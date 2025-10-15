@@ -1,0 +1,39 @@
+{
+  "name": "database",
+  "version": "1.0.0",
+  "description": "Database schema and types for SurrealDB",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./schema.surql": "./schema.surql"
+  },
+  "files": [
+    "schema.surql",
+    "dist"
+  ],
+  "scripts": {
+    "build": "vite build && pnpm run build:ts && pnpm run build:dart",
+    "build:ts": "syncgen --format typescript --input schema.surql --output ../client-solid/src/types/models.ts",
+    "build:dart": "syncgen --format dart --input schema.surql --output ../client-dart/src/db/models.dart",
+    "dev": "vite build --watch"
+  },
+  "keywords": [
+    "database",
+    "schema",
+    "surrealdb"
+  ],
+  "author": "",
+  "license": "MIT",
+  "packageManager": "pnpm@10.5.2",
+  "devDependencies": {
+    "syncgen": "workspace:*",
+    "vite": "^5.0.0",
+    "typescript": "^5.3.0"
+  }
+}

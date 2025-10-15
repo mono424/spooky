@@ -1,0 +1,52 @@
+{
+  "name": "syncgen",
+  "version": "0.1.0",
+  "description": "Generate TypeScript/Dart types from SurrealDB schema files",
+  "type": "module",
+  "main": "./dist/syncgen.cjs",
+  "module": "./dist/syncgen.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "syncgen": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/syncgen.js",
+      "require": "./dist/syncgen.cjs",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "target/release/syncgen"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build:rust": "cargo build --release",
+    "build:vite": "vite build",
+    "build:types": "tsc --emitDeclarationOnly --declaration --declarationDir dist",
+    "build": "npm run build:rust && npm run build:vite && npm run build:types",
+    "preview": "vite preview",
+    "test": "vitest",
+    "lint": "eslint src"
+  },
+  "keywords": [
+    "surrealdb",
+    "code-generation",
+    "typescript",
+    "dart",
+    "schema"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^12.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0",
+    "vite": "^5.0.0",
+    "vite-plugin-dts": "^3.7.0",
+    "vitest": "^1.0.0"
+  }
+}

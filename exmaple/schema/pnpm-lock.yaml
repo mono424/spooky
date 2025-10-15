@@ -1,0 +1,138 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      surrealdb:
+        specifier: ^1.3.2
+        version: 1.3.2(tslib@2.8.1)(typescript@5.9.2)(ws@8.18.3)
+      zod:
+        specifier: ^4.1.5
+        version: 4.1.5
+    devDependencies:
+      surreal-ts:
+        specifier: ^3.0.0
+        version: 3.0.0
+
+packages:
+
+  isows@1.0.7:
+    resolution: {integrity: sha512-I1fSfDCZL5P0v33sVqeTDSpcstAg/N+wF5HS033mogOVIp4B+oHC7oOCsA3axAbBSGTJ8QubbNmnIRN/h8U7hg==}
+    peerDependencies:
+      ws: '*'
+
+  surreal-ts-darwin-arm64@3.0.0:
+    resolution: {integrity: sha512-DEHhuhiuPslg2DZn90tGoG6pqBnwc49GCDD8jmMnySDQI6xj+7loEnQfbXrLRxFKInstdtc8QoWgw8HMOpEhBg==}
+    cpu: [arm64]
+    os: [darwin]
+
+  surreal-ts-darwin-x64@3.0.0:
+    resolution: {integrity: sha512-J3UcSny/uQbMVSGvxRF3/CBzvBk2Q1xJr2wo/I3nTqqHRdUWbKmMLPcLI7m6ilowV9WsFN4AJ7z9Gg9d4nRfMQ==}
+    cpu: [x64]
+    os: [darwin]
+
+  surreal-ts-linux-arm64@3.0.0:
+    resolution: {integrity: sha512-ga6k8V6meBPbnieU2ntxuGRP3JigzuyV7/pOmWlDVFegehR9QAdFi7cY9S+wxJ+wrk+SetyAnuOpvf/T1m+40w==}
+    cpu: [arm64]
+    os: [linux]
+
+  surreal-ts-linux-x64@3.0.0:
+    resolution: {integrity: sha512-YeLG4Pw358fICR3//58SU1Ah58CODhCqb+pwBKIprdBIh5ISTO/94xAidW0F/W9mxy1o7eUnyTjVbq6THAoQwQ==}
+    cpu: [x64]
+    os: [linux]
+
+  surreal-ts-windows-x64@3.0.0:
+    resolution: {integrity: sha512-ZPx1SkRUXGOYMluqTvYpqrvSKbSTrcnX/nutUgu6/WiIHC16JbVT6F1Bf/n/DFtCvAjF4EWiek/WL/xUSa5wSA==}
+    cpu: [x64]
+    os: [win32]
+
+  surreal-ts@3.0.0:
+    resolution: {integrity: sha512-/GCvKIcR58bpWm4NtynS3anhnD4ZTAHN9EkN/Cb8Qao2cUcgNMfiT0fs+uwMJbDOpW07CRJsX2h/CF8zWzd5SA==}
+    hasBin: true
+
+  surrealdb@1.3.2:
+    resolution: {integrity: sha512-mL7nij33iuon3IQP72F46fgX3p2LAxFCWCBDbZB7IohZ13RTEwJVNq7nZeP1eMSceQUpKzS6OHIWOuF9LYAkNw==}
+    engines: {node: '>=18.0.0'}
+    peerDependencies:
+      tslib: ^2.6.3
+      typescript: ^5.0.0
+
+  tslib@2.8.1:
+    resolution: {integrity: sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==}
+
+  typescript@5.9.2:
+    resolution: {integrity: sha512-CWBzXQrc/qOkhidw1OzBTQuYRbfyxDXJMVJ1XNwUHGROVmuaeiEm3OslpZ1RV96d7SKKjZKrSJu3+t/xlw3R9A==}
+    engines: {node: '>=14.17'}
+    hasBin: true
+
+  uuidv7@1.0.2:
+    resolution: {integrity: sha512-8JQkH4ooXnm1JCIhqTMbtmdnYEn6oKukBxHn1Ic9878jMkL7daTI7anTExfY18VRCX7tcdn5quzvCb6EWrR8PA==}
+    hasBin: true
+
+  ws@8.18.3:
+    resolution: {integrity: sha512-PEIGCY5tSlUt50cqyMXfCzX+oOPqN0vuGqWzbcJ2xvnkzkq46oOpz7dQaTDBdfICb4N14+GARUDw2XV2N4tvzg==}
+    engines: {node: '>=10.0.0'}
+    peerDependencies:
+      bufferutil: ^4.0.1
+      utf-8-validate: '>=5.0.2'
+    peerDependenciesMeta:
+      bufferutil:
+        optional: true
+      utf-8-validate:
+        optional: true
+
+  zod@4.1.5:
+    resolution: {integrity: sha512-rcUUZqlLJgBC33IT3PNMgsCq6TzLQEG/Ei/KTCU0PedSWRMAXoOUN+4t/0H+Q8bdnLPdqUYnvboJT0bn/229qg==}
+
+snapshots:
+
+  isows@1.0.7(ws@8.18.3):
+    dependencies:
+      ws: 8.18.3
+
+  surreal-ts-darwin-arm64@3.0.0:
+    optional: true
+
+  surreal-ts-darwin-x64@3.0.0:
+    optional: true
+
+  surreal-ts-linux-arm64@3.0.0:
+    optional: true
+
+  surreal-ts-linux-x64@3.0.0:
+    optional: true
+
+  surreal-ts-windows-x64@3.0.0:
+    optional: true
+
+  surreal-ts@3.0.0:
+    optionalDependencies:
+      surreal-ts-darwin-arm64: 3.0.0
+      surreal-ts-darwin-x64: 3.0.0
+      surreal-ts-linux-arm64: 3.0.0
+      surreal-ts-linux-x64: 3.0.0
+      surreal-ts-windows-x64: 3.0.0
+
+  surrealdb@1.3.2(tslib@2.8.1)(typescript@5.9.2)(ws@8.18.3):
+    dependencies:
+      isows: 1.0.7(ws@8.18.3)
+      tslib: 2.8.1
+      typescript: 5.9.2
+      uuidv7: 1.0.2
+    transitivePeerDependencies:
+      - ws
+
+  tslib@2.8.1: {}
+
+  typescript@5.9.2: {}
+
+  uuidv7@1.0.2: {}
+
+  ws@8.18.3: {}
+
+  zod@4.1.5: {}

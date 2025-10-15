@@ -1,0 +1,24 @@
+# Node
+node_modules/
+dist/
+*.log
+
+# TypeScript
+*.tsbuildinfo
+
+# Rust
+/target/
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.d.ts.map
