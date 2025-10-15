@@ -1,0 +1,43 @@
+<svg width="200" height="220" viewBox="0 0 200 220" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Gradient for ghost body -->
+    <linearGradient id="ghostGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:white;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:white;stop-opacity:0.6" />
+    </linearGradient>
+  </defs>
+
+  <!-- Ghost body with wobbly bottom -->
+  <path d="M100 20
+           C65 20, 40 45, 40 80
+           L40 140
+           Q44 155, 48 140
+           Q52 125, 56 140
+           Q60 155, 64 140
+           Q68 125, 72 140
+           Q76 155, 80 140
+           Q84 125, 88 140
+           Q92 155, 96 140
+           Q100 125, 104 140
+           Q108 155, 112 140
+           Q116 125, 120 140
+           Q124 155, 128 140
+           Q132 125, 136 140
+           Q140 155, 144 140
+           Q148 125, 152 140
+           Q156 155, 160 140
+           L160 80
+           C160 45, 135 20, 100 20 Z"
+        fill="url(#ghostGradient)"
+        stroke="none"/>
+
+
+  <!-- Left eye -->
+  <ellipse cx="70" cy="65" rx="10" ry="14" fill="black" opacity="0.9"/>
+
+  <!-- Right eye -->
+  <ellipse cx="130" cy="65" rx="10" ry="14" fill="black" opacity="0.9"/>
+
+  <!-- Mouth -->
+  <ellipse cx="100" cy="105" rx="12" ry="18" fill="black" opacity="0.9"/>
+</svg>

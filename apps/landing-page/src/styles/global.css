@@ -1,0 +1,126 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
+@layer base {
+  :root {
+    --primary-400: 242 112 137; /* #f27089 */
+    --primary-500: 233 69 96;   /* #E94560 */
+    --primary-600: 214 56 82;   /* #d63852 */
+    --primary-700: 184 42 67;   /* #b82a43 */
+    --secondary-900: 83 52 131; /* #533483 */
+    --navy-900: 15 52 96;       /* #0F3460 */
+    --deep-navy: 22 33 62;      /* #16213E */
+  }
+
+  html {
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+
+  body {
+    @apply bg-deepNavy text-white antialiased;
+  }
+}
+
+@layer components {
+  .gradient-text {
+    @apply bg-gradient-to-r from-primary-400 to-primary-600 bg-clip-text text-transparent;
+  }
+
+  .glass-effect {
+    @apply bg-white/5 backdrop-blur-sm border border-white/10;
+  }
+}
+
+@layer utilities {
+  @keyframes float {
+    0%, 100% {
+      transform: translateY(0px);
+    }
+    50% {
+      transform: translateY(-20px);
+    }
+  }
+
+  @keyframes float-slow {
+    0%, 100% {
+      transform: translateY(0px);
+    }
+    50% {
+      transform: translateY(-20px);
+    }
+  }
+
+  @keyframes wobble {
+    0%, 100% {
+      transform: translateX(0px) rotate(0deg);
+    }
+    25% {
+      transform: translateX(8px) rotate(3deg);
+    }
+    75% {
+      transform: translateX(-8px) rotate(-3deg);
+    }
+  }
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+      transform: translateY(20px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes slide-up {
+    from {
+      opacity: 0;
+      transform: translateY(40px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .animate-float {
+    animation: float 3s ease-in-out infinite;
+  }
+
+  .animate-float-slow {
+    animation: float-slow 4s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+  }
+
+  .animate-wobble {
+    animation: wobble 2.5s ease-in-out infinite;
+  }
+
+  .animate-fade-in {
+    animation: fade-in 1s ease-out;
+  }
+
+  .animate-slide-up {
+    animation: slide-up 1s ease-out;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-deepNavy-dark;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-secondary-900;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-primary-500;
+}

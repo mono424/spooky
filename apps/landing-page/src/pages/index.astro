@@ -1,0 +1,245 @@
+---
+import "../styles/global.css";
+import Navigation from "../components/Navigation";
+import FeatureCard from "../components/FeatureCard";
+import ContactForm from "../components/ContactForm";
+import WebGLBackground from "../components/WebGLBackground";
+import { Button } from "../components/ui/button";
+
+const logoSrc = "/logo.svg";
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="generator" content={Astro.generator} />
+    <meta
+      name="description"
+      content="Welcome to Spooky - A modern, dark-themed landing page"
+    />
+    <title>Spooky - Modern Dark Landing Page</title>
+  </head>
+  <body>
+    <!-- Navigation -->
+    <Navigation client:load logoSrc={logoSrc} />
+
+    <!-- Hero Section -->
+    <section
+      id="home"
+      class="min-h-screen flex items-center justify-center relative overflow-hidden"
+    >
+      <!-- Background Effects -->
+      <div class="absolute inset-0 bg-deepNavy-dark"></div>
+      <WebGLBackground client:load />
+      <div
+        class="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-secondary-900/10 via-transparent to-transparent"
+      >
+      </div>
+
+      <!-- Floating Elements -->
+      <div
+        class="absolute top-20 left-10 w-20 h-20 bg-primary-500/30 blur-xl animate-float"
+      >
+      </div>
+      <div
+        class="absolute bottom-20 right-10 w-32 h-32 bg-secondary-900/20 blur-2xl animate-float"
+        style="animation-delay: 1s;"
+      >
+      </div>
+      <div
+        class="absolute top-1/2 left-1/4 w-16 h-16 bg-primary-400/25 blur-lg animate-float"
+        style="animation-delay: 2s;"
+      >
+      </div>
+
+      <div
+        class="relative z-10 text-center px-4 sm:px-6 lg:px-8 max-w-4xl mx-auto"
+      >
+        <div class="animate-fade-in">
+          <img
+            src={logoSrc}
+            alt="Spooky Logo"
+            class="h-40 w-40 mx-auto mb-8 animate-float-slow drop-shadow-[0_0_30px_rgba(233,69,96,0.3)]"
+          />
+          <h1 class="text-5xl sm:text-6xl lg:text-7xl font-bold mb-6">
+            <span class="gradient-text">Spooky</span>
+          </h1>
+          <p
+            class="text-xl sm:text-2xl text-gray-300 mb-8 max-w-2xl mx-auto leading-relaxed"
+          >
+            Offline-first sync engine powering real-time collaboration and AI
+            applications with seamless synchronization and full type safety.
+          </p>
+          <div
+            class="flex flex-col sm:flex-row gap-4 justify-center items-center"
+          >
+            <Button client:load size="lg">Get Started</Button>
+            <Button client:load variant="secondary" size="lg"
+              >View GitHub</Button
+            >
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Features Section -->
+    <section id="features" class="py-20 bg-deepNavy-dark/80">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="text-center mb-16">
+          <h2 class="text-4xl sm:text-5xl font-bold mb-6">
+            <span class="gradient-text">Features</span>
+          </h2>
+          <p class="text-xl text-gray-300 max-w-2xl mx-auto">
+            Built for real-time collaboration and AI-powered applications that
+            demand instant synchronization and reliable offline capabilities.
+          </p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+          <FeatureCard
+            client:load
+            icon="lightning"
+            title="Real-Time Sync"
+            description="Instant data synchronization powers collaborative workflows and real-time chat applications with sub-second latency."
+          />
+
+          <FeatureCard
+            client:load
+            icon="heart"
+            title="Offline-First Architecture"
+            description="Continue working seamlessly during network interruptions. Automatic conflict resolution and intelligent sync when reconnected."
+          />
+
+          <FeatureCard
+            client:load
+            icon="shield"
+            title="Type-Safe & Secure"
+            description="Schema-driven type generation for TypeScript and Dart. Granular permissions with authentication-agnostic design."
+          />
+        </div>
+      </div>
+    </section>
+
+    <!-- About Section -->
+    <section id="about" class="py-20">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
+          <div class="animate-slide-up">
+            <h2 class="text-4xl sm:text-5xl font-bold mb-6">
+              <span class="gradient-text">About Spooky</span>
+            </h2>
+            <p class="text-xl text-gray-300 mb-6 leading-relaxed">
+              Spooky is a production-ready sync engine designed for modern
+              real-time applications. From collaborative document editors to
+              AI-powered chat platforms, Spooky delivers instant data
+              synchronization with intelligent offline-first architecture.
+            </p>
+            <p class="text-lg text-gray-400 mb-6 leading-relaxed">
+              Define your data model once in a single schema file. Spooky
+              automatically generates fully-typed client libraries for
+              TypeScript and Dart, complete with granular permission rules.
+              Seamlessly integrate with SolidJS and Flutter applications while
+              maintaining complete type safety across your entire stack.
+            </p>
+            <p class="text-lg text-gray-400 mb-8 leading-relaxed">
+              Built on SurrealDB, Spooky provides authentication-agnostic
+              security, allowing you to integrate with any identity provider
+              while maintaining fine-grained access control. Perfect for
+              building collaborative tools, real-time dashboards, and AI
+              applications.
+            </p>
+            <Button client:load>Discover More</Button>
+          </div>
+          <div class="relative">
+            <div class="glass-effect p-8">
+              <div
+                class="aspect-square bg-gradient-to-br from-secondary-900/30 to-primary-500/20 flex items-center justify-center"
+              >
+                <img src={logoSrc} alt="Spooky Logo" class="h-32 w-32" />
+              </div>
+            </div>
+            <div
+              class="absolute -top-4 -right-4 w-24 h-24 bg-primary-500/20 blur-xl"
+            >
+            </div>
+            <div
+              class="absolute -bottom-4 -left-4 w-32 h-32 bg-secondary-900/20 blur-2xl"
+            >
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Contact Section -->
+    <section id="contact" class="py-20 bg-deepNavy-dark/80">
+      <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+        <h2 class="text-4xl sm:text-5xl font-bold mb-6">
+          <span class="gradient-text">Get In Touch</span>
+        </h2>
+        <p class="text-xl text-gray-300 mb-12 max-w-2xl mx-auto">
+          Ready to embark on your journey with Spooky? Let's create something
+          amazing together.
+        </p>
+        <ContactForm client:load />
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="py-12 bg-deepNavy-dark border-t border-navy-900/50">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="flex flex-col md:flex-row items-center justify-between">
+          <div class="flex items-center space-x-3 mb-4 md:mb-0">
+            <img src={logoSrc} alt="Spooky Logo" class="h-8 w-8" />
+            <span class="text-xl font-bold gradient-text">Spooky</span>
+          </div>
+          <div class="flex space-x-6 text-gray-400">
+            <a href="#" class="hover:text-white transition-colors duration-300"
+              >Privacy</a
+            >
+            <a href="#" class="hover:text-white transition-colors duration-300"
+              >Terms</a
+            >
+            <a href="#" class="hover:text-white transition-colors duration-300"
+              >Support</a
+            >
+          </div>
+        </div>
+        <div
+          class="mt-8 pt-8 border-t border-gray-800 text-center text-gray-400"
+        >
+          <p>&copy; 2024 Spooky. All rights reserved.</p>
+        </div>
+      </div>
+    </footer>
+
+    <!-- Smooth scrolling script -->
+    <script>
+      // Smooth scrolling for navigation links
+      document.querySelectorAll('a[href^="#"]').forEach((anchor) => {
+        anchor.addEventListener("click", function (e) {
+          e.preventDefault();
+          const target = document.querySelector(this.getAttribute("href"));
+          if (target) {
+            target.scrollIntoView({
+              behavior: "smooth",
+              block: "start",
+            });
+          }
+        });
+      });
+
+      // Add scroll effect to navigation
+      window.addEventListener("scroll", () => {
+        const nav = document.querySelector("nav");
+        if (window.scrollY > 100) {
+          nav.classList.add("bg-gray-900/80");
+        } else {
+          nav.classList.remove("bg-gray-900/80");
+        }
+      });
+    </script>
+  </body>
+</html>

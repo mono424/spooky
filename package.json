@@ -1,0 +1,16 @@
+{
+  "name": "spooky",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Spooky monorepo",
+  "scripts": {
+    "dev": "pnpm -r --parallel dev",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@9.0.0"
+}
