@@ -17,6 +17,7 @@ Spooky is a work-in-progress sync engine focused on real-time collaboration and 
 ### Tech Stack
 
 - SurrealDB (data model, permissions, sync substrate)
+- Rust (SyncGen core and tooling)
 - Solid.js (web client target)
 - Flutter (mobile client target)
 - Type generation → TypeScript + Dart
@@ -51,7 +52,7 @@ The engine derives types and client libraries from a single schema. The high-lev
 apps/
   landing-page/           # Astro + Tailwind landing site
 packages/                 # Future shared packages (generators, clients)
-exmaple/schema/           # Example SurrealDB schema (experimental)
+example/schema/           # Example SurrealDB schema (experimental)
 image.png                 # Client library generation diagram
 ```
 
