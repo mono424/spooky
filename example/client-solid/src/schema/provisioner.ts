@@ -60,11 +60,11 @@ export class SchemaProvisioner {
       // Check if key tables exist
       const result = await this.db.query(`
         SELECT COUNT() FROM INFORMATION_SCHEMA.tables 
-        WHERE name IN ['user', 'message', 'friend_request']
+        WHERE name IN ['user', 'message', 'friend_request', 'thread', 'comment']
       `);
 
       const count = result[0]?.result?.[0] || 0;
-      return count >= 3;
+      return count >= 5;
     } catch (error) {
       // If we can't check, assume not provisioned
       return false;

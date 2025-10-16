@@ -6,12 +6,12 @@ DEFINE SCOPE user_auth
     SIGNUP (
         CREATE user SET
             id = $token.sub,
-            email = $token.email,
             username = $token.username,
+            password = crypto::argon2::generate($token.password),
             created_at = time::now()
     )
     SIGNIN (
-        SELECT * FROM user WHERE id = $token.sub
+        SELECT * FROM user WHERE username = $token.username AND crypto::argon2::compare(password, $token.password)
     )
 ;
 
@@ -28,62 +28,59 @@ DEFINE FIELD username ON user TYPE string
     ASSERT $value != NONE AND string::is::alphanum($value) AND string::len($value) > 3;
 DEFINE INDEX unique_username ON user FIELDS username UNIQUE;
 
-DEFINE FIELD email ON user TYPE string
-    ASSERT string::is::email($value);
-DEFINE INDEX unique_email ON user FIELDS email UNIQUE;
+DEFINE FIELD password ON user TYPE string
+    ASSERT $value != NONE AND string::len($value) > 0;
 
 DEFINE FIELD created_at ON user TYPE datetime
     VALUE $value OR time::now();
 
 DEFINE FIELD friends ON user TYPE array<record<user>>;
 
-
 -- ##################################################################
--- FRIEND REQUEST TABLE
+-- THREAD TABLE
 -- ##################################################################
 
-DEFINE TABLE friend_request SCHEMAFULL
+DEFINE TABLE thread SCHEMAFULL
     PERMISSIONS
-        FOR create WHERE from = $auth.id
-        FOR select WHERE from = $auth.id OR to = $auth.id
-        FOR update WHERE to = $auth.id
-        FOR delete WHERE from = $auth.id AND status = 'pending'
+        FOR create WHERE author = $auth.id
+        FOR select WHERE true
+        FOR update WHERE author = $auth.id
+        FOR delete WHERE author = $auth.id
 ;
 
-DEFINE FIELD from ON friend_request TYPE record<user>
-    VALUE $auth.id;
+DEFINE FIELD title ON thread TYPE string
+    ASSERT $value != NONE AND string::len($value) > 0 AND string::len($value) <= 200;
 
-DEFINE FIELD to ON friend_request TYPE record<user>;
-
-DEFINE FIELD status ON friend_request TYPE string
-    ASSERT $value IN ['pending', 'accepted', 'rejected']
-    VALUE $value OR 'pending';
-
-DEFINE FIELD created_at ON friend_request TYPE datetime
-    VALUE $value OR time::now();
-
-
--- ##################################################################
--- MESSAGE TABLE
--- ##################################################################
-
-DEFINE TABLE message SCHEMAFULL
-    PERMISSIONS
-        FOR create WHERE from = $auth.id AND (SELECT VALUE id FROM ONLY $auth.friends) CONTAINS to
-        FOR select WHERE from = $auth.id OR to = $auth.id
-        FOR delete WHERE from = $auth.id
-;
-
-DEFINE FIELD from ON message TYPE record<user>
-    VALUE $auth.id;
-
-DEFINE FIELD to ON message TYPE record<user>;
-
-DEFINE FIELD content ON message TYPE string
+DEFINE FIELD content ON thread TYPE string
     ASSERT $value != NONE AND string::len($value) > 0;
 
-DEFINE FIELD sent_at ON message TYPE datetime
+DEFINE FIELD author ON thread TYPE record<user>
+    VALUE $auth.id;
+
+DEFINE FIELD created_at ON thread TYPE datetime
     VALUE $value OR time::now();
 
-DEFINE FIELD read_at ON message TYPE option<datetime>;
+
+-- ##################################################################
+-- COMMENT TABLE
+-- ##################################################################
+
+DEFINE TABLE comment SCHEMAFULL
+    PERMISSIONS
+        FOR create WHERE author = $auth.id
+        FOR select WHERE true
+        FOR update WHERE author = $auth.id
+        FOR delete WHERE author = $auth.id
+;
+
+DEFINE FIELD thread_id ON comment TYPE record<thread>;
+
+DEFINE FIELD content ON comment TYPE string
+    ASSERT $value != NONE AND string::len($value) > 0;
+
+DEFINE FIELD author ON comment TYPE record<user>
+    VALUE $auth.id;
+
+DEFINE FIELD created_at ON comment TYPE datetime
+    VALUE $value OR time::now();
 
