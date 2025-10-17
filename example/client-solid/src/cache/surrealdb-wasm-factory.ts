@@ -1,5 +1,5 @@
-import { SurrealHTTP as Surreal } from "surrealdb.js";
-import initWasm from "@surrealdb/wasm";
+import { Surreal } from "surrealdb";
+import { createWasmEngines } from "@surrealdb/wasm";
 import type { CacheStrategy } from "../types";
 
 /**
@@ -15,23 +15,22 @@ export class SurrealDBWasmFactory {
     namespace?: string,
     database?: string
   ): Promise<Surreal> {
-    // Ensure WASM runtime is initialized (idempotent)
-    await initWasm();
-
-    // For local browser DB, SurrealDB 2.3 uses a file: or mem: URL with WASM storage
-    // We use surrealdb.js SurrealHTTP purely for a consistent API surface
+    // Create Surreal instance with WASM engines
     const surreal = new Surreal({
-      // This endpoint is ignored for WASM-backed local; we will use use() to set NS/DB
-      url: "http://localhost/wasm",
-    } as any);
+      engines: createWasmEngines(),
+    });
 
-    // Open a local database using WASM storage
-    // Note: the actual open happens implicitly when running queries with WASM
-    // We set the namespace and database now
+    // Connect to the appropriate storage backend
+    const connectionUrl =
+      strategy === "indexeddb" ? `indxdb://${dbName}` : "mem://";
+
+    await surreal.connect(connectionUrl);
+
+    // Set namespace and database
     await surreal.use({
       namespace: namespace || "main",
       database: database || dbName,
-    } as any);
+    });
 
     return surreal;
   }

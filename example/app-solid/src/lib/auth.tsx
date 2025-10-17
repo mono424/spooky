@@ -1,11 +1,8 @@
 import { createContext, useContext, createSignal, JSX, Show } from "solid-js";
 import { db } from "./db";
+import { TempSchema } from "db-solid";
 
-interface User {
-  id: string;
-  username: string;
-  created_at: Date;
-}
+type User = TempSchema["user"];
 
 interface AuthContextType {
   user: () => User | null;
@@ -27,15 +24,17 @@ export function AuthProvider(props: { children: JSX.Element }) {
       const token = localStorage.getItem("auth_token");
       if (token) {
         // Validate token by querying user data
-        const result = await db.queryLocal<{ result: User[] }>(
-          `
+        const [users] = await db.query.user
+          .queryLocal(
+            `
           SELECT * FROM user WHERE id = $token.sub
         `,
-          { token: { sub: token } }
-        );
+            { token: { sub: token } }
+          )
+          .collect();
 
-        if (result.result && result.result.length > 0) {
-          setUser(result.result[0]);
+        if (users && users.length > 0) {
+          setUser(users[0]);
         } else {
           localStorage.removeItem("auth_token");
         }
@@ -53,15 +52,17 @@ export function AuthProvider(props: { children: JSX.Element }) {
 
   const signIn = async (username: string, password: string) => {
     try {
-      const result = await db.queryLocal<{ result: User[] }>(
-        `
+      const [users] = await db.query.user
+        .queryLocal(
+          `
         SELECT * FROM user WHERE username = $username AND crypto::argon2::compare(password, $password)
       `,
-        { username, password }
-      );
+          { username, password }
+        )
+        .collect();
 
-      if (result.result && result.result.length > 0) {
-        const user = result.result[0];
+      if (users && users.length > 0) {
+        const user = users[0];
         setUser(user);
         localStorage.setItem("auth_token", user.id);
       } else {
@@ -77,21 +78,23 @@ export function AuthProvider(props: { children: JSX.Element }) {
     try {
       const userId = `user:${Date.now()}_${Math.random()
         .toString(36)
-        .substr(2, 9)}`;
+        .substring(2, 9)}`;
 
-      const result = await db.queryLocal<{ result: User[] }>(
-        `
+      const [users] = await db.query.user
+        .queryLocal(
+          `
         CREATE user SET
           id = $id,
           username = $username,
           password = crypto::argon2::generate($password),
           created_at = time::now()
       `,
-        { id: userId, username, password }
-      );
+          { id: userId, username, password }
+        )
+        .collect();
 
-      if (result.result && result.result.length > 0) {
-        const user = result.result[0];
+      if (users && users.length > 0) {
+        const user = users[0];
         setUser(user);
         localStorage.setItem("auth_token", user.id);
       } else {

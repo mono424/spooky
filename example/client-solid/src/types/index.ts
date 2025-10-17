@@ -7,6 +7,8 @@ export interface SyncedDbConfig {
   remoteUrl?: string;
   /** Local database name for WASM storage */
   localDbName: string;
+  /** Internal database name for WASM storage */
+  internalDbName: string;
   /** Storage strategy for SurrealDB WASM */
   storageStrategy: CacheStrategy;
   /** Namespace for the database */
@@ -32,6 +34,7 @@ export interface RemoteDbConfig {
 }
 
 export interface DbConnection {
+  internal: Surreal;
   local: Surreal;
   remote?: Surreal;
 }

@@ -1,8 +1,9 @@
-import { SyncedDb, type SyncedDbConfig } from "db-solid";
+import { SyncedDb, type SyncedDbConfig, type TempSchema } from "db-solid";
 
 // Database configuration
 const dbConfig: SyncedDbConfig = {
   localDbName: "thread-app-local",
+  internalDbName: "syncdb-int",
   storageStrategy: "indexeddb",
   namespace: "main",
   database: "thread_app",
@@ -11,8 +12,8 @@ const dbConfig: SyncedDbConfig = {
   // token: "your-auth-token-here"
 };
 
-// Create and export the database instance
-export const db = new SyncedDb(dbConfig);
+// Create and export the database instance with proper schema types
+export const db = new SyncedDb<TempSchema>(dbConfig);
 
 // Initialize the database
 let isInitialized = false;
@@ -31,5 +32,4 @@ export async function initDatabase(): Promise<void> {
   }
 }
 
-// Export database instance for use in components
-export { db };
+// Database instance is already exported above

@@ -34,8 +34,6 @@ DEFINE FIELD password ON user TYPE string
 DEFINE FIELD created_at ON user TYPE datetime
     VALUE $value OR time::now();
 
-DEFINE FIELD friends ON user TYPE array<record<user>>;
-
 -- ##################################################################
 -- THREAD TABLE
 -- ##################################################################

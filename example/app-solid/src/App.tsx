@@ -1,4 +1,4 @@
-import { Router, Routes, Route } from "solid-router";
+import { Router, Route } from "@solidjs/router";
 import { createSignal, Show, onMount } from "solid-js";
 import { AuthProvider, useAuth } from "./lib/auth";
 import { initDatabase } from "./lib/db";
@@ -9,11 +9,10 @@ import Home from "./routes/index";
 import ThreadPage from "./routes/thread/[id]";
 import CreateThreadPage from "./routes/create-thread";
 
-function AppContent() {
+function Layout(props: any) {
   const auth = useAuth();
   const [showAuthDialog, setShowAuthDialog] = createSignal(false);
 
-  // Show auth dialog if user is not authenticated
   const handleAuthRequired = () => {
     setShowAuthDialog(true);
   };
@@ -73,11 +72,7 @@ function AppContent() {
             </div>
           }
         >
-          <Routes>
-            <Route path="/" component={Home} />
-            <Route path="/thread/:id" component={ThreadPage} />
-            <Route path="/create-thread" component={CreateThreadPage} />
-          </Routes>
+          {props.children}
         </Show>
       </main>
 
@@ -93,14 +88,12 @@ function AppContent() {
 export default function App() {
   const [isDbReady, setIsDbReady] = createSignal(false);
 
-  // Initialize database on app start
   onMount(async () => {
     try {
       await initDatabase();
       setIsDbReady(true);
     } catch (error) {
       console.error("Failed to initialize database:", error);
-      // Still show the app, but database operations will fail
       setIsDbReady(true);
     }
   });
@@ -115,8 +108,10 @@ export default function App() {
       }
     >
       <AuthProvider>
-        <Router>
-          <AppContent />
+        <Router root={Layout}>
+          <Route path="/" component={Home} />
+          <Route path="/thread/:id" component={ThreadPage} />
+          <Route path="/create-thread" component={CreateThreadPage} />
         </Router>
       </AuthProvider>
     </Show>

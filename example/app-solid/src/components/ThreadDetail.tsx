@@ -1,29 +1,8 @@
-import { createResource, For } from "solid-js";
-import { useNavigate, useParams } from "solid-router";
+import { createResource, For, Show } from "solid-js";
+import { useNavigate, useParams } from "@solidjs/router";
 import { db } from "../lib/db";
 import { useAuth } from "../lib/auth";
 import { CommentForm } from "./CommentForm";
-
-interface Thread {
-  id: string;
-  title: string;
-  content: string;
-  author: {
-    id: string;
-    username: string;
-  };
-  created_at: Date;
-}
-
-interface Comment {
-  id: string;
-  content: string;
-  author: {
-    id: string;
-    username: string;
-  };
-  created_at: Date;
-}
 
 export function ThreadDetail() {
   const params = useParams();
@@ -34,8 +13,9 @@ export function ThreadDetail() {
     () => params.id,
     async (threadId) => {
       try {
-        const result = await db.queryLocal<{ result: Thread[] }>(
-          `
+        const [threads] = await db.query.thread
+          .queryLocal(
+            `
           SELECT 
             id,
             title,
@@ -46,16 +26,16 @@ export function ThreadDetail() {
           FROM thread
           WHERE id = $thread_id
         `,
-          { thread_id: threadId }
-        );
+            { thread_id: threadId }
+          )
+          .collect();
 
-        if (result.result && result.result.length > 0) {
-          const thread = result.result[0];
+        if (threads && threads.length > 0) {
+          const thread = threads[0];
           return {
             ...thread,
             author: {
-              id: thread.author_id,
-              username: thread.author_username,
+              id: thread.author,
             },
           };
         }
@@ -71,8 +51,9 @@ export function ThreadDetail() {
     () => params.id,
     async (threadId) => {
       try {
-        const result = await db.queryLocal<{ result: Comment[] }>(
-          `
+        const [comments] = await db.query.comment
+          .queryLocal(
+            `
           SELECT 
             id,
             content,
@@ -83,18 +64,18 @@ export function ThreadDetail() {
           WHERE thread_id = $thread_id
           ORDER BY created_at ASC
         `,
-          { thread_id: threadId }
-        );
+            { thread_id: threadId }
+          )
+          .collect();
 
-        return (
-          result.result?.map((comment) => ({
-            ...comment,
-            author: {
-              id: comment.author_id,
-              username: comment.author_username,
-            },
-          })) || []
-        );
+        return comments && comments.length > 0
+          ? comments.map((comment) => ({
+              ...comment,
+              author: {
+                id: comment.author,
+              },
+            }))
+          : [];
       } catch (error) {
         console.error("Failed to fetch comments:", error);
         return [];
@@ -134,9 +115,9 @@ export function ThreadDetail() {
                 {threadData().content}
               </p>
               <div class="flex justify-between items-center text-sm text-gray-500 border-t pt-3">
-                <span>By {threadData().author.username}</span>
+                <span>By {threadData().author?.id}</span>
                 <span>
-                  {new Date(threadData().created_at).toLocaleDateString()}
+                  {new Date(threadData().created_at ?? 0).toLocaleDateString()}
                 </span>
               </div>
             </div>
@@ -144,7 +125,7 @@ export function ThreadDetail() {
             {/* Comments Section */}
             <div class="space-y-4">
               <h2 class="text-xl font-semibold">
-                Comments ({comments().length})
+                Comments ({comments()?.length})
               </h2>
 
               {/* Comment Form */}
@@ -158,7 +139,7 @@ export function ThreadDetail() {
               {/* Comments List */}
               <div class="space-y-3">
                 <For
-                  each={comments()}
+                  each={comments() ?? []}
                   fallback={
                     <div class="text-center py-4 text-gray-500">
                       No comments yet. Be the first to comment!
@@ -171,9 +152,11 @@ export function ThreadDetail() {
                         {comment.content}
                       </p>
                       <div class="flex justify-between items-center text-sm text-gray-500">
-                        <span>By {comment.author.username}</span>
+                        <span>By {comment.author.id}</span>
                         <span>
-                          {new Date(comment.created_at).toLocaleDateString()}
+                          {new Date(
+                            comment.created_at ?? 0
+                          ).toLocaleDateString()}
                         </span>
                       </div>
                     </div>

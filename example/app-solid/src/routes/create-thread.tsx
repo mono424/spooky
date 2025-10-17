@@ -1,5 +1,5 @@
 import { createSignal, onMount } from "solid-js";
-import { useNavigate } from "solid-router";
+import { useNavigate } from "@solidjs/router";
 import { CreateThreadDialog } from "../components/CreateThreadDialog";
 
 export default function CreateThreadPage() {

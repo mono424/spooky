@@ -1,5 +1,5 @@
 import { createResource, For } from "solid-js";
-import { useNavigate } from "solid-router";
+import { useNavigate } from "@solidjs/router";
 import { db } from "../lib/db";
 import { useAuth } from "../lib/auth";
 

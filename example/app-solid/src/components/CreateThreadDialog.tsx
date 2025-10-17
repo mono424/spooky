@@ -1,5 +1,5 @@
 import { createSignal, Show } from "solid-js";
-import { useNavigate } from "solid-router";
+import { useNavigate } from "@solidjs/router";
 import { db } from "../lib/db";
 import { useAuth } from "../lib/auth";
 
@@ -24,22 +24,19 @@ export function CreateThreadDialog(props: CreateThreadDialogProps) {
     setIsLoading(true);
 
     try {
-      const result = await db.queryLocal<{ result: { id: string }[] }>(
-        `
-        CREATE thread SET
-          title = $title,
-          content = $content,
-          author = $author
-      `,
-        {
-          title: title().trim(),
-          content: content().trim(),
-          author: auth.user()!.id,
-        }
-      );
+      const [threads] = await db.query.thread
+        .queryLocal(
+          "CREATE thread SET title = $title, content = $content, author = $author",
+          {
+            title: title().trim(),
+            content: content().trim(),
+            author: auth.user()!.id,
+          }
+        )
+        .collect();
 
-      if (result.result && result.result.length > 0) {
-        const threadId = result.result[0].id;
+      if (threads && threads.length > 0) {
+        const threadId = threads[0].id;
         props.onClose();
         navigate(`/thread/${threadId}`);
       } else {
