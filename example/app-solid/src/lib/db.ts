@@ -1,7 +1,7 @@
 import { SyncedDb, type SyncedDbConfig, type TempSchema } from "db-solid";
 
 // Database configuration
-const dbConfig: SyncedDbConfig = {
+export const dbConfig: SyncedDbConfig = {
   localDbName: "thread-app-local",
   internalDbName: "syncdb-int",
   storageStrategy: "indexeddb",

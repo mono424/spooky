@@ -1,4 +1,11 @@
 import type { Surreal } from "surrealdb";
+import type { SyncedDb } from "../index";
+
+declare global {
+  interface Window {
+    db?: SyncedDb<any>;
+  }
+}
 
 export type CacheStrategy = "memory" | "indexeddb";
 

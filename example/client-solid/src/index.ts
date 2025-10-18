@@ -1,127 +1,20 @@
-import { RecordResult, Surreal, Table, Values } from "surrealdb";
+import { RecordId, Surreal, Table, Values } from "surrealdb";
 import { createWasmEngines } from "@surrealdb/wasm";
 import { SchemaProvisioner } from "./schema/provisioner";
 import { createSurrealDBWasm } from "./cache";
 import type { SyncedDbConfig, DbConnection } from "./types";
+import { GenericModel, GenericSchema, Model } from "./lib/models";
+import { QueryNamespace, TableQueries } from "./lib/table-queries";
 export type { RecordResult } from "surrealdb";
+export type { Model } from "./lib/models";
 
-type GenericModel = { id: string };
-type GenericSchema = Record<string, GenericModel>;
+export { RecordId } from "surrealdb";
 
-export type Model<T extends GenericModel> = RecordResult<Omit<T, "id">>;
-
-/**
- * Generic query response carrying Surreal query handle plus typed collect()
- */
 export type QueryResponse<T extends GenericModel> = Omit<
   ReturnType<Surreal["query"]>,
   "collect"
 > & {
   collect: () => Promise<[Model<T>[]]>;
-};
-
-/**
- * Table query interface for a specific table. The response type is inferred from Schema[K].
- */
-class TableQuery<
-  Schema extends GenericSchema,
-  K extends keyof Schema & string
-> {
-  private table: Table;
-
-  constructor(private db: SyncedDb<Schema>, public readonly tableName: K) {
-    this.table = new Table(this.tableName);
-  }
-
-  queryLocal(
-    sql: string,
-    vars?: Record<string, unknown>
-  ): QueryResponse<Schema[K]> {
-    return this.db.queryLocal<Schema[K]>(sql, vars);
-  }
-
-  queryRemote(
-    sql: string,
-    vars?: Record<string, unknown>
-  ): QueryResponse<Schema[K]> {
-    return this.db.queryRemote<Schema[K]>(sql, vars);
-  }
-
-  createLocal<T extends GenericModel = Schema[K]>(
-    data?: Values<Model<T>>
-  ): ReturnType<Surreal["create"]> {
-    return this.db.createLocal<T>(this.table, data);
-  }
-
-  createRemote<T extends GenericModel = Schema[K]>(
-    data?: Values<Model<T>>
-  ): ReturnType<Surreal["create"]> {
-    return this.db.createRemote<T>(this.table, data);
-  }
-
-  updateLocal<T extends GenericModel = Schema[K]>(
-    table: Table
-  ): ReturnType<Surreal["update"]> {
-    return this.db.updateLocal<T>(table);
-  }
-
-  updateRemote<T extends GenericModel = Schema[K]>(
-    table: Table
-  ): ReturnType<Surreal["update"]> {
-    return this.db.updateRemote<T>(table);
-  }
-
-  deleteLocal<T extends GenericModel = Schema[K]>(
-    table: Table
-  ): ReturnType<Surreal["delete"]> {
-    return this.db.deleteLocal<T>(table);
-  }
-
-  deleteRemote<T extends GenericModel = Schema[K]>(
-    table: Table
-  ): ReturnType<Surreal["delete"]> {
-    return this.db.deleteRemote<T>(table);
-  }
-}
-
-/**
- * Query namespace that provides table-scoped query access
- */
-class QueryNamespace<Schema extends GenericSchema> {
-  private tableCache = new Map<
-    keyof Schema & string,
-    TableQuery<Schema, any>
-  >();
-
-  constructor(private db: SyncedDb<Schema>) {
-    // Create a proxy to handle dynamic table access
-    return new Proxy(this, {
-      get(target, prop: keyof Schema | string | symbol) {
-        if (
-          typeof prop === "string" &&
-          prop !== "tableCache" &&
-          prop !== "db"
-        ) {
-          const key = prop as keyof Schema & string;
-          if (!target.tableCache.has(key)) {
-            target.tableCache.set(
-              key,
-              new TableQuery<Schema, typeof key>(target.db, key)
-            );
-          }
-          return target.tableCache.get(key);
-        }
-        return Reflect.get(target, prop);
-      },
-    }) as QueryNamespace<Schema>;
-  }
-}
-
-/**
- * Type helper for table queries
- */
-export type TableQueries<Schema extends GenericSchema> = {
-  [K in keyof Schema & string]: TableQuery<Schema, K>;
 };
 
 export class SyncedDb<Schema extends GenericSchema> {
@@ -133,6 +26,7 @@ export class SyncedDb<Schema extends GenericSchema> {
     this.config = config;
     this.query = new QueryNamespace<Schema>(this) as QueryNamespace<Schema> &
       TableQueries<Schema>;
+    window.db = this;
   }
 
   /**
@@ -211,25 +105,25 @@ export class SyncedDb<Schema extends GenericSchema> {
     const res = db.query(sql, vars as any);
     const oCollect = res.collect.bind(res);
     return Object.assign(res, {
-      collect: () => {
-        return oCollect<[Model<T>[]]>();
-      },
+      collect: () => oCollect<[Model<T>[]]>(),
     });
   }
 
   _create<T extends GenericModel>(
     db: Surreal,
     table: Table,
-    data?: Values<Model<T>>
-  ): ReturnType<Surreal["create"]> {
-    return db.create<Model<T>>(table, data);
+    data: Values<Model<T>> | Values<Model<T>>[]
+  ): ReturnType<Surreal["insert"]> {
+    console.log("createLocal", table, data);
+    return db.insert<Model<T>>(table, data);
   }
 
   _update<T extends Record<string, unknown> = Record<string, unknown>>(
     db: Surreal,
-    table: Table
-  ): ReturnType<Surreal["update"]> {
-    return db.update<T>(table);
+    recordId: RecordId,
+    data: Partial<T>
+  ): Promise<any> {
+    return db.update<T>(recordId).merge(data);
   }
 
   _delete<T extends Record<string, unknown> = Record<string, unknown>>(
@@ -258,7 +152,7 @@ export class SyncedDb<Schema extends GenericSchema> {
 
   createLocal<T extends GenericModel>(
     thing: Table,
-    data?: Values<Model<T>>
+    data: Values<Model<T>> | Values<Model<T>>[]
   ): ReturnType<Surreal["create"]> {
     const db = this.getLocal();
     return this._create<T>(db, thing, data);
@@ -266,7 +160,7 @@ export class SyncedDb<Schema extends GenericSchema> {
 
   createRemote<T extends GenericModel>(
     table: Table,
-    data?: Values<Model<T>>
+    data: Values<Model<T>> | Values<Model<T>>[]
   ): ReturnType<Surreal["create"]> {
     const db = this.getRemote();
     if (!db) throw new Error("Remote database is not configured");
@@ -274,18 +168,20 @@ export class SyncedDb<Schema extends GenericSchema> {
   }
 
   updateLocal<T extends Record<string, unknown> = Record<string, unknown>>(
-    table: Table
+    recordId: RecordId,
+    data: Partial<T>
   ): ReturnType<Surreal["update"]> {
     const db = this.getLocal();
-    return this._update<T>(db, table);
+    return this._update<T>(db, recordId, data);
   }
 
   updateRemote<T extends Record<string, unknown> = Record<string, unknown>>(
-    table: Table
+    recordId: RecordId,
+    data: Partial<T>
   ): ReturnType<Surreal["update"]> {
     const db = this.getRemote();
     if (!db) throw new Error("Remote database is not configured");
-    return this._update<T>(db, table);
+    return this._update<T>(db, recordId, data);
   }
 
   deleteLocal<T extends Record<string, unknown> = Record<string, unknown>>(

@@ -1,6 +1,6 @@
 import { createContext, useContext, createSignal, JSX, Show } from "solid-js";
-import { db } from "./db";
-import { Model, TempSchema } from "db-solid";
+import { db, dbConfig } from "./db";
+import type { Model, TempSchema } from "db-solid";
 
 type User = Model<TempSchema["user"]>;
 
@@ -9,7 +9,7 @@ interface AuthContextType {
   isLoading: () => boolean;
   signIn: (username: string, password: string) => Promise<void>;
   signUp: (username: string, password: string) => Promise<void>;
-  signOut: () => void;
+  signOut: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType>();
@@ -23,14 +23,13 @@ export function AuthProvider(props: { children: JSX.Element }) {
     try {
       const token = localStorage.getItem("auth_token");
       if (token) {
-        // Validate token by querying user data
+        // Authenticate with stored token
+        const localDb = db.getLocal();
+        await localDb.authenticate(token);
+
+        // Query authenticated user info
         const [users] = await db.query.user
-          .queryLocal(
-            `
-          SELECT * FROM user WHERE id = $token.sub
-        `,
-            { token: { sub: token } }
-          )
+          .queryLocal(`SELECT * FROM $auth`)
           .collect();
 
         if (users && users.length > 0) {
@@ -52,21 +51,27 @@ export function AuthProvider(props: { children: JSX.Element }) {
 
   const signIn = async (username: string, password: string) => {
     try {
-      const [users] = await db.query.user
-        .queryLocal(
-          `
-        SELECT * FROM user WHERE username = $username AND crypto::argon2::compare(password, $password)
-      `,
-          { username, password }
-        )
-        .collect();
+      const localDb = db.getLocal();
 
-      if (users && users.length > 0) {
-        const user = users[0];
-        setUser(user);
-        localStorage.setItem("auth_token", user.id.toJSON());
-      } else {
-        throw new Error("Invalid username or password");
+      const authResponse = await localDb.signin({
+        access: "account",
+        variables: {
+          username,
+          password,
+        },
+      });
+
+      if (authResponse.token) {
+        localStorage.setItem("auth_token", authResponse.token);
+
+        // Query authenticated user info
+        const [users] = await db.query.user
+          .queryLocal(`SELECT * FROM $auth`)
+          .collect();
+
+        if (users && users.length > 0) {
+          setUser(users[0]);
+        }
       }
     } catch (error) {
       console.error("Sign in failed:", error);
@@ -76,29 +81,31 @@ export function AuthProvider(props: { children: JSX.Element }) {
 
   const signUp = async (username: string, password: string) => {
     try {
-      const userId = `user:${Date.now()}_${Math.random()
-        .toString(36)
-        .substring(2, 9)}`;
+      const localDb = db.getLocal();
+      const { namespace, database } = dbConfig;
 
-      const [users] = await db.query.user
-        .queryLocal(
-          `
-        CREATE user SET
-          id = $id,
-          username = $username,
-          password = crypto::argon2::generate($password),
-          created_at = time::now()
-      `,
-          { id: userId, username, password }
-        )
-        .collect();
+      // Use SurrealDB's signup method
+      const authResponse = await localDb.signup({
+        namespace,
+        database,
+        access: "account",
+        variables: {
+          username,
+          password,
+        },
+      });
 
-      if (users && users.length > 0) {
-        const user = users[0];
-        setUser(user);
-        localStorage.setItem("auth_token", user.id.toJSON());
-      } else {
-        throw new Error("Failed to create user");
+      if (authResponse.token) {
+        localStorage.setItem("auth_token", authResponse.token);
+
+        // Query authenticated user info
+        const [users] = await db.query.user
+          .queryLocal(`SELECT * FROM $auth`)
+          .collect();
+
+        if (users && users.length > 0) {
+          setUser(users[0]);
+        }
       }
     } catch (error) {
       console.error("Sign up failed:", error);
@@ -106,9 +113,16 @@ export function AuthProvider(props: { children: JSX.Element }) {
     }
   };
 
-  const signOut = () => {
-    setUser(null);
-    localStorage.removeItem("auth_token");
+  const signOut = async () => {
+    try {
+      const localDb = db.getLocal();
+      await localDb.invalidate();
+    } catch (error) {
+      console.error("Sign out failed:", error);
+    } finally {
+      setUser(null);
+      localStorage.removeItem("auth_token");
+    }
   };
 
   const authValue: AuthContextType = {

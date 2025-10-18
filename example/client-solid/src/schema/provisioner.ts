@@ -120,16 +120,13 @@ export class SchemaProvisioner {
   private async dropMainDatabase(): Promise<void> {
     try {
       console.log("Dropping main database...");
-
-      // Remove the entire database to ensure clean slate
       await this.localDb.query(`REMOVE DATABASE ${this.database};`);
-
-      // Recreate the database
+    } catch (error) {}
+    try {
       await this.localDb.query(`DEFINE DATABASE ${this.database};`);
-
       console.log("Main database dropped successfully");
     } catch (error) {
-      console.error("Error dropping main database:", error);
+      console.error("Error creating main database:", error);
       throw error;
     }
   }
@@ -150,6 +147,7 @@ export class SchemaProvisioner {
       for (const statement of statements) {
         try {
           await this.localDb.query(statement);
+          console.log(`Executed statement: ${statement}`);
         } catch (err: any) {
           console.error(`Error executing statement: ${statement}`);
           throw err;

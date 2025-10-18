@@ -13,8 +13,7 @@
     }
   },
   "scripts": {
-    "build": "vite build && pnpm run build:types",
-    "build:types": "vite-plugin-dts --entry src/index.ts --outDir dist",
+    "build": "vite build",
     "dev": "vite build --watch",
     "test": "vitest",
     "type-check": "tsc --noEmit"

@@ -30,7 +30,6 @@ export function CreateThreadDialog(props: CreateThreadDialogProps) {
       }
 
       const [threads] = await db.query.thread.createLocal({
-        author: user.id.toString(),
         title: title().trim(),
         content: content().trim(),
         created_at: new Date(),

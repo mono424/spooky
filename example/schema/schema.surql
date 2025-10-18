@@ -1,21 +1,4 @@
 -- ##################################################################
--- SCOPES & AUTHENTICATION
--- ##################################################################
-DEFINE SCOPE user_auth
-    SESSION 14d
-    SIGNUP (
-        CREATE user SET
-            id = $token.sub,
-            username = $token.username,
-            password = crypto::argon2::generate($token.password),
-            created_at = time::now()
-    )
-    SIGNIN (
-        SELECT * FROM user WHERE username = $token.username AND crypto::argon2::compare(password, $token.password)
-    )
-;
-
--- ##################################################################
 -- USER TABLE
 -- ##################################################################
 
@@ -26,6 +9,7 @@ DEFINE TABLE user SCHEMAFULL
 
 DEFINE FIELD username ON user TYPE string
     ASSERT $value != NONE AND string::is::alphanum($value) AND string::len($value) > 3;
+    
 DEFINE INDEX unique_username ON user FIELDS username UNIQUE;
 
 DEFINE FIELD password ON user TYPE string
@@ -33,6 +17,15 @@ DEFINE FIELD password ON user TYPE string
 
 DEFINE FIELD created_at ON user TYPE datetime
     VALUE $value OR time::now();
+
+-- ##################################################################
+-- SCOPES & AUTHENTICATION
+-- ##################################################################
+DEFINE ACCESS account ON DATABASE TYPE RECORD
+	SIGNUP ( CREATE user SET username = $username, password = crypto::argon2::generate($password) )
+	SIGNIN ( SELECT * FROM user WHERE username = $username AND crypto::argon2::compare(password, $password) )
+	DURATION FOR TOKEN 15m, FOR SESSION 12h
+;
 
 -- ##################################################################
 -- THREAD TABLE
