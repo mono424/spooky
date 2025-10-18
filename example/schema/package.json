@@ -30,7 +30,7 @@
   ],
   "author": "",
   "license": "MIT",
-  "packageManager": "pnpm@10.5.2",
+  "packageManager": "pnpm@9.0.0",
   "devDependencies": {
     "syncgen": "workspace:*",
     "vite": "^5.0.0",

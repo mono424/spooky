@@ -1,5 +1,10 @@
-import { RecordId, Surreal, Table, Values } from "surrealdb";
-import { createWasmEngines } from "@surrealdb/wasm";
+import {
+  RecordId,
+  Surreal,
+  Table,
+  Values,
+  createRemoteEngines,
+} from "surrealdb";
 import { SchemaProvisioner } from "./schema/provisioner";
 import { createSurrealDBWasm } from "./cache";
 import type { SyncedDbConfig, DbConnection } from "./types";
@@ -29,6 +34,11 @@ export class SyncedDb<Schema extends GenericSchema> {
     window.db = this;
   }
 
+  logDatabase(db: Surreal) {
+    console.log(`Database[cache] version: ${db.version}`);
+    console.log(`Database[cache] config: ${db.status}`);
+  }
+
   /**
    * Initialize local WASM DB and optional remote client, then provision local schema
    */
@@ -47,8 +57,8 @@ export class SyncedDb<Schema extends GenericSchema> {
     const internal = await createSurrealDBWasm(
       internalDbName,
       storageStrategy,
-      namespace,
-      database
+      "internal",
+      "main"
     );
 
     // Local WASM database
@@ -62,13 +72,13 @@ export class SyncedDb<Schema extends GenericSchema> {
     // Optional remote HTTP client
     let remote: Surreal | undefined;
     if (remoteUrl) {
-      remote = new Surreal({ engines: createWasmEngines() });
+      remote = new Surreal({ engines: createRemoteEngines() });
       await remote.connect(remoteUrl);
 
       if (namespace || database) {
         await remote.use({
-          namespace: namespace || "main",
-          database: database || "main",
+          namespace: namespace,
+          database: database,
         });
       }
       if (token) {
@@ -82,8 +92,8 @@ export class SyncedDb<Schema extends GenericSchema> {
     const provisioner = new SchemaProvisioner(
       internal,
       local,
-      namespace || "main",
-      database || "main"
+      namespace,
+      database
     );
     await provisioner.provision();
   }

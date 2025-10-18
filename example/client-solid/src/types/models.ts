@@ -7,6 +7,7 @@ export interface TempSchema {
   comment: Comment;
   thread: Thread;
   user: User;
+  [key: string]: any;
 }
 
 export interface Comment {

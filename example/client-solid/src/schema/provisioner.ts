@@ -147,7 +147,7 @@ export class SchemaProvisioner {
       for (const statement of statements) {
         try {
           await this.localDb.query(statement);
-          console.log(`Executed statement: ${statement}`);
+          console.info(`Executed statement:\n${statement}`);
         } catch (err: any) {
           console.error(`Error executing statement: ${statement}`);
           throw err;

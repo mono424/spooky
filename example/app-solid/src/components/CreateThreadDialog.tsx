@@ -29,14 +29,15 @@ export function CreateThreadDialog(props: CreateThreadDialogProps) {
         throw new Error("You must be logged in to create a thread");
       }
 
-      const [threads] = await db.query.thread.createLocal({
+      const [thread] = await db.query.thread.createLocal({
         title: title().trim(),
         content: content().trim(),
+        author: user.id,
         created_at: new Date(),
       });
 
-      if (threads && threads.length > 0) {
-        const threadId = threads[0].id;
+      if (thread) {
+        const threadId = thread.id;
         props.onClose();
         navigate(`/thread/${threadId}`);
       } else {
