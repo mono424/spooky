@@ -3,24 +3,15 @@ import { useNavigate } from "@solidjs/router";
 import { db } from "../lib/db";
 import { useAuth } from "../lib/auth";
 
-interface Thread {
-  id: string;
-  title: string;
-  content: string;
-  author: {
-    id: string;
-    username: string;
-  };
-  created_at: Date;
-}
-
 export function ThreadList() {
   const navigate = useNavigate();
   const auth = useAuth();
 
   const [threads, { refetch }] = createResource(async () => {
     try {
-      const result = await db.queryLocal<{ result: Thread[] }>(`
+      const [threads] = await db.query.thread
+        .queryLocal(
+          `
         SELECT 
           id,
           title,
@@ -30,17 +21,10 @@ export function ThreadList() {
           created_at
         FROM thread
         ORDER BY created_at DESC
-      `);
-
-      return (
-        result.result?.map((thread) => ({
-          ...thread,
-          author: {
-            id: thread.author_id,
-            username: thread.author_username,
-          },
-        })) || []
-      );
+      `
+        )
+        .collect();
+      return threads;
     } catch (error) {
       console.error("Failed to fetch threads:", error);
       return [];
@@ -74,14 +58,16 @@ export function ThreadList() {
         >
           {(thread) => (
             <div
-              onClick={() => handleThreadClick(thread.id)}
+              onClick={() => handleThreadClick(thread.id.toString())}
               class="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md cursor-pointer transition-shadow"
             >
               <h2 class="text-xl font-semibold mb-2">{thread.title}</h2>
               <p class="text-gray-600 mb-3 line-clamp-3">{thread.content}</p>
               <div class="flex justify-between items-center text-sm text-gray-500">
-                <span>By {thread.author.username}</span>
-                <span>{new Date(thread.created_at).toLocaleDateString()}</span>
+                <span>By {thread.author}</span>
+                <span>
+                  {new Date(thread.created_at ?? 0).toLocaleDateString()}
+                </span>
               </div>
             </div>
           )}

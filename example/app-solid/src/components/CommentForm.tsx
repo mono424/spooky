@@ -18,19 +18,16 @@ export function CommentForm(props: CommentFormProps) {
 
     setIsLoading(true);
     try {
-      await db.queryLocal(
-        `
-        CREATE comment SET
-          thread_id = $thread_id,
-          content = $content,
-          author = $author
-      `,
-        {
-          thread_id: props.threadId,
-          content: content().trim(),
-          author: auth.user()!.id,
-        }
-      );
+      const user = auth.user();
+      if (!user) {
+        throw new Error("You must be logged in to post a comment");
+      }
+
+      await db.query.comment.createLocal({
+        thread_id: props.threadId,
+        content: content().trim(),
+        author: user,
+      });
 
       setContent("");
       props.onCommentAdded();

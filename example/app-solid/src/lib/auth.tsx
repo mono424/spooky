@@ -1,8 +1,8 @@
 import { createContext, useContext, createSignal, JSX, Show } from "solid-js";
 import { db } from "./db";
-import { TempSchema } from "db-solid";
+import { Model, TempSchema } from "db-solid";
 
-type User = TempSchema["user"];
+type User = Model<TempSchema["user"]>;
 
 interface AuthContextType {
   user: () => User | null;
@@ -64,7 +64,7 @@ export function AuthProvider(props: { children: JSX.Element }) {
       if (users && users.length > 0) {
         const user = users[0];
         setUser(user);
-        localStorage.setItem("auth_token", user.id);
+        localStorage.setItem("auth_token", user.id.toJSON());
       } else {
         throw new Error("Invalid username or password");
       }
@@ -96,7 +96,7 @@ export function AuthProvider(props: { children: JSX.Element }) {
       if (users && users.length > 0) {
         const user = users[0];
         setUser(user);
-        localStorage.setItem("auth_token", user.id);
+        localStorage.setItem("auth_token", user.id.toJSON());
       } else {
         throw new Error("Failed to create user");
       }
