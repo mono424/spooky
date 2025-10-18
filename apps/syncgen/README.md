@@ -1,16 +1,10 @@
-# @whitepawn/syncgen
+# syncgen
 
 Generate TypeScript and Dart types from SurrealDB schema files.
 
 ## Overview
 
 This package wraps a Rust-based code generator that parses SurrealDB `.surql` schema files and generates type definitions. The core logic is implemented in Rust for performance, with a TypeScript/Node.js wrapper for easy integration into JavaScript/TypeScript projects.
-
-## Installation
-
-```bash
-npm install @whitepawn/syncgen
-```
 
 ## Prerequisites
 
