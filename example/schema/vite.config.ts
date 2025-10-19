@@ -1,9 +1,10 @@
 import { defineConfig, Plugin } from "vite";
-import { exec, execSync } from "child_process";
+import { exec, execSync, spawn, ChildProcess } from "child_process";
 import { watch } from "fs";
 import path from "path";
 
 let isRestarting = false;
+let logsProcess: ChildProcess | null = null;
 
 // Plugin to run build:ts after each build
 function buildTsPlugin(): Plugin {
@@ -25,6 +26,22 @@ function buildTsPlugin(): Plugin {
 function dockerComposePlugin(): Plugin {
   let schemaWatcher: ReturnType<typeof watch> | null = null;
 
+  const startDockerLogs = () => {
+    // Stop existing logs process if any
+    if (logsProcess) {
+      logsProcess.kill();
+    }
+
+    // Start docker-compose logs in follow mode
+    logsProcess = spawn("docker-compose", ["logs", "-f"], {
+      stdio: ["ignore", "inherit", "inherit"],
+    });
+
+    logsProcess.on("error", (error) => {
+      console.error("❌ Failed to start docker-compose logs:", error);
+    });
+  };
+
   const startDockerCompose = () => {
     return new Promise<void>((resolve, reject) => {
       console.log("\n🐳 Starting docker-compose...");
@@ -35,6 +52,11 @@ function dockerComposePlugin(): Plugin {
         } else {
           console.log("✅ docker-compose started\n");
           if (stdout) console.log(stdout);
+
+          // Start streaming logs
+          console.log("📋 Streaming docker-compose logs...\n");
+          startDockerLogs();
+
           resolve();
         }
       });
@@ -47,6 +69,12 @@ function dockerComposePlugin(): Plugin {
 
     try {
       console.log("\n🔄 Restarting docker-compose...");
+
+      // Stop logs process
+      if (logsProcess) {
+        logsProcess.kill();
+        logsProcess = null;
+      }
 
       // Stop and remove containers
       execSync("docker-compose down", { stdio: "inherit" });
@@ -87,13 +115,12 @@ function dockerComposePlugin(): Plugin {
       // Clean up on build end
       if (schemaWatcher) {
         schemaWatcher.close();
+        schemaWatcher = null;
       }
     },
     closeBundle() {
-      // Don't stop docker-compose in watch mode, only on final exit
-      if (!this.meta.watchMode) {
-        // In production build, don't manage docker at all
-      }
+      // Keep docker-compose running in the background
+      // Logs will continue to stream to the terminal
     },
   };
 }

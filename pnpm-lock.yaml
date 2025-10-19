@@ -76,7 +76,7 @@ importers:
         version: 0.10.10(solid-js@1.9.9)
       db-solid:
         specifier: workspace:*
-        version: link:../client-solid
+        version: link:../../packages/client-solid
       solid-js:
         specifier: ^1.8.7
         version: 1.9.9
@@ -103,7 +103,19 @@ importers:
         specifier: ^2.8.0
         version: 2.11.9(solid-js@1.9.9)(vite@5.4.20(@types/node@20.19.22)(lightningcss@1.30.1))
 
-  example/client-solid:
+  example/schema:
+    devDependencies:
+      syncgen:
+        specifier: workspace:*
+        version: link:../../apps/syncgen
+      typescript:
+        specifier: ^5.3.0
+        version: 5.9.3
+      vite:
+        specifier: ^5.0.0
+        version: 5.4.20(@types/node@20.19.22)(lightningcss@1.30.1)
+
+  packages/client-solid:
     dependencies:
       '@surrealdb/wasm':
         specifier: ^2.3.2
@@ -127,18 +139,6 @@ importers:
       vitest:
         specifier: ^1.0.0
         version: 1.6.1(@types/node@20.19.22)(lightningcss@1.30.1)
-
-  example/schema:
-    devDependencies:
-      syncgen:
-        specifier: workspace:*
-        version: link:../../apps/syncgen
-      typescript:
-        specifier: ^5.3.0
-        version: 5.9.3
-      vite:
-        specifier: ^5.0.0
-        version: 5.4.20(@types/node@20.19.22)(lightningcss@1.30.1)
 
 packages:
 
