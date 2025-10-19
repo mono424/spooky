@@ -50,7 +50,6 @@ export class SyncedDb<Schema extends GenericSchema> {
       namespace,
       database,
       remoteUrl,
-      token,
       schema,
     } = this.config;
 
@@ -82,9 +81,6 @@ export class SyncedDb<Schema extends GenericSchema> {
           database: database,
         });
       }
-      if (token) {
-        await remote.authenticate(token);
-      }
     }
 
     this.connections = { local, internal, remote };
@@ -98,6 +94,23 @@ export class SyncedDb<Schema extends GenericSchema> {
       schema
     );
     await provisioner.provision();
+  }
+
+  async authenticate(token: string): Promise<void> {
+    if (!this.connections?.remote)
+      throw new Error("Remote database is not configured");
+    try {
+      await this.connections.local.authenticate(token);
+    } catch (error) {
+      console.error("Local authentication failed:", error);
+      throw error;
+    }
+    try {
+      await this.connections.remote.authenticate(token);
+    } catch (error) {
+      console.error("Remote authentication failed:", error);
+      throw error;
+    }
   }
 
   getLocal(): Surreal {

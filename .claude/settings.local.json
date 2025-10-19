@@ -4,7 +4,8 @@
       "Bash(pnpm install:*)",
       "Bash(pnpm add:*)",
       "Bash(pnpm:*)",
-      "Bash(cargo build:*)"
+      "Bash(cargo build:*)",
+      "Bash(/Users/khadim/dev/spooky/apps/syncgen/target/release/syncgen:*)"
     ],
     "deny": [],
     "ask": []

@@ -24,8 +24,6 @@ export interface SyncedDbConfig {
   namespace?: string;
   /** Database name */
   database?: string;
-  /** Authentication token for remote database */
-  token?: string;
 }
 
 export interface LocalDbConfig {

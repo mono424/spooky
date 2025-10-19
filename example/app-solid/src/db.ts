@@ -1,5 +1,6 @@
 import { SyncedDb, type SyncedDbConfig } from "db-solid";
 import { type Schema, SURQL_SCHEMA } from "./schema.gen";
+export type { Schema };
 
 // Database configuration
 export const dbConfig: SyncedDbConfig = {
@@ -9,9 +10,7 @@ export const dbConfig: SyncedDbConfig = {
   storageStrategy: "indexeddb",
   namespace: "main",
   database: "thread_app",
-  // Uncomment and configure these for remote sync
-  // remoteUrl: "http://localhost:8000",
-  // token: "your-auth-token-here"
+  remoteUrl: "http://localhost:8000",
 };
 
 // Create and export the database instance with proper schema types

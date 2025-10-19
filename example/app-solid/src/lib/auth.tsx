@@ -1,8 +1,8 @@
 import { createContext, useContext, createSignal, JSX, Show } from "solid-js";
-import { db, dbConfig } from "./db";
-import type { Model, TempSchema } from "db-solid";
+import { db, dbConfig, type Schema } from "../db";
+import type { Model } from "db-solid";
 
-type User = Model<TempSchema["user"]>;
+type User = Model<Schema["user"]>;
 
 interface AuthContextType {
   user: () => User | null;
@@ -24,8 +24,7 @@ export function AuthProvider(props: { children: JSX.Element }) {
       const token = localStorage.getItem("auth_token");
       if (token) {
         // Authenticate with stored token
-        const localDb = db.getLocal();
-        await localDb.authenticate(token);
+        await db.authenticate(token);
 
         // Query authenticated user info
         const [users] = await db.query.user

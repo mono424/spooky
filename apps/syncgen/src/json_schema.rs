@@ -12,6 +12,8 @@ pub struct JsonSchema {
     pub schema_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub properties: Option<HashMap<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required: Option<Vec<String>>,
     pub definitions: HashMap<String, Value>,
 }
 
@@ -25,6 +27,7 @@ impl JsonSchemaGenerator {
     pub fn generate(&self, parser: &SchemaParser) -> JsonSchema {
         let mut definitions = HashMap::new();
         let mut properties = HashMap::new();
+        let mut required_tables = Vec::new();
 
         for (table_name, table_schema) in &parser.tables {
             let definition = self.generate_table_definition(table_schema);
@@ -37,12 +40,16 @@ impl JsonSchemaGenerator {
                     "$ref": format!("#/definitions/{}", table_name)
                 })
             );
+
+            // Mark all table properties as required
+            required_tables.push(table_name.clone());
         }
 
         JsonSchema {
             schema: "http://json-schema.org/draft-07/schema#".to_string(),
             schema_type: Some("object".to_string()),
             properties: Some(properties),
+            required: Some(required_tables),
             definitions,
         }
     }
