@@ -1,7 +1,9 @@
-import { SyncedDb, type SyncedDbConfig, type TempSchema } from "db-solid";
+import { SyncedDb, type SyncedDbConfig } from "db-solid";
+import { type Schema, SURQL_SCHEMA } from "./schema.gen";
 
 // Database configuration
 export const dbConfig: SyncedDbConfig = {
+  schema: SURQL_SCHEMA,
   localDbName: "thread-app-local",
   internalDbName: "syncdb-int",
   storageStrategy: "indexeddb",
@@ -13,7 +15,7 @@ export const dbConfig: SyncedDbConfig = {
 };
 
 // Create and export the database instance with proper schema types
-export const db = new SyncedDb<TempSchema>(dbConfig);
+export const db = new SyncedDb<Schema>(dbConfig);
 
 // Initialize the database
 let isInitialized = false;

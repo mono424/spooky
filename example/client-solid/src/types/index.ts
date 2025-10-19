@@ -10,6 +10,8 @@ declare global {
 export type CacheStrategy = "memory" | "indexeddb";
 
 export interface SyncedDbConfig {
+  /** Schema for the database */
+  schema: string;
   /** Remote database URL (optional) */
   remoteUrl?: string;
   /** Local database name for WASM storage */
@@ -62,5 +64,3 @@ export interface SyncOptions {
   /** Batch size for sync operations */
   batchSize?: number;
 }
-
-export type * from "./models";

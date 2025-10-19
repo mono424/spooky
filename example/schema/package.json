@@ -19,7 +19,7 @@
   ],
   "scripts": {
     "build": "vite build && pnpm run build:ts && pnpm run build:dart",
-    "build:ts": "syncgen --format typescript --input schema.surql --output ../client-solid/src/types/models.ts",
+    "build:ts": "syncgen --format typescript --input schema.surql --output ../app-solid/src/schema.gen.ts",
     "build:dart": "syncgen --format dart --input schema.surql --output ../client-dart/src/db/models.dart",
     "dev": "vite build --watch"
   },

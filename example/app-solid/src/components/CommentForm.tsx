@@ -1,5 +1,5 @@
 import { createSignal } from "solid-js";
-import { db } from "../lib/db";
+import { db } from "../db";
 import { useAuth } from "../lib/auth";
 
 interface CommentFormProps {

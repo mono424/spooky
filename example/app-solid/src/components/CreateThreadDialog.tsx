@@ -1,6 +1,6 @@
 import { createSignal, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import { db } from "../lib/db";
+import { db } from "../db";
 import { useAuth } from "../lib/auth";
 
 interface CreateThreadDialogProps {

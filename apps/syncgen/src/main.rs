@@ -48,6 +48,9 @@ fn main() -> Result<()> {
     let content = fs::read_to_string(&args.input)
         .context(format!("Failed to read input file: {:?}", args.input))?;
 
+    // Store the raw schema content for later use
+    let raw_schema_content = content.clone();
+
     // Parse the schema
     let mut parser = SchemaParser::new();
     parser
@@ -113,7 +116,7 @@ fn main() -> Result<()> {
         // Generate TypeScript
         let ts_gen = CodeGenerator::new_with_header(OutputFormat::Typescript, !args.no_header);
         let ts_code = ts_gen
-            .generate(&json_schema_string, "Database")
+            .generate_with_schema(&json_schema_string, "Database", Some(&raw_schema_content))
             .context("Failed to generate TypeScript code")?;
         let ts_path = args.output.with_extension("ts");
         fs::write(&ts_path, ts_code)
@@ -123,7 +126,7 @@ fn main() -> Result<()> {
         // Generate Dart
         let dart_gen = CodeGenerator::new_with_header(OutputFormat::Dart, !args.no_header);
         let dart_code = dart_gen
-            .generate(&json_schema_string, "Database")
+            .generate_with_schema(&json_schema_string, "Database", Some(&raw_schema_content))
             .context("Failed to generate Dart code")?;
         let dart_path = args.output.with_extension("dart");
         fs::write(&dart_path, dart_code)
@@ -135,7 +138,7 @@ fn main() -> Result<()> {
         // Generate single format
         let code_gen = CodeGenerator::new_with_header(output_format, !args.no_header);
         let output_content = code_gen
-            .generate(&json_schema_string, "Database")
+            .generate_with_schema(&json_schema_string, "Database", Some(&raw_schema_content))
             .context("Failed to generate code")?;
 
         fs::write(&args.output, output_content)

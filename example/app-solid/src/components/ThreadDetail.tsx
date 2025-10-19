@@ -1,6 +1,6 @@
 import { createResource, For, Show } from "solid-js";
 import { useNavigate, useParams } from "@solidjs/router";
-import { db } from "../lib/db";
+import { db } from "../db";
 import { useAuth } from "../lib/auth";
 import { CommentForm } from "./CommentForm";
 import { RecordId } from "db-solid";

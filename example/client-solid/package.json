@@ -30,8 +30,7 @@
   "packageManager": "pnpm@9.0.0",
   "dependencies": {
     "surrealdb": "^2.0.0-alpha.9",
-    "@surrealdb/wasm": "^2.3.2",
-    "database": "workspace:*"
+    "@surrealdb/wasm": "^2.3.2"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

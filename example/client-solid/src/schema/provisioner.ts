@@ -1,5 +1,4 @@
 import type { Surreal } from "surrealdb";
-import schemaSurql from "database/schema.surql?raw";
 
 async function sha1(str: string) {
   const enc = new TextEncoder();
@@ -32,14 +31,14 @@ export class SchemaProvisioner {
     localDb: Surreal,
     namespace: string = "main",
     database: string = "main",
-    customSchema?: string
+    schema: string
   ) {
     this.internalDb = internalDb;
     this.localDb = localDb;
     this.namespace = namespace;
     this.database = database;
     this.internalDatabase = `${database}__internal`;
-    this.schema = customSchema || schemaSurql;
+    this.schema = schema;
   }
 
   /**

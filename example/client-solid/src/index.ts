@@ -51,6 +51,7 @@ export class SyncedDb<Schema extends GenericSchema> {
       database,
       remoteUrl,
       token,
+      schema,
     } = this.config;
 
     // Internal WASM database
@@ -93,7 +94,8 @@ export class SyncedDb<Schema extends GenericSchema> {
       internal,
       local,
       namespace,
-      database
+      database,
+      schema
     );
     await provisioner.provision();
   }

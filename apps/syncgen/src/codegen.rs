@@ -37,6 +37,15 @@ impl CodeGenerator {
     }
 
     pub fn generate(&self, json_schema_content: &str, _top_level_name: &str) -> Result<String> {
+        self.generate_with_schema(json_schema_content, _top_level_name, None)
+    }
+
+    pub fn generate_with_schema(
+        &self,
+        json_schema_content: &str,
+        _top_level_name: &str,
+        raw_schema: Option<&str>,
+    ) -> Result<String> {
         let mut content = match self.format {
             OutputFormat::JsonSchema => json_schema_content.to_string(),
             OutputFormat::Typescript => self.generate_typescript(json_schema_content)?,
@@ -46,6 +55,11 @@ impl CodeGenerator {
         if self.include_header {
             let header = self.generate_header();
             content = format!("{}\n{}", header, content);
+        }
+
+        // Add raw schema constant for TypeScript and Dart
+        if let Some(schema) = raw_schema {
+            content = self.add_schema_constant(content, schema)?;
         }
 
         Ok(content)
@@ -89,7 +103,7 @@ impl CodeGenerator {
     fn run_quicktype(&self, json_schema_content: &str, lang: &str) -> Result<String> {
         // Create a temporary file for the JSON schema
         let temp_dir = std::env::temp_dir();
-        let schema_path = temp_dir.join("temp_schema.json");
+        let schema_path = temp_dir.join("schema.json");
 
         fs::write(&schema_path, json_schema_content)
             .context("Failed to write temporary schema file")?;
@@ -122,5 +136,35 @@ impl CodeGenerator {
             String::from_utf8(output.stdout).context("quicktype output is not valid UTF-8")?;
 
         Ok(code)
+    }
+
+    fn add_schema_constant(&self, content: String, schema: &str) -> Result<String> {
+        match self.format {
+            OutputFormat::Typescript => {
+                // Escape the schema content for TypeScript template literal
+                let escaped_schema = schema.replace("\\", "\\\\").replace("`", "\\`");
+
+                Ok(format!(
+                    "{}\n\n/**\n * The complete SurrealDB schema definition.\n * This constant contains the raw .surql schema file content.\n */\nexport const SURQL_SCHEMA = `{}`;\n",
+                    content, escaped_schema
+                ))
+            }
+            OutputFormat::Dart => {
+                // Escape the schema content for Dart string literal
+                let escaped_schema = schema
+                    .replace("\\", "\\\\")
+                    .replace("\"", "\\\"")
+                    .replace("$", "\\$");
+
+                Ok(format!(
+                    "{}\n\n/// The complete SurrealDB schema definition.\n/// This constant contains the raw .surql schema file content.\nconst String SURQL_SCHEMA = \"{}\";\n",
+                    content, escaped_schema
+                ))
+            }
+            OutputFormat::JsonSchema => {
+                // For JSON, we don't add a schema constant
+                Ok(content)
+            }
+        }
     }
 }

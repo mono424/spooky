@@ -1,6 +1,6 @@
 import { createResource, For } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import { db } from "../lib/db";
+import { db } from "../db";
 import { useAuth } from "../lib/auth";
 
 export function ThreadList() {
