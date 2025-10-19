@@ -26,7 +26,8 @@ export function CommentForm(props: CommentFormProps) {
       await db.query.comment.createLocal({
         thread_id: props.threadId,
         content: content().trim(),
-        author: user,
+        author: user.id,
+        created_at: new Date(),
       });
 
       setContent("");

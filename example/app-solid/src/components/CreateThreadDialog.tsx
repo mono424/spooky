@@ -37,7 +37,7 @@ export function CreateThreadDialog(props: CreateThreadDialogProps) {
       });
 
       if (thread) {
-        const threadId = thread.id;
+        const threadId = thread.id.id.toString();
         props.onClose();
         navigate(`/thread/${threadId}`);
       } else {

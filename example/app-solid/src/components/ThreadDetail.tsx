@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "@solidjs/router";
 import { db } from "../lib/db";
 import { useAuth } from "../lib/auth";
 import { CommentForm } from "./CommentForm";
+import { RecordId } from "db-solid";
 
 export function ThreadDetail() {
   const params = useParams();
@@ -14,20 +15,9 @@ export function ThreadDetail() {
     async (threadId) => {
       try {
         const [threads] = await db.query.thread
-          .queryLocal(
-            `
-          SELECT 
-            id,
-            title,
-            content,
-            author.id as author_id,
-            author.username as author_username,
-            created_at
-          FROM thread
-          WHERE id = $thread_id
-        `,
-            { thread_id: threadId }
-          )
+          .queryLocal(`SELECT * FROM thread WHERE id = $thread_id`, {
+            thread_id: new RecordId("thread", threadId),
+          })
           .collect();
 
         if (threads && threads.length > 0) {
@@ -55,16 +45,12 @@ export function ThreadDetail() {
           .queryLocal(
             `
           SELECT 
-            id,
-            content,
-            author.id as author_id,
-            author.username as author_username,
-            created_at
+            *
           FROM comment
           WHERE thread_id = $thread_id
           ORDER BY created_at ASC
         `,
-            { thread_id: threadId }
+            { thread_id: new RecordId("thread", threadId) }
           )
           .collect();
 
