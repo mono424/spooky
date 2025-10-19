@@ -10,8 +10,24 @@ services:
       - ./schema.surql:/schema.surql:ro
     command: start --log info --user root --pass root memory
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      test: ["CMD", "/surreal", "isready", "--conn", "http://localhost:8000"]
       interval: 10s
       timeout: 5s
       retries: 5
     restart: unless-stopped
+
+  schema-migration:
+    image: curlimages/curl:latest
+    depends_on:
+      surrealdb:
+        condition: service_healthy
+    volumes:
+      - ./schema.surql:/schema.surql:ro
+    command: >
+      sh -c "curl -X POST http://surrealdb:8000/sql
+      -H 'Accept: application/json'
+      -H 'surreal-ns: main'
+      -H 'surreal-db: main'
+      -u root:root
+      --data-binary @/schema.surql && echo 'Schema migration completed successfully'"
+    restart: "no"
