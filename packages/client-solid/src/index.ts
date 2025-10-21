@@ -5,7 +5,7 @@ import {
   Values,
   createRemoteEngines,
 } from "surrealdb";
-import { SchemaProvisioner } from "./schema/provisioner";
+import { SchemaProvisioner } from "./lib/provisioner";
 import { createSurrealDBWasm } from "./cache";
 import type { SyncedDbConfig, DbConnection } from "./types";
 import { GenericModel, GenericSchema, Model } from "./lib/models";
