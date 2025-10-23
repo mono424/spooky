@@ -10,6 +10,7 @@ import { createSurrealDBWasm } from "./cache";
 import type { SyncedDbConfig, DbConnection } from "./types";
 import { GenericModel, GenericSchema, Model } from "./lib/models";
 import { QueryNamespace, TableQueries } from "./lib/table-queries";
+import { Syncer } from "./lib/syncer";
 export type { RecordResult } from "surrealdb";
 export type { Model } from "./lib/models";
 
@@ -23,14 +24,18 @@ export type QueryResponse<T extends GenericModel> = Omit<
 };
 
 export class SyncedDb<Schema extends GenericSchema> {
-  private config: SyncedDbConfig;
+  private config: SyncedDbConfig<Schema>;
   private connections: DbConnection | null = null;
   public readonly query: QueryNamespace<Schema> & TableQueries<Schema>;
+  private tables: Table[] = [];
+  private syncer: Syncer | null = null;
 
-  constructor(config: SyncedDbConfig) {
+  constructor(config: SyncedDbConfig<Schema>) {
     this.config = config;
+    this.tables = config.tables.map((table) => new Table(table));
     this.query = new QueryNamespace<Schema>(this) as QueryNamespace<Schema> &
       TableQueries<Schema>;
+    console.log("[SyncedDb] Tables", this.tables);
     window.db = this;
   }
 
@@ -94,6 +99,10 @@ export class SyncedDb<Schema extends GenericSchema> {
       schema
     );
     await provisioner.provision();
+
+    if (remote) {
+      this.syncer = new Syncer(local, remote, this.tables);
+    }
   }
 
   async authenticate(token: string): Promise<void> {

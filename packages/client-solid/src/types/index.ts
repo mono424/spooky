@@ -1,5 +1,6 @@
 import type { Surreal } from "surrealdb";
 import type { SyncedDb } from "../index";
+import { GenericSchema } from "../lib/models";
 
 declare global {
   interface Window {
@@ -9,7 +10,8 @@ declare global {
 
 export type CacheStrategy = "memory" | "indexeddb";
 
-export interface SyncedDbConfig {
+export interface SyncedDbConfig<Schema extends GenericSchema> {
+  tables: (keyof Schema & string)[];
   /** Schema for the database */
   schema: string;
   /** Remote database URL (optional) */

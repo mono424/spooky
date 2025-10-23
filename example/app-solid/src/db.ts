@@ -3,7 +3,7 @@ import { type Schema, SURQL_SCHEMA } from "./schema.gen";
 export type { Schema };
 
 // Database configuration
-export const dbConfig: SyncedDbConfig = {
+export const dbConfig: SyncedDbConfig<Schema> = {
   schema: SURQL_SCHEMA,
   localDbName: "thread-app-local",
   internalDbName: "syncdb-int",
@@ -11,6 +11,7 @@ export const dbConfig: SyncedDbConfig = {
   namespace: "main",
   database: "thread_app",
   remoteUrl: "http://localhost:8000",
+  tables: ["user", "thread", "comment"],
 };
 
 // Create and export the database instance with proper schema types

@@ -10,6 +10,7 @@ export class Syncer {
   ) {
     this.localDb = localDb;
     this.remoteDb = remoteDb;
+    this.tables.forEach((table) => this.startSyncTable(table));
   }
 
   async startSyncTable(table: Table) {
@@ -19,6 +20,7 @@ export class Syncer {
     const liveQuery = await this.localDb.live(table).diff();
     liveQuery.subscribe((event) => this.onLiveQueryUpdate(table, event));
     this.liveQueries.set(table, liveQuery);
+    console.log("[Syncer] Syncing ", table.name);
   }
 
   async stopSyncTable(table: Table) {

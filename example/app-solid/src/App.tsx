@@ -1,7 +1,7 @@
 import { Router, Route } from "@solidjs/router";
 import { createSignal, Show, onMount } from "solid-js";
 import { AuthProvider, useAuth } from "./lib/auth";
-import { initDatabase } from "./lib/db";
+import { initDatabase } from "./db";
 import { AuthDialog } from "./components/AuthDialog";
 
 // Import routes
