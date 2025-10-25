@@ -24,6 +24,7 @@ export function ThreadDetail() {
   const [thread, setThread] = createSignal<Thread | null>(null);
 
   onMount(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 10));
     const liveQuery = await db.query.thread.liveQuery(
       {
         where: {

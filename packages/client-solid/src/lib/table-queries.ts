@@ -75,6 +75,7 @@ export class LiveQueryList<
   }
 
   public async init(): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, 10));
     await this.hydrate();
     await this.initLive();
   }
