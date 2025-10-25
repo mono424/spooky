@@ -1,41 +1,27 @@
-import { createResource, For, Show } from "solid-js";
+import { createResource, createSignal, For, Show } from "solid-js";
 import { useNavigate, useParams } from "@solidjs/router";
 import { db } from "../db";
-import { useAuth } from "../lib/auth";
 import { CommentForm } from "./CommentForm";
 import { RecordId } from "db-solid";
+import { Thread } from "../schema.gen";
 
 export function ThreadDetail() {
   const params = useParams();
   const navigate = useNavigate();
-  const auth = useAuth();
 
-  const [thread, { refetch: refetchThread }] = createResource(
-    () => params.id,
-    async (threadId) => {
-      try {
-        const [threads] = await db.query.thread
-          .queryLocal(`SELECT * FROM thread WHERE id = $thread_id`, {
-            thread_id: new RecordId("thread", threadId),
-          })
-          .collect();
+  const [thread, setThread] = createSignal<any | null>(null);
 
-        if (threads && threads.length > 0) {
-          const thread = threads[0];
-          return {
-            ...thread,
-            author: {
-              id: thread.author,
-            },
-          };
-        }
-        return null;
-      } catch (error) {
-        console.error("Failed to fetch thread:", error);
-        return null;
+  const liveQuery = db.query.thread.liveQuery({
+    thread_id: new RecordId("thread", params.id),
+  });
+
+  setInterval(async () => {
+    for await (const frame of liveQuery) {
+      if (frame.isValue<Thread>()) {
+        setThread(frame.value);
       }
     }
-  );
+  }, 10);
 
   const [comments, { refetch: refetchComments }] = createResource(
     () => params.id,
@@ -101,7 +87,7 @@ export function ThreadDetail() {
                 {threadData().content}
               </p>
               <div class="flex justify-between items-center text-sm text-gray-500 border-t pt-3">
-                <span>By {threadData().author?.id}</span>
+                <span>By {threadData().author}</span>
                 <span>
                   {new Date(threadData().created_at ?? 0).toLocaleDateString()}
                 </span>

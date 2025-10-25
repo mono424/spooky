@@ -1,4 +1,11 @@
-import { RecordId, Surreal, Table, Values } from "surrealdb";
+import {
+  Frame,
+  LiveSubscription,
+  RecordId,
+  Surreal,
+  Table,
+  Values,
+} from "surrealdb";
 import { GenericModel, GenericSchema, Model } from "./models";
 import { QueryResponse, SyncedDb } from "..";
 
@@ -13,6 +20,14 @@ class TableQuery<
 
   constructor(private db: SyncedDb<Schema>, public readonly tableName: K) {
     this.table = new Table(this.tableName);
+  }
+
+  liveQuery(where: Partial<Schema[K]>): AsyncIterable<Frame<Schema[K], false>> {
+    const whereClause = Object.keys(where)
+      .map(([key]) => `${key} = $${key}`)
+      .join(" AND ");
+    const query = `SELECT * FROM ${this.table.name} WHERE ${whereClause}`;
+    return this.db.queryLocal<Schema[K]>(query, where).stream();
   }
 
   queryLocal(
