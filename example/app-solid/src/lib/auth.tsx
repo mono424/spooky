@@ -20,17 +20,21 @@ export function AuthProvider(props: { children: JSX.Element }) {
 
   // Check for existing session on mount
   const checkAuth = async () => {
+    console.log("[auth] Checking authentication");
     try {
       const token = localStorage.getItem("auth_token");
       if (token) {
         // Authenticate with stored token
+        console.log("[auth] Authenticating with token");
         await db.authenticate(token);
 
+        console.log("[auth] Querying authenticated user info");
         // Query authenticated user info
         const [users] = await db.query.user
           .queryLocal(`SELECT * FROM $auth`)
           .collect();
 
+        console.log("[auth] Authenticated user info", users);
         if (users && users.length > 0) {
           setUser(users[0]);
         } else {

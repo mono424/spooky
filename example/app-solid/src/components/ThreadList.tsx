@@ -1,35 +1,27 @@
-import { createResource, For } from "solid-js";
+import { createResource, createSignal, For } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { db } from "../db";
 import { useAuth } from "../lib/auth";
+import { Thread } from "../schema.gen";
 
 export function ThreadList() {
   const navigate = useNavigate();
   const auth = useAuth();
 
-  const [threads, { refetch }] = createResource(async () => {
-    try {
-      const [threads] = await db.query.thread
-        .queryLocal(
-          `
-        SELECT 
-          id,
-          title,
-          content,
-          author.id as author_id,
-          author.username as author_username,
-          created_at
-        FROM thread
-        ORDER BY created_at DESC
-      `
-        )
-        .collect();
-      return threads;
-    } catch (error) {
-      console.error("Failed to fetch threads:", error);
-      return [];
+  const [threads, setThreads] = createSignal<Thread[]>([]);
+
+  const liveQuery = db.query.thread.liveQuery({});
+
+  setInterval(async () => {
+    for await (const frame of liveQuery) {
+      if (frame.isValue<Thread>()) {
+        console.log("[ThreadList] Frame value", frame.value);
+        setThreads((prev) => [...prev, frame.value]);
+      } else {
+        console.log(frame);
+      }
     }
-  });
+  }, 10);
 
   const handleThreadClick = (threadId: string) => {
     navigate(`/thread/${threadId}`);

@@ -6,80 +6,92 @@ import {
   Table,
   Values,
 } from "surrealdb";
-import { GenericModel, GenericSchema, Model } from "./models";
+import { GenericModel, GenericSchema, ModelPayload } from "./models";
 import { QueryResponse, SyncedDb } from "..";
 
 /**
  * Table query interface for a specific table. The response type is inferred from Schema[K].
  */
-class TableQuery<
-  Schema extends GenericSchema,
-  K extends keyof Schema & string
-> {
+class TableQuery<Schema extends GenericSchema, Model extends GenericModel> {
   private table: Table;
 
-  constructor(private db: SyncedDb<Schema>, public readonly tableName: K) {
+  constructor(private db: SyncedDb<Schema>, public readonly tableName: string) {
     this.table = new Table(this.tableName);
   }
 
-  liveQuery(where: Partial<Schema[K]>): AsyncIterable<Frame<Schema[K], false>> {
-    const whereClause = Object.keys(where)
-      .map(([key]) => `${key} = $${key}`)
+  liveQuery({
+    select,
+    where,
+    orderBy,
+  }: {
+    select?: ((keyof Model & string) | "*")[];
+    where?: Partial<Model>;
+    orderBy?: Partial<Record<keyof Model, "asc" | "desc">>;
+  }): AsyncIterable<Frame<Model, false>> {
+    const selectClause = (select ?? ["*"]).map((key) => `${key}`).join(", ");
+
+    const whereClause = Object.keys(where ?? {})
+      .map((key) => `${key} = $${key}`)
       .join(" AND ");
-    const query = `SELECT * FROM ${this.table.name} WHERE ${whereClause}`;
-    return this.db.queryLocal<Schema[K]>(query, where).stream();
+
+    const orderClause = Object.entries(orderBy ?? {})
+      .map(([key, val]) => `${key} ${val}`)
+      .join(", ");
+
+    const query = `LIVE SELECT ${selectClause}
+    FROM ${this.table.name}
+    ${whereClause ? `WHERE ${whereClause}` : ""}
+    ${orderClause ? `ORDER BY ${orderClause}` : ""}`;
+
+    return this.db.queryLocal<Model>(query, where).stream();
   }
 
   queryLocal(
     sql: string,
     vars?: Record<string, unknown>
-  ): QueryResponse<Schema[K]> {
-    return this.db.queryLocal<Schema[K]>(sql, vars);
+  ): QueryResponse<Model> {
+    return this.db.queryLocal<Model>(sql, vars);
   }
 
   queryRemote(
     sql: string,
     vars?: Record<string, unknown>
-  ): QueryResponse<Schema[K]> {
-    return this.db.queryRemote<Schema[K]>(sql, vars);
+  ): QueryResponse<Model> {
+    return this.db.queryRemote<Model>(sql, vars);
   }
 
-  createLocal<T extends GenericModel = Schema[K]>(
-    data: Values<Model<T>> | Values<Model<T>>[]
+  createLocal(
+    data: Values<ModelPayload<Model>> | Values<ModelPayload<Model>>[]
   ): ReturnType<Surreal["insert"]> {
-    return this.db.createLocal<T>(this.table, data);
+    return this.db.createLocal<Model>(this.table, data);
   }
 
-  createRemote<T extends GenericModel = Schema[K]>(
-    data: Values<Model<T>> | Values<Model<T>>[]
+  createRemote(
+    data: Values<ModelPayload<Model>> | Values<ModelPayload<Model>>[]
   ): ReturnType<Surreal["insert"]> {
-    return this.db.createRemote<T>(this.table, data);
+    return this.db.createRemote<Model>(this.table, data);
   }
 
-  updateLocal<T extends GenericModel = Schema[K]>(
+  updateLocal(
     recordId: RecordId,
-    data: Partial<T>
+    data: Partial<Model>
   ): ReturnType<Surreal["update"]> {
-    return this.db.updateLocal<T>(recordId, data);
+    return this.db.updateLocal<Model>(recordId, data);
   }
 
-  updateRemote<T extends GenericModel = Schema[K]>(
+  updateRemote(
     recordId: RecordId,
-    data: Partial<T>
+    data: Partial<Model>
   ): ReturnType<Surreal["update"]> {
-    return this.db.updateRemote<T>(recordId, data);
+    return this.db.updateRemote<Model>(recordId, data);
   }
 
-  deleteLocal<T extends GenericModel = Schema[K]>(
-    table: Table
-  ): ReturnType<Surreal["delete"]> {
-    return this.db.deleteLocal<T>(table);
+  deleteLocal(table: Table): ReturnType<Surreal["delete"]> {
+    return this.db.deleteLocal<Model>(table);
   }
 
-  deleteRemote<T extends GenericModel = Schema[K]>(
-    table: Table
-  ): ReturnType<Surreal["delete"]> {
-    return this.db.deleteRemote<T>(table);
+  deleteRemote(table: Table): ReturnType<Surreal["delete"]> {
+    return this.db.deleteRemote<Model>(table);
   }
 }
 
@@ -89,7 +101,7 @@ class TableQuery<
 export class QueryNamespace<Schema extends GenericSchema> {
   private tableCache = new Map<
     keyof Schema & string,
-    TableQuery<Schema, any>
+    TableQuery<Schema, Schema[keyof Schema & string]>
   >();
 
   constructor(private db: SyncedDb<Schema>) {
@@ -102,10 +114,14 @@ export class QueryNamespace<Schema extends GenericSchema> {
           prop !== "db"
         ) {
           const key = prop as keyof Schema & string;
+          console.log(key, typeof key);
           if (!target.tableCache.has(key)) {
             target.tableCache.set(
               key,
-              new TableQuery<Schema, typeof key>(target.db, key)
+              new TableQuery<Schema, Schema[keyof Schema & string]>(
+                target.db,
+                key
+              )
             );
           }
           return target.tableCache.get(key);
@@ -120,5 +136,5 @@ export class QueryNamespace<Schema extends GenericSchema> {
  * Type helper for table queries
  */
 export type TableQueries<Schema extends GenericSchema> = {
-  [K in keyof Schema & string]: TableQuery<Schema, K>;
+  [K in keyof Schema & string]: TableQuery<Schema, Schema[K]>;
 };

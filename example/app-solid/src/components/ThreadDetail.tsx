@@ -9,10 +9,12 @@ export function ThreadDetail() {
   const params = useParams();
   const navigate = useNavigate();
 
-  const [thread, setThread] = createSignal<any | null>(null);
+  const [thread, setThread] = createSignal<Thread | null>(null);
 
   const liveQuery = db.query.thread.liveQuery({
-    thread_id: new RecordId("thread", params.id),
+    where: {
+      id: new RecordId("thread", params.id),
+    },
   });
 
   setInterval(async () => {

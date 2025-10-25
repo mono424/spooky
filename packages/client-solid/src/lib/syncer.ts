@@ -10,7 +10,7 @@ export class Syncer {
   ) {
     this.localDb = localDb;
     this.remoteDb = remoteDb;
-    this.tables.forEach((table) => this.startSyncTable(table));
+    // this.tables.forEach((table) => this.startSyncTable(table));
   }
 
   async startSyncTable(table: Table) {

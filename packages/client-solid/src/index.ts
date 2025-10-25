@@ -8,11 +8,10 @@ import {
 import { SchemaProvisioner } from "./lib/provisioner";
 import { createSurrealDBWasm } from "./cache";
 import type { SyncedDbConfig, DbConnection } from "./types";
-import { GenericModel, GenericSchema, Model } from "./lib/models";
+import { GenericModel, GenericSchema, ModelPayload } from "./lib/models";
 import { QueryNamespace, TableQueries } from "./lib/table-queries";
 import { Syncer } from "./lib/syncer";
 export type { RecordResult } from "surrealdb";
-export type { Model } from "./lib/models";
 
 export { RecordId } from "surrealdb";
 
@@ -20,13 +19,13 @@ export type QueryResponse<T extends GenericModel> = Omit<
   ReturnType<Surreal["query"]>,
   "collect"
 > & {
-  collect: () => Promise<[Model<T>[]]>;
+  collect: () => Promise<[ModelPayload<T>[]]>;
 };
 
 export class SyncedDb<Schema extends GenericSchema> {
   private config: SyncedDbConfig<Schema>;
   private connections: DbConnection | null = null;
-  public readonly query: QueryNamespace<Schema> & TableQueries<Schema>;
+  public readonly query: TableQueries<Schema>;
   private tables: Table[] = [];
   private syncer: Syncer | null = null;
 
@@ -139,17 +138,17 @@ export class SyncedDb<Schema extends GenericSchema> {
     const res = db.query(sql, vars as any);
     const oCollect = res.collect.bind(res);
     return Object.assign(res, {
-      collect: () => oCollect<[Model<T>[]]>(),
+      collect: () => oCollect<[ModelPayload<T>[]]>(),
     });
   }
 
   _create<T extends GenericModel>(
     db: Surreal,
     table: Table,
-    data: Values<Model<T>> | Values<Model<T>>[]
+    data: Values<ModelPayload<T>> | Values<ModelPayload<T>>[]
   ): ReturnType<Surreal["insert"]> {
     console.log("createLocal", table, data);
-    return db.insert<Model<T>>(table, data);
+    return db.insert<ModelPayload<T>>(table, data);
   }
 
   _update<T extends Record<string, unknown> = Record<string, unknown>>(
@@ -186,7 +185,7 @@ export class SyncedDb<Schema extends GenericSchema> {
 
   createLocal<T extends GenericModel>(
     thing: Table,
-    data: Values<Model<T>> | Values<Model<T>>[]
+    data: Values<ModelPayload<T>> | Values<ModelPayload<T>>[]
   ): ReturnType<Surreal["create"]> {
     const db = this.getLocal();
     return this._create<T>(db, thing, data);
@@ -194,7 +193,7 @@ export class SyncedDb<Schema extends GenericSchema> {
 
   createRemote<T extends GenericModel>(
     table: Table,
-    data: Values<Model<T>> | Values<Model<T>>[]
+    data: Values<ModelPayload<T>> | Values<ModelPayload<T>>[]
   ): ReturnType<Surreal["create"]> {
     const db = this.getRemote();
     if (!db) throw new Error("Remote database is not configured");
