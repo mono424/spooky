@@ -1,9 +1,21 @@
-import { createResource, createSignal, For, Show } from "solid-js";
+import {
+  createResource,
+  createSignal,
+  For,
+  Show,
+  onCleanup,
+  onMount,
+} from "solid-js";
 import { useNavigate, useParams } from "@solidjs/router";
 import { db } from "../db";
 import { CommentForm } from "./CommentForm";
 import { RecordId } from "db-solid";
-import { Thread } from "../schema.gen";
+import { Thread, Comment } from "../schema.gen";
+
+// Type for transformed comment with nested author
+type TransformedComment = Omit<Comment, "author"> & {
+  author: { id: string };
+};
 
 export function ThreadDetail() {
   const params = useParams();
@@ -11,23 +23,26 @@ export function ThreadDetail() {
 
   const [thread, setThread] = createSignal<Thread | null>(null);
 
-  const liveQuery = db.query.thread.liveQuery({
-    where: {
-      id: new RecordId("thread", params.id),
-    },
-  });
-
-  setInterval(async () => {
-    for await (const frame of liveQuery) {
-      if (frame.isValue<Thread>()) {
-        setThread(frame.value);
+  onMount(async () => {
+    const liveQuery = await db.query.thread.liveQuery(
+      {
+        where: {
+          id: new RecordId("thread", params.id),
+        },
+      },
+      (thread) => {
+        if (thread.length > 0) setThread(thread[0]);
       }
-    }
-  }, 10);
+    );
+
+    onCleanup(() => {
+      liveQuery.kill();
+    });
+  });
 
   const [comments, { refetch: refetchComments }] = createResource(
     () => params.id,
-    async (threadId) => {
+    async (threadId): Promise<TransformedComment[]> => {
       try {
         const [comments] = await db.query.comment
           .queryLocal(
@@ -43,12 +58,17 @@ export function ThreadDetail() {
           .collect();
 
         return comments && comments.length > 0
-          ? comments.map((comment) => ({
-              ...comment,
-              author: {
-                id: comment.author,
-              },
-            }))
+          ? comments.map(
+              (comment): TransformedComment => ({
+                id: comment.id,
+                content: comment.content,
+                thread_id: comment.thread_id,
+                created_at: comment.created_at,
+                author: {
+                  id: comment.author,
+                },
+              })
+            )
           : [];
       } catch (error) {
         console.error("Failed to fetch comments:", error);

@@ -35,7 +35,6 @@ export class SyncedDb<Schema extends GenericSchema> {
     this.query = new QueryNamespace<Schema>(this) as QueryNamespace<Schema> &
       TableQueries<Schema>;
     console.log("[SyncedDb] Tables", this.tables);
-    window.db = this;
   }
 
   logDatabase(db: Surreal) {
@@ -101,6 +100,7 @@ export class SyncedDb<Schema extends GenericSchema> {
 
     if (remote) {
       this.syncer = new Syncer(local, remote, this.tables);
+      // await this.syncer.init();
     }
   }
 

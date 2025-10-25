@@ -1,4 +1,10 @@
-import { createResource, createSignal, For } from "solid-js";
+import {
+  createResource,
+  createSignal,
+  For,
+  onCleanup,
+  onMount,
+} from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { db } from "../db";
 import { useAuth } from "../lib/auth";
@@ -10,18 +16,13 @@ export function ThreadList() {
 
   const [threads, setThreads] = createSignal<Thread[]>([]);
 
-  const liveQuery = db.query.thread.liveQuery({});
+  onMount(async () => {
+    const liveQuery = await db.query.thread.liveQuery({}, setThreads);
 
-  setInterval(async () => {
-    for await (const frame of liveQuery) {
-      if (frame.isValue<Thread>()) {
-        console.log("[ThreadList] Frame value", frame.value);
-        setThreads((prev) => [...prev, frame.value]);
-      } else {
-        console.log(frame);
-      }
-    }
-  }, 10);
+    onCleanup(() => {
+      liveQuery.kill();
+    });
+  });
 
   const handleThreadClick = (threadId: string) => {
     navigate(`/thread/${threadId}`);
@@ -50,7 +51,7 @@ export function ThreadList() {
         >
           {(thread) => (
             <div
-              onClick={() => handleThreadClick(thread.id.id.toString())}
+              onClick={() => handleThreadClick(thread.id)}
               class="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md cursor-pointer transition-shadow"
             >
               <h2 class="text-xl font-semibold mb-2">{thread.title}</h2>
