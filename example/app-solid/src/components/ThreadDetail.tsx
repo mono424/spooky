@@ -9,7 +9,7 @@ import {
 import { useNavigate, useParams } from "@solidjs/router";
 import { db } from "../db";
 import { CommentForm } from "./CommentForm";
-import { RecordId } from "db-solid";
+import { Model, RecordId } from "db-solid";
 import { Thread, Comment } from "../schema.gen";
 
 // Type for transformed comment with nested author
@@ -21,11 +21,11 @@ export function ThreadDetail() {
   const params = useParams();
   const navigate = useNavigate();
 
-  const [thread, setThread] = createSignal<Thread | null>(null);
+  const [thread, setThread] = createSignal<Model<Thread> | null>(null);
+  const [comments, setComments] = createSignal<Model<Comment>[]>([]);
 
   onMount(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    const liveQuery = await db.query.thread.liveQuery(
+    const threadLiveQuery = await db.query.thread.liveQuery(
       {
         where: {
           id: new RecordId("thread", params.id),
@@ -36,51 +36,22 @@ export function ThreadDetail() {
       }
     );
 
+    const commentsLiveQuery = await db.query.comment.liveQuery(
+      {
+        where: {
+          thread_id: new RecordId("thread", params.id),
+        },
+      },
+      (comments) => {
+        setComments(comments);
+      }
+    );
+
     onCleanup(() => {
-      liveQuery.kill();
+      threadLiveQuery.kill();
+      commentsLiveQuery.kill();
     });
   });
-
-  const [comments, { refetch: refetchComments }] = createResource(
-    () => params.id,
-    async (threadId): Promise<TransformedComment[]> => {
-      try {
-        const [comments] = await db.query.comment
-          .queryLocal(
-            `
-          SELECT 
-            *
-          FROM comment
-          WHERE thread_id = $thread_id
-          ORDER BY created_at ASC
-        `,
-            { thread_id: new RecordId("thread", threadId) }
-          )
-          .collect();
-
-        return comments && comments.length > 0
-          ? comments.map(
-              (comment): TransformedComment => ({
-                id: comment.id,
-                content: comment.content,
-                thread_id: comment.thread_id,
-                created_at: comment.created_at,
-                author: {
-                  id: comment.author,
-                },
-              })
-            )
-          : [];
-      } catch (error) {
-        console.error("Failed to fetch comments:", error);
-        return [];
-      }
-    }
-  );
-
-  const handleCommentAdded = () => {
-    refetchComments();
-  };
 
   const handleBack = () => {
     navigate("/");
@@ -125,10 +96,7 @@ export function ThreadDetail() {
 
               {/* Comment Form */}
               <div class="bg-gray-50 border border-gray-200 rounded-lg p-4">
-                <CommentForm
-                  threadId={threadData().id}
-                  onCommentAdded={handleCommentAdded}
-                />
+                <CommentForm threadId={threadData().id.toString()} />
               </div>
 
               {/* Comments List */}

@@ -66,7 +66,8 @@ impl CodeGenerator {
     }
 
     fn generate_typescript(&self, json_schema_content: &str) -> Result<String> {
-        self.run_quicktype(json_schema_content, "typescript")
+        let output = self.run_quicktype(json_schema_content, "typescript")?;
+        Ok(self.add_index_signature_to_interfaces(output))
     }
 
     fn generate_dart(&self, json_schema_content: &str) -> Result<String> {
@@ -136,6 +137,97 @@ impl CodeGenerator {
             String::from_utf8(output.stdout).context("quicktype output is not valid UTF-8")?;
 
         Ok(code)
+    }
+
+    fn add_index_signature_to_interfaces(&self, content: String) -> String {
+        let lines: Vec<&str> = content.lines().collect();
+        let mut result = Vec::new();
+        let mut i = 0;
+
+        while i < lines.len() {
+            let line = lines[i];
+            result.push(line.to_string());
+
+            // Check if this line starts an interface definition
+            if line.trim_start().starts_with("export interface ") {
+                // Find the opening brace
+                let mut brace_found = false;
+                let mut j = i;
+
+                while j < lines.len() && !brace_found {
+                    if lines[j].contains("{") {
+                        brace_found = true;
+
+                        // If opening brace is not on the same line as we just added, add those lines too
+                        if j > i {
+                            for k in (i + 1)..=j {
+                                result.push(lines[k].to_string());
+                            }
+                            i = j;
+                        }
+                    }
+                    j += 1;
+                }
+
+                // Now find the closing brace and check if we need to add the index signature
+                if brace_found {
+                    let mut brace_count = 0;
+                    let mut started = false;
+                    let mut closing_line_idx = i;
+                    let mut has_properties = false;
+                    let mut has_index_signature = false;
+
+                    for k in i..lines.len() {
+                        for ch in lines[k].chars() {
+                            if ch == '{' {
+                                brace_count += 1;
+                                started = true;
+                            } else if ch == '}' {
+                                brace_count -= 1;
+                                if started && brace_count == 0 {
+                                    closing_line_idx = k;
+                                    break;
+                                }
+                            }
+                        }
+                        if started && brace_count == 0 {
+                            break;
+                        }
+
+                        // Check if there are properties (lines with : that aren't index signatures)
+                        let trimmed = lines[k].trim();
+                        if trimmed.contains(':') {
+                            if trimmed.starts_with('[') && trimmed.contains("string]") && trimmed.contains(": any") {
+                                has_index_signature = true;
+                            } else if !trimmed.starts_with("//") && !trimmed.starts_with("*") {
+                                has_properties = true;
+                            }
+                        }
+                    }
+
+                    // Add all lines until the closing brace
+                    for k in (i + 1)..closing_line_idx {
+                        result.push(lines[k].to_string());
+                    }
+
+                    // Add index signature before the closing brace if there are properties and no existing index signature
+                    if has_properties && !has_index_signature && closing_line_idx > i {
+                        // Get the indentation from the closing brace line
+                        let closing_line = lines[closing_line_idx];
+                        let indent = closing_line.chars().take_while(|c| c.is_whitespace()).collect::<String>();
+                        result.push(format!("{}    [property: string]: any;", indent));
+                    }
+
+                    // Add the closing brace
+                    result.push(lines[closing_line_idx].to_string());
+                    i = closing_line_idx;
+                }
+            }
+
+            i += 1;
+        }
+
+        result.join("\n")
     }
 
     fn add_schema_constant(&self, content: String, schema: &str) -> Result<String> {

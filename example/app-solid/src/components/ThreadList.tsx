@@ -7,14 +7,13 @@ import {
 } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { db } from "../db";
-import { useAuth } from "../lib/auth";
-import { Thread } from "../schema.gen";
+import type { Thread } from "../schema.gen";
+import { Model } from "db-solid";
 
 export function ThreadList() {
   const navigate = useNavigate();
-  const auth = useAuth();
 
-  const [threads, setThreads] = createSignal<Thread[]>([]);
+  const [threads, setThreads] = createSignal<Model<Thread>[]>([]);
 
   onMount(async () => {
     const liveQuery = await db.query.thread.liveQuery({}, setThreads);
@@ -51,7 +50,7 @@ export function ThreadList() {
         >
           {(thread) => (
             <div
-              onClick={() => handleThreadClick(thread.id)}
+              onClick={() => handleThreadClick(thread.id.id.toString())}
               class="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md cursor-pointer transition-shadow"
             >
               <h2 class="text-xl font-semibold mb-2">{thread.title}</h2>

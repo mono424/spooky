@@ -14,6 +14,12 @@ import { Syncer } from "./lib/syncer";
 export type { RecordResult } from "surrealdb";
 
 export { RecordId } from "surrealdb";
+export type {
+  Model,
+  GenericModel,
+  GenericSchema,
+  ModelPayload,
+} from "./lib/models";
 
 export type QueryResponse<T extends GenericModel> = Omit<
   ReturnType<Surreal["query"]>,

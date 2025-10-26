@@ -4,7 +4,7 @@ import { useAuth } from "../lib/auth";
 
 interface CommentFormProps {
   threadId: string;
-  onCommentAdded: () => void;
+  onCommentAdded?: () => void;
 }
 
 export function CommentForm(props: CommentFormProps) {
@@ -31,7 +31,7 @@ export function CommentForm(props: CommentFormProps) {
       });
 
       setContent("");
-      props.onCommentAdded();
+      props.onCommentAdded?.();
     } catch (error) {
       console.error("Failed to create comment:", error);
     } finally {

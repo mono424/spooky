@@ -181,7 +181,7 @@ export class SchemaProvisioner {
     try {
       // Insert new schema record
       await this.internalDb.query(
-        `CREATE __schema SET hash = $hash, created_at = time::now();`,
+        `UPSERT __schema SET hash = $hash, created_at = time::now() WHERE hash = $hash;`,
         { hash }
       );
 
