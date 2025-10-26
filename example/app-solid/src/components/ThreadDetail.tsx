@@ -96,7 +96,7 @@ export function ThreadDetail() {
 
               {/* Comment Form */}
               <div class="bg-gray-50 border border-gray-200 rounded-lg p-4">
-                <CommentForm threadId={threadData().id.toString()} />
+                <CommentForm thread={threadData()} />
               </div>
 
               {/* Comments List */}

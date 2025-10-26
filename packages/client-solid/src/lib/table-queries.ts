@@ -51,11 +51,15 @@ export class LiveQueryList<
   }
 
   private async initLive(): Promise<void> {
+    console.log("[LiveQueryList] Init Live", this.liveQuery);
     const [queryId] = (await this.db
       .queryLocal(this.liveQuery.query, this.liveQuery.vars)
       .collect()) as unknown as [Uuid];
+    console.log("[LiveQueryList] QueryId", queryId);
     this.liveQ = await this.db.getLocal().liveOf(queryId);
+    console.log("[LiveQueryList] LiveQ", this.liveQ);
     this.liveQ.subscribe((event) => {
+      console.log("[LiveQueryList] Event", event);
       event.value = {
         ...event.value,
         id: (event?.value?.id as RecordId)?.id,

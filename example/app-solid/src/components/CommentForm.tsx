@@ -1,9 +1,11 @@
 import { createSignal } from "solid-js";
 import { db } from "../db";
 import { useAuth } from "../lib/auth";
+import { Model } from "db-solid";
+import { Thread } from "../schema.gen";
 
 interface CommentFormProps {
-  threadId: string;
+  thread: Model<Thread>;
   onCommentAdded?: () => void;
 }
 
@@ -24,7 +26,7 @@ export function CommentForm(props: CommentFormProps) {
       }
 
       await db.query.comment.createLocal({
-        thread_id: props.threadId,
+        thread_id: props.thread.id,
         content: content().trim(),
         author: user.id,
         created_at: new Date(),
