@@ -1,5 +1,5 @@
 {
-  "name": "app-solid",
+  "name": "@example/app-solid",
   "version": "1.0.0",
   "description": "Solid.js Thread Application with Authentication",
   "type": "module",
@@ -12,7 +12,7 @@
   "dependencies": {
     "solid-js": "^1.8.7",
     "@solidjs/router": "^0.10.2",
-    "db-solid": "workspace:*"
+    "@spooky/client-solid": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

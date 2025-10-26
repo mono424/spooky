@@ -74,7 +74,7 @@ importers:
       '@solidjs/router':
         specifier: ^0.10.2
         version: 0.10.10(solid-js@1.9.9)
-      db-solid:
+      '@spooky/client-solid':
         specifier: workspace:*
         version: link:../../packages/client-solid
       solid-js:
@@ -123,6 +123,9 @@ importers:
       surrealdb:
         specifier: ^2.0.0-alpha.9
         version: 2.0.0-alpha.9(tslib@2.8.1)(typescript@5.9.3)
+      valtio:
+        specifier: ^2.1.8
+        version: 2.1.8(@types/react@19.2.2)(react@19.2.0)
     devDependencies:
       '@types/node':
         specifier: ^20.0.0
@@ -2424,6 +2427,9 @@ packages:
   property-information@7.1.0:
     resolution: {integrity: sha512-TwEZ+X+yCJmYfL7TPUOcvBZ4QfoT5YenQiJuX//0th53DE6w0xxLEtfK3iyryQFddXuvkIk51EEgrJQ0WJkOmQ==}
 
+  proxy-compare@3.0.1:
+    resolution: {integrity: sha512-V9plBAt3qjMlS1+nC8771KNf6oJ12gExvaxnNzN/9yVRLdTv/lc+oJlnSzrdYDAvBfTStPCoiaCOTmTs0adv7Q==}
+
   punycode@2.3.1:
     resolution: {integrity: sha512-vYt7UD1U9Wg6138shLtLOvdAu+8DsC/ilFtEVHcH+wydcSpNE20AfSOduf6MkRFahL5FY7X1oU7nKVZFtfq8Fg==}
     engines: {node: '>=6'}
@@ -2920,6 +2926,18 @@ packages:
   validator@13.15.15:
     resolution: {integrity: sha512-BgWVbCI72aIQy937xbawcs+hrVaN/CZ2UwutgaJ36hGqRrLNM+f5LUT/YPRbo8IV/ASeFzXszezV+y2+rq3l8A==}
     engines: {node: '>= 0.10'}
+
+  valtio@2.1.8:
+    resolution: {integrity: sha512-fjTPbJyKEmfVBZUOh3V0OtMHoFUGr4+4XpejjxhNJE/IS2l8rDbyJuzi3w/fZWBDyk7BJOpG+lmvTK5iiVhXuQ==}
+    engines: {node: '>=12.20.0'}
+    peerDependencies:
+      '@types/react': '>=18.0.0'
+      react: '>=18.0.0'
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
+      react:
+        optional: true
 
   vfile-location@5.0.3:
     resolution: {integrity: sha512-5yXvWDEgqeiYiBe1lbxYF7UMAIm/IcopxMHrMQDq3nvKcjPKIhZklUKL+AE7J7uApI4kwe2snsK+eI6UTj9EHg==}
@@ -5656,6 +5674,8 @@ snapshots:
 
   property-information@7.1.0: {}
 
+  proxy-compare@3.0.1: {}
+
   punycode@2.3.1: {}
 
   quansync@0.2.11: {}
@@ -6195,6 +6215,13 @@ snapshots:
   validate-html-nesting@1.2.3: {}
 
   validator@13.15.15: {}
+
+  valtio@2.1.8(@types/react@19.2.2)(react@19.2.0):
+    dependencies:
+      proxy-compare: 3.0.1
+    optionalDependencies:
+      '@types/react': 19.2.2
+      react: 19.2.0
 
   vfile-location@5.0.3:
     dependencies:

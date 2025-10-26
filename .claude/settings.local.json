@@ -5,7 +5,15 @@
       "Bash(pnpm add:*)",
       "Bash(pnpm:*)",
       "Bash(cargo build:*)",
-      "Bash(/Users/khadim/dev/spooky/apps/syncgen/target/release/syncgen:*)"
+      "Bash(/Users/khadim/dev/spooky/apps/syncgen/target/release/syncgen:*)",
+      "Bash(cat:*)",
+      "Bash(apps/syncgen/target/release/syncgen -i example/schema/schema.surql -o example/schema/generated.ts)",
+      "Bash(timeout 5 pnpm:*)",
+      "Bash(timeout 3 pnpm dev:*)",
+      "Bash(node:*)",
+      "Bash(timeout:*)",
+      "Bash(git restore:*)",
+      "Bash(cd:*)"
     ],
     "deny": [],
     "ask": []

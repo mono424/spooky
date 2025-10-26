@@ -1,6 +1,13 @@
-import { createContext, useContext, createSignal, JSX, Show } from "solid-js";
+import {
+  createContext,
+  useContext,
+  createSignal,
+  JSX,
+  Show,
+  createEffect,
+} from "solid-js";
 import { db, dbConfig, type Schema } from "../db";
-import type { Model } from "db-solid";
+import type { Model } from "@spooky/client-solid";
 
 type User = Model<Schema["user"]>;
 
@@ -20,62 +27,33 @@ export function AuthProvider(props: { children: JSX.Element }) {
 
   // Check for existing session on mount
   const checkAuth = async () => {
-    console.log("[auth] Checking authentication");
-    try {
-      const token = localStorage.getItem("auth_token");
-      if (token) {
-        // Authenticate with stored token
-        console.log("[auth] Authenticating with token");
-        await db.authenticate(token);
-
-        console.log("[auth] Querying authenticated user info");
-        // Query authenticated user info
-        const [users] = await db.query.user
-          .queryLocal(`SELECT * FROM $auth`)
-          .collect();
-
-        console.log("[auth] Authenticated user info", users);
-        if (users && users.length > 0) {
-          setUser(users[0]);
-        } else {
-          localStorage.removeItem("auth_token");
-        }
-      }
-    } catch (error) {
-      console.error("Auth check failed:", error);
-      localStorage.removeItem("auth_token");
-    } finally {
-      setIsLoading(false);
-    }
+    await db.checkAuth("user");
+    setIsLoading(false);
   };
 
   // Initialize auth check
   checkAuth();
 
+  // Sync user state with db observable
+  createEffect(() => {
+    const currentUser = db.getCurrentUser<"user">();
+    setUser(currentUser.value as User | null);
+  });
+
   const signIn = async (username: string, password: string) => {
     try {
-      const localDb = db.getLocal();
-
-      const authResponse = await localDb.signin({
-        access: "account",
-        variables: {
-          username,
-          password,
+      // Use the centralized signIn method from db object
+      await db.signIn(
+        {
+          access: "account",
+          variables: {
+            username,
+            password,
+          },
         },
-      });
-
-      if (authResponse.token) {
-        localStorage.setItem("auth_token", authResponse.token);
-
-        // Query authenticated user info
-        const [users] = await db.query.user
-          .queryLocal(`SELECT * FROM $auth`)
-          .collect();
-
-        if (users && users.length > 0) {
-          setUser(users[0]);
-        }
-      }
+        "user"
+      );
+      // User is automatically set via the observable
     } catch (error) {
       console.error("Sign in failed:", error);
       throw error;
@@ -84,32 +62,20 @@ export function AuthProvider(props: { children: JSX.Element }) {
 
   const signUp = async (username: string, password: string) => {
     try {
-      const localDb = db.getLocal();
-      const { namespace, database } = dbConfig;
-
-      // Use SurrealDB's signup method
-      const authResponse = await localDb.signup({
-        namespace,
-        database,
-        access: "account",
-        variables: {
-          username,
-          password,
+      // Use the centralized signUp method from db object
+      await db.signUp(
+        {
+          namespace: dbConfig.namespace,
+          database: dbConfig.database,
+          access: "account",
+          variables: {
+            username,
+            password,
+          },
         },
-      });
-
-      if (authResponse.token) {
-        localStorage.setItem("auth_token", authResponse.token);
-
-        // Query authenticated user info
-        const [users] = await db.query.user
-          .queryLocal(`SELECT * FROM $auth`)
-          .collect();
-
-        if (users && users.length > 0) {
-          setUser(users[0]);
-        }
-      }
+        "user"
+      );
+      // User is automatically set via the observable
     } catch (error) {
       console.error("Sign up failed:", error);
       throw error;
@@ -118,13 +84,11 @@ export function AuthProvider(props: { children: JSX.Element }) {
 
   const signOut = async () => {
     try {
-      const localDb = db.getLocal();
-      await localDb.invalidate();
+      await db.signOut();
+      // User is automatically cleared via the observable
     } catch (error) {
       console.error("Sign out failed:", error);
-    } finally {
-      setUser(null);
-      localStorage.removeItem("auth_token");
+      throw error;
     }
   };
 

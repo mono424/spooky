@@ -9,6 +9,7 @@ pub struct TableSchema {
     pub name: String,
     pub fields: HashMap<String, FieldDefinition>,
     pub schemafull: bool,
+    pub relationships: Vec<String>, // List of related table names
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +80,7 @@ impl SchemaParser {
                         name: table_name,
                         fields: HashMap::new(),
                         schemafull,
+                        relationships: Vec::new(),
                     },
                 );
             }
@@ -97,13 +99,19 @@ impl SchemaParser {
 
                 let field = FieldDefinition {
                     name: field_name.clone(),
-                    field_type,
+                    field_type: field_type.clone(),
                     optional: false,
                     assert: assert_clause,
                     value: value_clause,
                 };
 
                 if let Some(table) = self.tables.get_mut(&table_name) {
+                    // Extract related table name from Record type
+                    if let Some(related_table) = Self::extract_related_table(&field_type) {
+                        if !table.relationships.contains(&related_table) {
+                            table.relationships.push(related_table);
+                        }
+                    }
                     table.fields.insert(field_name, field);
                 }
             }
@@ -136,6 +144,18 @@ impl SchemaParser {
             Kind::Option(inner) => FieldType::Option(Box::new(Self::parse_kind(*inner))),
             Kind::Any => FieldType::Any,
             _ => FieldType::Any,
+        }
+    }
+
+    /// Extract the related table name from a field type (if it's a Record type)
+    fn extract_related_table(field_type: &FieldType) -> Option<String> {
+        match field_type {
+            FieldType::Record(table_name) if table_name != "any" => {
+                Some(table_name.clone())
+            }
+            FieldType::Option(inner) => Self::extract_related_table(inner),
+            FieldType::Array(inner) => Self::extract_related_table(inner),
+            _ => None,
         }
     }
 }

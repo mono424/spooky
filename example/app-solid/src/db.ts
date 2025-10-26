@@ -1,4 +1,4 @@
-import { SyncedDb, type SyncedDbConfig } from "db-solid";
+import { SyncedDb, type SyncedDbConfig } from "@spooky/client-solid";
 import { type Schema, SURQL_SCHEMA } from "./schema.gen";
 export type { Schema };
 
@@ -9,7 +9,7 @@ export const dbConfig: SyncedDbConfig<Schema> = {
   internalDbName: "syncdb-int",
   storageStrategy: "indexeddb",
   namespace: "main",
-  database: "thread_app",
+  database: "main",
   remoteUrl: "http://localhost:8000",
   tables: ["user", "thread", "comment"],
 };

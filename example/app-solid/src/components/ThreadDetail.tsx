@@ -1,6 +1,7 @@
 import {
   createResource,
   createSignal,
+  createEffect,
   For,
   Show,
   onCleanup,
@@ -9,7 +10,7 @@ import {
 import { useNavigate, useParams } from "@solidjs/router";
 import { db } from "../db";
 import { CommentForm } from "./CommentForm";
-import { Model, RecordId } from "db-solid";
+import { Model, RecordId } from "@spooky/client-solid";
 import { Thread, Comment } from "../schema.gen";
 
 // Type for transformed comment with nested author
@@ -22,34 +23,22 @@ export function ThreadDetail() {
   const navigate = useNavigate();
 
   const [thread, setThread] = createSignal<Model<Thread> | null>(null);
-  const [comments, setComments] = createSignal<Model<Comment>[]>([]);
 
   onMount(async () => {
-    const threadLiveQuery = await db.query.thread.liveQuery(
-      {
-        where: {
-          id: new RecordId("thread", params.id),
-        },
-      },
-      (thread) => {
-        if (thread.length > 0) setThread(thread[0]);
-      }
-    );
+    const threadLiveQuery = await db.query.thread
+      .find({
+        id: new RecordId("thread", params.id),
+      })
+      .related("comment")
+      .query();
 
-    const commentsLiveQuery = await db.query.comment.liveQuery(
-      {
-        where: {
-          thread_id: new RecordId("thread", params.id),
-        },
-      },
-      (comments) => {
-        setComments(comments);
-      }
-    );
+    // Use createEffect to reactively update when liveQuery.data changes
+    createEffect(() => {
+      setThread(threadLiveQuery.data[0] || null);
+    });
 
     onCleanup(() => {
       threadLiveQuery.kill();
-      commentsLiveQuery.kill();
     });
   });
 
@@ -91,7 +80,7 @@ export function ThreadDetail() {
             {/* Comments Section */}
             <div class="space-y-4">
               <h2 class="text-xl font-semibold">
-                Comments ({comments()?.length})
+                Comments ({threadData().comments?.length})
               </h2>
 
               {/* Comment Form */}
@@ -102,7 +91,7 @@ export function ThreadDetail() {
               {/* Comments List */}
               <div class="space-y-3">
                 <For
-                  each={comments() ?? []}
+                  each={threadData().comments ?? []}
                   fallback={
                     <div class="text-center py-4 text-gray-500">
                       No comments yet. Be the first to comment!

@@ -29,6 +29,39 @@ impl JsonSchemaGenerator {
         let mut properties = HashMap::new();
         let mut required_tables = Vec::new();
 
+        // Build relationships map
+        let mut relationships: HashMap<String, Vec<String>> = HashMap::new();
+        for (table_name, table_schema) in &parser.tables {
+            if !table_schema.relationships.is_empty() {
+                relationships.insert(table_name.clone(), table_schema.relationships.clone());
+            }
+        }
+
+        // Add Relationships definition
+        let mut relationship_properties = serde_json::Map::new();
+        for (table_name, related_tables) in &relationships {
+            relationship_properties.insert(
+                table_name.clone(),
+                json!({
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": related_tables
+                    }
+                })
+            );
+        }
+
+        if !relationship_properties.is_empty() {
+            definitions.insert(
+                "Relationships".to_string(),
+                json!({
+                    "type": "object",
+                    "properties": relationship_properties
+                })
+            );
+        }
+
         for (table_name, table_schema) in &parser.tables {
             let definition = self.generate_table_definition(table_schema);
             definitions.insert(table_name.clone(), definition);

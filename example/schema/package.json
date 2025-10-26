@@ -1,5 +1,5 @@
 {
-  "name": "database",
+  "name": "@example/schema",
   "version": "1.0.0",
   "description": "Database schema and types for SurrealDB",
   "main": "dist/index.js",

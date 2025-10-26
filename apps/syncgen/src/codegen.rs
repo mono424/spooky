@@ -67,7 +67,11 @@ impl CodeGenerator {
 
     fn generate_typescript(&self, json_schema_content: &str) -> Result<String> {
         let output = self.run_quicktype(json_schema_content, "typescript")?;
-        Ok(self.add_index_signature_to_interfaces(output))
+        let output_with_signatures = self.add_index_signature_to_interfaces(output);
+
+        // Add Relationships interface from schema
+        let output_with_relationships = self.add_relationships_interface(&output_with_signatures, json_schema_content)?;
+        Ok(output_with_relationships)
     }
 
     fn generate_dart(&self, json_schema_content: &str) -> Result<String> {
@@ -228,6 +232,53 @@ impl CodeGenerator {
         }
 
         result.join("\n")
+    }
+
+    fn add_relationships_interface(&self, content: &str, json_schema_content: &str) -> Result<String> {
+        // Parse JSON schema to extract relationships
+        let schema: serde_json::Value = serde_json::from_str(json_schema_content)
+            .context("Failed to parse JSON schema")?;
+
+        let relationships = schema
+            .get("definitions")
+            .and_then(|defs| defs.get("Relationships"))
+            .and_then(|rel| rel.get("properties"));
+
+        if let Some(relationships) = relationships {
+            if let serde_json::Value::Object(rel_map) = relationships {
+                let mut interface_lines = vec![
+                    "/**".to_string(),
+                    " * Relationships between tables".to_string(),
+                    " * Maps each table name to an array of related table names".to_string(),
+                    " */".to_string(),
+                    "export interface Relationships {".to_string(),
+                ];
+
+                for (table_name, rel_data) in rel_map {
+                    if let Some(items) = rel_data.get("items") {
+                        if let Some(enum_values) = items.get("enum") {
+                            if let serde_json::Value::Array(tables) = enum_values {
+                                let table_names: Vec<String> = tables
+                                    .iter()
+                                    .filter_map(|v| v.as_str().map(|s| format!("\"{}\"", s)))
+                                    .collect();
+
+                                if !table_names.is_empty() {
+                                    interface_lines.push(format!("    {}: [{}];", table_name, table_names.join(" | ")));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                interface_lines.push("}".to_string());
+
+                return Ok(format!("{}\n\n{}\n", content, interface_lines.join("\n")));
+            }
+        }
+
+        // No relationships found, return original content
+        Ok(content.to_string())
     }
 
     fn add_schema_constant(&self, content: String, schema: &str) -> Result<String> {

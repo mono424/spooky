@@ -1,6 +1,7 @@
 import {
   createResource,
   createSignal,
+  createEffect,
   For,
   onCleanup,
   onMount,
@@ -8,7 +9,7 @@ import {
 import { useNavigate } from "@solidjs/router";
 import { db } from "../db";
 import type { Thread } from "../schema.gen";
-import { Model } from "db-solid";
+import type { Model } from "@spooky/client-solid";
 
 export function ThreadList() {
   const navigate = useNavigate();
@@ -16,7 +17,15 @@ export function ThreadList() {
   const [threads, setThreads] = createSignal<Model<Thread>[]>([]);
 
   onMount(async () => {
-    const liveQuery = await db.query.thread.liveQuery({}, setThreads);
+    const liveQuery = await db.query.thread
+      .find({})
+      .orderBy("created_at", "desc")
+      .query();
+
+    // Use createEffect to reactively update when liveQuery.data changes
+    createEffect(() => {
+      setThreads([...liveQuery.data]);
+    });
 
     onCleanup(() => {
       liveQuery.kill();

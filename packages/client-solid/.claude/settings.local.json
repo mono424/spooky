@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(kubectl get:*)",
+      "Bash(helm list:*)",
+      "Bash(kubectl describe:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

@@ -1,5 +1,5 @@
 {
-  "name": "db-solid",
+  "name": "@spooky/client-solid",
   "version": "1.0.0",
   "description": "SurrealDB client with local and remote database support for browser applications",
   "main": "dist/index.js",
@@ -29,8 +29,9 @@
   "license": "MIT",
   "packageManager": "pnpm@9.0.0",
   "dependencies": {
+    "@surrealdb/wasm": "^2.3.2",
     "surrealdb": "^2.0.0-alpha.9",
-    "@surrealdb/wasm": "^2.3.2"
+    "valtio": "^2.1.8"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

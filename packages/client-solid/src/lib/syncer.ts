@@ -1,7 +1,28 @@
-import { LiveMessage, LiveSubscription, Surreal, Table } from "surrealdb";
+import { LiveMessage, LiveSubscription, Surreal, Table, Uuid } from "surrealdb";
 
+/**
+ * Represents a tracked live query on the remote server
+ */
+interface TrackedLiveQuery {
+  queryKey: string;
+  subscription: LiveSubscription;
+  query: string;
+  vars?: Record<string, unknown>;
+  refCount: number;
+  affectedTables: Set<string>;
+}
+
+/**
+ * Syncer manages live queries on the remote server and syncs changes to local cache
+ * Key responsibilities:
+ * 1. Track and deduplicate live queries to the remote server
+ * 2. Update local cache when remote data changes
+ * 3. Notify all affected queries when data changes
+ */
 export class Syncer {
-  private liveQueries: Map<Table, LiveSubscription> = new Map();
+  private liveQueries: Map<string, TrackedLiveQuery> = new Map();
+  private tableToQueryKeys: Map<string, Set<string>> = new Map();
+  private queryListeners: Map<string, Set<() => void>> = new Map();
   private isInitialized = false;
 
   constructor(
@@ -17,106 +38,214 @@ export class Syncer {
     if (this.isInitialized) {
       return;
     }
-
-    // Initialize sync for all tables with delays to prevent race conditions
-    for (let i = 0; i < this.tables.length; i++) {
-      const table = this.tables[i];
-      await this.startSyncTable(table);
-
-      // Add a small delay between table syncs to prevent circular reference issues
-      if (i < this.tables.length - 1) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-    }
-
     this.isInitialized = true;
+    console.log("[Syncer] Initialized");
   }
 
-  async startSyncTable(table: Table, retryCount = 0): Promise<void> {
-    if (this.liveQueries.has(table)) {
-      return;
+  /**
+   * Subscribe to a live query on the remote server
+   * If the same query already exists, it increases the ref count
+   * @returns A function to unsubscribe from the live query
+   */
+  async subscribeLiveQuery(
+    query: string,
+    vars: Record<string, unknown> | undefined,
+    affectedTables: string[],
+    onUpdate: () => void
+  ): Promise<() => void> {
+    const queryKey = this.getQueryKey(query, vars);
+
+    // Add the listener
+    if (!this.queryListeners.has(queryKey)) {
+      this.queryListeners.set(queryKey, new Set());
+    }
+    this.queryListeners.get(queryKey)!.add(onUpdate);
+
+    // If query already exists, just increase ref count
+    if (this.liveQueries.has(queryKey)) {
+      const tracked = this.liveQueries.get(queryKey)!;
+      tracked.refCount++;
+      console.log(
+        `[Syncer] Reusing live query (refCount: ${tracked.refCount}):`,
+        queryKey
+      );
+      return () => this.unsubscribeLiveQuery(queryKey, onUpdate);
     }
 
-    const maxRetries = 3;
-    const retryDelay = 1000 * Math.pow(2, retryCount); // Exponential backoff
-
+    // Create new live query on remote
+    console.log("[Syncer] Creating new live query:", queryKey);
     try {
-      // Add a small delay before starting the live query to prevent race conditions
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // Execute LIVE SELECT on remote
+      const liveQuery = query.replace("SELECT", "LIVE SELECT");
+      const [queryId] = (await this.remoteDb
+        .query(liveQuery, vars)
+        .collect()) as unknown as [Uuid];
 
-      // Check if the table exists and is accessible before starting live query
-      try {
-        await this.localDb.query(`SELECT * FROM ${table.name} LIMIT 1`);
-      } catch (tableError) {
-        console.warn(
-          `[Syncer] Table ${table.name} may not be ready yet, waiting...`
-        );
-        await new Promise((resolve) => setTimeout(resolve, 200));
+      const subscription = await this.remoteDb.liveOf(queryId);
+
+      // Track the live query
+      const trackedQuery: TrackedLiveQuery = {
+        queryKey,
+        subscription,
+        query,
+        vars,
+        refCount: 1,
+        affectedTables: new Set(affectedTables),
+      };
+
+      this.liveQueries.set(queryKey, trackedQuery);
+
+      // Map tables to query keys for efficient lookups
+      for (const table of affectedTables) {
+        if (!this.tableToQueryKeys.has(table)) {
+          this.tableToQueryKeys.set(table, new Set());
+        }
+        this.tableToQueryKeys.get(table)!.add(queryKey);
       }
 
-      const liveQuery = await this.localDb.live(table).diff();
-      liveQuery.subscribe((event) => this.onLiveQueryUpdate(table, event));
-      this.liveQueries.set(table, liveQuery);
-      console.log(`[Syncer] Successfully started sync for table ${table.name}`);
+      // Subscribe to updates
+      subscription.subscribe(async (event) => {
+        await this.handleRemoteUpdate(queryKey, event);
+      });
+
+      console.log(`[Syncer] Live query started (refCount: 1):`, queryKey);
+    } catch (error) {
+      console.error("[Syncer] Failed to create live query:", error);
+      // Clean up listeners on error
+      this.queryListeners.get(queryKey)?.delete(onUpdate);
+      throw error;
+    }
+
+    return () => this.unsubscribeLiveQuery(queryKey, onUpdate);
+  }
+
+  /**
+   * Unsubscribe from a live query
+   * Decreases ref count and kills the query if no more subscribers
+   */
+  private unsubscribeLiveQuery(queryKey: string, listener: () => void): void {
+    // Remove the listener
+    const listeners = this.queryListeners.get(queryKey);
+    if (listeners) {
+      listeners.delete(listener);
+      if (listeners.size === 0) {
+        this.queryListeners.delete(queryKey);
+      }
+    }
+
+    const tracked = this.liveQueries.get(queryKey);
+    if (!tracked) return;
+
+    tracked.refCount--;
+    console.log(
+      `[Syncer] Unsubscribed from live query (refCount: ${tracked.refCount}):`,
+      queryKey
+    );
+
+    // If no more subscribers, kill the live query
+    if (tracked.refCount <= 0) {
+      console.log("[Syncer] Killing live query:", queryKey);
+      tracked.subscription.kill();
+      this.liveQueries.delete(queryKey);
+
+      // Clean up table mappings
+      for (const table of tracked.affectedTables) {
+        const queryKeys = this.tableToQueryKeys.get(table);
+        if (queryKeys) {
+          queryKeys.delete(queryKey);
+          if (queryKeys.size === 0) {
+            this.tableToQueryKeys.delete(table);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Handle updates from remote live queries and sync to local cache
+   */
+  private async handleRemoteUpdate(
+    queryKey: string,
+    event: LiveMessage
+  ): Promise<void> {
+    try {
+      console.log(`[Syncer] Remote update for query:`, queryKey, event);
+
+      const tracked = this.liveQueries.get(queryKey);
+      if (!tracked) return;
+
+      // Extract the record ID from the event
+      const recordValue = event.value as any;
+      const recordId = recordValue?.id;
+
+      if (!recordId) {
+        console.warn("[Syncer] Event value has no id:", event);
+        return;
+      }
+
+      // Update local cache based on the action
+      if (event.action === "CREATE") {
+        const tableName = recordId.tb;
+        await this.localDb.insert(tableName, recordValue);
+      } else if (event.action === "UPDATE") {
+        await this.localDb.update(recordId).merge(recordValue);
+      } else if (event.action === "DELETE") {
+        await this.localDb.delete(recordId);
+      }
+
+      // Notify all listeners of this query
+      const listeners = this.queryListeners.get(queryKey);
+      if (listeners) {
+        for (const listener of listeners) {
+          try {
+            listener();
+          } catch (error) {
+            console.error("[Syncer] Error in query listener:", error);
+          }
+        }
+      }
     } catch (error) {
       console.error(
-        `[Syncer] Failed to start sync for table ${table.name} (attempt ${
-          retryCount + 1
-        }/${maxRetries + 1}):`,
+        `[Syncer] Error processing remote update for query ${queryKey}:`,
         error
       );
-
-      // Retry with exponential backoff if we haven't exceeded max retries
-      if (retryCount < maxRetries) {
-        console.log(
-          `[Syncer] Retrying sync for table ${table.name} in ${retryDelay}ms...`
-        );
-        await new Promise((resolve) => setTimeout(resolve, retryDelay));
-        return this.startSyncTable(table, retryCount + 1);
-      } else {
-        console.error(
-          `[Syncer] Max retries exceeded for table ${table.name}, skipping sync`
-        );
-        // Don't throw the error, just log it and continue with other tables
-      }
     }
   }
 
-  async stopSyncTable(table: Table) {
-    if (!this.liveQueries.has(table)) {
-      return;
-    }
-    this.liveQueries.get(table)?.kill();
-    this.liveQueries.delete(table);
+  /**
+   * Generate a unique key for a query based on SQL and variables
+   */
+  private getQueryKey(
+    query: string,
+    vars?: Record<string, unknown>
+  ): string {
+    const varsStr = vars ? JSON.stringify(vars) : "";
+    return `${query}|${varsStr}`;
   }
 
   async destroy(): Promise<void> {
+    console.log("[Syncer] Destroying all live queries");
     // Stop all live queries
-    for (const [table, liveQuery] of this.liveQueries) {
+    for (const [queryKey, tracked] of this.liveQueries) {
       try {
-        liveQuery.kill();
+        tracked.subscription.kill();
       } catch (error) {
         console.error(
-          `[Syncer] Error stopping sync for table ${table.name}:`,
+          `[Syncer] Error stopping live query ${queryKey}:`,
           error
         );
       }
     }
     this.liveQueries.clear();
+    this.tableToQueryKeys.clear();
+    this.queryListeners.clear();
     this.isInitialized = false;
   }
 
-  private onLiveQueryUpdate(table: Table, event: LiveMessage) {
-    try {
-      console.log(`[Syncer] Live update for ${table.name}:`, event);
-      // TODO: Implement actual sync logic here
-      // This is where we would sync changes between local and remote databases
-    } catch (error) {
-      console.error(
-        `[Syncer] Error processing live update for ${table.name}:`,
-        error
-      );
-      // Don't rethrow the error to prevent breaking the live query
-    }
+  /**
+   * Get syncer instance if available
+   */
+  isActive(): boolean {
+    return this.isInitialized;
   }
 }
