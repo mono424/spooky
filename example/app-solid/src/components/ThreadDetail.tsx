@@ -10,7 +10,12 @@ import {
 import { useNavigate, useParams } from "@solidjs/router";
 import { db } from "../db";
 import { CommentForm } from "./CommentForm";
-import { Model, RecordId } from "@spooky/client-solid";
+import {
+  Model,
+  ReactiveQueryResult,
+  RecordId,
+  useQuery,
+} from "@spooky/client-solid";
 import { Thread, Comment } from "../schema.gen";
 
 // Type for transformed comment with nested author
@@ -22,24 +27,20 @@ export function ThreadDetail() {
   const params = useParams();
   const navigate = useNavigate();
 
-  const [thread, setThread] = createSignal<Model<Thread> | null>(null);
+  const threadQuery: ReactiveQueryResult<Model<Thread>> = db.query.thread
+    .find({
+      id: new RecordId("thread", params.id),
+    })
+    .related("comment")
+    .query();
 
-  onMount(async () => {
-    const threadLiveQuery = await db.query.thread
-      .find({
-        id: new RecordId("thread", params.id),
-      })
-      .related("comment")
-      .query();
+  const [threads, setThreads] = createSignal<Model<Thread>[]>([]);
+  useQuery(threadQuery, setThreads);
 
-    // Use createEffect to reactively update when liveQuery.data changes
-    createEffect(() => {
-      setThread(threadLiveQuery.data[0] || null);
-    });
+  const thread = () => threads()[0];
 
-    onCleanup(() => {
-      threadLiveQuery.kill();
-    });
+  onCleanup(() => {
+    threadQuery.kill();
   });
 
   const handleBack = () => {

@@ -31,8 +31,9 @@ export type {
   ModelPayload,
 } from "./lib/models";
 export { ReactiveQueryResult } from "./lib/table-queries";
+export { useQuery } from "./lib/use-query";
 
-export { snapshot } from "valtio";
+export { snapshot, type Snapshot } from "valtio";
 
 export type QueryResponse<T extends GenericModel> = Omit<
   ReturnType<Surreal["query"]>,
@@ -58,7 +59,7 @@ function convertDateTimeToDate(value: any): any {
     return value.map(convertDateTimeToDate);
   }
   // Process plain objects recursively
-  if (value && typeof value === 'object' && value.constructor === Object) {
+  if (value && typeof value === "object" && value.constructor === Object) {
     const result: any = {};
     for (const key in value) {
       if (Object.prototype.hasOwnProperty.call(value, key)) {
@@ -548,10 +549,9 @@ export class SyncedDb<Schema extends GenericSchema> {
     return this._create<T>(db, tableName, data);
   }
 
-  async updateLocal<T extends Record<string, unknown> = Record<string, unknown>>(
-    recordId: RecordId,
-    data: Partial<T>
-  ): Promise<any> {
+  async updateLocal<
+    T extends Record<string, unknown> = Record<string, unknown>
+  >(recordId: RecordId, data: Partial<T>): Promise<any> {
     // Get current data for rollback
     let rollbackData: any = null;
     try {
@@ -566,7 +566,7 @@ export class SyncedDb<Schema extends GenericSchema> {
 
     // Log to WAL for sync (use structuredClone to avoid proxy issues)
     if (this.walManager) {
-      const tableName = recordId.toString().split(':')[0];
+      const tableName = recordId.toString().split(":")[0];
       await this.walManager.logUpdate(
         tableName,
         recordId,
@@ -587,9 +587,9 @@ export class SyncedDb<Schema extends GenericSchema> {
     return this._update<T>(db, recordId, data);
   }
 
-  async deleteLocal<T extends Record<string, unknown> = Record<string, unknown>>(
-    recordId: RecordId
-  ): Promise<any> {
+  async deleteLocal<
+    T extends Record<string, unknown> = Record<string, unknown>
+  >(recordId: RecordId): Promise<any> {
     // Get current data for rollback
     let rollbackData: any = null;
     try {
@@ -604,7 +604,7 @@ export class SyncedDb<Schema extends GenericSchema> {
 
     // Log to WAL for sync (use structuredClone to avoid proxy issues)
     if (this.walManager) {
-      const tableName = recordId.toString().split(':')[0];
+      const tableName = recordId.toString().split(":")[0];
       await this.walManager.logDelete(tableName, recordId, rollbackData);
     }
 

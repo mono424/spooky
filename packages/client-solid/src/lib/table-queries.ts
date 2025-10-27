@@ -148,17 +148,26 @@ export class LiveQueryList<
           .collect();
 
         if (remoteModels && remoteModels.length > 0) {
-          console.log("[LiveQueryList] Using remote data directly:", remoteModels.length, "items");
+          console.log(
+            "[LiveQueryList] Using remote data directly:",
+            remoteModels.length,
+            "items"
+          );
           models = remoteModels as Model[];
         } else {
-          console.log("[LiveQueryList] No remote data found, falling back to local");
+          console.log(
+            "[LiveQueryList] No remote data found, falling back to local"
+          );
           const [localModels] = await this.db
             .queryLocal(this.hydrationQuery.query, this.hydrationQuery.vars)
             .collect();
           models = localModels as Model[];
         }
       } catch (error) {
-        console.warn("[LiveQueryList] Failed to fetch from remote, falling back to local cache:", error);
+        console.warn(
+          "[LiveQueryList] Failed to fetch from remote, falling back to local cache:",
+          error
+        );
         const [localModels] = await this.db
           .queryLocal(this.hydrationQuery.query, this.hydrationQuery.vars)
           .collect();
@@ -200,7 +209,9 @@ export class LiveQueryList<
       [this.tableName],
       async () => {
         // Re-fetch from remote when changes occur (instead of trying to update local cache)
-        console.log("[LiveQueryList] Remote change detected, re-fetching data...");
+        console.log(
+          "[LiveQueryList] Remote change detected, re-fetching data..."
+        );
         await this.hydrate();
       }
     );
@@ -315,15 +326,20 @@ export class QueryBuilder<
    * // Clean up when done
    * result.kill();
    */
-  async query(): Promise<ReactiveQueryResult<Model>> {
+  query(): ReactiveQueryResult<Model> {
     const result = new ReactiveQueryResult<Model>();
 
-    // Set up live query with callback that updates the reactive state
-    const liveQuery = await this.tableQuery.liveQuery(this.options, (items) => {
-      result._updateState(items);
-    });
+    (async () => {
+      const liveQuery = await this.tableQuery.liveQuery(
+        this.options,
+        (items) => {
+          result._updateState(items);
+        }
+      );
 
-    result._setLiveQuery(liveQuery);
+      result._setLiveQuery(liveQuery);
+    })();
+
     return result;
   }
 }

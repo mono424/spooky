@@ -30,6 +30,7 @@
   "packageManager": "pnpm@9.0.0",
   "dependencies": {
     "@surrealdb/wasm": "^2.3.2",
+    "solid-js": "^1.8.7",
     "surrealdb": "^2.0.0-alpha.9",
     "valtio": "^2.1.8"
   },

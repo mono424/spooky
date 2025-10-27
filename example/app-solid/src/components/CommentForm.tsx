@@ -1,11 +1,11 @@
 import { createSignal } from "solid-js";
 import { db } from "../db";
 import { useAuth } from "../lib/auth";
-import { Model } from "@spooky/client-solid";
+import { Model, Snapshot } from "@spooky/client-solid";
 import { Thread } from "../schema.gen";
 
 interface CommentFormProps {
-  thread: Model<Thread>;
+  thread: Snapshot<Model<Thread>>;
   onCommentAdded?: () => void;
 }
 

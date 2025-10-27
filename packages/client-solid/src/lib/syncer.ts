@@ -189,7 +189,7 @@ export class Syncer {
   }
 
   /**
-   * Handle updates from remote live queries and sync to local cache
+   * Handle updates from remote live queries and notify listeners
    */
   private async handleRemoteUpdate(
     queryKey: string,
@@ -201,7 +201,7 @@ export class Syncer {
       const tracked = this.liveQueries.get(queryKey);
       if (!tracked) return;
 
-      // Extract the record ID from the event
+      // Extract the record ID from the event for logging
       const recordValue = event.value as any;
       const recordId = recordValue?.id;
 
@@ -210,26 +210,15 @@ export class Syncer {
         return;
       }
 
-      // Update local cache based on the action
-      if (event.action === "CREATE") {
-        const tableName = recordId.tb;
-        console.log("[Syncer] Creating in local DB, table:", tableName, "value:", recordValue);
-        // Use create() instead of insert() to avoid Table object issues
-        try {
-          await this.localDb.create(tableName, recordValue);
-        } catch (error) {
-          console.error("[Syncer] Error creating in local DB:", error);
-          throw error;
-        }
-      } else if (event.action === "UPDATE") {
-        await this.localDb.update(recordId).merge(recordValue);
-      } else if (event.action === "DELETE") {
-        await this.localDb.delete(recordId);
-      }
+      console.log(`[Syncer] Change detected (${event.action}) for:`, recordId.toString());
+
+      // Skip local cache updates - queries will re-fetch from remote instead
+      // This avoids permission issues when trying to cache records that belong to other users
 
       // Notify all listeners of this query
       const listeners = this.queryListeners.get(queryKey);
       if (listeners) {
+        console.log(`[Syncer] Notifying ${listeners.size} listeners`);
         for (const listener of listeners) {
           try {
             listener();
