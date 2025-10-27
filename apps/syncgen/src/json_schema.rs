@@ -30,23 +30,42 @@ impl JsonSchemaGenerator {
         let mut required_tables = Vec::new();
 
         // Build relationships map
-        let mut relationships: HashMap<String, Vec<String>> = HashMap::new();
+        let mut relationships: HashMap<String, Vec<Value>> = HashMap::new();
         for (table_name, table_schema) in &parser.tables {
             if !table_schema.relationships.is_empty() {
-                relationships.insert(table_name.clone(), table_schema.relationships.clone());
+                let relationship_objects: Vec<Value> = table_schema.relationships
+                    .iter()
+                    .map(|rel| {
+                        json!({
+                            "field": rel.field_name,
+                            "table": rel.related_table
+                        })
+                    })
+                    .collect();
+                relationships.insert(table_name.clone(), relationship_objects);
             }
         }
 
         // Add Relationships definition
         let mut relationship_properties = serde_json::Map::new();
-        for (table_name, related_tables) in &relationships {
+        for (table_name, related_objects) in &relationships {
             relationship_properties.insert(
                 table_name.clone(),
                 json!({
                     "type": "array",
                     "items": {
-                        "type": "string",
-                        "enum": related_tables
+                        "type": "object",
+                        "properties": {
+                            "field": {
+                                "type": "string",
+                                "description": "The field name that creates this relationship"
+                            },
+                            "table": {
+                                "type": "string",
+                                "description": "The related table name"
+                            }
+                        },
+                        "required": ["field", "table"]
                     }
                 })
             );

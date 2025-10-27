@@ -17,7 +17,13 @@ export class SurrealDBWasmFactory {
   ): Promise<Surreal> {
     // Create Surreal instance with WASM engines
     const surreal = new Surreal({
-      engines: createWasmEngines(),
+      engines: createWasmEngines({
+        capabilities: {
+          experimental: {
+            allow: ["record_references"],
+          },
+        },
+      }),
     });
 
     // Connect to the appropriate storage backend

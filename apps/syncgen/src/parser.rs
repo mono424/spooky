@@ -1,7 +1,10 @@
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use surrealdb_core::sql::statements::DefineStatement;
-use surrealdb_core::sql::{parse, Statement};
+use surrealdb_core::sql::Statement;
+use surrealdb_core::syn::parse_with_capabilities;
+use surrealdb_core::dbs::Capabilities;
+use surrealdb_core::dbs::capabilities::ExperimentalTarget;
 
 #[derive(Debug, Clone)]
 pub struct TableSchema {
@@ -9,7 +12,13 @@ pub struct TableSchema {
     pub name: String,
     pub fields: HashMap<String, FieldDefinition>,
     pub schemafull: bool,
-    pub relationships: Vec<String>, // List of related table names
+    pub relationships: Vec<Relationship>, // List of relationships with field info
+}
+
+#[derive(Debug, Clone)]
+pub struct Relationship {
+    pub field_name: String,
+    pub related_table: String,
 }
 
 #[derive(Debug, Clone)]
@@ -48,7 +57,12 @@ impl SchemaParser {
     }
 
     pub fn parse_file(&mut self, content: &str) -> Result<()> {
-        let query = parse(content).context("Failed to parse SurrealDB schema file")?;
+        // Create capabilities with experimental features enabled
+        let capabilities = Capabilities::default()
+            .with_experimental(ExperimentalTarget::RecordReferences.into());
+
+        let query = parse_with_capabilities(content, &capabilities)
+            .context("Failed to parse SurrealDB schema file")?;
 
         self.process_statements(query.0)?;
         Ok(())
@@ -108,8 +122,15 @@ impl SchemaParser {
                 if let Some(table) = self.tables.get_mut(&table_name) {
                     // Extract related table name from Record type
                     if let Some(related_table) = Self::extract_related_table(&field_type) {
-                        if !table.relationships.contains(&related_table) {
-                            table.relationships.push(related_table);
+                        let relationship = Relationship {
+                            field_name: field_name.clone(),
+                            related_table: related_table.clone(),
+                        };
+                        // Check if this exact relationship already exists
+                        if !table.relationships.iter().any(|r|
+                            r.field_name == field_name && r.related_table == related_table
+                        ) {
+                            table.relationships.push(relationship);
                         }
                     }
                     table.fields.insert(field_name, field);

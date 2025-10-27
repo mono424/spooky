@@ -249,29 +249,108 @@ impl CodeGenerator {
                 let mut interface_lines = vec![
                     "/**".to_string(),
                     " * Relationships between tables".to_string(),
-                    " * Maps each table name to an array of related table names".to_string(),
+                    " * Maps each table name to an array of relationships with field and table info".to_string(),
                     " */".to_string(),
+                    "export interface Relationship {".to_string(),
+                    "    /** The field name that creates this relationship */".to_string(),
+                    "    field: string;".to_string(),
+                    "    /** The related table name */".to_string(),
+                    "    table: string;".to_string(),
+                    "}".to_string(),
+                    "".to_string(),
                     "export interface Relationships {".to_string(),
                 ];
 
-                for (table_name, rel_data) in rel_map {
-                    if let Some(items) = rel_data.get("items") {
-                        if let Some(enum_values) = items.get("enum") {
-                            if let serde_json::Value::Array(tables) = enum_values {
-                                let table_names: Vec<String> = tables
-                                    .iter()
-                                    .filter_map(|v| v.as_str().map(|s| format!("\"{}\"", s)))
-                                    .collect();
-
-                                if !table_names.is_empty() {
-                                    interface_lines.push(format!("    {}: [{}];", table_name, table_names.join(" | ")));
-                                }
-                            }
-                        }
-                    }
+                for (table_name, _rel_data) in rel_map {
+                    interface_lines.push(format!("    {}: Relationship[];", table_name));
                 }
 
                 interface_lines.push("}".to_string());
+                interface_lines.push("".to_string());
+
+                // Now add the actual relationship data from the schema
+                let table_relationships = schema
+                    .get("definitions")
+                    .and_then(|defs| {
+                        // Collect relationships from each table definition
+                        let mut all_rels = std::collections::HashMap::new();
+                        if let serde_json::Value::Object(defs_obj) = defs {
+                            for (table_name, table_def) in defs_obj {
+                                if table_name == "Relationships" {
+                                    continue;
+                                }
+                                // Check if this table has any record fields
+                                if let Some(props) = table_def.get("properties") {
+                                    if let serde_json::Value::Object(props_obj) = props {
+                                        let mut table_rels = Vec::new();
+                                        for (field_name, field_def) in props_obj {
+                                            // Check if this is a record field
+                                            if let Some(desc) = field_def.get("description") {
+                                                if let Some(desc_str) = desc.as_str() {
+                                                    if desc_str.starts_with("Record ID of table: ") {
+                                                        let related_table = desc_str.replace("Record ID of table: ", "");
+                                                        table_rels.push((field_name.clone(), related_table));
+                                                    }
+                                                }
+                                            }
+                                            // Check for array of records (including nullable arrays)
+                                            let is_array = if let Some(array_type) = field_def.get("type") {
+                                                if array_type == "array" {
+                                                    true
+                                                } else if let serde_json::Value::Array(types) = array_type {
+                                                    // Handle nullable types like ["array", "null"]
+                                                    types.iter().any(|t| t == "array")
+                                                } else {
+                                                    false
+                                                }
+                                            } else {
+                                                false
+                                            };
+
+                                            if is_array {
+                                                if let Some(items) = field_def.get("items") {
+                                                    if let Some(desc) = items.get("description") {
+                                                        if let Some(desc_str) = desc.as_str() {
+                                                            if desc_str.starts_with("Record ID of table: ") {
+                                                                let related_table = desc_str.replace("Record ID of table: ", "");
+                                                                table_rels.push((field_name.clone(), related_table));
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if !table_rels.is_empty() {
+                                            all_rels.insert(table_name.clone(), table_rels);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Some(all_rels)
+                    });
+
+                if let Some(table_rels) = table_relationships {
+                    interface_lines.push("/**".to_string());
+                    interface_lines.push(" * Relationship data extracted from the schema".to_string());
+                    interface_lines.push(" * Maps each table to its relationships with field and target table info".to_string());
+                    interface_lines.push(" */".to_string());
+                    interface_lines.push("export const RELATIONSHIPS: Relationships = {".to_string());
+
+                    for (table_name, rels) in table_rels {
+                        if rels.is_empty() {
+                            interface_lines.push(format!("    {}: [],", table_name));
+                        } else {
+                            interface_lines.push(format!("    {}: [", table_name));
+                            for (field_name, related_table) in rels {
+                                interface_lines.push(format!("        {{ field: \"{}\", table: \"{}\" }},", field_name, related_table));
+                            }
+                            interface_lines.push("    ],".to_string());
+                        }
+                    }
+
+                    interface_lines.push("};".to_string());
+                }
 
                 return Ok(format!("{}\n\n{}\n", content, interface_lines.join("\n")));
             }

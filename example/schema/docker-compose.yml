@@ -6,9 +6,10 @@ services:
     environment:
       - SURREAL_USER=root
       - SURREAL_PASS=root
+      - SURREAL_CAPS_ALLOW_EXPERIMENTAL=record_references
     volumes:
       - ./schema.surql:/schema.surql:ro
-    command: start --log info --user root --pass root memory
+    command: start --log info --user root --pass root --allow-experimental=record_references memory
     healthcheck:
       test: ["CMD", "/surreal", "isready", "--conn", "http://localhost:8000"]
       interval: 10s
