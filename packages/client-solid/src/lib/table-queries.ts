@@ -62,25 +62,6 @@ function wrapModelIdsWithRef<Model extends GenericModel>(
 }
 
 /**
- * Convert a SELECT query to a LIVE SELECT query
- * Ensures ORDER BY is removed as it's not supported in LIVE queries
- */
-export function toLiveQuery(queryInfo: QueryInfo): QueryInfo {
-  let query = queryInfo.query;
-
-  // Remove ORDER BY clause if present (not supported in LIVE SELECT)
-  query = query.replace(/\s+ORDER BY[^;]+/i, "");
-
-  // Replace SELECT with LIVE SELECT
-  query = query.replace(/^\s*SELECT\s+/i, "LIVE SELECT ");
-
-  return {
-    query,
-    vars: queryInfo.vars,
-  };
-}
-
-/**
  * Reactive query result with live updates
  */
 export class ReactiveQueryResult<Model extends GenericModel> {
@@ -123,12 +104,14 @@ export class LiveQueryList<
   private unsubscribe: (() => void) | undefined;
 
   constructor(
+    private liveQuery: QueryInfo,
     private hydrationQuery: QueryInfo,
     private tableName: string,
     private db: SyncedDb<Schema>,
     private callback: (items: Model[]) => void
   ) {
     this.state = [];
+    this.liveQuery = liveQuery;
     this.hydrationQuery = hydrationQuery;
     this.tableName = tableName;
     this.db = db;
@@ -204,8 +187,7 @@ export class LiveQueryList<
 
     // Subscribe to remote live query via syncer
     this.unsubscribe = await syncer.subscribeLiveQuery(
-      this.hydrationQuery.query,
-      this.hydrationQuery.vars,
+      this.liveQuery,
       [this.tableName],
       async () => {
         // Re-fetch from remote when changes occur (instead of trying to update local cache)
@@ -378,9 +360,17 @@ export class TableQuery<
     let query = `${method} ${selectClause} FROM ${this.tableName}`;
     if (whereClause) query += ` WHERE ${whereClause}`;
     if (orderClause) query += ` ORDER BY ${orderClause}`;
-    if (props.limit !== undefined) query += ` LIMIT ${props.limit}`;
-    if (props.offset !== undefined) query += ` START ${props.offset}`;
+
+    // Only add LIMIT and START for regular SELECT queries (not LIVE SELECT)
+    if (method === "SELECT") {
+      if (props.limit !== undefined) query += ` LIMIT ${props.limit}`;
+      if (props.offset !== undefined) query += ` START ${props.offset}`;
+    }
+
     query += ";";
+
+    console.log(`[buildQuery] Generated ${method} query:`, query);
+    console.log(`[buildQuery] Query vars:`, props.where);
 
     return {
       query,
@@ -568,17 +558,13 @@ export class TableQuery<
     options: LiveQueryOptions<Model>,
     callback: (queryId: Model[]) => void
   ): Promise<LiveQueryList<Schema, Model>> {
-    // Strip out orderBy for live queries as it's not supported
-    // Cast to any first to access potential orderBy, then create clean LiveQueryOptions
-    const liveOptions: LiveQueryOptions<Model> = {
-      select: options.select,
-      where: options.where,
-      limit: options.limit,
-      offset: options.offset,
-    };
+    // Build LIVE SELECT query directly (no ORDER BY, LIMIT, or START)
+    const liveQueryInfo = this.buildQuery("LIVE SELECT", options);
+    const selectQuery = this.buildQuery("SELECT", options);
 
     const liveQuery = new LiveQueryList<Schema, Model>(
-      this.buildQuery("SELECT", liveOptions),
+      liveQueryInfo,
+      selectQuery,
       this.tableName,
       this.db,
       callback

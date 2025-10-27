@@ -10,7 +10,7 @@ export const dbConfig: SyncedDbConfig<Schema> = {
   storageStrategy: "indexeddb",
   namespace: "main",
   database: "main",
-  remoteUrl: "http://localhost:8000",
+  remoteUrl: "ws://localhost:8000",
   tables: ["user", "thread", "comment"],
 };
 

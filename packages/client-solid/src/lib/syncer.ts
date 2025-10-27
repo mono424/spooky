@@ -1,5 +1,5 @@
-import { LiveMessage, LiveSubscription, Surreal, Table } from "surrealdb";
-import { toLiveQuery } from "./table-queries";
+import { LiveMessage, LiveSubscription, Surreal, Uuid } from "surrealdb";
+import { QueryInfo } from "./table-queries";
 
 /**
  * Represents a tracked live query on the remote server
@@ -26,11 +26,7 @@ export class Syncer {
   private queryListeners: Map<string, Set<() => void>> = new Map();
   private isInitialized = false;
 
-  constructor(
-    private localDb: Surreal,
-    private remoteDb: Surreal,
-    private tables: Table[]
-  ) {
+  constructor(private localDb: Surreal, private remoteDb: Surreal) {
     this.localDb = localDb;
     this.remoteDb = remoteDb;
   }
@@ -49,26 +45,25 @@ export class Syncer {
    * @returns A function to unsubscribe from the live query
    */
   async subscribeLiveQuery(
-    query: string,
-    vars: Record<string, unknown> | undefined,
+    liveQuery: QueryInfo,
     affectedTables: string[],
     onUpdate: () => void
   ): Promise<() => void> {
-    console.log("[Syncer.subscribeLiveQuery] START");
-    console.log("[Syncer.subscribeLiveQuery] query:", query);
-    console.log("[Syncer.subscribeLiveQuery] vars:", vars);
-    console.log("[Syncer.subscribeLiveQuery] affectedTables:", affectedTables);
-
-    const queryKey = this.getQueryKey(query, vars);
+    const queryKey = this.getQueryKey(liveQuery.query, liveQuery.vars);
     console.log("[Syncer.subscribeLiveQuery] queryKey:", queryKey);
 
     // Add the listener
     if (!this.queryListeners.has(queryKey)) {
-      console.log("[Syncer.subscribeLiveQuery] Creating new listeners set for queryKey");
+      console.log(
+        "[Syncer.subscribeLiveQuery] Creating new listeners set for queryKey"
+      );
       this.queryListeners.set(queryKey, new Set());
     }
     this.queryListeners.get(queryKey)!.add(onUpdate);
-    console.log("[Syncer.subscribeLiveQuery] Added listener, total listeners:", this.queryListeners.get(queryKey)!.size);
+    console.log(
+      "[Syncer.subscribeLiveQuery] Added listener, total listeners:",
+      this.queryListeners.get(queryKey)!.size
+    );
 
     // If query already exists, just increase ref count
     if (this.liveQueries.has(queryKey)) {
@@ -82,39 +77,50 @@ export class Syncer {
     }
 
     // Create new live query on remote
-    console.log("[Syncer.subscribeLiveQuery] Creating NEW live query:", queryKey);
+    console.log(
+      "[Syncer.subscribeLiveQuery] Creating NEW live query:",
+      queryKey
+    );
     try {
-      // Convert SELECT to LIVE SELECT and ensure ORDER BY is removed
-      console.log("[Syncer.subscribeLiveQuery] Converting to LIVE query...");
-      const liveQueryInfo = toLiveQuery({ query, vars });
-      console.log("[Syncer.subscribeLiveQuery] Live query SQL:", liveQueryInfo.query);
-      console.log("[Syncer.subscribeLiveQuery] Live query vars:", liveQueryInfo.vars);
+      // Execute the LIVE SELECT query directly using remoteDb.query()
+      console.log(
+        "[Syncer.subscribeLiveQuery] Executing LIVE query...",
+        liveQuery
+      );
 
-      // Use the live() method from SurrealDB SDK for the affected table
-      // Find the Table instance from our tracked tables, or create a new one
-      const tableName = affectedTables[0]; // Get the first affected table
-      console.log("[Syncer.subscribeLiveQuery] Target table name:", tableName);
-      console.log("[Syncer.subscribeLiveQuery] Looking for table in:", this.tables.map(t => t.name));
+      const [liveUuid] = await this.remoteDb
+        .query(liveQuery.query, liveQuery.vars)
+        .collect<[Uuid]>();
 
-      const tableInstance = this.tables.find(t => t.name === tableName) || new Table(tableName);
-      console.log("[Syncer.subscribeLiveQuery] Using table instance:", tableInstance.name);
-      console.log("[Syncer.subscribeLiveQuery] Calling remoteDb.live()...");
+      console.log("[Syncer.subscribeLiveQuery] Query result:", liveUuid);
 
-      const subscription = await this.remoteDb.live(tableInstance);
-      console.log("[Syncer.subscribeLiveQuery] Subscription created:", subscription);
+      // Extract the subscription from the query result
+      // The result is an array where each element corresponds to a query statement
+      const subscription = await this.remoteDb.liveOf(liveUuid);
+
+      if (!subscription || typeof subscription.subscribe !== "function") {
+        throw new Error("Failed to create live subscription from query result");
+      }
+      console.log(
+        "[Syncer.subscribeLiveQuery] Subscription created:",
+        subscription
+      );
 
       // Track the live query
       const trackedQuery: TrackedLiveQuery = {
         queryKey,
         subscription,
-        query,
-        vars,
+        query: liveQuery.query,
+        vars: liveQuery.vars,
         refCount: 1,
         affectedTables: new Set(affectedTables),
       };
 
       this.liveQueries.set(queryKey, trackedQuery);
-      console.log("[Syncer.subscribeLiveQuery] Tracked query stored, total live queries:", this.liveQueries.size);
+      console.log(
+        "[Syncer.subscribeLiveQuery] Tracked query stored, total live queries:",
+        this.liveQueries.size
+      );
 
       // Map tables to query keys for efficient lookups
       for (const table of affectedTables) {
@@ -122,27 +128,47 @@ export class Syncer {
           this.tableToQueryKeys.set(table, new Set());
         }
         this.tableToQueryKeys.get(table)!.add(queryKey);
-        console.log("[Syncer.subscribeLiveQuery] Mapped table to query:", table, "->", queryKey);
+        console.log(
+          "[Syncer.subscribeLiveQuery] Mapped table to query:",
+          table,
+          "->",
+          queryKey
+        );
       }
 
       // Subscribe to updates (the subscription automatically listens to changes)
-      console.log("[Syncer.subscribeLiveQuery] Setting up subscription.subscribe() callback...");
+      console.log(
+        "[Syncer.subscribeLiveQuery] Setting up subscription.subscribe() callback..."
+      );
       subscription.subscribe(async (event: LiveMessage) => {
-        console.log("[Syncer.subscribeLiveQuery] SUBSCRIPTION CALLBACK TRIGGERED");
+        console.log(
+          "[Syncer.subscribeLiveQuery] SUBSCRIPTION CALLBACK TRIGGERED"
+        );
         console.log("[Syncer.subscribeLiveQuery] Event received:", event);
         await this.handleRemoteUpdate(queryKey, event);
       });
 
-      console.log(`[Syncer.subscribeLiveQuery] Live query SUCCESSFULLY started (refCount: 1):`, queryKey);
+      console.log(
+        `[Syncer.subscribeLiveQuery] Live query SUCCESSFULLY started (refCount: 1):`,
+        queryKey
+      );
     } catch (error) {
-      console.error("[Syncer.subscribeLiveQuery] FAILED to create live query:", error);
-      console.error("[Syncer.subscribeLiveQuery] Error stack:", (error as Error).stack);
+      console.error(
+        "[Syncer.subscribeLiveQuery] FAILED to create live query:",
+        error
+      );
+      console.error(
+        "[Syncer.subscribeLiveQuery] Error stack:",
+        (error as Error).stack
+      );
       // Clean up listeners on error
       this.queryListeners.get(queryKey)?.delete(onUpdate);
       throw error;
     }
 
-    console.log("[Syncer.subscribeLiveQuery] END - returning unsubscribe function");
+    console.log(
+      "[Syncer.subscribeLiveQuery] END - returning unsubscribe function"
+    );
     return () => this.unsubscribeLiveQuery(queryKey, onUpdate);
   }
 
@@ -210,7 +236,10 @@ export class Syncer {
         return;
       }
 
-      console.log(`[Syncer] Change detected (${event.action}) for:`, recordId.toString());
+      console.log(
+        `[Syncer] Change detected (${event.action}) for:`,
+        recordId.toString()
+      );
 
       // Skip local cache updates - queries will re-fetch from remote instead
       // This avoids permission issues when trying to cache records that belong to other users
@@ -238,10 +267,7 @@ export class Syncer {
   /**
    * Generate a unique key for a query based on SQL and variables
    */
-  private getQueryKey(
-    query: string,
-    vars?: Record<string, unknown>
-  ): string {
+  private getQueryKey(query: string, vars?: Record<string, unknown>): string {
     const varsStr = vars ? JSON.stringify(vars) : "";
     return `${query}|${varsStr}`;
   }
@@ -253,10 +279,7 @@ export class Syncer {
       try {
         tracked.subscription.kill();
       } catch (error) {
-        console.error(
-          `[Syncer] Error stopping live query ${queryKey}:`,
-          error
-        );
+        console.error(`[Syncer] Error stopping live query ${queryKey}:`, error);
       }
     }
     this.liveQueries.clear();

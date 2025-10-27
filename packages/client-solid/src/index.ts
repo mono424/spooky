@@ -85,14 +85,12 @@ export class SyncedDb<Schema extends GenericSchema> {
   private config: SyncedDbConfig<Schema>;
   private connections: DbConnection | null = null;
   public readonly query: TableQueries<Schema>;
-  private tables: Table[] = [];
   private syncer: Syncer | null = null;
   private walManager: WALManager | null = null;
   private currentUser: any = proxy({ value: null });
 
   constructor(config: SyncedDbConfig<Schema>) {
     this.config = config;
-    this.tables = config.tables.map((table) => new Table(table));
     this.query = new QueryNamespace<Schema>(this) as QueryNamespace<Schema> &
       TableQueries<Schema>;
   }
@@ -158,7 +156,7 @@ export class SyncedDb<Schema extends GenericSchema> {
     await provisioner.provision();
 
     if (remote) {
-      this.syncer = new Syncer(local, remote, this.tables);
+      this.syncer = new Syncer(local, remote);
       await this.syncer.init();
     }
   }
