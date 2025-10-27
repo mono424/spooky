@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/khadim/dev/spooky/example/schema/**)",
+      "Bash(find:*)",
+      "Read(//Users/khadim/dev/spooky/**)",
+      "Bash(cargo build:*)",
+      "Bash(pnpm run:*)",
+      "Bash(docker-compose:*)",
+      "Bash(docker-compose up:*)",
+      "Bash(cargo doc:*)",
+      "Bash(cargo tree:*)",
+      "Read(//Users/khadim/.cargo/registry/src/**)",
+      "Read(//tmp/**)",
+      "Bash(cat:*)",
+      "Bash(python3:*)",
+      "Bash(./target/release/syncgen --format json --input ../../example/schema/schema.surql --output /tmp/schema.json --pretty)",
+      "Bash(node:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
