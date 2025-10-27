@@ -1,4 +1,5 @@
-import { LiveMessage, LiveSubscription, Surreal, Table, Uuid } from "surrealdb";
+import { LiveMessage, LiveSubscription, Surreal, Table } from "surrealdb";
+import { toLiveQuery } from "./table-queries";
 
 /**
  * Represents a tracked live query on the remote server
@@ -53,35 +54,54 @@ export class Syncer {
     affectedTables: string[],
     onUpdate: () => void
   ): Promise<() => void> {
+    console.log("[Syncer.subscribeLiveQuery] START");
+    console.log("[Syncer.subscribeLiveQuery] query:", query);
+    console.log("[Syncer.subscribeLiveQuery] vars:", vars);
+    console.log("[Syncer.subscribeLiveQuery] affectedTables:", affectedTables);
+
     const queryKey = this.getQueryKey(query, vars);
+    console.log("[Syncer.subscribeLiveQuery] queryKey:", queryKey);
 
     // Add the listener
     if (!this.queryListeners.has(queryKey)) {
+      console.log("[Syncer.subscribeLiveQuery] Creating new listeners set for queryKey");
       this.queryListeners.set(queryKey, new Set());
     }
     this.queryListeners.get(queryKey)!.add(onUpdate);
+    console.log("[Syncer.subscribeLiveQuery] Added listener, total listeners:", this.queryListeners.get(queryKey)!.size);
 
     // If query already exists, just increase ref count
     if (this.liveQueries.has(queryKey)) {
       const tracked = this.liveQueries.get(queryKey)!;
       tracked.refCount++;
       console.log(
-        `[Syncer] Reusing live query (refCount: ${tracked.refCount}):`,
+        `[Syncer.subscribeLiveQuery] Reusing existing live query (refCount: ${tracked.refCount}):`,
         queryKey
       );
       return () => this.unsubscribeLiveQuery(queryKey, onUpdate);
     }
 
     // Create new live query on remote
-    console.log("[Syncer] Creating new live query:", queryKey);
+    console.log("[Syncer.subscribeLiveQuery] Creating NEW live query:", queryKey);
     try {
-      // Execute LIVE SELECT on remote
-      const liveQuery = query.replace("SELECT", "LIVE SELECT");
-      const [queryId] = (await this.remoteDb
-        .query(liveQuery, vars)
-        .collect()) as unknown as [Uuid];
+      // Convert SELECT to LIVE SELECT and ensure ORDER BY is removed
+      console.log("[Syncer.subscribeLiveQuery] Converting to LIVE query...");
+      const liveQueryInfo = toLiveQuery({ query, vars });
+      console.log("[Syncer.subscribeLiveQuery] Live query SQL:", liveQueryInfo.query);
+      console.log("[Syncer.subscribeLiveQuery] Live query vars:", liveQueryInfo.vars);
 
-      const subscription = await this.remoteDb.liveOf(queryId);
+      // Use the live() method from SurrealDB SDK for the affected table
+      // Find the Table instance from our tracked tables, or create a new one
+      const tableName = affectedTables[0]; // Get the first affected table
+      console.log("[Syncer.subscribeLiveQuery] Target table name:", tableName);
+      console.log("[Syncer.subscribeLiveQuery] Looking for table in:", this.tables.map(t => t.name));
+
+      const tableInstance = this.tables.find(t => t.name === tableName) || new Table(tableName);
+      console.log("[Syncer.subscribeLiveQuery] Using table instance:", tableInstance.name);
+      console.log("[Syncer.subscribeLiveQuery] Calling remoteDb.live()...");
+
+      const subscription = await this.remoteDb.live(tableInstance);
+      console.log("[Syncer.subscribeLiveQuery] Subscription created:", subscription);
 
       // Track the live query
       const trackedQuery: TrackedLiveQuery = {
@@ -94,6 +114,7 @@ export class Syncer {
       };
 
       this.liveQueries.set(queryKey, trackedQuery);
+      console.log("[Syncer.subscribeLiveQuery] Tracked query stored, total live queries:", this.liveQueries.size);
 
       // Map tables to query keys for efficient lookups
       for (const table of affectedTables) {
@@ -101,21 +122,27 @@ export class Syncer {
           this.tableToQueryKeys.set(table, new Set());
         }
         this.tableToQueryKeys.get(table)!.add(queryKey);
+        console.log("[Syncer.subscribeLiveQuery] Mapped table to query:", table, "->", queryKey);
       }
 
-      // Subscribe to updates
-      subscription.subscribe(async (event) => {
+      // Subscribe to updates (the subscription automatically listens to changes)
+      console.log("[Syncer.subscribeLiveQuery] Setting up subscription.subscribe() callback...");
+      subscription.subscribe(async (event: LiveMessage) => {
+        console.log("[Syncer.subscribeLiveQuery] SUBSCRIPTION CALLBACK TRIGGERED");
+        console.log("[Syncer.subscribeLiveQuery] Event received:", event);
         await this.handleRemoteUpdate(queryKey, event);
       });
 
-      console.log(`[Syncer] Live query started (refCount: 1):`, queryKey);
+      console.log(`[Syncer.subscribeLiveQuery] Live query SUCCESSFULLY started (refCount: 1):`, queryKey);
     } catch (error) {
-      console.error("[Syncer] Failed to create live query:", error);
+      console.error("[Syncer.subscribeLiveQuery] FAILED to create live query:", error);
+      console.error("[Syncer.subscribeLiveQuery] Error stack:", (error as Error).stack);
       // Clean up listeners on error
       this.queryListeners.get(queryKey)?.delete(onUpdate);
       throw error;
     }
 
+    console.log("[Syncer.subscribeLiveQuery] END - returning unsubscribe function");
     return () => this.unsubscribeLiveQuery(queryKey, onUpdate);
   }
 
@@ -186,7 +213,14 @@ export class Syncer {
       // Update local cache based on the action
       if (event.action === "CREATE") {
         const tableName = recordId.tb;
-        await this.localDb.insert(tableName, recordValue);
+        console.log("[Syncer] Creating in local DB, table:", tableName, "value:", recordValue);
+        // Use create() instead of insert() to avoid Table object issues
+        try {
+          await this.localDb.create(tableName, recordValue);
+        } catch (error) {
+          console.error("[Syncer] Error creating in local DB:", error);
+          throw error;
+        }
       } else if (event.action === "UPDATE") {
         await this.localDb.update(recordId).merge(recordValue);
       } else if (event.action === "DELETE") {

@@ -1,25 +1,56 @@
-import {
-  Frame,
-  RecordId,
-  Surreal,
-  Table,
-  Values,
-} from "surrealdb";
-import { proxy } from "valtio";
+import { Frame, RecordId, Surreal, Table, Values } from "surrealdb";
+import { proxy, ref } from "valtio";
 import { GenericModel, GenericSchema, ModelPayload } from "./models";
 import { QueryResponse, SyncedDb } from "..";
 
 export interface LiveQueryOptions<Model extends GenericModel> {
   select?: ((keyof Model & string) | "*")[];
   where?: Partial<Model> | { id: RecordId };
-  orderBy?: Partial<Record<keyof Model, "asc" | "desc">>;
   limit?: number;
   offset?: number;
+}
+
+export interface QueryOptions<Model extends GenericModel>
+  extends LiveQueryOptions<Model> {
+  orderBy?: Partial<Record<keyof Model, "asc" | "desc">>;
 }
 
 export interface QueryInfo {
   query: string;
   vars?: Record<string, unknown>;
+}
+
+/**
+ * Wrap model id with ref() to prevent valtio from proxying RecordId objects
+ */
+function wrapModelIdsWithRef<Model extends GenericModel>(
+  models: Model[]
+): Model[] {
+  return models.map((model) => {
+    if (model.id) {
+      return { ...model, id: ref(model.id) };
+    }
+    return model;
+  });
+}
+
+/**
+ * Convert a SELECT query to a LIVE SELECT query
+ * Ensures ORDER BY is removed as it's not supported in LIVE queries
+ */
+export function toLiveQuery(queryInfo: QueryInfo): QueryInfo {
+  let query = queryInfo.query;
+
+  // Remove ORDER BY clause if present (not supported in LIVE SELECT)
+  query = query.replace(/\s+ORDER BY[^;]+/i, "");
+
+  // Replace SELECT with LIVE SELECT
+  query = query.replace(/^\s*SELECT\s+/i, "LIVE SELECT ");
+
+  return {
+    query,
+    vars: queryInfo.vars,
+  };
 }
 
 /**
@@ -43,8 +74,10 @@ export class ReactiveQueryResult<Model extends GenericModel> {
 
   _updateState(newState: Model[]): void {
     // Clear and replace array contents to maintain proxy reference
+    // Wrap ids with ref() to prevent valtio from proxying RecordId objects
+    const wrappedState = wrapModelIdsWithRef(newState);
     this.state.length = 0;
-    this.state.push(...newState);
+    this.state.push(...wrappedState);
   }
 
   /**
@@ -79,7 +112,8 @@ export class LiveQueryList<
     const [models] = await this.db
       .queryLocal(this.hydrationQuery.query, this.hydrationQuery.vars)
       .collect();
-    this.state = models as Model[];
+    // Wrap ids with ref() to prevent valtio from proxying RecordId objects
+    this.state = wrapModelIdsWithRef(models as Model[]);
     console.log("[LiveQueryList] Hydrated", this.state);
     this.callback(this.state);
   }
@@ -132,7 +166,7 @@ export class QueryBuilder<
   Model extends GenericModel,
   TableName extends keyof Schema & string = keyof Schema & string
 > {
-  private options: LiveQueryOptions<Model> = {};
+  private options: QueryOptions<Model> = {};
   private relatedTables: string[] = [];
 
   constructor(
@@ -165,7 +199,7 @@ export class QueryBuilder<
   }
 
   /**
-   * Add ordering to the query
+   * Add ordering to the query (only for non-live queries)
    */
   orderBy(
     field: keyof Model & string,
@@ -202,9 +236,7 @@ export class QueryBuilder<
    *
    * @param relatedTable - The name of the related table to include
    */
-  related<RelatedTable extends string>(
-    relatedTable: RelatedTable
-  ): this {
+  related<RelatedTable extends string>(relatedTable: RelatedTable): this {
     if (!this.relatedTables.includes(relatedTable)) {
       this.relatedTables.push(relatedTable);
     }
@@ -241,11 +273,10 @@ export class TableQuery<
   Schema extends GenericSchema,
   Model extends GenericModel
 > {
-  private table: Table;
-
-  constructor(private db: SyncedDb<Schema>, public readonly tableName: string) {
-    this.table = new Table(this.tableName);
-  }
+  constructor(
+    private db: SyncedDb<Schema>,
+    public readonly tableName: string
+  ) {}
 
   private buildQuery(
     method: "LIVE SELECT" | "SELECT",
@@ -257,9 +288,14 @@ export class TableQuery<
     const whereClause = Object.keys(props.where ?? {})
       .map((key) => `${key} = $${key}`)
       .join(" AND ");
-    const orderClause = Object.entries(props.orderBy ?? {})
-      .map(([key, val]) => `${key} ${val}`)
-      .join(", ");
+
+    // Only add ORDER BY for non-live queries
+    const orderClause =
+      method === "SELECT" && "orderBy" in props
+        ? Object.entries(props.orderBy ?? {})
+            .map(([key, val]) => `${key} ${val}`)
+            .join(", ")
+        : "";
 
     let query = `${method} ${selectClause} FROM ${this.tableName}`;
     if (whereClause) query += ` WHERE ${whereClause}`;
@@ -277,10 +313,12 @@ export class TableQuery<
   /**
    * Start a fluent query with optional where conditions
    * @example
-   * tableQuery.find({ status: 'active' }).orderBy('createdAt', 'desc').query()
+   * tableQuery.find({ status: 'active' }).limit(10).query()
    * tableQuery.find({ userId: '123' }).subscribe(items => console.log(items))
    */
-  find(where?: Partial<Model>): QueryBuilder<Schema, Model, typeof this.tableName> {
+  find(
+    where?: Partial<Model>
+  ): QueryBuilder<Schema, Model, typeof this.tableName> {
     return new QueryBuilder(this, this.tableName as any, where);
   }
 
@@ -293,8 +331,10 @@ export class TableQuery<
   async create(
     data: Values<ModelPayload<Model>> | Values<ModelPayload<Model>>[]
   ): Promise<Model[]> {
-    const result = await this.db.createLocal<Model>(this.table, data);
-    return result as unknown as Model[];
+    console.log("create", data);
+    const result = await this.db.createLocal<Model>(this.tableName, data);
+    // Wrap ids with ref() to prevent valtio from proxying RecordId objects
+    return wrapModelIdsWithRef(result as unknown as Model[]);
   }
 
   /**
@@ -367,8 +407,17 @@ export class TableQuery<
     options: LiveQueryOptions<Model>,
     callback: (queryId: Model[]) => void
   ): Promise<LiveQueryList<Schema, Model>> {
+    // Strip out orderBy for live queries as it's not supported
+    // Cast to any first to access potential orderBy, then create clean LiveQueryOptions
+    const liveOptions: LiveQueryOptions<Model> = {
+      select: options.select,
+      where: options.where,
+      limit: options.limit,
+      offset: options.offset,
+    };
+
     const liveQuery = new LiveQueryList<Schema, Model>(
-      this.buildQuery("SELECT", options),
+      this.buildQuery("SELECT", liveOptions),
       this.tableName,
       this.db,
       callback
@@ -395,13 +444,13 @@ export class TableQuery<
   createLocal(
     data: Values<ModelPayload<Model>> | Values<ModelPayload<Model>>[]
   ): ReturnType<Surreal["insert"]> {
-    return this.db.createLocal<Model>(this.table, data);
+    return this.db.createLocal<Model>(this.tableName, data);
   }
 
   createRemote(
     data: Values<ModelPayload<Model>> | Values<ModelPayload<Model>>[]
   ): ReturnType<Surreal["insert"]> {
-    return this.db.createRemote<Model>(this.table, data);
+    return this.db.createRemote<Model>(this.tableName, data);
   }
 
   updateLocal(

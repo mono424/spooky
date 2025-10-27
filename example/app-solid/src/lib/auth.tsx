@@ -4,7 +4,6 @@ import {
   createSignal,
   JSX,
   Show,
-  createEffect,
 } from "solid-js";
 import { db, dbConfig, type Schema } from "../db";
 import type { Model } from "@spooky/client-solid";
@@ -27,33 +26,29 @@ export function AuthProvider(props: { children: JSX.Element }) {
 
   // Check for existing session on mount
   const checkAuth = async () => {
-    await db.checkAuth("user");
+    const authUser = await db.checkAuth("user");
+    if (authUser) {
+      setUser(authUser as User);
+    }
     setIsLoading(false);
   };
 
   // Initialize auth check
   checkAuth();
 
-  // Sync user state with db observable
-  createEffect(() => {
-    const currentUser = db.getCurrentUser<"user">();
-    setUser(currentUser.value as User | null);
-  });
-
   const signIn = async (username: string, password: string) => {
     try {
       // Use the centralized signIn method from db object
-      await db.signIn(
-        {
-          access: "account",
-          variables: {
-            username,
-            password,
-          },
+      await db.signIn({
+        access: "account",
+        variables: {
+          username,
+          password,
         },
-        "user"
-      );
-      // User is automatically set via the observable
+      });
+      // Update user from db
+      const currentUser = db.getCurrentUser<"user">();
+      setUser(currentUser.value as User | null);
     } catch (error) {
       console.error("Sign in failed:", error);
       throw error;
@@ -63,19 +58,18 @@ export function AuthProvider(props: { children: JSX.Element }) {
   const signUp = async (username: string, password: string) => {
     try {
       // Use the centralized signUp method from db object
-      await db.signUp(
-        {
-          namespace: dbConfig.namespace,
-          database: dbConfig.database,
-          access: "account",
-          variables: {
-            username,
-            password,
-          },
+      await db.signUp({
+        namespace: dbConfig.namespace,
+        database: dbConfig.database,
+        access: "account",
+        variables: {
+          username,
+          password,
         },
-        "user"
-      );
-      // User is automatically set via the observable
+      });
+      // Update user from db
+      const currentUser = db.getCurrentUser<"user">();
+      setUser(currentUser.value as User | null);
     } catch (error) {
       console.error("Sign up failed:", error);
       throw error;
@@ -85,7 +79,8 @@ export function AuthProvider(props: { children: JSX.Element }) {
   const signOut = async () => {
     try {
       await db.signOut();
-      // User is automatically cleared via the observable
+      // Clear user
+      setUser(null);
     } catch (error) {
       console.error("Sign out failed:", error);
       throw error;

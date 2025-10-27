@@ -67,7 +67,7 @@ export function ThreadList() {
               <div class="flex justify-between items-center text-sm text-gray-500">
                 <span>By {thread.author}</span>
                 <span>
-                  {new Date(thread.created_at ?? 0).toLocaleDateString()}
+                  {/* {new Date(thread.created_at ?? 0).toLocaleDateString()} */}
                 </span>
               </div>
             </div>

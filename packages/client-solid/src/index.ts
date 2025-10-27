@@ -12,9 +12,13 @@ import { SchemaProvisioner } from "./lib/provisioner";
 import { createSurrealDBWasm } from "./cache";
 import type { SyncedDbConfig, DbConnection } from "./types";
 import { GenericModel, GenericSchema, ModelPayload } from "./lib/models";
-import { QueryNamespace, TableQueries, ReactiveQueryResult } from "./lib/table-queries";
+import {
+  QueryNamespace,
+  TableQueries,
+  ReactiveQueryResult,
+} from "./lib/table-queries";
 import { Syncer } from "./lib/syncer";
-import { proxy } from "valtio";
+import { proxy, ref } from "valtio";
 export type { RecordResult } from "surrealdb";
 
 export { RecordId } from "surrealdb";
@@ -26,6 +30,8 @@ export type {
 } from "./lib/models";
 export { ReactiveQueryResult } from "./lib/table-queries";
 
+export { snapshot } from "valtio";
+
 export type QueryResponse<T extends GenericModel> = Omit<
   ReturnType<Surreal["query"]>,
   "collect"
@@ -33,7 +39,15 @@ export type QueryResponse<T extends GenericModel> = Omit<
   collect: () => Promise<[ModelPayload<T>[]]>;
 };
 
-const AUTH_TOKEN_KEY = "auth_token";
+/**
+ * Wrap a single model's id with ref() to prevent valtio from proxying RecordId
+ */
+function wrapModelIdWithRef<T extends GenericModel>(model: T): T {
+  if (model && model.id) {
+    return { ...model, id: ref(model.id) };
+  }
+  return model;
+}
 
 export class SyncedDb<Schema extends GenericSchema> {
   private config: SyncedDbConfig<Schema>;
@@ -48,12 +62,6 @@ export class SyncedDb<Schema extends GenericSchema> {
     this.tables = config.tables.map((table) => new Table(table));
     this.query = new QueryNamespace<Schema>(this) as QueryNamespace<Schema> &
       TableQueries<Schema>;
-    console.log("[SyncedDb] Tables", this.tables);
-  }
-
-  logDatabase(db: Surreal) {
-    console.log(`Database[cache] version: ${db.version}`);
-    console.log(`Database[cache] config: ${db.status}`);
   }
 
   /**
@@ -119,54 +127,71 @@ export class SyncedDb<Schema extends GenericSchema> {
   }
 
   /**
-   * Store auth token in internal database
+   * Store auth tokens in internal database
    */
-  private async storeAuthToken(token: string): Promise<void> {
-    if (!this.connections?.internal) throw new Error("SyncedDb not initialized");
+  private async storeAuthTokens(
+    localToken: string,
+    remoteToken?: string
+  ): Promise<void> {
+    if (!this.connections?.internal)
+      throw new Error("SyncedDb not initialized");
     try {
+      // Delete existing token first
+      await this.connections.internal.query(`DELETE auth_token:current`);
+      // Create new token record
       await this.connections.internal.query(
-        `CREATE auth_token:current SET token = $token, created_at = time::now()`,
-        { token }
+        `CREATE auth_token:current SET local_token = $local_token, remote_token = $remote_token, created_at = time::now()`,
+        { local_token: localToken, remote_token: remoteToken }
       );
     } catch (error) {
-      console.error("Failed to store auth token:", error);
+      console.error("Failed to store auth tokens:", error);
       throw error;
     }
   }
 
   /**
-   * Retrieve auth token from internal database
+   * Retrieve auth tokens from internal database
    */
-  private async getStoredAuthToken(): Promise<string | null> {
-    if (!this.connections?.internal) throw new Error("SyncedDb not initialized");
+  private async getStoredAuthTokens(): Promise<{
+    local: string | null;
+    remote: string | null;
+  }> {
+    if (!this.connections?.internal)
+      throw new Error("SyncedDb not initialized");
     try {
       const [result] = await this.connections.internal
-        .query(`SELECT token FROM auth_token:current`)
-        .collect<[{ token: string }[]]>();
+        .query(`SELECT local_token, remote_token FROM auth_token:current`)
+        .collect<[{ local_token?: string; remote_token?: string }[]]>();
 
-      return result?.[0]?.token ?? null;
+      return {
+        local: result?.[0]?.local_token ?? null,
+        remote: result?.[0]?.remote_token ?? null,
+      };
     } catch (error) {
-      console.error("Failed to retrieve auth token:", error);
-      return null;
+      console.error("Failed to retrieve auth tokens:", error);
+      return { local: null, remote: null };
     }
   }
 
   /**
-   * Remove auth token from internal database
+   * Remove auth tokens from internal database
    */
-  private async removeStoredAuthToken(): Promise<void> {
-    if (!this.connections?.internal) throw new Error("SyncedDb not initialized");
+  private async removeStoredAuthTokens(): Promise<void> {
+    if (!this.connections?.internal)
+      throw new Error("SyncedDb not initialized");
     try {
       await this.connections.internal.query(`DELETE auth_token:current`);
     } catch (error) {
-      console.error("Failed to remove auth token:", error);
+      console.error("Failed to remove auth tokens:", error);
     }
   }
 
   /**
    * Get current user as observable
    */
-  getCurrentUser<T extends keyof Schema>(): { value: ModelPayload<Schema[T]> | null } {
+  getCurrentUser<T extends keyof Schema>(): {
+    value: ModelPayload<Schema[T]> | null;
+  } {
     return this.currentUser;
   }
 
@@ -176,155 +201,138 @@ export class SyncedDb<Schema extends GenericSchema> {
   async checkAuth<T extends keyof Schema>(
     userTable: T
   ): Promise<ModelPayload<Schema[T]> | null> {
-    console.log("[SyncedDb] Checking authentication");
     try {
-      const token = await this.getStoredAuthToken();
-      if (!token) {
-        console.log("[SyncedDb] No stored token found");
+      const tokens = await this.getStoredAuthTokens();
+      if (!tokens.local) {
         this.currentUser.value = null;
         return null;
       }
 
-      // Authenticate with stored token
-      console.log("[SyncedDb] Authenticating with token");
-      await this.authenticate(token);
+      // Authenticate local database with stored token
+      await this.connections!.local.authenticate(tokens.local);
 
-      console.log("[SyncedDb] Querying authenticated user info");
+      // Authenticate remote database if configured
+      if (this.connections?.remote && tokens.remote) {
+        try {
+          await this.connections.remote.authenticate(tokens.remote);
+        } catch (error) {
+          console.warn("[SyncedDb] Remote authentication failed:", error);
+        }
+      }
+
       // Query authenticated user info
       const [users] = await this.queryLocal<Schema[T]>(
         `SELECT * FROM $auth`
       ).collect();
 
-      console.log("[SyncedDb] Authenticated user info", users);
       if (users && users.length > 0) {
-        this.currentUser.value = users[0];
-        return users[0];
-      } else {
-        await this.removeStoredAuthToken();
-        this.currentUser.value = null;
-        return null;
+        const wrappedUser = wrapModelIdWithRef(users[0]);
+        this.currentUser.value = wrappedUser;
+        return wrappedUser;
       }
+
+      await this.removeStoredAuthTokens();
+      this.currentUser.value = null;
+      return null;
     } catch (error) {
       console.error("[SyncedDb] Auth check failed:", error);
-      await this.removeStoredAuthToken();
+      await this.removeStoredAuthTokens();
       this.currentUser.value = null;
       return null;
     }
   }
 
-  async signIn<T extends keyof Schema>(
+  /**
+   * Common authentication flow: authenticate remote, sync user, authenticate local
+   */
+  private async authenticateRemoteAndSyncUser<T extends keyof Schema>(
     auth: AnyAuth,
-    userTable: T
-  ): Promise<AuthResponse> {
+    isSignUp: boolean = false
+  ): Promise<{
+    remoteResponse: AuthResponse;
+    localResponse: AuthResponse;
+    user: ModelPayload<Schema[T]>;
+  }> {
     if (!this.connections?.local) throw new Error("SyncedDb not initialized");
+    if (!this.connections?.remote)
+      throw new Error("Remote database is not configured");
+
+    // Prepare auth for remote (add namespace/database for record access)
+    const remoteAuth = { ...auth } as any;
+    if (
+      "access" in remoteAuth &&
+      !remoteAuth.namespace &&
+      !remoteAuth.database
+    ) {
+      remoteAuth.namespace = this.config.namespace;
+      remoteAuth.database = this.config.database;
+    }
+
+    // Authenticate with remote (sign in or sign up)
+    const remoteAuthResponse = isSignUp
+      ? await this.connections.remote.signup(remoteAuth)
+      : await this.connections.remote.signin(remoteAuth);
+
+    if (!remoteAuthResponse?.token) {
+      throw new Error(
+        `${
+          isSignUp ? "Sign-up" : "Sign-in"
+        } failed: No token returned from remote`
+      );
+    }
+
+    // Query user from remote database
+    const [remoteUsers] = await this.connections.remote
+      .query(`SELECT * FROM $auth`)
+      .collect<[ModelPayload<Schema[T]>[]]>();
+
+    if (!remoteUsers || remoteUsers.length === 0) {
+      throw new Error(
+        `${isSignUp ? "Sign-up" : "Sign-in"} failed: User not found on remote`
+      );
+    }
+
+    const remoteUser = remoteUsers[0];
+
+    // Sync user to local database (upsert)
+    await this.connections.local.query(`UPDATE $id CONTENT $user`, {
+      id: remoteUser.id,
+      user: remoteUser,
+    });
 
     // Sign in to local database
-    let authResponse: AuthResponse;
-    try {
-      authResponse = await this.connections.local.signin(auth);
-    } catch (error) {
-      console.error("[SyncedDb] Local sign-in failed:", error);
-      throw error;
-    }
+    const localAuthResponse = await this.connections.local.signin({
+      access: (auth as any).access,
+      variables: (auth as any).variables,
+    });
 
-    if (!authResponse?.token) {
-      throw new Error("Sign-in failed: No token returned");
-    }
+    return {
+      remoteResponse: remoteAuthResponse,
+      localResponse: localAuthResponse,
+      user: remoteUser,
+    };
+  }
 
-    // Sign in to remote database if configured
-    if (this.connections.remote) {
-      try {
-        // For record access, ensure namespace and database are included
-        const remoteAuth = { ...auth } as any;
-        if ('access' in remoteAuth && !remoteAuth.namespace && !remoteAuth.database) {
-          remoteAuth.namespace = this.config.namespace;
-          remoteAuth.database = this.config.database;
-        }
-        await this.connections.remote.signin(remoteAuth);
-        console.log("[SyncedDb] Remote sign-in successful");
-      } catch (error) {
-        console.error("[SyncedDb] Remote sign-in failed:", error);
-        throw error;
-      }
-    }
+  async signIn<T extends keyof Schema>(auth: AnyAuth): Promise<AuthResponse> {
+    const { remoteResponse, localResponse, user } =
+      await this.authenticateRemoteAndSyncUser<T>(auth, false);
 
-    // Authenticate both databases with the token
-    try {
-      await this.connections.local.authenticate(authResponse.token);
-      if (this.connections.remote) {
-        await this.connections.remote.authenticate(authResponse.token);
-      }
-    } catch (error) {
-      console.error("[SyncedDb] Authentication failed:", error);
-      throw error;
-    }
+    await this.storeAuthTokens(localResponse.token, remoteResponse.token);
+    this.currentUser.value = wrapModelIdWithRef(user);
 
-    // Store token in internal database
-    await this.storeAuthToken(authResponse.token);
-
-    // Query and set current user
-    const [users] = await this.queryLocal<Schema[T]>(
-      `SELECT * FROM $auth`
-    ).collect();
-    if (users && users.length > 0) {
-      this.currentUser.value = users[0];
-    }
-
-    return authResponse;
+    return remoteResponse;
   }
 
   async signUp<T extends keyof Schema>(
-    auth: AccessRecordAuth,
-    userTable: T
+    auth: AccessRecordAuth
   ): Promise<AuthResponse> {
-    if (!this.connections?.local) throw new Error("SyncedDb not initialized");
+    const { remoteResponse, localResponse, user } =
+      await this.authenticateRemoteAndSyncUser<T>(auth, true);
 
-    // Sign up to local database
-    let authResponse: AuthResponse;
-    try {
-      authResponse = await this.connections.local.signup(auth);
-    } catch (error) {
-      console.error("Local sign-up failed:", error);
-      throw error;
-    }
+    await this.storeAuthTokens(localResponse.token, remoteResponse.token);
+    this.currentUser.value = wrapModelIdWithRef(user);
 
-    if (!authResponse?.token) {
-      throw new Error("Sign-up failed: No token returned");
-    }
-
-    // Sign up to remote database if configured
-    if (this.connections.remote) {
-      try {
-        await this.connections.remote.signup(auth);
-      } catch (error) {
-        console.error("Remote sign-up failed:", error);
-        throw error;
-      }
-    }
-
-    // Authenticate both databases with the token
-    try {
-      await this.connections.local.authenticate(authResponse.token);
-      if (this.connections.remote) {
-        await this.connections.remote.authenticate(authResponse.token);
-      }
-    } catch (error) {
-      console.error("Authentication failed:", error);
-      throw error;
-    }
-
-    // Store token in internal database
-    await this.storeAuthToken(authResponse.token);
-
-    // Query and set current user
-    const [users] = await this.queryLocal<Schema[T]>(
-      `SELECT * FROM $auth`
-    ).collect();
-    if (users && users.length > 0) {
-      this.currentUser.value = users[0];
-    }
-
-    return authResponse;
+    return remoteResponse;
   }
 
   async signOut(): Promise<void> {
@@ -341,8 +349,8 @@ export class SyncedDb<Schema extends GenericSchema> {
     } catch (error) {
       console.error("Sign out failed:", error);
     } finally {
-      // Clear stored token and user
-      await this.removeStoredAuthToken();
+      // Clear stored tokens and user
+      await this.removeStoredAuthTokens();
       this.currentUser.value = null;
     }
   }
@@ -391,11 +399,11 @@ export class SyncedDb<Schema extends GenericSchema> {
 
   _create<T extends GenericModel>(
     db: Surreal,
-    table: Table,
+    tableName: string,
     data: Values<ModelPayload<T>> | Values<ModelPayload<T>>[]
   ): ReturnType<Surreal["insert"]> {
-    console.log("createLocal", table, data);
-    return db.insert<ModelPayload<T>>(table, data);
+    const table = new Table(tableName);
+    return db.insert(table, data);
   }
 
   _update<T extends Record<string, unknown> = Record<string, unknown>>(
@@ -408,17 +416,17 @@ export class SyncedDb<Schema extends GenericSchema> {
 
   _delete<T extends Record<string, unknown> = Record<string, unknown>>(
     db: Surreal,
-    table: Table
+    table: Table | string
   ): ReturnType<Surreal["delete"]> {
-    return db.delete<T>(table);
+    const tableObj = typeof table === "string" ? new Table(table) : table;
+    return db.delete<T>(tableObj);
   }
 
   queryLocal<T extends GenericModel>(
     sql: string,
     vars?: Record<string, unknown>
   ): QueryResponse<T> {
-    const db = this.getLocal();
-    return this._query<T>(db, sql, vars);
+    return this._query<T>(this.getLocal(), sql, vars);
   }
 
   queryRemote<T extends GenericModel>(
@@ -431,28 +439,30 @@ export class SyncedDb<Schema extends GenericSchema> {
   }
 
   createLocal<T extends GenericModel>(
-    thing: Table,
+    table: Table | string,
     data: Values<ModelPayload<T>> | Values<ModelPayload<T>>[]
   ): ReturnType<Surreal["create"]> {
-    const db = this.getLocal();
-    return this._create<T>(db, thing, data);
+    const tableName =
+      typeof table === "string" ? table : table.name || table.toString();
+    return this._create<T>(this.getLocal(), tableName, data);
   }
 
   createRemote<T extends GenericModel>(
-    table: Table,
+    table: Table | string,
     data: Values<ModelPayload<T>> | Values<ModelPayload<T>>[]
   ): ReturnType<Surreal["create"]> {
     const db = this.getRemote();
     if (!db) throw new Error("Remote database is not configured");
-    return this._create<T>(db, table, data);
+    const tableName =
+      typeof table === "string" ? table : table.name || table.toString();
+    return this._create<T>(db, tableName, data);
   }
 
   updateLocal<T extends Record<string, unknown> = Record<string, unknown>>(
     recordId: RecordId,
     data: Partial<T>
   ): ReturnType<Surreal["update"]> {
-    const db = this.getLocal();
-    return this._update<T>(db, recordId, data);
+    return this._update<T>(this.getLocal(), recordId, data);
   }
 
   updateRemote<T extends Record<string, unknown> = Record<string, unknown>>(
@@ -465,14 +475,13 @@ export class SyncedDb<Schema extends GenericSchema> {
   }
 
   deleteLocal<T extends Record<string, unknown> = Record<string, unknown>>(
-    table: Table
+    table: Table | string
   ): ReturnType<Surreal["delete"]> {
-    const db = this.getLocal();
-    return this._delete<T>(db, table);
+    return this._delete<T>(this.getLocal(), table);
   }
 
   deleteRemote<T extends Record<string, unknown> = Record<string, unknown>>(
-    table: Table
+    table: Table | string
   ): ReturnType<Surreal["delete"]> {
     const db = this.getRemote();
     if (!db) throw new Error("Remote database is not configured");

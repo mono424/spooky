@@ -2,6 +2,7 @@ import { createSignal, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { db } from "../db";
 import { useAuth } from "../lib/auth";
+import { snapshot } from "@spooky/client-solid";
 
 interface CreateThreadDialogProps {
   isOpen: boolean;
@@ -29,7 +30,7 @@ export function CreateThreadDialog(props: CreateThreadDialogProps) {
         throw new Error("You must be logged in to create a thread");
       }
 
-      const [thread] = await db.query.thread.createRemote({
+      const [thread] = await db.query.thread.create({
         title: title().trim(),
         content: content().trim(),
         author: user.id,
