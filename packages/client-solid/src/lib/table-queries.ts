@@ -8,11 +8,13 @@ export interface LiveQueryOptions<Model extends GenericModel> {
   where?: Partial<Model> | { id: RecordId };
   limit?: number;
   offset?: number;
+  fetch?: string[];
 }
 
 export interface QueryOptions<Model extends GenericModel>
   extends LiveQueryOptions<Model> {
   orderBy?: Partial<Record<keyof Model, "asc" | "desc">>;
+  fetch?: string[];
 }
 
 export interface QueryInfo {
@@ -167,7 +169,12 @@ export class LiveQueryList<
 
     // Wrap ids with ref() to prevent valtio from proxying RecordId objects
     this.state = wrapModelIdsWithRef(models);
-    console.log("[LiveQueryList] Hydrated with", this.state.length, "items");
+    console.log(
+      "[LiveQueryList] Hydrated with",
+      this.state.length,
+      "items",
+      this.state
+    );
     this.callback(this.state);
   }
 
@@ -222,7 +229,6 @@ export class QueryBuilder<
   TableName extends keyof Schema & string = keyof Schema & string
 > {
   private options: QueryOptions<Model> = {};
-  private relatedTables: string[] = [];
 
   constructor(
     private tableQuery: TableQuery<Schema, Model>,
@@ -292,8 +298,11 @@ export class QueryBuilder<
    * @param relatedTable - The name of the related table to include
    */
   related<RelatedTable extends string>(relatedTable: RelatedTable): this {
-    if (!this.relatedTables.includes(relatedTable)) {
-      this.relatedTables.push(relatedTable);
+    if (!this.options.fetch) {
+      this.options.fetch = [];
+    }
+    if (!this.options.fetch.includes(relatedTable)) {
+      this.options.fetch.push(relatedTable);
     }
     return this;
   }
@@ -365,6 +374,12 @@ export class TableQuery<
     if (method === "SELECT") {
       if (props.limit !== undefined) query += ` LIMIT ${props.limit}`;
       if (props.offset !== undefined) query += ` START ${props.offset}`;
+    }
+
+    // Add FETCH clause if there are related tables
+    if ("fetch" in props && props.fetch && props.fetch.length > 0) {
+      const fetchClause = props.fetch.join(", ");
+      query += ` FETCH ${fetchClause}`;
     }
 
     query += ";";

@@ -39,6 +39,10 @@ export function ThreadDetail() {
 
   const thread = () => threads()[0];
 
+  createEffect(() => {
+    console.log("threads", threads());
+  });
+
   onCleanup(() => {
     threadQuery.kill();
   });
