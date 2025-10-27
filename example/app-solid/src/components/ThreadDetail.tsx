@@ -72,7 +72,7 @@ export function ThreadDetail() {
               <div class="flex justify-between items-center text-sm text-gray-500 border-t pt-3">
                 <span>By {threadData().author}</span>
                 <span>
-                  {/* {new Date(threadData().created_at ?? 0).toLocaleDateString()} */}
+                  {new Date(threadData().created_at ?? 0).toLocaleDateString()}
                 </span>
               </div>
             </div>
@@ -106,9 +106,9 @@ export function ThreadDetail() {
                       <div class="flex justify-between items-center text-sm text-gray-500">
                         <span>By {comment.author.id}</span>
                         <span>
-                          {/* {new Date(
+                          {new Date(
                             comment.created_at ?? 0
-                          ).toLocaleDateString()} */}
+                          ).toLocaleDateString()}
                         </span>
                       </div>
                     </div>

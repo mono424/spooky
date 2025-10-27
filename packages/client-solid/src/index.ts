@@ -4,6 +4,7 @@ import {
   Table,
   Values,
   createRemoteEngines,
+  DateTime,
   type AnyAuth,
   type AccessRecordAuth,
   type AuthResponse,
@@ -18,6 +19,7 @@ import {
   ReactiveQueryResult,
 } from "./lib/table-queries";
 import { Syncer } from "./lib/syncer";
+import { WALManager } from "./lib/wal";
 import { proxy, ref } from "valtio";
 export type { RecordResult } from "surrealdb";
 
@@ -40,13 +42,42 @@ export type QueryResponse<T extends GenericModel> = Omit<
 };
 
 /**
- * Wrap a single model's id with ref() to prevent valtio from proxying RecordId
+ * Recursively convert DateTime objects to Date objects and wrap RecordId objects with ref()
+ */
+function convertDateTimeToDate(value: any): any {
+  // Convert DateTime to Date
+  if (value instanceof DateTime) {
+    return value.toDate();
+  }
+  // Wrap RecordId with ref() to prevent valtio proxying
+  if (value instanceof RecordId) {
+    return ref(value);
+  }
+  // Process arrays recursively
+  if (Array.isArray(value)) {
+    return value.map(convertDateTimeToDate);
+  }
+  // Process plain objects recursively
+  if (value && typeof value === 'object' && value.constructor === Object) {
+    const result: any = {};
+    for (const key in value) {
+      if (Object.prototype.hasOwnProperty.call(value, key)) {
+        result[key] = convertDateTimeToDate(value[key]);
+      }
+    }
+    return result;
+  }
+  return value;
+}
+
+/**
+ * Process model: convert DateTime to Date and wrap all RecordId objects with ref()
  */
 function wrapModelIdWithRef<T extends GenericModel>(model: T): T {
-  if (model && model.id) {
-    return { ...model, id: ref(model.id) };
-  }
-  return model;
+  if (!model) return model;
+
+  // Convert DateTime to Date and wrap RecordId with ref (including id and relationship fields)
+  return convertDateTimeToDate(model);
 }
 
 export class SyncedDb<Schema extends GenericSchema> {
@@ -55,6 +86,7 @@ export class SyncedDb<Schema extends GenericSchema> {
   public readonly query: TableQueries<Schema>;
   private tables: Table[] = [];
   private syncer: Syncer | null = null;
+  private walManager: WALManager | null = null;
   private currentUser: any = proxy({ value: null });
 
   constructor(config: SyncedDbConfig<Schema>) {
@@ -109,6 +141,10 @@ export class SyncedDb<Schema extends GenericSchema> {
     }
 
     this.connections = { local, internal, remote };
+
+    // Initialize WAL manager
+    this.walManager = new WALManager(internal);
+    await this.walManager.init();
 
     // Provision local schema from src/db/schema.surql
     const provisioner = new SchemaProvisioner(
@@ -295,12 +331,28 @@ export class SyncedDb<Schema extends GenericSchema> {
     const remoteUser = remoteUsers[0];
 
     // Sync user to local database (upsert)
-    await this.connections.local.query(`UPDATE $id CONTENT $user`, {
-      id: remoteUser.id,
-      user: remoteUser,
-    });
+    // First, check if user exists locally
+    const [existingUsers] = await this.connections.local
+      .query(`SELECT * FROM $id`, { id: remoteUser.id })
+      .collect<[ModelPayload<Schema[T]>[]]>();
 
-    // Sign in to local database
+    if (!existingUsers || existingUsers.length === 0) {
+      // User doesn't exist locally, create it with the remote user data (including hashed password)
+      await this.connections.local.query(`CREATE $id CONTENT $user`, {
+        id: remoteUser.id,
+        user: remoteUser,
+      });
+    } else {
+      // User exists, update it
+      await this.connections.local.query(`UPDATE $id CONTENT $user`, {
+        id: remoteUser.id,
+        user: remoteUser,
+      });
+    }
+
+    // Sign in to local database - this will work because:
+    // 1. For sign-up: the user was just created on remote with the password, so the same password works locally
+    // 2. For sign-in: the user now exists locally with the same hashed password from remote
     const localAuthResponse = await this.connections.local.signin({
       access: (auth as any).access,
       variables: (auth as any).variables,
@@ -381,6 +433,35 @@ export class SyncedDb<Schema extends GenericSchema> {
     return this.connections?.remote;
   }
 
+  /**
+   * Sync all pending WAL operations to the remote database
+   * Returns the sync result with any failed operations
+   */
+  async syncWAL(): Promise<{ success: boolean; failedOperations: any[] }> {
+    if (!this.walManager) {
+      throw new Error("WAL manager not initialized");
+    }
+    if (!this.connections?.remote) {
+      throw new Error("Remote database is not configured");
+    }
+
+    return await this.walManager.syncToRemote(
+      this.connections.remote,
+      this.connections.local
+    );
+  }
+
+  /**
+   * Get pending WAL operations count
+   */
+  async getPendingWALCount(): Promise<number> {
+    if (!this.walManager) {
+      throw new Error("WAL manager not initialized");
+    }
+    const operations = await this.walManager.getPendingOperations();
+    return operations.length;
+  }
+
   getSyncer(): Syncer | null {
     return this.syncer;
   }
@@ -438,13 +519,22 @@ export class SyncedDb<Schema extends GenericSchema> {
     return this._query<T>(db, sql, vars);
   }
 
-  createLocal<T extends GenericModel>(
+  async createLocal<T extends GenericModel>(
     table: Table | string,
     data: Values<ModelPayload<T>> | Values<ModelPayload<T>>[]
-  ): ReturnType<Surreal["create"]> {
+  ): Promise<any> {
     const tableName =
       typeof table === "string" ? table : table.name || table.toString();
-    return this._create<T>(this.getLocal(), tableName, data);
+
+    // Execute on local DB
+    const result = await this._create<T>(this.getLocal(), tableName, data);
+
+    // Log to WAL for sync (use structuredClone to avoid proxy issues)
+    if (this.walManager) {
+      await this.walManager.logCreate(tableName, structuredClone(data));
+    }
+
+    return result;
   }
 
   createRemote<T extends GenericModel>(
@@ -458,11 +548,34 @@ export class SyncedDb<Schema extends GenericSchema> {
     return this._create<T>(db, tableName, data);
   }
 
-  updateLocal<T extends Record<string, unknown> = Record<string, unknown>>(
+  async updateLocal<T extends Record<string, unknown> = Record<string, unknown>>(
     recordId: RecordId,
     data: Partial<T>
-  ): ReturnType<Surreal["update"]> {
-    return this._update<T>(this.getLocal(), recordId, data);
+  ): Promise<any> {
+    // Get current data for rollback
+    let rollbackData: any = null;
+    try {
+      const current = await this.getLocal().select<T>(recordId);
+      rollbackData = structuredClone(current);
+    } catch (error) {
+      console.warn("[WAL] Could not fetch current data for rollback", error);
+    }
+
+    // Execute on local DB
+    const result = await this._update<T>(this.getLocal(), recordId, data);
+
+    // Log to WAL for sync (use structuredClone to avoid proxy issues)
+    if (this.walManager) {
+      const tableName = recordId.toString().split(':')[0];
+      await this.walManager.logUpdate(
+        tableName,
+        recordId,
+        structuredClone(data),
+        rollbackData
+      );
+    }
+
+    return result;
   }
 
   updateRemote<T extends Record<string, unknown> = Record<string, unknown>>(
@@ -474,10 +587,28 @@ export class SyncedDb<Schema extends GenericSchema> {
     return this._update<T>(db, recordId, data);
   }
 
-  deleteLocal<T extends Record<string, unknown> = Record<string, unknown>>(
-    table: Table | string
-  ): ReturnType<Surreal["delete"]> {
-    return this._delete<T>(this.getLocal(), table);
+  async deleteLocal<T extends Record<string, unknown> = Record<string, unknown>>(
+    recordId: RecordId
+  ): Promise<any> {
+    // Get current data for rollback
+    let rollbackData: any = null;
+    try {
+      const current = await this.getLocal().select<T>(recordId);
+      rollbackData = structuredClone(current);
+    } catch (error) {
+      console.warn("[WAL] Could not fetch current data for rollback", error);
+    }
+
+    // Execute on local DB
+    const result = await this.getLocal().delete(recordId);
+
+    // Log to WAL for sync (use structuredClone to avoid proxy issues)
+    if (this.walManager) {
+      const tableName = recordId.toString().split(':')[0];
+      await this.walManager.logDelete(tableName, recordId, rollbackData);
+    }
+
+    return result;
   }
 
   deleteRemote<T extends Record<string, unknown> = Record<string, unknown>>(

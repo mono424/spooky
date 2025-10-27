@@ -1,4 +1,4 @@
-import { Frame, RecordId, Surreal, Table, Values } from "surrealdb";
+import { Frame, RecordId, Surreal, Table, Values, DateTime } from "surrealdb";
 import { proxy, ref } from "valtio";
 import { GenericModel, GenericSchema, ModelPayload } from "./models";
 import { QueryResponse, SyncedDb } from "..";
@@ -21,16 +21,43 @@ export interface QueryInfo {
 }
 
 /**
- * Wrap model id with ref() to prevent valtio from proxying RecordId objects
+ * Recursively convert DateTime objects to Date objects and wrap RecordId objects with ref()
+ */
+function convertDateTimeToDate(value: any): any {
+  // Convert DateTime to Date
+  if (value instanceof DateTime) {
+    return value.toDate();
+  }
+  // Wrap RecordId with ref() to prevent valtio proxying
+  if (value instanceof RecordId) {
+    return ref(value);
+  }
+  // Process arrays recursively
+  if (Array.isArray(value)) {
+    return value.map(convertDateTimeToDate);
+  }
+  // Process plain objects recursively
+  if (value && typeof value === "object" && value.constructor === Object) {
+    const result: any = {};
+    for (const key in value) {
+      if (Object.prototype.hasOwnProperty.call(value, key)) {
+        result[key] = convertDateTimeToDate(value[key]);
+      }
+    }
+    return result;
+  }
+  return value;
+}
+
+/**
+ * Process models: convert DateTime to Date and wrap all RecordId objects with ref()
  */
 function wrapModelIdsWithRef<Model extends GenericModel>(
   models: Model[]
 ): Model[] {
   return models.map((model) => {
-    if (model.id) {
-      return { ...model, id: ref(model.id) };
-    }
-    return model;
+    // Convert DateTime to Date and wrap RecordId with ref (including id and relationship fields)
+    return convertDateTimeToDate(model);
   });
 }
 
@@ -109,12 +136,46 @@ export class LiveQueryList<
   }
 
   private async hydrate(): Promise<void> {
-    const [models] = await this.db
-      .queryLocal(this.hydrationQuery.query, this.hydrationQuery.vars)
-      .collect();
+    // Try to fetch from remote first to get the latest data
+    const remote = this.db.getRemote();
+    let models: Model[] = [];
+
+    if (remote) {
+      try {
+        console.log("[LiveQueryList] Fetching initial data from remote...");
+        const [remoteModels] = await this.db
+          .queryRemote(this.hydrationQuery.query, this.hydrationQuery.vars)
+          .collect();
+
+        if (remoteModels && remoteModels.length > 0) {
+          console.log("[LiveQueryList] Using remote data directly:", remoteModels.length, "items");
+          models = remoteModels as Model[];
+        } else {
+          console.log("[LiveQueryList] No remote data found, falling back to local");
+          const [localModels] = await this.db
+            .queryLocal(this.hydrationQuery.query, this.hydrationQuery.vars)
+            .collect();
+          models = localModels as Model[];
+        }
+      } catch (error) {
+        console.warn("[LiveQueryList] Failed to fetch from remote, falling back to local cache:", error);
+        const [localModels] = await this.db
+          .queryLocal(this.hydrationQuery.query, this.hydrationQuery.vars)
+          .collect();
+        models = localModels as Model[];
+      }
+    } else {
+      // No remote connection, use local only
+      console.log("[LiveQueryList] No remote connection, using local cache");
+      const [localModels] = await this.db
+        .queryLocal(this.hydrationQuery.query, this.hydrationQuery.vars)
+        .collect();
+      models = localModels as Model[];
+    }
+
     // Wrap ids with ref() to prevent valtio from proxying RecordId objects
-    this.state = wrapModelIdsWithRef(models as Model[]);
-    console.log("[LiveQueryList] Hydrated", this.state);
+    this.state = wrapModelIdsWithRef(models);
+    console.log("[LiveQueryList] Hydrated with", this.state.length, "items");
     this.callback(this.state);
   }
 
@@ -138,7 +199,8 @@ export class LiveQueryList<
       this.hydrationQuery.vars,
       [this.tableName],
       async () => {
-        // Re-hydrate from local cache when remote changes
+        // Re-fetch from remote when changes occur (instead of trying to update local cache)
+        console.log("[LiveQueryList] Remote change detected, re-fetching data...");
         await this.hydrate();
       }
     );
@@ -324,6 +386,8 @@ export class TableQuery<
 
   /**
    * Create one or more records
+   * Creates in local DB first, then syncs to remote if available.
+   * If remote creation fails, rolls back the local creation.
    * @example
    * tableQuery.create({ name: 'John', email: 'john@example.com' })
    * tableQuery.create([{ name: 'John' }, { name: 'Jane' }])
@@ -331,14 +395,57 @@ export class TableQuery<
   async create(
     data: Values<ModelPayload<Model>> | Values<ModelPayload<Model>>[]
   ): Promise<Model[]> {
-    console.log("create", data);
-    const result = await this.db.createLocal<Model>(this.tableName, data);
+    console.log("[TableQuery.create] Creating records", data);
+
+    // Create locally first
+    const localResult = await this.db.createLocal<Model>(this.tableName, data);
+    const models = localResult as unknown as Model[];
+    console.log("[TableQuery.create] Local creation successful", models);
+
+    // Try to sync to remote if available
+    const remote = this.db.getRemote();
+    if (remote) {
+      try {
+        console.log("[TableQuery.create] Syncing to remote...");
+        await this.db.createRemote<Model>(this.tableName, data);
+        console.log("[TableQuery.create] Remote creation successful");
+      } catch (error) {
+        console.error(
+          "[TableQuery.create] Remote creation failed, rolling back local changes",
+          error
+        );
+
+        // Rollback: delete the locally created records
+        try {
+          for (const model of models) {
+            if (model.id && model.id instanceof RecordId) {
+              await this.db.getLocal().delete(model.id);
+              console.log(
+                "[TableQuery.create] Rolled back local record",
+                model.id
+              );
+            }
+          }
+        } catch (rollbackError) {
+          console.error("[TableQuery.create] Rollback failed", rollbackError);
+        }
+
+        // Re-throw the original error
+        throw new Error(
+          `Failed to create records: ${
+            error instanceof Error ? error.message : "Remote creation failed"
+          }`
+        );
+      }
+    }
+
     // Wrap ids with ref() to prevent valtio from proxying RecordId objects
-    return wrapModelIdsWithRef(result as unknown as Model[]);
+    return wrapModelIdsWithRef(models);
   }
 
   /**
    * Delete records matching the given conditions
+   * Deletes from local DB first, then syncs to remote if available.
    * @example
    * tableQuery.delete({ status: 'archived' })
    */
@@ -355,11 +462,29 @@ export class TableQuery<
       .join(" AND ");
     const query = `DELETE FROM ${this.tableName} WHERE ${whereClause};`;
 
+    console.log("[TableQuery.delete] Deleting records from local", where);
     await this.db.queryLocal(query, where);
+
+    // Sync to remote if available
+    const remote = this.db.getRemote();
+    if (remote) {
+      try {
+        console.log("[TableQuery.delete] Syncing deletion to remote...");
+        await this.db.queryRemote(query, where);
+        console.log("[TableQuery.delete] Remote deletion successful");
+      } catch (error) {
+        console.error(
+          "[TableQuery.delete] Remote deletion failed (continuing anyway)",
+          error
+        );
+        // Note: We don't rollback deletes as they're already gone locally
+      }
+    }
   }
 
   /**
    * Update records matching the where conditions with the provided update data
+   * Updates local DB first, then syncs to remote if available.
    * @example
    * tableQuery.update({
    *   where: { status: 'pending' },
@@ -400,7 +525,27 @@ export class TableQuery<
       vars[`update_${key}`] = update[key as keyof Model];
     });
 
+    console.log("[TableQuery.update] Updating records in local", {
+      where,
+      update,
+    });
     await this.db.queryLocal(query, vars);
+
+    // Sync to remote if available
+    const remote = this.db.getRemote();
+    if (remote) {
+      try {
+        console.log("[TableQuery.update] Syncing update to remote...");
+        await this.db.queryRemote(query, vars);
+        console.log("[TableQuery.update] Remote update successful");
+      } catch (error) {
+        console.error(
+          "[TableQuery.update] Remote update failed (continuing anyway)",
+          error
+        );
+        // Note: We don't rollback updates as they're already applied locally
+      }
+    }
   }
 
   async liveQuery(
@@ -467,8 +612,8 @@ export class TableQuery<
     return this.db.updateRemote<Model>(recordId, data);
   }
 
-  deleteLocal(table: Table): ReturnType<Surreal["delete"]> {
-    return this.db.deleteLocal<Model>(table);
+  deleteLocal(recordId: RecordId): Promise<any> {
+    return this.db.deleteLocal<Model>(recordId);
   }
 
   deleteRemote(table: Table): ReturnType<Surreal["delete"]> {

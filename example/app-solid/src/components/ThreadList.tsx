@@ -9,7 +9,7 @@ import {
 import { useNavigate } from "@solidjs/router";
 import { db } from "../db";
 import type { Thread } from "../schema.gen";
-import type { Model } from "@spooky/client-solid";
+import { snapshot, type Model } from "@spooky/client-solid";
 
 export function ThreadList() {
   const navigate = useNavigate();
@@ -67,7 +67,7 @@ export function ThreadList() {
               <div class="flex justify-between items-center text-sm text-gray-500">
                 <span>By {thread.author}</span>
                 <span>
-                  {/* {new Date(thread.created_at ?? 0).toLocaleDateString()} */}
+                  {new Date(thread.created_at ?? 0).toLocaleDateString()}
                 </span>
               </div>
             </div>
