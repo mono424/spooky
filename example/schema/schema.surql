@@ -28,6 +28,8 @@ DEFINE FIELD password ON TABLE user TYPE string
 DEFINE FIELD created_at ON TABLE user TYPE datetime
     VALUE time::now();
 
+DEFINE FIELD comments ON TABLE user TYPE option<array<record<comment>>> REFERENCE;
+
 -- ##################################################################
 -- THREAD TABLE
 -- ##################################################################
@@ -50,6 +52,7 @@ DEFINE FIELD author ON TABLE thread TYPE record<user>;
 DEFINE FIELD created_at ON TABLE thread TYPE datetime
     VALUE time::now();
 
+DEFINE FIELD comments ON TABLE thread TYPE option<array<record<comment>>> REFERENCE;
 
 -- ##################################################################
 -- COMMENT TABLE

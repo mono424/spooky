@@ -136,7 +136,8 @@ export class LiveQueryList<
           console.log(
             "[LiveQueryList] Using remote data directly:",
             remoteModels.length,
-            "items"
+            "items",
+            remoteModels
           );
           models = remoteModels as Model[];
         } else {
@@ -576,6 +577,11 @@ export class TableQuery<
     // Build LIVE SELECT query directly (no ORDER BY, LIMIT, or START)
     const liveQueryInfo = this.buildQuery("LIVE SELECT", options);
     const selectQuery = this.buildQuery("SELECT", options);
+
+    console.log("[TableQuery.liveQuery] liveQueryInfo", {
+      liveQueryInfo,
+      selectQuery,
+    });
 
     const liveQuery = new LiveQueryList<Schema, Model>(
       liveQueryInfo,
