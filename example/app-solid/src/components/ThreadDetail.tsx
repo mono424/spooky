@@ -11,31 +11,44 @@ import { useNavigate, useParams } from "@solidjs/router";
 import { db } from "../db";
 import { CommentForm } from "./CommentForm";
 import { useQuery, InferQueryModel } from "@spooky/client-solid";
+import { useAuth } from "../lib/auth";
 
 export function ThreadDetail() {
+  const auth = useAuth();
   const params = useParams();
   const navigate = useNavigate();
+  const [commentFilter, setCommentFilter] = createSignal<"all" | "mine">("all");
 
-  const threadQuery = db.query.thread
-    .find({
-      id: params.id,
-    })
-    .related("")
-    .related("author", (q) => q.select("content", "created_at"))
-    .related("comments")
-    .one();
+  // Create a reactive query that rebuilds when commentFilter changes
+  const threadQuery = () => {
+    const query = db.query.thread
+      .find({
+        id: params.id,
+      })
+      .related("author")
+      .related("comments", (q) => {
+        // q = q.related("author");
+        if (commentFilter() === "mine" && auth.user()?.id) {
+          return q.where({ author: auth.user()!.id });
+        }
+        return q;
+      })
+      .one();
 
-  const [thread, setThread] = createSignal<InferQueryModel<typeof threadQuery>>(
-    null as any
-  );
+    return query;
+  };
+
+  const [thread, setThread] = createSignal<any>(null);
+
+  // useQuery will automatically handle cleanup and re-execution when threadQuery changes
   useQuery(threadQuery, setThread);
 
   createEffect(() => {
-    console.log("thread", thread());
-  });
-
-  onCleanup(() => {
-    threadQuery.kill();
+    const t = thread();
+    console.log("thread", t);
+    console.log("thread.comments", t?.comments);
+    console.log("thread.comments length", t?.comments?.length);
+    console.log("commentFilter", commentFilter());
   });
 
   const handleBack = () => {
@@ -66,7 +79,24 @@ export function ThreadDetail() {
                 {threadData().content}
               </p>
               <div class="flex justify-between items-center text-sm text-gray-500 border-t pt-3">
-                <span>By {threadData().author?.username ?? "Unknown"}</span>
+                <span>
+                  By{" "}
+                  {(() => {
+                    const author = threadData().author;
+                    // Handle both array (from subquery) and object formats
+                    const authorObj = Array.isArray(author)
+                      ? author[0]
+                      : author;
+                    if (
+                      authorObj &&
+                      typeof authorObj === "object" &&
+                      "username" in authorObj
+                    ) {
+                      return (authorObj as any).username;
+                    }
+                    return "Unknown";
+                  })()}
+                </span>
                 <span>
                   {new Date(threadData().created_at ?? 0).toLocaleDateString()}
                 </span>
@@ -75,13 +105,39 @@ export function ThreadDetail() {
 
             {/* Comments Section */}
             <div class="space-y-4">
-              <h2 class="text-xl font-semibold">
-                Comments ({threadData().comments?.length})
-              </h2>
+              <div class="flex justify-between items-center">
+                <h2 class="text-xl font-semibold">
+                  Comments ({threadData().comments?.length})
+                </h2>
+                <Show when={auth.user()}>
+                  <div class="flex gap-2">
+                    <button
+                      onClick={() => setCommentFilter("all")}
+                      class={`px-3 py-1 rounded ${
+                        commentFilter() === "all"
+                          ? "bg-blue-600 text-white"
+                          : "bg-gray-200 text-gray-700"
+                      }`}
+                    >
+                      All
+                    </button>
+                    <button
+                      onClick={() => setCommentFilter("mine")}
+                      class={`px-3 py-1 rounded ${
+                        commentFilter() === "mine"
+                          ? "bg-blue-600 text-white"
+                          : "bg-gray-200 text-gray-700"
+                      }`}
+                    >
+                      My Comments
+                    </button>
+                  </div>
+                </Show>
+              </div>
 
               {/* Comment Form */}
               <div class="bg-gray-50 border border-gray-200 rounded-lg p-4">
-                <CommentForm thread={threadData()} />
+                <CommentForm thread={threadData} />
               </div>
 
               {/* Comments List */}
@@ -102,9 +158,15 @@ export function ThreadDetail() {
                       <div class="flex justify-between items-center text-sm text-gray-500">
                         <span>
                           By{" "}
-                          {typeof comment.author === "string"
-                            ? comment.author
-                            : comment.author?.username ?? "Unknown"}
+                          {(() => {
+                            const author = comment.author;
+                            if (typeof author === "string") return author;
+                            // Handle array (from subquery) and object formats
+                            const authorObj = Array.isArray(author)
+                              ? author[0]
+                              : author;
+                            return authorObj?.username ?? "Unknown";
+                          })()}
                         </span>
                         <span>
                           {new Date(

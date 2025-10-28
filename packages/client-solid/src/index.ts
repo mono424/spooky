@@ -498,14 +498,48 @@ export class SyncedDb<
     });
   }
 
+  /**
+   * Convert string IDs to RecordId objects for reference fields
+   */
+  private convertReferenceFields(tableName: string, data: any): any {
+    if (!this.config.relationships) return data;
+
+    const relationships = this.config.relationships[tableName];
+    if (!relationships) return data;
+
+    const converted = { ...data };
+
+    for (const rel of relationships) {
+      const fieldValue = converted[rel.field];
+
+      // Skip if field is not present or already a RecordId
+      if (fieldValue === undefined || fieldValue === null) continue;
+      if (fieldValue instanceof RecordId) continue;
+
+      // Convert string ID to RecordId
+      if (typeof fieldValue === 'string' && fieldValue.includes(':')) {
+        const [table, id] = fieldValue.split(':', 2);
+        converted[rel.field] = new RecordId(table, id);
+      }
+    }
+
+    return converted;
+  }
+
   _create<T extends GenericModel>(
     db: Surreal,
     tableName: string,
     data: Values<ModelPayload<T>> | Values<ModelPayload<T>>[]
   ): ReturnType<Surreal["insert"]> {
     const table = new Table(tableName);
-    console.log("[SyncedDb._create] Creating records", data);
-    return db.insert(table, data);
+
+    // Convert reference fields for single or multiple records
+    const convertedData = Array.isArray(data)
+      ? data.map(item => this.convertReferenceFields(tableName, item))
+      : this.convertReferenceFields(tableName, data);
+
+    console.log("[SyncedDb._create] Creating records", convertedData);
+    return db.insert(table, convertedData);
   }
 
   _update<T extends Record<string, unknown> = Record<string, unknown>>(

@@ -46,7 +46,7 @@ export function ThreadList() {
         >
           {(thread) => (
             <div
-              onClick={() => handleThreadClick(thread.id.id.toString())}
+              onClick={() => handleThreadClick(thread.id)}
               class="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md cursor-pointer transition-shadow"
             >
               <h2 class="text-xl font-semibold mb-2">{thread.title}</h2>

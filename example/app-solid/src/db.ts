@@ -1,5 +1,5 @@
 import { SyncedDb, type SyncedDbConfig } from "@spooky/client-solid";
-import { type Schema, SURQL_SCHEMA, type Relationships } from "./schema.gen";
+import { type Schema, SURQL_SCHEMA, type Relationships, RELATIONSHIPS } from "./schema.gen";
 export type { Schema };
 
 // Database configuration with relationships
@@ -12,6 +12,7 @@ export const dbConfig: SyncedDbConfig<Schema> = {
   database: "main",
   remoteUrl: "ws://localhost:8000",
   tables: ["user", "thread", "comment"],
+  relationships: RELATIONSHIPS,
 };
 
 export const db = new SyncedDb<Schema, Relationships>(dbConfig);

@@ -399,27 +399,32 @@ function generateSubquery(
       const { table: relatedTable, cardinality } = relationship;
 
       if (cardinality === "many") {
-        // For many-to-many relationships through junction tables
-        if (relatedTable === "commented_on") {
-          const allSelectParts =
-            subqueries.length > 0
-              ? [selectClause, ...subqueries].join(", ")
-              : selectClause;
-          baseQuery = `(SELECT ${allSelectParts} FROM comment WHERE id IN (SELECT in FROM ${relatedTable} WHERE out=$parent.id)`;
-        } else {
-          const allSelectParts =
-            subqueries.length > 0
-              ? [selectClause, ...subqueries].join(", ")
-              : selectClause;
-          baseQuery = `(SELECT ${allSelectParts} FROM ${relatedTable} WHERE ${currentTable}=$parent.id`;
+        // For one-to-many relationships
+        // When the field name is "comments" on "thread", we want to fetch from the comment table
+        // using the foreign key: SELECT * FROM comment WHERE thread=$parent.id
+        let actualTable = relatedTable;
+
+        // If the related "table" is actually a relation table (like commented_on),
+        // we need to find the actual entity table
+        if (relatedTable === "commented_on" && relatedAlias === "comments") {
+          // For thread.comments, fetch from comment table using foreign key
+          actualTable = "comment";
         }
-      } else {
-        // For one-to-one relationships
+
         const allSelectParts =
           subqueries.length > 0
             ? [selectClause, ...subqueries].join(", ")
             : selectClause;
-        baseQuery = `(SELECT ${allSelectParts} FROM ${relatedTable} WHERE ${currentTable}=$parent.id`;
+        baseQuery = `(SELECT ${allSelectParts} FROM ${actualTable} WHERE ${currentTable}=$parent.id`;
+      } else {
+        // For one-to-one relationships
+        // The current table has a foreign key to the related table
+        // So we need: (SELECT * FROM relatedTable WHERE id=$parent.foreignKey LIMIT 1)[0]
+        const allSelectParts =
+          subqueries.length > 0
+            ? [selectClause, ...subqueries].join(", ")
+            : selectClause;
+        baseQuery = `(SELECT ${allSelectParts} FROM ${relatedTable} WHERE id=$parent.${relatedAlias} LIMIT 1`;
       }
     }
   }
@@ -458,6 +463,22 @@ function generateSubquery(
   }
 
   baseQuery += ")";
+
+  // Check if this is a one-to-one relationship that needs [0] unwrapping
+  let needsUnwrap = false;
+  if (relationships && relationships[currentTable]) {
+    const relationship = relationships[currentTable].find(
+      (rel: any) => rel.field === relatedAlias
+    );
+    if (relationship && relationship.cardinality === "one") {
+      needsUnwrap = true;
+    }
+  }
+
+  // Add [0] to unwrap array for one-to-one relationships
+  if (needsUnwrap) {
+    baseQuery += "[0]";
+  }
 
   return baseQuery;
 }

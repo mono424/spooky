@@ -1,11 +1,9 @@
-import { createSignal } from "solid-js";
+import { Accessor, createSignal } from "solid-js";
 import { db } from "../db";
 import { useAuth } from "../lib/auth";
-import { Model, Snapshot } from "@spooky/client-solid";
-import { Thread } from "../schema.gen";
 
 interface CommentFormProps {
-  thread: Snapshot<Model<Thread>>;
+  thread: Accessor<{ id: string }>;
   onCommentAdded?: () => void;
 }
 
@@ -25,12 +23,14 @@ export function CommentForm(props: CommentFormProps) {
         throw new Error("You must be logged in to post a comment");
       }
 
-      await db.query.comment.createRemote({
-        thread: props.thread.id,
+      const result = await db.query.comment.createRemote({
+        thread: props.thread().id,
         content: content().trim(),
         author: user.id,
         created_at: new Date(),
       });
+
+      console.log("[CommentForm] Comment created:", result);
 
       setContent("");
       props.onCommentAdded?.();
