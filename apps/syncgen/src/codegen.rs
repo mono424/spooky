@@ -244,6 +244,12 @@ impl CodeGenerator {
             .and_then(|defs| defs.get("Relationships"))
             .and_then(|rel| rel.get("properties"));
 
+        // Extract relation tables
+        let relation_tables = schema
+            .get("definitions")
+            .and_then(|defs| defs.get("RelationTables"))
+            .and_then(|rel| rel.get("const"));
+
         if let Some(relationships) = relationships {
             if let serde_json::Value::Object(rel_map) = relationships {
                 let mut interface_lines = vec![
@@ -350,6 +356,48 @@ impl CodeGenerator {
                     }
 
                     interface_lines.push("};".to_string());
+                }
+
+                // Add relation tables if they exist
+                if let Some(relation_tables) = relation_tables {
+                    if let serde_json::Value::Array(tables) = relation_tables {
+                        if !tables.is_empty() {
+                            interface_lines.push("".to_string());
+                            interface_lines.push("/**".to_string());
+                            interface_lines.push(" * Relation tables defined with TYPE RELATION".to_string());
+                            interface_lines.push(" * These tables represent many-to-many relationships between entities".to_string());
+                            interface_lines.push(" */".to_string());
+                            interface_lines.push("export interface RelationTable {".to_string());
+                            interface_lines.push("    /** The name of the relation table */".to_string());
+                            interface_lines.push("    name: string;".to_string());
+                            interface_lines.push("    /** The source table for this relation */".to_string());
+                            interface_lines.push("    from: string | null;".to_string());
+                            interface_lines.push("    /** The target table for this relation */".to_string());
+                            interface_lines.push("    to: string | null;".to_string());
+                            interface_lines.push("}".to_string());
+                            interface_lines.push("".to_string());
+                            interface_lines.push("/**".to_string());
+                            interface_lines.push(" * List of all relation tables in the schema".to_string());
+                            interface_lines.push(" */".to_string());
+                            interface_lines.push("export const RELATION_TABLES: RelationTable[] = [".to_string());
+
+                            for table in tables {
+                                let name = table.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
+                                let from = table.get("from")
+                                    .and_then(|f| f.as_str())
+                                    .map(|s| format!("\"{}\"", s))
+                                    .unwrap_or("null".to_string());
+                                let to = table.get("to")
+                                    .and_then(|t| t.as_str())
+                                    .map(|s| format!("\"{}\"", s))
+                                    .unwrap_or("null".to_string());
+
+                                interface_lines.push(format!("    {{ name: \"{}\", from: {}, to: {} }},", name, from, to));
+                            }
+
+                            interface_lines.push("];".to_string());
+                        }
+                    }
                 }
 
                 return Ok(format!("{}\n\n{}\n", content, interface_lines.join("\n")));

@@ -4,7 +4,6 @@ import {
   Table,
   Values,
   createRemoteEngines,
-  DateTime,
   type AnyAuth,
   type AccessRecordAuth,
   type AuthResponse,
@@ -46,10 +45,6 @@ export type QueryResponse<T extends GenericModel> = Omit<
  * Recursively convert DateTime objects to Date objects and wrap RecordId objects with ref()
  */
 function convertDateTimeToDate(value: any): any {
-  // Convert DateTime to Date
-  if (value instanceof DateTime) {
-    return value.toDate();
-  }
   // Wrap RecordId with ref() to prevent valtio proxying
   if (value instanceof RecordId) {
     return ref(value);
@@ -483,6 +478,7 @@ export class SyncedDb<Schema extends GenericSchema> {
     data: Values<ModelPayload<T>> | Values<ModelPayload<T>>[]
   ): ReturnType<Surreal["insert"]> {
     const table = new Table(tableName);
+    console.log("[SyncedDb._create] Creating records", data);
     return db.insert(table, data);
   }
 

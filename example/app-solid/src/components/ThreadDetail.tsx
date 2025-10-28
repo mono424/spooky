@@ -31,7 +31,7 @@ export function ThreadDetail() {
     .find({
       id: new RecordId("thread", params.id),
     })
-    .related("comment")
+    .related("comments")
     .query();
 
   const [threads, setThreads] = createSignal<Model<Thread>[]>([]);

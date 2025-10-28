@@ -26,7 +26,7 @@ export function CommentForm(props: CommentFormProps) {
       }
 
       await db.query.comment.createRemote({
-        thread_id: props.thread.id,
+        thread: props.thread.id,
         content: content().trim(),
         author: user.id,
         created_at: new Date(),

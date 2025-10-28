@@ -13,7 +13,10 @@
       "Bash(node:*)",
       "Bash(timeout:*)",
       "Bash(git restore:*)",
-      "Bash(cd:*)"
+      "Bash(cd:*)",
+      "Bash(cargo doc:*)",
+      "Read(//private/tmp/**)",
+      "Bash(docker-compose up:*)"
     ],
     "deny": [],
     "ask": []

@@ -3,18 +3,25 @@ import { proxy, ref } from "valtio";
 import { GenericModel, GenericSchema, ModelPayload } from "./models";
 import { QueryResponse, SyncedDb } from "..";
 
+export interface RelatedQuery {
+  /** The name of the related table to query */
+  relatedTable: string;
+  /** The alias for this subquery result (defaults to relatedTable name) */
+  alias?: string;
+}
+
 export interface LiveQueryOptions<Model extends GenericModel> {
   select?: ((keyof Model & string) | "*")[];
   where?: Partial<Model> | { id: RecordId };
   limit?: number;
   offset?: number;
-  fetch?: string[];
+  /** Related tables to include via subqueries */
+  related?: RelatedQuery[];
 }
 
 export interface QueryOptions<Model extends GenericModel>
   extends LiveQueryOptions<Model> {
   orderBy?: Partial<Record<keyof Model, "asc" | "desc">>;
-  fetch?: string[];
 }
 
 export interface QueryInfo {
@@ -291,19 +298,29 @@ export class QueryBuilder<
   }
 
   /**
-   * Include related records from specified table(s)
+   * Include related records from specified table(s) using subqueries
    * @example
-   * // For a thread table that has relationship to user
-   * tableQuery.find().related("user").query()
+   * // For a thread table that has relationship to comments
+   * tableQuery.find().related("comments").query()
+   * // Generates: SELECT *, (SELECT * FROM comment WHERE thread=$parent.id) AS comments FROM thread
    *
-   * @param relatedTable - The name of the related table to include
+   * @param relatedTableOrAlias - The name to use for the related data (e.g., "comments")
    */
-  related<RelatedTable extends string>(relatedTable: RelatedTable): this {
-    if (!this.options.fetch) {
-      this.options.fetch = [];
+  related<RelatedTable extends string>(relatedTableOrAlias: RelatedTable): this {
+    if (!this.options.related) {
+      this.options.related = [];
     }
-    if (!this.options.fetch.includes(relatedTable)) {
-      this.options.fetch.push(relatedTable);
+
+    // Check if this relationship already exists
+    const exists = this.options.related.some(
+      r => (r.alias || r.relatedTable) === relatedTableOrAlias
+    );
+
+    if (!exists) {
+      this.options.related.push({
+        relatedTable: relatedTableOrAlias,
+        alias: relatedTableOrAlias,
+      });
     }
     return this;
   }
@@ -348,13 +365,58 @@ export class TableQuery<
     public readonly tableName: string
   ) {}
 
+  /**
+   * Generate a subquery for related records
+   * @param currentTable - The current table being queried
+   * @param relatedAlias - The alias/name for the related data (e.g., "comments")
+   * @returns SQL subquery string
+   *
+   * This method infers the relationship based on naming conventions:
+   * - If relatedAlias is plural (e.g., "comments"), it assumes a one-to-many relationship
+   *   where we query the singular table (e.g., "comment") with a foreign key back to currentTable
+   * - Example: For table "thread" with related "comments", generates:
+   *   (SELECT * FROM comment WHERE thread=$parent.id)
+   */
+  private generateSubquery(currentTable: string, relatedAlias: string): string {
+    // Handle pluralization to get the actual table name
+    let relatedTable = relatedAlias;
+
+    // Simple pluralization: remove trailing 's' to get singular form
+    // This works for most English words (comments -> comment, users -> user)
+    if (relatedAlias.endsWith('s') && relatedAlias.length > 1) {
+      relatedTable = relatedAlias.slice(0, -1);
+    }
+
+    // The foreign key is the name of the current table
+    // For example, if querying "thread", comments will have a "thread" field
+    const foreignKey = currentTable;
+
+    // Build the subquery
+    // $parent.id refers to the id of the current row being selected
+    return `(SELECT * FROM ${relatedTable} WHERE ${foreignKey}=$parent.id)`;
+  }
+
   private buildQuery(
     method: "LIVE SELECT" | "SELECT",
     props: LiveQueryOptions<Model>
   ): QueryInfo {
-    const selectClause = (props.select ?? ["*"])
-      .map((key) => `${key}`)
-      .join(", ");
+    // Build the select clause with subqueries for related data
+    let selectParts = props.select ?? ["*"];
+    const selectFields = selectParts.map((key) => `${key}`).join(", ");
+
+    // Add subqueries for related tables
+    const subqueries: string[] = [];
+    if (props.related && props.related.length > 0) {
+      for (const rel of props.related) {
+        const subquery = this.generateSubquery(this.tableName, rel.alias || rel.relatedTable);
+        const alias = rel.alias || rel.relatedTable;
+        subqueries.push(`${subquery} AS ${alias}`);
+      }
+    }
+
+    // Combine regular fields and subqueries
+    const allSelectParts = [selectFields, ...subqueries].join(", ");
+
     const whereClause = Object.keys(props.where ?? {})
       .map((key) => `${key} = $${key}`)
       .join(" AND ");
@@ -367,7 +429,7 @@ export class TableQuery<
             .join(", ")
         : "";
 
-    let query = `${method} ${selectClause} FROM ${this.tableName}`;
+    let query = `${method} ${allSelectParts} FROM ${this.tableName}`;
     if (whereClause) query += ` WHERE ${whereClause}`;
     if (orderClause) query += ` ORDER BY ${orderClause}`;
 
@@ -375,12 +437,6 @@ export class TableQuery<
     if (method === "SELECT") {
       if (props.limit !== undefined) query += ` LIMIT ${props.limit}`;
       if (props.offset !== undefined) query += ` START ${props.offset}`;
-    }
-
-    // Add FETCH clause if there are related tables
-    if ("fetch" in props && props.fetch && props.fetch.length > 0) {
-      const fetchClause = props.fetch.join(", ");
-      query += ` FETCH ${fetchClause}`;
     }
 
     query += ";";

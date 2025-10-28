@@ -24,6 +24,9 @@ export class SurrealDBWasmFactory {
           },
         },
       }),
+      codecOptions: {
+        useNativeDates: true,
+      },
     });
 
     // Connect to the appropriate storage backend

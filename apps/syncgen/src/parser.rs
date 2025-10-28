@@ -13,6 +13,9 @@ pub struct TableSchema {
     pub fields: HashMap<String, FieldDefinition>,
     pub schemafull: bool,
     pub relationships: Vec<Relationship>, // List of relationships with field info
+    pub is_relation: bool, // Whether this is a relation table
+    pub relation_from: Option<String>, // Source table for relation
+    pub relation_to: Option<String>, // Target table for relation
 }
 
 #[derive(Debug, Clone)]
@@ -57,15 +60,78 @@ impl SchemaParser {
     }
 
     pub fn parse_file(&mut self, content: &str) -> Result<()> {
+        // Pre-process the content to remove EVENT definitions
+        // Events may contain syntax that the parser doesn't fully support yet
+        let processed_content = Self::remove_events(content);
+
         // Create capabilities with experimental features enabled
         let capabilities = Capabilities::default()
-            .with_experimental(ExperimentalTarget::RecordReferences.into());
+            .with_experimental(ExperimentalTarget::RecordReferences.into())
+            .with_scripting(true);
 
-        let query = parse_with_capabilities(content, &capabilities)
+        let query = parse_with_capabilities(&processed_content, &capabilities)
             .context("Failed to parse SurrealDB schema file")?;
 
         self.process_statements(query.0)?;
         Ok(())
+    }
+
+    /// Remove DEFINE EVENT statements from the schema content
+    /// This is a workaround for parser limitations with certain EVENT syntax
+    fn remove_events(content: &str) -> String {
+        let lines: Vec<&str> = content.lines().collect();
+        let mut result = Vec::new();
+        let mut i = 0;
+
+        while i < lines.len() {
+            let line = lines[i];
+
+            // Check if this line starts a DEFINE EVENT
+            if line.trim_start().starts_with("DEFINE EVENT") {
+                // Skip lines until we find the closing semicolon or brace
+                let mut brace_count = 0;
+                let mut in_event = true;
+
+                while i < lines.len() && in_event {
+                    let current = lines[i];
+
+                    // Count braces
+                    for ch in current.chars() {
+                        match ch {
+                            '{' => brace_count += 1,
+                            '}' => {
+                                brace_count -= 1;
+                                if brace_count == 0 {
+                                    // Check if there's a semicolon on this line
+                                    if current.contains(';') {
+                                        in_event = false;
+                                    }
+                                }
+                            }
+                            ';' if brace_count == 0 => {
+                                in_event = false;
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    i += 1;
+
+                    // Safety check - if we've gone too far without finding the end, break
+                    if i > lines.len() {
+                        break;
+                    }
+                }
+
+                // Continue without adding the event lines to result
+                continue;
+            }
+
+            result.push(line);
+            i += 1;
+        }
+
+        result.join("\n")
     }
 
     fn process_statements(&mut self, statements: surrealdb_core::sql::Statements) -> Result<()> {
@@ -75,7 +141,7 @@ impl SchemaParser {
                     self.process_define_statement(define)?;
                 }
                 _ => {
-                    // Skip other statement types (scopes, etc.)
+                    // Skip other statement types (scopes, events, etc.)
                 }
             }
         }
@@ -88,6 +154,42 @@ impl SchemaParser {
                 let table_name = table_def.name.to_string();
                 let schemafull = matches!(table_def.kind, surrealdb_core::sql::TableType::Normal);
 
+                // Check if this is a relation table
+                let is_relation = matches!(table_def.kind, surrealdb_core::sql::TableType::Relation(_));
+                let (relation_from, relation_to) = if is_relation {
+                    if let surrealdb_core::sql::TableType::Relation(rel) = table_def.kind {
+                        let from = rel.from.as_ref().and_then(|kind| {
+                            // Extract table names from the Kind type
+                            if let surrealdb_core::sql::Kind::Record(tables) = kind {
+                                if tables.is_empty() {
+                                    None
+                                } else {
+                                    Some(tables[0].to_string())
+                                }
+                            } else {
+                                None
+                            }
+                        });
+                        let to = rel.to.as_ref().and_then(|kind| {
+                            // Extract table names from the Kind type
+                            if let surrealdb_core::sql::Kind::Record(tables) = kind {
+                                if tables.is_empty() {
+                                    None
+                                } else {
+                                    Some(tables[0].to_string())
+                                }
+                            } else {
+                                None
+                            }
+                        });
+                        (from, to)
+                    } else {
+                        (None, None)
+                    }
+                } else {
+                    (None, None)
+                };
+
                 self.tables.insert(
                     table_name.clone(),
                     TableSchema {
@@ -95,6 +197,9 @@ impl SchemaParser {
                         fields: HashMap::new(),
                         schemafull,
                         relationships: Vec::new(),
+                        is_relation,
+                        relation_from,
+                        relation_to,
                     },
                 );
             }

@@ -29,7 +29,7 @@ impl JsonSchemaGenerator {
         let mut properties = HashMap::new();
         let mut required_tables = Vec::new();
 
-        // Build relationships map
+        // Build relationships map (from field references)
         let mut relationships: HashMap<String, Vec<Value>> = HashMap::new();
         for (table_name, table_schema) in &parser.tables {
             if !table_schema.relationships.is_empty() {
@@ -46,9 +46,21 @@ impl JsonSchemaGenerator {
             }
         }
 
+        // Build relation tables map (from TYPE RELATION definitions)
+        let mut relation_tables: Vec<Value> = Vec::new();
+        for (table_name, table_schema) in &parser.tables {
+            if table_schema.is_relation {
+                relation_tables.push(json!({
+                    "name": table_name,
+                    "from": table_schema.relation_from,
+                    "to": table_schema.relation_to
+                }));
+            }
+        }
+
         // Add Relationships definition
         let mut relationship_properties = serde_json::Map::new();
-        for (table_name, related_objects) in &relationships {
+        for (table_name, _related_objects) in &relationships {
             relationship_properties.insert(
                 table_name.clone(),
                 json!({
@@ -77,6 +89,35 @@ impl JsonSchemaGenerator {
                 json!({
                     "type": "object",
                     "properties": relationship_properties
+                })
+            );
+        }
+
+        // Add RelationTables definition
+        if !relation_tables.is_empty() {
+            definitions.insert(
+                "RelationTables".to_string(),
+                json!({
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type": "string",
+                                "description": "The name of the relation table"
+                            },
+                            "from": {
+                                "type": ["string", "null"],
+                                "description": "The source table for this relation"
+                            },
+                            "to": {
+                                "type": ["string", "null"],
+                                "description": "The target table for this relation"
+                            }
+                        },
+                        "required": ["name"]
+                    },
+                    "const": relation_tables
                 })
             );
         }

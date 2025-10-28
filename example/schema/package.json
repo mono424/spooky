@@ -21,7 +21,8 @@
     "build": "vite build",
     "build:ts": "syncgen --format typescript --input schema.surql --output ../app-solid/src/schema.gen.ts",
     "build:dart": "syncgen --format dart --input schema.surql --output ../client-dart/src/db/models.dart",
-    "dev": "vite build --watch"
+    "dev": "vite build --watch",
+    "db:reset": "docker-compose down -v && pnpm dev"
   },
   "keywords": [
     "database",

@@ -28,8 +28,6 @@ DEFINE FIELD password ON TABLE user TYPE string
 DEFINE FIELD created_at ON TABLE user TYPE datetime
     VALUE time::now();
 
-DEFINE FIELD comments ON TABLE user TYPE option<array<record<comment>>> REFERENCE;
-
 -- ##################################################################
 -- THREAD TABLE
 -- ##################################################################
@@ -47,12 +45,10 @@ DEFINE FIELD title ON TABLE thread TYPE string
 DEFINE FIELD content ON TABLE thread TYPE string
     ASSERT $value != NONE AND string::len($value) > 0;
 
-DEFINE FIELD author ON TABLE thread TYPE record<user>;
+DEFINE FIELD author ON TABLE thread TYPE record<user> REFERENCE;
 
 DEFINE FIELD created_at ON TABLE thread TYPE datetime
     VALUE time::now();
-
-DEFINE FIELD comments ON TABLE thread TYPE option<array<record<comment>>> REFERENCE;
 
 -- ##################################################################
 -- COMMENT TABLE
@@ -64,13 +60,28 @@ DEFINE TABLE comment SCHEMAFULL
     FOR update, delete, create WHERE $access = "account" AND author.id = $auth.id
 ;
 
-DEFINE FIELD thread_id ON TABLE comment TYPE record<thread>;
+DEFINE FIELD thread ON TABLE comment TYPE record<thread> REFERENCE;
 
 DEFINE FIELD content ON TABLE comment TYPE string
     ASSERT $value != NONE AND string::len($value) > 0;
 
-DEFINE FIELD author ON TABLE comment TYPE record<user>;
+DEFINE FIELD author ON TABLE comment TYPE record<user> REFERENCE;
 
 DEFINE FIELD created_at ON TABLE comment TYPE datetime
     VALUE time::now();
 
+-- ##################################################################
+-- RELATION TABLES
+-- ##################################################################
+
+
+DEFINE FIELD comments ON TABLE user TYPE option<array<record<commented_on>>> REFERENCE;
+DEFINE FIELD comments ON TABLE thread TYPE option<array<record<commented_on>>> REFERENCE;
+
+DEFINE TABLE commented_on SCHEMAFULL TYPE RELATION
+  FROM comment TO thread
+  PERMISSIONS FOR select WHERE true;
+
+DEFINE EVENT comment_created ON TABLE comment WHEN $event = "CREATE" THEN
+  RELATE ($after.id)->commented_on->($after.thread)
+;
