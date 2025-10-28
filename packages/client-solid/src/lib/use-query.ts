@@ -1,5 +1,5 @@
 import { createSignal, onCleanup, createEffect, Accessor } from "solid-js";
-import { ReactiveQueryResult } from "./table-queries";
+import { ReactiveQueryResult, ReactiveQueryResultOne } from "./table-queries";
 import { GenericModel } from "./models";
 import { snapshot, Snapshot, subscribe } from "valtio";
 
@@ -24,25 +24,45 @@ import { snapshot, Snapshot, subscribe } from "valtio";
  * </For>
  * ```
  */
-export function useQuery<Model extends GenericModel>(
+export function useQuery<Model extends Record<string, any>>(
   queryResult: ReactiveQueryResult<Model>,
   setData: (data: readonly Snapshot<Model>[]) => void
-): void {
-  // const [data, setData] = createSignal<readonly Snapshot<Model>[]>(
-  //   snapshot(queryResult.data),
-  //   {
-  //     equals: false, // Always trigger updates since we're subscribing to a proxy
-  //   }
-  // );
+): void;
 
+export function useQuery<Model extends Record<string, any>>(
+  queryResult: ReactiveQueryResultOne<Model>,
+  setData: (data: Snapshot<Model | null>) => void
+): void;
+
+export function useQuery<Model extends Record<string, any>>(
+  queryResult: ReactiveQueryResult<Model> | ReactiveQueryResultOne<Model>,
+  setData:
+    | ((data: readonly Snapshot<Model>[]) => void)
+    | ((data: Snapshot<Model | null>) => void)
+): void {
   // Subscribe to changes in the query result data
-  const unsubscribe = subscribe(queryResult.data, () => {
-    setData(snapshot(queryResult.data));
-  });
+  const unsubscribe = subscribe(
+    queryResult instanceof ReactiveQueryResultOne
+      ? (queryResult as any).state
+      : queryResult.data,
+    () => {
+      if (queryResult instanceof ReactiveQueryResultOne) {
+        const data = queryResult.data;
+        (setData as any)(data === null ? null : snapshot(data as any));
+      } else {
+        (setData as any)(snapshot(queryResult.data as any));
+      }
+    }
+  );
 
   // Initial sync to ensure we have the latest data
   createEffect(() => {
-    setData(snapshot(queryResult.data));
+    if (queryResult instanceof ReactiveQueryResultOne) {
+      const data = queryResult.data;
+      (setData as any)(data === null ? null : snapshot(data as any));
+    } else {
+      (setData as any)(snapshot(queryResult.data as any));
+    }
   });
 
   // Clean up subscription when component unmounts
@@ -50,6 +70,4 @@ export function useQuery<Model extends GenericModel>(
     unsubscribe();
     queryResult.kill();
   });
-
-  // return [data];
 }

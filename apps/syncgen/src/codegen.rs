@@ -178,8 +178,6 @@ impl CodeGenerator {
                     let mut brace_count = 0;
                     let mut started = false;
                     let mut closing_line_idx = i;
-                    let mut has_properties = false;
-                    let mut has_index_signature = false;
 
                     for k in i..lines.len() {
                         for ch in lines[k].chars() {
@@ -197,16 +195,6 @@ impl CodeGenerator {
                         if started && brace_count == 0 {
                             break;
                         }
-
-                        // Check if there are properties (lines with : that aren't index signatures)
-                        let trimmed = lines[k].trim();
-                        if trimmed.contains(':') {
-                            if trimmed.starts_with('[') && trimmed.contains("string]") && trimmed.contains(": any") {
-                                has_index_signature = true;
-                            } else if !trimmed.starts_with("//") && !trimmed.starts_with("*") {
-                                has_properties = true;
-                            }
-                        }
                     }
 
                     // Add all lines until the closing brace
@@ -214,13 +202,9 @@ impl CodeGenerator {
                         result.push(lines[k].to_string());
                     }
 
-                    // Add index signature before the closing brace if there are properties and no existing index signature
-                    if has_properties && !has_index_signature && closing_line_idx > i {
-                        // Get the indentation from the closing brace line
-                        let closing_line = lines[closing_line_idx];
-                        let indent = closing_line.chars().take_while(|c| c.is_whitespace()).collect::<String>();
-                        result.push(format!("{}    [property: string]: any;", indent));
-                    }
+                    // NOTE: Index signatures like [property: string]: any are intentionally NOT added
+                    // because they break TypeScript's type inference when using mapped types.
+                    // This allows proper type narrowing in generic contexts like TableQueries<Schema>.
 
                     // Add the closing brace
                     result.push(lines[closing_line_idx].to_string());
@@ -262,6 +246,8 @@ impl CodeGenerator {
                     "    field: string;".to_string(),
                     "    /** The related table name */".to_string(),
                     "    table: string;".to_string(),
+                    "    /** Whether this is a 1:1 or 1:many relationship */".to_string(),
+                    "    cardinality: \"one\" | \"many\";".to_string(),
                     "}".to_string(),
                     "".to_string(),
                     "export interface Relationships {".to_string(),
@@ -272,6 +258,11 @@ impl CodeGenerator {
                 }
 
                 interface_lines.push("}".to_string());
+                interface_lines.push("".to_string());
+                interface_lines.push("/**".to_string());
+                interface_lines.push(" * Helper type to extract relationship field names for a specific table".to_string());
+                interface_lines.push(" */".to_string());
+                interface_lines.push("export type RelationshipFieldsFor<TableName extends keyof Relationships> = Relationships[TableName][number][\"field\"];".to_string());
                 interface_lines.push("".to_string());
 
                 // Now add the actual relationship data from the schema
@@ -290,15 +281,6 @@ impl CodeGenerator {
                                     if let serde_json::Value::Object(props_obj) = props {
                                         let mut table_rels = Vec::new();
                                         for (field_name, field_def) in props_obj {
-                                            // Check if this is a record field
-                                            if let Some(desc) = field_def.get("description") {
-                                                if let Some(desc_str) = desc.as_str() {
-                                                    if desc_str.starts_with("Record ID of table: ") {
-                                                        let related_table = desc_str.replace("Record ID of table: ", "");
-                                                        table_rels.push((field_name.clone(), related_table));
-                                                    }
-                                                }
-                                            }
                                             // Check for array of records (including nullable arrays)
                                             let is_array = if let Some(array_type) = field_def.get("type") {
                                                 if array_type == "array" {
@@ -319,8 +301,20 @@ impl CodeGenerator {
                                                         if let Some(desc_str) = desc.as_str() {
                                                             if desc_str.starts_with("Record ID of table: ") {
                                                                 let related_table = desc_str.replace("Record ID of table: ", "");
-                                                                table_rels.push((field_name.clone(), related_table));
+                                                                // This is a 1:many relationship (array)
+                                                                table_rels.push((field_name.clone(), related_table, "many".to_string()));
                                                             }
+                                                        }
+                                                    }
+                                                }
+                                            } else {
+                                                // Check if this is a single record field (1:1)
+                                                if let Some(desc) = field_def.get("description") {
+                                                    if let Some(desc_str) = desc.as_str() {
+                                                        if desc_str.starts_with("Record ID of table: ") {
+                                                            let related_table = desc_str.replace("Record ID of table: ", "");
+                                                            // This is a 1:1 relationship (single value)
+                                                            table_rels.push((field_name.clone(), related_table, "one".to_string()));
                                                         }
                                                     }
                                                 }
@@ -348,8 +342,8 @@ impl CodeGenerator {
                             interface_lines.push(format!("    {}: [],", table_name));
                         } else {
                             interface_lines.push(format!("    {}: [", table_name));
-                            for (field_name, related_table) in rels {
-                                interface_lines.push(format!("        {{ field: \"{}\", table: \"{}\" }},", field_name, related_table));
+                            for (field_name, related_table, cardinality) in rels {
+                                interface_lines.push(format!("        {{ field: \"{}\", table: \"{}\", cardinality: \"{}\" }},", field_name, related_table, cardinality));
                             }
                             interface_lines.push("    ],".to_string());
                         }

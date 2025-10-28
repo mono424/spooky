@@ -16,7 +16,10 @@
       "Bash(cd:*)",
       "Bash(cargo doc:*)",
       "Read(//private/tmp/**)",
-      "Bash(docker-compose up:*)"
+      "Bash(docker-compose up:*)",
+      "Bash(./apps/syncgen/target/release/syncgen:*)",
+      "Read(//tmp/**)",
+      "Bash(target/release/syncgen:*)"
     ],
     "deny": [],
     "ask": []

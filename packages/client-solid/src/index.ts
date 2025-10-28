@@ -16,10 +16,11 @@ import {
   QueryNamespace,
   TableQueries,
   ReactiveQueryResult,
+  ReactiveQueryResultOne,
 } from "./lib/table-queries";
 import { Syncer } from "./lib/syncer";
 import { WALManager } from "./lib/wal";
-import { proxy, ref } from "valtio";
+import { proxy } from "valtio";
 export type { RecordResult } from "surrealdb";
 
 export { RecordId } from "surrealdb";
@@ -29,10 +30,26 @@ export type {
   GenericSchema,
   ModelPayload,
 } from "./lib/models";
-export { ReactiveQueryResult } from "./lib/table-queries";
+export {
+  ReactiveQueryResult,
+  ReactiveQueryResultOne,
+  type InferQueryModel,
+} from "./lib/table-queries";
 export { useQuery } from "./lib/use-query";
 
 export { snapshot, type Snapshot } from "valtio";
+export type { WithRelated } from "./lib/table-queries";
+
+// Re-export query builder types for convenience
+export type {
+  QueryModifier,
+  QueryModifierBuilder,
+  QueryInfo,
+  RelationshipsMetadata,
+  Relationship,
+  InferRelatedModelFromMetadata,
+  GetCardinality,
+} from "@spooky/query-builder";
 
 export type QueryResponse<T extends GenericModel> = Omit<
   ReturnType<Surreal["query"]>,
@@ -42,12 +59,12 @@ export type QueryResponse<T extends GenericModel> = Omit<
 };
 
 /**
- * Recursively convert DateTime objects to Date objects and wrap RecordId objects with ref()
+ * Recursively convert DateTime objects to Date objects and RecordId objects to strings
  */
 function convertDateTimeToDate(value: any): any {
-  // Wrap RecordId with ref() to prevent valtio proxying
+  // Convert RecordId to string
   if (value instanceof RecordId) {
-    return ref(value);
+    return value.toString();
   }
   // Process arrays recursively
   if (Array.isArray(value)) {
@@ -67,27 +84,31 @@ function convertDateTimeToDate(value: any): any {
 }
 
 /**
- * Process model: convert DateTime to Date and wrap all RecordId objects with ref()
+ * Process model: convert DateTime to Date and RecordId objects to strings
  */
-function wrapModelIdWithRef<T extends GenericModel>(model: T): T {
+function wrapModelIdWithRef<T extends GenericModel | undefined>(model: T): T {
   if (!model) return model;
 
-  // Convert DateTime to Date and wrap RecordId with ref (including id and relationship fields)
-  return convertDateTimeToDate(model);
+  // Convert DateTime to Date and RecordId to string (including id and relationship fields)
+  return convertDateTimeToDate(model) as T;
 }
 
-export class SyncedDb<Schema extends GenericSchema> {
+export class SyncedDb<
+  Schema extends GenericSchema,
+  Relationships extends Record<string, Array<{ field: string; table: string; cardinality?: "one" | "many" }>> = any
+> {
   private config: SyncedDbConfig<Schema>;
   private connections: DbConnection | null = null;
-  public readonly query: TableQueries<Schema>;
+  public readonly query: TableQueries<Schema, Relationships>;
   private syncer: Syncer | null = null;
   private walManager: WALManager | null = null;
   private currentUser: any = proxy({ value: null });
 
   constructor(config: SyncedDbConfig<Schema>) {
     this.config = config;
-    this.query = new QueryNamespace<Schema>(this) as QueryNamespace<Schema> &
-      TableQueries<Schema>;
+    this.query = new QueryNamespace<Schema, Relationships>(
+      this
+    ) as unknown as TableQueries<Schema, Relationships>;
   }
 
   /**
@@ -251,7 +272,7 @@ export class SyncedDb<Schema extends GenericSchema> {
       }
 
       // Query authenticated user info
-      const [users] = await this.queryLocal<Schema[T]>(
+      const [users] = await this.queryLocal<NonNullable<Schema[T]>>(
         `SELECT * FROM $auth`
       ).collect();
 
@@ -323,6 +344,11 @@ export class SyncedDb<Schema extends GenericSchema> {
     }
 
     const remoteUser = remoteUsers[0];
+    if (!remoteUser) {
+      throw new Error(
+        `${isSignUp ? "Sign-up" : "Sign-in"} failed: Invalid user data`
+      );
+    }
 
     // Sync user to local database (upsert)
     // First, check if user exists locally

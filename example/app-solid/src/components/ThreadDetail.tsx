@@ -10,37 +10,28 @@ import {
 import { useNavigate, useParams } from "@solidjs/router";
 import { db } from "../db";
 import { CommentForm } from "./CommentForm";
-import {
-  Model,
-  ReactiveQueryResult,
-  RecordId,
-  useQuery,
-} from "@spooky/client-solid";
-import { Thread, Comment } from "../schema.gen";
-
-// Type for transformed comment with nested author
-type TransformedComment = Omit<Comment, "author"> & {
-  author: { id: string };
-};
+import { useQuery, InferQueryModel } from "@spooky/client-solid";
 
 export function ThreadDetail() {
   const params = useParams();
   const navigate = useNavigate();
 
-  const threadQuery: ReactiveQueryResult<Model<Thread>> = db.query.thread
+  const threadQuery = db.query.thread
     .find({
-      id: new RecordId("thread", params.id),
+      id: params.id,
     })
+    .related("")
+    .related("author", (q) => q.select("content", "created_at"))
     .related("comments")
-    .query();
+    .one();
 
-  const [threads, setThreads] = createSignal<Model<Thread>[]>([]);
-  useQuery(threadQuery, setThreads);
-
-  const thread = () => threads()[0];
+  const [thread, setThread] = createSignal<InferQueryModel<typeof threadQuery>>(
+    null as any
+  );
+  useQuery(threadQuery, setThread);
 
   createEffect(() => {
-    console.log("threads", threads());
+    console.log("thread", thread());
   });
 
   onCleanup(() => {
@@ -75,7 +66,7 @@ export function ThreadDetail() {
                 {threadData().content}
               </p>
               <div class="flex justify-between items-center text-sm text-gray-500 border-t pt-3">
-                <span>By {threadData().author}</span>
+                <span>By {threadData().author?.username ?? "Unknown"}</span>
                 <span>
                   {new Date(threadData().created_at ?? 0).toLocaleDateString()}
                 </span>
@@ -109,7 +100,12 @@ export function ThreadDetail() {
                         {comment.content}
                       </p>
                       <div class="flex justify-between items-center text-sm text-gray-500">
-                        <span>By {comment.author.id}</span>
+                        <span>
+                          By{" "}
+                          {typeof comment.author === "string"
+                            ? comment.author
+                            : comment.author?.username ?? "Unknown"}
+                        </span>
                         <span>
                           {new Date(
                             comment.created_at ?? 0

@@ -1,7 +1,7 @@
 {
-  "name": "@spooky/client-solid",
+  "name": "@spooky/query-builder",
   "version": "1.0.0",
-  "description": "SurrealDB client with local and remote database support for browser applications",
+  "description": "Type-safe query builder for SurrealDB with relationship support",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
@@ -20,20 +20,15 @@
   },
   "keywords": [
     "surrealdb",
-    "database",
-    "browser",
-    "offline",
-    "sync"
+    "query-builder",
+    "typescript",
+    "type-safe"
   ],
   "author": "",
   "license": "MIT",
   "packageManager": "pnpm@9.0.0",
   "dependencies": {
-    "@spooky/query-builder": "workspace:*",
-    "@surrealdb/wasm": "^2.3.2",
-    "solid-js": "^1.8.7",
-    "surrealdb": "^2.0.0-alpha.9",
-    "valtio": "^2.1.8"
+    "surrealdb": "^2.0.0-alpha.9"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

@@ -1,45 +1,32 @@
 import { Frame, RecordId, Surreal, Table, Values, DateTime } from "surrealdb";
-import { proxy, ref } from "valtio";
-import { GenericModel, GenericSchema, ModelPayload } from "./models";
+import { proxy } from "valtio";
+import { GenericModel, GenericSchema, Model, ModelPayload } from "./models";
+import {
+  QueryBuilder as BaseQueryBuilder,
+  buildQueryFromOptions,
+  type QueryInfo,
+  type LiveQueryOptions,
+  type GetRelationshipFields,
+  type WithRelated,
+  type RelationshipsMetadata,
+  type QueryModifier,
+} from "@spooky/query-builder";
 import { QueryResponse, SyncedDb } from "..";
 
-export interface RelatedQuery {
-  /** The name of the related table to query */
-  relatedTable: string;
-  /** The alias for this subquery result (defaults to relatedTable name) */
-  alias?: string;
-}
-
-export interface LiveQueryOptions<Model extends GenericModel> {
-  select?: ((keyof Model & string) | "*")[];
-  where?: Partial<Model> | { id: RecordId };
-  limit?: number;
-  offset?: number;
-  /** Related tables to include via subqueries */
-  related?: RelatedQuery[];
-}
-
-export interface QueryOptions<Model extends GenericModel>
-  extends LiveQueryOptions<Model> {
-  orderBy?: Partial<Record<keyof Model, "asc" | "desc">>;
-}
-
-export interface QueryInfo {
-  query: string;
-  vars?: Record<string, unknown>;
-}
+// Re-export QueryInfo for internal use
+export type { QueryInfo } from "@spooky/query-builder";
 
 /**
- * Recursively convert DateTime objects to Date objects and wrap RecordId objects with ref()
+ * Recursively convert DateTime objects to Date objects and RecordId objects to strings
  */
 function convertDateTimeToDate(value: any): any {
   // Convert DateTime to Date
   if (value instanceof DateTime) {
     return value.toDate();
   }
-  // Wrap RecordId with ref() to prevent valtio proxying
+  // Convert RecordId to string
   if (value instanceof RecordId) {
-    return ref(value);
+    return value.toString();
   }
   // Process arrays recursively
   if (Array.isArray(value)) {
@@ -59,13 +46,13 @@ function convertDateTimeToDate(value: any): any {
 }
 
 /**
- * Process models: convert DateTime to Date and wrap all RecordId objects with ref()
+ * Process models: convert DateTime to Date and RecordId objects to strings
  */
 function wrapModelIdsWithRef<Model extends GenericModel>(
   models: Model[]
 ): Model[] {
   return models.map((model) => {
-    // Convert DateTime to Date and wrap RecordId with ref (including id and relationship fields)
+    // Convert DateTime to Date and RecordId to string (including id and relationship fields)
     return convertDateTimeToDate(model);
   });
 }
@@ -73,23 +60,23 @@ function wrapModelIdsWithRef<Model extends GenericModel>(
 /**
  * Reactive query result with live updates
  */
-export class ReactiveQueryResult<Model extends GenericModel> {
-  private state: Model[];
-  private liveQuery: LiveQueryList<any, Model> | null = null;
+export class ReactiveQueryResult<SModel extends GenericModel> {
+  private state: Model<SModel>[];
+  private liveQuery: LiveQueryList<any, SModel> | null = null;
 
   constructor() {
-    this.state = proxy([]) as Model[];
+    this.state = proxy([]) as Model<SModel>[];
   }
 
-  get data(): Model[] {
+  get data(): Model<SModel>[] {
     return this.state;
   }
 
-  _setLiveQuery(liveQuery: LiveQueryList<any, Model>): void {
+  _setLiveQuery(liveQuery: LiveQueryList<any, SModel>): void {
     this.liveQuery = liveQuery;
   }
 
-  _updateState(newState: Model[]): void {
+  _updateState(newState: Model<SModel>[]): void {
     // Clear and replace array contents to maintain proxy reference
     // Wrap ids with ref() to prevent valtio from proxying RecordId objects
     const wrappedState = wrapModelIdsWithRef(newState);
@@ -105,11 +92,59 @@ export class ReactiveQueryResult<Model extends GenericModel> {
   }
 }
 
+/**
+ * Reactive query result for single record queries with live updates
+ */
+export class ReactiveQueryResultOne<SModel extends GenericModel> {
+  private state: { value: Model<SModel> | null };
+  private liveQuery: LiveQueryList<any, SModel> | null = null;
+
+  // Type brand to help with type inference
+  readonly __model!: SModel;
+
+  constructor() {
+    this.state = proxy({ value: null }) as { value: Model<SModel> | null };
+  }
+
+  get data(): Model<SModel> | null {
+    return this.state.value;
+  }
+
+  _setLiveQuery(liveQuery: LiveQueryList<any, SModel>): void {
+    this.liveQuery = liveQuery;
+  }
+
+  _updateState(newState: Model<SModel>[]): void {
+    // Extract first element or set to null
+    // Wrap ids with ref() to prevent valtio from proxying RecordId objects
+    const wrappedState = wrapModelIdsWithRef(newState);
+    this.state.value = wrappedState.length > 0 ? wrappedState[0] : null;
+  }
+
+  /**
+   * Stop listening to live updates
+   */
+  kill(): void {
+    this.liveQuery?.kill();
+  }
+}
+
+/**
+ * Helper type to extract the Model type from a ReactiveQueryResult
+ * For ReactiveQueryResultOne, returns the model type or null
+ * For ReactiveQueryResult, returns the array of models
+ */
+export type InferQueryModel<T> = T extends ReactiveQueryResultOne<infer M>
+  ? M | null
+  : T extends ReactiveQueryResult<infer M>
+  ? readonly M[]
+  : never;
+
 export class LiveQueryList<
   Schema extends GenericSchema,
-  Model extends GenericModel
+  SModel extends GenericModel
 > {
-  private state: Model[];
+  private state: Model<SModel>[];
   private unsubscribe: (() => void) | undefined;
 
   constructor(
@@ -117,7 +152,7 @@ export class LiveQueryList<
     private hydrationQuery: QueryInfo,
     private tableName: string,
     private db: SyncedDb<Schema>,
-    private callback: (items: Model[]) => void
+    private callback: (items: Model<SModel>[]) => void
   ) {
     this.state = [];
     this.liveQuery = liveQuery;
@@ -130,7 +165,7 @@ export class LiveQueryList<
   private async hydrate(): Promise<void> {
     // Try to fetch from remote first to get the latest data
     const remote = this.db.getRemote();
-    let models: Model[] = [];
+    let models: Model<SModel>[] = [];
 
     if (remote) {
       try {
@@ -146,7 +181,7 @@ export class LiveQueryList<
             "items",
             remoteModels
           );
-          models = remoteModels as Model[];
+          models = remoteModels as Model<SModel>[];
         } else {
           console.log(
             "[LiveQueryList] No remote data found, falling back to local"
@@ -154,7 +189,7 @@ export class LiveQueryList<
           const [localModels] = await this.db
             .queryLocal(this.hydrationQuery.query, this.hydrationQuery.vars)
             .collect();
-          models = localModels as Model[];
+          models = localModels as Model<SModel>[];
         }
       } catch (error) {
         console.warn(
@@ -164,7 +199,7 @@ export class LiveQueryList<
         const [localModels] = await this.db
           .queryLocal(this.hydrationQuery.query, this.hydrationQuery.vars)
           .collect();
-        models = localModels as Model[];
+        models = localModels as Model<SModel>[];
       }
     } else {
       // No remote connection, use local only
@@ -172,7 +207,7 @@ export class LiveQueryList<
       const [localModels] = await this.db
         .queryLocal(this.hydrationQuery.query, this.hydrationQuery.vars)
         .collect();
-      models = localModels as Model[];
+      models = localModels as Model<SModel>[];
     }
 
     // Wrap ids with ref() to prevent valtio from proxying RecordId objects
@@ -228,100 +263,78 @@ export class LiveQueryList<
   }
 }
 
+// Re-export WithRelated type for backward compatibility
+export type { WithRelated } from "@spooky/query-builder";
+
 /**
  * Fluent query builder for constructing queries with chainable methods
+ * Extends the base query builder and adds Solid-specific reactive query execution
  */
 export class QueryBuilder<
   Schema extends GenericSchema,
-  Model extends GenericModel,
-  TableName extends keyof Schema & string = keyof Schema & string
-> {
-  private options: QueryOptions<Model> = {};
-
+  SModel extends Record<string, any>,
+  TableName extends keyof Schema & string,
+  Relationships extends Record<
+    string,
+    Array<{ field: string; table: string; cardinality?: "one" | "many" }>
+  >
+> extends BaseQueryBuilder<Schema, SModel, TableName, Relationships> {
   constructor(
-    private tableQuery: TableQuery<Schema, Model>,
-    private currentTableName: TableName,
-    where?: Partial<Model>
+    private tableQuery: TableQuery<Schema, SModel, TableName, Relationships>,
+    tableName: TableName,
+    relationships?: RelationshipsMetadata,
+    where?: Partial<Model<SModel>>
   ) {
-    if (where) {
-      this.options.where = where;
-    }
+    super(tableName, relationships, where);
   }
 
   /**
-   * Add additional where conditions
+   * Override related to return the Solid-specific QueryBuilder type
    */
-  where(conditions: Partial<Model>): this {
-    this.options.where = { ...this.options.where, ...conditions };
+  related<
+    RelatedField extends GetRelationshipFields<TableName, Relationships> &
+      string
+  >(
+    relatedField: RelatedField,
+    modifier?: QueryModifier<any>
+  ): QueryBuilder<
+    Schema,
+    WithRelated<Schema, SModel, TableName, RelatedField, Relationships>,
+    TableName,
+    Relationships
+  > {
+    super.related(relatedField, modifier);
+    return this as any;
+  }
+
+  /**
+   * Override chainable methods to return the Solid-specific QueryBuilder type
+   */
+  where(conditions: Partial<Model<SModel>>): this {
+    super.where(conditions);
     return this;
   }
 
-  /**
-   * Specify fields to select
-   */
-  select(...fields: ((keyof Model & string) | "*")[]): this {
-    if (this.options.select) {
-      throw new Error("Select can only be called once per query");
-    }
-    this.options.select = fields;
+  select(...fields: ((keyof SModel & string) | "*")[]): this {
+    super.select(...fields);
     return this;
   }
 
-  /**
-   * Add ordering to the query (only for non-live queries)
-   */
   orderBy(
-    field: keyof Model & string,
+    field: keyof SModel & string,
     direction: "asc" | "desc" = "asc"
   ): this {
-    this.options.orderBy = {
-      ...this.options.orderBy,
-      [field]: direction,
-    } as Partial<Record<keyof Model, "asc" | "desc">>;
+    super.orderBy(field, direction);
     return this;
   }
 
-  /**
-   * Limit the number of results
-   */
   limit(count: number): this {
-    this.options.limit = count;
+    super.limit(count);
     return this;
   }
 
-  /**
-   * Set the offset for results
-   */
   offset(count: number): this {
-    this.options.offset = count;
-    return this;
-  }
-
-  /**
-   * Include related records from specified table(s) using subqueries
-   * @example
-   * // For a thread table that has relationship to comments
-   * tableQuery.find().related("comments").query()
-   * // Generates: SELECT *, (SELECT * FROM comment WHERE thread=$parent.id) AS comments FROM thread
-   *
-   * @param relatedTableOrAlias - The name to use for the related data (e.g., "comments")
-   */
-  related<RelatedTable extends string>(relatedTableOrAlias: RelatedTable): this {
-    if (!this.options.related) {
-      this.options.related = [];
-    }
-
-    // Check if this relationship already exists
-    const exists = this.options.related.some(
-      r => (r.alias || r.relatedTable) === relatedTableOrAlias
-    );
-
-    if (!exists) {
-      this.options.related.push({
-        relatedTable: relatedTableOrAlias,
-        alias: relatedTableOrAlias,
-      });
-    }
+    super.offset(count);
     return this;
   }
 
@@ -335,12 +348,43 @@ export class QueryBuilder<
    * // Clean up when done
    * result.kill();
    */
-  query(): ReactiveQueryResult<Model> {
-    const result = new ReactiveQueryResult<Model>();
+  query(): ReactiveQueryResult<SModel> {
+    const result = new ReactiveQueryResult<SModel>();
 
     (async () => {
       const liveQuery = await this.tableQuery.liveQuery(
-        this.options,
+        this.getOptions(),
+        (items) => {
+          result._updateState(items);
+        }
+      );
+
+      result._setLiveQuery(liveQuery);
+    })();
+
+    return result;
+  }
+
+  /**
+   * Execute the query and return a single reactive record that updates automatically
+   * Automatically sets limit to 1 and returns a single record instead of an array
+   * @example
+   * const result = tableQuery.find({ id: new RecordId('thread', '123') }).one();
+   * // result.data is a single Model or null (not an array)
+   * console.log(result.data); // access the single reactive record
+   *
+   * // Clean up when done
+   * result.kill();
+   */
+  one(): ReactiveQueryResultOne<SModel> {
+    // Automatically set limit to 1
+    this.limit(1);
+
+    const result = new ReactiveQueryResultOne<SModel>();
+
+    (async () => {
+      const liveQuery = await this.tableQuery.liveQuery(
+        this.getOptions(),
         (items) => {
           result._updateState(items);
         }
@@ -358,96 +402,35 @@ export class QueryBuilder<
  */
 export class TableQuery<
   Schema extends GenericSchema,
-  Model extends GenericModel
+  SModel extends Record<string, any>,
+  TableName extends keyof Schema & string,
+  Relationships extends Record<
+    string,
+    Array<{ field: string; table: string; cardinality?: "one" | "many" }>
+  >
 > {
   constructor(
-    private db: SyncedDb<Schema>,
-    public readonly tableName: string
+    private db: SyncedDb<Schema, Relationships>,
+    public readonly tableName: TableName
   ) {}
 
   /**
-   * Generate a subquery for related records
-   * @param currentTable - The current table being queried
-   * @param relatedAlias - The alias/name for the related data (e.g., "comments")
-   * @returns SQL subquery string
-   *
-   * This method infers the relationship based on naming conventions:
-   * - If relatedAlias is plural (e.g., "comments"), it assumes a one-to-many relationship
-   *   where we query the singular table (e.g., "comment") with a foreign key back to currentTable
-   * - Example: For table "thread" with related "comments", generates:
-   *   (SELECT * FROM comment WHERE thread=$parent.id)
+   * Build a query using the query-builder package
    */
-  private generateSubquery(currentTable: string, relatedAlias: string): string {
-    // Handle pluralization to get the actual table name
-    let relatedTable = relatedAlias;
-
-    // Simple pluralization: remove trailing 's' to get singular form
-    // This works for most English words (comments -> comment, users -> user)
-    if (relatedAlias.endsWith('s') && relatedAlias.length > 1) {
-      relatedTable = relatedAlias.slice(0, -1);
-    }
-
-    // The foreign key is the name of the current table
-    // For example, if querying "thread", comments will have a "thread" field
-    const foreignKey = currentTable;
-
-    // Build the subquery
-    // $parent.id refers to the id of the current row being selected
-    return `(SELECT * FROM ${relatedTable} WHERE ${foreignKey}=$parent.id)`;
-  }
-
   private buildQuery(
     method: "LIVE SELECT" | "SELECT",
-    props: LiveQueryOptions<Model>
+    props: LiveQueryOptions<SModel>
   ): QueryInfo {
-    // Build the select clause with subqueries for related data
-    let selectParts = props.select ?? ["*"];
-    const selectFields = selectParts.map((key) => `${key}`).join(", ");
+    // Get relationships metadata from db config
+    const relationships = (this.db as any).config?.relationships;
 
-    // Add subqueries for related tables
-    const subqueries: string[] = [];
-    if (props.related && props.related.length > 0) {
-      for (const rel of props.related) {
-        const subquery = this.generateSubquery(this.tableName, rel.alias || rel.relatedTable);
-        const alias = rel.alias || rel.relatedTable;
-        subqueries.push(`${subquery} AS ${alias}`);
-      }
-    }
-
-    // Combine regular fields and subqueries
-    const allSelectParts = [selectFields, ...subqueries].join(", ");
-
-    const whereClause = Object.keys(props.where ?? {})
-      .map((key) => `${key} = $${key}`)
-      .join(" AND ");
-
-    // Only add ORDER BY for non-live queries
-    const orderClause =
-      method === "SELECT" && "orderBy" in props
-        ? Object.entries(props.orderBy ?? {})
-            .map(([key, val]) => `${key} ${val}`)
-            .join(", ")
-        : "";
-
-    let query = `${method} ${allSelectParts} FROM ${this.tableName}`;
-    if (whereClause) query += ` WHERE ${whereClause}`;
-    if (orderClause) query += ` ORDER BY ${orderClause}`;
-
-    // Only add LIMIT and START for regular SELECT queries (not LIVE SELECT)
-    if (method === "SELECT") {
-      if (props.limit !== undefined) query += ` LIMIT ${props.limit}`;
-      if (props.offset !== undefined) query += ` START ${props.offset}`;
-    }
-
-    query += ";";
-
-    console.log(`[buildQuery] Generated ${method} query:`, query);
-    console.log(`[buildQuery] Query vars:`, props.where);
-
-    return {
-      query,
-      vars: props.where,
-    };
+    // Use buildQueryFromOptions from query-builder package
+    return buildQueryFromOptions(
+      method,
+      this.tableName,
+      props as any,
+      relationships
+    );
   }
 
   /**
@@ -457,9 +440,16 @@ export class TableQuery<
    * tableQuery.find({ userId: '123' }).subscribe(items => console.log(items))
    */
   find(
-    where?: Partial<Model>
-  ): QueryBuilder<Schema, Model, typeof this.tableName> {
-    return new QueryBuilder(this, this.tableName as any, where);
+    where?: Partial<Model<SModel>>
+  ): QueryBuilder<Schema, SModel, TableName, Relationships> {
+    // Get relationships metadata from db config
+    const relationships = (this.db as any).config?.relationships;
+    return new QueryBuilder<Schema, SModel, TableName, Relationships>(
+      this,
+      this.tableName,
+      relationships,
+      where
+    );
   }
 
   /**
@@ -471,13 +461,13 @@ export class TableQuery<
    * tableQuery.create([{ name: 'John' }, { name: 'Jane' }])
    */
   async create(
-    data: Values<ModelPayload<Model>> | Values<ModelPayload<Model>>[]
-  ): Promise<Model[]> {
+    data: Values<ModelPayload<SModel>> | Values<ModelPayload<SModel>>[]
+  ): Promise<SModel[]> {
     console.log("[TableQuery.create] Creating records", data);
 
     // Create locally first
-    const localResult = await this.db.createLocal<Model>(this.tableName, data);
-    const models = localResult as unknown as Model[];
+    const localResult = await this.db.createLocal<SModel>(this.tableName, data);
+    const models = localResult as unknown as SModel[];
     console.log("[TableQuery.create] Local creation successful", models);
 
     // Try to sync to remote if available
@@ -485,7 +475,7 @@ export class TableQuery<
     if (remote) {
       try {
         console.log("[TableQuery.create] Syncing to remote...");
-        await this.db.createRemote<Model>(this.tableName, data);
+        await this.db.createRemote<SModel>(this.tableName, data);
         console.log("[TableQuery.create] Remote creation successful");
       } catch (error) {
         console.error(
@@ -527,7 +517,7 @@ export class TableQuery<
    * @example
    * tableQuery.delete({ status: 'archived' })
    */
-  async delete(where: Partial<Model>): Promise<void> {
+  async delete(where: Partial<SModel>): Promise<void> {
     const whereKeys = Object.keys(where);
     if (whereKeys.length === 0) {
       throw new Error(
@@ -570,8 +560,8 @@ export class TableQuery<
    * })
    */
   async update(options: {
-    where: Partial<Model>;
-    update: Partial<Model>;
+    where: Partial<SModel>;
+    update: Partial<SModel>;
   }): Promise<void> {
     const { where, update } = options;
 
@@ -597,10 +587,10 @@ export class TableQuery<
 
     const vars: Record<string, unknown> = {};
     whereKeys.forEach((key) => {
-      vars[`where_${key}`] = where[key as keyof Model];
+      vars[`where_${key}`] = where[key as keyof SModel];
     });
     updateKeys.forEach((key) => {
-      vars[`update_${key}`] = update[key as keyof Model];
+      vars[`update_${key}`] = update[key as keyof SModel];
     });
 
     console.log("[TableQuery.update] Updating records in local", {
@@ -627,9 +617,9 @@ export class TableQuery<
   }
 
   async liveQuery(
-    options: LiveQueryOptions<Model>,
-    callback: (queryId: Model[]) => void
-  ): Promise<LiveQueryList<Schema, Model>> {
+    options: LiveQueryOptions<SModel>,
+    callback: (items: Model<SModel>[]) => void
+  ): Promise<LiveQueryList<Schema, SModel>> {
     // Build LIVE SELECT query directly (no ORDER BY, LIMIT, or START)
     const liveQueryInfo = this.buildQuery("LIVE SELECT", options);
     const selectQuery = this.buildQuery("SELECT", options);
@@ -639,7 +629,7 @@ export class TableQuery<
       selectQuery,
     });
 
-    const liveQuery = new LiveQueryList<Schema, Model>(
+    const liveQuery = new LiveQueryList<Schema, SModel>(
       liveQueryInfo,
       selectQuery,
       this.tableName,
@@ -654,91 +644,126 @@ export class TableQuery<
   queryLocal(
     sql: string,
     vars?: Record<string, unknown>
-  ): QueryResponse<Model> {
-    return this.db.queryLocal<Model>(sql, vars);
+  ): QueryResponse<SModel> {
+    return this.db.queryLocal<SModel>(sql, vars);
   }
 
   queryRemote(
     sql: string,
     vars?: Record<string, unknown>
-  ): QueryResponse<Model> {
-    return this.db.queryRemote<Model>(sql, vars);
+  ): QueryResponse<SModel> {
+    return this.db.queryRemote<SModel>(sql, vars);
   }
 
   createLocal(
-    data: Values<ModelPayload<Model>> | Values<ModelPayload<Model>>[]
+    data: Values<ModelPayload<SModel>> | Values<ModelPayload<SModel>>[]
   ): ReturnType<Surreal["insert"]> {
-    return this.db.createLocal<Model>(this.tableName, data);
+    return this.db.createLocal<SModel>(this.tableName, data);
   }
 
   createRemote(
-    data: Values<ModelPayload<Model>> | Values<ModelPayload<Model>>[]
+    data: Values<ModelPayload<SModel>> | Values<ModelPayload<SModel>>[]
   ): ReturnType<Surreal["insert"]> {
-    return this.db.createRemote<Model>(this.tableName, data);
+    return this.db.createRemote<SModel>(this.tableName, data);
   }
 
   updateLocal(
     recordId: RecordId,
-    data: Partial<Model>
+    data: Partial<SModel>
   ): ReturnType<Surreal["update"]> {
-    return this.db.updateLocal<Model>(recordId, data);
+    return this.db.updateLocal<SModel>(recordId, data);
   }
 
   updateRemote(
     recordId: RecordId,
-    data: Partial<Model>
+    data: Partial<SModel>
   ): ReturnType<Surreal["update"]> {
-    return this.db.updateRemote<Model>(recordId, data);
+    return this.db.updateRemote<SModel>(recordId, data);
   }
 
   deleteLocal(recordId: RecordId): Promise<any> {
-    return this.db.deleteLocal<Model>(recordId);
+    return this.db.deleteLocal<SModel>(recordId);
   }
 
   deleteRemote(table: Table): ReturnType<Surreal["delete"]> {
-    return this.db.deleteRemote<Model>(table);
+    return this.db.deleteRemote<SModel>(table);
   }
 }
 
 /**
  * Query namespace that provides table-scoped query access
  */
-export class QueryNamespace<Schema extends GenericSchema> {
+class QueryNamespaceImpl<
+  Schema extends GenericSchema,
+  Relationships extends Record<
+    string,
+    Array<{ field: string; table: string; cardinality?: "one" | "many" }>
+  >
+> {
   private tableCache = new Map<
-    keyof Schema & string,
-    TableQuery<Schema, Schema[keyof Schema & string]>
+    string,
+    TableQuery<Schema, any, any, Relationships>
   >();
 
-  constructor(private db: SyncedDb<Schema>) {
+  constructor(private db: SyncedDb<Schema, Relationships>) {}
+
+  getTable<K extends keyof Schema & string>(
+    key: K
+  ): TableQuery<Schema, NonNullable<Schema[K]>, K, Relationships> {
+    if (!this.tableCache.has(key)) {
+      this.tableCache.set(
+        key,
+        new TableQuery<Schema, NonNullable<Schema[K]>, K, Relationships>(
+          this.db,
+          key
+        )
+      );
+    }
+    return this.tableCache.get(key) as TableQuery<
+      Schema,
+      NonNullable<Schema[K]>,
+      K,
+      Relationships
+    >;
+  }
+}
+
+export class QueryNamespace<
+  Schema extends GenericSchema,
+  Relationships extends Record<
+    string,
+    Array<{ field: string; table: string; cardinality?: "one" | "many" }>
+  >
+> {
+  constructor(db: SyncedDb<Schema, Relationships>) {
+    const impl = new QueryNamespaceImpl(db);
     // Create a proxy to handle dynamic table access
-    return new Proxy(this, {
+    return new Proxy(impl, {
       get(target, prop: keyof Schema | string | symbol) {
-        if (
-          typeof prop === "string" &&
-          prop !== "tableCache" &&
-          prop !== "db"
-        ) {
+        if (typeof prop === "string") {
           const key = prop as keyof Schema & string;
-          if (!target.tableCache.has(key)) {
-            target.tableCache.set(
-              key,
-              new TableQuery<Schema, Schema[keyof Schema & string]>(
-                target.db,
-                key
-              )
-            );
-          }
-          return target.tableCache.get(key);
+          return target.getTable(key);
         }
         return Reflect.get(target, prop);
       },
-    }) as QueryNamespace<Schema>;
+    });
   }
 }
 
 /**
  * Type helper for table queries
  */
-export type TableQueries<Schema extends GenericSchema> = {
-  [K in keyof Schema & string]: TableQuery<Schema, Schema[K]>;
+export type TableQueries<
+  Schema extends GenericSchema,
+  Relationships extends Record<
+    string,
+    Array<{ field: string; table: string; cardinality?: "one" | "many" }>
+  >
+> = {
+  [K in keyof Schema & string]: TableQuery<
+    Schema,
+    NonNullable<Schema[K]>,
+    K,
+    Relationships
+  >;
 };
