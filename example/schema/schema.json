@@ -1,0 +1,256 @@
+
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "user": {
+      "$ref": "#/definitions/user"
+    },
+    "comment": {
+      "$ref": "#/definitions/comment"
+    },
+    "commented_on": {
+      "$ref": "#/definitions/commented_on"
+    },
+    "thread": {
+      "$ref": "#/definitions/thread"
+    }
+  },
+  "required": [
+    "user",
+    "comment",
+    "commented_on",
+    "thread"
+  ],
+  "definitions": {
+    "user": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Record ID"
+        },
+        "username": {
+          "type": "string",
+          "description": "Assert: $value != NONE AND string::is::alphanum($value) AND string::len($value) > 3"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "password": {
+          "type": "string",
+          "description": "Assert: $value != NONE AND string::len($value) > 0"
+        },
+        "comments": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string",
+            "description": "Record ID of table: commented_on",
+            "pattern": "^commented_on:"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "username",
+        "password"
+      ],
+      "additionalProperties": false
+    },
+    "RelationTables": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The name of the relation table"
+          },
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The source table for this relation"
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The target table for this relation"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "const": [
+        {
+          "name": "commented_on",
+          "from": "comment",
+          "to": "thread"
+        }
+      ]
+    },
+    "comment": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Record ID"
+        },
+        "content": {
+          "type": "string",
+          "description": "Assert: $value != NONE AND string::len($value) > 0"
+        },
+        "thread": {
+          "type": "string",
+          "description": "Record ID of table: thread",
+          "pattern": "^thread:"
+        },
+        "author": {
+          "type": "string",
+          "description": "Record ID of table: user",
+          "pattern": "^user:"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "content",
+        "thread",
+        "author"
+      ],
+      "additionalProperties": false
+    },
+    "Relationships": {
+      "type": "object",
+      "properties": {
+        "user": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string",
+                "description": "The field name that creates this relationship"
+              },
+              "table": {
+                "type": "string",
+                "description": "The related table name"
+              }
+            },
+            "required": [
+              "field",
+              "table"
+            ]
+          }
+        },
+        "comment": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string",
+                "description": "The field name that creates this relationship"
+              },
+              "table": {
+                "type": "string",
+                "description": "The related table name"
+              }
+            },
+            "required": [
+              "field",
+              "table"
+            ]
+          }
+        },
+        "thread": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string",
+                "description": "The field name that creates this relationship"
+              },
+              "table": {
+                "type": "string",
+                "description": "The related table name"
+              }
+            },
+            "required": [
+              "field",
+              "table"
+            ]
+          }
+        }
+      }
+    },
+    "thread": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Record ID"
+        },
+        "content": {
+          "type": "string",
+          "description": "Assert: $value != NONE AND string::len($value) > 0"
+        },
+        "title": {
+          "type": "string",
+          "description": "Assert: $value != NONE AND string::len($value) > 0 AND string::len($value) <= 200"
+        },
+        "author": {
+          "type": "string",
+          "description": "Record ID of table: user",
+          "pattern": "^user:"
+        },
+        "comments": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string",
+            "description": "Record ID of table: commented_on",
+            "pattern": "^commented_on:"
+          }
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "content",
+        "title",
+        "author"
+      ],
+      "additionalProperties": false
+    },
+    "commented_on": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Record ID"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    }
+  }
+}
