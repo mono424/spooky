@@ -95,7 +95,7 @@ function wrapModelIdWithRef<T extends GenericModel | undefined>(model: T): T {
 
 export class SyncedDb<
   Schema extends GenericSchema,
-  Relationships extends Record<string, Array<{ field: string; table: string; cardinality?: "one" | "many" }>> = any
+  Relationships = any
 > {
   private config: SyncedDbConfig<Schema>;
   private connections: DbConnection | null = null;
@@ -509,17 +509,18 @@ export class SyncedDb<
 
     const converted = { ...data };
 
-    for (const rel of relationships) {
-      const fieldValue = converted[rel.field];
+    // Iterate over the nested object structure
+    for (const [fieldName, rel] of Object.entries(relationships)) {
+      const fieldValue = converted[fieldName];
 
       // Skip if field is not present or already a RecordId
       if (fieldValue === undefined || fieldValue === null) continue;
       if (fieldValue instanceof RecordId) continue;
 
       // Convert string ID to RecordId
-      if (typeof fieldValue === 'string' && fieldValue.includes(':')) {
-        const [table, id] = fieldValue.split(':', 2);
-        converted[rel.field] = new RecordId(table, id);
+      if (typeof fieldValue === "string" && fieldValue.includes(":")) {
+        const [table, id] = fieldValue.split(":", 2);
+        converted[fieldName] = new RecordId(table, id);
       }
     }
 
@@ -535,7 +536,7 @@ export class SyncedDb<
 
     // Convert reference fields for single or multiple records
     const convertedData = Array.isArray(data)
-      ? data.map(item => this.convertReferenceFields(tableName, item))
+      ? data.map((item) => this.convertReferenceFields(tableName, item))
       : this.convertReferenceFields(tableName, data);
 
     console.log("[SyncedDb._create] Creating records", convertedData);

@@ -61,14 +61,14 @@ function wrapModelIdsWithRef<Model extends GenericModel>(
  * Reactive query result with live updates
  */
 export class ReactiveQueryResult<SModel extends GenericModel> {
-  private state: Model<SModel>[];
+  private state: SModel[];
   private liveQuery: LiveQueryList<any, SModel> | null = null;
 
   constructor() {
-    this.state = proxy([]) as Model<SModel>[];
+    this.state = proxy([]) as SModel[];
   }
 
-  get data(): Model<SModel>[] {
+  get data(): SModel[] {
     return this.state;
   }
 
@@ -76,7 +76,7 @@ export class ReactiveQueryResult<SModel extends GenericModel> {
     this.liveQuery = liveQuery;
   }
 
-  _updateState(newState: Model<SModel>[]): void {
+  _updateState(newState: SModel[]): void {
     // Clear and replace array contents to maintain proxy reference
     // Wrap ids with ref() to prevent valtio from proxying RecordId objects
     const wrappedState = wrapModelIdsWithRef(newState);
@@ -96,7 +96,7 @@ export class ReactiveQueryResult<SModel extends GenericModel> {
  * Reactive query result for single record queries with live updates
  */
 export class ReactiveQueryResultOne<SModel extends GenericModel> {
-  private state: { value: Model<SModel> | null };
+  public state: { value: SModel | null };
   private liveQuery: LiveQueryList<any, SModel> | null = null;
 
   // Type brand to help with type inference
@@ -106,8 +106,8 @@ export class ReactiveQueryResultOne<SModel extends GenericModel> {
     this.state = proxy({ value: null }) as { value: Model<SModel> | null };
   }
 
-  get data(): Model<SModel> | null {
-    return this.state.value;
+  get data(): { value: Model<SModel> | null } {
+    return this.state;
   }
 
   _setLiveQuery(liveQuery: LiveQueryList<any, SModel>): void {
@@ -274,10 +274,7 @@ export class QueryBuilder<
   Schema extends GenericSchema,
   SModel extends Record<string, any>,
   TableName extends keyof Schema & string,
-  Relationships extends Record<
-    string,
-    Array<{ field: string; table: string; cardinality?: "one" | "many" }>
-  >
+  Relationships = any
 > extends BaseQueryBuilder<Schema, SModel, TableName, Relationships> {
   constructor(
     private tableQuery: TableQuery<Schema, SModel, TableName, Relationships>,
@@ -404,10 +401,7 @@ export class TableQuery<
   Schema extends GenericSchema,
   SModel extends Record<string, any>,
   TableName extends keyof Schema & string,
-  Relationships extends Record<
-    string,
-    Array<{ field: string; table: string; cardinality?: "one" | "many" }>
-  >
+  Relationships = any
 > {
   constructor(
     private db: SyncedDb<Schema, Relationships>,
@@ -695,10 +689,7 @@ export class TableQuery<
  */
 class QueryNamespaceImpl<
   Schema extends GenericSchema,
-  Relationships extends Record<
-    string,
-    Array<{ field: string; table: string; cardinality?: "one" | "many" }>
-  >
+  Relationships = any
 > {
   private tableCache = new Map<
     string,
@@ -730,10 +721,7 @@ class QueryNamespaceImpl<
 
 export class QueryNamespace<
   Schema extends GenericSchema,
-  Relationships extends Record<
-    string,
-    Array<{ field: string; table: string; cardinality?: "one" | "many" }>
-  >
+  Relationships = any
 > {
   constructor(db: SyncedDb<Schema, Relationships>) {
     const impl = new QueryNamespaceImpl(db);
@@ -755,10 +743,7 @@ export class QueryNamespace<
  */
 export type TableQueries<
   Schema extends GenericSchema,
-  Relationships extends Record<
-    string,
-    Array<{ field: string; table: string; cardinality?: "one" | "many" }>
-  >
+  Relationships = any
 > = {
   [K in keyof Schema & string]: TableQuery<
     Schema,

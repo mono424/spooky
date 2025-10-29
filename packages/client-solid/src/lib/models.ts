@@ -2,6 +2,8 @@
 export type {
   GenericModel,
   GenericSchema,
-  ModelPayload,
-  Model,
 } from "@spooky/query-builder";
+
+// Model and ModelPayload types for the client
+export type Model<T> = T;
+export type ModelPayload<T> = T;

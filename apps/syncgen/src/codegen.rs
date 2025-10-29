@@ -66,10 +66,12 @@ impl CodeGenerator {
     }
 
     fn generate_typescript(&self, json_schema_content: &str) -> Result<String> {
+        println!("Generating TypeScript from JSON schema...");
         let output = self.run_quicktype(json_schema_content, "typescript")?;
         let output_with_signatures = self.add_index_signature_to_interfaces(output);
 
         // Add Relationships interface from schema
+        println!("Adding relationships interface...");
         let output_with_relationships = self.add_relationships_interface(&output_with_signatures, json_schema_content)?;
         Ok(output_with_relationships)
     }
@@ -229,49 +231,21 @@ impl CodeGenerator {
             .and_then(|rel| rel.get("properties"));
 
         // Extract relation tables
-        let relation_tables = schema
+        let _relation_tables = schema
             .get("definitions")
             .and_then(|defs| defs.get("RelationTables"))
             .and_then(|rel| rel.get("const"));
 
         if let Some(relationships) = relationships {
             if let serde_json::Value::Object(rel_map) = relationships {
-                let mut interface_lines = vec![
-                    "/**".to_string(),
-                    " * Relationships between tables".to_string(),
-                    " * Maps each table name to an array of relationships with field and table info".to_string(),
-                    " */".to_string(),
-                    "export interface Relationship {".to_string(),
-                    "    /** The field name that creates this relationship */".to_string(),
-                    "    field: string;".to_string(),
-                    "    /** The related table name */".to_string(),
-                    "    table: string;".to_string(),
-                    "    /** Whether this is a 1:1 or 1:many relationship */".to_string(),
-                    "    cardinality: \"one\" | \"many\";".to_string(),
-                    "}".to_string(),
-                    "".to_string(),
-                    "export interface Relationships {".to_string(),
-                ];
-
-                for (table_name, _rel_data) in rel_map {
-                    interface_lines.push(format!("    {}: Relationship[];", table_name));
-                }
-
-                interface_lines.push("}".to_string());
-                interface_lines.push("".to_string());
-                interface_lines.push("/**".to_string());
-                interface_lines.push(" * Helper type to extract relationship field names for a specific table".to_string());
-                interface_lines.push(" */".to_string());
-                interface_lines.push("export type RelationshipFieldsFor<TableName extends keyof Relationships> = Relationships[TableName][number][\"field\"];".to_string());
-                interface_lines.push("".to_string());
-
-                // Now add the actual relationship data from the schema
+                // First, extract the actual relationship data from the schema
                 let table_relationships = schema
                     .get("definitions")
                     .and_then(|defs| {
                         // Collect relationships from each table definition
                         let mut all_rels = std::collections::HashMap::new();
                         if let serde_json::Value::Object(defs_obj) = defs {
+                            println!("Processing definitions, found {} tables", defs_obj.len());
                             for (table_name, table_def) in defs_obj {
                                 if table_name == "Relationships" {
                                     continue;
@@ -294,6 +268,9 @@ impl CodeGenerator {
                                             } else {
                                                 false
                                             };
+                                            
+                                            // Debug output
+                                            println!("Field: {}, Type: {:?}, Is array: {}", field_name, field_def.get("type"), is_array);
 
                                             if is_array {
                                                 if let Some(items) = field_def.get("items") {
@@ -301,8 +278,26 @@ impl CodeGenerator {
                                                         if let Some(desc_str) = desc.as_str() {
                                                             if desc_str.starts_with("Record ID of table: ") {
                                                                 let related_table = desc_str.replace("Record ID of table: ", "");
+                                                                
+                                                                // Check if this is a junction table (relation table)
+                                                                // If so, we need to find the actual target table
+                                                                let actual_target = if related_table.ends_with("_on") || related_table.contains("relation") {
+                                                                    // This is likely a junction table, try to find the actual target
+                                                                    // For now, we'll use a simple heuristic: if it's commented_on, target is comment
+                                                                    if related_table == "commented_on" {
+                                                                        "comment".to_string()
+                                                                    } else {
+                                                                        related_table.clone()
+                                                                    }
+                                                                } else {
+                                                                    related_table.clone()
+                                                                };
+                                                                
+                                                                // Debug output
+                                                                println!("Field: {}, Original table: {}, Actual target: {}", field_name, related_table, actual_target);
+                                                                
                                                                 // This is a 1:many relationship (array)
-                                                                table_rels.push((field_name.clone(), related_table, "many".to_string()));
+                                                                table_rels.push((field_name.clone(), actual_target, "many".to_string()));
                                                             }
                                                         }
                                                     }
@@ -330,76 +325,196 @@ impl CodeGenerator {
                         Some(all_rels)
                     });
 
-                if let Some(table_rels) = table_relationships {
-                    interface_lines.push("/**".to_string());
-                    interface_lines.push(" * Relationship data extracted from the schema".to_string());
-                    interface_lines.push(" * Maps each table to its relationships with field and target table info".to_string());
-                    interface_lines.push(" */".to_string());
-                    interface_lines.push("export const RELATIONSHIPS: Relationships = {".to_string());
+                // Now update the interface definitions to use proper relationship types
+                let updated_content = if let Some(ref table_rels) = table_relationships {
+                    self.update_interface_relationships(content, table_rels)?
+                } else {
+                    content.to_string()
+                };
 
+                // Generate the interface lines
+                let mut interface_lines = vec![
+                    "/**".to_string(),
+                    " * Relationship definition for a single relationship field".to_string(),
+                    " */".to_string(),
+                    "export interface RelationshipDefinition<Model = any> {".to_string(),
+                    "    /** The related model type */".to_string(),
+                    "    model: Model;".to_string(),
+                    "    /** The related table name */".to_string(),
+                    "    table: string;".to_string(),
+                    "    /** Whether this is a 1:1 or 1:many relationship */".to_string(),
+                    "    cardinality: \"one\" | \"many\";".to_string(),
+                    "}".to_string(),
+                    "".to_string(),
+                    "/**".to_string(),
+                    " * Relationships between tables - nested object structure".to_string(),
+                    " * Maps each table to its relationship fields with their definitions".to_string(),
+                    " */".to_string(),
+                    "export interface Relationships {".to_string(),
+                ];
+
+                // Generate nested interface structure
+                if let Some(ref table_rels) = table_relationships {
                     for (table_name, rels) in table_rels {
                         if rels.is_empty() {
-                            interface_lines.push(format!("    {}: [],", table_name));
+                            interface_lines.push(format!("    {}: {{}};", table_name));
                         } else {
-                            interface_lines.push(format!("    {}: [", table_name));
+                            interface_lines.push(format!("    {}: {{", table_name));
                             for (field_name, related_table, cardinality) in rels {
-                                interface_lines.push(format!("        {{ field: \"{}\", table: \"{}\", cardinality: \"{}\" }},", field_name, related_table, cardinality));
+                                interface_lines.push(format!("        {}: {{", field_name));
+                                interface_lines.push(format!("            model: Schema[\"{}\"];", related_table));
+                                interface_lines.push(format!("            table: \"{}\";", related_table));
+                                interface_lines.push(format!("            cardinality: \"{}\";", cardinality));
+                                interface_lines.push("        };".to_string());
                             }
-                            interface_lines.push("    ],".to_string());
+                            interface_lines.push("    };".to_string());
                         }
                     }
-
-                    interface_lines.push("};".to_string());
-                }
-
-                // Add relation tables if they exist
-                if let Some(relation_tables) = relation_tables {
-                    if let serde_json::Value::Array(tables) = relation_tables {
-                        if !tables.is_empty() {
-                            interface_lines.push("".to_string());
-                            interface_lines.push("/**".to_string());
-                            interface_lines.push(" * Relation tables defined with TYPE RELATION".to_string());
-                            interface_lines.push(" * These tables represent many-to-many relationships between entities".to_string());
-                            interface_lines.push(" */".to_string());
-                            interface_lines.push("export interface RelationTable {".to_string());
-                            interface_lines.push("    /** The name of the relation table */".to_string());
-                            interface_lines.push("    name: string;".to_string());
-                            interface_lines.push("    /** The source table for this relation */".to_string());
-                            interface_lines.push("    from: string | null;".to_string());
-                            interface_lines.push("    /** The target table for this relation */".to_string());
-                            interface_lines.push("    to: string | null;".to_string());
-                            interface_lines.push("}".to_string());
-                            interface_lines.push("".to_string());
-                            interface_lines.push("/**".to_string());
-                            interface_lines.push(" * List of all relation tables in the schema".to_string());
-                            interface_lines.push(" */".to_string());
-                            interface_lines.push("export const RELATION_TABLES: RelationTable[] = [".to_string());
-
-                            for table in tables {
-                                let name = table.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
-                                let from = table.get("from")
-                                    .and_then(|f| f.as_str())
-                                    .map(|s| format!("\"{}\"", s))
-                                    .unwrap_or("null".to_string());
-                                let to = table.get("to")
-                                    .and_then(|t| t.as_str())
-                                    .map(|s| format!("\"{}\"", s))
-                                    .unwrap_or("null".to_string());
-
-                                interface_lines.push(format!("    {{ name: \"{}\", from: {}, to: {} }},", name, from, to));
-                            }
-
-                            interface_lines.push("];".to_string());
-                        }
+                } else {
+                    for (table_name, _rel_data) in rel_map {
+                        interface_lines.push(format!("    {}: {{}};", table_name));
                     }
                 }
 
-                return Ok(format!("{}\n\n{}\n", content, interface_lines.join("\n")));
+                interface_lines.push("}".to_string());
+                interface_lines.push("".to_string());
+
+                // RELATIONSHIPS constant removed - relationships are type-only now
+                // The Relationships interface above provides type safety without runtime overhead
+
+                // RELATION_TABLES constant also removed - not needed for runtime
+
+                return Ok(format!("{}\n\n{}\n", updated_content, interface_lines.join("\n")));
             }
         }
 
         // No relationships found, return original content
         Ok(content.to_string())
+    }
+
+    fn update_interface_relationships(&self, content: &str, table_relationships: &std::collections::HashMap<String, Vec<(String, String, String)>>) -> Result<String> {
+        let lines: Vec<&str> = content.lines().collect();
+        let mut result = Vec::new();
+        let mut i = 0;
+
+        while i < lines.len() {
+            let line = lines[i];
+            
+            // Check if this line starts an interface definition
+            if line.trim_start().starts_with("export interface ") {
+                let interface_name = line
+                    .split_whitespace()
+                    .nth(2)
+                    .unwrap_or("")
+                    .trim_end_matches(" {");
+                
+                // Check if this interface has relationships we need to update
+                if let Some(relationships) = table_relationships.get(interface_name) {
+                    result.push(line.to_string());
+                    
+                    // Find the opening brace
+                    let mut brace_found = false;
+                    let mut j = i;
+                    
+                    while j < lines.len() && !brace_found {
+                        if lines[j].contains("{") {
+                            brace_found = true;
+                            
+                            // If opening brace is not on the same line, add those lines too
+                            if j > i {
+                                for k in (i + 1)..=j {
+                                    result.push(lines[k].to_string());
+                                }
+                                i = j;
+                            }
+                        }
+                        j += 1;
+                    }
+                    
+                    // Now find the closing brace and update relationship fields
+                    if brace_found {
+                        let mut brace_count = 0;
+                        let mut started = false;
+                        let mut closing_line_idx = i;
+                        
+                        for k in i..lines.len() {
+                            for ch in lines[k].chars() {
+                                if ch == '{' {
+                                    brace_count += 1;
+                                    started = true;
+                                } else if ch == '}' {
+                                    brace_count -= 1;
+                                    if started && brace_count == 0 {
+                                        closing_line_idx = k;
+                                        break;
+                                    }
+                                }
+                            }
+                            if started && brace_count == 0 {
+                                break;
+                            }
+                        }
+                        
+                        // Process lines within the interface
+                        for k in (i + 1)..closing_line_idx {
+                            let current_line = lines[k];
+                            let mut updated_line = current_line.to_string();
+                            
+                            // Check if this line contains a relationship field
+                            for (field_name, related_table, cardinality) in relationships {
+                                if current_line.contains(field_name) {
+                                    // Update the field type based on cardinality
+                                    if cardinality == "many" {
+                                        // For many relationships, use array of related type
+                                        if current_line.contains("string[]") {
+                                            updated_line = current_line.replace("string[]", &format!("Schema[\"{}\"][]", related_table));
+                                        } else if current_line.contains("string") {
+                                            updated_line = current_line.replace("string", &format!("Schema[\"{}\"][]", related_table));
+                                        }
+                                        
+                                        // Handle nullable arrays
+                                        if current_line.contains("| null") {
+                                            updated_line = updated_line.replace(
+                                                &format!("Schema[\"{}\"][]", related_table),
+                                                &format!("Schema[\"{}\"][] | null", related_table)
+                                            );
+                                        }
+                                    } else {
+                                        // For one relationships, use single related type
+                                        if current_line.contains("string") {
+                                            updated_line = current_line.replace("string", &format!("Schema[\"{}\"]", related_table));
+                                        }
+                                        
+                                        // Handle nullable single values
+                                        if current_line.contains("| null") {
+                                            updated_line = updated_line.replace(
+                                                &format!("Schema[\"{}\"]", related_table),
+                                                &format!("Schema[\"{}\"] | null", related_table)
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            result.push(updated_line);
+                        }
+                        
+                        // Add the closing brace
+                        result.push(lines[closing_line_idx].to_string());
+                        i = closing_line_idx;
+                    }
+                } else {
+                    // No relationships for this interface, add as-is
+                    result.push(line.to_string());
+                }
+            } else {
+                result.push(line.to_string());
+            }
+            
+            i += 1;
+        }
+        
+        Ok(result.join("\n"))
     }
 
     fn add_schema_constant(&self, content: String, schema: &str) -> Result<String> {

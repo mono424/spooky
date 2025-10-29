@@ -1,10 +1,4 @@
-import {
-  createContext,
-  useContext,
-  createSignal,
-  JSX,
-  Show,
-} from "solid-js";
+import { createContext, useContext, createSignal, JSX, Show } from "solid-js";
 import { db, dbConfig, type Schema } from "../db";
 import type { Model } from "@spooky/client-solid";
 

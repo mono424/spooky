@@ -2,7 +2,6 @@ import { RecordId } from "surrealdb";
 import type {
   GenericModel,
   GenericSchema,
-  Model,
   QueryInfo,
   QueryOptions,
   LiveQueryOptions,
@@ -84,15 +83,12 @@ function parseObjectIdsToRecordId(obj: any, tableName?: string): any {
 class QueryModifierBuilderImpl<
   TableName extends string,
   SModel extends GenericModel,
-  Relationships extends Record<
-    string,
-    Array<{ field: string; table: string; cardinality?: "one" | "many" }>
-  >
+  Relationships extends RelationshipsMetadata
 > implements QueryModifierBuilder<SModel>
 {
   private options: QueryOptions<SModel> = {};
 
-  where(conditions: Partial<Model<SModel>>): this {
+  where(conditions: Partial<SModel>): this {
     this.options.where = { ...this.options.where, ...conditions };
     return this;
   }
@@ -169,7 +165,7 @@ export class QueryBuilder<
   constructor(
     private currentTableName: TableName,
     private relationships?: RelationshipsMetadata,
-    where?: Partial<Model<SModel>>
+    where?: Partial<SModel>
   ) {
     if (where) {
       this.options.where = where;
@@ -179,7 +175,7 @@ export class QueryBuilder<
   /**
    * Add additional where conditions
    */
-  where(conditions: Partial<Model<SModel>>): this {
+  where(conditions: Partial<SModel>): this {
     this.options.where = { ...this.options.where, ...conditions };
     return this;
   }
@@ -237,19 +233,21 @@ export class QueryBuilder<
    * // Nested related queries
    * queryBuilder.related("comments", (q) => q.related("author").limit(10))
    */
-  related<RF extends RelatedField<TableName, Relationships>>(
-    relatedField: RF,
+  related<
+    RelatedField extends keyof (Relationships & { [key: string]: never })[TableName] & string
+  >(
+    relatedField: RelatedField,
     modifier?: QueryModifier<
       InferRelatedModelFromMetadata<
         Schema,
         TableName,
-        RF & string,
+        RelatedField,
         Relationships
       >
     >
   ): QueryBuilder<
     Schema,
-    WithRelated<Schema, SModel, TableName, RF & string, Relationships>,
+    WithRelated<Schema, SModel, TableName, RelatedField, Relationships>,
     TableName,
     Relationships
   > {
@@ -264,11 +262,11 @@ export class QueryBuilder<
 
     if (!exists) {
       this.options.related.push({
-        relatedTable: relatedField,
-        alias: relatedField,
+        relatedTable: relatedField as string,
+        alias: relatedField as string | undefined,
         modifier,
       });
-      this.relatedFields.push(relatedField);
+      this.relatedFields.push(relatedField as string);
     }
     return this as any;
   }
@@ -392,11 +390,10 @@ function generateSubquery(
   // Try to find the relationship in metadata
   let baseQuery = "";
   if (relationships && relationships[currentTable]) {
-    const relationship = relationships[currentTable].find(
-      (rel: any) => rel.field === relatedAlias
-    );
+    const relationship = relationships[currentTable][relatedAlias];
     if (relationship) {
-      const { table: relatedTable, cardinality } = relationship;
+      const relatedTable = relationship.table;
+      const cardinality = relationship.cardinality;
 
       if (cardinality === "many") {
         // For one-to-many relationships
@@ -467,9 +464,7 @@ function generateSubquery(
   // Check if this is a one-to-one relationship that needs [0] unwrapping
   let needsUnwrap = false;
   if (relationships && relationships[currentTable]) {
-    const relationship = relationships[currentTable].find(
-      (rel: any) => rel.field === relatedAlias
-    );
+    const relationship = relationships[currentTable][relatedAlias];
     if (relationship && relationship.cardinality === "one") {
       needsUnwrap = true;
     }
@@ -492,14 +487,8 @@ function getRelatedTableName(
   relationships?: RelationshipsMetadata
 ): string {
   if (relationships && relationships[currentTable]) {
-    const relationship = relationships[currentTable].find(
-      (rel: any) => rel.field === relatedAlias
-    );
+    const relationship = relationships[currentTable][relatedAlias];
     if (relationship) {
-      // Handle junction tables
-      if (relationship.table === "commented_on") {
-        return "comment";
-      }
       return relationship.table;
     }
   }
@@ -624,7 +613,7 @@ export function createQueryBuilder<
 >(
   tableName: TableName,
   relationships?: RelationshipsMetadata,
-  where?: Partial<Model<SModel>>
+  where?: Partial<SModel>
 ): QueryBuilder<Schema, SModel, TableName, Relationships> {
   return new QueryBuilder<Schema, SModel, TableName, Relationships>(
     tableName,

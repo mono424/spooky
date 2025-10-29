@@ -1,17 +1,12 @@
-import { Doc, RecordId } from "surrealdb";
-
 // Model types
 export type GenericModel = Record<string, any>;
 export type GenericSchema = Record<string, GenericModel>;
-// ModelPayload keeps the types from the schema (string IDs)
-export type ModelPayload<T> = T;
-export type Model<T> = ModelPayload<T>;
 
+/**
+ * Helper to constrain related field names based on relationships metadata
+ */
 export type RelatedField<T extends string, R> = GetRelationshipFields<T, R> &
   string;
-
-// Internal type used for database operations (with RecordId)
-export type InternalModel<T> = Omit<T, "id"> & { id: RecordId };
 
 // Query interfaces
 export interface QueryInfo {
@@ -30,7 +25,7 @@ export interface RelatedQuery {
 
 export interface QueryOptions<SModel extends GenericModel> {
   select?: ((keyof SModel & string) | "*")[];
-  where?: Partial<Model<SModel>>;
+  where?: Partial<SModel>;
   limit?: number;
   offset?: number;
   orderBy?: Partial<Record<keyof SModel, "asc" | "desc">>;
@@ -48,7 +43,7 @@ export type QueryModifier<SModel extends GenericModel> = (
 
 // Simplified query builder interface for modifying subqueries
 export interface QueryModifierBuilder<SModel extends GenericModel> {
-  where(conditions: Partial<Model<SModel>>): this;
+  where(conditions: Partial<SModel>): this;
   select(...fields: ((keyof SModel & string) | "*")[]): this;
   limit(count: number): this;
   offset(count: number): this;
@@ -71,80 +66,41 @@ export type RelationshipFields<SModel extends GenericModel> = {
     | "updated_at"
     | "deleted_at"
     ? never
-    : SModel[K] extends
-        | string
-        | string[]
-        | (string[] | null)
-        | (string | null)
-        | undefined
+    : SModel[K] extends string | string[] | null | undefined
     ? K
     : never;
 }[keyof SModel];
 
 /**
- * Check if a field is a 1:many relationship (array type)
- */
-export type IsArrayRelation<
-  SModel extends GenericModel,
-  Field extends keyof SModel
-> = SModel[Field] extends
-  | string[]
-  | (string[] | null)
-  | (string[] | null | undefined)
-  ? true
-  : false;
-
-/**
  * Helper type to infer the related model type from a field name using Relationships metadata
- * Falls back to pluralization heuristic if metadata not available
+ * Simplified to directly access the nested structure
  */
 export type InferRelatedModelFromMetadata<
   Schema extends GenericSchema,
   TableName extends string,
   FieldName extends string,
   Relationships
-> = Relationships extends Record<
-  string,
-  Array<{ field: string; table: string }>
->
+> = Relationships extends Record<string, Record<string, RelationshipDefinition>>
   ? TableName extends keyof Relationships
-    ? Extract<Relationships[TableName][number], { field: FieldName }> extends {
-        table: infer RelatedTable;
-      }
-      ? RelatedTable extends keyof Schema
-        ? // Handle junction tables - map them to the actual related table
-          RelatedTable extends "commented_on"
-          ? Schema["comment"]
-          : Schema[RelatedTable]
-        : any
+    ? FieldName extends keyof Relationships[TableName]
+      ? Relationships[TableName][FieldName]["model"]
       : any
     : any
-  : // Fallback to pluralization if no metadata
-  FieldName extends `${infer Singular}s`
-  ? Singular extends keyof Schema
-    ? Schema[Singular]
-    : any
-  : FieldName extends keyof Schema
-  ? Schema[FieldName]
   : any;
 
 /**
  * Get cardinality for a relationship field from metadata
+ * Simplified to directly access the nested structure
  */
 export type GetCardinality<
   TableName extends string,
   FieldName extends string,
   Relationships
-> = Relationships extends Record<
-  string,
-  Array<{ field: string; cardinality?: string }>
->
+> = Relationships extends Record<string, Record<string, RelationshipDefinition>>
   ? TableName extends keyof Relationships
-    ? Extract<Relationships[TableName][number], { field: FieldName }> extends {
-        cardinality: infer C;
-      }
-      ? C
-      : "many" // Default to many if not specified
+    ? FieldName extends keyof Relationships[TableName]
+      ? Relationships[TableName][FieldName]["cardinality"]
+      : "many"
     : "many"
   : "many";
 
@@ -159,45 +115,62 @@ export type WithRelated<
   FieldName extends string,
   Relationships
 > = FieldName extends keyof SModel
-  ? GetCardinality<TableName, FieldName, Relationships> extends "one"
-    ? Omit<SModel, FieldName> & {
-        [K in FieldName]: InferRelatedModelFromMetadata<
-          Schema,
-          TableName,
-          K,
-          Relationships
-        > | null;
-      }
-    : Omit<SModel, FieldName> & {
-        [K in FieldName]:
-          | InferRelatedModelFromMetadata<Schema, TableName, K, Relationships>[]
-          | null;
-      }
+  ? Omit<SModel, FieldName> & {
+      [K in FieldName]: GetCardinality<
+        TableName,
+        FieldName,
+        Relationships
+      > extends "one"
+        ? InferRelatedModelFromMetadata<
+            Schema,
+            TableName,
+            K,
+            Relationships
+          > | null
+        :
+            | InferRelatedModelFromMetadata<
+                Schema,
+                TableName,
+                K,
+                Relationships
+              >[]
+            | null;
+    }
   : SModel;
 
 /**
  * Type to extract relationship fields from Relationships metadata
- * Only returns actual relationship fields, not all string fields
+ * Now simplified to just get the keys of the nested object
  */
 export type GetRelationshipFields<
   TableName extends string,
   Relationships
-> = Relationships extends Record<string, Array<{ field: string }>>
+> = Relationships extends Record<string, Record<string, any>>
   ? TableName extends keyof Relationships
-    ? Relationships[TableName][number]["field"]
+    ? keyof Relationships[TableName] & string
     : never
   : never;
 
 /**
- * Relationship metadata structure
+ * Relationship metadata structure - now a nested object for better type safety
+ * Example:
+ * {
+ *   thread: {
+ *     author: { model: Schema["user"], table: "user", cardinality: "one" },
+ *     comments: { model: Schema["comment"], table: "comment", cardinality: "many" }
+ *   }
+ * }
  */
-export interface Relationship {
-  /** The field name that creates this relationship */
-  field: string;
+export interface RelationshipDefinition<Model = any> {
+  /** The related model type */
+  model: Model;
   /** The related table name */
   table: string;
   /** Whether this is a 1:1 or 1:many relationship */
-  cardinality?: "one" | "many";
+  cardinality: "one" | "many";
 }
 
-export type RelationshipsMetadata = Record<string, Relationship[]>;
+export type RelationshipsMetadata = Record<
+  string,
+  Record<string, RelationshipDefinition>
+>;

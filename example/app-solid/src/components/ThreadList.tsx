@@ -1,23 +1,17 @@
-import { createEffect, For, onMount, createSignal } from "solid-js";
+import { For } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { db } from "../db";
-import type { Thread } from "../schema.gen";
-import {
-  ReactiveQueryResult,
-  type Model,
-  useQuery,
-} from "@spooky/client-solid";
+import { useQuery } from "@spooky/client-solid";
 
 export function ThreadList() {
   const navigate = useNavigate();
 
-  const threadsQuery: ReactiveQueryResult<Model<Thread>> = db.query.thread
+  const threadsQuery = db.query.thread
     .find({})
     .orderBy("created_at", "desc")
     .query();
 
-  const [threads, setThreads] = createSignal<Model<Thread>[]>([]);
-  useQuery(threadsQuery, setThreads);
+  const threads = useQuery(threadsQuery);
 
   const handleThreadClick = (threadId: string) => {
     navigate(`/thread/${threadId}`);

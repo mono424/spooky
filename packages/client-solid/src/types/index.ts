@@ -26,8 +26,8 @@ export interface SyncedDbConfig<Schema extends GenericSchema> {
   namespace?: string;
   /** Database name */
   database?: string;
-  /** Relationships metadata for automatic RecordId conversion */
-  relationships?: Record<string, Array<{ field: string; table: string; cardinality?: "one" | "many" }>>;
+  /** Relationships metadata for automatic RecordId conversion (optional, type-only) */
+  relationships?: Record<string, Record<string, { model: any; table: string; cardinality: "one" | "many" }>>;
 }
 
 export interface LocalDbConfig {

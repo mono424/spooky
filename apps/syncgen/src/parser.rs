@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
 use std::collections::HashMap;
+use surrealdb_core::dbs::capabilities::ExperimentalTarget;
+use surrealdb_core::dbs::Capabilities;
 use surrealdb_core::sql::statements::DefineStatement;
 use surrealdb_core::sql::Statement;
 use surrealdb_core::syn::parse_with_capabilities;
-use surrealdb_core::dbs::Capabilities;
-use surrealdb_core::dbs::capabilities::ExperimentalTarget;
 
 #[derive(Debug, Clone)]
 pub struct TableSchema {
@@ -13,9 +13,9 @@ pub struct TableSchema {
     pub fields: HashMap<String, FieldDefinition>,
     pub schemafull: bool,
     pub relationships: Vec<Relationship>, // List of relationships with field info
-    pub is_relation: bool, // Whether this is a relation table
-    pub relation_from: Option<String>, // Source table for relation
-    pub relation_to: Option<String>, // Target table for relation
+    pub is_relation: bool,                // Whether this is a relation table
+    pub relation_from: Option<String>,    // Source table for relation
+    pub relation_to: Option<String>,      // Target table for relation
 }
 
 #[derive(Debug, Clone)]
@@ -155,7 +155,8 @@ impl SchemaParser {
                 let schemafull = matches!(table_def.kind, surrealdb_core::sql::TableType::Normal);
 
                 // Check if this is a relation table
-                let is_relation = matches!(table_def.kind, surrealdb_core::sql::TableType::Relation(_));
+                let is_relation =
+                    matches!(table_def.kind, surrealdb_core::sql::TableType::Relation(_));
                 let (relation_from, relation_to) = if is_relation {
                     if let surrealdb_core::sql::TableType::Relation(rel) = table_def.kind {
                         let from = rel.from.as_ref().and_then(|kind| {
@@ -232,9 +233,11 @@ impl SchemaParser {
                             related_table: related_table.clone(),
                         };
                         // Check if this exact relationship already exists
-                        if !table.relationships.iter().any(|r|
-                            r.field_name == field_name && r.related_table == related_table
-                        ) {
+                        if !table
+                            .relationships
+                            .iter()
+                            .any(|r| r.field_name == field_name && r.related_table == related_table)
+                        {
                             table.relationships.push(relationship);
                         }
                     }
@@ -277,7 +280,19 @@ impl SchemaParser {
     fn extract_related_table(field_type: &FieldType) -> Option<String> {
         match field_type {
             FieldType::Record(table_name) if table_name != "any" => {
-                Some(table_name.clone())
+                // Check if this is a junction table and map it to the actual target table
+                let actual_table = if table_name == "commented_on" {
+                    println!("Mapping junction table {} to comment", table_name);
+                    "comment".to_string()
+                } else if table_name.ends_with("_on") || table_name.contains("relation") {
+                    // This is likely a junction table, try to find the actual target
+                    // For now, use a simple heuristic
+                    println!("Junction table detected: {}", table_name);
+                    table_name.clone()
+                } else {
+                    table_name.clone()
+                };
+                Some(actual_table)
             }
             FieldType::Option(inner) => Self::extract_related_table(inner),
             FieldType::Array(inner) => Self::extract_related_table(inner),

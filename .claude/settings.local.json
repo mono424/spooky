@@ -19,7 +19,8 @@
       "Bash(docker-compose up:*)",
       "Bash(./apps/syncgen/target/release/syncgen:*)",
       "Read(//tmp/**)",
-      "Bash(target/release/syncgen:*)"
+      "Bash(target/release/syncgen:*)",
+      "Bash(apps/syncgen/target/release/syncgen -i example/schema/schema.surql -o example/app-solid/src/schema.gen.ts)"
     ],
     "deny": [],
     "ask": []

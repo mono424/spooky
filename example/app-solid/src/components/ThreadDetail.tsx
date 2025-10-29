@@ -1,17 +1,32 @@
-import {
-  createResource,
-  createSignal,
-  createEffect,
-  For,
-  Show,
-  onCleanup,
-  onMount,
-} from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 import { useNavigate, useParams } from "@solidjs/router";
 import { db } from "../db";
 import { CommentForm } from "./CommentForm";
-import { useQuery, InferQueryModel } from "@spooky/client-solid";
+import { useQuery } from "@spooky/client-solid";
 import { useAuth } from "../lib/auth";
+
+const createQuery = ({
+  threadId,
+  commentFilter,
+  userId,
+}: {
+  threadId: string;
+  commentFilter: "all" | "mine";
+  userId: string;
+}) => {
+  return db.query.thread
+    .find({
+      id: threadId,
+    })
+    .related("author")
+    .related("comments", (q) => {
+      if (commentFilter === "mine" && userId) {
+        return q.where({ author: userId });
+      }
+      return q;
+    })
+    .one();
+};
 
 export function ThreadDetail() {
   const auth = useAuth();
@@ -19,37 +34,14 @@ export function ThreadDetail() {
   const navigate = useNavigate();
   const [commentFilter, setCommentFilter] = createSignal<"all" | "mine">("all");
 
-  // Create a reactive query that rebuilds when commentFilter changes
-  const threadQuery = () => {
-    const query = db.query.thread
-      .find({
-        id: params.id,
-      })
-      .related("author")
-      .related("comments", (q) => {
-        // q = q.related("author");
-        if (commentFilter() === "mine" && auth.user()?.id) {
-          return q.where({ author: auth.user()!.id });
-        }
-        return q;
-      })
-      .one();
-
-    return query;
-  };
-
-  const [thread, setThread] = createSignal<any>(null);
-
-  // useQuery will automatically handle cleanup and re-execution when threadQuery changes
-  useQuery(threadQuery, setThread);
-
-  createEffect(() => {
-    const t = thread();
-    console.log("thread", t);
-    console.log("thread.comments", t?.comments);
-    console.log("thread.comments length", t?.comments?.length);
-    console.log("commentFilter", commentFilter());
-  });
+  // Create query as an accessor function that re-runs when dependencies change
+  const thread = useQuery(() =>
+    createQuery({
+      threadId: params.id,
+      commentFilter: commentFilter(),
+      userId: auth.user()?.id ?? "",
+    })
+  );
 
   const handleBack = () => {
     navigate("/");
