@@ -1,6 +1,14 @@
 import { SyncedDb, type SyncedDbConfig } from "@spooky/client-solid";
-import { type Schema, SURQL_SCHEMA, type Relationships } from "./schema.gen";
+import {
+  type Schema,
+  SURQL_SCHEMA,
+  type Relationships,
+  SCHEMA_METADATA,
+  type SchemaMetadata,
+  type SchemaRelationships,
+} from "./schema.gen";
 export type { Schema };
+export { SCHEMA_METADATA, type SchemaMetadata, type SchemaRelationships };
 
 // Database configuration
 export const dbConfig: SyncedDbConfig<Schema> = {

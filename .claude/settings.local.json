@@ -20,7 +20,8 @@
       "Bash(./apps/syncgen/target/release/syncgen:*)",
       "Read(//tmp/**)",
       "Bash(target/release/syncgen:*)",
-      "Bash(apps/syncgen/target/release/syncgen -i example/schema/schema.surql -o example/app-solid/src/schema.gen.ts)"
+      "Bash(apps/syncgen/target/release/syncgen -i example/schema/schema.surql -o example/app-solid/src/schema.gen.ts)",
+      "Bash(1)"
     ],
     "deny": [],
     "ask": []

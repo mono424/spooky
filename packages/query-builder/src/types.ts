@@ -1,4 +1,14 @@
-// Model types
+// Import new schema types
+export type {
+  ValueType,
+  ColumnSchema,
+  TableSchemaMetadata,
+  Cardinality,
+  RelationshipMetadata,
+  SchemaMetadataStructure,
+} from "./table-schema";
+
+// Model types (backward compatibility)
 export type GenericModel = Record<string, any>;
 export type GenericSchema = Record<string, GenericModel>;
 
@@ -21,55 +31,57 @@ export interface RelatedQuery {
   alias?: string;
   /** Optional query modifier for the subquery */
   modifier?: QueryModifier<any>;
+  /** The cardinality of the relationship */
+  cardinality: "one" | "many";
 }
 
-export interface QueryOptions<SModel extends GenericModel> {
-  select?: ((keyof SModel & string) | "*")[];
-  where?: Partial<SModel>;
+export interface QueryOptions<TModel extends GenericModel> {
+  select?: ((keyof TModel & string) | "*")[];
+  where?: Partial<TModel>;
   limit?: number;
   offset?: number;
-  orderBy?: Partial<Record<keyof SModel, "asc" | "desc">>;
+  orderBy?: Partial<Record<keyof TModel, "asc" | "desc">>;
   /** Related tables to include via subqueries */
   related?: RelatedQuery[];
 }
 
-export interface LiveQueryOptions<SModel extends GenericModel>
-  extends Omit<QueryOptions<SModel>, "orderBy"> {}
+export interface LiveQueryOptions<TModel extends GenericModel>
+  extends Omit<QueryOptions<TModel>, "orderBy"> {}
 
 // Query modifier type for related queries
-export type QueryModifier<SModel extends GenericModel> = (
-  builder: QueryModifierBuilder<SModel>
-) => QueryModifierBuilder<SModel>;
+export type QueryModifier<TModel extends GenericModel> = (
+  builder: QueryModifierBuilder<TModel>
+) => QueryModifierBuilder<TModel>;
 
 // Simplified query builder interface for modifying subqueries
-export interface QueryModifierBuilder<SModel extends GenericModel> {
-  where(conditions: Partial<SModel>): this;
-  select(...fields: ((keyof SModel & string) | "*")[]): this;
+export interface QueryModifierBuilder<TModel extends GenericModel> {
+  where(conditions: Partial<TModel>): this;
+  select(...fields: ((keyof TModel & string) | "*")[]): this;
   limit(count: number): this;
   offset(count: number): this;
-  orderBy(field: keyof SModel & string, direction?: "asc" | "desc"): this;
+  orderBy(field: keyof TModel & string, direction?: "asc" | "desc"): this;
   related<Field extends string>(
     relatedField: Field,
     modifier?: QueryModifier<any>
   ): this;
-  _getOptions(): QueryOptions<SModel>;
+  _getOptions(): QueryOptions<TModel>;
 }
 
 /**
  * Extract fields from a model that are relationship fields (string or string[])
  * Excludes common non-relationship fields like id, created_at, updated_at, etc.
  */
-export type RelationshipFields<SModel extends GenericModel> = {
-  [K in keyof SModel]: K extends
+export type RelationshipFields<TModel extends GenericModel> = {
+  [K in keyof TModel]: K extends
     | "id"
     | "created_at"
     | "updated_at"
     | "deleted_at"
     ? never
-    : SModel[K] extends string | string[] | null | undefined
+    : TModel[K] extends string | string[] | null | undefined
     ? K
     : never;
-}[keyof SModel];
+}[keyof TModel];
 
 /**
  * Helper type to infer the related model type from a field name using Relationships metadata
@@ -110,12 +122,12 @@ export type GetCardinality<
  */
 export type WithRelated<
   Schema extends GenericSchema,
-  SModel extends Record<string, any>,
+  TModel extends Record<string, any>,
   TableName extends string,
   FieldName extends string,
   Relationships
-> = FieldName extends keyof SModel
-  ? Omit<SModel, FieldName> & {
+> = FieldName extends keyof TModel
+  ? Omit<TModel, FieldName> & {
       [K in FieldName]: GetCardinality<
         TableName,
         FieldName,
@@ -136,7 +148,7 @@ export type WithRelated<
               >[]
             | null;
     }
-  : SModel;
+  : TModel;
 
 /**
  * Type to extract relationship fields from Relationships metadata

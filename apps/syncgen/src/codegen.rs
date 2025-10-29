@@ -73,7 +73,11 @@ impl CodeGenerator {
         // Add Relationships interface from schema
         println!("Adding relationships interface...");
         let output_with_relationships = self.add_relationships_interface(&output_with_signatures, json_schema_content)?;
-        Ok(output_with_relationships)
+
+        // Add SCHEMA_METADATA
+        println!("Adding schema metadata...");
+        let output_with_metadata = self.add_schema_metadata(&output_with_relationships, json_schema_content)?;
+        Ok(output_with_metadata)
     }
 
     fn generate_dart(&self, json_schema_content: &str) -> Result<String> {
@@ -218,6 +222,196 @@ impl CodeGenerator {
         }
 
         result.join("\n")
+    }
+
+    fn add_schema_metadata(&self, content: &str, json_schema_content: &str) -> Result<String> {
+        // Parse JSON schema to extract schema information
+        let schema: serde_json::Value = serde_json::from_str(json_schema_content)
+            .context("Failed to parse JSON schema")?;
+
+        // Build tables array
+        let mut tables_lines = vec![
+            "export const schema = {".to_string(),
+            "  tables: [".to_string(),
+        ];
+
+        if let Some(definitions) = schema.get("definitions") {
+            if let serde_json::Value::Object(defs_obj) = definitions {
+                // Process each table (skip Relationships and RelationTables)
+                for (table_name, table_def) in defs_obj {
+                    if table_name == "Relationships" || table_name == "RelationTables" {
+                        continue;
+                    }
+
+                    tables_lines.push("    {".to_string());
+                    tables_lines.push(format!("      name: '{}' as const,", table_name));
+                    tables_lines.push("      columns: {".to_string());
+
+                    // Extract columns from properties
+                    if let Some(props) = table_def.get("properties") {
+                        if let serde_json::Value::Object(props_obj) = props {
+                            for (col_name, col_def) in props_obj {
+                                let col_type = self.map_json_schema_type_to_value_type(col_def);
+                                let is_optional = self.is_field_optional(table_def, col_name);
+
+                                tables_lines.push(format!(
+                                    "        {}: {{ type: '{}' as const, optional: {} }},",
+                                    col_name, col_type, is_optional
+                                ));
+                            }
+                        }
+                    }
+
+                    tables_lines.push("      },".to_string());
+                    tables_lines.push("      primaryKey: ['id'] as const".to_string());
+                    tables_lines.push("    },".to_string());
+                }
+            }
+        }
+
+        tables_lines.push("  ],".to_string());
+
+        // Build relationships array
+        tables_lines.push("  relationships: [".to_string());
+
+        // Extract relationship data using the existing logic
+        let table_relationships = self.extract_table_relationships(&schema)?;
+
+        for (table_name, rels) in &table_relationships {
+            for (field_name, related_table, cardinality) in rels {
+                tables_lines.push("    {".to_string());
+                tables_lines.push(format!("      from: '{}' as const,", table_name));
+                tables_lines.push(format!("      field: '{}' as const,", field_name));
+                tables_lines.push(format!("      to: '{}' as const,", related_table));
+                tables_lines.push(format!("      cardinality: '{}' as const", cardinality));
+                tables_lines.push("    },".to_string());
+            }
+        }
+
+        tables_lines.push("  ]".to_string());
+        tables_lines.push("} as const;".to_string());
+        tables_lines.push("".to_string());
+
+        // Add derived type
+        tables_lines.push("export type Schema = typeof schema;".to_string());
+        tables_lines.push("".to_string());
+
+        Ok(format!("{}\n\n{}", content, tables_lines.join("\n")))
+    }
+
+    fn map_json_schema_type_to_value_type(&self, field_def: &serde_json::Value) -> &str {
+        if let Some(field_type) = field_def.get("type") {
+            match field_type {
+                serde_json::Value::String(type_str) => match type_str.as_str() {
+                    "string" => "string",
+                    "number" | "integer" => "number",
+                    "boolean" => "boolean",
+                    _ => "string",
+                },
+                serde_json::Value::Array(types) => {
+                    // Handle union types like ["string", "null"]
+                    for t in types {
+                        if let serde_json::Value::String(type_str) = t {
+                            if type_str != "null" {
+                                return match type_str.as_str() {
+                                    "string" => "string",
+                                    "number" | "integer" => "number",
+                                    "boolean" => "boolean",
+                                    _ => "string",
+                                };
+                            }
+                        }
+                    }
+                    "string"
+                }
+                _ => "string",
+            }
+        } else {
+            "string"
+        }
+    }
+
+    fn is_field_optional(&self, table_def: &serde_json::Value, field_name: &str) -> bool {
+        // Check if field is in required array
+        if let Some(required) = table_def.get("required") {
+            if let serde_json::Value::Array(req_array) = required {
+                return !req_array.iter().any(|v| {
+                    if let serde_json::Value::String(s) = v {
+                        s == field_name
+                    } else {
+                        false
+                    }
+                });
+            }
+        }
+        true // If no required array, assume optional
+    }
+
+    fn extract_table_relationships(&self, schema: &serde_json::Value) -> Result<std::collections::HashMap<String, Vec<(String, String, String)>>> {
+        let mut table_relationships = std::collections::HashMap::new();
+
+        if let Some(defs) = schema.get("definitions") {
+            if let serde_json::Value::Object(defs_obj) = defs {
+                for (table_name, table_def) in defs_obj {
+                    if table_name == "Relationships" || table_name == "RelationTables" {
+                        continue;
+                    }
+
+                    if let Some(props) = table_def.get("properties") {
+                        if let serde_json::Value::Object(props_obj) = props {
+                            let mut table_rels = Vec::new();
+
+                            for (field_name, field_def) in props_obj {
+                                let is_array = if let Some(array_type) = field_def.get("type") {
+                                    if array_type == "array" {
+                                        true
+                                    } else if let serde_json::Value::Array(types) = array_type {
+                                        types.iter().any(|t| t == "array")
+                                    } else {
+                                        false
+                                    }
+                                } else {
+                                    false
+                                };
+
+                                if is_array {
+                                    if let Some(items) = field_def.get("items") {
+                                        if let Some(desc) = items.get("description") {
+                                            if let Some(desc_str) = desc.as_str() {
+                                                if desc_str.starts_with("Record ID of table: ") {
+                                                    let related_table = desc_str.replace("Record ID of table: ", "");
+                                                    let actual_target = if related_table == "commented_on" {
+                                                        "comment".to_string()
+                                                    } else {
+                                                        related_table.clone()
+                                                    };
+                                                    table_rels.push((field_name.clone(), actual_target, "many".to_string()));
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    if let Some(desc) = field_def.get("description") {
+                                        if let Some(desc_str) = desc.as_str() {
+                                            if desc_str.starts_with("Record ID of table: ") {
+                                                let related_table = desc_str.replace("Record ID of table: ", "");
+                                                table_rels.push((field_name.clone(), related_table, "one".to_string()));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if !table_rels.is_empty() {
+                                table_relationships.insert(table_name.clone(), table_rels);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(table_relationships)
     }
 
     fn add_relationships_interface(&self, content: &str, json_schema_content: &str) -> Result<String> {

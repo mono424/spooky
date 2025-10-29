@@ -1,97 +1,86 @@
 import { describe, it, expect, expectTypeOf } from "vitest";
 import { QueryBuilder, buildQueryFromOptions } from "./query-builder";
 import { RecordId } from "surrealdb";
-import type { GenericSchema, RelationshipsMetadata } from "./types";
+import type { TableNames, TableModel, GetTable } from "./table-schema";
 
-// Test schema - fields store IDs as strings, relationships hydrate to full objects
-interface TestSchema extends GenericSchema {
-  user: { id: string; username: string; email: string; created_at: number };
-  thread: {
-    id: string;
-    title: string;
-    content: string;
-    author: string; // RecordId stored as string
-    comments: string[] | null; // Array of RecordIds
-    created_at: number;
-  };
-  comment: {
-    id: string;
-    content: string;
-    author: string; // RecordId stored as string
-    thread: string; // RecordId stored as string
-    created_at: number;
-  };
-}
-
-interface TestRelationships extends RelationshipsMetadata {
-  thread: {
-    author: {
-      model: TestSchema["user"];
-      table: "user";
-      cardinality: "one";
-    };
-    comments: {
-      model: TestSchema["comment"];
-      table: "comment";
-      cardinality: "many";
-    };
-  };
-  comment: {
-    author: {
-      model: TestSchema["user"];
-      table: "user";
-      cardinality: "one";
-    };
-    thread: {
-      model: TestSchema["thread"];
-      table: "thread";
-      cardinality: "one";
-    };
-  };
-}
-
-const testRelationships: TestRelationships = {
-  thread: {
-    author: {
-      model: {} as TestSchema["user"],
-      table: "user",
-      cardinality: "one",
+// Schema for testing the new array-based API
+const testSchema = {
+  tables: [
+    {
+      name: "user" as const,
+      columns: {
+        id: { type: "string" as const, optional: false },
+        username: { type: "string" as const, optional: false },
+        email: { type: "string" as const, optional: false },
+        created_at: { type: "number" as const, optional: false },
+      },
+      primaryKey: ["id"] as const,
     },
-    comments: {
-      model: {} as TestSchema["comment"],
-      table: "comment",
-      cardinality: "many",
+    {
+      name: "thread" as const,
+      columns: {
+        id: { type: "string" as const, optional: false },
+        title: { type: "string" as const, optional: false },
+        content: { type: "string" as const, optional: false },
+        author: { type: "string" as const, optional: false },
+        comments: { type: "string" as const, optional: true },
+        created_at: { type: "number" as const, optional: false },
+      },
+      primaryKey: ["id"] as const,
     },
-  },
-  comment: {
-    author: {
-      model: {} as TestSchema["user"],
-      table: "user",
-      cardinality: "one",
+    {
+      name: "comment" as const,
+      columns: {
+        id: { type: "string" as const, optional: false },
+        content: { type: "string" as const, optional: false },
+        author: { type: "string" as const, optional: false },
+        thread: { type: "string" as const, optional: false },
+        created_at: { type: "number" as const, optional: false },
+      },
+      primaryKey: ["id"] as const,
     },
-    thread: {
-      model: {} as TestSchema["thread"],
-      table: "thread",
-      cardinality: "one",
+  ],
+  relationships: [
+    {
+      from: "thread" as const,
+      field: "author" as const,
+      to: "user" as const,
+      cardinality: "one" as const,
     },
-  },
-};
+    {
+      from: "thread" as const,
+      field: "comments" as const,
+      to: "comment" as const,
+      cardinality: "many" as const,
+    },
+    {
+      from: "comment" as const,
+      field: "author" as const,
+      to: "user" as const,
+      cardinality: "one" as const,
+    },
+    {
+      from: "comment" as const,
+      field: "thread" as const,
+      to: "thread" as const,
+      cardinality: "one" as const,
+    },
+  ],
+} as const;
 
 describe("QueryBuilder", () => {
   it("should build basic SELECT query", () => {
-    const builder = new QueryBuilder<TestSchema, TestSchema["user"], "user">(
-      "user"
-    );
+    const builder = new QueryBuilder(testSchema, "user");
+
     const result = builder.buildQuery();
 
     expect(result.query).toBe("SELECT * FROM user;");
-    expect(result.vars).toEqual({});
+    expect(result.vars).toBeUndefined();
   });
 
   it("should build query with where conditions", () => {
-    const builder = new QueryBuilder<TestSchema, TestSchema["user"], "user">(
-      "user"
-    );
+    const builder = new QueryBuilder(testSchema, "user");
+
     builder.where({ username: "john", email: "john@example.com" });
     const result = builder.buildQuery();
 
@@ -105,9 +94,7 @@ describe("QueryBuilder", () => {
   });
 
   it("should build query with select fields", () => {
-    const builder = new QueryBuilder<TestSchema, TestSchema["user"], "user">(
-      "user"
-    );
+    const builder = new QueryBuilder(testSchema, "user");
     builder.select("username", "email");
     const result = builder.buildQuery();
 
@@ -115,9 +102,7 @@ describe("QueryBuilder", () => {
   });
 
   it("should throw error when calling select twice", () => {
-    const builder = new QueryBuilder<TestSchema, TestSchema["user"], "user">(
-      "user"
-    );
+    const builder = new QueryBuilder(testSchema, "user");
     builder.select("username");
     expect(() => builder.select("email")).toThrow(
       "Select can only be called once per query"
@@ -125,9 +110,7 @@ describe("QueryBuilder", () => {
   });
 
   it("should build query with ordering, limit, and offset", () => {
-    const builder = new QueryBuilder<TestSchema, TestSchema["user"], "user">(
-      "user"
-    );
+    const builder = new QueryBuilder(testSchema, "user");
     builder.orderBy("created_at", "desc").limit(10).offset(5);
     const result = builder.buildQuery();
 
@@ -137,9 +120,7 @@ describe("QueryBuilder", () => {
   });
 
   it("should support method chaining", () => {
-    const builder = new QueryBuilder<TestSchema, TestSchema["user"], "user">(
-      "user"
-    );
+    const builder = new QueryBuilder(testSchema, "user");
     const result = builder
       .where({ username: "john" })
       .select("username", "email")
@@ -154,9 +135,7 @@ describe("QueryBuilder", () => {
   });
 
   it("should build LIVE SELECT query (ignores ORDER BY, LIMIT, START)", () => {
-    const builder = new QueryBuilder<TestSchema, TestSchema["user"], "user">(
-      "user"
-    );
+    const builder = new QueryBuilder(testSchema, "user");
     builder
       .where({ username: "john" })
       .orderBy("created_at", "desc")
@@ -171,13 +150,10 @@ describe("QueryBuilder", () => {
 });
 
 describe("Relationship Queries", () => {
+  // Using testSchema from top-level scope
+
   it("should build query with one-to-one relationship", () => {
-    const builder = new QueryBuilder<
-      TestSchema,
-      TestSchema["thread"],
-      "thread",
-      typeof testRelationships
-    >("thread", testRelationships);
+    const builder = new QueryBuilder(testSchema, "thread");
     builder.related("author");
     const result = builder.buildQuery();
 
@@ -187,12 +163,7 @@ describe("Relationship Queries", () => {
   });
 
   it("should build query with one-to-many relationship", () => {
-    const builder = new QueryBuilder<
-      TestSchema,
-      TestSchema["thread"],
-      "thread",
-      typeof testRelationships
-    >("thread", testRelationships);
+    const builder = new QueryBuilder(testSchema, "thread");
     builder.related("comments");
     const result = builder.buildQuery();
 
@@ -202,12 +173,7 @@ describe("Relationship Queries", () => {
   });
 
   it("should build query with relationship modifiers", () => {
-    const builder = new QueryBuilder<
-      TestSchema,
-      TestSchema["thread"],
-      "thread",
-      typeof testRelationships
-    >("thread", testRelationships);
+    const builder = new QueryBuilder(testSchema, "thread");
     builder.related("comments", (q) =>
       q.where({ author: "user:123" }).limit(5)
     );
@@ -219,12 +185,7 @@ describe("Relationship Queries", () => {
   });
 
   it("should build query with nested relationships", () => {
-    const builder = new QueryBuilder<
-      TestSchema,
-      TestSchema["thread"],
-      "thread",
-      typeof testRelationships
-    >("thread", testRelationships);
+    const builder = new QueryBuilder(testSchema, "thread");
     builder.related("comments", (q) => q.related("author"));
     const result = builder.buildQuery();
 
@@ -236,7 +197,9 @@ describe("Relationship Queries", () => {
 
 describe("buildQueryFromOptions", () => {
   it("should build query from options", () => {
-    const result = buildQueryFromOptions<TestSchema["user"]>("SELECT", "user", {
+    const result = buildQueryFromOptions<
+      TableModel<(typeof testSchema)["tables"][0]>
+    >("SELECT", "user", {
       where: { username: "john" },
       select: ["username", "email"],
       orderBy: { username: "desc" },
@@ -250,13 +213,11 @@ describe("buildQueryFromOptions", () => {
   });
 
   it("should build LIVE SELECT query from options", () => {
-    const result = buildQueryFromOptions<TestSchema["user"]>(
-      "LIVE SELECT",
-      "user",
-      {
-        where: { username: "john" },
-      }
-    );
+    const result = buildQueryFromOptions<
+      TableModel<(typeof testSchema)["tables"][0]>
+    >("LIVE SELECT", "user", {
+      where: { username: "john" },
+    });
 
     expect(result.query).toBe(
       "LIVE SELECT * FROM user WHERE username = $username;"
@@ -266,11 +227,7 @@ describe("buildQueryFromOptions", () => {
 
 describe("RecordId Parsing", () => {
   it("should parse string IDs to RecordId", () => {
-    const builder = new QueryBuilder<
-      TestSchema,
-      TestSchema["thread"],
-      "thread"
-    >("thread");
+    const builder = new QueryBuilder(testSchema, "thread");
     builder.where({ author: "user:123", id: "abc123" });
     const result = builder.buildQuery();
 
@@ -282,9 +239,7 @@ describe("RecordId Parsing", () => {
   });
 
   it("should not parse non-ID strings", () => {
-    const builder = new QueryBuilder<TestSchema, TestSchema["user"], "user">(
-      "user"
-    );
+    const builder = new QueryBuilder(testSchema, "user");
     builder.where({ username: "john_doe" });
     const result = builder.buildQuery();
 
@@ -295,9 +250,7 @@ describe("RecordId Parsing", () => {
 
 describe("Edge Cases", () => {
   it("should handle empty where object", () => {
-    const builder = new QueryBuilder<TestSchema, TestSchema["user"], "user">(
-      "user"
-    );
+    const builder = new QueryBuilder(testSchema, "user");
     builder.where({});
     const result = builder.buildQuery();
 
@@ -305,9 +258,7 @@ describe("Edge Cases", () => {
   });
 
   it("should handle special characters in strings", () => {
-    const builder = new QueryBuilder<TestSchema, TestSchema["user"], "user">(
-      "user"
-    );
+    const builder = new QueryBuilder(testSchema, "user");
     builder.where({ username: 'john"doe' });
     const result = builder.buildQuery();
 
@@ -315,9 +266,7 @@ describe("Edge Cases", () => {
   });
 
   it("should return options via getOptions()", () => {
-    const builder = new QueryBuilder<TestSchema, TestSchema["user"], "user">(
-      "user"
-    );
+    const builder = new QueryBuilder(testSchema, "user");
     builder.where({ username: "john" }).limit(10);
     const options = builder.getOptions();
 
@@ -329,18 +278,16 @@ describe("Edge Cases", () => {
 describe("Type Tests", () => {
   it("should enforce correct table names", () => {
     // Valid table names should work
-    new QueryBuilder<TestSchema, TestSchema["user"], "user">("user");
-    new QueryBuilder<TestSchema, TestSchema["thread"], "thread">("thread");
-    new QueryBuilder<TestSchema, TestSchema["comment"], "comment">("comment");
+    new QueryBuilder(testSchema, "user");
+    new QueryBuilder(testSchema, "thread");
+    new QueryBuilder(testSchema, "comment");
 
     // @ts-expect-error - invalid table name should not compile
-    new QueryBuilder<TestSchema, TestSchema["user"], "user">("invalid_table");
+    new QueryBuilder(testSchema, "invalid_table");
   });
 
   it("should enforce correct field names in where clause", () => {
-    const builder = new QueryBuilder<TestSchema, TestSchema["user"], "user">(
-      "user"
-    );
+    const builder = new QueryBuilder(testSchema, "user");
 
     // Valid fields should work
     builder.where({ username: "john" });
@@ -352,28 +299,20 @@ describe("Type Tests", () => {
   });
 
   it("should enforce correct field names in select", () => {
-    const builder1 = new QueryBuilder<TestSchema, TestSchema["user"], "user">(
-      "user"
-    );
-    const builder2 = new QueryBuilder<TestSchema, TestSchema["user"], "user">(
-      "user"
-    );
+    const builder1 = new QueryBuilder(testSchema, "user");
+    const builder2 = new QueryBuilder(testSchema, "user");
 
     // Valid fields should work
     builder1.select("username", "email");
     builder2.select("id", "created_at");
 
-    const builder3 = new QueryBuilder<TestSchema, TestSchema["user"], "user">(
-      "user"
-    );
+    const builder3 = new QueryBuilder(testSchema, "user");
     // @ts-expect-error - invalid field should not compile
     builder3.select("invalid_field");
   });
 
   it("should enforce correct field names in orderBy", () => {
-    const builder = new QueryBuilder<TestSchema, TestSchema["user"], "user">(
-      "user"
-    );
+    const builder = new QueryBuilder(testSchema, "user");
 
     // Valid fields should work
     builder.orderBy("username", "asc");
@@ -384,27 +323,17 @@ describe("Type Tests", () => {
   });
 
   it("should enforce correct relationship field names", () => {
-    const builder = new QueryBuilder<
-      TestSchema,
-      TestSchema["thread"],
-      "thread",
-      typeof testRelationships
-    >("thread", testRelationships);
+    const builder = new QueryBuilder(testSchema, "thread");
 
-    // Valid relationship fields should work
+    // Valid relationship fields should work (cardinality now required)
     builder.related("author");
     builder.related("comments");
   });
 
   it("should enforce relationship metadata types", () => {
-    const builder = new QueryBuilder<
-      TestSchema,
-      TestSchema["thread"],
-      "thread",
-      typeof testRelationships
-    >("thread", testRelationships);
+    const builder = new QueryBuilder(testSchema, "thread");
 
-    // The related method should accept a modifier function with correct types
+    // The related method should accept a modifier function with correct types (cardinality as 2nd param)
     builder.related("comments", (q) => {
       // Should be able to call methods on the related query builder
       q.where({ content: "test" });
@@ -412,7 +341,7 @@ describe("Type Tests", () => {
       return q;
     });
 
-    builder.related("author", (q) => {
+    builder.related("author", "one", (q) => {
       // Should be able to call methods on the related query builder
       q.where({ username: "john" });
       return q;
@@ -420,9 +349,7 @@ describe("Type Tests", () => {
   });
 
   it("should enforce correct types in where clause values", () => {
-    const builder = new QueryBuilder<TestSchema, TestSchema["user"], "user">(
-      "user"
-    );
+    const builder = new QueryBuilder(testSchema, "user");
 
     // String fields should accept strings
     builder.where({ username: "john" });
@@ -436,9 +363,7 @@ describe("Type Tests", () => {
   });
 
   it("should return correctly typed query result", () => {
-    const builder = new QueryBuilder<TestSchema, TestSchema["user"], "user">(
-      "user"
-    );
+    const builder = new QueryBuilder(testSchema, "user");
     const result = builder.buildQuery();
 
     // Query should be a string
@@ -451,9 +376,7 @@ describe("Type Tests", () => {
   });
 
   it("should enforce correct select return type", () => {
-    const builder = new QueryBuilder<TestSchema, TestSchema["user"], "user">(
-      "user"
-    );
+    const builder = new QueryBuilder(testSchema, "user");
 
     // Select should return the builder for chaining
     const result = builder.select("username", "email");
@@ -461,9 +384,7 @@ describe("Type Tests", () => {
   });
 
   it("should enforce correct method chaining types", () => {
-    const builder = new QueryBuilder<TestSchema, TestSchema["user"], "user">(
-      "user"
-    );
+    const builder = new QueryBuilder(testSchema, "user");
 
     // All methods should return the builder for chaining
     const result = builder
@@ -475,16 +396,37 @@ describe("Type Tests", () => {
 
     expectTypeOf(result).toMatchTypeOf<typeof builder>();
   });
+});
 
-  it("should enforce buildQueryFromOptions parameter types", () => {
-    // Valid options should work
-    buildQueryFromOptions<TestSchema["user"]>("SELECT", "user", {
-      where: { username: "john" },
-      limit: 10,
-    });
+describe("Schema Metadata Integration", () => {
+  // Using testSchema from top-level scope
+  type TestSchemaMetadata = typeof testSchema;
 
-    buildQueryFromOptions<TestSchema["thread"]>("LIVE SELECT", "thread", {
-      where: { title: "test" },
-    });
+  it("should accept testSchema in constructor", () => {
+    const builder = new QueryBuilder(testSchema, "thread");
+
+    expect(builder).toBeDefined();
+  });
+
+  it("should build query with metadata-driven relationships", () => {
+    const builder = new QueryBuilder(testSchema, "thread");
+
+    builder.related("author", "one");
+    const result = builder.buildQuery();
+
+    expect(result.query).toBe(
+      "SELECT *, (SELECT * FROM user WHERE id=$parent.author LIMIT 1)[0] AS author FROM thread;"
+    );
+  });
+
+  it("should handle one-to-many relationships with metadata", () => {
+    const builder = new QueryBuilder(testSchema, "thread");
+
+    builder.related("comments");
+    const result = builder.buildQuery();
+
+    expect(result.query).toBe(
+      "SELECT *, (SELECT * FROM comment WHERE thread=$parent.id) AS comments FROM thread;"
+    );
   });
 });

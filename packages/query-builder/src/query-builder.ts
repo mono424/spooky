@@ -1,19 +1,20 @@
 import { RecordId } from "surrealdb";
 import type {
   GenericModel,
-  GenericSchema,
   QueryInfo,
   QueryOptions,
-  LiveQueryOptions,
   QueryModifier,
   QueryModifierBuilder,
   RelatedQuery,
-  RelationshipsMetadata,
-  WithRelated,
-  GetRelationshipFields,
-  RelatedField,
-  InferRelatedModelFromMetadata,
 } from "./types";
+import type {
+  TableNames,
+  GetTable,
+  TableModel,
+  TableRelationships,
+  GetRelationship,
+  SchemaStructure,
+} from "./table-schema";
 
 /**
  * Parse a string ID to RecordId
@@ -24,10 +25,10 @@ import type {
  * @param fieldName - The field name to determine if this is an ID field
  */
 function parseStringToRecordId(
-  value: any,
+  value: unknown,
   tableName?: string,
   fieldName?: string
-): any {
+): unknown {
   if (typeof value !== "string") return value;
 
   // If it already contains ":", parse it as a full record ID
@@ -51,7 +52,7 @@ function parseStringToRecordId(
  * @param obj - The object to parse
  * @param tableName - The table name to use for ID fields without ":"
  */
-function parseObjectIdsToRecordId(obj: any, tableName?: string): any {
+function parseObjectIdsToRecordId(obj: unknown, tableName?: string): unknown {
   if (obj === null || obj === undefined) return obj;
 
   if (typeof obj === "string") {
@@ -63,7 +64,7 @@ function parseObjectIdsToRecordId(obj: any, tableName?: string): any {
   }
 
   if (typeof obj === "object" && obj.constructor === Object) {
-    const result: any = {};
+    const result: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(obj)) {
       // Parse recursively, passing the field name to identify ID fields
       result[key] =
@@ -80,20 +81,17 @@ function parseObjectIdsToRecordId(obj: any, tableName?: string): any {
 /**
  * Internal query modifier builder implementation
  */
-class QueryModifierBuilderImpl<
-  TableName extends string,
-  SModel extends GenericModel,
-  Relationships extends RelationshipsMetadata
-> implements QueryModifierBuilder<SModel>
+class QueryModifierBuilderImpl<TModel extends GenericModel>
+  implements QueryModifierBuilder<TModel>
 {
-  private options: QueryOptions<SModel> = {};
+  private options: QueryOptions<TModel> = {};
 
-  where(conditions: Partial<SModel>): this {
+  where(conditions: Partial<TModel>): this {
     this.options.where = { ...this.options.where, ...conditions };
     return this;
   }
 
-  select(...fields: ((keyof SModel & string) | "*")[]): this {
+  select(...fields: ((keyof TModel & string) | "*")[]): this {
     if (this.options.select) {
       throw new Error("Select can only be called once per query");
     }
@@ -112,20 +110,20 @@ class QueryModifierBuilderImpl<
   }
 
   orderBy(
-    field: keyof SModel & string,
+    field: keyof TModel & string,
     direction: "asc" | "desc" = "asc"
   ): this {
     this.options.orderBy = {
       ...this.options.orderBy,
       [field]: direction,
-    } as Partial<Record<keyof SModel, "asc" | "desc">>;
+    } as Partial<Record<keyof TModel, "asc" | "desc">>;
     return this;
   }
 
   // Broad implementation to satisfy QueryModifierBuilder interface
   related<Field extends string>(
     relatedField: Field,
-    modifier?: QueryModifier<any>
+    modifier?: QueryModifier<GenericModel>
   ): this {
     if (!this.options.related) {
       this.options.related = [];
@@ -140,42 +138,36 @@ class QueryModifierBuilderImpl<
         relatedTable: relatedField,
         alias: relatedField,
         modifier,
+        cardinality: "many", // Default to many for subqueries without explicit cardinality
       });
     }
     return this;
   }
 
-  _getOptions(): QueryOptions<SModel> {
+  _getOptions(): QueryOptions<TModel> {
     return this.options;
   }
 }
 
 /**
  * Fluent query builder for constructing queries with chainable methods
+ * Now with full type inference from schema constant!
  */
 export class QueryBuilder<
-  Schema extends GenericSchema,
-  SModel extends Record<string, any>,
-  TableName extends keyof Schema & string = keyof Schema & string,
-  Relationships = undefined
+  const S extends SchemaStructure,
+  TableName extends TableNames<S>
 > {
-  private options: QueryOptions<SModel> = {};
-  private relatedFields: string[] = [];
+  private options: QueryOptions<TableModel<GetTable<S, TableName>>> = {};
 
   constructor(
-    private currentTableName: TableName,
-    private relationships?: RelationshipsMetadata,
-    where?: Partial<SModel>
-  ) {
-    if (where) {
-      this.options.where = where;
-    }
-  }
+    private readonly schema: S,
+    private readonly tableName: TableName
+  ) {}
 
   /**
    * Add additional where conditions
    */
-  where(conditions: Partial<SModel>): this {
+  where(conditions: Partial<TableModel<GetTable<S, TableName>>>): this {
     this.options.where = { ...this.options.where, ...conditions };
     return this;
   }
@@ -183,7 +175,9 @@ export class QueryBuilder<
   /**
    * Specify fields to select
    */
-  select(...fields: ((keyof SModel & string) | "*")[]): this {
+  select(
+    ...fields: ((keyof TableModel<GetTable<S, TableName>> & string) | "*")[]
+  ): this {
     if (this.options.select) {
       throw new Error("Select can only be called once per query");
     }
@@ -195,18 +189,20 @@ export class QueryBuilder<
    * Add ordering to the query (only for non-live queries)
    */
   orderBy(
-    field: keyof SModel & string,
+    field: keyof TableModel<GetTable<S, TableName>>,
     direction: "asc" | "desc" = "asc"
   ): this {
     this.options.orderBy = {
       ...this.options.orderBy,
       [field]: direction,
-    } as Partial<Record<keyof SModel, "asc" | "desc">>;
+    } as Partial<
+      Record<keyof TableModel<GetTable<S, TableName>>, "asc" | "desc">
+    >;
     return this;
   }
 
   /**
-   * Limit the number of results
+   * Add limit to the query (only for non-live queries)
    */
   limit(count: number): this {
     this.options.limit = count;
@@ -214,7 +210,7 @@ export class QueryBuilder<
   }
 
   /**
-   * Set the offset for results
+   * Add offset to the query (only for non-live queries)
    */
   offset(count: number): this {
     this.options.offset = count;
@@ -222,59 +218,61 @@ export class QueryBuilder<
   }
 
   /**
-   * Include related records from specified table(s) using subqueries
-   * @param relatedField - The relationship field name to expand (e.g., "comments")
-   * @param modifier - Optional function to modify the subquery (e.g., add where, limit)
-   * @example
-   * // For a thread table that has relationship to comments
-   * queryBuilder.related("comments")
-   * // With modifier to filter and limit comments
-   * queryBuilder.related("comments", (q) => q.where({ approved: true }).limit(5))
-   * // Nested related queries
-   * queryBuilder.related("comments", (q) => q.related("author").limit(10))
+   * Include related data via subqueries
+   * Field and cardinality are validated against schema relationships
    */
   related<
-    RelatedField extends keyof (Relationships & { [key: string]: never })[TableName] & string
+    Field extends TableRelationships<S, TableName>["field"],
+    Rel extends GetRelationship<S, TableName, Field>
   >(
-    relatedField: RelatedField,
-    modifier?: QueryModifier<
-      InferRelatedModelFromMetadata<
-        Schema,
-        TableName,
-        RelatedField,
-        Relationships
-      >
-    >
-  ): QueryBuilder<
-    Schema,
-    WithRelated<Schema, SModel, TableName, RelatedField, Relationships>,
-    TableName,
-    Relationships
-  > {
+    field: Field,
+    cardinalityOrModifier?: Rel["cardinality"] | QueryModifier<GenericModel>,
+    modifier?: QueryModifier<GenericModel>
+  ): this {
     if (!this.options.related) {
       this.options.related = [];
     }
 
-    // Check if this relationship already exists
+    // Determine if first optional arg is cardinality or modifier
+    const actualModifier =
+      typeof cardinalityOrModifier === "function"
+        ? cardinalityOrModifier
+        : modifier;
+
+    const relationship = this.schema.relationships.find(
+      (r) => r.from === this.tableName && r.field === field
+    );
+
+    if (!relationship) {
+      throw new Error(
+        `Relationship '${field}' not found for table '${this.tableName}'`
+      );
+    }
+
     const exists = this.options.related.some(
-      (r) => (r.alias || r.relatedTable) === relatedField
+      (r) => (r.alias || r.relatedTable) === field
     );
 
     if (!exists) {
+      const foreignKeyField =
+        relationship.cardinality === "many" ? this.tableName : field;
+
       this.options.related.push({
-        relatedTable: relatedField as string,
-        alias: relatedField as string | undefined,
-        modifier,
-      });
-      this.relatedFields.push(relatedField as string);
+        relatedTable: relationship.to,
+        alias: field,
+        modifier: actualModifier,
+        cardinality: relationship.cardinality,
+        foreignKeyField,
+      } as RelatedQuery & { foreignKeyField: string });
     }
-    return this as any;
+
+    return this;
   }
 
   /**
-   * Get the built query options
+   * Get the current query options
    */
-  getOptions(): QueryOptions<SModel> {
+  getOptions(): QueryOptions<TableModel<GetTable<S, TableName>>> {
     return this.options;
   }
 
@@ -284,12 +282,7 @@ export class QueryBuilder<
    * @returns QueryInfo with the generated SQL and variables
    */
   buildQuery(method: "LIVE SELECT" | "SELECT" = "SELECT"): QueryInfo {
-    return buildQueryFromOptions(
-      method,
-      this.currentTableName,
-      this.options,
-      this.relationships
-    );
+    return buildQueryFromOptions(method, this.tableName, this.options);
   }
 
   /**
@@ -301,323 +294,166 @@ export class QueryBuilder<
 }
 
 /**
- * Generate a subquery for related records using relationship metadata
- * @param currentTable - The current table being queried
- * @param relatedAlias - The alias/name for the related data (e.g., "comments")
- * @param relationships - Relationship metadata
- * @param modifier - Optional query modifier function
- * @returns SQL subquery string
- */
-function generateSubquery(
-  currentTable: string,
-  relatedAlias: string,
-  relationships?: RelationshipsMetadata,
-  modifier?: QueryModifier<any>
-): string {
-  // Base query parts
-  let selectClause = "*";
-  let whereClause = "";
-  let orderClause = "";
-  let limitClause = "";
-  let offsetClause = "";
-  const subqueries: string[] = [];
-
-  // Apply modifier if provided
-  if (modifier) {
-    const modifierBuilder = new QueryModifierBuilderImpl();
-    modifier(modifierBuilder);
-    const modifierOptions = modifierBuilder._getOptions();
-
-    // Apply select
-    if (modifierOptions.select && modifierOptions.select.length > 0) {
-      selectClause = modifierOptions.select.join(", ");
-    }
-
-    // Build where conditions
-    const conditions: string[] = [];
-
-    if (modifierOptions.where) {
-      for (const [key, value] of Object.entries(modifierOptions.where)) {
-        conditions.push(`${key} = ${formatValue(value)}`);
-      }
-    }
-
-    // Handle related subqueries recursively
-    if (modifierOptions.related && modifierOptions.related.length > 0) {
-      // Determine the actual table name for nested queries
-      const relatedTable = getRelatedTableName(
-        currentTable,
-        relatedAlias,
-        relationships
-      );
-
-      for (const rel of modifierOptions.related) {
-        const nestedSubquery = generateSubquery(
-          relatedTable,
-          rel.alias || rel.relatedTable,
-          relationships,
-          rel.modifier
-        );
-        subqueries.push(
-          `${nestedSubquery} AS ${rel.alias || rel.relatedTable}`
-        );
-      }
-    }
-
-    if (conditions.length > 0) {
-      whereClause = conditions.join(" AND ");
-    }
-
-    // Apply order by
-    if (modifierOptions.orderBy) {
-      const orderParts = Object.entries(modifierOptions.orderBy)
-        .map(([key, dir]) => `${key} ${dir}`)
-        .join(", ");
-      if (orderParts) {
-        orderClause = orderParts;
-      }
-    }
-
-    // Apply limit/offset
-    if (modifierOptions.limit !== undefined) {
-      limitClause = `LIMIT ${modifierOptions.limit}`;
-    }
-    if (modifierOptions.offset !== undefined) {
-      offsetClause = `START ${modifierOptions.offset}`;
-    }
-  }
-
-  // Try to find the relationship in metadata
-  let baseQuery = "";
-  if (relationships && relationships[currentTable]) {
-    const relationship = relationships[currentTable][relatedAlias];
-    if (relationship) {
-      const relatedTable = relationship.table;
-      const cardinality = relationship.cardinality;
-
-      if (cardinality === "many") {
-        // For one-to-many relationships
-        // When the field name is "comments" on "thread", we want to fetch from the comment table
-        // using the foreign key: SELECT * FROM comment WHERE thread=$parent.id
-        let actualTable = relatedTable;
-
-        // If the related "table" is actually a relation table (like commented_on),
-        // we need to find the actual entity table
-        if (relatedTable === "commented_on" && relatedAlias === "comments") {
-          // For thread.comments, fetch from comment table using foreign key
-          actualTable = "comment";
-        }
-
-        const allSelectParts =
-          subqueries.length > 0
-            ? [selectClause, ...subqueries].join(", ")
-            : selectClause;
-        baseQuery = `(SELECT ${allSelectParts} FROM ${actualTable} WHERE ${currentTable}=$parent.id`;
-      } else {
-        // For one-to-one relationships
-        // The current table has a foreign key to the related table
-        // So we need: (SELECT * FROM relatedTable WHERE id=$parent.foreignKey LIMIT 1)[0]
-        const allSelectParts =
-          subqueries.length > 0
-            ? [selectClause, ...subqueries].join(", ")
-            : selectClause;
-        baseQuery = `(SELECT ${allSelectParts} FROM ${relatedTable} WHERE id=$parent.${relatedAlias} LIMIT 1`;
-      }
-    }
-  }
-
-  // Fallback to simple pluralization logic
-  if (!baseQuery) {
-    let relatedTable = relatedAlias;
-    if (relatedAlias.endsWith("s") && relatedAlias.length > 1) {
-      relatedTable = relatedAlias.slice(0, -1);
-    }
-
-    const foreignKey = currentTable;
-    const allSelectParts =
-      subqueries.length > 0
-        ? [selectClause, ...subqueries].join(", ")
-        : selectClause;
-    baseQuery = `(SELECT ${allSelectParts} FROM ${relatedTable} WHERE ${foreignKey}=$parent.id`;
-  }
-
-  // Add where clause if any
-  if (whereClause) {
-    baseQuery += ` AND ${whereClause}`;
-  }
-
-  // Add order clause
-  if (orderClause) {
-    baseQuery += ` ORDER BY ${orderClause}`;
-  }
-
-  // Add limit/offset
-  if (limitClause) {
-    baseQuery += ` ${limitClause}`;
-  }
-  if (offsetClause) {
-    baseQuery += ` ${offsetClause}`;
-  }
-
-  baseQuery += ")";
-
-  // Check if this is a one-to-one relationship that needs [0] unwrapping
-  let needsUnwrap = false;
-  if (relationships && relationships[currentTable]) {
-    const relationship = relationships[currentTable][relatedAlias];
-    if (relationship && relationship.cardinality === "one") {
-      needsUnwrap = true;
-    }
-  }
-
-  // Add [0] to unwrap array for one-to-one relationships
-  if (needsUnwrap) {
-    baseQuery += "[0]";
-  }
-
-  return baseQuery;
-}
-
-/**
- * Get the actual table name for a related field using relationship metadata
- */
-function getRelatedTableName(
-  currentTable: string,
-  relatedAlias: string,
-  relationships?: RelationshipsMetadata
-): string {
-  if (relationships && relationships[currentTable]) {
-    const relationship = relationships[currentTable][relatedAlias];
-    if (relationship) {
-      return relationship.table;
-    }
-  }
-
-  // Fallback to simple pluralization
-  if (relatedAlias.endsWith("s") && relatedAlias.length > 1) {
-    return relatedAlias.slice(0, -1);
-  }
-  return relatedAlias;
-}
-
-/**
- * Format a value for SQL query (handles RecordId, strings, etc.)
- */
-function formatValue(value: any): string {
-  // Parse string IDs to RecordId first
-  const parsedValue = parseStringToRecordId(value);
-
-  if (parsedValue instanceof RecordId) {
-    return `${parsedValue}`;
-  }
-  if (typeof parsedValue === "string") {
-    // Don't quote if it looks like it should have been a RecordId
-    if (parsedValue.includes(":")) {
-      return parsedValue;
-    }
-    return `"${parsedValue.replace(/"/g, '\\"')}"`;
-  }
-  if (typeof parsedValue === "number") {
-    return String(parsedValue);
-  }
-  if (typeof parsedValue === "boolean") {
-    return parsedValue ? "true" : "false";
-  }
-  if (parsedValue === null) {
-    return "NULL";
-  }
-  return JSON.stringify(parsedValue);
-}
-
-/**
- * Build a query from options
+ * Build a query string from query options
  * @param method - The query method (SELECT or LIVE SELECT)
- * @param tableName - The table name
- * @param options - Query options
- * @param relationships - Relationship metadata
+ * @param tableName - The table name to query
+ * @param options - The query options (where, select, orderBy, etc.)
  * @returns QueryInfo with the generated SQL and variables
  */
-export function buildQueryFromOptions<SModel extends GenericModel>(
-  method: "LIVE SELECT" | "SELECT",
+export function buildQueryFromOptions<TModel extends GenericModel>(
+  method: "SELECT" | "LIVE SELECT",
   tableName: string,
-  options: QueryOptions<SModel> | LiveQueryOptions<SModel>,
-  relationships?: RelationshipsMetadata
+  options: QueryOptions<TModel>
 ): QueryInfo {
-  // Build the select clause with subqueries for related data
-  let selectParts = options.select ?? ["*"];
-  const selectFields = selectParts.map((key) => `${key}`).join(", ");
-
-  // Add subqueries for related tables
-  const subqueries: string[] = [];
-  if (options.related && options.related.length > 0) {
-    for (const rel of options.related) {
-      const subquery = generateSubquery(
-        tableName,
-        rel.alias || rel.relatedTable,
-        relationships,
-        rel.modifier
-      );
-      const alias = rel.alias || rel.relatedTable;
-      subqueries.push(`${subquery} AS ${alias}`);
-    }
-  }
-
-  // Combine regular fields and subqueries
-  const allSelectParts = [selectFields, ...subqueries].join(", ");
+  const isLiveQuery = method === "LIVE SELECT";
 
   // Parse where conditions to convert string IDs to RecordId
-  // Pass the table name so IDs without ":" get the table prepended automatically
-  const parsedWhere = parseObjectIdsToRecordId(options.where ?? {}, tableName);
+  const parsedWhere = options.where
+    ? parseObjectIdsToRecordId(options.where, tableName)
+    : undefined;
 
-  const whereClause = Object.keys(parsedWhere)
-    .map((key) => `${key} = $${key}`)
-    .join(" AND ");
+  // Build SELECT clause
+  let selectClause = "*";
+  if (options.select && options.select.length > 0) {
+    selectClause = options.select.join(", ");
+  }
 
-  // Only add ORDER BY for non-live queries
-  const orderClause =
-    method === "SELECT" && "orderBy" in options
-      ? Object.entries((options as QueryOptions<SModel>).orderBy ?? {})
-          .map(([key, val]) => `${key} ${val}`)
-          .join(", ")
-      : "";
+  // Build related subqueries (fetch clauses)
+  let fetchClauses = "";
+  if (options.related && options.related.length > 0) {
+    const subqueries = options.related.map((rel) => buildSubquery(rel));
+    fetchClauses = ", " + subqueries.join(", ");
+  }
 
-  let query = `${method} ${allSelectParts} FROM ${tableName}`;
-  if (whereClause) query += ` WHERE ${whereClause}`;
-  if (orderClause) query += ` ORDER BY ${orderClause}`;
+  // Start building the query
+  let query = `${method} ${selectClause}${fetchClauses} FROM ${tableName}`;
 
-  // Only add LIMIT and START for regular SELECT queries (not LIVE SELECT)
-  if (method === "SELECT") {
-    if (options.limit !== undefined) query += ` LIMIT ${options.limit}`;
-    if (options.offset !== undefined) query += ` START ${options.offset}`;
+  // Build WHERE clause
+  const vars: Record<string, unknown> = {};
+  if (parsedWhere && Object.keys(parsedWhere).length > 0) {
+    const conditions: string[] = [];
+    for (const [key, value] of Object.entries(parsedWhere)) {
+      const varName = key;
+      vars[varName] = value;
+      conditions.push(`${key} = $${varName}`);
+    }
+    query += ` WHERE ${conditions.join(" AND ")}`;
+  }
+
+  // Add ORDER BY, LIMIT, START only for non-live queries
+  if (!isLiveQuery) {
+    if (options.orderBy && Object.keys(options.orderBy).length > 0) {
+      const orderClauses = Object.entries(options.orderBy).map(
+        ([field, direction]) => `${field} ${direction}`
+      );
+      query += ` ORDER BY ${orderClauses.join(", ")}`;
+    }
+
+    if (options.limit !== undefined) {
+      query += ` LIMIT ${options.limit}`;
+    }
+
+    if (options.offset !== undefined) {
+      query += ` START ${options.offset}`;
+    }
   }
 
   query += ";";
 
   console.log(`[buildQuery] Generated ${method} query:`, query);
-  console.log(`[buildQuery] Query vars:`, parsedWhere);
+  console.log(`[buildQuery] Query vars:`, vars);
 
   return {
     query,
-    vars: parsedWhere,
+    vars: Object.keys(vars).length > 0 ? vars : undefined,
   };
 }
 
 /**
- * Create a new query builder instance
+ * Build a subquery for a related field
  */
-export function createQueryBuilder<
-  Schema extends GenericSchema,
-  SModel extends Record<string, any>,
-  TableName extends keyof Schema & string,
-  Relationships = undefined
->(
-  tableName: TableName,
-  relationships?: RelationshipsMetadata,
-  where?: Partial<SModel>
-): QueryBuilder<Schema, SModel, TableName, Relationships> {
-  return new QueryBuilder<Schema, SModel, TableName, Relationships>(
-    tableName,
-    relationships,
-    where
-  );
+function buildSubquery(
+  rel: RelatedQuery & { foreignKeyField?: string }
+): string {
+  const { relatedTable, alias, modifier, cardinality } = rel;
+  const foreignKeyField = rel.foreignKeyField || alias;
+
+  let subquerySelect = "*";
+  let subqueryWhere = "";
+  let subqueryOrderBy = "";
+  let subqueryLimit = "";
+
+  // If there's a modifier, apply it to get the sub-options
+  if (modifier) {
+    const modifierBuilder = new QueryModifierBuilderImpl();
+    modifier(modifierBuilder);
+    const subOptions = modifierBuilder._getOptions();
+
+    // Build sub-select
+    if (subOptions.select && subOptions.select.length > 0) {
+      subquerySelect = subOptions.select.join(", ");
+    }
+
+    // Build sub-where
+    if (subOptions.where && Object.keys(subOptions.where).length > 0) {
+      const parsedSubWhere = parseObjectIdsToRecordId(
+        subOptions.where,
+        relatedTable
+      ) as Record<string, unknown>;
+      const conditions = Object.entries(parsedSubWhere).map(([key, value]) => {
+        if (value instanceof RecordId) {
+          return `${key} = ${value.toString()}`;
+        }
+        return `${key} = ${JSON.stringify(value)}`;
+      });
+      subqueryWhere = ` AND ${conditions.join(" AND ")}`;
+    }
+
+    // Build sub-orderBy
+    if (subOptions.orderBy && Object.keys(subOptions.orderBy).length > 0) {
+      const orderClauses = Object.entries(subOptions.orderBy).map(
+        ([field, direction]) => `${field} ${direction}`
+      );
+      subqueryOrderBy = ` ORDER BY ${orderClauses.join(", ")}`;
+    }
+
+    // Build sub-limit
+    if (subOptions.limit !== undefined) {
+      subqueryLimit = ` LIMIT ${subOptions.limit}`;
+    }
+
+    // Handle nested relationships
+    if (subOptions.related && subOptions.related.length > 0) {
+      const nestedSubqueries = subOptions.related.map((nestedRel) =>
+        buildSubquery(nestedRel)
+      );
+      subquerySelect += ", " + nestedSubqueries.join(", ");
+    }
+  }
+
+  // Determine the WHERE condition based on cardinality
+  let whereCondition: string;
+  if (cardinality === "one") {
+    // For one-to-one, the related table's id matches parent's foreign key field
+    whereCondition = `WHERE id=$parent.${foreignKeyField}`;
+    // Add LIMIT 1 for one-to-one relationships if not already set
+    if (!subqueryLimit) {
+      subqueryLimit = " LIMIT 1";
+    }
+  } else {
+    // For one-to-many, the related table has a foreign key field pointing to parent's id
+    whereCondition = `WHERE ${foreignKeyField}=$parent.id`;
+  }
+
+  // Build the complete subquery
+  let subquery = `(SELECT ${subquerySelect} FROM ${relatedTable} ${whereCondition}${subqueryWhere}${subqueryOrderBy}${subqueryLimit})`;
+
+  // For one-to-one relationships, select the first element
+  if (cardinality === "one") {
+    subquery += "[0]";
+  }
+
+  subquery += ` AS ${alias}`;
+
+  return subquery;
 }
