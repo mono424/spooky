@@ -123,22 +123,26 @@ export interface SchemaStructure {
  */
 export type GetTable<
   S extends SchemaStructure,
-  Name extends string
+  Name extends TableNames<S>
 > = Extract<S["tables"][number], { name: Name }>;
 
 /**
  * Extract all table names from the schema
  */
-export type TableNames<S extends SchemaStructure> =
-  S["tables"][number]["name"];
+export type TableNames<S extends SchemaStructure> = S["tables"][number]["name"];
+
+/**
+ * Extract all field names from a type
+ */
+export type TableFieldNames<
+  T extends { columns: Record<string, ColumnSchema> }
+> = keyof T["columns"] & string;
 
 /**
  * Convert table schema columns to a TypeScript model type
  */
 export type TableModel<T extends { columns: Record<string, ColumnSchema> }> = {
-  [K in keyof T["columns"]]: T["columns"][K] extends { optional: true }
-    ? TypeNameToTypeMap[T["columns"][K]["type"]] | null
-    : TypeNameToTypeMap[T["columns"][K]["type"]];
+  [K in keyof T["columns"]]: ColumnToTSType<T["columns"][K]>;
 };
 
 /**

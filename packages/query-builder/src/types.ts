@@ -21,6 +21,7 @@ export type RelatedField<T extends string, R> = GetRelationshipFields<T, R> &
 // Query interfaces
 export interface QueryInfo {
   query: string;
+  hash: number;
   vars?: Record<string, unknown>;
 }
 

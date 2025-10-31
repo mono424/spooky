@@ -1,29 +1,27 @@
-import { SyncedDb, type SyncedDbConfig } from "@spooky/client-solid";
+import { SyncedDb } from "@spooky/client-solid";
 import {
-  type Schema,
+  schema,
+  SchemaDefinition,
   SURQL_SCHEMA,
-  type Relationships,
-  SCHEMA_METADATA,
-  type SchemaMetadata,
-  type SchemaRelationships,
+  type Schema,
 } from "./schema.gen";
+
+// Re-export Schema type for use in components
 export type { Schema };
-export { SCHEMA_METADATA, type SchemaMetadata, type SchemaRelationships };
 
 // Database configuration
-export const dbConfig: SyncedDbConfig<Schema> = {
-  schema: SURQL_SCHEMA,
+export const dbConfig = {
+  schema: schema,
+  schemaSurql: SURQL_SCHEMA,
   localDbName: "thread-app-local",
   internalDbName: "syncdb-int",
   storageStrategy: "indexeddb",
   namespace: "main",
   database: "main",
   remoteUrl: "ws://localhost:8000",
-  tables: ["user", "thread", "comment"],
-  // relationships is optional and type-only - no runtime constant needed
-};
+} as const;
 
-export const db = new SyncedDb<Schema, Relationships>(dbConfig);
+export const db = new SyncedDb<SchemaDefinition>(dbConfig);
 
 // Initialize the database
 let isInitialized = false;

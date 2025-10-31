@@ -11,16 +11,16 @@ import {
 import { SchemaProvisioner } from "./lib/provisioner";
 import { createSurrealDBWasm } from "./cache";
 import type { SyncedDbConfig, DbConnection } from "./types";
-import { GenericModel, GenericSchema, ModelPayload } from "./lib/models";
-import {
-  QueryNamespace,
-  TableQueries,
-  ReactiveQueryResult,
-  ReactiveQueryResultOne,
-} from "./lib/table-queries";
+import { GenericModel, ModelPayload } from "./lib/models";
 import { Syncer } from "./lib/syncer";
 import { WALManager } from "./lib/wal";
 import { proxy } from "valtio";
+import {
+  QueryBuilder,
+  SchemaStructure,
+  TableNames,
+} from "@spooky/query-builder";
+import { Executer } from "./lib/executer";
 export type { RecordResult } from "surrealdb";
 
 export { RecordId } from "surrealdb";
@@ -30,15 +30,9 @@ export type {
   GenericSchema,
   ModelPayload,
 } from "./lib/models";
-export {
-  ReactiveQueryResult,
-  ReactiveQueryResultOne,
-  type InferQueryModel,
-} from "./lib/table-queries";
 export { useQuery } from "./lib/use-query";
 
 export { snapshot, type Snapshot } from "valtio";
-export type { WithRelated } from "./lib/table-queries";
 
 // Re-export query builder types for convenience
 export type {
@@ -46,15 +40,12 @@ export type {
   QueryModifierBuilder,
   QueryInfo,
   RelationshipsMetadata,
-  Relationship,
+  RelationshipDefinition,
   InferRelatedModelFromMetadata,
   GetCardinality,
 } from "@spooky/query-builder";
 
-export type QueryResponse<T extends GenericModel> = Omit<
-  ReturnType<Surreal["query"]>,
-  "collect"
-> & {
+export type QueryResponse<T> = Omit<ReturnType<Surreal["query"]>, "collect"> & {
   collect: () => Promise<[ModelPayload<T>[]]>;
 };
 
@@ -93,22 +84,27 @@ function wrapModelIdWithRef<T extends GenericModel | undefined>(model: T): T {
   return convertDateTimeToDate(model) as T;
 }
 
-export class SyncedDb<
-  Schema extends GenericSchema,
-  Relationships = any
-> {
+export interface SyncedDbContext<S extends SyncedDb<SchemaStructure>> {
+  db: S;
+}
+
+export class SyncedDb<const Schema extends SchemaStructure> {
   private config: SyncedDbConfig<Schema>;
   private connections: DbConnection | null = null;
-  public readonly query: TableQueries<Schema, Relationships>;
+  private executer: Executer<Schema>;
   private syncer: Syncer | null = null;
   private walManager: WALManager | null = null;
   private currentUser: any = proxy({ value: null });
 
   constructor(config: SyncedDbConfig<Schema>) {
     this.config = config;
-    this.query = new QueryNamespace<Schema, Relationships>(
-      this
-    ) as unknown as TableQueries<Schema, Relationships>;
+    this.executer = new Executer<Schema>(this);
+  }
+
+  public query<TName extends TableNames<Schema>>(
+    table: TName
+  ): QueryBuilder<Schema, TName> {
+    return new QueryBuilder(this.config.schema, table, this.executer.run);
   }
 
   /**
@@ -122,7 +118,7 @@ export class SyncedDb<
       namespace,
       database,
       remoteUrl,
-      schema,
+      schemaSurql,
     } = this.config;
 
     // Internal WASM database
@@ -161,13 +157,13 @@ export class SyncedDb<
     this.walManager = new WALManager(internal);
     await this.walManager.init();
 
-    // Provision local schema from src/db/schema.surql
+    // Provision local schema from schemaSurql
     const provisioner = new SchemaProvisioner(
       internal,
       local,
       namespace,
       database,
-      schema
+      schemaSurql
     );
     await provisioner.provision();
 
@@ -352,23 +348,23 @@ export class SyncedDb<
 
     // Sync user to local database (upsert)
     // First, check if user exists locally
-    const [existingUsers] = await this.connections.local
-      .query(`SELECT * FROM $id`, { id: remoteUser.id })
-      .collect<[ModelPayload<Schema[T]>[]]>();
+    // const [existingUsers] = await this.connections.local
+    //   .query(`SELECT * FROM $id`, { id: remoteUser.id })
+    //   .collect<[ModelPayload<Schema[T]>[]]>();
 
-    if (!existingUsers || existingUsers.length === 0) {
-      // User doesn't exist locally, create it with the remote user data (including hashed password)
-      await this.connections.local.query(`CREATE $id CONTENT $user`, {
-        id: remoteUser.id,
-        user: remoteUser,
-      });
-    } else {
-      // User exists, update it
-      await this.connections.local.query(`UPDATE $id CONTENT $user`, {
-        id: remoteUser.id,
-        user: remoteUser,
-      });
-    }
+    // if (!existingUsers || existingUsers.length === 0) {
+    //   // User doesn't exist locally, create it with the remote user data (including hashed password)
+    //   await this.connections.local.query(`CREATE $id CONTENT $user`, {
+    //     id: remoteUser.id,
+    //     user: remoteUser,
+    //   });
+    // } else {
+    //   // User exists, update it
+    //   await this.connections.local.query(`UPDATE $id CONTENT $user`, {
+    //     id: remoteUser.id,
+    //     user: remoteUser,
+    //   });
+    // }
 
     // Sign in to local database - this will work because:
     // 1. For sign-up: the user was just created on remote with the password, so the same password works locally
@@ -390,7 +386,7 @@ export class SyncedDb<
       await this.authenticateRemoteAndSyncUser<T>(auth, false);
 
     await this.storeAuthTokens(localResponse.token, remoteResponse.token);
-    this.currentUser.value = wrapModelIdWithRef(user);
+    this.currentUser.value = { id: "abc123" }; //wrapModelIdWithRef(user);
 
     return remoteResponse;
   }
@@ -402,7 +398,7 @@ export class SyncedDb<
       await this.authenticateRemoteAndSyncUser<T>(auth, true);
 
     await this.storeAuthTokens(localResponse.token, remoteResponse.token);
-    this.currentUser.value = wrapModelIdWithRef(user);
+    this.currentUser.value = { id: "abc123" }; //wrapModelIdWithRef(user);
 
     return remoteResponse;
   }
@@ -486,7 +482,7 @@ export class SyncedDb<
     return this.syncer;
   }
 
-  _query<T extends GenericModel>(
+  _query<T>(
     db: Surreal,
     sql: string,
     vars?: Record<string, unknown>
@@ -502,16 +498,21 @@ export class SyncedDb<
    * Convert string IDs to RecordId objects for reference fields
    */
   private convertReferenceFields(tableName: string, data: any): any {
-    if (!this.config.relationships) return data;
+    if (!this.config.schema) return data;
 
-    const relationships = this.config.relationships[tableName];
-    if (!relationships) return data;
+    // Find relationships for this table from the schema const
+    const tableRelationships = this.config.schema.relationships.filter(
+      (rel: { from: string; field: string; to: string; cardinality: string }) =>
+        rel.from === tableName
+    );
+
+    if (tableRelationships.length === 0) return data;
 
     const converted = { ...data };
 
-    // Iterate over the nested object structure
-    for (const [fieldName, rel] of Object.entries(relationships)) {
-      const fieldValue = converted[fieldName];
+    // Iterate over relationships for this table
+    for (const rel of tableRelationships) {
+      const fieldValue = converted[rel.field];
 
       // Skip if field is not present or already a RecordId
       if (fieldValue === undefined || fieldValue === null) continue;
@@ -520,7 +521,7 @@ export class SyncedDb<
       // Convert string ID to RecordId
       if (typeof fieldValue === "string" && fieldValue.includes(":")) {
         const [table, id] = fieldValue.split(":", 2);
-        converted[fieldName] = new RecordId(table, id);
+        converted[rel.field] = new RecordId(table, id);
       }
     }
 
@@ -559,14 +560,11 @@ export class SyncedDb<
     return db.delete<T>(tableObj);
   }
 
-  queryLocal<T extends GenericModel>(
-    sql: string,
-    vars?: Record<string, unknown>
-  ): QueryResponse<T> {
+  queryLocal<T>(sql: string, vars?: Record<string, unknown>): QueryResponse<T> {
     return this._query<T>(this.getLocal(), sql, vars);
   }
 
-  queryRemote<T extends GenericModel>(
+  queryRemote<T>(
     sql: string,
     vars?: Record<string, unknown>
   ): QueryResponse<T> {

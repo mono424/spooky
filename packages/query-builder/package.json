@@ -28,7 +28,8 @@
   "license": "MIT",
   "packageManager": "pnpm@9.0.0",
   "dependencies": {
-    "surrealdb": "^2.0.0-alpha.9"
+    "surrealdb": "^2.0.0-alpha.9",
+    "valtio": "^2.1.8"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

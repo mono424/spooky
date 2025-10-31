@@ -14,7 +14,9 @@ import type {
   TableRelationships,
   GetRelationship,
   SchemaStructure,
+  TableFieldNames,
 } from "./table-schema";
+import { proxy, subscribe } from "valtio";
 
 /**
  * Parse a string ID to RecordId
@@ -76,6 +78,108 @@ function parseObjectIdsToRecordId(obj: unknown, tableName?: string): unknown {
   }
 
   return obj;
+}
+
+type Executor<T> = (query: InnerQuery<T>) => Promise<void>;
+
+export interface InnerQueryResult<T> {
+  data: T | null;
+  hash: number;
+  subscribe: (callback: (data: T | null) => void) => () => void;
+  unsubscribeAll: () => void;
+}
+
+export class InnerQuery<T> {
+  private _hash: number;
+  private _data: { value: T | null } = { value: null };
+
+  constructor(
+    private readonly tableName: string,
+    private readonly options: QueryOptions<GenericModel>,
+    private readonly schema: SchemaStructure,
+    private readonly executor: Executor<T>
+  ) {
+    this._hash = cyrb53(this.selectQuery().query, 0);
+    this._data = proxy({ value: null });
+  }
+
+  get hash(): number {
+    return this._hash;
+  }
+
+  get data(): { value: T | null } {
+    return this._data;
+  }
+
+  public setData(data: T): void {
+    this._data.value = data;
+  }
+
+  public selectQuery(): QueryInfo {
+    return buildQueryFromOptions(
+      "SELECT",
+      this.tableName,
+      this.options,
+      this.schema
+    );
+  }
+
+  public selectLiveQuery(): QueryInfo {
+    return buildQueryFromOptions(
+      "LIVE SELECT",
+      this.tableName,
+      this.options,
+      this.schema
+    );
+  }
+
+  public run(): InnerQueryResult<T> {
+    this.executor(this);
+    const unsubs: (() => void)[] = [];
+    return {
+      data: this.data.value,
+      hash: this.hash,
+      subscribe: (callback: (data: T | null) => void) => {
+        const unsub = subscribe(this.data, () => callback(this.data.value));
+        unsubs.push(unsub);
+        return unsub;
+      },
+      unsubscribeAll: () => {
+        const fns = unsubs.splice(0, unsubs.length);
+        fns.forEach((sub) => sub());
+      },
+    };
+  }
+}
+
+export class FinalQuery<T> {
+  private _innerQuery: InnerQuery<T>;
+
+  constructor(
+    private readonly tableName: string,
+    private readonly options: QueryOptions<GenericModel>,
+    private readonly schema: SchemaStructure,
+    private readonly executor: Executor<T>
+  ) {
+    this._innerQuery = new InnerQuery(
+      this.tableName,
+      this.options,
+      this.schema,
+      this.executor
+    );
+  }
+
+  get hash(): number {
+    return this._innerQuery.hash;
+  }
+
+  get data(): { value: T | null } {
+    return this._innerQuery.data;
+  }
+
+  select(): InnerQueryResult<T> {
+    return this._innerQuery.run();
+  }
 }
 
 /**
@@ -155,19 +259,22 @@ class QueryModifierBuilderImpl<TModel extends GenericModel>
  */
 export class QueryBuilder<
   const S extends SchemaStructure,
-  TableName extends TableNames<S>
+  const TableName extends TableNames<S>
 > {
   private options: QueryOptions<TableModel<GetTable<S, TableName>>> = {};
 
   constructor(
     private readonly schema: S,
-    private readonly tableName: TableName
+    private readonly tableName: TableName,
+    private readonly executer: Executor<TableModel<GetTable<S, TableName>>>
   ) {}
 
   /**
    * Add additional where conditions
    */
-  where(conditions: Partial<TableModel<GetTable<S, TableName>>>): this {
+  where(
+    conditions: Partial<TableModel<GetTable<S, TableName>>>
+  ): QueryBuilder<S, TableName> {
     this.options.where = { ...this.options.where, ...conditions };
     return this;
   }
@@ -177,7 +284,7 @@ export class QueryBuilder<
    */
   select(
     ...fields: ((keyof TableModel<GetTable<S, TableName>> & string) | "*")[]
-  ): this {
+  ): QueryBuilder<S, TableName> {
     if (this.options.select) {
       throw new Error("Select can only be called once per query");
     }
@@ -189,9 +296,9 @@ export class QueryBuilder<
    * Add ordering to the query (only for non-live queries)
    */
   orderBy(
-    field: keyof TableModel<GetTable<S, TableName>>,
+    field: TableFieldNames<GetTable<S, TableName>>,
     direction: "asc" | "desc" = "asc"
-  ): this {
+  ): QueryBuilder<S, TableName> {
     this.options.orderBy = {
       ...this.options.orderBy,
       [field]: direction,
@@ -204,7 +311,7 @@ export class QueryBuilder<
   /**
    * Add limit to the query (only for non-live queries)
    */
-  limit(count: number): this {
+  limit(count: number): QueryBuilder<S, TableName> {
     this.options.limit = count;
     return this;
   }
@@ -212,7 +319,7 @@ export class QueryBuilder<
   /**
    * Add offset to the query (only for non-live queries)
    */
-  offset(count: number): this {
+  offset(count: number): QueryBuilder<S, TableName> {
     this.options.offset = count;
     return this;
   }
@@ -277,20 +384,33 @@ export class QueryBuilder<
   }
 
   /**
-   * Build a SQL query string from the current builder state
-   * @param method - The query method (SELECT or LIVE SELECT)
-   * @returns QueryInfo with the generated SQL and variables
+   * Build query methods for SELECT and LIVE SELECT
+   * @returns Object with select() and selectLive() methods
    */
-  buildQuery(method: "LIVE SELECT" | "SELECT" = "SELECT"): QueryInfo {
-    return buildQueryFromOptions(method, this.tableName, this.options);
+  build(): FinalQuery<TableModel<GetTable<S, TableName>>> {
+    return new FinalQuery<TableModel<GetTable<S, TableName>>>(
+      this.tableName,
+      this.options,
+      this.schema,
+      this.executer
+    );
   }
+}
 
-  /**
-   * Build a live query (LIVE SELECT)
-   */
-  buildLiveQuery(): QueryInfo {
-    return this.buildQuery("LIVE SELECT");
+function cyrb53(str: string, seed: number): number {
+  let h1 = 0xdeadbeef ^ seed,
+    h2 = 0x41c6ce57 ^ seed;
+  for (let i = 0, ch; i < str.length; i++) {
+    ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
   }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);
+  h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);
+  h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+
+  return 4294967296 * (2097151 & h2) + (h1 >>> 0);
 }
 
 /**
@@ -298,12 +418,14 @@ export class QueryBuilder<
  * @param method - The query method (SELECT or LIVE SELECT)
  * @param tableName - The table name to query
  * @param options - The query options (where, select, orderBy, etc.)
+ * @param schema - Optional schema for resolving nested relationships
  * @returns QueryInfo with the generated SQL and variables
  */
 export function buildQueryFromOptions<TModel extends GenericModel>(
   method: "SELECT" | "LIVE SELECT",
   tableName: string,
-  options: QueryOptions<TModel>
+  options: QueryOptions<TModel>,
+  schema?: SchemaStructure
 ): QueryInfo {
   const isLiveQuery = method === "LIVE SELECT";
 
@@ -321,7 +443,7 @@ export function buildQueryFromOptions<TModel extends GenericModel>(
   // Build related subqueries (fetch clauses)
   let fetchClauses = "";
   if (options.related && options.related.length > 0) {
-    const subqueries = options.related.map((rel) => buildSubquery(rel));
+    const subqueries = options.related.map((rel) => buildSubquery(rel, schema));
     fetchClauses = ", " + subqueries.join(", ");
   }
 
@@ -365,6 +487,7 @@ export function buildQueryFromOptions<TModel extends GenericModel>(
 
   return {
     query,
+    hash: cyrb53(query, 0),
     vars: Object.keys(vars).length > 0 ? vars : undefined,
   };
 }
@@ -373,7 +496,8 @@ export function buildQueryFromOptions<TModel extends GenericModel>(
  * Build a subquery for a related field
  */
 function buildSubquery(
-  rel: RelatedQuery & { foreignKeyField?: string }
+  rel: RelatedQuery & { foreignKeyField?: string },
+  schema?: SchemaStructure
 ): string {
   const { relatedTable, alias, modifier, cardinality } = rel;
   const foreignKeyField = rel.foreignKeyField || alias;
@@ -424,8 +548,34 @@ function buildSubquery(
 
     // Handle nested relationships
     if (subOptions.related && subOptions.related.length > 0) {
-      const nestedSubqueries = subOptions.related.map((nestedRel) =>
-        buildSubquery(nestedRel)
+      // Resolve nested relationship metadata if schema is available
+      const resolvedNestedRels = subOptions.related.map((nestedRel) => {
+        if (schema) {
+          // Look up the actual relationship metadata from schema
+          const relationship = schema.relationships.find(
+            (r) => r.from === relatedTable && r.field === nestedRel.alias
+          );
+
+          if (relationship) {
+            // Use the resolved table name and add foreign key field
+            const nestedForeignKeyField =
+              relationship.cardinality === "many"
+                ? relatedTable
+                : nestedRel.alias;
+
+            return {
+              ...nestedRel,
+              relatedTable: relationship.to,
+              cardinality: relationship.cardinality,
+              foreignKeyField: nestedForeignKeyField,
+            } as RelatedQuery & { foreignKeyField: string };
+          }
+        }
+        return nestedRel;
+      });
+
+      const nestedSubqueries = resolvedNestedRels.map((nestedRel) =>
+        buildSubquery(nestedRel, schema)
       );
       subquerySelect += ", " + nestedSubqueries.join(", ");
     }

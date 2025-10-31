@@ -1,6 +1,12 @@
 import type { Surreal } from "surrealdb";
 import type { SyncedDb } from "../index";
 import { GenericSchema } from "../lib/models";
+import type {
+  SchemaStructure,
+  TableNames,
+  GetTable,
+  TableModel,
+} from "@spooky/query-builder";
 
 declare global {
   interface Window {
@@ -10,10 +16,38 @@ declare global {
 
 export type CacheStrategy = "memory" | "indexeddb";
 
-export interface SyncedDbConfig<Schema extends GenericSchema> {
-  tables: (keyof Schema & string)[];
-  /** Schema for the database */
-  schema: string;
+/**
+ * Infer Schema type (Record<TableName, Model>) from schema const
+ */
+export type InferSchemaFromConst<S extends SchemaStructure> = {
+  [K in TableNames<S>]: TableModel<GetTable<S, K>>;
+};
+
+/**
+ * Infer Relationships type from schema const's relationships array
+ * Converts from array format to nested object format
+ */
+export type InferRelationshipsFromConst<
+  S extends SchemaStructure,
+  Schema extends GenericSchema
+> = {
+  [TableName in TableNames<S>]: {
+    [Rel in Extract<
+      S["relationships"][number],
+      { from: TableName }
+    > as Rel["field"]]: {
+      model: Rel["to"] extends keyof Schema ? Schema[Rel["to"]] : any;
+      table: Rel["to"];
+      cardinality: Rel["cardinality"];
+    };
+  };
+};
+
+export interface SyncedDbConfig<S extends SchemaStructure> {
+  /** Schema const with runtime metadata (tables and relationships) */
+  schema: S;
+  /** SurrealQL schema string for database provisioning */
+  schemaSurql: string;
   /** Remote database URL (optional) */
   remoteUrl?: string;
   /** Local database name for WASM storage */
@@ -26,8 +60,6 @@ export interface SyncedDbConfig<Schema extends GenericSchema> {
   namespace?: string;
   /** Database name */
   database?: string;
-  /** Relationships metadata for automatic RecordId conversion (optional, type-only) */
-  relationships?: Record<string, Record<string, { model: any; table: string; cardinality: "one" | "many" }>>;
 }
 
 export interface LocalDbConfig {

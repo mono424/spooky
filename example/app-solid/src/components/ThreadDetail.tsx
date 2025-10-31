@@ -18,7 +18,7 @@ const createQuery = ({
     .find({
       id: threadId,
     })
-    .related("author")
+    .related("author", (q) => q)
     .related("comments", (q) => {
       if (commentFilter === "mine" && userId) {
         return q.where({ author: userId });

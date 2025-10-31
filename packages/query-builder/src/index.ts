@@ -1,5 +1,10 @@
 // Core exports
-export { QueryBuilder, buildQueryFromOptions } from "./query-builder";
+export {
+  QueryBuilder,
+  buildQueryFromOptions,
+  FinalQuery,
+  InnerQuery,
+} from "./query-builder";
 
 // Type exports
 export type {

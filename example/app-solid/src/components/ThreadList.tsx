@@ -6,12 +6,8 @@ import { useQuery } from "@spooky/client-solid";
 export function ThreadList() {
   const navigate = useNavigate();
 
-  const threadsQuery = db.query.thread
-    .find({})
-    .orderBy("created_at", "desc")
-    .query();
-
-  const threads = useQuery(threadsQuery);
+  const threadsQuery = db.query("thread").orderBy("created_at", "desc").build();
+  const threads = useQuery(() => threadsQuery);
 
   const handleThreadClick = (threadId: string) => {
     navigate(`/thread/${threadId}`);

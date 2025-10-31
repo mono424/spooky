@@ -1,5 +1,5 @@
+import { QueryInfo } from "@spooky/query-builder";
 import { LiveMessage, LiveSubscription, Surreal, Uuid } from "surrealdb";
-import { QueryInfo } from "./table-queries";
 
 /**
  * Represents a tracked live query on the remote server
