@@ -53,10 +53,21 @@ export interface QueryOptions<
 export interface LiveQueryOptions<TModel extends GenericModel>
   extends Omit<QueryOptions<TModel, boolean>, "orderBy"> {}
 
-// Query modifier type for related queries
+// Import schema types for schema-aware modifiers
+import type { SchemaStructure, TableNames, GetTable, TableModel, TableRelationships, GetRelationship } from "./table-schema";
+
+// Query modifier type for related queries - now schema-aware!
 export type QueryModifier<TModel extends GenericModel> = (
   builder: QueryModifierBuilder<TModel>
 ) => QueryModifierBuilder<TModel>;
+
+// Schema-aware query modifier that knows about relationships
+export type SchemaAwareQueryModifier<
+  S extends SchemaStructure,
+  TableName extends TableNames<S>
+> = (
+  builder: SchemaAwareQueryModifierBuilder<S, TableName>
+) => SchemaAwareQueryModifierBuilder<S, TableName>;
 
 // Simplified query builder interface for modifying subqueries
 export interface QueryModifierBuilder<TModel extends GenericModel> {
@@ -70,6 +81,26 @@ export interface QueryModifierBuilder<TModel extends GenericModel> {
     modifier?: QueryModifier<any>
   ): this;
   _getOptions(): QueryOptions<TModel, boolean>;
+}
+
+// Schema-aware query builder interface that understands relationships
+export interface SchemaAwareQueryModifierBuilder<
+  S extends SchemaStructure,
+  TableName extends TableNames<S>
+> {
+  where(conditions: Partial<TableModel<GetTable<S, TableName>>>): this;
+  select(...fields: ((keyof TableModel<GetTable<S, TableName>> & string) | "*")[]): this;
+  limit(count: number): this;
+  offset(count: number): this;
+  orderBy(field: keyof TableModel<GetTable<S, TableName>> & string, direction?: "asc" | "desc"): this;
+  related<
+    Field extends TableRelationships<S, TableName>["field"],
+    Rel extends GetRelationship<S, TableName, Field>
+  >(
+    relatedField: Field,
+    modifier?: SchemaAwareQueryModifier<S, Rel["to"]>
+  ): this;
+  _getOptions(): QueryOptions<TableModel<GetTable<S, TableName>>, boolean>;
 }
 
 /**

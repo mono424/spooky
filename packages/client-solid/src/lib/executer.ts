@@ -39,7 +39,22 @@ export class Executer<Schema extends SchemaStructure> {
     if (this.queryExists(query.hash)) return;
     this.addQuery(query.hash, query);
     await this.hydrateLocal(query);
+    this.hydrateRemote(query);
     await this.subscribeRemote(query);
+  }
+
+  private async hydrateRemote<
+    T extends { columns: Record<string, ColumnSchema> }
+  >(query: InnerQuery<T, boolean>): Promise<void> {
+    const { query: selectQuery, vars: selectQueryVars } = query.selectQuery();
+    const remoteQuery = this.db.queryRemote<TableModel<T>>(
+      selectQuery,
+      selectQueryVars
+    );
+    remoteQuery.collect().then(([data]) => {
+      console.log("[Executer.hydrateRemote] Remote data:", data);
+      query.setData(data);
+    });
   }
 
   private async hydrateLocal<

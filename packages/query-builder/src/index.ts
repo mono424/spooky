@@ -16,6 +16,8 @@ export type {
   LiveQueryOptions,
   QueryModifier,
   QueryModifierBuilder,
+  SchemaAwareQueryModifier,
+  SchemaAwareQueryModifierBuilder,
   RelatedQuery,
   RelationshipDefinition,
   RelationshipsMetadata,

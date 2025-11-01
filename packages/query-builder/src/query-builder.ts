@@ -6,6 +6,8 @@ import type {
   QueryModifier,
   QueryModifierBuilder,
   RelatedQuery,
+  SchemaAwareQueryModifier,
+  SchemaAwareQueryModifierBuilder,
 } from "./types";
 import type {
   TableNames,
@@ -251,21 +253,30 @@ export class FinalQuery<
 }
 
 /**
- * Internal query modifier builder implementation
+ * Schema-aware query modifier builder implementation
+ * This version provides full type safety for nested relationships
  */
-class QueryModifierBuilderImpl<
-  TModel extends GenericModel,
-  IsOne extends boolean
-> implements QueryModifierBuilder<TModel>
+class SchemaAwareQueryModifierBuilderImpl<
+  S extends SchemaStructure,
+  TableName extends TableNames<S>
+> implements SchemaAwareQueryModifierBuilder<S, TableName>
 {
-  private options: QueryOptions<TModel, IsOne> = {};
+  private options: QueryOptions<TableModel<GetTable<S, TableName>>, boolean> =
+    {};
 
-  where(conditions: Partial<TModel>): this {
+  constructor(
+    private readonly tableName: TableName,
+    private readonly schema: S
+  ) {}
+
+  where(conditions: Partial<TableModel<GetTable<S, TableName>>>): this {
     this.options.where = { ...this.options.where, ...conditions };
     return this;
   }
 
-  select(...fields: ((keyof TModel & string) | "*")[]): this {
+  select(
+    ...fields: ((keyof TableModel<GetTable<S, TableName>> & string) | "*")[]
+  ): this {
     if (this.options.select) {
       throw new Error("Select can only be called once per query");
     }
@@ -284,20 +295,25 @@ class QueryModifierBuilderImpl<
   }
 
   orderBy(
-    field: keyof TModel & string,
+    field: keyof TableModel<GetTable<S, TableName>> & string,
     direction: "asc" | "desc" = "asc"
   ): this {
     this.options.orderBy = {
       ...this.options.orderBy,
       [field]: direction,
-    } as Partial<Record<keyof TModel, "asc" | "desc">>;
+    } as Partial<
+      Record<keyof TableModel<GetTable<S, TableName>>, "asc" | "desc">
+    >;
     return this;
   }
 
-  // Broad implementation to satisfy QueryModifierBuilder interface
-  related<Field extends string>(
+  // Schema-aware implementation for nested relationships with full type inference
+  related<
+    Field extends TableRelationships<S, TableName>["field"],
+    Rel extends GetRelationship<S, TableName, Field>
+  >(
     relatedField: Field,
-    modifier?: QueryModifier<GenericModel>
+    modifier?: SchemaAwareQueryModifier<S, Rel["to"]>
   ): this {
     if (!this.options.related) {
       this.options.related = [];
@@ -308,17 +324,36 @@ class QueryModifierBuilderImpl<
     );
 
     if (!exists) {
+      // Look up the relationship from schema
+      const relationship = this.schema.relationships.find(
+        (r) => r.from === this.tableName && r.field === relatedField
+      );
+
+      if (!relationship) {
+        throw new Error(
+          `Relationship '${String(relatedField)}' not found for table '${
+            this.tableName
+          }'`
+        );
+      }
+
+      const relatedTable = relationship.to;
+      const cardinality = relationship.cardinality;
+      const foreignKeyField =
+        cardinality === "many" ? this.tableName : relatedField;
+
       this.options.related.push({
-        relatedTable: relatedField,
-        alias: relatedField,
-        modifier,
-        cardinality: "many", // Default to many for subqueries without explicit cardinality
-      });
+        relatedTable,
+        alias: relatedField as string,
+        modifier: modifier as QueryModifier<GenericModel>,
+        cardinality,
+        foreignKeyField: foreignKeyField as string,
+      } as RelatedQuery & { foreignKeyField: string });
     }
     return this;
   }
 
-  _getOptions(): QueryOptions<TModel, IsOne> {
+  _getOptions(): QueryOptions<TableModel<GetTable<S, TableName>>, boolean> {
     return this.options;
   }
 }
@@ -417,8 +452,10 @@ export class QueryBuilder<
     Rel extends GetRelationship<S, TableName, Field>
   >(
     field: Field,
-    modifierOrCardinality?: QueryModifier<GenericModel> | Rel["cardinality"],
-    modifier?: QueryModifier<GenericModel>
+    modifierOrCardinality?:
+      | SchemaAwareQueryModifier<S, Rel["to"]>
+      | Rel["cardinality"],
+    modifier?: SchemaAwareQueryModifier<S, Rel["to"]>
   ): QueryBuilder<
     S,
     TableName,
@@ -458,7 +495,7 @@ export class QueryBuilder<
 
     // Determine cardinality and modifier based on arguments
     let actualCardinality: "one" | "many";
-    let actualModifier: QueryModifier<GenericModel> | undefined;
+    let actualModifier: SchemaAwareQueryModifier<S, Rel["to"]> | undefined;
 
     if (typeof modifierOrCardinality === "function") {
       // Signature: related(field, modifier)
@@ -481,10 +518,16 @@ export class QueryBuilder<
     const foreignKeyField =
       actualCardinality === "many" ? this.tableName : field;
 
+    // Cast the schema-aware modifier to the runtime type
+    // At runtime, QueryModifierBuilderImpl will work correctly with the schema
+    const wrappedModifier = actualModifier as
+      | QueryModifier<GenericModel>
+      | undefined;
+
     this.options.related.push({
       relatedTable: relationship.to,
       alias: field as string,
-      modifier: actualModifier,
+      modifier: wrappedModifier,
       cardinality: actualCardinality,
       foreignKeyField: foreignKeyField as string,
     } as RelatedQuery & { foreignKeyField: string });
@@ -551,7 +594,7 @@ export function buildQueryFromOptions<
   method: "SELECT" | "LIVE SELECT",
   tableName: string,
   options: QueryOptions<TModel, IsOne>,
-  schema?: SchemaStructure
+  schema: SchemaStructure
 ): QueryInfo {
   if (options.isOne) {
     options.limit = 1;
@@ -626,7 +669,7 @@ export function buildQueryFromOptions<
  */
 function buildSubquery(
   rel: RelatedQuery & { foreignKeyField?: string },
-  schema?: SchemaStructure
+  schema: SchemaStructure
 ): string {
   const { relatedTable, alias, modifier, cardinality } = rel;
   const foreignKeyField = rel.foreignKeyField || alias;
@@ -638,7 +681,10 @@ function buildSubquery(
 
   // If there's a modifier, apply it to get the sub-options
   if (modifier) {
-    const modifierBuilder = new QueryModifierBuilderImpl();
+    const modifierBuilder = new SchemaAwareQueryModifierBuilderImpl(
+      relatedTable,
+      schema
+    );
     modifier(modifierBuilder);
     const subOptions = modifierBuilder._getOptions();
 
