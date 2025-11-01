@@ -84,7 +84,7 @@ function parseObjectIdsToRecordId(obj: unknown, tableName?: string): unknown {
 
 type Executor<T extends { columns: Record<string, ColumnSchema> }> = (
   query: InnerQuery<T, boolean>
-) => Promise<void>;
+) => { cleanup: () => void };
 
 type InnerQueryListener<T extends { columns: Record<string, ColumnSchema> }> = {
   callback: (data: TableModel<T>[]) => void;
@@ -152,20 +152,31 @@ export class InnerQuery<
   }
 
   public run() {
-    this.executor(this);
+    const { cleanup } = this.executor(this);
     const unsubs: (() => void)[] = [];
+
+    const subscribe = (callback: (data: TableModel<T>[]) => void) => {
+      const unsub = this.addListener({ callback });
+      unsubs.push(unsub);
+      return unsub;
+    };
+
+    const unsubscribeAll = () => {
+      const fns = unsubs.splice(0, unsubs.length);
+      fns.forEach((sub) => sub());
+    };
+
+    const kill = () => {
+      unsubscribeAll();
+      cleanup();
+    };
+
     return {
       data: this.data,
       hash: this.hash,
-      subscribe: (callback: (data: TableModel<T>[]) => void) => {
-        const unsub = this.addListener({ callback });
-        unsubs.push(unsub);
-        return unsub;
-      },
-      unsubscribeAll: () => {
-        const fns = unsubs.splice(0, unsubs.length);
-        fns.forEach((sub) => sub());
-      },
+      subscribe,
+      unsubscribeAll,
+      kill,
     };
   }
 }

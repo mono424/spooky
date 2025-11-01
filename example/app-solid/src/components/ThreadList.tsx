@@ -11,11 +11,8 @@ export function ThreadList() {
     .related("author")
     .orderBy("created_at", "desc")
     .build();
-  const [threads] = useQuery(() => threadsQuery);
 
-  createEffect(() => {
-    console.log("[ThreadList] Threads:", threads());
-  });
+  const [threads] = useQuery(() => threadsQuery);
 
   const handleThreadClick = (threadId: string) => {
     navigate(`/thread/${threadId}`);

@@ -10,22 +10,17 @@ import { SyncedDb } from "..";
 import { LiveMessage, Uuid } from "surrealdb";
 
 export class Executer<Schema extends SchemaStructure> {
-  private _queries: Map<number, InnerQuery<any, boolean>[]> = new Map();
+  private _queries: Map<number, InnerQuery<any, boolean>> = new Map();
 
   constructor(private readonly db: SyncedDb<Schema>) {}
 
   private addQuery(queryKey: number, query: InnerQuery<any, boolean>) {
-    if (!this._queries.has(queryKey)) {
-      this._queries.set(queryKey, []);
-    }
-    this._queries.get(queryKey)!.push(query);
+    this._queries.set(queryKey, query);
   }
 
   private removeQuery(queryKey: number, query: InnerQuery<any, boolean>) {
     if (this.queryExists(queryKey)) {
-      this._queries
-        .get(queryKey)!
-        .splice(this._queries.get(queryKey)!.indexOf(query), 1);
+      this._queries.delete(queryKey);
     }
   }
 
@@ -33,9 +28,20 @@ export class Executer<Schema extends SchemaStructure> {
     return this._queries.has(queryKey);
   }
 
-  async run<T extends { columns: Record<string, ColumnSchema> }>(
+  run<T extends { columns: Record<string, ColumnSchema> }>(
     query: InnerQuery<T, boolean>
-  ): Promise<void> {
+  ): { cleanup: () => void } {
+    console.log("[Executer.run] Run query:", query.hash);
+    this.init(query);
+    return {
+      cleanup: () => {
+        console.log("[Executer.run] Cleanup query:", query.hash);
+        this.removeQuery(query.hash, query);
+      },
+    };
+  }
+
+  private async init(query: InnerQuery<any, boolean>): Promise<void> {
     if (this.queryExists(query.hash)) return;
     this.addQuery(query.hash, query);
     await this.hydrateLocal(query);

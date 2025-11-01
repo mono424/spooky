@@ -104,13 +104,10 @@ export function useQuery<T extends FinalQuery<any, any, any, any, any>>(
     if (query.hash === previousQueryHash) return;
     previousQueryHash = query.hash;
 
-    const { data, subscribe } = query.select();
+    const { data, subscribe, kill } = query.select();
     setData(() => data as ResultType);
-
-    const unsubscribe = subscribe((newData) =>
-      setData(() => newData as ResultType)
-    );
-    onCleanup(() => unsubscribe());
+    subscribe((newData) => setData(() => newData as ResultType));
+    onCleanup(() => kill());
   });
 
   // Check if query is a "one" query once
