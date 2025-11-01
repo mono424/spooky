@@ -16,8 +16,10 @@ import { Syncer } from "./lib/syncer";
 import { WALManager } from "./lib/wal";
 import { proxy } from "valtio";
 import {
+  GetTable,
   QueryBuilder,
   SchemaStructure,
+  TableModel,
   TableNames,
 } from "@spooky/query-builder";
 import { Executer } from "./lib/executer";
@@ -30,9 +32,7 @@ export type {
   GenericSchema,
   ModelPayload,
 } from "./lib/models";
-export { useQuery } from "./lib/use-query";
-
-export { snapshot, type Snapshot } from "valtio";
+export { useQuery, useQueryOne } from "./lib/use-query";
 
 // Re-export query builder types for convenience
 export type {
@@ -43,6 +43,9 @@ export type {
   RelationshipDefinition,
   InferRelatedModelFromMetadata,
   GetCardinality,
+  GetTable,
+  TableModel,
+  TableNames,
 } from "@spooky/query-builder";
 
 export type QueryResponse<T> = Omit<ReturnType<Surreal["query"]>, "collect"> & {
@@ -94,7 +97,9 @@ export class SyncedDb<const Schema extends SchemaStructure> {
   private executer: Executer<Schema>;
   private syncer: Syncer | null = null;
   private walManager: WALManager | null = null;
-  private currentUser: any = proxy({ value: null });
+  private currentUser: {
+    value: TableModel<GetTable<Schema, TableNames<Schema>>> | null;
+  } = proxy({ value: null });
 
   constructor(config: SyncedDbConfig<Schema>) {
     this.config = config;
@@ -104,7 +109,11 @@ export class SyncedDb<const Schema extends SchemaStructure> {
   public query<TName extends TableNames<Schema>>(
     table: TName
   ): QueryBuilder<Schema, TName> {
-    return new QueryBuilder(this.config.schema, table, this.executer.run);
+    return new QueryBuilder(
+      this.config.schema,
+      table,
+      this.executer.run.bind(this.executer)
+    );
   }
 
   /**
@@ -236,8 +245,8 @@ export class SyncedDb<const Schema extends SchemaStructure> {
   /**
    * Get current user as observable
    */
-  getCurrentUser<T extends keyof Schema>(): {
-    value: ModelPayload<Schema[T]> | null;
+  getCurrentUser<T extends TableNames<Schema>>(): {
+    value: TableModel<GetTable<Schema, T>> | null;
   } {
     return this.currentUser;
   }
@@ -245,9 +254,9 @@ export class SyncedDb<const Schema extends SchemaStructure> {
   /**
    * Check authentication status and restore session
    */
-  async checkAuth<T extends keyof Schema>(
+  async checkAuth<T extends TableNames<Schema>>(
     userTable: T
-  ): Promise<ModelPayload<Schema[T]> | null> {
+  ): Promise<TableModel<GetTable<Schema, T>> | null> {
     try {
       const tokens = await this.getStoredAuthTokens();
       if (!tokens.local) {
@@ -268,7 +277,7 @@ export class SyncedDb<const Schema extends SchemaStructure> {
       }
 
       // Query authenticated user info
-      const [users] = await this.queryLocal<NonNullable<Schema[T]>>(
+      const [users] = await this.queryLocal<TableModel<GetTable<Schema, T>>>(
         `SELECT * FROM $auth`
       ).collect();
 
@@ -292,13 +301,13 @@ export class SyncedDb<const Schema extends SchemaStructure> {
   /**
    * Common authentication flow: authenticate remote, sync user, authenticate local
    */
-  private async authenticateRemoteAndSyncUser<T extends keyof Schema>(
+  private async authenticateRemoteAndSyncUser<T extends TableNames<Schema>>(
     auth: AnyAuth,
     isSignUp: boolean = false
   ): Promise<{
     remoteResponse: AuthResponse;
     localResponse: AuthResponse;
-    user: ModelPayload<Schema[T]>;
+    user: TableModel<GetTable<Schema, T>>;
   }> {
     if (!this.connections?.local) throw new Error("SyncedDb not initialized");
     if (!this.connections?.remote)
@@ -331,7 +340,7 @@ export class SyncedDb<const Schema extends SchemaStructure> {
     // Query user from remote database
     const [remoteUsers] = await this.connections.remote
       .query(`SELECT * FROM $auth`)
-      .collect<[ModelPayload<Schema[T]>[]]>();
+      .collect<[TableModel<GetTable<Schema, T>>[]]>();
 
     if (!remoteUsers || remoteUsers.length === 0) {
       throw new Error(
@@ -381,24 +390,26 @@ export class SyncedDb<const Schema extends SchemaStructure> {
     };
   }
 
-  async signIn<T extends keyof Schema>(auth: AnyAuth): Promise<AuthResponse> {
+  async signIn<T extends TableNames<Schema>>(
+    auth: AnyAuth
+  ): Promise<AuthResponse> {
     const { remoteResponse, localResponse, user } =
       await this.authenticateRemoteAndSyncUser<T>(auth, false);
 
     await this.storeAuthTokens(localResponse.token, remoteResponse.token);
-    this.currentUser.value = { id: "abc123" }; //wrapModelIdWithRef(user);
+    this.currentUser.value = wrapModelIdWithRef(user);
 
     return remoteResponse;
   }
 
-  async signUp<T extends keyof Schema>(
+  async signUp<T extends TableNames<Schema>>(
     auth: AccessRecordAuth
   ): Promise<AuthResponse> {
     const { remoteResponse, localResponse, user } =
       await this.authenticateRemoteAndSyncUser<T>(auth, true);
 
     await this.storeAuthTokens(localResponse.token, remoteResponse.token);
-    this.currentUser.value = { id: "abc123" }; //wrapModelIdWithRef(user);
+    this.currentUser.value = wrapModelIdWithRef(user);
 
     return remoteResponse;
   }

@@ -15,8 +15,8 @@ import type {
   GetRelationship,
   SchemaStructure,
   TableFieldNames,
+  ColumnSchema,
 } from "./table-schema";
-import { proxy, subscribe } from "valtio";
 
 /**
  * Parse a string ID to RecordId
@@ -80,39 +80,57 @@ function parseObjectIdsToRecordId(obj: unknown, tableName?: string): unknown {
   return obj;
 }
 
-type Executor<T> = (query: InnerQuery<T>) => Promise<void>;
+type Executor<T extends { columns: Record<string, ColumnSchema> }> = (
+  query: InnerQuery<T, boolean>
+) => Promise<void>;
 
-export interface InnerQueryResult<T> {
-  data: T | null;
+export interface InnerQueryResult<
+  T extends { columns: Record<string, ColumnSchema> }
+> {
+  data: TableModel<T>[];
   hash: number;
-  subscribe: (callback: (data: T | null) => void) => () => void;
+  subscribe: (callback: (data: TableModel<T>[]) => void) => () => void;
   unsubscribeAll: () => void;
 }
 
-export class InnerQuery<T> {
+type InnerQueryListener<T extends { columns: Record<string, ColumnSchema> }> = {
+  callback: (data: TableModel<T>[]) => void;
+};
+
+export class InnerQuery<
+  T extends { columns: Record<string, ColumnSchema> },
+  IsOne extends boolean
+> {
   private _hash: number;
-  private _data: { value: T | null } = { value: null };
+  private _data: TableModel<T>[];
+  private _listeners: InnerQueryListener<T>[] = [];
 
   constructor(
     private readonly tableName: string,
-    private readonly options: QueryOptions<GenericModel>,
+    private readonly options: QueryOptions<GenericModel, IsOne>,
     private readonly schema: SchemaStructure,
     private readonly executor: Executor<T>
   ) {
     this._hash = cyrb53(this.selectQuery().query, 0);
-    this._data = proxy({ value: null });
+    this._data = [];
+    this._listeners = [];
   }
 
   get hash(): number {
     return this._hash;
   }
 
-  get data(): { value: T | null } {
+  get isOne(): boolean {
+    return this.options.isOne ?? false;
+  }
+
+  get data(): TableModel<T>[] {
     return this._data;
   }
 
-  public setData(data: T): void {
-    this._data.value = data;
+  public setData(data: TableModel<T>[]): void {
+    this._data = data;
+    this._listeners.forEach(({ callback }) => callback(data));
   }
 
   public selectQuery(): QueryInfo {
@@ -133,14 +151,21 @@ export class InnerQuery<T> {
     );
   }
 
+  private addListener(listener: InnerQueryListener<T>): () => void {
+    this._listeners.push(listener);
+    return () => {
+      this._listeners = this._listeners.filter((l) => l !== listener);
+    };
+  }
+
   public run(): InnerQueryResult<T> {
     this.executor(this);
     const unsubs: (() => void)[] = [];
     return {
-      data: this.data.value,
+      data: this.data,
       hash: this.hash,
-      subscribe: (callback: (data: T | null) => void) => {
-        const unsub = subscribe(this.data, () => callback(this.data.value));
+      subscribe: (callback: (data: TableModel<T>[]) => void) => {
+        const unsub = this.addListener({ callback });
         unsubs.push(unsub);
         return unsub;
       },
@@ -152,16 +177,19 @@ export class InnerQuery<T> {
   }
 }
 
-export class FinalQuery<T> {
-  private _innerQuery: InnerQuery<T>;
+export class FinalQuery<
+  T extends { columns: Record<string, ColumnSchema> },
+  IsOne extends boolean
+> {
+  private _innerQuery: InnerQuery<T, IsOne>;
 
   constructor(
     private readonly tableName: string,
-    private readonly options: QueryOptions<GenericModel>,
+    private readonly options: QueryOptions<GenericModel, IsOne>,
     private readonly schema: SchemaStructure,
     private readonly executor: Executor<T>
   ) {
-    this._innerQuery = new InnerQuery(
+    this._innerQuery = new InnerQuery<T, IsOne>(
       this.tableName,
       this.options,
       this.schema,
@@ -173,8 +201,11 @@ export class FinalQuery<T> {
     return this._innerQuery.hash;
   }
 
-  get data(): { value: T | null } {
-    return this._innerQuery.data;
+  get data(): IsOne extends true ? TableModel<T> | null : TableModel<T>[] {
+    if (this.options.isOne) {
+      return (this._innerQuery.data[0] ?? null) as any;
+    }
+    return this._innerQuery.data as any;
   }
 
   select(): InnerQueryResult<T> {
@@ -259,14 +290,17 @@ class QueryModifierBuilderImpl<TModel extends GenericModel>
  */
 export class QueryBuilder<
   const S extends SchemaStructure,
-  const TableName extends TableNames<S>
+  const TableName extends TableNames<S>,
+  IsOne extends boolean = false
 > {
-  private options: QueryOptions<TableModel<GetTable<S, TableName>>> = {};
-
   constructor(
     private readonly schema: S,
     private readonly tableName: TableName,
-    private readonly executer: Executor<TableModel<GetTable<S, TableName>>>
+    private readonly executer: Executor<GetTable<S, TableName>>,
+    private options: QueryOptions<
+      TableModel<GetTable<S, TableName>>,
+      IsOne
+    > = {}
   ) {}
 
   /**
@@ -274,7 +308,7 @@ export class QueryBuilder<
    */
   where(
     conditions: Partial<TableModel<GetTable<S, TableName>>>
-  ): QueryBuilder<S, TableName> {
+  ): QueryBuilder<S, TableName, IsOne> {
     this.options.where = { ...this.options.where, ...conditions };
     return this;
   }
@@ -284,7 +318,7 @@ export class QueryBuilder<
    */
   select(
     ...fields: ((keyof TableModel<GetTable<S, TableName>> & string) | "*")[]
-  ): QueryBuilder<S, TableName> {
+  ): QueryBuilder<S, TableName, IsOne> {
     if (this.options.select) {
       throw new Error("Select can only be called once per query");
     }
@@ -298,7 +332,7 @@ export class QueryBuilder<
   orderBy(
     field: TableFieldNames<GetTable<S, TableName>>,
     direction: "asc" | "desc" = "asc"
-  ): QueryBuilder<S, TableName> {
+  ): QueryBuilder<S, TableName, IsOne> {
     this.options.orderBy = {
       ...this.options.orderBy,
       [field]: direction,
@@ -311,7 +345,7 @@ export class QueryBuilder<
   /**
    * Add limit to the query (only for non-live queries)
    */
-  limit(count: number): QueryBuilder<S, TableName> {
+  limit(count: number): QueryBuilder<S, TableName, IsOne> {
     this.options.limit = count;
     return this;
   }
@@ -319,9 +353,18 @@ export class QueryBuilder<
   /**
    * Add offset to the query (only for non-live queries)
    */
-  offset(count: number): QueryBuilder<S, TableName> {
+  offset(count: number): QueryBuilder<S, TableName, IsOne> {
     this.options.offset = count;
     return this;
+  }
+
+  one(): QueryBuilder<S, TableName, true> {
+    return new QueryBuilder<S, TableName, true>(
+      this.schema,
+      this.tableName,
+      this.executer,
+      { ...this.options, isOne: true }
+    );
   }
 
   /**
@@ -335,7 +378,7 @@ export class QueryBuilder<
     field: Field,
     cardinalityOrModifier?: Rel["cardinality"] | QueryModifier<GenericModel>,
     modifier?: QueryModifier<GenericModel>
-  ): this {
+  ): QueryBuilder<S, TableName, IsOne> {
     if (!this.options.related) {
       this.options.related = [];
     }
@@ -379,7 +422,7 @@ export class QueryBuilder<
   /**
    * Get the current query options
    */
-  getOptions(): QueryOptions<TableModel<GetTable<S, TableName>>> {
+  getOptions(): QueryOptions<TableModel<GetTable<S, TableName>>, IsOne> {
     return this.options;
   }
 
@@ -387,8 +430,8 @@ export class QueryBuilder<
    * Build query methods for SELECT and LIVE SELECT
    * @returns Object with select() and selectLive() methods
    */
-  build(): FinalQuery<TableModel<GetTable<S, TableName>>> {
-    return new FinalQuery<TableModel<GetTable<S, TableName>>>(
+  build(): FinalQuery<GetTable<S, TableName>, IsOne> {
+    return new FinalQuery<GetTable<S, TableName>, IsOne>(
       this.tableName,
       this.options,
       this.schema,
@@ -421,12 +464,18 @@ function cyrb53(str: string, seed: number): number {
  * @param schema - Optional schema for resolving nested relationships
  * @returns QueryInfo with the generated SQL and variables
  */
-export function buildQueryFromOptions<TModel extends GenericModel>(
+export function buildQueryFromOptions<
+  TModel extends GenericModel,
+  IsOne extends boolean = false
+>(
   method: "SELECT" | "LIVE SELECT",
   tableName: string,
-  options: QueryOptions<TModel>,
+  options: QueryOptions<TModel, IsOne>,
   schema?: SchemaStructure
 ): QueryInfo {
+  if (options.isOne) {
+    options.limit = 1;
+  }
   const isLiveQuery = method === "LIVE SELECT";
 
   // Parse where conditions to convert string IDs to RecordId

@@ -36,7 +36,10 @@ export interface RelatedQuery {
   cardinality: "one" | "many";
 }
 
-export interface QueryOptions<TModel extends GenericModel> {
+export interface QueryOptions<
+  TModel extends GenericModel,
+  IsOne extends boolean = false
+> {
   select?: ((keyof TModel & string) | "*")[];
   where?: Partial<TModel>;
   limit?: number;
@@ -44,6 +47,7 @@ export interface QueryOptions<TModel extends GenericModel> {
   orderBy?: Partial<Record<keyof TModel, "asc" | "desc">>;
   /** Related tables to include via subqueries */
   related?: RelatedQuery[];
+  isOne?: IsOne;
 }
 
 export interface LiveQueryOptions<TModel extends GenericModel>

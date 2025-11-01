@@ -1,8 +1,9 @@
 import { createContext, useContext, createSignal, JSX, Show } from "solid-js";
-import { db, dbConfig, type Schema } from "../db";
-import type { Model } from "@spooky/client-solid";
+import { db, dbConfig } from "../db";
+import { schema } from "../schema.gen";
+import type { GetTable, TableModel } from "@spooky/client-solid";
 
-type User = Model<Schema["user"]>;
+type User = TableModel<GetTable<typeof schema, "user">>;
 
 interface AuthContextType {
   user: () => User | null;
@@ -22,7 +23,7 @@ export function AuthProvider(props: { children: JSX.Element }) {
   const checkAuth = async () => {
     const authUser = await db.checkAuth("user");
     if (authUser) {
-      setUser(authUser as User);
+      setUser(authUser);
     }
     setIsLoading(false);
   };
@@ -42,7 +43,7 @@ export function AuthProvider(props: { children: JSX.Element }) {
       });
       // Update user from db
       const currentUser = db.getCurrentUser<"user">();
-      setUser(currentUser.value as User | null);
+      setUser(currentUser.value);
     } catch (error) {
       console.error("Sign in failed:", error);
       throw error;

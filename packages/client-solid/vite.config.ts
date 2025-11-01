@@ -11,7 +11,7 @@ export default defineConfig({
       formats: ["es", "cjs"],
     },
     rollupOptions: {
-      external: ["surrealdb", "@surrealdb/wasm"],
+      external: ["surrealdb", "@surrealdb/wasm", "solid-js"],
       output: {
         preserveModules: false,
         globals: {

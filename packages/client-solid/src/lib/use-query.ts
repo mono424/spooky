@@ -1,11 +1,17 @@
 import { onCleanup, createEffect, Accessor, createSignal } from "solid-js";
-import type { FinalQuery, SchemaStructure } from "@spooky/query-builder";
-import { SyncedDbContext } from "..";
+import type {
+  ColumnSchema,
+  FinalQuery,
+  TableModel,
+} from "@spooky/query-builder";
 
 // Implementation
-export function useQuery<T>(queryResult: Accessor<FinalQuery<T>>) {
+export function useQuery<
+  T extends { columns: Record<string, ColumnSchema> },
+  IsOne extends boolean
+>(queryResult: Accessor<FinalQuery<T, IsOne>>): [Accessor<TableModel<T>[]>] {
   // Create internal signal to store data
-  const [data, setData] = createSignal<T | null>(null);
+  const [data, setData] = createSignal<TableModel<T>[]>([]);
 
   // Track the previous query to detect changes
   let previousQueryHash: number | null = null;
@@ -23,5 +29,17 @@ export function useQuery<T>(queryResult: Accessor<FinalQuery<T>>) {
     onCleanup(() => unsubscribe());
   });
 
-  return data as any;
+  return [data];
+}
+
+// Implementation
+export function useQueryOne<
+  T extends { columns: Record<string, ColumnSchema> },
+  IsOne extends boolean
+>(queryResult: Accessor<FinalQuery<T, IsOne>>): [Accessor<TableModel<T>>] {
+  const [dataArr] = useQuery(queryResult);
+
+  const data = () => dataArr()[0];
+
+  return [data];
 }

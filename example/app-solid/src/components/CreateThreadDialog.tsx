@@ -2,7 +2,6 @@ import { createSignal, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { db } from "../db";
 import { useAuth } from "../lib/auth";
-import { snapshot } from "@spooky/client-solid";
 
 interface CreateThreadDialogProps {
   isOpen: boolean;
@@ -30,7 +29,7 @@ export function CreateThreadDialog(props: CreateThreadDialogProps) {
         throw new Error("You must be logged in to create a thread");
       }
 
-      const [thread] = await db.query.thread.create({
+      const [thread] = await db.createRemote("thread", {
         title: title().trim(),
         content: content().trim(),
         author: user.id,
@@ -45,6 +44,7 @@ export function CreateThreadDialog(props: CreateThreadDialogProps) {
         throw new Error("Failed to create thread");
       }
     } catch (err) {
+      console.error("Failed to create thread:", err);
       setError(err instanceof Error ? err.message : "Failed to create thread");
     } finally {
       setIsLoading(false);

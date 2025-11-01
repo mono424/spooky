@@ -9,7 +9,7 @@ export default defineConfig({
       formats: ["es", "cjs"],
     },
     rollupOptions: {
-      external: [],
+      external: ["solid-js"],
       output: {
         preserveModules: false,
       },
