@@ -19,7 +19,7 @@ const createQuery = ({
     .where({
       id: threadId,
     })
-    .related("author", (q) => q)
+    .related("author")
     .related("comments", (q) => {
       if (commentFilter === "mine" && userId) {
         return q.where({ author: userId });
@@ -73,24 +73,7 @@ export function ThreadDetail() {
                 {threadData().content}
               </p>
               <div class="flex justify-between items-center text-sm text-gray-500 border-t pt-3">
-                <span>
-                  By{" "}
-                  {(() => {
-                    const author = threadData().author;
-                    // Handle both array (from subquery) and object formats
-                    const authorObj = Array.isArray(author)
-                      ? author[0]
-                      : author;
-                    if (
-                      authorObj &&
-                      typeof authorObj === "object" &&
-                      "username" in authorObj
-                    ) {
-                      return (authorObj as any).username;
-                    }
-                    return "Unknown";
-                  })()}
-                </span>
+                <span>By{threadData().author.username}</span>
                 <span>
                   {new Date(threadData().created_at ?? 0).toLocaleDateString()}
                 </span>
@@ -150,18 +133,7 @@ export function ThreadDetail() {
                         {comment.content}
                       </p>
                       <div class="flex justify-between items-center text-sm text-gray-500">
-                        <span>
-                          By{" "}
-                          {(() => {
-                            const author = comment.author;
-                            if (typeof author === "string") return author;
-                            // Handle array (from subquery) and object formats
-                            const authorObj = Array.isArray(author)
-                              ? author[0]
-                              : author;
-                            return authorObj?.username ?? "Unknown";
-                          })()}
-                        </span>
+                        <span>By {comment.author}</span>
                         <span>
                           {new Date(
                             comment.created_at ?? 0

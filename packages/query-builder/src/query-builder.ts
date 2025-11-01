@@ -168,16 +168,58 @@ export class InnerQuery<
   }
 }
 
+/**
+ * Helper type to get the model type for a related table
+ */
+type GetRelatedModel<
+  S extends SchemaStructure,
+  RelatedTableName extends string
+> = RelatedTableName extends TableNames<S>
+  ? TableModel<GetTable<S, RelatedTableName>>
+  : never;
+
+/**
+ * Helper type to build the related fields object based on accumulated relationships
+ */
+type BuildRelatedFields<
+  S extends SchemaStructure,
+  TableName extends TableNames<S>,
+  RelatedFields extends Record<string, any>
+> = {
+  [K in keyof RelatedFields]: RelatedFields[K] extends { cardinality: "one" }
+    ? GetRelatedModel<S, RelatedFields[K]["to"]> | null
+    : GetRelatedModel<S, RelatedFields[K]["to"]>[];
+};
+
+/**
+ * The final result type combining base model with related fields
+ */
+type QueryResult<
+  S extends SchemaStructure,
+  TableName extends TableNames<S>,
+  RelatedFields extends Record<string, any>,
+  IsOne extends boolean
+> = IsOne extends true
+  ?
+      | (TableModel<GetTable<S, TableName>> &
+          BuildRelatedFields<S, TableName, RelatedFields>)
+      | null
+  : (TableModel<GetTable<S, TableName>> &
+      BuildRelatedFields<S, TableName, RelatedFields>)[];
+
 export class FinalQuery<
+  S extends SchemaStructure,
+  TableName extends TableNames<S>,
   T extends { columns: Record<string, ColumnSchema> },
+  RelatedFields extends Record<string, any>,
   IsOne extends boolean
 > {
   private _innerQuery: InnerQuery<T, IsOne>;
 
   constructor(
-    private readonly tableName: string,
+    private readonly tableName: TableName,
     private readonly options: QueryOptions<TableModel<T>, IsOne>,
-    private readonly schema: SchemaStructure,
+    private readonly schema: S,
     private readonly executor: Executor<T>
   ) {
     this._innerQuery = new InnerQuery<T, IsOne>(
@@ -192,8 +234,8 @@ export class FinalQuery<
     return this._innerQuery.hash;
   }
 
-  get data() {
-    return this._innerQuery.data;
+  get data(): QueryResult<S, TableName, RelatedFields, IsOne> {
+    return this._innerQuery.data as any;
   }
 
   get isOne(): boolean {
@@ -201,7 +243,10 @@ export class FinalQuery<
   }
 
   select() {
-    return this._innerQuery.run();
+    return {
+      ...this._innerQuery.run(),
+      data: this.data,
+    };
   }
 }
 
@@ -280,12 +325,13 @@ class QueryModifierBuilderImpl<
 
 /**
  * Fluent query builder for constructing queries with chainable methods
- * Now with full type inference from schema constant!
+ * Now with full type inference from schema constant AND related field accumulation!
  */
 export class QueryBuilder<
   const S extends SchemaStructure,
   const TableName extends TableNames<S>,
-  const IsOne extends boolean
+  const RelatedFields extends Record<string, any> = {},
+  const IsOne extends boolean = false
 > {
   constructor(
     private readonly schema: S,
@@ -302,7 +348,7 @@ export class QueryBuilder<
    */
   where(
     conditions: Partial<TableModel<GetTable<S, TableName>>>
-  ): QueryBuilder<S, TableName, IsOne> {
+  ): QueryBuilder<S, TableName, RelatedFields, IsOne> {
     this.options.where = { ...this.options.where, ...conditions };
     return this;
   }
@@ -312,7 +358,7 @@ export class QueryBuilder<
    */
   select(
     ...fields: ((keyof TableModel<GetTable<S, TableName>> & string) | "*")[]
-  ): QueryBuilder<S, TableName, IsOne> {
+  ): QueryBuilder<S, TableName, RelatedFields, IsOne> {
     if (this.options.select) {
       throw new Error("Select can only be called once per query");
     }
@@ -326,7 +372,7 @@ export class QueryBuilder<
   orderBy(
     field: TableFieldNames<GetTable<S, TableName>>,
     direction: "asc" | "desc" = "asc"
-  ): QueryBuilder<S, TableName, IsOne> {
+  ): QueryBuilder<S, TableName, RelatedFields, IsOne> {
     this.options.orderBy = {
       ...this.options.orderBy,
       [field]: direction,
@@ -339,7 +385,7 @@ export class QueryBuilder<
   /**
    * Add limit to the query (only for non-live queries)
    */
-  limit(count: number): QueryBuilder<S, TableName, IsOne> {
+  limit(count: number): QueryBuilder<S, TableName, RelatedFields, IsOne> {
     this.options.limit = count;
     return this;
   }
@@ -347,13 +393,13 @@ export class QueryBuilder<
   /**
    * Add offset to the query (only for non-live queries)
    */
-  offset(count: number): QueryBuilder<S, TableName, IsOne> {
+  offset(count: number): QueryBuilder<S, TableName, RelatedFields, IsOne> {
     this.options.offset = count;
     return this;
   }
 
-  one(): QueryBuilder<S, TableName, true> {
-    return new QueryBuilder<S, TableName, true>(
+  one(): QueryBuilder<S, TableName, RelatedFields, true> {
+    return new QueryBuilder<S, TableName, RelatedFields, true>(
       this.schema,
       this.tableName,
       this.executer,
@@ -364,53 +410,86 @@ export class QueryBuilder<
   /**
    * Include related data via subqueries
    * Field and cardinality are validated against schema relationships
+   * Now accumulates the related field in the type!
    */
   related<
     Field extends TableRelationships<S, TableName>["field"],
     Rel extends GetRelationship<S, TableName, Field>
   >(
     field: Field,
-    cardinalityOrModifier?: Rel["cardinality"] | QueryModifier<GenericModel>,
+    modifierOrCardinality?: QueryModifier<GenericModel> | Rel["cardinality"],
     modifier?: QueryModifier<GenericModel>
-  ): QueryBuilder<S, TableName, IsOne> {
+  ): QueryBuilder<
+    S,
+    TableName,
+    RelatedFields & {
+      [K in Field]: {
+        to: Rel["to"];
+        cardinality: Rel["cardinality"];
+      };
+    },
+    IsOne
+  > {
     if (!this.options.related) {
       this.options.related = [];
     }
 
-    // Determine if first optional arg is cardinality or modifier
-    const actualModifier =
-      typeof cardinalityOrModifier === "function"
-        ? cardinalityOrModifier
-        : modifier;
+    // Check if field already exists
+    const exists = this.options.related.some(
+      (r) => (r.alias || r.relatedTable) === field
+    );
 
+    if (exists) {
+      return this as any;
+    }
+
+    // Look up relationship metadata from schema
     const relationship = this.schema.relationships.find(
       (r) => r.from === this.tableName && r.field === field
     );
 
     if (!relationship) {
       throw new Error(
-        `Relationship '${field}' not found for table '${this.tableName}'`
+        `Relationship '${String(field)}' not found for table '${
+          this.tableName
+        }'`
       );
     }
 
-    const exists = this.options.related.some(
-      (r) => (r.alias || r.relatedTable) === field
-    );
+    // Determine cardinality and modifier based on arguments
+    let actualCardinality: "one" | "many";
+    let actualModifier: QueryModifier<GenericModel> | undefined;
 
-    if (!exists) {
-      const foreignKeyField =
-        relationship.cardinality === "many" ? this.tableName : field;
-
-      this.options.related.push({
-        relatedTable: relationship.to,
-        alias: field,
-        modifier: actualModifier,
-        cardinality: relationship.cardinality,
-        foreignKeyField,
-      } as RelatedQuery & { foreignKeyField: string });
+    if (typeof modifierOrCardinality === "function") {
+      // Signature: related(field, modifier)
+      actualCardinality = relationship.cardinality;
+      actualModifier = modifierOrCardinality;
+    } else if (
+      modifierOrCardinality === "one" ||
+      modifierOrCardinality === "many"
+    ) {
+      // Signature: related(field, cardinality, modifier)
+      actualCardinality = modifierOrCardinality;
+      actualModifier = modifier;
+    } else {
+      // Signature: related(field)
+      actualCardinality = relationship.cardinality;
+      actualModifier = undefined;
     }
 
-    return this;
+    // Determine foreign key field based on cardinality
+    const foreignKeyField =
+      actualCardinality === "many" ? this.tableName : field;
+
+    this.options.related.push({
+      relatedTable: relationship.to,
+      alias: field as string,
+      modifier: actualModifier,
+      cardinality: actualCardinality,
+      foreignKeyField: foreignKeyField as string,
+    } as RelatedQuery & { foreignKeyField: string });
+
+    return this as any;
   }
 
   /**
@@ -424,13 +503,20 @@ export class QueryBuilder<
    * Build query methods for SELECT and LIVE SELECT
    * @returns Object with select() and selectLive() methods
    */
-  build(): FinalQuery<GetTable<S, TableName>, IsOne> {
-    return new FinalQuery<GetTable<S, TableName>, IsOne>(
-      this.tableName,
-      this.options,
-      this.schema,
-      this.executer
-    );
+  build(): FinalQuery<
+    S,
+    TableName,
+    GetTable<S, TableName>,
+    RelatedFields,
+    IsOne
+  > {
+    return new FinalQuery<
+      S,
+      TableName,
+      GetTable<S, TableName>,
+      RelatedFields,
+      IsOne
+    >(this.tableName, this.options, this.schema, this.executer);
   }
 }
 
