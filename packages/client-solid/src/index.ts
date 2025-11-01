@@ -108,7 +108,7 @@ export class SyncedDb<const Schema extends SchemaStructure> {
 
   public query<TName extends TableNames<Schema>>(
     table: TName
-  ): QueryBuilder<Schema, TName, false> {
+  ): QueryBuilder<Schema, TName> {
     return new QueryBuilder(
       this.config.schema,
       table,
