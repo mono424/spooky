@@ -32,7 +32,7 @@ export type {
   GenericSchema,
   ModelPayload,
 } from "./lib/models";
-export { useQuery, useQueryOne } from "./lib/use-query";
+export { useQuery } from "./lib/use-query";
 
 // Re-export query builder types for convenience
 export type {
@@ -108,7 +108,7 @@ export class SyncedDb<const Schema extends SchemaStructure> {
 
   public query<TName extends TableNames<Schema>>(
     table: TName
-  ): QueryBuilder<Schema, TName> {
+  ): QueryBuilder<Schema, TName, false> {
     return new QueryBuilder(
       this.config.schema,
       table,

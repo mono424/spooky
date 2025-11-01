@@ -84,15 +84,6 @@ type Executor<T extends { columns: Record<string, ColumnSchema> }> = (
   query: InnerQuery<T, boolean>
 ) => Promise<void>;
 
-export interface InnerQueryResult<
-  T extends { columns: Record<string, ColumnSchema> }
-> {
-  data: TableModel<T>[];
-  hash: number;
-  subscribe: (callback: (data: TableModel<T>[]) => void) => () => void;
-  unsubscribeAll: () => void;
-}
-
 type InnerQueryListener<T extends { columns: Record<string, ColumnSchema> }> = {
   callback: (data: TableModel<T>[]) => void;
 };
@@ -107,7 +98,7 @@ export class InnerQuery<
 
   constructor(
     private readonly tableName: string,
-    private readonly options: QueryOptions<GenericModel, IsOne>,
+    private readonly options: QueryOptions<TableModel<T>, IsOne>,
     private readonly schema: SchemaStructure,
     private readonly executor: Executor<T>
   ) {
@@ -158,7 +149,7 @@ export class InnerQuery<
     };
   }
 
-  public run(): InnerQueryResult<T> {
+  public run() {
     this.executor(this);
     const unsubs: (() => void)[] = [];
     return {
@@ -185,7 +176,7 @@ export class FinalQuery<
 
   constructor(
     private readonly tableName: string,
-    private readonly options: QueryOptions<GenericModel, IsOne>,
+    private readonly options: QueryOptions<TableModel<T>, IsOne>,
     private readonly schema: SchemaStructure,
     private readonly executor: Executor<T>
   ) {
@@ -201,14 +192,15 @@ export class FinalQuery<
     return this._innerQuery.hash;
   }
 
-  get data(): IsOne extends true ? TableModel<T> | null : TableModel<T>[] {
-    if (this.options.isOne) {
-      return (this._innerQuery.data[0] ?? null) as any;
-    }
-    return this._innerQuery.data as any;
+  get data() {
+    return this._innerQuery.data;
   }
 
-  select(): InnerQueryResult<T> {
+  get isOne(): boolean {
+    return this.options.isOne ?? false;
+  }
+
+  select() {
     return this._innerQuery.run();
   }
 }
@@ -216,10 +208,12 @@ export class FinalQuery<
 /**
  * Internal query modifier builder implementation
  */
-class QueryModifierBuilderImpl<TModel extends GenericModel>
-  implements QueryModifierBuilder<TModel>
+class QueryModifierBuilderImpl<
+  TModel extends GenericModel,
+  IsOne extends boolean
+> implements QueryModifierBuilder<TModel>
 {
-  private options: QueryOptions<TModel> = {};
+  private options: QueryOptions<TModel, IsOne> = {};
 
   where(conditions: Partial<TModel>): this {
     this.options.where = { ...this.options.where, ...conditions };
@@ -279,7 +273,7 @@ class QueryModifierBuilderImpl<TModel extends GenericModel>
     return this;
   }
 
-  _getOptions(): QueryOptions<TModel> {
+  _getOptions(): QueryOptions<TModel, IsOne> {
     return this.options;
   }
 }
@@ -291,7 +285,7 @@ class QueryModifierBuilderImpl<TModel extends GenericModel>
 export class QueryBuilder<
   const S extends SchemaStructure,
   const TableName extends TableNames<S>,
-  IsOne extends boolean = false
+  const IsOne extends boolean
 > {
   constructor(
     private readonly schema: S,
@@ -466,7 +460,7 @@ function cyrb53(str: string, seed: number): number {
  */
 export function buildQueryFromOptions<
   TModel extends GenericModel,
-  IsOne extends boolean = false
+  IsOne extends boolean
 >(
   method: "SELECT" | "LIVE SELECT",
   tableName: string,

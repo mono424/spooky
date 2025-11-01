@@ -38,7 +38,7 @@ export interface RelatedQuery {
 
 export interface QueryOptions<
   TModel extends GenericModel,
-  IsOne extends boolean = false
+  IsOne extends boolean
 > {
   select?: ((keyof TModel & string) | "*")[];
   where?: Partial<TModel>;
@@ -51,7 +51,7 @@ export interface QueryOptions<
 }
 
 export interface LiveQueryOptions<TModel extends GenericModel>
-  extends Omit<QueryOptions<TModel>, "orderBy"> {}
+  extends Omit<QueryOptions<TModel, boolean>, "orderBy"> {}
 
 // Query modifier type for related queries
 export type QueryModifier<TModel extends GenericModel> = (
@@ -69,7 +69,7 @@ export interface QueryModifierBuilder<TModel extends GenericModel> {
     relatedField: Field,
     modifier?: QueryModifier<any>
   ): this;
-  _getOptions(): QueryOptions<TModel>;
+  _getOptions(): QueryOptions<TModel, boolean>;
 }
 
 /**

@@ -10,18 +10,18 @@ import { SyncedDb } from "..";
 import { LiveMessage, Uuid } from "surrealdb";
 
 export class Executer<Schema extends SchemaStructure> {
-  private _queries: Map<number, InnerQuery<any>[]> = new Map();
+  private _queries: Map<number, InnerQuery<any, boolean>[]> = new Map();
 
   constructor(private readonly db: SyncedDb<Schema>) {}
 
-  private addQuery(queryKey: number, query: InnerQuery<any>) {
+  private addQuery(queryKey: number, query: InnerQuery<any, boolean>) {
     if (!this._queries.has(queryKey)) {
       this._queries.set(queryKey, []);
     }
     this._queries.get(queryKey)!.push(query);
   }
 
-  private removeQuery(queryKey: number, query: InnerQuery<any>) {
+  private removeQuery(queryKey: number, query: InnerQuery<any, boolean>) {
     if (this.queryExists(queryKey)) {
       this._queries
         .get(queryKey)!
@@ -34,7 +34,7 @@ export class Executer<Schema extends SchemaStructure> {
   }
 
   async run<T extends { columns: Record<string, ColumnSchema> }>(
-    query: InnerQuery<T>
+    query: InnerQuery<T, boolean>
   ): Promise<void> {
     if (this.queryExists(query.hash)) return;
     this.addQuery(query.hash, query);
@@ -44,7 +44,7 @@ export class Executer<Schema extends SchemaStructure> {
 
   private async hydrateLocal<
     T extends { columns: Record<string, ColumnSchema> }
-  >(query: InnerQuery<T>): Promise<void> {
+  >(query: InnerQuery<T, boolean>): Promise<void> {
     const { query: selectQuery, vars: selectQueryVars } = query.selectQuery();
     const localQuery = this.db.queryLocal<TableModel<T>>(
       selectQuery,
@@ -58,7 +58,7 @@ export class Executer<Schema extends SchemaStructure> {
 
   private async subscribeRemote<
     T extends { columns: Record<string, ColumnSchema> }
-  >(query: InnerQuery<T>): Promise<void> {
+  >(query: InnerQuery<T, boolean>): Promise<void> {
     const remoteDb = this.db.getRemote();
     if (!remoteDb) {
       return;
@@ -78,7 +78,7 @@ export class Executer<Schema extends SchemaStructure> {
 
   private async handleRemoteUpdate<
     T extends { columns: Record<string, ColumnSchema> }
-  >(query: InnerQuery<T>, event: LiveMessage): Promise<void> {
+  >(query: InnerQuery<T, boolean>, event: LiveMessage): Promise<void> {
     console.log("[Executer.handleRemoteUpdate] Event received:", event);
 
     switch (event.action) {

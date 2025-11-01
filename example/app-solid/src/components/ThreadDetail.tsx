@@ -2,7 +2,7 @@ import { createSignal, For, Show } from "solid-js";
 import { useNavigate, useParams } from "@solidjs/router";
 import { db } from "../db";
 import { CommentForm } from "./CommentForm";
-import { useQueryOne } from "@spooky/client-solid";
+import { useQuery } from "@spooky/client-solid";
 import { useAuth } from "../lib/auth";
 
 const createQuery = ({
@@ -37,7 +37,7 @@ export function ThreadDetail() {
   const [commentFilter, setCommentFilter] = createSignal<"all" | "mine">("all");
 
   // Create query as an accessor function that re-runs when dependencies change
-  const [thread] = useQueryOne(() =>
+  const [thread] = useQuery(() =>
     createQuery({
       threadId: params.id,
       commentFilter: commentFilter(),

@@ -5,13 +5,26 @@ import type {
   TableModel,
 } from "@spooky/query-builder";
 
-// Implementation
-export function useQuery<
-  T extends { columns: Record<string, ColumnSchema> },
-  IsOne extends boolean
->(queryResult: Accessor<FinalQuery<T, IsOne>>): [Accessor<TableModel<T>[]>] {
+// Helper type to extract the table type from FinalQuery
+type ExtractTableType<T> = T extends FinalQuery<infer Table, any>
+  ? Table
+  : never;
+type ExtractIsOne<T> = T extends FinalQuery<any, infer IsOne> ? IsOne : never;
+
+// Conditional return type based on IsOne
+type UseQueryReturn<T extends FinalQuery<any, any>> =
+  ExtractIsOne<T> extends true
+    ? Accessor<TableModel<ExtractTableType<T>> | undefined>
+    : Accessor<TableModel<ExtractTableType<T>>[]>;
+
+// Single signature with conditional return type
+export function useQuery<T extends FinalQuery<any, any>>(
+  queryResult: Accessor<T>
+): [UseQueryReturn<T>] {
+  type TableType = ExtractTableType<T>;
+
   // Create internal signal to store data
-  const [data, setData] = createSignal<TableModel<T>[]>([]);
+  const [data, setData] = createSignal<TableModel<TableType>[]>([]);
 
   // Track the previous query to detect changes
   let previousQueryHash: number | null = null;
@@ -29,17 +42,13 @@ export function useQuery<
     onCleanup(() => unsubscribe());
   });
 
-  return [data];
-}
+  // Check if query is a "one" query once
+  const isOneQuery = queryResult().isOne;
 
-// Implementation
-export function useQueryOne<
-  T extends { columns: Record<string, ColumnSchema> },
-  IsOne extends boolean
->(queryResult: Accessor<FinalQuery<T, IsOne>>): [Accessor<TableModel<T>>] {
-  const [dataArr] = useQuery(queryResult);
+  // Return either single item or array based on isOne flag
+  if (isOneQuery) {
+    return [(() => data()[0]) as UseQueryReturn<T>];
+  }
 
-  const data = () => dataArr()[0];
-
-  return [data];
+  return [data as UseQueryReturn<T>];
 }
