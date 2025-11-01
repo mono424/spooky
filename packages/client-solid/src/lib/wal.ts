@@ -13,9 +13,9 @@ export interface WALOperation {
   id?: RecordId;
   operation_type: WALOperationType;
   table_name: string;
-  data: any;
-  record_id?: string; // For update/delete operations
-  rollback_data?: any; // Snapshot of data before the operation for rollback
+  data: Record<string, unknown>;
+  record_id?: RecordId; // For update/delete operations
+  rollback_data?: Record<string, unknown>; // Snapshot of data before the operation for rollback
   created_at: Date;
   retry_count: number;
   last_error?: string;
@@ -39,15 +39,15 @@ export class WALManager {
   async init(): Promise<void> {
     try {
       await this.internalDb.query(`
-        DEFINE TABLE IF NOT EXISTS ${this.WAL_TABLE} SCHEMAFULL;
-        DEFINE FIELD IF NOT EXISTS operation_type ON TABLE ${this.WAL_TABLE} TYPE string;
-        DEFINE FIELD IF NOT EXISTS table_name ON TABLE ${this.WAL_TABLE} TYPE string;
-        DEFINE FIELD IF NOT EXISTS data ON TABLE ${this.WAL_TABLE} TYPE object;
-        DEFINE FIELD IF NOT EXISTS record_id ON TABLE ${this.WAL_TABLE} TYPE option<string>;
-        DEFINE FIELD IF NOT EXISTS rollback_data ON TABLE ${this.WAL_TABLE} TYPE option<object>;
-        DEFINE FIELD IF NOT EXISTS created_at ON TABLE ${this.WAL_TABLE} TYPE datetime VALUE time::now();
-        DEFINE FIELD IF NOT EXISTS retry_count ON TABLE ${this.WAL_TABLE} TYPE int DEFAULT 0;
-        DEFINE FIELD IF NOT EXISTS last_error ON TABLE ${this.WAL_TABLE} TYPE option<string>;
+        DEFINE TABLE IF OVERWRITE ${this.WAL_TABLE} SCHEMAFULL;
+        DEFINE FIELD IF OVERWRITE operation_type ON TABLE ${this.WAL_TABLE} TYPE string;
+        DEFINE FIELD IF OVERWRITE table_name ON TABLE ${this.WAL_TABLE} TYPE string;
+        DEFINE FIELD IF OVERWRITE data ON TABLE ${this.WAL_TABLE} TYPE object;
+        DEFINE FIELD IF OVERWRITE record_id ON TABLE ${this.WAL_TABLE} TYPE option<string>;
+        DEFINE FIELD IF OVERWRITE rollback_data ON TABLE ${this.WAL_TABLE} TYPE option<object>;
+        DEFINE FIELD IF OVERWRITE created_at ON TABLE ${this.WAL_TABLE} TYPE datetime VALUE time::now();
+        DEFINE FIELD IF OVERWRITE retry_count ON TABLE ${this.WAL_TABLE} TYPE int DEFAULT 0;
+        DEFINE FIELD IF OVERWRITE last_error ON TABLE ${this.WAL_TABLE} TYPE option<string>;
       `);
     } catch (error) {
       // If table already exists, that's fine
@@ -58,20 +58,24 @@ export class WALManager {
   /**
    * Log a create operation
    */
-  async logCreate(
+  async logCreate<T extends { id: RecordId }>(
     tableName: string,
-    data: any
+    data: T
   ): Promise<RecordId> {
+    console.log("[WAL] Logging create operation", { tableName, data });
     const operation: Omit<WALOperation, "id"> = {
       operation_type: "create",
       table_name: tableName,
       data: data,
+      rollback_data: {},
+      record_id: data.id,
       created_at: new Date(),
       retry_count: 0,
     };
 
-    const result = await this.internalDb
-      .insert(new Table(this.WAL_TABLE), operation);
+    const result = await this.internalDb.insert(new Table(this.WAL_TABLE), [
+      operation,
+    ]);
 
     return (result as any)[0].id!;
   }
@@ -88,15 +92,17 @@ export class WALManager {
     const operation: Omit<WALOperation, "id"> = {
       operation_type: "update",
       table_name: tableName,
-      record_id: recordId.toString(),
+      record_id: recordId,
       data: data,
       rollback_data: rollbackData,
       created_at: new Date(),
       retry_count: 0,
     };
 
-    const result = await this.internalDb
-      .insert(new Table(this.WAL_TABLE), operation);
+    const result = await this.internalDb.insert(
+      new Table(this.WAL_TABLE),
+      operation
+    );
 
     return (result as any)[0].id!;
   }
@@ -112,15 +118,17 @@ export class WALManager {
     const operation: Omit<WALOperation, "id"> = {
       operation_type: "delete",
       table_name: tableName,
-      record_id: recordId.toString(),
-      data: null, // No data for delete, but required by type
+      record_id: recordId,
+      data: {}, // No data for delete, but required by type
       rollback_data: rollbackData,
       created_at: new Date(),
       retry_count: 0,
     };
 
-    const result = await this.internalDb
-      .insert(new Table(this.WAL_TABLE), operation);
+    const result = await this.internalDb.insert(
+      new Table(this.WAL_TABLE),
+      operation
+    );
 
     return (result as any)[0].id!;
   }
@@ -177,9 +185,13 @@ export class WALManager {
         // Check if retry limit exceeded
         if (operation.retry_count >= this.MAX_RETRIES) {
           console.warn(
-            `[WAL] Operation ${operation.id} exceeded max retries, skipping`
+            `[WAL] Operation ${operation.id} exceeded max retries, rollback`
           );
           failedOperations.push(operation);
+          await this.rollbackOperation(operation, localDb);
+          console.log(`[WAL] Rolled back operation ${operation.id} locally`);
+          await this.removeOperation(operation.id!);
+          console.log(`[WAL] Removed operation ${operation.id} from WAL`);
           continue;
         }
 
@@ -232,18 +244,14 @@ export class WALManager {
         if (!operation.record_id) {
           throw new Error("Update operation missing record_id");
         }
-        const [updateTable, updateId] = operation.record_id.split(':');
-        const updateRecordId = new RecordId(updateTable, updateId);
-        await remoteDb.update(updateRecordId).merge(operation.data);
+        await remoteDb.update(operation.record_id).merge(operation.data);
         break;
 
       case "delete":
         if (!operation.record_id) {
           throw new Error("Delete operation missing record_id");
         }
-        const [deleteTable, deleteId] = operation.record_id.split(':');
-        const deleteRecordId = new RecordId(deleteTable, deleteId);
-        await remoteDb.delete(deleteRecordId);
+        await remoteDb.delete(operation.record_id);
         break;
 
       default:
@@ -272,9 +280,9 @@ export class WALManager {
       case "update":
         // Restore the original data
         if (operation.rollback_data && operation.record_id) {
-          const [table, id] = operation.record_id.split(':');
-          const recordId = new RecordId(table, id);
-          await localDb.update(recordId).merge(operation.rollback_data);
+          await localDb
+            .update(operation.record_id)
+            .merge(operation.rollback_data);
         }
         break;
 

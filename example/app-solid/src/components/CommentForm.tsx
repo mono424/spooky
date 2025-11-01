@@ -23,7 +23,7 @@ export function CommentForm(props: CommentFormProps) {
         throw new Error("You must be logged in to post a comment");
       }
 
-      const result = await db.createRemote("comment", {
+      const result = await db.create("comment", {
         thread: props.thread().id,
         content: content().trim(),
         author: user.id,

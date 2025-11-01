@@ -41,9 +41,10 @@ export function AuthProvider(props: { children: JSX.Element }) {
           password,
         },
       });
+
       // Update user from db
-      const currentUser = db.getCurrentUser<"user">();
-      setUser(currentUser.value);
+      const currentUser = await db.checkAuth("user");
+      setUser(currentUser);
     } catch (error) {
       console.error("Sign in failed:", error);
       throw error;

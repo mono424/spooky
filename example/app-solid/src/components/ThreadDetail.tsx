@@ -73,7 +73,7 @@ export function ThreadDetail() {
                 {threadData().content}
               </p>
               <div class="flex justify-between items-center text-sm text-gray-500 border-t pt-3">
-                <span>By{threadData().author.username}</span>
+                <span>By {threadData().author.username}</span>
                 <span>
                   {new Date(threadData().created_at ?? 0).toLocaleDateString()}
                 </span>

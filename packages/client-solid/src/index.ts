@@ -149,7 +149,10 @@ export class SyncedDb<const Schema extends SchemaStructure> {
     // Optional remote HTTP client
     let remote: Surreal | undefined;
     if (remoteUrl) {
-      remote = new Surreal({ engines: createRemoteEngines() });
+      remote = new Surreal({
+        engines: createRemoteEngines(),
+        codecOptions: { useNativeDates: false },
+      });
       await remote.connect(remoteUrl);
 
       if (namespace || database) {
@@ -165,6 +168,9 @@ export class SyncedDb<const Schema extends SchemaStructure> {
     // Initialize WAL manager
     this.walManager = new WALManager(internal);
     await this.walManager.init();
+    setInterval(() => {
+      this.syncWAL();
+    }, 1000);
 
     // Provision local schema from schemaSurql
     const provisioner = new SchemaProvisioner(
@@ -355,25 +361,23 @@ export class SyncedDb<const Schema extends SchemaStructure> {
       );
     }
 
-    // Sync user to local database (upsert)
-    // First, check if user exists locally
-    // const [existingUsers] = await this.connections.local
-    //   .query(`SELECT * FROM $id`, { id: remoteUser.id })
-    //   .collect<[ModelPayload<Schema[T]>[]]>();
+    const [existingUsers] = await this.connections.local
+      .query(`SELECT * FROM $id`, { id: remoteUser.id })
+      .collect<[TableModel<GetTable<Schema, T>>[]]>();
 
-    // if (!existingUsers || existingUsers.length === 0) {
-    //   // User doesn't exist locally, create it with the remote user data (including hashed password)
-    //   await this.connections.local.query(`CREATE $id CONTENT $user`, {
-    //     id: remoteUser.id,
-    //     user: remoteUser,
-    //   });
-    // } else {
-    //   // User exists, update it
-    //   await this.connections.local.query(`UPDATE $id CONTENT $user`, {
-    //     id: remoteUser.id,
-    //     user: remoteUser,
-    //   });
-    // }
+    if (!existingUsers || existingUsers.length === 0) {
+      // User doesn't exist locally, create it with the remote user data (including hashed password)
+      await this.connections.local.query(`CREATE $id CONTENT $user`, {
+        id: remoteUser.id,
+        user: remoteUser,
+      });
+    } else {
+      // User exists, update it
+      await this.connections.local.query(`UPDATE $id CONTENT $user`, {
+        id: remoteUser.id,
+        user: remoteUser,
+      });
+    }
 
     // Sign in to local database - this will work because:
     // 1. For sign-up: the user was just created on remote with the password, so the same password works locally
@@ -395,7 +399,11 @@ export class SyncedDb<const Schema extends SchemaStructure> {
   ): Promise<AuthResponse> {
     const { remoteResponse, localResponse, user } =
       await this.authenticateRemoteAndSyncUser<T>(auth, false);
-
+    console.log("[SyncedDb.signIn] Signed in user", {
+      user,
+      remoteResponse,
+      localResponse,
+    });
     await this.storeAuthTokens(localResponse.token, remoteResponse.token);
     this.currentUser.value = wrapModelIdWithRef(user);
 
@@ -542,17 +550,13 @@ export class SyncedDb<const Schema extends SchemaStructure> {
   _create<T extends GenericModel>(
     db: Surreal,
     tableName: string,
-    data: Values<ModelPayload<T>> | Values<ModelPayload<T>>[]
+    data: Values<ModelPayload<T>>[]
   ): ReturnType<Surreal["insert"]> {
     const table = new Table(tableName);
-
-    // Convert reference fields for single or multiple records
-    const convertedData = Array.isArray(data)
-      ? data.map((item) => this.convertReferenceFields(tableName, item))
-      : this.convertReferenceFields(tableName, data);
-
-    console.log("[SyncedDb._create] Creating records", convertedData);
-    return db.insert(table, convertedData);
+    return db.insert(
+      table,
+      data.map((item) => this.convertReferenceFields(tableName, item))
+    );
   }
 
   _update<T extends Record<string, unknown> = Record<string, unknown>>(
@@ -584,19 +588,40 @@ export class SyncedDb<const Schema extends SchemaStructure> {
     return this._query<T>(db, sql, vars);
   }
 
-  async createLocal<T extends GenericModel>(
+  async create<T extends GenericModel>(
     table: Table | string,
     data: Values<ModelPayload<T>> | Values<ModelPayload<T>>[]
   ): Promise<any> {
     const tableName =
       typeof table === "string" ? table : table.name || table.toString();
 
+    const dataArray = Array.isArray(data) ? data : [data];
+    const result = await this._create<T>(this.getLocal(), tableName, dataArray);
+    console.log("[SyncedDb.create] Created records", result);
+    if (this.walManager) {
+      for (const item of result) {
+        await this.walManager.logCreate(tableName, item);
+      }
+    }
+    return result;
+  }
+
+  async createLocal<T extends GenericModel>(
+    table: Table | string,
+    data: Values<ModelPayload<T>> | Values<ModelPayload<T>>[]
+  ): Promise<any> {
+    const tableName =
+      typeof table === "string" ? table : table.name || table.toString();
+    const dataArray = Array.isArray(data) ? data : [data];
+
     // Execute on local DB
-    const result = await this._create<T>(this.getLocal(), tableName, data);
+    const result = await this._create<T>(this.getLocal(), tableName, dataArray);
 
     // Log to WAL for sync (use structuredClone to avoid proxy issues)
     if (this.walManager) {
-      await this.walManager.logCreate(tableName, structuredClone(data));
+      for (const item of result) {
+        await this.walManager.logCreate(tableName, item);
+      }
     }
 
     return result;
@@ -610,7 +635,8 @@ export class SyncedDb<const Schema extends SchemaStructure> {
     if (!db) throw new Error("Remote database is not configured");
     const tableName =
       typeof table === "string" ? table : table.name || table.toString();
-    return this._create<T>(db, tableName, data);
+    const dataArray = Array.isArray(data) ? data : [data];
+    return this._create<T>(db, tableName, dataArray);
   }
 
   async updateLocal<

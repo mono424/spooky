@@ -6,7 +6,11 @@ import { useQuery } from "@spooky/client-solid";
 export function ThreadList() {
   const navigate = useNavigate();
 
-  const threadsQuery = db.query("thread").orderBy("created_at", "desc").build();
+  const threadsQuery = db
+    .query("thread")
+    .related("author")
+    .orderBy("created_at", "desc")
+    .build();
   const [threads] = useQuery(() => threadsQuery);
 
   createEffect(() => {
@@ -46,7 +50,7 @@ export function ThreadList() {
               <h2 class="text-xl font-semibold mb-2">{thread.title}</h2>
               <p class="text-gray-600 mb-3 line-clamp-3">{thread.content}</p>
               <div class="flex justify-between items-center text-sm text-gray-500">
-                <span>By {thread.author}</span>
+                <span>By {thread.author.username}</span>
                 <span>
                   {new Date(thread.created_at ?? 0).toLocaleDateString()}
                 </span>

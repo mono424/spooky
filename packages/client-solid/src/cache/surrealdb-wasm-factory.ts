@@ -25,7 +25,7 @@ export class SurrealDBWasmFactory {
         },
       }),
       codecOptions: {
-        useNativeDates: true,
+        useNativeDates: false,
       },
     });
 

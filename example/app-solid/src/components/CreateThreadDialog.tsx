@@ -29,7 +29,7 @@ export function CreateThreadDialog(props: CreateThreadDialogProps) {
         throw new Error("You must be logged in to create a thread");
       }
 
-      const [thread] = await db.createRemote("thread", {
+      const [thread] = await db.create("thread", {
         title: title().trim(),
         content: content().trim(),
         author: user.id,
