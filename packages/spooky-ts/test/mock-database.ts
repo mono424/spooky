@@ -1,7 +1,7 @@
 import { Surreal } from "surrealdb";
 import { createWasmEngines } from "@surrealdb/wasm";
-import { Context, Data, Effect, Layer } from "effect";
-import { Config, makeConfig } from "../src/config.js";
+import { Data, Effect, Layer } from "effect";
+import { makeConfig } from "../src/config.js";
 import {
   DatabaseService,
   LocalDatabaseError,

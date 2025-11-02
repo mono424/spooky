@@ -4,11 +4,9 @@ import type { SpookyConfig } from "../src/config.js";
 import { testSchema } from "./test.schema.js";
 import { Effect, Layer } from "effect";
 import { ConfigLayer } from "../src/config.js";
-import {
-  MockDatabaseServiceLayer,
-  createMockDatabaseService,
-} from "./mock-database.js";
+import { MockDatabaseServiceLayer } from "./mock-database.js";
 import { main } from "../src/spooky.js";
+import { Executor, GetTable } from "@spooky/query-builder";
 
 describe("Spooky Initialization", () => {
   const mockConfig: SpookyConfig<typeof testSchema> = {
@@ -79,48 +77,46 @@ describe("Mock Database with 3 Nodes", () => {
     expect(spooky.useQuery).toBeDefined();
   });
 
-  it("should create 3 independent nodes with load balancer", async () => {
-    const mockDb = await Effect.runPromise(
-      createMockDatabaseService("test", "test")
+  it("should create a query", async () => {
+    const configLayer = ConfigLayer(mockConfig);
+    const mockDatabaseServiceLayer = MockDatabaseServiceLayer<
+      typeof testSchema
+    >().pipe(Layer.provide(configLayer));
+
+    const AllServices = Layer.mergeAll(configLayer, mockDatabaseServiceLayer);
+
+    const spooky = await main<typeof testSchema>().pipe(
+      Effect.provide(AllServices),
+      Effect.runPromise
     );
 
-    expect(mockDb.nodes).toHaveLength(3);
-    expect(mockDb.nodes[0].id).toBe("node1");
-    expect(mockDb.nodes[1].id).toBe("node2");
-    expect(mockDb.nodes[2].id).toBe("node3");
-    expect(mockDb.loadBalancer).toBeDefined();
+    // Mock functions to track calls
+    let executorCalled = false;
+    let cleanupCalled = false;
+    let queryString = "";
 
-    // Verify each node has its own instance
-    expect(mockDb.nodes[0].instance).toBeDefined();
-    expect(mockDb.nodes[1].instance).toBeDefined();
-    expect(mockDb.nodes[2].instance).toBeDefined();
+    const executor: Executor<GetTable<typeof testSchema, "thread">> = (
+      query
+    ) => {
+      executorCalled = true;
+      queryString = query.selectQuery().query;
+      return {
+        cleanup: () => {
+          cleanupCalled = true;
+        },
+      };
+    };
 
-    // Cleanup
-    await Effect.runPromise(mockDb.cleanup);
-  });
+    const query = Effect.runSync(
+      spooky.useQuery("thread", executor, {})
+    ).orderBy("created_at", "asc");
 
-  it("should distribute requests across nodes using round-robin", async () => {
-    const mockDb = await Effect.runPromise(
-      createMockDatabaseService("test", "test")
-    );
+    const result = query.build();
 
-    // Get nodes in sequence
-    const node1 = mockDb.loadBalancer.getNextNode();
-    const node2 = mockDb.loadBalancer.getNextNode();
-    const node3 = mockDb.loadBalancer.getNextNode();
-    const node4 = mockDb.loadBalancer.getNextNode(); // Should wrap back to node1
+    await result.select();
 
-    expect(node1.id).toBe("node1");
-    expect(node2.id).toBe("node2");
-    expect(node3.id).toBe("node3");
-    expect(node4.id).toBe("node1");
-
-    // Verify request counts
-    expect(node1.requestCount).toBe(2);
-    expect(node2.requestCount).toBe(1);
-    expect(node3.requestCount).toBe(1);
-
-    // Cleanup
-    await Effect.runPromise(mockDb.cleanup);
+    expect(queryString).toBe("SELECT * FROM thread ORDER BY created_at asc;");
+    expect(executorCalled).toBe(true);
+    expect(cleanupCalled).toBe(true);
   });
 });
