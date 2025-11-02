@@ -1,5 +1,6 @@
 // Core exports
 export {
+  type Executor,
   QueryBuilder,
   buildQueryFromOptions,
   FinalQuery,

@@ -6,8 +6,8 @@ import {
   SchemaStructure,
   TableModel,
 } from "@spooky/query-builder";
-import { SyncedDb } from "..";
-import { LiveMessage, Uuid } from "surrealdb";
+import { ModelPayload, SyncedDb } from "..";
+import { LiveMessage, RecordId, Uuid } from "surrealdb";
 
 export class Executer<Schema extends SchemaStructure> {
   private _queries: Map<number, InnerQuery<any, boolean>> = new Map();
@@ -57,10 +57,23 @@ export class Executer<Schema extends SchemaStructure> {
       selectQuery,
       selectQueryVars
     );
-    remoteQuery.collect().then(([data]) => {
+    remoteQuery.collect().then(async ([data]) => {
       console.log("[Executer.hydrateRemote] Remote data:", data);
-      query.setData(data);
+      await this.syncLocalDb(data);
+      this.hydrateLocal(query);
     });
+  }
+
+  private async syncLocalDb<
+    T extends { columns: Record<string, ColumnSchema> }
+  >(data: ModelPayload<TableModel<T>>[]): Promise<void> {
+    const localDb = this.db.getLocal();
+    if (!localDb) {
+      return;
+    }
+    for (const item of data) {
+      await localDb.upsert(item.id).merge(item);
+    }
   }
 
   private async hydrateLocal<

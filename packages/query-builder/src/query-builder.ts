@@ -82,7 +82,7 @@ function parseObjectIdsToRecordId(obj: unknown, tableName?: string): unknown {
   return obj;
 }
 
-type Executor<T extends { columns: Record<string, ColumnSchema> }> = (
+export type Executor<T extends { columns: Record<string, ColumnSchema> }> = (
   query: InnerQuery<T, boolean>
 ) => { cleanup: () => void };
 

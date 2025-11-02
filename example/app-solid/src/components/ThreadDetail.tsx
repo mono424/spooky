@@ -21,10 +21,11 @@ const createQuery = ({
     })
     .related("author")
     .related("comments", (q) => {
+      q = q.related("author");
       if (commentFilter === "mine" && userId) {
         return q.where({ author: userId });
       }
-      return q.related("author");
+      return q;
     })
     .one()
     .build();
