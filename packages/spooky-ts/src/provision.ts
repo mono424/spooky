@@ -1,5 +1,7 @@
 import { Effect } from "effect";
 import type { Surreal } from "surrealdb";
+import { DatabaseService, makeConfig } from "./services/index.js";
+import { SchemaStructure } from "@spooky/query-builder";
 
 /**
  * Options for database provisioning
@@ -7,12 +9,6 @@ import type { Surreal } from "surrealdb";
 export interface ProvisionOptions {
   /** Force re-provision even if schema already exists */
   force?: boolean;
-  /** Custom schema content (optional) */
-  customSchema?: string;
-  /** Namespace for the database */
-  namespace?: string;
-  /** Main database name */
-  database?: string;
 }
 
 /**
@@ -47,8 +43,7 @@ export const sha1 = (str: string) =>
         .map((v) => v.toString(16).padStart(2, "0"))
         .join("");
     },
-    catch: (error) =>
-      new Error(`Failed to compute SHA-1 hash: ${error}`),
+    catch: (error) => new Error(`Failed to compute SHA-1 hash: ${error}`),
   });
 
 /**
@@ -97,8 +92,7 @@ export const isSchemaUpToDate = (internalDb: Surreal, hash: string) =>
         return false;
       }
     },
-    catch: (error) =>
-      new Error(`Failed to check schema status: ${error}`),
+    catch: (error) => new Error(`Failed to check schema status: ${error}`),
   });
 
 /**
@@ -117,8 +111,7 @@ export const dropMainDatabase = (localDb: Surreal, database: string) =>
       console.log("Main database dropped successfully");
       return Effect.succeed(undefined);
     },
-    catch: (error) =>
-      new Error(`Failed to drop main database: ${error}`),
+    catch: (error) => new Error(`Failed to drop main database: ${error}`),
   });
 
 /**
@@ -148,8 +141,7 @@ export const provisionSchema = (localDb: Surreal, schemaContent: string) =>
       console.log("Schema provisioned successfully");
       return Effect.succeed(undefined);
     },
-    catch: (error) =>
-      new Error(`Failed to provision schema: ${error}`),
+    catch: (error) => new Error(`Failed to provision schema: ${error}`),
   });
 
 /**
@@ -165,58 +157,50 @@ export const recordSchemaHash = (internalDb: Surreal, hash: string) =>
       console.log("Schema hash recorded in internal database");
       return Effect.succeed(undefined);
     },
-    catch: (error) =>
-      new Error(`Failed to record schema hash: ${error}`),
+    catch: (error) => new Error(`Failed to record schema hash: ${error}`),
   });
 
 /**
  * Main provision function that orchestrates the provisioning process
  * This is the primary entry point for database schema provisioning
  */
-export const provision = (
-  context: ProvisionContext,
+export const provision = <S extends SchemaStructure>(
   options: ProvisionOptions = {}
 ) =>
-  Effect.gen(function* (_) {
-    const { internalDb, localDb, database, schema } = context;
-    const { force = false, customSchema } = options;
+  Effect.gen(function* () {
+    const { database, schemaSurql } = yield* (yield* makeConfig<S>()).getConfig;
 
-    // Initialize internal database
-    yield* _(initializeInternalDatabase(internalDb));
+    const databaseService = yield* DatabaseService;
+    const { force = false } = options;
 
-    // Use custom schema if provided
-    const schemaContent = customSchema || schema;
+    yield* Effect.gen(function* () {
+      return {
+        internalDb: yield* databaseService.useInternal((internalDb) =>
+          Effect.succeed(internalDb)
+        ),
+        localDb: yield* databaseService.useLocal((localDb) =>
+          Effect.succeed(localDb)
+        ),
+        remoteDb: yield* databaseService.useRemote((remoteDb) =>
+          Effect.succeed(remoteDb)
+        ),
+      };
+    }).pipe(
+      Effect.tap(({ internalDb, localDb, remoteDb }) =>
+        Effect.gen(function* () {
+          yield* initializeInternalDatabase(internalDb);
+          const schemaHash = yield* sha1(schemaSurql);
+          const isUpToDate = yield* isSchemaUpToDate(internalDb, schemaHash);
+          const shouldMigrate = force || !isUpToDate;
 
-    if (!schemaContent) {
-      return yield* _(Effect.fail(new Error("No schema content available")));
-    }
-
-    // Compute schema hash
-    const schemaHash = yield* _(sha1(schemaContent));
-
-    // Check if migration is needed
-    const isUpToDate = yield* _(isSchemaUpToDate(internalDb, schemaHash));
-    const needsMigration = force || !isUpToDate;
-
-    if (!needsMigration) {
-      console.log("Schema is up to date, skipping provisioning...");
-      return Effect.succeed(undefined);
-    }
-
-    if (!force) {
-      console.log("Schema changed detected, migrating database...");
-    } else {
-      console.log("Force provisioning database...");
-    }
-
-    // Drop and recreate main database
-    yield* _(dropMainDatabase(localDb, database));
-
-    // Provision the new schema
-    yield* _(provisionSchema(localDb, schemaContent));
-
-    // Record the new schema hash
-    yield* _(recordSchemaHash(internalDb, schemaHash));
+          if (shouldMigrate) {
+            yield* dropMainDatabase(localDb, database);
+            yield* provisionSchema(localDb, schemaSurql);
+            yield* recordSchemaHash(internalDb, schemaHash);
+          }
+        })
+      )
+    );
 
     console.log("Database schema provisioned successfully");
     return Effect.succeed(undefined);
@@ -226,21 +210,3 @@ export const provision = (
       return Effect.fail(error);
     })
   );
-
-/**
- * Creates a provision context from configuration
- */
-export const createProvisionContext = (
-  internalDb: Surreal,
-  localDb: Surreal,
-  schema: string,
-  namespace: string = "main",
-  database: string = "main"
-): ProvisionContext => ({
-  internalDb,
-  localDb,
-  namespace,
-  database,
-  internalDatabase: `${database}__internal`,
-  schema,
-});

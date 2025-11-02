@@ -16,6 +16,7 @@ const createQuery = ({
 }) => {
   return db
     .query("thread")
+    .related("comments")
     .where({
       id: threadId,
     })

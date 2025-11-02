@@ -1,7 +1,10 @@
-import { ConfigLayer, SpookyConfig } from "./config.js";
+import {
+  ConfigLayer,
+  SpookyConfig,
+  DatabaseServiceLayer,
+} from "./services/index.js";
 import { Effect, Layer } from "effect";
 import { main } from "./spooky.js";
-import { DatabaseServiceLayer } from "./database.js";
 import { SchemaStructure } from "@spooky/query-builder";
 
 export function createSpooky<S extends SchemaStructure>(

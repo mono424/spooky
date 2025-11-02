@@ -17,9 +17,9 @@ export interface SpookyConfig<S extends SchemaStructure> {
   /** Storage strategy for SurrealDB WASM */
   storageStrategy: CacheStrategy;
   /** Namespace for the database */
-  namespace?: string;
+  namespace: string;
   /** Database name */
-  database?: string;
+  database: string;
 }
 
 export class Config extends Context.Tag("Config")<
