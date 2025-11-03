@@ -73,5 +73,6 @@ export const main = <S extends SchemaStructure>() =>
       delete: deleteFn,
       query,
       close,
+      clearLocalCache: databaseService.clearLocalCache,
     };
   });

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest";
+import { beforeAll, beforeEach, describe, expect, it } from "@effect/vitest";
 import { type SpookyConfig } from "../src/services/index.js";
 import { schema as testSchema, SURQL_SCHEMA } from "./test.schema.js";
 import { Effect } from "effect";
@@ -31,16 +31,11 @@ describe("Spooky Initialization", () => {
 });
 
 describe("Mock Database with 3 Nodes", () => {
-  afterEach(async () => {
-    const { spooky } = await createMockSpooky(mockConfig);
-    Effect.runPromise(spooky.close());
-  });
-
-  beforeEach(async () => {
+  beforeAll(async () => {
     const { dbContext } = await createMockSpooky(mockConfig);
-    await dbContext.mockRemoteDatabase?.query([SURQL_SCHEMA].join("\n"));
+    await dbContext.remoteDatabase?.query([SURQL_SCHEMA].join("\n"));
 
-    await dbContext.mockRemoteDatabase?.query(
+    await dbContext.remoteDatabase?.query(
       [
         "CREATE user CONTENT { id: user:A, username: 'userA', email: 'userA@example.com', password: crypto::argon2::generate('pw1') };",
         "CREATE user CONTENT { id: user:B, username: 'userB', email: 'userB@example.com', password: crypto::argon2::generate('pw2') };",
@@ -48,7 +43,7 @@ describe("Mock Database with 3 Nodes", () => {
       ].join("\n")
     );
 
-    await dbContext.mockRemoteDatabase?.query(
+    await dbContext.remoteDatabase?.query(
       [
         "CREATE thread CONTENT { id: thread:A1, title: 'threadA1', content: 'content', author: user:A, created_at: time::now() };",
         "CREATE thread CONTENT { id: thread:B1, title: 'threadB1', content: 'content', author: user:B, created_at: time::now() };",
@@ -57,10 +52,19 @@ describe("Mock Database with 3 Nodes", () => {
     );
   });
 
+  beforeEach(async () => {
+    const { spooky } = await createMockSpooky(mockConfig);
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* spooky.clearLocalCache();
+      })
+    );
+  });
+
   it("should create a query", async () => {
     const { spooky } = await createMockSpooky(mockConfig);
 
-    const query = Effect.runSync(spooky.query("thread", {}));
+    const query = Effect.runSync(spooky.query("user", {}));
     query.orderBy("created_at", "asc");
 
     const result = query.build().select();
@@ -70,7 +74,7 @@ describe("Mock Database with 3 Nodes", () => {
   it("should authenticate", async () => {
     const { spooky, dbContext } = await createMockSpooky(mockConfig);
 
-    const authResponse = await dbContext.mockRemoteDatabase?.signin({
+    const authResponse = await dbContext.remoteDatabase?.signin({
       access: "account",
       variables: {
         username: "userA",
@@ -90,21 +94,81 @@ describe("Mock Database with 3 Nodes", () => {
     expect(userId?.id).toBe("A");
   });
 
-  // it("should create a query with a filter", async () => {
-  //   const { spooky, dbContext } = await createMockSpooky(mockConfig);
+  it("should create a query that returns correct remote data", async () => {
+    const { spooky, dbContext } = await createMockSpooky(mockConfig);
 
-  //   const authResponse = await dbContext.mockRemoteDatabase?.signin({
-  //     access: "account",
-  //     variables: {
-  //       username: "userA",
-  //       password: "pw1",
-  //     },
-  //   });
+    const authResponse = await dbContext.remoteDatabase?.signin({
+      access: "account",
+      variables: {
+        username: "userB",
+        password: "pw2",
+      },
+    });
 
-  //   await Effect.runPromise(spooky.authenticate(authResponse?.token ?? ""));
+    await Effect.runPromise(spooky.authenticate(authResponse?.token ?? ""));
 
-  //   const result = Effect.runSync(spooky.query("thread", {})).build().select();
-  //   console.log(result.data);
-  //   expect(result).toBeDefined();
-  // });
+    const result = Effect.runSync(spooky.query("thread", {})).build().select();
+    expect(result).toBeDefined();
+    expect(result.data).toHaveLength(0);
+
+    const subResult01 = await new Promise((resolve) =>
+      result.subscribe((threads) => resolve(threads))
+    );
+
+    const subResult02 = await new Promise((resolve) =>
+      result.subscribe((threads) => resolve(threads))
+    );
+
+    expect(subResult01).toHaveLength(0);
+    expect(subResult02).toHaveLength(3);
+  });
+
+  it("should update query when new data is created in remote database", async () => {
+    const { spooky, dbContext } = await createMockSpooky(mockConfig);
+
+    const authResponse = await dbContext.remoteDatabase?.signin({
+      access: "account",
+      variables: {
+        username: "userA",
+        password: "pw1",
+      },
+    });
+
+    await Effect.runPromise(spooky.authenticate(authResponse?.token ?? ""));
+
+    const result = Effect.runSync(spooky.query("thread", {}))
+      .limit(1)
+      .build()
+      .select();
+    expect(result).toBeDefined();
+    expect(result.data).toHaveLength(0);
+
+    const subResult01 = await new Promise((resolve) =>
+      result.subscribe((threads) => resolve(threads))
+    );
+
+    const subResult02 = await new Promise((resolve) =>
+      result.subscribe((threads) => resolve(threads))
+    );
+
+    const result2 = Effect.runSync(spooky.query("thread", {}))
+      .limit(3)
+      .build()
+      .select();
+    expect(result2).toBeDefined();
+    expect(result2.data).toHaveLength(0);
+
+    const subResult03 = await new Promise((resolve) =>
+      result2.subscribe((threads) => resolve(threads))
+    );
+
+    const subResult04 = await new Promise((resolve) =>
+      result2.subscribe((threads) => resolve(threads))
+    );
+
+    expect(subResult01).toHaveLength(0);
+    expect(subResult02).toHaveLength(1);
+    expect(subResult03).toHaveLength(1);
+    expect(subResult04).toHaveLength(3);
+  });
 });

@@ -1,4 +1,4 @@
-import { Console, Context, Effect, Layer, Runtime } from "effect";
+import { Context, Effect, Layer, Logger, LogLevel, Runtime } from "effect";
 import {
   ColumnSchema,
   InnerQuery,
@@ -38,14 +38,69 @@ const cache: QueryCache<SchemaStructure> = {};
 const queryLocalRefresh = Effect.fn("queryLocalRefresh")(function* <
   T extends { columns: Record<string, ColumnSchema> }
 >(query: InnerQuery<T, boolean>) {
+  yield* Effect.logDebug("[QueryManager] Local Query Refresh - Starting", {
+    queryHash: query.hash,
+  });
   const databaseService = yield* DatabaseService;
 
-  const [result] = yield* databaseService.queryLocal<TableModel<T>[]>(
+  const results = yield* databaseService.queryLocal<TableModel<T>[]>(
+    query.selectQuery.query,
+    query.selectQuery.vars
+  );
+  yield* Effect.logDebug("[QueryManager] Local Query Refresh - Done", {
+    queryHash: query.hash,
+    resultLength: results?.length ?? 0,
+  });
+  query.setData(results);
+});
+
+const queryRemoteHydration = Effect.fn("queryRemoteHydration")(function* <
+  T extends { columns: Record<string, ColumnSchema> }
+>(query: InnerQuery<T, boolean>) {
+  yield* Effect.logDebug("[QueryManager] Remote Query Hydration - Starting", {
+    queryHash: query.hash,
+    query: query.selectQuery.query,
+  });
+
+  const databaseService = yield* DatabaseService;
+  const results = yield* databaseService.queryRemote<TableModel<T>[]>(
     query.selectQuery.query,
     query.selectQuery.vars
   );
 
-  query.setData(result);
+  yield* Effect.logDebug(
+    "[QueryManager] Remote Query Hydration - Remote query done",
+    {
+      queryHash: query.hash,
+      resultLength: results?.length ?? 0,
+    }
+  );
+
+  const hydrateQuery = results
+    .map(
+      ({ id, ...payload }) => `UPSERT ${id} CONTENT ${JSON.stringify(payload)}`
+    )
+    .join(";\n");
+
+  yield* Effect.logDebug(
+    "[QueryManager] Remote Query Hydration - Updating local cache",
+    {
+      queryHash: query.hash,
+      hydrateQuery,
+    }
+  );
+
+  yield* databaseService.queryLocal(hydrateQuery);
+
+  yield* Effect.logDebug(
+    "[QueryManager] Remote Query Hydration - Local cache updated",
+    {
+      queryHash: query.hash,
+      resultLength: results?.length ?? 0,
+    }
+  );
+
+  query.setData(results);
 });
 
 const handleRemoteUpdate = Effect.fn("handleRemoteUpdate")(function* <
@@ -53,26 +108,50 @@ const handleRemoteUpdate = Effect.fn("handleRemoteUpdate")(function* <
 >(query: InnerQuery<T, boolean>, event: LiveMessage) {
   switch (event.action) {
     case "CREATE":
-      yield* Console.log("Created:", event.value);
+      yield* Effect.logDebug(
+        "[QueryManager] Live Event - Created:",
+        event.value
+      );
       break;
     case "UPDATE":
-      yield* Console.log("Updated:", event.value);
+      yield* Effect.logDebug(
+        "[QueryManager] Live Event - Updated:",
+        event.value
+      );
       break;
     case "DELETE":
-      yield* Console.log("Deleted:", event.value);
+      yield* Effect.logDebug(
+        "[QueryManager] Live Event - Deleted:",
+        event.value
+      );
       break;
     default:
-      yield* Effect.fail("failed to handle remote update");
+      yield* Effect.logError(
+        "[QueryManager] Live Event - failed to handle remote update",
+        event
+      );
   }
 });
 
 const subscribeRemoteQuery = Effect.fn("subscribeRemoteQuery")(function* <
   T extends { columns: Record<string, ColumnSchema> }
 >(query: InnerQuery<T, boolean>) {
+  yield* Effect.logDebug("[QueryManager] Subscribe Remote Query - Starting", {
+    queryHash: query.hash,
+    query: query.selectLiveQuery.query,
+  });
   const databaseService = yield* DatabaseService;
-  const [liveUuid] = yield* databaseService.queryRemote<Uuid>(
+  const [liveUuid] = yield* databaseService.queryRemote<Uuid[]>(
     query.selectLiveQuery.query,
     query.selectLiveQuery.vars
+  );
+
+  yield* Effect.logDebug(
+    "[QueryManager] Subscribe Remote Query - Created Live UUID",
+    {
+      queryHash: query.hash,
+      liveUuid: liveUuid,
+    }
   );
 
   const runtime = yield* Effect.runtime<DatabaseService>();
@@ -80,12 +159,22 @@ const subscribeRemoteQuery = Effect.fn("subscribeRemoteQuery")(function* <
   const subscription = yield* databaseService.liveOfRemote(liveUuid);
   subscription.subscribe(async (event: LiveMessage) =>
     Runtime.runPromise(runtime)(
-      handleRemoteUpdate(query, event).pipe(
-        Effect.catchAll((error) =>
-          Effect.logError("Failed to refresh query after subscription", error)
+      handleRemoteUpdate(query, event)
+        .pipe(
+          Effect.catchAll((error) =>
+            Effect.logError("Failed to refresh query after subscription", error)
+          )
         )
-      )
+        .pipe(Logger.withMinimumLogLevel(LogLevel.Debug))
     )
+  );
+
+  yield* Effect.logDebug(
+    "[QueryManager] Subscribe Remote Query - Subscribed to Live UUID",
+    {
+      queryHash: query.hash,
+      liveUuid: liveUuid,
+    }
   );
 });
 
@@ -94,19 +183,53 @@ const makeRun = (runtime: Runtime.Runtime<DatabaseService>) => {
     query: InnerQuery<T, boolean>
   ): Effect.Effect<{ cleanup: CleanupFn }, never, never> =>
     Effect.gen(function* () {
+      yield* Effect.logDebug("[QueryManager] Run - Starting", {
+        queryHash: query.hash,
+      });
+
       if (!cache[query.hash]) {
+        yield* Effect.logDebug("[QueryManager] Run - Cache miss", {
+          queryHash: query.hash,
+        });
+
         cache[query.hash] = {
           innerQuery: query,
           cleanup: () => {},
         };
 
-        yield* Effect.fork(
+        Effect.runFork(
           Effect.gen(function* () {
+            yield* Effect.logDebug("[QueryManager] Run - Initialize query", {
+              queryHash: query.hash,
+            });
+
+            yield* Effect.logDebug(
+              "[QueryManager] Run - Refresh query locally",
+              { queryHash: query.hash }
+            );
+
             yield* queryLocalRefresh(query).pipe(
               Effect.catchAll((error) =>
                 Effect.logError("Failed to refresh query locally", error)
               ),
               Effect.provide(runtime)
+            );
+
+            yield* Effect.logDebug(
+              "[QueryManager] Run - Hydrate remote query",
+              { queryHash: query.hash }
+            );
+
+            yield* queryRemoteHydration(query).pipe(
+              Effect.catchAll((error) =>
+                Effect.logError("Failed to refresh query locally", error)
+              ),
+              Effect.provide(runtime)
+            );
+
+            yield* Effect.logDebug(
+              "[QueryManager] Run - Subscribe to remote query",
+              { queryHash: query.hash }
             );
             yield* subscribeRemoteQuery(query).pipe(
               Effect.catchAll((error) =>
@@ -115,17 +238,23 @@ const makeRun = (runtime: Runtime.Runtime<DatabaseService>) => {
               Effect.provide(runtime)
             );
 
+            yield* Effect.logDebug(
+              "[QueryManager] Run - Initialize subqueries",
+              query.hash
+            );
             for (const subquery of query.subqueries) {
               const unsubscribe = subquery.subscribe(() => {
                 Runtime.runPromise(runtime)(
-                  queryLocalRefresh(query).pipe(
-                    Effect.catchAll((error) =>
-                      Effect.logError(
-                        "Failed to refresh query after subscription",
-                        error
+                  queryLocalRefresh(query)
+                    .pipe(
+                      Effect.catchAll((error) =>
+                        Effect.logError(
+                          "Failed to refresh query after subscription",
+                          error
+                        )
                       )
                     )
-                  )
+                    .pipe(Logger.withMinimumLogLevel(LogLevel.Debug))
                 );
               });
 
@@ -137,14 +266,16 @@ const makeRun = (runtime: Runtime.Runtime<DatabaseService>) => {
 
               yield* run(subquery);
             }
-          })
-        );
+          }).pipe(Logger.withMinimumLogLevel(LogLevel.Debug))
+        ).pipe(Logger.withMinimumLogLevel(LogLevel.Debug));
+      } else {
+        yield* Effect.logDebug("[QueryManager] Run - Cache hit", query.hash);
       }
 
       return {
         cleanup: cache[query.hash].cleanup,
       };
-    });
+    }).pipe(Logger.withMinimumLogLevel(LogLevel.Debug));
 
   return run;
 };

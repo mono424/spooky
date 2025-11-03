@@ -4,7 +4,6 @@ import {
   DatabaseService,
   LocalDatabaseError,
   makeConfig,
-  RemoteDatabaseError,
 } from "./services/index.js";
 import { SchemaStructure } from "@spooky/query-builder";
 
@@ -14,8 +13,6 @@ import { SchemaStructure } from "@spooky/query-builder";
 export interface ProvisionOptions {
   /** Force re-provision even if schema already exists */
   force?: boolean;
-  /** Provision the remote database */
-  provisionRemote?: boolean;
 }
 
 /**
@@ -199,7 +196,7 @@ export const provision = Effect.fn("provision")(function* <
     const { database, schemaSurql } = yield* (yield* makeConfig<S>()).getConfig;
 
     const databaseService = yield* DatabaseService;
-    const { force = false, provisionRemote = false } = options;
+    const { force = false } = options;
 
     yield* Effect.gen(function* () {
       const result = yield* databaseService.useInternal(
@@ -246,25 +243,6 @@ export const provision = Effect.fn("provision")(function* <
           );
         })
       );
-
-      if (provisionRemote) {
-        yield* databaseService.useRemote(
-          Effect.fn("migrateRemote")(function* (db: Surreal) {
-            return yield* Effect.gen(function* () {
-              yield* provisionSchema(db, schemaSurql);
-            }).pipe(
-              Effect.catchAll((error) => {
-                return Effect.fail(
-                  new RemoteDatabaseError({
-                    message: `Failed to migrate remote database: ${error}`,
-                    cause: error,
-                  })
-                );
-              })
-            );
-          })
-        );
-      }
 
       yield* databaseService.useInternal(
         Effect.fn("shouldMigrate")(function* (db) {

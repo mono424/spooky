@@ -35,15 +35,15 @@ export class DatabaseService extends Context.Tag("DatabaseService")<
     queryLocal: <T>(
       sql: string,
       vars?: Record<string, unknown>
-    ) => Effect.Effect<T[], LocalDatabaseError, never>;
+    ) => Effect.Effect<T, LocalDatabaseError, never>;
     queryInternal: <T>(
       sql: string,
       vars?: Record<string, unknown>
-    ) => Effect.Effect<T[], LocalDatabaseError, never>;
+    ) => Effect.Effect<T, LocalDatabaseError, never>;
     queryRemote: <T>(
       sql: string,
       vars?: Record<string, unknown>
-    ) => Effect.Effect<T[], RemoteDatabaseError, never>;
+    ) => Effect.Effect<T, RemoteDatabaseError, never>;
     liveOfRemote: (
       liveUuid: Uuid
     ) => Effect.Effect<LiveSubscription, RemoteDatabaseError, never>;
@@ -53,5 +53,6 @@ export class DatabaseService extends Context.Tag("DatabaseService")<
     closeRemote: () => Effect.Effect<void, RemoteDatabaseError, never>;
     closeLocal: () => Effect.Effect<void, LocalDatabaseError, never>;
     closeInternal: () => Effect.Effect<void, LocalDatabaseError, never>;
+    clearLocalCache: () => Effect.Effect<void, LocalDatabaseError, never>;
   }
 >() {}

@@ -690,8 +690,13 @@ export function buildQueryFromOptions<
 
   // Build SELECT clause
   let selectClause = "*";
-  if (options.select && options.select.length > 0) {
-    selectClause = options.select.join(", ");
+
+  if (method === "LIVE SELECT DIFF") {
+    selectClause = "";
+  } else {
+    if (options.select && options.select.length > 0) {
+      selectClause = options.select.join(", ");
+    }
   }
 
   // Build related subqueries (fetch clauses)
@@ -702,7 +707,9 @@ export function buildQueryFromOptions<
   }
 
   // Start building the query
-  let query = `${method} ${selectClause}${fetchClauses} FROM ${tableName}`;
+  let query = `${method}${
+    selectClause ? ` ${selectClause}` : ""
+  }${fetchClauses} FROM ${tableName}`;
 
   // Build WHERE clause
   const vars: Record<string, unknown> = {};

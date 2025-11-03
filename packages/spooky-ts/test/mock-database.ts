@@ -114,6 +114,27 @@ const queryLocalDatabase = Effect.fn("queryLocalDatabase")(function* (
   });
 });
 
+const clearDatabase = Effect.fn("clearLocalCache")(function* (
+  dbEffect: Effect.Effect<Surreal, LocalDatabaseError, never>,
+  tables: SchemaStructure["tables"]
+) {
+  return Effect.fn("clearDatabaseInner")(function* () {
+    const db = yield* dbEffect;
+    return yield* Effect.tryPromise({
+      try: async () => {
+        for (const table of tables) {
+          await db.query(`DELETE ${table.name}`).collect();
+        }
+      },
+      catch: (error) =>
+        new LocalDatabaseError({
+          message: "Failed to execute query on local database",
+          cause: error,
+        }),
+    });
+  });
+});
+
 /**
  * Query function for remote/mock database
  */
@@ -125,6 +146,7 @@ const queryMockDatabase = Effect.fn("queryMockDatabase")(function* (
     vars?: Record<string, unknown>
   ) {
     const instance = yield* instanceEffect;
+
     return yield* Effect.tryPromise({
       try: async () => {
         const result = await instance.query(sql, vars).collect<[T]>();
@@ -168,7 +190,9 @@ const createNewDatabase = async (namespace: string, database: string) => {
       useNativeDates: false,
     },
   });
-  await db.connect("mem://");
+  await db.connect(
+    "mem://" + database + Math.random().toString(36).substring(2, 15)
+  );
   await db.use({
     namespace,
     database,
@@ -179,11 +203,11 @@ const createNewDatabase = async (namespace: string, database: string) => {
 export const dbContext: {
   internalDatabase: Surreal | undefined;
   localDatabase: Surreal | undefined;
-  mockRemoteDatabase: Surreal | undefined;
+  remoteDatabase: Surreal | undefined;
 } = {
   internalDatabase: undefined,
   localDatabase: undefined,
-  mockRemoteDatabase: undefined,
+  remoteDatabase: undefined,
 };
 
 const authenticateRemoteDatabase = Effect.fn("authenticateRemoteDatabase")(
@@ -233,7 +257,12 @@ export const MockDatabaseServiceLayer = <S extends SchemaStructure>() =>
     DatabaseService,
     Effect.gen(function* () {
       const config = yield* (yield* makeConfig<S>()).getConfig;
-      const { localDbName, namespace, database } = config;
+      const {
+        localDbName,
+        namespace,
+        database,
+        schema: { tables },
+      } = config;
 
       // Create local and internal databases (same as real implementation)
       const internalDatabase = Effect.tryPromise({
@@ -268,14 +297,14 @@ export const MockDatabaseServiceLayer = <S extends SchemaStructure>() =>
           }),
       });
 
-      const mockRemoteDatabase = Effect.tryPromise({
+      const remoteDatabase = Effect.tryPromise({
         try: async () => {
-          if (dbContext.mockRemoteDatabase) return dbContext.mockRemoteDatabase;
-          dbContext.mockRemoteDatabase = await createNewDatabase(
+          if (dbContext.remoteDatabase) return dbContext.remoteDatabase;
+          dbContext.remoteDatabase = await createNewDatabase(
             namespace || "main",
             database || localDbName
           );
-          return dbContext.mockRemoteDatabase;
+          return dbContext.remoteDatabase;
         },
         catch: (error) =>
           new RemoteDatabaseError({
@@ -287,8 +316,8 @@ export const MockDatabaseServiceLayer = <S extends SchemaStructure>() =>
       const closeRemoteDb = Effect.fn("closeRemoteDatabase")(function* () {
         return yield* Effect.tryPromise({
           try: async () => {
-            await dbContext.mockRemoteDatabase?.close();
-            dbContext.mockRemoteDatabase = undefined;
+            await dbContext.remoteDatabase?.close();
+            dbContext.remoteDatabase = undefined;
           },
           catch: (error) =>
             new RemoteDatabaseError({
@@ -327,7 +356,7 @@ export const MockDatabaseServiceLayer = <S extends SchemaStructure>() =>
       });
 
       // Important to make dbContext work for the tests
-      yield* Effect.log("mockRemoteDatabase", yield* mockRemoteDatabase);
+      yield* Effect.log("remoteDatabase", yield* remoteDatabase);
       yield* Effect.log("localDatabase", yield* localDatabase);
       yield* Effect.log("internalDatabase", yield* internalDatabase);
       // Important to make dbContext work for the tests
@@ -335,15 +364,16 @@ export const MockDatabaseServiceLayer = <S extends SchemaStructure>() =>
       return DatabaseService.of({
         useLocal: yield* useLocalDatabase(localDatabase),
         useInternal: yield* useLocalDatabase(internalDatabase),
-        useRemote: yield* useMockNode(mockRemoteDatabase),
+        useRemote: yield* useMockNode(remoteDatabase),
         queryLocal: yield* queryLocalDatabase(localDatabase),
         queryInternal: yield* queryLocalDatabase(internalDatabase),
-        queryRemote: yield* queryMockDatabase(mockRemoteDatabase),
-        liveOfRemote: yield* liveOfMockDatabase(mockRemoteDatabase),
-        authenticate: yield* authenticateRemoteDatabase(mockRemoteDatabase),
+        queryRemote: yield* queryMockDatabase(remoteDatabase),
+        liveOfRemote: yield* liveOfMockDatabase(remoteDatabase),
+        authenticate: yield* authenticateRemoteDatabase(remoteDatabase),
         closeRemote: closeRemoteDb,
         closeLocal: closeLocalDb,
         closeInternal: closeInternalDb,
+        clearLocalCache: yield* clearDatabase(localDatabase, tables),
       });
     })
   );
