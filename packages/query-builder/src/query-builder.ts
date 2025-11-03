@@ -90,6 +90,16 @@ type InnerQueryListener<T extends { columns: Record<string, ColumnSchema> }> = {
   callback: (data: TableModel<T>[]) => void;
 };
 
+export type ReactiveQueryResult<
+  T extends { columns: Record<string, ColumnSchema> }
+> = {
+  data: TableModel<T>[];
+  hash: number;
+  subscribe: (callback: (data: TableModel<T>[]) => void) => () => void;
+  unsubscribeAll: () => void;
+  kill: () => void;
+};
+
 export class InnerQuery<
   T extends { columns: Record<string, ColumnSchema> },
   IsOne extends boolean
@@ -97,16 +107,62 @@ export class InnerQuery<
   private _hash: number;
   private _data: TableModel<T>[];
   private _listeners: InnerQueryListener<T>[] = [];
+  private _selectQuery: QueryInfo;
+  private _selectLiveQuery: QueryInfo;
+  private _subqueries: InnerQuery<
+    { columns: Record<string, ColumnSchema> },
+    boolean
+  >[];
+
+  private _hasRun: boolean = false;
+  private _unsubs: (() => void)[] = [];
+  private _cleanup: () => void = () => {};
 
   constructor(
     private readonly tableName: string,
     private readonly options: QueryOptions<TableModel<T>, IsOne>,
     private readonly schema: SchemaStructure,
-    private readonly executor: Executor<T>
+    private readonly executor: Executor<any>
   ) {
-    this._hash = cyrb53(this.selectQuery().query, 0);
     this._data = [];
     this._listeners = [];
+
+    this._selectQuery = buildQueryFromOptions(
+      "SELECT",
+      this.tableName,
+      this.options,
+      this.schema
+    );
+
+    this._hash = this._selectQuery.hash;
+
+    this._selectLiveQuery = buildQueryFromOptions(
+      "LIVE SELECT DIFF",
+      this.tableName,
+      this.options,
+      this.schema
+    );
+
+    this._subqueries = extractSubqueryQueryInfos(
+      schema,
+      this.options,
+      this.executor
+    );
+  }
+
+  get subqueries(): InnerQuery<
+    { columns: Record<string, ColumnSchema> },
+    boolean
+  >[] {
+    return this._subqueries;
+  }
+
+  get selectQuery(): QueryInfo {
+    return this._selectQuery;
+  }
+
+  get selectLiveQuery(): QueryInfo {
+    return this._selectLiveQuery;
   }
 
   get hash(): number {
@@ -126,24 +182,6 @@ export class InnerQuery<
     this._listeners.forEach(({ callback }) => callback(data));
   }
 
-  public selectQuery(): QueryInfo {
-    return buildQueryFromOptions(
-      "SELECT",
-      this.tableName,
-      this.options,
-      this.schema
-    );
-  }
-
-  public selectLiveQuery(): QueryInfo {
-    return buildQueryFromOptions(
-      "LIVE SELECT",
-      this.tableName,
-      this.options,
-      this.schema
-    );
-  }
-
   private addListener(listener: InnerQueryListener<T>): () => void {
     this._listeners.push(listener);
     return () => {
@@ -151,33 +189,42 @@ export class InnerQuery<
     };
   }
 
-  public run() {
-    const { cleanup } = this.executor(this);
-    const unsubs: (() => void)[] = [];
+  public subscribe(callback: (data: TableModel<T>[]) => void): () => void {
+    const unsub = this.addListener({ callback });
+    this._unsubs.push(unsub);
+    return unsub;
+  }
 
-    const subscribe = (callback: (data: TableModel<T>[]) => void) => {
-      const unsub = this.addListener({ callback });
-      unsubs.push(unsub);
-      return unsub;
-    };
+  public unsubscribeAll(): void {
+    this._unsubs.forEach((unsub) => unsub());
+    this._unsubs = [];
+  }
 
-    const unsubscribeAll = () => {
-      const fns = unsubs.splice(0, unsubs.length);
-      fns.forEach((sub) => sub());
-    };
+  public kill(): void {
+    this.unsubscribeAll();
+    this._cleanup?.();
+  }
 
-    const kill = () => {
-      unsubscribeAll();
-      cleanup();
-    };
-
+  private getReactiveQueryResult(): ReactiveQueryResult<T> {
     return {
       data: this.data,
       hash: this.hash,
-      subscribe,
-      unsubscribeAll,
-      kill,
+      subscribe: (callback: (data: TableModel<T>[]) => void) =>
+        this.subscribe(callback),
+      unsubscribeAll: () => this.unsubscribeAll(),
+      kill: () => this.kill(),
     };
+  }
+
+  public run(): ReactiveQueryResult<T> {
+    if (this._hasRun) {
+      throw new Error("Query has already been run");
+    }
+    this._hasRun = true;
+
+    const { cleanup } = this.executor(this);
+    this._cleanup = cleanup;
+    return this.getReactiveQueryResult();
   }
 }
 
@@ -590,6 +637,30 @@ function cyrb53(str: string, seed: number): number {
   return 4294967296 * (2097151 & h2) + (h1 >>> 0);
 }
 
+export function extractSubqueryQueryInfos<S extends SchemaStructure>(
+  schema: S,
+  options: QueryOptions<GenericModel, boolean>,
+  executer: Executor<{ columns: Record<string, ColumnSchema> }>
+): InnerQuery<{ columns: Record<string, ColumnSchema> }, boolean>[] {
+  if (!options.related) {
+    return [];
+  }
+
+  return options.related.map(
+    (rel) =>
+      new InnerQuery(
+        rel.relatedTable,
+        rel
+          .modifier?.(
+            new SchemaAwareQueryModifierBuilderImpl(rel.relatedTable, schema)
+          )
+          ._getOptions() ?? {},
+        schema,
+        executer
+      )
+  );
+}
+
 /**
  * Build a query string from query options
  * @param method - The query method (SELECT or LIVE SELECT)
@@ -602,7 +673,7 @@ export function buildQueryFromOptions<
   TModel extends GenericModel,
   IsOne extends boolean
 >(
-  method: "SELECT" | "LIVE SELECT",
+  method: "SELECT" | "LIVE SELECT" | "LIVE SELECT DIFF",
   tableName: string,
   options: QueryOptions<TModel, IsOne>,
   schema: SchemaStructure
@@ -610,7 +681,7 @@ export function buildQueryFromOptions<
   if (options.isOne) {
     options.limit = 1;
   }
-  const isLiveQuery = method === "LIVE SELECT";
+  const isLiveQuery = method === "LIVE SELECT" || method === "LIVE SELECT DIFF";
 
   // Parse where conditions to convert string IDs to RecordId
   const parsedWhere = options.where
@@ -625,7 +696,7 @@ export function buildQueryFromOptions<
 
   // Build related subqueries (fetch clauses)
   let fetchClauses = "";
-  if (options.related && options.related.length > 0) {
+  if (!isLiveQuery && options.related && options.related.length > 0) {
     const subqueries = options.related.map((rel) => buildSubquery(rel, schema));
     fetchClauses = ", " + subqueries.join(", ");
   }

@@ -1,7 +1,6 @@
 // spooky.ts
-import { Effect } from "effect";
+import { Effect, Runtime } from "effect";
 import {
-  Executor,
   GetTable,
   QueryBuilder,
   QueryOptions,
@@ -9,7 +8,7 @@ import {
   TableModel,
   TableNames,
 } from "@spooky/query-builder";
-import { makeConfig } from "./services/index.js";
+import { makeConfig, QueryManagerService } from "./services/index.js";
 import { provision } from "./provision.js";
 
 const create = Effect.fn("create")(function* (table: string, data: any) {
@@ -24,36 +23,37 @@ const deleteFn = Effect.fn("delete")(function* (table: string, data: any) {
   return yield* Effect.succeed(data);
 });
 
-const useQuery =
-  <S extends SchemaStructure>(schema: S) =>
-  <Table extends TableNames<S>>(
+const useQuery = Effect.fn("useQuery")(function* <S extends SchemaStructure>(
+  schema: S
+) {
+  const queryManager = yield* QueryManagerService;
+  return Effect.fn("useQueryInner")(function* <Table extends TableNames<S>>(
     table: Table,
     options: QueryOptions<TableModel<GetTable<S, Table>>, false>
-  ) =>
-    Effect.succeed(
+  ) {
+    return yield* Effect.succeed(
       new QueryBuilder<S, Table>(
         schema,
         table,
-        (query) => {
-          return {
-            cleanup: () => {},
-          };
-        },
+        (q) => Runtime.runSync(queryManager.runtime)(queryManager.run(q)),
         options
       )
     );
+  });
+});
 
-// spooky.ts
 export const main = <S extends SchemaStructure>() =>
   Effect.gen(function* () {
     const { schema } = yield* (yield* makeConfig<S>()).getConfig;
 
     yield* provision<S>();
 
+    const query = yield* useQuery<S>(schema);
+
     return {
       create,
       update,
       delete: deleteFn,
-      query: useQuery<S>(schema),
+      query,
     };
   });

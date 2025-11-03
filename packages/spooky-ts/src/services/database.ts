@@ -1,4 +1,9 @@
-import { createRemoteEngines, Surreal } from "surrealdb";
+import {
+  createRemoteEngines,
+  LiveSubscription,
+  Surreal,
+  Uuid,
+} from "surrealdb";
 import { createWasmEngines } from "@surrealdb/wasm";
 import { Context, Data, Effect, Layer } from "effect";
 import { CacheStrategy, makeConfig } from "./config.js";
@@ -28,6 +33,21 @@ export class DatabaseService extends Context.Tag("DatabaseService")<
     useRemote: <T>(
       fn: (remote: Surreal) => Effect.Effect<T, RemoteDatabaseError, never>
     ) => Effect.Effect<T, RemoteDatabaseError, never>;
+    queryLocal: <T>(
+      sql: string,
+      vars?: Record<string, unknown>
+    ) => Effect.Effect<T[], LocalDatabaseError, never>;
+    queryInternal: <T>(
+      sql: string,
+      vars?: Record<string, unknown>
+    ) => Effect.Effect<T[], LocalDatabaseError, never>;
+    queryRemote: <T>(
+      sql: string,
+      vars?: Record<string, unknown>
+    ) => Effect.Effect<T[], RemoteDatabaseError, never>;
+    liveOfRemote: (
+      liveUuid: Uuid
+    ) => Effect.Effect<LiveSubscription, RemoteDatabaseError, never>;
   }
 >() {}
 
@@ -137,6 +157,49 @@ const useRemoteDatabase =
       }
     });
 
+const queryLocalDatabase =
+  (db: Surreal) =>
+  <T>(sql: string, vars?: Record<string, unknown>) =>
+    Effect.tryPromise({
+      try: async () => {
+        const result = await db.query(sql, vars).collect<[T]>();
+        return result[0];
+      },
+      catch: (error) =>
+        new LocalDatabaseError({
+          message: "Failed to execute query on local database",
+          cause: error,
+        }),
+    });
+
+const queryRemoteDatabase =
+  (db: Surreal) =>
+  <T>(sql: string, vars?: Record<string, unknown>) =>
+    Effect.tryPromise({
+      try: async () => {
+        const result = await db.query(sql, vars).collect<[T]>();
+        return result[0];
+      },
+      catch: (error) =>
+        new RemoteDatabaseError({
+          message: "Failed to execute query on remote database",
+          cause: error,
+        }),
+    });
+
+const liveOfRemoteDatabase = (db: Surreal) => (liveUuid: Uuid) =>
+  Effect.tryPromise({
+    try: async () => {
+      const result = await db.liveOf(liveUuid);
+      return result;
+    },
+    catch: (error) =>
+      new RemoteDatabaseError({
+        message: "Failed to execute liveOf on remote database",
+        cause: error,
+      }),
+  });
+
 let localDatabase: Surreal | undefined;
 let internalDatabase: Surreal | undefined;
 let remoteDatabase: Surreal | undefined;
@@ -167,6 +230,10 @@ export const DatabaseServiceLayer = <S extends SchemaStructure>() =>
         useLocal: useLocalDatabase(localDatabase),
         useInternal: useLocalDatabase(internalDatabase),
         useRemote: useRemoteDatabase(remoteDatabase),
+        queryLocal: queryLocalDatabase(localDatabase),
+        queryInternal: queryLocalDatabase(internalDatabase),
+        queryRemote: queryRemoteDatabase(remoteDatabase),
+        liveOfRemote: liveOfRemoteDatabase(remoteDatabase),
       });
     })
   );

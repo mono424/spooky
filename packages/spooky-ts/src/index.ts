@@ -2,6 +2,7 @@ import {
   ConfigLayer,
   SpookyConfig,
   DatabaseServiceLayer,
+  QueryManagerServiceLayer,
 } from "./services/index.js";
 import { Effect, Layer } from "effect";
 import { main } from "./spooky.js";
@@ -14,7 +15,16 @@ export function createSpooky<S extends SchemaStructure>(
   const databaseServiceLayer = DatabaseServiceLayer<S>().pipe(
     Layer.provide(configLayer)
   );
+  const queryManagerServiceLayer = QueryManagerServiceLayer<S>().pipe(
+    Layer.provide(configLayer),
+    Layer.provide(databaseServiceLayer)
+  );
 
-  const MainLayer = Layer.mergeAll(configLayer, databaseServiceLayer);
+  const MainLayer = Layer.mergeAll(
+    configLayer,
+    databaseServiceLayer,
+    queryManagerServiceLayer
+  );
+
   return main<S>().pipe(Effect.provide(MainLayer), Effect.runPromise);
 }

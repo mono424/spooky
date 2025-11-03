@@ -1,12 +1,12 @@
-import { Surreal } from "surrealdb";
-import { createWasmEngines } from "@surrealdb/wasm";
+import { Surreal, Uuid } from "surrealdb";
+import { createNodeEngines } from "@surrealdb/node";
 import { Data, Effect, Layer } from "effect";
-import { makeConfig } from "../src/config.js";
 import {
+  makeConfig,
   DatabaseService,
   LocalDatabaseError,
   RemoteDatabaseError,
-} from "../src/database.js";
+} from "../src/services/index.js";
 import { SchemaStructure } from "@spooky/query-builder";
 
 /**
@@ -34,7 +34,7 @@ const createMockNode = (nodeId: string, namespace: string, database: string) =>
   Effect.tryPromise({
     try: async () => {
       const node = new Surreal({
-        engines: createWasmEngines({
+        engines: createNodeEngines({
           capabilities: {
             experimental: {
               allow: ["record_references"],
@@ -178,6 +178,61 @@ const useLocalDatabase =
     });
 
 /**
+ * Query function for local database
+ */
+const queryLocalDatabase =
+  (db: Surreal) =>
+  <T>(sql: string, vars?: Record<string, unknown>) =>
+    Effect.tryPromise({
+      try: async () => {
+        const result = await db.query(sql, vars).collect<[T]>();
+        return result[0];
+      },
+      catch: (error) =>
+        new LocalDatabaseError({
+          message: "Failed to execute query on local database",
+          cause: error,
+        }),
+    });
+
+/**
+ * Query function for remote/mock database
+ */
+const queryMockDatabase =
+  (loadBalancer: NodeLoadBalancer) =>
+  <T>(sql: string, vars?: Record<string, unknown>) =>
+    Effect.tryPromise({
+      try: async () => {
+        const node = loadBalancer.getNextNode();
+        const result = await node.instance.query(sql, vars).collect<[T]>();
+        return result[0];
+      },
+      catch: (error) =>
+        new RemoteDatabaseError({
+          message: "Failed to execute query on mock database",
+          cause: error,
+        }),
+    });
+
+/**
+ * liveOf function for remote/mock database
+ */
+const liveOfMockDatabase =
+  (loadBalancer: NodeLoadBalancer) => (liveUuid: Uuid) =>
+    Effect.tryPromise({
+      try: async () => {
+        const node = loadBalancer.getNextNode();
+        const result = await node.instance.liveOf(liveUuid);
+        return result;
+      },
+      catch: (error) =>
+        new RemoteDatabaseError({
+          message: "Failed to execute liveOf on mock database",
+          cause: error,
+        }),
+    });
+
+/**
  * Mock Database Service Layer that creates 3 local nodes instead of
  * connecting to a remote database
  */
@@ -193,7 +248,7 @@ export const MockDatabaseServiceLayer = <S extends SchemaStructure>() =>
         Effect.tryPromise({
           try: async () => {
             const db = new Surreal({
-              engines: createWasmEngines({
+              engines: createNodeEngines({
                 capabilities: {
                   experimental: {
                     allow: ["record_references"],
@@ -224,7 +279,7 @@ export const MockDatabaseServiceLayer = <S extends SchemaStructure>() =>
         Effect.tryPromise({
           try: async () => {
             const db = new Surreal({
-              engines: createWasmEngines({
+              engines: createNodeEngines({
                 capabilities: {
                   experimental: {
                     allow: ["record_references"],
@@ -274,6 +329,10 @@ export const MockDatabaseServiceLayer = <S extends SchemaStructure>() =>
         useLocal: useLocalDatabase(localDatabase),
         useInternal: useLocalDatabase(internalDatabase),
         useRemote: useMockNode(loadBalancer),
+        queryLocal: queryLocalDatabase(localDatabase),
+        queryInternal: queryLocalDatabase(internalDatabase),
+        queryRemote: queryMockDatabase(loadBalancer),
+        liveOfRemote: liveOfMockDatabase(loadBalancer),
       });
     })
   );

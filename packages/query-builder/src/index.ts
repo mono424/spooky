@@ -5,6 +5,7 @@ export {
   buildQueryFromOptions,
   FinalQuery,
   InnerQuery,
+  type ReactiveQueryResult,
 } from "./query-builder";
 
 // Type exports

@@ -2,7 +2,7 @@
   "name": "@spooky/lib",
   "version": "0.0.0",
   "type": "module",
-  "packageManager": "pnpm@10.14.0",
+  "packageManager": "pnpm@9.0.0",
   "license": "MIT",
   "description": "A basic Effect package",
   "repository": {
@@ -30,6 +30,7 @@
     "surrealdb": "^2.0.0-alpha.9"
   },
   "devDependencies": {
+    "@surrealdb/node": "^2.0.0-alpha.9",
     "@babel/cli": "^7.24.8",
     "@babel/core": "^7.25.2",
     "@babel/plugin-transform-export-namespace-from": "^7.24.7",

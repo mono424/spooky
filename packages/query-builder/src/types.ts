@@ -31,7 +31,7 @@ export interface RelatedQuery {
   /** The alias for this subquery result (defaults to relatedTable name) */
   alias?: string;
   /** Optional query modifier for the subquery */
-  modifier?: QueryModifier<any>;
+  modifier?: SchemaAwareQueryModifier<SchemaStructure, string>;
   /** The cardinality of the relationship */
   cardinality: "one" | "many";
 }
@@ -54,7 +54,14 @@ export interface LiveQueryOptions<TModel extends GenericModel>
   extends Omit<QueryOptions<TModel, boolean>, "orderBy"> {}
 
 // Import schema types for schema-aware modifiers
-import type { SchemaStructure, TableNames, GetTable, TableModel, TableRelationships, GetRelationship } from "./table-schema";
+import type {
+  SchemaStructure,
+  TableNames,
+  GetTable,
+  TableModel,
+  TableRelationships,
+  GetRelationship,
+} from "./table-schema";
 
 // Query modifier type for related queries - now schema-aware!
 export type QueryModifier<TModel extends GenericModel> = (
@@ -89,10 +96,15 @@ export interface SchemaAwareQueryModifierBuilder<
   TableName extends TableNames<S>
 > {
   where(conditions: Partial<TableModel<GetTable<S, TableName>>>): this;
-  select(...fields: ((keyof TableModel<GetTable<S, TableName>> & string) | "*")[]): this;
+  select(
+    ...fields: ((keyof TableModel<GetTable<S, TableName>> & string) | "*")[]
+  ): this;
   limit(count: number): this;
   offset(count: number): this;
-  orderBy(field: keyof TableModel<GetTable<S, TableName>> & string, direction?: "asc" | "desc"): this;
+  orderBy(
+    field: keyof TableModel<GetTable<S, TableName>> & string,
+    direction?: "asc" | "desc"
+  ): this;
   related<
     Field extends TableRelationships<S, TableName>["field"],
     Rel extends GetRelationship<S, TableName, Field>
