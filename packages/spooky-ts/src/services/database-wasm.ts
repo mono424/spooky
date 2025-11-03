@@ -1,4 +1,4 @@
-import { createRemoteEngines, Surreal, Uuid } from "surrealdb";
+import { createRemoteEngines, RecordId, Surreal, Uuid } from "surrealdb";
 import { Effect, Layer } from "effect";
 import { CacheStrategy, makeConfig } from "./config.js";
 import { SchemaStructure } from "@spooky/query-builder";
@@ -192,10 +192,13 @@ const authenticateRemoteDatabase = Effect.fn("authenticateRemoteDatabase")(
     return Effect.fn("authenticateRemoteDatabaseInner")(function* (
       token: string
     ) {
-      Effect.tryPromise({
+      return yield* Effect.tryPromise({
         try: async () => {
-          const result = await db.authenticate(token);
-          return result;
+          await db.authenticate(token);
+          const [result] = await db
+            .query(`SELECT id FROM $auth`)
+            .collect<[{ id: RecordId }]>();
+          return result?.id;
         },
         catch: (error) =>
           new RemoteAuthenticationError({

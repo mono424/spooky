@@ -1,9 +1,10 @@
-import { Surreal, Uuid } from "surrealdb";
+import { RecordId, Surreal, Uuid } from "surrealdb";
 import { createNodeEngines } from "@surrealdb/node";
 import { Data, Effect, Layer } from "effect";
 import {
   DatabaseService,
   LocalDatabaseError,
+  RemoteAuthenticationError,
   RemoteDatabaseError,
 } from "../src/services/database.js";
 import { makeConfig } from "../src/services/config.js";
@@ -187,6 +188,29 @@ export const dbContext: {
   mockRemoteDatabase: undefined,
 };
 
+const authenticateRemoteDatabase = Effect.fn("authenticateRemoteDatabase")(
+  function* (db: Surreal) {
+    return Effect.fn("authenticateRemoteDatabaseInner")(function* (
+      token: string
+    ) {
+      return yield* Effect.tryPromise({
+        try: async () => {
+          await db.authenticate(token);
+          const [result] = await db
+            .query(`SELECT id FROM $auth`)
+            .collect<[{ id: RecordId }]>();
+          return result?.id;
+        },
+        catch: (error) =>
+          new RemoteAuthenticationError({
+            message: "Failed to authenticate on remote database",
+            cause: error,
+          }),
+      });
+    });
+  }
+);
+
 /**
  * Mock Database Service Layer that creates 3 local nodes instead of
  * connecting to a remote database
@@ -249,6 +273,7 @@ export const MockDatabaseServiceLayer = <S extends SchemaStructure>() =>
         queryInternal: queryLocalDatabase(internalDatabase),
         queryRemote: queryMockDatabase(mockRemoteDatabase),
         liveOfRemote: liveOfMockDatabase(mockRemoteDatabase),
+        authenticate: yield* authenticateRemoteDatabase(mockRemoteDatabase),
       });
     })
   );

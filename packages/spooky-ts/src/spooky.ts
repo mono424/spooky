@@ -8,7 +8,11 @@ import {
   TableModel,
   TableNames,
 } from "@spooky/query-builder";
-import { makeConfig, QueryManagerService } from "./services/index.js";
+import {
+  AuthManagerService,
+  makeConfig,
+  QueryManagerService,
+} from "./services/index.js";
 import { provision } from "./provision.js";
 
 const create = Effect.fn("create")(function* (table: string, data: any) {
@@ -44,13 +48,16 @@ const useQuery = Effect.fn("useQuery")(function* <S extends SchemaStructure>(
 
 export const main = <S extends SchemaStructure>() =>
   Effect.gen(function* () {
-    const { schema } = yield* (yield* makeConfig<S>()).getConfig;
+    const { schema, provisionOptions } = yield* (yield* makeConfig<S>())
+      .getConfig;
 
-    yield* provision<S>();
+    yield* provision<S>(provisionOptions);
 
+    const authManager = yield* AuthManagerService;
     const query = yield* useQuery<S>(schema);
 
     return {
+      authenticate: authManager.authenticate,
       create,
       update,
       delete: deleteFn,

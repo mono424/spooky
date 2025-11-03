@@ -1,5 +1,6 @@
 import { SchemaStructure } from "@spooky/query-builder";
 import { Context, Effect, Layer } from "effect";
+import { ProvisionOptions } from "src/provision.js";
 
 export type CacheStrategy = "memory" | "indexeddb";
 
@@ -20,6 +21,8 @@ export interface SpookyConfig<S extends SchemaStructure> {
   namespace: string;
   /** Database name */
   database: string;
+  /** Provision options */
+  provisionOptions: ProvisionOptions;
 }
 
 export class Config extends Context.Tag("Config")<

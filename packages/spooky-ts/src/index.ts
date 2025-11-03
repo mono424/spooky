@@ -7,6 +7,7 @@ import { DatabaseServiceLayer } from "./services/database-wasm.js";
 import { Effect, Layer } from "effect";
 import { main } from "./spooky.js";
 import { SchemaStructure } from "@spooky/query-builder";
+import { AuthManagerServiceLayer } from "./services/auth-manager.js";
 
 export function createSpooky<S extends SchemaStructure>(
   config: SpookyConfig<S>
@@ -15,14 +16,19 @@ export function createSpooky<S extends SchemaStructure>(
   const databaseServiceLayer = DatabaseServiceLayer<S>().pipe(
     Layer.provide(configLayer)
   );
+  const authManagerServiceLayer = AuthManagerServiceLayer<S>().pipe(
+    Layer.provide(databaseServiceLayer)
+  );
   const queryManagerServiceLayer = QueryManagerServiceLayer<S>().pipe(
     Layer.provide(configLayer),
-    Layer.provide(databaseServiceLayer)
+    Layer.provide(databaseServiceLayer),
+    Layer.provide(authManagerServiceLayer)
   );
 
   const MainLayer = Layer.mergeAll(
     configLayer,
     databaseServiceLayer,
+    authManagerServiceLayer,
     queryManagerServiceLayer
   );
 

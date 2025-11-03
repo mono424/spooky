@@ -9,6 +9,8 @@ import { SchemaStructure } from "@spooky/query-builder";
 export interface ProvisionOptions {
   /** Force re-provision even if schema already exists */
   force?: boolean;
+  /** Provision the remote database */
+  provisionRemote?: boolean;
 }
 
 /**
@@ -55,6 +57,7 @@ export const initializeInternalDatabase = Effect.fn(
 )(function* (internalDb: Surreal) {
   return yield* Effect.tryPromise({
     try: async () => {
+      console.log("Initializing internal database...", internalDb);
       await internalDb
         .query(
           `
@@ -187,40 +190,47 @@ export const recordSchemaHash = Effect.fn("recordSchemaHash")(function* (
 export const provision = Effect.fn("provision")(function* <
   S extends SchemaStructure
 >(options: ProvisionOptions = {}) {
-  Effect.gen(function* () {
+  return yield* Effect.gen(function* () {
     const { database, schemaSurql } = yield* (yield* makeConfig<S>()).getConfig;
 
     const databaseService = yield* DatabaseService;
-    const { force = false } = options;
+    const { force = false, provisionRemote = false } = options;
 
     yield* Effect.gen(function* () {
-      return {
-        internalDb: yield* databaseService.useInternal((internalDb) =>
-          Effect.succeed(internalDb)
-        ),
-        localDb: yield* databaseService.useLocal((localDb) =>
-          Effect.succeed(localDb)
-        ),
-        remoteDb: yield* databaseService.useRemote((remoteDb) =>
-          Effect.succeed(remoteDb)
-        ),
-      };
-    }).pipe(
-      Effect.tap(({ internalDb, localDb, remoteDb }) =>
-        Effect.gen(function* () {
-          yield* initializeInternalDatabase(internalDb);
-          const schemaHash = yield* sha1(schemaSurql);
-          const isUpToDate = yield* isSchemaUpToDate(internalDb, schemaHash);
-          const shouldMigrate = force || !isUpToDate;
-
-          if (shouldMigrate) {
-            yield* dropMainDatabase(localDb, database);
-            yield* provisionSchema(localDb, schemaSurql);
-            yield* recordSchemaHash(internalDb, schemaHash);
-          }
+      const internalDb = yield* databaseService.useInternal(
+        Effect.fn("useInternal")(function* (internalDb: Surreal) {
+          console.log("using internal database", internalDb);
+          return yield* Effect.succeed(internalDb);
         })
-      )
-    );
+      );
+      const localDb = yield* databaseService.useLocal(
+        Effect.fn("useLocal")(function* (db: Surreal) {
+          return yield* Effect.succeed(db);
+        })
+      );
+
+      const remoteDb = yield* databaseService.useRemote(
+        Effect.fn("useRemote")(function* (db: Surreal) {
+          return yield* Effect.succeed(db);
+        })
+      );
+
+      const schemaHash = yield* sha1(schemaSurql);
+      const isUpToDate = yield* isSchemaUpToDate(internalDb, schemaHash);
+      const shouldMigrate = force || !isUpToDate;
+      if (!shouldMigrate) return;
+
+      yield* initializeInternalDatabase(internalDb);
+
+      if (shouldMigrate) {
+        yield* dropMainDatabase(localDb, database);
+        yield* provisionSchema(localDb, schemaSurql);
+        if (provisionRemote) {
+          yield* provisionSchema(remoteDb, schemaSurql);
+        }
+        yield* recordSchemaHash(internalDb, schemaHash);
+      }
+    });
 
     console.log("Database schema provisioned successfully");
     return Effect.succeed(undefined);

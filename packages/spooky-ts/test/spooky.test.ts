@@ -1,21 +1,25 @@
 import { describe, expect, it } from "@effect/vitest";
 import { type SpookyConfig } from "../src/services/index.js";
-import { testSchema } from "./test.schema.js";
+import { schema as testSchema, SURQL_SCHEMA } from "./test.schema.js";
 import { Effect } from "effect";
 import { createMockSpooky } from "./mock-spooky.js";
 
-describe("Spooky Initialization", () => {
-  const mockConfig: SpookyConfig<typeof testSchema> = {
-    schema: testSchema,
-    schemaSurql: "DEFINE TABLE test;",
-    remoteUrl: "ws://localhost:8000",
-    localDbName: "test-local",
-    internalDbName: "test-internal",
-    storageStrategy: "memory" as const,
-    namespace: "test",
-    database: "test",
-  };
+const mockConfig: SpookyConfig<typeof testSchema> = {
+  schema: testSchema,
+  schemaSurql: SURQL_SCHEMA,
+  remoteUrl: "ws://localhost:8000",
+  localDbName: "test-local",
+  internalDbName: "test-internal",
+  storageStrategy: "memory" as const,
+  namespace: "test",
+  database: "test",
+  provisionOptions: {
+    force: false,
+    provisionRemote: true,
+  },
+};
 
+describe("Spooky Initialization", () => {
   it("should initialize spooky with valid config", async () => {
     const { spooky } = await createMockSpooky(mockConfig);
 
@@ -28,17 +32,6 @@ describe("Spooky Initialization", () => {
 });
 
 describe("Mock Database with 3 Nodes", () => {
-  const mockConfig: SpookyConfig<typeof testSchema> = {
-    schema: testSchema,
-    schemaSurql: "DEFINE TABLE test;",
-    remoteUrl: "ws://localhost:8000", // This will be ignored
-    localDbName: "test-local",
-    internalDbName: "test-internal",
-    storageStrategy: "memory" as const,
-    namespace: "test",
-    database: "test",
-  };
-
   it("should create a query", async () => {
     const { spooky } = await createMockSpooky(mockConfig);
 
@@ -49,16 +42,54 @@ describe("Mock Database with 3 Nodes", () => {
     expect(result).toBeDefined();
   });
 
+  it("should authenticate", async () => {
+    const { spooky, dbContext } = await createMockSpooky(mockConfig);
+
+    await dbContext.mockRemoteDatabase?.query(
+      [
+        "CREATE user CONTENT { id: user:A, username: 'userA', email: 'userA@example.com', password: crypto::argon2::generate('pw1') };",
+      ].join("\n")
+    );
+
+    const authResponse = await dbContext.mockRemoteDatabase?.signin({
+      access: "account",
+      variables: {
+        username: "userA",
+        password: "pw1",
+      },
+    });
+    console.log("authResponse", authResponse);
+
+    expect(authResponse?.token).toBeDefined();
+
+    const userId = await Effect.runPromise(
+      spooky.authenticate(authResponse?.token ?? "")
+    );
+
+    expect(userId).toBeDefined();
+    expect(userId?.id).toBe("A");
+  });
+
   it("should create a query with a filter", async () => {
     const { spooky, dbContext } = await createMockSpooky(mockConfig);
 
     await dbContext.mockRemoteDatabase?.query(
       [
-        "CREATE user CONTENT { id: user:A, username: 'userA', email: 'userA@example.com' };",
-        "CREATE user CONTENT { id: user:B, username: 'userB', email: 'userB@example.com' };",
-        "CREATE user CONTENT { id: user:C, username: 'userC', email: 'userC@example.com' };",
+        "CREATE user CONTENT { id: user:A, username: 'userA', email: 'userA@example.com', password: crypto::argon2::generate('pw1') };",
+        "CREATE user CONTENT { id: user:B, username: 'userB', email: 'userB@example.com', password: crypto::argon2::generate('pw2') };",
+        "CREATE user CONTENT { id: user:C, username: 'userC', email: 'userC@example.com', password: crypto::argon2::generate('pw3') };",
       ].join("\n")
     );
+
+    const authResponse = await dbContext.mockRemoteDatabase?.signin({
+      access: "account",
+      variables: {
+        username: "userA",
+        password: "pw1",
+      },
+    });
+
+    await Effect.runPromise(spooky.authenticate(authResponse?.token ?? ""));
 
     await dbContext.mockRemoteDatabase?.query(
       [

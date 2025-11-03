@@ -1,4 +1,4 @@
-import { LiveSubscription, Surreal, Uuid } from "surrealdb";
+import { LiveSubscription, RecordId, Surreal, Uuid } from "surrealdb";
 import { Context, Data, Effect } from "effect";
 
 export class LocalDatabaseError extends Data.TaggedError("LocalDatabaseError")<{
@@ -49,6 +49,6 @@ export class DatabaseService extends Context.Tag("DatabaseService")<
     ) => Effect.Effect<LiveSubscription, RemoteDatabaseError, never>;
     authenticate: (
       token: string
-    ) => Effect.Effect<void, RemoteAuthenticationError, never>;
+    ) => Effect.Effect<RecordId, RemoteAuthenticationError, never>;
   }
 >() {}
