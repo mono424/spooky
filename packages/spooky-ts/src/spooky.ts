@@ -10,6 +10,7 @@ import {
 } from "@spooky/query-builder";
 import {
   AuthManagerService,
+  DatabaseService,
   makeConfig,
   QueryManagerService,
 } from "./services/index.js";
@@ -53,8 +54,17 @@ export const main = <S extends SchemaStructure>() =>
 
     yield* provision<S>(provisionOptions);
 
+    const databaseService = yield* DatabaseService;
     const authManager = yield* AuthManagerService;
     const query = yield* useQuery<S>(schema);
+
+    const close = Effect.fn("close")(function* () {
+      return yield* Effect.gen(function* () {
+        yield* databaseService.closeRemote();
+        yield* databaseService.closeLocal();
+        yield* databaseService.closeInternal();
+      });
+    });
 
     return {
       authenticate: authManager.authenticate,
@@ -62,5 +72,6 @@ export const main = <S extends SchemaStructure>() =>
       update,
       delete: deleteFn,
       query,
+      close,
     };
   });

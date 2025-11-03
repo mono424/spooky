@@ -23,31 +23,15 @@ export class MockNodeError extends Data.TaggedError("MockNodeError")<{
 }> {}
 
 /**
- * Creates a single mock SurrealDB node using WASM
- */
-const createMockNode = (nodeId: string, namespace: string, database: string) =>
-  Effect.tryPromise({
-    try: async () => {
-      dbContext.mockRemoteDatabase = await createNewDatabase(
-        namespace || "main",
-        database || database
-      );
-      return dbContext.mockRemoteDatabase;
-    },
-    catch: (error) =>
-      new RemoteDatabaseError({
-        message: `Failed to create mock remote node ${nodeId}`,
-        cause: error,
-      }),
-  });
-
-/**
  * Wrapper function for using a mock node
  */
-const useMockNode = Effect.fn("useMockNode")(function* (instance: Surreal) {
+const useMockNode = Effect.fn("useMockNode")(function* (
+  instanceEffect: Effect.Effect<Surreal, RemoteDatabaseError, never>
+) {
   return Effect.fn("useMockNodeInner")(function* <T>(
     fn: (db: Surreal) => Effect.Effect<T, RemoteDatabaseError, never>
   ) {
+    const instance = yield* instanceEffect;
     const result = yield* Effect.try({
       try: () => fn(instance),
       catch: (error) =>
@@ -74,10 +58,13 @@ const useMockNode = Effect.fn("useMockNode")(function* (instance: Surreal) {
 /**
  * Wrapper function for using local database
  */
-const useLocalDatabase = Effect.fn("useLocalDatabase")(function* (db: Surreal) {
+const useLocalDatabase = Effect.fn("useLocalDatabase")(function* (
+  dbEffect: Effect.Effect<Surreal, LocalDatabaseError, never>
+) {
   return Effect.fn("useLocalDatabaseInner")(function* <T>(
     fn: (db: Surreal) => Effect.Effect<T, LocalDatabaseError, never>
   ) {
+    const db = yield* dbEffect;
     const result = yield* Effect.try({
       try: () => fn(db),
       catch: (error) =>
@@ -106,12 +93,13 @@ const useLocalDatabase = Effect.fn("useLocalDatabase")(function* (db: Surreal) {
  * Query function for local database
  */
 const queryLocalDatabase = Effect.fn("queryLocalDatabase")(function* (
-  db: Surreal
+  dbEffect: Effect.Effect<Surreal, LocalDatabaseError, never>
 ) {
   return Effect.fn("queryLocalDatabaseInner")(function* <T>(
     sql: string,
     vars?: Record<string, unknown>
   ) {
+    const db = yield* dbEffect;
     return yield* Effect.tryPromise({
       try: async () => {
         const result = await db.query(sql, vars).collect<[T]>();
@@ -130,12 +118,13 @@ const queryLocalDatabase = Effect.fn("queryLocalDatabase")(function* (
  * Query function for remote/mock database
  */
 const queryMockDatabase = Effect.fn("queryMockDatabase")(function* (
-  instance: Surreal
+  instanceEffect: Effect.Effect<Surreal, RemoteDatabaseError, never>
 ) {
   return Effect.fn("queryMockDatabaseInner")(function* <T>(
     sql: string,
     vars?: Record<string, unknown>
   ) {
+    const instance = yield* instanceEffect;
     return yield* Effect.tryPromise({
       try: async () => {
         const result = await instance.query(sql, vars).collect<[T]>();
@@ -154,9 +143,10 @@ const queryMockDatabase = Effect.fn("queryMockDatabase")(function* (
  * liveOf function for remote/mock database
  */
 const liveOfMockDatabase = Effect.fn("liveOfMockDatabase")(function* (
-  instance: Surreal
+  instanceEffect: Effect.Effect<Surreal, RemoteDatabaseError, never>
 ) {
   return Effect.fn("liveOfMockDatabase")(function* (liveUuid: Uuid) {
+    const instance = yield* instanceEffect;
     return yield* Effect.tryPromise({
       try: async () => {
         const result = await instance.liveOf(liveUuid);
@@ -173,13 +163,7 @@ const liveOfMockDatabase = Effect.fn("liveOfMockDatabase")(function* (
 
 const createNewDatabase = async (namespace: string, database: string) => {
   const db = new Surreal({
-    engines: createNodeEngines({
-      capabilities: {
-        experimental: {
-          allow: ["record_references"],
-        },
-      },
-    }),
+    engines: createNodeEngines({}),
     codecOptions: {
       useNativeDates: false,
     },
@@ -203,17 +187,32 @@ export const dbContext: {
 };
 
 const authenticateRemoteDatabase = Effect.fn("authenticateRemoteDatabase")(
-  function* (db: Surreal) {
+  function* (dbEffect: Effect.Effect<Surreal, RemoteDatabaseError, never>) {
     return Effect.fn("authenticateRemoteDatabaseInner")(function* (
       token: string
     ) {
+      const db = yield* dbEffect.pipe(
+        Effect.mapError(
+          (error) =>
+            new RemoteAuthenticationError({
+              message: "Failed to use mock database",
+              cause: error,
+            })
+        )
+      );
       return yield* Effect.tryPromise({
         try: async () => {
           await db.authenticate(token);
           const [result] = await db
             .query(`SELECT id FROM $auth`)
-            .collect<[{ id: RecordId }]>();
-          return result?.id;
+            .collect<[[{ id: RecordId }]]>();
+          if (!result[0]) {
+            throw new RemoteAuthenticationError({
+              message: "Failed to authenticate on remote database",
+              cause: new Error("User not found"),
+            });
+          }
+          return result[0]?.id;
         },
         catch: (error) =>
           new RemoteAuthenticationError({
@@ -237,47 +236,101 @@ export const MockDatabaseServiceLayer = <S extends SchemaStructure>() =>
       const { localDbName, namespace, database } = config;
 
       // Create local and internal databases (same as real implementation)
-      const internalDatabase = yield* Effect.acquireRelease(
-        Effect.tryPromise({
+      const internalDatabase = Effect.tryPromise({
+        try: async () => {
+          if (dbContext.internalDatabase) return dbContext.internalDatabase;
+          dbContext.internalDatabase = await createNewDatabase(
+            "internal",
+            "main"
+          );
+          return dbContext.internalDatabase;
+        },
+        catch: (error) =>
+          new LocalDatabaseError({
+            message: "Failed to create internal database",
+            cause: error,
+          }),
+      });
+
+      const localDatabase = Effect.tryPromise({
+        try: async () => {
+          if (dbContext.localDatabase) return dbContext.localDatabase;
+          dbContext.localDatabase = await createNewDatabase(
+            namespace || "main",
+            database || localDbName
+          );
+          return dbContext.localDatabase;
+        },
+        catch: (error) =>
+          new LocalDatabaseError({
+            message: "Failed to create local database",
+            cause: error,
+          }),
+      });
+
+      const mockRemoteDatabase = Effect.tryPromise({
+        try: async () => {
+          if (dbContext.mockRemoteDatabase) return dbContext.mockRemoteDatabase;
+          dbContext.mockRemoteDatabase = await createNewDatabase(
+            namespace || "main",
+            database || localDbName
+          );
+          return dbContext.mockRemoteDatabase;
+        },
+        catch: (error) =>
+          new RemoteDatabaseError({
+            message: "Failed to create remote database",
+            cause: error,
+          }),
+      });
+
+      const closeRemoteDb = Effect.fn("closeRemoteDatabase")(function* () {
+        return yield* Effect.tryPromise({
           try: async () => {
-            dbContext.internalDatabase = await createNewDatabase(
-              "internal",
-              "main"
-            );
-            return dbContext.internalDatabase;
+            await dbContext.mockRemoteDatabase?.close();
+            dbContext.mockRemoteDatabase = undefined;
+          },
+          catch: (error) =>
+            new RemoteDatabaseError({
+              message: "Failed to close remote database",
+              cause: error,
+            }),
+        });
+      });
+
+      const closeLocalDb = Effect.fn("closeLocalDatabase")(function* () {
+        return yield* Effect.tryPromise({
+          try: async () => {
+            await dbContext.localDatabase?.close();
+            dbContext.localDatabase = undefined;
           },
           catch: (error) =>
             new LocalDatabaseError({
-              message: "Failed to create internal database",
+              message: "Failed to close local database",
               cause: error,
             }),
-        }),
-        (db) => Effect.promise(() => db.close())
-      );
+        });
+      });
 
-      const localDatabase = yield* Effect.acquireRelease(
-        Effect.tryPromise({
+      const closeInternalDb = Effect.fn("closeInternalDatabase")(function* () {
+        return yield* Effect.tryPromise({
           try: async () => {
-            dbContext.localDatabase = await createNewDatabase(
-              namespace || "main",
-              database || localDbName
-            );
-            return dbContext.localDatabase;
+            await dbContext.internalDatabase?.close();
+            dbContext.internalDatabase = undefined;
           },
           catch: (error) =>
             new LocalDatabaseError({
-              message: "Failed to create local database",
+              message: "Failed to close local database",
               cause: error,
             }),
-        }),
-        (db) => Effect.promise(() => db.close())
-      );
+        });
+      });
 
-      const mockRemoteDatabase = yield* createMockNode(
-        "remote",
-        namespace || "main",
-        database || "test"
-      );
+      // Important to make dbContext work for the tests
+      yield* Effect.log("mockRemoteDatabase", yield* mockRemoteDatabase);
+      yield* Effect.log("localDatabase", yield* localDatabase);
+      yield* Effect.log("internalDatabase", yield* internalDatabase);
+      // Important to make dbContext work for the tests
 
       return DatabaseService.of({
         useLocal: yield* useLocalDatabase(localDatabase),
@@ -288,6 +341,9 @@ export const MockDatabaseServiceLayer = <S extends SchemaStructure>() =>
         queryRemote: yield* queryMockDatabase(mockRemoteDatabase),
         liveOfRemote: yield* liveOfMockDatabase(mockRemoteDatabase),
         authenticate: yield* authenticateRemoteDatabase(mockRemoteDatabase),
+        closeRemote: closeRemoteDb,
+        closeLocal: closeLocalDb,
+        closeInternal: closeInternalDb,
       });
     })
   );

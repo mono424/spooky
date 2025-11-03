@@ -50,5 +50,8 @@ export class DatabaseService extends Context.Tag("DatabaseService")<
     authenticate: (
       token: string
     ) => Effect.Effect<RecordId, RemoteAuthenticationError, never>;
+    closeRemote: () => Effect.Effect<void, RemoteDatabaseError, never>;
+    closeLocal: () => Effect.Effect<void, LocalDatabaseError, never>;
+    closeInternal: () => Effect.Effect<void, LocalDatabaseError, never>;
   }
 >() {}

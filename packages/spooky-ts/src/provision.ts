@@ -1,6 +1,11 @@
 import { Effect } from "effect";
 import type { Surreal } from "surrealdb";
-import { DatabaseService, makeConfig } from "./services/index.js";
+import {
+  DatabaseService,
+  LocalDatabaseError,
+  makeConfig,
+  RemoteDatabaseError,
+} from "./services/index.js";
 import { SchemaStructure } from "@spooky/query-builder";
 
 /**
@@ -197,39 +202,86 @@ export const provision = Effect.fn("provision")(function* <
     const { force = false, provisionRemote = false } = options;
 
     yield* Effect.gen(function* () {
-      const internalDb = yield* databaseService.useInternal(
-        Effect.fn("useInternal")(function* (db: Surreal) {
-          console.log("using internal database", db);
-          return db;
+      const result = yield* databaseService.useInternal(
+        Effect.fn("shouldMigrate")(function* (db) {
+          return yield* Effect.gen(function* () {
+            const schemaHash = yield* sha1(schemaSurql);
+            const isUpToDate = yield* isSchemaUpToDate(db, schemaHash);
+            const shouldMigrate = force || !isUpToDate;
+            if (!shouldMigrate)
+              return Effect.succeed({ shouldMigrate, schemaHash });
+
+            yield* initializeInternalDatabase(db);
+            return Effect.succeed({ shouldMigrate, schemaHash });
+          }).pipe(
+            Effect.catchAll((error) => {
+              return Effect.fail(
+                new LocalDatabaseError({
+                  message: `Failed to use internal database: ${error}`,
+                  cause: error,
+                })
+              );
+            })
+          );
         })
       );
-      const localDb = yield* databaseService.useLocal(
-        Effect.fn("useLocal")(function* (db: Surreal) {
-          return db;
+
+      if (!(yield* result).shouldMigrate) return;
+
+      yield* databaseService.useLocal(
+        Effect.fn("useLocalMigration")(function* (db) {
+          return yield* Effect.gen(function* () {
+            yield* dropMainDatabase(db, database);
+            yield* provisionSchema(db, schemaSurql);
+            return true;
+          }).pipe(
+            Effect.catchAll((error) => {
+              return Effect.fail(
+                new LocalDatabaseError({
+                  message: `Failed to migrate database: ${error}`,
+                  cause: error,
+                })
+              );
+            })
+          );
         })
       );
 
-      const remoteDb = yield* databaseService.useRemote(
-        Effect.fn("useRemote")(function* (db: Surreal) {
-          return db;
-        })
-      );
-
-      const schemaHash = yield* sha1(schemaSurql);
-      const isUpToDate = yield* isSchemaUpToDate(internalDb, schemaHash);
-      const shouldMigrate = force || !isUpToDate;
-      if (!shouldMigrate) return;
-
-      yield* initializeInternalDatabase(internalDb);
-
-      if (shouldMigrate) {
-        yield* dropMainDatabase(localDb, database);
-        yield* provisionSchema(localDb, schemaSurql);
-        if (provisionRemote) {
-          yield* provisionSchema(remoteDb, schemaSurql);
-        }
-        yield* recordSchemaHash(internalDb, schemaHash);
+      if (provisionRemote) {
+        yield* databaseService.useRemote(
+          Effect.fn("migrateRemote")(function* (db: Surreal) {
+            return yield* Effect.gen(function* () {
+              yield* provisionSchema(db, schemaSurql);
+            }).pipe(
+              Effect.catchAll((error) => {
+                return Effect.fail(
+                  new RemoteDatabaseError({
+                    message: `Failed to migrate remote database: ${error}`,
+                    cause: error,
+                  })
+                );
+              })
+            );
+          })
+        );
       }
+
+      yield* databaseService.useInternal(
+        Effect.fn("shouldMigrate")(function* (db) {
+          return yield* Effect.gen(function* () {
+            yield* recordSchemaHash(db, (yield* result).schemaHash);
+          }).pipe(
+            Effect.catchAll((error) => {
+              return Effect.fail(
+                new LocalDatabaseError({
+                  message: `Failed to use internal database: ${error}`,
+                  cause: error,
+                })
+              );
+            })
+          );
+        })
+      );
     });
 
     console.log("Database schema provisioned successfully");

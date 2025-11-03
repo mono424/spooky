@@ -24,7 +24,6 @@ export const AuthManagerServiceLayer = <S extends SchemaStructure>() =>
 
       const authenticate = Effect.fn("authenticate")(function* (token: string) {
         const userId = yield* databaseService.authenticate(token);
-
         yield* Ref.set(tokenRef, token);
         yield* Ref.set(userIdRef, userId);
         return userId;

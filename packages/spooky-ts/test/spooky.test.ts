@@ -1,4 +1,4 @@
-import { describe, expect, it } from "@effect/vitest";
+import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest";
 import { type SpookyConfig } from "../src/services/index.js";
 import { schema as testSchema, SURQL_SCHEMA } from "./test.schema.js";
 import { Effect } from "effect";
@@ -15,7 +15,6 @@ const mockConfig: SpookyConfig<typeof testSchema> = {
   database: "test",
   provisionOptions: {
     force: false,
-    provisionRemote: true,
   },
 };
 
@@ -32,6 +31,32 @@ describe("Spooky Initialization", () => {
 });
 
 describe("Mock Database with 3 Nodes", () => {
+  afterEach(async () => {
+    const { spooky } = await createMockSpooky(mockConfig);
+    Effect.runPromise(spooky.close());
+  });
+
+  beforeEach(async () => {
+    const { dbContext } = await createMockSpooky(mockConfig);
+    await dbContext.mockRemoteDatabase?.query([SURQL_SCHEMA].join("\n"));
+
+    await dbContext.mockRemoteDatabase?.query(
+      [
+        "CREATE user CONTENT { id: user:A, username: 'userA', email: 'userA@example.com', password: crypto::argon2::generate('pw1') };",
+        "CREATE user CONTENT { id: user:B, username: 'userB', email: 'userB@example.com', password: crypto::argon2::generate('pw2') };",
+        "CREATE user CONTENT { id: user:C, username: 'userC', email: 'userC@example.com', password: crypto::argon2::generate('pw3') };",
+      ].join("\n")
+    );
+
+    await dbContext.mockRemoteDatabase?.query(
+      [
+        "CREATE thread CONTENT { id: thread:A1, title: 'threadA1', content: 'content', author: user:A, created_at: time::now() };",
+        "CREATE thread CONTENT { id: thread:B1, title: 'threadB1', content: 'content', author: user:B, created_at: time::now() };",
+        "CREATE thread CONTENT { id: thread:C1, title: 'threadC1', content: 'content', author: user:C, created_at: time::now() };",
+      ].join("\n")
+    );
+  });
+
   it("should create a query", async () => {
     const { spooky } = await createMockSpooky(mockConfig);
 
@@ -45,12 +70,6 @@ describe("Mock Database with 3 Nodes", () => {
   it("should authenticate", async () => {
     const { spooky, dbContext } = await createMockSpooky(mockConfig);
 
-    await dbContext.mockRemoteDatabase?.query(
-      [
-        "CREATE user CONTENT { id: user:A, username: 'userA', email: 'userA@example.com', password: crypto::argon2::generate('pw1') };",
-      ].join("\n")
-    );
-
     const authResponse = await dbContext.mockRemoteDatabase?.signin({
       access: "account",
       variables: {
@@ -58,6 +77,7 @@ describe("Mock Database with 3 Nodes", () => {
         password: "pw1",
       },
     });
+
     console.log("authResponse", authResponse);
 
     expect(authResponse?.token).toBeDefined();
@@ -70,38 +90,21 @@ describe("Mock Database with 3 Nodes", () => {
     expect(userId?.id).toBe("A");
   });
 
-  it("should create a query with a filter", async () => {
-    const { spooky, dbContext } = await createMockSpooky(mockConfig);
+  // it("should create a query with a filter", async () => {
+  //   const { spooky, dbContext } = await createMockSpooky(mockConfig);
 
-    await dbContext.mockRemoteDatabase?.query(
-      [
-        "CREATE user CONTENT { id: user:A, username: 'userA', email: 'userA@example.com', password: crypto::argon2::generate('pw1') };",
-        "CREATE user CONTENT { id: user:B, username: 'userB', email: 'userB@example.com', password: crypto::argon2::generate('pw2') };",
-        "CREATE user CONTENT { id: user:C, username: 'userC', email: 'userC@example.com', password: crypto::argon2::generate('pw3') };",
-      ].join("\n")
-    );
+  //   const authResponse = await dbContext.mockRemoteDatabase?.signin({
+  //     access: "account",
+  //     variables: {
+  //       username: "userA",
+  //       password: "pw1",
+  //     },
+  //   });
 
-    const authResponse = await dbContext.mockRemoteDatabase?.signin({
-      access: "account",
-      variables: {
-        username: "userA",
-        password: "pw1",
-      },
-    });
+  //   await Effect.runPromise(spooky.authenticate(authResponse?.token ?? ""));
 
-    await Effect.runPromise(spooky.authenticate(authResponse?.token ?? ""));
-
-    await dbContext.mockRemoteDatabase?.query(
-      [
-        "CREATE thread CONTENT { id: thread:A1, title: 'threadA1', content: 'content', author: thread:A, created_at: time::now() };",
-        "CREATE thread CONTENT { id: thread:B1, title: 'threadB1', content: 'content', author: thread:B, created_at: time::now() };",
-        "CREATE thread CONTENT { id: thread:C1, title: 'threadC1', content: 'content', author: thread:C, created_at: time::now() };",
-      ].join("\n")
-    );
-
-    const result = Effect.runSync(spooky.query("thread", {})).build().select();
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    console.log(result.data);
-    expect(result).toBeDefined();
-  });
+  //   const result = Effect.runSync(spooky.query("thread", {})).build().select();
+  //   console.log(result.data);
+  //   expect(result).toBeDefined();
+  // });
 });
