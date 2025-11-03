@@ -13,6 +13,13 @@ export class RemoteDatabaseError extends Data.TaggedError(
   readonly message: string;
 }> {}
 
+export class RemoteAuthenticationError extends Data.TaggedError(
+  "RemoteAuthenticationError"
+)<{
+  readonly cause?: unknown;
+  readonly message: string;
+}> {}
+
 export class DatabaseService extends Context.Tag("DatabaseService")<
   DatabaseService,
   {
@@ -40,5 +47,8 @@ export class DatabaseService extends Context.Tag("DatabaseService")<
     liveOfRemote: (
       liveUuid: Uuid
     ) => Effect.Effect<LiveSubscription, RemoteDatabaseError, never>;
+    authenticate: (
+      token: string
+    ) => Effect.Effect<void, RemoteAuthenticationError, never>;
   }
 >() {}
