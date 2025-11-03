@@ -198,20 +198,20 @@ export const provision = Effect.fn("provision")(function* <
 
     yield* Effect.gen(function* () {
       const internalDb = yield* databaseService.useInternal(
-        Effect.fn("useInternal")(function* (internalDb: Surreal) {
-          console.log("using internal database", internalDb);
-          return yield* Effect.succeed(internalDb);
+        Effect.fn("useInternal")(function* (db: Surreal) {
+          console.log("using internal database", db);
+          return db;
         })
       );
       const localDb = yield* databaseService.useLocal(
         Effect.fn("useLocal")(function* (db: Surreal) {
-          return yield* Effect.succeed(db);
+          return db;
         })
       );
 
       const remoteDb = yield* databaseService.useRemote(
         Effect.fn("useRemote")(function* (db: Surreal) {
-          return yield* Effect.succeed(db);
+          return db;
         })
       );
 

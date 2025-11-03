@@ -44,74 +44,75 @@ const createMockNode = (nodeId: string, namespace: string, database: string) =>
 /**
  * Wrapper function for using a mock node
  */
-const useMockNode =
-  (instance: Surreal) =>
-  <T>(
+const useMockNode = Effect.fn("useMockNode")(function* (instance: Surreal) {
+  return Effect.fn("useMockNodeInner")(function* <T>(
     fn: (db: Surreal) => Effect.Effect<T, RemoteDatabaseError, never>
-  ): Effect.Effect<T, RemoteDatabaseError, never> =>
-    Effect.gen(function* () {
-      const result = yield* Effect.try({
-        try: () => fn(instance),
+  ) {
+    const result = yield* Effect.try({
+      try: () => fn(instance),
+      catch: (error) =>
+        new RemoteDatabaseError({
+          message: `Failed to use mock db [sync]`,
+          cause: error,
+        }),
+    });
+
+    if (result instanceof Promise) {
+      return yield* Effect.tryPromise({
+        try: () => result,
         catch: (error) =>
           new RemoteDatabaseError({
-            message: `Failed to use mock db [sync]`,
+            message: `Failed to use mock db [async]`,
             cause: error,
           }),
       });
-
-      if (result instanceof Promise) {
-        return yield* Effect.tryPromise({
-          try: () => result,
-          catch: (error) =>
-            new RemoteDatabaseError({
-              message: `Failed to use mock db [async]`,
-              cause: error,
-            }),
-        });
-      } else {
-        return result;
-      }
-    });
+    }
+    return result;
+  });
+});
 
 /**
  * Wrapper function for using local database
  */
-const useLocalDatabase =
-  (db: Surreal) =>
-  <T>(
+const useLocalDatabase = Effect.fn("useLocalDatabase")(function* (db: Surreal) {
+  return Effect.fn("useLocalDatabaseInner")(function* <T>(
     fn: (db: Surreal) => Effect.Effect<T, LocalDatabaseError, never>
-  ): Effect.Effect<T, LocalDatabaseError, never> =>
-    Effect.gen(function* () {
-      const result = yield* Effect.try({
-        try: () => fn(db),
+  ) {
+    const result = yield* Effect.try({
+      try: () => fn(db),
+      catch: (error) =>
+        new LocalDatabaseError({
+          message: "Failed to use database [sync]",
+          cause: error,
+        }),
+    });
+
+    if (result instanceof Promise) {
+      return yield* Effect.tryPromise({
+        try: () => result,
         catch: (error) =>
           new LocalDatabaseError({
-            message: "Failed to use database [sync]",
+            message: "Failed to use database [async]",
             cause: error,
           }),
       });
-
-      if (result instanceof Promise) {
-        return yield* Effect.tryPromise({
-          try: () => result,
-          catch: (error) =>
-            new LocalDatabaseError({
-              message: "Failed to use database [async]",
-              cause: error,
-            }),
-        });
-      } else {
-        return result;
-      }
-    });
+    } else {
+      return result;
+    }
+  });
+});
 
 /**
  * Query function for local database
  */
-const queryLocalDatabase =
-  (db: Surreal) =>
-  <T>(sql: string, vars?: Record<string, unknown>) =>
-    Effect.tryPromise({
+const queryLocalDatabase = Effect.fn("queryLocalDatabase")(function* (
+  db: Surreal
+) {
+  return Effect.fn("queryLocalDatabaseInner")(function* <T>(
+    sql: string,
+    vars?: Record<string, unknown>
+  ) {
+    return yield* Effect.tryPromise({
       try: async () => {
         const result = await db.query(sql, vars).collect<[T]>();
         return result[0];
@@ -122,14 +123,20 @@ const queryLocalDatabase =
           cause: error,
         }),
     });
+  });
+});
 
 /**
  * Query function for remote/mock database
  */
-const queryMockDatabase =
-  (instance: Surreal) =>
-  <T>(sql: string, vars?: Record<string, unknown>) =>
-    Effect.tryPromise({
+const queryMockDatabase = Effect.fn("queryMockDatabase")(function* (
+  instance: Surreal
+) {
+  return Effect.fn("queryMockDatabaseInner")(function* <T>(
+    sql: string,
+    vars?: Record<string, unknown>
+  ) {
+    return yield* Effect.tryPromise({
       try: async () => {
         const result = await instance.query(sql, vars).collect<[T]>();
         return result[0];
@@ -140,22 +147,29 @@ const queryMockDatabase =
           cause: error,
         }),
     });
+  });
+});
 
 /**
  * liveOf function for remote/mock database
  */
-const liveOfMockDatabase = (instance: Surreal) => (liveUuid: Uuid) =>
-  Effect.tryPromise({
-    try: async () => {
-      const result = await instance.liveOf(liveUuid);
-      return result;
-    },
-    catch: (error) =>
-      new RemoteDatabaseError({
-        message: "Failed to execute liveOf on mock database",
-        cause: error,
-      }),
+const liveOfMockDatabase = Effect.fn("liveOfMockDatabase")(function* (
+  instance: Surreal
+) {
+  return Effect.fn("liveOfMockDatabase")(function* (liveUuid: Uuid) {
+    return yield* Effect.tryPromise({
+      try: async () => {
+        const result = await instance.liveOf(liveUuid);
+        return result;
+      },
+      catch: (error) =>
+        new RemoteDatabaseError({
+          message: "Failed to execute liveOf on mock database",
+          cause: error,
+        }),
+    });
   });
+});
 
 const createNewDatabase = async (namespace: string, database: string) => {
   const db = new Surreal({
@@ -266,13 +280,13 @@ export const MockDatabaseServiceLayer = <S extends SchemaStructure>() =>
       );
 
       return DatabaseService.of({
-        useLocal: useLocalDatabase(localDatabase),
-        useInternal: useLocalDatabase(internalDatabase),
-        useRemote: useMockNode(mockRemoteDatabase),
-        queryLocal: queryLocalDatabase(localDatabase),
-        queryInternal: queryLocalDatabase(internalDatabase),
-        queryRemote: queryMockDatabase(mockRemoteDatabase),
-        liveOfRemote: liveOfMockDatabase(mockRemoteDatabase),
+        useLocal: yield* useLocalDatabase(localDatabase),
+        useInternal: yield* useLocalDatabase(internalDatabase),
+        useRemote: yield* useMockNode(mockRemoteDatabase),
+        queryLocal: yield* queryLocalDatabase(localDatabase),
+        queryInternal: yield* queryLocalDatabase(internalDatabase),
+        queryRemote: yield* queryMockDatabase(mockRemoteDatabase),
+        liveOfRemote: yield* liveOfMockDatabase(mockRemoteDatabase),
         authenticate: yield* authenticateRemoteDatabase(mockRemoteDatabase),
       });
     })
