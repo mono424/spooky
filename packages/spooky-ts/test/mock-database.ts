@@ -2,11 +2,11 @@ import { Surreal, Uuid } from "surrealdb";
 import { createNodeEngines } from "@surrealdb/node";
 import { Data, Effect, Layer } from "effect";
 import {
-  makeConfig,
   DatabaseService,
   LocalDatabaseError,
   RemoteDatabaseError,
-} from "../src/services/index.js";
+} from "../src/services/database.js";
+import { makeConfig } from "../src/services/config.js";
 import { SchemaStructure } from "@spooky/query-builder";
 
 /**
@@ -21,112 +21,39 @@ export class MockNodeError extends Data.TaggedError("MockNodeError")<{
   readonly nodeId: string;
 }> {}
 
-interface MockNode {
-  id: string;
-  instance: Surreal;
-  requestCount: number;
-}
-
 /**
  * Creates a single mock SurrealDB node using WASM
  */
 const createMockNode = (nodeId: string, namespace: string, database: string) =>
   Effect.tryPromise({
     try: async () => {
-      const node = new Surreal({
-        engines: createNodeEngines({
-          capabilities: {
-            experimental: {
-              allow: ["record_references"],
-            },
-          },
-        }),
-        codecOptions: {
-          useNativeDates: false,
-        },
-      });
-
-      // Each node uses its own in-memory database
-      await node.connect("mem://");
-      await node.use({
-        namespace: namespace,
-        database: `${database}_${nodeId}`,
-      });
-
-      return {
-        id: nodeId,
-        instance: node,
-        requestCount: 0,
-      } as MockNode;
+      dbContext.mockRemoteDatabase = await createNewDatabase(
+        namespace || "main",
+        database || database
+      );
+      return dbContext.mockRemoteDatabase;
     },
     catch: (error) =>
-      new MockNodeError({
-        message: `Failed to create mock node ${nodeId}`,
+      new RemoteDatabaseError({
+        message: `Failed to create mock remote node ${nodeId}`,
         cause: error,
-        nodeId,
       }),
   });
-
-/**
- * Load balancer that distributes requests across the 3 nodes
- * using a simple round-robin strategy
- */
-class NodeLoadBalancer {
-  private currentIndex = 0;
-
-  constructor(private nodes: MockNode[]) {}
-
-  /**
-   * Get the next node in round-robin fashion
-   */
-  getNextNode(): MockNode {
-    const node = this.nodes[this.currentIndex];
-    node.requestCount++;
-    this.currentIndex = (this.currentIndex + 1) % this.nodes.length;
-    return node;
-  }
-
-  /**
-   * Get a specific node by ID
-   */
-  getNodeById(nodeId: string): MockNode | undefined {
-    return this.nodes.find((n) => n.id === nodeId);
-  }
-
-  /**
-   * Get all nodes
-   */
-  getAllNodes(): MockNode[] {
-    return this.nodes;
-  }
-
-  /**
-   * Get node with least load
-   */
-  getLeastLoadedNode(): MockNode {
-    return this.nodes.reduce((prev, current) =>
-      current.requestCount < prev.requestCount ? current : prev
-    );
-  }
-}
 
 /**
  * Wrapper function for using a mock node
  */
 const useMockNode =
-  (loadBalancer: NodeLoadBalancer) =>
+  (instance: Surreal) =>
   <T>(
     fn: (db: Surreal) => Effect.Effect<T, RemoteDatabaseError, never>
   ): Effect.Effect<T, RemoteDatabaseError, never> =>
     Effect.gen(function* () {
-      // Get the next node in round-robin fashion
-      const node = loadBalancer.getNextNode();
-
       const result = yield* Effect.try({
-        try: () => fn(node.instance),
+        try: () => fn(instance),
         catch: (error) =>
           new RemoteDatabaseError({
-            message: `Failed to use mock node ${node.id} [sync]`,
+            message: `Failed to use mock db [sync]`,
             cause: error,
           }),
       });
@@ -136,7 +63,7 @@ const useMockNode =
           try: () => result,
           catch: (error) =>
             new RemoteDatabaseError({
-              message: `Failed to use mock node ${node.id} [async]`,
+              message: `Failed to use mock db [async]`,
               cause: error,
             }),
         });
@@ -199,12 +126,11 @@ const queryLocalDatabase =
  * Query function for remote/mock database
  */
 const queryMockDatabase =
-  (loadBalancer: NodeLoadBalancer) =>
+  (instance: Surreal) =>
   <T>(sql: string, vars?: Record<string, unknown>) =>
     Effect.tryPromise({
       try: async () => {
-        const node = loadBalancer.getNextNode();
-        const result = await node.instance.query(sql, vars).collect<[T]>();
+        const result = await instance.query(sql, vars).collect<[T]>();
         return result[0];
       },
       catch: (error) =>
@@ -217,20 +143,49 @@ const queryMockDatabase =
 /**
  * liveOf function for remote/mock database
  */
-const liveOfMockDatabase =
-  (loadBalancer: NodeLoadBalancer) => (liveUuid: Uuid) =>
-    Effect.tryPromise({
-      try: async () => {
-        const node = loadBalancer.getNextNode();
-        const result = await node.instance.liveOf(liveUuid);
-        return result;
+const liveOfMockDatabase = (instance: Surreal) => (liveUuid: Uuid) =>
+  Effect.tryPromise({
+    try: async () => {
+      const result = await instance.liveOf(liveUuid);
+      return result;
+    },
+    catch: (error) =>
+      new RemoteDatabaseError({
+        message: "Failed to execute liveOf on mock database",
+        cause: error,
+      }),
+  });
+
+const createNewDatabase = async (namespace: string, database: string) => {
+  const db = new Surreal({
+    engines: createNodeEngines({
+      capabilities: {
+        experimental: {
+          allow: ["record_references"],
+        },
       },
-      catch: (error) =>
-        new RemoteDatabaseError({
-          message: "Failed to execute liveOf on mock database",
-          cause: error,
-        }),
-    });
+    }),
+    codecOptions: {
+      useNativeDates: false,
+    },
+  });
+  await db.connect("mem://");
+  await db.use({
+    namespace,
+    database,
+  });
+  return db;
+};
+
+export const dbContext: {
+  internalDatabase: Surreal | undefined;
+  localDatabase: Surreal | undefined;
+  mockRemoteDatabase: Surreal | undefined;
+} = {
+  internalDatabase: undefined,
+  localDatabase: undefined,
+  mockRemoteDatabase: undefined,
+};
 
 /**
  * Mock Database Service Layer that creates 3 local nodes instead of
@@ -247,24 +202,11 @@ export const MockDatabaseServiceLayer = <S extends SchemaStructure>() =>
       const internalDatabase = yield* Effect.acquireRelease(
         Effect.tryPromise({
           try: async () => {
-            const db = new Surreal({
-              engines: createNodeEngines({
-                capabilities: {
-                  experimental: {
-                    allow: ["record_references"],
-                  },
-                },
-              }),
-              codecOptions: {
-                useNativeDates: false,
-              },
-            });
-            await db.connect("mem://");
-            await db.use({
-              namespace: "internal",
-              database: "main",
-            });
-            return db;
+            dbContext.internalDatabase = await createNewDatabase(
+              "internal",
+              "main"
+            );
+            return dbContext.internalDatabase;
           },
           catch: (error) =>
             new LocalDatabaseError({
@@ -278,24 +220,11 @@ export const MockDatabaseServiceLayer = <S extends SchemaStructure>() =>
       const localDatabase = yield* Effect.acquireRelease(
         Effect.tryPromise({
           try: async () => {
-            const db = new Surreal({
-              engines: createNodeEngines({
-                capabilities: {
-                  experimental: {
-                    allow: ["record_references"],
-                  },
-                },
-              }),
-              codecOptions: {
-                useNativeDates: false,
-              },
-            });
-            await db.connect("mem://");
-            await db.use({
-              namespace: namespace || "main",
-              database: database || localDbName,
-            });
-            return db;
+            dbContext.localDatabase = await createNewDatabase(
+              namespace || "main",
+              database || localDbName
+            );
+            return dbContext.localDatabase;
           },
           catch: (error) =>
             new LocalDatabaseError({
@@ -306,59 +235,20 @@ export const MockDatabaseServiceLayer = <S extends SchemaStructure>() =>
         (db) => Effect.promise(() => db.close())
       );
 
-      // Create 3 mock nodes instead of connecting to remote
-      const node1 = yield* Effect.acquireRelease(
-        createMockNode("node1", namespace || "main", database || "test"),
-        (node) => Effect.promise(() => node.instance.close())
+      const mockRemoteDatabase = yield* createMockNode(
+        "remote",
+        namespace || "main",
+        database || "test"
       );
-
-      const node2 = yield* Effect.acquireRelease(
-        createMockNode("node2", namespace || "main", database || "test"),
-        (node) => Effect.promise(() => node.instance.close())
-      );
-
-      const node3 = yield* Effect.acquireRelease(
-        createMockNode("node3", namespace || "main", database || "test"),
-        (node) => Effect.promise(() => node.instance.close())
-      );
-
-      // Create load balancer
-      const loadBalancer = new NodeLoadBalancer([node1, node2, node3]);
 
       return DatabaseService.of({
         useLocal: useLocalDatabase(localDatabase),
         useInternal: useLocalDatabase(internalDatabase),
-        useRemote: useMockNode(loadBalancer),
+        useRemote: useMockNode(mockRemoteDatabase),
         queryLocal: queryLocalDatabase(localDatabase),
         queryInternal: queryLocalDatabase(internalDatabase),
-        queryRemote: queryMockDatabase(loadBalancer),
-        liveOfRemote: liveOfMockDatabase(loadBalancer),
+        queryRemote: queryMockDatabase(mockRemoteDatabase),
+        liveOfRemote: liveOfMockDatabase(mockRemoteDatabase),
       });
     })
   );
-
-/**
- * Helper function to create a test database service with 3 nodes
- */
-export const createMockDatabaseService = (
-  namespace = "test",
-  database = "test"
-) => {
-  return Effect.gen(function* () {
-    const node1 = yield* createMockNode("node1", namespace, database);
-    const node2 = yield* createMockNode("node2", namespace, database);
-    const node3 = yield* createMockNode("node3", namespace, database);
-
-    const loadBalancer = new NodeLoadBalancer([node1, node2, node3]);
-
-    return {
-      loadBalancer,
-      nodes: [node1, node2, node3],
-      cleanup: Effect.all([
-        Effect.promise(() => node1.instance.close()),
-        Effect.promise(() => node2.instance.close()),
-        Effect.promise(() => node3.instance.close()),
-      ]),
-    };
-  });
-};

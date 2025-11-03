@@ -35,7 +35,7 @@ export class QueryManagerService extends Context.Tag("QueryManagerService")<
 
 const cache: QueryCache<SchemaStructure> = {};
 
-const queryLocalRefresh = Effect.fn("initQuery")(function* <
+const queryLocalRefresh = Effect.fn("queryLocalRefresh")(function* <
   T extends { columns: Record<string, ColumnSchema> }
 >(query: InnerQuery<T, boolean>) {
   const databaseService = yield* DatabaseService;
@@ -99,41 +99,46 @@ const makeRun = (runtime: Runtime.Runtime<DatabaseService>) => {
           innerQuery: query,
           cleanup: () => {},
         };
-        yield* queryLocalRefresh(query).pipe(
-          Effect.catchAll((error) =>
-            Effect.logError("Failed to refresh query locally", error)
-          ),
-          Effect.provide(runtime)
-        );
-        yield* subscribeRemoteQuery(query).pipe(
-          Effect.catchAll((error) =>
-            Effect.logError("Failed to subscribe to remote query", error)
-          ),
-          Effect.provide(runtime)
-        );
 
-        for (const subquery of query.subqueries) {
-          const unsubscribe = subquery.subscribe(() => {
-            Runtime.runPromise(runtime)(
-              queryLocalRefresh(query).pipe(
-                Effect.catchAll((error) =>
-                  Effect.logError(
-                    "Failed to refresh query after subscription",
-                    error
-                  )
-                )
-              )
+        yield* Effect.fork(
+          Effect.gen(function* () {
+            yield* queryLocalRefresh(query).pipe(
+              Effect.catchAll((error) =>
+                Effect.logError("Failed to refresh query locally", error)
+              ),
+              Effect.provide(runtime)
             );
-          });
+            yield* subscribeRemoteQuery(query).pipe(
+              Effect.catchAll((error) =>
+                Effect.logError("Failed to subscribe to remote query", error)
+              ),
+              Effect.provide(runtime)
+            );
 
-          const previousCleanup = cache[query.hash].cleanup;
-          cache[query.hash].cleanup = () => {
-            previousCleanup();
-            unsubscribe();
-          };
+            for (const subquery of query.subqueries) {
+              const unsubscribe = subquery.subscribe(() => {
+                Runtime.runPromise(runtime)(
+                  queryLocalRefresh(query).pipe(
+                    Effect.catchAll((error) =>
+                      Effect.logError(
+                        "Failed to refresh query after subscription",
+                        error
+                      )
+                    )
+                  )
+                );
+              });
 
-          yield* run(subquery);
-        }
+              const previousCleanup = cache[query.hash].cleanup;
+              cache[query.hash].cleanup = () => {
+                previousCleanup();
+                unsubscribe();
+              };
+
+              yield* run(subquery);
+            }
+          })
+        );
       }
 
       return {

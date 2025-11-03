@@ -6,7 +6,9 @@ export default defineConfig({
   test: {
     setupFiles: [path.join(__dirname, "setupTests.ts")],
     include: ["./test/**/*.test.ts"],
-    globals: true
+    globals: true,
+    environment: 'node',
+    pool: 'forks',
   },
   resolve: {
     alias: {

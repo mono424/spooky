@@ -34,8 +34,8 @@ export interface ProvisionContext {
 /**
  * Computes SHA-1 hash of a string using Web Crypto API
  */
-export const sha1 = (str: string) =>
-  Effect.tryPromise({
+export const sha1 = Effect.fn("sha1")(function* (str: string) {
+  return yield* Effect.tryPromise({
     try: async () => {
       const enc = new TextEncoder();
       const hash = await crypto.subtle.digest("SHA-1", enc.encode(str));
@@ -45,12 +45,15 @@ export const sha1 = (str: string) =>
     },
     catch: (error) => new Error(`Failed to compute SHA-1 hash: ${error}`),
   });
+});
 
 /**
  * Initializes the internal database with __schema table
  */
-export const initializeInternalDatabase = (internalDb: Surreal) =>
-  Effect.tryPromise({
+export const initializeInternalDatabase = Effect.fn(
+  "initializeInternalDatabase"
+)(function* (internalDb: Surreal) {
+  return yield* Effect.tryPromise({
     try: async () => {
       await internalDb
         .query(
@@ -68,12 +71,16 @@ export const initializeInternalDatabase = (internalDb: Surreal) =>
     catch: (error) =>
       new Error(`Failed to initialize internal database: ${error}`),
   });
+});
 
 /**
  * Checks if the current schema hash matches the stored hash
  */
-export const isSchemaUpToDate = (internalDb: Surreal, hash: string) =>
-  Effect.tryPromise({
+export const isSchemaUpToDate = Effect.fn("isSchemaUpToDate")(function* (
+  internalDb: Surreal,
+  hash: string
+) {
+  return yield* Effect.tryPromise({
     try: async () => {
       try {
         const [result] = await internalDb
@@ -94,11 +101,15 @@ export const isSchemaUpToDate = (internalDb: Surreal, hash: string) =>
     },
     catch: (error) => new Error(`Failed to check schema status: ${error}`),
   });
+});
 
 /**
  * Drops the main database and recreates it
  */
-export const dropMainDatabase = (localDb: Surreal, database: string) =>
+export const dropMainDatabase = Effect.fn("dropMainDatabase")(function* (
+  localDb: Surreal,
+  database: string
+) {
   Effect.tryPromise({
     try: async () => {
       console.log("Dropping main database...");
@@ -113,12 +124,16 @@ export const dropMainDatabase = (localDb: Surreal, database: string) =>
     },
     catch: (error) => new Error(`Failed to drop main database: ${error}`),
   });
+});
 
 /**
  * Provisions the schema by executing all SurrealQL statements
  */
-export const provisionSchema = (localDb: Surreal, schemaContent: string) =>
-  Effect.tryPromise({
+export const provisionSchema = Effect.fn("provisionSchema")(function* (
+  localDb: Surreal,
+  schemaContent: string
+) {
+  return yield* Effect.tryPromise({
     try: async () => {
       console.log("Provisioning new schema...");
 
@@ -143,12 +158,16 @@ export const provisionSchema = (localDb: Surreal, schemaContent: string) =>
     },
     catch: (error) => new Error(`Failed to provision schema: ${error}`),
   });
+});
 
 /**
  * Records the schema hash in the internal database
  */
-export const recordSchemaHash = (internalDb: Surreal, hash: string) =>
-  Effect.tryPromise({
+export const recordSchemaHash = Effect.fn("recordSchemaHash")(function* (
+  internalDb: Surreal,
+  hash: string
+) {
+  return yield* Effect.tryPromise({
     try: async () => {
       await internalDb.query(
         `UPSERT __schema SET hash = $hash, created_at = time::now() WHERE hash = $hash;`,
@@ -159,14 +178,15 @@ export const recordSchemaHash = (internalDb: Surreal, hash: string) =>
     },
     catch: (error) => new Error(`Failed to record schema hash: ${error}`),
   });
+});
 
 /**
  * Main provision function that orchestrates the provisioning process
  * This is the primary entry point for database schema provisioning
  */
-export const provision = <S extends SchemaStructure>(
-  options: ProvisionOptions = {}
-) =>
+export const provision = Effect.fn("provision")(function* <
+  S extends SchemaStructure
+>(options: ProvisionOptions = {}) {
   Effect.gen(function* () {
     const { database, schemaSurql } = yield* (yield* makeConfig<S>()).getConfig;
 
@@ -210,3 +230,4 @@ export const provision = <S extends SchemaStructure>(
       return Effect.fail(error);
     })
   );
+});

@@ -27,10 +27,10 @@
     "effect": "^3.17.7",
     "@spooky/query-builder": "workspace:*",
     "@surrealdb/wasm": "^2.3.2",
-    "surrealdb": "^2.0.0-alpha.9"
+    "surrealdb": "^2.0.0-alpha.10"
   },
   "devDependencies": {
-    "@surrealdb/node": "^2.0.0-alpha.9",
+    "@surrealdb/node": "^2.3.3",
     "@babel/cli": "^7.24.8",
     "@babel/core": "^7.25.2",
     "@babel/plugin-transform-export-namespace-from": "^7.24.7",

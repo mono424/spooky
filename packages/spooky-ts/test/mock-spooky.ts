@@ -2,17 +2,17 @@ import {
   ConfigLayer,
   SpookyConfig,
   QueryManagerServiceLayer,
-} from "./services/index.js";
-import { DatabaseServiceLayer } from "./services/database-wasm.js";
+} from "../src/services/index.js";
 import { Effect, Layer } from "effect";
-import { main } from "./spooky.js";
+import { main } from "../src/spooky.js";
 import { SchemaStructure } from "@spooky/query-builder";
+import { dbContext, MockDatabaseServiceLayer } from "./mock-database.js";
 
-export function createSpooky<S extends SchemaStructure>(
+export async function createMockSpooky<S extends SchemaStructure>(
   config: SpookyConfig<S>
 ) {
   const configLayer = ConfigLayer<S>(config);
-  const databaseServiceLayer = DatabaseServiceLayer<S>().pipe(
+  const databaseServiceLayer = MockDatabaseServiceLayer<S>().pipe(
     Layer.provide(configLayer)
   );
   const queryManagerServiceLayer = QueryManagerServiceLayer<S>().pipe(
@@ -26,5 +26,8 @@ export function createSpooky<S extends SchemaStructure>(
     queryManagerServiceLayer
   );
 
-  return main<S>().pipe(Effect.provide(MainLayer), Effect.runPromise);
+  return {
+    spooky: await main<S>().pipe(Effect.provide(MainLayer), Effect.runPromise),
+    dbContext,
+  };
 }
