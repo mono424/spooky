@@ -29,7 +29,7 @@
   "license": "MIT",
   "packageManager": "pnpm@9.0.0",
   "dependencies": {
-    "@spooky/query-builder": "workspace:*",
+    "@spooky/spooky-ts": "workspace:*",
     "@surrealdb/wasm": "^2.3.2",
     "surrealdb": "^2.0.0-alpha.9",
     "valtio": "^2.1.8"
