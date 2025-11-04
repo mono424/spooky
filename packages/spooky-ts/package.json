@@ -1,5 +1,5 @@
 {
-  "name": "@spooky/lib",
+  "name": "@spooky/spooky-ts",
   "version": "0.0.0",
   "type": "module",
   "packageManager": "pnpm@9.0.0",
@@ -24,13 +24,13 @@
     "coverage": "vitest --coverage"
   },
   "dependencies": {
-    "effect": "^3.17.7",
     "@spooky/query-builder": "workspace:*",
     "@surrealdb/wasm": "^2.3.2",
+    "effect": "^3.17.7",
+    "fast-json-patch": "^3.1.1",
     "surrealdb": "^2.0.0-alpha.10"
   },
   "devDependencies": {
-    "@surrealdb/node": "^2.3.3",
     "@babel/cli": "^7.24.8",
     "@babel/core": "^7.25.2",
     "@babel/plugin-transform-export-namespace-from": "^7.24.7",
@@ -38,6 +38,7 @@
     "@effect/build-utils": "^0.8.9",
     "@effect/language-service": "latest",
     "@effect/vitest": "^0.25.1",
+    "@surrealdb/node": "^2.3.3",
     "@types/node": "^22.5.2",
     "babel-plugin-annotate-pure-calls": "^0.5.0",
     "tsx": "^4.17.0",

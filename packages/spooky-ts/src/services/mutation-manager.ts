@@ -1,4 +1,12 @@
-import { Context, Effect, Layer, Logger, LogLevel, Runtime } from "effect";
+import {
+  Context,
+  Effect,
+  Layer,
+  Logger,
+  LogLevel,
+  Runtime,
+  Schedule,
+} from "effect";
 import {
   ColumnSchema,
   SchemaStructure,
@@ -198,6 +206,10 @@ const makeRun = (runtime: Runtime.Runtime<DatabaseService>) => {
         Effect.provide(runtime)
       );
       yield* mutationApplyRemote(mutation).pipe(
+        Effect.retry({
+          times: 3,
+          schedule: Schedule.exponential("10 millis"),
+        }),
         Effect.catchAll((error) =>
           Effect.logError("Failed to apply mutation remotely", error)
         ),
