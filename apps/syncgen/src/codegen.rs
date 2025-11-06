@@ -253,11 +253,21 @@ impl CodeGenerator {
                             for (col_name, col_def) in props_obj {
                                 let col_type = self.map_json_schema_type_to_value_type(col_def);
                                 let is_optional = self.is_field_optional(table_def, col_name);
+                                let is_record_id = col_def.get("x-is-record-id")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false);
 
-                                tables_lines.push(format!(
-                                    "        {}: {{ type: '{}' as const, optional: {} }},",
-                                    col_name, col_type, is_optional
-                                ));
+                                if is_record_id {
+                                    tables_lines.push(format!(
+                                        "        {}: {{ type: '{}' as const, recordId: true, optional: {} }},",
+                                        col_name, col_type, is_optional
+                                    ));
+                                } else {
+                                    tables_lines.push(format!(
+                                        "        {}: {{ type: '{}' as const, optional: {} }},",
+                                        col_name, col_type, is_optional
+                                    ));
+                                }
                             }
                         }
                     }

@@ -5,8 +5,9 @@ import {
   SchemaStructure,
   TableModel,
 } from "@spooky/query-builder";
-import { DatabaseService } from "./index.js";
+import { DatabaseService, makeConfig } from "./index.js";
 import { LiveMessage, Uuid } from "surrealdb";
+import { decodeFromSpooky } from "./converter.js";
 
 export type CleanupFn = () => void;
 
@@ -36,8 +37,9 @@ export class QueryManagerService extends Context.Tag("QueryManagerService")<
 const cache: QueryCache<SchemaStructure> = {};
 
 const queryLocalRefresh = Effect.fn("queryLocalRefresh")(function* <
+  S extends SchemaStructure,
   T extends { columns: Record<string, ColumnSchema> }
->(query: InnerQuery<T, boolean>) {
+>(schema: S, query: InnerQuery<T, boolean>) {
   yield* Effect.logDebug("[QueryManager] Local Query Refresh - Starting", {
     queryHash: query.hash,
   });
@@ -51,12 +53,18 @@ const queryLocalRefresh = Effect.fn("queryLocalRefresh")(function* <
     queryHash: query.hash,
     resultLength: results?.length ?? 0,
   });
-  query.setData(results);
+
+  const decodedResults = yield* Effect.all(
+    results.map((result) => decodeFromSpooky(schema, query.tableName, result))
+  );
+
+  query.setData(decodedResults.filter((result) => result !== undefined));
 });
 
 const queryRemoteHydration = Effect.fn("queryRemoteHydration")(function* <
+  S extends SchemaStructure,
   T extends { columns: Record<string, ColumnSchema> }
->(query: InnerQuery<T, boolean>) {
+>(schema: S, query: InnerQuery<T, boolean>) {
   yield* Effect.logDebug("[QueryManager] Remote Query Hydration - Starting", {
     queryHash: query.hash,
     query: query.selectQuery.query,
@@ -100,7 +108,11 @@ const queryRemoteHydration = Effect.fn("queryRemoteHydration")(function* <
     }
   );
 
-  query.setData(results);
+  const decodedResults = yield* Effect.all(
+    results.map((result) => decodeFromSpooky(schema, query.tableName, result))
+  );
+
+  query.setData(decodedResults.filter((result) => result !== undefined));
 });
 
 const handleRemoteUpdate = Effect.fn("handleRemoteUpdate")(function* <
@@ -178,7 +190,10 @@ const subscribeRemoteQuery = Effect.fn("subscribeRemoteQuery")(function* <
   );
 });
 
-const makeRun = (runtime: Runtime.Runtime<DatabaseService>) => {
+const makeRun = <S extends SchemaStructure>(
+  schema: S,
+  runtime: Runtime.Runtime<DatabaseService>
+) => {
   const run = <T extends { columns: Record<string, ColumnSchema> }>(
     query: InnerQuery<T, boolean>
   ): Effect.Effect<{ cleanup: CleanupFn }, never, never> =>
@@ -208,7 +223,7 @@ const makeRun = (runtime: Runtime.Runtime<DatabaseService>) => {
               { queryHash: query.hash }
             );
 
-            yield* queryLocalRefresh(query).pipe(
+            yield* queryLocalRefresh(schema, query).pipe(
               Effect.catchAll((error) =>
                 Effect.logError("Failed to refresh query locally", error)
               ),
@@ -220,7 +235,7 @@ const makeRun = (runtime: Runtime.Runtime<DatabaseService>) => {
               { queryHash: query.hash }
             );
 
-            yield* queryRemoteHydration(query).pipe(
+            yield* queryRemoteHydration(schema, query).pipe(
               Effect.catchAll((error) =>
                 Effect.logError("Failed to refresh query locally", error)
               ),
@@ -245,7 +260,7 @@ const makeRun = (runtime: Runtime.Runtime<DatabaseService>) => {
             for (const subquery of query.subqueries) {
               const unsubscribe = subquery.subscribe(() => {
                 Runtime.runPromise(runtime)(
-                  queryLocalRefresh(query)
+                  queryLocalRefresh(schema, query)
                     .pipe(
                       Effect.catchAll((error) =>
                         Effect.logError(
@@ -284,8 +299,10 @@ export const QueryManagerServiceLayer = <S extends SchemaStructure>() =>
   Layer.scoped(
     QueryManagerService,
     Effect.gen(function* () {
+      const { schema } = yield* (yield* makeConfig<S>()).getConfig;
+
       const runtime = yield* Effect.runtime<DatabaseService>();
-      const run = makeRun(runtime);
+      const run = makeRun<S>(schema, runtime);
 
       return QueryManagerService.of({
         runtime,

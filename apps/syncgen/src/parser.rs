@@ -32,6 +32,7 @@ pub struct FieldDefinition {
     pub optional: bool,
     pub assert: Option<String>,
     pub value: Option<String>,
+    pub is_record_id: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -217,12 +218,16 @@ impl SchemaParser {
                 let assert_clause = field_def.assert.map(|v| format!("{}", v));
                 let value_clause = field_def.value.map(|v| format!("{}", v));
 
+                // Check if this field is a record ID (has Record type)
+                let is_record_id = Self::is_field_record_id(&field_type);
+
                 let field = FieldDefinition {
                     name: field_name.clone(),
                     field_type: field_type.clone(),
                     optional: false,
                     assert: assert_clause,
                     value: value_clause,
+                    is_record_id,
                 };
 
                 if let Some(table) = self.tables.get_mut(&table_name) {
@@ -273,6 +278,16 @@ impl SchemaParser {
             Kind::Option(inner) => FieldType::Option(Box::new(Self::parse_kind(*inner))),
             Kind::Any => FieldType::Any,
             _ => FieldType::Any,
+        }
+    }
+
+    /// Check if a field type is a record ID (contains Record type anywhere in the type hierarchy)
+    fn is_field_record_id(field_type: &FieldType) -> bool {
+        match field_type {
+            FieldType::Record(_) => true,
+            FieldType::Option(inner) => Self::is_field_record_id(inner),
+            FieldType::Array(inner) => Self::is_field_record_id(inner),
+            _ => false,
         }
     }
 

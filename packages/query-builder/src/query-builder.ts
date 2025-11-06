@@ -119,7 +119,7 @@ export class InnerQuery<
   private _cleanup: () => void = () => {};
 
   constructor(
-    private readonly tableName: string,
+    private readonly _tableName: string,
     private readonly options: QueryOptions<TableModel<T>, IsOne>,
     private readonly schema: SchemaStructure,
     private readonly executor: Executor<any>
@@ -129,7 +129,7 @@ export class InnerQuery<
 
     this._selectQuery = buildQueryFromOptions(
       "SELECT",
-      this.tableName,
+      this._tableName,
       this.options,
       this.schema
     );
@@ -138,7 +138,7 @@ export class InnerQuery<
 
     this._selectLiveQuery = buildQueryFromOptions(
       "LIVE SELECT DIFF",
-      this.tableName,
+      this._tableName,
       this.options,
       this.schema
     );
@@ -163,6 +163,10 @@ export class InnerQuery<
 
   get selectLiveQuery(): QueryInfo {
     return this._selectLiveQuery;
+  }
+
+  get tableName(): string {
+    return this._tableName;
   }
 
   get hash(): number {

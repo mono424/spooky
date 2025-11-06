@@ -178,6 +178,14 @@ impl JsonSchemaGenerator {
                 );
             }
 
+            // Add is_record_id flag to metadata
+            if field_def.is_record_id {
+                field_obj.insert(
+                    "x-is-record-id".to_string(),
+                    Value::Bool(true),
+                );
+            }
+
             properties.insert(field_name.clone(), Value::Object(field_obj));
 
             // Determine if field is required
