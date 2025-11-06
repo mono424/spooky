@@ -178,8 +178,8 @@ describe("Mock Database with 3 Nodes", () => {
     const authResponse = await dbContext.remoteDatabase?.signin({
       access: "account",
       variables: {
-        username: "userB",
-        password: "pw2",
+        username: "userA",
+        password: "pw1",
       },
     });
 
@@ -187,16 +187,15 @@ describe("Mock Database with 3 Nodes", () => {
 
     await Effect.runPromise(
       spooky.create("thread", {
-        id: "thread:N1",
         title: "threadN1",
         content: "content",
-        author: "user:B",
+        author: "user:A",
         created_at: new Date(),
       })
     );
 
     const result = Effect.runSync(spooky.query("thread", {}))
-      .limit(99)
+      .limit(1)
       .build()
       .select();
     expect(result).toBeDefined();
@@ -207,6 +206,6 @@ describe("Mock Database with 3 Nodes", () => {
     );
     console.log("subResult01", subResult01);
 
-    expect(subResult01.find((t) => t.id === "thread:N1")).toBeTruthy();
+    expect(subResult01).length(1);
   });
 });

@@ -14,7 +14,8 @@ import {
   TableNames,
   GetTable,
 } from "@spooky/query-builder";
-import { DatabaseService } from "./index.js";
+import { DatabaseService, makeConfig } from "./index.js";
+import { encodeToSpooky, generateNewId } from "./converter.js";
 
 export type MutationType = "create" | "update" | "delete";
 
@@ -78,9 +79,19 @@ export class MutationManagerService extends Context.Tag(
   {
     readonly runtime: Runtime.Runtime<DatabaseService>;
     run: ReturnType<typeof makeRun>;
-    create: ReturnType<typeof makeCreate>;
-    update: ReturnType<typeof makeUpdate>;
-    delete: ReturnType<typeof makeDelete>;
+    create: <S extends SchemaStructure, N extends TableNames<S>>(
+      tableName: N,
+      payload: TableModel<GetTable<S, N>>
+    ) => Effect.Effect<void, string | Error, never>;
+    update: <S extends SchemaStructure, N extends TableNames<S>>(
+      tableName: N,
+      recordId: RecordId,
+      payload: Partial<TableModel<GetTable<S, N>>>
+    ) => Effect.Effect<void, string | Error, never>;
+    delete: <S extends SchemaStructure, N extends TableNames<S>>(
+      tableName: N,
+      id: RecordId
+    ) => Effect.Effect<void, string | Error, never>;
   }
 >() {}
 
@@ -158,6 +169,10 @@ const mutationApplyRemote = Effect.fn("queryLocalRefresh")(function* <
 
   switch (mutation.operationType) {
     case "create":
+      yield* Effect.logDebug("[MutationManager] Create remote", {
+        id: mutation.id,
+        data: mutation.data,
+      });
       yield* databaseService.queryRemote<TableModel<GetTable<S, N>>[]>(
         `CREATE ${mutation.tableName} CONTENT $payload`,
         {
@@ -167,19 +182,26 @@ const mutationApplyRemote = Effect.fn("queryLocalRefresh")(function* <
       break;
 
     case "update":
-      const updateMutation = mutation as UpdateMutation<S, N>;
+      yield* Effect.logDebug("[MutationManager] Update remote", {
+        id: mutation.id,
+        recordId: mutation.recordId,
+        data: mutation.patches,
+      });
       yield* databaseService.queryRemote<TableModel<GetTable<S, N>>[]>(
-        `UPDATE ${updateMutation.recordId.toString()} CONTENT $patches`,
+        `UPDATE ${mutation.recordId.toString()} CONTENT $patches`,
         {
-          patches: updateMutation.patches,
+          patches: mutation.patches,
         }
       );
       break;
 
     case "delete":
-      const deleteMutation = mutation as DeleteMutation<S, N>;
+      yield* Effect.logDebug("[MutationManager] Delete remote", {
+        id: mutation.id,
+        recordId: mutation.recordId,
+      });
       yield* databaseService.queryRemote<TableModel<GetTable<S, N>>[]>(
-        `DELETE ${deleteMutation.recordId.toString()}`
+        `DELETE ${mutation.recordId.toString()}`
       );
       break;
 
@@ -228,16 +250,32 @@ const makeRun = (runtime: Runtime.Runtime<DatabaseService>) => {
 };
 
 export const makeCreate = <S extends SchemaStructure>(
+  schema: S,
   run: ReturnType<typeof makeRun>
 ) => {
   return Effect.fn("create")(function* <N extends TableNames<S>>(
     tableName: N,
     payload: TableModel<GetTable<S, N>>
   ) {
+    const encodedPayload = yield* encodeToSpooky(schema, tableName, payload);
+    if (!encodedPayload) {
+      yield* Effect.fail("payload could not be encoded");
+      return;
+    }
+
+    const encodedPayloadWithId = yield* generateNewId(
+      schema,
+      tableName,
+      encodedPayload
+    );
+    if (!encodedPayloadWithId) {
+      yield* Effect.fail("id could not be generated");
+      return;
+    }
     return yield* run<S, N>({
       operationType: "create",
       tableName: tableName,
-      data: payload,
+      data: encodedPayloadWithId,
       createdAt: new Date(),
       retryCount: 0,
     });
@@ -245,6 +283,7 @@ export const makeCreate = <S extends SchemaStructure>(
 };
 
 export const makeUpdate = <S extends SchemaStructure>(
+  schema: S,
   run: ReturnType<typeof makeRun>
 ) => {
   return Effect.fn("update")(function* <N extends TableNames<S>>(
@@ -273,6 +312,7 @@ export const makeUpdate = <S extends SchemaStructure>(
 };
 
 export const makeDelete = <S extends SchemaStructure>(
+  schema: S,
   run: ReturnType<typeof makeRun>
 ) => {
   return Effect.fn("delete")(function* <N extends TableNames<S>>(
@@ -294,15 +334,16 @@ export const MutationManagerServiceLayer = <S extends SchemaStructure>() =>
   Layer.scoped(
     MutationManagerService,
     Effect.gen(function* () {
+      const { schema } = yield* (yield* makeConfig<S>()).getConfig;
       const runtime = yield* Effect.runtime<DatabaseService>();
       const run = makeRun(runtime);
 
       return MutationManagerService.of({
         runtime,
-        run: run,
-        create: makeCreate(run),
-        update: makeUpdate(run),
-        delete: makeDelete(run),
+        run,
+        create: makeCreate(schema, run),
+        update: makeUpdate(schema, run),
+        delete: makeDelete(schema, run),
       });
     })
   );

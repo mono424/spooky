@@ -156,7 +156,8 @@ impl JsonSchemaGenerator {
             "id".to_string(),
             json!({
                 "type": "string",
-                "description": "Record ID"
+                "description": "Record ID",
+                "x-is-record-id": true
             }),
         );
         required_fields.push("id".to_string());

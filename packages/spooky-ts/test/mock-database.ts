@@ -197,6 +197,11 @@ const createNewDatabase = async (namespace: string, database: string) => {
     namespace,
     database,
   });
+
+  db.subscribe("disconnected", () => console.log("[SURREALDB] DISCONNECTED"));
+  db.subscribe("connected", () => console.log("[SURREALDB] CONNECTED"));
+  db.subscribe("reconnecting", () => console.log("[SURREALDB] RECONNECTING"));
+  db.subscribe("error", (err) => console.log("[SURREALDB] ERROR | ", err));
   return db;
 };
 
