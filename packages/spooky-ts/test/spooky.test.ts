@@ -1,6 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it } from "@effect/vitest";
 import { type SpookyConfig } from "../src/services/index.js";
-import { schema as testSchema, SURQL_SCHEMA } from "./test.schema.js";
+import { schema as testSchema, SURQL_SCHEMA, Thread } from "./test.schema.js";
 import { Effect } from "effect";
 import { createMockSpooky } from "./mock-spooky.js";
 
@@ -170,5 +170,43 @@ describe("Mock Database with 3 Nodes", () => {
     expect(subResult02).toHaveLength(1);
     expect(subResult03).toHaveLength(1);
     expect(subResult04).toHaveLength(3);
+  });
+
+  it("should create local data on create mutation", async () => {
+    const { spooky, dbContext } = await createMockSpooky(mockConfig);
+
+    const authResponse = await dbContext.remoteDatabase?.signin({
+      access: "account",
+      variables: {
+        username: "userB",
+        password: "pw2",
+      },
+    });
+
+    await Effect.runPromise(spooky.authenticate(authResponse?.token ?? ""));
+
+    await Effect.runPromise(
+      spooky.create("thread", {
+        id: "thread:N1",
+        title: "threadN1",
+        content: "content",
+        author: "user:B",
+        created_at: new Date(),
+      })
+    );
+
+    const result = Effect.runSync(spooky.query("thread", {}))
+      .limit(99)
+      .build()
+      .select();
+    expect(result).toBeDefined();
+    expect(result.data).toHaveLength(0);
+
+    const subResult01: Thread[] = await new Promise((resolve) =>
+      result.subscribe((threads) => resolve(threads as Thread[]))
+    );
+    console.log("subResult01", subResult01);
+
+    expect(subResult01.find((t) => t.id === "thread:N1")).toBeTruthy();
   });
 });

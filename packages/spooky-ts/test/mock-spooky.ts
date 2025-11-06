@@ -3,6 +3,7 @@ import {
   SpookyConfig,
   QueryManagerServiceLayer,
   AuthManagerServiceLayer,
+  MutationManagerServiceLayer,
 } from "../src/services/index.js";
 import { Effect, Layer } from "effect";
 import { main } from "../src/spooky.js";
@@ -25,11 +26,19 @@ export async function createMockSpooky<S extends SchemaStructure>(
     Layer.provide(authManagerServiceLayer)
   );
 
+  const mutationManagerServiceLayer = MutationManagerServiceLayer<S>().pipe(
+    Layer.provide(configLayer),
+    Layer.provide(databaseServiceLayer),
+    Layer.provide(authManagerServiceLayer),
+    Layer.provide(queryManagerServiceLayer)
+  );
+
   const MainLayer = Layer.mergeAll(
     configLayer,
     databaseServiceLayer,
     queryManagerServiceLayer,
-    authManagerServiceLayer
+    authManagerServiceLayer,
+    mutationManagerServiceLayer
   );
 
   return {
