@@ -15,18 +15,7 @@ import {
   QueryManagerService,
 } from "./services/index.js";
 import { provision } from "./provision.js";
-
-const create = Effect.fn("create")(function* (table: string, data: any) {
-  return yield* Effect.succeed(data);
-});
-
-const update = Effect.fn("update")(function* (table: string, data: any) {
-  return yield* Effect.succeed(data);
-});
-
-const deleteFn = Effect.fn("delete")(function* (table: string, data: any) {
-  return yield* Effect.succeed(data);
-});
+import { MutationManagerService } from "./services/mutation-manager.js";
 
 const useQuery = Effect.fn("useQuery")(function* <S extends SchemaStructure>(
   schema: S
@@ -56,6 +45,7 @@ export const main = <S extends SchemaStructure>() =>
 
     const databaseService = yield* DatabaseService;
     const authManager = yield* AuthManagerService;
+    const mutationManager = yield* MutationManagerService;
     const query = yield* useQuery<S>(schema);
 
     const close = Effect.fn("close")(function* () {
@@ -68,9 +58,9 @@ export const main = <S extends SchemaStructure>() =>
 
     return {
       authenticate: authManager.authenticate,
-      create,
-      update,
-      delete: deleteFn,
+      create: mutationManager.create,
+      update: mutationManager.update,
+      delete: mutationManager.delete,
       query,
       close,
       clearLocalCache: databaseService.clearLocalCache,
