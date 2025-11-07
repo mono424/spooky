@@ -152,11 +152,14 @@ const queryMockDatabase = Effect.fn("queryMockDatabase")(function* (
         const result = await instance.query(sql, vars).collect<[T]>();
         return result[0];
       },
-      catch: (error) =>
-        new RemoteDatabaseError({
-          message: "Failed to execute query on mock database",
+      catch: (error) => {
+        return new RemoteDatabaseError({
+          message: `Failed to execute query on mock database: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
           cause: error,
-        }),
+        });
+      },
     });
   });
 });

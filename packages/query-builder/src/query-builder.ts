@@ -114,6 +114,7 @@ export class InnerQuery<
     boolean
   >[];
 
+  private _hasData: boolean = false;
   private _hasRun: boolean = false;
   private _unsubs: (() => void)[] = [];
   private _cleanup: () => void = () => {};
@@ -183,11 +184,15 @@ export class InnerQuery<
 
   public setData(data: TableModel<T>[]): void {
     this._data = data;
+    this._hasData = true;
     this._listeners.forEach(({ callback }) => callback(data));
   }
 
   private addListener(listener: InnerQueryListener<T>): () => void {
     this._listeners.push(listener);
+    if (this._hasData) {
+      listener.callback(this._data);
+    }
     return () => {
       this._listeners = this._listeners.filter((l) => l !== listener);
     };

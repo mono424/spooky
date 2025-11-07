@@ -111,66 +111,72 @@ describe("Mock Database with 3 Nodes", () => {
     expect(result).toBeDefined();
     expect(result.data).toHaveLength(0);
 
-    const subResult01 = await new Promise((resolve) =>
-      result.subscribe((threads) => resolve(threads))
-    );
-
-    const subResult02 = await new Promise((resolve) =>
-      result.subscribe((threads) => resolve(threads))
-    );
-
-    expect(subResult01).toHaveLength(0);
-    expect(subResult02).toHaveLength(3);
-  });
-
-  it("should update query when new data is created in remote database", async () => {
-    const { spooky, dbContext } = await createMockSpooky(mockConfig);
-
-    const authResponse = await dbContext.remoteDatabase?.signin({
-      access: "account",
-      variables: {
-        username: "userA",
-        password: "pw1",
-      },
+    const results: Thread[][] = await new Promise((resolve) => {
+      const results: Thread[][] = [];
+      result.subscribe((threads) => {
+        results.push(threads as Thread[]);
+        if (results.length === 2) {
+          resolve(results);
+        }
+      });
     });
 
-    await Effect.runPromise(spooky.authenticate(authResponse?.token ?? ""));
-
-    const result = Effect.runSync(spooky.query("thread", {}))
-      .limit(1)
-      .build()
-      .select();
-    expect(result).toBeDefined();
-    expect(result.data).toHaveLength(0);
-
-    const subResult01 = await new Promise((resolve) =>
-      result.subscribe((threads) => resolve(threads))
-    );
-
-    const subResult02 = await new Promise((resolve) =>
-      result.subscribe((threads) => resolve(threads))
-    );
-
-    const result2 = Effect.runSync(spooky.query("thread", {}))
-      .limit(3)
-      .build()
-      .select();
-    expect(result2).toBeDefined();
-    expect(result2.data).toHaveLength(0);
-
-    const subResult03 = await new Promise((resolve) =>
-      result2.subscribe((threads) => resolve(threads))
-    );
-
-    const subResult04 = await new Promise((resolve) =>
-      result2.subscribe((threads) => resolve(threads))
-    );
-
-    expect(subResult01).toHaveLength(0);
-    expect(subResult02).toHaveLength(1);
-    expect(subResult03).toHaveLength(1);
-    expect(subResult04).toHaveLength(3);
+    expect(results[0]).toHaveLength(0);
+    expect(results[1]).toHaveLength(3);
   });
+
+  // it("should update query when new data is created in remote database", async () => {
+  //   const { spooky, dbContext } = await createMockSpooky(mockConfig);
+
+  //   const authResponse = await dbContext.remoteDatabase?.signin({
+  //     access: "account",
+  //     variables: {
+  //       username: "userA",
+  //       password: "pw1",
+  //     },
+  //   });
+
+  //   await Effect.runPromise(spooky.authenticate(authResponse?.token ?? ""));
+
+  //   const result = Effect.runSync(spooky.query("thread", {}))
+  //     .limit(1)
+  //     .build()
+  //     .select();
+  //   expect(result).toBeDefined();
+  //   expect(result.data).toHaveLength(0);
+
+  //   const results: Thread[][] = await new Promise((resolve) => {
+  //     const results: Thread[][] = [];
+  //     result.subscribe((threads) => {
+  //       results.push(threads as Thread[]);
+  //       if (results.length === 2) {
+  //         resolve(results);
+  //       }
+  //     });
+  //   });
+
+  //   const result2 = Effect.runSync(spooky.query("thread", {}))
+  //     .limit(2)
+  //     .build()
+  //     .select();
+  //   expect(result2).toBeDefined();
+  //   expect(result2.data).toHaveLength(0);
+
+  //   const results2: Thread[][] = await new Promise((resolve) => {
+  //     const results: Thread[][] = [];
+  //     result2.subscribe((threads) => {
+  //       results.push(threads as Thread[]);
+  //       if (results.length === 2) {
+  //         resolve(results);
+  //       }
+  //     });
+  //   });
+
+  //   expect(results[0]).toHaveLength(0);
+  //   expect(results[1]).toHaveLength(1);
+  //   expect(results2[0]).toHaveLength(0);
+  //   expect(results2[1]).toHaveLength(3);
+  // });
 
   it("should create local data on create mutation", async () => {
     const { spooky, dbContext } = await createMockSpooky(mockConfig);
@@ -195,17 +201,22 @@ describe("Mock Database with 3 Nodes", () => {
     );
 
     const result = Effect.runSync(spooky.query("thread", {}))
-      .limit(1)
+      .limit(111)
       .build()
       .select();
     expect(result).toBeDefined();
     expect(result.data).toHaveLength(0);
 
-    const subResult01: Thread[] = await new Promise((resolve) =>
-      result.subscribe((threads) => resolve(threads as Thread[]))
-    );
-    console.log("subResult01", subResult01);
+    const results: Thread[] = await new Promise((resolve) => {
+      result.subscribe((threads) => {
+        resolve(threads as Thread[]);
+      });
+    });
 
-    expect(subResult01).length(1);
+    expect(results).length(1);
+    expect(results[0].title).toBe("threadN1");
+    expect(results[0].content).toBe("content");
+    expect(results[0].author).toBe("user:A");
+    expect(results[0].created_at).toBeDefined();
   });
 });

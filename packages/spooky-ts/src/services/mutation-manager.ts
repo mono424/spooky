@@ -10,12 +10,12 @@ import {
 import {
   SchemaStructure,
   TableModel,
-  RecordId,
   TableNames,
   GetTable,
 } from "@spooky/query-builder";
-import { DatabaseService, makeConfig } from "./index.js";
+import { DatabaseService, makeConfig, QueryManagerService } from "./index.js";
 import { encodeToSpooky, generateNewId } from "./converter.js";
+import { RecordId } from "surrealdb";
 
 export type MutationType = "create" | "update" | "delete";
 
@@ -37,7 +37,8 @@ export interface CreateMutation<
   id?: RecordId;
   operationType: "create";
   tableName: N;
-  data: TableModel<GetTable<S, N>>;
+  recordId: RecordId;
+  data: any;
   createdAt: Date;
   retryCount: number;
   lastError?: string;
@@ -82,18 +83,41 @@ export class MutationManagerService extends Context.Tag(
     create: <S extends SchemaStructure, N extends TableNames<S>>(
       tableName: N,
       payload: TableModel<GetTable<S, N>>
-    ) => Effect.Effect<void, string | Error, never>;
+    ) => Effect.Effect<
+      void,
+      string | Error,
+      DatabaseService | QueryManagerService
+    >;
     update: <S extends SchemaStructure, N extends TableNames<S>>(
       tableName: N,
       recordId: RecordId,
       payload: Partial<TableModel<GetTable<S, N>>>
-    ) => Effect.Effect<void, string | Error, never>;
+    ) => Effect.Effect<
+      void,
+      string | Error,
+      DatabaseService | QueryManagerService
+    >;
     delete: <S extends SchemaStructure, N extends TableNames<S>>(
       tableName: N,
       id: RecordId
-    ) => Effect.Effect<void, string | Error, never>;
+    ) => Effect.Effect<
+      void,
+      string | Error,
+      DatabaseService | QueryManagerService
+    >;
   }
 >() {}
+
+const buildCreateQuery = Effect.fn("buildCreateQuery")(function* <
+  S extends SchemaStructure,
+  N extends TableNames<S>
+>(id: RecordId, payload: TableModel<GetTable<S, N>>) {
+  const setQuery = Object.entries(payload)
+    .map(([key, value]) => `${key} = $${key}`)
+    .join(", ");
+
+  return `CREATE ${id.table.name}:${id.id} SET ${setQuery};`;
+});
 
 const createMutation = Effect.fn("createMutation")(function* <
   S extends SchemaStructure,
@@ -123,11 +147,10 @@ const mutationApplyLocal = Effect.fn("queryLocalRefresh")(function* <
 
   switch (mutation.operationType) {
     case "create":
+      const q = yield* buildCreateQuery(mutation.recordId, mutation.data);
       yield* databaseService.queryLocal<TableModel<GetTable<S, N>>[]>(
-        `CREATE ${mutation.tableName} CONTENT $payload`,
-        {
-          payload: mutation.data,
-        }
+        q,
+        mutation.data
       );
       break;
 
@@ -162,22 +185,22 @@ const mutationApplyRemote = Effect.fn("queryLocalRefresh")(function* <
   S extends SchemaStructure,
   N extends TableNames<S>
 >(mutation: Mutation<S, N>) {
-  yield* Effect.logDebug("[MutationManager] Apply locally", {
+  yield* Effect.logDebug("[MutationManager] Apply remote", {
     id: mutation.id,
   });
   const databaseService = yield* DatabaseService;
 
   switch (mutation.operationType) {
     case "create":
+      const q = yield* buildCreateQuery(mutation.recordId, mutation.data);
       yield* Effect.logDebug("[MutationManager] Create remote", {
         id: mutation.id,
+        query: q,
         data: mutation.data,
       });
       yield* databaseService.queryRemote<TableModel<GetTable<S, N>>[]>(
-        `CREATE ${mutation.tableName} CONTENT $payload`,
-        {
-          payload: mutation.data,
-        }
+        q,
+        mutation.data
       );
       break;
 
@@ -210,7 +233,7 @@ const mutationApplyRemote = Effect.fn("queryLocalRefresh")(function* <
       return;
   }
 
-  yield* Effect.logDebug("[MutationManager] Apply locally - Done", {
+  yield* Effect.logDebug("[MutationManager] Apply remote - Done", {
     id: mutation.id,
   });
 });
@@ -221,6 +244,7 @@ const makeRun = (runtime: Runtime.Runtime<DatabaseService>) => {
   ) =>
     Effect.gen(function* () {
       yield* Effect.logDebug("[MutationManager] Run - Starting");
+      const queryManager = yield* QueryManagerService;
       yield* createMutation(mutation).pipe(
         Effect.catchAll((error) =>
           Effect.logError("Failed to create mutation", error)
@@ -233,6 +257,7 @@ const makeRun = (runtime: Runtime.Runtime<DatabaseService>) => {
         ),
         Effect.provide(runtime)
       );
+      yield* queryManager.refreshTableQueries(mutation.tableName);
       yield* mutationApplyRemote(mutation).pipe(
         Effect.retry({
           times: 3,
@@ -243,6 +268,7 @@ const makeRun = (runtime: Runtime.Runtime<DatabaseService>) => {
         ),
         Effect.provide(runtime)
       );
+      yield* queryManager.refreshTableQueries(mutation.tableName);
       yield* Effect.logDebug("[MutationManager] Run - Done");
     }).pipe(Logger.withMinimumLogLevel(LogLevel.Debug));
 
@@ -263,19 +289,17 @@ export const makeCreate = <S extends SchemaStructure>(
       return;
     }
 
-    const encodedPayloadWithId = yield* generateNewId(
-      schema,
-      tableName,
-      encodedPayload
-    );
-    if (!encodedPayloadWithId) {
+    const id = yield* generateNewId(tableName);
+    if (!id) {
       yield* Effect.fail("id could not be generated");
       return;
     }
+
     return yield* run<S, N>({
       operationType: "create",
       tableName: tableName,
-      data: encodedPayloadWithId,
+      recordId: id,
+      data: encodedPayload,
       createdAt: new Date(),
       retryCount: 0,
     });

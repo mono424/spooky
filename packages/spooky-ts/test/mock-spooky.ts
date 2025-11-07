@@ -5,7 +5,8 @@ import {
   AuthManagerServiceLayer,
   MutationManagerServiceLayer,
 } from "../src/services/index.js";
-import { Effect, Layer } from "effect";
+import { DevTools } from "@effect/experimental";
+import { Effect, Layer, Logger, LogLevel } from "effect";
 import { main } from "../src/spooky.js";
 import { SchemaStructure } from "@spooky/query-builder";
 import { dbContext, MockDatabaseServiceLayer } from "./mock-database.js";
@@ -33,12 +34,17 @@ export async function createMockSpooky<S extends SchemaStructure>(
     Layer.provide(queryManagerServiceLayer)
   );
 
+  const DevToolsLive = DevTools.layer();
+  const logger = Logger.minimumLogLevel(LogLevel.Debug);
+
   const MainLayer = Layer.mergeAll(
     configLayer,
     databaseServiceLayer,
     queryManagerServiceLayer,
     authManagerServiceLayer,
-    mutationManagerServiceLayer
+    mutationManagerServiceLayer,
+    DevToolsLive,
+    logger
   );
 
   return {

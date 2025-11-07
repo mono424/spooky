@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Logger, LogLevel, Runtime } from "effect";
+import { Context, Effect, Layer, Runtime } from "effect";
 import {
   ColumnSchema,
   InnerQuery,
@@ -30,7 +30,10 @@ export class QueryManagerService extends Context.Tag("QueryManagerService")<
     readonly cache: QueryCache<SchemaStructure>;
     run: <T extends { columns: Record<string, ColumnSchema> }>(
       query: InnerQuery<T, boolean>
-    ) => Effect.Effect<{ cleanup: CleanupFn }, never, never>;
+    ) => ReturnType<ReturnType<typeof makeRun>>;
+    refreshTableQueries: <T extends { columns: Record<string, ColumnSchema> }>(
+      table: string
+    ) => ReturnType<ReturnType<typeof makeRefreshTableQueries>>;
   }
 >() {}
 
@@ -60,6 +63,25 @@ const queryLocalRefresh = Effect.fn("queryLocalRefresh")(function* <
 
   query.setData(decodedResults.filter((result) => result !== undefined));
 });
+
+const makeRefreshTableQueries = <S extends SchemaStructure>(schema: S) =>
+  Effect.fn("refreshTableQueries")(function* <
+    T extends { columns: Record<string, ColumnSchema> }
+  >(table: string) {
+    yield* Effect.logDebug("[QueryManager] Refresh Table Queries - Starting", {
+      table,
+    });
+
+    for (const query of Object.values(cache)) {
+      if (query.innerQuery.tableName === table) {
+        yield* queryLocalRefresh(schema, query.innerQuery);
+      }
+    }
+
+    yield* Effect.logDebug("[QueryManager] Refresh Table Queries - Done", {
+      table,
+    });
+  });
 
 const queryRemoteHydration = Effect.fn("queryRemoteHydration")(function* <
   S extends SchemaStructure,
@@ -171,13 +193,11 @@ const subscribeRemoteQuery = Effect.fn("subscribeRemoteQuery")(function* <
   const subscription = yield* databaseService.liveOfRemote(liveUuid);
   subscription.subscribe(async (event: LiveMessage) =>
     Runtime.runPromise(runtime)(
-      handleRemoteUpdate(query, event)
-        .pipe(
-          Effect.catchAll((error) =>
-            Effect.logError("Failed to refresh query after subscription", error)
-          )
+      handleRemoteUpdate(query, event).pipe(
+        Effect.catchAll((error) =>
+          Effect.logError("Failed to refresh query after subscription", error)
         )
-        .pipe(Logger.withMinimumLogLevel(LogLevel.Debug))
+      )
     )
   );
 
@@ -260,16 +280,14 @@ const makeRun = <S extends SchemaStructure>(
             for (const subquery of query.subqueries) {
               const unsubscribe = subquery.subscribe(() => {
                 Runtime.runPromise(runtime)(
-                  queryLocalRefresh(schema, query)
-                    .pipe(
-                      Effect.catchAll((error) =>
-                        Effect.logError(
-                          "Failed to refresh query after subscription",
-                          error
-                        )
+                  queryLocalRefresh(schema, query).pipe(
+                    Effect.catchAll((error) =>
+                      Effect.logError(
+                        "Failed to refresh query after subscription",
+                        error
                       )
                     )
-                    .pipe(Logger.withMinimumLogLevel(LogLevel.Debug))
+                  )
                 );
               });
 
@@ -281,8 +299,8 @@ const makeRun = <S extends SchemaStructure>(
 
               yield* run(subquery);
             }
-          }).pipe(Logger.withMinimumLogLevel(LogLevel.Debug))
-        ).pipe(Logger.withMinimumLogLevel(LogLevel.Debug));
+          })
+        );
       } else {
         yield* Effect.logDebug("[QueryManager] Run - Cache hit", query.hash);
       }
@@ -290,7 +308,7 @@ const makeRun = <S extends SchemaStructure>(
       return {
         cleanup: cache[query.hash].cleanup,
       };
-    }).pipe(Logger.withMinimumLogLevel(LogLevel.Debug));
+    });
 
   return run;
 };
@@ -304,9 +322,12 @@ export const QueryManagerServiceLayer = <S extends SchemaStructure>() =>
       const runtime = yield* Effect.runtime<DatabaseService>();
       const run = makeRun<S>(schema, runtime);
 
+      const refreshTableQueries = makeRefreshTableQueries<S>(schema);
+
       return QueryManagerService.of({
         runtime,
         cache: cache as QueryCache<S>,
+        refreshTableQueries,
         run,
       });
     })

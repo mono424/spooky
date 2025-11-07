@@ -24,6 +24,7 @@
     "coverage": "vitest --coverage"
   },
   "dependencies": {
+    "@effect/experimental": "^0.57.0",
     "@spooky/query-builder": "workspace:*",
     "@surrealdb/wasm": "^2.3.2",
     "effect": "^3.17.7",
@@ -36,7 +37,7 @@
     "@babel/plugin-transform-export-namespace-from": "^7.24.7",
     "@babel/plugin-transform-modules-commonjs": "^7.24.8",
     "@effect/build-utils": "^0.8.9",
-    "@effect/language-service": "latest",
+    "@effect/language-service": "^0.53.2",
     "@effect/vitest": "^0.25.1",
     "@surrealdb/node": "^2.3.3",
     "@types/node": "^22.5.2",

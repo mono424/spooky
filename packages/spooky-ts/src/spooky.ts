@@ -1,5 +1,5 @@
 // spooky.ts
-import { Effect, Runtime } from "effect";
+import { Effect, Layer, Runtime } from "effect";
 import {
   GetTable,
   QueryBuilder,
@@ -8,6 +8,7 @@ import {
   TableModel,
   TableNames,
 } from "@spooky/query-builder";
+import { RecordId } from "surrealdb";
 import {
   AuthManagerService,
   DatabaseService,
@@ -46,6 +47,7 @@ export const main = <S extends SchemaStructure>() =>
     const databaseService = yield* DatabaseService;
     const authManager = yield* AuthManagerService;
     const mutationManager = yield* MutationManagerService;
+    const queryManager = yield* QueryManagerService;
     const query = yield* useQuery<S>(schema);
 
     const close = Effect.fn("close")(function* () {
@@ -58,9 +60,34 @@ export const main = <S extends SchemaStructure>() =>
 
     return {
       authenticate: authManager.authenticate,
-      create: mutationManager.create,
-      update: mutationManager.update,
-      delete: mutationManager.delete,
+      create: <N extends TableNames<S>>(
+        tableName: N,
+        payload: TableModel<GetTable<S, N>>
+      ) =>
+        mutationManager
+          .create(tableName, payload)
+          .pipe(
+            Effect.provide(Layer.succeed(DatabaseService, databaseService)),
+            Effect.provide(Layer.succeed(QueryManagerService, queryManager))
+          ),
+      update: <N extends TableNames<S>>(
+        tableName: N,
+        recordId: RecordId,
+        payload: Partial<TableModel<GetTable<S, N>>>
+      ) =>
+        mutationManager
+          .update(tableName, recordId, payload)
+          .pipe(
+            Effect.provide(Layer.succeed(DatabaseService, databaseService)),
+            Effect.provide(Layer.succeed(QueryManagerService, queryManager))
+          ),
+      delete: <N extends TableNames<S>>(tableName: N, id: RecordId) =>
+        mutationManager
+          .delete(tableName, id)
+          .pipe(
+            Effect.provide(Layer.succeed(DatabaseService, databaseService)),
+            Effect.provide(Layer.succeed(QueryManagerService, queryManager))
+          ),
       query,
       close,
       clearLocalCache: databaseService.clearLocalCache,
