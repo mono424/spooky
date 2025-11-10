@@ -1,13 +1,5 @@
 import { SyncedDb } from "@spooky/client-solid";
-import {
-  schema,
-  SchemaDefinition,
-  SURQL_SCHEMA,
-  type Schema,
-} from "./schema.gen";
-
-// Re-export Schema type for use in components
-export type { Schema };
+import { schema, SURQL_SCHEMA } from "./schema.gen";
 
 // Database configuration
 export const dbConfig = {
@@ -21,7 +13,7 @@ export const dbConfig = {
   remoteUrl: "ws://localhost:8000",
 } as const;
 
-export const db = new SyncedDb<SchemaDefinition>(dbConfig);
+export const db = new SyncedDb(dbConfig);
 
 // Initialize the database
 let isInitialized = false;
