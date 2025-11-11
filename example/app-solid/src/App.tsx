@@ -1,5 +1,6 @@
 import { Router, Route } from "@solidjs/router";
 import { createSignal, Show, onMount } from "solid-js";
+import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import { AuthProvider, useAuth } from "./lib/auth";
 import { initDatabase } from "./db";
 import { AuthDialog } from "./components/AuthDialog";
@@ -85,6 +86,17 @@ function Layout(props: any) {
   );
 }
 
+// Create a QueryClient instance
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 0, // Always consider data stale to allow live updates
+      refetchOnWindowFocus: false, // We handle updates via subscriptions
+      refetchOnReconnect: false, // We handle updates via subscriptions
+    },
+  },
+});
+
 export default function App() {
   const [isDbReady, setIsDbReady] = createSignal(false);
 
@@ -107,13 +119,15 @@ export default function App() {
         </div>
       }
     >
-      <AuthProvider>
-        <Router root={Layout}>
-          <Route path="/" component={Home} />
-          <Route path="/thread/:id" component={ThreadPage} />
-          <Route path="/create-thread" component={CreateThreadPage} />
-        </Router>
-      </AuthProvider>
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider>
+          <Router root={Layout}>
+            <Route path="/" component={Home} />
+            <Route path="/thread/:id" component={ThreadPage} />
+            <Route path="/create-thread" component={CreateThreadPage} />
+          </Router>
+        </AuthProvider>
+      </QueryClientProvider>
     </Show>
   );
 }

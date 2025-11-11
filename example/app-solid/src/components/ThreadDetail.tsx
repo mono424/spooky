@@ -29,7 +29,7 @@ const createQuery = ({
       return q;
     })
     .one()
-    .build();
+    .buildCustom();
 };
 
 export function ThreadDetail() {

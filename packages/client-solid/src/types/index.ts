@@ -8,6 +8,14 @@ import type {
   TableModel,
 } from "@spooky/query-builder";
 
+/**
+ * Options for database provisioning
+ */
+export interface ProvisionOptions {
+  /** Force re-provision even if schema already exists */
+  force?: boolean;
+}
+
 declare global {
   interface Window {
     db?: SyncedDb<any>;
@@ -60,6 +68,8 @@ export interface SyncedDbConfig<S extends SchemaStructure> {
   namespace?: string;
   /** Database name */
   database?: string;
+  /** Provision options */
+  provisionOptions?: ProvisionOptions;
 }
 
 export interface LocalDbConfig {

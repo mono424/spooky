@@ -60,6 +60,7 @@ export const main = <S extends SchemaStructure>() =>
 
     return {
       authenticate: authManager.authenticate,
+      deauthenticate: authManager.deauthenticate,
       create: <N extends TableNames<S>>(
         tableName: N,
         payload: TableModel<GetTable<S, N>>
@@ -91,5 +92,6 @@ export const main = <S extends SchemaStructure>() =>
       query,
       close,
       clearLocalCache: databaseService.clearLocalCache,
+      useRemote: databaseService.useRemote,
     };
   });

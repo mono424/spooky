@@ -10,7 +10,7 @@ export function ThreadList() {
     .query("thread")
     .related("author")
     .orderBy("created_at", "desc")
-    .build();
+    .buildCustom();
 
   const [threads] = useQuery(() => threadsQuery);
 

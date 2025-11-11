@@ -11,6 +11,9 @@ export const dbConfig = {
   namespace: "main",
   database: "main",
   remoteUrl: "ws://localhost:8000",
+  provisionOptions: {
+    force: false,
+  },
 } as const;
 
 export const db = new SyncedDb(dbConfig);

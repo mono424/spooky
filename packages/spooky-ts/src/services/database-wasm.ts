@@ -187,28 +187,39 @@ const liveOfRemoteDatabase = Effect.fn("liveOfRemoteDatabase")(function* (
   });
 });
 
-const authenticateRemoteDatabase = Effect.fn("authenticateRemoteDatabase")(
-  function* (db: Surreal) {
-    return Effect.fn("authenticateRemoteDatabaseInner")(function* (
-      token: string
-    ) {
-      return yield* Effect.tryPromise({
-        try: async () => {
-          await db.authenticate(token);
-          const [result] = await db
-            .query(`SELECT id FROM $auth`)
-            .collect<[{ id: RecordId }]>();
-          return result?.id;
-        },
-        catch: (error) =>
-          new RemoteAuthenticationError({
-            message: "Failed to authenticate on remote database",
-            cause: error,
-          }),
-      });
+const authenticateRemoteDatabase = (db: Surreal) => {
+  return Effect.fn("authenticateRemoteDatabase")(function* (token: string) {
+    return yield* Effect.tryPromise({
+      try: async () => {
+        await db.authenticate(token);
+        const [result] = await db
+          .query(`SELECT id FROM $auth`)
+          .collect<[{ id: RecordId }]>();
+        return result?.id;
+      },
+      catch: (error) =>
+        new RemoteAuthenticationError({
+          message: "Failed to authenticate on remote database",
+          cause: error,
+        }),
     });
-  }
-);
+  });
+};
+
+const makeDeauthenticateRemoteDatabase = (db: Surreal) => {
+  return Effect.fn("deauthenticateRemoteDatabase")(function* () {
+    return yield* Effect.tryPromise({
+      try: async () => {
+        await db.invalidate();
+      },
+      catch: (error) =>
+        new RemoteDatabaseError({
+          message: "Failed to deauthenticate on remote database",
+          cause: error,
+        }),
+    });
+  });
+};
 
 let localDatabase: Surreal | undefined;
 let internalDatabase: Surreal | undefined;
@@ -244,7 +255,68 @@ export const DatabaseServiceLayer = <S extends SchemaStructure>() =>
         queryInternal: yield* queryLocalDatabase(internalDatabase),
         queryRemote: yield* queryRemoteDatabase(remoteDatabase),
         liveOfRemote: yield* liveOfRemoteDatabase(remoteDatabase),
-        authenticate: yield* authenticateRemoteDatabase(remoteDatabase),
+        authenticate: authenticateRemoteDatabase(remoteDatabase),
+        deauthenticate: makeDeauthenticateRemoteDatabase(remoteDatabase),
+        closeRemote: () =>
+          Effect.tryPromise({
+            try: async () => {
+              if (remoteDatabase) {
+                await remoteDatabase.close();
+              }
+            },
+            catch: (error) =>
+              new RemoteDatabaseError({
+                message: "Failed to close remote database",
+                cause: error,
+              }),
+          }),
+        closeLocal: () =>
+          Effect.tryPromise({
+            try: async () => {
+              if (localDatabase) {
+                await localDatabase.close();
+              }
+            },
+            catch: (error) =>
+              new LocalDatabaseError({
+                message: "Failed to close local database",
+                cause: error,
+              }),
+          }),
+        closeInternal: () =>
+          Effect.tryPromise({
+            try: async () => {
+              if (internalDatabase) {
+                await internalDatabase.close();
+              }
+            },
+            catch: (error) =>
+              new LocalDatabaseError({
+                message: "Failed to close internal database",
+                cause: error,
+              }),
+          }),
+        clearLocalCache: () =>
+          Effect.tryPromise({
+            try: async () => {
+              if (localDatabase) {
+                // Simple implementation: just close and reopen the database
+                // This effectively clears the cache
+                await localDatabase.close();
+                localDatabase = await createLocalDatabase(
+                  localDbName,
+                  storageStrategy,
+                  namespace,
+                  database
+                ).pipe(Effect.runPromise);
+              }
+            },
+            catch: (error) =>
+              new LocalDatabaseError({
+                message: "Failed to clear local cache",
+                cause: error,
+              }),
+          }),
       });
     })
   );

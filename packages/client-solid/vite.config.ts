@@ -11,7 +11,15 @@ export default defineConfig({
       formats: ["es", "cjs"],
     },
     rollupOptions: {
-      external: ["surrealdb", "@surrealdb/wasm", "solid-js"],
+      external: [
+        "surrealdb",
+        "@surrealdb/wasm",
+        "solid-js",
+        "@spooky/spooky-ts",
+        "@spooky/query-builder",
+        "effect",
+        "valtio",
+      ],
       output: {
         preserveModules: false,
         globals: {

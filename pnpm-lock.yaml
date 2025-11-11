@@ -77,6 +77,9 @@ importers:
       '@spooky/client-solid':
         specifier: workspace:*
         version: link:../../packages/client-solid
+      '@tanstack/solid-query':
+        specifier: ^5.90.10
+        version: 5.90.10(solid-js@1.9.9)
       solid-js:
         specifier: ^1.8.7
         version: 1.9.9
@@ -120,12 +123,18 @@ importers:
 
   packages/client-solid:
     dependencies:
+      '@spooky/query-builder':
+        specifier: workspace:*
+        version: link:../query-builder
       '@spooky/spooky-ts':
         specifier: workspace:*
         version: link:../spooky-ts/dist
       '@surrealdb/wasm':
         specifier: ^2.3.2
         version: 2.3.2(surrealdb@2.0.0-alpha.9(tslib@2.8.1)(typescript@5.9.3))
+      effect:
+        specifier: ^3.12.4
+        version: 3.18.4
       surrealdb:
         specifier: ^2.0.0-alpha.9
         version: 2.0.0-alpha.9(tslib@2.8.1)(typescript@5.9.3)
@@ -1290,6 +1299,14 @@ packages:
     resolution: {integrity: sha512-BoFUoU0XqgCUS1UXWhmDJroKKhNXeDzD7/XwabjkDIAbMnc4ULn5e2FuEuBbhZ6ENZoSYzKlzvZ44Yr6EUDUSA==}
     peerDependencies:
       vite: ^5.2.0 || ^6 || ^7
+
+  '@tanstack/query-core@5.90.7':
+    resolution: {integrity: sha512-6PN65csiuTNfBMXqQUxQhCNdtm1rV+9kC9YwWAIKcaxAauq3Wu7p18j3gQY3YIBJU70jT/wzCCZ2uqto/vQgiQ==}
+
+  '@tanstack/solid-query@5.90.10':
+    resolution: {integrity: sha512-r01GebtWUIy2+HnqLVfw4x56d8hG6mBhv913tOJSqTOHEQVEleJxyx+K6lmW07RJygKHZlA1EZsvy6Ow3qVEnw==}
+    peerDependencies:
+      solid-js: ^1.6.0
 
   '@types/argparse@1.0.38':
     resolution: {integrity: sha512-ebDJ9b0e702Yr7pWgB0jzm+CX4Srzz8RcXtLJDJB+BSccqMa36uyH/zUsSYao5+BD1ytv3k3rPYCq4mAE1hsXA==}
@@ -4545,6 +4562,13 @@ snapshots:
       '@tailwindcss/oxide': 4.1.14
       tailwindcss: 4.1.14
       vite: 6.3.7(@types/node@22.18.13)(jiti@2.6.1)(lightningcss@1.30.1)(tsx@4.20.6)(yaml@2.8.1)
+
+  '@tanstack/query-core@5.90.7': {}
+
+  '@tanstack/solid-query@5.90.10(solid-js@1.9.9)':
+    dependencies:
+      '@tanstack/query-core': 5.90.7
+      solid-js: 1.9.9
 
   '@types/argparse@1.0.38': {}
 

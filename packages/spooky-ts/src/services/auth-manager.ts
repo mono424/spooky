@@ -1,7 +1,11 @@
 import { Context, Effect, Layer, Ref } from "effect";
 import { SchemaStructure } from "@spooky/query-builder";
-import { DatabaseService, RemoteAuthenticationError } from "./index.js";
-import { RecordId } from "surrealdb";
+import {
+  DatabaseService,
+  RemoteAuthenticationError,
+  RemoteDatabaseError,
+} from "./index.js";
+import type { RecordId } from "surrealdb";
 
 export class AuthManagerService extends Context.Tag("AuthManagerService")<
   AuthManagerService,
@@ -11,6 +15,11 @@ export class AuthManagerService extends Context.Tag("AuthManagerService")<
     readonly authenticate: (
       token: string
     ) => Effect.Effect<RecordId, RemoteAuthenticationError, never>;
+    readonly deauthenticate: () => Effect.Effect<
+      void,
+      RemoteDatabaseError,
+      never
+    >;
   }
 >() {}
 
@@ -29,6 +38,12 @@ export const AuthManagerServiceLayer = <S extends SchemaStructure>() =>
         return userId;
       });
 
+      const deauthenticate = Effect.fn("deauthenticate")(function* () {
+        yield* Ref.set(tokenRef, "");
+        yield* Ref.set(userIdRef, undefined);
+        yield* databaseService.deauthenticate();
+      });
+
       const getToken = () => Ref.get(tokenRef);
       const getUserId = () => Ref.get(userIdRef);
 
@@ -36,6 +51,7 @@ export const AuthManagerServiceLayer = <S extends SchemaStructure>() =>
         getToken,
         getUserId,
         authenticate,
+        deauthenticate,
       });
     })
   );

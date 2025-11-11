@@ -12,6 +12,7 @@
   "dependencies": {
     "@solidjs/router": "^0.10.2",
     "@spooky/client-solid": "workspace:*",
+    "@tanstack/solid-query": "^5.90.10",
     "solid-js": "^1.8.7",
     "solid-valtio": "^0.2.2"
   },

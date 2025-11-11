@@ -318,6 +318,10 @@ export class FinalQuery<
       data: this.data,
     };
   }
+
+  selectLive() {
+    return this._innerQuery.selectLiveQuery;
+  }
 }
 
 /**
@@ -611,10 +615,10 @@ export class QueryBuilder<
   }
 
   /**
-   * Build query methods for SELECT and LIVE SELECT
-   * @returns Object with select() and selectLive() methods
+   * Build query methods for SELECT and LIVE SELECT (custom implementation)
+   * @returns FinalQuery object with select() method for custom usage
    */
-  build(): FinalQuery<
+  buildCustom(): FinalQuery<
     S,
     TableName,
     GetTable<S, TableName>,
@@ -628,6 +632,39 @@ export class QueryBuilder<
       RelatedFields,
       IsOne
     >(this.tableName, this.options, this.schema, this.executer);
+  }
+
+  /**
+   * Build query for TanStack Query compatibility
+   * @returns TanStack Query options object with queryKey and queryFn
+   */
+  build(): {
+    queryKey: readonly unknown[];
+    queryFn: () => Promise<QueryResult<S, TableName, RelatedFields, IsOne>>;
+    _finalQuery: FinalQuery<
+      S,
+      TableName,
+      GetTable<S, TableName>,
+      RelatedFields,
+      IsOne
+    >;
+  } {
+    const finalQuery = new FinalQuery<
+      S,
+      TableName,
+      GetTable<S, TableName>,
+      RelatedFields,
+      IsOne
+    >(this.tableName, this.options, this.schema, this.executer);
+
+    return {
+      queryKey: ["spooky-query", finalQuery.hash] as const,
+      queryFn: async () => {
+        const { data } = finalQuery.select();
+        return data;
+      },
+      _finalQuery: finalQuery,
+    };
   }
 }
 

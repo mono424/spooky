@@ -67,7 +67,7 @@ describe("Mock Database with 3 Nodes", () => {
     const query = Effect.runSync(spooky.query("user", {}));
     query.orderBy("created_at", "asc");
 
-    const result = query.build().select();
+    const result = query.buildCustom().select();
     expect(result).toBeDefined();
   });
 
@@ -107,7 +107,9 @@ describe("Mock Database with 3 Nodes", () => {
 
     await Effect.runPromise(spooky.authenticate(authResponse?.token ?? ""));
 
-    const result = Effect.runSync(spooky.query("thread", {})).build().select();
+    const result = Effect.runSync(spooky.query("thread", {}))
+      .buildCustom()
+      .select();
     expect(result).toBeDefined();
     expect(result.data).toHaveLength(0);
 
@@ -202,7 +204,7 @@ describe("Mock Database with 3 Nodes", () => {
 
     const result = Effect.runSync(spooky.query("thread", {}))
       .limit(111)
-      .build()
+      .buildCustom()
       .select();
     expect(result).toBeDefined();
     expect(result.data).toHaveLength(0);
