@@ -142,7 +142,7 @@ const queryRemoteHydration = Effect.fn("queryRemoteHydration")(function* <
       resultLength: results?.length ?? 0,
     }
   );
-
+  console.log("results", results);
   const hydrateQuery = results
     .map(
       ({ id, ...payload }) =>
@@ -163,7 +163,6 @@ const queryRemoteHydration = Effect.fn("queryRemoteHydration")(function* <
   );
 
   yield* databaseService.queryLocal(hydrateQuery);
-
   yield* Effect.logDebug(
     "[QueryManager] Remote Query Hydration - Local cache updated",
     {

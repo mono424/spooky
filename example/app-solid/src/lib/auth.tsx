@@ -8,8 +8,8 @@ import {
 } from "solid-js";
 import { db, dbConfig } from "../db";
 import { schema } from "../schema.gen";
-import { type GetTable, type TableModel } from "@spooky/client-solid";
-import { useQuery } from "@tanstack/solid-query";
+import { type GetTable, type TableModel, useQuery } from "@spooky/client-solid";
+import { queryClient } from "../query-client";
 
 type User = TableModel<GetTable<typeof schema, "user">>;
 
@@ -30,23 +30,18 @@ export function AuthProvider(props: { children: JSX.Element }) {
   const [isInitialized, setIsInitialized] = createSignal(false);
 
   // Only run query after auth is initialized
-  const userQuery = useQuery(() => ({
-    ...db
-      .query("user")
-      .where({ id: userId() ?? undefined })
-      .build(),
-    enabled: isInitialized() && userId() !== null,
-  }));
+  const userQuery = useQuery(
+    () => ({
+      ...db
+        .query("user")
+        .where({ id: userId() ?? undefined })
+        .build(),
+      enabled: isInitialized() && userId() !== null,
+    }),
+    () => queryClient
+  );
 
   const user = () => userQuery.data?.[0] ?? null;
-
-  setInterval(() => {
-    console.log(
-      "[AuthProvider] User query data:",
-      userQuery.data?.length,
-      userQuery.status
-    );
-  }, 1000);
 
   // Check for existing session on mount
   const checkAuth = async (tkn?: string) => {
@@ -78,6 +73,7 @@ export function AuthProvider(props: { children: JSX.Element }) {
 
   const signIn = async (username: string, password: string) => {
     try {
+      console.log("[AuthProvider] Sign in attempt for:", username);
       // Use the centralized signIn method from db object
       const res = await db.db().signin({
         namespace: dbConfig.namespace,
@@ -89,15 +85,18 @@ export function AuthProvider(props: { children: JSX.Element }) {
         },
       });
 
+      console.log("[AuthProvider] Sign in successful, token received");
       await checkAuth(res.token);
+      console.log("[AuthProvider] Auth check complete after sign in");
     } catch (error) {
-      console.error("Sign in failed:", error);
+      console.error("[AuthProvider] Sign in failed:", error);
       throw error;
     }
   };
 
   const signUp = async (username: string, password: string) => {
     try {
+      console.log("[AuthProvider] Sign up attempt for:", username);
       // Use the centralized signUp method from db object
       const res = await db.db().signup({
         namespace: dbConfig.namespace,
@@ -109,9 +108,11 @@ export function AuthProvider(props: { children: JSX.Element }) {
         },
       });
 
+      console.log("[AuthProvider] Sign up successful, token received");
       await checkAuth(res.token);
+      console.log("[AuthProvider] Auth check complete after sign up");
     } catch (error) {
-      console.error("Sign up failed:", error);
+      console.error("[AuthProvider] Sign up failed:", error);
       throw error;
     }
   };

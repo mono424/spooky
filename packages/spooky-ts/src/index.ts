@@ -17,7 +17,7 @@ export function createSpooky<S extends SchemaStructure>(
 ) {
   const configLayer = ConfigLayer<S>(config);
   const loggerLayer = LoggerLayer<S>(config);
-  
+
   const databaseServiceLayer = DatabaseServiceLayer<S>().pipe(
     Layer.provide(configLayer)
   );

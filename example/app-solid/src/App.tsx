@@ -1,5 +1,5 @@
 import { Router, Route } from "@solidjs/router";
-import { createSignal, Show, onMount } from "solid-js";
+import { createSignal, Show, onMount, createEffect } from "solid-js";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import { AuthProvider, useAuth } from "./lib/auth";
 import { initDatabase } from "./db";
@@ -9,10 +9,19 @@ import { AuthDialog } from "./components/AuthDialog";
 import Home from "./routes/index";
 import ThreadPage from "./routes/thread/[id]";
 import CreateThreadPage from "./routes/create-thread";
+import { queryClient } from "./query-client";
 
 function Layout(props: any) {
   const auth = useAuth();
   const [showAuthDialog, setShowAuthDialog] = createSignal(false);
+
+  // Auto-close auth dialog when user is authenticated
+  createEffect(() => {
+    if (auth.user()) {
+      console.log("[Layout] User authenticated, closing auth dialog");
+      setShowAuthDialog(false);
+    }
+  });
 
   const handleAuthRequired = () => {
     setShowAuthDialog(true);
@@ -85,17 +94,6 @@ function Layout(props: any) {
     </div>
   );
 }
-
-// Create a QueryClient instance
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 0, // Always consider data stale to allow live updates
-      refetchOnWindowFocus: false, // We handle updates via subscriptions
-      refetchOnReconnect: false, // We handle updates via subscriptions
-    },
-  },
-});
 
 export default function App() {
   const [isDbReady, setIsDbReady] = createSignal(false);

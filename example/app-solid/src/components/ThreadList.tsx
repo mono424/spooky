@@ -2,6 +2,7 @@ import { createEffect, For } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { db } from "../db";
 import { useQuery } from "@spooky/client-solid";
+import { queryClient } from "../query-client";
 
 export function ThreadList() {
   const navigate = useNavigate();
@@ -12,7 +13,8 @@ export function ThreadList() {
     .orderBy("created_at", "desc")
     .buildCustom();
 
-  const [threads] = useQuery(() => threadsQuery);
+  const threadsResult = useQuery(() => threadsQuery, () => queryClient);
+  const threads = () => threadsResult.data || [];
 
   const handleThreadClick = (threadId: string) => {
     navigate(`/thread/${threadId}`);

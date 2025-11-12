@@ -25,9 +25,13 @@ export function AuthDialog(props: AuthDialogProps) {
       } else {
         await auth.signIn(username(), password());
       }
-      props.onClose();
+      // Wait a bit for the auth state to fully update
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      // Clear form and close dialog
       setUsername("");
       setPassword("");
+      props.onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred");
     } finally {
