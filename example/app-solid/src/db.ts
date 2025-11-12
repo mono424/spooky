@@ -7,7 +7,8 @@ export const dbConfig = {
   schemaSurql: SURQL_SCHEMA,
   localDbName: "thread-app-local",
   internalDbName: "syncdb-int",
-  storageStrategy: "indexeddb",
+  // Try with memory storage first for debugging
+  storageStrategy: "memory" as const,
   namespace: "main",
   database: "main",
   remoteUrl: "ws://localhost:8000",

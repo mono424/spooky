@@ -9,7 +9,7 @@ export interface SpookyConfig<S extends SchemaStructure> {
   schema: S;
   /** SurrealQL schema string for database provisioning */
   schemaSurql: string;
-  /** Remote database URL (optional) */
+  /** Remote database URL - required for sync functionality */
   remoteUrl: string;
   /** Local database name for WASM storage */
   localDbName: string;

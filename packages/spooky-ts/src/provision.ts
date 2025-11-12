@@ -96,11 +96,11 @@ export const dropMainDatabase = async (
 ): Promise<void> => {
   console.log("Dropping main database...");
   try {
-    await localDb.query(`REMOVE DATABASE ${database};`);
+    await localDb.query(`REMOVE DATABASE ${database};`).dispatch();
   } catch (error) {
     // Ignore error if database doesn't exist
   }
-  await localDb.query(`DEFINE DATABASE ${database};`);
+  await localDb.query(`DEFINE DATABASE ${database};`).dispatch();
   console.log("Main database dropped successfully");
 };
 
@@ -121,7 +121,7 @@ export const provisionSchema = async (
 
   for (const statement of statements) {
     try {
-      await localDb.query(statement);
+      await localDb.query(statement).dispatch();
       console.info(`Executed statement:\n${statement}`);
     } catch (err: any) {
       console.error(`Error executing statement: ${statement}`);
@@ -142,7 +142,7 @@ export const recordSchemaHash = async (
   await internalDb.query(
     `UPSERT __schema SET hash = $hash, created_at = time::now() WHERE hash = $hash;`,
     { hash }
-  );
+  ).dispatch();
   console.log("Schema hash recorded in internal database");
 };
 
@@ -162,15 +162,26 @@ export const provision = <S extends SchemaStructure>(
     const result = yield* databaseService.useInternal(async (db: Surreal) => {
       const schemaHash = await sha1(schemaSurql);
       const isUpToDate = await isSchemaUpToDate(db, schemaHash);
-      const shouldMigrate = force || !isUpToDate;
+      let shouldMigrate = force || !isUpToDate;
+      
+      console.log(`[Provisioning] Schema hash: ${schemaHash}`);
+      console.log(`[Provisioning] Schema up to date: ${isUpToDate}`);
+      console.log(`[Provisioning] Should migrate: ${shouldMigrate}`);
+      
       if (!shouldMigrate) return { shouldMigrate, schemaHash };
 
+      console.log("[Provisioning] Initializing internal database schema...");
       await initializeInternalDatabase(db);
+      shouldMigrate = true;
       return { shouldMigrate, schemaHash };
     });
 
-    if (!result.shouldMigrate) return;
+    if (!result.shouldMigrate) {
+      console.log("[Provisioning] Schema is up to date, skipping migration");
+      return;
+    }
 
+    console.log("[Provisioning] Starting schema migration...");
     yield* databaseService.useLocal(async (db: Surreal) => {
       await dropMainDatabase(db, database);
       await provisionSchema(db, schemaSurql);
@@ -181,12 +192,10 @@ export const provision = <S extends SchemaStructure>(
       await recordSchemaHash(db, result.schemaHash);
     });
 
-    console.log("Database schema provisioned successfully");
-
-    return Effect.succeed(undefined);
+    console.log("[Provisioning] Database schema provisioned successfully");
   }).pipe(
     Effect.catchAll((error) => {
-      console.error("Failed to provision database schema:", error);
+      console.error("[Provisioning] Failed to provision database schema:", error);
       return Effect.fail(error);
     })
   );
