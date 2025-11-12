@@ -1,6 +1,5 @@
 import { RecordId, Surreal, Uuid } from "surrealdb";
 import { Context, Data, Effect } from "effect";
-import { CacheStrategy } from "./config.js";
 
 export class LocalDatabaseError extends Data.TaggedError("LocalDatabaseError")<{
   readonly cause?: unknown;
@@ -213,27 +212,17 @@ export const makeCloseLocalDatabase = (db: Surreal) => {
   });
 };
 
-export const makeClearLocalCache = (
-  db: Surreal,
-  dbName: string,
-  strategy: CacheStrategy,
-  namespace?: string,
-  database?: string
-) => {
+export const makeClearLocalCache = (db: Surreal) => {
   return Effect.fn("clearLocalCache")(function* () {
     return yield* Effect.tryPromise({
       try: async () => {
         // Get all tables and delete all records from them
-        const tables = await db.query("INFO FOR DB").collect<
-          [
-            {
-              tables: Record<string, unknown>;
-            }
-          ]
-        >();
+        const [info] = await db.query("INFO FOR DB").collect<[{
+          tables: Record<string, unknown>;
+        }]>();
 
-        if (tables[0]?.tables) {
-          const tableNames = Object.keys(tables[0].tables);
+        if (info?.tables) {
+          const tableNames = Object.keys(info.tables);
           for (const tableName of tableNames) {
             await db.query(`DELETE ${tableName}`).collect();
           }

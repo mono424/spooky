@@ -195,17 +195,17 @@ export const provision = <S extends SchemaStructure>(
     const databaseService = yield* DatabaseService;
     const { force = false } = options;
 
-    const result = yield* yield* yield* databaseService.useInternal(
-      (db: Surreal) => {
-        return Effect.gen(function* () {
+    const result = yield* databaseService.useInternal(
+      (db: Surreal) =>
+        Effect.gen(function* () {
           const schemaHash = yield* sha1(schemaSurql);
           const isUpToDate = yield* isSchemaUpToDate(db, schemaHash);
           const shouldMigrate = force || !isUpToDate;
           if (!shouldMigrate)
-            return Effect.succeed({ shouldMigrate, schemaHash });
+            return { shouldMigrate, schemaHash };
 
           yield* initializeInternalDatabase(db);
-          return Effect.succeed({ shouldMigrate, schemaHash });
+          return { shouldMigrate, schemaHash };
         }).pipe(
           Effect.catchAll((error) => {
             return Effect.fail(
@@ -214,19 +214,17 @@ export const provision = <S extends SchemaStructure>(
                 cause: error,
               })
             );
-          })
-        );
-      }
+          }),
+          Effect.runPromise
+        )
     );
 
     if (!result.shouldMigrate) return;
 
-    yield* yield* databaseService.useLocal((db: Surreal) => {
-      return Effect.gen(function* () {
-        const provisionSchema = yield* makeProvisionSchema(db, schemaSurql);
-        const dropMainDatabase = yield* makeDropMainDatabase(db, database);
-        yield* dropMainDatabase;
-        yield* provisionSchema;
+    yield* databaseService.useLocal((db: Surreal) =>
+      Effect.gen(function* () {
+        yield* makeDropMainDatabase(db, database);
+        yield* makeProvisionSchema(db, schemaSurql);
         return true;
       }).pipe(
         Effect.catchAll((error) => {
@@ -236,12 +234,13 @@ export const provision = <S extends SchemaStructure>(
               cause: error,
             })
           );
-        })
-      );
-    });
+        }),
+        Effect.runPromise
+      )
+    );
 
-    yield* yield* databaseService.useInternal((db: Surreal) => {
-      return Effect.gen(function* () {
+    yield* databaseService.useInternal((db: Surreal) =>
+      Effect.gen(function* () {
         yield* recordSchemaHash(db, result.schemaHash);
       }).pipe(
         Effect.catchAll((error) => {
@@ -251,9 +250,10 @@ export const provision = <S extends SchemaStructure>(
               cause: error,
             })
           );
-        })
-      );
-    });
+        }),
+        Effect.runPromise
+      )
+    );
 
     console.log("Database schema provisioned successfully");
 

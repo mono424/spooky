@@ -116,13 +116,7 @@ export const DatabaseServiceLayer = <S extends SchemaStructure>() =>
         closeRemote: makeCloseRemoteDatabase(remoteDatabase),
         closeLocal: makeCloseLocalDatabase(localDatabase),
         closeInternal: makeCloseLocalDatabase(internalDatabase),
-        clearLocalCache: makeClearLocalCache(
-          localDatabase,
-          localDbName,
-          storageStrategy,
-          namespace,
-          database
-        ),
+        clearLocalCache: makeClearLocalCache(localDatabase),
       });
     })
   );
