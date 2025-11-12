@@ -187,6 +187,14 @@ impl JsonSchemaGenerator {
                 );
             }
 
+            // Add is_datetime flag to metadata
+            if matches!(field_def.field_type, FieldType::Datetime) || Self::is_field_datetime(&field_def.field_type) {
+                field_obj.insert(
+                    "x-is-datetime".to_string(),
+                    Value::Bool(true),
+                );
+            }
+
             properties.insert(field_name.clone(), Value::Object(field_obj));
 
             // Determine if field is required
@@ -289,6 +297,16 @@ impl JsonSchemaGenerator {
             FieldType::Any => json!({
                 "description": "Any type"
             }),
+        }
+    }
+
+    /// Check if a field type is a datetime (contains Datetime type anywhere in the type hierarchy)
+    fn is_field_datetime(field_type: &FieldType) -> bool {
+        match field_type {
+            FieldType::Datetime => true,
+            FieldType::Option(inner) => Self::is_field_datetime(inner),
+            FieldType::Array(inner) => Self::is_field_datetime(inner),
+            _ => false,
         }
     }
 }

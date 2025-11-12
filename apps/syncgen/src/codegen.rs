@@ -262,16 +262,27 @@ impl CodeGenerator {
                                 let is_record_id = col_def.get("x-is-record-id")
                                     .and_then(|v| v.as_bool())
                                     .unwrap_or(false);
+                                let is_datetime = col_def.get("x-is-datetime")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false);
 
+                                let mut flags = Vec::new();
                                 if is_record_id {
+                                    flags.push("recordId: true");
+                                }
+                                if is_datetime {
+                                    flags.push("dateTime: true");
+                                }
+
+                                if flags.is_empty() {
                                     tables_lines.push(format!(
-                                        "        {}: {{ type: '{}' as const, recordId: true, optional: {} }},",
+                                        "        {}: {{ type: '{}' as const, optional: {} }},",
                                         col_name, col_type, is_optional
                                     ));
                                 } else {
                                     tables_lines.push(format!(
-                                        "        {}: {{ type: '{}' as const, optional: {} }},",
-                                        col_name, col_type, is_optional
+                                        "        {}: {{ type: '{}' as const, {}, optional: {} }},",
+                                        col_name, col_type, flags.join(", "), is_optional
                                     ));
                                 }
                             }

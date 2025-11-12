@@ -19,13 +19,14 @@ import {
 } from "./database.js";
 import { createWasmEngines } from "@surrealdb/wasm";
 
-
 export const connectRemoteDatabase = Effect.fn("connectRemoteDatabase")(
   function* (url: string) {
-    yield* Effect.logDebug(`[DatabaseService] Connecting to remote database...`);
-    
+    yield* Effect.logDebug(
+      `[DatabaseService] Connecting to remote database...`
+    );
+
     const startTime = yield* Effect.sync(() => performance.now());
-    
+
     const remote = yield* Effect.tryPromise({
       try: async () => {
         const r = new Surreal({
@@ -42,10 +43,10 @@ export const connectRemoteDatabase = Effect.fn("connectRemoteDatabase")(
         });
       },
     });
-    
+
     const endTime = yield* Effect.sync(() => performance.now());
     const duration = (endTime - startTime).toFixed(2);
-    
+
     yield* Effect.logInfo(
       `[DatabaseService] ✅ Connected successfully! (${duration}ms)`
     );
@@ -53,7 +54,7 @@ export const connectRemoteDatabase = Effect.fn("connectRemoteDatabase")(
     yield* Effect.logInfo(
       `[DatabaseService] ✅ Connected successfully to remote database`
     );
-    
+
     return remote;
   }
 );
@@ -67,7 +68,7 @@ export const createLocalDatabase = Effect.fn("createLocalDatabase")(function* (
   yield* Effect.logDebug(`[DatabaseService] Creating WASM Surreal instance...`);
   yield* Effect.logDebug(`[DatabaseService] Storage strategy: ${strategy}`);
   yield* Effect.logDebug(`[DatabaseService] DB Name: ${dbName}`);
-  
+
   const local = yield* Effect.tryPromise({
     try: async () => {
       const instance = new Surreal({
@@ -104,7 +105,11 @@ export const createLocalDatabase = Effect.fn("createLocalDatabase")(function* (
         database: selectedDatabase,
       });
 
-      return { instance, connectionUrl, duration: (endTime - startTime).toFixed(2) };
+      return {
+        instance,
+        connectionUrl,
+        duration: (endTime - startTime).toFixed(2),
+      };
     },
     catch: (error: any) => {
       return new LocalDatabaseError({
@@ -118,7 +123,9 @@ export const createLocalDatabase = Effect.fn("createLocalDatabase")(function* (
     `[DatabaseService] ✅ Connected successfully! (${local.duration}ms)`
   );
   yield* Effect.logInfo(
-    `[DatabaseService] ✅ Local database fully initialized! (${namespace || "main"}/${database || dbName})`
+    `[DatabaseService] ✅ Local database fully initialized! (${
+      namespace || "main"
+    }/${database || dbName})`
   );
 
   return local.instance;

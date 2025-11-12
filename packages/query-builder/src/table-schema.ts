@@ -9,6 +9,8 @@ export type ValueType = "string" | "number" | "boolean" | "null" | "json";
 export interface ColumnSchema {
   readonly type: ValueType;
   readonly optional: boolean;
+  readonly dateTime?: boolean;
+  readonly recordId?: boolean;
 }
 
 /**

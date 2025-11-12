@@ -39,6 +39,43 @@ export class QueryManagerService extends Context.Tag("QueryManagerService")<
 
 const cache: QueryCache<SchemaStructure> = {};
 
+/**
+ * Custom JSON.stringify function that formats Date objects as SurrealDB date literals.
+ * Dates are formatted as: d"2025-11-12T05:47:42.527106262Z"
+ */
+function surrealStringify<S extends SchemaStructure>(
+  schema: S,
+  tableName: string,
+  value: unknown
+): string {
+  const table = schema.tables.find((t) => t.name === tableName);
+  if (!table) {
+    throw new Error(`Table ${tableName} not found in schema`);
+  }
+
+  // Use a unique placeholder for dates to avoid conflicts
+  const DATE_PLACEHOLDER = "__SURREAL_DATE__";
+
+  // First pass: replace Date objects with placeholders
+  const replacer = (key: string, val: unknown): unknown => {
+    if (table.columns[key]?.dateTime) {
+      return DATE_PLACEHOLDER + val + DATE_PLACEHOLDER;
+    }
+    return val;
+  };
+
+  // Stringify with replacer
+  let jsonString = JSON.stringify(value, replacer);
+  // Second pass: replace placeholders with SurrealDB date format
+  // Match the placeholder pattern and replace with SurrealDB date literal
+  jsonString = jsonString.replace(
+    new RegExp(`"${DATE_PLACEHOLDER}([^"]+)${DATE_PLACEHOLDER}"`, "g"),
+    (match, isoString) => `d"${isoString}"`
+  );
+
+  return jsonString;
+}
+
 const queryLocalRefresh = Effect.fn("queryLocalRefresh")(function* <
   S extends SchemaStructure,
   T extends { columns: Record<string, ColumnSchema> }
@@ -108,7 +145,12 @@ const queryRemoteHydration = Effect.fn("queryRemoteHydration")(function* <
 
   const hydrateQuery = results
     .map(
-      ({ id, ...payload }) => `UPSERT ${id} CONTENT ${JSON.stringify(payload)}`
+      ({ id, ...payload }) =>
+        `UPSERT ${id} CONTENT ${surrealStringify(
+          schema,
+          query.tableName,
+          payload
+        )}`
     )
     .join(";\n");
 

@@ -41,7 +41,11 @@ export function AuthProvider(props: { children: JSX.Element }) {
   const user = () => userQuery.data?.[0] ?? null;
 
   setInterval(() => {
-    console.log("[AuthProvider] User query data:", userQuery.data?.length);
+    console.log(
+      "[AuthProvider] User query data:",
+      userQuery.data?.length,
+      userQuery.status
+    );
   }, 1000);
 
   // Check for existing session on mount
