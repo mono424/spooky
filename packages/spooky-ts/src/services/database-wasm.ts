@@ -19,15 +19,16 @@ import {
 } from "./database.js";
 import { createWasmEngines } from "@surrealdb/wasm";
 
+
 export const connectRemoteDatabase = Effect.fn("connectRemoteDatabase")(
   function* (url: string) {
+    yield* Effect.logDebug(`[DatabaseService] Connecting to remote database...`);
     return yield* Effect.tryPromise({
       try: async () => {
         const remote = new Surreal({
           engines: createRemoteEngines(),
           codecOptions: { useNativeDates: false },
         });
-        console.log(`[DatabaseService] Connecting to remote database...`);
         const startTime = performance.now();
         await remote.connect(url);
         const endTime = performance.now();
@@ -48,7 +49,22 @@ export const connectRemoteDatabase = Effect.fn("connectRemoteDatabase")(
           cause: error,
         });
       },
-    });
+    }).pipe(
+      Effect.tap(() => 
+        Effect.logInfo(
+          `[DatabaseService] ✅ Connected successfully to remote database`
+        )
+      ),
+      Effect.catchAll((error) =>
+        Effect.gen(function* () {
+          yield* Effect.logError(
+            `[DatabaseService] Failed to connect to remote database`,
+            error
+          );
+          throw error;
+        })
+      )
+    );
   }
 );
 
@@ -58,10 +74,12 @@ export const createLocalDatabase = Effect.fn("createLocalDatabase")(function* (
   namespace?: string,
   database?: string
 ) {
+  yield* Effect.logDebug(`[DatabaseService] Creating WASM Surreal instance...`);
+  yield* Effect.logDebug(`[DatabaseService] Storage strategy: ${strategy}`);
+  yield* Effect.logDebug(`[DatabaseService] DB Name: ${dbName}`);
+  
   return yield* Effect.tryPromise({
     try: async () => {
-      console.log(`[DatabaseService] Creating WASM Surreal instance...`);
-
       const local = new Surreal({
         engines: createWasmEngines({
           capabilities: {
@@ -75,10 +93,6 @@ export const createLocalDatabase = Effect.fn("createLocalDatabase")(function* (
         },
       });
 
-      console.log(
-        `[DatabaseService] WASM Surreal instance created successfully`
-      );
-
       // Determine connection URL based on storage strategy
       let connectionUrl: string;
       if (strategy === "indexeddb") {
@@ -89,12 +103,7 @@ export const createLocalDatabase = Effect.fn("createLocalDatabase")(function* (
         connectionUrl = "mem://";
       }
 
-      console.log(`[DatabaseService] Storage strategy: ${strategy}`);
-      console.log(`[DatabaseService] Connection URL: ${connectionUrl}`);
-      console.log(`[DatabaseService] DB Name: ${dbName}`);
-
       try {
-        console.log(`[DatabaseService] Attempting to connect to database...`);
         const startTime = performance.now();
         await local.connect(connectionUrl);
         const endTime = performance.now();
@@ -115,7 +124,6 @@ export const createLocalDatabase = Effect.fn("createLocalDatabase")(function* (
           `[DatabaseService] Error message:`,
           connectError?.message || connectError
         );
-        console.error(`[DatabaseService] Full error:`, connectError);
         throw new Error(
           `Failed to connect to ${connectionUrl}: ${
             connectError?.message || connectError
@@ -123,17 +131,13 @@ export const createLocalDatabase = Effect.fn("createLocalDatabase")(function* (
         );
       }
 
-      console.log(
-        `[DatabaseService] Selecting namespace '${
-          namespace || "main"
-        }' and database '${database || dbName}'...`
-      );
+      const selectedNamespace = namespace || "main";
+      const selectedDatabase = database || dbName;
       await local.use({
-        namespace: namespace || "main",
-        database: database || dbName,
+        namespace: selectedNamespace,
+        database: selectedDatabase,
       });
 
-      console.log(`[DatabaseService] ✅ Local database fully initialized!`);
       return local;
     },
     catch: (error: any) => {
@@ -146,7 +150,22 @@ export const createLocalDatabase = Effect.fn("createLocalDatabase")(function* (
         cause: error,
       });
     },
-  });
+  }).pipe(
+    Effect.tap(() =>
+      Effect.logInfo(
+        `[DatabaseService] ✅ Local database fully initialized! (${namespace || "main"}/${database || dbName})`
+      )
+    ),
+    Effect.catchAll((error) =>
+      Effect.gen(function* () {
+        yield* Effect.logError(
+          `[DatabaseService] Failed to create local database`,
+          error
+        );
+        throw error;
+      })
+    )
+  );
 });
 
 let localDatabase: Surreal | undefined;

@@ -51,7 +51,10 @@ export function AuthProvider(props: { children: JSX.Element }) {
         if (userId) {
           setUserId(userId.id.toString());
           localStorage.setItem("token", token);
-          console.log("[AuthProvider] Auth check successful, userId:", userId.id);
+          console.log(
+            "[AuthProvider] Auth check successful, userId:",
+            userId.id
+          );
         }
       } catch (error) {
         console.error("[AuthProvider] Auth check failed:", error);
