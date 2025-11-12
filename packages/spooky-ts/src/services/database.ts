@@ -217,9 +217,13 @@ export const makeClearLocalCache = (db: Surreal) => {
     return yield* Effect.tryPromise({
       try: async () => {
         // Get all tables and delete all records from them
-        const [info] = await db.query("INFO FOR DB").collect<[{
-          tables: Record<string, unknown>;
-        }]>();
+        const [info] = await db.query("INFO FOR DB").collect<
+          [
+            {
+              tables: Record<string, unknown>;
+            }
+          ]
+        >();
 
         if (info?.tables) {
           const tableNames = Object.keys(info.tables);
