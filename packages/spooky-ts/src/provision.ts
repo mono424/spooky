@@ -2,6 +2,7 @@ import { Effect } from "effect";
 import type { Surreal } from "surrealdb";
 import { DatabaseService, makeConfig } from "./services/index.js";
 import { SchemaStructure } from "@spooky/query-builder";
+import { logDebug, logError, logInfo } from "./services/logger.js";
 
 /**
  * Options for database provisioning
@@ -45,21 +46,34 @@ export const sha1 = async (str: string): Promise<string> => {
 /**
  * Initializes the internal database with __schema table
  */
-export const initializeInternalDatabase = async (
+export const initializeInternalDatabase = (
   internalDb: Surreal
 ): Promise<void> => {
-  console.log("Initializing internal database...", internalDb);
-  await internalDb
-    .query(
-      `
+  return Effect.runPromise(
+    logDebug("Initializing internal database...").pipe(
+      Effect.andThen(() =>
+        Effect.tryPromise({
+          try: () =>
+            internalDb
+              .query(
+                `
       DEFINE TABLE IF NOT EXISTS __schema SCHEMAFULL;
       DEFINE FIELD IF NOT EXISTS id ON __schema TYPE string;
       DEFINE FIELD IF NOT EXISTS hash ON __schema TYPE string;
       DEFINE FIELD IF NOT EXISTS created_at ON __schema TYPE datetime VALUE time::now();
       DEFINE INDEX IF NOT EXISTS unique_hash ON __schema FIELDS hash UNIQUE;
     `
+              )
+              .dispatch(),
+          catch: (error) =>
+            Effect.gen(function* () {
+              yield* logError("Failed to initialize internal database", error);
+              throw error;
+            }),
+        })
+      )
     )
-    .dispatch();
+  );
 };
 
 /**

@@ -20,8 +20,22 @@ const AuthContext = createContext<AuthContextType>();
 export function AuthProvider(props: { children: JSX.Element }) {
   const [userId, setUserId] = createSignal<string | null>(null);
   const [isLoading, setIsLoading] = createSignal(true);
+  const [isInitialized, setIsInitialized] = createSignal(false);
 
-  const userQuery = useQuery(() => db.query("user").one().build());
+  // Only run query after auth is initialized
+  const userQuery = useQuery(() => ({
+    queryKey: ["user"],
+    queryFn: async () => {
+      if (!isInitialized()) return null;
+      try {
+        return await db.query("user").one().build();
+      } catch (error) {
+        console.error("Failed to fetch user:", error);
+        return null;
+      }
+    },
+    enabled: isInitialized(),
+  }));
 
   const user = () => {
     return userQuery.data ?? null;
@@ -30,13 +44,21 @@ export function AuthProvider(props: { children: JSX.Element }) {
   // Check for existing session on mount
   const checkAuth = async (tkn?: string) => {
     const token = tkn || localStorage.getItem("token");
+    console.log("[AuthProvider] Checking auth with token:", !!token);
     if (token) {
-      const userId = await db.authenticate(token);
-      if (userId) {
-        setUserId(userId.id.toString());
-        localStorage.setItem("token", token);
+      try {
+        const userId = await db.authenticate(token);
+        if (userId) {
+          setUserId(userId.id.toString());
+          localStorage.setItem("token", token);
+          console.log("[AuthProvider] Auth check successful, userId:", userId.id);
+        }
+      } catch (error) {
+        console.error("[AuthProvider] Auth check failed:", error);
+        localStorage.removeItem("token");
       }
     }
+    setIsInitialized(true);
     setIsLoading(false);
   };
 
