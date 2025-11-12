@@ -256,9 +256,13 @@ const makeRun = <S extends SchemaStructure>(
             );
 
             yield* queryRemoteHydration(schema, query).pipe(
-              Effect.catchAll((error) =>
-                Effect.logError("Failed to refresh query locally", error)
-              ),
+              Effect.catchAll((error) => {
+                yield* Effect.logWarn(
+                  "[QueryManager] Remote hydration failed (continuing with local data)",
+                  error
+                );
+                return Effect.succeed(undefined);
+              }),
               Effect.provide(runtime)
             );
 
@@ -267,9 +271,13 @@ const makeRun = <S extends SchemaStructure>(
               { queryHash: query.hash }
             );
             yield* subscribeRemoteQuery(query).pipe(
-              Effect.catchAll((error) =>
-                Effect.logError("Failed to subscribe to remote query", error)
-              ),
+              Effect.catchAll((error) => {
+                yield* Effect.logWarn(
+                  "[QueryManager] Remote subscription failed (continuing with local data)",
+                  error
+                );
+                return Effect.succeed(undefined);
+              }),
               Effect.provide(runtime)
             );
 
