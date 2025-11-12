@@ -102,6 +102,11 @@ export const makeQueryRemoteDatabase = (db: Surreal) => {
     return yield* Effect.tryPromise({
       try: async () => {
         const result = await db.query(sql, vars).collect<[T]>();
+        Effect.logDebug("[Database] Query Remote Database - Result", {
+          sql,
+          vars,
+          result,
+        });
         return result[0];
       },
       catch: (error) =>
@@ -121,6 +126,11 @@ export const makeQueryLocalDatabase = (db: Surreal) => {
     return yield* Effect.tryPromise({
       try: async () => {
         const result = await db.query(sql, vars).collect<[T]>();
+        Effect.logDebug("[Database] Query Local Database - Result", {
+          sql,
+          vars,
+          result,
+        });
         return result[0];
       },
       catch: (error) =>

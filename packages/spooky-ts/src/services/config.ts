@@ -4,6 +4,8 @@ import { ProvisionOptions } from "src/provision.js";
 
 export type CacheStrategy = "memory" | "indexeddb";
 
+export type LogLevel = "debug" | "info" | "warn" | "error";
+
 export interface SpookyConfig<S extends SchemaStructure> {
   /** Schema const with runtime metadata (tables and relationships) */
   schema: S;
@@ -23,6 +25,8 @@ export interface SpookyConfig<S extends SchemaStructure> {
   database: string;
   /** Provision options */
   provisionOptions: ProvisionOptions;
+  /** Log level */
+  logLevel: LogLevel;
 }
 
 export class Config extends Context.Tag("Config")<
