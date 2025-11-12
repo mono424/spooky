@@ -56,17 +56,7 @@ export class SyncedDb<const Schema extends SchemaStructure> {
    * Initialize the spooky-ts instance
    */
   async init(): Promise<void> {
-    this.spooky = await createSpooky<Schema>({
-      schema: this.config.schema,
-      schemaSurql: this.config.schemaSurql,
-      remoteUrl: this.config.remoteUrl || "",
-      localDbName: this.config.localDbName,
-      internalDbName: this.config.internalDbName,
-      storageStrategy: this.config.storageStrategy,
-      namespace: this.config.namespace || "",
-      database: this.config.database || "",
-      provisionOptions: this.config.provisionOptions || {},
-    });
+    this.spooky = await createSpooky<Schema>(this.config);
   }
 
   /**

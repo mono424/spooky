@@ -14,6 +14,7 @@ export const dbConfig = {
   provisionOptions: {
     force: false,
   },
+  logLevel: "debug" as const,
 } as const;
 
 export const db = new SyncedDb(dbConfig);
