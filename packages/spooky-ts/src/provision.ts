@@ -111,11 +111,8 @@ export const isSchemaUpToDate = Effect.fn("isSchemaUpToDate")(function* (
 /**
  * Drops the main database and recreates it
  */
-export const dropMainDatabase = Effect.fn("dropMainDatabase")(function* (
-  localDb: Surreal,
-  database: string
-) {
-  Effect.tryPromise({
+export const makeDropMainDatabase = (localDb: Surreal, database: string) => {
+  return Effect.tryPromise({
     try: async () => {
       console.log("Dropping main database...");
       try {
@@ -129,16 +126,16 @@ export const dropMainDatabase = Effect.fn("dropMainDatabase")(function* (
     },
     catch: (error) => new Error(`Failed to drop main database: ${error}`),
   });
-});
+};
 
 /**
  * Provisions the schema by executing all SurrealQL statements
  */
-export const provisionSchema = Effect.fn("provisionSchema")(function* (
+export const makeProvisionSchema = (
   localDb: Surreal,
   schemaContent: string
-) {
-  return yield* Effect.tryPromise({
+) => {
+  return Effect.tryPromise({
     try: async () => {
       console.log("Provisioning new schema...");
 
@@ -163,7 +160,7 @@ export const provisionSchema = Effect.fn("provisionSchema")(function* (
     },
     catch: (error) => new Error(`Failed to provision schema: ${error}`),
   });
-});
+};
 
 /**
  * Records the schema hash in the internal database
@@ -189,73 +186,69 @@ export const recordSchemaHash = Effect.fn("recordSchemaHash")(function* (
  * Main provision function that orchestrates the provisioning process
  * This is the primary entry point for database schema provisioning
  */
-export const provision = Effect.fn("provision")(function* <
-  S extends SchemaStructure
->(options: ProvisionOptions = {}) {
-  return yield* Effect.gen(function* () {
+export const provision = <S extends SchemaStructure>(
+  options: ProvisionOptions = {}
+) => {
+  return Effect.gen(function* () {
     const { database, schemaSurql } = yield* (yield* makeConfig<S>()).getConfig;
 
     const databaseService = yield* DatabaseService;
     const { force = false } = options;
 
-    yield* Effect.gen(function* () {
-      const result = yield* databaseService.useInternal(
-        Effect.fn("shouldMigrate")(function* (db) {
-          return yield* Effect.gen(function* () {
-            const schemaHash = yield* sha1(schemaSurql);
-            const isUpToDate = yield* isSchemaUpToDate(db, schemaHash);
-            const shouldMigrate = force || !isUpToDate;
-            if (!shouldMigrate)
-              return Effect.succeed({ shouldMigrate, schemaHash });
-
-            yield* initializeInternalDatabase(db);
+    const result = yield* yield* yield* databaseService.useInternal(
+      (db: Surreal) => {
+        return Effect.gen(function* () {
+          const schemaHash = yield* sha1(schemaSurql);
+          const isUpToDate = yield* isSchemaUpToDate(db, schemaHash);
+          const shouldMigrate = force || !isUpToDate;
+          if (!shouldMigrate)
             return Effect.succeed({ shouldMigrate, schemaHash });
-          }).pipe(
-            Effect.catchAll((error) => {
-              return Effect.fail(
-                new LocalDatabaseError({
-                  message: `Failed to use internal database: ${error}`,
-                  cause: error,
-                })
-              );
+
+          yield* initializeInternalDatabase(db);
+          return Effect.succeed({ shouldMigrate, schemaHash });
+        }).pipe(
+          Effect.catchAll((error) => {
+            return Effect.fail(
+              new LocalDatabaseError({
+                message: `Failed to use internal database: ${error}`,
+                cause: error,
+              })
+            );
+          })
+        );
+      }
+    );
+
+    if (!result.shouldMigrate) return;
+
+    yield* yield* databaseService.useLocal((db: Surreal) => {
+      return Effect.gen(function* () {
+        const provisionSchema = yield* makeProvisionSchema(db, schemaSurql);
+        const dropMainDatabase = yield* makeDropMainDatabase(db, database);
+        yield* dropMainDatabase;
+        yield* provisionSchema;
+        return true;
+      }).pipe(
+        Effect.catchAll((error) => {
+          return Effect.fail(
+            new LocalDatabaseError({
+              message: `Failed to migrate database: ${error}`,
+              cause: error,
             })
           );
         })
       );
+    });
 
-      if (!(yield* result).shouldMigrate) return;
-
-      yield* databaseService.useLocal(
-        Effect.fn("useLocalMigration")(function* (db) {
-          return yield* Effect.gen(function* () {
-            yield* dropMainDatabase(db, database);
-            yield* provisionSchema(db, schemaSurql);
-            return true;
-          }).pipe(
-            Effect.catchAll((error) => {
-              return Effect.fail(
-                new LocalDatabaseError({
-                  message: `Failed to migrate database: ${error}`,
-                  cause: error,
-                })
-              );
-            })
-          );
-        })
-      );
-
-      yield* databaseService.useInternal(
-        Effect.fn("shouldMigrate")(function* (db) {
-          return yield* Effect.gen(function* () {
-            yield* recordSchemaHash(db, (yield* result).schemaHash);
-          }).pipe(
-            Effect.catchAll((error) => {
-              return Effect.fail(
-                new LocalDatabaseError({
-                  message: `Failed to use internal database: ${error}`,
-                  cause: error,
-                })
-              );
+    yield* yield* databaseService.useInternal((db: Surreal) => {
+      return Effect.gen(function* () {
+        yield* recordSchemaHash(db, result.schemaHash);
+      }).pipe(
+        Effect.catchAll((error) => {
+          return Effect.fail(
+            new LocalDatabaseError({
+              message: `Failed to use internal database: ${error}`,
+              cause: error,
             })
           );
         })
@@ -263,6 +256,7 @@ export const provision = Effect.fn("provision")(function* <
     });
 
     console.log("Database schema provisioned successfully");
+
     return Effect.succeed(undefined);
   }).pipe(
     Effect.catchAll((error) => {
@@ -270,4 +264,4 @@ export const provision = Effect.fn("provision")(function* <
       return Effect.fail(error);
     })
   );
-});
+};

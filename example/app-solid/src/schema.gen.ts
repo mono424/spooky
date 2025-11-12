@@ -4,12 +4,13 @@
 export const schema = {
   tables: [
     {
-      name: 'user' as const,
+      name: 'comment' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
+        author: { type: 'string' as const, recordId: true, optional: false },
         created_at: { type: 'string' as const, optional: true },
-        username: { type: 'string' as const, optional: false },
-        password: { type: 'string' as const, optional: false },
+        thread: { type: 'string' as const, recordId: true, optional: false },
+        content: { type: 'string' as const, optional: false },
       },
       primaryKey: ['id'] as const
     },
@@ -26,19 +27,18 @@ export const schema = {
         id: { type: 'string' as const, recordId: true, optional: false },
         content: { type: 'string' as const, optional: false },
         title: { type: 'string' as const, optional: false },
-        created_at: { type: 'string' as const, optional: true },
         author: { type: 'string' as const, recordId: true, optional: false },
+        created_at: { type: 'string' as const, optional: true },
       },
       primaryKey: ['id'] as const
     },
     {
-      name: 'comment' as const,
+      name: 'user' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
-        content: { type: 'string' as const, optional: false },
+        username: { type: 'string' as const, optional: false },
+        password: { type: 'string' as const, optional: false },
         created_at: { type: 'string' as const, optional: true },
-        author: { type: 'string' as const, recordId: true, optional: false },
-        thread: { type: 'string' as const, recordId: true, optional: false },
       },
       primaryKey: ['id'] as const
     },

@@ -106,7 +106,7 @@ export class SyncedDb<const Schema extends SchemaStructure> {
 
   public db(): Surreal {
     if (!this.spooky) throw new Error("SyncedDb not initialized");
-    return Effect.runSync(this.spooky.useRemote((db) => Effect.succeed(db)));
+    return Effect.runSync(this.spooky.useRemote((db) => db));
   }
 }
 
