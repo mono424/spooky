@@ -23,48 +23,38 @@ import { createWasmEngines } from "@surrealdb/wasm";
 export const connectRemoteDatabase = Effect.fn("connectRemoteDatabase")(
   function* (url: string) {
     yield* Effect.logDebug(`[DatabaseService] Connecting to remote database...`);
-    return yield* Effect.tryPromise({
+    
+    const startTime = yield* Effect.sync(() => performance.now());
+    
+    const remote = yield* Effect.tryPromise({
       try: async () => {
-        const remote = new Surreal({
+        const r = new Surreal({
           engines: createRemoteEngines(),
           codecOptions: { useNativeDates: false },
         });
-        const startTime = performance.now();
-        await remote.connect(url);
-        const endTime = performance.now();
-        console.log(
-          `[DatabaseService] ✅ Connected successfully! (${(
-            endTime - startTime
-          ).toFixed(2)}ms)`
-        );
-        console.log(`[DatabaseService] URL: ${url}`);
-        return remote;
+        await r.connect(url);
+        return r;
       },
       catch: (error) => {
-        console.error(
-          `[DatabaseService] Error connecting to remote database: ${error}`
-        );
         return new RemoteDatabaseError({
           message: "Failed to connect to remote database",
           cause: error,
         });
       },
-    }).pipe(
-      Effect.tap(() => 
-        Effect.logInfo(
-          `[DatabaseService] ✅ Connected successfully to remote database`
-        )
-      ),
-      Effect.catchAll((error) =>
-        Effect.gen(function* () {
-          yield* Effect.logError(
-            `[DatabaseService] Failed to connect to remote database`,
-            error
-          );
-          throw error;
-        })
-      )
+    });
+    
+    const endTime = yield* Effect.sync(() => performance.now());
+    const duration = (endTime - startTime).toFixed(2);
+    
+    yield* Effect.logInfo(
+      `[DatabaseService] ✅ Connected successfully! (${duration}ms)`
     );
+    yield* Effect.logDebug(`[DatabaseService] URL: ${url}`);
+    yield* Effect.logInfo(
+      `[DatabaseService] ✅ Connected successfully to remote database`
+    );
+    
+    return remote;
   }
 );
 
@@ -78,9 +68,9 @@ export const createLocalDatabase = Effect.fn("createLocalDatabase")(function* (
   yield* Effect.logDebug(`[DatabaseService] Storage strategy: ${strategy}`);
   yield* Effect.logDebug(`[DatabaseService] DB Name: ${dbName}`);
   
-  return yield* Effect.tryPromise({
+  const local = yield* Effect.tryPromise({
     try: async () => {
-      const local = new Surreal({
+      const instance = new Surreal({
         engines: createWasmEngines({
           capabilities: {
             experimental: {
@@ -103,69 +93,35 @@ export const createLocalDatabase = Effect.fn("createLocalDatabase")(function* (
         connectionUrl = "mem://";
       }
 
-      try {
-        const startTime = performance.now();
-        await local.connect(connectionUrl);
-        const endTime = performance.now();
-        console.log(
-          `[DatabaseService] ✅ Connected successfully! (${(
-            endTime - startTime
-          ).toFixed(2)}ms)`
-        );
-      } catch (connectError: any) {
-        console.error(
-          `[DatabaseService] ❌ Connection FAILED after attempting to connect to ${connectionUrl}`
-        );
-        console.error(
-          `[DatabaseService] Error type:`,
-          connectError?.constructor?.name || typeof connectError
-        );
-        console.error(
-          `[DatabaseService] Error message:`,
-          connectError?.message || connectError
-        );
-        throw new Error(
-          `Failed to connect to ${connectionUrl}: ${
-            connectError?.message || connectError
-          }`
-        );
-      }
+      const startTime = performance.now();
+      await instance.connect(connectionUrl);
+      const endTime = performance.now();
 
       const selectedNamespace = namespace || "main";
       const selectedDatabase = database || dbName;
-      await local.use({
+      await instance.use({
         namespace: selectedNamespace,
         database: selectedDatabase,
       });
 
-      return local;
+      return { instance, connectionUrl, duration: (endTime - startTime).toFixed(2) };
     },
     catch: (error: any) => {
-      console.error(
-        "[DatabaseService] ❌ Error creating local database:",
-        error?.message || error
-      );
       return new LocalDatabaseError({
         message: "Failed to create local database",
         cause: error,
       });
     },
-  }).pipe(
-    Effect.tap(() =>
-      Effect.logInfo(
-        `[DatabaseService] ✅ Local database fully initialized! (${namespace || "main"}/${database || dbName})`
-      )
-    ),
-    Effect.catchAll((error) =>
-      Effect.gen(function* () {
-        yield* Effect.logError(
-          `[DatabaseService] Failed to create local database`,
-          error
-        );
-        throw error;
-      })
-    )
+  });
+
+  yield* Effect.logInfo(
+    `[DatabaseService] ✅ Connected successfully! (${local.duration}ms)`
   );
+  yield* Effect.logInfo(
+    `[DatabaseService] ✅ Local database fully initialized! (${namespace || "main"}/${database || dbName})`
+  );
+
+  return local.instance;
 });
 
 let localDatabase: Surreal | undefined;

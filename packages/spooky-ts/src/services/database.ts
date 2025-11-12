@@ -155,8 +155,8 @@ export const makeAuthenticateRemoteDatabase = (db: Surreal) => {
         await db.authenticate(token);
         const [result] = await db
           .query(`SELECT id FROM $auth`)
-          .collect<[{ id: RecordId }]>();
-        return result?.id;
+          .collect<[{ id: RecordId }[]]>();
+        return result?.[0]?.id;
       },
       catch: (error) =>
         new RemoteAuthenticationError({

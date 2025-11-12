@@ -1,4 +1,11 @@
-import { createContext, useContext, createSignal, JSX, Show } from "solid-js";
+import {
+  createContext,
+  useContext,
+  createSignal,
+  JSX,
+  Show,
+  createEffect,
+} from "solid-js";
 import { db, dbConfig } from "../db";
 import { schema } from "../schema.gen";
 import { type GetTable, type TableModel } from "@spooky/client-solid";
@@ -24,22 +31,18 @@ export function AuthProvider(props: { children: JSX.Element }) {
 
   // Only run query after auth is initialized
   const userQuery = useQuery(() => ({
-    queryKey: ["user"],
-    queryFn: async () => {
-      if (!isInitialized()) return null;
-      try {
-        return await db.query("user").one().build();
-      } catch (error) {
-        console.error("Failed to fetch user:", error);
-        return null;
-      }
-    },
-    enabled: isInitialized(),
+    ...db
+      .query("user")
+      .where({ id: userId() ?? undefined })
+      .build(),
+    enabled: isInitialized() && userId() !== null,
   }));
 
-  const user = () => {
-    return userQuery.data ?? null;
-  };
+  const user = () => userQuery.data?.[0] ?? null;
+
+  setInterval(() => {
+    console.log("[AuthProvider] User query data:", userQuery.data?.length);
+  }, 1000);
 
   // Check for existing session on mount
   const checkAuth = async (tkn?: string) => {
@@ -48,6 +51,7 @@ export function AuthProvider(props: { children: JSX.Element }) {
     if (token) {
       try {
         const userId = await db.authenticate(token);
+        console.log("[AuthProvider] Authenticated user:", userId);
         if (userId) {
           setUserId(userId.id.toString());
           localStorage.setItem("token", token);
@@ -72,6 +76,8 @@ export function AuthProvider(props: { children: JSX.Element }) {
     try {
       // Use the centralized signIn method from db object
       const res = await db.db().signin({
+        namespace: dbConfig.namespace,
+        database: dbConfig.database,
         access: "account",
         variables: {
           username,
