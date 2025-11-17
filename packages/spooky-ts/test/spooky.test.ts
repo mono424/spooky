@@ -5,6 +5,7 @@ import { Effect } from "effect";
 import { createMockSpooky } from "./mock-spooky.js";
 
 const mockConfig: SpookyConfig<typeof testSchema> = {
+  logLevel: "debug",
   schema: testSchema,
   schemaSurql: SURQL_SCHEMA,
   remoteUrl: "ws://localhost:8000",

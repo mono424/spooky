@@ -7,7 +7,7 @@ import {
 } from "../src/services/index.js";
 import { DevTools } from "@effect/experimental";
 import { Effect, Layer, Logger, LogLevel } from "effect";
-import { main } from "../src/spooky.js";
+import { mainProgram } from "../src/spooky.js";
 import { SchemaStructure } from "@spooky/query-builder";
 import { dbContext, MockDatabaseServiceLayer } from "./mock-database.js";
 
@@ -48,7 +48,10 @@ export async function createMockSpooky<S extends SchemaStructure>(
   );
 
   return {
-    spooky: await main<S>().pipe(Effect.provide(MainLayer), Effect.runPromise),
+    spooky: await mainProgram<S>().pipe(
+      Effect.provide(MainLayer),
+      Effect.runPromise
+    ),
     dbContext,
   };
 }

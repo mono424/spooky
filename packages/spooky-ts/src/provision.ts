@@ -124,20 +124,18 @@ export const recordSchemaHash = async (
   internalDb: Surreal,
   hash: string
 ): Promise<void> => {
-  await internalDb.query(
-    `UPSERT __schema SET hash = $hash, created_at = time::now() WHERE hash = $hash;`,
-    { hash }
-  ).dispatch();
+  await internalDb
+    .query(
+      `UPSERT __schema SET hash = $hash, created_at = time::now() WHERE hash = $hash;`,
+      { hash }
+    )
+    .dispatch();
 };
 
-/**
- * Main provision function that orchestrates the provisioning process
- * This is the primary entry point for database schema provisioning
- */
-export const provision = <S extends SchemaStructure>(
+export const provisionProgram = <S extends SchemaStructure>(
   options: ProvisionOptions = {}
-) => {
-  return Effect.gen(function* () {
+) =>
+  Effect.gen(function* () {
     const { database, schemaSurql } = yield* (yield* makeConfig<S>()).getConfig;
 
     const databaseService = yield* DatabaseService;
@@ -149,20 +147,28 @@ export const provision = <S extends SchemaStructure>(
       const schemaHash = await sha1(schemaSurql);
       const isUpToDate = await isSchemaUpToDate(db, schemaHash);
       let shouldMigrate = force || !isUpToDate;
-      
+
       return { shouldMigrate, schemaHash, isUpToDate };
     });
 
     yield* Effect.logDebug(`[Provisioning] Schema hash: ${result.schemaHash}`);
-    yield* Effect.logDebug(`[Provisioning] Schema up to date: ${result.isUpToDate}`);
-    yield* Effect.logDebug(`[Provisioning] Should migrate: ${result.shouldMigrate}`);
+    yield* Effect.logDebug(
+      `[Provisioning] Schema up to date: ${result.isUpToDate}`
+    );
+    yield* Effect.logDebug(
+      `[Provisioning] Should migrate: ${result.shouldMigrate}`
+    );
 
     if (!result.shouldMigrate) {
-      yield* Effect.logInfo("[Provisioning] Schema is up to date, skipping migration");
+      yield* Effect.logInfo(
+        "[Provisioning] Schema is up to date, skipping migration"
+      );
       return;
     }
 
-    yield* Effect.logInfo("[Provisioning] Initializing internal database schema...");
+    yield* Effect.logInfo(
+      "[Provisioning] Initializing internal database schema..."
+    );
     yield* databaseService.useInternal(async (db: Surreal) => {
       await initializeInternalDatabase(db);
     });
@@ -178,13 +184,7 @@ export const provision = <S extends SchemaStructure>(
       await recordSchemaHash(db, result.schemaHash);
     });
 
-    yield* Effect.logInfo("[Provisioning] Database schema provisioned successfully");
-  }).pipe(
-    Effect.catchAll((error) => {
-      return Effect.gen(function* () {
-        yield* Effect.logError("[Provisioning] Failed to provision database schema:", error);
-        return yield* Effect.fail(error);
-      });
-    })
-  );
-};
+    yield* Effect.logInfo(
+      "[Provisioning] Database schema provisioned successfully"
+    );
+  });

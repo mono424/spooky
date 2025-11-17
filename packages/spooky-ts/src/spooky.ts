@@ -15,7 +15,7 @@ import {
   makeConfig,
   QueryManagerService,
 } from "./services/index.js";
-import { provision } from "./provision.js";
+import { provisionProgram } from "./provision.js";
 import { MutationManagerService } from "./services/mutation-manager.js";
 
 const useQuery = Effect.fn("useQuery")(function* <S extends SchemaStructure>(
@@ -37,12 +37,12 @@ const useQuery = Effect.fn("useQuery")(function* <S extends SchemaStructure>(
   });
 });
 
-export const main = <S extends SchemaStructure>() =>
+export const mainProgram = <S extends SchemaStructure>() =>
   Effect.gen(function* () {
     const { schema, provisionOptions } = yield* (yield* makeConfig<S>())
       .getConfig;
 
-    yield* provision<S>(provisionOptions);
+    yield* provisionProgram<S>(provisionOptions);
 
     const databaseService = yield* DatabaseService;
     const authManager = yield* AuthManagerService;

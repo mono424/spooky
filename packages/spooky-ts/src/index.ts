@@ -7,7 +7,7 @@ import {
 } from "./services/index.js";
 import { DatabaseServiceLayer } from "./services/database-wasm.js";
 import { Effect, Layer } from "effect";
-import { main } from "./spooky.js";
+import { mainProgram } from "./spooky.js";
 import { SchemaStructure } from "@spooky/query-builder";
 import { AuthManagerServiceLayer } from "./services/auth-manager.js";
 export * from "./types.js";
@@ -45,5 +45,5 @@ export function createSpooky<S extends SchemaStructure>(
     mutationManagerServiceLayer
   );
 
-  return main<S>().pipe(Effect.provide(MainLayer), Effect.runPromise);
+  return mainProgram<S>().pipe(Effect.provide(MainLayer), Effect.runPromise);
 }

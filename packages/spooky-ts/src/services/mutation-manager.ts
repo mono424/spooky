@@ -80,31 +80,9 @@ export class MutationManagerService extends Context.Tag(
   {
     readonly runtime: Runtime.Runtime<DatabaseService>;
     run: ReturnType<typeof makeRun>;
-    create: <S extends SchemaStructure, N extends TableNames<S>>(
-      tableName: N,
-      payload: TableModel<GetTable<S, N>>
-    ) => Effect.Effect<
-      void,
-      string | Error,
-      DatabaseService | QueryManagerService
-    >;
-    update: <S extends SchemaStructure, N extends TableNames<S>>(
-      tableName: N,
-      recordId: RecordId,
-      payload: Partial<TableModel<GetTable<S, N>>>
-    ) => Effect.Effect<
-      void,
-      string | Error,
-      DatabaseService | QueryManagerService
-    >;
-    delete: <S extends SchemaStructure, N extends TableNames<S>>(
-      tableName: N,
-      id: RecordId
-    ) => Effect.Effect<
-      void,
-      string | Error,
-      DatabaseService | QueryManagerService
-    >;
+    create: ReturnType<typeof makeCreate<SchemaStructure>>;
+    update: ReturnType<typeof makeUpdate<SchemaStructure>>;
+    delete: ReturnType<typeof makeDelete<SchemaStructure>>;
   }
 >() {}
 
@@ -365,9 +343,15 @@ export const MutationManagerServiceLayer = <S extends SchemaStructure>() =>
       return MutationManagerService.of({
         runtime,
         run,
-        create: makeCreate(schema, run),
-        update: makeUpdate(schema, run),
-        delete: makeDelete(schema, run),
+        create: makeCreate(schema, run) as ReturnType<
+          typeof makeCreate<SchemaStructure>
+        >,
+        update: makeUpdate(schema, run) as ReturnType<
+          typeof makeUpdate<SchemaStructure>
+        >,
+        delete: makeDelete(schema, run) as ReturnType<
+          typeof makeDelete<SchemaStructure>
+        >,
       });
     })
   );
