@@ -1,4 +1,11 @@
-import { createContext, useContext, createSignal, JSX, Show } from "solid-js";
+import {
+  createContext,
+  useContext,
+  createSignal,
+  JSX,
+  Show,
+  onCleanup,
+} from "solid-js";
 import { db, dbConfig } from "../db";
 import { schema } from "../schema.gen";
 import {
@@ -27,15 +34,21 @@ export function AuthProvider(props: { children: JSX.Element }) {
   const [isLoading, setIsLoading] = createSignal(true);
   const [isInitialized, setIsInitialized] = createSignal(false);
 
-  spooky.subscribe(AuthEventTypes.Authenticated, (event) => {
-    setUserId(event.payload.userId.toString());
-    setIsInitialized(true);
-    setIsLoading(false);
-  });
-  spooky.subscribe(AuthEventTypes.Deauthenticated, () => {
-    setUserId(null);
-    setIsInitialized(true);
-    setIsLoading(false);
+  const subIds = [
+    spooky.subscribe(AuthEventTypes.Authenticated, (event) => {
+      console.log("[AuthProvider] Authenticated event received:", event);
+      setUserId(event.payload.userId.toString());
+      localStorage.setItem("token", event.payload.token);
+    }),
+    spooky.subscribe(AuthEventTypes.Deauthenticated, () => {
+      console.log("[AuthProvider] Deauthenticated event received");
+      setUserId(null);
+      localStorage.removeItem("token");
+    }),
+  ];
+
+  onCleanup(() => {
+    subIds.forEach((id) => spooky.unsubscribe(id));
   });
 
   // Only run query after auth is initialized and userId is available
@@ -61,25 +74,12 @@ export function AuthProvider(props: { children: JSX.Element }) {
   const checkAuth = async (tkn?: string) => {
     const token = tkn || localStorage.getItem("token");
     console.log("[AuthProvider] Checking auth with token:", !!token);
-    if (token) {
-      try {
-        const userId = await db.authenticate(token);
-        console.log("[AuthProvider] Authenticated user:", userId);
-        if (userId) {
-          setUserId(userId.id.toString());
-          localStorage.setItem("token", token);
-          console.log(
-            "[AuthProvider] Auth check successful, userId:",
-            userId.id
-          );
-        }
-      } catch (error) {
-        console.error("[AuthProvider] Auth check failed:", error);
-        localStorage.removeItem("token");
-      }
-    }
-    setIsInitialized(true);
+    setIsLoading(true);
+    try {
+      await db.authenticate(token);
+    } catch (error) {}
     setIsLoading(false);
+    setIsInitialized(true);
   };
 
   // Initialize auth check
