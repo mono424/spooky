@@ -33,7 +33,7 @@ function Layout(props: any) {
           <div class="flex justify-between items-center">
             <h1 class="text-xl font-bold text-gray-900">Thread App</h1>
             <Show
-              when={auth.user()}
+              when={auth.userId()}
               fallback={
                 <button
                   onClick={handleAuthRequired}
@@ -45,7 +45,7 @@ function Layout(props: any) {
             >
               <div class="flex items-center space-x-4">
                 <span class="text-gray-700">
-                  Welcome, {auth.user()!.username}
+                  Welcome, {auth.user()?.username ?? "Guest"}
                 </span>
                 <button
                   onClick={auth.signOut}
@@ -62,7 +62,7 @@ function Layout(props: any) {
       {/* Main Content */}
       <main>
         <Show
-          when={auth.user()}
+          when={auth.userId()}
           fallback={
             <div class="max-w-4xl mx-auto p-4">
               <div class="text-center py-12">

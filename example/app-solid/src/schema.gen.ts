@@ -4,18 +4,6 @@
 export const schema = {
   tables: [
     {
-      name: 'thread' as const,
-      columns: {
-        id: { type: 'string' as const, recordId: true, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
-        content: { type: 'string' as const, optional: false },
-        author: { type: 'string' as const, recordId: true, optional: false },
-        title: { type: 'string' as const, optional: false },
-        comments: { type: 'string' as const, optional: true },
-      },
-      primaryKey: ['id'] as const
-    },
-    {
       name: 'user' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
@@ -31,10 +19,22 @@ export const schema = {
       name: 'comment' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
-        content: { type: 'string' as const, optional: false },
         thread: { type: 'string' as const, recordId: true, optional: false },
         author: { type: 'string' as const, recordId: true, optional: false },
+        content: { type: 'string' as const, optional: false },
         created_at: { type: 'string' as const, dateTime: true, optional: true },
+      },
+      primaryKey: ['id'] as const
+    },
+    {
+      name: 'thread' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
+        author: { type: 'string' as const, recordId: true, optional: false },
+        content: { type: 'string' as const, optional: false },
+        title: { type: 'string' as const, optional: false },
+        comments: { type: 'string' as const, optional: true },
       },
       primaryKey: ['id'] as const
     },
@@ -48,30 +48,6 @@ export const schema = {
   ],
   relationships: [
     {
-      from: 'user' as const,
-      field: 'threads' as const,
-      to: 'thread' as const,
-      cardinality: 'many' as const
-    },
-    {
-      from: 'user' as const,
-      field: 'comments' as const,
-      to: 'comment' as const,
-      cardinality: 'many' as const
-    },
-    {
-      from: 'thread' as const,
-      field: 'author' as const,
-      to: 'user' as const,
-      cardinality: 'one' as const
-    },
-    {
-      from: 'thread' as const,
-      field: 'comments' as const,
-      to: 'comment' as const,
-      cardinality: 'many' as const
-    },
-    {
       from: 'comment' as const,
       field: 'thread' as const,
       to: 'thread' as const,
@@ -82,6 +58,30 @@ export const schema = {
       field: 'author' as const,
       to: 'user' as const,
       cardinality: 'one' as const
+    },
+    {
+      from: 'thread' as const,
+      field: 'author' as const,
+      to: 'user' as const,
+      cardinality: 'one' as const
+    },
+    {
+      from: 'thread' as const,
+      field: 'comments' as const,
+      to: 'comment' as const,
+      cardinality: 'many' as const
+    },
+    {
+      from: 'user' as const,
+      field: 'threads' as const,
+      to: 'thread' as const,
+      cardinality: 'many' as const
+    },
+    {
+      from: 'user' as const,
+      field: 'comments' as const,
+      to: 'comment' as const,
+      cardinality: 'many' as const
     },
   ]
 } as const;
@@ -99,7 +99,7 @@ export const SURQL_SCHEMA = `-- ################################################
 DEFINE ACCESS account ON DATABASE TYPE RECORD
 	SIGNUP ( CREATE user SET username = $username, password = crypto::argon2::generate($password) )
 	SIGNIN ( SELECT * FROM user WHERE username = $username AND crypto::argon2::compare(password, $password) )
-	DURATION FOR TOKEN 15m, FOR SESSION 12h
+	DURATION FOR TOKEN 365d, FOR SESSION 365d
 ;
 
 -- ##################################################################

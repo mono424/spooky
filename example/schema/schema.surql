@@ -4,7 +4,7 @@
 DEFINE ACCESS account ON DATABASE TYPE RECORD
 	SIGNUP ( CREATE user SET username = $username, password = crypto::argon2::generate($password) )
 	SIGNIN ( SELECT * FROM user WHERE username = $username AND crypto::argon2::compare(password, $password) )
-	DURATION FOR TOKEN 15m, FOR SESSION 12h
+	DURATION FOR TOKEN 365d, FOR SESSION 365d
 ;
 
 -- ##################################################################

@@ -4,7 +4,7 @@ import {
   SchemaStructure,
   TableModel,
 } from "@spooky/query-builder";
-import { DatabaseService } from "./index.js";
+import { AuthManagerService, DatabaseService } from "./index.js";
 import { LiveHandler, Uuid } from "surrealdb";
 import { decodeFromSpooky } from "./converter.js";
 import { Logger } from "./logger.js";
@@ -29,6 +29,7 @@ export class QueryManagerService<S extends SchemaStructure> {
   constructor(
     private schema: S,
     private databaseService: DatabaseService,
+    private authManager: AuthManagerService,
     private logger: Logger
   ) {}
 
@@ -279,6 +280,7 @@ export class QueryManagerService<S extends SchemaStructure> {
               "[QueryManager] Remote hydration failed (continuing with local data)",
               error
             );
+            this.authManager.reauthenticate();
           }
 
           this.logger.debug("[QueryManager] Run - Subscribe to remote query", {
@@ -340,7 +342,8 @@ export class QueryManagerService<S extends SchemaStructure> {
 export function createQueryManagerService<S extends SchemaStructure>(
   schema: S,
   databaseService: DatabaseService,
+  authManager: AuthManagerService,
   logger: Logger
 ): QueryManagerService<S> {
-  return new QueryManagerService(schema, databaseService, logger);
+  return new QueryManagerService(schema, databaseService, authManager, logger);
 }

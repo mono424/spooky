@@ -15,6 +15,18 @@ export class AuthManagerService {
     return this.userId;
   }
 
+  async reauthenticate(): Promise<void> {
+    if (!this.token) {
+      throw new Error("No token found");
+    }
+    try {
+      await this.authenticate(this.token);
+    } catch (error) {
+      this.deauthenticate();
+      throw new Error("Failed to reauthenticate", { cause: error });
+    }
+  }
+
   async authenticate(token: string): Promise<RecordId | undefined> {
     const userId = await this.databaseService.authenticate(token);
     this.token = token;

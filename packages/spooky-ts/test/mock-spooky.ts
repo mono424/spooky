@@ -30,6 +30,7 @@ export async function createMockSpooky<S extends SchemaStructure>(
   const queryManager = createQueryManagerService(
     config.schema,
     databaseService,
+    authManager,
     logger
   );
   const mutationManager = createMutationManagerService(
