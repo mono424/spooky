@@ -122,7 +122,7 @@ export class InnerQuery<
     this._hash = this._selectQuery.hash;
 
     this._selectLiveQuery = buildQueryFromOptions(
-      "LIVE SELECT DIFF",
+      "LIVE SELECT",
       this._tableName,
       this.options,
       this.schema

@@ -16,6 +16,7 @@ export const GlobalQueryEventTypes = {
   Updated: "QUERY_UPDATED",
   RemoteUpdate: "QUERY_REMOTE_UPDATE",
   Destroyed: "QUERY_DESTROYED",
+  RemoteLiveUpdate: "QUERY_REMOTE_LIVE_UPDATE",
 } as const;
 
 export type SpookyEventTypeMap = {
@@ -63,6 +64,14 @@ export type SpookyEventTypeMap = {
       subqueryHash: number;
     }
   >;
+  [GlobalQueryEventTypes.RemoteLiveUpdate]: EventDefinition<
+    typeof GlobalQueryEventTypes.RemoteLiveUpdate,
+    {
+      queryHash: number;
+      action: "CREATE" | "UPDATE" | "DELETE" | "CLOSE";
+      update: Record<string, unknown>;
+    }
+  >;
 };
 
 export type SpookyEventSystem = EventSystem<SpookyEventTypeMap>;
@@ -76,5 +85,6 @@ export function createSpookyEventSystem(): SpookyEventSystem {
     GlobalQueryEventTypes.RemoteUpdate,
     GlobalQueryEventTypes.Destroyed,
     GlobalQueryEventTypes.SubqueryUpdated,
+    GlobalQueryEventTypes.RemoteLiveUpdate,
   ]);
 }

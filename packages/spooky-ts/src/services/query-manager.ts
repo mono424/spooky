@@ -11,7 +11,7 @@ import {
   QueryEventTypes,
   GlobalQueryEventTypes,
 } from "./index.js";
-import { LiveHandler, Uuid } from "surrealdb";
+import { LiveHandler, RecordId, Uuid } from "surrealdb";
 import { decodeFromSpooky } from "./converter.js";
 import { Logger } from "./logger.js";
 import {
@@ -78,6 +78,17 @@ export class QueryManagerService<S extends SchemaStructure> {
     this.eventSystem.subscribe(GlobalQueryEventTypes.RequestInit, (event) => {
       this.initQuery(event.payload.queryHash);
     });
+
+    this.eventSystem.subscribe(
+      GlobalQueryEventTypes.RemoteLiveUpdate,
+      (event) => {
+        this.handleRemoteUpdate(
+          event.payload.queryHash,
+          event.payload.action,
+          event.payload.update
+        );
+      }
+    );
   }
 
   /**
@@ -186,6 +197,45 @@ export class QueryManagerService<S extends SchemaStructure> {
     });
   }
 
+  private async triggerQueryUpdate<
+    T extends { columns: Record<string, ColumnSchema> }
+  >(queryHash: number): Promise<void> {
+    const query = this.cache[queryHash];
+    if (!query) {
+      this.logger.error(
+        "[QueryManager] Trigger Query Update - Query not found",
+        {
+          queryHash: queryHash,
+        }
+      );
+      return;
+    }
+
+    const results = await this.databaseService.queryLocal<TableModel<T>[]>(
+      query.innerQuery.selectQuery.query,
+      query.innerQuery.selectQuery.vars
+    );
+    this.logger.debug(
+      "[QueryManager] Remote Query Hydration - Local cache updated",
+      {
+        queryHash,
+        resultLength: results?.length ?? 0,
+      }
+    );
+
+    const decodedResults = results.map((result) =>
+      decodeFromSpooky(this.schema, query.innerQuery.tableName, result)
+    );
+
+    this.eventSystem.addEvent({
+      type: GlobalQueryEventTypes.RemoteUpdate,
+      payload: {
+        queryHash,
+        data: decodedResults,
+      },
+    });
+  }
+
   private async queryRemoteHydration<
     T extends { columns: Record<string, ColumnSchema> }
   >(query: InnerQuery<T, boolean>): Promise<void> {
@@ -230,39 +280,114 @@ export class QueryManagerService<S extends SchemaStructure> {
       "[QueryManager] Remote Query Hydration - Local cache updated",
       {
         queryHash: query.hash,
-        resultLength: results?.length ?? 0,
       }
     );
 
-    const decodedResults = results.map((result) =>
-      decodeFromSpooky(this.schema, query.tableName, result)
+    await this.triggerQueryUpdate(query.hash);
+  }
+
+  private async hydrateRemoteCreateUpdate<
+    T extends { columns: Record<string, ColumnSchema> }
+  >(queryHash: number, record: Record<string, unknown>): Promise<void> {
+    const query = this.cache[queryHash];
+    if (!query) {
+      this.logger.error(
+        "[QueryManager] Hydrate Remote Create Update - Query not found",
+        {
+          queryHash: queryHash,
+        }
+      );
+      return;
+    }
+
+    this.logger.debug(
+      "[QueryManager] Hydrate Remote Create Update - Starting",
+      {
+        queryHash,
+        record,
+      }
     );
 
-    this.eventSystem.addEvent({
-      type: GlobalQueryEventTypes.RemoteUpdate,
-      payload: {
-        queryHash: query.hash,
-        data: decodedResults,
-      },
-    });
+    const hydrateQuery = `UPSERT ${record.id} CONTENT ${this.surrealStringify(
+      query.innerQuery.tableName,
+      record
+    )}`;
+
+    this.logger.debug(
+      "[QueryManager] Remote Query Hydration - Updating local cache",
+      {
+        queryHash,
+        hydrateQuery,
+      }
+    );
+
+    await this.databaseService.queryLocal(hydrateQuery);
+    this.logger.debug(
+      "[QueryManager] Remote Query Hydration - Local cache updated",
+      {
+        queryHash,
+      }
+    );
+
+    await this.triggerQueryUpdate(queryHash);
+  }
+
+  private async hydrateRemoteDelete<
+    T extends { columns: Record<string, ColumnSchema> }
+  >(queryHash: number, record: Record<string, unknown>): Promise<void> {
+    const query = this.cache[queryHash];
+    if (!query) {
+      this.logger.error(
+        "[QueryManager] Hydrate Remote Delete - Query not found",
+        {
+          queryHash: queryHash,
+        }
+      );
+      return;
+    }
+
+    const recordId = record.id as RecordId;
+
+    const hydrateQuery = `DELETE $recordId`;
+
+    this.logger.debug(
+      "[QueryManager] Remote Query Hydration - Updating local cache",
+      {
+        queryHash,
+        hydrateQuery,
+      }
+    );
+
+    await this.databaseService.queryLocal(hydrateQuery, { recordId });
+    this.logger.debug(
+      "[QueryManager] Remote Query Hydration - Local cache updated",
+      {
+        queryHash,
+      }
+    );
+
+    await this.triggerQueryUpdate(queryHash);
   }
 
   private async handleRemoteUpdate<
     T extends { columns: Record<string, ColumnSchema> }
   >(
-    query: InnerQuery<T, boolean>,
+    queryHash: number,
     action: "CREATE" | "UPDATE" | "DELETE" | "CLOSE",
-    result: unknown
+    result: Record<string, unknown>
   ): Promise<void> {
     switch (action) {
       case "CREATE":
         this.logger.debug("[QueryManager] Live Event - Created:", result);
+        await this.hydrateRemoteCreateUpdate(queryHash, result);
         break;
       case "UPDATE":
         this.logger.debug("[QueryManager] Live Event - Updated:", result);
+        await this.hydrateRemoteCreateUpdate(queryHash, result);
         break;
       case "DELETE":
         this.logger.debug("[QueryManager] Live Event - Deleted:", result);
+        await this.hydrateRemoteDelete(queryHash, result);
         break;
       default:
         this.logger.error(
@@ -295,13 +420,16 @@ export class QueryManagerService<S extends SchemaStructure> {
 
     const handler: LiveHandler<Record<string, unknown>> = async (
       action,
-      result
+      update
     ) => {
-      try {
-        await this.handleRemoteUpdate(query, action, result);
-      } catch (error) {
-        this.logger.error("Failed to refresh query after subscription", error);
-      }
+      this.eventSystem.addEvent({
+        type: GlobalQueryEventTypes.RemoteLiveUpdate,
+        payload: {
+          queryHash: query.hash,
+          action: action,
+          update: update as Record<string, unknown>,
+        },
+      });
     };
 
     await this.databaseService.subscribeLiveOfRemote(liveUuid, handler);
