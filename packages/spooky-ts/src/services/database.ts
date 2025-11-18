@@ -1,4 +1,4 @@
-import { RecordId, Surreal, Uuid } from "surrealdb";
+import { LiveHandler, RecordId, Surreal, Uuid } from "surrealdb";
 import { Logger } from "./logger.js";
 
 export class LocalDatabaseError extends Error {
@@ -35,7 +35,14 @@ export interface DatabaseService {
   queryLocal: <T>(sql: string, vars?: Record<string, unknown>) => Promise<T>;
   queryInternal: <T>(sql: string, vars?: Record<string, unknown>) => Promise<T>;
   queryRemote: <T>(sql: string, vars?: Record<string, unknown>) => Promise<T>;
-  liveOfRemote: (liveUuid: Uuid) => Promise<any>;
+  subscribeLiveOfRemote: (
+    liveUuid: Uuid,
+    callback: LiveHandler<Record<string, unknown>>
+  ) => Promise<any>;
+  unsubscribeLiveOfRemote: (
+    liveUuid: Uuid,
+    callback: LiveHandler<Record<string, unknown>>
+  ) => Promise<any>;
   authenticate: (token: string) => Promise<RecordId | undefined>;
   deauthenticate: () => Promise<void>;
   closeRemote: () => Promise<void>;
@@ -73,13 +80,12 @@ export const makeUseRemoteDatabase = (db: Surreal) => {
 };
 
 export const makeQueryRemoteDatabase = (db: Surreal, logger: Logger) => {
-  return async <T>(
-    sql: string,
-    vars?: Record<string, unknown>
-  ): Promise<T> => {
+  return async <T>(sql: string, vars?: Record<string, unknown>): Promise<T> => {
     try {
       // In surrealdb 1.x, query returns [result] where result is an array of rows
-      const result = vars ? await db.query<T[]>(sql, vars) : await db.query<T[]>(sql);
+      const result = vars
+        ? await db.query<T[]>(sql, vars)
+        : await db.query<T[]>(sql);
       logger.debug("[Database] Query Remote Database - Result", {
         sql,
         vars,
@@ -109,13 +115,12 @@ export const makeQueryRemoteDatabase = (db: Surreal, logger: Logger) => {
 };
 
 export const makeQueryLocalDatabase = (db: Surreal, logger: Logger) => {
-  return async <T>(
-    sql: string,
-    vars?: Record<string, unknown>
-  ): Promise<T> => {
+  return async <T>(sql: string, vars?: Record<string, unknown>): Promise<T> => {
     try {
       // In surrealdb 1.x, query returns [result] where result is an array of rows
-      const result = vars ? await db.query<T[]>(sql, vars) : await db.query<T[]>(sql);
+      const result = vars
+        ? await db.query<T[]>(sql, vars)
+        : await db.query<T[]>(sql);
       logger.debug("[Database] Query Local Database - Result", {
         sql,
         vars,
@@ -144,14 +149,33 @@ export const makeQueryLocalDatabase = (db: Surreal, logger: Logger) => {
   };
 };
 
-export const makeLiveOfRemoteDatabase = (db: Surreal) => {
-  return async (liveUuid: Uuid) => {
+export const makeSubscribeLiveOfRemoteDatabase = (db: Surreal) => {
+  return async (
+    liveUuid: Uuid,
+    callback: LiveHandler<Record<string, unknown>>
+  ) => {
     try {
       // In surrealdb 1.x, it's `live` not `liveOf`, and it takes a string
-      return await db.live(liveUuid.toString());
+      return await db.subscribeLive(liveUuid, callback);
     } catch (error) {
       throw new RemoteDatabaseError(
         "Failed to execute live on remote database",
+        error
+      );
+    }
+  };
+};
+
+export const makeUnsubscribeLiveOfRemoteDatabase = (db: Surreal) => {
+  return async (
+    liveUuid: Uuid,
+    callback: LiveHandler<Record<string, unknown>>
+  ) => {
+    try {
+      return await db.unSubscribeLive(liveUuid, callback);
+    } catch (error) {
+      throw new RemoteDatabaseError(
+        "Failed to unsubscribe from live on remote database",
         error
       );
     }
@@ -164,7 +188,12 @@ export const makeAuthenticateRemoteDatabase = (db: Surreal) => {
       await db.authenticate(token);
       const result = await db.query<{ id: RecordId }[]>(`SELECT id FROM $auth`);
       // In surrealdb 1.x, query returns [result] where result is an array of rows
-      if (result && result.length > 0 && Array.isArray(result[0]) && result[0].length > 0) {
+      if (
+        result &&
+        result.length > 0 &&
+        Array.isArray(result[0]) &&
+        result[0].length > 0
+      ) {
         return result[0][0]?.id;
       }
       return undefined;
@@ -195,10 +224,7 @@ export const makeCloseRemoteDatabase = (db: Surreal) => {
     try {
       await db.close();
     } catch (error) {
-      throw new RemoteDatabaseError(
-        "Failed to close remote database",
-        error
-      );
+      throw new RemoteDatabaseError("Failed to close remote database", error);
     }
   };
 };
@@ -208,10 +234,7 @@ export const makeCloseLocalDatabase = (db: Surreal) => {
     try {
       await db.close();
     } catch (error) {
-      throw new LocalDatabaseError(
-        "Failed to close local database",
-        error
-      );
+      throw new LocalDatabaseError("Failed to close local database", error);
     }
   };
 };
@@ -220,11 +243,17 @@ export const makeClearLocalCache = (db: Surreal) => {
   return async (): Promise<void> => {
     try {
       // Get all tables and delete all records from them
-      const result = await db.query<[{ tables: Record<string, unknown> }]>("INFO FOR DB");
+      const result = await db.query<[{ tables: Record<string, unknown> }]>(
+        "INFO FOR DB"
+      );
       // In surrealdb 1.x, query returns [result] where result is an array of rows
-      const info = result && result.length > 0 && Array.isArray(result[0]) && result[0].length > 0 
-        ? result[0][0] as { tables: Record<string, unknown> }
-        : null;
+      const info =
+        result &&
+        result.length > 0 &&
+        Array.isArray(result[0]) &&
+        result[0].length > 0
+          ? (result[0][0] as { tables: Record<string, unknown> })
+          : null;
 
       if (info?.tables) {
         const tableNames = Object.keys(info.tables);
@@ -233,10 +262,7 @@ export const makeClearLocalCache = (db: Surreal) => {
         }
       }
     } catch (error) {
-      throw new LocalDatabaseError(
-        "Failed to clear local cache",
-        error
-      );
+      throw new LocalDatabaseError("Failed to clear local cache", error);
     }
   };
 };

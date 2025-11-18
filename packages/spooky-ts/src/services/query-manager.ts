@@ -5,13 +5,7 @@ import {
   TableModel,
 } from "@spooky/query-builder";
 import { DatabaseService } from "./index.js";
-import { Uuid } from "surrealdb";
-
-// Live message type for surrealdb 1.x (different from 2.x)
-interface LiveMessage {
-  action: "CREATE" | "UPDATE" | "DELETE";
-  value: unknown;
-}
+import { LiveHandler, Uuid } from "surrealdb";
 import { decodeFromSpooky } from "./converter.js";
 import { Logger } from "./logger.js";
 
@@ -71,9 +65,9 @@ export class QueryManagerService<S extends SchemaStructure> {
     return jsonString;
   }
 
-  private async queryLocalRefresh<T extends { columns: Record<string, ColumnSchema> }>(
-    query: InnerQuery<T, boolean>
-  ): Promise<void> {
+  private async queryLocalRefresh<
+    T extends { columns: Record<string, ColumnSchema> }
+  >(query: InnerQuery<T, boolean>): Promise<void> {
     this.logger.debug("[QueryManager] Local Query Refresh - Starting", {
       queryHash: query.hash,
     });
@@ -115,9 +109,9 @@ export class QueryManagerService<S extends SchemaStructure> {
     });
   }
 
-  private async queryRemoteHydration<T extends { columns: Record<string, ColumnSchema> }>(
-    query: InnerQuery<T, boolean>
-  ): Promise<void> {
+  private async queryRemoteHydration<
+    T extends { columns: Record<string, ColumnSchema> }
+  >(query: InnerQuery<T, boolean>): Promise<void> {
     this.logger.debug("[QueryManager] Remote Query Hydration - Starting", {
       queryHash: query.hash,
       query: query.selectQuery.query,
@@ -170,40 +164,34 @@ export class QueryManagerService<S extends SchemaStructure> {
     query.setData(decodedResults.filter((result) => result !== undefined));
   }
 
-  private async handleRemoteUpdate<T extends { columns: Record<string, ColumnSchema> }>(
+  private async handleRemoteUpdate<
+    T extends { columns: Record<string, ColumnSchema> }
+  >(
     query: InnerQuery<T, boolean>,
-    event: LiveMessage
+    action: "CREATE" | "UPDATE" | "DELETE" | "CLOSE",
+    result: unknown
   ): Promise<void> {
-    switch (event.action) {
+    switch (action) {
       case "CREATE":
-        this.logger.debug(
-          "[QueryManager] Live Event - Created:",
-          event.value
-        );
+        this.logger.debug("[QueryManager] Live Event - Created:", result);
         break;
       case "UPDATE":
-        this.logger.debug(
-          "[QueryManager] Live Event - Updated:",
-          event.value
-        );
+        this.logger.debug("[QueryManager] Live Event - Updated:", result);
         break;
       case "DELETE":
-        this.logger.debug(
-          "[QueryManager] Live Event - Deleted:",
-          event.value
-        );
+        this.logger.debug("[QueryManager] Live Event - Deleted:", result);
         break;
       default:
         this.logger.error(
           "[QueryManager] Live Event - failed to handle remote update",
-          event
+          action
         );
     }
   }
 
-  private async subscribeRemoteQuery<T extends { columns: Record<string, ColumnSchema> }>(
-    query: InnerQuery<T, boolean>
-  ): Promise<void> {
+  private async subscribeRemoteQuery<
+    T extends { columns: Record<string, ColumnSchema> }
+  >(query: InnerQuery<T, boolean>): Promise<void> {
     this.logger.debug("[QueryManager] Subscribe Remote Query - Starting", {
       queryHash: query.hash,
       query: query.selectLiveQuery.query,
@@ -222,17 +210,18 @@ export class QueryManagerService<S extends SchemaStructure> {
       }
     );
 
-    const subscription = await this.databaseService.liveOfRemote(liveUuid);
-    subscription.subscribe(async (event: LiveMessage) => {
+    const handler: LiveHandler<Record<string, unknown>> = async (
+      action,
+      result
+    ) => {
       try {
-        await this.handleRemoteUpdate(query, event);
+        await this.handleRemoteUpdate(query, action, result);
       } catch (error) {
-        this.logger.error(
-          "Failed to refresh query after subscription",
-          error
-        );
+        this.logger.error("Failed to refresh query after subscription", error);
       }
-    });
+    };
+
+    await this.databaseService.unsubscribeLiveOfRemote(liveUuid, handler);
 
     this.logger.debug(
       "[QueryManager] Subscribe Remote Query - Subscribed to Live UUID",
@@ -267,10 +256,9 @@ export class QueryManagerService<S extends SchemaStructure> {
             queryHash: query.hash,
           });
 
-          this.logger.debug(
-            "[QueryManager] Run - Refresh query locally",
-            { queryHash: query.hash }
-          );
+          this.logger.debug("[QueryManager] Run - Refresh query locally", {
+            queryHash: query.hash,
+          });
 
           try {
             await this.queryLocalRefresh(query);
@@ -278,10 +266,9 @@ export class QueryManagerService<S extends SchemaStructure> {
             this.logger.error("Failed to refresh query locally", error);
           }
 
-          this.logger.debug(
-            "[QueryManager] Run - Hydrate remote query",
-            { queryHash: query.hash }
-          );
+          this.logger.debug("[QueryManager] Run - Hydrate remote query", {
+            queryHash: query.hash,
+          });
 
           try {
             await this.queryRemoteHydration(query);
@@ -292,10 +279,9 @@ export class QueryManagerService<S extends SchemaStructure> {
             );
           }
 
-          this.logger.debug(
-            "[QueryManager] Run - Subscribe to remote query",
-            { queryHash: query.hash }
-          );
+          this.logger.debug("[QueryManager] Run - Subscribe to remote query", {
+            queryHash: query.hash,
+          });
 
           try {
             await this.subscribeRemoteQuery(query);

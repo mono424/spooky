@@ -190,7 +190,7 @@ export class InnerQuery<
 
   private addListener(listener: InnerQueryListener<T>): () => void {
     this._listeners.push(listener);
-    console.log("addListener", this._hasData);
+    console.log("addListener", this);
     if (this._hasData) {
       listener.callback(this._data);
     }

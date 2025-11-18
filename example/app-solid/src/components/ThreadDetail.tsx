@@ -47,6 +47,8 @@ export function ThreadDetail() {
   );
   const thread = () => threadResult.data;
 
+  console.log("xxxxxxxxx#######", threadResult, thread());
+
   const handleBack = () => {
     navigate("/");
   };
@@ -135,7 +137,7 @@ export function ThreadDetail() {
                         {comment.content}
                       </p>
                       <div class="flex justify-between items-center text-sm text-gray-500">
-                        <span>By {comment.author.username}</span>
+                        <span>By {comment.author}</span>
                         <span>
                           {new Date(
                             comment.created_at ?? 0

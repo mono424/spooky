@@ -9,7 +9,8 @@ import {
   makeCloseLocalDatabase,
   makeCloseRemoteDatabase,
   makeDeauthenticateRemoteDatabase,
-  makeLiveOfRemoteDatabase,
+  makeSubscribeLiveOfRemoteDatabase,
+  makeUnsubscribeLiveOfRemoteDatabase,
   makeQueryLocalDatabase,
   makeQueryRemoteDatabase,
   makeUseLocalDatabase,
@@ -88,9 +89,7 @@ export async function createLocalDatabase(
 
     const duration = (endTime - startTime).toFixed(2);
 
-    logger.info(
-      `[DatabaseService] ✅ Connected successfully! (${duration}ms)`
-    );
+    logger.info(`[DatabaseService] ✅ Connected successfully! (${duration}ms)`);
     logger.info(
       `[DatabaseService] ✅ Local database fully initialized! (${selectedNamespace}/${selectedDatabase})`
     );
@@ -137,7 +136,9 @@ export async function createDatabaseService<S extends SchemaStructure>(
     queryLocal: makeQueryLocalDatabase(localDatabase, logger),
     queryInternal: makeQueryLocalDatabase(internalDatabase, logger),
     queryRemote: makeQueryRemoteDatabase(remoteDatabase, logger),
-    liveOfRemote: makeLiveOfRemoteDatabase(remoteDatabase),
+    subscribeLiveOfRemote: makeSubscribeLiveOfRemoteDatabase(remoteDatabase),
+    unsubscribeLiveOfRemote:
+      makeUnsubscribeLiveOfRemoteDatabase(remoteDatabase),
     authenticate: makeAuthenticateRemoteDatabase(remoteDatabase),
     deauthenticate: makeDeauthenticateRemoteDatabase(remoteDatabase),
     closeRemote: makeCloseRemoteDatabase(remoteDatabase),
