@@ -10,7 +10,7 @@ import {
   Surreal,
 } from "@spooky/spooky-ts";
 
-export { RecordId } from "surrealdb";
+export { RecordId, Uuid } from "surrealdb";
 export type {
   Model,
   GenericModel,

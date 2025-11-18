@@ -42,6 +42,7 @@ export function encodeToSpooky<
   const decoded = { ...record } as any;
   for (const field of Object.keys(table.columns)) {
     const column = table.columns[field] as any;
+    
     if (column.recordId && decoded[field] != null) {
       // Handle both string format ("table:id") and RecordId objects
       if (decoded[field] instanceof RecordId) {
@@ -51,6 +52,18 @@ export function encodeToSpooky<
         // String format, convert to RecordId
         const [tableName, ...idParts] = decoded[field].split(":");
         decoded[field] = new RecordId(tableName, idParts.join(":"));
+      }
+      // If it's neither, leave it as is (might be undefined or null)
+    }
+    
+    // Convert datetime strings to Date objects
+    if (column.dateTime && decoded[field] != null) {
+      if (typeof decoded[field] === "string") {
+        // ISO string format, convert to Date object
+        decoded[field] = new Date(decoded[field]);
+      } else if (decoded[field] instanceof Date) {
+        // Already a Date, keep it as is
+        decoded[field] = decoded[field];
       }
       // If it's neither, leave it as is (might be undefined or null)
     }

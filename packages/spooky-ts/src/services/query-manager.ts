@@ -292,7 +292,7 @@ export class QueryManagerService<S extends SchemaStructure> {
       }
     };
 
-    await this.databaseService.unsubscribeLiveOfRemote(liveUuid, handler);
+    await this.databaseService.subscribeLiveOfRemote(liveUuid, handler);
 
     this.logger.debug(
       "[QueryManager] Subscribe Remote Query - Subscribed to Live UUID",

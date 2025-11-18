@@ -78,7 +78,9 @@ export class MutationManagerService<S extends SchemaStructure> {
     id: RecordId,
     payload: TableModel<GetTable<S, N>>
   ): string {
+    // Always exclude 'id' from SET clause since it's specified in CREATE statement
     const setQuery = Object.entries(payload)
+      .filter(([key]) => key !== "id")
       .map(([key, value]) => `${key} = $${key}`)
       .join(", ");
 
@@ -89,16 +91,39 @@ export class MutationManagerService<S extends SchemaStructure> {
   private async createMutation<N extends TableNames<S>>(
     mutation: Mutation<S, N>
   ): Promise<Mutation<S, N>> {
-    const [result] = await this.databaseService.queryInternal<{ id: RecordId }[]>(
-      `CREATE _mutations CONTENT $payload`,
-      {
-        payload: mutation,
-      }
-    );
-    return {
+    const results = await this.databaseService.queryInternal<
+      { id: RecordId }[]
+    >(`CREATE _mutations CONTENT $payload`, {
+      payload: mutation,
+    });
+
+    this.logger.debug("[MutationManager] Create mutation - Result", {
+      results,
+      resultsLength: results?.length,
+    });
+
+    if (!results || results.length === 0) {
+      throw new Error("Failed to create mutation: no result returned");
+    }
+
+    const result = results[0];
+    if (!result || !result.id) {
+      this.logger.error("[MutationManager] Create mutation - Invalid result", {
+        result,
+      });
+      throw new Error("Failed to create mutation: invalid result structure");
+    }
+
+    const mutationWithId = {
       ...mutation,
       id: result.id,
     };
+
+    this.logger.debug("[MutationManager] Create mutation - Success", {
+      mutationId: mutationWithId.id,
+    });
+
+    return mutationWithId;
   }
 
   private async mutationApplyLocal<N extends TableNames<S>>(
@@ -111,9 +136,11 @@ export class MutationManagerService<S extends SchemaStructure> {
     switch (mutation.operationType) {
       case "create":
         const q = this.buildCreateQuery(mutation.recordId, mutation.data);
+        // Always filter out 'id' from variables since it's not in the SET clause
+        const { id: _, ...dataWithoutId } = mutation.data as any;
         await this.databaseService.queryLocal<TableModel<GetTable<S, N>>[]>(
           q,
-          mutation.data
+          dataWithoutId
         );
         break;
 
@@ -153,14 +180,16 @@ export class MutationManagerService<S extends SchemaStructure> {
     switch (mutation.operationType) {
       case "create":
         const q = this.buildCreateQuery(mutation.recordId, mutation.data);
+        // Always filter out 'id' from variables since it's not in the SET clause
+        const { id: _, ...dataWithoutId } = mutation.data as any;
         this.logger.debug("[MutationManager] Create remote", {
           id: mutation.id,
           query: q,
-          data: mutation.data,
+          data: dataWithoutId,
         });
         await this.databaseService.queryRemote<TableModel<GetTable<S, N>>[]>(
           q,
-          mutation.data
+          dataWithoutId
         );
         break;
 
@@ -222,31 +251,43 @@ export class MutationManagerService<S extends SchemaStructure> {
   private async run<N extends TableNames<S>>(
     mutation: Mutation<S, N>
   ): Promise<void> {
-    this.logger.debug("[MutationManager] Run - Starting");
+    this.logger.debug("[MutationManager] Run - Starting", {
+      recordId: mutation.recordId.toString(),
+      operationType: mutation.operationType,
+    });
 
+    let mutationWithId: Mutation<S, N>;
     try {
-      await this.createMutation(mutation);
+      mutationWithId = await this.createMutation(mutation);
+      this.logger.debug("[MutationManager] Run - Mutation created with ID", {
+        mutationId: mutationWithId.id?.toString(),
+      });
     } catch (error) {
       this.logger.error("Failed to create mutation", error);
+      throw error;
     }
 
     try {
-      await this.mutationApplyLocal(mutation);
+      await this.mutationApplyLocal(mutationWithId);
     } catch (error) {
       this.logger.error("Failed to apply mutation locally", error);
+      throw error;
     }
 
     await this.queryManagerService.refreshTableQueries(mutation.tableName);
 
     try {
-      await this.runWithRetry(mutation);
+      await this.runWithRetry(mutationWithId);
     } catch (error) {
       this.logger.error("Failed to apply mutation remotely", error);
+      throw error;
     }
 
     await this.queryManagerService.refreshTableQueries(mutation.tableName);
 
-    this.logger.debug("[MutationManager] Run - Done");
+    this.logger.debug("[MutationManager] Run - Done", {
+      mutationId: mutationWithId.id?.toString(),
+    });
   }
 
   async create<N extends TableNames<S>>(
@@ -258,9 +299,32 @@ export class MutationManagerService<S extends SchemaStructure> {
       throw new Error("payload could not be encoded");
     }
 
-    const id = generateNewId(tableName);
-    if (!id) {
-      throw new Error("id could not be generated");
+    // Check if payload has an 'id' field
+    const hasId =
+      encodedPayload &&
+      typeof encodedPayload === "object" &&
+      "id" in encodedPayload &&
+      encodedPayload.id != null;
+
+    let id: RecordId;
+    if (hasId) {
+      // Use the ID from the payload
+      const payloadId = (encodedPayload as any).id;
+      if (payloadId instanceof RecordId) {
+        id = payloadId;
+      } else if (typeof payloadId === "string") {
+        // Parse string format "table:id"
+        const [tb, ...idParts] = payloadId.split(":");
+        id = new RecordId(tb, idParts.join(":"));
+      } else {
+        throw new Error("Invalid id format in payload");
+      }
+    } else {
+      // Generate a new ID
+      id = generateNewId(tableName);
+      if (!id) {
+        throw new Error("id could not be generated");
+      }
     }
 
     return this.run<N>({
