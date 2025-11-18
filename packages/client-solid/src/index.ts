@@ -9,7 +9,6 @@ import {
   createSpooky,
   Surreal,
 } from "@spooky/spooky-ts";
-export type { RecordResult } from "surrealdb";
 
 export { RecordId } from "surrealdb";
 export type {
@@ -19,6 +18,8 @@ export type {
   ModelPayload,
 } from "./lib/models";
 export { useQuery } from "./lib/use-query";
+
+export { AuthEventTypes } from "@spooky/spooky-ts";
 
 // Re-export query builder types for convenience
 export type {
@@ -49,6 +50,11 @@ export class SyncedDb<const Schema extends SchemaStructure> {
 
   constructor(config: SyncedDbConfig<Schema>) {
     this.config = config;
+  }
+
+  public getSpooky(): Awaited<ReturnType<typeof createSpooky<Schema>>> {
+    if (!this.spooky) throw new Error("SyncedDb not initialized");
+    return this.spooky;
   }
 
   /**

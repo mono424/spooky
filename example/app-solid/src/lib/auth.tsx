@@ -1,14 +1,12 @@
-import {
-  createContext,
-  useContext,
-  createSignal,
-  JSX,
-  Show,
-  createEffect,
-} from "solid-js";
+import { createContext, useContext, createSignal, JSX, Show } from "solid-js";
 import { db, dbConfig } from "../db";
 import { schema } from "../schema.gen";
-import { type GetTable, type TableModel, useQuery } from "@spooky/client-solid";
+import {
+  AuthEventTypes,
+  type GetTable,
+  type TableModel,
+  useQuery,
+} from "@spooky/client-solid";
 
 type User = TableModel<GetTable<typeof schema, "user">>;
 
@@ -24,9 +22,21 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType>();
 
 export function AuthProvider(props: { children: JSX.Element }) {
+  const spooky = db.getSpooky();
   const [userId, setUserId] = createSignal<string | null>(null);
   const [isLoading, setIsLoading] = createSignal(true);
   const [isInitialized, setIsInitialized] = createSignal(false);
+
+  spooky.subscribe(AuthEventTypes.Authenticated, (event) => {
+    setUserId(event.payload.userId.toString());
+    setIsInitialized(true);
+    setIsLoading(false);
+  });
+  spooky.subscribe(AuthEventTypes.Deauthenticated, () => {
+    setUserId(null);
+    setIsInitialized(true);
+    setIsLoading(false);
+  });
 
   // Only run query after auth is initialized and userId is available
   const userQuery = useQuery(
