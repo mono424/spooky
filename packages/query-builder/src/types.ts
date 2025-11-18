@@ -71,10 +71,11 @@ export type QueryModifier<TModel extends GenericModel> = (
 // Schema-aware query modifier that knows about relationships
 export type SchemaAwareQueryModifier<
   S extends SchemaStructure,
-  TableName extends TableNames<S>
+  TableName extends TableNames<S>,
+  RelatedFields extends Record<string, any> = {}
 > = (
-  builder: SchemaAwareQueryModifierBuilder<S, TableName>
-) => SchemaAwareQueryModifierBuilder<S, TableName>;
+  builder: SchemaAwareQueryModifierBuilder<S, TableName, RelatedFields>
+) => SchemaAwareQueryModifierBuilder<S, TableName, RelatedFields>;
 
 // Simplified query builder interface for modifying subqueries
 export interface QueryModifierBuilder<TModel extends GenericModel> {
@@ -93,7 +94,8 @@ export interface QueryModifierBuilder<TModel extends GenericModel> {
 // Schema-aware query builder interface that understands relationships
 export interface SchemaAwareQueryModifierBuilder<
   S extends SchemaStructure,
-  TableName extends TableNames<S>
+  TableName extends TableNames<S>,
+  RelatedFields extends Record<string, any> = {}
 > {
   where(conditions: Partial<TableModel<GetTable<S, TableName>>>): this;
   select(
@@ -107,11 +109,22 @@ export interface SchemaAwareQueryModifierBuilder<
   ): this;
   related<
     Field extends TableRelationships<S, TableName>["field"],
-    Rel extends GetRelationship<S, TableName, Field>
+    Rel extends GetRelationship<S, TableName, Field>,
+    RelatedFields2 extends Record<string, any> = {}
   >(
     relatedField: Field,
-    modifier?: SchemaAwareQueryModifier<S, Rel["to"]>
-  ): this;
+    modifier?: SchemaAwareQueryModifier<S, Rel["to"], RelatedFields2>
+  ): SchemaAwareQueryModifierBuilder<
+    S,
+    TableName,
+    RelatedFields & {
+      [K in Field]: {
+        to: Rel["to"];
+        cardinality: Rel["cardinality"];
+        relatedFields: {};
+      };
+    }
+  >;
   _getOptions(): QueryOptions<TableModel<GetTable<S, TableName>>, boolean>;
 }
 

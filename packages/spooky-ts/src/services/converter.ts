@@ -9,7 +9,11 @@ import { Uuid, RecordId } from "surrealdb";
 export function decodeFromSpooky<
   S extends SchemaStructure,
   T extends TableNames<S>
->(schema: S, tableName: T, record: TableModel<GetTable<S, T>>): TableModel<GetTable<S, T>> {
+>(
+  schema: S,
+  tableName: T,
+  record: TableModel<GetTable<S, T>>
+): TableModel<GetTable<S, T>> {
   const table = schema.tables.find((t) => t.name === tableName);
   if (!table) {
     throw new Error(`Table ${tableName} not found in schema`);
@@ -20,11 +24,24 @@ export function decodeFromSpooky<
   for (const field of Object.keys(table.columns)) {
     const column = table.columns[field] as any;
     if (column.recordId && encoded[field] != null) {
-      const recordId = encoded[field] as RecordId;
-      // In surrealdb 1.x, RecordId has .tb and .id properties
-      encoded[field] = `${recordId.tb}:${recordId.id}`;
+      if (encoded[field] instanceof RecordId) {
+        encoded[field] = `${encoded[field].tb}:${encoded[field].id}`;
+      } else if (encoded[field] instanceof Object) {
+        const relation = schema.relationships.find(
+          (r) => r.from === tableName && r.field === field
+        );
+        if (relation) {
+          encoded[field] = decodeFromSpooky(
+            schema,
+            relation.to,
+            encoded[field]
+          );
+        }
+      }
     }
   }
+
+  console.log("encoded", encoded);
 
   return encoded as TableModel<GetTable<S, T>>;
 }
@@ -42,7 +59,7 @@ export function encodeToSpooky<
   const decoded = { ...record } as any;
   for (const field of Object.keys(table.columns)) {
     const column = table.columns[field] as any;
-    
+
     if (column.recordId && decoded[field] != null) {
       // Handle both string format ("table:id") and RecordId objects
       if (decoded[field] instanceof RecordId) {
@@ -55,7 +72,7 @@ export function encodeToSpooky<
       }
       // If it's neither, leave it as is (might be undefined or null)
     }
-    
+
     // Convert datetime strings to Date objects
     if (column.dateTime && decoded[field] != null) {
       if (typeof decoded[field] === "string") {
