@@ -8,13 +8,15 @@ import {
   TableNames,
 } from "@spooky/query-builder";
 import { RecordId } from "surrealdb";
-import { DatabaseService } from "./services/index.js";
+import { DatabaseService, EventSystem } from "./services/index.js";
 import { AuthManagerService } from "./services/auth-manager.js";
 import { QueryManagerService } from "./services/query-manager.js";
 import { MutationManagerService } from "./services/mutation-manager.js";
 
 export interface SpookyInstance<S extends SchemaStructure> {
-  authenticate: (token: string) => Promise<RecordId | undefined>;
+  subscribe: typeof EventSystem.prototype.subscribe;
+  unsubscribe: typeof EventSystem.prototype.unsubscribe;
+  authenticate: (token: string) => Promise<void>;
   deauthenticate: () => Promise<void>;
   create: <N extends TableNames<S>>(
     tableName: N,
@@ -43,7 +45,8 @@ export async function createSpookyInstance<S extends SchemaStructure>(
   databaseService: DatabaseService,
   authManager: AuthManagerService,
   queryManager: QueryManagerService<S>,
-  mutationManager: MutationManagerService<S>
+  mutationManager: MutationManagerService<S>,
+  eventSystem: EventSystem
 ): Promise<SpookyInstance<S>> {
   const useQuery = <Table extends TableNames<S>>(
     table: Table,
@@ -64,6 +67,8 @@ export async function createSpookyInstance<S extends SchemaStructure>(
   };
 
   return {
+    subscribe: eventSystem.subscribe.bind(eventSystem),
+    unsubscribe: eventSystem.unsubscribe.bind(eventSystem),
     authenticate: authManager.authenticate.bind(authManager),
     deauthenticate: authManager.deauthenticate.bind(authManager),
     create: <N extends TableNames<S>>(
