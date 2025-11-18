@@ -91,6 +91,7 @@ export class InnerQuery<
   IsOne extends boolean
 > {
   private _hash: number;
+  private _mainQuery: QueryInfo;
   private _selectQuery: QueryInfo;
   private _selectLiveQuery: QueryInfo;
   private _subqueries: InnerQuery<
@@ -111,6 +112,13 @@ export class InnerQuery<
       this.schema
     );
 
+    this._mainQuery = buildQueryFromOptions(
+      "SELECT",
+      this._tableName,
+      { ...this.options, related: [] },
+      this.schema
+    );
+
     this._hash = this._selectQuery.hash;
 
     this._selectLiveQuery = buildQueryFromOptions(
@@ -125,6 +133,10 @@ export class InnerQuery<
       this.options,
       this.executor
     );
+  }
+
+  get mainQuery(): QueryInfo {
+    return this._mainQuery;
   }
 
   get subqueries(): InnerQuery<

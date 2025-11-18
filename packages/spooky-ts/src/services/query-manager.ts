@@ -92,11 +92,15 @@ export class QueryManagerService<S extends SchemaStructure> {
 
     // Use a unique placeholder for dates to avoid conflicts
     const DATE_PLACEHOLDER = "__SURREAL_DATE__";
+    const RECORDID_PLACEHOLDER = "__SURREAL_RECORDID__";
 
     // First pass: replace Date objects with placeholders
     const replacer = (key: string, val: unknown): unknown => {
       if (table.columns[key]?.dateTime) {
         return DATE_PLACEHOLDER + val + DATE_PLACEHOLDER;
+      }
+      if (table.columns[key]?.recordId) {
+        return RECORDID_PLACEHOLDER + val + RECORDID_PLACEHOLDER;
       }
       return val;
     };
@@ -108,6 +112,14 @@ export class QueryManagerService<S extends SchemaStructure> {
     jsonString = jsonString.replace(
       new RegExp(`"${DATE_PLACEHOLDER}([^"]+)${DATE_PLACEHOLDER}"`, "g"),
       (match, isoString) => `d"${isoString}"`
+    );
+
+    jsonString = jsonString.replace(
+      new RegExp(
+        `"${RECORDID_PLACEHOLDER}([^"]+)${RECORDID_PLACEHOLDER}"`,
+        "g"
+      ),
+      (match, recordId) => `${recordId}`
     );
 
     return jsonString;
@@ -179,12 +191,12 @@ export class QueryManagerService<S extends SchemaStructure> {
   >(query: InnerQuery<T, boolean>): Promise<void> {
     this.logger.debug("[QueryManager] Remote Query Hydration - Starting", {
       queryHash: query.hash,
-      query: query.selectQuery.query,
+      query: query.mainQuery.query,
     });
 
     const results = await this.databaseService.queryRemote<TableModel<T>[]>(
-      query.selectQuery.query,
-      query.selectQuery.vars
+      query.mainQuery.query,
+      query.mainQuery.vars
     );
 
     this.logger.debug(
