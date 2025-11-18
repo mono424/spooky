@@ -4,4 +4,4 @@ export * from "./auth-manager.js";
 export * from "./query-manager.js";
 export * from "./mutation-manager.js";
 export * from "./logger.js";
-export * from "./event-system.js";
+export * from "./spooky-event-system.js";

@@ -1,11 +1,11 @@
-import { AuthEventTypes, DatabaseService, EventSystem } from "./index.js";
+import { AuthEventTypes, DatabaseService, SpookyEventSystem } from "./index.js";
 
 export class AuthManagerService {
   private token: string = "";
 
   constructor(
     private databaseService: DatabaseService,
-    private eventSystem: EventSystem
+    private eventSystem: SpookyEventSystem
   ) {
     eventSystem.subscribe(AuthEventTypes.Authenticated, (event) => {
       this.token = event.payload.token;
@@ -52,7 +52,7 @@ export class AuthManagerService {
 
 export function createAuthManagerService(
   databaseService: DatabaseService,
-  eventSystem: EventSystem
+  eventSystem: SpookyEventSystem
 ): AuthManagerService {
   return new AuthManagerService(databaseService, eventSystem);
 }

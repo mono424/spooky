@@ -4,7 +4,12 @@ import {
   SchemaStructure,
   TableModel,
 } from "@spooky/query-builder";
-import { AuthManagerService, DatabaseService } from "./index.js";
+import {
+  AuthManagerService,
+  DatabaseService,
+  SpookyEventSystem,
+  QueryEventTypes,
+} from "./index.js";
 import { LiveHandler, Uuid } from "surrealdb";
 import { decodeFromSpooky } from "./converter.js";
 import { Logger } from "./logger.js";
@@ -30,8 +35,25 @@ export class QueryManagerService<S extends SchemaStructure> {
     private schema: S,
     private databaseService: DatabaseService,
     private authManager: AuthManagerService,
-    private logger: Logger
-  ) {}
+    private logger: Logger,
+    private eventSystem: SpookyEventSystem
+  ) {
+    this.eventSystem.subscribe(QueryEventTypes.Updated, (event) => {
+      this.cache[event.payload.queryHash].innerQuery.setData(
+        event.payload.data as any
+      );
+    });
+
+    this.eventSystem.subscribe(QueryEventTypes.RemoteUpdate, (event) => {
+      this.cache[event.payload.queryHash].innerQuery.setData(
+        event.payload.data as any
+      );
+    });
+
+    this.eventSystem.subscribe(QueryEventTypes.RequestInit, (event) => {
+      this.initQuery(event.payload.queryHash);
+    });
+  }
 
   /**
    * Custom JSON.stringify function that formats Date objects as SurrealDB date literals.
@@ -83,11 +105,17 @@ export class QueryManagerService<S extends SchemaStructure> {
       resultLength: results?.length ?? 0,
     });
 
-    const decodedResults = results.map((result) =>
-      decodeFromSpooky(this.schema, query.tableName, result)
-    );
+    const decodedResults = results
+      .map((result) => decodeFromSpooky(this.schema, query.tableName, result))
+      .filter((result) => result !== undefined);
 
-    query.setData(decodedResults.filter((result) => result !== undefined));
+    this.eventSystem.addEvent({
+      type: QueryEventTypes.Updated,
+      payload: {
+        queryHash: query.hash,
+        data: decodedResults,
+      },
+    });
   }
 
   async refreshTableQueries(table: string): Promise<void> {
@@ -162,7 +190,13 @@ export class QueryManagerService<S extends SchemaStructure> {
       decodeFromSpooky(this.schema, query.tableName, result)
     );
 
-    query.setData(decodedResults.filter((result) => result !== undefined));
+    this.eventSystem.addEvent({
+      type: QueryEventTypes.RemoteUpdate,
+      payload: {
+        queryHash: query.hash,
+        data: decodedResults,
+      },
+    });
   }
 
   private async handleRemoteUpdate<
@@ -233,13 +267,90 @@ export class QueryManagerService<S extends SchemaStructure> {
     );
   }
 
+  private async initQuery(queryHash: number): Promise<void> {
+    const query = this.cache[queryHash]?.innerQuery;
+    try {
+      if (!query) {
+        this.logger.error("[QueryManager] Update query - Query not found", {
+          queryHash: queryHash,
+        });
+        return;
+      }
+
+      this.logger.debug("[QueryManager] Run - Initialize query", {
+        queryHash: query.hash,
+      });
+
+      this.logger.debug("[QueryManager] Run - Refresh query locally", {
+        queryHash: query.hash,
+      });
+
+      try {
+        await this.queryLocalRefresh(query);
+      } catch (error) {
+        this.logger.error("Failed to refresh query locally", error);
+      }
+
+      this.logger.debug("[QueryManager] Run - Hydrate remote query", {
+        queryHash: query.hash,
+      });
+
+      try {
+        await this.queryRemoteHydration(query);
+      } catch (error) {
+        this.logger.warn(
+          "[QueryManager] Remote hydration failed (continuing with local data)",
+          error
+        );
+        this.authManager.reauthenticate();
+      }
+
+      this.logger.debug("[QueryManager] Run - Subscribe to remote query", {
+        queryHash: query.hash,
+      });
+
+      try {
+        await this.subscribeRemoteQuery(query);
+      } catch (error) {
+        this.logger.warn(
+          "[QueryManager] Remote subscription failed (continuing with local data)",
+          error
+        );
+      }
+
+      this.logger.debug(
+        "[QueryManager] Run - Initialize subqueries",
+        query.hash
+      );
+
+      for (const subquery of query.subqueries) {
+        const unsubscribe = subquery.subscribe(async () => {
+          try {
+            await this.queryLocalRefresh(query);
+          } catch (error) {
+            this.logger.error(
+              "Failed to refresh query after subscription",
+              error
+            );
+          }
+        });
+
+        const previousCleanup = this.cache[query.hash].cleanup;
+        this.cache[query.hash].cleanup = () => {
+          previousCleanup();
+          unsubscribe();
+        };
+
+        await this.run(subquery);
+      }
+    } catch (error) {
+      this.logger.error("Failed to initialize query", error);
+    }
+  }
+
   run<T extends { columns: Record<string, ColumnSchema> }>(
     query: InnerQuery<T, boolean>
   ): { cachedQuery: InnerQuery<T, boolean> | null; cleanup: CleanupFn } {
-    this.logger.debug("[QueryManager] Run - Starting", {
-      queryHash: query.hash,
-    });
-
     const cacheHit = this.cache[query.hash];
 
     if (!cacheHit) {
@@ -252,79 +363,13 @@ export class QueryManagerService<S extends SchemaStructure> {
         cleanup: () => {},
       };
 
-      // Run initialization asynchronously
-      (async () => {
-        try {
-          this.logger.debug("[QueryManager] Run - Initialize query", {
-            queryHash: query.hash,
-          });
+      this.eventSystem.addEvent({
+        type: QueryEventTypes.RequestInit,
+        payload: {
+          queryHash: query.hash,
+        },
+      });
 
-          this.logger.debug("[QueryManager] Run - Refresh query locally", {
-            queryHash: query.hash,
-          });
-
-          try {
-            await this.queryLocalRefresh(query);
-          } catch (error) {
-            this.logger.error("Failed to refresh query locally", error);
-          }
-
-          this.logger.debug("[QueryManager] Run - Hydrate remote query", {
-            queryHash: query.hash,
-          });
-
-          try {
-            await this.queryRemoteHydration(query);
-          } catch (error) {
-            this.logger.warn(
-              "[QueryManager] Remote hydration failed (continuing with local data)",
-              error
-            );
-            this.authManager.reauthenticate();
-          }
-
-          this.logger.debug("[QueryManager] Run - Subscribe to remote query", {
-            queryHash: query.hash,
-          });
-
-          try {
-            await this.subscribeRemoteQuery(query);
-          } catch (error) {
-            this.logger.warn(
-              "[QueryManager] Remote subscription failed (continuing with local data)",
-              error
-            );
-          }
-
-          this.logger.debug(
-            "[QueryManager] Run - Initialize subqueries",
-            query.hash
-          );
-
-          for (const subquery of query.subqueries) {
-            const unsubscribe = subquery.subscribe(async () => {
-              try {
-                await this.queryLocalRefresh(query);
-              } catch (error) {
-                this.logger.error(
-                  "Failed to refresh query after subscription",
-                  error
-                );
-              }
-            });
-
-            const previousCleanup = this.cache[query.hash].cleanup;
-            this.cache[query.hash].cleanup = () => {
-              previousCleanup();
-              unsubscribe();
-            };
-
-            await this.run(subquery);
-          }
-        } catch (error) {
-          this.logger.error("Failed to initialize query", error);
-        }
-      })();
       return {
         cachedQuery: null,
         cleanup: this.cache[query.hash].cleanup,
@@ -343,7 +388,14 @@ export function createQueryManagerService<S extends SchemaStructure>(
   schema: S,
   databaseService: DatabaseService,
   authManager: AuthManagerService,
-  logger: Logger
+  logger: Logger,
+  eventSystem: SpookyEventSystem
 ): QueryManagerService<S> {
-  return new QueryManagerService(schema, databaseService, authManager, logger);
+  return new QueryManagerService(
+    schema,
+    databaseService,
+    authManager,
+    logger,
+    eventSystem
+  );
 }
