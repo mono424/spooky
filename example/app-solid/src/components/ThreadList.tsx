@@ -14,7 +14,7 @@ export function ThreadList() {
       .limit(100)
       .buildCustom()
   );
-  const threads = () => threadsResult.data || [];
+  const threads = () => threadsResult.data() || [];
 
   const handleThreadClick = (threadId: string) => {
     navigate(`/thread/${threadId}`);

@@ -65,16 +65,13 @@ export function useQuery<
     });
   });
 
+  const isLoading = () => {
+    return data() === undefined && error() === undefined;
+  };
+
   return {
-    get data() {
-      return data();
-    },
-    get error() {
-      return error();
-    },
-    get isLoading() {
-      const enabled = options?.enabled?.() ?? true;
-      return enabled && data() === undefined && error() === undefined;
-    },
+    data,
+    error,
+    isLoading,
   };
 }

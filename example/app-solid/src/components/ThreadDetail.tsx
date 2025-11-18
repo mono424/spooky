@@ -27,7 +27,6 @@ const createQuery = ({
       }
       return q;
     })
-    .one()
     .buildCustom();
 };
 
@@ -45,9 +44,7 @@ export function ThreadDetail() {
       userId: auth.user()?.id ?? "",
     })
   );
-  const thread = () => threadResult.data;
-
-  console.log("xxxxxxxxx#######", threadResult, thread());
+  const thread = () => threadResult.data()?.[0];
 
   const handleBack = () => {
     navigate("/");
