@@ -73,6 +73,8 @@ export function AuthProvider(props: { children: JSX.Element }) {
     const token = tkn || localStorage.getItem("token");
     console.log("[AuthProvider] Checking auth with token:", !!token);
     if (!token) {
+      setIsLoading(false);
+      setIsInitialized(true);
       return;
     }
     setIsLoading(true);
