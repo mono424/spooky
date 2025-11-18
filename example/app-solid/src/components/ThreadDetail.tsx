@@ -4,7 +4,6 @@ import { db } from "../db";
 import { CommentForm } from "./CommentForm";
 import { useQuery } from "@spooky/client-solid";
 import { useAuth } from "../lib/auth";
-import { queryClient } from "../query-client";
 
 const createQuery = ({
   threadId,
@@ -17,7 +16,6 @@ const createQuery = ({
 }) => {
   return db
     .query("thread")
-    .related("comments")
     .where({
       id: threadId,
     })
@@ -40,14 +38,12 @@ export function ThreadDetail() {
   const [commentFilter, setCommentFilter] = createSignal<"all" | "mine">("all");
 
   // Create query as an accessor function that re-runs when dependencies change
-  const threadResult = useQuery(
-    () =>
-      createQuery({
-        threadId: params.id,
-        commentFilter: commentFilter(),
-        userId: auth.user()?.id ?? "",
-      }),
-    () => queryClient
+  const threadResult = useQuery(() =>
+    createQuery({
+      threadId: params.id,
+      commentFilter: commentFilter(),
+      userId: auth.user()?.id ?? "",
+    })
   );
   const thread = () => threadResult.data;
 

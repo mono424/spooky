@@ -3,24 +3,24 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "properties": {
+    "commented_on": {
+      "$ref": "#/definitions/commented_on"
+    },
     "user": {
       "$ref": "#/definitions/user"
     },
     "comment": {
       "$ref": "#/definitions/comment"
     },
-    "commented_on": {
-      "$ref": "#/definitions/commented_on"
-    },
     "thread": {
       "$ref": "#/definitions/thread"
     }
   },
   "required": [
-    "user",
-    "comment",
     "commented_on",
-    "thread"
+    "user",
+    "thread",
+    "comment"
   ],
   "definitions": {
     "user": {
@@ -28,30 +28,41 @@
       "properties": {
         "id": {
           "type": "string",
-          "description": "Record ID"
+          "description": "Record ID",
+          "x-is-record-id": true
         },
         "username": {
           "type": "string",
           "description": "Assert: $value != NONE AND string::is::alphanum($value) AND string::len($value) > 3"
         },
-        "created_at": {
-          "type": "string",
-          "format": "date-time"
-        },
         "password": {
           "type": "string",
           "description": "Assert: $value != NONE AND string::len($value) > 0"
         },
-        "comments": {
-          "type": [
-            "array",
-            "null"
-          ],
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "x-is-datetime": true
+        },
+        "threads": {
+          "type": "array",
           "items": {
             "type": "string",
-            "description": "Record ID of table: commented_on",
-            "pattern": "^commented_on:"
-          }
+            "description": "Record ID of table: thread",
+            "x-is-record-id": true
+          },
+          "description": "Reverse relationship: array of thread records",
+          "x-is-reverse-relationship": true
+        },
+        "comments": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "description": "Record ID of table: comment",
+            "x-is-record-id": true
+          },
+          "description": "Reverse relationship: array of comment records",
+          "x-is-reverse-relationship": true
         }
       },
       "required": [
@@ -61,80 +72,23 @@
       ],
       "additionalProperties": false
     },
-    "RelationTables": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "description": "The name of the relation table"
-          },
-          "from": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The source table for this relation"
-          },
-          "to": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The target table for this relation"
-          }
-        },
-        "required": [
-          "name"
-        ]
-      },
-      "const": [
-        {
-          "name": "commented_on",
-          "from": "comment",
-          "to": "thread"
-        }
-      ]
-    },
-    "comment": {
+    "commented_on": {
       "type": "object",
       "properties": {
         "id": {
           "type": "string",
-          "description": "Record ID"
-        },
-        "content": {
-          "type": "string",
-          "description": "Assert: $value != NONE AND string::len($value) > 0"
-        },
-        "thread": {
-          "type": "string",
-          "description": "Record ID of table: thread",
-          "pattern": "^thread:"
-        },
-        "author": {
-          "type": "string",
-          "description": "Record ID of table: user",
-          "pattern": "^user:"
-        },
-        "created_at": {
-          "type": "string",
-          "format": "date-time"
+          "description": "Record ID",
+          "x-is-record-id": true
         }
       },
       "required": [
-        "id",
-        "content",
-        "thread",
-        "author"
-      ],
-      "additionalProperties": false
+        "id"
+      ]
     },
     "Relationships": {
       "type": "object",
       "properties": {
-        "user": {
+        "thread": {
           "type": "array",
           "items": {
             "type": "object",
@@ -174,7 +128,7 @@
             ]
           }
         },
-        "thread": {
+        "user": {
           "type": "array",
           "items": {
             "type": "object",
@@ -196,16 +150,58 @@
         }
       }
     },
+    "RelationTables": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The name of the relation table"
+          },
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The source table for this relation"
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The target table for this relation"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "const": [
+        {
+          "name": "commented_on",
+          "from": "comment",
+          "to": "thread"
+        }
+      ]
+    },
     "thread": {
       "type": "object",
       "properties": {
         "id": {
           "type": "string",
-          "description": "Record ID"
+          "description": "Record ID",
+          "x-is-record-id": true
         },
         "content": {
           "type": "string",
           "description": "Assert: $value != NONE AND string::len($value) > 0"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "x-is-datetime": true
         },
         "title": {
           "type": "string",
@@ -214,22 +210,18 @@
         "author": {
           "type": "string",
           "description": "Record ID of table: user",
-          "pattern": "^user:"
+          "pattern": "^user:",
+          "x-is-record-id": true
         },
         "comments": {
-          "type": [
-            "array",
-            "null"
-          ],
+          "type": "array",
           "items": {
             "type": "string",
-            "description": "Record ID of table: commented_on",
-            "pattern": "^commented_on:"
-          }
-        },
-        "created_at": {
-          "type": "string",
-          "format": "date-time"
+            "description": "Record ID of table: comment",
+            "x-is-record-id": true
+          },
+          "description": "Reverse relationship: array of comment records",
+          "x-is-reverse-relationship": true
         }
       },
       "required": [
@@ -240,17 +232,43 @@
       ],
       "additionalProperties": false
     },
-    "commented_on": {
+    "comment": {
       "type": "object",
       "properties": {
         "id": {
           "type": "string",
-          "description": "Record ID"
+          "description": "Record ID",
+          "x-is-record-id": true
+        },
+        "thread": {
+          "type": "string",
+          "description": "Record ID of table: thread",
+          "pattern": "^thread:",
+          "x-is-record-id": true
+        },
+        "author": {
+          "type": "string",
+          "description": "Record ID of table: user",
+          "pattern": "^user:",
+          "x-is-record-id": true
+        },
+        "content": {
+          "type": "string",
+          "description": "Assert: $value != NONE AND string::len($value) > 0"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "x-is-datetime": true
         }
       },
       "required": [
-        "id"
-      ]
+        "id",
+        "thread",
+        "author",
+        "content"
+      ],
+      "additionalProperties": false
     }
   }
 }

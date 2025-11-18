@@ -2,20 +2,17 @@ import { For } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { db } from "../db";
 import { useQuery } from "@spooky/client-solid";
-import { queryClient } from "../query-client";
 
 export function ThreadList() {
   const navigate = useNavigate();
 
-  const threadsResult = useQuery(
-    () =>
-      db
-        .query("thread")
-        .related("author")
-        .orderBy("created_at", "desc")
-        .limit(100)
-        .build(),
-    () => queryClient
+  const threadsResult = useQuery(() =>
+    db
+      .query("thread")
+      .related("author")
+      .orderBy("created_at", "desc")
+      .limit(100)
+      .buildCustom()
   );
   const threads = () => threadsResult.data || [];
 

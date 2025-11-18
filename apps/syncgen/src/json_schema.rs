@@ -46,6 +46,41 @@ impl JsonSchemaGenerator {
             }
         }
 
+        // Build reverse relationships
+        // For each relationship A.field -> B, create a reverse relationship B.reverse_field -> A[]
+        for (from_table, table_schema) in &parser.tables {
+            for rel in &table_schema.relationships {
+                let to_table = &rel.related_table;
+                
+                // Skip if the target table doesn't exist (shouldn't happen, but be safe)
+                if !parser.tables.contains_key(to_table) {
+                    continue;
+                }
+                
+                // Generate reverse field name (pluralize the source table name)
+                let reverse_field_name = Self::pluralize_table_name(from_table);
+                
+                // Check if this reverse relationship already exists (avoid duplicates)
+                let reverse_rels = relationships.entry(to_table.clone()).or_insert_with(Vec::new);
+                let already_exists = reverse_rels.iter().any(|r| {
+                    if let Some(field) = r.get("field").and_then(|f| f.as_str()) {
+                        field == reverse_field_name
+                    } else {
+                        false
+                    }
+                });
+                
+                if !already_exists {
+                    reverse_rels.push(json!({
+                        "field": reverse_field_name,
+                        "table": from_table,
+                        "is_reverse": true,
+                        "cardinality": "many"
+                    }));
+                }
+            }
+        }
+
         // Build relation tables map (from TYPE RELATION definitions)
         let mut relation_tables: Vec<Value> = Vec::new();
         for (table_name, table_schema) in &parser.tables {
@@ -123,7 +158,20 @@ impl JsonSchemaGenerator {
         }
 
         for (table_name, table_schema) in &parser.tables {
-            let definition = self.generate_table_definition(table_schema);
+            // Get reverse relationships for this table
+            let reverse_rels = relationships.get(table_name)
+                .and_then(|rels| {
+                    let reverse: Vec<&Value> = rels.iter()
+                        .filter(|r| r.get("is_reverse").and_then(|v| v.as_bool()).unwrap_or(false))
+                        .collect();
+                    if reverse.is_empty() {
+                        None
+                    } else {
+                        Some(reverse)
+                    }
+                });
+
+            let definition = self.generate_table_definition(table_schema, reverse_rels);
             definitions.insert(table_name.clone(), definition);
 
             // Add a property that references the definition
@@ -147,7 +195,7 @@ impl JsonSchemaGenerator {
         }
     }
 
-    fn generate_table_definition(&self, table: &TableSchema) -> Value {
+    fn generate_table_definition(&self, table: &TableSchema, reverse_rels: Option<Vec<&Value>>) -> Value {
         let mut properties = serde_json::Map::new();
         let mut required_fields = Vec::new();
 
@@ -202,6 +250,31 @@ impl JsonSchemaGenerator {
                 // If there's no VALUE clause and field is not optional, it's required
                 if field_def.value.is_none() {
                     required_fields.push(field_name.clone());
+                }
+            }
+        }
+
+        // Add reverse relationship fields as virtual fields (for code generation)
+        if let Some(reverse_rels) = reverse_rels {
+            for rel in reverse_rels {
+                if let Some(field_name) = rel.get("field").and_then(|f| f.as_str()) {
+                    if let Some(related_table) = rel.get("table").and_then(|t| t.as_str()) {
+                        // Add as an array field (reverse relationships are always many-to-one from the target's perspective)
+                        properties.insert(
+                            field_name.to_string(),
+                            json!({
+                                "type": "array",
+                                "items": {
+                                    "type": "string",
+                                    "description": format!("Record ID of table: {}", related_table),
+                                    "x-is-record-id": true
+                                },
+                                "description": format!("Reverse relationship: array of {} records", related_table),
+                                "x-is-reverse-relationship": true
+                            })
+                        );
+                        // Reverse relationship fields are optional (not in required_fields)
+                    }
                 }
             }
         }
@@ -307,6 +380,41 @@ impl JsonSchemaGenerator {
             FieldType::Option(inner) => Self::is_field_datetime(inner),
             FieldType::Array(inner) => Self::is_field_datetime(inner),
             _ => false,
+        }
+    }
+
+    /// Pluralize a table name for reverse relationship field names
+    /// Simple pluralization: add 's' or 'es' based on common rules
+    fn pluralize_table_name(table_name: &str) -> String {
+        // Handle common irregular plurals
+        match table_name {
+            "user" => "users".to_string(),
+            "person" => "people".to_string(),
+            "child" => "children".to_string(),
+            "mouse" => "mice".to_string(),
+            _ => {
+                // Simple pluralization rules
+                if table_name.ends_with('s') || table_name.ends_with("sh") || 
+                   table_name.ends_with("ch") || table_name.ends_with('x') || 
+                   table_name.ends_with('z') {
+                    format!("{}es", table_name)
+                } else if table_name.ends_with('y') && table_name.len() > 1 {
+                    // Check if the letter before 'y' is a consonant
+                    let chars: Vec<char> = table_name.chars().collect();
+                    let second_last = chars[chars.len() - 2];
+                    if !matches!(second_last, 'a' | 'e' | 'i' | 'o' | 'u') {
+                        format!("{}ies", &table_name[..table_name.len() - 1])
+                    } else {
+                        format!("{}s", table_name)
+                    }
+                } else if table_name.ends_with("fe") {
+                    format!("{}ves", &table_name[..table_name.len() - 2])
+                } else if table_name.ends_with('f') {
+                    format!("{}ves", &table_name[..table_name.len() - 1])
+                } else {
+                    format!("{}s", table_name)
+                }
+            }
         }
     }
 }

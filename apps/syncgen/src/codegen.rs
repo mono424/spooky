@@ -442,6 +442,9 @@ impl CodeGenerator {
             }
         }
 
+        // Reverse relationships are now added as virtual fields in table definitions,
+        // so they will be extracted by the field-based extraction above
+
         Ok(table_relationships)
     }
 

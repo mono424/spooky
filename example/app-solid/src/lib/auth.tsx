@@ -9,7 +9,6 @@ import {
 import { db, dbConfig } from "../db";
 import { schema } from "../schema.gen";
 import { type GetTable, type TableModel, useQuery } from "@spooky/client-solid";
-import { queryClient } from "../query-client";
 
 type User = TableModel<GetTable<typeof schema, "user">>;
 
@@ -29,19 +28,24 @@ export function AuthProvider(props: { children: JSX.Element }) {
   const [isLoading, setIsLoading] = createSignal(true);
   const [isInitialized, setIsInitialized] = createSignal(false);
 
-  // Only run query after auth is initialized
+  // Only run query after auth is initialized and userId is available
   const userQuery = useQuery(
-    () => ({
-      ...db
-        .query("user")
-        .where({ id: userId() ?? undefined })
-        .build(),
-      enabled: isInitialized() && userId() !== null,
-    }),
-    () => queryClient
+    () => {
+      const currentUserId = userId();
+      if (!currentUserId) {
+        return null;
+      }
+      return db.query("user").where({ id: currentUserId }).buildCustom();
+    },
+    {
+      enabled: () => isInitialized() && userId() !== null,
+    }
   );
 
-  const user = () => userQuery.data?.[0] ?? null;
+  const user = () => {
+    const data = userQuery.data;
+    return (Array.isArray(data) ? data[0] : data) ?? null;
+  };
 
   // Check for existing session on mount
   const checkAuth = async (tkn?: string) => {

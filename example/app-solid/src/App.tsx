@@ -1,6 +1,5 @@
 import { Router, Route } from "@solidjs/router";
 import { createSignal, Show, onMount, createEffect } from "solid-js";
-import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import { AuthProvider, useAuth } from "./lib/auth";
 import { initDatabase } from "./db";
 import { AuthDialog } from "./components/AuthDialog";
@@ -9,7 +8,6 @@ import { AuthDialog } from "./components/AuthDialog";
 import Home from "./routes/index";
 import ThreadPage from "./routes/thread/[id]";
 import CreateThreadPage from "./routes/create-thread";
-import { queryClient } from "./query-client";
 
 function Layout(props: any) {
   const auth = useAuth();
@@ -117,15 +115,13 @@ export default function App() {
         </div>
       }
     >
-      <QueryClientProvider client={queryClient}>
-        <AuthProvider>
-          <Router root={Layout}>
-            <Route path="/" component={Home} />
-            <Route path="/thread/:id" component={ThreadPage} />
-            <Route path="/create-thread" component={CreateThreadPage} />
-          </Router>
-        </AuthProvider>
-      </QueryClientProvider>
+      <AuthProvider>
+        <Router root={Layout}>
+          <Route path="/" component={Home} />
+          <Route path="/thread/:id" component={ThreadPage} />
+          <Route path="/create-thread" component={CreateThreadPage} />
+        </Router>
+      </AuthProvider>
     </Show>
   );
 }

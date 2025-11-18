@@ -1,49 +1,80 @@
-import { FinalQuery } from "@spooky/query-builder";
 import {
-  QueryClient,
-  QueryFunction,
-  QueryKey,
-  UndefinedInitialDataOptions,
-  UseQueryResult,
-  useQuery as useTanstackQuery,
-  useQueryClient as useTanstackQueryClient,
-} from "@tanstack/solid-query";
+  ColumnSchema,
+  FinalQuery,
+  SchemaStructure,
+  TableNames,
+  QueryResult,
+} from "@spooky/query-builder";
+import { createEffect, createSignal, onCleanup } from "solid-js";
 
 export function useQuery<
-  TQueryFnData = unknown,
-  TError = Error,
-  TData = TQueryFnData,
-  TQueryKey extends QueryKey = readonly unknown[]
+  S extends SchemaStructure,
+  TableName extends TableNames<S>,
+  T extends {
+    columns: Record<string, ColumnSchema>;
+  },
+  RelatedFields extends Record<string, any>,
+  IsOne extends boolean,
+  TData = QueryResult<S, TableName, RelatedFields, IsOne> | null
 >(
-  options: UndefinedInitialDataOptions<TQueryFnData, TError, TData, TQueryKey>,
-  queryClient?: () => QueryClient
-): UseQueryResult<TData, TError> {
-  const client = () => (queryClient ? queryClient() : useTanstackQueryClient());
-  const wrappedOptions = () => {
-    const opts = options();
-    if ("_finalQuery" in opts && opts._finalQuery instanceof FinalQuery) {
-      const finalQuery = opts._finalQuery;
-      // Capture the query client reference synchronously
-      const qc = client();
-      const queryKey = opts.queryKey;
+  finalQuery:
+    | FinalQuery<S, TableName, T, RelatedFields, IsOne>
+    | (() =>
+        | FinalQuery<S, TableName, T, RelatedFields, IsOne>
+        | null
+        | undefined),
+  options?: { enabled?: () => boolean }
+) {
+  const [data, setData] = createSignal<TData | undefined>(undefined);
+  const [error, setError] = createSignal<Error | undefined>(undefined);
 
-      opts.queryFn = (async () => {
-        const res = await finalQuery.select();
+  createEffect(() => {
+    const enabled = options?.enabled?.() ?? true;
 
-        // Subscribe to updates and update the query cache when data changes
-        res.subscribe((data) => {
-          console.log("_finalQuery data update", data);
-          // Use the captured query client and query key
-          qc.setQueryData(queryKey, data as any);
-        });
-
-        // Return the initial data
-        return res.data;
-      }) as unknown as QueryFunction<TQueryFnData, TQueryKey, never>;
+    // If disabled, clear error and don't run query
+    if (!enabled) {
+      setError(undefined);
+      return;
     }
-    return opts;
-  };
-  const q = useTanstackQuery(wrappedOptions, client);
 
-  return q;
+    const query = typeof finalQuery === "function" ? finalQuery() : finalQuery;
+    if (!query) {
+      return;
+    }
+
+    setError(undefined);
+
+    let unsubscribe: (() => void) | undefined;
+    let cancelled = false;
+
+    try {
+      const result = query.select();
+      setData(() => result.data as TData);
+      unsubscribe = result.subscribe((newData) => {
+        if (!cancelled) setData(() => newData as TData);
+      });
+    } catch (err) {
+      if (!cancelled) {
+        setError(err instanceof Error ? err : new Error(String(err)));
+      }
+    }
+
+    onCleanup(() => {
+      cancelled = true;
+      unsubscribe?.();
+    });
+  });
+
+  return {
+    get data() {
+      return data();
+    },
+    get error() {
+      return error();
+    },
+    get isLoading() {
+      const enabled = options?.enabled?.() ?? true;
+      return enabled && data() === undefined && error() === undefined;
+    },
+  };
 }

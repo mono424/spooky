@@ -264,7 +264,7 @@ type BuildRelatedFields<
 /**
  * The final result type combining base model with related fields
  */
-type QueryResult<
+export type QueryResult<
   S extends SchemaStructure,
   TableName extends TableNames<S>,
   RelatedFields extends Record<string, any>,
