@@ -684,7 +684,12 @@ export function buildQueryFromOptions<
 
   return {
     query,
-    hash: cyrb53(query, 0),
+    hash: cyrb53(
+      `${query}::${Object.entries(vars)
+        .map(([key, value]) => `${key}=${value}`)
+        .join("&")}`,
+      0
+    ),
     vars: Object.keys(vars).length > 0 ? vars : undefined,
   };
 }
