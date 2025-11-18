@@ -10,10 +10,12 @@ export const AuthEventTypes = {
   Deauthenticated: "DEAUTHENTICATED",
 } as const;
 
-export const QueryEventTypes = {
+export const GlobalQueryEventTypes = {
+  SubqueryUpdated: "SUBQUERY_UPDATED",
   RequestInit: "QUERY_REQUEST_INIT",
   Updated: "QUERY_UPDATED",
   RemoteUpdate: "QUERY_REMOTE_UPDATE",
+  Destroyed: "QUERY_DESTROYED",
 } as const;
 
 export type SpookyEventTypeMap = {
@@ -28,24 +30,37 @@ export type SpookyEventTypeMap = {
     typeof AuthEventTypes.Deauthenticated,
     never
   >;
-  [QueryEventTypes.RequestInit]: EventDefinition<
-    typeof QueryEventTypes.RequestInit,
+  [GlobalQueryEventTypes.RequestInit]: EventDefinition<
+    typeof GlobalQueryEventTypes.RequestInit,
     {
       queryHash: number;
     }
   >;
-  [QueryEventTypes.Updated]: EventDefinition<
-    typeof QueryEventTypes.Updated,
+  [GlobalQueryEventTypes.Updated]: EventDefinition<
+    typeof GlobalQueryEventTypes.Updated,
     {
       queryHash: number;
       data: Record<string, unknown>[];
     }
   >;
-  [QueryEventTypes.RemoteUpdate]: EventDefinition<
-    typeof QueryEventTypes.RemoteUpdate,
+  [GlobalQueryEventTypes.RemoteUpdate]: EventDefinition<
+    typeof GlobalQueryEventTypes.RemoteUpdate,
     {
       queryHash: number;
       data: Record<string, unknown>[];
+    }
+  >;
+  [GlobalQueryEventTypes.Destroyed]: EventDefinition<
+    typeof GlobalQueryEventTypes.Destroyed,
+    {
+      queryHash: number;
+    }
+  >;
+  [GlobalQueryEventTypes.SubqueryUpdated]: EventDefinition<
+    typeof GlobalQueryEventTypes.SubqueryUpdated,
+    {
+      queryHash: number;
+      subqueryHash: number;
     }
   >;
 };
@@ -56,8 +71,10 @@ export function createSpookyEventSystem(): SpookyEventSystem {
   return createEventSystem([
     AuthEventTypes.Authenticated,
     AuthEventTypes.Deauthenticated,
-    QueryEventTypes.RequestInit,
-    QueryEventTypes.Updated,
-    QueryEventTypes.RemoteUpdate,
+    GlobalQueryEventTypes.RequestInit,
+    GlobalQueryEventTypes.Updated,
+    GlobalQueryEventTypes.RemoteUpdate,
+    GlobalQueryEventTypes.Destroyed,
+    GlobalQueryEventTypes.SubqueryUpdated,
   ]);
 }

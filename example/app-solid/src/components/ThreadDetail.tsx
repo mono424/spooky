@@ -27,7 +27,8 @@ const createQuery = ({
       }
       return q;
     })
-    .buildCustom();
+    .one()
+    .build();
 };
 
 export function ThreadDetail() {
@@ -37,14 +38,14 @@ export function ThreadDetail() {
   const [commentFilter, setCommentFilter] = createSignal<"all" | "mine">("all");
 
   // Create query as an accessor function that re-runs when dependencies change
-  const threadResult = useQuery(() =>
+  const threadResult = useQuery(db, () =>
     createQuery({
       threadId: params.id,
       commentFilter: commentFilter(),
       userId: auth.user()?.id ?? "",
     })
   );
-  const thread = () => threadResult.data()?.[0];
+  const thread = () => threadResult.data() || null;
 
   const handleBack = () => {
     navigate("/");

@@ -53,27 +53,28 @@ export function AuthProvider(props: { children: JSX.Element }) {
 
   // Only run query after auth is initialized and userId is available
   const userQuery = useQuery(
+    db,
     () => {
       const currentUserId = userId();
       if (!currentUserId) {
         return null;
       }
-      return db.query("user").where({ id: currentUserId }).buildCustom();
+      return db.query("user").where({ id: currentUserId }).one().build();
     },
     {
       enabled: () => isInitialized() && userId() !== null,
     }
   );
 
-  const user = () => {
-    const data = userQuery.data;
-    return (Array.isArray(data) ? data[0] : data) ?? null;
-  };
+  const user = () => userQuery.data() || null;
 
   // Check for existing session on mount
   const checkAuth = async (tkn?: string) => {
     const token = tkn || localStorage.getItem("token");
     console.log("[AuthProvider] Checking auth with token:", !!token);
+    if (!token) {
+      return;
+    }
     setIsLoading(true);
     try {
       await db.authenticate(token);

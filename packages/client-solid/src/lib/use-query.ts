@@ -6,6 +6,7 @@ import {
   QueryResult,
 } from "@spooky/query-builder";
 import { createEffect, createSignal, onCleanup } from "solid-js";
+import { SyncedDb } from "..";
 
 export function useQuery<
   S extends SchemaStructure,
@@ -17,6 +18,7 @@ export function useQuery<
   IsOne extends boolean,
   TData = QueryResult<S, TableName, RelatedFields, IsOne> | null
 >(
+  db: SyncedDb<S>,
   finalQuery:
     | FinalQuery<S, TableName, T, RelatedFields, IsOne>
     | (() =>
@@ -41,27 +43,26 @@ export function useQuery<
     if (!query) {
       return;
     }
-
     setError(undefined);
+    query.run();
+    console.log("[useQuery] init");
+    const spooky = db.getSpooky();
+    const subscriptionId = spooky.subscribeToQuery(
+      query.hash,
+      (e) => {
+        const data = (query.isOne ? e[0] : e) as TData;
+        console.log("[useQuery] Data updated", query.hash, data);
+        setData(() => data);
+      },
+      { immediately: true }
+    );
 
-    let unsubscribe: (() => void) | undefined;
-    let cancelled = false;
-
-    try {
-      const result = query.select();
-      setData(() => result.data as TData);
-      unsubscribe = result.subscribe((newData) => {
-        if (!cancelled) setData(() => newData as TData);
-      });
-    } catch (err) {
-      if (!cancelled) {
-        setError(err instanceof Error ? err : new Error(String(err)));
-      }
-    }
+    const cleanup = () => {
+      spooky.unsubscribeFromQuery(query.hash, subscriptionId);
+    };
 
     onCleanup(() => {
-      cancelled = true;
-      unsubscribe?.();
+      cleanup?.();
     });
   });
 

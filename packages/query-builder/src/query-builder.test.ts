@@ -72,7 +72,7 @@ describe("QueryBuilder", () => {
   it("should build basic SELECT query", () => {
     const builder = new QueryBuilder(testSchema, "user");
 
-    const result = builder.buildCustom().select();
+    const result = builder.build().run();
 
     expect(result.query).toBe("SELECT * FROM user;");
     expect(result.vars).toBeUndefined();
@@ -82,7 +82,7 @@ describe("QueryBuilder", () => {
     const builder = new QueryBuilder(testSchema, "user");
 
     builder.where({ username: "john", email: "john@example.com" });
-    const result = builder.buildCustom().select();
+    const result = builder.build().run();
 
     expect(result.query).toBe(
       "SELECT * FROM user WHERE username = $username AND email = $email;"
@@ -96,7 +96,7 @@ describe("QueryBuilder", () => {
   it("should build query with select fields", () => {
     const builder = new QueryBuilder(testSchema, "user");
     builder.select("username", "email");
-    const result = builder.buildCustom().select();
+    const result = builder.build().run();
 
     expect(result.query).toBe("SELECT username, email FROM user;");
   });
@@ -112,7 +112,7 @@ describe("QueryBuilder", () => {
   it("should build query with ordering, limit, and offset", () => {
     const builder = new QueryBuilder(testSchema, "user");
     builder.orderBy("created_at", "desc").limit(10).offset(5);
-    const result = builder.buildCustom().select();
+    const result = builder.build().run();
 
     expect(result.query).toBe(
       "SELECT * FROM user ORDER BY created_at desc LIMIT 10 START 5;"
@@ -126,8 +126,8 @@ describe("QueryBuilder", () => {
       .select("username", "email")
       .orderBy("created_at", "desc")
       .limit(10)
-      .buildCustom()
-      .select();
+      .build()
+      .run();
 
     expect(result.query).toBe(
       "SELECT username, email FROM user WHERE username = $username ORDER BY created_at desc LIMIT 10;"
@@ -142,7 +142,7 @@ describe("QueryBuilder", () => {
       .orderBy("created_at", "desc")
       .limit(10)
       .offset(5);
-    const result = builder.buildCustom().selectLive();
+    const result = builder.build().selectLive();
 
     expect(result.query).toBe(
       "LIVE SELECT * FROM user WHERE username = $username;"
@@ -156,7 +156,7 @@ describe("Relationship Queries", () => {
   it("should build query with one-to-one relationship", () => {
     const builder = new QueryBuilder(testSchema, "thread");
     builder.related("author");
-    const result = builder.buildCustom().select();
+    const result = builder.build().run();
 
     expect(result.query).toBe(
       "SELECT *, (SELECT * FROM user WHERE id=$parent.author LIMIT 1)[0] AS author FROM thread;"
@@ -166,7 +166,7 @@ describe("Relationship Queries", () => {
   it("should build query with one-to-many relationship", () => {
     const builder = new QueryBuilder(testSchema, "thread");
     builder.related("comments");
-    const result = builder.buildCustom().select();
+    const result = builder.build().run();
 
     expect(result.query).toBe(
       "SELECT *, (SELECT * FROM comment WHERE thread=$parent.id) AS comments FROM thread;"
@@ -178,7 +178,7 @@ describe("Relationship Queries", () => {
     builder.related("comments", (q) =>
       q.where({ author: "user:123" }).limit(5)
     );
-    const result = builder.buildCustom().select();
+    const result = builder.build().run();
 
     expect(result.query).toBe(
       "SELECT *, (SELECT * FROM comment WHERE thread=$parent.id AND author = user:⟨123⟩ LIMIT 5) AS comments FROM thread;"
@@ -188,7 +188,7 @@ describe("Relationship Queries", () => {
   it("should build query with nested relationships", () => {
     const builder = new QueryBuilder(testSchema, "thread");
     builder.related("comments", (q) => q.related("author"));
-    const result = builder.buildCustom().select();
+    const result = builder.build().run();
 
     expect(result.query).toBe(
       "SELECT *, (SELECT *, (SELECT * FROM user WHERE id=$parent.author LIMIT 1)[0] AS author FROM comment WHERE thread=$parent.id) AS comments FROM thread;"
@@ -230,7 +230,7 @@ describe("RecordId Parsing", () => {
   it("should parse string IDs to RecordId", () => {
     const builder = new QueryBuilder(testSchema, "thread");
     builder.where({ author: "user:123", id: "abc123" });
-    const result = builder.buildCustom().select();
+    const result = builder.build().run();
 
     expect(result.vars).toBeDefined();
     expect(result.vars!.author).toBeInstanceOf(RecordId);
@@ -242,7 +242,7 @@ describe("RecordId Parsing", () => {
   it("should not parse non-ID strings", () => {
     const builder = new QueryBuilder(testSchema, "user");
     builder.where({ username: "john_doe" });
-    const result = builder.buildCustom().select();
+    const result = builder.build().run();
 
     expect(result.vars?.username).toBe("john_doe");
     expect(result.vars?.username).not.toBeInstanceOf(RecordId);
@@ -253,7 +253,7 @@ describe("Edge Cases", () => {
   it("should handle empty where object", () => {
     const builder = new QueryBuilder(testSchema, "user");
     builder.where({});
-    const result = builder.buildCustom().select();
+    const result = builder.build().run();
 
     expect(result.query).toBe("SELECT * FROM user;");
   });
@@ -261,7 +261,7 @@ describe("Edge Cases", () => {
   it("should handle special characters in strings", () => {
     const builder = new QueryBuilder(testSchema, "user");
     builder.where({ username: 'john"doe' });
-    const result = builder.buildCustom().select();
+    const result = builder.build().run();
 
     expect(result.vars?.username).toBe('john"doe');
   });
@@ -365,7 +365,7 @@ describe("Type Tests", () => {
 
   it("should return correctly typed query result", () => {
     const builder = new QueryBuilder(testSchema, "user");
-    const result = builder.buildCustom().select();
+    const result = builder.build().run();
 
     // Query should be a string
     expectTypeOf(result.query).toBeString();
@@ -413,7 +413,7 @@ describe("Schema Metadata Integration", () => {
     const builder = new QueryBuilder(testSchema, "thread");
 
     builder.related("author", "one");
-    const result = builder.buildCustom().select();
+    const result = builder.build().run();
 
     expect(result.query).toBe(
       "SELECT *, (SELECT * FROM user WHERE id=$parent.author LIMIT 1)[0] AS author FROM thread;"
@@ -421,10 +421,10 @@ describe("Schema Metadata Integration", () => {
   });
 
   it("should handle one-to-many relationships with metadata", () => {
-    const builder = new QueryBuilder(testSchema, "thread");
+    const builder = new QueryBuilder(testSchema, "thread", () => {});
 
     builder.related("comments");
-    const result = builder.buildCustom().select();
+    const result = builder.build().run();
 
     expect(result.query).toBe(
       "SELECT *, (SELECT * FROM comment WHERE thread=$parent.id) AS comments FROM thread;"

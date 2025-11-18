@@ -8,14 +8,21 @@ import {
   TableNames,
 } from "@spooky/query-builder";
 import { RecordId } from "surrealdb";
-import { DatabaseService, EventSystem } from "./services/index.js";
+import { DatabaseService, SpookyEventSystem } from "./services/index.js";
 import { AuthManagerService } from "./services/auth-manager.js";
 import { QueryManagerService } from "./services/query-manager.js";
 import { MutationManagerService } from "./services/mutation-manager.js";
+import { EventSubscriptionOptions } from "./types.js";
 
 export interface SpookyInstance<S extends SchemaStructure> {
-  subscribe: typeof EventSystem.prototype.subscribe;
-  unsubscribe: typeof EventSystem.prototype.unsubscribe;
+  subscribeToQuery: (
+    queryHash: number,
+    callback: (data: Record<string, unknown>[]) => void,
+    options?: EventSubscriptionOptions
+  ) => number;
+  unsubscribeFromQuery: (queryHash: number, subscriptionId: number) => void;
+  subscribe: SpookyEventSystem["subscribe"];
+  unsubscribe: SpookyEventSystem["unsubscribe"];
   authenticate: (token: string) => Promise<void>;
   deauthenticate: () => Promise<void>;
   create: <N extends TableNames<S>>(
@@ -46,7 +53,7 @@ export async function createSpookyInstance<S extends SchemaStructure>(
   authManager: AuthManagerService,
   queryManager: QueryManagerService<S>,
   mutationManager: MutationManagerService<S>,
-  eventSystem: EventSystem
+  eventSystem: SpookyEventSystem
 ): Promise<SpookyInstance<S>> {
   const useQuery = <Table extends TableNames<S>>(
     table: Table,
@@ -55,7 +62,13 @@ export async function createSpookyInstance<S extends SchemaStructure>(
     return new QueryBuilder<S, Table>(
       schema,
       table,
-      (q) => queryManager.run(q),
+      (q) => {
+        queryManager.run(q);
+        return {
+          cachedQuery: null,
+          cleanup: () => {},
+        };
+      },
       options
     );
   };
@@ -67,6 +80,8 @@ export async function createSpookyInstance<S extends SchemaStructure>(
   };
 
   return {
+    subscribeToQuery: queryManager.subscribe.bind(queryManager),
+    unsubscribeFromQuery: queryManager.unsubscribe.bind(queryManager),
     subscribe: eventSystem.subscribe.bind(eventSystem),
     unsubscribe: eventSystem.unsubscribe.bind(eventSystem),
     authenticate: authManager.authenticate.bind(authManager),

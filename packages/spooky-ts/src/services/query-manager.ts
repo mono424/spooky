@@ -9,19 +9,23 @@ import {
   DatabaseService,
   SpookyEventSystem,
   QueryEventTypes,
+  GlobalQueryEventTypes,
 } from "./index.js";
 import { LiveHandler, Uuid } from "surrealdb";
 import { decodeFromSpooky } from "./converter.js";
 import { Logger } from "./logger.js";
-
-export type CleanupFn = () => void;
+import {
+  createQueryEventSystem,
+  QueryEventSystem,
+} from "./query-event-system.js";
+import { EventSubscriptionOptions } from "src/events/index.js";
 
 export interface Query<
   T extends { columns: Record<string, ColumnSchema> },
   IsOne extends boolean
 > {
   innerQuery: InnerQuery<T, IsOne>;
-  cleanup: CleanupFn;
+  eventSystem: QueryEventSystem;
 }
 
 export interface QueryCache<S extends SchemaStructure> {
@@ -39,18 +43,39 @@ export class QueryManagerService<S extends SchemaStructure> {
     private eventSystem: SpookyEventSystem
   ) {
     this.eventSystem.subscribe(QueryEventTypes.Updated, (event) => {
-      this.cache[event.payload.queryHash].innerQuery.setData(
-        event.payload.data as any
-      );
+      this.cache[event.payload.queryHash].eventSystem.addEvent({
+        type: QueryEventTypes.Updated,
+        payload: {
+          type: "local",
+          data: event.payload.data,
+        },
+      });
+      // this.cache[event.payload.queryHash].innerQuery.setData(
+      //   event.payload.data as any
+      // );
     });
 
-    this.eventSystem.subscribe(QueryEventTypes.RemoteUpdate, (event) => {
-      this.cache[event.payload.queryHash].innerQuery.setData(
-        event.payload.data as any
-      );
+    this.eventSystem.subscribe(GlobalQueryEventTypes.RemoteUpdate, (event) => {
+      this.cache[event.payload.queryHash].eventSystem.addEvent({
+        type: GlobalQueryEventTypes.Updated,
+        payload: {
+          type: "remote",
+          data: event.payload.data,
+        },
+      });
+      // this.cache[event.payload.queryHash].innerQuery.setData(
+      //   event.payload.data as any
+      // );
     });
 
-    this.eventSystem.subscribe(QueryEventTypes.RequestInit, (event) => {
+    this.eventSystem.subscribe(
+      GlobalQueryEventTypes.SubqueryUpdated,
+      (event) => {
+        this.queryLocalRefresh(event.payload.queryHash);
+      }
+    );
+
+    this.eventSystem.subscribe(GlobalQueryEventTypes.RequestInit, (event) => {
       this.initQuery(event.payload.queryHash);
     });
   }
@@ -90,7 +115,18 @@ export class QueryManagerService<S extends SchemaStructure> {
 
   private async queryLocalRefresh<
     T extends { columns: Record<string, ColumnSchema> }
-  >(query: InnerQuery<T, boolean>): Promise<void> {
+  >(queryHash: number): Promise<void> {
+    const query = this.cache[queryHash].innerQuery;
+    if (!query) {
+      this.logger.error(
+        "[QueryManager] Local Query Refresh - Query not found",
+        {
+          queryHash: queryHash,
+        }
+      );
+      return;
+    }
+
     this.logger.debug("[QueryManager] Local Query Refresh - Starting", {
       queryHash: query.hash,
     });
@@ -126,7 +162,7 @@ export class QueryManagerService<S extends SchemaStructure> {
     for (const query of Object.values(this.cache)) {
       if (query.innerQuery.tableName === table) {
         try {
-          await this.queryLocalRefresh(query.innerQuery);
+          await this.queryLocalRefresh(query.innerQuery.hash);
         } catch (error) {
           this.logger.error("Failed to refresh query", error);
         }
@@ -191,7 +227,7 @@ export class QueryManagerService<S extends SchemaStructure> {
     );
 
     this.eventSystem.addEvent({
-      type: QueryEventTypes.RemoteUpdate,
+      type: GlobalQueryEventTypes.RemoteUpdate,
       payload: {
         queryHash: query.hash,
         data: decodedResults,
@@ -268,7 +304,8 @@ export class QueryManagerService<S extends SchemaStructure> {
   }
 
   private async initQuery(queryHash: number): Promise<void> {
-    const query = this.cache[queryHash]?.innerQuery;
+    const { innerQuery: query, eventSystem: queryEventSystem } =
+      this.cache[queryHash];
     try {
       if (!query) {
         this.logger.error("[QueryManager] Update query - Query not found", {
@@ -286,7 +323,7 @@ export class QueryManagerService<S extends SchemaStructure> {
       });
 
       try {
-        await this.queryLocalRefresh(query);
+        await this.queryLocalRefresh(query.hash);
       } catch (error) {
         this.logger.error("Failed to refresh query locally", error);
       }
@@ -323,26 +360,31 @@ export class QueryManagerService<S extends SchemaStructure> {
         query.hash
       );
 
+      const cleanups: (() => void)[] = [];
       for (const subquery of query.subqueries) {
-        const unsubscribe = subquery.subscribe(async () => {
-          try {
-            await this.queryLocalRefresh(query);
-          } catch (error) {
-            this.logger.error(
-              "Failed to refresh query after subscription",
-              error
-            );
-          }
-        });
-
-        const previousCleanup = this.cache[query.hash].cleanup;
-        this.cache[query.hash].cleanup = () => {
-          previousCleanup();
-          unsubscribe();
-        };
-
         await this.run(subquery);
+
+        const sQuery = this.cache[subquery.hash];
+        const subId = sQuery.eventSystem.subscribe(
+          QueryEventTypes.Updated,
+          () =>
+            this.eventSystem.addEvent({
+              type: GlobalQueryEventTypes.SubqueryUpdated,
+              payload: {
+                queryHash: query.hash,
+                subqueryHash: subquery.hash,
+              },
+            })
+        );
+
+        cleanups.push(() => {
+          sQuery.eventSystem.unsubscribe(subId);
+        });
       }
+
+      queryEventSystem.subscribe(QueryEventTypes.Destroyed, (e) => {
+        cleanups.forEach((cleanup) => cleanup());
+      });
     } catch (error) {
       this.logger.error("Failed to initialize query", error);
     }
@@ -350,7 +392,7 @@ export class QueryManagerService<S extends SchemaStructure> {
 
   run<T extends { columns: Record<string, ColumnSchema> }>(
     query: InnerQuery<T, boolean>
-  ): { cachedQuery: InnerQuery<T, boolean> | null; cleanup: CleanupFn } {
+  ): number {
     const cacheHit = this.cache[query.hash];
 
     if (!cacheHit) {
@@ -360,27 +402,58 @@ export class QueryManagerService<S extends SchemaStructure> {
 
       this.cache[query.hash] = {
         innerQuery: query,
-        cleanup: () => {},
+        eventSystem: createQueryEventSystem(),
       };
 
       this.eventSystem.addEvent({
-        type: QueryEventTypes.RequestInit,
+        type: GlobalQueryEventTypes.RequestInit,
         payload: {
           queryHash: query.hash,
         },
       });
 
-      return {
-        cachedQuery: null,
-        cleanup: this.cache[query.hash].cleanup,
-      };
+      return query.hash;
     } else {
       this.logger.debug("[QueryManager] Run - Cache hit", query.hash);
-      return {
-        cachedQuery: cacheHit.innerQuery,
-        cleanup: cacheHit.cleanup,
-      };
+      return query.hash;
     }
+  }
+
+  subscribe(
+    queryHash: number,
+    callback: (data: Record<string, unknown>[]) => void,
+    options?: EventSubscriptionOptions
+  ): number {
+    const query = this.cache[queryHash];
+    if (!query) {
+      this.logger.error("[QueryManager] Subscribe to Query - Query not found", {
+        queryHash: queryHash,
+      });
+      throw new Error(`Query ${queryHash} not found`);
+    }
+
+    return query.eventSystem.subscribe(
+      QueryEventTypes.Updated,
+      (event) => {
+        callback(event.payload.data);
+      },
+      options
+    );
+  }
+
+  unsubscribe(queryHash: number, subscriptionId: number): void {
+    const query = this.cache[queryHash];
+    if (!query) {
+      this.logger.error(
+        "[QueryManager] Unsubscribe from Query - Query not found",
+        {
+          queryHash: queryHash,
+        }
+      );
+      throw new Error(`Query ${queryHash} not found`);
+    }
+
+    query.eventSystem.unsubscribe(subscriptionId);
   }
 }
 

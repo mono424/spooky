@@ -84,29 +84,13 @@ function parseObjectIdsToRecordId(obj: unknown, tableName?: string): unknown {
 
 export type Executor<T extends { columns: Record<string, ColumnSchema> }> = (
   query: InnerQuery<T, boolean>
-) => { cachedQuery: InnerQuery<T, boolean> | null; cleanup: () => void };
-
-type InnerQueryListener<T extends { columns: Record<string, ColumnSchema> }> = {
-  callback: (data: TableModel<T>[]) => void;
-};
-
-export type ReactiveQueryResult<
-  T extends { columns: Record<string, ColumnSchema> }
-> = {
-  data: TableModel<T>[];
-  hash: number;
-  subscribe: (callback: (data: TableModel<T>[]) => void) => () => void;
-  unsubscribeAll: () => void;
-  kill: () => void;
-};
+) => void;
 
 export class InnerQuery<
   T extends { columns: Record<string, ColumnSchema> },
   IsOne extends boolean
 > {
   private _hash: number;
-  private _data: TableModel<T>[];
-  private _listeners: InnerQueryListener<T>[] = [];
   private _selectQuery: QueryInfo;
   private _selectLiveQuery: QueryInfo;
   private _subqueries: InnerQuery<
@@ -114,25 +98,12 @@ export class InnerQuery<
     boolean
   >[];
 
-  private _cachedInnerQuery: InnerQuery<
-    { columns: Record<string, ColumnSchema> },
-    boolean
-  > | null = null;
-
-  private _hasData: boolean = false;
-  private _hasRun: boolean = false;
-  private _unsubs: (() => void)[] = [];
-  private _cleanup: () => void = () => {};
-
   constructor(
     private readonly _tableName: string,
     private readonly options: QueryOptions<TableModel<T>, IsOne>,
     private readonly schema: SchemaStructure,
     private readonly executor: Executor<any>
   ) {
-    this._data = [];
-    this._listeners = [];
-
     this._selectQuery = buildQueryFromOptions(
       "SELECT",
       this._tableName,
@@ -183,80 +154,8 @@ export class InnerQuery<
     return this.options.isOne ?? false;
   }
 
-  get data(): TableModel<T>[] {
-    return this._data;
-  }
-
-  public setData(data: TableModel<T>[]): void {
-    this._data = data;
-    this._hasData = true;
-    this._listeners.forEach(({ callback }) => callback(data));
-  }
-
-  private addListener(listener: InnerQueryListener<T>): () => void {
-    this._listeners.push(listener);
-    console.log("addListener", this);
-    if (this._hasData) {
-      listener.callback(this._data);
-    }
-    return () => {
-      this._listeners = this._listeners.filter((l) => l !== listener);
-    };
-  }
-
-  public subscribe(callback: (data: TableModel<T>[]) => void): () => void {
-    if (this._cachedInnerQuery) {
-      console.log("xxx subscribe InnerPTR", this._cachedInnerQuery);
-      return this._cachedInnerQuery.subscribe(
-        callback as (
-          data: TableModel<{ columns: Record<string, ColumnSchema> }>[]
-        ) => void
-      );
-    }
-    console.log("xxx subscribe X", this);
-    const unsub = this.addListener({ callback });
-    this._unsubs.push(unsub);
-    return unsub;
-  }
-
-  public unsubscribeAll(): void {
-    if (this._cachedInnerQuery) {
-      return this._cachedInnerQuery.unsubscribeAll();
-    }
-    this._unsubs.forEach((unsub) => unsub());
-    this._unsubs = [];
-  }
-
-  public kill(): void {
-    if (this._cachedInnerQuery) {
-      return this._cachedInnerQuery.kill();
-    }
-    this.unsubscribeAll();
-    this._cleanup?.();
-  }
-
-  private getReactiveQueryResult(): ReactiveQueryResult<T> {
-    return {
-      data: this.data,
-      hash: this.hash,
-      subscribe: (callback: (data: TableModel<T>[]) => void) =>
-        this.subscribe(callback),
-      unsubscribeAll: () => this.unsubscribeAll(),
-      kill: () => this.kill(),
-    };
-  }
-
-  public run(): ReactiveQueryResult<T> {
-    if (this._hasRun) {
-      throw new Error("Query has already been run");
-    }
-    this._hasRun = true;
-
-    const { cachedQuery, cleanup } = this.executor(this);
-    console.log("xxx run", cachedQuery);
-    this._cachedInnerQuery = cachedQuery;
-    this._cleanup = cleanup;
-    return this.getReactiveQueryResult();
+  public run(): void {
+    this.executor(this);
   }
 }
 
@@ -322,27 +221,16 @@ export class FinalQuery<
     );
   }
 
-  get hash(): number {
-    return this._innerQuery.hash;
-  }
-
-  get data(): QueryResult<S, TableName, RelatedFields, IsOne> {
-    return this._innerQuery.data as any;
+  run(): void {
+    this.executor(this._innerQuery);
   }
 
   get isOne(): boolean {
     return this.options.isOne ?? false;
   }
 
-  select() {
-    return {
-      ...this._innerQuery.run(),
-      data: this.data,
-    };
-  }
-
-  selectLive() {
-    return this._innerQuery.selectLiveQuery;
+  get hash(): number {
+    return this._innerQuery.hash;
   }
 }
 
@@ -640,7 +528,7 @@ export class QueryBuilder<
    * Build query methods for SELECT and LIVE SELECT (custom implementation)
    * @returns FinalQuery object with select() method for custom usage
    */
-  buildCustom(): FinalQuery<
+  build(): FinalQuery<
     S,
     TableName,
     GetTable<S, TableName>,
@@ -654,39 +542,6 @@ export class QueryBuilder<
       RelatedFields,
       IsOne
     >(this.tableName, this.options, this.schema, this.executer);
-  }
-
-  /**
-   * Build query for TanStack Query compatibility
-   * @returns TanStack Query options object with queryKey and queryFn
-   */
-  build(): {
-    queryKey: readonly unknown[];
-    queryFn: () => Promise<QueryResult<S, TableName, RelatedFields, IsOne>>;
-    _finalQuery: FinalQuery<
-      S,
-      TableName,
-      GetTable<S, TableName>,
-      RelatedFields,
-      IsOne
-    >;
-  } {
-    const finalQuery = new FinalQuery<
-      S,
-      TableName,
-      GetTable<S, TableName>,
-      RelatedFields,
-      IsOne
-    >(this.tableName, this.options, this.schema, this.executer);
-
-    return {
-      queryKey: ["spooky-query", finalQuery.hash] as const,
-      queryFn: async () => {
-        const { data } = finalQuery.select();
-        return data;
-      },
-      _finalQuery: finalQuery,
-    };
   }
 }
 

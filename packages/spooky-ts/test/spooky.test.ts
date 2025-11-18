@@ -63,7 +63,7 @@ describe("Mock Database with 3 Nodes", () => {
     const query = spooky.query("user", {});
     query.orderBy("created_at", "asc");
 
-    const result = query.buildCustom().select();
+    const result = query.build().select();
     expect(result).toBeDefined();
   });
 
@@ -101,9 +101,7 @@ describe("Mock Database with 3 Nodes", () => {
 
     await spooky.authenticate(authResponse?.token ?? "");
 
-    const result = spooky.query("thread", {})
-      .buildCustom()
-      .select();
+    const result = spooky.query("thread", {}).build().select();
     expect(result).toBeDefined();
     expect(result.data).toHaveLength(0);
 
@@ -141,10 +139,7 @@ describe("Mock Database with 3 Nodes", () => {
       created_at: new Date(),
     });
 
-    const result = spooky.query("thread", {})
-      .limit(111)
-      .buildCustom()
-      .select();
+    const result = spooky.query("thread", {}).limit(111).build().select();
     expect(result).toBeDefined();
     expect(result.data).toHaveLength(0);
 

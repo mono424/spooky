@@ -6,13 +6,13 @@ import { useQuery } from "@spooky/client-solid";
 export function ThreadList() {
   const navigate = useNavigate();
 
-  const threadsResult = useQuery(() =>
+  const threadsResult = useQuery(db, () =>
     db
       .query("thread")
       .related("author")
       .orderBy("created_at", "desc")
       .limit(100)
-      .buildCustom()
+      .build()
   );
   const threads = () => threadsResult.data() || [];
 
