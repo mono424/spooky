@@ -4,17 +4,15 @@ import {
   TableModel,
   TableNames,
 } from "@spooky/query-builder";
-import { Effect } from "effect";
 import { Uuid, RecordId } from "surrealdb";
 
-export const decodeFromSpooky = Effect.fn("decodeFromSpooky")(function* <
+export function decodeFromSpooky<
   S extends SchemaStructure,
   T extends TableNames<S>
->(schema: S, tableName: T, record: TableModel<GetTable<S, T>>) {
+>(schema: S, tableName: T, record: TableModel<GetTable<S, T>>): TableModel<GetTable<S, T>> {
   const table = schema.tables.find((t) => t.name === tableName);
   if (!table) {
-    yield* Effect.fail(new Error(`Table ${tableName} not found in schema`));
-    return;
+    throw new Error(`Table ${tableName} not found in schema`);
   }
 
   const encoded = { ...record } as any;
@@ -22,42 +20,48 @@ export const decodeFromSpooky = Effect.fn("decodeFromSpooky")(function* <
   for (const field of Object.keys(table.columns)) {
     const column = table.columns[field] as any;
     if (column.recordId && encoded[field] != null) {
-      encoded[field] =
-        (encoded[field] as RecordId).table.name +
-        ":" +
-        (encoded[field] as RecordId).id;
+      const recordId = encoded[field] as RecordId;
+      // In surrealdb 1.x, RecordId has .tb and .id properties
+      encoded[field] = `${recordId.tb}:${recordId.id}`;
     }
   }
 
   return encoded as TableModel<GetTable<S, T>>;
-});
+}
 
-export const encodeToSpooky = Effect.fn("encodeToSpooky")(function* <
+export function encodeToSpooky<
   S extends SchemaStructure,
   T extends TableNames<S>,
   R extends Partial<TableModel<GetTable<S, T>>>
->(schema: S, tableName: T, record: R) {
+>(schema: S, tableName: T, record: R): R {
   const table = schema.tables.find((t) => t.name === tableName);
   if (!table) {
-    yield* Effect.fail(new Error(`Table ${tableName} not found in schema`));
-    return;
+    throw new Error(`Table ${tableName} not found in schema`);
   }
 
   const decoded = { ...record } as any;
   for (const field of Object.keys(table.columns)) {
     const column = table.columns[field] as any;
     if (column.recordId && decoded[field] != null) {
-      const [table, ...idParts] = decoded[field].split(":");
-      decoded[field] = new RecordId(table, idParts.join(":"));
+      // Handle both string format ("table:id") and RecordId objects
+      if (decoded[field] instanceof RecordId) {
+        // Already a RecordId, keep it as is
+        decoded[field] = decoded[field];
+      } else if (typeof decoded[field] === "string") {
+        // String format, convert to RecordId
+        const [tableName, ...idParts] = decoded[field].split(":");
+        decoded[field] = new RecordId(tableName, idParts.join(":"));
+      }
+      // If it's neither, leave it as is (might be undefined or null)
     }
   }
 
   return decoded;
-});
+}
 
-export const generateNewId = Effect.fn("generateNewId")(function* <
+export function generateNewId<
   S extends SchemaStructure,
   T extends TableNames<S>
->(tableName: T) {
+>(tableName: T): RecordId {
   return new RecordId(tableName, Uuid.v4().toString().replace(/-/g, ""));
-});
+}

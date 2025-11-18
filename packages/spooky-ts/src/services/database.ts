@@ -1,252 +1,242 @@
 import { RecordId, Surreal, Uuid } from "surrealdb";
-import { Context, Data, Effect } from "effect";
+import { Logger } from "./logger.js";
 
-export class LocalDatabaseError extends Data.TaggedError("LocalDatabaseError")<{
+export class LocalDatabaseError extends Error {
   readonly cause?: unknown;
-  readonly message: string;
-}> {}
-
-export class RemoteDatabaseError extends Data.TaggedError(
-  "RemoteDatabaseError"
-)<{
-  readonly cause?: unknown;
-  readonly message: string;
-}> {}
-
-export class RemoteAuthenticationError extends Data.TaggedError(
-  "RemoteAuthenticationError"
-)<{
-  readonly cause?: unknown;
-  readonly message: string;
-}> {}
-
-export class DatabaseService extends Context.Tag("DatabaseService")<
-  DatabaseService,
-  {
-    useLocal: ReturnType<typeof makeUseLocalDatabase>;
-    useInternal: ReturnType<typeof makeUseLocalDatabase>;
-    useRemote: ReturnType<typeof makeUseRemoteDatabase>;
-    queryLocal: ReturnType<typeof makeQueryLocalDatabase>;
-    queryInternal: ReturnType<typeof makeQueryLocalDatabase>;
-    queryRemote: ReturnType<typeof makeQueryRemoteDatabase>;
-    liveOfRemote: ReturnType<typeof makeLiveOfRemoteDatabase>;
-    authenticate: ReturnType<typeof makeAuthenticateRemoteDatabase>;
-    deauthenticate: ReturnType<typeof makeDeauthenticateRemoteDatabase>;
-    closeRemote: ReturnType<typeof makeCloseRemoteDatabase>;
-    closeLocal: ReturnType<typeof makeCloseLocalDatabase>;
-    closeInternal: ReturnType<typeof makeCloseLocalDatabase>;
-    clearLocalCache: ReturnType<typeof makeClearLocalCache>;
+  constructor(message: string, cause?: unknown) {
+    super(message);
+    this.name = "LocalDatabaseError";
+    this.cause = cause;
   }
->() {}
+}
+
+export class RemoteDatabaseError extends Error {
+  readonly cause?: unknown;
+  constructor(message: string, cause?: unknown) {
+    super(message);
+    this.name = "RemoteDatabaseError";
+    this.cause = cause;
+  }
+}
+
+export class RemoteAuthenticationError extends Error {
+  readonly cause?: unknown;
+  constructor(message: string, cause?: unknown) {
+    super(message);
+    this.name = "RemoteAuthenticationError";
+    this.cause = cause;
+  }
+}
+
+export interface DatabaseService {
+  useLocal: <T>(fn: (db: Surreal) => T | Promise<T>) => Promise<T>;
+  useInternal: <T>(fn: (db: Surreal) => T | Promise<T>) => Promise<T>;
+  useRemote: <T>(fn: (db: Surreal) => T | Promise<T>) => Promise<T>;
+  queryLocal: <T>(sql: string, vars?: Record<string, unknown>) => Promise<T>;
+  queryInternal: <T>(sql: string, vars?: Record<string, unknown>) => Promise<T>;
+  queryRemote: <T>(sql: string, vars?: Record<string, unknown>) => Promise<T>;
+  liveOfRemote: (liveUuid: Uuid) => Promise<any>;
+  authenticate: (token: string) => Promise<RecordId | undefined>;
+  deauthenticate: () => Promise<void>;
+  closeRemote: () => Promise<void>;
+  closeLocal: () => Promise<void>;
+  closeInternal: () => Promise<void>;
+  clearLocalCache: () => Promise<void>;
+}
 
 export const makeUseLocalDatabase = (db: Surreal) => {
-  return Effect.fn("useLocalDatabase")(function* <T>(
-    fn: (db: Surreal) => T | Promise<T>
-  ) {
-    const result = yield* Effect.try({
-      try: () => fn(db),
-      catch: (error) =>
-        new LocalDatabaseError({
-          message: "Failed to use database [sync]",
-          cause: error,
-        }),
-    });
-    if (result instanceof Promise) {
-      return yield* Effect.tryPromise({
-        try: () => result,
-        catch: (error) =>
-          new LocalDatabaseError({
-            message: "Failed to use database [async]",
-            cause: error,
-          }),
-      });
-    } else {
+  return async <T>(fn: (db: Surreal) => T | Promise<T>): Promise<T> => {
+    try {
+      const result = fn(db);
+      if (result instanceof Promise) {
+        return await result;
+      }
       return result;
+    } catch (error) {
+      throw new LocalDatabaseError("Failed to use database", error);
     }
-  });
+  };
 };
 
 export const makeUseRemoteDatabase = (db: Surreal) => {
-  return Effect.fn("useRemoteDatabaseInner")(
-    <T>(fn: (db: Surreal) => T | Promise<T>) =>
-      Effect.gen(function* () {
-        const result = yield* Effect.try({
-          try: () => fn(db),
-          catch: (error) =>
-            new RemoteDatabaseError({
-              message: "Failed to use database [sync]",
-              cause: error,
-            }),
-        });
-        if (result instanceof Promise) {
-          return yield* Effect.tryPromise({
-            try: () => result,
-            catch: (error) =>
-              new RemoteDatabaseError({
-                message: "Failed to use database [async]",
-                cause: error,
-              }),
-          });
+  return async <T>(fn: (db: Surreal) => T | Promise<T>): Promise<T> => {
+    try {
+      const result = fn(db);
+      if (result instanceof Promise) {
+        return await result;
+      }
+      return result;
+    } catch (error) {
+      throw new RemoteDatabaseError("Failed to use database", error);
+    }
+  };
+};
+
+export const makeQueryRemoteDatabase = (db: Surreal, logger: Logger) => {
+  return async <T>(
+    sql: string,
+    vars?: Record<string, unknown>
+  ): Promise<T> => {
+    try {
+      // In surrealdb 1.x, query returns [result] where result is an array of rows
+      const result = vars ? await db.query<T[]>(sql, vars) : await db.query<T[]>(sql);
+      logger.debug("[Database] Query Remote Database - Result", {
+        sql,
+        vars,
+        result,
+      });
+      // Return the array of rows (result[0]), not just the first row
+      // This allows callers to get arrays when they expect arrays, or destructure when needed
+      if (result && result.length > 0) {
+        if (Array.isArray(result[0])) {
+          // result[0] is an array of rows (normal SELECT query)
+          return result[0] as T;
         } else {
-          return result;
+          // result[0] is a single value (LIVE query or single-row result)
+          // Wrap it in an array so callers can destructure if needed
+          return [result[0]] as unknown as T;
         }
-      })
-  );
+      }
+      // If no results, return empty array for array types
+      return [] as unknown as T;
+    } catch (error) {
+      throw new RemoteDatabaseError(
+        "Failed to execute query on remote database",
+        error
+      );
+    }
+  };
 };
 
-export const makeQueryRemoteDatabase = (db: Surreal) => {
-  return Effect.fn("queryRemoteDatabaseInner")(function* <T>(
+export const makeQueryLocalDatabase = (db: Surreal, logger: Logger) => {
+  return async <T>(
     sql: string,
     vars?: Record<string, unknown>
-  ) {
-    return yield* Effect.tryPromise({
-      try: async () => {
-        const result = await db.query(sql, vars).collect<[T]>();
-        Effect.logDebug("[Database] Query Remote Database - Result", {
-          sql,
-          vars,
-          result,
-        });
-        return result[0];
-      },
-      catch: (error) =>
-        new RemoteDatabaseError({
-          message: "Failed to execute query on remote database",
-          cause: error,
-        }),
-    });
-  });
-};
-
-export const makeQueryLocalDatabase = (db: Surreal) => {
-  return Effect.fn("queryLocalDatabaseInner")(function* <T>(
-    sql: string,
-    vars?: Record<string, unknown>
-  ) {
-    return yield* Effect.tryPromise({
-      try: async () => {
-        const result = await db.query(sql, vars).collect<[T]>();
-        Effect.logDebug("[Database] Query Local Database - Result", {
-          sql,
-          vars,
-          result,
-        });
-        return result[0];
-      },
-      catch: (error) =>
-        new LocalDatabaseError({
-          message: "Failed to execute query on local database",
-          cause: error,
-        }),
-    });
-  });
+  ): Promise<T> => {
+    try {
+      // In surrealdb 1.x, query returns [result] where result is an array of rows
+      const result = vars ? await db.query<T[]>(sql, vars) : await db.query<T[]>(sql);
+      logger.debug("[Database] Query Local Database - Result", {
+        sql,
+        vars,
+        result,
+      });
+      // Return the array of rows (result[0]), not just the first row
+      // This allows callers to get arrays when they expect arrays, or destructure when needed
+      if (result && result.length > 0) {
+        if (Array.isArray(result[0])) {
+          // result[0] is an array of rows (normal SELECT query)
+          return result[0] as T;
+        } else {
+          // result[0] is a single value (LIVE query or single-row result)
+          // Wrap it in an array so callers can destructure if needed
+          return [result[0]] as unknown as T;
+        }
+      }
+      // If no results, return empty array for array types
+      return [] as unknown as T;
+    } catch (error) {
+      throw new LocalDatabaseError(
+        "Failed to execute query on local database",
+        error
+      );
+    }
+  };
 };
 
 export const makeLiveOfRemoteDatabase = (db: Surreal) => {
-  return Effect.fn("liveOfRemoteDatabaseInner")(function* (liveUuid: Uuid) {
-    return yield* Effect.tryPromise({
-      try: async () => {
-        const result = await db.liveOf(liveUuid);
-        return result;
-      },
-      catch: (error) =>
-        new RemoteDatabaseError({
-          message: "Failed to execute liveOf on remote database",
-          cause: error,
-        }),
-    });
-  });
+  return async (liveUuid: Uuid) => {
+    try {
+      // In surrealdb 1.x, it's `live` not `liveOf`, and it takes a string
+      return await db.live(liveUuid.toString());
+    } catch (error) {
+      throw new RemoteDatabaseError(
+        "Failed to execute live on remote database",
+        error
+      );
+    }
+  };
 };
 
 export const makeAuthenticateRemoteDatabase = (db: Surreal) => {
-  return Effect.fn("authenticateRemoteDatabase")(function* (token: string) {
-    return yield* Effect.tryPromise({
-      try: async () => {
-        await db.authenticate(token);
-        const [result] = await db
-          .query(`SELECT id FROM $auth`)
-          .collect<[{ id: RecordId }[]]>();
-        return result?.[0]?.id;
-      },
-      catch: (error) =>
-        new RemoteAuthenticationError({
-          message: "Failed to authenticate on remote database",
-          cause: error,
-        }),
-    });
-  });
+  return async (token: string): Promise<RecordId | undefined> => {
+    try {
+      await db.authenticate(token);
+      const result = await db.query<{ id: RecordId }[]>(`SELECT id FROM $auth`);
+      // In surrealdb 1.x, query returns [result] where result is an array of rows
+      if (result && result.length > 0 && Array.isArray(result[0]) && result[0].length > 0) {
+        return result[0][0]?.id;
+      }
+      return undefined;
+    } catch (error) {
+      throw new RemoteAuthenticationError(
+        "Failed to authenticate on remote database",
+        error
+      );
+    }
+  };
 };
 
 export const makeDeauthenticateRemoteDatabase = (db: Surreal) => {
-  return Effect.fn("deauthenticateRemoteDatabase")(function* () {
-    return yield* Effect.tryPromise({
-      try: async () => {
-        await db.invalidate();
-      },
-      catch: (error) =>
-        new RemoteDatabaseError({
-          message: "Failed to deauthenticate on remote database",
-          cause: error,
-        }),
-    });
-  });
+  return async (): Promise<void> => {
+    try {
+      await db.invalidate();
+    } catch (error) {
+      throw new RemoteDatabaseError(
+        "Failed to deauthenticate on remote database",
+        error
+      );
+    }
+  };
 };
 
 export const makeCloseRemoteDatabase = (db: Surreal) => {
-  return Effect.fn("deauthenticateRemoteDatabase")(function* () {
-    return yield* Effect.tryPromise({
-      try: async () => {
-        await db.close();
-      },
-      catch: (error) =>
-        new RemoteDatabaseError({
-          message: "Failed to close remote database",
-          cause: error,
-        }),
-    });
-  });
+  return async (): Promise<void> => {
+    try {
+      await db.close();
+    } catch (error) {
+      throw new RemoteDatabaseError(
+        "Failed to close remote database",
+        error
+      );
+    }
+  };
 };
 
 export const makeCloseLocalDatabase = (db: Surreal) => {
-  return Effect.fn("closeLocalDatabase")(function* () {
-    return yield* Effect.tryPromise({
-      try: async () => {
-        await db.close();
-      },
-      catch: (error) =>
-        new LocalDatabaseError({
-          message: "Failed to close local database",
-          cause: error,
-        }),
-    });
-  });
+  return async (): Promise<void> => {
+    try {
+      await db.close();
+    } catch (error) {
+      throw new LocalDatabaseError(
+        "Failed to close local database",
+        error
+      );
+    }
+  };
 };
 
 export const makeClearLocalCache = (db: Surreal) => {
-  return Effect.fn("clearLocalCache")(function* () {
-    return yield* Effect.tryPromise({
-      try: async () => {
-        // Get all tables and delete all records from them
-        const [info] = await db.query("INFO FOR DB").collect<
-          [
-            {
-              tables: Record<string, unknown>;
-            }
-          ]
-        >();
+  return async (): Promise<void> => {
+    try {
+      // Get all tables and delete all records from them
+      const result = await db.query<[{ tables: Record<string, unknown> }]>("INFO FOR DB");
+      // In surrealdb 1.x, query returns [result] where result is an array of rows
+      const info = result && result.length > 0 && Array.isArray(result[0]) && result[0].length > 0 
+        ? result[0][0] as { tables: Record<string, unknown> }
+        : null;
 
-        if (info?.tables) {
-          const tableNames = Object.keys(info.tables);
-          for (const tableName of tableNames) {
-            await db.query(`DELETE ${tableName}`).collect();
-          }
+      if (info?.tables) {
+        const tableNames = Object.keys(info.tables);
+        for (const tableName of tableNames) {
+          await db.query(`DELETE ${tableName}`);
         }
-      },
-      catch: (error) =>
-        new LocalDatabaseError({
-          message: "Failed to clear local cache",
-          cause: error,
-        }),
-    });
-  });
+      }
+    } catch (error) {
+      throw new LocalDatabaseError(
+        "Failed to clear local cache",
+        error
+      );
+    }
+  };
 };

@@ -1,6 +1,5 @@
-import { createRemoteEngines, Surreal } from "surrealdb";
-import { Effect, Layer } from "effect";
-import { CacheStrategy, makeConfig } from "./config.js";
+import { Surreal } from "surrealdb";
+import { CacheStrategy, SpookyConfig } from "./config.js";
 import { SchemaStructure } from "@spooky/query-builder";
 import {
   DatabaseService,
@@ -17,161 +16,133 @@ import {
   makeUseRemoteDatabase,
   RemoteDatabaseError,
 } from "./database.js";
-import { createWasmEngines } from "@surrealdb/wasm";
+import { surrealdbWasmEngines } from "@surrealdb/wasm";
+import { Logger } from "./logger.js";
 
-export const connectRemoteDatabase = Effect.fn("connectRemoteDatabase")(
-  function* (url: string) {
-    yield* Effect.logDebug(
-      `[DatabaseService] Connecting to remote database...`
-    );
+export async function connectRemoteDatabase(
+  url: string,
+  logger: Logger
+): Promise<Surreal> {
+  logger.debug(`[DatabaseService] Connecting to remote database...`);
 
-    const startTime = yield* Effect.sync(() => performance.now());
+  const startTime = performance.now();
 
-    const remote = yield* Effect.tryPromise({
-      try: async () => {
-        const r = new Surreal({
-          engines: createRemoteEngines(),
-          codecOptions: { useNativeDates: false },
-        });
-        await r.connect(url);
-        return r;
-      },
-      catch: (error) => {
-        return new RemoteDatabaseError({
-          message: "Failed to connect to remote database",
-          cause: error,
-        });
-      },
-    });
+  try {
+    const r = new Surreal();
+    await r.connect(url);
 
-    const endTime = yield* Effect.sync(() => performance.now());
+    const endTime = performance.now();
     const duration = (endTime - startTime).toFixed(2);
 
-    yield* Effect.logInfo(
-      `[DatabaseService] ✅ Connected successfully! (${duration}ms)`
-    );
-    yield* Effect.logDebug(`[DatabaseService] URL: ${url}`);
-    yield* Effect.logInfo(
+    logger.info(`[DatabaseService] ✅ Connected successfully! (${duration}ms)`);
+    logger.debug(`[DatabaseService] URL: ${url}`);
+    logger.info(
       `[DatabaseService] ✅ Connected successfully to remote database`
     );
 
-    return remote;
+    return r;
+  } catch (error) {
+    throw new RemoteDatabaseError(
+      "Failed to connect to remote database",
+      error
+    );
   }
-);
+}
 
-export const createLocalDatabase = Effect.fn("createLocalDatabase")(function* (
+export async function createLocalDatabase(
   dbName: string,
   strategy: CacheStrategy,
+  logger: Logger,
   namespace?: string,
   database?: string
-) {
-  yield* Effect.logDebug(`[DatabaseService] Creating WASM Surreal instance...`);
-  yield* Effect.logDebug(`[DatabaseService] Storage strategy: ${strategy}`);
-  yield* Effect.logDebug(`[DatabaseService] DB Name: ${dbName}`);
+): Promise<Surreal> {
+  logger.debug(`[DatabaseService] Creating WASM Surreal instance...`);
+  logger.debug(`[DatabaseService] Storage strategy: ${strategy}`);
+  logger.debug(`[DatabaseService] DB Name: ${dbName}`);
 
-  const local = yield* Effect.tryPromise({
-    try: async () => {
-      const instance = new Surreal({
-        engines: createWasmEngines({
-          capabilities: {
-            experimental: {
-              allow: ["record_references"],
-            },
-          },
-        }),
-        codecOptions: {
-          useNativeDates: false,
-        },
-      });
+  try {
+    const instance = new Surreal({
+      engines: surrealdbWasmEngines(),
+    });
 
-      // Determine connection URL based on storage strategy
-      let connectionUrl: string;
-      if (strategy === "indexeddb") {
-        // Using indxdb:// protocol for IndexedDB storage
-        connectionUrl = `indxdb://${dbName}`;
-      } else {
-        // Using mem:// protocol for in-memory storage
-        connectionUrl = "mem://";
-      }
+    // Determine connection URL based on storage strategy
+    let connectionUrl: string;
+    if (strategy === "indexeddb") {
+      // Using indxdb:// protocol for IndexedDB storage
+      connectionUrl = `indxdb://${dbName}`;
+    } else {
+      // Using mem:// protocol for in-memory storage
+      connectionUrl = "mem://";
+    }
 
-      const startTime = performance.now();
-      await instance.connect(connectionUrl);
-      const endTime = performance.now();
+    const startTime = performance.now();
+    await instance.connect(connectionUrl);
+    const endTime = performance.now();
 
-      const selectedNamespace = namespace || "main";
-      const selectedDatabase = database || dbName;
-      await instance.use({
-        namespace: selectedNamespace,
-        database: selectedDatabase,
-      });
+    const selectedNamespace = namespace || "main";
+    const selectedDatabase = database || dbName;
+    await instance.use({
+      namespace: selectedNamespace,
+      database: selectedDatabase,
+    });
 
-      return {
-        instance,
-        connectionUrl,
-        duration: (endTime - startTime).toFixed(2),
-      };
-    },
-    catch: (error: any) => {
-      return new LocalDatabaseError({
-        message: "Failed to create local database",
-        cause: error,
-      });
-    },
-  });
+    const duration = (endTime - startTime).toFixed(2);
 
-  yield* Effect.logInfo(
-    `[DatabaseService] ✅ Connected successfully! (${local.duration}ms)`
-  );
-  yield* Effect.logInfo(
-    `[DatabaseService] ✅ Local database fully initialized! (${
-      namespace || "main"
-    }/${database || dbName})`
-  );
+    logger.info(
+      `[DatabaseService] ✅ Connected successfully! (${duration}ms)`
+    );
+    logger.info(
+      `[DatabaseService] ✅ Local database fully initialized! (${selectedNamespace}/${selectedDatabase})`
+    );
 
-  return local.instance;
-});
+    return instance;
+  } catch (error: any) {
+    throw new LocalDatabaseError("Failed to create local database", error);
+  }
+}
 
 let localDatabase: Surreal | undefined;
 let internalDatabase: Surreal | undefined;
 let remoteDatabase: Surreal | undefined;
 
-export const DatabaseServiceLayer = <S extends SchemaStructure>() =>
-  Layer.scoped(
-    DatabaseService,
-    Effect.gen(function* () {
-      const { localDbName, storageStrategy, namespace, database, remoteUrl } =
-        yield* (yield* makeConfig<S>()).getConfig;
+export async function createDatabaseService<S extends SchemaStructure>(
+  config: SpookyConfig<S>,
+  logger: Logger
+): Promise<DatabaseService> {
+  const { localDbName, storageStrategy, namespace, database, remoteUrl } =
+    config;
 
-      internalDatabase = yield* createLocalDatabase(
-        localDbName,
-        storageStrategy,
-        "internal",
-        "main"
-      );
-
-      localDatabase = yield* createLocalDatabase(
-        localDbName,
-        storageStrategy,
-        namespace,
-        database
-      );
-
-      remoteDatabase = yield* connectRemoteDatabase(remoteUrl);
-
-      return DatabaseService.of({
-        useLocal: makeUseLocalDatabase(localDatabase),
-        useInternal: makeUseLocalDatabase(internalDatabase),
-        useRemote: makeUseRemoteDatabase(remoteDatabase),
-        queryLocal: makeQueryLocalDatabase(localDatabase),
-        queryInternal: makeQueryLocalDatabase(internalDatabase),
-        queryRemote: makeQueryRemoteDatabase(remoteDatabase),
-        liveOfRemote: makeLiveOfRemoteDatabase(remoteDatabase),
-        authenticate: makeAuthenticateRemoteDatabase(remoteDatabase),
-        deauthenticate: makeDeauthenticateRemoteDatabase(remoteDatabase),
-        closeRemote: makeCloseRemoteDatabase(remoteDatabase),
-        closeLocal: makeCloseLocalDatabase(localDatabase),
-        closeInternal: makeCloseLocalDatabase(internalDatabase),
-        clearLocalCache: makeClearLocalCache(localDatabase),
-      });
-    })
+  internalDatabase = await createLocalDatabase(
+    localDbName,
+    storageStrategy,
+    logger,
+    "internal",
+    "main"
   );
+
+  localDatabase = await createLocalDatabase(
+    localDbName,
+    storageStrategy,
+    logger,
+    namespace,
+    database
+  );
+
+  remoteDatabase = await connectRemoteDatabase(remoteUrl, logger);
+
+  return {
+    useLocal: makeUseLocalDatabase(localDatabase),
+    useInternal: makeUseLocalDatabase(internalDatabase),
+    useRemote: makeUseRemoteDatabase(remoteDatabase),
+    queryLocal: makeQueryLocalDatabase(localDatabase, logger),
+    queryInternal: makeQueryLocalDatabase(internalDatabase, logger),
+    queryRemote: makeQueryRemoteDatabase(remoteDatabase, logger),
+    liveOfRemote: makeLiveOfRemoteDatabase(remoteDatabase),
+    authenticate: makeAuthenticateRemoteDatabase(remoteDatabase),
+    deauthenticate: makeDeauthenticateRemoteDatabase(remoteDatabase),
+    closeRemote: makeCloseRemoteDatabase(remoteDatabase),
+    closeLocal: makeCloseLocalDatabase(localDatabase),
+    closeInternal: makeCloseLocalDatabase(internalDatabase),
+    clearLocalCache: makeClearLocalCache(localDatabase),
+  };
+}

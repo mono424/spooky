@@ -1,21 +1,14 @@
 import {
-  Context,
-  Effect,
-  Layer,
-  Logger,
-  LogLevel,
-  Runtime,
-  Schedule,
-} from "effect";
-import {
   SchemaStructure,
   TableModel,
   TableNames,
   GetTable,
 } from "@spooky/query-builder";
-import { DatabaseService, makeConfig, QueryManagerService } from "./index.js";
+import { DatabaseService } from "./index.js";
 import { encodeToSpooky, generateNewId } from "./converter.js";
 import { RecordId } from "surrealdb";
+import { Logger } from "./logger.js";
+import { QueryManagerService } from "./query-manager.js";
 
 export type MutationType = "create" | "update" | "delete";
 
@@ -73,207 +66,204 @@ export interface DeleteMutation<
   lastError?: string;
 }
 
-export class MutationManagerService extends Context.Tag(
-  "MutationManagerService"
-)<
-  MutationManagerService,
-  {
-    readonly runtime: Runtime.Runtime<DatabaseService>;
-    run: ReturnType<typeof makeRun>;
-    create: ReturnType<typeof makeCreate<SchemaStructure>>;
-    update: ReturnType<typeof makeUpdate<SchemaStructure>>;
-    delete: ReturnType<typeof makeDelete<SchemaStructure>>;
-  }
->() {}
+export class MutationManagerService<S extends SchemaStructure> {
+  constructor(
+    private schema: S,
+    private databaseService: DatabaseService,
+    private queryManagerService: QueryManagerService<S>,
+    private logger: Logger
+  ) {}
 
-const buildCreateQuery = Effect.fn("buildCreateQuery")(function* <
-  S extends SchemaStructure,
-  N extends TableNames<S>
->(id: RecordId, payload: TableModel<GetTable<S, N>>) {
-  const setQuery = Object.entries(payload)
-    .map(([key, value]) => `${key} = $${key}`)
-    .join(", ");
+  private buildCreateQuery<N extends TableNames<S>>(
+    id: RecordId,
+    payload: TableModel<GetTable<S, N>>
+  ): string {
+    const setQuery = Object.entries(payload)
+      .map(([key, value]) => `${key} = $${key}`)
+      .join(", ");
 
-  return `CREATE ${id.table.name}:${id.id} SET ${setQuery};`;
-});
-
-const createMutation = Effect.fn("createMutation")(function* <
-  S extends SchemaStructure,
-  N extends TableNames<S>
->(mutation: Mutation<S, N>) {
-  const databaseService = yield* DatabaseService;
-  const [result] = yield* databaseService.queryInternal<{ id: RecordId }[]>(
-    `CREATE _mutations CONTENT $payload`,
-    {
-      payload: mutation,
-    }
-  );
-  return {
-    ...mutation,
-    id: result.id,
-  };
-});
-
-const mutationApplyLocal = Effect.fn("queryLocalRefresh")(function* <
-  S extends SchemaStructure,
-  N extends TableNames<S>
->(mutation: Mutation<S, N>) {
-  yield* Effect.logDebug("[MutationManager] Apply locally", {
-    id: mutation.id,
-  });
-  const databaseService = yield* DatabaseService;
-
-  switch (mutation.operationType) {
-    case "create":
-      const q = yield* buildCreateQuery(mutation.recordId, mutation.data);
-      yield* databaseService.queryLocal<TableModel<GetTable<S, N>>[]>(
-        q,
-        mutation.data
-      );
-      break;
-
-    case "update":
-      const updateMutation = mutation as UpdateMutation<S, N>;
-      yield* databaseService.queryLocal<TableModel<GetTable<S, N>>[]>(
-        `UPDATE ${updateMutation.recordId.toString()} CONTENT $patches`,
-        {
-          patches: updateMutation.patches,
-        }
-      );
-      break;
-
-    case "delete":
-      const deleteMutation = mutation as DeleteMutation<S, N>;
-      yield* databaseService.queryLocal<TableModel<GetTable<S, N>>[]>(
-        `DELETE ${deleteMutation.recordId.toString()}`
-      );
-      break;
-
-    default:
-      yield* Effect.die(`Unknown mutation type`);
-      return;
+    // In surrealdb 1.x, RecordId has .tb and .id properties
+    return `CREATE ${id.tb}:${id.id} SET ${setQuery};`;
   }
 
-  yield* Effect.logDebug("[MutationManager] Apply locally - Done", {
-    id: mutation.id,
-  });
-});
-
-const mutationApplyRemote = Effect.fn("queryLocalRefresh")(function* <
-  S extends SchemaStructure,
-  N extends TableNames<S>
->(mutation: Mutation<S, N>) {
-  yield* Effect.logDebug("[MutationManager] Apply remote", {
-    id: mutation.id,
-  });
-  const databaseService = yield* DatabaseService;
-
-  switch (mutation.operationType) {
-    case "create":
-      const q = yield* buildCreateQuery(mutation.recordId, mutation.data);
-      yield* Effect.logDebug("[MutationManager] Create remote", {
-        id: mutation.id,
-        query: q,
-        data: mutation.data,
-      });
-      yield* databaseService.queryRemote<TableModel<GetTable<S, N>>[]>(
-        q,
-        mutation.data
-      );
-      break;
-
-    case "update":
-      yield* Effect.logDebug("[MutationManager] Update remote", {
-        id: mutation.id,
-        recordId: mutation.recordId,
-        data: mutation.patches,
-      });
-      yield* databaseService.queryRemote<TableModel<GetTable<S, N>>[]>(
-        `UPDATE ${mutation.recordId.toString()} CONTENT $patches`,
-        {
-          patches: mutation.patches,
-        }
-      );
-      break;
-
-    case "delete":
-      yield* Effect.logDebug("[MutationManager] Delete remote", {
-        id: mutation.id,
-        recordId: mutation.recordId,
-      });
-      yield* databaseService.queryRemote<TableModel<GetTable<S, N>>[]>(
-        `DELETE ${mutation.recordId.toString()}`
-      );
-      break;
-
-    default:
-      yield* Effect.die(`Unknown mutation type`);
-      return;
-  }
-
-  yield* Effect.logDebug("[MutationManager] Apply remote - Done", {
-    id: mutation.id,
-  });
-});
-
-const makeRun = (runtime: Runtime.Runtime<DatabaseService>) => {
-  const run = <S extends SchemaStructure, N extends TableNames<S>>(
+  private async createMutation<N extends TableNames<S>>(
     mutation: Mutation<S, N>
-  ) =>
-    Effect.gen(function* () {
-      yield* Effect.logDebug("[MutationManager] Run - Starting");
-      const queryManager = yield* QueryManagerService;
-      yield* createMutation(mutation).pipe(
-        Effect.catchAll((error) =>
-          Effect.logError("Failed to create mutation", error)
-        ),
-        Effect.provide(runtime)
-      );
-      yield* mutationApplyLocal(mutation).pipe(
-        Effect.catchAll((error) =>
-          Effect.logError("Failed to apply mutation locally", error)
-        ),
-        Effect.provide(runtime)
-      );
-      yield* queryManager.refreshTableQueries(mutation.tableName);
-      yield* mutationApplyRemote(mutation).pipe(
-        Effect.retry({
-          times: 3,
-          schedule: Schedule.exponential("10 millis"),
-        }),
-        Effect.catchAll((error) =>
-          Effect.logError("Failed to apply mutation remotely", error)
-        ),
-        Effect.provide(runtime)
-      );
-      yield* queryManager.refreshTableQueries(mutation.tableName);
-      yield* Effect.logDebug("[MutationManager] Run - Done");
-    }).pipe(Logger.withMinimumLogLevel(LogLevel.Debug));
+  ): Promise<Mutation<S, N>> {
+    const [result] = await this.databaseService.queryInternal<{ id: RecordId }[]>(
+      `CREATE _mutations CONTENT $payload`,
+      {
+        payload: mutation,
+      }
+    );
+    return {
+      ...mutation,
+      id: result.id,
+    };
+  }
 
-  return run;
-};
+  private async mutationApplyLocal<N extends TableNames<S>>(
+    mutation: Mutation<S, N>
+  ): Promise<void> {
+    this.logger.debug("[MutationManager] Apply locally", {
+      id: mutation.id,
+    });
 
-export const makeCreate = <S extends SchemaStructure>(
-  schema: S,
-  run: ReturnType<typeof makeRun>
-) => {
-  return Effect.fn("create")(function* <N extends TableNames<S>>(
+    switch (mutation.operationType) {
+      case "create":
+        const q = this.buildCreateQuery(mutation.recordId, mutation.data);
+        await this.databaseService.queryLocal<TableModel<GetTable<S, N>>[]>(
+          q,
+          mutation.data
+        );
+        break;
+
+      case "update":
+        const updateMutation = mutation as UpdateMutation<S, N>;
+        await this.databaseService.queryLocal<TableModel<GetTable<S, N>>[]>(
+          `UPDATE ${updateMutation.recordId.toString()} CONTENT $patches`,
+          {
+            patches: updateMutation.patches,
+          }
+        );
+        break;
+
+      case "delete":
+        const deleteMutation = mutation as DeleteMutation<S, N>;
+        await this.databaseService.queryLocal<TableModel<GetTable<S, N>>[]>(
+          `DELETE ${deleteMutation.recordId.toString()}`
+        );
+        break;
+
+      default:
+        throw new Error(`Unknown mutation type`);
+    }
+
+    this.logger.debug("[MutationManager] Apply locally - Done", {
+      id: mutation.id,
+    });
+  }
+
+  private async mutationApplyRemote<N extends TableNames<S>>(
+    mutation: Mutation<S, N>
+  ): Promise<void> {
+    this.logger.debug("[MutationManager] Apply remote", {
+      id: mutation.id,
+    });
+
+    switch (mutation.operationType) {
+      case "create":
+        const q = this.buildCreateQuery(mutation.recordId, mutation.data);
+        this.logger.debug("[MutationManager] Create remote", {
+          id: mutation.id,
+          query: q,
+          data: mutation.data,
+        });
+        await this.databaseService.queryRemote<TableModel<GetTable<S, N>>[]>(
+          q,
+          mutation.data
+        );
+        break;
+
+      case "update":
+        this.logger.debug("[MutationManager] Update remote", {
+          id: mutation.id,
+          recordId: mutation.recordId,
+          data: mutation.patches,
+        });
+        await this.databaseService.queryRemote<TableModel<GetTable<S, N>>[]>(
+          `UPDATE ${mutation.recordId.toString()} CONTENT $patches`,
+          {
+            patches: mutation.patches,
+          }
+        );
+        break;
+
+      case "delete":
+        this.logger.debug("[MutationManager] Delete remote", {
+          id: mutation.id,
+          recordId: mutation.recordId,
+        });
+        await this.databaseService.queryRemote<TableModel<GetTable<S, N>>[]>(
+          `DELETE ${mutation.recordId.toString()}`
+        );
+        break;
+
+      default:
+        throw new Error(`Unknown mutation type`);
+    }
+
+    this.logger.debug("[MutationManager] Apply remote - Done", {
+      id: mutation.id,
+    });
+  }
+
+  private async runWithRetry<N extends TableNames<S>>(
+    mutation: Mutation<S, N>
+  ): Promise<void> {
+    const maxRetries = 3;
+    const baseDelay = 10;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        await this.mutationApplyRemote(mutation);
+        return; // Success, exit the retry loop
+      } catch (error) {
+        if (attempt === maxRetries) {
+          this.logger.error("Failed to apply mutation remotely", error);
+          throw error;
+        }
+        // Exponential backoff
+        const delay = baseDelay * Math.pow(2, attempt);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+  }
+
+  private async run<N extends TableNames<S>>(
+    mutation: Mutation<S, N>
+  ): Promise<void> {
+    this.logger.debug("[MutationManager] Run - Starting");
+
+    try {
+      await this.createMutation(mutation);
+    } catch (error) {
+      this.logger.error("Failed to create mutation", error);
+    }
+
+    try {
+      await this.mutationApplyLocal(mutation);
+    } catch (error) {
+      this.logger.error("Failed to apply mutation locally", error);
+    }
+
+    await this.queryManagerService.refreshTableQueries(mutation.tableName);
+
+    try {
+      await this.runWithRetry(mutation);
+    } catch (error) {
+      this.logger.error("Failed to apply mutation remotely", error);
+    }
+
+    await this.queryManagerService.refreshTableQueries(mutation.tableName);
+
+    this.logger.debug("[MutationManager] Run - Done");
+  }
+
+  async create<N extends TableNames<S>>(
     tableName: N,
     payload: TableModel<GetTable<S, N>>
-  ) {
-    const encodedPayload = yield* encodeToSpooky(schema, tableName, payload);
+  ): Promise<void> {
+    const encodedPayload = encodeToSpooky(this.schema, tableName, payload);
     if (!encodedPayload) {
-      yield* Effect.fail("payload could not be encoded");
-      return;
+      throw new Error("payload could not be encoded");
     }
 
-    const id = yield* generateNewId(tableName);
+    const id = generateNewId(tableName);
     if (!id) {
-      yield* Effect.fail("id could not be generated");
-      return;
+      throw new Error("id could not be generated");
     }
 
-    return yield* run<S, N>({
+    return this.run<N>({
       operationType: "create",
       tableName: tableName,
       recordId: id,
@@ -281,18 +271,13 @@ export const makeCreate = <S extends SchemaStructure>(
       createdAt: new Date(),
       retryCount: 0,
     });
-  });
-};
+  }
 
-export const makeUpdate = <S extends SchemaStructure>(
-  schema: S,
-  run: ReturnType<typeof makeRun>
-) => {
-  return Effect.fn("update")(function* <N extends TableNames<S>>(
+  async update<N extends TableNames<S>>(
     tableName: N,
     recordId: RecordId,
     payload: Partial<TableModel<GetTable<S, N>>>
-  ) {
+  ): Promise<void> {
     const patches = Object.entries(payload)
       .filter(([key]) => key !== "id")
       .map(([key, value]) => ({
@@ -301,7 +286,7 @@ export const makeUpdate = <S extends SchemaStructure>(
         value: value,
       }));
 
-    return yield* run<S, N>({
+    return this.run<N>({
       operationType: "update",
       recordId,
       tableName: tableName,
@@ -310,18 +295,13 @@ export const makeUpdate = <S extends SchemaStructure>(
       createdAt: new Date(),
       retryCount: 0,
     });
-  });
-};
+  }
 
-export const makeDelete = <S extends SchemaStructure>(
-  schema: S,
-  run: ReturnType<typeof makeRun>
-) => {
-  return Effect.fn("delete")(function* <N extends TableNames<S>>(
+  async delete<N extends TableNames<S>>(
     tableName: N,
     id: RecordId
-  ) {
-    return yield* run<S, N>({
+  ): Promise<void> {
+    return this.run<N>({
       operationType: "delete",
       tableName: tableName,
       recordId: id,
@@ -329,29 +309,19 @@ export const makeDelete = <S extends SchemaStructure>(
       createdAt: new Date(),
       retryCount: 0,
     });
-  });
-};
+  }
+}
 
-export const MutationManagerServiceLayer = <S extends SchemaStructure>() =>
-  Layer.scoped(
-    MutationManagerService,
-    Effect.gen(function* () {
-      const { schema } = yield* (yield* makeConfig<S>()).getConfig;
-      const runtime = yield* Effect.runtime<DatabaseService>();
-      const run = makeRun(runtime);
-
-      return MutationManagerService.of({
-        runtime,
-        run,
-        create: makeCreate(schema, run) as ReturnType<
-          typeof makeCreate<SchemaStructure>
-        >,
-        update: makeUpdate(schema, run) as ReturnType<
-          typeof makeUpdate<SchemaStructure>
-        >,
-        delete: makeDelete(schema, run) as ReturnType<
-          typeof makeDelete<SchemaStructure>
-        >,
-      });
-    })
+export function createMutationManagerService<S extends SchemaStructure>(
+  schema: S,
+  databaseService: DatabaseService,
+  queryManagerService: QueryManagerService<S>,
+  logger: Logger
+): MutationManagerService<S> {
+  return new MutationManagerService(
+    schema,
+    databaseService,
+    queryManagerService,
+    logger
   );
+}

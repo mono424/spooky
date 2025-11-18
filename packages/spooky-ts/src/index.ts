@@ -1,49 +1,66 @@
-import {
-  ConfigLayer,
-  SpookyConfig,
-  QueryManagerServiceLayer,
-  MutationManagerServiceLayer,
-  LoggerLayer,
-} from "./services/index.js";
-import { DatabaseServiceLayer } from "./services/database-wasm.js";
-import { Effect, Layer } from "effect";
-import { mainProgram } from "./spooky.js";
 import { SchemaStructure } from "@spooky/query-builder";
-import { AuthManagerServiceLayer } from "./services/auth-manager.js";
+import { SpookyConfig } from "./services/index.js";
+import { createDatabaseService } from "./services/database-wasm.js";
+import { createAuthManagerService } from "./services/auth-manager.js";
+import { createQueryManagerService } from "./services/query-manager.js";
+import { createMutationManagerService } from "./services/mutation-manager.js";
+import { createLogger } from "./services/logger.js";
+import { runProvision } from "./provision.js";
+import { createSpookyInstance, SpookyInstance } from "./spooky.js";
+
+// Re-export types and values
 export * from "./types.js";
+export type { SpookyInstance } from "./spooky.js";
 
-export function createSpooky<S extends SchemaStructure>(
+// Re-export common query-builder exports as values
+export { QueryBuilder, RecordId } from "@spooky/query-builder";
+export type {
+  GetTable,
+  SchemaStructure,
+  TableModel,
+  TableNames,
+} from "@spooky/query-builder";
+
+// Re-export Surreal type and value
+export type { Surreal } from "surrealdb";
+
+export async function createSpooky<S extends SchemaStructure>(
   config: SpookyConfig<S>
-) {
-  const configLayer = ConfigLayer<S>(config);
-  const loggerLayer = LoggerLayer<S>(config);
+): Promise<SpookyInstance<S>> {
+  const logger = createLogger(config.logLevel);
 
-  const databaseServiceLayer = DatabaseServiceLayer<S>().pipe(
-    Layer.provide(configLayer)
-  );
-  const authManagerServiceLayer = AuthManagerServiceLayer<S>().pipe(
-    Layer.provide(databaseServiceLayer)
-  );
-  const queryManagerServiceLayer = QueryManagerServiceLayer<S>().pipe(
-    Layer.provide(configLayer),
-    Layer.provide(databaseServiceLayer),
-    Layer.provide(authManagerServiceLayer)
-  );
-  const mutationManagerServiceLayer = MutationManagerServiceLayer<S>().pipe(
-    Layer.provide(configLayer),
-    Layer.provide(databaseServiceLayer),
-    Layer.provide(authManagerServiceLayer),
-    Layer.provide(queryManagerServiceLayer)
+  // Create database service
+  const databaseService = await createDatabaseService(config, logger);
+
+  // Run provisioning
+  await runProvision(
+    config.database,
+    config.schemaSurql,
+    databaseService,
+    logger,
+    config.provisionOptions
   );
 
-  const MainLayer = Layer.mergeAll(
-    loggerLayer,
-    configLayer,
-    databaseServiceLayer,
-    authManagerServiceLayer,
-    queryManagerServiceLayer,
-    mutationManagerServiceLayer
+  // Create services
+  const authManager = createAuthManagerService(databaseService);
+  const queryManager = createQueryManagerService(
+    config.schema,
+    databaseService,
+    logger
+  );
+  const mutationManager = createMutationManagerService(
+    config.schema,
+    databaseService,
+    queryManager,
+    logger
   );
 
-  return mainProgram<S>().pipe(Effect.provide(MainLayer), Effect.runPromise);
+  // Create and return the Spooky instance
+  return createSpookyInstance(
+    config.schema,
+    databaseService,
+    authManager,
+    queryManager,
+    mutationManager
+  );
 }

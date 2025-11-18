@@ -1,6 +1,5 @@
 import { SchemaStructure } from "@spooky/query-builder";
-import { Context, Effect, Layer } from "effect";
-import { ProvisionOptions } from "src/provision.js";
+import { ProvisionOptions } from "../provision.js";
 
 export type CacheStrategy = "memory" | "indexeddb";
 
@@ -28,22 +27,3 @@ export interface SpookyConfig<S extends SchemaStructure> {
   /** Log level */
   logLevel: LogLevel;
 }
-
-export class Config extends Context.Tag("Config")<
-  Config,
-  {
-    readonly getConfig: Effect.Effect<SpookyConfig<SchemaStructure>>;
-  }
->() {}
-
-export const makeConfig = <S extends SchemaStructure>() =>
-  Context.GenericTag<{
-    readonly getConfig: Effect.Effect<SpookyConfig<S>>;
-  }>("Config");
-
-export const ConfigLayer = <S extends SchemaStructure>(
-  config: SpookyConfig<S>
-) =>
-  Layer.succeed(makeConfig<S>(), {
-    getConfig: Effect.succeed(config),
-  });

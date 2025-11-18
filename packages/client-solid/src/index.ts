@@ -9,7 +9,6 @@ import {
   createSpooky,
   Surreal,
 } from "@spooky/spooky-ts";
-import { Effect } from "effect";
 export type { RecordResult } from "surrealdb";
 
 export { RecordId } from "surrealdb";
@@ -67,7 +66,7 @@ export class SyncedDb<const Schema extends SchemaStructure> {
     payload: TableModel<GetTable<Schema, TName>>
   ): Promise<void> {
     if (!this.spooky) throw new Error("SyncedDb not initialized");
-    await Effect.runPromise(this.spooky.create(tableName, payload));
+    await this.spooky.create(tableName, payload);
   }
 
   /**
@@ -77,26 +76,32 @@ export class SyncedDb<const Schema extends SchemaStructure> {
     table: TName
   ): QueryBuilder<Schema, TName, {}, false> {
     if (!this.spooky) throw new Error("SyncedDb not initialized");
-    return Effect.runSync(this.spooky.query(table, {}));
+    return this.spooky.query(table, {});
   }
 
   /**
-   * Query data from the database
+   * Authenticate with the database
    */
   public async authenticate(token: string): Promise<RecordId<string>> {
     if (!this.spooky) throw new Error("SyncedDb not initialized");
-    const userId = await Effect.runPromise(this.spooky.authenticate(token));
-    return userId;
+    const userId = await this.spooky.authenticate(token);
+    return userId!;
   }
 
+  /**
+   * Deauthenticate from the database
+   */
   public async deauthenticate(): Promise<void> {
     if (!this.spooky) throw new Error("SyncedDb not initialized");
-    await Effect.runPromise(this.spooky.deauthenticate());
+    await this.spooky.deauthenticate();
   }
 
-  public db(): Surreal {
+  /**
+   * Execute a function with direct access to the remote database connection
+   */
+  public async useRemote<T>(fn: (db: Surreal) => T | Promise<T>): Promise<T> {
     if (!this.spooky) throw new Error("SyncedDb not initialized");
-    return Effect.runSync(this.spooky.useRemote((db) => db));
+    return await this.spooky.useRemote(fn);
   }
 }
 

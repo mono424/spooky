@@ -1,6 +1,8 @@
 import { Accessor, createSignal } from "solid-js";
 import { db } from "../db";
 import { useAuth } from "../lib/auth";
+import { RecordId } from "@spooky/client-solid";
+import { Uuid } from "surrealdb";
 
 interface CommentFormProps {
   thread: Accessor<{ id: string }>;
@@ -23,14 +25,18 @@ export function CommentForm(props: CommentFormProps) {
         throw new Error("You must be logged in to post a comment");
       }
 
-      const result = await db.create("comment", {
+      // Generate a record ID before creating
+      const commentId = new RecordId("comment", Uuid.v4().toString().replace(/-/g, ""));
+      
+      await db.create("comment", {
+        id: commentId,
         thread: props.thread().id,
         content: content().trim(),
         author: user.id,
-        created_at: new Date(),
+        created_at: new Date().toISOString(),
       });
 
-      console.log("[CommentForm] Comment created:", result);
+      console.log("[CommentForm] Comment created with ID:", commentId.toString());
 
       setContent("");
       props.onCommentAdded?.();

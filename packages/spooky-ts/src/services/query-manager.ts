@@ -1,13 +1,19 @@
-import { Context, Effect, Layer, Runtime } from "effect";
 import {
   ColumnSchema,
   InnerQuery,
   SchemaStructure,
   TableModel,
 } from "@spooky/query-builder";
-import { DatabaseService, makeConfig } from "./index.js";
-import { LiveMessage, Uuid } from "surrealdb";
+import { DatabaseService } from "./index.js";
+import { Uuid } from "surrealdb";
+
+// Live message type for surrealdb 1.x (different from 2.x)
+interface LiveMessage {
+  action: "CREATE" | "UPDATE" | "DELETE";
+  value: unknown;
+}
 import { decodeFromSpooky } from "./converter.js";
+import { Logger } from "./logger.js";
 
 export type CleanupFn = () => void;
 
@@ -23,365 +29,326 @@ export interface QueryCache<S extends SchemaStructure> {
   [key: number]: Query<{ columns: S["tables"][number]["columns"] }, boolean>;
 }
 
-export class QueryManagerService extends Context.Tag("QueryManagerService")<
-  QueryManagerService,
-  {
-    readonly runtime: Runtime.Runtime<DatabaseService>;
-    readonly cache: QueryCache<SchemaStructure>;
-    run: <T extends { columns: Record<string, ColumnSchema> }>(
-      query: InnerQuery<T, boolean>
-    ) => ReturnType<ReturnType<typeof makeRun>>;
-    refreshTableQueries: <T extends { columns: Record<string, ColumnSchema> }>(
-      table: string
-    ) => ReturnType<ReturnType<typeof makeRefreshTableQueries>>;
-  }
->() {}
+export class QueryManagerService<S extends SchemaStructure> {
+  private cache: QueryCache<S> = {};
 
-const cache: QueryCache<SchemaStructure> = {};
+  constructor(
+    private schema: S,
+    private databaseService: DatabaseService,
+    private logger: Logger
+  ) {}
 
-/**
- * Custom JSON.stringify function that formats Date objects as SurrealDB date literals.
- * Dates are formatted as: d"2025-11-12T05:47:42.527106262Z"
- */
-function surrealStringify<S extends SchemaStructure>(
-  schema: S,
-  tableName: string,
-  value: unknown
-): string {
-  const table = schema.tables.find((t) => t.name === tableName);
-  if (!table) {
-    throw new Error(`Table ${tableName} not found in schema`);
-  }
-
-  // Use a unique placeholder for dates to avoid conflicts
-  const DATE_PLACEHOLDER = "__SURREAL_DATE__";
-
-  // First pass: replace Date objects with placeholders
-  const replacer = (key: string, val: unknown): unknown => {
-    if (table.columns[key]?.dateTime) {
-      return DATE_PLACEHOLDER + val + DATE_PLACEHOLDER;
+  /**
+   * Custom JSON.stringify function that formats Date objects as SurrealDB date literals.
+   * Dates are formatted as: d"2025-11-12T05:47:42.527106262Z"
+   */
+  private surrealStringify(tableName: string, value: unknown): string {
+    const table = this.schema.tables.find((t) => t.name === tableName);
+    if (!table) {
+      throw new Error(`Table ${tableName} not found in schema`);
     }
-    return val;
-  };
 
-  // Stringify with replacer
-  let jsonString = JSON.stringify(value, replacer);
-  // Second pass: replace placeholders with SurrealDB date format
-  // Match the placeholder pattern and replace with SurrealDB date literal
-  jsonString = jsonString.replace(
-    new RegExp(`"${DATE_PLACEHOLDER}([^"]+)${DATE_PLACEHOLDER}"`, "g"),
-    (match, isoString) => `d"${isoString}"`
-  );
+    // Use a unique placeholder for dates to avoid conflicts
+    const DATE_PLACEHOLDER = "__SURREAL_DATE__";
 
-  return jsonString;
-}
+    // First pass: replace Date objects with placeholders
+    const replacer = (key: string, val: unknown): unknown => {
+      if (table.columns[key]?.dateTime) {
+        return DATE_PLACEHOLDER + val + DATE_PLACEHOLDER;
+      }
+      return val;
+    };
 
-const queryLocalRefresh = Effect.fn("queryLocalRefresh")(function* <
-  S extends SchemaStructure,
-  T extends { columns: Record<string, ColumnSchema> }
->(schema: S, query: InnerQuery<T, boolean>) {
-  yield* Effect.logDebug("[QueryManager] Local Query Refresh - Starting", {
-    queryHash: query.hash,
-  });
-  const databaseService = yield* DatabaseService;
+    // Stringify with replacer
+    let jsonString = JSON.stringify(value, replacer);
+    // Second pass: replace placeholders with SurrealDB date format
+    // Match the placeholder pattern and replace with SurrealDB date literal
+    jsonString = jsonString.replace(
+      new RegExp(`"${DATE_PLACEHOLDER}([^"]+)${DATE_PLACEHOLDER}"`, "g"),
+      (match, isoString) => `d"${isoString}"`
+    );
 
-  const results = yield* databaseService.queryLocal<TableModel<T>[]>(
-    query.selectQuery.query,
-    query.selectQuery.vars
-  );
-  yield* Effect.logDebug("[QueryManager] Local Query Refresh - Done", {
-    queryHash: query.hash,
-    resultLength: results?.length ?? 0,
-  });
+    return jsonString;
+  }
 
-  const decodedResults = yield* Effect.all(
-    results.map((result) => decodeFromSpooky(schema, query.tableName, result))
-  );
+  private async queryLocalRefresh<T extends { columns: Record<string, ColumnSchema> }>(
+    query: InnerQuery<T, boolean>
+  ): Promise<void> {
+    this.logger.debug("[QueryManager] Local Query Refresh - Starting", {
+      queryHash: query.hash,
+    });
 
-  query.setData(decodedResults.filter((result) => result !== undefined));
-});
+    const results = await this.databaseService.queryLocal<TableModel<T>[]>(
+      query.selectQuery.query,
+      query.selectQuery.vars
+    );
 
-const makeRefreshTableQueries = <S extends SchemaStructure>(schema: S) =>
-  Effect.fn("refreshTableQueries")(function* <
-    T extends { columns: Record<string, ColumnSchema> }
-  >(table: string) {
-    yield* Effect.logDebug("[QueryManager] Refresh Table Queries - Starting", {
+    this.logger.debug("[QueryManager] Local Query Refresh - Done", {
+      queryHash: query.hash,
+      resultLength: results?.length ?? 0,
+    });
+
+    const decodedResults = results.map((result) =>
+      decodeFromSpooky(this.schema, query.tableName, result)
+    );
+
+    query.setData(decodedResults.filter((result) => result !== undefined));
+  }
+
+  async refreshTableQueries(table: string): Promise<void> {
+    this.logger.debug("[QueryManager] Refresh Table Queries - Starting", {
       table,
     });
 
-    for (const query of Object.values(cache)) {
+    for (const query of Object.values(this.cache)) {
       if (query.innerQuery.tableName === table) {
-        yield* queryLocalRefresh(schema, query.innerQuery);
+        try {
+          await this.queryLocalRefresh(query.innerQuery);
+        } catch (error) {
+          this.logger.error("Failed to refresh query", error);
+        }
       }
     }
 
-    yield* Effect.logDebug("[QueryManager] Refresh Table Queries - Done", {
+    this.logger.debug("[QueryManager] Refresh Table Queries - Done", {
       table,
     });
-  });
-
-const queryRemoteHydration = Effect.fn("queryRemoteHydration")(function* <
-  S extends SchemaStructure,
-  T extends { columns: Record<string, ColumnSchema> }
->(schema: S, query: InnerQuery<T, boolean>) {
-  yield* Effect.logDebug("[QueryManager] Remote Query Hydration - Starting", {
-    queryHash: query.hash,
-    query: query.selectQuery.query,
-  });
-
-  const databaseService = yield* DatabaseService;
-  const results = yield* databaseService.queryRemote<TableModel<T>[]>(
-    query.selectQuery.query,
-    query.selectQuery.vars
-  );
-
-  yield* Effect.logDebug(
-    "[QueryManager] Remote Query Hydration - Remote query done",
-    {
-      queryHash: query.hash,
-      resultLength: results?.length ?? 0,
-    }
-  );
-  console.log("results", results);
-  const hydrateQuery = results
-    .map(
-      ({ id, ...payload }) =>
-        `UPSERT ${id} CONTENT ${surrealStringify(
-          schema,
-          query.tableName,
-          payload
-        )}`
-    )
-    .join(";\n");
-
-  yield* Effect.logDebug(
-    "[QueryManager] Remote Query Hydration - Updating local cache",
-    {
-      queryHash: query.hash,
-      hydrateQuery,
-    }
-  );
-
-  yield* databaseService.queryLocal(hydrateQuery);
-  yield* Effect.logDebug(
-    "[QueryManager] Remote Query Hydration - Local cache updated",
-    {
-      queryHash: query.hash,
-      resultLength: results?.length ?? 0,
-    }
-  );
-
-  const decodedResults = yield* Effect.all(
-    results.map((result) => decodeFromSpooky(schema, query.tableName, result))
-  );
-
-  query.setData(decodedResults.filter((result) => result !== undefined));
-});
-
-const handleRemoteUpdate = Effect.fn("handleRemoteUpdate")(function* <
-  T extends { columns: Record<string, ColumnSchema> }
->(query: InnerQuery<T, boolean>, event: LiveMessage) {
-  switch (event.action) {
-    case "CREATE":
-      yield* Effect.logDebug(
-        "[QueryManager] Live Event - Created:",
-        event.value
-      );
-      break;
-    case "UPDATE":
-      yield* Effect.logDebug(
-        "[QueryManager] Live Event - Updated:",
-        event.value
-      );
-      break;
-    case "DELETE":
-      yield* Effect.logDebug(
-        "[QueryManager] Live Event - Deleted:",
-        event.value
-      );
-      break;
-    default:
-      yield* Effect.logError(
-        "[QueryManager] Live Event - failed to handle remote update",
-        event
-      );
   }
-});
 
-const subscribeRemoteQuery = Effect.fn("subscribeRemoteQuery")(function* <
-  T extends { columns: Record<string, ColumnSchema> }
->(query: InnerQuery<T, boolean>) {
-  yield* Effect.logDebug("[QueryManager] Subscribe Remote Query - Starting", {
-    queryHash: query.hash,
-    query: query.selectLiveQuery.query,
-  });
-  const databaseService = yield* DatabaseService;
-  const [liveUuid] = yield* databaseService.queryRemote<Uuid[]>(
-    query.selectLiveQuery.query,
-    query.selectLiveQuery.vars
-  );
-
-  yield* Effect.logDebug(
-    "[QueryManager] Subscribe Remote Query - Created Live UUID",
-    {
-      queryHash: query.hash,
-      liveUuid: liveUuid,
-    }
-  );
-
-  const runtime = yield* Effect.runtime<DatabaseService>();
-
-  const subscription = yield* databaseService.liveOfRemote(liveUuid);
-  subscription.subscribe(async (event: LiveMessage) =>
-    Runtime.runPromise(runtime)(
-      handleRemoteUpdate(query, event).pipe(
-        Effect.catchAll((error) =>
-          Effect.logError("Failed to refresh query after subscription", error)
-        )
-      )
-    )
-  );
-
-  yield* Effect.logDebug(
-    "[QueryManager] Subscribe Remote Query - Subscribed to Live UUID",
-    {
-      queryHash: query.hash,
-      liveUuid: liveUuid,
-    }
-  );
-});
-
-const makeRun = <S extends SchemaStructure>(
-  schema: S,
-  runtime: Runtime.Runtime<DatabaseService>
-) => {
-  const run = <T extends { columns: Record<string, ColumnSchema> }>(
+  private async queryRemoteHydration<T extends { columns: Record<string, ColumnSchema> }>(
     query: InnerQuery<T, boolean>
-  ): Effect.Effect<{ cleanup: CleanupFn }, never, never> =>
-    Effect.gen(function* () {
-      yield* Effect.logDebug("[QueryManager] Run - Starting", {
+  ): Promise<void> {
+    this.logger.debug("[QueryManager] Remote Query Hydration - Starting", {
+      queryHash: query.hash,
+      query: query.selectQuery.query,
+    });
+
+    const results = await this.databaseService.queryRemote<TableModel<T>[]>(
+      query.selectQuery.query,
+      query.selectQuery.vars
+    );
+
+    this.logger.debug(
+      "[QueryManager] Remote Query Hydration - Remote query done",
+      {
+        queryHash: query.hash,
+        resultLength: results?.length ?? 0,
+      }
+    );
+
+    const hydrateQuery = results
+      .map(
+        ({ id, ...payload }) =>
+          `UPSERT ${id} CONTENT ${this.surrealStringify(
+            query.tableName,
+            payload
+          )}`
+      )
+      .join(";\n");
+
+    this.logger.debug(
+      "[QueryManager] Remote Query Hydration - Updating local cache",
+      {
+        queryHash: query.hash,
+        hydrateQuery,
+      }
+    );
+
+    await this.databaseService.queryLocal(hydrateQuery);
+    this.logger.debug(
+      "[QueryManager] Remote Query Hydration - Local cache updated",
+      {
+        queryHash: query.hash,
+        resultLength: results?.length ?? 0,
+      }
+    );
+
+    const decodedResults = results.map((result) =>
+      decodeFromSpooky(this.schema, query.tableName, result)
+    );
+
+    query.setData(decodedResults.filter((result) => result !== undefined));
+  }
+
+  private async handleRemoteUpdate<T extends { columns: Record<string, ColumnSchema> }>(
+    query: InnerQuery<T, boolean>,
+    event: LiveMessage
+  ): Promise<void> {
+    switch (event.action) {
+      case "CREATE":
+        this.logger.debug(
+          "[QueryManager] Live Event - Created:",
+          event.value
+        );
+        break;
+      case "UPDATE":
+        this.logger.debug(
+          "[QueryManager] Live Event - Updated:",
+          event.value
+        );
+        break;
+      case "DELETE":
+        this.logger.debug(
+          "[QueryManager] Live Event - Deleted:",
+          event.value
+        );
+        break;
+      default:
+        this.logger.error(
+          "[QueryManager] Live Event - failed to handle remote update",
+          event
+        );
+    }
+  }
+
+  private async subscribeRemoteQuery<T extends { columns: Record<string, ColumnSchema> }>(
+    query: InnerQuery<T, boolean>
+  ): Promise<void> {
+    this.logger.debug("[QueryManager] Subscribe Remote Query - Starting", {
+      queryHash: query.hash,
+      query: query.selectLiveQuery.query,
+    });
+
+    const [liveUuid] = await this.databaseService.queryRemote<Uuid[]>(
+      query.selectLiveQuery.query,
+      query.selectLiveQuery.vars
+    );
+
+    this.logger.debug(
+      "[QueryManager] Subscribe Remote Query - Created Live UUID",
+      {
+        queryHash: query.hash,
+        liveUuid: liveUuid,
+      }
+    );
+
+    const subscription = await this.databaseService.liveOfRemote(liveUuid);
+    subscription.subscribe(async (event: LiveMessage) => {
+      try {
+        await this.handleRemoteUpdate(query, event);
+      } catch (error) {
+        this.logger.error(
+          "Failed to refresh query after subscription",
+          error
+        );
+      }
+    });
+
+    this.logger.debug(
+      "[QueryManager] Subscribe Remote Query - Subscribed to Live UUID",
+      {
+        queryHash: query.hash,
+        liveUuid: liveUuid,
+      }
+    );
+  }
+
+  async run<T extends { columns: Record<string, ColumnSchema> }>(
+    query: InnerQuery<T, boolean>
+  ): Promise<{ cleanup: CleanupFn }> {
+    this.logger.debug("[QueryManager] Run - Starting", {
+      queryHash: query.hash,
+    });
+
+    if (!this.cache[query.hash]) {
+      this.logger.debug("[QueryManager] Run - Cache miss", {
         queryHash: query.hash,
       });
 
-      if (!cache[query.hash]) {
-        yield* Effect.logDebug("[QueryManager] Run - Cache miss", {
-          queryHash: query.hash,
-        });
+      this.cache[query.hash] = {
+        innerQuery: query,
+        cleanup: () => {},
+      };
 
-        cache[query.hash] = {
-          innerQuery: query,
-          cleanup: () => {},
-        };
+      // Run initialization asynchronously
+      (async () => {
+        try {
+          this.logger.debug("[QueryManager] Run - Initialize query", {
+            queryHash: query.hash,
+          });
 
-        Effect.runFork(
-          Effect.gen(function* () {
-            yield* Effect.logDebug("[QueryManager] Run - Initialize query", {
-              queryHash: query.hash,
+          this.logger.debug(
+            "[QueryManager] Run - Refresh query locally",
+            { queryHash: query.hash }
+          );
+
+          try {
+            await this.queryLocalRefresh(query);
+          } catch (error) {
+            this.logger.error("Failed to refresh query locally", error);
+          }
+
+          this.logger.debug(
+            "[QueryManager] Run - Hydrate remote query",
+            { queryHash: query.hash }
+          );
+
+          try {
+            await this.queryRemoteHydration(query);
+          } catch (error) {
+            this.logger.warn(
+              "[QueryManager] Remote hydration failed (continuing with local data)",
+              error
+            );
+          }
+
+          this.logger.debug(
+            "[QueryManager] Run - Subscribe to remote query",
+            { queryHash: query.hash }
+          );
+
+          try {
+            await this.subscribeRemoteQuery(query);
+          } catch (error) {
+            this.logger.warn(
+              "[QueryManager] Remote subscription failed (continuing with local data)",
+              error
+            );
+          }
+
+          this.logger.debug(
+            "[QueryManager] Run - Initialize subqueries",
+            query.hash
+          );
+
+          for (const subquery of query.subqueries) {
+            const unsubscribe = subquery.subscribe(async () => {
+              try {
+                await this.queryLocalRefresh(query);
+              } catch (error) {
+                this.logger.error(
+                  "Failed to refresh query after subscription",
+                  error
+                );
+              }
             });
 
-            yield* Effect.logDebug(
-              "[QueryManager] Run - Refresh query locally",
-              { queryHash: query.hash }
-            );
+            const previousCleanup = this.cache[query.hash].cleanup;
+            this.cache[query.hash].cleanup = () => {
+              previousCleanup();
+              unsubscribe();
+            };
 
-            yield* queryLocalRefresh(schema, query).pipe(
-              Effect.catchAll((error) =>
-                Effect.logError("Failed to refresh query locally", error)
-              ),
-              Effect.provide(runtime)
-            );
+            await this.run(subquery);
+          }
+        } catch (error) {
+          this.logger.error("Failed to initialize query", error);
+        }
+      })();
+    } else {
+      this.logger.debug("[QueryManager] Run - Cache hit", query.hash);
+    }
 
-            yield* Effect.logDebug(
-              "[QueryManager] Run - Hydrate remote query",
-              { queryHash: query.hash }
-            );
+    return {
+      cleanup: this.cache[query.hash].cleanup,
+    };
+  }
+}
 
-            yield* queryRemoteHydration(schema, query).pipe(
-              Effect.catchAll((error) =>
-                Effect.gen(function* () {
-                  yield* Effect.logWarning(
-                    "[QueryManager] Remote hydration failed (continuing with local data)",
-                    error
-                  );
-                  return Effect.succeed(undefined);
-                })
-              ),
-              Effect.provide(runtime)
-            );
-
-            yield* Effect.logDebug(
-              "[QueryManager] Run - Subscribe to remote query",
-              { queryHash: query.hash }
-            );
-            yield* subscribeRemoteQuery(query).pipe(
-              Effect.catchAll((error) =>
-                Effect.gen(function* () {
-                  yield* Effect.logWarning(
-                    "[QueryManager] Remote subscription failed (continuing with local data)",
-                    error
-                  );
-                  return Effect.succeed(undefined);
-                })
-              ),
-              Effect.provide(runtime)
-            );
-
-            yield* Effect.logDebug(
-              "[QueryManager] Run - Initialize subqueries",
-              query.hash
-            );
-            for (const subquery of query.subqueries) {
-              const unsubscribe = subquery.subscribe(() => {
-                Runtime.runPromise(runtime)(
-                  queryLocalRefresh(schema, query).pipe(
-                    Effect.catchAll((error) =>
-                      Effect.logError(
-                        "Failed to refresh query after subscription",
-                        error
-                      )
-                    )
-                  )
-                );
-              });
-
-              const previousCleanup = cache[query.hash].cleanup;
-              cache[query.hash].cleanup = () => {
-                previousCleanup();
-                unsubscribe();
-              };
-
-              yield* run(subquery);
-            }
-          })
-        );
-      } else {
-        yield* Effect.logDebug("[QueryManager] Run - Cache hit", query.hash);
-      }
-
-      return {
-        cleanup: cache[query.hash].cleanup,
-      };
-    });
-
-  return run;
-};
-
-export const QueryManagerServiceLayer = <S extends SchemaStructure>() =>
-  Layer.scoped(
-    QueryManagerService,
-    Effect.gen(function* () {
-      const { schema } = yield* (yield* makeConfig<S>()).getConfig;
-
-      const runtime = yield* Effect.runtime<DatabaseService>();
-      const run = makeRun<S>(schema, runtime);
-
-      const refreshTableQueries = makeRefreshTableQueries<S>(schema);
-
-      return QueryManagerService.of({
-        runtime,
-        cache: cache as QueryCache<S>,
-        refreshTableQueries,
-        run,
-      });
-    })
-  );
+export function createQueryManagerService<S extends SchemaStructure>(
+  schema: S,
+  databaseService: DatabaseService,
+  logger: Logger
+): QueryManagerService<S> {
+  return new QueryManagerService(schema, databaseService, logger);
+}

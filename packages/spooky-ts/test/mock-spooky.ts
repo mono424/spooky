@@ -1,57 +1,55 @@
-import {
-  ConfigLayer,
-  SpookyConfig,
-  QueryManagerServiceLayer,
-  AuthManagerServiceLayer,
-  MutationManagerServiceLayer,
-} from "../src/services/index.js";
-import { DevTools } from "@effect/experimental";
-import { Effect, Layer, Logger, LogLevel } from "effect";
-import { mainProgram } from "../src/spooky.js";
+import { SpookyConfig } from "../src/services/index.js";
 import { SchemaStructure } from "@spooky/query-builder";
-import { dbContext, MockDatabaseServiceLayer } from "./mock-database.js";
+import { dbContext, createMockDatabaseService } from "./mock-database.js";
+import { createLogger } from "../src/services/logger.js";
+import { createAuthManagerService } from "../src/services/auth-manager.js";
+import { createQueryManagerService } from "../src/services/query-manager.js";
+import { createMutationManagerService } from "../src/services/mutation-manager.js";
+import { runProvision } from "../src/provision.js";
+import { createSpookyInstance } from "../src/spooky.js";
 
 export async function createMockSpooky<S extends SchemaStructure>(
   config: SpookyConfig<S>
 ) {
-  const configLayer = ConfigLayer<S>(config);
-  const databaseServiceLayer = MockDatabaseServiceLayer<S>().pipe(
-    Layer.provide(configLayer)
-  );
-  const authManagerServiceLayer = AuthManagerServiceLayer<S>().pipe(
-    Layer.provide(databaseServiceLayer)
-  );
-  const queryManagerServiceLayer = QueryManagerServiceLayer<S>().pipe(
-    Layer.provide(configLayer),
-    Layer.provide(databaseServiceLayer),
-    Layer.provide(authManagerServiceLayer)
+  const logger = createLogger(config.logLevel);
+
+  // Create mock database service (using local nodes instead of remote)
+  const databaseService = await createMockDatabaseService(config, logger);
+
+  // Run provisioning
+  await runProvision(
+    config.database,
+    config.schemaSurql,
+    databaseService,
+    logger,
+    config.provisionOptions
   );
 
-  const mutationManagerServiceLayer = MutationManagerServiceLayer<S>().pipe(
-    Layer.provide(configLayer),
-    Layer.provide(databaseServiceLayer),
-    Layer.provide(authManagerServiceLayer),
-    Layer.provide(queryManagerServiceLayer)
+  // Create services
+  const authManager = createAuthManagerService(databaseService);
+  const queryManager = createQueryManagerService(
+    config.schema,
+    databaseService,
+    logger
   );
-
-  const DevToolsLive = DevTools.layer();
-  const logger = Logger.minimumLogLevel(LogLevel.Debug);
-
-  const MainLayer = Layer.mergeAll(
-    configLayer,
-    databaseServiceLayer,
-    queryManagerServiceLayer,
-    authManagerServiceLayer,
-    mutationManagerServiceLayer,
-    DevToolsLive,
+  const mutationManager = createMutationManagerService(
+    config.schema,
+    databaseService,
+    queryManager,
     logger
   );
 
+  // Create and return the Spooky instance
+  const spooky = await createSpookyInstance(
+    config.schema,
+    databaseService,
+    authManager,
+    queryManager,
+    mutationManager
+  );
+
   return {
-    spooky: await mainProgram<S>().pipe(
-      Effect.provide(MainLayer),
-      Effect.runPromise
-    ),
+    spooky,
     dbContext,
   };
 }

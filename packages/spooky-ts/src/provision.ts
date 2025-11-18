@@ -1,7 +1,6 @@
-import { Effect } from "effect";
 import type { Surreal } from "surrealdb";
-import { DatabaseService, makeConfig } from "./services/index.js";
-import { SchemaStructure } from "@spooky/query-builder";
+import { DatabaseService } from "./services/index.js";
+import { Logger } from "./services/logger.js";
 
 /**
  * Options for database provisioning
@@ -48,17 +47,15 @@ export const sha1 = async (str: string): Promise<string> => {
 export const initializeInternalDatabase = async (
   internalDb: Surreal
 ): Promise<void> => {
-  await internalDb
-    .query(
-      `
-      DEFINE TABLE IF NOT EXISTS __schema SCHEMAFULL;
-      DEFINE FIELD IF NOT EXISTS id ON __schema TYPE string;
-      DEFINE FIELD IF NOT EXISTS hash ON __schema TYPE string;
-      DEFINE FIELD IF NOT EXISTS created_at ON __schema TYPE datetime VALUE time::now();
-      DEFINE INDEX IF NOT EXISTS unique_hash ON __schema FIELDS hash UNIQUE;
+  await internalDb.query(
     `
-    )
-    .dispatch();
+    DEFINE TABLE IF NOT EXISTS __schema SCHEMAFULL;
+    DEFINE FIELD IF NOT EXISTS id ON __schema TYPE string;
+    DEFINE FIELD IF NOT EXISTS hash ON __schema TYPE string;
+    DEFINE FIELD IF NOT EXISTS created_at ON __schema TYPE datetime VALUE time::now();
+    DEFINE INDEX IF NOT EXISTS unique_hash ON __schema FIELDS hash UNIQUE;
+  `
+  );
 };
 
 /**
@@ -69,14 +66,14 @@ export const isSchemaUpToDate = async (
   hash: string
 ): Promise<boolean> => {
   try {
-    const [result] = await internalDb
-      .query(
-        `SELECT hash, created_at FROM __schema ORDER BY created_at DESC LIMIT 1;`
-      )
-      .collect<[SchemaRecord[]]>();
+    const result = await internalDb.query<SchemaRecord[]>(
+      `SELECT hash, created_at FROM __schema ORDER BY created_at DESC LIMIT 1;`
+    );
 
-    if (result.length > 0) {
-      return result[0].hash === hash;
+    // In surrealdb 1.x, query returns [result] where result is an array of rows
+    if (result && result.length > 0 && Array.isArray(result[0]) && result[0].length > 0) {
+      const firstRow = result[0][0] as SchemaRecord;
+      return firstRow.hash === hash;
     }
     return false;
   } catch (error) {
@@ -92,11 +89,11 @@ export const dropMainDatabase = async (
   database: string
 ): Promise<void> => {
   try {
-    await localDb.query(`REMOVE DATABASE ${database};`).dispatch();
+    await localDb.query(`REMOVE DATABASE ${database};`);
   } catch (error) {
     // Ignore error if database doesn't exist
   }
-  await localDb.query(`DEFINE DATABASE ${database};`).dispatch();
+  await localDb.query(`DEFINE DATABASE ${database};`);
 };
 
 /**
@@ -113,7 +110,7 @@ export const provisionSchema = async (
     .filter((s) => s.length > 0);
 
   for (const statement of statements) {
-    await localDb.query(statement).dispatch();
+    await localDb.query(statement);
   }
 };
 
@@ -124,67 +121,59 @@ export const recordSchemaHash = async (
   internalDb: Surreal,
   hash: string
 ): Promise<void> => {
-  await internalDb
-    .query(
-      `UPSERT __schema SET hash = $hash, created_at = time::now() WHERE hash = $hash;`,
-      { hash }
-    )
-    .dispatch();
+  await internalDb.query(
+    `UPSERT __schema SET hash = $hash, created_at = time::now() WHERE hash = $hash;`,
+    { hash }
+  );
 };
 
-export const provisionProgram = <S extends SchemaStructure>(
+export async function runProvision(
+  database: string,
+  schemaSurql: string,
+  databaseService: DatabaseService,
+  logger: Logger,
   options: ProvisionOptions = {}
-) =>
-  Effect.gen(function* () {
-    const { database, schemaSurql } = yield* (yield* makeConfig<S>()).getConfig;
+): Promise<void> {
+  const { force = false } = options;
 
-    const databaseService = yield* DatabaseService;
-    const { force = false } = options;
+  logger.info("[Provisioning] Starting provision check...");
 
-    yield* Effect.logInfo("[Provisioning] Starting provision check...");
+  const result = await databaseService.useInternal(async (db: Surreal) => {
+    const schemaHash = await sha1(schemaSurql);
+    const isUpToDate = await isSchemaUpToDate(db, schemaHash);
+    let shouldMigrate = force || !isUpToDate;
 
-    const result = yield* databaseService.useInternal(async (db: Surreal) => {
-      const schemaHash = await sha1(schemaSurql);
-      const isUpToDate = await isSchemaUpToDate(db, schemaHash);
-      let shouldMigrate = force || !isUpToDate;
-
-      return { shouldMigrate, schemaHash, isUpToDate };
-    });
-
-    yield* Effect.logDebug(`[Provisioning] Schema hash: ${result.schemaHash}`);
-    yield* Effect.logDebug(
-      `[Provisioning] Schema up to date: ${result.isUpToDate}`
-    );
-    yield* Effect.logDebug(
-      `[Provisioning] Should migrate: ${result.shouldMigrate}`
-    );
-
-    if (!result.shouldMigrate) {
-      yield* Effect.logInfo(
-        "[Provisioning] Schema is up to date, skipping migration"
-      );
-      return;
-    }
-
-    yield* Effect.logInfo(
-      "[Provisioning] Initializing internal database schema..."
-    );
-    yield* databaseService.useInternal(async (db: Surreal) => {
-      await initializeInternalDatabase(db);
-    });
-
-    yield* Effect.logInfo("[Provisioning] Starting schema migration...");
-    yield* databaseService.useLocal(async (db: Surreal) => {
-      await dropMainDatabase(db, database);
-      await provisionSchema(db, schemaSurql);
-    });
-
-    yield* Effect.logDebug("[Provisioning] Recording schema hash...");
-    yield* databaseService.useInternal(async (db: Surreal) => {
-      await recordSchemaHash(db, result.schemaHash);
-    });
-
-    yield* Effect.logInfo(
-      "[Provisioning] Database schema provisioned successfully"
-    );
+    return { shouldMigrate, schemaHash, isUpToDate };
   });
+
+  logger.debug(`[Provisioning] Schema hash: ${result.schemaHash}`);
+  logger.debug(`[Provisioning] Schema up to date: ${result.isUpToDate}`);
+  logger.debug(`[Provisioning] Should migrate: ${result.shouldMigrate}`);
+
+  if (!result.shouldMigrate) {
+    logger.info(
+      "[Provisioning] Schema is up to date, skipping migration"
+    );
+    return;
+  }
+
+  logger.info("[Provisioning] Initializing internal database schema...");
+  await databaseService.useInternal(async (db: Surreal) => {
+    await initializeInternalDatabase(db);
+  });
+
+  logger.info("[Provisioning] Starting schema migration...");
+  await databaseService.useLocal(async (db: Surreal) => {
+    await dropMainDatabase(db, database);
+    await provisionSchema(db, schemaSurql);
+  });
+
+  logger.debug("[Provisioning] Recording schema hash...");
+  await databaseService.useInternal(async (db: Surreal) => {
+    await recordSchemaHash(db, result.schemaHash);
+  });
+
+  logger.info(
+    "[Provisioning] Database schema provisioned successfully"
+  );
+}

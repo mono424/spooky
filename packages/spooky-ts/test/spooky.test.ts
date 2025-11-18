@@ -1,7 +1,6 @@
-import { beforeAll, beforeEach, describe, expect, it } from "@effect/vitest";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { type SpookyConfig } from "../src/services/index.js";
 import { schema as testSchema, SURQL_SCHEMA, Thread } from "./test.schema.js";
-import { Effect } from "effect";
 import { createMockSpooky } from "./mock-spooky.js";
 
 const mockConfig: SpookyConfig<typeof testSchema> = {
@@ -55,17 +54,13 @@ describe("Mock Database with 3 Nodes", () => {
 
   beforeEach(async () => {
     const { spooky } = await createMockSpooky(mockConfig);
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        yield* spooky.clearLocalCache();
-      })
-    );
+    await spooky.clearLocalCache();
   });
 
   it("should create a query", async () => {
     const { spooky } = await createMockSpooky(mockConfig);
 
-    const query = Effect.runSync(spooky.query("user", {}));
+    const query = spooky.query("user", {});
     query.orderBy("created_at", "asc");
 
     const result = query.buildCustom().select();
@@ -87,9 +82,7 @@ describe("Mock Database with 3 Nodes", () => {
 
     expect(authResponse?.token).toBeDefined();
 
-    const userId = await Effect.runPromise(
-      spooky.authenticate(authResponse?.token ?? "")
-    );
+    const userId = await spooky.authenticate(authResponse?.token ?? "");
 
     expect(userId).toBeDefined();
     expect(userId?.id).toBe("A");
@@ -106,9 +99,9 @@ describe("Mock Database with 3 Nodes", () => {
       },
     });
 
-    await Effect.runPromise(spooky.authenticate(authResponse?.token ?? ""));
+    await spooky.authenticate(authResponse?.token ?? "");
 
-    const result = Effect.runSync(spooky.query("thread", {}))
+    const result = spooky.query("thread", {})
       .buildCustom()
       .select();
     expect(result).toBeDefined();
@@ -128,59 +121,6 @@ describe("Mock Database with 3 Nodes", () => {
     expect(results[1]).toHaveLength(3);
   });
 
-  // it("should update query when new data is created in remote database", async () => {
-  //   const { spooky, dbContext } = await createMockSpooky(mockConfig);
-
-  //   const authResponse = await dbContext.remoteDatabase?.signin({
-  //     access: "account",
-  //     variables: {
-  //       username: "userA",
-  //       password: "pw1",
-  //     },
-  //   });
-
-  //   await Effect.runPromise(spooky.authenticate(authResponse?.token ?? ""));
-
-  //   const result = Effect.runSync(spooky.query("thread", {}))
-  //     .limit(1)
-  //     .build()
-  //     .select();
-  //   expect(result).toBeDefined();
-  //   expect(result.data).toHaveLength(0);
-
-  //   const results: Thread[][] = await new Promise((resolve) => {
-  //     const results: Thread[][] = [];
-  //     result.subscribe((threads) => {
-  //       results.push(threads as Thread[]);
-  //       if (results.length === 2) {
-  //         resolve(results);
-  //       }
-  //     });
-  //   });
-
-  //   const result2 = Effect.runSync(spooky.query("thread", {}))
-  //     .limit(2)
-  //     .build()
-  //     .select();
-  //   expect(result2).toBeDefined();
-  //   expect(result2.data).toHaveLength(0);
-
-  //   const results2: Thread[][] = await new Promise((resolve) => {
-  //     const results: Thread[][] = [];
-  //     result2.subscribe((threads) => {
-  //       results.push(threads as Thread[]);
-  //       if (results.length === 2) {
-  //         resolve(results);
-  //       }
-  //     });
-  //   });
-
-  //   expect(results[0]).toHaveLength(0);
-  //   expect(results[1]).toHaveLength(1);
-  //   expect(results2[0]).toHaveLength(0);
-  //   expect(results2[1]).toHaveLength(3);
-  // });
-
   it("should create local data on create mutation", async () => {
     const { spooky, dbContext } = await createMockSpooky(mockConfig);
 
@@ -192,18 +132,16 @@ describe("Mock Database with 3 Nodes", () => {
       },
     });
 
-    await Effect.runPromise(spooky.authenticate(authResponse?.token ?? ""));
+    await spooky.authenticate(authResponse?.token ?? "");
 
-    await Effect.runPromise(
-      spooky.create("thread", {
-        title: "threadN1",
-        content: "content",
-        author: "user:A",
-        created_at: new Date(),
-      })
-    );
+    await spooky.create("thread", {
+      title: "threadN1",
+      content: "content",
+      author: "user:A",
+      created_at: new Date(),
+    });
 
-    const result = Effect.runSync(spooky.query("thread", {}))
+    const result = spooky.query("thread", {})
       .limit(111)
       .buildCustom()
       .select();
