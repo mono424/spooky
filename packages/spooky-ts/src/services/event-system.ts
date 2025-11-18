@@ -24,10 +24,7 @@ export type EventTypeMap = {
   >;
 };
 
-export type Event<T extends EventType> = EventDefinition<
-  T,
-  EventTypeMap[T]["payload"]
->;
+export type Event<T extends EventType> = EventTypeMap[T];
 
 export type EventType = keyof EventTypeMap;
 
@@ -46,6 +43,9 @@ export class AuthManagerService {
     [K in EventType]: Map<number, InnerEventHandler<K>>;
   };
   private subscribersTypeMap: Map<number, EventType>;
+  private lastEvents: {
+    [K in EventType]?: Event<K>;
+  };
 
   constructor() {
     this.buffer = [];
@@ -53,6 +53,7 @@ export class AuthManagerService {
       [AuthEventTypes.Authenticated]: new Map(),
       [AuthEventTypes.Deauthenticated]: new Map(),
     };
+    this.lastEvents = {};
     this.subscribersTypeMap = new Map();
   }
 
@@ -102,14 +103,19 @@ export class AuthManagerService {
     const event = this.buffer.shift();
     if (!event) return false;
 
-    const subscribers = this.subscribers[
-      event.type
-    ].values() as IterableIterator<InnerEventHandler<typeof event.type>>;
+    this.setLastEvent(event.type, event);
+    this.broadcastEvent(event.type, event);
+    return true;
+  }
 
+  private setLastEvent<T extends EventType>(type: T, event: Event<T>): void {
+    this.lastEvents[type] = event;
+  }
+
+  private broadcastEvent<T extends EventType>(type: T, event: Event<T>): void {
+    const subscribers = this.subscribers[type].values();
     for (const subscriber of subscribers) {
       subscriber.handler(event);
     }
-
-    return true;
   }
 }
