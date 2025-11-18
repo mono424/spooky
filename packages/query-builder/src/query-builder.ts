@@ -84,7 +84,7 @@ function parseObjectIdsToRecordId(obj: unknown, tableName?: string): unknown {
 
 export type Executor<T extends { columns: Record<string, ColumnSchema> }> = (
   query: InnerQuery<T, boolean>
-) => { cleanup: () => void };
+) => { cachedQuery: InnerQuery<T, boolean> | null; cleanup: () => void };
 
 type InnerQueryListener<T extends { columns: Record<string, ColumnSchema> }> = {
   callback: (data: TableModel<T>[]) => void;
@@ -113,6 +113,11 @@ export class InnerQuery<
     { columns: Record<string, ColumnSchema> },
     boolean
   >[];
+
+  private _cachedInnerQuery: InnerQuery<
+    { columns: Record<string, ColumnSchema> },
+    boolean
+  > | null = null;
 
   private _hasData: boolean = false;
   private _hasRun: boolean = false;
@@ -200,17 +205,32 @@ export class InnerQuery<
   }
 
   public subscribe(callback: (data: TableModel<T>[]) => void): () => void {
+    if (this._cachedInnerQuery) {
+      console.log("xxx subscribe InnerPTR", this._cachedInnerQuery);
+      return this._cachedInnerQuery.subscribe(
+        callback as (
+          data: TableModel<{ columns: Record<string, ColumnSchema> }>[]
+        ) => void
+      );
+    }
+    console.log("xxx subscribe X", this);
     const unsub = this.addListener({ callback });
     this._unsubs.push(unsub);
     return unsub;
   }
 
   public unsubscribeAll(): void {
+    if (this._cachedInnerQuery) {
+      return this._cachedInnerQuery.unsubscribeAll();
+    }
     this._unsubs.forEach((unsub) => unsub());
     this._unsubs = [];
   }
 
   public kill(): void {
+    if (this._cachedInnerQuery) {
+      return this._cachedInnerQuery.kill();
+    }
     this.unsubscribeAll();
     this._cleanup?.();
   }
@@ -232,7 +252,9 @@ export class InnerQuery<
     }
     this._hasRun = true;
 
-    const { cleanup } = this.executor(this);
+    const { cachedQuery, cleanup } = this.executor(this);
+    console.log("xxx run", cachedQuery);
+    this._cachedInnerQuery = cachedQuery;
     this._cleanup = cleanup;
     return this.getReactiveQueryResult();
   }

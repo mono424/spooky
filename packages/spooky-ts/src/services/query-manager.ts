@@ -232,14 +232,16 @@ export class QueryManagerService<S extends SchemaStructure> {
     );
   }
 
-  async run<T extends { columns: Record<string, ColumnSchema> }>(
+  run<T extends { columns: Record<string, ColumnSchema> }>(
     query: InnerQuery<T, boolean>
-  ): Promise<{ cleanup: CleanupFn }> {
+  ): { cachedQuery: InnerQuery<T, boolean> | null; cleanup: CleanupFn } {
     this.logger.debug("[QueryManager] Run - Starting", {
       queryHash: query.hash,
     });
 
-    if (!this.cache[query.hash]) {
+    const cacheHit = this.cache[query.hash];
+
+    if (!cacheHit) {
       this.logger.debug("[QueryManager] Run - Cache miss", {
         queryHash: query.hash,
       });
@@ -321,13 +323,17 @@ export class QueryManagerService<S extends SchemaStructure> {
           this.logger.error("Failed to initialize query", error);
         }
       })();
+      return {
+        cachedQuery: null,
+        cleanup: this.cache[query.hash].cleanup,
+      };
     } else {
       this.logger.debug("[QueryManager] Run - Cache hit", query.hash);
+      return {
+        cachedQuery: cacheHit.innerQuery,
+        cleanup: cacheHit.cleanup,
+      };
     }
-
-    return {
-      cleanup: this.cache[query.hash].cleanup,
-    };
   }
 }
 
