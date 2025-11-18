@@ -1,18 +1,18 @@
-import { DatabaseService } from "./index.js";
-import type { RecordId } from "surrealdb";
+import { AuthEventTypes, DatabaseService, EventSystem } from "./index.js";
 
 export class AuthManagerService {
   private token: string = "";
-  private userId: RecordId | undefined = undefined;
 
-  constructor(private databaseService: DatabaseService) {}
-
-  getToken(): string {
-    return this.token;
-  }
-
-  getUserId(): RecordId | undefined {
-    return this.userId;
+  constructor(
+    private databaseService: DatabaseService,
+    private eventSystem: EventSystem
+  ) {
+    eventSystem.subscribe(AuthEventTypes.Authenticated, (event) => {
+      this.token = event.payload.token;
+    });
+    eventSystem.subscribe(AuthEventTypes.Deauthenticated, () => {
+      this.token = "";
+    });
   }
 
   async reauthenticate(): Promise<void> {
@@ -22,27 +22,37 @@ export class AuthManagerService {
     try {
       await this.authenticate(this.token);
     } catch (error) {
-      this.deauthenticate();
+      await this.deauthenticate();
       throw new Error("Failed to reauthenticate", { cause: error });
     }
   }
 
-  async authenticate(token: string): Promise<RecordId | undefined> {
+  async authenticate(token: string): Promise<void> {
     const userId = await this.databaseService.authenticate(token);
-    this.token = token;
-    this.userId = userId;
-    return userId;
+    if (!userId) {
+      await this.deauthenticate();
+      throw new Error("Failed to authenticate");
+    }
+    this.eventSystem.addEvent({
+      type: AuthEventTypes.Authenticated,
+      payload: {
+        userId,
+        token,
+      },
+    });
   }
 
   async deauthenticate(): Promise<void> {
-    this.token = "";
-    this.userId = undefined;
     await this.databaseService.deauthenticate();
+    this.eventSystem.addEvent({
+      type: AuthEventTypes.Deauthenticated,
+    });
   }
 }
 
 export function createAuthManagerService(
-  databaseService: DatabaseService
+  databaseService: DatabaseService,
+  eventSystem: EventSystem
 ): AuthManagerService {
-  return new AuthManagerService(databaseService);
+  return new AuthManagerService(databaseService, eventSystem);
 }

@@ -1,5 +1,5 @@
 import { SchemaStructure } from "@spooky/query-builder";
-import { SpookyConfig } from "./services/index.js";
+import { createEventSystem, SpookyConfig } from "./services/index.js";
 import { createDatabaseService } from "./services/database-wasm.js";
 import { createAuthManagerService } from "./services/auth-manager.js";
 import { createQueryManagerService } from "./services/query-manager.js";
@@ -28,6 +28,7 @@ export async function createSpooky<S extends SchemaStructure>(
   config: SpookyConfig<S>
 ): Promise<SpookyInstance<S>> {
   const logger = createLogger(config.logLevel);
+  const eventSystem = createEventSystem();
 
   // Create database service
   const databaseService = await createDatabaseService(config, logger);
@@ -42,7 +43,7 @@ export async function createSpooky<S extends SchemaStructure>(
   );
 
   // Create services
-  const authManager = createAuthManagerService(databaseService);
+  const authManager = createAuthManagerService(databaseService, eventSystem);
   const queryManager = createQueryManagerService(
     config.schema,
     databaseService,
@@ -62,6 +63,7 @@ export async function createSpooky<S extends SchemaStructure>(
     databaseService,
     authManager,
     queryManager,
-    mutationManager
+    mutationManager,
+    eventSystem
   );
 }

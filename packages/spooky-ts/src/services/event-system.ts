@@ -2,8 +2,7 @@ import { RecordId } from "@spooky/query-builder";
 
 export type EventDefinition<T extends EventType, P> = {
   type: T;
-  payload: P;
-};
+} & ([P] extends [never] ? {} : { payload: P });
 
 export const AuthEventTypes = {
   Authenticated: "AUTHENTICATED",
@@ -33,9 +32,15 @@ export type EventHandler<T extends EventType> = (event: Event<T>) => void;
 type InnerEventHandler<T extends EventType> = {
   id: number;
   handler: EventHandler<T>;
+  once?: boolean;
 };
 
-export class AuthManagerService {
+export type EventSubscriptionOptions = {
+  immediately?: boolean;
+  once?: boolean;
+};
+
+export class EventSystem {
   private subscriberId: number = 0;
   private isProcessing: boolean = false;
   private buffer: Event<EventType>[];
@@ -57,13 +62,22 @@ export class AuthManagerService {
     this.subscribersTypeMap = new Map();
   }
 
-  subscribe<T extends EventType>(type: T, handler: EventHandler<T>): number {
+  subscribe<T extends EventType>(
+    type: T,
+    handler: EventHandler<T>,
+    options?: EventSubscriptionOptions
+  ): number {
     const id = this.subscriberId++;
     this.subscribers[type].set(id, {
       id,
       handler,
+      once: options?.once ?? false,
     });
     this.subscribersTypeMap.set(id, type);
+    if (options?.immediately) {
+      const lastEvent = this.lastEvents[type];
+      if (lastEvent) handler(lastEvent);
+    }
     return id;
   }
 
@@ -77,7 +91,7 @@ export class AuthManagerService {
     return false;
   }
 
-  addEvent(event: Event<EventType>): void {
+  addEvent<T extends EventType>(event: Event<T>): void {
     this.buffer.push(event);
     this.scheduleProcessing();
   }
@@ -116,6 +130,13 @@ export class AuthManagerService {
     const subscribers = this.subscribers[type].values();
     for (const subscriber of subscribers) {
       subscriber.handler(event);
+      if (subscriber.once) {
+        this.unsubscribe(subscriber.id);
+      }
     }
   }
+}
+
+export function createEventSystem(): EventSystem {
+  return new EventSystem();
 }
