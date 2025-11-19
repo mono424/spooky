@@ -4,7 +4,6 @@ import type {
   QueryInfo,
   QueryOptions,
   QueryModifier,
-  QueryModifierBuilder,
   RelatedQuery,
   SchemaAwareQueryModifier,
   SchemaAwareQueryModifierBuilder,
@@ -182,51 +181,69 @@ type GetRelatedModel<
   : never;
 
 /**
+ * Helper type to extract field names from RelatedFields
+ */
+type ExtractFieldNames<RelatedFields extends RelatedFieldsMap> =
+  keyof RelatedFields;
+
+type RelatedField = {
+  to: string;
+  cardinality: "one" | "many";
+  relatedFields: RelatedFieldsMap;
+};
+
+type RelatedFieldsMap = Record<string, RelatedField>;
+
+/**
  * Helper type to build the related fields object based on accumulated relationships
  */
 type BuildRelatedFields<
   S extends SchemaStructure,
-  TableName extends TableNames<S>,
-  RelatedFields extends Record<string, any>
+  RelatedFields extends RelatedFieldsMap
 > = {
-  [K in keyof RelatedFields]: RelatedFields[K] extends { cardinality: "one" }
-    ?
-        | (GetRelatedModel<S, RelatedFields[K]["to"]> &
-            BuildRelatedFields<
-              S,
-              RelatedFields[K]["to"],
-              RelatedFields[K]["relatedFields"]
-            >)
-        | null
-    : GetRelatedModel<S, RelatedFields[K]["to"]> &
-        BuildRelatedFields<
-          S,
-          RelatedFields[K]["to"],
-          RelatedFields[K]["relatedFields"]
-        >[];
+  [K in keyof RelatedFields]: QueryResult<
+    S,
+    RelatedFields[K]["to"],
+    RelatedFields[K]["relatedFields"],
+    RelatedFields[K]["cardinality"] extends "one" ? true : false
+  >;
 };
+
+type BuildResultModelOne<
+  S extends SchemaStructure,
+  TableName extends TableNames<S>,
+  RelatedFields extends RelatedFieldsMap
+> = Omit<TableModel<GetTable<S, TableName>>, ExtractFieldNames<RelatedFields>> &
+  BuildRelatedFields<S, RelatedFields>;
+
+type BuildResultModelMany<
+  S extends SchemaStructure,
+  TableName extends TableNames<S>,
+  RelatedFields extends RelatedFieldsMap
+> = (Omit<
+  TableModel<GetTable<S, TableName>>,
+  ExtractFieldNames<RelatedFields>
+> &
+  BuildRelatedFields<S, RelatedFields>)[];
 
 /**
  * The final result type combining base model with related fields
+ * Excludes related field keys from the base model to avoid type conflicts
  */
 export type QueryResult<
   S extends SchemaStructure,
   TableName extends TableNames<S>,
-  RelatedFields extends Record<string, any>,
+  RelatedFields extends RelatedFieldsMap,
   IsOne extends boolean
 > = IsOne extends true
-  ?
-      | (TableModel<GetTable<S, TableName>> &
-          BuildRelatedFields<S, TableName, RelatedFields>)
-      | null
-  : (TableModel<GetTable<S, TableName>> &
-      BuildRelatedFields<S, TableName, RelatedFields>)[];
+  ? BuildResultModelOne<S, TableName, RelatedFields>
+  : BuildResultModelMany<S, TableName, RelatedFields>;
 
 export class FinalQuery<
   S extends SchemaStructure,
   TableName extends TableNames<S>,
   T extends { columns: Record<string, ColumnSchema> },
-  RelatedFields extends Record<string, any>,
+  RelatedFields extends RelatedFieldsMap,
   IsOne extends boolean
 > {
   private _innerQuery: InnerQuery<T, IsOne>;
@@ -265,7 +282,7 @@ export class FinalQuery<
 class SchemaAwareQueryModifierBuilderImpl<
   S extends SchemaStructure,
   TableName extends TableNames<S>,
-  RelatedFields extends Record<string, any> = {}
+  RelatedFields extends RelatedFieldsMap = {}
 > implements SchemaAwareQueryModifierBuilder<S, TableName, RelatedFields>
 {
   private options: QueryOptions<TableModel<GetTable<S, TableName>>, boolean> =
@@ -318,7 +335,7 @@ class SchemaAwareQueryModifierBuilderImpl<
   related<
     Field extends TableRelationships<S, TableName>["field"],
     Rel extends GetRelationship<S, TableName, Field>,
-    RelatedFields2 extends Record<string, any> = {}
+    RelatedFields2 extends RelatedFieldsMap = {}
   >(
     relatedField: Field,
     modifier?: SchemaAwareQueryModifier<S, Rel["to"], RelatedFields2>
@@ -329,7 +346,7 @@ class SchemaAwareQueryModifierBuilderImpl<
       [K in Field]: {
         to: Rel["to"];
         cardinality: Rel["cardinality"];
-        relatedFields: {};
+        relatedFields: RelatedFields2;
       };
     }
   > {
@@ -368,7 +385,7 @@ class SchemaAwareQueryModifierBuilderImpl<
         foreignKeyField: foreignKeyField as string,
       } as RelatedQuery & { foreignKeyField: string });
     }
-    return this;
+    return this as any;
   }
 
   _getOptions(): QueryOptions<TableModel<GetTable<S, TableName>>, boolean> {
@@ -383,7 +400,7 @@ class SchemaAwareQueryModifierBuilderImpl<
 export class QueryBuilder<
   const S extends SchemaStructure,
   const TableName extends TableNames<S>,
-  const RelatedFields extends Record<string, any> = {},
+  const RelatedFields extends RelatedFieldsMap = {},
   const IsOne extends boolean = false
 > {
   constructor(
@@ -468,11 +485,11 @@ export class QueryBuilder<
   related<
     Field extends TableRelationships<S, TableName>["field"],
     Rel extends GetRelationship<S, TableName, Field>,
-    RelatedFields2 extends Record<string, any> = {}
+    RelatedFields2 extends RelatedFieldsMap = {}
   >(
     field: Field,
     modifierOrCardinality?:
-      | SchemaAwareQueryModifier<S, Rel["to"]>
+      | SchemaAwareQueryModifier<S, Rel["to"], RelatedFields2>
       | Rel["cardinality"],
     modifier?: SchemaAwareQueryModifier<S, Rel["to"], RelatedFields2>
   ): QueryBuilder<
@@ -482,7 +499,7 @@ export class QueryBuilder<
       [K in Field]: {
         to: Rel["to"];
         cardinality: Rel["cardinality"];
-        relatedFields: {};
+        relatedFields: RelatedFields2;
       };
     },
     IsOne

@@ -21,11 +21,11 @@ const createQuery = ({
     })
     .related("author")
     .related("comments", (q) => {
-      q = q.related("author");
+      const withAuthor = q.related("author");
       if (commentFilter === "mine" && userId) {
-        return q.where({ author: userId });
+        return withAuthor.where({ author: userId });
       }
-      return q;
+      return withAuthor.orderBy("created_at", "desc").limit(10);
     })
     .one()
     .build();
@@ -75,7 +75,7 @@ export function ThreadDetail() {
                 {threadData().content}
               </p>
               <div class="flex justify-between items-center text-sm text-gray-500 border-t pt-3">
-                <span>By {threadData().author.username}</span>
+                <span>By {threadData().author?.username}</span>
                 <span>
                   {new Date(threadData().created_at ?? 0).toLocaleDateString()}
                 </span>
@@ -135,7 +135,7 @@ export function ThreadDetail() {
                         {comment.content}
                       </p>
                       <div class="flex justify-between items-center text-sm text-gray-500">
-                        <span>By {comment.author.username}</span>
+                        <span>By {comment.author?.username}</span>
                         <span>
                           {new Date(
                             comment.created_at ?? 0

@@ -74,7 +74,7 @@ export type SchemaAwareQueryModifier<
   TableName extends TableNames<S>,
   RelatedFields extends Record<string, any> = {}
 > = (
-  builder: SchemaAwareQueryModifierBuilder<S, TableName, RelatedFields>
+  builder: SchemaAwareQueryModifierBuilder<S, TableName, {}>
 ) => SchemaAwareQueryModifierBuilder<S, TableName, RelatedFields>;
 
 // Simplified query builder interface for modifying subqueries
@@ -121,7 +121,7 @@ export interface SchemaAwareQueryModifierBuilder<
       [K in Field]: {
         to: Rel["to"];
         cardinality: Rel["cardinality"];
-        relatedFields: {};
+        relatedFields: RelatedFields2;
       };
     }
   >;
