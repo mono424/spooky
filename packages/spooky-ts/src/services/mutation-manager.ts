@@ -74,6 +74,14 @@ export class MutationManagerService<S extends SchemaStructure> {
     private logger: Logger
   ) {}
 
+  private buildRecordId(table: string, id: string): RecordId {
+    if (id.includes(":")) {
+      const [table, ...idParts] = id.split(":");
+      return new RecordId(table, idParts.join(":"));
+    }
+    return new RecordId(table, id);
+  }
+
   private buildCreateQuery<N extends TableNames<S>>(
     id: RecordId,
     payload: TableModel<GetTable<S, N>>
@@ -339,7 +347,7 @@ export class MutationManagerService<S extends SchemaStructure> {
 
   async update<N extends TableNames<S>>(
     tableName: N,
-    recordId: RecordId,
+    recordId: string,
     payload: Partial<TableModel<GetTable<S, N>>>
   ): Promise<void> {
     const patches = Object.entries(payload)
@@ -352,7 +360,7 @@ export class MutationManagerService<S extends SchemaStructure> {
 
     return this.run<N>({
       operationType: "update",
-      recordId,
+      recordId: this.buildRecordId(tableName, recordId),
       tableName: tableName,
       patches: patches,
       rollbackPatches: null,
@@ -363,12 +371,12 @@ export class MutationManagerService<S extends SchemaStructure> {
 
   async delete<N extends TableNames<S>>(
     tableName: N,
-    id: RecordId
+    id: string
   ): Promise<void> {
     return this.run<N>({
       operationType: "delete",
       tableName: tableName,
-      recordId: id,
+      recordId: this.buildRecordId(tableName, id),
       rollbackData: null,
       createdAt: new Date(),
       retryCount: 0,

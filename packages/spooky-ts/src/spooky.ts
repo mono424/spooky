@@ -7,7 +7,6 @@ import {
   TableModel,
   TableNames,
 } from "@spooky/query-builder";
-import { RecordId } from "surrealdb";
 import { DatabaseService, SpookyEventSystem } from "./services/index.js";
 import { AuthManagerService } from "./services/auth-manager.js";
 import { QueryManagerService } from "./services/query-manager.js";
@@ -31,13 +30,10 @@ export interface SpookyInstance<S extends SchemaStructure> {
   ) => Promise<void>;
   update: <N extends TableNames<S>>(
     tableName: N,
-    recordId: RecordId,
+    recordId: string,
     payload: Partial<TableModel<GetTable<S, N>>>
   ) => Promise<void>;
-  delete: <N extends TableNames<S>>(
-    tableName: N,
-    id: RecordId
-  ) => Promise<void>;
+  delete: <N extends TableNames<S>>(tableName: N, id: string) => Promise<void>;
   query: <Table extends TableNames<S>>(
     table: Table,
     options: QueryOptions<TableModel<GetTable<S, Table>>, false>
@@ -92,10 +88,10 @@ export async function createSpookyInstance<S extends SchemaStructure>(
     ) => mutationManager.create(tableName, payload),
     update: <N extends TableNames<S>>(
       tableName: N,
-      recordId: RecordId,
+      recordId: string,
       payload: Partial<TableModel<GetTable<S, N>>>
     ) => mutationManager.update(tableName, recordId, payload),
-    delete: <N extends TableNames<S>>(tableName: N, id: RecordId) =>
+    delete: <N extends TableNames<S>>(tableName: N, id: string) =>
       mutationManager.delete(tableName, id),
     query: useQuery,
     close,
