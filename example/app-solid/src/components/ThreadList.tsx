@@ -11,6 +11,7 @@ export function ThreadList() {
       .query("thread")
       .related("author")
       .orderBy("created_at", "desc")
+      .orderBy("id", "asc")
       .limit(100)
       .build()
   );
