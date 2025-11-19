@@ -183,21 +183,21 @@ type GetRelatedModel<
 /**
  * Helper type to extract field names from RelatedFields
  */
-type ExtractFieldNames<RelatedFields extends RelatedFieldsMap> =
+export type ExtractFieldNames<RelatedFields extends RelatedFieldsMap> =
   keyof RelatedFields;
 
-type RelatedField = {
+export type RelatedFieldMapEntry = {
   to: string;
   cardinality: "one" | "many";
   relatedFields: RelatedFieldsMap;
 };
 
-type RelatedFieldsMap = Record<string, RelatedField>;
+export type RelatedFieldsMap = Record<string, RelatedFieldMapEntry>;
 
 /**
  * Helper type to build the related fields object based on accumulated relationships
  */
-type BuildRelatedFields<
+export type BuildRelatedFields<
   S extends SchemaStructure,
   RelatedFields extends RelatedFieldsMap
 > = {
@@ -209,14 +209,14 @@ type BuildRelatedFields<
   >;
 };
 
-type BuildResultModelOne<
+export type BuildResultModelOne<
   S extends SchemaStructure,
   TableName extends TableNames<S>,
   RelatedFields extends RelatedFieldsMap
 > = Omit<TableModel<GetTable<S, TableName>>, ExtractFieldNames<RelatedFields>> &
   BuildRelatedFields<S, RelatedFields>;
 
-type BuildResultModelMany<
+export type BuildResultModelMany<
   S extends SchemaStructure,
   TableName extends TableNames<S>,
   RelatedFields extends RelatedFieldsMap

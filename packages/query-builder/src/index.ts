@@ -6,6 +6,12 @@ export {
   FinalQuery,
   InnerQuery,
   type QueryResult,
+  type RelatedFieldsMap,
+  type BuildRelatedFields,
+  type BuildResultModelOne,
+  type BuildResultModelMany,
+  type ExtractFieldNames,
+  type RelatedFieldMapEntry,
 } from "./query-builder";
 
 // Type exports

@@ -4,6 +4,7 @@ import { db } from "../db";
 import { CommentForm } from "./CommentForm";
 import { useQuery } from "@spooky/client-solid";
 import { useAuth } from "../lib/auth";
+import { CommentBox } from "./CommentBox";
 
 const createQuery = ({
   threadId,
@@ -129,21 +130,7 @@ export function ThreadDetail() {
                     </div>
                   }
                 >
-                  {(comment) => (
-                    <div class="bg-white border border-gray-200 rounded-lg p-4">
-                      <p class="text-gray-700 mb-2 whitespace-pre-wrap">
-                        {comment.content}
-                      </p>
-                      <div class="flex justify-between items-center text-sm text-gray-500">
-                        <span>By {comment.author?.username}</span>
-                        <span>
-                          {new Date(
-                            comment.created_at ?? 0
-                          ).toLocaleDateString()}
-                        </span>
-                      </div>
-                    </div>
-                  )}
+                  {(comment) => <CommentBox comment={comment} />}
                 </For>
               </div>
             </div>

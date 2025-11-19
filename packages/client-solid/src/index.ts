@@ -8,6 +8,15 @@ import {
   TableNames,
   createSpooky,
   Surreal,
+  RelationshipsMetadata,
+  InferRelatedModelFromMetadata,
+  GetCardinality,
+  QueryResult,
+  RelatedFieldsMap,
+  RelatedField,
+  RelationshipFieldsFromSchema,
+  GetRelationship,
+  RelatedFieldMapEntry,
 } from "@spooky/spooky-ts";
 
 export { RecordId, Uuid } from "surrealdb";
@@ -20,6 +29,7 @@ export type {
 export { useQuery } from "./lib/use-query";
 
 export { AuthEventTypes } from "@spooky/spooky-ts";
+export type {};
 
 // Re-export query builder types for convenience
 export type {
@@ -33,11 +43,59 @@ export type {
   GetTable,
   TableModel,
   TableNames,
+  QueryResult,
 } from "@spooky/query-builder";
 
 export interface SyncedDbContext<S extends SyncedDb<SchemaStructure>> {
   db: S;
 }
+
+export type RelationshipField<
+  Schema extends SchemaStructure,
+  TableName extends TableNames<Schema>,
+  Field extends RelationshipFieldsFromSchema<Schema, TableName>
+> = GetRelationship<Schema, TableName, Field>;
+
+export type RelatedFieldsTableScoped<
+  Schema extends SchemaStructure,
+  TableName extends TableNames<Schema>,
+  RelatedFields extends RelationshipFieldsFromSchema<
+    Schema,
+    TableName
+  > = RelationshipFieldsFromSchema<Schema, TableName>
+> = {
+  [K in RelatedFields]: {
+    to: RelationshipField<Schema, TableName, K>["to"];
+    relatedFields: RelatedFieldsMap;
+    cardinality: RelationshipField<Schema, TableName, K>["cardinality"];
+  };
+};
+
+export type InferModel<
+  Schema extends SchemaStructure,
+  TableName extends TableNames<Schema>,
+  RelatedFields extends RelatedFieldsTableScoped<Schema, TableName>
+> = QueryResult<Schema, TableName, RelatedFields, true>;
+
+export type WithRelated<
+  Field extends string,
+  RelatedFields extends RelatedFieldsMap = {}
+> = {
+  [K in Field]: Omit<RelatedFieldMapEntry, "relatedFields"> & {
+    relatedFields: RelatedFields;
+  };
+};
+
+export type WithRelatedMany<
+  Field extends string,
+  RelatedFields extends RelatedFieldsMap = {}
+> = {
+  [K in Field]: {
+    to: Field;
+    relatedFields: RelatedFields;
+    cardinality: "many";
+  };
+};
 
 /**
  * SyncedDb - A thin wrapper around spooky-ts for Solid.js integration

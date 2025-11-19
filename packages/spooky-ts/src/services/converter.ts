@@ -23,14 +23,21 @@ export function decodeFromSpooky<
 
   for (const field of Object.keys(table.columns)) {
     const column = table.columns[field] as any;
-    if (column.recordId && encoded[field] != null) {
+    const relation = schema.relationships.find(
+      (r) => r.from === tableName && r.field === field
+    );
+    if ((column.recordId || relation) && encoded[field] != null) {
       if (encoded[field] instanceof RecordId) {
         encoded[field] = `${encoded[field].tb}:${encoded[field].id}`;
-      } else if (encoded[field] instanceof Object) {
-        const relation = schema.relationships.find(
-          (r) => r.from === tableName && r.field === field
-        );
-        if (relation) {
+      } else if (
+        relation &&
+        (encoded[field] instanceof Object || encoded[field] instanceof Array)
+      ) {
+        if (Array.isArray(encoded[field])) {
+          encoded[field] = encoded[field].map((item) =>
+            decodeFromSpooky(schema, relation.to, item)
+          );
+        } else {
           encoded[field] = decodeFromSpooky(
             schema,
             relation.to,
