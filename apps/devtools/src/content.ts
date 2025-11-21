@@ -28,6 +28,7 @@ window.addEventListener('message', (event) => {
     type: event.data.type,
     data: event.data.data,
     state: event.data.state, // Include state for SPOOKY_STATE_CHANGED messages
+    tableName: event.data.tableName, // Include tableName for table data responses
   });
 });
 

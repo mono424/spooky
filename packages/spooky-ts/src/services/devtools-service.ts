@@ -4,6 +4,8 @@ import {
   GlobalQueryEventTypes,
 } from "./spooky-event-system.js";
 import { Logger } from "./logger.js";
+import { DatabaseService } from "./database.js";
+import { SchemaStructure } from "@spooky/query-builder";
 
 /**
  * Event entry in the history
@@ -25,6 +27,8 @@ export interface ActiveQuery {
   lastUpdate: number;
   updateCount: number;
   dataSize?: number;
+  query?: string;
+  variables?: Record<string, unknown>;
 }
 
 /**
@@ -37,6 +41,14 @@ export interface AuthState {
 }
 
 /**
+ * Database state
+ */
+export interface DatabaseState {
+  tables: string[];
+  tableData: Record<string, Record<string, unknown>[]>;
+}
+
+/**
  * Complete DevTools state
  */
 export interface DevToolsState {
@@ -44,6 +56,7 @@ export interface DevToolsState {
   activeQueries: Record<number, ActiveQuery>;
   auth: AuthState;
   version: string;
+  database?: DatabaseState;
 }
 
 /**
@@ -70,6 +83,8 @@ export class DevToolsService {
   constructor(
     private eventSystem: SpookyEventSystem,
     private logger: Logger,
+    private databaseService: DatabaseService,
+    private schema: SchemaStructure,
     config: DevToolsServiceConfig = {}
   ) {
     this.maxEvents = config.maxEvents ?? 100;
@@ -113,13 +128,22 @@ export class DevToolsService {
     // Query lifecycle events
     this.eventSystem.subscribe(GlobalQueryEventTypes.RequestInit, (event) => {
       const queryHash = event.payload.queryHash;
-      this.activeQueries.set(queryHash, {
+      const activeQuery: ActiveQuery = {
         queryHash,
         status: "initializing",
         createdAt: Date.now(),
         lastUpdate: Date.now(),
         updateCount: 0,
-      });
+      };
+
+      if (event.payload.query !== undefined) {
+        activeQuery.query = event.payload.query;
+      }
+      if (event.payload.variables !== undefined) {
+        activeQuery.variables = event.payload.variables;
+      }
+
+      this.activeQueries.set(queryHash, activeQuery);
       this.addEvent(GlobalQueryEventTypes.RequestInit, event.payload);
       this.notifyDevTools();
     });
@@ -219,6 +243,27 @@ export class DevToolsService {
   }
 
   /**
+   * Get database tables from schema
+   */
+  private getTables(): string[] {
+    return this.schema.tables.map((table) => table.name);
+  }
+
+  /**
+   * Get table data from local database
+   */
+  private async getTableData(tableName: string): Promise<Record<string, unknown>[]> {
+    try {
+      const query = `SELECT * FROM ${tableName}`;
+      const result = await this.databaseService.queryLocal<Record<string, unknown>[]>(query);
+      return result || [];
+    } catch (error) {
+      this.logger.error(`[DevTools] Failed to fetch table data for ${tableName}`, error);
+      return [];
+    }
+  }
+
+  /**
    * Get the current DevTools state
    */
   public getState(): DevToolsState {
@@ -227,6 +272,10 @@ export class DevToolsService {
       activeQueries: Object.fromEntries(this.activeQueries),
       auth: { ...this.auth },
       version: this.version,
+      database: {
+        tables: this.getTables(),
+        tableData: {},
+      },
     };
   }
 
@@ -257,6 +306,9 @@ export class DevToolsService {
         clearHistory: () => {
           this.eventsHistory = [];
           this.notifyDevTools();
+        },
+        getTableData: async (tableName: string) => {
+          return await this.getTableData(tableName);
         },
       };
 
@@ -295,7 +347,9 @@ export class DevToolsService {
 export function createDevToolsService(
   eventSystem: SpookyEventSystem,
   logger: Logger,
+  databaseService: DatabaseService,
+  schema: SchemaStructure,
   config?: DevToolsServiceConfig
 ): DevToolsService {
-  return new DevToolsService(eventSystem, logger, config);
+  return new DevToolsService(eventSystem, logger, databaseService, schema, config);
 }

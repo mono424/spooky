@@ -62,7 +62,7 @@ export async function createSpooky<S extends SchemaStructure>(
   // Create DevTools service to expose state to Chrome DevTools
   // This service is intentionally not returned in the instance as it works
   // in the background by exposing window.__SPOOKY__ API
-  createDevToolsService(eventSystem, logger, {
+  createDevToolsService(eventSystem, logger, databaseService, config.schema, {
     version: "0.1.0", // TODO: Get from package.json
     enabled: true,
   });

@@ -35,6 +35,8 @@ export type SpookyEventTypeMap = {
     typeof GlobalQueryEventTypes.RequestInit,
     {
       queryHash: number;
+      query?: string;
+      variables?: Record<string, unknown>;
     }
   >;
   [GlobalQueryEventTypes.Updated]: EventDefinition<

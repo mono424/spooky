@@ -545,11 +545,24 @@ export class QueryManagerService<S extends SchemaStructure> {
         eventSystem: createQueryEventSystem(),
       };
 
+      const payload: {
+        queryHash: number;
+        query?: string;
+        variables?: Record<string, unknown>;
+      } = {
+        queryHash: query.hash,
+      };
+
+      if (query.selectQuery.query !== undefined) {
+        payload.query = query.selectQuery.query;
+      }
+      if (query.selectQuery.vars !== undefined) {
+        payload.variables = query.selectQuery.vars;
+      }
+
       this.eventSystem.addEvent({
         type: GlobalQueryEventTypes.RequestInit,
-        payload: {
-          queryHash: query.hash,
-        },
+        payload,
       });
 
       return query.hash;
