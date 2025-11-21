@@ -52,28 +52,33 @@ const tabId = chrome.devtools.inspectedWindow.tabId;
 
 // Create a connection to the background script
 const backgroundConnection = chrome.runtime.connect({
-  name: 'spooky-devtools-panel'
+  name: "spooky-devtools-panel",
 });
 
 // Detect and apply Chrome DevTools theme
 function detectAndApplyTheme() {
-  function applyTheme(theme: 'light' | 'dark') {
-    document.documentElement.setAttribute('data-theme', theme);
+  function applyTheme(theme: "light" | "dark") {
+    document.documentElement.setAttribute("data-theme", theme);
   }
 
   // Method 1: Try to get themeName from chrome.devtools.panels (if available)
   try {
     const themeName = (chrome.devtools.panels as any).themeName;
     if (themeName) {
-      const isDark = themeName === 'dark' || themeName === 'default';
-      applyTheme(isDark ? 'dark' : 'light');
-      
+      const isDark = themeName === "dark" || themeName === "default";
+      applyTheme(isDark ? "dark" : "light");
+
       // Listen for theme changes if API is available
-      if (typeof (chrome.devtools.panels as any).onThemeChanged !== 'undefined') {
-        (chrome.devtools.panels as any).onThemeChanged.addListener((newThemeName: string) => {
-          const isDarkTheme = newThemeName === 'dark' || newThemeName === 'default';
-          applyTheme(isDarkTheme ? 'dark' : 'light');
-        });
+      if (
+        typeof (chrome.devtools.panels as any).onThemeChanged !== "undefined"
+      ) {
+        (chrome.devtools.panels as any).onThemeChanged.addListener(
+          (newThemeName: string) => {
+            const isDarkTheme =
+              newThemeName === "dark" || newThemeName === "default";
+            applyTheme(isDarkTheme ? "dark" : "light");
+          }
+        );
       }
       return;
     }
@@ -89,23 +94,27 @@ function detectAndApplyTheme() {
       try {
         const bodyBg = window.getComputedStyle(document.body).backgroundColor;
         const rgbMatch = bodyBg.match(/\d+/g);
-        
+
         if (rgbMatch && rgbMatch.length >= 3) {
           const r = parseInt(rgbMatch[0]);
           const g = parseInt(rgbMatch[1]);
           const b = parseInt(rgbMatch[2]);
           // Calculate relative luminance (per WCAG)
           const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-          applyTheme(luminance > 0.5 ? 'light' : 'dark');
+          applyTheme(luminance > 0.5 ? "light" : "dark");
         } else {
           // Fallback to system preference
-          const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-          applyTheme(prefersDark ? 'dark' : 'light');
+          const prefersDark = window.matchMedia(
+            "(prefers-color-scheme: dark)"
+          ).matches;
+          applyTheme(prefersDark ? "dark" : "light");
         }
       } catch (e) {
         // Fallback to system preference
-        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-        applyTheme(prefersDark ? 'dark' : 'light');
+        const prefersDark = window.matchMedia(
+          "(prefers-color-scheme: dark)"
+        ).matches;
+        applyTheme(prefersDark ? "dark" : "light");
       }
     }, 100);
   }
@@ -114,15 +123,15 @@ function detectAndApplyTheme() {
   detectThemeFromBackground();
 
   // Listen for system theme changes
-  const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-  mediaQuery.addEventListener('change', (e) => {
+  const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+  mediaQuery.addEventListener("change", (e) => {
     // Only apply if we couldn't detect DevTools theme directly
     try {
       if (!(chrome.devtools.panels as any).themeName) {
-        applyTheme(e.matches ? 'dark' : 'light');
+        applyTheme(e.matches ? "dark" : "light");
       }
     } catch (err) {
-      applyTheme(e.matches ? 'dark' : 'light');
+      applyTheme(e.matches ? "dark" : "light");
     }
   });
 
@@ -133,14 +142,14 @@ function detectAndApplyTheme() {
     try {
       const bodyBg = window.getComputedStyle(document.body).backgroundColor;
       const rgbMatch = bodyBg.match(/\d+/g);
-      
+
       if (rgbMatch && rgbMatch.length >= 3) {
         const r = parseInt(rgbMatch[0]);
         const g = parseInt(rgbMatch[1]);
         const b = parseInt(rgbMatch[2]);
         const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-        const detectedTheme = luminance > 0.5 ? 'light' : 'dark';
-        
+        const detectedTheme = luminance > 0.5 ? "light" : "dark";
+
         if (lastTheme !== detectedTheme) {
           lastTheme = detectedTheme;
           applyTheme(detectedTheme);
@@ -155,47 +164,52 @@ function detectAndApplyTheme() {
 // Initialize the panel
 function initPanel() {
   // Ensure default theme is set first
-  if (!document.documentElement.hasAttribute('data-theme')) {
-    document.documentElement.setAttribute('data-theme', 'dark');
+  if (!document.documentElement.hasAttribute("data-theme")) {
+    document.documentElement.setAttribute("data-theme", "dark");
   }
-  
+
   // Detect and apply Chrome DevTools theme
   detectAndApplyTheme();
 
-  const refreshBtn = document.getElementById('refresh-btn');
-  const clearEventsBtn = document.getElementById('clear-events-btn');
+  const refreshBtn = document.getElementById("refresh-btn");
+  const clearEventsBtn = document.getElementById("clear-events-btn");
 
-  refreshBtn?.addEventListener('click', refreshState);
-  clearEventsBtn?.addEventListener('click', clearEventsHistory);
+  refreshBtn?.addEventListener("click", refreshState);
+  clearEventsBtn?.addEventListener("click", clearEventsHistory);
 
   // Set up tab switching
   setupTabs();
 
   // Tell the background script which tab we're inspecting
   backgroundConnection.postMessage({
-    name: 'init',
-    tabId: tabId
+    name: "init",
+    tabId: tabId,
   });
 
   // Listen for state updates from the background script via the port
   backgroundConnection.onMessage.addListener((message) => {
-    console.log('Panel received message:', message);
+    console.log("Panel received message:", message);
 
-    if (message.type === 'SPOOKY_DETECTED') {
-      console.log('SPOOKY_DETECTED message received with data:', message.data);
-      updateUI(message.data || { detected: true, version: message.data?.version });
+    if (message.type === "SPOOKY_DETECTED") {
+      console.log("SPOOKY_DETECTED message received with data:", message.data);
+      updateUI(
+        message.data || { detected: true, version: message.data?.version }
+      );
     }
 
-    if (message.type === 'SPOOKY_STATE_CHANGED') {
-      console.log('SPOOKY_STATE_CHANGED message received with state:', message.state);
+    if (message.type === "SPOOKY_STATE_CHANGED") {
+      console.log(
+        "SPOOKY_STATE_CHANGED message received with state:",
+        message.state
+      );
       // State is included in the message from devtools-service
       if (message.state) {
         updateUI({ detected: true, state: message.state });
       }
     }
 
-    if (message.type === 'SPOOKY_TABLE_DATA_RESPONSE') {
-      console.log('SPOOKY_TABLE_DATA_RESPONSE received:', message);
+    if (message.type === "SPOOKY_TABLE_DATA_RESPONSE") {
+      console.log("SPOOKY_TABLE_DATA_RESPONSE received:", message);
       const { tableName, data } = message;
       if (tableName && data) {
         updateTableData(tableName, data);
@@ -213,9 +227,9 @@ function refreshState() {
     `(${detectSpooky.toString()})()`,
     (result, isException) => {
       if (isException) {
-        console.error('Error detecting Spooky:', isException);
+        console.error("Error detecting Spooky:", isException);
         updateUI({ detected: false });
-      } else if (result && typeof result === 'object' && 'detected' in result) {
+      } else if (result && typeof result === "object" && "detected" in result) {
         updateUI(result as SpookyData);
       } else {
         updateUI({ detected: false });
@@ -236,18 +250,18 @@ function detectSpooky() {
 
     return {
       detected: true,
-      version: spooky.version || 'unknown',
+      version: spooky.version || "unknown",
       state: spooky.getState ? spooky.getState() : null,
     };
   } catch (error) {
-    console.error('Error in detectSpooky:', error);
+    console.error("Error in detectSpooky:", error);
     return { detected: false };
   }
 }
 
 // Update the UI with Spooky data
 function updateUI(data: SpookyData) {
-  console.log('updateUI called with data:', data);
+  console.log("updateUI called with data:", data);
   currentData = data;
 
   // Update status
@@ -255,18 +269,24 @@ function updateUI(data: SpookyData) {
 
   // Update content based on current tab
   if (data.state) {
-    console.log('Updating UI with state:', data.state);
+    console.log("Updating UI with state:", data.state);
     updateEventsHistory(data.state.eventsHistory);
     updateActiveQueries(data.state.activeQueries);
     updateAuthInfo(data.state.auth);
     if (data.state.database) {
       updateDatabaseTables(data.state.database.tables);
-      if (selectedTableName && data.state.database.tableData[selectedTableName]) {
-        updateTableData(selectedTableName, data.state.database.tableData[selectedTableName]);
+      if (
+        selectedTableName &&
+        data.state.database.tableData[selectedTableName]
+      ) {
+        updateTableData(
+          selectedTableName,
+          data.state.database.tableData[selectedTableName]
+        );
       }
     }
   } else {
-    console.log('No state available, showing empty state');
+    console.log("No state available, showing empty state");
     // Show empty states
     updateEventsHistory([]);
     updateActiveQueries({});
@@ -276,30 +296,35 @@ function updateUI(data: SpookyData) {
 }
 
 function updateStatus(data: SpookyData) {
-  const statusEl = document.getElementById('status');
+  const statusEl = document.getElementById("status");
   if (statusEl) {
-    const statusDot = statusEl.querySelector('.status-dot');
-    const statusText = statusEl.querySelector('span:last-child');
-    
+    const statusDot = statusEl.querySelector(".status-dot");
+    const statusText = statusEl.querySelector("span:last-child");
+
     if (statusDot && statusText) {
       if (data.detected) {
-        statusDot.className = 'status-dot active';
-        const authStatus = data.state?.auth.authenticated ? 'Authenticated' : 'Not authenticated';
-        statusText.textContent = `Spooky detected ${data.version ? `(v${data.version})` : ''} • ${authStatus}`;
+        statusDot.className = "status-dot active";
+        const authStatus = data.state?.auth.authenticated
+          ? "Authenticated"
+          : "Not authenticated";
+        statusText.textContent = `Spooky detected ${
+          data.version ? `(v${data.version})` : ""
+        } • ${authStatus}`;
       } else {
-        statusDot.className = 'status-dot inactive';
-        statusText.textContent = 'Spooky not detected on this page';
+        statusDot.className = "status-dot inactive";
+        statusText.textContent = "Spooky not detected on this page";
       }
     }
   }
 }
 
 function updateEventsHistory(events: DevToolsEvent[]) {
-  const eventsListEl = document.getElementById('events-list');
+  const eventsListEl = document.getElementById("events-list");
   if (!eventsListEl) return;
 
   if (events.length === 0) {
-    eventsListEl.innerHTML = '<div class="empty-state">No events recorded yet</div>';
+    eventsListEl.innerHTML =
+      '<div class="empty-state">No events recorded yet</div>';
     return;
   }
 
@@ -320,17 +345,18 @@ function updateEventsHistory(events: DevToolsEvent[]) {
         </div>
       `;
     })
-    .join('');
+    .join("");
 }
 
 function updateActiveQueries(queries: Record<number, ActiveQuery>) {
-  const queriesListContentEl = document.getElementById('queries-list-content');
+  const queriesListContentEl = document.getElementById("queries-list-content");
   if (!queriesListContentEl) return;
 
   const queryArray = Object.values(queries);
 
   if (queryArray.length === 0) {
-    queriesListContentEl.innerHTML = '<div class="empty-state">No active queries</div>';
+    queriesListContentEl.innerHTML =
+      '<div class="empty-state">No active queries</div>';
     selectedQueryHash = null;
     hideQueryDetail();
     return;
@@ -340,28 +366,40 @@ function updateActiveQueries(queries: Record<number, ActiveQuery>) {
     .map((query) => {
       const age = Math.floor((Date.now() - query.createdAt) / 1000);
       const isSelected = selectedQueryHash === query.queryHash;
-      const queryPreview = query.query ? query.query.substring(0, 50) + (query.query.length > 50 ? '...' : '') : '';
+      const queryPreview = query.query
+        ? query.query.substring(0, 50) + (query.query.length > 50 ? "..." : "")
+        : "";
       return `
-        <div class="query-item ${isSelected ? 'selected' : ''}" data-query-hash="${query.queryHash}">
+        <div class="query-item ${
+          isSelected ? "selected" : ""
+        }" data-query-hash="${query.queryHash}">
           <div class="query-header">
             <span class="query-hash">Query #${query.queryHash}</span>
-            <span class="query-status status-${query.status}">${query.status}</span>
+            <span class="query-status status-${query.status}">${
+        query.status
+      }</span>
           </div>
-          ${queryPreview ? `<div class="query-preview">${queryPreview}</div>` : ''}
+          ${
+            queryPreview
+              ? `<div class="query-preview">${queryPreview}</div>`
+              : ""
+          }
           <div class="query-meta">
             Updates: ${query.updateCount} •
-            Size: ${query.dataSize ?? '?'} •
+            Size: ${query.dataSize ?? "?"} •
             Age: ${age}s
           </div>
         </div>
       `;
     })
-    .join('');
+    .join("");
 
   // Add click handlers to query items
-  queriesListContentEl.querySelectorAll('.query-item').forEach((item) => {
-    item.addEventListener('click', () => {
-      const queryHash = parseInt((item as HTMLElement).dataset.queryHash || '0');
+  queriesListContentEl.querySelectorAll(".query-item").forEach((item) => {
+    item.addEventListener("click", () => {
+      const queryHash = parseInt(
+        (item as HTMLElement).dataset.queryHash || "0"
+      );
       selectQuery(queryHash, queries);
     });
   });
@@ -379,13 +417,17 @@ function selectQuery(queryHash: number, queries: Record<number, ActiveQuery>) {
   if (query) {
     showQueryDetail(query);
     // Update the selected state in the list
-    const queriesListContentEl = document.getElementById('queries-list-content');
+    const queriesListContentEl = document.getElementById(
+      "queries-list-content"
+    );
     if (queriesListContentEl) {
-      queriesListContentEl.querySelectorAll('.query-item').forEach((item) => {
-        if (parseInt((item as HTMLElement).dataset.queryHash || '0') === queryHash) {
-          item.classList.add('selected');
+      queriesListContentEl.querySelectorAll(".query-item").forEach((item) => {
+        if (
+          parseInt((item as HTMLElement).dataset.queryHash || "0") === queryHash
+        ) {
+          item.classList.add("selected");
         } else {
-          item.classList.remove('selected');
+          item.classList.remove("selected");
         }
       });
     }
@@ -393,9 +435,9 @@ function selectQuery(queryHash: number, queries: Record<number, ActiveQuery>) {
 }
 
 function showQueryDetail(query: ActiveQuery) {
-  const detailEl = document.getElementById('query-detail');
+  const detailEl = document.getElementById("query-detail");
   if (!detailEl) {
-    console.error('Query detail element not found');
+    console.error("Query detail element not found");
     return;
   }
 
@@ -404,7 +446,7 @@ function showQueryDetail(query: ActiveQuery) {
   const createdTime = new Date(query.createdAt).toLocaleString();
   const lastUpdateTime = new Date(query.lastUpdate).toLocaleString();
 
-  console.log('Showing query detail for:', query.queryHash);
+  console.log("Showing query detail for:", query.queryHash);
 
   detailEl.innerHTML = `
     <div class="detail-header">
@@ -414,7 +456,9 @@ function showQueryDetail(query: ActiveQuery) {
       <div class="detail-section">
         <div class="detail-label">Status</div>
         <div class="detail-value">
-          <span class="query-status status-${query.status}">${query.status}</span>
+          <span class="query-status status-${query.status}">${
+    query.status
+  }</span>
         </div>
       </div>
 
@@ -423,23 +467,35 @@ function showQueryDetail(query: ActiveQuery) {
         <div class="detail-value mono">${query.queryHash}</div>
       </div>
 
-      ${query.query ? `
+      ${
+        query.query
+          ? `
       <div class="detail-section">
         <div class="detail-label">Query</div>
         <div class="detail-value">
           <pre class="query-code">${query.query}</pre>
         </div>
       </div>
-      ` : ''}
+      `
+          : ""
+      }
 
-      ${query.variables && Object.keys(query.variables).length > 0 ? `
+      ${
+        query.variables && Object.keys(query.variables).length > 0
+          ? `
       <div class="detail-section">
         <div class="detail-label">Variables</div>
         <div class="detail-value">
-          <pre class="query-code">${JSON.stringify(query.variables, null, 2)}</pre>
+          <pre class="query-code">${JSON.stringify(
+            query.variables,
+            null,
+            2
+          )}</pre>
         </div>
       </div>
-      ` : ''}
+      `
+          : ""
+      }
 
       <div class="detail-section">
         <div class="detail-label">Created</div>
@@ -458,13 +514,17 @@ function showQueryDetail(query: ActiveQuery) {
 
       <div class="detail-section">
         <div class="detail-label">Data Size</div>
-        <div class="detail-value">${query.dataSize ?? 'unknown'} records</div>
+        <div class="detail-value">${query.dataSize ?? "unknown"} records</div>
       </div>
 
       <div class="detail-section">
         <div class="detail-label">Performance</div>
         <div class="detail-value">
-          ${query.updateCount > 0 ? `${(query.updateCount / (age || 1)).toFixed(2)} updates/sec` : 'No updates yet'}
+          ${
+            query.updateCount > 0
+              ? `${(query.updateCount / (age || 1)).toFixed(2)} updates/sec`
+              : "No updates yet"
+          }
         </div>
       </div>
     </div>
@@ -472,32 +532,34 @@ function showQueryDetail(query: ActiveQuery) {
 }
 
 function hideQueryDetail() {
-  const detailEl = document.getElementById('query-detail');
+  const detailEl = document.getElementById("query-detail");
   if (detailEl) {
-    detailEl.innerHTML = '';
+    detailEl.innerHTML = "";
   }
 
   selectedQueryHash = null;
 
   // Remove selection from all query items
-  const queriesListContentEl = document.getElementById('queries-list-content');
+  const queriesListContentEl = document.getElementById("queries-list-content");
   if (queriesListContentEl) {
-    queriesListContentEl.querySelectorAll('.query-item').forEach((item) => {
-      item.classList.remove('selected');
+    queriesListContentEl.querySelectorAll(".query-item").forEach((item) => {
+      item.classList.remove("selected");
     });
   }
 }
 
 function updateAuthInfo(auth: AuthState) {
-  const authInfoEl = document.getElementById('auth-info');
+  const authInfoEl = document.getElementById("auth-info");
   if (!authInfoEl) return;
 
   if (auth.authenticated) {
-    const time = auth.timestamp ? new Date(auth.timestamp).toLocaleTimeString() : 'unknown';
+    const time = auth.timestamp
+      ? new Date(auth.timestamp).toLocaleTimeString()
+      : "unknown";
     authInfoEl.innerHTML = `
       <div class="auth-status authenticated">
         <strong>Status:</strong> Authenticated<br>
-        <strong>User ID:</strong> ${auth.userId || 'unknown'}<br>
+        <strong>User ID:</strong> ${auth.userId || "unknown"}<br>
         <strong>Time:</strong> ${time}
       </div>
     `;
@@ -511,23 +573,23 @@ function updateAuthInfo(auth: AuthState) {
 }
 
 function setupTabs() {
-  const tabBtns = document.querySelectorAll('.tab-btn');
-  const tabContents = document.querySelectorAll('.tab-content');
+  const tabBtns = document.querySelectorAll(".tab-btn");
+  const tabContents = document.querySelectorAll(".tab-content");
 
   tabBtns.forEach((btn) => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener("click", () => {
       const tabName = (btn as HTMLElement).dataset.tab;
 
       // Update active tab button
-      tabBtns.forEach((b) => b.classList.remove('active'));
-      btn.classList.add('active');
+      tabBtns.forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
 
       // Show corresponding content
       tabContents.forEach((content) => {
         if ((content as HTMLElement).dataset.tab === tabName) {
-          content.classList.add('active');
+          content.classList.add("active");
         } else {
-          content.classList.remove('active');
+          content.classList.remove("active");
         }
       });
     });
@@ -545,7 +607,7 @@ function clearEventsHistory() {
     })()`,
     (result: any, isException) => {
       if (!isException && result?.success) {
-        console.log('Events history cleared');
+        console.log("Events history cleared");
         refreshState();
       }
     }
@@ -553,15 +615,16 @@ function clearEventsHistory() {
 }
 
 function updateDatabaseTables(tables: string[]) {
-  console.log('updateDatabaseTables called with:', tables);
-  const tablesListEl = document.getElementById('tables-list');
+  console.log("updateDatabaseTables called with:", tables);
+  const tablesListEl = document.getElementById("tables-list");
   if (!tablesListEl) {
-    console.error('tables-list element not found');
+    console.error("tables-list element not found");
     return;
   }
 
   if (tables.length === 0) {
-    tablesListEl.innerHTML = '<div class="empty-state">No tables available</div>';
+    tablesListEl.innerHTML =
+      '<div class="empty-state">No tables available</div>';
     return;
   }
 
@@ -569,20 +632,22 @@ function updateDatabaseTables(tables: string[]) {
     .map((tableName) => {
       const isSelected = selectedTableName === tableName;
       return `
-        <div class="table-item ${isSelected ? 'selected' : ''}" data-table-name="${tableName}">
+        <div class="table-item ${
+          isSelected ? "selected" : ""
+        }" data-table-name="${tableName}">
           ${tableName}
         </div>
       `;
     })
-    .join('');
+    .join("");
 
-  console.log('Added table items, now adding click handlers');
+  console.log("Added table items, now adding click handlers");
 
   // Add click handlers to table items
-  tablesListEl.querySelectorAll('.table-item').forEach((item) => {
-    item.addEventListener('click', () => {
+  tablesListEl.querySelectorAll(".table-item").forEach((item) => {
+    item.addEventListener("click", () => {
       const tableName = (item as HTMLElement).dataset.tableName;
-      console.log('Table item clicked:', tableName);
+      console.log("Table item clicked:", tableName);
       if (tableName) {
         selectTable(tableName);
       }
@@ -591,18 +656,18 @@ function updateDatabaseTables(tables: string[]) {
 }
 
 function selectTable(tableName: string) {
-  console.log('selectTable called with:', tableName);
+  console.log("selectTable called with:", tableName);
   selectedTableName = tableName;
 
   // Update selected state in the list
-  const tablesListEl = document.getElementById('tables-list');
+  const tablesListEl = document.getElementById("tables-list");
   if (tablesListEl) {
-    tablesListEl.querySelectorAll('.table-item').forEach((item) => {
+    tablesListEl.querySelectorAll(".table-item").forEach((item) => {
       if ((item as HTMLElement).dataset.tableName === tableName) {
-        item.classList.add('selected');
-        console.log('Added selected class to:', tableName);
+        item.classList.add("selected");
+        console.log("Added selected class to:", tableName);
       } else {
-        item.classList.remove('selected');
+        item.classList.remove("selected");
       }
     });
   }
@@ -639,26 +704,29 @@ function fetchTableData(tableName: string) {
       }
     })()`,
     (result: any, isException: any) => {
-      console.log('Eval completed:', { tableName, result, isException });
+      console.log("Eval completed:", { tableName, result, isException });
     }
   );
 }
 
 function updateTableData(tableName: string, data: Record<string, unknown>[]) {
-  console.log('updateTableData called with:', { tableName, dataLength: data?.length, data });
-  const tableDataEl = document.getElementById('table-data');
-  const tableNameHeader = document.getElementById('table-name-header');
+  console.log("updateTableData called with:", {
+    tableName,
+    dataLength: data?.length,
+    data,
+  });
+  const tableDataEl = document.getElementById("table-data");
 
-  if (!tableDataEl || !tableNameHeader) {
-    console.error('table-data or table-name-header element not found');
+  if (!tableDataEl) {
+    console.error("table-data or table-name-header element not found");
     return;
   }
 
   // Safety check for data
   if (!data || !Array.isArray(data) || data.length === 0) {
-    console.log('No data to display');
-    tableNameHeader.innerHTML = `<span>${tableName}</span>`;
-    tableDataEl.innerHTML = '<div class="empty-state">No data in this table</div>';
+    console.log("No data to display");
+    tableDataEl.innerHTML =
+      '<div class="empty-state">No data in this table</div>';
     return;
   }
 
@@ -666,46 +734,47 @@ function updateTableData(tableName: string, data: Record<string, unknown>[]) {
     // Get all unique columns from the data
     const columns = new Set<string>();
     data.forEach((row) => {
-      if (row && typeof row === 'object') {
+      if (row && typeof row === "object") {
         Object.keys(row).forEach((key) => columns.add(key));
       }
     });
     const columnArray = Array.from(columns);
 
     if (columnArray.length === 0) {
-      tableNameHeader.innerHTML = `<span>${tableName}</span>`;
-      tableDataEl.innerHTML = '<div class="empty-state">No columns found in data</div>';
+      tableDataEl.innerHTML =
+        '<div class="empty-state">No columns found in data</div>';
       return;
     }
 
-    // Hide the header div since we'll use the table's thead
-    tableNameHeader.style.display = 'none';
-
     // Build table header row
-    const headerCells = columnArray.map((col) =>
-      `<th>${escapeHtml(col)}</th>`
-    ).join('');
+    const headerCells = columnArray
+      .map((col) => `<th>${escapeHtml(col)}</th>`)
+      .join("");
 
     // Build table data rows
-    const rowsHtml = data.map((row) => {
-      const cellsHtml = columnArray.map((col) => {
-        const value = row[col];
-        let displayValue = '';
-        if (value === null || value === undefined) {
-          displayValue = '<em>null</em>';
-        } else if (typeof value === 'object') {
-          try {
-            displayValue = escapeHtml(JSON.stringify(value));
-          } catch (e) {
-            displayValue = escapeHtml('[Object]');
-          }
-        } else {
-          displayValue = escapeHtml(String(value));
-        }
-        return `<td title="${displayValue}">${displayValue}</td>`;
-      }).join('');
-      return `<tr>${cellsHtml}</tr>`;
-    }).join('');
+    const rowsHtml = data
+      .map((row) => {
+        const cellsHtml = columnArray
+          .map((col) => {
+            const value = row[col];
+            let displayValue = "";
+            if (value === null || value === undefined) {
+              displayValue = "<em>null</em>";
+            } else if (typeof value === "object") {
+              try {
+                displayValue = escapeHtml(JSON.stringify(value));
+              } catch (e) {
+                displayValue = escapeHtml("[Object]");
+              }
+            } else {
+              displayValue = escapeHtml(String(value));
+            }
+            return `<td title="${displayValue}">${displayValue}</td>`;
+          })
+          .join("");
+        return `<tr>${cellsHtml}</tr>`;
+      })
+      .join("");
 
     // Build complete table with thead
     const tableHtml = `
@@ -721,21 +790,21 @@ function updateTableData(tableName: string, data: Record<string, unknown>[]) {
 
     tableDataEl.innerHTML = tableHtml;
   } catch (error) {
-    console.error('Error rendering table:', error);
-    tableNameHeader.innerHTML = `<span>${tableName}</span>`;
-    tableDataEl.innerHTML = '<div class="empty-state">Error rendering table data</div>';
+    console.error("Error rendering table:", error);
+    tableDataEl.innerHTML =
+      '<div class="empty-state">Error rendering table data</div>';
   }
 }
 
 function escapeHtml(text: string): string {
-  const div = document.createElement('div');
+  const div = document.createElement("div");
   div.textContent = text;
   return div.innerHTML;
 }
 
 // Initialize when the DOM is ready
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initPanel);
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initPanel);
 } else {
   initPanel();
 }
