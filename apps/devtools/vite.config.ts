@@ -1,8 +1,9 @@
 import { defineConfig } from "vite";
 import { resolve } from "path";
-import { copyFileSync, mkdirSync, existsSync, readdirSync, statSync } from "fs";
+import { copyFileSync, mkdirSync, existsSync, readdirSync, statSync, readFileSync, writeFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
+import solid from "vite-plugin-solid";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -11,6 +12,23 @@ const __dirname = dirname(__filename);
 const copyAssetsPlugin = () => ({
   name: "copy-assets",
   closeBundle() {
+    // Move panel.html from dist/public to dist root and fix paths
+    const panelHtmlSource = resolve(__dirname, "dist", "public", "panel.html");
+    const panelHtmlDest = resolve(__dirname, "dist", "panel.html");
+    if (existsSync(panelHtmlSource)) {
+      let htmlContent = readFileSync(panelHtmlSource, "utf-8");
+      // Remove leading slashes to make paths relative
+      htmlContent = htmlContent.replace(/src="\/([^"]+)"/g, 'src="$1"');
+      htmlContent = htmlContent.replace(/href="\/([^"]+)"/g, 'href="$1"');
+      // Remove Chrome DevTools theme link that gets auto-injected
+      htmlContent = htmlContent.replace(
+        /<link[^>]*href="devtools:\/\/theme\/colors\.css[^"]*"[^>]*>\s*/g,
+        ""
+      );
+      writeFileSync(panelHtmlDest, htmlContent);
+      console.log("✓ Moved panel.html to dist root with relative paths");
+    }
+
     // Copy manifest.json
     const manifestPath = resolve(__dirname, "manifest.json");
     const distPath = resolve(__dirname, "dist", "manifest.json");
@@ -52,13 +70,14 @@ const copyAssetsPlugin = () => ({
 });
 
 export default defineConfig({
-  plugins: [copyAssetsPlugin()],
+  plugins: [solid(), copyAssetsPlugin()],
   build: {
     outDir: "dist",
+    assetsDir: "assets",
     rollupOptions: {
       input: {
         devtools: resolve(__dirname, "src/devtools.ts"),
-        panel: resolve(__dirname, "src/panel.ts"),
+        panel: resolve(__dirname, "public/panel.html"),
         background: resolve(__dirname, "src/background.ts"),
         content: resolve(__dirname, "src/content.ts"),
         "page-script": resolve(__dirname, "src/page-script.ts"),

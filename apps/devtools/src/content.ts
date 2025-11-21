@@ -10,7 +10,15 @@ function injectPageScript() {
   script.src = chrome.runtime.getURL('page-script.js');
   script.onload = function() {
     // Remove script tag after execution to keep DOM clean
-    script.remove();
+    try {
+      script.remove();
+    } catch (e) {
+      // Ignore errors if script is already removed
+      console.warn('[DevTools] Script removal failed:', e);
+    }
+  };
+  script.onerror = function(error) {
+    console.error('[DevTools] Failed to load page-script.js:', error);
   };
   (document.head || document.documentElement).appendChild(script);
 }
@@ -24,16 +32,26 @@ window.addEventListener('message', (event) => {
   if (event.data.source !== 'spooky-devtools-page') return;
 
   // Forward to background script with all relevant data
-  chrome.runtime.sendMessage({
-    type: event.data.type,
-    data: event.data.data,
-    state: event.data.state, // Include state for SPOOKY_STATE_CHANGED messages
-    tableName: event.data.tableName, // Include tableName for table data responses
-  });
+  try {
+    chrome.runtime.sendMessage({
+      type: event.data.type,
+      data: event.data.data,
+      state: event.data.state, // Include state for SPOOKY_STATE_CHANGED messages
+      tableName: event.data.tableName, // Include tableName for table data responses
+    }).catch((error) => {
+      // Silently ignore "Extension context invalidated" errors (happens during dev reloads)
+      if (!error.message?.includes('Extension context invalidated')) {
+        console.warn('[DevTools] Failed to send message to background:', error);
+      }
+    });
+  } catch (error) {
+    // Extension was reloaded, runtime is no longer available
+    // This is normal during development, silently ignore
+  }
 });
 
 // Listen for messages from the background script/devtools
-chrome.runtime.onMessage.addListener((message) => {
+chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
   if (message.type === 'GET_SPOOKY_STATE') {
     // Request state from the page
     window.postMessage({
@@ -41,6 +59,8 @@ chrome.runtime.onMessage.addListener((message) => {
       source: 'spooky-devtools-content'
     }, '*');
   }
+  // Return true to indicate we may send a response asynchronously
+  return true;
 });
 
 // Inject the page script

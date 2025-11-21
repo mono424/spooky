@@ -11,11 +11,13 @@
   },
   "devDependencies": {
     "@types/chrome": "^0.0.270",
+    "babel-preset-solid": "^1.9.10",
     "typescript": "^5.3.3",
     "vite": "^5.0.0",
+    "vite-plugin-solid": "^2.8.0",
     "vite-plugin-web-extension": "^4.1.0"
   },
   "dependencies": {
-    "solid-js": "^1.8.0"
+    "solid-js": "^1.9.10"
   }
 }

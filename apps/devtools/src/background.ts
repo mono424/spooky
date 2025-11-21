@@ -23,7 +23,10 @@ chrome.runtime.onConnect.addListener((port) => {
 
     // Forward messages to the content script
     if (tabId) {
-      chrome.tabs.sendMessage(tabId, message);
+      chrome.tabs.sendMessage(tabId, message).catch((error) => {
+        // Ignore errors if content script is not ready or tab is closed
+        console.warn('Failed to send message to content script:', error);
+      });
     }
   };
 
