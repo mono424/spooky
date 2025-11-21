@@ -16,7 +16,9 @@ chrome.runtime.onConnect.addListener((port) => {
   const messageListener = (message: any) => {
     if (message.name === 'init') {
       tabId = message.tabId;
-      connections.set(tabId, port);
+      if (tabId !== undefined) {
+        connections.set(tabId, port);
+      }
     }
 
     // Forward messages to the content script
@@ -45,7 +47,7 @@ chrome.runtime.onMessage.addListener((message, sender) => {
 });
 
 // Detect when tabs are updated
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status === 'complete' && connections.has(tabId)) {
     // Notify the devtools panel that the page has been reloaded
     const port = connections.get(tabId);

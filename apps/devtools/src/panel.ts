@@ -41,8 +41,10 @@ function refreshState() {
       if (isException) {
         console.error('Error detecting Spooky:', isException);
         updateUI({ detected: false, stores: [] });
+      } else if (result && typeof result === 'object' && 'detected' in result) {
+        updateUI(result as SpookyData);
       } else {
-        updateUI(result);
+        updateUI({ detected: false, stores: [] });
       }
     }
   );
