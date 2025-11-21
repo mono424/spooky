@@ -33,6 +33,8 @@ pub struct FieldDefinition {
     pub assert: Option<String>,
     pub value: Option<String>,
     pub is_record_id: bool,
+    pub select_permission: Option<String>,
+    pub should_strip: bool, // True if field should be excluded from client
 }
 
 #[derive(Debug, Clone)]
@@ -221,6 +223,9 @@ impl SchemaParser {
                 // Check if this field is a record ID (has Record type)
                 let is_record_id = Self::is_field_record_id(&field_type);
 
+                // Extract select permission and determine if field should be stripped
+                let (select_permission, should_strip) = Self::parse_permissions(&field_def.permissions);
+
                 let field = FieldDefinition {
                     name: field_name.clone(),
                     field_type: field_type.clone(),
@@ -228,6 +233,8 @@ impl SchemaParser {
                     assert: assert_clause,
                     value: value_clause,
                     is_record_id,
+                    select_permission: select_permission.clone(),
+                    should_strip,
                 };
 
                 if let Some(table) = self.tables.get_mut(&table_name) {
@@ -313,5 +320,24 @@ impl SchemaParser {
             FieldType::Array(inner) => Self::extract_related_table(inner),
             _ => None,
         }
+    }
+
+    /// Parse field permissions and determine if field should be stripped from client schema
+    /// Returns (select_permission_string, should_strip)
+    fn parse_permissions(permissions: &surrealdb_core::sql::Permissions) -> (Option<String>, bool) {
+        // Convert permissions to string and check for patterns
+        let perm_str = format!("{}", permissions);
+
+        // Check if the permission string contains "FOR select WHERE false"
+        // or similar patterns that indicate the field should not be readable
+        let should_strip = perm_str.contains("FOR select WHERE false")
+            || perm_str.contains("FOR select false")
+            || (perm_str.contains("SELECT") && perm_str.contains("false"));
+
+        if should_strip {
+            println!("  → Field has 'FOR select WHERE false' - will be stripped from client schema");
+        }
+
+        (Some(perm_str), should_strip)
     }
 }

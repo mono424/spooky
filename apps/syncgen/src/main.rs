@@ -41,6 +41,73 @@ struct Args {
     no_header: bool,
 }
 
+/// Filter schema content to remove field definitions with FOR select WHERE false
+fn filter_schema_for_client(content: &str, parser: &SchemaParser) -> Result<String> {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut result = Vec::new();
+    let mut i = 0;
+
+    while i < lines.len() {
+        let line = lines[i];
+        let trimmed = line.trim();
+
+        // Check if this line starts a DEFINE FIELD
+        if trimmed.starts_with("DEFINE FIELD") {
+            // Extract table and field name
+            if let Some((table_name, field_name)) = extract_table_and_field_name(trimmed) {
+                // Check if this field should be stripped
+                if let Some(table) = parser.tables.get(&table_name) {
+                    if let Some(field) = table.fields.get(&field_name) {
+                        if field.should_strip {
+                            // Skip this entire field definition (until semicolon)
+                            println!("  → Removing field '{}' from table '{}' in client schema", field_name, table_name);
+                            while i < lines.len() {
+                                if lines[i].contains(';') {
+                                    i += 1;
+                                    break;
+                                }
+                                i += 1;
+                            }
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+
+        result.push(line);
+        i += 1;
+    }
+
+    Ok(result.join("\n"))
+}
+
+/// Extract table and field name from a DEFINE FIELD line
+/// Example: "DEFINE FIELD password ON TABLE user TYPE string"
+/// Returns: Some(("user", "password"))
+fn extract_table_and_field_name(line: &str) -> Option<(String, String)> {
+    let parts: Vec<&str> = line.split_whitespace().collect();
+
+    // Look for pattern: DEFINE FIELD <name> ON TABLE <table>
+    let mut field_name = None;
+    let mut table_name = None;
+
+    for i in 0..parts.len() {
+        if parts[i] == "FIELD" && i + 1 < parts.len() {
+            field_name = Some(parts[i + 1].to_string());
+        }
+        if parts[i] == "TABLE" && i + 1 < parts.len() {
+            table_name = Some(parts[i + 1].to_string());
+        }
+    }
+
+    if let (Some(table), Some(field)) = (table_name, field_name) {
+        Some((table, field))
+    } else {
+        None
+    }
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
 
@@ -48,14 +115,14 @@ fn main() -> Result<()> {
     let content = fs::read_to_string(&args.input)
         .context(format!("Failed to read input file: {:?}", args.input))?;
 
-    // Store the raw schema content for later use
-    let raw_schema_content = content.clone();
-
     // Parse the schema
     let mut parser = SchemaParser::new();
     parser
         .parse_file(&content)
         .context("Failed to parse SurrealDB schema")?;
+
+    // Filter the raw schema content to remove fields with FOR select WHERE false
+    let raw_schema_content = filter_schema_for_client(&content, &parser)?;
 
     println!(
         "Successfully parsed {} table(s) from {:?}",

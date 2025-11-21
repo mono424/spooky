@@ -211,6 +211,11 @@ impl JsonSchemaGenerator {
         required_fields.push("id".to_string());
 
         for (field_name, field_def) in &table.fields {
+            // Skip fields marked as should_strip (FOR select WHERE false)
+            if field_def.should_strip {
+                continue;
+            }
+
             let field_schema = self.generate_field_schema(&field_def.field_type);
 
             let mut field_obj = serde_json::Map::new();

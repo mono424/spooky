@@ -12,21 +12,29 @@ DEFINE ACCESS account ON DATABASE TYPE RECORD
 -- ##################################################################
 
 DEFINE TABLE user SCHEMAFULL
-  PERMISSIONS FOR select, update, delete, create
-  WHERE $access = "account"
-  AND id = $auth.id
-;
+PERMISSIONS
+  FOR update, delete, create WHERE $access = "account" AND id = $auth.id
+  FOR select WHERE true;
 
 DEFINE FIELD username ON TABLE user TYPE string
-    ASSERT $value != NONE AND string::is::alphanum($value) AND string::len($value) > 3;
+ASSERT $value != NONE AND string::is::alphanum($value) AND string::len($value) > 3
+PERMISSIONS
+    FOR select WHERE true
+    FOR update WHERE $access = "account" AND id = $auth.id;
     
 DEFINE INDEX unique_username ON TABLE user FIELDS username UNIQUE;
 
 DEFINE FIELD password ON TABLE user TYPE string
-    ASSERT $value != NONE AND string::len($value) > 0;
+ASSERT $value != NONE AND string::len($value) > 0
+PERMISSIONS
+    FOR select WHERE false
+    FOR update WHERE $access = "account" AND id = $auth.id;
 
 DEFINE FIELD created_at ON TABLE user TYPE datetime
-    VALUE time::now();
+VALUE time::now()
+PERMISSIONS
+    FOR select WHERE false
+    FOR update WHERE $access = "account" AND id = $auth.id;
 
 -- ##################################################################
 -- THREAD TABLE

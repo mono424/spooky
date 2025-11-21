@@ -4,36 +4,22 @@
 export const schema = {
   tables: [
     {
-      name: 'user' as const,
-      columns: {
-        id: { type: 'string' as const, recordId: true, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
-        username: { type: 'string' as const, optional: false },
-        password: { type: 'string' as const, optional: false },
-        threads: { type: 'string' as const, optional: true },
-        comments: { type: 'string' as const, optional: true },
-      },
-      primaryKey: ['id'] as const
-    },
-    {
       name: 'comment' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
         thread: { type: 'string' as const, recordId: true, optional: false },
-        author: { type: 'string' as const, recordId: true, optional: false },
         content: { type: 'string' as const, optional: false },
+        author: { type: 'string' as const, recordId: true, optional: false },
         created_at: { type: 'string' as const, dateTime: true, optional: true },
       },
       primaryKey: ['id'] as const
     },
     {
-      name: 'thread' as const,
+      name: 'user' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
-        author: { type: 'string' as const, recordId: true, optional: false },
-        content: { type: 'string' as const, optional: false },
-        title: { type: 'string' as const, optional: false },
+        username: { type: 'string' as const, optional: false },
+        threads: { type: 'string' as const, optional: true },
         comments: { type: 'string' as const, optional: true },
       },
       primaryKey: ['id'] as const
@@ -45,8 +31,32 @@ export const schema = {
       },
       primaryKey: ['id'] as const
     },
+    {
+      name: 'thread' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
+        author: { type: 'string' as const, recordId: true, optional: false },
+        content: { type: 'string' as const, optional: false },
+        title: { type: 'string' as const, optional: false },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
+        comments: { type: 'string' as const, optional: true },
+      },
+      primaryKey: ['id'] as const
+    },
   ],
   relationships: [
+    {
+      from: 'user' as const,
+      field: 'threads' as const,
+      to: 'thread' as const,
+      cardinality: 'many' as const
+    },
+    {
+      from: 'user' as const,
+      field: 'comments' as const,
+      to: 'comment' as const,
+      cardinality: 'many' as const
+    },
     {
       from: 'comment' as const,
       field: 'thread' as const,
@@ -67,18 +77,6 @@ export const schema = {
     },
     {
       from: 'thread' as const,
-      field: 'comments' as const,
-      to: 'comment' as const,
-      cardinality: 'many' as const
-    },
-    {
-      from: 'user' as const,
-      field: 'threads' as const,
-      to: 'thread' as const,
-      cardinality: 'many' as const
-    },
-    {
-      from: 'user' as const,
       field: 'comments' as const,
       to: 'comment' as const,
       cardinality: 'many' as const
@@ -107,21 +105,19 @@ DEFINE ACCESS account ON DATABASE TYPE RECORD
 -- ##################################################################
 
 DEFINE TABLE user SCHEMAFULL
-  PERMISSIONS FOR select, update, delete, create
-  WHERE $access = "account"
-  AND id = $auth.id
-;
+PERMISSIONS
+  FOR update, delete, create WHERE $access = "account" AND id = $auth.id
+  FOR select WHERE true;
 
 DEFINE FIELD username ON TABLE user TYPE string
-    ASSERT $value != NONE AND string::is::alphanum($value) AND string::len($value) > 3;
+ASSERT $value != NONE AND string::is::alphanum($value) AND string::len($value) > 3
+PERMISSIONS
+    FOR select WHERE true
+    FOR update WHERE $access = "account" AND id = $auth.id;
     
 DEFINE INDEX unique_username ON TABLE user FIELDS username UNIQUE;
 
-DEFINE FIELD password ON TABLE user TYPE string
-    ASSERT $value != NONE AND string::len($value) > 0;
 
-DEFINE FIELD created_at ON TABLE user TYPE datetime
-    VALUE time::now();
 
 -- ##################################################################
 -- THREAD TABLE
