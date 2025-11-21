@@ -36,6 +36,7 @@ interface SpookyData {
 }
 
 let currentData: SpookyData | null = null;
+let selectedQueryHash: number | null = null;
 
 // Get the inspected tab ID
 const tabId = chrome.devtools.inspectedWindow.tabId;
@@ -196,29 +197,135 @@ function updateActiveQueries(queries: Record<number, ActiveQuery>) {
 
   if (queryArray.length === 0) {
     queriesListEl.innerHTML = '<div class="empty-state">No active queries</div>';
+    selectedQueryHash = null;
+    hideQueryDetail();
     return;
   }
 
   queriesListEl.innerHTML = queryArray
     .map((query) => {
       const age = Math.floor((Date.now() - query.createdAt) / 1000);
-      const lastUpdate = Math.floor((Date.now() - query.lastUpdate) / 1000);
+      const isSelected = selectedQueryHash === query.queryHash;
       return `
-        <div class="query-item">
+        <div class="query-item ${isSelected ? 'selected' : ''}" data-query-hash="${query.queryHash}">
           <div class="query-header">
             <span class="query-hash">Query #${query.queryHash}</span>
             <span class="query-status status-${query.status}">${query.status}</span>
           </div>
           <div class="query-meta">
             Updates: ${query.updateCount} •
-            Data size: ${query.dataSize ?? 'unknown'} •
-            Age: ${age}s •
-            Last update: ${lastUpdate}s ago
+            Size: ${query.dataSize ?? '?'} •
+            Age: ${age}s
           </div>
         </div>
       `;
     })
     .join('');
+
+  // Add click handlers to query items
+  queriesListEl.querySelectorAll('.query-item').forEach((item) => {
+    item.addEventListener('click', () => {
+      const queryHash = parseInt((item as HTMLElement).dataset.queryHash || '0');
+      selectQuery(queryHash, queries);
+    });
+  });
+
+  // If a query was selected, update the detail view
+  if (selectedQueryHash && queries[selectedQueryHash]) {
+    showQueryDetail(queries[selectedQueryHash]);
+  }
+}
+
+function selectQuery(queryHash: number, queries: Record<number, ActiveQuery>) {
+  selectedQueryHash = queryHash;
+  const query = queries[queryHash];
+
+  if (query) {
+    showQueryDetail(query);
+    // Update the selected state in the list
+    document.querySelectorAll('.query-item').forEach((item) => {
+      if (parseInt((item as HTMLElement).dataset.queryHash || '0') === queryHash) {
+        item.classList.add('selected');
+      } else {
+        item.classList.remove('selected');
+      }
+    });
+  }
+}
+
+function showQueryDetail(query: ActiveQuery) {
+  const detailEl = document.getElementById('query-detail');
+  if (!detailEl) {
+    console.error('Query detail element not found');
+    return;
+  }
+
+  const age = Math.floor((Date.now() - query.createdAt) / 1000);
+  const lastUpdate = Math.floor((Date.now() - query.lastUpdate) / 1000);
+  const createdTime = new Date(query.createdAt).toLocaleString();
+  const lastUpdateTime = new Date(query.lastUpdate).toLocaleString();
+
+  console.log('Showing query detail for:', query.queryHash);
+
+  detailEl.innerHTML = `
+    <div class="detail-header">
+      <h3>Query #${query.queryHash}</h3>
+    </div>
+    <div class="detail-content">
+      <div class="detail-section">
+        <div class="detail-label">Status</div>
+        <div class="detail-value">
+          <span class="query-status status-${query.status}">${query.status}</span>
+        </div>
+      </div>
+
+      <div class="detail-section">
+        <div class="detail-label">Query Hash</div>
+        <div class="detail-value mono">${query.queryHash}</div>
+      </div>
+
+      <div class="detail-section">
+        <div class="detail-label">Created</div>
+        <div class="detail-value">${createdTime} (${age}s ago)</div>
+      </div>
+
+      <div class="detail-section">
+        <div class="detail-label">Last Update</div>
+        <div class="detail-value">${lastUpdateTime} (${lastUpdate}s ago)</div>
+      </div>
+
+      <div class="detail-section">
+        <div class="detail-label">Update Count</div>
+        <div class="detail-value">${query.updateCount}</div>
+      </div>
+
+      <div class="detail-section">
+        <div class="detail-label">Data Size</div>
+        <div class="detail-value">${query.dataSize ?? 'unknown'} records</div>
+      </div>
+
+      <div class="detail-section">
+        <div class="detail-label">Performance</div>
+        <div class="detail-value">
+          ${query.updateCount > 0 ? `${(query.updateCount / (age || 1)).toFixed(2)} updates/sec` : 'No updates yet'}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function hideQueryDetail() {
+  const detailEl = document.getElementById('query-detail');
+  if (detailEl) {
+    detailEl.innerHTML = '';
+  }
+
+  selectedQueryHash = null;
+
+  // Remove selection from all query items
+  document.querySelectorAll('.query-item').forEach((item) => {
+    item.classList.remove('selected');
+  });
 }
 
 function updateAuthInfo(auth: AuthState) {
