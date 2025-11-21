@@ -23,10 +23,11 @@ window.addEventListener('message', (event) => {
   // Only handle messages from our injected script
   if (event.data.source !== 'spooky-devtools-page') return;
 
-  // Forward to background script
+  // Forward to background script with all relevant data
   chrome.runtime.sendMessage({
     type: event.data.type,
-    data: event.data.data
+    data: event.data.data,
+    state: event.data.state, // Include state for SPOOKY_STATE_CHANGED messages
   });
 });
 

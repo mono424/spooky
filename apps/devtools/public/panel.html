@@ -21,43 +21,20 @@
 
     #app {
       display: flex;
+      flex-direction: column;
       height: 100vh;
     }
 
-    .sidebar {
-      width: 250px;
+    .header {
       background: #252526;
-      border-right: 1px solid #3e3e42;
-      padding: 12px;
-      overflow-y: auto;
-    }
-
-    .main-content {
-      flex: 1;
-      overflow-y: auto;
-      padding: 16px;
-    }
-
-    h1 {
-      font-size: 18px;
-      margin-bottom: 16px;
-      color: #ffffff;
-    }
-
-    h2 {
-      font-size: 14px;
-      margin-bottom: 12px;
-      color: #ffffff;
-      padding: 8px;
-      background: #2d2d30;
-      border-radius: 4px;
+      border-bottom: 1px solid #3e3e42;
+      padding: 12px 16px;
     }
 
     .status {
       padding: 8px 12px;
       background: #2d2d30;
       border-radius: 4px;
-      margin-bottom: 16px;
       font-size: 13px;
     }
 
@@ -69,45 +46,76 @@
       border-left: 3px solid #f44336;
     }
 
-    .section {
-      margin-bottom: 24px;
-    }
-
-    .store-list {
-      list-style: none;
-    }
-
-    .store-item {
-      padding: 8px 12px;
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      padding: 12px 16px;
       background: #2d2d30;
-      border-radius: 4px;
-      margin-bottom: 8px;
-      cursor: pointer;
-      transition: background 0.2s;
+      border-bottom: 1px solid #3e3e42;
     }
 
-    .store-item:hover {
+    .btn {
+      padding: 6px 12px;
+      background: #0e639c;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .btn:hover {
+      background: #1177bb;
+    }
+
+    .btn.secondary {
       background: #3e3e42;
     }
 
-    .store-name {
-      font-weight: 500;
-      margin-bottom: 4px;
+    .btn.secondary:hover {
+      background: #4e4e52;
     }
 
-    .store-meta {
-      font-size: 11px;
-      color: #858585;
+    .tabs {
+      display: flex;
+      background: #252526;
+      border-bottom: 1px solid #3e3e42;
     }
 
-    .state-viewer {
+    .tab-btn {
+      padding: 12px 24px;
+      background: transparent;
+      color: #cccccc;
+      border: none;
+      border-bottom: 2px solid transparent;
+      cursor: pointer;
+      font-size: 13px;
+      transition: all 0.2s;
+    }
+
+    .tab-btn:hover {
       background: #2d2d30;
-      border-radius: 4px;
-      padding: 12px;
-      font-family: 'Courier New', monospace;
-      font-size: 12px;
-      overflow: auto;
-      max-height: 500px;
+    }
+
+    .tab-btn.active {
+      color: #ffffff;
+      border-bottom-color: #0e639c;
+    }
+
+    .content {
+      flex: 1;
+      overflow: hidden;
+    }
+
+    .tab-content {
+      display: none;
+      height: 100%;
+      overflow-y: auto;
+      padding: 16px;
+    }
+
+    .tab-content.active {
+      display: block;
     }
 
     .empty-state {
@@ -116,45 +124,150 @@
       color: #858585;
     }
 
-    pre {
+    .event-item, .query-item {
+      background: #2d2d30;
+      border-radius: 4px;
+      padding: 12px;
+      margin-bottom: 8px;
+      border-left: 3px solid #0e639c;
+    }
+
+    .event-header, .query-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
+    .event-type, .query-hash {
+      font-weight: 600;
+      color: #ffffff;
+      font-size: 13px;
+    }
+
+    .event-time {
+      font-size: 11px;
+      color: #858585;
+    }
+
+    .event-payload {
+      background: #1e1e1e;
+      border-radius: 4px;
+      padding: 8px;
+      margin-top: 8px;
+      font-size: 11px;
+      overflow-x: auto;
+    }
+
+    .event-payload pre {
+      margin: 0;
       white-space: pre-wrap;
       word-wrap: break-word;
     }
 
-    .refresh-btn {
-      padding: 6px 12px;
-      background: #0e639c;
-      color: white;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 12px;
-      margin-bottom: 12px;
+    .query-status {
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
     }
 
-    .refresh-btn:hover {
-      background: #1177bb;
+    .status-initializing {
+      background: #ffa726;
+      color: #000;
+    }
+
+    .status-active {
+      background: #4caf50;
+      color: #000;
+    }
+
+    .status-updating {
+      background: #29b6f6;
+      color: #000;
+    }
+
+    .status-destroyed {
+      background: #e57373;
+      color: #000;
+    }
+
+    .query-meta {
+      font-size: 11px;
+      color: #858585;
+      margin-top: 4px;
+    }
+
+    .auth-status {
+      background: #2d2d30;
+      border-radius: 4px;
+      padding: 12px;
+      font-size: 13px;
+    }
+
+    .auth-status.authenticated {
+      border-left: 3px solid #4caf50;
+    }
+
+    .auth-status.not-authenticated {
+      border-left: 3px solid #858585;
+    }
+
+    h2 {
+      font-size: 16px;
+      margin-bottom: 16px;
+      color: #ffffff;
+    }
+
+    h3 {
+      font-size: 14px;
+      margin-bottom: 12px;
+      margin-top: 24px;
+      color: #ffffff;
     }
   </style>
 </head>
 <body>
   <div id="app">
-    <div class="sidebar">
-      <h2>Spooky Stores</h2>
-      <button class="refresh-btn" id="refresh-btn">Refresh</button>
-      <ul class="store-list" id="store-list">
-        <li class="empty-state">No stores detected</li>
-      </ul>
-    </div>
-    <div class="main-content">
-      <h1>Spooky DevTools</h1>
+    <div class="header">
       <div class="status inactive" id="status">
         <strong>Status:</strong> Spooky not detected on this page
       </div>
-      <div class="section">
-        <h2>Store State</h2>
-        <div class="state-viewer" id="state-viewer">
-          <div class="empty-state">Select a store to view its state</div>
+    </div>
+
+    <div class="toolbar">
+      <button class="btn" id="refresh-btn">Refresh</button>
+      <button class="btn secondary" id="clear-events-btn">Clear Events</button>
+    </div>
+
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="events">Events</button>
+      <button class="tab-btn" data-tab="queries">Queries</button>
+      <button class="tab-btn" data-tab="auth">Auth</button>
+    </div>
+
+    <div class="content">
+      <div class="tab-content active" data-tab="events">
+        <h2>Events History</h2>
+        <div id="events-list">
+          <div class="empty-state">No events recorded yet</div>
+        </div>
+      </div>
+
+      <div class="tab-content" data-tab="queries">
+        <h2>Active Queries</h2>
+        <div id="queries-list">
+          <div class="empty-state">No active queries</div>
+        </div>
+      </div>
+
+      <div class="tab-content" data-tab="auth">
+        <h2>Authentication</h2>
+        <div id="auth-info">
+          <div class="auth-status not-authenticated">
+            <strong>Status:</strong> Not authenticated
+          </div>
         </div>
       </div>
     </div>

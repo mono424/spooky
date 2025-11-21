@@ -4,6 +4,7 @@ import { createDatabaseService } from "./services/database-wasm.js";
 import { createAuthManagerService } from "./services/auth-manager.js";
 import { createQueryManagerService } from "./services/query-manager.js";
 import { createMutationManagerService } from "./services/mutation-manager.js";
+import { createDevToolsService } from "./services/devtools-service.js";
 import { createLogger } from "./services/logger.js";
 import { runProvision } from "./provision.js";
 import { createSpookyInstance, SpookyInstance } from "./spooky.js";
@@ -57,6 +58,14 @@ export async function createSpooky<S extends SchemaStructure>(
     queryManager,
     logger
   );
+
+  // Create DevTools service to expose state to Chrome DevTools
+  // This service is intentionally not returned in the instance as it works
+  // in the background by exposing window.__SPOOKY__ API
+  createDevToolsService(eventSystem, logger, {
+    version: "0.1.0", // TODO: Get from package.json
+    enabled: true,
+  });
 
   // Create and return the Spooky instance
   return createSpookyInstance(
