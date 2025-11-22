@@ -54,11 +54,10 @@ export function ThreadDetail() {
   // Initialize title and content from thread data (only when thread changes)
   createEffect(() => {
     const threadData = thread();
-    if (threadData && threadData.id !== lastThreadId()) {
-      setTitle(threadData.title || "");
-      setContent(threadData.content || "");
-      setLastThreadId(threadData.id);
-    }
+    if (!threadData) return;
+    setTitle(threadData.title || "");
+    setContent(threadData.content || "");
+    setLastThreadId(threadData.id);
   });
 
   const handleBack = () => {
