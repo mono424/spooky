@@ -9,6 +9,7 @@ import {
   GlobalQueryEventTypes,
   MutationEventTypes,
   SpookyEventSystem,
+  TableModelWithId,
 } from "./index.js";
 import { encodeToSpooky, generateNewId } from "./converter.js";
 import { RecordId } from "surrealdb";
@@ -108,25 +109,30 @@ export class MutationManagerService<S extends SchemaStructure> {
 
   private async mutationApplyLocal<N extends TableNames<S>>(
     mutation: Mutation<S, N>
-  ): Promise<void> {
+  ): Promise<TableModelWithId<GetTable<S, N>>[]> {
     this.logger.debug("[MutationManager] Apply locally", {
       id: mutation.id,
     });
+
+    const rollbackData = await this.databaseService.queryLocal<
+      TableModelWithId<GetTable<S, N>>[]
+    >(`SELECT * FROM ${mutation.recordId.toString()}`);
 
     switch (mutation.operationType) {
       case "create":
         const q = this.buildCreateQuery(mutation.recordId, mutation.data);
         // Always filter out 'id' from variables since it's not in the SET clause
         const { id: _, ...dataWithoutId } = mutation.data as any;
-        await this.databaseService.queryLocal<TableModel<GetTable<S, N>>[]>(
-          q,
-          dataWithoutId
-        );
+        await this.databaseService.queryLocal<
+          TableModelWithId<GetTable<S, N>>[]
+        >(q, dataWithoutId);
         break;
 
       case "update":
         const updateMutation = mutation as UpdateMutation<S, N>;
-        await this.databaseService.queryLocal<TableModel<GetTable<S, N>>[]>(
+        await this.databaseService.queryLocal<
+          TableModelWithId<GetTable<S, N>>[]
+        >(
           `UPDATE ${updateMutation.recordId.toString()} PATCH ${JSON.stringify(
             updateMutation.patches
           )}`
@@ -135,27 +141,20 @@ export class MutationManagerService<S extends SchemaStructure> {
 
       case "delete":
         const deleteMutation = mutation as DeleteMutation<S, N>;
-        await this.databaseService.queryLocal<TableModel<GetTable<S, N>>[]>(
-          `DELETE ${deleteMutation.recordId.toString()}`
-        );
+        return await this.databaseService.queryLocal<
+          TableModelWithId<GetTable<S, N>>[]
+        >(`DELETE ${deleteMutation.recordId.toString()}`);
         break;
 
       default:
         throw new Error(`Unknown mutation type`);
     }
-
-    this.logger.debug("[MutationManager] Apply locally - Done", {
-      id: mutation.id,
-    });
+    return rollbackData;
   }
 
-  private async mutationApplyRemote<N extends TableNames<S>>(
+  private async mutationApplyRemoteInner<N extends TableNames<S>>(
     mutation: Mutation<S, N>
-  ): Promise<void> {
-    this.logger.debug("[MutationManager] Apply remote", {
-      id: mutation.id,
-    });
-
+  ): Promise<TableModelWithId<GetTable<S, N>>[]> {
     switch (mutation.operationType) {
       case "create":
         const q = this.buildCreateQuery(mutation.recordId, mutation.data);
@@ -166,11 +165,9 @@ export class MutationManagerService<S extends SchemaStructure> {
           query: q,
           data: dataWithoutId,
         });
-        await this.databaseService.queryRemote<TableModel<GetTable<S, N>>[]>(
-          q,
-          dataWithoutId
-        );
-        break;
+        return this.databaseService.queryRemote<
+          TableModelWithId<GetTable<S, N>>[]
+        >(q, dataWithoutId);
 
       case "update":
         this.logger.debug("[MutationManager] Update remote", {
@@ -178,30 +175,47 @@ export class MutationManagerService<S extends SchemaStructure> {
           recordId: mutation.recordId,
           data: mutation.patches,
         });
-        await this.databaseService.queryRemote<TableModel<GetTable<S, N>>[]>(
+        return this.databaseService.queryRemote<
+          TableModelWithId<GetTable<S, N>>[]
+        >(
           `UPDATE ${mutation.recordId.toString()} PATCH ${JSON.stringify(
             mutation.patches
           )}`
         );
-        break;
 
       case "delete":
         this.logger.debug("[MutationManager] Delete remote", {
           id: mutation.id,
           recordId: mutation.recordId,
         });
-        await this.databaseService.queryRemote<TableModel<GetTable<S, N>>[]>(
-          `DELETE ${mutation.recordId.toString()}`
-        );
-        break;
+        return this.databaseService.queryRemote<
+          TableModelWithId<GetTable<S, N>>[]
+        >(`DELETE ${mutation.recordId.toString()}`);
 
       default:
         throw new Error(`Unknown mutation type`);
     }
+  }
 
-    this.logger.debug("[MutationManager] Apply remote - Done", {
+  private async mutationApplyRemote<N extends TableNames<S>>(
+    mutation: Mutation<S, N>
+  ): Promise<TableModelWithId<GetTable<S, N>> | null> {
+    this.logger.debug("[MutationManager] Apply remote", {
       id: mutation.id,
     });
+
+    const result: TableModelWithId<GetTable<S, N>>[] =
+      await this.mutationApplyRemoteInner(mutation);
+
+    this.logger.debug("[MutationManager] Apply remote - Result", {
+      result: result,
+    });
+
+    if (result.length > 0) {
+      return result[0];
+    }
+
+    throw new Error("No result from remote mutation");
   }
 
   private async executeMutation<N extends TableNames<S>>(
@@ -210,9 +224,14 @@ export class MutationManagerService<S extends SchemaStructure> {
     this.logger.debug("[MutationManager] Request execution", {
       mutationId: mutation.id?.toString(),
     });
+
+    let rollbackData: TableModelWithId<GetTable<S, N>> | null = null;
     try {
       try {
-        await this.mutationApplyLocal(mutation);
+        const result = await this.mutationApplyLocal(mutation);
+        if (result.length > 0) {
+          rollbackData = result[0];
+        }
       } catch (error) {
         this.logger.error("Failed to apply mutation locally", error);
         throw error;
@@ -226,7 +245,15 @@ export class MutationManagerService<S extends SchemaStructure> {
       });
 
       try {
-        await this.mutationApplyRemote(mutation);
+        const remoteResult = await this.mutationApplyRemote(mutation);
+        if (remoteResult) {
+          this.eventSystem.addEvent({
+            type: GlobalQueryEventTypes.MaterializeRemoteRecordUpdate,
+            payload: {
+              record: remoteResult,
+            },
+          });
+        }
       } catch (error) {
         this.logger.error("Failed to apply mutation remotely", error);
         throw error;
@@ -238,20 +265,19 @@ export class MutationManagerService<S extends SchemaStructure> {
       );
     } catch (error) {
       this.logger.error("[MutationManager] Execute mutation - Failed", error);
+
+      if (rollbackData) {
+        this.logger.error("[MutationManager] Rolling back mutation", {
+          rollbackData,
+        });
+        this.eventSystem.addEvent({
+          type: GlobalQueryEventTypes.MaterializeRemoteRecordUpdate,
+          payload: {
+            record: rollbackData,
+          },
+        });
+      }
       throw error;
-    } finally {
-      this.logger.debug(
-        "[MutationManager] Execute mutation - Refreshing table queries",
-        {
-          table: mutation.tableName,
-        }
-      );
-      this.eventSystem.addEvent({
-        type: GlobalQueryEventTypes.RequestTableQueryRefresh,
-        payload: {
-          table: mutation.tableName,
-        },
-      });
     }
   }
 

@@ -20,6 +20,10 @@ import {
 } from "./query-event-system.js";
 import { EventSubscriptionOptions } from "src/events/index.js";
 
+export type TableModelWithId<
+  T extends { columns: Record<string, ColumnSchema> }
+> = TableModel<T> & { id: RecordId };
+
 export interface Query<
   T extends { columns: Record<string, ColumnSchema> },
   IsOne extends boolean
@@ -94,6 +98,13 @@ export class QueryManagerService<S extends SchemaStructure> {
           event.payload.action,
           event.payload.update
         );
+      }
+    );
+
+    this.eventSystem.subscribe(
+      GlobalQueryEventTypes.MaterializeRemoteRecordUpdate,
+      (event) => {
+        this.materializeRemoteRecordUpdate([event.payload.record]);
       }
     );
   }
@@ -175,6 +186,10 @@ export class QueryManagerService<S extends SchemaStructure> {
       .map((result) => decodeFromSpooky(this.schema, query.tableName, result))
       .filter((result) => result !== undefined);
 
+    this.logger.debug("[QueryManager] Local Query Refresh - Decoded results", {
+      decodedResults: decodedResults,
+    });
+
     this.eventSystem.addEvent({
       type: QueryEventTypes.Updated,
       payload: {
@@ -182,6 +197,48 @@ export class QueryManagerService<S extends SchemaStructure> {
         data: decodedResults,
       },
     });
+  }
+
+  private async materializeRemoteRecordUpdate(
+    records: TableModelWithId<{ columns: Record<string, ColumnSchema> }>[]
+  ): Promise<void> {
+    this.logger.debug(
+      "[QueryManager] Materialize remote record update - Starting",
+      { records: records.length }
+    );
+
+    const materializeQuery = records
+      .map(
+        ({ id, ...payload }) =>
+          `UPSERT ${id} CONTENT ${this.surrealStringify(
+            id.tb.toString(),
+            payload
+          )}`
+      )
+      .join(";\n");
+
+    this.logger.debug(
+      "[QueryManager] Materialize remote record update - Updating local cache",
+      {
+        records: records.length,
+        materializeQuery,
+      }
+    );
+
+    await this.databaseService.queryLocal(materializeQuery);
+
+    this.logger.debug(
+      "[QueryManager] Materialize remote record update - Done",
+      {
+        records: records.length,
+      }
+    );
+
+    await Promise.all(
+      records
+        .map(({ id }) => id.tb.toString())
+        .map((table) => this.refreshTableQueries(table))
+    );
   }
 
   private async refreshTableQueries(table: string): Promise<void> {
@@ -251,10 +308,9 @@ export class QueryManagerService<S extends SchemaStructure> {
       query: query.mainQuery.query,
     });
 
-    const results = await this.databaseService.queryRemote<TableModel<T>[]>(
-      query.mainQuery.query,
-      query.mainQuery.vars
-    );
+    const results = await this.databaseService.queryRemote<
+      TableModelWithId<T>[]
+    >(query.mainQuery.query, query.mainQuery.vars);
 
     this.logger.debug(
       "[QueryManager] Remote Query Hydration - Remote query done",
@@ -264,25 +320,8 @@ export class QueryManagerService<S extends SchemaStructure> {
       }
     );
 
-    const hydrateQuery = results
-      .map(
-        ({ id, ...payload }) =>
-          `UPSERT ${id} CONTENT ${this.surrealStringify(
-            query.tableName,
-            payload
-          )}`
-      )
-      .join(";\n");
+    await this.materializeRemoteRecordUpdate(results);
 
-    this.logger.debug(
-      "[QueryManager] Remote Query Hydration - Updating local cache",
-      {
-        queryHash: query.hash,
-        hydrateQuery,
-      }
-    );
-
-    await this.databaseService.queryLocal(hydrateQuery);
     this.logger.debug(
       "[QueryManager] Remote Query Hydration - Local cache updated",
       {
