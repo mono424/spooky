@@ -40,9 +40,13 @@ export class EventSystem<E extends EventTypeMap> {
     [K in EventType<E>]?: Event<E, K>;
   };
 
-  constructor(eventTypes: EventTypes<E>) {
+  get eventTypes(): EventTypes<E> {
+    return this.eventTypes;
+  }
+
+  constructor(private _eventTypes: EventTypes<E>) {
     this.buffer = [];
-    this.subscribers = eventTypes.reduce((acc, key) => {
+    this.subscribers = this._eventTypes.reduce((acc, key) => {
       return Object.assign(acc, { [key]: new Map() });
     }, {} as { [K in EventType<E>]: Map<number, InnerEventHandler<E, K>> });
     this.lastEvents = {};

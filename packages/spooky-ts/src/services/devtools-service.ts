@@ -2,6 +2,7 @@ import {
   SpookyEventSystem,
   AuthEventTypes,
   GlobalQueryEventTypes,
+  MutationEventTypes,
 } from "./spooky-event-system.js";
 import { Logger } from "./logger.js";
 import { DatabaseService } from "./database.js";
@@ -227,6 +228,22 @@ export class DevToolsService {
       GlobalQueryEventTypes.SubqueryUpdated,
       (event) => {
         this.addEvent(GlobalQueryEventTypes.SubqueryUpdated, event.payload);
+        this.notifyDevTools();
+      }
+    );
+
+    this.eventSystem.subscribe(MutationEventTypes.RequestExecution, (event) => {
+      this.addEvent(MutationEventTypes.RequestExecution, event.payload);
+      this.notifyDevTools();
+    });
+
+    this.eventSystem.subscribe(
+      GlobalQueryEventTypes.RequestTableQueryRefresh,
+      (event) => {
+        this.addEvent(
+          GlobalQueryEventTypes.RequestTableQueryRefresh,
+          event.payload
+        );
         this.notifyDevTools();
       }
     );

@@ -127,10 +127,9 @@ export class MutationManagerService<S extends SchemaStructure> {
       case "update":
         const updateMutation = mutation as UpdateMutation<S, N>;
         await this.databaseService.queryLocal<TableModel<GetTable<S, N>>[]>(
-          `UPDATE ${updateMutation.recordId.toString()} CONTENT $patches`,
-          {
-            patches: updateMutation.patches,
-          }
+          `UPDATE ${updateMutation.recordId.toString()} PATCH ${JSON.stringify(
+            updateMutation.patches
+          )}`
         );
         break;
 
@@ -180,10 +179,9 @@ export class MutationManagerService<S extends SchemaStructure> {
           data: mutation.patches,
         });
         await this.databaseService.queryRemote<TableModel<GetTable<S, N>>[]>(
-          `UPDATE ${mutation.recordId.toString()} CONTENT $patches`,
-          {
-            patches: mutation.patches,
-          }
+          `UPDATE ${mutation.recordId.toString()} PATCH ${JSON.stringify(
+            mutation.patches
+          )}`
         );
         break;
 
