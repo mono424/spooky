@@ -1,9 +1,10 @@
-import { RecordId } from "@spooky/query-builder";
+import { RecordId, SchemaStructure, TableNames } from "@spooky/query-builder";
 import {
   createEventSystem,
   EventDefinition,
   EventSystem,
 } from "../events/index.js";
+import { Mutation } from "./mutation-manager.js";
 
 export const AuthEventTypes = {
   Authenticated: "AUTHENTICATED",
@@ -17,6 +18,11 @@ export const GlobalQueryEventTypes = {
   RemoteUpdate: "QUERY_REMOTE_UPDATE",
   Destroyed: "QUERY_DESTROYED",
   RemoteLiveUpdate: "QUERY_REMOTE_LIVE_UPDATE",
+  RequestTableQueryRefresh: "QUERY_REQUEST_TABLE_QUERY_REFRESH",
+} as const;
+
+export const MutationEventTypes = {
+  RequestExecution: "MUTATION_REQUEST_EXECUTION",
 } as const;
 
 export type SpookyEventTypeMap = {
@@ -74,6 +80,18 @@ export type SpookyEventTypeMap = {
       update: Record<string, unknown>;
     }
   >;
+  [MutationEventTypes.RequestExecution]: EventDefinition<
+    typeof MutationEventTypes.RequestExecution,
+    {
+      mutation: Mutation<SchemaStructure, TableNames<SchemaStructure>>;
+    }
+  >;
+  [GlobalQueryEventTypes.RequestTableQueryRefresh]: EventDefinition<
+    typeof GlobalQueryEventTypes.RequestTableQueryRefresh,
+    {
+      table: string;
+    }
+  >;
 };
 
 export type SpookyEventSystem = EventSystem<SpookyEventTypeMap>;
@@ -88,5 +106,7 @@ export function createSpookyEventSystem(): SpookyEventSystem {
     GlobalQueryEventTypes.Destroyed,
     GlobalQueryEventTypes.SubqueryUpdated,
     GlobalQueryEventTypes.RemoteLiveUpdate,
+    GlobalQueryEventTypes.RequestTableQueryRefresh,
+    MutationEventTypes.RequestExecution,
   ]);
 }

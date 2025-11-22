@@ -42,7 +42,7 @@ export class QueryManagerService<S extends SchemaStructure> {
     private logger: Logger,
     private eventSystem: SpookyEventSystem
   ) {
-    this.eventSystem.subscribe(QueryEventTypes.Updated, (event) => {
+    this.eventSystem.subscribe(GlobalQueryEventTypes.Updated, (event) => {
       this.cache[event.payload.queryHash].eventSystem.addEvent({
         type: QueryEventTypes.Updated,
         payload: {
@@ -78,6 +78,13 @@ export class QueryManagerService<S extends SchemaStructure> {
     this.eventSystem.subscribe(GlobalQueryEventTypes.RequestInit, (event) => {
       this.initQuery(event.payload.queryHash);
     });
+
+    this.eventSystem.subscribe(
+      GlobalQueryEventTypes.RequestTableQueryRefresh,
+      (event) => {
+        this.refreshTableQueries(event.payload.table);
+      }
+    );
 
     this.eventSystem.subscribe(
       GlobalQueryEventTypes.RemoteLiveUpdate,
@@ -177,7 +184,7 @@ export class QueryManagerService<S extends SchemaStructure> {
     });
   }
 
-  async refreshTableQueries(table: string): Promise<void> {
+  private async refreshTableQueries(table: string): Promise<void> {
     this.logger.debug("[QueryManager] Refresh Table Queries - Starting", {
       table,
     });

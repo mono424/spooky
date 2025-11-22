@@ -55,17 +55,24 @@ export async function createSpooky<S extends SchemaStructure>(
   const mutationManager = createMutationManagerService(
     config.schema,
     databaseService,
-    queryManager,
-    logger
+    logger,
+    eventSystem
   );
 
   // Create DevTools service to expose state to Chrome DevTools
   // This service is intentionally not returned in the instance as it works
   // in the background by exposing window.__SPOOKY__ API
-  createDevToolsService(eventSystem, logger, databaseService, config.schema, queryManager, {
-    version: "0.1.0", // TODO: Get from package.json
-    enabled: true,
-  });
+  createDevToolsService(
+    eventSystem,
+    logger,
+    databaseService,
+    config.schema,
+    queryManager,
+    {
+      version: "0.1.0", // TODO: Get from package.json
+      enabled: true,
+    }
+  );
 
   // Create and return the Spooky instance
   return createSpookyInstance(

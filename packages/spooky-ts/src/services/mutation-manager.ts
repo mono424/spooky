@@ -4,11 +4,15 @@ import {
   TableNames,
   GetTable,
 } from "@spooky/query-builder";
-import { DatabaseService } from "./index.js";
+import {
+  DatabaseService,
+  GlobalQueryEventTypes,
+  MutationEventTypes,
+  SpookyEventSystem,
+} from "./index.js";
 import { encodeToSpooky, generateNewId } from "./converter.js";
 import { RecordId } from "surrealdb";
 import { Logger } from "./logger.js";
-import { QueryManagerService } from "./query-manager.js";
 
 export type MutationType = "create" | "update" | "delete";
 
@@ -70,9 +74,15 @@ export class MutationManagerService<S extends SchemaStructure> {
   constructor(
     private schema: S,
     private databaseService: DatabaseService,
-    private queryManagerService: QueryManagerService<S>,
-    private logger: Logger
-  ) {}
+    private logger: Logger,
+    private eventSystem: SpookyEventSystem
+  ) {
+    this.eventSystem.subscribe(MutationEventTypes.RequestExecution, (event) => {
+      this.executeMutation(
+        event.payload.mutation as Mutation<S, TableNames<S>>
+      );
+    });
+  }
 
   private buildRecordId(table: string, id: string): RecordId {
     if (id.includes(":")) {
@@ -94,44 +104,6 @@ export class MutationManagerService<S extends SchemaStructure> {
 
     // In surrealdb 1.x, RecordId has .tb and .id properties
     return `CREATE ${id.tb}:${id.id} SET ${setQuery};`;
-  }
-
-  private async createMutation<N extends TableNames<S>>(
-    mutation: Mutation<S, N>
-  ): Promise<Mutation<S, N>> {
-    const results = await this.databaseService.queryInternal<
-      { id: RecordId }[]
-    >(`CREATE _mutations CONTENT $payload`, {
-      payload: mutation,
-    });
-
-    this.logger.debug("[MutationManager] Create mutation - Result", {
-      results,
-      resultsLength: results?.length,
-    });
-
-    if (!results || results.length === 0) {
-      throw new Error("Failed to create mutation: no result returned");
-    }
-
-    const result = results[0];
-    if (!result || !result.id) {
-      this.logger.error("[MutationManager] Create mutation - Invalid result", {
-        result,
-      });
-      throw new Error("Failed to create mutation: invalid result structure");
-    }
-
-    const mutationWithId = {
-      ...mutation,
-      id: result.id,
-    };
-
-    this.logger.debug("[MutationManager] Create mutation - Success", {
-      mutationId: mutationWithId.id,
-    });
-
-    return mutationWithId;
   }
 
   private async mutationApplyLocal<N extends TableNames<S>>(
@@ -234,68 +206,55 @@ export class MutationManagerService<S extends SchemaStructure> {
     });
   }
 
-  private async runWithRetry<N extends TableNames<S>>(
+  private async executeMutation<N extends TableNames<S>>(
     mutation: Mutation<S, N>
   ): Promise<void> {
-    const maxRetries = 3;
-    const baseDelay = 10;
+    this.logger.debug("[MutationManager] Request execution", {
+      mutationId: mutation.id?.toString(),
+    });
+    try {
+      try {
+        await this.mutationApplyLocal(mutation);
+      } catch (error) {
+        this.logger.error("Failed to apply mutation locally", error);
+        throw error;
+      }
 
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      this.eventSystem.addEvent({
+        type: GlobalQueryEventTypes.RequestTableQueryRefresh,
+        payload: {
+          table: mutation.tableName,
+        },
+      });
+
       try {
         await this.mutationApplyRemote(mutation);
-        return; // Success, exit the retry loop
       } catch (error) {
-        if (attempt === maxRetries) {
-          this.logger.error("Failed to apply mutation remotely", error);
-          throw error;
-        }
-        // Exponential backoff
-        const delay = baseDelay * Math.pow(2, attempt);
-        await new Promise((resolve) => setTimeout(resolve, delay));
+        this.logger.error("Failed to apply mutation remotely", error);
+        throw error;
       }
-    }
-  }
 
-  private async run<N extends TableNames<S>>(
-    mutation: Mutation<S, N>
-  ): Promise<void> {
-    this.logger.debug("[MutationManager] Run - Starting", {
-      recordId: mutation.recordId.toString(),
-      operationType: mutation.operationType,
-    });
-
-    let mutationWithId: Mutation<S, N>;
-    try {
-      mutationWithId = await this.createMutation(mutation);
-      this.logger.debug("[MutationManager] Run - Mutation created with ID", {
-        mutationId: mutationWithId.id?.toString(),
+      this.logger.debug(
+        "[MutationManager] Execute mutation - Successful",
+        mutation
+      );
+    } catch (error) {
+      this.logger.error("[MutationManager] Execute mutation - Failed", error);
+      throw error;
+    } finally {
+      this.logger.debug(
+        "[MutationManager] Execute mutation - Refreshing table queries",
+        {
+          table: mutation.tableName,
+        }
+      );
+      this.eventSystem.addEvent({
+        type: GlobalQueryEventTypes.RequestTableQueryRefresh,
+        payload: {
+          table: mutation.tableName,
+        },
       });
-    } catch (error) {
-      this.logger.error("Failed to create mutation", error);
-      throw error;
     }
-
-    try {
-      await this.mutationApplyLocal(mutationWithId);
-    } catch (error) {
-      this.logger.error("Failed to apply mutation locally", error);
-      throw error;
-    }
-
-    await this.queryManagerService.refreshTableQueries(mutation.tableName);
-
-    try {
-      await this.runWithRetry(mutationWithId);
-    } catch (error) {
-      this.logger.error("Failed to apply mutation remotely", error);
-      throw error;
-    }
-
-    await this.queryManagerService.refreshTableQueries(mutation.tableName);
-
-    this.logger.debug("[MutationManager] Run - Done", {
-      mutationId: mutationWithId.id?.toString(),
-    });
   }
 
   async create<N extends TableNames<S>>(
@@ -335,13 +294,18 @@ export class MutationManagerService<S extends SchemaStructure> {
       }
     }
 
-    return this.run<N>({
-      operationType: "create",
-      tableName: tableName,
-      recordId: id,
-      data: encodedPayload,
-      createdAt: new Date(),
-      retryCount: 0,
+    return this.eventSystem.addEvent({
+      type: MutationEventTypes.RequestExecution,
+      payload: {
+        mutation: {
+          operationType: "create",
+          tableName: tableName,
+          recordId: id,
+          data: encodedPayload,
+          createdAt: new Date(),
+          retryCount: 0,
+        },
+      },
     });
   }
 
@@ -358,14 +322,19 @@ export class MutationManagerService<S extends SchemaStructure> {
         value: value,
       }));
 
-    return this.run<N>({
-      operationType: "update",
-      recordId: this.buildRecordId(tableName, recordId),
-      tableName: tableName,
-      patches: patches,
-      rollbackPatches: null,
-      createdAt: new Date(),
-      retryCount: 0,
+    return this.eventSystem.addEvent({
+      type: MutationEventTypes.RequestExecution,
+      payload: {
+        mutation: {
+          operationType: "update",
+          recordId: this.buildRecordId(tableName, recordId),
+          tableName: tableName,
+          patches: patches,
+          rollbackPatches: null,
+          createdAt: new Date(),
+          retryCount: 0,
+        },
+      },
     });
   }
 
@@ -373,13 +342,18 @@ export class MutationManagerService<S extends SchemaStructure> {
     tableName: N,
     id: string
   ): Promise<void> {
-    return this.run<N>({
-      operationType: "delete",
-      tableName: tableName,
-      recordId: this.buildRecordId(tableName, id),
-      rollbackData: null,
-      createdAt: new Date(),
-      retryCount: 0,
+    return this.eventSystem.addEvent({
+      type: MutationEventTypes.RequestExecution,
+      payload: {
+        mutation: {
+          operationType: "delete",
+          tableName: tableName,
+          recordId: this.buildRecordId(tableName, id),
+          rollbackData: null,
+          createdAt: new Date(),
+          retryCount: 0,
+        },
+      },
     });
   }
 }
@@ -387,13 +361,13 @@ export class MutationManagerService<S extends SchemaStructure> {
 export function createMutationManagerService<S extends SchemaStructure>(
   schema: S,
   databaseService: DatabaseService,
-  queryManagerService: QueryManagerService<S>,
-  logger: Logger
+  logger: Logger,
+  eventSystem: SpookyEventSystem
 ): MutationManagerService<S> {
   return new MutationManagerService(
     schema,
     databaseService,
-    queryManagerService,
-    logger
+    logger,
+    eventSystem
   );
 }
