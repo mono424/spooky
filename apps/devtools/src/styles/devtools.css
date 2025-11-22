@@ -198,6 +198,15 @@ body {
   border-left: 1px solid var(--sys-color-divider);
 }
 
+.toolbar-group-right {
+  display: flex;
+  align-items: center;
+  gap: var(--sys-spacing-1);
+  margin-left: auto;
+  flex-grow: 1;
+  justify-content: flex-end;
+}
+
 .toolbar-spacer {
   flex: 1;
 }

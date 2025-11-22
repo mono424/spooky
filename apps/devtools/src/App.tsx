@@ -1,7 +1,6 @@
 import { Show } from "solid-js";
 import { DevToolsProvider, useDevTools } from "./context/DevToolsContext";
 import { useTheme } from "./hooks/useTheme";
-import { Toolbar } from "./components/Toolbar";
 import { Tabs } from "./components/Tabs";
 import { EventsTab } from "./components/events/EventsTab";
 import { QueriesTab } from "./components/queries/QueriesTab";
@@ -15,7 +14,6 @@ function AppContent() {
 
   return (
     <>
-      <Toolbar />
       <Tabs />
       <div class="content">
         <div
