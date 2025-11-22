@@ -44,6 +44,8 @@ export interface ActiveQuery {
   dataSize?: number;
   query?: string;
   variables?: Record<string, unknown>;
+  listenerCount?: number;
+  connectedQueries?: number[];
 }
 
 export interface AuthState {

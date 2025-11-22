@@ -6,6 +6,7 @@ import {
 import { Logger } from "./logger.js";
 import { DatabaseService } from "./database.js";
 import { SchemaStructure } from "@spooky/query-builder";
+import { QueryManagerService } from "./query-manager.js";
 
 /**
  * Event entry in the history
@@ -29,6 +30,8 @@ export interface ActiveQuery {
   dataSize?: number;
   query?: string;
   variables?: Record<string, unknown>;
+  listenerCount?: number;
+  connectedQueries?: number[];
 }
 
 /**
@@ -79,25 +82,34 @@ export class DevToolsService {
   private maxEvents: number;
   private enabled: boolean;
   private version: string;
+  private subscriptionMap: Map<number, Set<number>> = new Map(); // queryHash -> Set of subscriber queryHashes
 
   constructor(
     private eventSystem: SpookyEventSystem,
     private logger: Logger,
     private databaseService: DatabaseService,
     private schema: SchemaStructure,
+    // queryManager reserved for future subscription tracking implementation
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    private _queryManager?: QueryManagerService<SchemaStructure>,
     config: DevToolsServiceConfig = {}
   ) {
     this.maxEvents = config.maxEvents ?? 100;
     this.enabled = config.enabled ?? true;
     this.version = config.version ?? "unknown";
 
-    console.log("[DevTools] Service constructor called", { enabled: this.enabled, version: this.version });
+    console.log("[DevTools] Service constructor called", {
+      enabled: this.enabled,
+      version: this.version,
+    });
 
     if (this.enabled) {
       this.setupEventSubscriptions();
       this.exposeToWindow();
       this.logger.debug("[DevTools] Service initialized");
-      console.log("[DevTools] Service fully initialized, window.__SPOOKY__ exposed");
+      console.log(
+        "[DevTools] Service fully initialized, window.__SPOOKY__ exposed"
+      );
     }
   }
 
@@ -252,13 +264,20 @@ export class DevToolsService {
   /**
    * Get table data from local database
    */
-  private async getTableData(tableName: string): Promise<Record<string, unknown>[]> {
+  private async getTableData(
+    tableName: string
+  ): Promise<Record<string, unknown>[]> {
     try {
       const query = `SELECT * FROM ${tableName}`;
-      const result = await this.databaseService.queryLocal<Record<string, unknown>[]>(query);
+      const result = await this.databaseService.queryLocal<
+        Record<string, unknown>[]
+      >(query);
       return result || [];
     } catch (error) {
-      this.logger.error(`[DevTools] Failed to fetch table data for ${tableName}`, error);
+      this.logger.error(
+        `[DevTools] Failed to fetch table data for ${tableName}`,
+        error
+      );
       return [];
     }
   }
@@ -275,11 +294,18 @@ export class DevToolsService {
       // Build the UPDATE query with MERGE to update specific fields
       const query = `UPDATE ${recordId} MERGE $updates`;
       await this.databaseService.queryLocal(query, { updates });
-      this.logger.debug(`[DevTools] Updated row ${recordId} in ${tableName}`, updates);
+      this.logger.debug(
+        `[DevTools] Updated row ${recordId} in ${tableName}`,
+        updates
+      );
       return { success: true };
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      this.logger.error(`[DevTools] Failed to update row ${recordId} in ${tableName}`, error);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        `[DevTools] Failed to update row ${recordId} in ${tableName}`,
+        error
+      );
       return { success: false, error: errorMessage };
     }
   }
@@ -297,16 +323,71 @@ export class DevToolsService {
       this.logger.debug(`[DevTools] Deleted row ${recordId} from ${tableName}`);
       return { success: true };
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      this.logger.error(`[DevTools] Failed to delete row ${recordId} from ${tableName}`, error);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        `[DevTools] Failed to delete row ${recordId} from ${tableName}`,
+        error
+      );
       return { success: false, error: errorMessage };
     }
+  }
+
+  /**
+   * Update subscription tracking for queries
+   */
+  private updateSubscriptionTracking(): void {
+    // Reset subscription tracking
+    this.subscriptionMap.clear();
+
+    // For now, we'll track this manually when we have access to QueryManagerService
+    // This is a placeholder that can be enhanced to track actual subscriptions
+    // by accessing QueryManagerService's internal state or by emitting subscription events
+    // TODO: Use this._queryManager to get actual subscription information
+
+    // Update listener counts and connected queries for each active query
+    for (const [queryHash, query] of this.activeQueries.entries()) {
+      const subscribers =
+        this.subscriptionMap.get(queryHash) || new Set<number>();
+      query.listenerCount = subscribers.size;
+      query.connectedQueries = Array.from(subscribers);
+    }
+
+    // Reference queryManager to avoid unused variable warning
+    // Will be used when implementing full subscription tracking
+    void this._queryManager;
+  }
+
+  /**
+   * Track a subscription from one query to another
+   */
+  public trackSubscription(subscriberHash: number, targetHash: number): void {
+    if (!this.subscriptionMap.has(targetHash)) {
+      this.subscriptionMap.set(targetHash, new Set());
+    }
+    this.subscriptionMap.get(targetHash)!.add(subscriberHash);
+    this.updateSubscriptionTracking();
+  }
+
+  /**
+   * Track an unsubscription
+   */
+  public trackUnsubscription(subscriberHash: number, targetHash: number): void {
+    const subscribers = this.subscriptionMap.get(targetHash);
+    if (subscribers) {
+      subscribers.delete(subscriberHash);
+      if (subscribers.size === 0) {
+        this.subscriptionMap.delete(targetHash);
+      }
+    }
+    this.updateSubscriptionTracking();
   }
 
   /**
    * Get the current DevTools state
    */
   public getState(): DevToolsState {
+    this.updateSubscriptionTracking();
     return {
       eventsHistory: [...this.eventsHistory],
       activeQueries: Object.fromEntries(this.activeQueries),
@@ -399,7 +480,15 @@ export function createDevToolsService(
   logger: Logger,
   databaseService: DatabaseService,
   schema: SchemaStructure,
+  queryManager?: QueryManagerService<SchemaStructure>,
   config?: DevToolsServiceConfig
 ): DevToolsService {
-  return new DevToolsService(eventSystem, logger, databaseService, schema, config);
+  return new DevToolsService(
+    eventSystem,
+    logger,
+    databaseService,
+    schema,
+    queryManager,
+    config
+  );
 }

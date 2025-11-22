@@ -134,6 +134,18 @@ export class SyncedDb<const Schema extends SchemaStructure> {
   }
 
   /**
+   * Update an existing record in the database
+   */
+  async update<TName extends TableNames<Schema>>(
+    tableName: TName,
+    recordId: string,
+    payload: Partial<TableModel<GetTable<Schema, TName>>>
+  ): Promise<void> {
+    if (!this.spooky) throw new Error("SyncedDb not initialized");
+    await this.spooky.update(tableName, recordId, payload);
+  }
+
+  /**
    * Query data from the database
    */
   public query<TName extends TableNames<Schema>>(

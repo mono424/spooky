@@ -1,4 +1,4 @@
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, For, Show, createEffect } from "solid-js";
 import { useNavigate, useParams } from "@solidjs/router";
 import { db } from "../db";
 import { CommentForm } from "./CommentForm";
@@ -37,6 +37,9 @@ export function ThreadDetail() {
   const params = useParams();
   const navigate = useNavigate();
   const [commentFilter, setCommentFilter] = createSignal<"all" | "mine">("all");
+  const [title, setTitle] = createSignal("");
+  const [content, setContent] = createSignal("");
+  const [lastThreadId, setLastThreadId] = createSignal<string | null>(null);
 
   // Create query as an accessor function that re-runs when dependencies change
   const threadResult = useQuery(db, () =>
@@ -48,8 +51,48 @@ export function ThreadDetail() {
   );
   const thread = () => threadResult.data() || null;
 
+  // Initialize title and content from thread data (only when thread changes)
+  createEffect(() => {
+    const threadData = thread();
+    if (threadData && threadData.id !== lastThreadId()) {
+      setTitle(threadData.title || "");
+      setContent(threadData.content || "");
+      setLastThreadId(threadData.id);
+    }
+  });
+
   const handleBack = () => {
     navigate("/");
+  };
+
+  // Auto-save title changes
+  const handleTitleChange = async (newTitle: string) => {
+    setTitle(newTitle);
+    const threadData = thread();
+    if (threadData && threadData.id) {
+      try {
+        await db.update("thread", threadData.id, { title: newTitle });
+      } catch (error) {
+        console.error("Failed to update title:", error);
+        // Revert on error
+        setTitle(threadData.title || "");
+      }
+    }
+  };
+
+  // Auto-save content changes
+  const handleContentChange = async (newContent: string) => {
+    setContent(newContent);
+    const threadData = thread();
+    if (threadData && threadData.id) {
+      try {
+        await db.update("thread", threadData.id, { content: newContent });
+      } catch (error) {
+        console.error("Failed to update content:", error);
+        // Revert on error
+        setContent(threadData.content || "");
+      }
+    }
   };
 
   return (
@@ -71,10 +114,19 @@ export function ThreadDetail() {
           <div class="space-y-6">
             {/* Thread Content */}
             <div class="bg-white border border-gray-200 rounded-lg p-6">
-              <h1 class="text-2xl font-bold mb-3">{threadData().title}</h1>
-              <p class="text-gray-700 mb-4 whitespace-pre-wrap">
-                {threadData().content}
-              </p>
+              <input
+                type="text"
+                value={title()}
+                onInput={(e) => handleTitleChange(e.currentTarget.value)}
+                class="text-2xl font-bold mb-3 w-full bg-transparent border-none outline-none focus:ring-2 focus:ring-blue-500 rounded px-2 -mx-2"
+                placeholder="Thread title"
+              />
+              <textarea
+                value={content()}
+                onInput={(e) => handleContentChange(e.currentTarget.value)}
+                class="text-gray-700 mb-4 whitespace-pre-wrap w-full bg-transparent border-none outline-none focus:ring-2 focus:ring-blue-500 rounded px-2 -mx-2 resize-none min-h-[100px]"
+                placeholder="Thread content"
+              />
               <div class="flex justify-between items-center text-sm text-gray-500 border-t pt-3">
                 <span>By {threadData().author?.username}</span>
                 <span>

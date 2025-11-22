@@ -5,9 +5,15 @@ import {
   formatRelativeTime,
   formatBytes,
 } from "../../utils/formatters";
+import { QueryGraph } from "./QueryGraph";
 
 function QueryList() {
   const { state, selectedQueryHash, setSelectedQueryHash } = useDevTools();
+
+  // Sort queries by createdAt in descending order (newest first)
+  const sortedQueries = createMemo(() => {
+    return [...state.activeQueries].sort((a, b) => b.createdAt - a.createdAt);
+  });
 
   return (
     <div class="queries-list">
@@ -16,10 +22,10 @@ function QueryList() {
       </div>
       <div class="queries-list-content">
         <Show
-          when={state.activeQueries.length > 0}
+          when={sortedQueries().length > 0}
           fallback={<div class="empty-state">No active queries</div>}
         >
-          <For each={state.activeQueries}>
+          <For each={sortedQueries()}>
             {(query) => (
               <div
                 class="query-item"
@@ -117,6 +123,8 @@ function QueryDetail() {
                 </pre>
               </div>
             </Show>
+
+            <QueryGraph query={query()} allQueries={state.activeQueries} />
           </>
         )}
       </Show>
