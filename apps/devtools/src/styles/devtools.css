@@ -807,6 +807,105 @@ body {
   border-bottom: none;
 }
 
+/* Editable cells */
+.editable-cell {
+  cursor: pointer;
+  position: relative;
+  transition: background-color var(--sys-transition-fast);
+  user-select: none;
+}
+
+.editable-cell:not(.readonly):hover {
+  background: var(--sys-color-state-hover) !important;
+}
+
+.editable-cell:not(.readonly):active {
+  background: var(--sys-color-state-pressed) !important;
+}
+
+.editable-cell.readonly {
+  cursor: default;
+  opacity: 0.7;
+  user-select: text;
+}
+
+.editable-cell.editing {
+  padding: 0;
+  background: var(--sys-color-surface-container) !important;
+  cursor: text;
+}
+
+.cell-input {
+  width: 100%;
+  min-width: 100px;
+  height: 100%;
+  min-height: 20px;
+  padding: 2px 8px;
+  border: none;
+  background: var(--sys-color-surface-container);
+  color: var(--sys-color-on-surface);
+  font-family: var(--sys-typescale-monospace-font);
+  font-size: var(--sys-typescale-monospace-size);
+  line-height: var(--sys-typescale-monospace-line-height);
+  outline: 2px solid var(--sys-color-primary);
+  outline-offset: -2px;
+  box-sizing: border-box;
+  user-select: text;
+}
+
+.cell-input:focus {
+  outline: 2px solid var(--sys-color-primary-bright);
+  background: var(--sys-color-surface-container-high);
+}
+
+/* Delete button column and cell */
+.delete-column {
+  width: 60px;
+  text-align: center;
+  background: var(--sys-color-surface-container);
+}
+
+.delete-cell {
+  width: 60px;
+  text-align: center;
+  background: var(--sys-color-surface);
+  border-left: 1px solid var(--sys-color-divider);
+}
+
+.data-table tbody tr:hover .delete-cell {
+  background: var(--sys-color-state-hover-on-subtle) !important;
+}
+
+.delete-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--sys-color-on-surface-subtle);
+  font-size: 18px;
+  font-weight: 400;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: var(--sys-radius-xs);
+  transition: background-color var(--sys-transition-fast),
+    color var(--sys-transition-fast);
+  opacity: 0.6;
+}
+
+.delete-btn:hover {
+  background: var(--sys-color-error);
+  color: white;
+  opacity: 1;
+}
+
+.delete-btn:active {
+  transform: scale(0.95);
+}
+
 /* Auth tab */
 .auth-container {
   display: flex;

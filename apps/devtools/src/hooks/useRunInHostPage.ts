@@ -98,10 +98,65 @@ export function useRunInHostPage() {
     );
   };
 
+  /**
+   * Update a table row
+   */
+  const updateTableRow = (
+    tableName: string,
+    recordId: string,
+    updates: Record<string, unknown>,
+    onSuccess: (result: { success: boolean; error?: string }) => void,
+    onError?: (error: any) => void
+  ): void => {
+    const updatesJson = JSON.stringify(updates).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    run(
+      `(async function() {
+        try {
+          if (window.__SPOOKY__ && window.__SPOOKY__.updateTableRow) {
+            const updates = JSON.parse("${updatesJson}");
+            const result = await window.__SPOOKY__.updateTableRow("${tableName}", "${recordId}", updates);
+            return result;
+          }
+          return { success: false, error: 'Spooky not found' };
+        } catch (error) {
+          return { success: false, error: error.message };
+        }
+      })()`,
+      { onSuccess, onError }
+    );
+  };
+
+  /**
+   * Delete a table row
+   */
+  const deleteTableRow = (
+    tableName: string,
+    recordId: string,
+    onSuccess: (result: { success: boolean; error?: string }) => void,
+    onError?: (error: any) => void
+  ): void => {
+    run(
+      `(async function() {
+        try {
+          if (window.__SPOOKY__ && window.__SPOOKY__.deleteTableRow) {
+            const result = await window.__SPOOKY__.deleteTableRow("${tableName}", "${recordId}");
+            return result;
+          }
+          return { success: false, error: 'Spooky not found' };
+        } catch (error) {
+          return { success: false, error: error.message };
+        }
+      })()`,
+      { onSuccess, onError }
+    );
+  };
+
   return {
     run,
     getSpookyState,
     getTableData,
+    updateTableRow,
+    deleteTableRow,
     checkSpookyAvailable,
     isRunning,
     error,

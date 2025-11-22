@@ -264,6 +264,46 @@ export class DevToolsService {
   }
 
   /**
+   * Update a row in the database
+   */
+  private async updateTableRow(
+    tableName: string,
+    recordId: string,
+    updates: Record<string, unknown>
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      // Build the UPDATE query with MERGE to update specific fields
+      const query = `UPDATE ${recordId} MERGE $updates`;
+      await this.databaseService.queryLocal(query, { updates });
+      this.logger.debug(`[DevTools] Updated row ${recordId} in ${tableName}`, updates);
+      return { success: true };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`[DevTools] Failed to update row ${recordId} in ${tableName}`, error);
+      return { success: false, error: errorMessage };
+    }
+  }
+
+  /**
+   * Delete a row from the database
+   */
+  private async deleteTableRow(
+    tableName: string,
+    recordId: string
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const query = `DELETE ${recordId}`;
+      await this.databaseService.queryLocal(query);
+      this.logger.debug(`[DevTools] Deleted row ${recordId} from ${tableName}`);
+      return { success: true };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`[DevTools] Failed to delete row ${recordId} from ${tableName}`, error);
+      return { success: false, error: errorMessage };
+    }
+  }
+
+  /**
    * Get the current DevTools state
    */
   public getState(): DevToolsState {
@@ -309,6 +349,16 @@ export class DevToolsService {
         },
         getTableData: async (tableName: string) => {
           return await this.getTableData(tableName);
+        },
+        updateTableRow: async (
+          tableName: string,
+          recordId: string,
+          updates: Record<string, unknown>
+        ) => {
+          return await this.updateTableRow(tableName, recordId, updates);
+        },
+        deleteTableRow: async (tableName: string, recordId: string) => {
+          return await this.deleteTableRow(tableName, recordId);
         },
       };
 

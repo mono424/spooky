@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal } from "solid-js";
 import { useDevTools } from "../../context/DevToolsContext";
 import { escapeHtml } from "../../utils/html";
 
@@ -33,7 +33,12 @@ function TableList() {
 }
 
 function TableView() {
-  const { state, selectedTable, fetchTableData } = useDevTools();
+  const { state, selectedTable, fetchTableData, updateTableRow, deleteTableRow } = useDevTools();
+  const [editingCell, setEditingCell] = createSignal<{
+    rowIndex: number;
+    column: string;
+  } | null>(null);
+  const [editValue, setEditValue] = createSignal("");
 
   // Fetch table data when a table is selected
   createEffect(() => {
@@ -61,6 +66,127 @@ function TableView() {
     return Array.from(keys);
   });
 
+  // Get record ID from a row
+  const getRecordId = (row: Record<string, unknown>): string | null => {
+    if (row.id && typeof row.id === "string") {
+      return row.id;
+    }
+    return null;
+  };
+
+  // Handle cell click to start editing
+  const handleCellClick = (e: MouseEvent, rowIndex: number, column: string, currentValue: unknown) => {
+    // Don't allow editing the 'id' column
+    if (column === "id") return;
+
+    // Prevent event bubbling to avoid conflicts
+    e.stopPropagation();
+
+    setEditingCell({ rowIndex, column });
+    const stringValue =
+      currentValue !== undefined && currentValue !== null
+        ? typeof currentValue === "object"
+          ? JSON.stringify(currentValue)
+          : String(currentValue)
+        : "";
+    setEditValue(stringValue);
+  };
+
+  // Handle cell value update
+  const handleCellUpdate = (row: Record<string, unknown>, column: string) => {
+    const editing = editingCell();
+    if (!editing) return;
+
+    const recordId = getRecordId(row);
+    if (!recordId) {
+      console.error("Cannot update row: no id found");
+      setEditingCell(null);
+      return;
+    }
+
+    const tableName = selectedTable();
+    if (!tableName) {
+      setEditingCell(null);
+      return;
+    }
+
+    const newValue = editValue();
+    const originalValue = row[column];
+
+    // Convert original value to string for comparison
+    const originalValueStr =
+      originalValue !== undefined && originalValue !== null
+        ? typeof originalValue === "object"
+          ? JSON.stringify(originalValue)
+          : String(originalValue)
+        : "";
+
+    // Don't update if value hasn't changed
+    if (newValue === originalValueStr) {
+      setEditingCell(null);
+      return;
+    }
+
+    let parsedValue: unknown = newValue;
+
+    // Try to parse JSON for objects
+    if (newValue.startsWith("{") || newValue.startsWith("[")) {
+      try {
+        parsedValue = JSON.parse(newValue);
+      } catch {
+        // Keep as string if parsing fails
+      }
+    } else if (newValue === "true" || newValue === "false") {
+      parsedValue = newValue === "true";
+    } else if (!isNaN(Number(newValue)) && newValue !== "") {
+      parsedValue = Number(newValue);
+    }
+
+    updateTableRow(tableName, recordId, { [column]: parsedValue });
+    setEditingCell(null);
+  };
+
+  // Handle delete row
+  const handleDeleteRow = (row: Record<string, unknown>) => {
+    const recordId = getRecordId(row);
+    if (!recordId) {
+      console.error("Cannot delete row: no id found");
+      return;
+    }
+
+    const tableName = selectedTable();
+    if (!tableName) return;
+
+    if (confirm(`Delete record ${recordId}?`)) {
+      deleteTableRow(tableName, recordId);
+    }
+  };
+
+  // Handle key down in edit input
+  const handleKeyDown = (e: KeyboardEvent, row: Record<string, unknown>, column: string) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      e.stopPropagation();
+      handleCellUpdate(row, column);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      setEditingCell(null);
+    }
+  };
+
+  // Handle blur to save changes
+  const handleBlur = (row: Record<string, unknown>, column: string, rowIndex: number) => {
+    // Use setTimeout to allow click events to process first
+    setTimeout(() => {
+      const editing = editingCell();
+      // Only update if we're still editing this cell
+      if (editing && editing.rowIndex === rowIndex && editing.column === column) {
+        handleCellUpdate(row, column);
+      }
+    }, 200);
+  };
+
   return (
     <div class="database-data">
       <div class="table-data">
@@ -84,23 +210,70 @@ function TableView() {
                   <For each={columns()}>
                     {(column) => <th>{escapeHtml(column)}</th>}
                   </For>
+                  <th class="delete-column">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 <For each={tableData()}>
-                  {(row) => (
+                  {(row, rowIndex) => (
                     <tr>
                       <For each={columns()}>
-                        {(column) => (
-                          <td>
-                            {row[column] !== undefined && row[column] !== null
-                              ? typeof row[column] === "object"
-                                ? JSON.stringify(row[column])
-                                : String(row[column])
-                              : ""}
-                          </td>
-                        )}
+                        {(column) => {
+                          const editing = editingCell();
+                          const isEditing =
+                            editing !== null &&
+                            editing.rowIndex === rowIndex() &&
+                            editing.column === column;
+                          const cellValue = row[column];
+                          const displayValue =
+                            cellValue !== undefined && cellValue !== null
+                              ? typeof cellValue === "object"
+                                ? JSON.stringify(cellValue)
+                                : String(cellValue)
+                              : "";
+
+                          return (
+                            <td
+                              class="editable-cell"
+                              classList={{ editing: isEditing, readonly: column === "id" }}
+                              onClick={(e) =>
+                                !isEditing &&
+                                handleCellClick(e, rowIndex(), column, cellValue)
+                              }
+                            >
+                              <Show when={isEditing} fallback={displayValue}>
+                                <input
+                                  ref={(el) => {
+                                    // Focus and select when input is rendered
+                                    if (el) {
+                                      setTimeout(() => {
+                                        el.focus();
+                                        el.select();
+                                      }, 0);
+                                    }
+                                  }}
+                                  type="text"
+                                  class="cell-input"
+                                  value={editValue()}
+                                  onInput={(e) => setEditValue(e.currentTarget.value)}
+                                  onBlur={() => handleBlur(row, column, rowIndex())}
+                                  onKeyDown={(e) => handleKeyDown(e, row, column)}
+                                  onClick={(e) => e.stopPropagation()}
+                                />
+                              </Show>
+                            </td>
+                          );
+                        }}
                       </For>
+                      <td class="delete-cell">
+                        <button
+                          class="delete-btn"
+                          onClick={() => handleDeleteRow(row)}
+                          title="Delete row"
+                        >
+                          ×
+                        </button>
+                      </td>
                     </tr>
                   )}
                 </For>

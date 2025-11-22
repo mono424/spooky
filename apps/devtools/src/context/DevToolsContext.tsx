@@ -31,6 +31,12 @@ interface DevToolsContextValue {
   clearEvents: () => void;
   refresh: () => void;
   fetchTableData: (tableName: string) => void;
+  updateTableRow: (
+    tableName: string,
+    recordId: string,
+    updates: Record<string, unknown>
+  ) => void;
+  deleteTableRow: (tableName: string, recordId: string) => void;
 }
 
 const DevToolsContext = createContext<DevToolsContextValue>();
@@ -198,6 +204,57 @@ export const DevToolsProvider: ParentComponent = (props) => {
     );
   }
 
+  /**
+   * Update a table row
+   */
+  function updateTableRow(
+    tableName: string,
+    recordId: string,
+    updates: Record<string, unknown>
+  ) {
+    console.log("[DevTools] Updating row:", { tableName, recordId, updates });
+    hostPage.updateTableRow(
+      tableName,
+      recordId,
+      updates,
+      (result) => {
+        console.log("[DevTools] Update result:", result);
+        if (result.success) {
+          // Refresh table data after successful update
+          fetchTableData(tableName);
+        } else {
+          console.error("[DevTools] Update failed:", result.error);
+        }
+      },
+      (error) => {
+        console.error("[DevTools] Error updating row:", error);
+      }
+    );
+  }
+
+  /**
+   * Delete a table row
+   */
+  function deleteTableRow(tableName: string, recordId: string) {
+    console.log("[DevTools] Deleting row:", { tableName, recordId });
+    hostPage.deleteTableRow(
+      tableName,
+      recordId,
+      (result) => {
+        console.log("[DevTools] Delete result:", result);
+        if (result.success) {
+          // Refresh table data after successful delete
+          fetchTableData(tableName);
+        } else {
+          console.error("[DevTools] Delete failed:", result.error);
+        }
+      },
+      (error) => {
+        console.error("[DevTools] Error deleting row:", error);
+      }
+    );
+  }
+
   // Check for Spooky on mount
   onMount(() => {
     setTimeout(() => {
@@ -230,6 +287,8 @@ export const DevToolsProvider: ParentComponent = (props) => {
     clearEvents,
     refresh,
     fetchTableData,
+    updateTableRow,
+    deleteTableRow,
   };
 
   return (
