@@ -37,7 +37,6 @@
     "valtio": "^2.1.8"
   },
   "peerDependencies": {
-    "@tanstack/solid-query": "^5.0.0",
     "solid-js": "^1.x.x"
   },
   "devDependencies": {

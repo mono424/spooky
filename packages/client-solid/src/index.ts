@@ -29,7 +29,7 @@ export type {
 export { useQuery } from "./lib/use-query";
 
 export { AuthEventTypes } from "@spooky/spooky-ts";
-export type {};
+export type { };
 
 // Re-export query builder types for convenience
 export type {
@@ -64,12 +64,12 @@ export type RelatedFieldsTableScoped<
     TableName
   > = RelationshipFieldsFromSchema<Schema, TableName>
 > = {
-  [K in RelatedFields]: {
-    to: RelationshipField<Schema, TableName, K>["to"];
-    relatedFields: RelatedFieldsMap;
-    cardinality: RelationshipField<Schema, TableName, K>["cardinality"];
+    [K in RelatedFields]: {
+      to: RelationshipField<Schema, TableName, K>["to"];
+      relatedFields: RelatedFieldsMap;
+      cardinality: RelationshipField<Schema, TableName, K>["cardinality"];
+    };
   };
-};
 
 export type InferModel<
   Schema extends SchemaStructure,
@@ -81,21 +81,21 @@ export type WithRelated<
   Field extends string,
   RelatedFields extends RelatedFieldsMap = {}
 > = {
-  [K in Field]: Omit<RelatedFieldMapEntry, "relatedFields"> & {
-    relatedFields: RelatedFields;
+    [K in Field]: Omit<RelatedFieldMapEntry, "relatedFields"> & {
+      relatedFields: RelatedFields;
+    };
   };
-};
 
 export type WithRelatedMany<
   Field extends string,
   RelatedFields extends RelatedFieldsMap = {}
 > = {
-  [K in Field]: {
-    to: Field;
-    relatedFields: RelatedFields;
-    cardinality: "many";
+    [K in Field]: {
+      to: Field;
+      relatedFields: RelatedFields;
+      cardinality: "many";
+    };
   };
-};
 
 /**
  * SyncedDb - A thin wrapper around spooky-ts for Solid.js integration
@@ -127,7 +127,7 @@ export class SyncedDb<const Schema extends SchemaStructure> {
    */
   async create<TName extends TableNames<Schema>>(
     tableName: TName,
-    payload: TableModel<GetTable<Schema, TName>>
+    payload: TableModel<GetTable<Schema, TName>> & { id?: string | RecordId }
   ): Promise<void> {
     if (!this.spooky) throw new Error("SyncedDb not initialized");
     await this.spooky.create(tableName, payload);
@@ -143,6 +143,17 @@ export class SyncedDb<const Schema extends SchemaStructure> {
   ): Promise<void> {
     if (!this.spooky) throw new Error("SyncedDb not initialized");
     await this.spooky.update(tableName, recordId, payload);
+  }
+
+  /**
+   * Delete an existing record in the database
+   */
+  async delete<TName extends TableNames<Schema>>(
+    tableName: TName,
+    recordId: string
+  ): Promise<void> {
+    if (!this.spooky) throw new Error("SyncedDb not initialized");
+    await this.spooky.delete(tableName, recordId);
   }
 
   /**

@@ -12,6 +12,7 @@ import { AuthManagerService } from "./services/auth-manager.js";
 import { QueryManagerService } from "./services/query-manager.js";
 import { MutationManagerService } from "./services/mutation-manager.js";
 import { EventSubscriptionOptions } from "./types.js";
+import { RecordId } from "surrealdb";
 
 export interface SpookyInstance<S extends SchemaStructure> {
   subscribeToQuery: (
@@ -26,7 +27,7 @@ export interface SpookyInstance<S extends SchemaStructure> {
   deauthenticate: () => Promise<void>;
   create: <N extends TableNames<S>>(
     tableName: N,
-    payload: TableModel<GetTable<S, N>>
+    payload: TableModel<GetTable<S, N>> & { id?: string | RecordId }
   ) => Promise<void>;
   update: <N extends TableNames<S>>(
     tableName: N,
@@ -62,7 +63,7 @@ export async function createSpookyInstance<S extends SchemaStructure>(
         queryManager.run(q);
         return {
           cachedQuery: null,
-          cleanup: () => {},
+          cleanup: () => { },
         };
       },
       options
@@ -84,7 +85,7 @@ export async function createSpookyInstance<S extends SchemaStructure>(
     deauthenticate: authManager.deauthenticate.bind(authManager),
     create: <N extends TableNames<S>>(
       tableName: N,
-      payload: TableModel<GetTable<S, N>>
+      payload: TableModel<GetTable<S, N>> & { id?: string | RecordId }
     ) => mutationManager.create(tableName, payload),
     update: <N extends TableNames<S>>(
       tableName: N,

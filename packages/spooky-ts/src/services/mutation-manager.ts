@@ -283,7 +283,7 @@ export class MutationManagerService<S extends SchemaStructure> {
 
   async create<N extends TableNames<S>>(
     tableName: N,
-    payload: TableModel<GetTable<S, N>>
+    payload: TableModel<GetTable<S, N>> & { id?: string | RecordId }
   ): Promise<void> {
     const encodedPayload = encodeToSpooky(this.schema, tableName, payload);
     if (!encodedPayload) {
