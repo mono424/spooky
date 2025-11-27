@@ -472,8 +472,9 @@ describe("Subquery Filtering", () => {
     // Check that the subquery has the parent filter injected
     // thread table has 'comments' field pointing to 'comment' table (one-to-many)
     // So it should have WHERE thread ∈ $parentIds
-    expect(commentSubquery.selectQuery.query).toContain("thread ∈ $thread");
-    expect(commentSubquery.selectQuery.vars).toEqual(expect.objectContaining({
+    // And 'thread' should NOT be in vars because it's a direct variable reference
+    expect(commentSubquery.selectQuery.query).toContain("thread ∈ $parentIds");
+    expect(commentSubquery.selectQuery.vars).not.toEqual(expect.objectContaining({
       thread: "$parentIds"
     }));
   });

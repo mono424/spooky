@@ -781,8 +781,13 @@ export function buildQueryFromOptions<
       // Handle operator objects { _op, _val }
       if (value && typeof value === "object" && "_op" in value && "_val" in value) {
         const { _op, _val } = value as { _op: string; _val: unknown };
-        vars[varName] = _val;
-        conditions.push(`${key} ${_op} $${varName}`);
+
+        if (typeof _val === "string" && _val.startsWith("$")) {
+          conditions.push(`${key} ${_op} ${_val}`);
+        } else {
+          vars[varName] = _val;
+          conditions.push(`${key} ${_op} $${varName}`);
+        }
       } else {
         vars[varName] = value;
         conditions.push(`${key} = $${varName}`);
