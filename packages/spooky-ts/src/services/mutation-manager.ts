@@ -3,6 +3,8 @@ import {
   TableModel,
   TableNames,
   GetTable,
+  InnerQuery,
+  QueryBuilder,
 } from "@spooky/query-builder";
 import {
   DatabaseService,
@@ -49,7 +51,7 @@ export interface UpdateMutation<
   id?: RecordId;
   operationType: "update";
   tableName: N;
-  recordId: RecordId;
+  selector: InnerQuery<GetTable<S, N>, boolean>;
   patches: JsonPatch[];
   rollbackPatches: JsonPatch[] | null;
   createdAt: Date;
@@ -64,7 +66,7 @@ export interface DeleteMutation<
   id?: RecordId;
   operationType: "delete";
   tableName: N;
-  recordId: RecordId;
+  selector: InnerQuery<GetTable<S, N>, boolean>;
   rollbackData: TableModel<GetTable<S, N>> | null;
   createdAt: Date;
   retryCount: number;
@@ -83,14 +85,6 @@ export class MutationManagerService<S extends SchemaStructure> {
         event.payload.mutation as Mutation<S, TableNames<S>>
       );
     });
-  }
-
-  private buildRecordId(table: string, id: string): RecordId {
-    if (id.includes(":")) {
-      const [table, ...idParts] = id.split(":");
-      return new RecordId(table, idParts.join(":"));
-    }
-    return new RecordId(table, id);
   }
 
   private buildCreateQuery<N extends TableNames<S>>(
@@ -114,9 +108,18 @@ export class MutationManagerService<S extends SchemaStructure> {
       id: mutation.id,
     });
 
-    const rollbackData = await this.databaseService.queryLocal<
-      TableModelWithId<GetTable<S, N>>[]
-    >(`SELECT * FROM ${mutation.recordId.toString()}`);
+    let rollbackData: TableModelWithId<GetTable<S, N>>[] = [];
+
+    if (mutation.operationType === "create") {
+      rollbackData = await this.databaseService.queryLocal<
+        TableModelWithId<GetTable<S, N>>[]
+      >(`SELECT * FROM ${mutation.recordId.toString()}`);
+    } else {
+      const selectQuery = mutation.selector.selectQuery;
+      rollbackData = await this.databaseService.queryLocal<
+        TableModelWithId<GetTable<S, N>>[]
+      >(selectQuery.query, selectQuery.vars);
+    }
 
     switch (mutation.operationType) {
       case "create":
@@ -130,20 +133,18 @@ export class MutationManagerService<S extends SchemaStructure> {
 
       case "update":
         const updateMutation = mutation as UpdateMutation<S, N>;
+        const updateQuery = updateMutation.selector.buildUpdateQuery(updateMutation.patches);
         await this.databaseService.queryLocal<
           TableModelWithId<GetTable<S, N>>[]
-        >(
-          `UPDATE ${updateMutation.recordId.toString()} PATCH ${JSON.stringify(
-            updateMutation.patches
-          )}`
-        );
+        >(updateQuery.query, updateQuery.vars);
         break;
 
       case "delete":
         const deleteMutation = mutation as DeleteMutation<S, N>;
+        const deleteQuery = deleteMutation.selector.buildDeleteQuery();
         return await this.databaseService.queryLocal<
           TableModelWithId<GetTable<S, N>>[]
-        >(`DELETE ${deleteMutation.recordId.toString()}`);
+        >(deleteQuery.query, deleteQuery.vars);
         break;
 
       default:
@@ -170,27 +171,28 @@ export class MutationManagerService<S extends SchemaStructure> {
         >(q, dataWithoutId);
 
       case "update":
+        const updateQuery = mutation.selector.buildUpdateQuery(mutation.patches);
         this.logger.debug("[MutationManager] Update remote", {
           id: mutation.id,
-          recordId: mutation.recordId,
+          query: updateQuery.query,
           data: mutation.patches,
         });
         return this.databaseService.queryRemote<
           TableModelWithId<GetTable<S, N>>[]
         >(
-          `UPDATE ${mutation.recordId.toString()} PATCH ${JSON.stringify(
-            mutation.patches
-          )}`
+          updateQuery.query,
+          updateQuery.vars
         );
 
       case "delete":
+        const deleteQuery = mutation.selector.buildDeleteQuery();
         this.logger.debug("[MutationManager] Delete remote", {
           id: mutation.id,
-          recordId: mutation.recordId,
+          query: deleteQuery.query,
         });
         return this.databaseService.queryRemote<
           TableModelWithId<GetTable<S, N>>[]
-        >(`DELETE ${mutation.recordId.toString()}`);
+        >(deleteQuery.query, deleteQuery.vars);
 
       default:
         throw new Error(`Unknown mutation type`);
@@ -335,10 +337,36 @@ export class MutationManagerService<S extends SchemaStructure> {
 
   async update<N extends TableNames<S>>(
     tableName: N,
-    recordId: string,
+    selector: string | InnerQuery<GetTable<S, N>, boolean>,
     payload: Partial<TableModel<GetTable<S, N>>>
   ): Promise<void> {
-    const patches = Object.entries(payload)
+    let innerQuery: InnerQuery<GetTable<S, N>, boolean>;
+    let targetTableName: string = tableName;
+    let actualPayload: Partial<TableModel<GetTable<S, N>>> = payload;
+
+    // Handle case where update is called with (recordId, payload)
+    // In this case, tableName is recordId, selector is payload, and payload is undefined
+    if (!payload && typeof selector === "object" && !(selector instanceof InnerQuery) && typeof tableName === "string" && (tableName as string).includes(":")) {
+      const parts = (tableName as string).split(":");
+      targetTableName = parts[0];
+      actualPayload = selector as unknown as Partial<TableModel<GetTable<S, N>>>;
+
+      innerQuery = new QueryBuilder(this.schema, targetTableName)
+        .where({ id: tableName } as any)
+        .build().innerQuery;
+    } else if (typeof selector === "string") {
+      innerQuery = new QueryBuilder(this.schema, tableName)
+        .where({ id: selector } as any)
+        .build().innerQuery;
+    } else {
+      innerQuery = selector as InnerQuery<GetTable<S, N>, boolean>;
+    }
+
+    if (!innerQuery) {
+      throw new Error(`Invalid selector for update operation. tableName: ${tableName}`);
+    }
+
+    const patches = Object.entries(actualPayload)
       .filter(([key]) => key !== "id")
       .map(([key, value]) => ({
         op: "replace",
@@ -351,8 +379,8 @@ export class MutationManagerService<S extends SchemaStructure> {
       payload: {
         mutation: {
           operationType: "update",
-          recordId: this.buildRecordId(tableName, recordId),
-          tableName: tableName,
+          selector: innerQuery,
+          tableName: targetTableName as N,
           patches: patches,
           rollbackPatches: null,
           createdAt: new Date(),
@@ -364,15 +392,39 @@ export class MutationManagerService<S extends SchemaStructure> {
 
   async delete<N extends TableNames<S>>(
     tableName: N,
-    id: string
+    selector: string | InnerQuery<GetTable<S, N>, boolean>
   ): Promise<void> {
+    let innerQuery: InnerQuery<GetTable<S, N>, boolean>;
+    let targetTableName: string = tableName;
+
+    // Handle case where delete is called with a single argument (recordId)
+    // In this case, tableName contains the recordId and selector is undefined
+    if (!selector && typeof tableName === "string" && (tableName as string).includes(":")) {
+      const parts = (tableName as string).split(":");
+      targetTableName = parts[0];
+
+      innerQuery = new QueryBuilder(this.schema, targetTableName)
+        .where({ id: tableName } as any)
+        .build().innerQuery;
+    } else if (typeof selector === "string") {
+      innerQuery = new QueryBuilder(this.schema, tableName)
+        .where({ id: selector } as any)
+        .build().innerQuery;
+    } else {
+      innerQuery = selector;
+    }
+
+    if (!innerQuery) {
+      throw new Error(`Invalid selector for delete operation. tableName: ${tableName}, selector: ${selector}`);
+    }
+
     return this.eventSystem.addEvent({
       type: MutationEventTypes.RequestExecution,
       payload: {
         mutation: {
           operationType: "delete",
-          tableName: tableName,
-          recordId: this.buildRecordId(tableName, id),
+          tableName: targetTableName as N,
+          selector: innerQuery,
           rollbackData: null,
           createdAt: new Date(),
           retryCount: 0,

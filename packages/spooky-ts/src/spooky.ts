@@ -1,6 +1,7 @@
-// spooky.ts
+
 import {
   GetTable,
+  InnerQuery,
   QueryBuilder,
   QueryOptions,
   SchemaStructure,
@@ -31,10 +32,13 @@ export interface SpookyInstance<S extends SchemaStructure> {
   ) => Promise<void>;
   update: <N extends TableNames<S>>(
     tableName: N,
-    recordId: string,
+    selector: string | InnerQuery<GetTable<S, N>, boolean>,
     payload: Partial<TableModel<GetTable<S, N>>>
   ) => Promise<void>;
-  delete: <N extends TableNames<S>>(tableName: N, id: string) => Promise<void>;
+  delete: <N extends TableNames<S>>(
+    tableName: N,
+    selector: string | InnerQuery<GetTable<S, N>, boolean>
+  ) => Promise<void>;
   query: <Table extends TableNames<S>>(
     table: Table,
     options: QueryOptions<TableModel<GetTable<S, Table>>, false>
@@ -89,11 +93,13 @@ export async function createSpookyInstance<S extends SchemaStructure>(
     ) => mutationManager.create(tableName, payload),
     update: <N extends TableNames<S>>(
       tableName: N,
-      recordId: string,
+      selector: string | InnerQuery<GetTable<S, N>, boolean>,
       payload: Partial<TableModel<GetTable<S, N>>>
-    ) => mutationManager.update(tableName, recordId, payload),
-    delete: <N extends TableNames<S>>(tableName: N, id: string) =>
-      mutationManager.delete(tableName, id),
+    ) => mutationManager.update(tableName, selector, payload),
+    delete: <N extends TableNames<S>>(
+      tableName: N,
+      selector: string | InnerQuery<GetTable<S, N>, boolean>
+    ) => mutationManager.delete(tableName, selector),
     query: useQuery,
     close,
     clearLocalCache: databaseService.clearLocalCache,

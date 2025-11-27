@@ -70,7 +70,7 @@ const testSchema = {
 
 describe("QueryBuilder", () => {
   it("should build basic SELECT query", () => {
-    const builder = new QueryBuilder(testSchema, "user");
+    const builder = new QueryBuilder(testSchema, "user", (q) => q.selectQuery);
 
     const result = builder.build().run();
 
@@ -79,7 +79,7 @@ describe("QueryBuilder", () => {
   });
 
   it("should build query with where conditions", () => {
-    const builder = new QueryBuilder(testSchema, "user");
+    const builder = new QueryBuilder(testSchema, "user", (q) => q.selectQuery);
 
     builder.where({ username: "john", email: "john@example.com" });
     const result = builder.build().run();
@@ -94,7 +94,7 @@ describe("QueryBuilder", () => {
   });
 
   it("should build query with select fields", () => {
-    const builder = new QueryBuilder(testSchema, "user");
+    const builder = new QueryBuilder(testSchema, "user", (q) => q.selectQuery);
     builder.select("username", "email");
     const result = builder.build().run();
 
@@ -102,7 +102,7 @@ describe("QueryBuilder", () => {
   });
 
   it("should throw error when calling select twice", () => {
-    const builder = new QueryBuilder(testSchema, "user");
+    const builder = new QueryBuilder(testSchema, "user", (q) => q.selectQuery);
     builder.select("username");
     expect(() => builder.select("email")).toThrow(
       "Select can only be called once per query"
@@ -110,7 +110,7 @@ describe("QueryBuilder", () => {
   });
 
   it("should build query with ordering, limit, and offset", () => {
-    const builder = new QueryBuilder(testSchema, "user");
+    const builder = new QueryBuilder(testSchema, "user", (q) => q.selectQuery);
     builder.orderBy("created_at", "desc").limit(10).offset(5);
     const result = builder.build().run();
 
@@ -120,7 +120,7 @@ describe("QueryBuilder", () => {
   });
 
   it("should support method chaining", () => {
-    const builder = new QueryBuilder(testSchema, "user");
+    const builder = new QueryBuilder(testSchema, "user", (q) => q.selectQuery);
     const result = builder
       .where({ username: "john" })
       .select("username", "email")
@@ -136,7 +136,7 @@ describe("QueryBuilder", () => {
   });
 
   it("should build LIVE SELECT query (ignores ORDER BY, LIMIT, START)", () => {
-    const builder = new QueryBuilder(testSchema, "user");
+    const builder = new QueryBuilder(testSchema, "user", (q) => q.selectQuery);
     builder
       .where({ username: "john" })
       .orderBy("created_at", "desc")
@@ -154,7 +154,7 @@ describe("Relationship Queries", () => {
   // Using testSchema from top-level scope
 
   it("should build query with one-to-one relationship", () => {
-    const builder = new QueryBuilder(testSchema, "thread");
+    const builder = new QueryBuilder(testSchema, "thread", (q) => q.selectQuery);
     builder.related("author");
     const result = builder.build().run();
 
@@ -164,7 +164,7 @@ describe("Relationship Queries", () => {
   });
 
   it("should build query with one-to-many relationship", () => {
-    const builder = new QueryBuilder(testSchema, "thread");
+    const builder = new QueryBuilder(testSchema, "thread", (q) => q.selectQuery);
     builder.related("comments");
     const result = builder.build().run();
 
@@ -174,7 +174,7 @@ describe("Relationship Queries", () => {
   });
 
   it("should build query with relationship modifiers", () => {
-    const builder = new QueryBuilder(testSchema, "thread");
+    const builder = new QueryBuilder(testSchema, "thread", (q) => q.selectQuery);
     builder.related("comments", (q) =>
       q.where({ author: "user:123" }).limit(5)
     );
@@ -186,7 +186,7 @@ describe("Relationship Queries", () => {
   });
 
   it("should build query with nested relationships", () => {
-    const builder = new QueryBuilder(testSchema, "thread");
+    const builder = new QueryBuilder(testSchema, "thread", (q) => q.selectQuery);
     builder.related("comments", (q) => q.related("author"));
     const result = builder.build().run();
 
@@ -199,13 +199,14 @@ describe("Relationship Queries", () => {
 describe("buildQueryFromOptions", () => {
   it("should build query from options", () => {
     const result = buildQueryFromOptions<
-      TableModel<(typeof testSchema)["tables"][0]>
+      TableModel<(typeof testSchema)["tables"][0]>,
+      boolean
     >("SELECT", "user", {
       where: { username: "john" },
       select: ["username", "email"],
       orderBy: { username: "desc" },
       limit: 10,
-    });
+    }, testSchema);
 
     expect(result.query).toBe(
       "SELECT username, email FROM user WHERE username = $username ORDER BY username desc LIMIT 10;"
@@ -215,10 +216,11 @@ describe("buildQueryFromOptions", () => {
 
   it("should build LIVE SELECT query from options", () => {
     const result = buildQueryFromOptions<
-      TableModel<(typeof testSchema)["tables"][0]>
+      TableModel<(typeof testSchema)["tables"][0]>,
+      boolean
     >("LIVE SELECT", "user", {
       where: { username: "john" },
-    });
+    }, testSchema);
 
     expect(result.query).toBe(
       "LIVE SELECT * FROM user WHERE username = $username;"
@@ -228,7 +230,7 @@ describe("buildQueryFromOptions", () => {
 
 describe("RecordId Parsing", () => {
   it("should parse string IDs to RecordId", () => {
-    const builder = new QueryBuilder(testSchema, "thread");
+    const builder = new QueryBuilder(testSchema, "thread", (q) => q.selectQuery);
     builder.where({ author: "user:123", id: "abc123" });
     const result = builder.build().run();
 
@@ -240,7 +242,7 @@ describe("RecordId Parsing", () => {
   });
 
   it("should not parse non-ID strings", () => {
-    const builder = new QueryBuilder(testSchema, "user");
+    const builder = new QueryBuilder(testSchema, "user", (q) => q.selectQuery);
     builder.where({ username: "john_doe" });
     const result = builder.build().run();
 
@@ -251,7 +253,7 @@ describe("RecordId Parsing", () => {
 
 describe("Edge Cases", () => {
   it("should handle empty where object", () => {
-    const builder = new QueryBuilder(testSchema, "user");
+    const builder = new QueryBuilder(testSchema, "user", (q) => q.selectQuery);
     builder.where({});
     const result = builder.build().run();
 
@@ -259,7 +261,7 @@ describe("Edge Cases", () => {
   });
 
   it("should handle special characters in strings", () => {
-    const builder = new QueryBuilder(testSchema, "user");
+    const builder = new QueryBuilder(testSchema, "user", (q) => q.selectQuery);
     builder.where({ username: 'john"doe' });
     const result = builder.build().run();
 
@@ -267,7 +269,7 @@ describe("Edge Cases", () => {
   });
 
   it("should return options via getOptions()", () => {
-    const builder = new QueryBuilder(testSchema, "user");
+    const builder = new QueryBuilder(testSchema, "user", (q) => q.selectQuery);
     builder.where({ username: "john" }).limit(10);
     const options = builder.getOptions();
 
@@ -288,7 +290,7 @@ describe("Type Tests", () => {
   });
 
   it("should enforce correct field names in where clause", () => {
-    const builder = new QueryBuilder(testSchema, "user");
+    const builder = new QueryBuilder(testSchema, "user", (q) => q.selectQuery);
 
     // Valid fields should work
     builder.where({ username: "john" });
@@ -300,11 +302,11 @@ describe("Type Tests", () => {
   });
 
   it("should enforce correct field names in select", () => {
-    const builder1 = new QueryBuilder(testSchema, "user");
-    const builder2 = new QueryBuilder(testSchema, "user");
+    const builder = new QueryBuilder(testSchema, "comment", (q) => q.selectQuery);
+    const builder2 = new QueryBuilder(testSchema, "user", (q) => q.selectQuery);
 
     // Valid fields should work
-    builder1.select("username", "email");
+    builder.select("content", "thread");
     builder2.select("id", "created_at");
 
     const builder3 = new QueryBuilder(testSchema, "user");
@@ -313,7 +315,7 @@ describe("Type Tests", () => {
   });
 
   it("should enforce correct field names in orderBy", () => {
-    const builder = new QueryBuilder(testSchema, "user");
+    const builder = new QueryBuilder(testSchema, "user", (q) => q.selectQuery);
 
     // Valid fields should work
     builder.orderBy("username", "asc");
@@ -324,7 +326,7 @@ describe("Type Tests", () => {
   });
 
   it("should enforce correct relationship field names", () => {
-    const builder = new QueryBuilder(testSchema, "thread");
+    const builder = new QueryBuilder(testSchema, "thread", (q) => q.selectQuery);
 
     // Valid relationship fields should work (cardinality now required)
     builder.related("author");
@@ -332,7 +334,7 @@ describe("Type Tests", () => {
   });
 
   it("should enforce relationship metadata types", () => {
-    const builder = new QueryBuilder(testSchema, "thread");
+    const builder = new QueryBuilder(testSchema, "thread", (q) => q.selectQuery);
 
     // The related method should accept a modifier function with correct types (cardinality as 2nd param)
     builder.related("comments", (q) => {
@@ -350,7 +352,7 @@ describe("Type Tests", () => {
   });
 
   it("should enforce correct types in where clause values", () => {
-    const builder = new QueryBuilder(testSchema, "user");
+    const builder = new QueryBuilder(testSchema, "user", (q) => q.selectQuery);
 
     // String fields should accept strings
     builder.where({ username: "john" });
@@ -364,7 +366,7 @@ describe("Type Tests", () => {
   });
 
   it("should return correctly typed query result", () => {
-    const builder = new QueryBuilder(testSchema, "user");
+    const builder = new QueryBuilder(testSchema, "user", (q) => q.selectQuery);
     const result = builder.build().run();
 
     // Query should be a string
@@ -377,7 +379,7 @@ describe("Type Tests", () => {
   });
 
   it("should enforce correct select return type", () => {
-    const builder = new QueryBuilder(testSchema, "user");
+    const builder = new QueryBuilder(testSchema, "user", (q) => q.selectQuery);
 
     // Select should return the builder for chaining
     const result = builder.select("username", "email");
@@ -385,7 +387,7 @@ describe("Type Tests", () => {
   });
 
   it("should enforce correct method chaining types", () => {
-    const builder = new QueryBuilder(testSchema, "user");
+    const builder = new QueryBuilder(testSchema, "user", (q) => q.selectQuery);
 
     // All methods should return the builder for chaining
     const result = builder
@@ -404,13 +406,13 @@ describe("Schema Metadata Integration", () => {
   type TestSchemaMetadata = typeof testSchema;
 
   it("should accept testSchema in constructor", () => {
-    const builder = new QueryBuilder(testSchema, "thread");
+    const builder = new QueryBuilder(testSchema, "thread", (q) => q.selectQuery);
 
     expect(builder).toBeDefined();
   });
 
   it("should build query with metadata-driven relationships", () => {
-    const builder = new QueryBuilder(testSchema, "thread");
+    const builder = new QueryBuilder(testSchema, "thread", (q) => q.selectQuery);
 
     builder.related("author", "one");
     const result = builder.build().run();
@@ -421,7 +423,7 @@ describe("Schema Metadata Integration", () => {
   });
 
   it("should handle one-to-many relationships with metadata", () => {
-    const builder = new QueryBuilder(testSchema, "thread", () => {});
+    const builder = new QueryBuilder(testSchema, "thread", (q) => q.selectQuery);
 
     builder.related("comments");
     const result = builder.build().run();
@@ -429,5 +431,28 @@ describe("Schema Metadata Integration", () => {
     expect(result.query).toBe(
       "SELECT *, (SELECT * FROM comment WHERE thread=$parent.id) AS comments FROM thread;"
     );
+  });
+});
+
+describe("Update and Delete Queries", () => {
+  it("should build UPDATE query with patches", () => {
+    const builder = new QueryBuilder(testSchema, "user", (q) => q.selectQuery);
+    builder.where({ username: "john" });
+    const patches = [{ op: "replace", path: "/email", value: "new@example.com" }];
+    const result = builder.build().buildUpdateQuery(patches);
+
+    expect(result.query).toBe(
+      `UPDATE user WHERE username = $username PATCH ${JSON.stringify(patches)};`
+    );
+    expect(result.vars).toEqual({ username: "john" });
+  });
+
+  it("should build DELETE query", () => {
+    const builder = new QueryBuilder(testSchema, "user", (q) => q.selectQuery);
+    builder.where({ username: "john" });
+    const result = builder.build().buildDeleteQuery();
+
+    expect(result.query).toBe("DELETE FROM user WHERE username = $username;");
+    expect(result.vars).toEqual({ username: "john" });
   });
 });

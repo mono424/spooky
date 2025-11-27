@@ -8,15 +8,12 @@ import {
   TableNames,
   createSpooky,
   Surreal,
-  RelationshipsMetadata,
-  InferRelatedModelFromMetadata,
-  GetCardinality,
   QueryResult,
   RelatedFieldsMap,
-  RelatedField,
   RelationshipFieldsFromSchema,
   GetRelationship,
   RelatedFieldMapEntry,
+  InnerQuery,
 } from "@spooky/spooky-ts";
 
 export { RecordId, Uuid } from "surrealdb";
@@ -150,10 +147,10 @@ export class SyncedDb<const Schema extends SchemaStructure> {
    */
   async delete<TName extends TableNames<Schema>>(
     tableName: TName,
-    recordId: string
+    selector: string | InnerQuery<GetTable<Schema, TName>, boolean>
   ): Promise<void> {
     if (!this.spooky) throw new Error("SyncedDb not initialized");
-    await this.spooky.delete(tableName, recordId);
+    await this.spooky.delete(tableName, selector);
   }
 
   /**

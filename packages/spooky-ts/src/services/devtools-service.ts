@@ -233,7 +233,9 @@ export class DevToolsService {
     );
 
     this.eventSystem.subscribe(MutationEventTypes.RequestExecution, (event) => {
-      this.addEvent(MutationEventTypes.RequestExecution, event.payload);
+      // Sanitize payload to avoid DataCloneError with InnerQuery objects
+      const sanitizedPayload = this.sanitizePayload(event.payload);
+      this.addEvent(MutationEventTypes.RequestExecution, sanitizedPayload);
       this.notifyDevTools();
     });
 
@@ -269,6 +271,33 @@ export class DevToolsService {
 
     console.log(`[DevTools] Event added: ${eventType}`, payload);
     this.logger.debug(`[DevTools] Event added: ${eventType}`, payload);
+  }
+
+  /**
+   * Sanitize payload to ensure it can be sent via postMessage
+   */
+  private sanitizePayload(payload: any): any {
+    if (!payload) return payload;
+
+    // Handle Mutation payload
+    if (payload.mutation && payload.mutation.selector) {
+      const mutation = { ...payload.mutation };
+
+      // Check if selector is an InnerQuery (has selectQuery property)
+      if (typeof mutation.selector === 'object' && 'selectQuery' in mutation.selector) {
+        // Convert InnerQuery to a serializable object
+        mutation.selector = {
+          tableName: mutation.selector.tableName,
+          query: mutation.selector.selectQuery.query,
+          vars: mutation.selector.selectQuery.vars,
+          isInnerQuery: true
+        };
+      }
+
+      return { ...payload, mutation };
+    }
+
+    return payload;
   }
 
   /**

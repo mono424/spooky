@@ -81,13 +81,15 @@ function parseObjectIdsToRecordId(obj: unknown, tableName?: string): unknown {
   return obj;
 }
 
-export type Executor<T extends { columns: Record<string, ColumnSchema> }> = (
-  query: InnerQuery<T, boolean>
-) => void;
+export type Executor<
+  T extends { columns: Record<string, ColumnSchema> },
+  R = void
+> = (query: InnerQuery<T, boolean>) => R;
 
 export class InnerQuery<
   T extends { columns: Record<string, ColumnSchema> },
-  IsOne extends boolean
+  IsOne extends boolean,
+  R = void
 > {
   private _hash: number;
   private _mainQuery: QueryInfo;
@@ -102,7 +104,7 @@ export class InnerQuery<
     private readonly _tableName: string,
     private readonly options: QueryOptions<TableModel<T>, IsOne>,
     private readonly schema: SchemaStructure,
-    private readonly executor: Executor<any>
+    private readonly executor: Executor<any, R>
   ) {
     this._selectQuery = buildQueryFromOptions(
       "SELECT",
@@ -165,8 +167,27 @@ export class InnerQuery<
     return this.options.isOne ?? false;
   }
 
-  public run(): void {
-    this.executor(this);
+  public run(): R {
+    return this.executor(this);
+  }
+
+  public buildUpdateQuery(patches: any[]): QueryInfo {
+    return buildQueryFromOptions(
+      "UPDATE",
+      this._tableName,
+      this.options,
+      this.schema,
+      patches
+    );
+  }
+
+  public buildDeleteQuery(): QueryInfo {
+    return buildQueryFromOptions(
+      "DELETE",
+      this._tableName,
+      this.options,
+      this.schema
+    );
   }
 }
 
@@ -201,13 +222,13 @@ export type BuildRelatedFields<
   S extends SchemaStructure,
   RelatedFields extends RelatedFieldsMap
 > = {
-  [K in keyof RelatedFields]: QueryResult<
-    S,
-    RelatedFields[K]["to"],
-    RelatedFields[K]["relatedFields"],
-    RelatedFields[K]["cardinality"] extends "one" ? true : false
-  >;
-};
+    [K in keyof RelatedFields]: QueryResult<
+      S,
+      RelatedFields[K]["to"],
+      RelatedFields[K]["relatedFields"],
+      RelatedFields[K]["cardinality"] extends "one" ? true : false
+    >;
+  };
 
 export type BuildResultModelOne<
   S extends SchemaStructure,
@@ -244,17 +265,18 @@ export class FinalQuery<
   TableName extends TableNames<S>,
   T extends { columns: Record<string, ColumnSchema> },
   RelatedFields extends RelatedFieldsMap,
-  IsOne extends boolean
+  IsOne extends boolean,
+  R = void
 > {
-  private _innerQuery: InnerQuery<T, IsOne>;
+  private _innerQuery: InnerQuery<T, IsOne, R>;
 
   constructor(
     private readonly tableName: TableName,
     private readonly options: QueryOptions<TableModel<T>, IsOne>,
     private readonly schema: S,
-    private readonly executor: Executor<T>
+    private readonly executor: Executor<T, R>
   ) {
-    this._innerQuery = new InnerQuery<T, IsOne>(
+    this._innerQuery = new InnerQuery<T, IsOne, R>(
       this.tableName,
       this.options,
       this.schema,
@@ -262,8 +284,24 @@ export class FinalQuery<
     );
   }
 
-  run(): void {
-    this.executor(this._innerQuery);
+  run(): R {
+    return this.executor(this._innerQuery);
+  }
+
+  buildUpdateQuery(patches: any[]): QueryInfo {
+    return this._innerQuery.buildUpdateQuery(patches);
+  }
+
+  buildDeleteQuery(): QueryInfo {
+    return this._innerQuery.buildDeleteQuery();
+  }
+
+  selectLive(): QueryInfo {
+    return this._innerQuery.selectLiveQuery;
+  }
+
+  get innerQuery(): InnerQuery<T, IsOne, R> {
+    return this._innerQuery;
   }
 
   get isOne(): boolean {
@@ -283,15 +321,14 @@ class SchemaAwareQueryModifierBuilderImpl<
   S extends SchemaStructure,
   TableName extends TableNames<S>,
   RelatedFields extends RelatedFieldsMap = {}
-> implements SchemaAwareQueryModifierBuilder<S, TableName, RelatedFields>
-{
+> implements SchemaAwareQueryModifierBuilder<S, TableName, RelatedFields> {
   private options: QueryOptions<TableModel<GetTable<S, TableName>>, boolean> =
     {};
 
   constructor(
     private readonly tableName: TableName,
     private readonly schema: S
-  ) {}
+  ) { }
 
   where(conditions: Partial<TableModel<GetTable<S, TableName>>>): this {
     this.options.where = { ...this.options.where, ...conditions };
@@ -366,8 +403,7 @@ class SchemaAwareQueryModifierBuilderImpl<
 
       if (!relationship) {
         throw new Error(
-          `Relationship '${String(relatedField)}' not found for table '${
-            this.tableName
+          `Relationship '${String(relatedField)}' not found for table '${this.tableName
           }'`
         );
       }
@@ -401,24 +437,26 @@ export class QueryBuilder<
   const S extends SchemaStructure,
   const TableName extends TableNames<S>,
   const RelatedFields extends RelatedFieldsMap = {},
-  const IsOne extends boolean = false
+  const IsOne extends boolean = false,
+  const R = void
 > {
   constructor(
     private readonly schema: S,
     private readonly tableName: TableName,
-    private readonly executer: Executor<GetTable<S, TableName>>,
+    private readonly executer: Executor<GetTable<S, TableName>, R> = () =>
+      undefined as R,
     private options: QueryOptions<
       TableModel<GetTable<S, TableName>>,
       IsOne
     > = {}
-  ) {}
+  ) { }
 
   /**
    * Add additional where conditions
    */
   where(
     conditions: Partial<TableModel<GetTable<S, TableName>>>
-  ): QueryBuilder<S, TableName, RelatedFields, IsOne> {
+  ): QueryBuilder<S, TableName, RelatedFields, IsOne, R> {
     this.options.where = { ...this.options.where, ...conditions };
     return this;
   }
@@ -428,7 +466,7 @@ export class QueryBuilder<
    */
   select(
     ...fields: ((keyof TableModel<GetTable<S, TableName>> & string) | "*")[]
-  ): QueryBuilder<S, TableName, RelatedFields, IsOne> {
+  ): QueryBuilder<S, TableName, RelatedFields, IsOne, R> {
     if (this.options.select) {
       throw new Error("Select can only be called once per query");
     }
@@ -442,7 +480,7 @@ export class QueryBuilder<
   orderBy(
     field: TableFieldNames<GetTable<S, TableName>>,
     direction: "asc" | "desc" = "asc"
-  ): QueryBuilder<S, TableName, RelatedFields, IsOne> {
+  ): QueryBuilder<S, TableName, RelatedFields, IsOne, R> {
     this.options.orderBy = {
       ...this.options.orderBy,
       [field]: direction,
@@ -455,7 +493,7 @@ export class QueryBuilder<
   /**
    * Add limit to the query (only for non-live queries)
    */
-  limit(count: number): QueryBuilder<S, TableName, RelatedFields, IsOne> {
+  limit(count: number): QueryBuilder<S, TableName, RelatedFields, IsOne, R> {
     this.options.limit = count;
     return this;
   }
@@ -463,13 +501,13 @@ export class QueryBuilder<
   /**
    * Add offset to the query (only for non-live queries)
    */
-  offset(count: number): QueryBuilder<S, TableName, RelatedFields, IsOne> {
+  offset(count: number): QueryBuilder<S, TableName, RelatedFields, IsOne, R> {
     this.options.offset = count;
     return this;
   }
 
-  one(): QueryBuilder<S, TableName, RelatedFields, true> {
-    return new QueryBuilder<S, TableName, RelatedFields, true>(
+  one(): QueryBuilder<S, TableName, RelatedFields, true, R> {
+    return new QueryBuilder<S, TableName, RelatedFields, true, R>(
       this.schema,
       this.tableName,
       this.executer,
@@ -502,7 +540,8 @@ export class QueryBuilder<
         relatedFields: RelatedFields2;
       };
     },
-    IsOne
+    IsOne,
+    R
   > {
     if (!this.options.related) {
       this.options.related = [];
@@ -524,8 +563,7 @@ export class QueryBuilder<
 
     if (!relationship) {
       throw new Error(
-        `Relationship '${String(field)}' not found for table '${
-          this.tableName
+        `Relationship '${String(field)}' not found for table '${this.tableName
         }'`
       );
     }
@@ -588,14 +626,16 @@ export class QueryBuilder<
     TableName,
     GetTable<S, TableName>,
     RelatedFields,
-    IsOne
+    IsOne,
+    R
   > {
     return new FinalQuery<
       S,
       TableName,
       GetTable<S, TableName>,
       RelatedFields,
-      IsOne
+      IsOne,
+      R
     >(this.tableName, this.options, this.schema, this.executer);
   }
 }
@@ -652,10 +692,16 @@ export function buildQueryFromOptions<
   TModel extends GenericModel,
   IsOne extends boolean
 >(
-  method: "SELECT" | "LIVE SELECT" | "LIVE SELECT DIFF",
+  method:
+    | "SELECT"
+    | "LIVE SELECT"
+    | "LIVE SELECT DIFF"
+    | "UPDATE"
+    | "DELETE",
   tableName: string,
   options: QueryOptions<TModel, IsOne>,
-  schema: SchemaStructure
+  schema: SchemaStructure,
+  patches?: any[]
 ): QueryInfo {
   if (options.isOne) {
     options.limit = 1;
@@ -686,9 +732,16 @@ export function buildQueryFromOptions<
   }
 
   // Start building the query
-  let query = `${method}${
-    selectClause ? ` ${selectClause}` : ""
-  }${fetchClauses} FROM ${tableName}`;
+  let query = "";
+
+  if (method === "UPDATE") {
+    query = `UPDATE ${tableName}`;
+  } else if (method === "DELETE") {
+    query = `DELETE FROM ${tableName}`;
+  } else {
+    query = `${method}${selectClause ? ` ${selectClause}` : ""
+      }${fetchClauses} FROM ${tableName}`;
+  }
 
   // Build WHERE clause
   const vars: Record<string, unknown> = {};
@@ -702,7 +755,14 @@ export function buildQueryFromOptions<
     query += ` WHERE ${conditions.join(" AND ")}`;
   }
 
-  // Add ORDER BY, LIMIT, START only for non-live queries
+  // Add PATCH for UPDATE
+  if (method === "UPDATE" && patches) {
+    query += ` PATCH ${JSON.stringify(patches)}`;
+  }
+
+  // Add ORDER BY, LIMIT, START only for non-live queries and non-update/delete queries (unless supported)
+  // SurrealDB UPDATE/DELETE supports WHERE, but LIMIT/START/ORDER BY might be restricted or behave differently.
+  // For now, let's allow them if they are set, as SurrealDB supports them for DELETE/UPDATE.
   if (!isLiveQuery) {
     if (options.orderBy && Object.keys(options.orderBy).length > 0) {
       const orderClauses = Object.entries(options.orderBy).map(
