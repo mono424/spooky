@@ -131,6 +131,7 @@ export class InnerQuery<
 
     this._subqueries = extractSubqueryQueryInfos(
       schema,
+      this._tableName,
       this.options,
       this.executor
     );
@@ -658,6 +659,7 @@ function cyrb53(str: string, seed: number): number {
 
 export function extractSubqueryQueryInfos<S extends SchemaStructure>(
   schema: S,
+  parentTableName: string,
   options: QueryOptions<GenericModel, boolean>,
   executer: Executor<{ columns: Record<string, ColumnSchema> }>
 ): InnerQuery<{ columns: Record<string, ColumnSchema> }, boolean>[] {
@@ -665,19 +667,45 @@ export function extractSubqueryQueryInfos<S extends SchemaStructure>(
     return [];
   }
 
-  return options.related.map(
-    (rel) =>
-      new InnerQuery(
-        rel.relatedTable,
-        rel
-          .modifier?.(
-            new SchemaAwareQueryModifierBuilderImpl(rel.relatedTable, schema)
-          )
-          ._getOptions() ?? {},
-        schema,
-        executer
-      )
-  );
+  return options.related.map((rel) => {
+    // Get base options from modifier
+    const subOptions = rel.modifier?.(
+      new SchemaAwareQueryModifierBuilderImpl(rel.relatedTable, schema)
+    )._getOptions() ?? {};
+
+    // Find relationship to determine how to filter
+    const relationship = schema.relationships.find(
+      (r) => r.from === parentTableName && r.field === rel.alias
+    );
+
+    if (relationship) {
+      // Determine foreign key field
+      // rel.alias is guaranteed to be defined if relationship is found (matched r.field)
+      const foreignKeyField =
+        relationship.cardinality === "many" ? parentTableName : rel.alias!;
+
+      // Add parent filter to where clause
+      subOptions.where = subOptions.where || {};
+
+      if (relationship.cardinality === "many") {
+        // One-to-Many: Child has foreign key to parent
+        // WHERE child.parent_id ∈ $parentIds
+        (subOptions.where as any)[foreignKeyField] = { _op: "∈", _val: "$parentIds" };
+      } else {
+        // One-to-One: Parent has foreign key to child
+        // WHERE child.id ∈ $parent_<foreignKeyField>
+        // We use a dynamic variable name derived from the foreign key field on the parent
+        (subOptions.where as any).id = { _op: "∈", _val: `$parent_${foreignKeyField}` };
+      }
+    }
+
+    return new InnerQuery(
+      rel.relatedTable,
+      subOptions,
+      schema,
+      executer
+    );
+  });
 }
 
 /**
@@ -749,8 +777,16 @@ export function buildQueryFromOptions<
     const conditions: string[] = [];
     for (const [key, value] of Object.entries(parsedWhere)) {
       const varName = key;
-      vars[varName] = value;
-      conditions.push(`${key} = $${varName}`);
+
+      // Handle operator objects { _op, _val }
+      if (value && typeof value === "object" && "_op" in value && "_val" in value) {
+        const { _op, _val } = value as { _op: string; _val: unknown };
+        vars[varName] = _val;
+        conditions.push(`${key} ${_op} $${varName}`);
+      } else {
+        vars[varName] = value;
+        conditions.push(`${key} = $${varName}`);
+      }
     }
     query += ` WHERE ${conditions.join(" AND ")}`;
   }

@@ -456,3 +456,25 @@ describe("Update and Delete Queries", () => {
     expect(result.vars).toEqual({ username: "john" });
   });
 });
+
+describe("Subquery Filtering", () => {
+  it("should inject parent filter into subqueries", () => {
+    const builder = new QueryBuilder(testSchema, "thread", (q) => q.selectQuery);
+    builder.related("comments");
+    const query = builder.build();
+
+    const innerQuery = query.innerQuery;
+    const subqueries = innerQuery.subqueries;
+
+    expect(subqueries).toHaveLength(1);
+    const commentSubquery = subqueries[0];
+
+    // Check that the subquery has the parent filter injected
+    // thread table has 'comments' field pointing to 'comment' table (one-to-many)
+    // So it should have WHERE thread ∈ $parentIds
+    expect(commentSubquery.selectQuery.query).toContain("thread ∈ $thread");
+    expect(commentSubquery.selectQuery.vars).toEqual(expect.objectContaining({
+      thread: "$parentIds"
+    }));
+  });
+});
