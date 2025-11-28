@@ -3,6 +3,7 @@ import {
   InnerQuery,
   SchemaStructure,
   TableModel,
+  cyrb53,
 } from "@spooky/query-builder";
 import {
   AuthManagerService,
@@ -30,6 +31,9 @@ export interface Query<
 > {
   innerQuery: InnerQuery<T, IsOne>;
   eventSystem: QueryEventSystem;
+  variables?: Record<string, unknown>;
+  dataHash?: number;
+  activeSubqueries?: Record<number, number[]>;
 }
 
 export interface QueryCache<S extends SchemaStructure> {
@@ -157,7 +161,8 @@ export class QueryManagerService<S extends SchemaStructure> {
   private async queryLocalRefresh<
     T extends { columns: Record<string, ColumnSchema> }
   >(queryHash: number): Promise<TableModel<T>[]> {
-    const query = this.cache[queryHash].innerQuery;
+    const queryEntry = this.cache[queryHash];
+    const query = queryEntry.innerQuery;
     if (!query) {
       this.logger.error(
         "[QueryManager] Local Query Refresh - Query not found",
@@ -174,7 +179,7 @@ export class QueryManagerService<S extends SchemaStructure> {
 
     const results = await this.databaseService.queryLocal<TableModel<T>[]>(
       query.selectQuery.query,
-      query.selectQuery.vars
+      queryEntry.variables || query.selectQuery.vars
     );
 
     this.logger.debug("[QueryManager] Local Query Refresh - Done", {
@@ -186,6 +191,41 @@ export class QueryManagerService<S extends SchemaStructure> {
       .map((result) => decodeFromSpooky(this.schema, query.tableName, result))
       .filter((result) => result !== undefined);
 
+    // Compute hash of the decoded results
+    let dataHash = cyrb53(JSON.stringify(decodedResults));
+
+    // If the query has subqueries (dependencies), incorporate their hashes
+    if (query.subqueries && query.subqueries.length > 0) {
+      const subqueryHashes = query.subqueries.map((sub) => {
+        // Check if this subquery is split
+        const activeHashes = queryEntry.activeSubqueries?.[sub.hash];
+        if (activeHashes && activeHashes.length > 0) {
+          // Hash all split instances
+          const splitHashes = activeHashes.map(
+            (h) => this.cache[h]?.dataHash || 0
+          );
+          return cyrb53(JSON.stringify(splitHashes));
+        }
+        // Fallback to single instance
+        const subEntry = this.cache[sub.hash];
+        return subEntry?.dataHash || 0;
+      });
+      dataHash = cyrb53(
+        JSON.stringify({ local: dataHash, subs: subqueryHashes })
+      );
+    }
+
+    // If hash matches cached hash, skip update
+    if (queryEntry.dataHash === dataHash) {
+      this.logger.debug("[QueryManager] Local Query Refresh - Data unchanged, skipping update", {
+        queryHash: query.hash,
+      });
+      return decodedResults as TableModel<T>[];
+    }
+
+    // Update cached hash
+    queryEntry.dataHash = dataHash;
+
     this.logger.debug("[QueryManager] Local Query Refresh - Decoded results", {
       decodedResults: decodedResults,
     });
@@ -195,6 +235,7 @@ export class QueryManagerService<S extends SchemaStructure> {
       payload: {
         queryHash: query.hash,
         data: decodedResults,
+        dataHash: dataHash,
       },
     });
 
@@ -279,7 +320,7 @@ export class QueryManagerService<S extends SchemaStructure> {
 
     const results = await this.databaseService.queryLocal<TableModel<T>[]>(
       query.innerQuery.selectQuery.query,
-      query.innerQuery.selectQuery.vars
+      query.variables || query.innerQuery.selectQuery.vars
     );
     this.logger.debug(
       "[QueryManager] Remote Query Hydration - Local cache updated",
@@ -305,6 +346,8 @@ export class QueryManagerService<S extends SchemaStructure> {
   private async queryRemoteHydration<
     T extends { columns: Record<string, ColumnSchema> }
   >(query: InnerQuery<T, boolean>): Promise<void> {
+    const queryEntry = this.cache[query.hash];
+
     this.logger.debug("[QueryManager] Remote Query Hydration - Starting", {
       queryHash: query.hash,
       query: query.mainQuery.query,
@@ -312,7 +355,7 @@ export class QueryManagerService<S extends SchemaStructure> {
 
     const results = await this.databaseService.queryRemote<
       TableModelWithId<T>[]
-    >(query.mainQuery.query, query.mainQuery.vars);
+    >(query.mainQuery.query, queryEntry?.variables || query.mainQuery.vars);
 
     this.logger.debug(
       "[QueryManager] Remote Query Hydration - Remote query done",
@@ -448,6 +491,8 @@ export class QueryManagerService<S extends SchemaStructure> {
   private async subscribeRemoteQuery<
     T extends { columns: Record<string, ColumnSchema> }
   >(query: InnerQuery<T, boolean>): Promise<void> {
+    const queryEntry = this.cache[query.hash];
+
     this.logger.debug("[QueryManager] Subscribe Remote Query - Starting", {
       queryHash: query.hash,
       query: query.selectLiveQuery.query,
@@ -455,7 +500,7 @@ export class QueryManagerService<S extends SchemaStructure> {
 
     const [liveUuid] = await this.databaseService.queryRemote<Uuid[]>(
       query.selectLiveQuery.query,
-      query.selectLiveQuery.vars
+      queryEntry?.variables || query.selectLiveQuery.vars
     );
 
     this.logger.debug(
@@ -549,73 +594,202 @@ export class QueryManagerService<S extends SchemaStructure> {
         query.hash
       );
 
-      // Collect parent IDs for subqueries
-      const parentIds = localResults.map((r) => r.id);
-      const extraVars = {
-        parentIds: parentIds,
-        // Also support single parent ID if needed, though we use INSIDE now
-        // But for 1:1 we might need specific mapping which is harder here.
-        // For 1:1, we used $parent_<foreignKeyField>.
-        // We need to construct a map of parent IDs keyed by their foreign key?
-        // No, the subquery is "WHERE id IN $parent_fk".
-        // So we need to collect all values of that FK from the parent results.
-      };
+      // Track cleanups for split subqueries
+      const splitSubqueryCleanups = new Map<number, () => void>();
 
-      const cleanups: (() => void)[] = [];
-      for (const subquery of query.subqueries) {
-        // Determine if we need specific vars for this subquery
-        // We can check subquery.selectQuery.vars to see what it expects?
-        // Or we can just pass all potential vars.
+      // Helper to extract parent IDs and update subqueries
+      const updateSubqueries = async (data: any[]) => {
+        const parentIds = data.map((r) => {
+          if (typeof r.id === "string" && r.id.includes(":")) {
+            const [tb, ...idParts] = r.id.split(":");
+            return new RecordId(tb, idParts.join(":"));
+          }
+          return r.id;
+        });
 
-        // For 1:1, we need to find which field in parent points to this child (or vice versa).
-        // The subquery has "WHERE id IN $parent_<field>".
-        // We can iterate over parent columns to find relations?
-        // Or just pass all parent fields as arrays? That might be expensive.
+        const queryEntry = this.cache[query.hash];
+        if (!queryEntry.activeSubqueries) {
+          queryEntry.activeSubqueries = {};
+        }
 
-        // Let's try to be smart. subquery.tableName is known.
-        // We can look at the schema relationships again?
-        // Or we can just pass the parentIds as a baseline.
+        // Track all currently active split hashes to identify obsolete ones
+        const allCurrentSplitHashes = new Set<number>();
 
-        // For 1:1 relationships where parent holds the FK (e.g. thread.author -> user),
-        // the subquery on 'user' will have "WHERE id IN $parent_author".
-        // So we need to collect all 'author' values from localResults.
+        for (const subquery of query.subqueries) {
+          const options = subquery.getOptions();
 
-        const subqueryVars: Record<string, any> = { ...extraVars };
-
-        // Attempt to populate $parent_<field> variables
-        // We don't easily know which field corresponds to this subquery here without looking at schema/options again.
-        // But we can iterate over all columns in localResults and collect them?
-        if (localResults.length > 0) {
-          const firstResult = localResults[0];
-          for (const key of Object.keys(firstResult)) {
-            // If it looks like a relation (string or recordId), collect it
-            // Optimization: only do this if we see the variable in the subquery?
-            const varName = `parent_${key}`;
-            // Check if subquery needs this var (optimization)
-            if (subquery.selectQuery.query.includes(`$${varName}`)) {
-              subqueryVars[varName] = localResults.map(r => r[key]).filter(v => v !== null && v !== undefined);
+          // Check if we need to split: limit, offset, or complex where
+          let foreignKeyField: string | undefined;
+          if (options.where) {
+            for (const [key, val] of Object.entries(options.where)) {
+              if (
+                val &&
+                typeof val === "object" &&
+                (val as any)._val === "$parentIds"
+              ) {
+                foreignKeyField = key;
+                break;
+              }
             }
+          }
+
+          const needsSplit =
+            options.limit !== undefined ||
+            options.offset !== undefined ||
+            (options.where &&
+              (!foreignKeyField || Object.keys(options.where).length > 1));
+
+          if (needsSplit && foreignKeyField) {
+            const activeHashes: number[] = [];
+
+            for (const pId of parentIds) {
+              // Create new options with specific parent ID filter
+              const newOptions = { ...options };
+              newOptions.where = { ...options.where };
+
+              // Replace IN $parentIds with = pId
+              (newOptions.where as any)[foreignKeyField] = pId;
+
+              // Create new InnerQuery for this specific parent
+              const newQuery = new InnerQuery(
+                subquery.tableName,
+                newOptions,
+                this.schema,
+                () => { }
+              );
+
+              // Register/Run the query
+              const newHash = this.run(newQuery);
+              activeHashes.push(newHash);
+              allCurrentSplitHashes.add(newHash);
+
+              // Subscribe if not already subscribed
+              if (!splitSubqueryCleanups.has(newHash)) {
+                const sQuery = this.cache[newHash];
+                if (sQuery) {
+                  const subId = sQuery.eventSystem.subscribe(
+                    QueryEventTypes.Updated,
+                    () =>
+                      this.eventSystem.addEvent({
+                        type: GlobalQueryEventTypes.SubqueryUpdated,
+                        payload: {
+                          queryHash: query.hash,
+                          subqueryHash: newHash,
+                        },
+                      })
+                  );
+
+                  splitSubqueryCleanups.set(newHash, () => {
+                    sQuery.eventSystem.unsubscribe(subId);
+                  });
+                }
+              }
+            }
+
+            // Update active subqueries map
+            queryEntry.activeSubqueries[subquery.hash] = activeHashes;
+          } else {
+            // Existing bulk logic
+            const extraVars = {
+              parentIds: parentIds,
+            };
+
+            const subqueryVars: Record<string, any> = { ...extraVars };
+
+            if (data.length > 0) {
+              const firstResult = data[0];
+              for (const key of Object.keys(firstResult)) {
+                const varName = `parent_${key}`;
+                if (subquery.selectQuery.query.includes(`$${varName}`)) {
+                  subqueryVars[varName] = data
+                    .map((r) => {
+                      const val = r[key];
+                      if (typeof val === "string" && val.includes(":")) {
+                        const [tb, ...idParts] = val.split(":");
+                        return new RecordId(tb, idParts.join(":"));
+                      }
+                      return val;
+                    })
+                    .filter((v) => v !== null && v !== undefined);
+                }
+              }
+            }
+
+            // Update cached variables for subquery
+            const subQueryEntry = this.cache[subquery.hash];
+            if (subQueryEntry) {
+              const currentVarsHash = cyrb53(
+                JSON.stringify(subQueryEntry.variables || {})
+              );
+              const newVarsHash = cyrb53(
+                JSON.stringify({
+                  ...subQueryEntry.variables,
+                  ...subqueryVars,
+                })
+              );
+
+              if (currentVarsHash !== newVarsHash) {
+                subQueryEntry.variables = {
+                  ...subQueryEntry.variables,
+                  ...subqueryVars,
+                };
+                await this.queryLocalRefresh(subquery.hash);
+              }
+            } else {
+              await this.run(subquery, subqueryVars);
+            }
+
+            // Mark as active (single instance)
+            queryEntry.activeSubqueries[subquery.hash] = [subquery.hash];
           }
         }
 
-        await this.run(subquery, subqueryVars);
+        // Cleanup obsolete split subscriptions
+        for (const [hash, cleanup] of splitSubqueryCleanups) {
+          if (!allCurrentSplitHashes.has(hash)) {
+            cleanup();
+            splitSubqueryCleanups.delete(hash);
+          }
+        }
+      };
 
+      // Initial run for subqueries
+      await updateSubqueries(localResults);
+
+      const cleanups: (() => void)[] = [];
+
+      // Subscribe to main query updates to keep subqueries in sync
+      const mainQuerySubId = queryEventSystem.subscribe(
+        QueryEventTypes.Updated,
+        async (event) => {
+          await updateSubqueries(event.payload.data);
+        }
+      );
+
+      cleanups.push(() => {
+        queryEventSystem.unsubscribe(mainQuerySubId);
+      });
+
+      for (const subquery of query.subqueries) {
         const sQuery = this.cache[subquery.hash];
-        const subId = sQuery.eventSystem.subscribe(
-          QueryEventTypes.Updated,
-          () =>
-            this.eventSystem.addEvent({
-              type: GlobalQueryEventTypes.SubqueryUpdated,
-              payload: {
-                queryHash: query.hash,
-                subqueryHash: subquery.hash,
-              },
-            })
-        );
+        // Check if sQuery exists, it should because updateSubqueries calls run
+        if (sQuery) {
+          const subId = sQuery.eventSystem.subscribe(
+            QueryEventTypes.Updated,
+            () =>
+              this.eventSystem.addEvent({
+                type: GlobalQueryEventTypes.SubqueryUpdated,
+                payload: {
+                  queryHash: query.hash,
+                  subqueryHash: subquery.hash,
+                },
+              })
+          );
 
-        cleanups.push(() => {
-          sQuery.eventSystem.unsubscribe(subId);
-        });
+          cleanups.push(() => {
+            sQuery.eventSystem.unsubscribe(subId);
+          });
+        }
       }
 
       queryEventSystem.subscribe(QueryEventTypes.Destroyed, (e) => {
@@ -637,7 +811,7 @@ export class QueryManagerService<S extends SchemaStructure> {
         queryHash: query.hash,
       });
 
-      this.cache[query.hash] = {
+      const cacheEntry: Query<{ columns: Record<string, ColumnSchema> }, boolean> = {
         innerQuery: query,
         eventSystem: createQueryEventSystem(),
       };
@@ -653,11 +827,20 @@ export class QueryManagerService<S extends SchemaStructure> {
       if (query.selectQuery.query !== undefined) {
         payload.query = query.selectQuery.query;
       }
+
+      let mergedVars: Record<string, unknown> | undefined;
       if (query.selectQuery.vars !== undefined) {
-        payload.variables = { ...query.selectQuery.vars, ...extraVars };
+        mergedVars = { ...query.selectQuery.vars, ...extraVars };
       } else if (extraVars) {
-        payload.variables = extraVars;
+        mergedVars = extraVars;
       }
+
+      if (mergedVars) {
+        payload.variables = mergedVars;
+        cacheEntry.variables = mergedVars;
+      }
+
+      this.cache[query.hash] = cacheEntry;
 
       this.eventSystem.addEvent({
         type: GlobalQueryEventTypes.RequestInit,

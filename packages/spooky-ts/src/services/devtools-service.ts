@@ -8,6 +8,7 @@ import { Logger } from "./logger.js";
 import { DatabaseService } from "./database.js";
 import { SchemaStructure } from "@spooky/query-builder";
 import { QueryManagerService } from "./query-manager.js";
+import { RecordId } from "surrealdb";
 
 /**
  * Event entry in the history
@@ -33,6 +34,8 @@ export interface ActiveQuery {
   variables?: Record<string, unknown>;
   listenerCount?: number;
   connectedQueries?: number[];
+  dataHash?: number;
+  data?: any;
 }
 
 /**
@@ -169,10 +172,13 @@ export class DevToolsService {
         query.lastUpdate = Date.now();
         query.updateCount++;
         query.dataSize = event.payload.data?.length ?? 0;
+        query.dataHash = event.payload.dataHash;
+        query.data = this.sanitizeData(event.payload.data);
       }
       this.addEvent(GlobalQueryEventTypes.Updated, {
         queryHash: event.payload.queryHash,
         dataSize: event.payload.data?.length ?? 0,
+        dataHash: event.payload.dataHash,
       });
       this.notifyDevTools();
     });
@@ -185,6 +191,7 @@ export class DevToolsService {
         query.lastUpdate = Date.now();
         query.updateCount++;
         query.dataSize = event.payload.data?.length ?? 0;
+        query.data = this.sanitizeData(event.payload.data);
       }
       this.addEvent(GlobalQueryEventTypes.RemoteUpdate, {
         queryHash: event.payload.queryHash,
@@ -284,20 +291,63 @@ export class DevToolsService {
       const mutation = { ...payload.mutation };
 
       // Check if selector is an InnerQuery (has selectQuery property)
-      if (typeof mutation.selector === 'object' && 'selectQuery' in mutation.selector) {
+      if (
+        typeof mutation.selector === "object" &&
+        mutation.selector !== null &&
+        "selectQuery" in mutation.selector
+      ) {
         // Convert InnerQuery to a serializable object
         mutation.selector = {
           tableName: mutation.selector.tableName,
           query: mutation.selector.selectQuery.query,
           vars: mutation.selector.selectQuery.vars,
-          isInnerQuery: true
+          isInnerQuery: true,
         };
+      }
+
+      // Also sanitize data in mutation to handle Dates and RecordIds
+      if (mutation.data) {
+        mutation.data = this.sanitizeData(mutation.data);
+      }
+      if (mutation.patches) {
+        mutation.patches = this.sanitizeData(mutation.patches);
       }
 
       return { ...payload, mutation };
     }
 
-    return payload;
+    return this.sanitizeData(payload);
+  }
+
+  /**
+   * Sanitize data to ensure it can be sent via postMessage
+   * Converts RecordId objects to strings
+   */
+  private sanitizeData(data: any): any {
+    if (!data) return data;
+
+    if (Array.isArray(data)) {
+      return data.map((item) => this.sanitizeData(item));
+    }
+
+    if (data instanceof RecordId) {
+      return data.toString();
+    }
+
+    if (typeof data === "object" && data !== null) {
+      // Handle Date objects
+      if (data instanceof Date) {
+        return data.toISOString();
+      }
+
+      const sanitized: any = {};
+      for (const key in data) {
+        sanitized[key] = this.sanitizeData(data[key]);
+      }
+      return sanitized;
+    }
+
+    return data;
   }
 
   /**

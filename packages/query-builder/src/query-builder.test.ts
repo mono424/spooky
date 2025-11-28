@@ -61,7 +61,7 @@ const testSchema = {
     },
     {
       from: "comment" as const,
-      field: "thread" as const,
+      field: "thread_ref" as const,
       to: "thread" as const,
       cardinality: "one" as const,
     },
@@ -471,11 +471,11 @@ describe("Subquery Filtering", () => {
 
     // Check that the subquery has the parent filter injected
     // thread table has 'comments' field pointing to 'comment' table (one-to-many)
-    // So it should have WHERE thread ∈ $parentIds
-    // And 'thread' should NOT be in vars because it's a direct variable reference
-    expect(commentSubquery.selectQuery.query).toContain("thread ∈ $parentIds");
+    // So it should have WHERE $parentIds ∋ thread_ref (found via reverse relationship)
+    // And 'thread_ref' should NOT be in vars because it's a direct variable reference
+    expect(commentSubquery.selectQuery.query).toContain("$parentIds ∋ thread_ref");
     expect(commentSubquery.selectQuery.vars).not.toEqual(expect.objectContaining({
-      thread: "$parentIds"
+      thread_ref: "$parentIds"
     }));
   });
 });

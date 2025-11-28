@@ -190,6 +190,10 @@ export class InnerQuery<
       this.schema
     );
   }
+
+  public getOptions(): QueryOptions<TableModel<T>, IsOne> {
+    return this.options;
+  }
 }
 
 /**
@@ -591,8 +595,32 @@ export class QueryBuilder<
     }
 
     // Determine foreign key field based on cardinality
-    const foreignKeyField =
-      actualCardinality === "many" ? this.tableName : field;
+    let foreignKeyField: string =
+      actualCardinality === "many" ? (this.tableName as string) : (field as string);
+
+    if (actualCardinality === "many") {
+      // For one-to-many, we need to find the field on the child table that points back to the parent
+      // We look for a relationship from Child -> Parent
+      const reverseRelationships = this.schema.relationships.filter(
+        (r) => r.from === relationship.to && r.to === this.tableName && r.cardinality === "one"
+      );
+
+      if (reverseRelationships.length > 0) {
+        // Prioritize field that matches parent table name
+        const exactMatch = reverseRelationships.find(r => r.field === this.tableName);
+        if (exactMatch) {
+          foreignKeyField = exactMatch.field;
+        } else {
+          foreignKeyField = reverseRelationships[0].field;
+        }
+      } else {
+        // Fallback heuristics
+        if (this.tableName.startsWith(`${relationship.to}_`)) {
+          // If parent table is "game_database" and child is "game", try "database"
+          foreignKeyField = this.tableName.slice(relationship.to.length + 1);
+        }
+      }
+    }
 
     // Cast the schema-aware modifier to the runtime type
     // At runtime, QueryModifierBuilderImpl will work correctly with the schema
@@ -605,7 +633,7 @@ export class QueryBuilder<
       alias: field as string,
       modifier: wrappedModifier,
       cardinality: actualCardinality,
-      foreignKeyField: foreignKeyField as string,
+      foreignKeyField: foreignKeyField as any,
     } as RelatedQuery & { foreignKeyField: string });
 
     return this as any;
@@ -641,7 +669,7 @@ export class QueryBuilder<
   }
 }
 
-function cyrb53(str: string, seed: number): number {
+export function cyrb53(str: string, seed: number = 0): number {
   let h1 = 0xdeadbeef ^ seed,
     h2 = 0x41c6ce57 ^ seed;
   for (let i = 0, ch; i < str.length; i++) {
@@ -681,21 +709,47 @@ export function extractSubqueryQueryInfos<S extends SchemaStructure>(
     if (relationship) {
       // Determine foreign key field
       // rel.alias is guaranteed to be defined if relationship is found (matched r.field)
-      const foreignKeyField =
-        relationship.cardinality === "many" ? parentTableName : rel.alias!;
+      let foreignKeyField = rel.alias!;
+
+      if (relationship.cardinality === "many") {
+        // For one-to-many, we need to find the field on the child table that points back to the parent
+        // We look for a relationship from Child -> Parent
+        const reverseRelationships = schema.relationships.filter(
+          (r) => r.from === rel.relatedTable && r.to === parentTableName && r.cardinality === "one"
+        );
+
+        if (reverseRelationships.length > 0) {
+          // Prioritize field that matches parent table name
+          const exactMatch = reverseRelationships.find(r => r.field === parentTableName);
+          if (exactMatch) {
+            foreignKeyField = exactMatch.field;
+          } else {
+            foreignKeyField = reverseRelationships[0].field;
+          }
+        } else {
+          // Fallback heuristics
+          if (parentTableName.startsWith(`${rel.relatedTable}_`)) {
+            // If parent table is "game_database" and child is "game", try "database"
+            foreignKeyField = parentTableName.slice(rel.relatedTable.length + 1);
+          } else {
+            // Default to parent table name
+            foreignKeyField = parentTableName;
+          }
+        }
+      }
 
       // Add parent filter to where clause
       subOptions.where = subOptions.where || {};
 
       if (relationship.cardinality === "many") {
         // One-to-Many: Child has foreign key to parent
-        // WHERE child.parent_id ∈ $parentIds
-        (subOptions.where as any)[foreignKeyField] = { _op: "∈", _val: "$parentIds" };
+        // WHERE $parentIds ∋ child.parent_id
+        (subOptions.where as any)[foreignKeyField] = { _op: "∋", _val: "$parentIds", _swap: true };
       } else {
         // One-to-One: Parent has foreign key to child
-        // WHERE child.id ∈ $parent_<foreignKeyField>
+        // WHERE $parent_<foreignKeyField> ∋ child.id
         // We use a dynamic variable name derived from the foreign key field on the parent
-        (subOptions.where as any).id = { _op: "∈", _val: `$parent_${foreignKeyField}` };
+        (subOptions.where as any).id = { _op: "∋", _val: `$parent_${foreignKeyField}`, _swap: true };
       }
     }
 
@@ -780,13 +834,20 @@ export function buildQueryFromOptions<
 
       // Handle operator objects { _op, _val }
       if (value && typeof value === "object" && "_op" in value && "_val" in value) {
-        const { _op, _val } = value as { _op: string; _val: unknown };
+        const { _op, _val, _swap } = value as { _op: string; _val: unknown; _swap?: boolean };
 
+        let rightSide = "";
         if (typeof _val === "string" && _val.startsWith("$")) {
-          conditions.push(`${key} ${_op} ${_val}`);
+          rightSide = _val;
         } else {
           vars[varName] = _val;
-          conditions.push(`${key} ${_op} $${varName}`);
+          rightSide = `$${varName}`;
+        }
+
+        if (_swap) {
+          conditions.push(`${rightSide} ${_op} ${key}`);
+        } else {
+          conditions.push(`${key} ${_op} ${rightSide}`);
         }
       } else {
         vars[varName] = value;

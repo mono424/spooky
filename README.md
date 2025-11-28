@@ -1,62 +1,128 @@
-## Spooky Sync Engine (WIP)
+# Spooky Sync Engine
 
-Spooky is a work-in-progress sync engine focused on real-time collaboration and offline-first apps. The initial targets are a Solid.js web client and a Flutter mobile client, with a shared data layer powered by SurrealDB.
+Spooky is a modern, offline-first synchronization engine designed for real-time collaboration. It targets **Solid.js** for web and **Flutter** for mobile, utilizing **SurrealDB** as the unified backend and source of truth.
 
-### Status
+## 🏗 Architecture Overview
 
-- Active development; APIs and schema are evolving
-- Landing page prototype lives in `apps/landing-page`
+Spooky sits between your client application and SurrealDB, abstracting away the complexities of real-time data synchronization, query management, and type safety.
 
-### Goals
+```mermaid
+graph TD
+    subgraph Client ["Client Layer"]
+        Solid[Solid.js App]
+        Flutter[Flutter App]
+    end
 
-- Unified schema in SurrealDB as the source of truth
-- Automatic, type-safe client libraries for TypeScript (web/Solid.js) and Dart (Flutter)
-- Offline-first with conflict resolution and background sync
-- Authentication-agnostic permission model
+    subgraph Engine ["Spooky Engine"]
+        Core[spooky-ts Core]
+        QB[Query Builder]
+        QM[Query Manager]
+        MM[Mutation Manager]
+    end
 
-### Tech Stack
+    subgraph Backend ["Data Layer"]
+        Surreal[SurrealDB]
+    end
 
-- SurrealDB (data model, permissions, sync substrate)
-- Rust (SyncGen core and tooling)
-- Solid.js (web client target)
-- Flutter (mobile client target)
-- Type generation → TypeScript + Dart
-- Astro + Tailwind (marketing site in `apps/landing-page`)
+    Solid -->|Bindings| Core
+    Flutter -->|Bindings| Core
+    
+    Core --> QB
+    Core --> QM
+    Core --> MM
 
----
-
-### Client Library Generation
-
-The engine derives types and client libraries from a single schema. The high-level flow:
-
-1. Define schema, auth scopes, and permissions in SurrealDB
-2. Generate an intermediate JSON schema
-3. Produce language-specific models and helper APIs
-4. Package per-platform libraries (TypeScript, Dart)
-
-![Client Library Generation Diagram](./image.png)
-
----
-
-### Getting Started (Landing Page)
-
-1. Install pnpm and dependencies:
-   - `pnpm install`
-2. Run the landing page:
-   - `pnpm --filter "landing-page" dev`
-   - App runs at `http://localhost:4321`
-
-### Repository Layout
-
-```
-apps/
-  landing-page/           # Astro + Tailwind landing site
-packages/                 # Future shared packages (generators, clients)
-example/schema/           # Example SurrealDB schema (experimental)
-image.png                 # Client library generation diagram
+    QM <-->|WebSocket / Live Queries| Surreal
+    MM -->|RPC| Surreal
 ```
 
-### Notes
+## 🧩 Core Components
 
-- Schema and generation tooling are under active design; expect breaking changes.
-- Solid.js and Flutter clients will be developed in parallel once the core generation path stabilizes.
+### 1. `spooky-ts` (The Core)
+The heart of the engine. It manages the connection to SurrealDB, handles authentication, and coordinates queries and mutations.
+- **`SpookyInstance`**: The main entry point.
+- **`QueryManager`**: Handles subscriptions to live queries, deduplicates identical queries, and manages the cache.
+- **`MutationManager`**: Handles data modifications (Create, Update, Delete) and ensures they are propagated to the server.
+
+### 2. `query-builder`
+A powerful, type-safe query builder that allows you to construct complex SurrealDB queries using a fluent API. It leverages TypeScript generics to ensure that your queries are valid against your schema.
+
+### 3. `client-solid`
+Provides Solid.js specific bindings (like `useQuery`) to easily integrate Spooky into your Solid.js applications. It uses Solid's fine-grained reactivity to update the UI efficiently when data changes.
+
+## 🔄 Data Flow
+
+### Query Lifecycle
+When a component requests data, Spooky checks if a live query is already active. If not, it establishes a new one.
+
+```mermaid
+sequenceDiagram
+    participant Comp as Component
+    participant Hook as useQuery
+    participant QM as Query Manager
+    participant DB as SurrealDB
+
+    Comp->>Hook: Request Data (Table, Options)
+    Hook->>QM: subscribe(queryHash)
+    
+    alt Cache Miss
+        QM->>DB: LIVE SELECT ...
+        DB-->>QM: Initial Result set
+        QM-->>Hook: Update Signal
+        QM->>DB: Listen for changes
+    else Cache Hit
+        QM-->>Hook: Return Cached Data
+    end
+
+    loop Real-time Updates
+        DB-->>QM: LIVE QUERY EVENT (CREATE/UPDATE/DELETE)
+        QM->>QM: Apply Patch to Cache
+        QM-->>Hook: Update Signal
+        Hook-->>Comp: Re-render
+    end
+```
+
+### Mutation Flow
+Mutations are straightforward but trigger the reactive loop via the database.
+
+```mermaid
+sequenceDiagram
+    participant App as Client App
+    participant MM as Mutation Manager
+    participant DB as SurrealDB
+
+    App->>MM: create(payload)
+    MM->>DB: CREATE record CONTENT payload
+    DB-->>MM: Success
+    
+    Note over DB: DB processes change
+    Note over DB: Triggers Live Queries
+    
+    DB-->>App: (Via Query Lifecycle) Update UI
+```
+
+## 🚀 Getting Started
+
+### Prerequisites
+- Node.js & pnpm
+- SurrealDB running locally
+
+### Installation
+```bash
+pnpm install
+```
+
+### Running the Landing Page
+```bash
+pnpm --filter "landing-page" dev
+```
+Visit `http://localhost:4321`
+
+## 📂 Repository Layout
+
+- **`packages/spooky-ts`**: Core logic.
+- **`packages/query-builder`**: Type-safe query construction.
+- **`packages/client-solid`**: Solid.js integration.
+- **`apps/landing-page`**: Documentation and marketing site.
+
+---
+*Status: Active Development. APIs are subject to change.*

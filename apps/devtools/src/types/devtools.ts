@@ -46,6 +46,8 @@ export interface ActiveQuery {
   variables?: Record<string, unknown>;
   listenerCount?: number;
   connectedQueries?: number[];
+  dataHash?: number;
+  data?: any;
 }
 
 export interface AuthState {

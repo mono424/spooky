@@ -123,12 +123,37 @@ export class MutationManagerService<S extends SchemaStructure> {
 
     switch (mutation.operationType) {
       case "create":
-        const q = this.buildCreateQuery(mutation.recordId, mutation.data);
-        // Always filter out 'id' from variables since it's not in the SET clause
-        const { id: _, ...dataWithoutId } = mutation.data as any;
+        // Use inline values to avoid driver serialization issues with Dates
+        // We manually format values, especially Dates
+        const createSetQuery = Object.entries(mutation.data)
+          .filter(([key]) => key !== "id")
+          .map(([key, value]) => {
+            let formattedValue: string;
+            if (value instanceof Date) {
+              if (isNaN(value.getTime())) {
+                // Invalid date, use null or a safe fallback?
+                // For now, let's use null which is valid in SurrealDB for optional fields
+                // or maybe we should throw if it's required?
+                // Let's log a warning and use null
+                console.warn(`[MutationManager] Invalid date for field ${key}, using null`);
+                formattedValue = "null";
+              } else {
+                formattedValue = `d"${value.toISOString()}"`;
+              }
+            } else if (value instanceof RecordId) {
+              formattedValue = value.toString();
+            } else {
+              formattedValue = JSON.stringify(value);
+            }
+            return `${key} = ${formattedValue}`;
+          })
+          .join(", ");
+
+        const createQuery = `CREATE ${mutation.recordId.toString()} SET ${createSetQuery};`;
+
         await this.databaseService.queryLocal<
           TableModelWithId<GetTable<S, N>>[]
-        >(q, dataWithoutId);
+        >(createQuery);
         break;
 
       case "update":

@@ -57,6 +57,7 @@ export type SpookyEventTypeMap = {
     {
       queryHash: number;
       data: Record<string, unknown>[];
+      dataHash: number;
     }
   >;
   [GlobalQueryEventTypes.RemoteUpdate]: EventDefinition<

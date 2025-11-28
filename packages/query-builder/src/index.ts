@@ -12,6 +12,7 @@ export {
   type BuildResultModelMany,
   type ExtractFieldNames,
   type RelatedFieldMapEntry,
+  cyrb53,
 } from "./query-builder";
 
 // Type exports
