@@ -68,7 +68,7 @@ DEFINE TABLE comment SCHEMAFULL
     FOR update, delete, create WHERE $access = "account" AND author.id = $auth.id
 ;
 
-DEFINE FIELD thread ON TABLE comment TYPE record<thread>;
+DEFINE FIELD thread ON TABLE comment TYPE record<thread>; -- @parent
 
 DEFINE FIELD content ON TABLE comment TYPE string
     ASSERT $value != NONE AND string::len($value) > 0;

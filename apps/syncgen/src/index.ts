@@ -1,4 +1,4 @@
-import { spawn } from "child_process";
+import { spawn, execSync } from "child_process";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { readFileSync, writeFileSync, unlinkSync } from "fs";
@@ -42,6 +42,16 @@ export function runSyncgen(options: SyncgenOptions): Promise<string> {
 
     // Check if output is .surql or format is surql
     const isSurqlOutput = options.output.endsWith(".surql") || options.format === "surql";
+
+    // Generate Spooky Events
+    try {
+      if (isSurqlOutput) {
+        const events = generateSpookyEvents(options.input, binaryPath);
+        finalContent += "\n\n" + events;
+      }
+    } catch (err) {
+      console.warn("Failed to generate Spooky Events:", err);
+    }
 
     if (isSurqlOutput) {
       try {
@@ -124,4 +134,190 @@ export function runSyncgen(options: SyncgenOptions): Promise<string> {
       reject(error);
     });
   });
+}
+
+function generateSpookyEvents(schemaPath: string, binaryPath: string): string {
+  // 1. Get JSON Schema from syncgen binary
+  const timestamp = Date.now();
+  const rand = Math.floor(Math.random() * 10000);
+  const tempJsonPath = join(tmpdir(), `syncgen-schema-${timestamp}-${rand}.json`);
+
+  try {
+    execSync(`"${binaryPath}" --input "${schemaPath}" --output "${tempJsonPath}" --format json`);
+    const jsonContent = readFileSync(tempJsonPath, "utf-8");
+    const schema = JSON.parse(jsonContent);
+    unlinkSync(tempJsonPath);
+
+    // 2. Parse schema.surql to find @parent annotations
+    const schemaContent = readFileSync(schemaPath, "utf-8");
+    const parentMap: Record<string, string> = {}; // childTable -> parentField
+    
+    const lines = schemaContent.split("\n");
+    for (const line of lines) {
+      const match = line.match(/DEFINE\s+FIELD\s+(\w+)\s+ON\s+TABLE\s+(\w+).*--\s*@parent/i);
+      if (match) {
+        const [, field, table] = match;
+        parentMap[table.toLowerCase()] = field.toLowerCase();
+      }
+    }
+
+    // 3. Generate Events
+    let events = "-- ==================================================\n-- AUTO-GENERATED SPOOKY EVENTS\n-- ==================================================\n\n";
+
+    const definitions = schema.definitions || {};
+
+    // Filter out Relation tables and definitions that are not tables
+    const tableNames = Object.keys(definitions).filter(name => {
+      const def = definitions[name];
+      return name !== "Relationships" && 
+             name !== "RelationTables" && 
+             !def["x-is-relation-table"] && 
+             def.properties && 
+             !def.properties["x-is-reverse-relationship"]; 
+    });
+
+    for (const tableName of tableNames) {
+      if (tableName.startsWith("spooky_")) continue;
+
+      const def = definitions[tableName];
+      const properties = def.properties || {};
+      
+      const parentField = parentMap[tableName];
+      
+      // Calculate Intrinsic Fields
+      const intrinsicFields: string[] = [];
+
+      for (const [propName, propDef] of Object.entries(properties)) {
+        const prop = propDef as any;
+        if (prop["x-is-reverse-relationship"]) continue;
+        
+        // Add to intrinsic hash
+        intrinsicFields.push(`${propName}: $after.${propName}`);
+      }
+
+      // --------------------------------------------------
+      // A. Mutation Event
+      // --------------------------------------------------
+      events += `-- Table: ${tableName} Mutation\n`;
+      events += `DEFINE EVENT OVERWRITE spooky_${tableName}_mutation ON TABLE ${tableName}\n`;
+      events += `WHEN $before != $after\nTHEN {\n`;
+      
+      // 1. New Intrinsic Hash
+      events += `    LET $new_intrinsic = crypto::blake3({\n`;
+      events += `        ${intrinsicFields.join(",\n        ")}\n`;
+      events += `    });\n\n`;
+
+      // 2. Previous Hash State
+      events += `    LET $old_hash_data = (SELECT * FROM ONLY spooky_data_hash WHERE RecordId = $before.id);\n`;
+      events += `    LET $old_total = $old_hash_data.TotalHash OR <bytes>[];\n`;
+      events += `    LET $composition = $old_hash_data.CompositionHash OR <bytes>[];\n\n`;
+
+      // 3. New Total Hash
+      events += `    LET $new_total = array::boolean_xor($new_intrinsic, $composition);\n\n`;
+
+      // 4. Upsert Meta Table
+      events += `    UPSERT spooky_data_hash CONTENT {\n`;
+      events += `        RecordId: $after.id,\n`;
+      events += `        IntrinsicHash: $new_intrinsic,\n`;
+      events += `        CompositionHash: $composition,\n`;
+      events += `        TotalHash: $new_total\n`;
+      events += `    };\n\n`;
+
+      // 5. Bubble Up (If Parent exists)
+      if (parentField) {
+        events += `    -- BUBBLE UP to Parent (${parentField})\n`;
+        events += `    IF $before.${parentField} = $after.${parentField} THEN {\n`;
+        events += `        LET $delta = array::boolean_xor($old_total, $new_total);\n`;
+        events += `        UPDATE spooky_data_hash SET\n`;
+        events += `            CompositionHash = array::boolean_xor(CompositionHash, $delta),\n`;
+        events += `            TotalHash = array::boolean_xor(IntrinsicHash, array::boolean_xor(CompositionHash, $delta))\n`;
+        events += `        WHERE RecordId = $after.${parentField};\n`;
+        events += `    } ELSE {\n`;
+        events += `        IF $before.${parentField} != NONE THEN {\n`;
+        events += `            UPDATE spooky_data_hash SET\n`;
+        events += `                CompositionHash = array::boolean_xor(CompositionHash, $old_total),\n`;
+        events += `                TotalHash = array::boolean_xor(IntrinsicHash, array::boolean_xor(CompositionHash, $old_total))\n`;
+        events += `            WHERE RecordId = $before.${parentField};\n`;
+        events += `        };\n`;
+        events += `        IF $after.${parentField} != NONE THEN {\n`;
+        events += `            UPDATE spooky_data_hash SET\n`;
+        events += `                CompositionHash = array::boolean_xor(CompositionHash, $new_total),\n`;
+        events += `                TotalHash = array::boolean_xor(IntrinsicHash, array::boolean_xor(CompositionHash, $new_total))\n`;
+        events += `            WHERE RecordId = $after.${parentField};\n`;
+        events += `        };\n`;
+        events += `    };\n\n`;
+      }
+
+      // 6. Cascade Down (Incoming References)
+      // Check which other tables reference us
+      let cascadeUpdates = "";
+      
+      for (const otherTable of tableNames) {
+          if (otherTable === tableName) continue;
+          const otherDef = definitions[otherTable];
+          const otherProps = otherDef.properties || {};
+          
+          for (const [otherPropName, otherPropDef] of Object.entries(otherProps)) {
+              const prop = otherPropDef as any;
+              if (prop["x-is-reverse-relationship"]) continue;
+              
+              if (prop.pattern && prop.pattern instanceof String && prop.pattern.startsWith("^")) {
+                  const targetTable = prop.pattern.substring(1, prop.pattern.length - 1);
+                  if (targetTable === tableName) {
+                      // Check if this is NOT a parent relationship
+                      const isParentField = parentMap[otherTable] === otherPropName;
+                      if (!isParentField) {
+                          cascadeUpdates += `        UPDATE ${otherTable} SET _spooky_dirty = time::now() WHERE ${otherPropName} = $after.id;\n`;
+                      }
+                  }
+              } else if (prop.type === "string" && prop.description && prop.description.startsWith("Record ID of table:")) {
+                  // Fallback for cases where pattern might be different or parsed differently
+                  const targetTable = prop.description.replace("Record ID of table: ", "");
+                  if (targetTable === tableName) {
+                      const isParentField = parentMap[otherTable] === otherPropName;
+                      if (!isParentField) {
+                             cascadeUpdates += `        UPDATE ${otherTable} SET _spooky_dirty = time::now() WHERE ${otherPropName} = $after.id;\n`;
+                      }
+                  }
+              }
+          }
+      }
+
+      if (cascadeUpdates.length > 0) {
+          events += `    -- CASCADE DOWN (References)\n`;
+          events += `    IF $new_intrinsic != $old_hash_data.IntrinsicHash THEN {\n`;
+          events += cascadeUpdates;
+          events += `    };\n`;
+      }
+
+      events += `};\n\n`;
+
+      // --------------------------------------------------
+      // B. Deletion Event
+      // --------------------------------------------------
+      events += `-- Table: ${tableName} Deletion\n`;
+      events += `DEFINE EVENT OVERWRITE spooky_${tableName}_delete ON TABLE ${tableName}\n`;
+      events += `WHEN $event = "DELETE"\nTHEN {\n`;
+      events += `    LET $old_hash_data = (SELECT * FROM ONLY spooky_data_hash WHERE RecordId = $before.id);\n`;
+      events += `    LET $old_total = $old_hash_data.TotalHash;\n\n`;
+
+      if (parentField) {
+        events += `    -- BUBBLE UP Delete to Parent\n`;
+        events += `    IF $old_total != NONE AND $before.${parentField} != NONE THEN {\n`;
+        events += `        UPDATE spooky_data_hash SET\n`;
+        events += `            CompositionHash = array::boolean_xor(CompositionHash, $old_total),\n`;
+        events += `            TotalHash = array::boolean_xor(IntrinsicHash, array::boolean_xor(CompositionHash, $old_total))\n`;
+        events += `        WHERE RecordId = $before.${parentField};\n`;
+        events += `    };\n\n`;
+      }
+      
+      events += `    DELETE spooky_data_hash WHERE RecordId = $before.id;\n`;
+      events += `};\n\n`;
+    }
+
+    return events;
+  } catch (err) {
+    if (tempJsonPath) try { unlinkSync(tempJsonPath); } catch (e) {}
+    throw err;
+  }
 }

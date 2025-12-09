@@ -4,23 +4,18 @@
 export const schema = {
   tables: [
     {
-      name: 'spooky_incantation_tail' as const,
+      name: 'commented_on' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
-        TailValues: { type: 'string' as const, optional: false },
-        IncantationId: { type: 'string' as const, optional: false },
       },
       primaryKey: ['id'] as const
     },
     {
-      name: 'spooky_incantation_lookup' as const,
+      name: 'spooky_incantation_tail' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
-        SortDirections: { type: 'string' as const, optional: false },
         IncantationId: { type: 'string' as const, optional: false },
-        SortFields: { type: 'string' as const, optional: false },
-        `Table`: { type: 'string' as const, optional: false },
-        `Where`: { type: 'string' as const, optional: false },
+        TailValues: { type: 'string' as const, optional: false },
       },
       primaryKey: ['id'] as const
     },
@@ -29,10 +24,10 @@ export const schema = {
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
         TTL: { type: 'string' as const, optional: false },
-        Id: { type: 'string' as const, optional: false },
         SurrealQL: { type: 'string' as const, optional: false },
         Hash: { type: 'string' as const, optional: false },
         LastActiveAt: { type: 'string' as const, dateTime: true, optional: false },
+        Id: { type: 'string' as const, optional: false },
       },
       primaryKey: ['id'] as const
     },
@@ -41,39 +36,9 @@ export const schema = {
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
         created_at: { type: 'string' as const, dateTime: true, optional: true },
+        author: { type: 'string' as const, recordId: true, optional: false },
+        content: { type: 'string' as const, optional: false },
         thread: { type: 'string' as const, recordId: true, optional: false },
-        author: { type: 'string' as const, recordId: true, optional: false },
-        content: { type: 'string' as const, optional: false },
-      },
-      primaryKey: ['id'] as const
-    },
-    {
-      name: 'commented_on' as const,
-      columns: {
-        id: { type: 'string' as const, recordId: true, optional: false },
-      },
-      primaryKey: ['id'] as const
-    },
-    {
-      name: 'spooky_relationship' as const,
-      columns: {
-        id: { type: 'string' as const, recordId: true, optional: false },
-        ParentTable: { type: 'string' as const, optional: false },
-        ChildField: { type: 'string' as const, optional: false },
-        ChildTable: { type: 'string' as const, optional: false },
-        Type: { type: 'string' as const, optional: false },
-      },
-      primaryKey: ['id'] as const
-    },
-    {
-      name: 'thread' as const,
-      columns: {
-        id: { type: 'string' as const, recordId: true, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
-        title: { type: 'string' as const, optional: false },
-        content: { type: 'string' as const, optional: false },
-        author: { type: 'string' as const, recordId: true, optional: false },
-        comments: { type: 'string' as const, optional: true },
       },
       primaryKey: ['id'] as const
     },
@@ -82,8 +47,20 @@ export const schema = {
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
         username: { type: 'string' as const, optional: false },
-        threads: { type: 'string' as const, optional: true },
         comments: { type: 'string' as const, optional: true },
+        threads: { type: 'string' as const, optional: true },
+      },
+      primaryKey: ['id'] as const
+    },
+    {
+      name: 'spooky_incantation_lookup' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
+        `Table`: { type: 'string' as const, optional: false },
+        IncantationId: { type: 'string' as const, optional: false },
+        SortFields: { type: 'string' as const, optional: false },
+        SortDirections: { type: 'string' as const, optional: false },
+        `Where`: { type: 'string' as const, optional: false },
       },
       primaryKey: ['id'] as const
     },
@@ -91,38 +68,43 @@ export const schema = {
       name: 'spooky_data_hash' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
-        CompositionHash: { type: 'string' as const, optional: false },
         RecordId: { type: 'string' as const, recordId: true, optional: false },
         TotalHash: { type: 'string' as const, optional: false },
         IntrinsicHash: { type: 'string' as const, optional: false },
+        CompositionHash: { type: 'string' as const, optional: false },
+      },
+      primaryKey: ['id'] as const
+    },
+    {
+      name: 'spooky_relationship' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
+        Type: { type: 'string' as const, optional: false },
+        ParentTable: { type: 'string' as const, optional: false },
+        ChildField: { type: 'string' as const, optional: false },
+        ChildTable: { type: 'string' as const, optional: false },
+      },
+      primaryKey: ['id'] as const
+    },
+    {
+      name: 'thread' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
+        title: { type: 'string' as const, optional: false },
+        author: { type: 'string' as const, recordId: true, optional: false },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
+        content: { type: 'string' as const, optional: false },
+        comments: { type: 'string' as const, optional: true },
       },
       primaryKey: ['id'] as const
     },
   ],
   relationships: [
     {
-      from: 'thread' as const,
-      field: 'author' as const,
-      to: 'user' as const,
-      cardinality: 'one' as const
-    },
-    {
-      from: 'thread' as const,
+      from: 'user' as const,
       field: 'comments' as const,
       to: 'comment' as const,
       cardinality: 'many' as const
-    },
-    {
-      from: 'comment' as const,
-      field: 'thread' as const,
-      to: 'thread' as const,
-      cardinality: 'one' as const
-    },
-    {
-      from: 'comment' as const,
-      field: 'author' as const,
-      to: 'user' as const,
-      cardinality: 'one' as const
     },
     {
       from: 'user' as const,
@@ -131,10 +113,28 @@ export const schema = {
       cardinality: 'many' as const
     },
     {
-      from: 'user' as const,
+      from: 'thread' as const,
+      field: 'author' as const,
+      to: 'user' as const,
+      cardinality: 'one' as const
+    },
+    {
+      from: 'thread' as const,
       field: 'comments' as const,
       to: 'comment' as const,
       cardinality: 'many' as const
+    },
+    {
+      from: 'comment' as const,
+      field: 'author' as const,
+      to: 'user' as const,
+      cardinality: 'one' as const
+    },
+    {
+      from: 'comment' as const,
+      field: 'thread' as const,
+      to: 'thread' as const,
+      cardinality: 'one' as const
     },
   ]
 } as const;
@@ -206,7 +206,7 @@ DEFINE TABLE comment SCHEMAFULL
     FOR update, delete, create WHERE $access = "account" AND author.id = $auth.id
 ;
 
-DEFINE FIELD thread ON TABLE comment TYPE record<thread>;
+DEFINE FIELD thread ON TABLE comment TYPE record<thread>; -- @parent
 
 DEFINE FIELD content ON TABLE comment TYPE string
     ASSERT $value != NONE AND string::len($value) > 0;
