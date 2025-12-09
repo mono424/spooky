@@ -177,7 +177,7 @@ function generateSpookyEvents(schemaPath: string, binaryPath: string): string {
     });
 
     for (const tableName of tableNames) {
-      if (tableName.startsWith("spooky_")) continue;
+      if (tableName.startsWith("_spooky_")) continue; // Matches new prefix
 
       const def = definitions[tableName];
       const properties = def.properties || {};
@@ -199,7 +199,7 @@ function generateSpookyEvents(schemaPath: string, binaryPath: string): string {
       // A. Mutation Event
       // --------------------------------------------------
       events += `-- Table: ${tableName} Mutation\n`;
-      events += `DEFINE EVENT OVERWRITE spooky_${tableName}_mutation ON TABLE ${tableName}\n`;
+      events += `DEFINE EVENT OVERWRITE _spooky_${tableName}_mutation ON TABLE ${tableName}\n`;
       events += `WHEN $before != $after\nTHEN {\n`;
       
       // 1. New Intrinsic Hash
@@ -208,7 +208,7 @@ function generateSpookyEvents(schemaPath: string, binaryPath: string): string {
       events += `    });\n\n`;
 
       // 2. Previous Hash State
-      events += `    LET $old_hash_data = (SELECT * FROM ONLY spooky_data_hash WHERE RecordId = $before.id);\n`;
+      events += `    LET $old_hash_data = (SELECT * FROM ONLY _spooky_data_hash WHERE RecordId = $before.id);\n`;
       events += `    LET $old_total = $old_hash_data.TotalHash OR <bytes>[];\n`;
       events += `    LET $composition = $old_hash_data.CompositionHash OR <bytes>[];\n\n`;
 
@@ -216,7 +216,7 @@ function generateSpookyEvents(schemaPath: string, binaryPath: string): string {
       events += `    LET $new_total = array::boolean_xor($new_intrinsic, $composition);\n\n`;
 
       // 4. Upsert Meta Table
-      events += `    UPSERT spooky_data_hash CONTENT {\n`;
+      events += `    UPSERT _spooky_data_hash CONTENT {\n`;
       events += `        RecordId: $after.id,\n`;
       events += `        IntrinsicHash: $new_intrinsic,\n`;
       events += `        CompositionHash: $composition,\n`;
@@ -228,24 +228,23 @@ function generateSpookyEvents(schemaPath: string, binaryPath: string): string {
         events += `    -- BUBBLE UP to Parent (${parentField})\n`;
         events += `    IF $before.${parentField} = $after.${parentField} THEN {\n`;
         events += `        LET $delta = array::boolean_xor($old_total, $new_total);\n`;
-        events += `        UPDATE spooky_data_hash SET\n`;
+        events += `        UPDATE _spooky_data_hash SET\n`;
         events += `            CompositionHash = array::boolean_xor(CompositionHash, $delta),\n`;
         events += `            TotalHash = array::boolean_xor(IntrinsicHash, array::boolean_xor(CompositionHash, $delta))\n`;
         events += `        WHERE RecordId = $after.${parentField};\n`;
         events += `    } ELSE {\n`;
-        events += `        IF $before.${parentField} != NONE THEN {\n`;
-        events += `            UPDATE spooky_data_hash SET\n`;
-        events += `                CompositionHash = array::boolean_xor(CompositionHash, $old_total),\n`;
-        events += `                TotalHash = array::boolean_xor(IntrinsicHash, array::boolean_xor(CompositionHash, $old_total))\n`;
-        events += `            WHERE RecordId = $before.${parentField};\n`;
-        events += `        };\n`;
-        events += `        IF $after.${parentField} != NONE THEN {\n`;
-        events += `            UPDATE spooky_data_hash SET\n`;
-        events += `                CompositionHash = array::boolean_xor(CompositionHash, $new_total),\n`;
-        events += `                TotalHash = array::boolean_xor(IntrinsicHash, array::boolean_xor(CompositionHash, $new_total))\n`;
-        events += `            WHERE RecordId = $after.${parentField};\n`;
-        events += `        };\n`;
-        events += `    };\n\n`;
+        // Remove contribution from Old Parent
+        events += `        UPDATE _spooky_data_hash SET\n`;
+        events += `            CompositionHash = array::boolean_xor(CompositionHash, $old_total),\n`;
+        events += `            TotalHash = array::boolean_xor(IntrinsicHash, array::boolean_xor(CompositionHash, $old_total))\n`;
+        events += `        WHERE RecordId = $before.${parentField} AND RecordId != NONE;\n`;
+
+        // Add contribution to New Parent
+        events += `        UPDATE _spooky_data_hash SET\n`;
+        events += `            CompositionHash = array::boolean_xor(CompositionHash, $new_total),\n`;
+        events += `            TotalHash = array::boolean_xor(IntrinsicHash, array::boolean_xor(CompositionHash, $new_total))\n`;
+        events += `        WHERE RecordId = $after.${parentField} AND RecordId != NONE;\n`;
+        events += `    } END;\n\n`;
       }
 
       // 6. Cascade Down (Incoming References)
@@ -285,9 +284,9 @@ function generateSpookyEvents(schemaPath: string, binaryPath: string): string {
 
       if (cascadeUpdates.length > 0) {
           events += `    -- CASCADE DOWN (References)\n`;
-          events += `    IF $new_intrinsic != $old_hash_data.IntrinsicHash THEN {\n`;
+          events += `    IF $old_hash_data.RecordId != NONE AND $new_intrinsic != $old_hash_data.IntrinsicHash THEN {\n`;
           events += cascadeUpdates;
-          events += `    };\n`;
+          events += `    } END;\n`;
       }
 
       events += `};\n\n`;
@@ -296,22 +295,22 @@ function generateSpookyEvents(schemaPath: string, binaryPath: string): string {
       // B. Deletion Event
       // --------------------------------------------------
       events += `-- Table: ${tableName} Deletion\n`;
-      events += `DEFINE EVENT OVERWRITE spooky_${tableName}_delete ON TABLE ${tableName}\n`;
+      events += `DEFINE EVENT OVERWRITE _spooky_${tableName}_delete ON TABLE ${tableName}\n`;
       events += `WHEN $event = "DELETE"\nTHEN {\n`;
-      events += `    LET $old_hash_data = (SELECT * FROM ONLY spooky_data_hash WHERE RecordId = $before.id);\n`;
+      events += `    LET $old_hash_data = (SELECT * FROM ONLY _spooky_data_hash WHERE RecordId = $before.id);\n`;
       events += `    LET $old_total = $old_hash_data.TotalHash;\n\n`;
 
       if (parentField) {
         events += `    -- BUBBLE UP Delete to Parent\n`;
         events += `    IF $old_total != NONE AND $before.${parentField} != NONE THEN {\n`;
-        events += `        UPDATE spooky_data_hash SET\n`;
+        events += `        UPDATE _spooky_data_hash SET\n`;
         events += `            CompositionHash = array::boolean_xor(CompositionHash, $old_total),\n`;
         events += `            TotalHash = array::boolean_xor(IntrinsicHash, array::boolean_xor(CompositionHash, $old_total))\n`;
         events += `        WHERE RecordId = $before.${parentField};\n`;
-        events += `    };\n\n`;
+        events += `    } END;\n\n`;
       }
       
-      events += `    DELETE spooky_data_hash WHERE RecordId = $before.id;\n`;
+      events += `    DELETE _spooky_data_hash WHERE RecordId = $before.id;\n`;
       events += `};\n\n`;
     }
 

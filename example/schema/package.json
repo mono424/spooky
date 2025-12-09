@@ -19,7 +19,7 @@
   ],
   "scripts": {
     "build": "vite build",
-    "build:ts": "syncgen --format typescript --input schema.surql --append meta_tables.surql --output ../app-solid/src/schema.gen.ts",
+    "build:ts": "syncgen --format typescript --input schema.surql --output ../app-solid/src/schema.gen.ts",
     "build:dart": "syncgen --format dart --input schema.surql --append meta_tables.surql --output ../client-dart/src/db/models.dart",
     "build:surql": "npm run build:ts && npm run build:dart && syncgen --input schema.surql --append meta_tables.surql --output remote.gen.surql",
     "dev": "vite build --watch",
