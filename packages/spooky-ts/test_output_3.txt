@@ -1,0 +1,338 @@
+
+> @spooky/spooky-ts@0.0.0 test /Users/khadim/dev/spooky/packages/spooky-ts
+> vitest "test/sync.test.ts"
+
+
+ DEV  v3.2.4 /Users/khadim/dev/spooky/packages/spooky-ts
+
+stdout | test/sync.test.ts > Sync Protocol > should fetch data on initial sync (hash mismatch)
+[2025-11-30T13:50:41.287Z] [INFO] [Provisioning] Starting provision check...
+
+stdout | test/sync.test.ts > Sync Protocol > should fetch data on initial sync (hash mismatch)
+[2025-11-30T13:50:41.289Z] [DEBUG] [Provisioning] Schema hash: 36219f6c156e8612442cf558e26fc4750fa5daf8
+[2025-11-30T13:50:41.289Z] [DEBUG] [Provisioning] Schema up to date: false
+[2025-11-30T13:50:41.289Z] [DEBUG] [Provisioning] Should migrate: true
+[2025-11-30T13:50:41.289Z] [INFO] [Provisioning] Initializing internal database schema...
+
+stdout | test/sync.test.ts > Sync Protocol > should fetch data on initial sync (hash mismatch)
+[2025-11-30T13:50:41.290Z] [INFO] [Provisioning] Starting schema migration...
+
+stdout | test/sync.test.ts > Sync Protocol > should fetch data on initial sync (hash mismatch)
+[2025-11-30T13:50:41.295Z] [DEBUG] [Provisioning] Recording schema hash...
+
+stdout | test/sync.test.ts > Sync Protocol > should fetch data on initial sync (hash mismatch)
+[2025-11-30T13:50:41.295Z] [INFO] [Provisioning] Database schema provisioned successfully
+
+stdout | test/sync.test.ts > Sync Protocol > should fetch data on initial sync (hash mismatch)
+Create Result: [
+  []
+]
+
+stdout | test/sync.test.ts > Sync Protocol > should fetch data on initial sync (hash mismatch)
+Thread Check: [
+  []
+]
+
+stdout | test/sync.test.ts > Sync Protocol > should fetch data on initial sync (hash mismatch)
+[buildQuery] Generated SELECT query: SELECT * FROM thread;
+[buildQuery] Query vars: {}
+[buildQuery] Generated SELECT query: SELECT * FROM thread;
+[buildQuery] Query vars: {}
+[buildQuery] Generated LIVE SELECT query: LIVE SELECT * FROM thread;
+[buildQuery] Query vars: {}
+[2025-11-30T13:50:41.335Z] [DEBUG] [QueryManager] Run - Cache miss { queryHash: [33m5287015697723528[39m }
+
+stdout | test/sync.test.ts > Sync Protocol > should fetch data on initial sync (hash mismatch)
+[2025-11-30T13:50:41.336Z] [DEBUG] [QueryManager] Run - Initialize query { queryHash: [33m5287015697723528[39m }
+[2025-11-30T13:50:41.336Z] [DEBUG] [QueryManager] Run - Refresh query locally { queryHash: [33m5287015697723528[39m }
+[2025-11-30T13:50:41.336Z] [DEBUG] [QueryManager] Local Query Refresh - Starting { queryHash: [33m5287015697723528[39m }
+
+stdout | test/sync.test.ts > Sync Protocol > should fetch data on initial sync (hash mismatch)
+[2025-11-30T13:50:41.336Z] [DEBUG] [Database] Query Local Database - Result { sql: [32m'SELECT * FROM thread;'[39m, vars: [90mundefined[39m, result: [ [] ] }
+
+stdout | test/sync.test.ts > Sync Protocol > should fetch data on initial sync (hash mismatch)
+[2025-11-30T13:50:41.336Z] [DEBUG] [QueryManager] Local Query Refresh - Done { queryHash: [33m5287015697723528[39m, resultLength: [33m0[39m }
+
+stdout | test/sync.test.ts > Sync Protocol > should fetch data on initial sync (hash mismatch)
+[2025-11-30T13:50:41.337Z] [DEBUG] [Database] Query Local Database - Result {
+  sql: [32m'RETURN crypto::blake3($data)'[39m,
+  vars: { data: [32m'[]'[39m },
+  result: [
+    [32m'd53d18c23212ea7b6300594bb89bce60218f6eff2b9d628b8cc42d3e79bbd5ab'[39m
+  ]
+}
+
+stdout | test/sync.test.ts > Sync Protocol > should fetch data on initial sync (hash mismatch)
+[2025-11-30T13:50:41.337Z] [DEBUG] [QueryManager] Local Query Refresh - Decoded results { decodedResults: [] }
+
+stdout | test/sync.test.ts > Sync Protocol > should fetch data on initial sync (hash mismatch)
+[2025-11-30T13:50:41.337Z] [DEBUG] [QueryManager] Run - Hydrate remote query { queryHash: [33m5287015697723528[39m }
+[2025-11-30T13:50:41.337Z] [DEBUG] [QueryManager] Remote Query Hydration - Starting { queryHash: [33m5287015697723528[39m, query: [32m'SELECT * FROM thread;'[39m }
+[DEBUG] Fetching remote hash with query: RETURN crypto::blake3(string::json({ SELECT * FROM thread }))
+
+stderr | test/sync.test.ts > Sync Protocol > should fetch data on initial sync (hash mismatch)
+[DEBUG] Remote hash fetch failed: RemoteDatabaseError: Failed to execute query on remote database
+    at Object.queryRemote [90m(/Users/khadim/dev/spooky/packages/spooky-ts/[39msrc/services/database.ts:110:13[90m)[39m
+    at QueryManagerService.queryRemoteHydration [90m(/Users/khadim/dev/spooky/packages/spooky-ts/[39msrc/services/query-manager.ts:379:22[90m)[39m
+    at QueryManagerService.initQuery [90m(/Users/khadim/dev/spooky/packages/spooky-ts/[39msrc/services/query-manager.ts:629:9[90m)[39m {
+  cause: [Error: There was a problem with the database: Parse error: Invalid function/constant path, did you maybe mean `string::join`
+   --> [1:23]
+    |
+  1 | RETURN crypto::blake3(string::json({ SELECT * FROM thread }))
+    |                       ^^^^^^^^^^^^ 
+  ] {
+    code: [32m'GenericFailure'[39m
+  }
+}
+
+stdout | test/sync.test.ts > Sync Protocol > should fetch data on initial sync (hash mismatch)
+[2025-11-30T13:50:41.339Z] [WARN] [QueryManager] Remote Query Hydration - Failed to get remote hash (falling back to full fetch) RemoteDatabaseError: Failed to execute query on remote database
+    at Object.queryRemote [90m(/Users/khadim/dev/spooky/packages/spooky-ts/[39msrc/services/database.ts:110:13[90m)[39m
+    at QueryManagerService.queryRemoteHydration [90m(/Users/khadim/dev/spooky/packages/spooky-ts/[39msrc/services/query-manager.ts:379:22[90m)[39m
+    at QueryManagerService.initQuery [90m(/Users/khadim/dev/spooky/packages/spooky-ts/[39msrc/services/query-manager.ts:629:9[90m)[39m {
+  cause: [Error: There was a problem with the database: Parse error: Invalid function/constant path, did you maybe mean `string::join`
+   --> [1:23]
+    |
+  1 | RETURN crypto::blake3(string::json({ SELECT * FROM thread }))
+    |                       ^^^^^^^^^^^^ 
+  ] {
+    code: [32m'GenericFailure'[39m
+  }
+}
+[DEBUG] Comparing hashes. Local: d53d18c23212ea7b6300594bb89bce60218f6eff2b9d628b8cc42d3e79bbd5ab Remote: [90mundefined[39m
+[2025-11-30T13:50:41.339Z] [DEBUG] [QueryManager] Remote Query Hydration - Hash mismatch or missing, fetching data {
+  queryHash: [33m5287015697723528[39m,
+  localHash: [32m'd53d18c23212ea7b6300594bb89bce60218f6eff2b9d628b8cc42d3e79bbd5ab'[39m,
+  remoteHash: [90mundefined[39m
+}
+
+stdout | test/sync.test.ts > Sync Protocol > should fetch data on initial sync (hash mismatch)
+[2025-11-30T13:50:41.339Z] [DEBUG] [Database] Query Remote Database - Result { sql: [32m'SELECT * FROM thread;'[39m, vars: [90mundefined[39m, result: [ [] ] }
+
+stdout | test/sync.test.ts > Sync Protocol > should fetch data on initial sync (hash mismatch)
+[2025-11-30T13:50:41.339Z] [DEBUG] [QueryManager] Remote Query Hydration - Remote query done { queryHash: [33m5287015697723528[39m, resultLength: [33m0[39m }
+[2025-11-30T13:50:41.339Z] [DEBUG] [QueryManager] Materialize remote record update - Starting { records: [33m0[39m }
+[2025-11-30T13:50:41.339Z] [DEBUG] [QueryManager] Materialize remote record update - Updating local cache { records: [33m0[39m, materializeQuery: [32m''[39m }
+
+stdout | test/sync.test.ts > Sync Protocol > should fetch data on initial sync (hash mismatch)
+[2025-11-30T13:50:41.339Z] [DEBUG] [Database] Query Local Database - Result { sql: [32m''[39m, vars: [90mundefined[39m, result: [] }
+
+stdout | test/sync.test.ts > Sync Protocol > should fetch data on initial sync (hash mismatch)
+[2025-11-30T13:50:41.339Z] [DEBUG] [QueryManager] Materialize remote record update - Done { records: [33m0[39m }
+
+stdout | test/sync.test.ts > Sync Protocol > should fetch data on initial sync (hash mismatch)
+[2025-11-30T13:50:41.339Z] [DEBUG] [QueryManager] Remote Query Hydration - Local cache updated { queryHash: [33m5287015697723528[39m }
+
+stdout | test/sync.test.ts > Sync Protocol > should fetch data on initial sync (hash mismatch)
+[2025-11-30T13:50:41.339Z] [DEBUG] [Database] Query Local Database - Result { sql: [32m'SELECT * FROM thread;'[39m, vars: [90mundefined[39m, result: [ [] ] }
+
+stdout | test/sync.test.ts > Sync Protocol > should fetch data on initial sync (hash mismatch)
+[2025-11-30T13:50:41.339Z] [DEBUG] [QueryManager] Remote Query Hydration - Local cache updated { queryHash: [33m5287015697723528[39m, resultLength: [33m0[39m }
+
+stdout | test/sync.test.ts > Sync Protocol > should fetch data on initial sync (hash mismatch)
+[2025-11-30T13:50:41.339Z] [DEBUG] [QueryManager] Run - Subscribe to remote query { queryHash: [33m5287015697723528[39m }
+[2025-11-30T13:50:41.340Z] [DEBUG] [QueryManager] Subscribe Remote Query - Starting { queryHash: [33m5287015697723528[39m, query: [32m'LIVE SELECT * FROM thread;'[39m }
+
+stdout | test/sync.test.ts > Sync Protocol > should fetch data on initial sync (hash mismatch)
+[2025-11-30T13:50:41.340Z] [DEBUG] [Database] Query Remote Database - Result {
+  sql: [32m'LIVE SELECT * FROM thread;'[39m,
+  vars: [90mundefined[39m,
+  result: [ Uuid {} ]
+}
+
+stdout | test/sync.test.ts > Sync Protocol > should fetch data on initial sync (hash mismatch)
+[2025-11-30T13:50:41.340Z] [DEBUG] [QueryManager] Subscribe Remote Query - Created Live UUID { queryHash: [33m5287015697723528[39m, liveUuid: Uuid {} }
+
+stderr | test/sync.test.ts > Sync Protocol > should fetch data on initial sync (hash mismatch)
+[Database] liveQuery method not found on Surreal instance. Live updates will not work.
+
+stdout | test/sync.test.ts > Sync Protocol > should fetch data on initial sync (hash mismatch)
+[2025-11-30T13:50:41.340Z] [DEBUG] [QueryManager] Subscribe Remote Query - Subscribed to Live UUID { queryHash: [33m5287015697723528[39m, liveUuid: Uuid {} }
+
+stdout | test/sync.test.ts > Sync Protocol > should fetch data on initial sync (hash mismatch)
+[2025-11-30T13:50:41.340Z] [DEBUG] [QueryManager] Run - Initialize subqueries [33m5287015697723528[39m
+
+stdout | test/sync.test.ts > Sync Protocol > should NOT fetch data if hashes match
+[2025-11-30T13:50:51.282Z] [INFO] [Provisioning] Starting provision check...
+
+stdout | test/sync.test.ts > Sync Protocol > should NOT fetch data if hashes match
+[2025-11-30T13:50:51.282Z] [DEBUG] [Provisioning] Schema hash: 36219f6c156e8612442cf558e26fc4750fa5daf8
+[2025-11-30T13:50:51.282Z] [DEBUG] [Provisioning] Schema up to date: false
+[2025-11-30T13:50:51.282Z] [DEBUG] [Provisioning] Should migrate: true
+[2025-11-30T13:50:51.282Z] [INFO] [Provisioning] Initializing internal database schema...
+
+stdout | test/sync.test.ts > Sync Protocol > should NOT fetch data if hashes match
+[2025-11-30T13:50:51.283Z] [INFO] [Provisioning] Starting schema migration...
+
+stdout | test/sync.test.ts > Sync Protocol > should NOT fetch data if hashes match
+[2025-11-30T13:50:51.288Z] [DEBUG] [Provisioning] Recording schema hash...
+
+stdout | test/sync.test.ts > Sync Protocol > should NOT fetch data if hashes match
+[2025-11-30T13:50:51.289Z] [INFO] [Provisioning] Database schema provisioned successfully
+
+stdout | test/sync.test.ts > Sync Protocol > should NOT fetch data if hashes match
+[buildQuery] Generated SELECT query: SELECT * FROM thread;
+[buildQuery] Query vars: {}
+[buildQuery] Generated SELECT query: SELECT * FROM thread;
+[buildQuery] Query vars: {}
+[buildQuery] Generated LIVE SELECT query: LIVE SELECT * FROM thread;
+[buildQuery] Query vars: {}
+[2025-11-30T13:50:51.339Z] [DEBUG] [QueryManager] Run - Cache miss { queryHash: [33m5287015697723528[39m }
+
+stdout | test/sync.test.ts > Sync Protocol > should NOT fetch data if hashes match
+[2025-11-30T13:50:51.340Z] [DEBUG] [QueryManager] Run - Initialize query { queryHash: [33m5287015697723528[39m }
+[2025-11-30T13:50:51.340Z] [DEBUG] [QueryManager] Run - Refresh query locally { queryHash: [33m5287015697723528[39m }
+[2025-11-30T13:50:51.340Z] [DEBUG] [QueryManager] Local Query Refresh - Starting { queryHash: [33m5287015697723528[39m }
+
+stdout | test/sync.test.ts > Sync Protocol > should NOT fetch data if hashes match
+[2025-11-30T13:50:51.340Z] [DEBUG] [Database] Query Local Database - Result { sql: [32m'SELECT * FROM thread;'[39m, vars: [90mundefined[39m, result: [ [] ] }
+
+stdout | test/sync.test.ts > Sync Protocol > should NOT fetch data if hashes match
+[2025-11-30T13:50:51.340Z] [DEBUG] [QueryManager] Local Query Refresh - Done { queryHash: [33m5287015697723528[39m, resultLength: [33m0[39m }
+
+stdout | test/sync.test.ts > Sync Protocol > should NOT fetch data if hashes match
+[2025-11-30T13:50:51.340Z] [DEBUG] [Database] Query Local Database - Result {
+  sql: [32m'RETURN crypto::blake3($data)'[39m,
+  vars: { data: [32m'[]'[39m },
+  result: [
+    [32m'd53d18c23212ea7b6300594bb89bce60218f6eff2b9d628b8cc42d3e79bbd5ab'[39m
+  ]
+}
+
+stdout | test/sync.test.ts > Sync Protocol > should NOT fetch data if hashes match
+[2025-11-30T13:50:51.340Z] [DEBUG] [QueryManager] Local Query Refresh - Decoded results { decodedResults: [] }
+
+stdout | test/sync.test.ts > Sync Protocol > should NOT fetch data if hashes match
+[2025-11-30T13:50:51.340Z] [DEBUG] [QueryManager] Run - Hydrate remote query { queryHash: [33m5287015697723528[39m }
+[2025-11-30T13:50:51.340Z] [DEBUG] [QueryManager] Remote Query Hydration - Starting { queryHash: [33m5287015697723528[39m, query: [32m'SELECT * FROM thread;'[39m }
+[DEBUG] Fetching remote hash with query: RETURN crypto::blake3(string::json({ SELECT * FROM thread }))
+
+stderr | test/sync.test.ts > Sync Protocol > should NOT fetch data if hashes match
+[DEBUG] Remote hash fetch failed: RemoteDatabaseError: Failed to execute query on remote database
+    at Object.queryRemote [90m(/Users/khadim/dev/spooky/packages/spooky-ts/[39msrc/services/database.ts:110:13[90m)[39m
+    at QueryManagerService.queryRemoteHydration [90m(/Users/khadim/dev/spooky/packages/spooky-ts/[39msrc/services/query-manager.ts:379:22[90m)[39m
+    at QueryManagerService.initQuery [90m(/Users/khadim/dev/spooky/packages/spooky-ts/[39msrc/services/query-manager.ts:629:9[90m)[39m {
+  cause: [Error: There was a problem with the database: Parse error: Invalid function/constant path, did you maybe mean `string::join`
+   --> [1:23]
+    |
+  1 | RETURN crypto::blake3(string::json({ SELECT * FROM thread }))
+    |                       ^^^^^^^^^^^^ 
+  ] {
+    code: [32m'GenericFailure'[39m
+  }
+}
+
+stdout | test/sync.test.ts > Sync Protocol > should NOT fetch data if hashes match
+[2025-11-30T13:50:51.341Z] [WARN] [QueryManager] Remote Query Hydration - Failed to get remote hash (falling back to full fetch) RemoteDatabaseError: Failed to execute query on remote database
+    at Object.queryRemote [90m(/Users/khadim/dev/spooky/packages/spooky-ts/[39msrc/services/database.ts:110:13[90m)[39m
+    at QueryManagerService.queryRemoteHydration [90m(/Users/khadim/dev/spooky/packages/spooky-ts/[39msrc/services/query-manager.ts:379:22[90m)[39m
+    at QueryManagerService.initQuery [90m(/Users/khadim/dev/spooky/packages/spooky-ts/[39msrc/services/query-manager.ts:629:9[90m)[39m {
+  cause: [Error: There was a problem with the database: Parse error: Invalid function/constant path, did you maybe mean `string::join`
+   --> [1:23]
+    |
+  1 | RETURN crypto::blake3(string::json({ SELECT * FROM thread }))
+    |                       ^^^^^^^^^^^^ 
+  ] {
+    code: [32m'GenericFailure'[39m
+  }
+}
+[DEBUG] Comparing hashes. Local: d53d18c23212ea7b6300594bb89bce60218f6eff2b9d628b8cc42d3e79bbd5ab Remote: [90mundefined[39m
+[2025-11-30T13:50:51.341Z] [DEBUG] [QueryManager] Remote Query Hydration - Hash mismatch or missing, fetching data {
+  queryHash: [33m5287015697723528[39m,
+  localHash: [32m'd53d18c23212ea7b6300594bb89bce60218f6eff2b9d628b8cc42d3e79bbd5ab'[39m,
+  remoteHash: [90mundefined[39m
+}
+
+stdout | test/sync.test.ts > Sync Protocol > should NOT fetch data if hashes match
+[2025-11-30T13:50:51.341Z] [DEBUG] [Database] Query Remote Database - Result { sql: [32m'SELECT * FROM thread;'[39m, vars: [90mundefined[39m, result: [ [] ] }
+
+stdout | test/sync.test.ts > Sync Protocol > should NOT fetch data if hashes match
+[2025-11-30T13:50:51.341Z] [DEBUG] [QueryManager] Remote Query Hydration - Remote query done { queryHash: [33m5287015697723528[39m, resultLength: [33m0[39m }
+[2025-11-30T13:50:51.341Z] [DEBUG] [QueryManager] Materialize remote record update - Starting { records: [33m0[39m }
+[2025-11-30T13:50:51.341Z] [DEBUG] [QueryManager] Materialize remote record update - Updating local cache { records: [33m0[39m, materializeQuery: [32m''[39m }
+
+stdout | test/sync.test.ts > Sync Protocol > should NOT fetch data if hashes match
+[2025-11-30T13:50:51.341Z] [DEBUG] [Database] Query Local Database - Result { sql: [32m''[39m, vars: [90mundefined[39m, result: [] }
+
+stdout | test/sync.test.ts > Sync Protocol > should NOT fetch data if hashes match
+[2025-11-30T13:50:51.341Z] [DEBUG] [QueryManager] Materialize remote record update - Done { records: [33m0[39m }
+
+stdout | test/sync.test.ts > Sync Protocol > should NOT fetch data if hashes match
+[2025-11-30T13:50:51.342Z] [DEBUG] [QueryManager] Remote Query Hydration - Local cache updated { queryHash: [33m5287015697723528[39m }
+
+stdout | test/sync.test.ts > Sync Protocol > should NOT fetch data if hashes match
+[2025-11-30T13:50:51.342Z] [DEBUG] [Database] Query Local Database - Result { sql: [32m'SELECT * FROM thread;'[39m, vars: [90mundefined[39m, result: [ [] ] }
+
+stdout | test/sync.test.ts > Sync Protocol > should NOT fetch data if hashes match
+[2025-11-30T13:50:51.342Z] [DEBUG] [QueryManager] Remote Query Hydration - Local cache updated { queryHash: [33m5287015697723528[39m, resultLength: [33m0[39m }
+
+stdout | test/sync.test.ts > Sync Protocol > should NOT fetch data if hashes match
+[2025-11-30T13:50:51.342Z] [DEBUG] [QueryManager] Run - Subscribe to remote query { queryHash: [33m5287015697723528[39m }
+[2025-11-30T13:50:51.342Z] [DEBUG] [QueryManager] Subscribe Remote Query - Starting { queryHash: [33m5287015697723528[39m, query: [32m'LIVE SELECT * FROM thread;'[39m }
+
+stdout | test/sync.test.ts > Sync Protocol > should NOT fetch data if hashes match
+[2025-11-30T13:50:51.342Z] [DEBUG] [Database] Query Remote Database - Result {
+  sql: [32m'LIVE SELECT * FROM thread;'[39m,
+  vars: [90mundefined[39m,
+  result: [ Uuid {} ]
+}
+
+stdout | test/sync.test.ts > Sync Protocol > should NOT fetch data if hashes match
+[2025-11-30T13:50:51.342Z] [DEBUG] [QueryManager] Subscribe Remote Query - Created Live UUID { queryHash: [33m5287015697723528[39m, liveUuid: Uuid {} }
+
+stderr | test/sync.test.ts > Sync Protocol > should NOT fetch data if hashes match
+[Database] liveQuery method not found on Surreal instance. Live updates will not work.
+
+stdout | test/sync.test.ts > Sync Protocol > should NOT fetch data if hashes match
+[2025-11-30T13:50:51.342Z] [DEBUG] [QueryManager] Subscribe Remote Query - Subscribed to Live UUID { queryHash: [33m5287015697723528[39m, liveUuid: Uuid {} }
+
+stdout | test/sync.test.ts > Sync Protocol > should NOT fetch data if hashes match
+[2025-11-30T13:50:51.342Z] [DEBUG] [QueryManager] Run - Initialize subqueries [33m5287015697723528[39m
+
+ ❯ test/sync.test.ts (2 tests | 2 failed) 20006ms
+   × Sync Protocol > should fetch data on initial sync (hash mismatch) 10003ms
+     → Test timed out in 10000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+   × Sync Protocol > should NOT fetch data if hashes match 10002ms
+     → Test timed out in 10000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  test/sync.test.ts > Sync Protocol > should fetch data on initial sync (hash mismatch)
+Error: Test timed out in 10000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ test/sync.test.ts:22:5
+     20| 
+     21| describe("Sync Protocol", () => {
+     22|     it("should fetch data on initial sync (hash mismatch)", async () =…
+       |     ^
+     23|         const { spooky, dbContext } = await createMockSpooky(mockConfi…
+     24|         try {
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  test/sync.test.ts > Sync Protocol > should NOT fetch data if hashes match
+Error: Test timed out in 10000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ test/sync.test.ts:79:5
+     77|     }, 10000);
+     78| 
+     79|     it("should NOT fetch data if hashes match", async () => {
+       |     ^
+     80|         const { spooky, dbContext } = await createMockSpooky(mockConfi…
+     81|         try {
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  2 failed (2)
+   Start at  14:50:40
+   Duration  20.42s (transform 78ms, setup 122ms, collect 110ms, tests 20.01s, environment 0ms, prepare 36ms)
+
+ FAIL  Tests failed. Watching for file changes...
+       press h to show help, press q to quit
+Cancelling test run. Press CTRL+c again to exit forcefully.
+
+ ELIFECYCLE  Test failed. See above for more details.

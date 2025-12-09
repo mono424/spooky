@@ -14,7 +14,7 @@ program
     "-o, --output <path>",
     "Path to the output file (extension determines format: .json, .ts, .dart)"
   )
-  .option("-f, --format <format>", "Output format (json, typescript, dart)")
+  .option("-f, --format <format>", "Output format (json, typescript, dart, surql)")
   .option(
     "-p, --pretty",
     "Pretty print the JSON output (only for JSON format)",
@@ -29,6 +29,10 @@ program
     "--no-header",
     "Disable the generated file comment header (enabled by default)",
     false
+  )
+  .option(
+    "--append <path>",
+    "Path to another .surql file to append to the input"
   )
   .parse(process.argv);
 
@@ -49,6 +53,7 @@ async function main() {
       pretty: options.pretty,
       all: options.all,
       noHeader: options.noHeader,
+      append: options.append,
     });
 
     console.log(output);

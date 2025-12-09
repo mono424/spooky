@@ -25,7 +25,7 @@ export default defineConfig({
       },
     },
     rollupOptions: {
-      external: ["commander", "child_process", "url", "path"],
+      external: ["commander", "child_process", "url", "path", "fs", "os"],
       output: {
         preserveModules: false,
         banner: (chunk) => {

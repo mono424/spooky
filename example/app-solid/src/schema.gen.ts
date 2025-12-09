@@ -4,9 +4,35 @@
 export const schema = {
   tables: [
     {
-      name: 'commented_on' as const,
+      name: 'spooky_incantation_tail' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
+        TailValues: { type: 'string' as const, optional: false },
+        IncantationId: { type: 'string' as const, optional: false },
+      },
+      primaryKey: ['id'] as const
+    },
+    {
+      name: 'spooky_incantation_lookup' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
+        SortDirections: { type: 'string' as const, optional: false },
+        IncantationId: { type: 'string' as const, optional: false },
+        SortFields: { type: 'string' as const, optional: false },
+        `Table`: { type: 'string' as const, optional: false },
+        `Where`: { type: 'string' as const, optional: false },
+      },
+      primaryKey: ['id'] as const
+    },
+    {
+      name: 'spooky_incantation' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
+        TTL: { type: 'string' as const, optional: false },
+        Id: { type: 'string' as const, optional: false },
+        SurrealQL: { type: 'string' as const, optional: false },
+        Hash: { type: 'string' as const, optional: false },
+        LastActiveAt: { type: 'string' as const, dateTime: true, optional: false },
       },
       primaryKey: ['id'] as const
     },
@@ -14,10 +40,28 @@ export const schema = {
       name: 'comment' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
-        content: { type: 'string' as const, optional: false },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
         thread: { type: 'string' as const, recordId: true, optional: false },
         author: { type: 'string' as const, recordId: true, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
+        content: { type: 'string' as const, optional: false },
+      },
+      primaryKey: ['id'] as const
+    },
+    {
+      name: 'commented_on' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
+      },
+      primaryKey: ['id'] as const
+    },
+    {
+      name: 'spooky_relationship' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
+        ParentTable: { type: 'string' as const, optional: false },
+        ChildField: { type: 'string' as const, optional: false },
+        ChildTable: { type: 'string' as const, optional: false },
+        Type: { type: 'string' as const, optional: false },
       },
       primaryKey: ['id'] as const
     },
@@ -25,9 +69,9 @@ export const schema = {
       name: 'thread' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
         title: { type: 'string' as const, optional: false },
         content: { type: 'string' as const, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
         author: { type: 'string' as const, recordId: true, optional: false },
         comments: { type: 'string' as const, optional: true },
       },
@@ -43,20 +87,19 @@ export const schema = {
       },
       primaryKey: ['id'] as const
     },
+    {
+      name: 'spooky_data_hash' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
+        CompositionHash: { type: 'string' as const, optional: false },
+        RecordId: { type: 'string' as const, recordId: true, optional: false },
+        TotalHash: { type: 'string' as const, optional: false },
+        IntrinsicHash: { type: 'string' as const, optional: false },
+      },
+      primaryKey: ['id'] as const
+    },
   ],
   relationships: [
-    {
-      from: 'comment' as const,
-      field: 'thread' as const,
-      to: 'thread' as const,
-      cardinality: 'one' as const
-    },
-    {
-      from: 'comment' as const,
-      field: 'author' as const,
-      to: 'user' as const,
-      cardinality: 'one' as const
-    },
     {
       from: 'thread' as const,
       field: 'author' as const,
@@ -68,6 +111,18 @@ export const schema = {
       field: 'comments' as const,
       to: 'comment' as const,
       cardinality: 'many' as const
+    },
+    {
+      from: 'comment' as const,
+      field: 'thread' as const,
+      to: 'thread' as const,
+      cardinality: 'one' as const
+    },
+    {
+      from: 'comment' as const,
+      field: 'author' as const,
+      to: 'user' as const,
+      cardinality: 'one' as const
     },
     {
       from: 'user' as const,
@@ -171,4 +226,125 @@ DEFINE TABLE commented_on SCHEMAFULL TYPE RELATION
 
 DEFINE EVENT comment_created ON TABLE comment WHEN $event = "CREATE" THEN
   RELATE ($after.id)->commented_on->($after.thread)
-;`;
+;
+
+-- ==================================================
+-- 1. SPOOKY DATA HASH
+-- The "Shadow Graph" tracking the state of every record.
+-- ==================================================
+
+DEFINE TABLE spooky_data_hash SCHEMAFULL
+    PERMISSIONS FULL; -- In prod, you might restrict write access to server-side only
+
+-- The actual record being tracked (e.g., comment:abc, thread:123)
+DEFINE FIELD RecordId ON TABLE spooky_data_hash TYPE record;
+
+-- H_intrinsic: BLAKE3 hash of the record's own scalar fields
+DEFINE FIELD IntrinsicHash ON TABLE spooky_data_hash TYPE bytes;
+
+-- H_composition: XOR sum of all dependent children's TotalHashes
+DEFINE FIELD CompositionHash ON TABLE spooky_data_hash TYPE bytes;
+
+-- H_total: Intrinsic XOR Composition
+DEFINE FIELD TotalHash ON TABLE spooky_data_hash TYPE bytes;
+
+-- Fast lookup by the original record ID
+DEFINE INDEX idx_record_id ON TABLE spooky_data_hash COLUMNS RecordId UNIQUE;
+
+
+-- ==================================================
+-- 2. SPOOKY INCANTATION
+-- The Registry of active Live Queries (Incantations).
+-- ==================================================
+
+DEFINE TABLE spooky_incantation SCHEMAFULL
+    PERMISSIONS FULL;
+
+-- The unique hash ID of the query + params
+DEFINE FIELD Id ON TABLE spooky_incantation TYPE string;
+
+-- The raw query string (for re-hydration/debugging)
+DEFINE FIELD SurrealQL ON TABLE spooky_incantation TYPE string;
+
+-- The current XOR sum of all results in this query
+DEFINE FIELD Hash ON TABLE spooky_incantation TYPE bytes;
+
+-- For garbage collection (Heartbeat)
+DEFINE FIELD LastActiveAt ON TABLE spooky_incantation TYPE datetime DEFAULT time::now();
+
+-- How long this Incantation stays alive without activity
+DEFINE FIELD TTL ON TABLE spooky_incantation TYPE duration;
+
+-- Cleanup Triggers
+-- When an incantation dies, clean up its lookup and tail records
+DEFINE EVENT cascade_delete_lookup ON TABLE spooky_incantation WHEN $event = "DELETE" THEN {
+    DELETE spooky_incantation_lookup WHERE IncantationId = $before.Id;
+    DELETE spooky_incantation_tail WHERE IncantationId = $before.Id;
+};
+
+
+-- ==================================================
+-- 3. SPOOKY INCANTATION LOOKUP
+-- The Reverse Index: Maps Tables -> Incantations
+-- ==================================================
+
+DEFINE TABLE spooky_incantation_lookup SCHEMAFULL
+    PERMISSIONS FULL;
+
+-- Link to the parent Incantation
+DEFINE FIELD IncantationId ON TABLE spooky_incantation_lookup TYPE string;
+
+-- The primary table being queried (e.g., 'thread')
+DEFINE FIELD Table ON TABLE spooky_incantation_lookup TYPE string;
+
+-- Filter logic used to check if a dirty record matches this query
+-- Stored as an object e.g., { clause: "importance >= 3", args: [...] }
+DEFINE FIELD Where ON TABLE spooky_incantation_lookup TYPE object;
+
+-- Sorting Metadata needed to maintain order
+DEFINE FIELD SortFields ON TABLE spooky_incantation_lookup TYPE array<string>;
+DEFINE FIELD SortDirections ON TABLE spooky_incantation_lookup TYPE array<string>; -- 'ASC', 'DESC'
+
+-- Indexes for performance
+DEFINE INDEX idx_incantation ON TABLE spooky_incantation_lookup COLUMNS IncantationId;
+DEFINE INDEX idx_table ON TABLE spooky_incantation_lookup COLUMNS Table;
+
+
+-- ==================================================
+-- 4. SPOOKY INCANTATION TAIL
+-- Cursor Management for Pagination/Limits
+-- ==================================================
+
+DEFINE TABLE spooky_incantation_tail SCHEMAFULL
+    PERMISSIONS FULL;
+
+-- Link to the parent Incantation
+DEFINE FIELD IncantationId ON TABLE spooky_incantation_tail TYPE string;
+
+-- The sort values of the *last* item in the current result set
+-- Used to determine if a new record falls inside or outside the LIMIT window.
+DEFINE FIELD TailValues ON TABLE spooky_incantation_tail TYPE array<any>;
+
+DEFINE INDEX idx_incantation ON TABLE spooky_incantation_tail COLUMNS IncantationId UNIQUE;
+
+
+-- ==================================================
+-- 5. SPOOKY RELATIONSHIP
+-- The Graph Schema: Defines 'Bubble Up' vs 'Cascade Down'
+-- ==================================================
+
+DEFINE TABLE spooky_relationship SCHEMAFULL
+    PERMISSIONS FULL;
+
+DEFINE FIELD ParentTable ON TABLE spooky_relationship TYPE string;
+DEFINE FIELD ChildTable ON TABLE spooky_relationship TYPE string;
+
+-- The field on the Child that holds the Parent's ID
+DEFINE FIELD ChildField ON TABLE spooky_relationship TYPE string;
+
+-- The Logic Flow: 'COMPOSITION' (Bubble Up) or 'REFERENCE' (Cascade Down)
+DEFINE FIELD Type ON TABLE spooky_relationship TYPE string 
+    ASSERT $value INSIDE ['COMPOSITION', 'REFERENCE'];
+
+-- Enforce unique definition per relationship path
+DEFINE INDEX idx_rel_unique ON TABLE spooky_relationship COLUMNS ParentTable, ChildTable, ChildField UNIQUE;`;
