@@ -1,0 +1,55 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# VS Code
+.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+.dart_tool/
+.flutter-plugins-dependencies
+**/build/
+**/coverage/
+
+# Pubspec lock (often ignored for libraries, but can be kept if desired. Ignored here to keep it small)
+pubspec.lock
+
+# Rust
+**/target/
+**/*.rs.bk
+
+# Android
+**/android/.gradle
+**/android/local.properties
+**/android/captures/
+**/android/gradlew
+**/android/gradlew.bat
+**/android/generated/
+
+# iOS/macOS
+**/Pods/
+**/.symlinks/
+**/Podfile.lock
+**/ios/Flutter/Generated.xcconfig
+**/macos/Flutter/Generated.xcconfig
+**/ios/Flutter/flutter_export_environment.sh
+**/macos/Flutter/flutter_export_environment.sh
+**/ios/ServiceDefinitions.json
+**/macos/ServiceDefinitions.json
