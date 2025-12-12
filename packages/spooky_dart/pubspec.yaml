@@ -1,0 +1,22 @@
+name: spooky_dart
+description: The Spooky SDK for Dart, providing database orchestration, auth, and live queries.
+version: 0.0.1
+publish_to: 'none'
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  meta: ^1.7.0
+  rxdart: ^0.27.7
+  uuid: ^4.0.0
+  
+  # Local dependencies
+  query_builder_dart:
+    path: ../query_builder_dart
+  flutter_surrealdb_engine:
+    path: ../flutter_surrealdb_engine
+
+dev_dependencies:
+  lints: ^2.0.0
+  test: ^1.21.0
