@@ -66,7 +66,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => 1628624945;
+  int get rustContentHash => 727272529;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -77,11 +77,88 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
 }
 
 abstract class RustLibApi extends BaseApi {
-  Future<void> crateConnectDb({required String path});
+  Future<List<SurrealResult>> crateSurrealDatabaseAuthenticate({
+    required SurrealDatabase that,
+    required String token,
+  });
+
+  SurrealDb crateSurrealDatabaseAutoAccessorGetDb({
+    required SurrealDatabase that,
+  });
+
+  void crateSurrealDatabaseAutoAccessorSetDb({
+    required SurrealDatabase that,
+    required SurrealDb db,
+  });
+
+  Future<List<SurrealResult>> crateSurrealDatabaseHealth({
+    required SurrealDatabase that,
+  });
+
+  Future<List<SurrealResult>> crateSurrealDatabaseInvalidate({
+    required SurrealDatabase that,
+  });
+
+  Future<List<SurrealResult>> crateSurrealDatabaseQueryDb({
+    required SurrealDatabase that,
+    required String query,
+  });
+
+  Future<List<SurrealResult>> crateSurrealDatabaseSigninDatabase({
+    required SurrealDatabase that,
+    required String username,
+    required String password,
+    required String namespace,
+    required String database,
+  });
+
+  Future<List<SurrealResult>> crateSurrealDatabaseSigninNamespace({
+    required SurrealDatabase that,
+    required String username,
+    required String password,
+    required String namespace,
+  });
+
+  Future<List<SurrealResult>> crateSurrealDatabaseSigninRoot({
+    required SurrealDatabase that,
+    required String username,
+    required String password,
+  });
+
+  Future<List<SurrealResult>> crateSurrealDatabaseUseDb({
+    required SurrealDatabase that,
+    required String db,
+  });
+
+  Future<List<SurrealResult>> crateSurrealDatabaseUseNs({
+    required SurrealDatabase that,
+    required String ns,
+  });
+
+  Future<List<SurrealResult>> crateSurrealDatabaseVersion({
+    required SurrealDatabase that,
+  });
+
+  Future<SurrealDatabase> crateConnectDb({required String path});
 
   Future<void> crateInitApp();
 
-  Future<List<SurrealResult>> crateQueryDb({required String query});
+  RustArcIncrementStrongCountFnType
+  get rust_arc_increment_strong_count_SurrealDatabase;
+
+  RustArcDecrementStrongCountFnType
+  get rust_arc_decrement_strong_count_SurrealDatabase;
+
+  CrossPlatformFinalizerArg
+  get rust_arc_decrement_strong_count_SurrealDatabasePtr;
+
+  RustArcIncrementStrongCountFnType
+  get rust_arc_increment_strong_count_SurrealDb;
+
+  RustArcDecrementStrongCountFnType
+  get rust_arc_decrement_strong_count_SurrealDb;
+
+  CrossPlatformFinalizerArg get rust_arc_decrement_strong_count_SurrealDbPtr;
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -93,12 +170,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   });
 
   @override
-  Future<void> crateConnectDb({required String path}) {
+  Future<List<SurrealResult>> crateSurrealDatabaseAuthenticate({
+    required SurrealDatabase that,
+    required String token,
+  }) {
     return handler.executeNormal(
       NormalTask(
         callFfi: (port_) {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_String(path, serializer);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDatabase(
+            that,
+            serializer,
+          );
+          sse_encode_String(token, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -107,7 +191,452 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
         },
         codec: SseCodec(
+          decodeSuccessData: sse_decode_list_surreal_result,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateSurrealDatabaseAuthenticateConstMeta,
+        argValues: [that, token],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateSurrealDatabaseAuthenticateConstMeta =>
+      const TaskConstMeta(
+        debugName: "SurrealDatabase_authenticate",
+        argNames: ["that", "token"],
+      );
+
+  @override
+  SurrealDb crateSurrealDatabaseAutoAccessorGetDb({
+    required SurrealDatabase that,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDatabase(
+            that,
+            serializer,
+          );
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 2)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData:
+              sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDb,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateSurrealDatabaseAutoAccessorGetDbConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateSurrealDatabaseAutoAccessorGetDbConstMeta =>
+      const TaskConstMeta(
+        debugName: "SurrealDatabase_auto_accessor_get_db",
+        argNames: ["that"],
+      );
+
+  @override
+  void crateSurrealDatabaseAutoAccessorSetDb({
+    required SurrealDatabase that,
+    required SurrealDb db,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDatabase(
+            that,
+            serializer,
+          );
+          sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDb(
+            db,
+            serializer,
+          );
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 3)!;
+        },
+        codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateSurrealDatabaseAutoAccessorSetDbConstMeta,
+        argValues: [that, db],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateSurrealDatabaseAutoAccessorSetDbConstMeta =>
+      const TaskConstMeta(
+        debugName: "SurrealDatabase_auto_accessor_set_db",
+        argNames: ["that", "db"],
+      );
+
+  @override
+  Future<List<SurrealResult>> crateSurrealDatabaseHealth({
+    required SurrealDatabase that,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDatabase(
+            that,
+            serializer,
+          );
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 4,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_surreal_result,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateSurrealDatabaseHealthConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateSurrealDatabaseHealthConstMeta => const TaskConstMeta(
+    debugName: "SurrealDatabase_health",
+    argNames: ["that"],
+  );
+
+  @override
+  Future<List<SurrealResult>> crateSurrealDatabaseInvalidate({
+    required SurrealDatabase that,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDatabase(
+            that,
+            serializer,
+          );
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 5,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_surreal_result,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateSurrealDatabaseInvalidateConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateSurrealDatabaseInvalidateConstMeta =>
+      const TaskConstMeta(
+        debugName: "SurrealDatabase_invalidate",
+        argNames: ["that"],
+      );
+
+  @override
+  Future<List<SurrealResult>> crateSurrealDatabaseQueryDb({
+    required SurrealDatabase that,
+    required String query,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDatabase(
+            that,
+            serializer,
+          );
+          sse_encode_String(query, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 6,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_surreal_result,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateSurrealDatabaseQueryDbConstMeta,
+        argValues: [that, query],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateSurrealDatabaseQueryDbConstMeta =>
+      const TaskConstMeta(
+        debugName: "SurrealDatabase_query_db",
+        argNames: ["that", "query"],
+      );
+
+  @override
+  Future<List<SurrealResult>> crateSurrealDatabaseSigninDatabase({
+    required SurrealDatabase that,
+    required String username,
+    required String password,
+    required String namespace,
+    required String database,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDatabase(
+            that,
+            serializer,
+          );
+          sse_encode_String(username, serializer);
+          sse_encode_String(password, serializer);
+          sse_encode_String(namespace, serializer);
+          sse_encode_String(database, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 7,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_surreal_result,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateSurrealDatabaseSigninDatabaseConstMeta,
+        argValues: [that, username, password, namespace, database],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateSurrealDatabaseSigninDatabaseConstMeta =>
+      const TaskConstMeta(
+        debugName: "SurrealDatabase_signin_database",
+        argNames: ["that", "username", "password", "namespace", "database"],
+      );
+
+  @override
+  Future<List<SurrealResult>> crateSurrealDatabaseSigninNamespace({
+    required SurrealDatabase that,
+    required String username,
+    required String password,
+    required String namespace,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDatabase(
+            that,
+            serializer,
+          );
+          sse_encode_String(username, serializer);
+          sse_encode_String(password, serializer);
+          sse_encode_String(namespace, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 8,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_surreal_result,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateSurrealDatabaseSigninNamespaceConstMeta,
+        argValues: [that, username, password, namespace],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateSurrealDatabaseSigninNamespaceConstMeta =>
+      const TaskConstMeta(
+        debugName: "SurrealDatabase_signin_namespace",
+        argNames: ["that", "username", "password", "namespace"],
+      );
+
+  @override
+  Future<List<SurrealResult>> crateSurrealDatabaseSigninRoot({
+    required SurrealDatabase that,
+    required String username,
+    required String password,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDatabase(
+            that,
+            serializer,
+          );
+          sse_encode_String(username, serializer);
+          sse_encode_String(password, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 9,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_surreal_result,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateSurrealDatabaseSigninRootConstMeta,
+        argValues: [that, username, password],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateSurrealDatabaseSigninRootConstMeta =>
+      const TaskConstMeta(
+        debugName: "SurrealDatabase_signin_root",
+        argNames: ["that", "username", "password"],
+      );
+
+  @override
+  Future<List<SurrealResult>> crateSurrealDatabaseUseDb({
+    required SurrealDatabase that,
+    required String db,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDatabase(
+            that,
+            serializer,
+          );
+          sse_encode_String(db, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 10,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_surreal_result,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateSurrealDatabaseUseDbConstMeta,
+        argValues: [that, db],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateSurrealDatabaseUseDbConstMeta => const TaskConstMeta(
+    debugName: "SurrealDatabase_use_db",
+    argNames: ["that", "db"],
+  );
+
+  @override
+  Future<List<SurrealResult>> crateSurrealDatabaseUseNs({
+    required SurrealDatabase that,
+    required String ns,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDatabase(
+            that,
+            serializer,
+          );
+          sse_encode_String(ns, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 11,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_surreal_result,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateSurrealDatabaseUseNsConstMeta,
+        argValues: [that, ns],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateSurrealDatabaseUseNsConstMeta => const TaskConstMeta(
+    debugName: "SurrealDatabase_use_ns",
+    argNames: ["that", "ns"],
+  );
+
+  @override
+  Future<List<SurrealResult>> crateSurrealDatabaseVersion({
+    required SurrealDatabase that,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDatabase(
+            that,
+            serializer,
+          );
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 12,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_surreal_result,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateSurrealDatabaseVersionConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateSurrealDatabaseVersionConstMeta =>
+      const TaskConstMeta(
+        debugName: "SurrealDatabase_version",
+        argNames: ["that"],
+      );
+
+  @override
+  Future<SurrealDatabase> crateConnectDb({required String path}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(path, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 13,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData:
+              sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDatabase,
           decodeErrorData: sse_decode_String,
         ),
         constMeta: kCrateConnectDbConstMeta,
@@ -129,7 +658,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 2,
+            funcId: 14,
             port: port_,
           );
         },
@@ -147,33 +676,75 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateInitAppConstMeta =>
       const TaskConstMeta(debugName: "init_app", argNames: []);
 
-  @override
-  Future<List<SurrealResult>> crateQueryDb({required String query}) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_String(query, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 3,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_surreal_result,
-          decodeErrorData: sse_decode_String,
-        ),
-        constMeta: kCrateQueryDbConstMeta,
-        argValues: [query],
-        apiImpl: this,
-      ),
-    );
+  RustArcIncrementStrongCountFnType
+  get rust_arc_increment_strong_count_SurrealDatabase => wire
+      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDatabase;
+
+  RustArcDecrementStrongCountFnType
+  get rust_arc_decrement_strong_count_SurrealDatabase => wire
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDatabase;
+
+  RustArcIncrementStrongCountFnType
+  get rust_arc_increment_strong_count_SurrealDb => wire
+      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDb;
+
+  RustArcDecrementStrongCountFnType
+  get rust_arc_decrement_strong_count_SurrealDb => wire
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDb;
+
+  @protected
+  SurrealDatabase
+  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDatabase(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return SurrealDatabaseImpl.frbInternalDcoDecode(raw as List<dynamic>);
   }
 
-  TaskConstMeta get kCrateQueryDbConstMeta =>
-      const TaskConstMeta(debugName: "query_db", argNames: ["query"]);
+  @protected
+  SurrealDb
+  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDb(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return SurrealDbImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
+  @protected
+  SurrealDatabase
+  dco_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDatabase(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return SurrealDatabaseImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
+  @protected
+  SurrealDatabase
+  dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDatabase(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return SurrealDatabaseImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
+  @protected
+  SurrealDatabase
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDatabase(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return SurrealDatabaseImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
+  @protected
+  SurrealDb
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDb(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return SurrealDbImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
 
   @protected
   String dco_decode_String(dynamic raw) {
@@ -222,6 +793,84 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   void dco_decode_unit(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return;
+  }
+
+  @protected
+  BigInt dco_decode_usize(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dcoDecodeU64(raw);
+  }
+
+  @protected
+  SurrealDatabase
+  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDatabase(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return SurrealDatabaseImpl.frbInternalSseDecode(
+      sse_decode_usize(deserializer),
+      sse_decode_i_32(deserializer),
+    );
+  }
+
+  @protected
+  SurrealDb
+  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDb(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return SurrealDbImpl.frbInternalSseDecode(
+      sse_decode_usize(deserializer),
+      sse_decode_i_32(deserializer),
+    );
+  }
+
+  @protected
+  SurrealDatabase
+  sse_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDatabase(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return SurrealDatabaseImpl.frbInternalSseDecode(
+      sse_decode_usize(deserializer),
+      sse_decode_i_32(deserializer),
+    );
+  }
+
+  @protected
+  SurrealDatabase
+  sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDatabase(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return SurrealDatabaseImpl.frbInternalSseDecode(
+      sse_decode_usize(deserializer),
+      sse_decode_i_32(deserializer),
+    );
+  }
+
+  @protected
+  SurrealDatabase
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDatabase(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return SurrealDatabaseImpl.frbInternalSseDecode(
+      sse_decode_usize(deserializer),
+      sse_decode_i_32(deserializer),
+    );
+  }
+
+  @protected
+  SurrealDb
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDb(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return SurrealDbImpl.frbInternalSseDecode(
+      sse_decode_usize(deserializer),
+      sse_decode_i_32(deserializer),
+    );
   }
 
   @protected
@@ -288,6 +937,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  BigInt sse_decode_usize(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getBigUint64();
+  }
+
+  @protected
   int sse_decode_i_32(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getInt32();
@@ -297,6 +952,84 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   bool sse_decode_bool(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getUint8() != 0;
+  }
+
+  @protected
+  void
+  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDatabase(
+    SurrealDatabase self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+      (self as SurrealDatabaseImpl).frbInternalSseEncode(move: true),
+      serializer,
+    );
+  }
+
+  @protected
+  void
+  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDb(
+    SurrealDb self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+      (self as SurrealDbImpl).frbInternalSseEncode(move: true),
+      serializer,
+    );
+  }
+
+  @protected
+  void
+  sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDatabase(
+    SurrealDatabase self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+      (self as SurrealDatabaseImpl).frbInternalSseEncode(move: false),
+      serializer,
+    );
+  }
+
+  @protected
+  void
+  sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDatabase(
+    SurrealDatabase self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+      (self as SurrealDatabaseImpl).frbInternalSseEncode(move: false),
+      serializer,
+    );
+  }
+
+  @protected
+  void
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDatabase(
+    SurrealDatabase self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+      (self as SurrealDatabaseImpl).frbInternalSseEncode(move: null),
+      serializer,
+    );
+  }
+
+  @protected
+  void
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDb(
+    SurrealDb self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+      (self as SurrealDbImpl).frbInternalSseEncode(move: null),
+      serializer,
+    );
   }
 
   @protected
@@ -357,6 +1090,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_usize(BigInt self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putBigUint64(self);
+  }
+
+  @protected
   void sse_encode_i_32(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putInt32(self);
@@ -367,4 +1106,108 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putUint8(self ? 1 : 0);
   }
+}
+
+@sealed
+class SurrealDatabaseImpl extends RustOpaque implements SurrealDatabase {
+  // Not to be used by end users
+  SurrealDatabaseImpl.frbInternalDcoDecode(List<dynamic> wire)
+    : super.frbInternalDcoDecode(wire, _kStaticData);
+
+  // Not to be used by end users
+  SurrealDatabaseImpl.frbInternalSseDecode(BigInt ptr, int externalSizeOnNative)
+    : super.frbInternalSseDecode(ptr, externalSizeOnNative, _kStaticData);
+
+  static final _kStaticData = RustArcStaticData(
+    rustArcIncrementStrongCount:
+        RustLib.instance.api.rust_arc_increment_strong_count_SurrealDatabase,
+    rustArcDecrementStrongCount:
+        RustLib.instance.api.rust_arc_decrement_strong_count_SurrealDatabase,
+    rustArcDecrementStrongCountPtr:
+        RustLib.instance.api.rust_arc_decrement_strong_count_SurrealDatabasePtr,
+  );
+
+  Future<List<SurrealResult>> authenticate({required String token}) => RustLib
+      .instance
+      .api
+      .crateSurrealDatabaseAuthenticate(that: this, token: token);
+
+  SurrealDb get db =>
+      RustLib.instance.api.crateSurrealDatabaseAutoAccessorGetDb(that: this);
+
+  set db(SurrealDb db) => RustLib.instance.api
+      .crateSurrealDatabaseAutoAccessorSetDb(that: this, db: db);
+
+  Future<List<SurrealResult>> health() =>
+      RustLib.instance.api.crateSurrealDatabaseHealth(that: this);
+
+  Future<List<SurrealResult>> invalidate() =>
+      RustLib.instance.api.crateSurrealDatabaseInvalidate(that: this);
+
+  Future<List<SurrealResult>> queryDb({required String query}) => RustLib
+      .instance
+      .api
+      .crateSurrealDatabaseQueryDb(that: this, query: query);
+
+  Future<List<SurrealResult>> signinDatabase({
+    required String username,
+    required String password,
+    required String namespace,
+    required String database,
+  }) => RustLib.instance.api.crateSurrealDatabaseSigninDatabase(
+    that: this,
+    username: username,
+    password: password,
+    namespace: namespace,
+    database: database,
+  );
+
+  Future<List<SurrealResult>> signinNamespace({
+    required String username,
+    required String password,
+    required String namespace,
+  }) => RustLib.instance.api.crateSurrealDatabaseSigninNamespace(
+    that: this,
+    username: username,
+    password: password,
+    namespace: namespace,
+  );
+
+  Future<List<SurrealResult>> signinRoot({
+    required String username,
+    required String password,
+  }) => RustLib.instance.api.crateSurrealDatabaseSigninRoot(
+    that: this,
+    username: username,
+    password: password,
+  );
+
+  Future<List<SurrealResult>> useDb({required String db}) =>
+      RustLib.instance.api.crateSurrealDatabaseUseDb(that: this, db: db);
+
+  Future<List<SurrealResult>> useNs({required String ns}) =>
+      RustLib.instance.api.crateSurrealDatabaseUseNs(that: this, ns: ns);
+
+  Future<List<SurrealResult>> version() =>
+      RustLib.instance.api.crateSurrealDatabaseVersion(that: this);
+}
+
+@sealed
+class SurrealDbImpl extends RustOpaque implements SurrealDb {
+  // Not to be used by end users
+  SurrealDbImpl.frbInternalDcoDecode(List<dynamic> wire)
+    : super.frbInternalDcoDecode(wire, _kStaticData);
+
+  // Not to be used by end users
+  SurrealDbImpl.frbInternalSseDecode(BigInt ptr, int externalSizeOnNative)
+    : super.frbInternalSseDecode(ptr, externalSizeOnNative, _kStaticData);
+
+  static final _kStaticData = RustArcStaticData(
+    rustArcIncrementStrongCount:
+        RustLib.instance.api.rust_arc_increment_strong_count_SurrealDb,
+    rustArcDecrementStrongCount:
+        RustLib.instance.api.rust_arc_decrement_strong_count_SurrealDb,
+    rustArcDecrementStrongCountPtr:
+        RustLib.instance.api.rust_arc_decrement_strong_count_SurrealDbPtr,
+  );
 }

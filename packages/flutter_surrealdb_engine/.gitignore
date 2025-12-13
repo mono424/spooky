@@ -18,38 +18,52 @@ migrate_working_dir/
 *.iws
 .idea/
 
-# VS Code
+# VS Code related
 .vscode/
 
 # Flutter/Dart/Pub related
 **/doc/api/
 .dart_tool/
+.flutter-plugins
 .flutter-plugins-dependencies
-**/build/
-**/coverage/
+.pub-cache/
+.pub/
+/build/
+/coverage/
 
-# Pubspec lock (often ignored for libraries, but can be kept if desired. Ignored here to keep it small)
-pubspec.lock
-
-# Rust
-**/target/
+# Rust related
+/target/
+/rust/target/
 **/*.rs.bk
 
-# Android
-**/android/.gradle
+# Android related
 **/android/local.properties
+**/android/.gradle
 **/android/captures/
 **/android/gradlew
 **/android/gradlew.bat
-**/android/generated/
+**/android/build/
+**/android/app/build/
+**/android/.cxx/
 
-# iOS/macOS
-**/Pods/
-**/.symlinks/
-**/Podfile.lock
+# iOS/macOS related
 **/ios/Flutter/Generated.xcconfig
-**/macos/Flutter/Generated.xcconfig
+**/ios/Flutter/app.flx
+**/ios/Flutter/app.zip
+**/ios/Flutter/flutter_assets/
 **/ios/Flutter/flutter_export_environment.sh
-**/macos/Flutter/flutter_export_environment.sh
 **/ios/ServiceDefinitions.json
-**/macos/ServiceDefinitions.json
+**/ios/Runner/GeneratedPluginRegistrant.*
+**/macos/Flutter/Generated.xcconfig
+**/macos/Flutter/flutter_assets/
+**/macos/Flutter/flutter_export_environment.sh
+**/macos/Flutter/ephemeral/
+
+# Windows related
+**/windows/flutter/ephemeral/
+
+# Linux related
+**/linux/flutter/ephemeral/
+
+# Exceptions to above rules.
+!/example/build/

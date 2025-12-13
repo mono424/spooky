@@ -6,11 +6,53 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-Future<void> connectDb({required String path}) =>
+// These functions are ignored because they are not marked as `pub`: `create_result`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`
+
+Future<SurrealDatabase> connectDb({required String path}) =>
     RustLib.instance.api.crateConnectDb(path: path);
 
-Future<List<SurrealResult>> queryDb({required String query}) =>
-    RustLib.instance.api.crateQueryDb(query: query);
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SurrealDatabase>>
+abstract class SurrealDatabase implements RustOpaqueInterface {
+  Future<List<SurrealResult>> authenticate({required String token});
+
+  SurrealDb get db;
+
+  set db(SurrealDb db);
+
+  Future<List<SurrealResult>> health();
+
+  Future<List<SurrealResult>> invalidate();
+
+  Future<List<SurrealResult>> queryDb({required String query});
+
+  Future<List<SurrealResult>> signinDatabase({
+    required String username,
+    required String password,
+    required String namespace,
+    required String database,
+  });
+
+  Future<List<SurrealResult>> signinNamespace({
+    required String username,
+    required String password,
+    required String namespace,
+  });
+
+  Future<List<SurrealResult>> signinRoot({
+    required String username,
+    required String password,
+  });
+
+  Future<List<SurrealResult>> useDb({required String db});
+
+  Future<List<SurrealResult>> useNs({required String ns});
+
+  Future<List<SurrealResult>> version();
+}
+
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Surreal < Db >>>
+abstract class SurrealDb implements RustOpaqueInterface {}
 
 class SurrealResult {
   final String? result;
