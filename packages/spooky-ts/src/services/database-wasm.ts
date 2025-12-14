@@ -128,6 +128,9 @@ export async function createDatabaseService<S extends SchemaStructure>(
   );
 
   remoteDatabase = await connectRemoteDatabase(remoteUrl, logger);
+  if (namespace && database) {
+    await remoteDatabase.use({ namespace, database });
+  }
 
   return {
     useLocal: makeUseLocalDatabase(localDatabase),

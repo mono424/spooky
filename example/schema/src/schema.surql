@@ -10,7 +10,8 @@ DEFINE ACCESS account ON DATABASE TYPE RECORD
 		LET $existing = (SELECT value id FROM user WHERE username = $username LIMIT 1)[0];
 		IF $existing != NONE { THROW "Username '" + <string>$username + "' is already taken" };
 
-		CREATE user SET username = $username, password = crypto::argon2::generate($password);
+		LET $u = CREATE user SET username = $username, password = crypto::argon2::generate($password);
+		RETURN $u;
 	}
 	SIGNIN ( SELECT * FROM user WHERE username = $username AND crypto::argon2::compare(password, $password) )
 	DURATION FOR TOKEN 365d, FOR SESSION 365d

@@ -12,5 +12,8 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "packageManager": "pnpm@9.0.0"
+  "packageManager": "pnpm@9.0.0",
+  "devDependencies": {
+    "surrealdb": "^2.0.0-alpha.14"
+  }
 }

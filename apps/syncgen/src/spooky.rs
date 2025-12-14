@@ -31,7 +31,7 @@ pub fn generate_spooky_events(
 
     for table_name in &sorted_table_names {
         // Skip system/internal tables and the spooky hash tables themselves
-        if table_name.starts_with("_spooky_") {
+        if table_name.starts_with("_spooky_") || table_name.as_str() == "user" {
             continue;
         }
 
@@ -60,6 +60,9 @@ pub fn generate_spooky_events(
         sorted_fields.sort();
 
         for field_name in sorted_fields {
+            if field_name == "password" {
+                continue;
+            }
             // Logic from TS: `intrinsicFields.push("${propName}: $after.${propName}")`
             // We just format it similarly
             intrinsic_fields.push(format!("{}: $after.{}", field_name, field_name));

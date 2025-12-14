@@ -121,6 +121,26 @@ fn extract_table_and_field_name(line: &str) -> Option<(String, String)> {
 fn main() -> Result<()> {
     let args = Args::parse();
 
+    // Determine output format
+    let output_format = if let Some(format_str) = &args.format {
+        match format_str.to_lowercase().as_str() {
+            "json" => OutputFormat::JsonSchema,
+            "typescript" | "ts" => OutputFormat::Typescript,
+            "dart" => OutputFormat::Dart,
+            "surql" => OutputFormat::Surql,
+            _ => {
+                anyhow::bail!(
+                    "Unknown format: {}. Supported formats: json, typescript, dart, surql",
+                    format_str
+                );
+            }
+        }
+    } else {
+        // Infer from file extension
+        OutputFormat::from_extension(args.output.to_str().unwrap_or(""))
+            .unwrap_or(OutputFormat::JsonSchema)
+    };
+
     // Read the input file
     let mut content = fs::read_to_string(&args.input)
         .context(format!("Failed to read input file: {:?}", args.input))?;
@@ -142,7 +162,14 @@ fn main() -> Result<()> {
         .context("Failed to parse SurrealDB schema")?;
 
     // Filter the raw schema content to remove fields with FOR select WHERE false
-    let raw_schema_content = filter_schema_for_client(&content, &parser)?;
+    let filtered_schema_content = filter_schema_for_client(&content, &parser)?;
+    
+    // Choose which content to use based on format
+    let raw_schema_content = if matches!(output_format, OutputFormat::Surql) {
+        content.clone()
+    } else {
+        filtered_schema_content.clone()
+    };
 
     println!(
         "Successfully parsed {} table(s) from {:?}",
@@ -169,26 +196,6 @@ fn main() -> Result<()> {
         serde_json::to_string_pretty(&json_schema).context("Failed to serialize JSON Schema")?
     } else {
         serde_json::to_string(&json_schema).context("Failed to serialize JSON Schema")?
-    };
-
-    // Determine output format
-    let output_format = if let Some(format_str) = &args.format {
-        match format_str.to_lowercase().as_str() {
-            "json" => OutputFormat::JsonSchema,
-            "typescript" | "ts" => OutputFormat::Typescript,
-            "dart" => OutputFormat::Dart,
-            "surql" => OutputFormat::Surql,
-            _ => {
-                anyhow::bail!(
-                    "Unknown format: {}. Supported formats: json, typescript, dart, surql",
-                    format_str
-                );
-            }
-        }
-    } else {
-        // Infer from file extension
-        OutputFormat::from_extension(args.output.to_str().unwrap_or(""))
-            .unwrap_or(OutputFormat::JsonSchema)
     };
 
     if args.all {
