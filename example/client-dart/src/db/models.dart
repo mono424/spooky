@@ -12,22 +12,12 @@ Schema schemaFromJson(String str) => Schema.fromJson(json.decode(str));
 String schemaToJson(Schema data) => json.encode(data.toJson());
 
 class Schema {
-    SpookyDataHash spookyDataHash;
-    SpookyIncantation spookyIncantation;
-    SpookyIncantationLookup spookyIncantationLookup;
-    SpookyIncantationTail spookyIncantationTail;
-    SpookyRelationship spookyRelationship;
     Comment comment;
     CommentedOn commentedOn;
     Thread thread;
     User user;
 
     Schema({
-        required this.spookyDataHash,
-        required this.spookyIncantation,
-        required this.spookyIncantationLookup,
-        required this.spookyIncantationTail,
-        required this.spookyRelationship,
         required this.comment,
         required this.commentedOn,
         required this.thread,
@@ -35,11 +25,6 @@ class Schema {
     });
 
     factory Schema.fromJson(Map<String, dynamic> json) => Schema(
-        spookyDataHash: SpookyDataHash.fromJson(json["_spooky_data_hash"]),
-        spookyIncantation: SpookyIncantation.fromJson(json["_spooky_incantation"]),
-        spookyIncantationLookup: SpookyIncantationLookup.fromJson(json["_spooky_incantation_lookup"]),
-        spookyIncantationTail: SpookyIncantationTail.fromJson(json["_spooky_incantation_tail"]),
-        spookyRelationship: SpookyRelationship.fromJson(json["_spooky_relationship"]),
         comment: Comment.fromJson(json["comment"]),
         commentedOn: CommentedOn.fromJson(json["commented_on"]),
         thread: Thread.fromJson(json["thread"]),
@@ -47,11 +32,6 @@ class Schema {
     );
 
     Map<String, dynamic> toJson() => {
-        "_spooky_data_hash": spookyDataHash.toJson(),
-        "_spooky_incantation": spookyIncantation.toJson(),
-        "_spooky_incantation_lookup": spookyIncantationLookup.toJson(),
-        "_spooky_incantation_tail": spookyIncantationTail.toJson(),
-        "_spooky_relationship": spookyRelationship.toJson(),
         "comment": comment.toJson(),
         "commented_on": commentedOn.toJson(),
         "thread": thread.toJson(),
@@ -114,192 +94,6 @@ class CommentedOn {
 
     Map<String, dynamic> toJson() => {
         "id": id,
-    };
-}
-
-class SpookyDataHash {
-    
-    ///Any type
-    dynamic compositionHash;
-    
-    ///Record ID
-    String id;
-    
-    ///Any type
-    dynamic intrinsicHash;
-    
-    ///Record ID
-    String recordId;
-    
-    ///Any type
-    dynamic totalHash;
-
-    SpookyDataHash({
-        required this.compositionHash,
-        required this.id,
-        required this.intrinsicHash,
-        required this.recordId,
-        required this.totalHash,
-    });
-
-    factory SpookyDataHash.fromJson(Map<String, dynamic> json) => SpookyDataHash(
-        compositionHash: json["CompositionHash"],
-        id: json["id"],
-        intrinsicHash: json["IntrinsicHash"],
-        recordId: json["RecordId"],
-        totalHash: json["TotalHash"],
-    );
-
-    Map<String, dynamic> toJson() => {
-        "CompositionHash": compositionHash,
-        "id": id,
-        "IntrinsicHash": intrinsicHash,
-        "RecordId": recordId,
-        "TotalHash": totalHash,
-    };
-}
-
-class SpookyIncantation {
-    
-    ///Any type
-    dynamic hash;
-    
-    ///Record ID
-    String spookyIncantationId;
-    String id;
-    DateTime lastActiveAt;
-    String surrealQl;
-    
-    ///ISO 8601 duration
-    String ttl;
-
-    SpookyIncantation({
-        required this.hash,
-        required this.spookyIncantationId,
-        required this.id,
-        required this.lastActiveAt,
-        required this.surrealQl,
-        required this.ttl,
-    });
-
-    factory SpookyIncantation.fromJson(Map<String, dynamic> json) => SpookyIncantation(
-        hash: json["Hash"],
-        spookyIncantationId: json["id"],
-        id: json["Id"],
-        lastActiveAt: DateTime.parse(json["LastActiveAt"]),
-        surrealQl: json["SurrealQL"],
-        ttl: json["TTL"],
-    );
-
-    Map<String, dynamic> toJson() => {
-        "Hash": hash,
-        "id": spookyIncantationId,
-        "Id": id,
-        "LastActiveAt": lastActiveAt.toIso8601String(),
-        "SurrealQL": surrealQl,
-        "TTL": ttl,
-    };
-}
-
-class SpookyIncantationLookup {
-    String table;
-    
-    ///Any type
-    dynamic where;
-    
-    ///Record ID
-    String id;
-    String incantationId;
-    List<String> sortDirections;
-    List<String> sortFields;
-
-    SpookyIncantationLookup({
-        required this.table,
-        required this.where,
-        required this.id,
-        required this.incantationId,
-        required this.sortDirections,
-        required this.sortFields,
-    });
-
-    factory SpookyIncantationLookup.fromJson(Map<String, dynamic> json) => SpookyIncantationLookup(
-        table: json["`Table`"],
-        where: json["`Where`"],
-        id: json["id"],
-        incantationId: json["IncantationId"],
-        sortDirections: List<String>.from(json["SortDirections"].map((x) => x)),
-        sortFields: List<String>.from(json["SortFields"].map((x) => x)),
-    );
-
-    Map<String, dynamic> toJson() => {
-        "`Table`": table,
-        "`Where`": where,
-        "id": id,
-        "IncantationId": incantationId,
-        "SortDirections": List<dynamic>.from(sortDirections.map((x) => x)),
-        "SortFields": List<dynamic>.from(sortFields.map((x) => x)),
-    };
-}
-
-class SpookyIncantationTail {
-    
-    ///Record ID
-    String id;
-    String incantationId;
-    List<dynamic> tailValues;
-
-    SpookyIncantationTail({
-        required this.id,
-        required this.incantationId,
-        required this.tailValues,
-    });
-
-    factory SpookyIncantationTail.fromJson(Map<String, dynamic> json) => SpookyIncantationTail(
-        id: json["id"],
-        incantationId: json["IncantationId"],
-        tailValues: List<dynamic>.from(json["TailValues"].map((x) => x)),
-    );
-
-    Map<String, dynamic> toJson() => {
-        "id": id,
-        "IncantationId": incantationId,
-        "TailValues": List<dynamic>.from(tailValues.map((x) => x)),
-    };
-}
-
-class SpookyRelationship {
-    String childField;
-    String childTable;
-    
-    ///Record ID
-    String id;
-    String parentTable;
-    
-    ///Assert: $value INSIDE ['COMPOSITION', 'REFERENCE']
-    String type;
-
-    SpookyRelationship({
-        required this.childField,
-        required this.childTable,
-        required this.id,
-        required this.parentTable,
-        required this.type,
-    });
-
-    factory SpookyRelationship.fromJson(Map<String, dynamic> json) => SpookyRelationship(
-        childField: json["ChildField"],
-        childTable: json["ChildTable"],
-        id: json["id"],
-        parentTable: json["ParentTable"],
-        type: json["Type"],
-    );
-
-    Map<String, dynamic> toJson() => {
-        "ChildField": childField,
-        "ChildTable": childTable,
-        "id": id,
-        "ParentTable": parentTable,
-        "Type": type,
     };
 }
 
@@ -469,145 +263,4 @@ DEFINE TABLE commented_on SCHEMAFULL TYPE RELATION
 
 DEFINE EVENT comment_created ON TABLE comment WHEN \$event = \"CREATE\" THEN
   RELATE (\$after.id)->commented_on->(\$after.thread)
-;
-
--- ==================================================
--- 1. SPOOKY DATA HASH
--- The \"Shadow Graph\" tracking the state of every record.
--- ==================================================
-
-DEFINE TABLE _spooky_data_hash SCHEMAFULL
-    PERMISSIONS FOR select, create, update, delete WHERE true; -- In prod, you might restrict write access to server-side only
-
--- The actual record being tracked (e.g., comment:abc, thread:123)
-DEFINE FIELD RecordId ON TABLE _spooky_data_hash TYPE record
-    PERMISSIONS FOR select, create, update, delete WHERE true;
-
--- H_intrinsic: BLAKE3 hash of the record's own scalar fields
-DEFINE FIELD IntrinsicHash ON TABLE _spooky_data_hash TYPE bytes
-    PERMISSIONS FOR select, create, update, delete WHERE true;
-
--- H_composition: XOR sum of all dependent children's TotalHashes
-DEFINE FIELD CompositionHash ON TABLE _spooky_data_hash TYPE bytes
-    PERMISSIONS FOR select, create, update, delete WHERE true;
-
--- H_total: Intrinsic XOR Composition
-DEFINE FIELD TotalHash ON TABLE _spooky_data_hash TYPE bytes
-    PERMISSIONS FOR select, create, update, delete WHERE true;
-
--- Fast lookup by the original record ID
-DEFINE INDEX idx_record_id ON TABLE _spooky_data_hash COLUMNS RecordId UNIQUE;
-
-
--- ==================================================
--- 2. SPOOKY INCANTATION
--- The Registry of active Live Queries (Incantations).
--- ==================================================
-
-DEFINE TABLE _spooky_incantation SCHEMAFULL
-    PERMISSIONS FOR select, create, update, delete WHERE true;
-
--- The unique hash ID of the query + params
-DEFINE FIELD Id ON TABLE _spooky_incantation TYPE string
-    PERMISSIONS FOR select, create, update, delete WHERE true;
-
--- The raw query string (for re-hydration/debugging)
-DEFINE FIELD SurrealQL ON TABLE _spooky_incantation TYPE string
-    PERMISSIONS FOR select, create, update, delete WHERE true;
-
--- The current XOR sum of all results in this query
-DEFINE FIELD Hash ON TABLE _spooky_incantation TYPE bytes
-    PERMISSIONS FOR select, create, update, delete WHERE true;
-
--- For garbage collection (Heartbeat)
-DEFINE FIELD LastActiveAt ON TABLE _spooky_incantation TYPE datetime DEFAULT time::now()
-    PERMISSIONS FOR select, create, update, delete WHERE true;
-
--- How long this Incantation stays alive without activity
-DEFINE FIELD TTL ON TABLE _spooky_incantation TYPE duration
-    PERMISSIONS FOR select, create, update, delete WHERE true;
-
--- Cleanup Triggers
--- When an incantation dies, clean up its lookup and tail records
-DEFINE EVENT _spooky_cascade_delete_lookup ON TABLE _spooky_incantation WHEN \$event = \"DELETE\" THEN {
-    DELETE _spooky_incantation_lookup WHERE IncantationId = \$before.Id;
-    DELETE _spooky_incantation_tail WHERE IncantationId = \$before.Id;
-};
-
-
--- ==================================================
--- 3. SPOOKY INCANTATION LOOKUP
--- The Reverse Index: Maps Tables -> Incantations
--- ==================================================
-
-DEFINE TABLE _spooky_incantation_lookup SCHEMAFULL
-    PERMISSIONS FOR select, create, update, delete WHERE true;
-
--- Link to the parent Incantation
-DEFINE FIELD IncantationId ON TABLE _spooky_incantation_lookup TYPE string
-    PERMISSIONS FOR select, create, update, delete WHERE true;
-
--- The primary table being queried (e.g., 'thread')
-DEFINE FIELD Table ON TABLE _spooky_incantation_lookup TYPE string
-    PERMISSIONS FOR select, create, update, delete WHERE true;
-
--- Filter logic used to check if a dirty record matches this query
--- Stored as an object e.g., { clause: \"importance >= 3\", args: [...] }
-DEFINE FIELD Where ON TABLE _spooky_incantation_lookup TYPE object
-    PERMISSIONS FOR select, create, update, delete WHERE true;
-
--- Sorting Metadata needed to maintain order
-DEFINE FIELD SortFields ON TABLE _spooky_incantation_lookup TYPE array<string>
-    PERMISSIONS FOR select, create, update, delete WHERE true;
-DEFINE FIELD SortDirections ON TABLE _spooky_incantation_lookup TYPE array<string>
-    PERMISSIONS FOR select, create, update, delete WHERE true; -- 'ASC', 'DESC'
-
--- Indexes for performance
-DEFINE INDEX idx_incantation ON TABLE _spooky_incantation_lookup COLUMNS IncantationId;
-DEFINE INDEX idx_table ON TABLE _spooky_incantation_lookup COLUMNS Table;
-
-
--- ==================================================
--- 4. SPOOKY INCANTATION TAIL
--- Cursor Management for Pagination/Limits
--- ==================================================
-
-DEFINE TABLE _spooky_incantation_tail SCHEMAFULL
-    PERMISSIONS FOR select, create, update, delete WHERE true;
-
--- Link to the parent Incantation
-DEFINE FIELD IncantationId ON TABLE _spooky_incantation_tail TYPE string
-    PERMISSIONS FOR select, create, update, delete WHERE true;
-
--- The sort values of the *last* item in the current result set
--- Used to determine if a new record falls inside or outside the LIMIT window.
-DEFINE FIELD TailValues ON TABLE _spooky_incantation_tail TYPE array<any>
-    PERMISSIONS FOR select, create, update, delete WHERE true;
-
-DEFINE INDEX idx_incantation ON TABLE _spooky_incantation_tail COLUMNS IncantationId UNIQUE;
-
-
--- ==================================================
--- 5. SPOOKY RELATIONSHIP
--- The Graph Schema: Defines 'Bubble Up' vs 'Cascade Down'
--- ==================================================
-
-DEFINE TABLE _spooky_relationship SCHEMAFULL
-    PERMISSIONS FOR select, create, update, delete WHERE true;
-
-DEFINE FIELD ParentTable ON TABLE _spooky_relationship TYPE string
-    PERMISSIONS FOR select, create, update, delete WHERE true;
-DEFINE FIELD ChildTable ON TABLE _spooky_relationship TYPE string
-    PERMISSIONS FOR select, create, update, delete WHERE true;
-
--- The field on the Child that holds the Parent's ID
-DEFINE FIELD ChildField ON TABLE _spooky_relationship TYPE string
-    PERMISSIONS FOR select, create, update, delete WHERE true;
-
--- The Logic Flow: 'COMPOSITION' (Bubble Up) or 'REFERENCE' (Cascade Down)
-DEFINE FIELD Type ON TABLE _spooky_relationship TYPE string 
-    ASSERT \$value INSIDE ['COMPOSITION', 'REFERENCE']
-    PERMISSIONS FOR select, create, update, delete WHERE true;
-
--- Enforce unique definition per relationship path
-DEFINE INDEX idx_rel_unique ON TABLE _spooky_relationship COLUMNS ParentTable, ChildTable, ChildField UNIQUE;";
+;";

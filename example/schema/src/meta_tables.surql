@@ -3,7 +3,7 @@
 -- The "Shadow Graph" tracking the state of every record.
 -- ==================================================
 
-DEFINE TABLE _spooky_data_hash SCHEMAFULL
+DEFINE TABLE _spooky_data_hash SCHEMALESS
     PERMISSIONS FOR select, create, update, delete WHERE true; -- In prod, you might restrict write access to server-side only
 
 -- The actual record being tracked (e.g., comment:abc, thread:123)
