@@ -1,6 +1,7 @@
 mod codegen;
 mod json_schema;
 mod parser;
+mod spooky;
 
 use anyhow::{Context, Result};
 use clap::Parser as ClapParser;
@@ -203,7 +204,7 @@ fn main() -> Result<()> {
         // Generate TypeScript
         let ts_gen = CodeGenerator::new_with_header(OutputFormat::Typescript, !args.no_header);
         let ts_code = ts_gen
-            .generate_with_schema(&json_schema_string, "Database", Some(&raw_schema_content))
+            .generate_with_schema(&json_schema_string, "Database", Some(&raw_schema_content), None)
             .context("Failed to generate TypeScript code")?;
         let ts_path = args.output.with_extension("ts");
         fs::write(&ts_path, ts_code)
@@ -213,7 +214,7 @@ fn main() -> Result<()> {
         // Generate Dart
         let dart_gen = CodeGenerator::new_with_header(OutputFormat::Dart, !args.no_header);
         let dart_code = dart_gen
-            .generate_with_schema(&json_schema_string, "Database", Some(&raw_schema_content))
+            .generate_with_schema(&json_schema_string, "Database", Some(&raw_schema_content), None)
             .context("Failed to generate Dart code")?;
         let dart_path = args.output.with_extension("dart");
         fs::write(&dart_path, dart_code)
@@ -223,10 +224,14 @@ fn main() -> Result<()> {
         println!("\nSuccessfully generated all formats!");
     } else {
         // Generate single format
-        let code_gen = CodeGenerator::new_with_header(output_format, !args.no_header);
-        let output_content = code_gen
-            .generate_with_schema(&json_schema_string, "Database", Some(&raw_schema_content))
-            .context("Failed to generate code")?;
+       // Generate spooky events
+    let spooky_events = spooky::generate_spooky_events(&parser.tables, &content);
+
+    // Generate code
+    let generator = CodeGenerator::new_with_header(output_format, !args.no_header);
+    let output_content = generator
+        .generate_with_schema(&json_schema_string, "Schema", Some(&raw_schema_content), Some(&spooky_events))
+        .context("Failed to generate output code")?;
 
         fs::write(&args.output, output_content)
             .context(format!("Failed to write output file: {:?}", args.output))?;

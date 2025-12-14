@@ -40,7 +40,7 @@ impl CodeGenerator {
     }
 
     pub fn generate(&self, json_schema_content: &str, _top_level_name: &str) -> Result<String> {
-        self.generate_with_schema(json_schema_content, _top_level_name, None)
+        self.generate_with_schema(json_schema_content, _top_level_name, None, None)
     }
 
     pub fn generate_with_schema(
@@ -48,12 +48,19 @@ impl CodeGenerator {
         json_schema_content: &str,
         _top_level_name: &str,
         raw_schema: Option<&str>,
+        spooky_events: Option<&str>,
     ) -> Result<String> {
         let mut content = match self.format {
             OutputFormat::JsonSchema => json_schema_content.to_string(),
             OutputFormat::Typescript => self.generate_typescript(json_schema_content)?,
             OutputFormat::Dart => self.generate_dart(json_schema_content)?,
-            OutputFormat::Surql => raw_schema.unwrap_or("").to_string(),
+            OutputFormat::Surql => {
+                let mut schema = raw_schema.unwrap_or("").to_string();
+                if let Some(events) = spooky_events {
+                    schema.push_str(events);
+                }
+                schema
+            },
         };
 
         if self.include_header {
