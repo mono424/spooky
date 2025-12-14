@@ -55,7 +55,21 @@ impl CodeGenerator {
             OutputFormat::Typescript => self.generate_typescript(json_schema_content)?,
             OutputFormat::Dart => self.generate_dart(json_schema_content)?,
             OutputFormat::Surql => {
-                let mut schema = raw_schema.unwrap_or("").to_string();
+                let mut schema = String::new();
+
+                // Add module definitions section
+                schema.push_str("\n-- ==================================================\n");
+                schema.push_str("-- SURREALISM MODULES\n");
+                schema.push_str("-- ==================================================\n");
+                schema.push_str("\n-- Define bucket for module files\n");
+                schema.push_str("DEFINE BUCKET modules BACKEND \"file:/modules\";\n\n");
+                schema.push_str("-- Define the XOR module\n");
+                schema.push_str("DEFINE MODULE mod::xor AS f\"modules:/xor_module.surli\";\n\n");
+
+                // Add the main schema content
+                schema.push_str(raw_schema.unwrap_or(""));
+
+                // Add spooky events at the end
                 if let Some(events) = spooky_events {
                     schema.push_str(events);
                 }

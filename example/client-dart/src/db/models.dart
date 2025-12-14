@@ -154,7 +154,7 @@ class User {
     ///Reverse relationship: array of thread records
     List<String>? threads;
     
-    ///Assert: $value != NONE AND string::is::alphanum($value) AND string::len($value) > 3
+    ///Assert: $value != NONE AND string::len($value) > 3
     String username;
 
     User({
@@ -194,7 +194,7 @@ DEFINE TABLE user SCHEMAFULL
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
 DEFINE FIELD username ON TABLE user TYPE string
-ASSERT \$value != NONE AND string::is::alphanum(\$value) AND string::len(\$value) > 3
+ASSERT \$value != NONE AND string::len(\$value) > 3
 PERMISSIONS FOR select, create, update, delete WHERE true;
     
 DEFINE INDEX unique_username ON TABLE user FIELDS username UNIQUE;
