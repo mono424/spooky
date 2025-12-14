@@ -211,8 +211,17 @@ THEN {
 
     -- CASCADE DOWN (References)
     IF $old_hash_data.RecordId != NONE AND $new_intrinsic != $old_hash_data.IntrinsicHash THEN {
-        UPDATE comment SET _spooky_dirty = time::now() WHERE author = $after.id;
-        UPDATE thread SET _spooky_dirty = time::now() WHERE author = $after.id;
+        LET $intrinsic_delta = array::boolean_xor($new_intrinsic, $old_hash_data.IntrinsicHash);
+        UPDATE _spooky_data_hash SET
+            CompositionHash = array::boolean_xor(CompositionHash, $intrinsic_delta),
+            TotalHash = array::boolean_xor(TotalHash, $intrinsic_delta)
+        WHERE RecordId IN (SELECT value id FROM comment WHERE author = $after.id);
+
+        UPDATE _spooky_data_hash SET
+            CompositionHash = array::boolean_xor(CompositionHash, $intrinsic_delta),
+            TotalHash = array::boolean_xor(TotalHash, $intrinsic_delta)
+        WHERE RecordId IN (SELECT value id FROM thread WHERE author = $after.id);
+
     } END;
 };
 

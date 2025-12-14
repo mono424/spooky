@@ -109,6 +109,9 @@ export function AuthProvider(props: { children: JSX.Element }) {
       console.log("[AuthProvider] Auth check complete after sign in");
     } catch (error) {
       console.error("[AuthProvider] Sign in failed:", error);
+      if (error instanceof Error && "cause" in error) {
+        console.error("Caused by:", (error as any).cause);
+      }
       throw error;
     }
   };
@@ -134,6 +137,9 @@ export function AuthProvider(props: { children: JSX.Element }) {
       console.log("[AuthProvider] Auth check complete after sign up");
     } catch (error) {
       console.error("[AuthProvider] Sign up failed:", error);
+      if (error instanceof Error && "cause" in error) {
+        console.error("Caused by:", (error as any).cause);
+      }
       throw error;
     }
   };
@@ -145,6 +151,9 @@ export function AuthProvider(props: { children: JSX.Element }) {
       await db.deauthenticate();
     } catch (error) {
       console.error("Sign out failed:", error);
+      if (error instanceof Error && "cause" in error) {
+        console.error("Caused by:", (error as any).cause);
+      }
       throw error;
     }
   };

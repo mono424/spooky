@@ -60,7 +60,8 @@ export const makeUseLocalDatabase = (db: Surreal) => {
       }
       return result;
     } catch (error) {
-      throw new LocalDatabaseError("Failed to use database", error);
+      const msg = error instanceof Error ? error.message : String(error);
+      throw new LocalDatabaseError(`Failed to use database: ${msg}`, error);
     }
   };
 };
@@ -74,7 +75,8 @@ export const makeUseRemoteDatabase = (db: Surreal) => {
       }
       return result;
     } catch (error) {
-      throw new RemoteDatabaseError("Failed to use database", error);
+      const msg = error instanceof Error ? error.message : String(error);
+      throw new RemoteDatabaseError(`Failed to use database: ${msg}`, error);
     }
   };
 };
@@ -106,8 +108,9 @@ export const makeQueryRemoteDatabase = (db: Surreal, logger: Logger) => {
       // If no results, return empty array for array types
       return [] as unknown as T;
     } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
       throw new RemoteDatabaseError(
-        "Failed to execute query on remote database",
+        `Failed to execute query on remote database: ${msg}`,
         error
       );
     }
@@ -141,8 +144,9 @@ export const makeQueryLocalDatabase = (db: Surreal, logger: Logger) => {
       // If no results, return empty array for array types
       return [] as unknown as T;
     } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
       throw new LocalDatabaseError(
-        "Failed to execute query on local database",
+        `Failed to execute query on local database: ${msg}`,
         error
       );
     }
@@ -158,8 +162,9 @@ export const makeSubscribeLiveOfRemoteDatabase = (db: Surreal) => {
       // In surrealdb 1.x, it's `live` not `liveOf`, and it takes a string
       return await db.subscribeLive(liveUuid, callback);
     } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
       throw new RemoteDatabaseError(
-        "Failed to execute live on remote database",
+        `Failed to execute live on remote database: ${msg}`,
         error
       );
     }
@@ -174,8 +179,9 @@ export const makeUnsubscribeLiveOfRemoteDatabase = (db: Surreal) => {
     try {
       return await db.unSubscribeLive(liveUuid, callback);
     } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
       throw new RemoteDatabaseError(
-        "Failed to unsubscribe from live on remote database",
+        `Failed to unsubscribe from live on remote database: ${msg}`,
         error
       );
     }
@@ -198,8 +204,9 @@ export const makeAuthenticateRemoteDatabase = (db: Surreal) => {
       }
       return undefined;
     } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
       throw new RemoteAuthenticationError(
-        "Failed to authenticate on remote database",
+        `Failed to authenticate on remote database: ${msg}`,
         error
       );
     }
@@ -211,8 +218,9 @@ export const makeDeauthenticateRemoteDatabase = (db: Surreal) => {
     try {
       await db.invalidate();
     } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
       throw new RemoteDatabaseError(
-        "Failed to deauthenticate on remote database",
+        `Failed to deauthenticate on remote database: ${msg}`,
         error
       );
     }
@@ -224,7 +232,8 @@ export const makeCloseRemoteDatabase = (db: Surreal) => {
     try {
       await db.close();
     } catch (error) {
-      throw new RemoteDatabaseError("Failed to close remote database", error);
+      const msg = error instanceof Error ? error.message : String(error);
+      throw new RemoteDatabaseError(`Failed to close remote database: ${msg}`, error);
     }
   };
 };
@@ -234,7 +243,8 @@ export const makeCloseLocalDatabase = (db: Surreal) => {
     try {
       await db.close();
     } catch (error) {
-      throw new LocalDatabaseError("Failed to close local database", error);
+      const msg = error instanceof Error ? error.message : String(error);
+      throw new LocalDatabaseError(`Failed to close local database: ${msg}`, error);
     }
   };
 };
@@ -262,7 +272,8 @@ export const makeClearLocalCache = (db: Surreal) => {
         }
       }
     } catch (error) {
-      throw new LocalDatabaseError("Failed to clear local cache", error);
+      const msg = error instanceof Error ? error.message : String(error);
+      throw new LocalDatabaseError(`Failed to clear local cache: ${msg}`, error);
     }
   };
 };

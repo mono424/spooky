@@ -152,8 +152,12 @@ pub fn generate_spooky_events(
                      };
 
                      if !is_parent_link {
-                         // This is a reference that should be dirtied
-                         cascade_updates.push_str(&format!("        UPDATE {} SET _spooky_dirty = time::now() WHERE {} = $after.id;\n", other_table_name, rel.field_name));
+                         // This is a reference - update the spooky hash of the REFERENCING record
+                         // We update its CompositionHash and TotalHash by XORing with the delta
+                         cascade_updates.push_str("        UPDATE _spooky_data_hash SET\n");
+                         cascade_updates.push_str("            CompositionHash = array::boolean_xor(CompositionHash, $intrinsic_delta),\n");
+                         cascade_updates.push_str("            TotalHash = array::boolean_xor(TotalHash, $intrinsic_delta)\n");
+                         cascade_updates.push_str(&format!("        WHERE RecordId IN (SELECT value id FROM {} WHERE {} = $after.id);\n\n", other_table_name, rel.field_name));
                      }
                  }
              }
@@ -162,6 +166,7 @@ pub fn generate_spooky_events(
         if !cascade_updates.is_empty() {
              events.push_str("    -- CASCADE DOWN (References)\n");
              events.push_str("    IF $old_hash_data.RecordId != NONE AND $new_intrinsic != $old_hash_data.IntrinsicHash THEN {\n");
+             events.push_str("        LET $intrinsic_delta = array::boolean_xor($new_intrinsic, $old_hash_data.IntrinsicHash);\n");
              events.push_str(&cascade_updates);
              events.push_str("    } END;\n");
         }

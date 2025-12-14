@@ -2,7 +2,16 @@
 -- SCOPES & AUTHENTICATION
 -- ##################################################################
 DEFINE ACCESS account ON DATABASE TYPE RECORD
-	SIGNUP ( CREATE user SET username = $username, password = crypto::argon2::generate($password) )
+	SIGNUP {
+		IF string::len($username) <= 3 { THROW "Username must be longer than 3 characters" };
+		IF !string::is::alphanum($username) { THROW "Username must be alphanumeric" };
+		IF string::len($password) == 0 { THROW "Password cannot be empty" };
+
+		LET $existing = (SELECT value id FROM user WHERE username = $username LIMIT 1)[0];
+		IF $existing != NONE { THROW "Username '" + <string>$username + "' is already taken" };
+
+		CREATE user SET username = $username, password = crypto::argon2::generate($password);
+	}
 	SIGNIN ( SELECT * FROM user WHERE username = $username AND crypto::argon2::compare(password, $password) )
 	DURATION FOR TOKEN 365d, FOR SESSION 365d
 ;
