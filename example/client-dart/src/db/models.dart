@@ -403,8 +403,8 @@ DEFINE ACCESS account ON DATABASE TYPE RECORD
 
 DEFINE TABLE user SCHEMAFULL
 PERMISSIONS
-  FOR update, delete, create WHERE \$access = \"account\" AND id = \$auth.id
-  FOR select WHERE true;
+  FOR update, delete WHERE \$access = \"account\" AND id = \$auth.id
+  FOR create, select WHERE true;
 
 DEFINE FIELD username ON TABLE user TYPE string
 ASSERT \$value != NONE AND string::is::alphanum(\$value) AND string::len(\$value) > 3
