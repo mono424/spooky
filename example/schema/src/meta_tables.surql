@@ -1,4 +1,15 @@
 -- ==================================================
+-- 0. SPOOKY SCHEMA
+-- The provisioned schema state for the database. Currently only used in local cache.
+-- ==================================================
+
+DEFINE TABLE IF NOT EXISTS _spooky_schema SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS id ON _spooky_schema TYPE string;
+DEFINE FIELD IF NOT EXISTS hash ON _spooky_schema TYPE string;
+DEFINE FIELD IF NOT EXISTS created_at ON _spooky_schema TYPE datetime VALUE time::now();
+DEFINE INDEX IF NOT EXISTS unique_hash ON _spooky_schema FIELDS hash UNIQUE;
+
+-- ==================================================
 -- 1. SPOOKY DATA HASH
 -- The "Shadow Graph" tracking the state of every record.
 -- ==================================================

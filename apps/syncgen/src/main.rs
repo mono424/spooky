@@ -39,6 +39,10 @@ struct Args {
     /// Disable the generated file comment header (enabled by default)
     #[arg(long = "no-header", default_value_t = false)]
     no_header: bool,
+
+    /// Path to another .surql file to append to the input
+    #[arg(long)]
+    append: Option<PathBuf>,
 }
 
 /// Filter schema content to remove field definitions with FOR select WHERE false
@@ -62,7 +66,12 @@ fn filter_schema_for_client(content: &str, parser: &SchemaParser) -> Result<Stri
                             // Skip this entire field definition (until semicolon)
                             println!("  → Removing field '{}' from table '{}' in client schema", field_name, table_name);
                             while i < lines.len() {
-                                if lines[i].contains(';') {
+                                if let Some(idx) = lines[i].find(';') {
+                                    // Check if there is content after the semicolon
+                                    let after_semicolon = &lines[i][idx + 1..];
+                                    if !after_semicolon.trim().is_empty() {
+                                        result.push(after_semicolon);
+                                    }
                                     i += 1;
                                     break;
                                 }
@@ -112,8 +121,18 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     // Read the input file
-    let content = fs::read_to_string(&args.input)
+    let mut content = fs::read_to_string(&args.input)
         .context(format!("Failed to read input file: {:?}", args.input))?;
+
+    // Append extra file if specified
+    if let Some(append_path) = &args.append {
+        let append_content = fs::read_to_string(append_path)
+            .context(format!("Failed to read append file: {:?}", append_path))?;
+        
+        content.push('\n');
+        content.push_str(&append_content);
+        println!("  + Appended schema from {:?}", append_path);
+    }
 
     // Parse the schema
     let mut parser = SchemaParser::new();
@@ -157,9 +176,10 @@ fn main() -> Result<()> {
             "json" => OutputFormat::JsonSchema,
             "typescript" | "ts" => OutputFormat::Typescript,
             "dart" => OutputFormat::Dart,
+            "surql" => OutputFormat::Surql,
             _ => {
                 anyhow::bail!(
-                    "Unknown format: {}. Supported formats: json, typescript, dart",
+                    "Unknown format: {}. Supported formats: json, typescript, dart, surql",
                     format_str
                 );
             }
@@ -215,6 +235,7 @@ fn main() -> Result<()> {
             OutputFormat::JsonSchema => "JSON Schema",
             OutputFormat::Typescript => "TypeScript",
             OutputFormat::Dart => "Dart",
+            OutputFormat::Surql => "SurrealQL",
         };
 
         println!(
