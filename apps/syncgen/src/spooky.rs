@@ -31,7 +31,7 @@ pub fn generate_spooky_events(
 
     for table_name in &sorted_table_names {
         // Skip system/internal tables and the spooky hash tables themselves
-        if table_name.starts_with("_spooky_") || table_name.as_str() == "user" {
+        if table_name.starts_with("_spooky_") {
             continue;
         }
 
@@ -60,7 +60,7 @@ pub fn generate_spooky_events(
         sorted_fields.sort();
 
         for field_name in sorted_fields {
-            if field_name == "password" {
+            if field_name == "password" || field_name == "created_at" {
                 continue;
             }
             // Logic from TS: `intrinsicFields.push("${propName}: $after.${propName}")`
@@ -76,22 +76,22 @@ pub fn generate_spooky_events(
         events.push_str("WHEN $before != $after\nTHEN {\n");
 
         // 1. New Intrinsic Hash
-        // NOTE: crypto::blake3 takes a value. In TS it passed an object `{ field: value }`.
-        // SurrealQL `crypto::blake3({ ... })` works.
-        events.push_str("    LET $new_intrinsic = crypto::blake3({\n");
+        // NOTE: crypto::blake3 expects a string and returns hex string
+        events.push_str("    LET $new_intrinsic = crypto::blake3(<string>{\n");
         for (i, field_expr) in intrinsic_fields.iter().enumerate() {
             let comma = if i < intrinsic_fields.len() - 1 { "," } else { "" };
             events.push_str(&format!("        {}{}\n", field_expr, comma));
         }
         events.push_str("    });\n\n");
 
-        // 2. Previous Hash State
-        events.push_str("    LET $old_hash_data = (SELECT * FROM ONLY _spooky_data_hash WHERE RecordId = $before.id);\n");
-        events.push_str("    LET $old_total = $old_hash_data.TotalHash OR <bytes>[];\n");
-        events.push_str("    LET $composition = $old_hash_data.CompositionHash OR <bytes>[];\n\n");
+        // 2. Previous Hash State (use $before.id for UPDATE, fallback to $after.id for CREATE)
+        events.push_str("    LET $record_id = $before.id OR $after.id;\n");
+        events.push_str("    LET $old_hash_data = (SELECT * FROM ONLY _spooky_data_hash WHERE RecordId = $record_id);\n");
+        events.push_str("    LET $old_total = IF $old_hash_data.RecordId != NONE THEN $old_hash_data.TotalHash ELSE $new_intrinsic END;\n");
+        events.push_str("    LET $composition = IF $old_hash_data.RecordId != NONE THEN $old_hash_data.CompositionHash ELSE crypto::blake3(\"\") END;\n\n");
 
-        // 3. New Total Hash
-        events.push_str("    LET $new_total = array::boolean_xor($new_intrinsic, $composition);\n\n");
+        // 3. New Total Hash (XOR intrinsic with composition, or just intrinsic if no children)
+        events.push_str("    LET $new_total = mod::xor::blake3_xor($new_intrinsic, $composition);\n\n");
 
         // 4. Upsert Meta Table
         events.push_str("    UPSERT _spooky_data_hash CONTENT {\n");
@@ -105,23 +105,23 @@ pub fn generate_spooky_events(
         if let Some(parent_field) = parent_field_opt {
              events.push_str(&format!("    -- BUBBLE UP to Parent ({})\n", parent_field));
              events.push_str(&format!("    IF $before.{} = $after.{} THEN {{\n", parent_field, parent_field));
-             events.push_str("        LET $delta = array::boolean_xor($old_total, $new_total);\n");
+             events.push_str("        LET $delta = mod::xor::blake3_xor($old_total, $new_total);\n");
              events.push_str("        UPDATE _spooky_data_hash SET\n");
-             events.push_str("            CompositionHash = array::boolean_xor(CompositionHash, $delta),\n");
-             events.push_str("            TotalHash = array::boolean_xor(IntrinsicHash, array::boolean_xor(CompositionHash, $delta))\n");
+             events.push_str("            CompositionHash = mod::xor::blake3_xor(CompositionHash, $delta),\n");
+             events.push_str("            TotalHash = mod::xor::blake3_xor(IntrinsicHash, mod::xor::blake3_xor(CompositionHash, $delta))\n");
              events.push_str(&format!("        WHERE RecordId = $after.{};\n", parent_field));
              events.push_str("    } ELSE {\n");
-             
+
              // Remove contribution from Old Parent
              events.push_str("        UPDATE _spooky_data_hash SET\n");
-             events.push_str("            CompositionHash = array::boolean_xor(CompositionHash, $old_total),\n");
-             events.push_str("            TotalHash = array::boolean_xor(IntrinsicHash, array::boolean_xor(CompositionHash, $old_total))\n");
+             events.push_str("            CompositionHash = mod::xor::blake3_xor(CompositionHash, $old_total),\n");
+             events.push_str("            TotalHash = mod::xor::blake3_xor(IntrinsicHash, mod::xor::blake3_xor(CompositionHash, $old_total))\n");
              events.push_str(&format!("        WHERE RecordId = $before.{} AND RecordId != NONE;\n\n", parent_field));
-             
+
              // Add contribution to New Parent
              events.push_str("        UPDATE _spooky_data_hash SET\n");
-             events.push_str("            CompositionHash = array::boolean_xor(CompositionHash, $new_total),\n");
-             events.push_str("            TotalHash = array::boolean_xor(IntrinsicHash, array::boolean_xor(CompositionHash, $new_total))\n");
+             events.push_str("            CompositionHash = mod::xor::blake3_xor(CompositionHash, $new_total),\n");
+             events.push_str("            TotalHash = mod::xor::blake3_xor(IntrinsicHash, mod::xor::blake3_xor(CompositionHash, $new_total))\n");
              events.push_str(&format!("        WHERE RecordId = $after.{} AND RecordId != NONE;\n", parent_field));
              events.push_str("    } END;\n\n");
         }
@@ -158,8 +158,8 @@ pub fn generate_spooky_events(
                          // This is a reference - update the spooky hash of the REFERENCING record
                          // We update its CompositionHash and TotalHash by XORing with the delta
                          cascade_updates.push_str("        UPDATE _spooky_data_hash SET\n");
-                         cascade_updates.push_str("            CompositionHash = array::boolean_xor(CompositionHash, $intrinsic_delta),\n");
-                         cascade_updates.push_str("            TotalHash = array::boolean_xor(TotalHash, $intrinsic_delta)\n");
+                         cascade_updates.push_str("            CompositionHash = mod::xor::blake3_xor(CompositionHash, $intrinsic_delta),\n");
+                         cascade_updates.push_str("            TotalHash = mod::xor::blake3_xor(TotalHash, $intrinsic_delta)\n");
                          cascade_updates.push_str(&format!("        WHERE RecordId IN (SELECT value id FROM {} WHERE {} = $after.id);\n\n", other_table_name, rel.field_name));
                      }
                  }
@@ -169,7 +169,7 @@ pub fn generate_spooky_events(
         if !cascade_updates.is_empty() {
              events.push_str("    -- CASCADE DOWN (References)\n");
              events.push_str("    IF $old_hash_data.RecordId != NONE AND $new_intrinsic != $old_hash_data.IntrinsicHash THEN {\n");
-             events.push_str("        LET $intrinsic_delta = array::boolean_xor($new_intrinsic, $old_hash_data.IntrinsicHash);\n");
+             events.push_str("        LET $intrinsic_delta = mod::xor::blake3_xor($new_intrinsic, $old_hash_data.IntrinsicHash);\n");
              events.push_str(&cascade_updates);
              events.push_str("    } END;\n");
         }
@@ -189,8 +189,8 @@ pub fn generate_spooky_events(
              events.push_str(&format!("    -- BUBBLE UP Delete to Parent\n"));
              events.push_str(&format!("    IF $old_total != NONE AND $before.{} != NONE THEN {{\n", parent_field));
              events.push_str("        UPDATE _spooky_data_hash SET\n");
-             events.push_str("            CompositionHash = array::boolean_xor(CompositionHash, $old_total),\n");
-             events.push_str("            TotalHash = array::boolean_xor(IntrinsicHash, array::boolean_xor(CompositionHash, $old_total))\n");
+             events.push_str("            CompositionHash = mod::xor::blake3_xor(CompositionHash, $old_total),\n");
+             events.push_str("            TotalHash = mod::xor::blake3_xor(IntrinsicHash, mod::xor::blake3_xor(CompositionHash, $old_total))\n");
              events.push_str(&format!("        WHERE RecordId = $before.{};\n", parent_field));
              events.push_str("    } END;\n\n");
         }

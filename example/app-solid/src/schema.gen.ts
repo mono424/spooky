@@ -7,10 +7,10 @@ export const schema = {
       name: 'comment' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
         author: { type: 'string' as const, recordId: true, optional: false },
-        thread: { type: 'string' as const, recordId: true, optional: false },
         content: { type: 'string' as const, optional: false },
+        thread: { type: 'string' as const, recordId: true, optional: false },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
       },
       primaryKey: ['id'] as const
     },
@@ -18,10 +18,10 @@ export const schema = {
       name: 'thread' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
-        title: { type: 'string' as const, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
-        author: { type: 'string' as const, recordId: true, optional: false },
         content: { type: 'string' as const, optional: false },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
+        title: { type: 'string' as const, optional: false },
+        author: { type: 'string' as const, recordId: true, optional: false },
         comments: { type: 'string' as const, optional: true },
       },
       primaryKey: ['id'] as const

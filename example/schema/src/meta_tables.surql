@@ -15,23 +15,23 @@ DEFINE INDEX IF NOT EXISTS unique_hash ON _spooky_schema FIELDS hash UNIQUE;
 -- ==================================================
 
 DEFINE TABLE _spooky_data_hash SCHEMAFULL
-    PERMISSIONS FOR select, create, update, delete WHERE true; -- In prod, you might restrict write access to server-side only
+    PERMISSIONS FOR select, create, update WHERE true; -- In prod, you might restrict write access to server-side only
 
 -- The actual record being tracked (e.g., comment:abc, thread:123)
 DEFINE FIELD RecordId ON TABLE _spooky_data_hash TYPE record
-    PERMISSIONS FOR select, create, update, delete WHERE true;
+    PERMISSIONS FOR select, create, update WHERE true;
 
 -- H_intrinsic: BLAKE3 hash of the record's own scalar fields
-DEFINE FIELD IntrinsicHash ON TABLE _spooky_data_hash TYPE string | bytes
-    PERMISSIONS FOR select, create, update, delete WHERE true;
+DEFINE FIELD IntrinsicHash ON TABLE _spooky_data_hash TYPE string
+    PERMISSIONS FOR select, create, update WHERE true;
 
 -- H_composition: XOR sum of all dependent children's TotalHashes
-DEFINE FIELD CompositionHash ON TABLE _spooky_data_hash TYPE string | bytes
-    PERMISSIONS FOR select, create, update, delete WHERE true;
+DEFINE FIELD CompositionHash ON TABLE _spooky_data_hash TYPE string
+    PERMISSIONS FOR select, create, update WHERE true;
 
 -- H_total: Intrinsic XOR Composition
-DEFINE FIELD TotalHash ON TABLE _spooky_data_hash TYPE string | bytes
-    PERMISSIONS FOR select, create, update, delete WHERE true;
+DEFINE FIELD TotalHash ON TABLE _spooky_data_hash TYPE string
+    PERMISSIONS FOR select, create, update WHERE true;
 
 -- Fast lookup by the original record ID
 DEFINE INDEX idx_record_id ON TABLE _spooky_data_hash COLUMNS RecordId UNIQUE;
@@ -42,27 +42,27 @@ DEFINE INDEX idx_record_id ON TABLE _spooky_data_hash COLUMNS RecordId UNIQUE;
 -- ==================================================
 
 DEFINE TABLE _spooky_incantation SCHEMAFULL
-    PERMISSIONS FOR select, create, update, delete WHERE true;
+    PERMISSIONS FOR select, create, update WHERE true;
 
 -- The unique hash ID of the query + params
 DEFINE FIELD Id ON TABLE _spooky_incantation TYPE string
-    PERMISSIONS FOR select, create, update, delete WHERE true;
+    PERMISSIONS FOR select, create, update WHERE true;
 
 -- The raw query string (for re-hydration/debugging)
 DEFINE FIELD SurrealQL ON TABLE _spooky_incantation TYPE string
-    PERMISSIONS FOR select, create, update, delete WHERE true;
+    PERMISSIONS FOR select, create, update WHERE true;
 
 -- The current XOR sum of all results in this query
 DEFINE FIELD Hash ON TABLE _spooky_incantation TYPE bytes
-    PERMISSIONS FOR select, create, update, delete WHERE true;
+    PERMISSIONS FOR select, create, update WHERE true;
 
 -- For garbage collection (Heartbeat)
 DEFINE FIELD LastActiveAt ON TABLE _spooky_incantation TYPE datetime DEFAULT time::now()
-    PERMISSIONS FOR select, create, update, delete WHERE true;
+    PERMISSIONS FOR select, create, update WHERE true;
 
 -- How long this Incantation stays alive without activity
 DEFINE FIELD TTL ON TABLE _spooky_incantation TYPE duration
-    PERMISSIONS FOR select, create, update, delete WHERE true;
+    PERMISSIONS FOR select, create, update WHERE true;
 
 -- Cleanup Triggers
 -- When an incantation dies, clean up its lookup and tail records
@@ -78,26 +78,26 @@ DEFINE EVENT _spooky_cascade_delete_lookup ON TABLE _spooky_incantation WHEN $ev
 -- ==================================================
 
 DEFINE TABLE _spooky_incantation_lookup SCHEMAFULL
-    PERMISSIONS FOR select, create, update, delete WHERE true;
+    PERMISSIONS FOR select, create, update WHERE true;
 
 -- Link to the parent Incantation
 DEFINE FIELD IncantationId ON TABLE _spooky_incantation_lookup TYPE string
-    PERMISSIONS FOR select, create, update, delete WHERE true;
+    PERMISSIONS FOR select, create, update WHERE true;
 
 -- The primary table being queried (e.g., 'thread')
 DEFINE FIELD Table ON TABLE _spooky_incantation_lookup TYPE string
-    PERMISSIONS FOR select, create, update, delete WHERE true;
+    PERMISSIONS FOR select, create, update WHERE true;
 
 -- Filter logic used to check if a dirty record matches this query
 -- Stored as an object e.g., { clause: "importance >= 3", args: [...] }
 DEFINE FIELD Where ON TABLE _spooky_incantation_lookup TYPE object
-    PERMISSIONS FOR select, create, update, delete WHERE true;
+    PERMISSIONS FOR select, create, update WHERE true;
 
 -- Sorting Metadata needed to maintain order
 DEFINE FIELD SortFields ON TABLE _spooky_incantation_lookup TYPE array<string>
-    PERMISSIONS FOR select, create, update, delete WHERE true;
+    PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD SortDirections ON TABLE _spooky_incantation_lookup TYPE array<string>
-    PERMISSIONS FOR select, create, update, delete WHERE true; -- 'ASC', 'DESC'
+    PERMISSIONS FOR select, create, update WHERE true; -- 'ASC', 'DESC'
 
 -- Indexes for performance
 DEFINE INDEX idx_incantation ON TABLE _spooky_incantation_lookup COLUMNS IncantationId;
@@ -110,16 +110,16 @@ DEFINE INDEX idx_table ON TABLE _spooky_incantation_lookup COLUMNS Table;
 -- ==================================================
 
 DEFINE TABLE _spooky_incantation_tail SCHEMAFULL
-    PERMISSIONS FOR select, create, update, delete WHERE true;
+    PERMISSIONS FOR select, create, update WHERE true;
 
 -- Link to the parent Incantation
 DEFINE FIELD IncantationId ON TABLE _spooky_incantation_tail TYPE string
-    PERMISSIONS FOR select, create, update, delete WHERE true;
+    PERMISSIONS FOR select, create, update WHERE true;
 
 -- The sort values of the *last* item in the current result set
 -- Used to determine if a new record falls inside or outside the LIMIT window.
 DEFINE FIELD TailValues ON TABLE _spooky_incantation_tail TYPE array<any>
-    PERMISSIONS FOR select, create, update, delete WHERE true;
+    PERMISSIONS FOR select, create, update WHERE true;
 
 DEFINE INDEX idx_incantation ON TABLE _spooky_incantation_tail COLUMNS IncantationId UNIQUE;
 
@@ -130,21 +130,21 @@ DEFINE INDEX idx_incantation ON TABLE _spooky_incantation_tail COLUMNS Incantati
 -- ==================================================
 
 DEFINE TABLE _spooky_relationship SCHEMAFULL
-    PERMISSIONS FOR select, create, update, delete WHERE true;
+    PERMISSIONS FOR select, create, update WHERE true;
 
 DEFINE FIELD ParentTable ON TABLE _spooky_relationship TYPE string
-    PERMISSIONS FOR select, create, update, delete WHERE true;
+    PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD ChildTable ON TABLE _spooky_relationship TYPE string
-    PERMISSIONS FOR select, create, update, delete WHERE true;
+    PERMISSIONS FOR select, create, update WHERE true;
 
 -- The field on the Child that holds the Parent's ID
 DEFINE FIELD ChildField ON TABLE _spooky_relationship TYPE string
-    PERMISSIONS FOR select, create, update, delete WHERE true;
+    PERMISSIONS FOR select, create, update WHERE true;
 
 -- The Logic Flow: 'COMPOSITION' (Bubble Up) or 'REFERENCE' (Cascade Down)
 DEFINE FIELD Type ON TABLE _spooky_relationship TYPE string 
     ASSERT $value INSIDE ['COMPOSITION', 'REFERENCE']
-    PERMISSIONS FOR select, create, update, delete WHERE true;
+    PERMISSIONS FOR select, create, update WHERE true;
 
 -- Enforce unique definition per relationship path
 DEFINE INDEX idx_rel_unique ON TABLE _spooky_relationship COLUMNS ParentTable, ChildTable, ChildField UNIQUE;
