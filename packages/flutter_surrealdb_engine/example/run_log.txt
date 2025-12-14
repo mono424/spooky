@@ -1,0 +1,108 @@
+Resolving dependencies...
+Downloading packages...
+  characters 1.4.0 (1.4.1 available)
+  matcher 0.12.17 (0.12.18 available)
+  material_color_utilities 0.11.1 (0.13.0 available)
+  test_api 0.7.7 (0.7.8 available)
+Got dependencies!
+4 packages have newer versions incompatible with dependency constraints.
+Try `flutter pub outdated` for more information.
+Launching integration_test/plugin_integration_test.dart on macOS in debug mode...
+Building macOS application...                                   
+✓ Built build/macos/Build/Products/Debug/flutter_surrealdb_engine_example.app
+2025-12-13 14:44:11.111 flutter_surrealdb_engine_example[72257:27761290] Running with merged UI and platform thread. Experimental.
+Failed to foreground app; open returned 1
+flutter: 00:00 +0: SurrealDB Engine Tests (setUpAll)
+flutter: Initializing RustLib...
+Syncing files to device macOS...                                
+flutter: RustLib initialized.
+flutter: DB Path: /Users/timohty/Library/Containers/com.example.flutterSurrealdbEngineExample/Data/Library/Caches/test_surreal_1765633451494.db
+flutter: Connecting to DB...
+
+══╡ EXCEPTION CAUGHT BY GESTURES LIBRARY ╞══════════════════════════════════════════════════════════
+The following StateError was thrown while handling a pointer data packet:
+Bad state: No element
+
+When the exception was thrown, this was the stack:
+#0      Iterable.firstWhere (dart:core/iterable.dart:722:5)
+#1      LiveTestWidgetsFlutterBinding.handlePointerEvent (package:flutter_test/src/binding.dart:2036:53)
+#2      GestureBinding._flushPointerEventQueue (package:flutter/src/gestures/binding.dart:341:7)
+#3      GestureBinding._handlePointerDataPacket (package:flutter/src/gestures/binding.dart:308:9)
+#4      _invoke1 (dart:ui/hooks.dart:346:13)
+#5      PlatformDispatcher._dispatchPointerDataPacket (dart:ui/platform_dispatcher.dart:467:7)
+#6      _dispatchPointerDataPacket (dart:ui/hooks.dart:281:31)
+════════════════════════════════════════════════════════════════════════════════════════════════════
+
+flutter: Connected to DB.
+flutter: 00:00 +1: SurrealDB Engine Tests Check Connection
+Syncing files to device macOS...                                    36ms
+
+Flutter run key commands.
+r Hot reload. 🔥🔥🔥
+R Hot restart.
+h List all available interactive commands.
+d Detach (terminate "flutter run" but leave application running).
+c Clear the screen
+q Quit (terminate the application on the device).
+
+A Dart VM Service on macOS is available at: http://127.0.0.1:63612/Qk3t8jedQEk=/
+The Flutter DevTools debugger and profiler on macOS is available at: http://127.0.0.1:9103?uri=http://127.0.0.1:63612/Qk3t8jedQEk=/
+flutter: 00:00 +2: SurrealDB Engine Tests Health Check
+flutter: 00:00 +3: SurrealDB Engine Tests Version Check
+flutter: SurrealDB Version: 2.4.0
+flutter: 00:00 +4: SurrealDB Engine Tests Authentication (Root)
+flutter: 00:00 +5: SurrealDB Engine Tests Session Management
+flutter: 00:00 +6: SurrealDB Engine Tests CRUD Operations
+flutter: ══╡ EXCEPTION CAUGHT BY FLUTTER TEST FRAMEWORK ╞════════════════════════════════════════════════════
+flutter: The following TestFailure was thrown running a test:
+flutter: Expected: <true>
+flutter:   Actual: <false>
+flutter: Query Create Result:
+flutter: {"Array":[{"Object":{"age":{"Number":{"Int":30}},"id":{"Thing":{"tb":"person","id":{"String":"gfmjisjw81zvvcwpbqpp"}}},"name":{"Strand":"Test
+flutter: User"}}}]}
+flutter: 
+flutter: When the exception was thrown, this was the stack:
+flutter: #4      main.<anonymous closure>.<anonymous closure> (file:///Users/timohty/projekts/flutter_surrealdb_engine/example/integration_test/plugin_integration_test.dart:113:7)
+flutter: <asynchronous suspension>
+flutter: #5      testWidgets.<anonymous closure>.<anonymous closure> (package:flutter_test/src/widget_tester.dart:192:15)
+flutter: <asynchronous suspension>
+flutter: #6      TestWidgetsFlutterBinding._runTestBody (package:flutter_test/src/binding.dart:1059:5)
+flutter: <asynchronous suspension>
+flutter: #7      TestWidgetsFlutterBinding._createTestCompletionHandler.<anonymous closure> (package:flutter_test/src/binding.dart:814:12)
+flutter: <asynchronous suspension>
+flutter: 
+flutter: This was caught by the test expectation on the following line:
+flutter:   file:///Users/timohty/projekts/flutter_surrealdb_engine/example/integration_test/plugin_integration_test.dart line 113
+flutter: The test description was:
+flutter:   CRUD Operations
+flutter: ════════════════════════════════════════════════════════════════════════════════════════════════════
+flutter: 00:00 +6: SurrealDB Engine Tests CRUD Operations [E]
+flutter:   Test failed. See exception logs above.
+  The test description was: CRUD Operations
+flutter:   
+flutter: 00:00 +6 -1: SurrealDB Engine Tests (tearDownAll)
+flutter: 00:00 +7 -1: (tearDownAll)
+flutter: Warning: integration_test plugin was not detected.
+flutter: 
+flutter: If you're running the tests with `flutter drive`, please make sure your tests
+flutter: are in the `integration_test/` directory of your package and use
+flutter: `flutter test $path_to_test` to run it instead.
+flutter: 
+flutter: If you're running the tests with Android instrumentation or XCTest, this means
+flutter: that you are not capturing test results properly! See the following link for
+flutter: how to set up the integration_test plugin:
+flutter: 
+flutter: https://docs.flutter.dev/testing/integration-tests
+flutter: 
+flutter: 00:00 +8 -1: Some tests failed.
+flutter: Some possible finders for the widgets at Offset(488.9, 321.9):
+flutter:   find.text('Test starting...')
+flutter:   find.byType(Center)
+flutter:   find.byType(Container)
+flutter:   find.byType(Focus)
+flutter:   find.byType(FocusTraversalGroup)
+flutter:   find.byType(MediaQuery)
+flutter:   find.widgetWithText(RawView, 'Test starting...')
+flutter:   find.widgetWithText(View, 'Test starting...')
+[ERROR:flutter/lib/ui/window/platform_configuration.cc(428)] Reported frame time is older than the last one; clamping. 2075260915661 < 2075260922606 ~= 6945
+Lost connection to device.

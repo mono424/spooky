@@ -1,0 +1,17 @@
+name: query_builder_dart
+description: A type-safe query builder for SurrealDB, ported from @spooky/query-builder.
+version: 0.0.1
+publish_to: 'none'
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  # No direct dependency on surrealdb engine required for string building, 
+  # but useful if we want to add execution capabilities later.
+  # For now, keeping it minimal.
+  meta: ^1.7.0
+
+dev_dependencies:
+  lints: ^2.0.0
+  test: ^1.21.0
