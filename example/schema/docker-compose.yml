@@ -23,7 +23,7 @@ services:
       surrealdb:
         condition: service_healthy
     volumes:
-      - ./remote.gen.surql:/remote.gen.surql:ro
+      - ./.spooky/remote.gen.surql:/remote.gen.surql:ro
     command: >
       sh -c "curl -X POST http://surrealdb:8000/sql
       -H 'Accept: application/json'

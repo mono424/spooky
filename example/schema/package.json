@@ -2,26 +2,11 @@
   "name": "@example/schema",
   "version": "1.0.0",
   "description": "Database schema and types for SurrealDB",
-  "main": "dist/index.js",
-  "module": "dist/index.mjs",
-  "types": "dist/index.d.ts",
-  "exports": {
-    ".": {
-      "import": "./dist/index.mjs",
-      "require": "./dist/index.js",
-      "types": "./dist/index.d.ts"
-    },
-    "./schema.surql": "./schema.surql"
-  },
-  "files": [
-    "schema.surql",
-    "dist"
-  ],
   "scripts": {
     "build": "vite build",
-    "build:ts": "syncgen --format typescript --input schema.surql --output ../app-solid/src/schema.gen.ts",
-    "build:dart": "syncgen --format dart --input schema.surql --append meta_tables.surql --output ../client-dart/src/db/models.dart",
-    "build:surql": "npm run build:ts && npm run build:dart && syncgen --input schema.surql --append meta_tables.surql --output remote.gen.surql",
+    "build:ts": "syncgen --format typescript --input ./src/schema.surql --output ../app-solid/src/schema.gen.ts",
+    "build:dart": "syncgen --format dart --input ./src/schema.surql --append ./src/meta_tables.surql --output ../client-dart/src/db/models.dart",
+    "build:surql": "npm run build:ts && npm run build:dart && syncgen --input ./src/schema.surql --output ./.spooky/remote.gen.surql",
     "dev": "vite build --watch",
     "db:reset": "docker-compose down -v && pnpm dev"
   },
