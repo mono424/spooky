@@ -763,7 +763,8 @@ impl CodeGenerator {
         match self.format {
             OutputFormat::Typescript => {
                 // Escape the schema content for TypeScript template literal
-                let escaped_schema = schema.replace("\\", "\\\\").replace("`", "\\`");
+                let filtered_schema = self.filter_client_schema(schema);
+                let escaped_schema = filtered_schema.replace("\\", "\\\\").replace("`", "\\`");
 
                 Ok(format!(
                     "{}\n\n/**\n * The complete SurrealDB schema definition.\n * This constant contains the raw .surql schema file content.\n */\nexport const SURQL_SCHEMA = `{}`;\n",
@@ -772,7 +773,8 @@ impl CodeGenerator {
             }
             OutputFormat::Dart => {
                 // Escape the schema content for Dart string literal
-                let escaped_schema = schema
+                let filtered_schema = self.filter_client_schema(schema);
+                let escaped_schema = filtered_schema
                     .replace("\\", "\\\\")
                     .replace("\"", "\\\"")
                     .replace("$", "\\$");
@@ -787,5 +789,94 @@ impl CodeGenerator {
                 Ok(content)
             }
         }
+    }
+
+    fn filter_client_schema(&self, schema: &str) -> String {
+        let lines: Vec<&str> = schema.lines().collect();
+        let mut result = Vec::new();
+        let mut i = 0;
+        let mut in_define_access = false;
+        let mut access_brace_count = 0;
+        let mut skip_permissions = false;
+
+        while i < lines.len() {
+            let line = lines[i];
+            let trimmed = line.trim();
+
+            // Handle DEFINE ACCESS removal
+            if trimmed.to_uppercase().starts_with("DEFINE ACCESS") {
+                in_define_access = true;
+                access_brace_count = 0;
+                // Count braces in the start line
+                for ch in trimmed.chars() {
+                    if ch == '{' { access_brace_count += 1; }
+                    else if ch == '}' { access_brace_count -= 1; }
+                }
+
+                if access_brace_count == 0 && trimmed.ends_with(';') {
+                    in_define_access = false;
+                }
+                i += 1;
+                continue;
+            }
+
+            if in_define_access {
+                for ch in trimmed.chars() {
+                    if ch == '{' { access_brace_count += 1; }
+                    else if ch == '}' { access_brace_count -= 1; }
+                }
+
+                if access_brace_count == 0 && trimmed.ends_with(';') {
+                    in_define_access = false;
+                }
+                i += 1;
+                continue;
+            }
+
+            // Handle PERMISSIONS replacement
+            // Match PERMISSIONS at start of line (for TABLE/FIELD)
+            if trimmed.to_uppercase().starts_with("PERMISSIONS") {
+                let mut replacement = "PERMISSIONS FOR select, create, update, delete WHERE true".to_string();
+                
+                if trimmed.ends_with(';') {
+                    replacement.push(';');
+                } else {
+                    // It's a block, skip subsequent lines properly
+                    skip_permissions = true;
+                }
+                
+                result.push(replacement);
+                i += 1;
+                continue;
+            }
+
+            // If we are inside a permissions block, skip lines starting with FOR
+            if skip_permissions {
+                if trimmed.to_uppercase().starts_with("FOR") {
+                     // Check if this is the last line of permissions (ends with semicolon)
+                     if trimmed.ends_with(';') {
+                         skip_permissions = false;
+                         // We consumed the line with semicolon, so we must add it to our replacement
+                         if let Some(last) = result.last_mut() {
+                             last.push(';');
+                         }
+                     }
+                     i += 1;
+                     continue;
+                } else {
+                    // We encountered something that is NOT a FOR line.
+                    // This implies the permissions block ended (perhaps implicitly or we misjudged).
+                    skip_permissions = false;
+                }
+            }
+            
+            // Also need to handle "FOR select WHERE ..." lines if the previous line was PERMISSIONS
+            // But my logic above handles "FOR" skipping.
+            
+            result.push(line.to_string());
+            i += 1;
+        }
+
+        result.join("\n")
     }
 }
