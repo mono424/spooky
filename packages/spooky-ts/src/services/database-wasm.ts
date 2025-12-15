@@ -30,7 +30,7 @@ export async function connectRemoteDatabase(
 
   try {
     const r = new Surreal();
-    await r.connect(url);
+    await r.connect(url, { versionCheck: false });
 
     const endTime = performance.now();
     const duration = (endTime - startTime).toFixed(2);
