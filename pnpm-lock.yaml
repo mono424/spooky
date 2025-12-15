@@ -209,8 +209,8 @@ importers:
   packages/query-builder:
     dependencies:
       surrealdb:
-        specifier: ^1.3.2
-        version: 1.3.2(tslib@2.8.1)(typescript@5.9.3)(ws@8.18.3)
+        specifier: ^2.0.0-alpha.14
+        version: 2.0.0-alpha.14(tslib@2.8.1)(typescript@5.9.3)
     devDependencies:
       '@types/node':
         specifier: ^20.0.0
@@ -2336,11 +2336,6 @@ packages:
     resolution: {integrity: sha512-WhB9zCku7EGTj/HQQRz5aUQEUeoQZH2bWcltRErOpymJ4boYE6wL9Tbr23krRPSZ+C5zqNSrSw+Cc7sZZ4b7vg==}
     engines: {node: '>=0.10.0'}
 
-  isows@1.0.7:
-    resolution: {integrity: sha512-I1fSfDCZL5P0v33sVqeTDSpcstAg/N+wF5HS033mogOVIp4B+oHC7oOCsA3axAbBSGTJ8QubbNmnIRN/h8U7hg==}
-    peerDependencies:
-      ws: '*'
-
   jackspeak@3.4.3:
     resolution: {integrity: sha512-OGlZQpz2yfahA/Rd1Y8Cd9SIEsqvXkLVoSw/cgwhnhFMDbsQFeZYoJJ7bIZBS9BcamUW96asq/npPWugM+RQBw==}
 
@@ -3364,13 +3359,6 @@ packages:
     resolution: {integrity: sha512-ot0WnXS9fgdkgIcePe6RHNk1WA8+muPa6cSjeR3V8K27q9BB1rTE3R1p7Hv0z1ZyAc8s6Vvv8DIyWf681MAt0w==}
     engines: {node: '>= 0.4'}
 
-  surrealdb@1.3.2:
-    resolution: {integrity: sha512-mL7nij33iuon3IQP72F46fgX3p2LAxFCWCBDbZB7IohZ13RTEwJVNq7nZeP1eMSceQUpKzS6OHIWOuF9LYAkNw==}
-    engines: {node: '>=18.0.0'}
-    peerDependencies:
-      tslib: ^2.6.3
-      typescript: ^5.0.0
-
   surrealdb@2.0.0-alpha.14:
     resolution: {integrity: sha512-9j9LDCv8r6WLzH8M2K8i1NshnnTi9GkuEq9PoqlRbNx+yR8B4pjEX4/sjiP/5LkaDvzncdo6SYYAw9sAKCiUsQ==}
     peerDependencies:
@@ -3929,18 +3917,6 @@ packages:
   wrap-ansi@9.0.2:
     resolution: {integrity: sha512-42AtmgqjV+X1VpdOfyTGOYRi0/zsoLqtXQckTmqTeybT+BDIbM/Guxo7x3pE2vtpr1ok6xRqM9OpBe+Jyoqyww==}
     engines: {node: '>=18'}
-
-  ws@8.18.3:
-    resolution: {integrity: sha512-PEIGCY5tSlUt50cqyMXfCzX+oOPqN0vuGqWzbcJ2xvnkzkq46oOpz7dQaTDBdfICb4N14+GARUDw2XV2N4tvzg==}
-    engines: {node: '>=10.0.0'}
-    peerDependencies:
-      bufferutil: ^4.0.1
-      utf-8-validate: '>=5.0.2'
-    peerDependenciesMeta:
-      bufferutil:
-        optional: true
-      utf-8-validate:
-        optional: true
 
   xdg-basedir@5.1.0:
     resolution: {integrity: sha512-GCPAHLvrIH13+c0SuacwvRYj2SxJXQ4kaVTT5xgL3kPrz56XxkF21IGhjSE1+W0aw7gpBWRGXLCPnPby6lSpmQ==}
@@ -6158,10 +6134,6 @@ snapshots:
 
   isobject@3.0.1: {}
 
-  isows@1.0.7(ws@8.18.3):
-    dependencies:
-      ws: 8.18.3
-
   jackspeak@3.4.3:
     dependencies:
       '@isaacs/cliui': 8.0.2
@@ -7423,15 +7395,6 @@ snapshots:
 
   supports-preserve-symlinks-flag@1.0.0: {}
 
-  surrealdb@1.3.2(tslib@2.8.1)(typescript@5.9.3)(ws@8.18.3):
-    dependencies:
-      isows: 1.0.7(ws@8.18.3)
-      tslib: 2.8.1
-      typescript: 5.9.3
-      uuidv7: 1.0.2
-    transitivePeerDependencies:
-      - ws
-
   surrealdb@2.0.0-alpha.14(tslib@2.8.1)(typescript@5.9.3):
     dependencies:
       '@surrealdb/cbor': 2.0.0-alpha.4
@@ -8040,8 +8003,6 @@ snapshots:
       ansi-styles: 6.2.3
       string-width: 7.2.0
       strip-ansi: 7.1.2
-
-  ws@8.18.3: {}
 
   xdg-basedir@5.1.0: {}
 

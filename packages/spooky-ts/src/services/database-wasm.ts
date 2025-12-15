@@ -17,7 +17,7 @@ import {
   makeUseRemoteDatabase,
   RemoteDatabaseError,
 } from "./database.js";
-import { surrealdbWasmEngines } from "@surrealdb/wasm";
+import { createWasmEngines } from "@surrealdb/wasm";
 import { Logger } from "./logger.js";
 
 export async function connectRemoteDatabase(
@@ -63,7 +63,7 @@ export async function createLocalDatabase(
 
   try {
     const instance = new Surreal({
-      engines: surrealdbWasmEngines(),
+      engines: createWasmEngines(),
     });
 
     // Determine connection URL based on storage strategy

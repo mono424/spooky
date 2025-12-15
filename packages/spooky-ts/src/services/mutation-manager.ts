@@ -98,7 +98,7 @@ export class MutationManagerService<S extends SchemaStructure> {
       .join(", ");
 
     // In surrealdb 1.x, RecordId has .tb and .id properties
-    return `CREATE ${id.tb}:${id.id} SET ${setQuery};`;
+    return `CREATE ${id.table.toString()}:${id.id} SET ${setQuery};`;
   }
 
   private async mutationApplyLocal<N extends TableNames<S>>(

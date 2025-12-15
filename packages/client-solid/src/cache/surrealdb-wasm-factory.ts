@@ -1,5 +1,5 @@
 import { Surreal } from "surrealdb";
-import { surrealdbWasmEngines } from "@surrealdb/wasm";
+import { createWasmEngines } from "@surrealdb/wasm";
 import type { CacheStrategy } from "../types";
 
 /**
@@ -17,7 +17,7 @@ export class SurrealDBWasmFactory {
   ): Promise<Surreal> {
     // Create Surreal instance with WASM engines
     const surreal = new Surreal({
-      engines: surrealdbWasmEngines(),
+      engines: createWasmEngines(),
     });
 
     // Connect to the appropriate storage backend

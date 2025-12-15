@@ -29,7 +29,7 @@
   "license": "MIT",
   "packageManager": "pnpm@9.0.0",
   "dependencies": {
-    "surrealdb": "^1.3.2"
+    "surrealdb": "^2.0.0-alpha.14"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

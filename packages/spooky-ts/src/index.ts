@@ -20,6 +20,12 @@ export type {
   SchemaStructure,
   TableModel,
   TableNames,
+  QueryResult,
+  RelatedFieldsMap,
+  RelationshipFieldsFromSchema,
+  GetRelationship,
+  RelatedFieldMapEntry,
+  InnerQuery,
 } from "@spooky/query-builder";
 
 // Re-export Surreal type and value

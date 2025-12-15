@@ -66,14 +66,19 @@ export const isSchemaUpToDate = async (
   hash: string
 ): Promise<boolean> => {
   try {
-    const result = await internalDb.query<SchemaRecord[]>(
+    const response = await internalDb.query(
       `SELECT hash, created_at FROM __schema ORDER BY created_at DESC LIMIT 1;`
     );
 
-    // In surrealdb 1.x, query returns [result] where result is an array of rows
-    if (result && result.length > 0 && Array.isArray(result[0]) && result[0].length > 0) {
-      const firstRow = result[0][0] as SchemaRecord;
-      return firstRow.hash === hash;
+    // In surrealdb v2, result is ActionResult[]
+    if (Array.isArray(response) && response.length > 0) {
+      const firstResult = response[0];
+      if (firstResult.status === "OK") {
+        const records = firstResult.result as SchemaRecord[];
+        if (Array.isArray(records) && records.length > 0) {
+          return records[0].hash === hash;
+        }
+      }
     }
     return false;
   } catch (error) {
