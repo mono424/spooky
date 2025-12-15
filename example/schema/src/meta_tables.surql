@@ -30,7 +30,7 @@ DEFINE FIELD CompositionHash ON TABLE _spooky_data_hash TYPE string
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- H_total: Intrinsic XOR Composition
-DEFINE FIELD TotalHash ON TABLE _spooky_data_hash TYPE string
+DEFINE FIELD TotalHash ON TABLE _spooky_data_hash TYPE option<string>
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- Fast lookup by the original record ID

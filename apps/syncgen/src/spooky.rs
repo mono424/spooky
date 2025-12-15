@@ -25,6 +25,18 @@ pub fn generate_spooky_events(
     // 2. Generate Events
     let mut events = String::from("\n-- ==================================================\n-- AUTO-GENERATED SPOOKY EVENTS\n-- ==================================================\n\n");
 
+    // Generate the _spooky_data_hash mutation event first
+    events.push_str("-- Meta Table: _spooky_data_hash Mutation\n");
+    events.push_str("-- Automatically recalculates TotalHash when IntrinsicHash or CompositionHash changes\n");
+    events.push_str("DEFINE EVENT OVERWRITE _spooky_data_hash_mutation ON TABLE _spooky_data_hash\n");
+    events.push_str("WHEN $before != $after AND $event != \"DELETE\"\n");
+    events.push_str("THEN {\n");
+    events.push_str("    LET $new_total = mod::xor::blake3_xor($after.IntrinsicHash, $after.CompositionHash);\n");
+    events.push_str("    IF $new_total != $after.TotalHash THEN {\n");
+    events.push_str("        UPDATE _spooky_data_hash SET TotalHash = $new_total WHERE RecordId = $after.RecordId;\n");
+    events.push_str("    } END;\n");
+    events.push_str("};\n\n");
+
     // Sort table names for deterministic output
     let mut sorted_table_names: Vec<_> = tables.keys().collect();
     sorted_table_names.sort();
@@ -90,63 +102,63 @@ pub fn generate_spooky_events(
         events.push_str("    LET $old_total = IF $old_hash_data.RecordId != NONE THEN $old_hash_data.TotalHash ELSE $new_intrinsic END;\n");
         events.push_str("    LET $composition = IF $old_hash_data.RecordId != NONE THEN $old_hash_data.CompositionHash ELSE crypto::blake3(\"\") END;\n\n");
 
-        // 3. New Total Hash (XOR intrinsic with composition, or just intrinsic if no children)
-        events.push_str("    LET $new_total = mod::xor::blake3_xor($new_intrinsic, $composition);\n\n");
-
-        // 4. Upsert Meta Table
+        // 3. Upsert Meta Table (TotalHash will be calculated by _spooky_data_hash event)
         events.push_str("    UPSERT _spooky_data_hash CONTENT {\n");
         events.push_str("        RecordId: $after.id,\n");
         events.push_str("        IntrinsicHash: $new_intrinsic,\n");
         events.push_str("        CompositionHash: $composition,\n");
-        events.push_str("        TotalHash: $new_total\n");
+        events.push_str("        TotalHash: NONE -- Placeholder, will be recalculated by event\n");
         events.push_str("    };\n\n");
 
-        // 5. Bubble Up (If Parent exists)
+        // 4. Bubble Up (If Parent exists)
         if let Some(parent_field) = parent_field_opt {
              events.push_str(&format!("    -- BUBBLE UP to Parent ({})\n", parent_field));
+             events.push_str("    LET $old_total = IF $old_hash_data.RecordId != NONE THEN $old_hash_data.TotalHash ELSE $new_intrinsic END;\n");
+             events.push_str("    LET $new_total_after = (SELECT TotalHash FROM ONLY _spooky_data_hash WHERE RecordId = $after.id).TotalHash;\n");
              events.push_str(&format!("    IF $before.{} = $after.{} THEN {{\n", parent_field, parent_field));
-             events.push_str("        LET $delta = mod::xor::blake3_xor($old_total, $new_total);\n");
+             events.push_str("        LET $delta = mod::xor::blake3_xor($old_total, $new_total_after);\n");
              events.push_str("        UPDATE _spooky_data_hash SET\n");
-             events.push_str("            CompositionHash = mod::xor::blake3_xor(CompositionHash, $delta),\n");
-             events.push_str("            TotalHash = mod::xor::blake3_xor(IntrinsicHash, mod::xor::blake3_xor(CompositionHash, $delta))\n");
+             events.push_str("            CompositionHash = mod::xor::blake3_xor(CompositionHash, $delta)\n");
              events.push_str(&format!("        WHERE RecordId = $after.{};\n", parent_field));
              events.push_str("    } ELSE {\n");
 
              // Remove contribution from Old Parent
              events.push_str("        UPDATE _spooky_data_hash SET\n");
-             events.push_str("            CompositionHash = mod::xor::blake3_xor(CompositionHash, $old_total),\n");
-             events.push_str("            TotalHash = mod::xor::blake3_xor(IntrinsicHash, mod::xor::blake3_xor(CompositionHash, $old_total))\n");
+             events.push_str("            CompositionHash = mod::xor::blake3_xor(CompositionHash, $old_total)\n");
              events.push_str(&format!("        WHERE RecordId = $before.{} AND RecordId != NONE;\n\n", parent_field));
 
              // Add contribution to New Parent
              events.push_str("        UPDATE _spooky_data_hash SET\n");
-             events.push_str("            CompositionHash = mod::xor::blake3_xor(CompositionHash, $new_total),\n");
-             events.push_str("            TotalHash = mod::xor::blake3_xor(IntrinsicHash, mod::xor::blake3_xor(CompositionHash, $new_total))\n");
+             events.push_str("            CompositionHash = mod::xor::blake3_xor(CompositionHash, $new_total_after)\n");
              events.push_str(&format!("        WHERE RecordId = $after.{} AND RecordId != NONE;\n", parent_field));
              events.push_str("    } END;\n\n");
         }
 
-        // 6. Cascade Down (Incoming References)
+        // 6. Cascade Down (Incoming References) + Manual Bubble Up
         // Need to find OTHER tables that reference THIS table.
         // In TS logic: it checked regex patterns or descriptions like "Record ID of table: ..."
         // In Rust parser: we have `relationships` vector in TableSchema!
         // But `TableSchema.relationships` lists OUTGOING relationships.
-        // We need INCOMING. 
+        // We need INCOMING.
         // We can iterate all other tables and check THEIR relationships to see if they point to `table_name`.
-        
+
         let mut cascade_updates = String::new();
-        
+        let mut bubble_up_updates = String::new();
+
+        // Track which dependent tables were updated (for bubble up)
+        let mut affected_dependent_tables = Vec::new();
+
         for other_table_name in sorted_table_names.iter() {
              if *other_table_name == *table_name { continue; }
-             
+
              let other_table = tables.get(*other_table_name).unwrap();
-             
+
              for rel in &other_table.relationships {
                  // Check if this relationship points to the current table
                  if rel.related_table == **table_name {
                      // Check if this is NOT a parent relationship (to avoid double update or circles? logic from TS says so)
                      // "if (!isParentField)"
-                     
+
                      let other_parent_field = parent_map.get(&other_table_name.to_lowercase());
                      let is_parent_link = if let Some(p_field) = other_parent_field {
                          p_field == &rel.field_name
@@ -156,22 +168,61 @@ pub fn generate_spooky_events(
 
                      if !is_parent_link {
                          // This is a reference - update the spooky hash of the REFERENCING record
-                         // We update its CompositionHash and TotalHash by XORing with the delta
+                         // CASCADE DOWN: Update IntrinsicHash (not CompositionHash) because the dependency changed
+                         cascade_updates.push_str(&format!("        -- Update {} records that reference {}\n", other_table_name, table_name));
                          cascade_updates.push_str("        UPDATE _spooky_data_hash SET\n");
-                         cascade_updates.push_str("            CompositionHash = mod::xor::blake3_xor(CompositionHash, $intrinsic_delta),\n");
-                         cascade_updates.push_str("            TotalHash = mod::xor::blake3_xor(TotalHash, $intrinsic_delta)\n");
+                         cascade_updates.push_str("            IntrinsicHash = mod::xor::blake3_xor(IntrinsicHash, $intrinsic_delta)\n");
                          cascade_updates.push_str(&format!("        WHERE RecordId IN (SELECT value id FROM {} WHERE {} = $after.id);\n\n", other_table_name, rel.field_name));
+
+                         // Track this dependent table for bubble up
+                         affected_dependent_tables.push((other_table_name.as_str(), rel.field_name.as_str()));
                      }
                  }
              }
         }
 
+        // Generate bubble up logic for each affected dependent table
+        if !affected_dependent_tables.is_empty() {
+            bubble_up_updates.push_str("\n        -- ==================================================\n");
+            bubble_up_updates.push_str("        -- MANUAL BUBBLE UP\n");
+            bubble_up_updates.push_str("        -- Because we updated _spooky_data_hash directly,\n");
+            bubble_up_updates.push_str("        -- the dependent table's event won't fire.\n");
+            bubble_up_updates.push_str("        -- We must manually propagate changes to parent records.\n");
+            bubble_up_updates.push_str("        -- ==================================================\n\n");
+
+            for (dependent_table, reference_field) in &affected_dependent_tables {
+                // Check if this dependent table has a parent
+                if let Some(parent_field) = parent_map.get(&dependent_table.to_lowercase()) {
+                    bubble_up_updates.push_str(&format!("        -- Bubble up from {} to its parent via {}\n", dependent_table, parent_field));
+                    bubble_up_updates.push_str(&format!("        LET $affected_parents_{} = (\n", dependent_table));
+                    bubble_up_updates.push_str(&format!("            SELECT count() AS count, {} \n", parent_field));
+                    bubble_up_updates.push_str(&format!("            FROM {} \n", dependent_table));
+                    bubble_up_updates.push_str(&format!("            WHERE {} = $after.id \n", reference_field));
+                    bubble_up_updates.push_str(&format!("            GROUP BY {}\n", parent_field));
+                    bubble_up_updates.push_str("        );\n\n");
+
+                    bubble_up_updates.push_str(&format!("        FOR $item IN $affected_parents_{} {{\n", dependent_table));
+                    bubble_up_updates.push_str("            -- XOR Logic: If record appears N times, Delta^N = Delta (if N is odd) or 0 (if N is even)\n");
+                    bubble_up_updates.push_str("            IF $item.count % 2 == 1 {\n");
+                    bubble_up_updates.push_str("                UPDATE _spooky_data_hash SET\n");
+                    bubble_up_updates.push_str("                    CompositionHash = mod::xor::blake3_xor(CompositionHash, $intrinsic_delta)\n");
+                    bubble_up_updates.push_str(&format!("                WHERE RecordId = $item.{};\n", parent_field));
+                    bubble_up_updates.push_str("            }\n");
+                    bubble_up_updates.push_str("        };\n\n");
+                }
+            }
+        }
+
         if !cascade_updates.is_empty() {
-             events.push_str("    -- CASCADE DOWN (References)\n");
+             events.push_str("    -- ==================================================\n");
+             events.push_str("    -- CASCADE DOWN (Strict Compliance)\n");
+             events.push_str(&format!("    -- Logic: {} Change -> Updates Dependent INTRINSIC Hash\n", table_name));
+             events.push_str("    -- ==================================================\n");
              events.push_str("    IF $old_hash_data.RecordId != NONE AND $new_intrinsic != $old_hash_data.IntrinsicHash THEN {\n");
-             events.push_str("        LET $intrinsic_delta = mod::xor::blake3_xor($new_intrinsic, $old_hash_data.IntrinsicHash);\n");
+             events.push_str("        LET $intrinsic_delta = mod::xor::blake3_xor($new_intrinsic, $old_hash_data.IntrinsicHash);\n\n");
              events.push_str(&cascade_updates);
-             events.push_str("    } END;\n");
+             events.push_str(&bubble_up_updates);
+             events.push_str("    } END;\n\n");
         }
 
         events.push_str("};\n\n");
@@ -189,8 +240,7 @@ pub fn generate_spooky_events(
              events.push_str(&format!("    -- BUBBLE UP Delete to Parent\n"));
              events.push_str(&format!("    IF $old_total != NONE AND $before.{} != NONE THEN {{\n", parent_field));
              events.push_str("        UPDATE _spooky_data_hash SET\n");
-             events.push_str("            CompositionHash = mod::xor::blake3_xor(CompositionHash, $old_total),\n");
-             events.push_str("            TotalHash = mod::xor::blake3_xor(IntrinsicHash, mod::xor::blake3_xor(CompositionHash, $old_total))\n");
+             events.push_str("            CompositionHash = mod::xor::blake3_xor(CompositionHash, $old_total)\n");
              events.push_str(&format!("        WHERE RecordId = $before.{};\n", parent_field));
              events.push_str("    } END;\n\n");
         }
