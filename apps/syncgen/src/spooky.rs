@@ -85,7 +85,7 @@ pub fn generate_spooky_events(
         // --------------------------------------------------
         events.push_str(&format!("-- Table: {} Mutation\n", table_name));
         events.push_str(&format!("DEFINE EVENT OVERWRITE _spooky_{}_mutation ON TABLE {}\n", table_name, table_name));
-        events.push_str("WHEN $before != $after\nTHEN {\n");
+        events.push_str("WHEN $before != $after AND $event != \"DELETE\"\nTHEN {\n");
 
         // 1. New Intrinsic Hash
         // NOTE: crypto::blake3 expects a string and returns hex string
