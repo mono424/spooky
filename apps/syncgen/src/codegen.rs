@@ -84,7 +84,12 @@ impl CodeGenerator {
 
         // Add raw schema constant for TypeScript and Dart
         if let Some(schema) = raw_schema {
-            content = self.add_schema_constant(content, schema)?;
+            let full_schema = if let Some(events) = spooky_events {
+                format!("{}\n\n{}", schema, events)
+            } else {
+                schema.to_string()
+            };
+            content = self.add_schema_constant(content, &full_schema)?;
         }
 
         Ok(content)
@@ -294,6 +299,8 @@ impl CodeGenerator {
                                     .and_then(|v| v.as_bool())
                                     .unwrap_or(false);
 
+                                let clean_col_name = col_name.replace("`", "");
+
                                 let mut flags = Vec::new();
                                 if is_record_id {
                                     flags.push("recordId: true");
@@ -305,12 +312,12 @@ impl CodeGenerator {
                                 if flags.is_empty() {
                                     tables_lines.push(format!(
                                         "        {}: {{ type: '{}' as const, optional: {} }},",
-                                        col_name, col_type, is_optional
+                                        clean_col_name, col_type, is_optional
                                     ));
                                 } else {
                                     tables_lines.push(format!(
                                         "        {}: {{ type: '{}' as const, {}, optional: {} }},",
-                                        col_name, col_type, flags.join(", "), is_optional
+                                        clean_col_name, col_type, flags.join(", "), is_optional
                                     ));
                                 }
                             }
@@ -813,9 +820,50 @@ impl CodeGenerator {
         let mut access_brace_count = 0;
         let mut skip_permissions = false;
 
+        let mut def_type = "TABLE";
+
         while i < lines.len() {
             let line = lines[i];
-            let trimmed = line.trim();
+            
+            // Strip comments to correctly check for semicolons
+            let clean_line = if let Some(idx) = line.find("--") {
+                &line[..idx]
+            } else if let Some(idx) = line.find("//") {
+                &line[..idx]
+            } else if let Some(idx) = line.find('#') {
+                &line[..idx]
+            } else {
+                line
+            };
+            
+            let trimmed = clean_line.trim();
+
+            // Skip empty lines (were just comments or whitespace)
+            if trimmed.is_empty() {
+                // If we are skipping a permissions block, and we hit an empty line,
+                // we should check if the PREVIOUS line ended with semicolon?
+                // Or does semicolon end the block immediately?
+                // Logic:
+                // if trimmed.ends_with(';') { replacement.push(';') } else { skip_permissions = true }
+                // So if we are in skip_permissions mode, we look for ';'.
+                // If line is empty, just continue.
+                
+                // But wait, if we are NOT in skip_permissions mode, we might want to preserve comments?
+                // The logical flow below pushes `result.push(line.to_string())` at the end.
+                // If I change `trimmed` to be comment-free, I might lose comments in output?
+                // The task is to GENERATE valid schema. Comments valid.
+                // But for LOGIC CHECKS, use `trimmed`.
+                // For OUTPUT, use `line`.
+                
+                // Let's use `trimmed` for logic, keep `line` for output unless replacing.
+                
+                // BUT if I skip empty lines here, I lose them. I should proceed.
+            }
+
+            let full_trimmed = line.trim(); // For checks that might need full line? 
+            // Actually, matching "DEFINE TABLE" should use stripped line?
+            // "DEFINE TABLE foo -- comment" -> "DEFINE TABLE foo". Matches.
+            // So using `trimmed` (clean) is better.
 
             // Handle DEFINE ACCESS removal
             if trimmed.to_uppercase().starts_with("DEFINE ACCESS") {
@@ -847,10 +895,22 @@ impl CodeGenerator {
                 continue;
             }
 
+            // Track definition type
+            if trimmed.to_uppercase().starts_with("DEFINE TABLE") {
+                def_type = "TABLE";
+            } else if trimmed.to_uppercase().starts_with("DEFINE FIELD") {
+                def_type = "FIELD";
+            }
+
             // Handle PERMISSIONS replacement
             // Match PERMISSIONS at start of line (for TABLE/FIELD)
             if trimmed.to_uppercase().starts_with("PERMISSIONS") {
-                let mut replacement = "PERMISSIONS FOR select, create, update, delete WHERE true".to_string();
+                let perms = if def_type == "TABLE" {
+                    "PERMISSIONS FOR select, create, update, delete WHERE true"
+                } else {
+                    "PERMISSIONS FOR select, create, update WHERE true"
+                };
+                let mut replacement = perms.to_string();
                 
                 if trimmed.ends_with(';') {
                     replacement.push(';');
@@ -866,6 +926,12 @@ impl CodeGenerator {
 
             // If we are inside a permissions block, skip lines starting with FOR
             if skip_permissions {
+                // If the line is just a comment, we ignore it for semicolon checking
+                if trimmed.is_empty() {
+                    i += 1;
+                    continue;
+                }
+
                 if trimmed.to_uppercase().starts_with("FOR") {
                      // Check if this is the last line of permissions (ends with semicolon)
                      if trimmed.ends_with(';') {
@@ -881,11 +947,12 @@ impl CodeGenerator {
                     // We encountered something that is NOT a FOR line.
                     // This implies the permissions block ended (perhaps implicitly or we misjudged).
                     skip_permissions = false;
+                    
+                    // IMPORTANT: If we misjudged, we might be on a new definition line.
+                    // We should NOT suppress it. 
+                    // Fall through to result.push(line).
                 }
             }
-            
-            // Also need to handle "FOR select WHERE ..." lines if the previous line was PERMISSIONS
-            // But my logic above handles "FOR" skipping.
             
             result.push(line.to_string());
             i += 1;

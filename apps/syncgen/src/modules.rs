@@ -22,9 +22,9 @@ pub fn compile_modules(modules_dir: &Path, output_dir: &Path) -> Result<()> {
                 let module_name = path.file_name().unwrap().to_string_lossy().to_string();
                 println!("  Compiling module: {}", module_name);
 
-                // Run cargo build
+                // Run cargo build with wasi target
                 let status = Command::new("cargo")
-                    .args(&["build", "--release", "--target", "wasm32-unknown-unknown"])
+                    .args(&["build", "--release", "--target", "wasm32-wasip1"])
                     .current_dir(&path)
                     .status()
                     .context(format!("Failed to run cargo build for module {}", module_name))?;
@@ -34,12 +34,7 @@ pub fn compile_modules(modules_dir: &Path, output_dir: &Path) -> Result<()> {
                 }
 
                 // Locate the WASM file
-                // Usually in target/wasm32-unknown-unknown/release/*.wasm
-                // The filename normally matches the package name in Cargo.toml.
-                // However, user example shows "spooky-xor_module-0.1.0.surli" which implies some renaming or specific naming.
-                // For now, I'll look for any .wasm file in the release dir.
-                
-                let target_dir = path.join("target/wasm32-unknown-unknown/release");
+                let target_dir = path.join("target/wasm32-wasip1/release");
                 let wasm_files: Vec<PathBuf> = fs::read_dir(&target_dir)
                     .context("Failed to read target directory")?
                     .filter_map(|e| e.ok())
@@ -52,18 +47,43 @@ pub fn compile_modules(modules_dir: &Path, output_dir: &Path) -> Result<()> {
                     continue;
                 }
 
-                // Copy to output dir with .surli extension
-                // If multiple, copy all (though usually one per project)
+                // Should be only one wasm file usually
                 for wasm_path in wasm_files {
                     let file_name = wasm_path.file_name().unwrap().to_string_lossy();
-                    // Rename .wasm to .surli
-                    let new_file_name = format!("{}.surli", file_name.trim_end_matches(".wasm"));
-                    let dest_path = output_dir.join(&new_file_name);
+                    // Output file name: module_name.surli
+                    // OR should we respect the filename? Let's use the package name/module name.
+                    // The user's output shows `xor_module.surli`.
+                    let output_filename = format!("{}.surli", module_name);
+                    let dest_path = output_dir.join(&output_filename);
                     
-                    fs::copy(&wasm_path, &dest_path)
-                        .context(format!("Failed to copy WASM file to {:?}", dest_path))?;
+                    // Package into .surli (ZSTD compressed TAR)
+                    println!("    Packaging {}...", output_filename);
                     
-                    println!("    ✓ Copied {} to {:?}", file_name, dest_path);
+                    // Create TAR in memory
+                    let mut tar_builder = tar::Builder::new(Vec::new());
+                    
+                    // Add mod.wasm
+                    let mut wasm_file = fs::File::open(&wasm_path)?;
+                    tar_builder.append_file("mod.wasm", &mut wasm_file)?;
+                    
+                    // Add surrealism.toml if exists
+                    let manifest_path = path.join("surrealism.toml");
+                    if manifest_path.exists() {
+                        let mut manifest_file = fs::File::open(&manifest_path)?;
+                        tar_builder.append_file("surrealism.toml", &mut manifest_file)?;
+                    } else {
+                        println!("    Warning: No surrealism.toml found for {}", module_name);
+                    }
+                    
+                    let tar_data = tar_builder.into_inner()?;
+                    
+                    // Compress with ZSTD
+                    let compressed_data = zstd::stream::encode_all(std::io::Cursor::new(tar_data), 0)?;
+                    
+                    // Write to output
+                    fs::write(&dest_path, compressed_data)?;
+                    
+                    println!("    ✓ Packaged to {:?}", dest_path);
                 }
             }
         }

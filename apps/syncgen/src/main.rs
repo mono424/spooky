@@ -152,9 +152,24 @@ fn main() -> Result<()> {
 
     // Append embedded meta tables
     let meta_tables = include_str!("meta_tables.surql");
+    let meta_tables_remote = include_str!("meta_tables_remote.surql");
+    let meta_tables_client = include_str!("meta_tables_client.surql");
+
+    // Include base meta tables
     content.push('\n');
     content.push_str(meta_tables);
-    println!("  + Appended embedded meta_tables.surql");
+    println!("  + Appended base meta_tables.surql");
+
+    // Include format-specific meta tables
+    if matches!(output_format, OutputFormat::Surql) {
+         content.push('\n');
+         content.push_str(meta_tables_remote);
+         println!("  + Appended meta_tables_remote.surql");
+    } else {
+         content.push('\n');
+         content.push_str(meta_tables_client);
+         println!("  + Appended meta_tables_client.surql");
+    }
 
     // Append extra file if specified
     if let Some(append_path) = &args.append {
@@ -209,12 +224,23 @@ fn main() -> Result<()> {
         serde_json::to_string(&json_schema).context("Failed to serialize JSON Schema")?
     };
 
+    fn ensure_directory_exists(path: &std::path::Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() && !parent.exists() {
+                fs::create_dir_all(parent)
+                    .context(format!("Failed to create directory: {:?}", parent))?;
+            }
+        }
+        Ok(())
+    }
+
     if args.all {
         // Generate all formats
         println!("\nGenerating all formats...");
 
         // Write JSON Schema
         let json_path = args.output.with_extension("json");
+        ensure_directory_exists(&json_path)?;
         fs::write(&json_path, &json_schema_string)
             .context(format!("Failed to write JSON Schema file: {:?}", json_path))?;
         println!("  ✓ JSON Schema: {:?}", json_path);
@@ -225,6 +251,7 @@ fn main() -> Result<()> {
             .generate_with_schema(&json_schema_string, "Database", Some(&raw_schema_content), None)
             .context("Failed to generate TypeScript code")?;
         let ts_path = args.output.with_extension("ts");
+        ensure_directory_exists(&ts_path)?;
         fs::write(&ts_path, ts_code)
             .context(format!("Failed to write TypeScript file: {:?}", ts_path))?;
         println!("  ✓ TypeScript: {:?}", ts_path);
@@ -235,6 +262,7 @@ fn main() -> Result<()> {
             .generate_with_schema(&json_schema_string, "Database", Some(&raw_schema_content), None)
             .context("Failed to generate Dart code")?;
         let dart_path = args.output.with_extension("dart");
+        ensure_directory_exists(&dart_path)?;
         fs::write(&dart_path, dart_code)
             .context(format!("Failed to write Dart file: {:?}", dart_path))?;
         println!("  ✓ Dart: {:?}", dart_path);
@@ -243,7 +271,8 @@ fn main() -> Result<()> {
     } else {
         // Generate single format
        // Generate spooky events
-    let spooky_events = spooky::generate_spooky_events(&parser.tables, &content);
+    let is_client = !matches!(output_format, OutputFormat::Surql);
+    let spooky_events = spooky::generate_spooky_events(&parser.tables, &content, is_client);
 
     // Generate code
     let generator = CodeGenerator::new_with_header(output_format, !args.no_header);
@@ -251,6 +280,7 @@ fn main() -> Result<()> {
         .generate_with_schema(&json_schema_string, "Schema", Some(&raw_schema_content), Some(&spooky_events))
         .context("Failed to generate output code")?;
 
+        ensure_directory_exists(&args.output)?;
         fs::write(&args.output, output_content)
             .context(format!("Failed to write output file: {:?}", args.output))?;
 

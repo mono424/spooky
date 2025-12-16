@@ -6,6 +6,7 @@ use std::collections::HashMap;
 pub fn generate_spooky_events(
     tables: &HashMap<String, TableSchema>,
     raw_content: &str,
+    is_client: bool,
 ) -> String {
     // 1. Parse @parent tags from raw content
     // pattern: DEFINE FIELD field ON TABLE table ... -- @parent
@@ -25,6 +26,81 @@ pub fn generate_spooky_events(
     // 2. Generate Events
     let mut events = String::from("\n-- ==================================================\n-- AUTO-GENERATED SPOOKY EVENTS\n-- ==================================================\n\n");
 
+    // Client Logic: Minimal logic, only Intrinsic Hash, Dirty Flags
+    if is_client {
+        // Sort table names for deterministic output
+        let mut sorted_table_names: Vec<_> = tables.keys().collect();
+        sorted_table_names.sort();
+
+        for table_name in &sorted_table_names {
+            // Skip system/internal tables and the spooky hash tables themselves
+            if table_name.starts_with("_spooky_") {
+                continue;
+            }
+
+            let table = tables.get(*table_name).unwrap();
+            
+            if table.is_relation {
+                continue;
+            }
+
+            // Calculate Intrinsic Fields
+            let mut intrinsic_fields = Vec::new();
+            let mut sorted_fields: Vec<_> = table.fields.keys().collect();
+            sorted_fields.sort();
+
+            for field_name in sorted_fields {
+                if field_name == "password" || field_name == "created_at" {
+                    continue;
+                }
+                intrinsic_fields.push(format!("{}: $after.{}", field_name, field_name));
+            }
+
+            // --------------------------------------------------
+            // A. Client Mutation Event
+            // --------------------------------------------------
+            events.push_str(&format!("-- Table: {} Client Mutation\n", table_name));
+            events.push_str(&format!("DEFINE EVENT OVERWRITE _spooky_{}_client_mutation ON TABLE {}\n", table_name, table_name));
+            events.push_str("WHEN $before != $after AND $event != \"DELETE\"\nTHEN {\n");
+
+            // 1. New Intrinsic Hash
+            events.push_str("    LET $new_intrinsic = crypto::blake3(<string>{\n");
+            for (i, field_expr) in intrinsic_fields.iter().enumerate() {
+                let comma = if i < intrinsic_fields.len() - 1 { "," } else { "" };
+                events.push_str(&format!("        {}{}\n", field_expr, comma));
+            }
+            events.push_str("    });\n\n");
+
+            // 3. Upsert Meta Table with IsDirty = true
+            events.push_str("    UPSERT _spooky_data_hash CONTENT {\n");
+            events.push_str("        RecordId: $after.id,\n");
+            events.push_str("        IntrinsicHash: $new_intrinsic,\n");
+            events.push_str("        CompositionHash: crypto::blake3(\"\"), -- Empty for client\n");
+            events.push_str("        TotalHash: NONE,\n");
+            events.push_str("        IsDirty: true,\n");
+            events.push_str("        PendingDelete: false\n");
+            events.push_str("    };\n");
+            events.push_str("};\n\n");
+
+            // --------------------------------------------------
+            // B. Client Deletion Event
+            // --------------------------------------------------
+            events.push_str(&format!("-- Table: {} Client Deletion\n", table_name));
+            events.push_str(&format!("DEFINE EVENT OVERWRITE _spooky_{}_client_delete ON TABLE {}\n", table_name, table_name));
+            events.push_str("WHEN $event = \"DELETE\"\nTHEN {\n");
+            
+            // Mark as PendingDelete instead of removing
+            // Note: If the record is truly deleted, this event runs. But upserting purely by ID might fail if we need other data? 
+            // _spooky_data_hash uses RecordId as key. So we can update it directly.
+            events.push_str("    UPDATE _spooky_data_hash SET PendingDelete = true WHERE RecordId = $before.id;\n");
+            events.push_str("};\n\n");
+        }
+
+        return events;
+    }
+
+    // Remote Logic: Full Merkle Tree Logic
+    
     // Generate the _spooky_data_hash mutation event first
     events.push_str("-- Meta Table: _spooky_data_hash Mutation\n");
     // Table definition is now in meta_tables.surql
@@ -137,17 +213,8 @@ pub fn generate_spooky_events(
         }
 
         // 6. Cascade Down (Incoming References) + Manual Bubble Up
-        // Need to find OTHER tables that reference THIS table.
-        // In TS logic: it checked regex patterns or descriptions like "Record ID of table: ..."
-        // In Rust parser: we have `relationships` vector in TableSchema!
-        // But `TableSchema.relationships` lists OUTGOING relationships.
-        // We need INCOMING.
-        // We can iterate all other tables and check THEIR relationships to see if they point to `table_name`.
-
         let mut cascade_updates = String::new();
         let mut bubble_up_updates = String::new();
-
-        // Track which dependent tables were updated (for bubble up)
         let mut affected_dependent_tables = Vec::new();
 
         for other_table_name in sorted_table_names.iter() {
@@ -156,11 +223,7 @@ pub fn generate_spooky_events(
              let other_table = tables.get(*other_table_name).unwrap();
 
              for rel in &other_table.relationships {
-                 // Check if this relationship points to the current table
                  if rel.related_table == **table_name {
-                     // Check if this is NOT a parent relationship (to avoid double update or circles? logic from TS says so)
-                     // "if (!isParentField)"
-
                      let other_parent_field = parent_map.get(&other_table_name.to_lowercase());
                      let is_parent_link = if let Some(p_field) = other_parent_field {
                          p_field == &rel.field_name
@@ -169,21 +232,16 @@ pub fn generate_spooky_events(
                      };
 
                      if !is_parent_link {
-                         // This is a reference - update the spooky hash of the REFERENCING record
-                         // CASCADE DOWN: Update IntrinsicHash (not CompositionHash) because the dependency changed
                          cascade_updates.push_str(&format!("        -- Update {} records that reference {}\n", other_table_name, table_name));
                          cascade_updates.push_str("        UPDATE _spooky_data_hash SET\n");
                          cascade_updates.push_str("            IntrinsicHash = mod::xor::blake3_xor(IntrinsicHash, $intrinsic_delta)\n");
                          cascade_updates.push_str(&format!("        WHERE RecordId IN (SELECT value id FROM {} WHERE {} = $after.id);\n\n", other_table_name, rel.field_name));
-
-                         // Track this dependent table for bubble up
                          affected_dependent_tables.push((other_table_name.as_str(), rel.field_name.as_str()));
                      }
                  }
              }
         }
 
-        // Generate bubble up logic for each affected dependent table
         if !affected_dependent_tables.is_empty() {
             bubble_up_updates.push_str("\n        -- ==================================================\n");
             bubble_up_updates.push_str("        -- MANUAL BUBBLE UP\n");
@@ -193,7 +251,6 @@ pub fn generate_spooky_events(
             bubble_up_updates.push_str("        -- ==================================================\n\n");
 
             for (dependent_table, reference_field) in &affected_dependent_tables {
-                // Check if this dependent table has a parent
                 if let Some(parent_field) = parent_map.get(&dependent_table.to_lowercase()) {
                     bubble_up_updates.push_str(&format!("        -- Bubble up from {} to its parent via {}\n", dependent_table, parent_field));
                     bubble_up_updates.push_str(&format!("        LET $affected_parents_{} = (\n", dependent_table));
@@ -204,7 +261,6 @@ pub fn generate_spooky_events(
                     bubble_up_updates.push_str("        );\n\n");
 
                     bubble_up_updates.push_str(&format!("        FOR $item IN $affected_parents_{} {{\n", dependent_table));
-                    bubble_up_updates.push_str("            -- XOR Logic: If record appears N times, Delta^N = Delta (if N is odd) or 0 (if N is even)\n");
                     bubble_up_updates.push_str("            IF $item.count % 2 == 1 {\n");
                     bubble_up_updates.push_str("                UPDATE _spooky_data_hash SET\n");
                     bubble_up_updates.push_str("                    CompositionHash = mod::xor::blake3_xor(CompositionHash, $intrinsic_delta)\n");

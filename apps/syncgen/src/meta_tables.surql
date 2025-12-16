@@ -1,43 +1,5 @@
 -- ==================================================
--- 0. SPOOKY SCHEMA
--- The provisioned schema state for the database. Currently only used in local cache.
--- ==================================================
-
-DEFINE TABLE IF NOT EXISTS _spooky_schema SCHEMAFULL;
-DEFINE FIELD IF NOT EXISTS id ON _spooky_schema TYPE string;
-DEFINE FIELD IF NOT EXISTS hash ON _spooky_schema TYPE string;
-DEFINE FIELD IF NOT EXISTS created_at ON _spooky_schema TYPE datetime VALUE time::now();
-DEFINE INDEX IF NOT EXISTS unique_hash ON _spooky_schema FIELDS hash UNIQUE;
-
--- ==================================================
--- 1. SPOOKY DATA HASH
--- The "Shadow Graph" tracking the state of every record.
--- ==================================================
-
-DEFINE TABLE _spooky_data_hash SCHEMAFULL
-    PERMISSIONS FOR select, create, update WHERE true; -- In prod, you might restrict write access to server-side only
-
--- The actual record being tracked (e.g., comment:abc, thread:123)
-DEFINE FIELD RecordId ON TABLE _spooky_data_hash TYPE record
-    PERMISSIONS FOR select, create, update WHERE true;
-
--- H_intrinsic: BLAKE3 hash of the record's own scalar fields
-DEFINE FIELD IntrinsicHash ON TABLE _spooky_data_hash TYPE string
-    PERMISSIONS FOR select, create, update WHERE true;
-
--- H_composition: XOR sum of all dependent children's TotalHashes
-DEFINE FIELD CompositionHash ON TABLE _spooky_data_hash TYPE string
-    PERMISSIONS FOR select, create, update WHERE true;
-
--- H_total: Intrinsic XOR Composition
-DEFINE FIELD TotalHash ON TABLE _spooky_data_hash TYPE option<string>
-    PERMISSIONS FOR select, create, update WHERE true;
-
--- Fast lookup by the original record ID
-DEFINE INDEX idx_record_id ON TABLE _spooky_data_hash COLUMNS RecordId UNIQUE;
-
--- ==================================================
--- 2. SPOOKY INCANTATION
+-- SPOOKY INCANTATION
 -- The Registry of active Live Queries (Incantations).
 -- ==================================================
 
@@ -73,7 +35,7 @@ DEFINE EVENT _spooky_cascade_delete_lookup ON TABLE _spooky_incantation WHEN $ev
 
 
 -- ==================================================
--- 3. SPOOKY INCANTATION LOOKUP
+-- SPOOKY INCANTATION LOOKUP
 -- The Reverse Index: Maps Tables -> Incantations
 -- ==================================================
 
@@ -105,7 +67,7 @@ DEFINE INDEX idx_table ON TABLE _spooky_incantation_lookup COLUMNS Table;
 
 
 -- ==================================================
--- 4. SPOOKY INCANTATION TAIL
+-- SPOOKY INCANTATION TAIL
 -- Cursor Management for Pagination/Limits
 -- ==================================================
 
@@ -125,7 +87,7 @@ DEFINE INDEX idx_incantation ON TABLE _spooky_incantation_tail COLUMNS Incantati
 
 
 -- ==================================================
--- 5. SPOOKY RELATIONSHIP
+-- SPOOKY RELATIONSHIP
 -- The Graph Schema: Defines 'Bubble Up' vs 'Cascade Down'
 -- ==================================================
 
