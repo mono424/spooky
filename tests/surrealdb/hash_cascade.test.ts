@@ -99,6 +99,11 @@ describe('Hash Cascade Logic', () => {
         LET $t2_comp_before = (SELECT value CompositionHash FROM ONLY _spooky_data_hash WHERE RecordId = $thread2.id);
         LET $t2_comp_after  = (SELECT value CompositionHash FROM ONLY _spooky_data_hash WHERE RecordId = $thread2.id);
 
+        LET $comment2_id = (SELECT value id FROM comment WHERE thread = $thread2.id LIMIT 1)[0];
+        LET $c2_intrinsic_before = (SELECT value IntrinsicHash FROM ONLY _spooky_data_hash WHERE RecordId = $comment2_id);
+        LET $c2_intrinsic_after = (SELECT value IntrinsicHash FROM ONLY _spooky_data_hash WHERE RecordId = $comment2_id);
+
+
         -- Clean up? Or leave it?
         -- Since verified via return, maybe rollback? 
         -- But SLEEP doesn't work well in transactions for waiting on SIDE EFFECTS if they are async.
@@ -118,17 +123,28 @@ describe('Hash Cascade Logic', () => {
                     description: "Has 1 comment. Delta should affect Composition.",
                     composition_changed: $t2_comp_before != $t2_comp_after,
                     test_status: IF $t2_comp_before != $t2_comp_after THEN "PASS" ELSE "FAIL" END
+                },
+                "Debug": {
+                    t1_before: $t1_comp_before,
+                    t1_after: $t1_comp_after,
+                    t2_before: $t2_comp_before,
+                    t2_after: $t2_comp_after,
+                    user_hash_before: $hash_user_before,
+                    user_hash_after: $hash_user_after,
+                    affected_parents_simulation: (SELECT count() AS count, thread FROM comment WHERE author = $uid GROUP BY thread),
+                    comment2_intrinsic_before: $c2_intrinsic_before,
+                    comment2_intrinsic_after: $c2_intrinsic_after,
+                    sim_delta: mod::xor::blake3_xor($hash_user_before, $hash_user_after),
+                    sim_t2_update: mod::xor::blake3_xor($t2_comp_before, mod::xor::blake3_xor($hash_user_before, $hash_user_after))
                 }
             }
         };
         `;
 
+
         const result = await db.query(script).collect() as any;
-        // db.query returns list of results for each statement if multiple.
-        // The last return is what we want.
-        // With SurrealDB client, if we send one string, do we get array of results? Yes.
         const lastResult = result[result.length - 1] as any;
-        console.log("Test Result Report:", JSON.stringify(lastResult, null, 2));
+        // console.log("Test Result Report:", JSON.stringify(lastResult, null, 2));
 
         expect(lastResult['3_RESULTS']['Thread_1_Even_Parity']['test_status']).toBe('PASS');
         expect(lastResult['3_RESULTS']['Thread_2_Odd_Parity']['test_status']).toBe('PASS');

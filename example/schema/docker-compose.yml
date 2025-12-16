@@ -10,6 +10,7 @@ services:
       - SURREAL_BUCKET_FOLDER_ALLOWLIST=/modules
     command:
       - start
+      - --allow-all
       - --log
       - info
       - --user
