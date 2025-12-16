@@ -39,28 +39,59 @@ describe('Hash Cascade Logic', () => {
             thread: threadId,
             author: userId
         });
-        console.log("Comment Created");
+        const commentId = (comment as any)[0].id;
+        console.log("Comment Created:", commentId);
 
-        // 4. Update User -> Triggers Cascade
+        // 4. Capture Initial Hash
+        const getHash = async (recordId: string) => {
+             const res = await db.query(`SELECT * FROM ONLY _spooky_data_hash WHERE RecordId = ${recordId}`).collect() as any;
+             return Array.isArray(res) ? res[0] : res;
+        };
+        const initialHash = await getHash(threadId);
+        // const initialUserHash = await getHash(userId);
+
+        console.log("Initial Thread Hash:", initialHash.TotalHash);
+        // console.log("Initial User Hash:", initialUserHash?.TotalHash);
+        
+        expect(initialHash.TotalHash).toBeDefined();
+
+        // 4. Update Comment -> Triggers Cascade (Bubble)
+        // Note: Updating User (Reference) does not change Thread Hash unless schema embeds User. 
+        // Updating Comment (Child) creates a delta that propagates to Thread (Parent).
         try {
-            console.log("Updating User...");
+            console.log("Updating Comment...");
             // Use query to control update precisely
-            const result = await db.query(`UPDATE ${userId} SET username = "updated_user_${Date.now()}"`).collect();
-            console.log("User Update Result:", JSON.stringify(result));
+            const result = await db.query(`UPDATE ${commentId} SET content = "updated_comment_${Date.now()}"`).collect();
+            console.log("Comment Update Result:", JSON.stringify(result));
         } catch (e: any) {
-            console.error("User Update Failed:", e);
+            console.error("Comment Update Failed:", e);
             throw e;
         }
 
+        // Wait for cascade
+        await new Promise(r => setTimeout(r, 2000));
+
         // 5. Check Hashes (if update succeeded)
-        const hash = await db.query(`SELECT * FROM _spooky_data_hash WHERE RecordId = ${threadId}`).collect() as any[];
-        console.log("Thread Hash Check:", JSON.stringify(hash, null, 2));
+        const finalHash = await getHash(threadId);
+        // We don't verify User hash anymore as we didn't update it
+        // const finalUserHash = await getHash(userId);
+        
+        console.log("Final Thread Hash:", finalHash.TotalHash);
+        // console.log("Final User Hash:", finalUserHash?.TotalHash);
 
         // Assert record exists and has hashes
-        expect(hash[0].length).toBeGreaterThan(0);
-        const record = hash[0][0];
-        expect(record.IntrinsicHash).toBeDefined();
-        expect(record.CompositionHash).toBeDefined();
-        expect(record.TotalHash).toBeDefined();
+        expect(finalHash.IntrinsicHash).toBeDefined();
+        expect(finalHash.CompositionHash).toBeDefined();
+        expect(finalHash.TotalHash).toBeDefined();
+
+        /*
+        // Check if User Hash Changed
+        if (initialUserHash && finalUserHash) {
+             expect(finalUserHash.TotalHash).not.toBe(initialUserHash.TotalHash);
+        }
+        */
+
+        // CRITICAL ASSERTION: TotalHash MUST change
+        expect(finalHash.TotalHash).not.toBe(initialHash.TotalHash);
     }, 60000);
 });
