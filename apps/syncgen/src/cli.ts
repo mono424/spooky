@@ -34,6 +34,10 @@ program
     "--append <path>",
     "Path to another .surql file to append to the input"
   )
+  .option(
+    "--modules-dir <path>",
+    "Directory containing Surrealism modules to compile and bundle"
+  )
   .parse(process.argv);
 
 const options = program.opts();
@@ -54,6 +58,7 @@ async function main() {
       all: options.all,
       noHeader: options.noHeader,
       append: options.append,
+      modulesDir: options.modulesDir,
     });
 
     console.log(output);

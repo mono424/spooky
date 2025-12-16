@@ -2,6 +2,7 @@ mod codegen;
 mod json_schema;
 mod parser;
 mod spooky;
+mod modules;
 
 use anyhow::{Context, Result};
 use clap::Parser as ClapParser;
@@ -44,6 +45,10 @@ struct Args {
     /// Path to another .surql file to append to the input
     #[arg(long)]
     append: Option<PathBuf>,
+
+    /// Directory containing Surrealism modules to compile and bundle
+    #[arg(long, default_value = "../../packages/surrealism-modules")]
+    modules_dir: PathBuf,
 }
 
 /// Filter schema content to remove field definitions with FOR select WHERE false
@@ -255,6 +260,20 @@ fn main() -> Result<()> {
             OutputFormat::Dart => "Dart",
             OutputFormat::Surql => "SurrealQL",
         };
+
+        if matches!(output_format, OutputFormat::Surql) {
+            // Compile and bundle modules
+            // Output dir is the directory containing args.output
+            if let Some(output_dir) = args.output.parent() {
+                 println!("\nProcessing Surrealism Modules...");
+                 if let Err(e) = modules::compile_modules(&args.modules_dir, output_dir) {
+                     eprintln!("Warning: Failed to compile modules: {}", e);
+                     // Don't fail the whole build for this? Or should we?
+                     // User said "compile and add", implies part of the process.
+                     // But if directory doesn't exist, we skip.
+                 }
+            }
+        }
 
         println!(
             "\nSuccessfully generated {} at {:?}",

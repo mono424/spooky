@@ -18,6 +18,7 @@ export interface SyncgenOptions {
   all?: boolean;
   noHeader?: boolean;
   append?: string;
+  modulesDir?: string;
 }
 
 function findBinary(): string {
@@ -71,6 +72,10 @@ export async function runSyncgen(options: SyncgenOptions): Promise<string> {
 
   if (options.append) {
     args.push("--append", options.append);
+  }
+
+  if (options.modulesDir) {
+    args.push("--modules-dir", options.modulesDir);
   }
 
   try {

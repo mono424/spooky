@@ -62,7 +62,7 @@ impl CodeGenerator {
                 schema.push_str("-- SURREALISM MODULES\n");
                 schema.push_str("-- ==================================================\n");
                 schema.push_str("\n-- Define bucket for module files\n");
-                schema.push_str("DEFINE BUCKET modules BACKEND \"file:/modules\";\n\n");
+                schema.push_str("DEFINE BUCKET IF NOT EXISTS modules BACKEND \"file:/modules\";\n\n");
                 schema.push_str("-- Define the XOR module\n");
                 schema.push_str("DEFINE MODULE mod::xor AS f\"modules:/xor_module.surli\";\n\n");
 
