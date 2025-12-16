@@ -13,37 +13,31 @@ describe('Blake3 XOR Logic', () => {
   });
 
   test('should XOR two hashes correctly', async () => {
-    // Define a simple XOR test
-    // XOR of identical things is 0 (or equivalent usage in the module)
-    // XOR with 0 is identity
+    // Real WASM implementation: mod::xor::blake3_xor
     
-    // We need to know the valid input format for blake3_xor. presumably strings (hashes)?
-    
-    // Test 1: XOR same hash -> Dummy function returns A + "1"
-    // Queries can be run directly
-    const hashA = "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"; // Some random blake3 hash
-    const resultSame = await db.query(`RETURN fn::xor_blake3_xor('${hashA}', '${hashA}');`).collect() as any;
-    
-    const val = Array.isArray(resultSame) ? resultSame[0] : resultSame;
-    expect(val).toBe(hashA + "1"); // Dummy implementation appends "1"
-
-    // Test 2: Neutral element
+    const hashA = "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262";
     const zeroHash = "0000000000000000000000000000000000000000000000000000000000000000";
-    const resultNeutral = await db.query(`RETURN fn::xor_blake3_xor('${hashA}', '${zeroHash}');`).collect() as any;
-    const valNeutral = Array.isArray(resultNeutral) ? resultNeutral[0] : resultNeutral;
     
-    // With RETURN A + "1":
-    expect(valNeutral).toBe(hashA + "1");
+    // Test 1: XOR same hash -> 0
+    // Because A XOR A = 0
+    const resultSame = await db.query(`RETURN mod::xor::blake3_xor('${hashA}', '${hashA}');`).collect() as any;
+    const valSame = Array.isArray(resultSame) ? resultSame[0] : resultSame;
+    expect(valSame).toBe(zeroHash); 
+
+    // Test 2: Neutral element (A XOR 0 = A)
+    const resultNeutral = await db.query(`RETURN mod::xor::blake3_xor('${hashA}', '${zeroHash}');`).collect() as any;
+    const valNeutral = Array.isArray(resultNeutral) ? resultNeutral[0] : resultNeutral;
+    expect(valNeutral).toBe(hashA);
   
-    // Test 3: Commutativity (BROKEN by dummy implementation)
+    // Test 3: Commutativity (A XOR B = B XOR A)
     const hashB = "2b1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262";
-    const resAB = await db.query(`RETURN fn::xor_blake3_xor('${hashA}', '${hashB}');`).collect() as any;
-    const resBA = await db.query(`RETURN fn::xor_blake3_xor('${hashB}', '${hashA}');`).collect() as any;
+    const resAB = await db.query(`RETURN mod::xor::blake3_xor('${hashA}', '${hashB}');`).collect() as any;
+    const resBA = await db.query(`RETURN mod::xor::blake3_xor('${hashB}', '${hashA}');`).collect() as any;
     const valAB = Array.isArray(resAB) ? resAB[0] : resAB;
     const valBA = Array.isArray(resBA) ? resBA[0] : resBA;
     
-    // With Dummy RETURN A + "1":
-    expect(valAB).toBe(hashA + "1");
-    expect(valBA).toBe(hashB + "1");
+    expect(valAB).toBe(valBA);
+    expect(valAB).not.toBe(hashA);
+    expect(valAB).not.toBe(hashB);
   });
 });

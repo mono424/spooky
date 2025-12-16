@@ -9,5 +9,5 @@ crate-type = ["cdylib"]
 [dependencies]
 surrealism = "0.1"
 hex = { version = "0.4", default-features = false, features = ["alloc"] }
-getrandom = { version = "0.3", features = ["wasm_js"] }
-getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
+# WASI target provides random backend
+
