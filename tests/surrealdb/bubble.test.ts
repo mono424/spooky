@@ -14,9 +14,7 @@ describe('Bubble Hash Logic', () => {
         await db.close();
     });
 
-    // Skipped: Bubble test fails to detect hash change in testcontainers environment despite hash_cascade.test.ts proving logic works.
-    // Likely due to subtle event timing or logic verification diffs. hash_cascade provides sufficient coverage.
-    test.skip('Hash should bubble up from Child to Parent', async () => {
+    test('Hash should bubble up from Child to Parent', async () => {
         // 0. Create a User (Author)
         const user = await db.create(new Table('user')).content({
             username: "bubble_user_" + Date.now(),
