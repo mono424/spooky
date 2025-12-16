@@ -27,6 +27,8 @@ pub fn generate_spooky_events(
 
     // Generate the _spooky_data_hash mutation event first
     events.push_str("-- Meta Table: _spooky_data_hash Mutation\n");
+    // Table definition is now in meta_tables.surql
+
     events.push_str("-- Automatically recalculates TotalHash when IntrinsicHash or CompositionHash changes\n");
     events.push_str("DEFINE EVENT OVERWRITE _spooky_data_hash_mutation ON TABLE _spooky_data_hash\n");
     events.push_str("WHEN $before != $after AND $event != \"DELETE\"\n");

@@ -12,37 +12,15 @@ describe('Authentication Flows', () => {
         // Ensure we use the main database where schema is applied
         await db.use({ namespace: testNs, database: testDb });
 
-        // Workaround: Remove events that block Guest signup due to permission issues
-        try {
-           await db.query('REMOVE EVENT _spooky_user_mutation ON TABLE user');
-           await db.query('REMOVE EVENT _spooky_user_delete ON TABLE user');
-        } catch (e) { console.warn("Failed to remove events:", e); }
-
-
-        // Define a privileged function to handle user creation (bypass guest limits on events)
-        try {
-            // Remove first to ensure we update definition (and add debug)
-            try { await db.query('REMOVE FUNCTION fn::create_user'); } catch(e) {}
-            
-            await db.query(`
-                DEFINE FUNCTION fn::create_user($username: string, $password: string) {
-                    LET $u = CREATE user CONTENT {
-                        username: $username,
-                        password: crypto::argon2::generate($password),
-                        created_at: time::now()
-                    };
-                    RETURN $u;
-                } PERMISSIONS FULL;
-            `);
-        } catch (e) { 
-            console.warn("Function define warning:", e); 
-        }
-
         const accessQuery = `
             DEFINE ACCESS account ON DATABASE TYPE RECORD
             SIGNUP {
-                // Use privileged function to ensure internal events run with permissions
-                LET $u = fn::create_user($username, $password);
+                // Standard signup should now work with events enabled because hash table is writable by guest
+                LET $u = (CREATE user CONTENT {
+                    username: $username,
+                    password: crypto::argon2::generate($password),
+                    created_at: time::now()
+                });
                 RETURN $u;
             }
             SIGNIN ( SELECT * FROM user WHERE username = $username AND crypto::argon2::compare(password, $password) )
@@ -85,26 +63,30 @@ describe('Authentication Flows', () => {
     });
 
     test('Should Signup a new user', async () => {
-        const uniqueSuffix = Date.now().toString();
-        const username = `testuser_${uniqueSuffix}`;
-        const password = "securepassword";
+        // const uniqueSuffix = Date.now().toString();
+        // const username = `testuser_${uniqueSuffix}`;
+        // const password = "securepassword";
         
-        let token;
+        // let token;
         try {
-            token = await db.signup({
+            const token = await db.signup({
+                namespace: testNs,
+                database: testDb,
                 access: 'account',
                 variables: {
-                    username: username,
-                    password: password,
-                }
+                    username: `test_user_${Date.now()}`,
+                    password: 'password123',
+                },
             });
+            // console.log("Signup Token:", token);
+            expect(token).toBeDefined();
         } catch (e: any) {
             console.error("Signup Error:", e);
             if (e.cause) console.error("Signup Error Cause:", e.cause);
             throw e;
         }
 
-        expect(token).toBeDefined();
+        // expect(token).toBeDefined();
         // console.log("Signup Token:", token);
     });
 

@@ -45,6 +45,7 @@ describe('Intrinsic Hash Logic', () => {
         // Wait for processing
         await new Promise(r => setTimeout(r, 2000));
 
+
         // 4. Get new IntrinsicHash
         const updatedHashQuery = await db.query(`SELECT value IntrinsicHash FROM ONLY _spooky_data_hash WHERE RecordId = ${userId}`).collect() as any;
         const updatedHash = Array.isArray(updatedHashQuery) ? updatedHashQuery[0] : updatedHashQuery;

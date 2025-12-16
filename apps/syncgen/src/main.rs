@@ -145,6 +145,12 @@ fn main() -> Result<()> {
     let mut content = fs::read_to_string(&args.input)
         .context(format!("Failed to read input file: {:?}", args.input))?;
 
+    // Append embedded meta tables
+    let meta_tables = include_str!("meta_tables.surql");
+    content.push('\n');
+    content.push_str(meta_tables);
+    println!("  + Appended embedded meta_tables.surql");
+
     // Append extra file if specified
     if let Some(append_path) = &args.append {
         let append_content = fs::read_to_string(append_path)
