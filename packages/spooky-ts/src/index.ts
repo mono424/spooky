@@ -43,6 +43,7 @@ export async function createSpooky<S extends SchemaStructure>(
   // Run provisioning
   await runProvision(
     config.database,
+    config.namespace || "main",
     config.schemaSurql,
     databaseService,
     logger,
