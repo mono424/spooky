@@ -1,5 +1,5 @@
 import { LocalDatabaseService, RemoteDatabaseService } from "../database/index.js";
-import { MutationEventSystem, MutationEventTypes } from "../mutation/index.js";
+import { MutationEventSystem } from "../mutation/index.js";
 import { SyncQueueEventTypes } from "./events.js";
 import { UpEvent, UpQueue } from "./queue.js";
 
