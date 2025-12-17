@@ -5,6 +5,7 @@ import { UpEvent, UpQueue } from "./queue.js";
 export class SpookySync {
   private upQueue: UpQueue;
   private isInit: boolean = false;
+  private isSyncing: boolean = false;
 
   constructor(private local: LocalDatabaseService, private remote: RemoteDatabaseService, private mutationEvents: MutationEventSystem) {
     this.upQueue = new UpQueue(this.local);
@@ -14,7 +15,22 @@ export class SpookySync {
     if (this.isInit) throw new Error("SpookySync is already initialized");
     this.isInit = true;
     await this.upQueue.loadFromDatabase();
+    this.upQueue.registerEnqueueListener(this.triggerSync.bind(this));
     this.upQueue.listenForMutations(this.mutationEvents);
+    // Trigger initial sync for any loaded items
+    void this.triggerSync();
+  }
+
+  private async triggerSync() {
+    if (this.isSyncing) return;
+    this.isSyncing = true;
+    try {
+        while (this.upQueue.size > 0) {
+            await this.syncNext();
+        }
+    } finally {
+        this.isSyncing = false;
+    }
   }
 
   private async syncNext() {

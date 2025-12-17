@@ -26,11 +26,21 @@ export type UpEvent = CreateEvent | UpdateEvent | DeleteEvent;
 
 export class UpQueue {
     private queue: UpEvent[] = [];
+    private onEnqueue?: () => void;
 
     constructor(private local: LocalDatabaseService) {}
 
+    public registerEnqueueListener(listener: () => void) {
+        this.onEnqueue = listener;
+    }
+
+    get size(): number {
+        return this.queue.length;
+    }
+
     push(event: UpEvent) {
         this.queue.push(event);
+        if (this.onEnqueue) this.onEnqueue();
     }
 
     async next(fn: (event: UpEvent) => Promise<void>): Promise<void> {
