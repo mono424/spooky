@@ -1,6 +1,7 @@
 import { RecordId } from "surrealdb"
 import { MutationEventSystem, MutationEventTypes } from "../mutation/events.js"
 import { LocalDatabaseService } from "../database/index.js"
+import { createSyncQueueEventSystem, SyncQueueEventSystem, SyncQueueEventTypes } from "./events.js"
 
 export type CreateEvent = {
     type: "create",
@@ -26,12 +27,14 @@ export type UpEvent = CreateEvent | UpdateEvent | DeleteEvent;
 
 export class UpQueue {
     private queue: UpEvent[] = [];
-    private onEnqueue?: () => void;
+    private _events: SyncQueueEventSystem;
 
-    constructor(private local: LocalDatabaseService) {}
+    get events(): SyncQueueEventSystem {
+        return this._events;
+    }
 
-    public registerEnqueueListener(listener: () => void) {
-        this.onEnqueue = listener;
+    constructor(private local: LocalDatabaseService) {
+        this._events = createSyncQueueEventSystem();
     }
 
     get size(): number {
@@ -40,7 +43,7 @@ export class UpQueue {
 
     push(event: UpEvent) {
         this.queue.push(event);
-        if (this.onEnqueue) this.onEnqueue();
+        this._events.addEvent({ type: SyncQueueEventTypes.MutationEnqueued, payload: { queueSize: this.queue.length } });
     }
 
     async next(fn: (event: UpEvent) => Promise<void>): Promise<void> {

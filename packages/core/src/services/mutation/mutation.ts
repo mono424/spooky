@@ -3,10 +3,14 @@ import { LocalDatabaseService } from "../database/index.js";
 import { createMutationEventSystem, MutationEventSystem, MutationEventTypes } from "./events.js";
 
 export class MutationManager {
-  private events: MutationEventSystem;
+  private _events: MutationEventSystem;
+
+  get events(): MutationEventSystem {
+    return this._events;
+  }
 
   constructor(private db: LocalDatabaseService) {
-    this.events = createMutationEventSystem();
+    this._events = createMutationEventSystem();
   }
 
   async create<T extends Record<string, unknown>>(
@@ -41,7 +45,7 @@ export class MutationManager {
           throw new Error("Failed to create record or mutation log.");
       }
 
-      this.events.addEvent({
+      this._events.addEvent({
           type: MutationEventTypes.MutationCreated,
           payload: [{ 
               type: "create", 
@@ -90,7 +94,7 @@ export class MutationManager {
           throw new Error(`Failed to update record: ${id} not found.`);
       }
       
-      this.events.addEvent({
+      this._events.addEvent({
           type: MutationEventTypes.MutationCreated,
           payload: [{ 
               type: "update", 
@@ -131,7 +135,7 @@ export class MutationManager {
         throw new Error("Failed to perform delete or create mutation log.");
     }
     
-    this.events.addEvent({
+    this._events.addEvent({
         type: MutationEventTypes.MutationCreated,
         payload: [{ 
             type: "delete", 

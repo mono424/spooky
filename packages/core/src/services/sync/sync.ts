@@ -1,5 +1,6 @@
 import { LocalDatabaseService, RemoteDatabaseService } from "../database/index.js";
 import { MutationEventSystem, MutationEventTypes } from "../mutation/index.js";
+import { SyncQueueEventTypes } from "./events.js";
 import { UpEvent, UpQueue } from "./queue.js";
 
 export class SpookySync {
@@ -15,9 +16,8 @@ export class SpookySync {
     if (this.isInit) throw new Error("SpookySync is already initialized");
     this.isInit = true;
     await this.upQueue.loadFromDatabase();
-    this.upQueue.registerEnqueueListener(this.triggerSync.bind(this));
+    this.upQueue.events.subscribe(SyncQueueEventTypes.MutationEnqueued, this.triggerSync.bind(this));
     this.upQueue.listenForMutations(this.mutationEvents);
-    // Trigger initial sync for any loaded items
     void this.triggerSync();
   }
 
