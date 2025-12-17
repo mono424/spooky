@@ -9,6 +9,22 @@ pub fn compile_modules(modules_dir: &Path, output_dir: &Path) -> Result<()> {
         return Ok(());
     }
 
+    // Ensure wasm32-wasip1 target is installed
+    println!("Ensuring wasm32-wasip1 target is installed...");
+    match Command::new("rustup")
+        .args(&["target", "add", "wasm32-wasip1"])
+        .status()
+    {
+        Ok(status) => {
+            if !status.success() {
+                println!("Warning: 'rustup target add wasm32-wasip1' failed with status: {}", status);
+            }
+        }
+        Err(e) => {
+             println!("Warning: Could not run 'rustup'. Is it installed? Error: {}", e);
+        }
+    }
+
     println!("Scanning for modules in {:?}", modules_dir);
 
     for entry in fs::read_dir(modules_dir)? {
