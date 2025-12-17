@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "test": "jest",
+    "test": "jest --runInBand",
     "test:watch": "jest --watch",
     "generate": "pnpm run generate:client && pnpm run generate:remote",
     "generate:client": "syncgen --input ../example/schema/src/schema.surql --output .spooky/client_schema.ts",

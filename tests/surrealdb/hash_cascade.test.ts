@@ -69,27 +69,24 @@ describe('Hash Cascade Logic', () => {
         }
 
         // Wait for cascade
-        await new Promise(r => setTimeout(r, 2000));
+        const waitForHashChange = async (initial: string, timeout = 5000) => {
+            const start = Date.now();
+            while (Date.now() - start < timeout) {
+                const current = await getHash(threadId);
+                if (current && current.TotalHash !== initial) return current;
+                await new Promise(r => setTimeout(r, 200));
+            }
+            return await getHash(threadId);
+        }
 
-        // 5. Check Hashes (if update succeeded)
-        const finalHash = await getHash(threadId);
-        // We don't verify User hash anymore as we didn't update it
-        // const finalUserHash = await getHash(userId);
+        const finalHash = await waitForHashChange(initialHash.TotalHash);
         
         console.log("Final Thread Hash:", finalHash.TotalHash);
-        // console.log("Final User Hash:", finalUserHash?.TotalHash);
 
         // Assert record exists and has hashes
         expect(finalHash.IntrinsicHash).toBeDefined();
         expect(finalHash.CompositionHash).toBeDefined();
         expect(finalHash.TotalHash).toBeDefined();
-
-        /*
-        // Check if User Hash Changed
-        if (initialUserHash && finalUserHash) {
-             expect(finalUserHash.TotalHash).not.toBe(initialUserHash.TotalHash);
-        }
-        */
 
         // CRITICAL ASSERTION: TotalHash MUST change
         expect(finalHash.TotalHash).not.toBe(initialHash.TotalHash);

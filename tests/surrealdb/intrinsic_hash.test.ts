@@ -26,12 +26,23 @@ describe('Intrinsic Hash Logic', () => {
         const user = Array.isArray(res) ? res[0] : res;
         const userId = user.id;
 
-        // Wait for potential async event processing
-        await new Promise(r => setTimeout(r, 2000));
+        // Wait for hash change (polling)
+        const waitForHashChange = async (initial: string, shouldChange: boolean = true, timeout = 5000) => {
+            const start = Date.now();
+            while (Date.now() - start < timeout) {
+                const q = await db.query(`SELECT value IntrinsicHash FROM ONLY _spooky_data_hash WHERE RecordId = ${userId}`).collect() as any;
+                const h = Array.isArray(q) ? q[0] : q;
+                if (h) {
+                     if (shouldChange && h !== initial) return h;
+                     if (!shouldChange && h === initial) return h;
+                }
+                await new Promise(r => setTimeout(r, 200));
+            }
+            const q = await db.query(`SELECT value IntrinsicHash FROM ONLY _spooky_data_hash WHERE RecordId = ${userId}`).collect() as any;
+            return Array.isArray(q) ? q[0] : q;
+        }
 
-        // 2. Get initial IntrinsicHash
-        const initialHashQuery = await db.query(`SELECT value IntrinsicHash FROM ONLY _spooky_data_hash WHERE RecordId = ${userId}`).collect() as any;
-        const initialHash = Array.isArray(initialHashQuery) ? initialHashQuery[0] : initialHashQuery;
+        const initialHash = await waitForHashChange("", true); // wait for existence
         
         console.log("Initial Hash:", initialHash);
         expect(initialHash).toBeDefined();
@@ -42,13 +53,8 @@ describe('Intrinsic Hash Logic', () => {
         const updatedUsername = tempUsername + "_updated";
         await db.query(`UPDATE ${userId} SET username = '${updatedUsername}'`);
 
-        // Wait for processing
-        await new Promise(r => setTimeout(r, 2000));
-
-
         // 4. Get new IntrinsicHash
-        const updatedHashQuery = await db.query(`SELECT value IntrinsicHash FROM ONLY _spooky_data_hash WHERE RecordId = ${userId}`).collect() as any;
-        const updatedHash = Array.isArray(updatedHashQuery) ? updatedHashQuery[0] : updatedHashQuery;
+        const updatedHash = await waitForHashChange(initialHash, true);
 
         console.log("Updated Hash:", updatedHash);
         expect(updatedHash).toBeDefined();
@@ -57,17 +63,10 @@ describe('Intrinsic Hash Logic', () => {
         // 5. Revert the change
         await db.query(`UPDATE ${userId} SET username = '${tempUsername}'`);
 
-        // Wait for processing
-        await new Promise(r => setTimeout(r, 2000));
-
         // 6. Get final IntrinsicHash (Should match initial)
-        const revertHashQuery = await db.query(`SELECT value IntrinsicHash FROM ONLY _spooky_data_hash WHERE RecordId = ${userId}`).collect() as any;
-        const revertHash = Array.isArray(revertHashQuery) ? revertHashQuery[0] : revertHashQuery;
+        const revertHash = await waitForHashChange(initialHash, false);
 
         console.log("Revert Hash:", revertHash);
-        // Note: created_at didn't change, so restoring username should restore the hash IF ONLY username/password/created_at are hashed.
-        // If 'updated_at' is implicitly tracked and hashed, this might fail. 
-        // Assuming deterministic hashing of content.
         expect(revertHash).toBe(initialHash);
     }, 30000);
 });

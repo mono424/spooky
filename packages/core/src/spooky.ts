@@ -1,5 +1,5 @@
 import { QueryManager } from "./services/query.js";
-import { MutationManager } from "./services/mutation.js";
+import { MutationManager } from "./services/mutation/mutation.js";
 import { SpookyConfig } from "./types.js";
 import { LocalDatabaseService, RemoteDatabaseService } from "./services/database/index.js";
 
@@ -12,8 +12,8 @@ export class SpookyClient {
   constructor(config: SpookyConfig) {
     this.local = new LocalDatabaseService(config);
     this.remote = new RemoteDatabaseService(config);
-    this.queryManager = new QueryManager(this.db);
-    this.mutationManager = new MutationManager(this.db);
+    this.mutationManager = new MutationManager(this.local);
+    this.queryManager = new QueryManager(this.local);
   }
 
   async init() {

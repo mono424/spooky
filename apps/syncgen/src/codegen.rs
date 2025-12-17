@@ -278,7 +278,7 @@ impl CodeGenerator {
             if let serde_json::Value::Object(defs_obj) = definitions {
                 // Process each table (skip Relationships and RelationTables)
                 for (table_name, table_def) in defs_obj {
-                    if table_name == "Relationships" || table_name == "RelationTables" {
+                    if table_name == "Relationships" || table_name == "RelationTables" || table_name.starts_with("_spooky_") {
                         continue;
                     }
 
@@ -419,7 +419,7 @@ impl CodeGenerator {
         if let Some(defs) = schema.get("definitions") {
             if let serde_json::Value::Object(defs_obj) = defs {
                 for (table_name, table_def) in defs_obj {
-                    if table_name == "Relationships" || table_name == "RelationTables" {
+                    if table_name == "Relationships" || table_name == "RelationTables" || table_name.starts_with("_spooky_") {
                         continue;
                     }
 
@@ -510,7 +510,7 @@ impl CodeGenerator {
                         if let serde_json::Value::Object(defs_obj) = defs {
                             println!("Processing definitions, found {} tables", defs_obj.len());
                             for (table_name, table_def) in defs_obj {
-                                if table_name == "Relationships" {
+                                if table_name == "Relationships" || table_name.starts_with("_spooky_") {
                                     continue;
                                 }
                                 // Check if this table has any record fields

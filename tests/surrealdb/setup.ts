@@ -30,7 +30,7 @@ async function getContainer() {
         ])
         .withUser("root") 
         .withCommand(["start", "--log", "trace", "--user", "root", "--pass", "root", "--allow-all", "--allow-experimental"]) 
-        .withStartupTimeout(10000)
+        .withStartupTimeout(30000)
         .withLogConsumer((stream) => {
             stream.pipe(process.stdout);
         })
@@ -94,13 +94,17 @@ export async function createTestDb() {
       // Check for errors in results
       if (Array.isArray(results)) {
         for (const res of results) {
-            if (res.status === 'ERR') {
+            if (res && res.status === 'ERR') {
                 console.error("Schema Load Error:", res);
                 throw new Error("Schema Load Failed: " + JSON.stringify(res));
             }
         }
       } else {
-        console.warn("Schema query returned non-array:", results);
+        // Just log if interesting, but usually it's fine (e.g. empty array or successful execution of first statement)
+        if (results && results.status === 'ERR') {
+             console.error("Schema Load Error:", results);
+             throw new Error("Schema Load Failed: " + JSON.stringify(results));
+        }
       }
   } else {
       console.warn("Schema file not found at " + schemaPath + ". Tests might fail.");

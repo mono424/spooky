@@ -8,6 +8,10 @@ describe("Client Spooky Events", () => {
   beforeAll(async () => {
     db = await createTestDb();
     // Use a separate namespace/database for client testing to avoid conflicts
+    try {
+        await db.query("REMOVE DATABASE test_client");
+    } catch(e) {}
+    await db.query("DEFINE DATABASE test_client");
     await db.use({ namespace: "test_client", database: "test_client" });
     
     // Load the client schema (which includes the client-specific events)
@@ -123,4 +127,5 @@ describe("Client Spooky Events", () => {
     expect(hashRecord).toBeDefined(); // Should not be deleted
     expect(hashRecord.PendingDelete).toBe(true);
   });
+
 });

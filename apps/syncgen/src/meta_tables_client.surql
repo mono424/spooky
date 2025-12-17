@@ -42,3 +42,22 @@ DEFINE FIELD PendingDelete ON TABLE _spooky_data_hash TYPE bool DEFAULT false
 
 -- Fast lookup by the original record ID
 DEFINE INDEX idx_record_id ON TABLE _spooky_data_hash COLUMNS RecordId UNIQUE;
+
+-- ==================================================
+-- SPOOKY EVENTS
+-- Stores create, update, and delete events
+-- ==================================================
+
+DEFINE TABLE _spooky_pending_mutations SCHEMAFULL
+    PERMISSIONS FOR select, create, update, delete WHERE true;
+
+DEFINE FIELD mutation_type ON TABLE _spooky_pending_mutations TYPE string
+    PERMISSIONS FOR select, create, update, delete WHERE true;
+
+-- The target record ID (for update/delete) - maps to 'id' in the event object
+DEFINE FIELD record_id ON TABLE _spooky_pending_mutations TYPE option<record>
+    PERMISSIONS FOR select, create, update, delete WHERE true;
+
+-- The data payload (for create/update)
+DEFINE FIELD data ON TABLE _spooky_pending_mutations TYPE option<object> FLEXIBLE
+    PERMISSIONS FOR select, create, update, delete WHERE true;

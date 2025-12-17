@@ -69,22 +69,16 @@ describe('SurrealDB Simple CRUD', () => {
     const person = Array.isArray(res) ? res[0] : res;
     
     await db.delete(person.id);
-    // ... check logic ...
-    // select might return empty array? or null provided ID?
-    // v2 select(id) returns the record or error/null?
-    try {
-        const check = await db.select(person.id);
-        const CheckRes = check as any;
-        // If it returns list, it's empty? Or returns the record?
-        // If deleted, it should be empty or throw?
-        // Usually returns empty array or null.
-        if (Array.isArray(CheckRes)) {
-            expect(CheckRes.length).toBe(0);
-        } else {
-             expect(CheckRes).toBeFalsy(); 
-        }
-    } catch (e) {
-        // success if it throws
-    }
+
+    // Verify deletion using a query to be unambiguous
+    const checkQuery = await db.query('SELECT * FROM person WHERE id = $id', { id: person.id });
+    const checkRes = checkQuery as any;
+    
+    // Result should be empty array or array with empty list
+    const found = (Array.isArray(checkRes) && checkRes[0] && checkRes[0].result) 
+        ? checkRes[0].result 
+        : (Array.isArray(checkRes) ? checkRes : []);
+
+    expect(found.length).toBe(0);
   });
 });
