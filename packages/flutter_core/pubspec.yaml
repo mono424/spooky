@@ -10,6 +10,10 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  crypto: ^3.0.7
+  flutter_surrealdb_engine:
+    path: ../flutter_surrealdb_engine
+
   flutter_web_plugins:
     sdk: flutter
   web: ^1.0.0
