@@ -102,9 +102,9 @@ Future<void> provisionSchema(
       .split(';')
       .map((s) => s.trim())
       .where((s) => s.isNotEmpty);
-  for (final statement in statements) {
-    await localDb.queryDb(query: statement);
-  }
+  //for (final statement in statements) {
+  await localDb.queryDb(query: schemaContent);
+  //}
 }
 
 Future<void> recordSchemaHash(SurrealDatabase internalDb, String hash) async {

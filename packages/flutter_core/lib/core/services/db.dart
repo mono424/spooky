@@ -10,6 +10,9 @@ class DatabaseService {
   DatabaseService(this.config);
 
   Future<void> init() async {
+    // Initialize FFI bindings
+    await RustLib.init();
+
     // Initialize local database
     local = await connectDb(path: config.localDBurl);
 

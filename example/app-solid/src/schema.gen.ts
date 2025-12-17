@@ -14,25 +14,13 @@ export const schema = {
       primaryKey: ['id'] as const
     },
     {
-      name: 'thread' as const,
-      columns: {
-        id: { type: 'string' as const, recordId: true, optional: false },
-        content: { type: 'string' as const, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
-        author: { type: 'string' as const, recordId: true, optional: false },
-        title: { type: 'string' as const, optional: false },
-        comments: { type: 'string' as const, optional: true },
-      },
-      primaryKey: ['id'] as const
-    },
-    {
       name: 'comment' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
         thread: { type: 'string' as const, recordId: true, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
         author: { type: 'string' as const, recordId: true, optional: false },
         content: { type: 'string' as const, optional: false },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
       },
       primaryKey: ['id'] as const
     },
@@ -43,19 +31,31 @@ export const schema = {
       },
       primaryKey: ['id'] as const
     },
+    {
+      name: 'thread' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
+        title: { type: 'string' as const, optional: false },
+        author: { type: 'string' as const, recordId: true, optional: false },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
+        content: { type: 'string' as const, optional: false },
+        comments: { type: 'string' as const, optional: true },
+      },
+      primaryKey: ['id'] as const
+    },
   ],
   relationships: [
     {
-      from: 'thread' as const,
-      field: 'author' as const,
-      to: 'user' as const,
+      from: 'comment' as const,
+      field: 'thread' as const,
+      to: 'thread' as const,
       cardinality: 'one' as const
     },
     {
-      from: 'thread' as const,
-      field: 'comments' as const,
-      to: 'comment' as const,
-      cardinality: 'many' as const
+      from: 'comment' as const,
+      field: 'author' as const,
+      to: 'user' as const,
+      cardinality: 'one' as const
     },
     {
       from: 'user' as const,
@@ -70,16 +70,16 @@ export const schema = {
       cardinality: 'many' as const
     },
     {
-      from: 'comment' as const,
-      field: 'thread' as const,
-      to: 'thread' as const,
-      cardinality: 'one' as const
-    },
-    {
-      from: 'comment' as const,
+      from: 'thread' as const,
       field: 'author' as const,
       to: 'user' as const,
       cardinality: 'one' as const
+    },
+    {
+      from: 'thread' as const,
+      field: 'comments' as const,
+      to: 'comment' as const,
+      cardinality: 'many' as const
     },
   ]
 } as const;
@@ -94,27 +94,17 @@ export type SchemaDefinition = typeof schema;
 export const SURQL_SCHEMA = `-- ##################################################################
 -- SCOPES & AUTHENTICATION
 -- ##################################################################
-DEFINE ACCESS account ON DATABASE TYPE RECORD
-	SIGNUP ( CREATE user SET username = $username, password = crypto::argon2::generate($password) )
-	SIGNIN ( SELECT * FROM user WHERE username = $username AND crypto::argon2::compare(password, $password) )
-	DURATION FOR TOKEN 365d, FOR SESSION 365d
-;
 
 -- ##################################################################
 -- USER TABLE
 -- ##################################################################
 
 DEFINE TABLE user SCHEMAFULL
-PERMISSIONS
-  FOR update, delete WHERE $access = "account" AND id = $auth.id
-  FOR create, select WHERE true;
+PERMISSIONS FOR select, create, update, delete WHERE true;
 
 DEFINE FIELD username ON TABLE user TYPE string
 ASSERT $value != NONE AND string::is::alphanum($value) AND string::len($value) > 3
-PERMISSIONS
-    FOR select WHERE true
-    FOR create WHERE true
-    FOR update WHERE $access = "account" AND id = $auth.id;
+PERMISSIONS FOR select, create, update, delete WHERE true;
     
 DEFINE INDEX unique_username ON TABLE user FIELDS username UNIQUE;
 
@@ -125,9 +115,7 @@ DEFINE INDEX unique_username ON TABLE user FIELDS username UNIQUE;
 -- ##################################################################
 
 DEFINE TABLE thread SCHEMAFULL
-  PERMISSIONS
-    FOR select WHERE true
-    FOR update, delete, create WHERE $access = "account" AND author.id = $auth.id
+PERMISSIONS FOR select, create, update, delete WHERE true
 ;
 
 
@@ -147,9 +135,7 @@ DEFINE FIELD created_at ON TABLE thread TYPE datetime
 -- ##################################################################
 
 DEFINE TABLE comment SCHEMAFULL
-  PERMISSIONS
-    FOR select WHERE true
-    FOR update, delete, create WHERE $access = "account" AND author.id = $auth.id
+PERMISSIONS FOR select, create, update, delete WHERE true
 ;
 
 DEFINE FIELD thread ON TABLE comment TYPE record<thread>; -- @parent
@@ -168,7 +154,7 @@ DEFINE FIELD created_at ON TABLE comment TYPE datetime
 
 DEFINE TABLE commented_on SCHEMAFULL TYPE RELATION
   FROM comment TO thread
-  PERMISSIONS FOR select WHERE true;
+PERMISSIONS FOR select, create, update, delete WHERE true;
 
 DEFINE EVENT comment_created ON TABLE comment WHEN $event = "CREATE" THEN
   RELATE ($after.id)->commented_on->($after.thread)

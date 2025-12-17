@@ -1,7 +1,9 @@
 import 'types.dart';
+import 'provision.dart'; // Add provision import
 import 'services/db.dart';
 import 'services/auth.dart';
 import 'services/query.dart';
+import 'services/logger.dart'; // Add logger import
 import 'services/mutation.dart';
 
 export 'types.dart';
@@ -25,9 +27,11 @@ class Spooky {
     db = DatabaseService(config);
     await db.init();
 
-    auth = AuthManager(db);
-    queryManager = QueryManager(db);
-    mutationManager = MutationManager(db);
+    await runProvision(config.database, config.schemaString, db, Logger());
+
+    //auth = AuthManager(db);
+    //queryManager = QueryManager(db);
+    //mutationManager = MutationManager(db);
   }
 
   /// Query interface

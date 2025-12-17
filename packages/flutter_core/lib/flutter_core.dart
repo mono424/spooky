@@ -1,11 +1,6 @@
-import 'flutter_core_platform_interface.dart';
+export 'core/spooky.dart';
+export 'core/types.dart';
+export 'core/provision.dart';
 
-class FlutterCore {
-  Future<String?> getPlatformVersion() {
-    return FlutterCorePlatform.instance.getPlatformVersion();
-  }
-
-  int? add(int a, int b) {
-    return FlutterCorePlatform.instance.add(a, b);
-  }
-}
+// Leaving empty or minimal logic if needed.
+// The user wants to instantiate SpookyConfig and Spooky directly, which are exported above.

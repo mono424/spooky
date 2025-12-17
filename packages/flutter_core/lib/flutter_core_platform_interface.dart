@@ -1,7 +1,6 @@
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
 import 'flutter_core_method_channel.dart';
-import 'core/db.dart';
 
 abstract class FlutterCorePlatform extends PlatformInterface {
   /// Constructs a FlutterCorePlatform.
@@ -26,9 +25,5 @@ abstract class FlutterCorePlatform extends PlatformInterface {
 
   Future<String?> getPlatformVersion() {
     throw UnimplementedError('platformVersion() has not been implemented.');
-  }
-
-  int? add(int a, int b) {
-    return Database.add(a, b);
   }
 }
