@@ -16,25 +16,21 @@ export class SpookySync {
     if (this.isInit) throw new Error("SpookySync is already initialized");
     this.isInit = true;
     await this.upQueue.loadFromDatabase();
-    this.upQueue.events.subscribe(SyncQueueEventTypes.MutationEnqueued, this.triggerSync.bind(this));
+    this.upQueue.events.subscribe(SyncQueueEventTypes.MutationEnqueued, this.sync.bind(this));
     this.upQueue.listenForMutations(this.mutationEvents);
-    void this.triggerSync();
+    void this.sync();
   }
 
-  private async triggerSync() {
+  private async sync() {
     if (this.isSyncing) return;
     this.isSyncing = true;
     try {
         while (this.upQueue.size > 0) {
-            await this.syncNext();
+            await this.upQueue.next(this.processUpEvent.bind(this));
         }
     } finally {
         this.isSyncing = false;
     }
-  }
-
-  private async syncNext() {
-    await this.upQueue.next(this.processUpEvent.bind(this));
   }
 
   private async processUpEvent(event: UpEvent) {
