@@ -3,23 +3,28 @@ import { SpookyConfig } from "../../types.js";
 import { AbstractDatabaseService } from "./database.js";
 
 export class RemoteDatabaseService extends AbstractDatabaseService {
-  private config: SpookyConfig;
+  private config: SpookyConfig<any>['database'];
 
-  constructor(config: SpookyConfig) {
+  constructor(config: SpookyConfig<any>['database']) {
     super(new Surreal());
     this.config = config;
   }
 
+  getConfig(): SpookyConfig<any>['database'] {
+    return this.config;
+  }
+
   async connect(): Promise<void> {
-    if (this.config.database.endpoint) {
-      await this.client.connect(this.config.database.endpoint);
+    const {endpoint, token, namespace, database} = this.getConfig();
+    if (endpoint) {
+      await this.client.connect(endpoint);
       await this.client.use({
-        namespace: this.config.database.namespace,
-        database: this.config.database.database,
+        namespace,
+        database,
       });
       
-      if (this.config.database.token) {
-        await this.client.authenticate(this.config.database.token);
+      if (token) {
+        await this.client.authenticate(token);
       }
     }
   }

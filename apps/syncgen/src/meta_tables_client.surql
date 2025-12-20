@@ -1,6 +1,7 @@
 -- ==================================================
 -- SPOOKY SCHEMA
 -- The provisioned schema state for the database. Currently only used in local cache.
+-- Used in local-migrator.ts
 -- ==================================================
 
 DEFINE TABLE IF NOT EXISTS _spooky_schema SCHEMAFULL;

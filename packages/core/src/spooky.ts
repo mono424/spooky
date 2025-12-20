@@ -1,19 +1,22 @@
 import { QueryManager } from "./services/query.js";
 import { MutationManager } from "./services/mutation/mutation.js";
 import { SpookyConfig } from "./types.js";
-import { LocalDatabaseService, RemoteDatabaseService } from "./services/database/index.js";
+import { LocalDatabaseService, LocalMigrator, RemoteDatabaseService } from "./services/database/index.js";
 import { SpookySync } from "./services/sync/index.js";
+import { SchemaStructure } from "@spooky/query-builder";
 
-export class SpookyClient {
+export class SpookyClient<S extends SchemaStructure> {
   private local: LocalDatabaseService;
   private remote: RemoteDatabaseService;
+  private migrator: LocalMigrator;
   private queryManager: QueryManager;
   private mutationManager: MutationManager;
   private sync: SpookySync;
 
-  constructor(config: SpookyConfig) {
-    this.local = new LocalDatabaseService(config);
-    this.remote = new RemoteDatabaseService(config);
+  constructor(private config: SpookyConfig<S>) {
+    this.local = new LocalDatabaseService(this.config.database);
+    this.remote = new RemoteDatabaseService(this.config.database);
+    this.migrator = new LocalMigrator(this.local);
     this.mutationManager = new MutationManager(this.local);
     this.queryManager = new QueryManager(this.local);
     this.sync = new SpookySync(this.local, this.remote, this.mutationManager.events);
@@ -22,6 +25,7 @@ export class SpookyClient {
   async init() {
     await this.local.connect();
     await this.remote.connect();
+    await this.migrator.provision(this.config.schemaSurql);
   }
 
   async close() {
