@@ -1,1 +1,0 @@
-2025/12/17-19:08:47.258890 6220247040 [WARN] [db/db_impl/db_impl_open.cc:2688] DB::Open() failed: IO error: While lock file: /Users/timohty/projekts/spooky/packages/flutter_core/example/db/LOCK: Resource temporarily unavailable

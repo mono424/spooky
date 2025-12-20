@@ -1,22 +1,28 @@
-class SpookyConfig {
-  final String schemaString;
-  final String globalDBurl;
-  final String localDBurl;
-  final String dbName;
+class DatabaseConfig {
+  final String? endpoint;
+  final String path;
   final String namespace;
   final String database;
-  final String internalDatabase; // Used for Spooky's internal state
-  final String? token; // Added token for auth if needed
+  final String? internalDatabase;
+  final String? token;
 
-  const SpookyConfig({
-    required this.schemaString,
-    required this.globalDBurl,
-    required this.localDBurl,
-    required this.dbName,
+  DatabaseConfig({
+    this.endpoint,
+    required this.path,
     required this.namespace,
     required this.database,
-    required this.internalDatabase,
+    this.internalDatabase,
     this.token,
+  });
+}
+
+class SpookyConfig {
+  final String schemaString;
+  final DatabaseConfig database;
+
+  SpookyConfig({
+    required this.schemaString,
+    required this.database,
   });
 }
 

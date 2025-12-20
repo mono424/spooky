@@ -37,16 +37,15 @@ class _MyAppState extends State<MyApp> {
           '/Users/timohty/projekts/spooky/packages/flutter_core/example/db';
       await Directory(dbPath).create(recursive: true);
 
-      final localUrl = 'rocksdb://$dbPath';
+      final localUrl = dbPath;
 
       final config = SpookyConfig(
         schemaString: SURQL_SCHEMA,
-        globalDBurl: '',
-        localDBurl: localUrl,
-        dbName: 'spooky',
-        namespace: 'test',
-        database: 'test',
-        internalDatabase: 'spooky_internal',
+        database: DatabaseConfig(
+          namespace: 'test',
+          database: 'test',
+          path: localUrl,
+        ),
       );
 
       final client = await Spooky.create(config);

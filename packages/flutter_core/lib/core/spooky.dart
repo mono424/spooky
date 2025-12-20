@@ -1,10 +1,10 @@
 import 'types.dart';
 import 'provision.dart'; // Add provision import
-import 'services/db.dart';
-import 'services/auth.dart';
-import 'services/query.dart';
+import 'backup/db.dart';
+import 'backup/auth.dart';
+import 'backup/query.dart';
 import 'services/logger.dart'; // Add logger import
-import 'services/mutation.dart';
+import 'backup/mutation.dart';
 
 export 'types.dart';
 
@@ -26,8 +26,13 @@ class Spooky {
   Future<void> _init() async {
     db = DatabaseService(config);
     await db.init();
+    
 
-    await runProvision(config.database, config.schemaString, db, Logger());
+    final res = await db.queryLocal('CREATE thread SET author = user:am4v458ret6ocg1kalzl, title = "Hello", content = "Hello"'); 
+    print(res);
+
+
+    //await runProvision(config.database, config.schemaString, db, Logger());
 
     //auth = AuthManager(db);
     //queryManager = QueryManager(db);

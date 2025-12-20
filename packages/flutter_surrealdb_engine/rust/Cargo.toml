@@ -4,13 +4,13 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib", "staticlib"]
+crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
 flutter_rust_bridge = "=2.11.1"
 
 
-surrealdb = { version = "2.4.0", features = ["kv-rocksdb"] }
+surrealdb = { version = "2.4.0", features = ["kv-rocksdb", "protocol-ws", "protocol-http"] }
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
 serde = "1.0.228"
