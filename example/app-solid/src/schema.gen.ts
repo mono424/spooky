@@ -8,19 +8,8 @@ export const schema = {
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
         username: { type: 'string' as const, optional: false },
-        threads: { type: 'string' as const, optional: true },
         comments: { type: 'string' as const, optional: true },
-      },
-      primaryKey: ['id'] as const
-    },
-    {
-      name: 'comment' as const,
-      columns: {
-        id: { type: 'string' as const, recordId: true, optional: false },
-        thread: { type: 'string' as const, recordId: true, optional: false },
-        author: { type: 'string' as const, recordId: true, optional: false },
-        content: { type: 'string' as const, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
+        threads: { type: 'string' as const, optional: true },
       },
       primaryKey: ['id'] as const
     },
@@ -35,11 +24,22 @@ export const schema = {
       name: 'thread' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
-        title: { type: 'string' as const, optional: false },
-        author: { type: 'string' as const, recordId: true, optional: false },
         created_at: { type: 'string' as const, dateTime: true, optional: true },
         content: { type: 'string' as const, optional: false },
+        author: { type: 'string' as const, recordId: true, optional: false },
+        title: { type: 'string' as const, optional: false },
         comments: { type: 'string' as const, optional: true },
+      },
+      primaryKey: ['id'] as const
+    },
+    {
+      name: 'comment' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
+        thread: { type: 'string' as const, recordId: true, optional: false },
+        content: { type: 'string' as const, optional: false },
+        author: { type: 'string' as const, recordId: true, optional: false },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
       },
       primaryKey: ['id'] as const
     },
@@ -59,14 +59,14 @@ export const schema = {
     },
     {
       from: 'user' as const,
-      field: 'threads' as const,
-      to: 'thread' as const,
+      field: 'comments' as const,
+      to: 'comment' as const,
       cardinality: 'many' as const
     },
     {
       from: 'user' as const,
-      field: 'comments' as const,
-      to: 'comment' as const,
+      field: 'threads' as const,
+      to: 'thread' as const,
       cardinality: 'many' as const
     },
     {
@@ -103,8 +103,8 @@ DEFINE TABLE user SCHEMAFULL
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
 DEFINE FIELD username ON TABLE user TYPE string
-ASSERT $value != NONE AND string::is::alphanum($value) AND string::len($value) > 3
-PERMISSIONS FOR select, create, update, delete WHERE true;
+ASSERT $value != NONE AND string::len($value) > 3
+PERMISSIONS FOR select, create, update WHERE true;
     
 DEFINE INDEX unique_username ON TABLE user FIELDS username UNIQUE;
 
@@ -158,4 +158,265 @@ PERMISSIONS FOR select, create, update, delete WHERE true;
 
 DEFINE EVENT comment_created ON TABLE comment WHEN $event = "CREATE" THEN
   RELATE ($after.id)->commented_on->($after.thread)
-;`;
+;
+-- ==================================================
+-- SPOOKY INCANTATION
+-- The Registry of active Live Queries (Incantations).
+-- ==================================================
+
+DEFINE TABLE _spooky_incantation SCHEMAFULL
+PERMISSIONS FOR select, create, update, delete WHERE true;
+
+-- The unique hash ID of the query + params
+DEFINE FIELD Id ON TABLE _spooky_incantation TYPE string
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- The raw query string (for re-hydration/debugging)
+DEFINE FIELD SurrealQL ON TABLE _spooky_incantation TYPE string
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- The current XOR sum of all results in this query
+DEFINE FIELD Hash ON TABLE _spooky_incantation TYPE bytes
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- For garbage collection (Heartbeat)
+DEFINE FIELD LastActiveAt ON TABLE _spooky_incantation TYPE datetime DEFAULT time::now()
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- How long this Incantation stays alive without activity
+DEFINE FIELD TTL ON TABLE _spooky_incantation TYPE duration
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- Cleanup Triggers
+-- When an incantation dies, clean up its lookup and tail records
+DEFINE EVENT _spooky_cascade_delete_lookup ON TABLE _spooky_incantation WHEN $event = "DELETE" THEN {
+    DELETE _spooky_incantation_lookup WHERE IncantationId = $before.Id;
+    DELETE _spooky_incantation_tail WHERE IncantationId = $before.Id;
+};
+
+
+-- ==================================================
+-- SPOOKY INCANTATION LOOKUP
+-- The Reverse Index: Maps Tables -> Incantations
+-- ==================================================
+
+DEFINE TABLE _spooky_incantation_lookup SCHEMAFULL
+PERMISSIONS FOR select, create, update, delete WHERE true;
+
+-- Link to the parent Incantation
+DEFINE FIELD IncantationId ON TABLE _spooky_incantation_lookup TYPE string
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- The primary table being queried (e.g., 'thread')
+DEFINE FIELD Table ON TABLE _spooky_incantation_lookup TYPE string
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- Filter logic used to check if a dirty record matches this query
+-- Stored as an object e.g., { clause: "importance >= 3", args: [...] }
+DEFINE FIELD Where ON TABLE _spooky_incantation_lookup TYPE object
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- Sorting Metadata needed to maintain order
+DEFINE FIELD SortFields ON TABLE _spooky_incantation_lookup TYPE array<string>
+PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD SortDirections ON TABLE _spooky_incantation_lookup TYPE array<string>
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- Indexes for performance
+DEFINE INDEX idx_incantation ON TABLE _spooky_incantation_lookup COLUMNS IncantationId;
+DEFINE INDEX idx_table ON TABLE _spooky_incantation_lookup COLUMNS Table;
+
+
+-- ==================================================
+-- SPOOKY INCANTATION TAIL
+-- Cursor Management for Pagination/Limits
+-- ==================================================
+
+DEFINE TABLE _spooky_incantation_tail SCHEMAFULL
+PERMISSIONS FOR select, create, update, delete WHERE true;
+
+-- Link to the parent Incantation
+DEFINE FIELD IncantationId ON TABLE _spooky_incantation_tail TYPE string
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- The sort values of the *last* item in the current result set
+-- Used to determine if a new record falls inside or outside the LIMIT window.
+DEFINE FIELD TailValues ON TABLE _spooky_incantation_tail TYPE array<any>
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE INDEX idx_incantation ON TABLE _spooky_incantation_tail COLUMNS IncantationId UNIQUE;
+
+
+-- ==================================================
+-- SPOOKY RELATIONSHIP
+-- The Graph Schema: Defines 'Bubble Up' vs 'Cascade Down'
+-- ==================================================
+
+DEFINE TABLE _spooky_relationship SCHEMAFULL
+PERMISSIONS FOR select, create, update, delete WHERE true;
+
+DEFINE FIELD ParentTable ON TABLE _spooky_relationship TYPE string
+PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD ChildTable ON TABLE _spooky_relationship TYPE string
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- The field on the Child that holds the Parent's ID
+DEFINE FIELD ChildField ON TABLE _spooky_relationship TYPE string
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- The Logic Flow: 'COMPOSITION' (Bubble Up) or 'REFERENCE' (Cascade Down)
+DEFINE FIELD Type ON TABLE _spooky_relationship TYPE string 
+    ASSERT $value INSIDE ['COMPOSITION', 'REFERENCE']
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- Enforce unique definition per relationship path
+DEFINE INDEX idx_rel_unique ON TABLE _spooky_relationship COLUMNS ParentTable, ChildTable, ChildField UNIQUE;
+
+-- ==================================================
+-- SPOOKY SCHEMA
+-- The provisioned schema state for the database. Currently only used in local cache.
+-- ==================================================
+
+DEFINE TABLE IF NOT EXISTS _spooky_schema SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS id ON _spooky_schema TYPE string;
+DEFINE FIELD IF NOT EXISTS hash ON _spooky_schema TYPE string;
+DEFINE FIELD IF NOT EXISTS created_at ON _spooky_schema TYPE datetime VALUE time::now();
+DEFINE INDEX IF NOT EXISTS unique_hash ON _spooky_schema FIELDS hash UNIQUE;
+
+-- ==================================================
+-- SPOOKY DATA HASH (Client)
+-- The "Shadow Graph" tracking the state of every record.
+-- ==================================================
+
+DEFINE TABLE _spooky_data_hash SCHEMAFULL
+PERMISSIONS FOR select, create, update, delete WHERE true;
+
+-- The actual record being tracked (e.g., comment:abc, thread:123)
+DEFINE FIELD RecordId ON TABLE _spooky_data_hash TYPE record
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- H_intrinsic: BLAKE3 hash of the record's own scalar fields
+DEFINE FIELD IntrinsicHash ON TABLE _spooky_data_hash TYPE string
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- H_composition: XOR sum of all dependent children's TotalHashes
+DEFINE FIELD CompositionHash ON TABLE _spooky_data_hash TYPE string
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- H_total: Intrinsic XOR Composition
+DEFINE FIELD TotalHash ON TABLE _spooky_data_hash TYPE option<string>
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- CLIENT-SPECIFIC FIELDS
+DEFINE FIELD IsDirty ON TABLE _spooky_data_hash TYPE bool DEFAULT false
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD PendingDelete ON TABLE _spooky_data_hash TYPE bool DEFAULT false
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- Fast lookup by the original record ID
+DEFINE INDEX idx_record_id ON TABLE _spooky_data_hash COLUMNS RecordId UNIQUE;
+
+-- ==================================================
+-- SPOOKY EVENTS
+-- Stores create, update, and delete events
+-- ==================================================
+
+DEFINE TABLE _spooky_pending_mutations SCHEMAFULL
+PERMISSIONS FOR select, create, update, delete WHERE true;
+
+DEFINE FIELD mutation_type ON TABLE _spooky_pending_mutations TYPE string
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- The target record ID (for update/delete) - maps to 'id' in the event object
+DEFINE FIELD record_id ON TABLE _spooky_pending_mutations TYPE option<record>
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- The data payload (for create/update)
+DEFINE FIELD data ON TABLE _spooky_pending_mutations TYPE option<object> FLEXIBLE
+PERMISSIONS FOR select, create, update WHERE true;
+
+
+-- ==================================================
+-- AUTO-GENERATED SPOOKY EVENTS
+-- ==================================================
+
+-- Table: comment Client Mutation
+DEFINE EVENT OVERWRITE _spooky_comment_client_mutation ON TABLE comment
+WHEN $before != $after AND $event != "DELETE"
+THEN {
+    LET $new_intrinsic = crypto::blake3(<string>{
+        author: $after.author,
+        content: $after.content,
+        thread: $after.thread
+    });
+
+    UPSERT _spooky_data_hash CONTENT {
+        RecordId: $after.id,
+        IntrinsicHash: $new_intrinsic,
+        CompositionHash: crypto::blake3(""), -- Empty for client
+        TotalHash: NONE,
+        IsDirty: true,
+        PendingDelete: false
+    };
+};
+
+-- Table: comment Client Deletion
+DEFINE EVENT OVERWRITE _spooky_comment_client_delete ON TABLE comment
+WHEN $event = "DELETE"
+THEN {
+    UPDATE _spooky_data_hash SET PendingDelete = true WHERE RecordId = $before.id;
+};
+
+-- Table: thread Client Mutation
+DEFINE EVENT OVERWRITE _spooky_thread_client_mutation ON TABLE thread
+WHEN $before != $after AND $event != "DELETE"
+THEN {
+    LET $new_intrinsic = crypto::blake3(<string>{
+        author: $after.author,
+        content: $after.content,
+        title: $after.title
+    });
+
+    UPSERT _spooky_data_hash CONTENT {
+        RecordId: $after.id,
+        IntrinsicHash: $new_intrinsic,
+        CompositionHash: crypto::blake3(""), -- Empty for client
+        TotalHash: NONE,
+        IsDirty: true,
+        PendingDelete: false
+    };
+};
+
+-- Table: thread Client Deletion
+DEFINE EVENT OVERWRITE _spooky_thread_client_delete ON TABLE thread
+WHEN $event = "DELETE"
+THEN {
+    UPDATE _spooky_data_hash SET PendingDelete = true WHERE RecordId = $before.id;
+};
+
+-- Table: user Client Mutation
+DEFINE EVENT OVERWRITE _spooky_user_client_mutation ON TABLE user
+WHEN $before != $after AND $event != "DELETE"
+THEN {
+    LET $new_intrinsic = crypto::blake3(<string>{
+        username: $after.username
+    });
+
+    UPSERT _spooky_data_hash CONTENT {
+        RecordId: $after.id,
+        IntrinsicHash: $new_intrinsic,
+        CompositionHash: crypto::blake3(""), -- Empty for client
+        TotalHash: NONE,
+        IsDirty: true,
+        PendingDelete: false
+    };
+};
+
+-- Table: user Client Deletion
+DEFINE EVENT OVERWRITE _spooky_user_client_delete ON TABLE user
+WHEN $event = "DELETE"
+THEN {
+    UPDATE _spooky_data_hash SET PendingDelete = true WHERE RecordId = $before.id;
+};
+`;

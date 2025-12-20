@@ -1,6 +1,8 @@
 mod codegen;
 mod json_schema;
 mod parser;
+mod spooky;
+mod modules;
 
 use anyhow::{Context, Result};
 use clap::Parser as ClapParser;
@@ -39,6 +41,14 @@ struct Args {
     /// Disable the generated file comment header (enabled by default)
     #[arg(long = "no-header", default_value_t = false)]
     no_header: bool,
+
+    /// Path to another .surql file to append to the input
+    #[arg(long)]
+    append: Option<PathBuf>,
+
+    /// Directory containing Surrealism modules to compile and bundle
+    #[arg(long, default_value = "../../packages/surrealism-modules")]
+    modules_dir: PathBuf,
 }
 
 /// Filter schema content to remove field definitions with FOR select WHERE false
@@ -62,7 +72,12 @@ fn filter_schema_for_client(content: &str, parser: &SchemaParser) -> Result<Stri
                             // Skip this entire field definition (until semicolon)
                             println!("  → Removing field '{}' from table '{}' in client schema", field_name, table_name);
                             while i < lines.len() {
-                                if lines[i].contains(';') {
+                                if let Some(idx) = lines[i].find(';') {
+                                    // Check if there is content after the semicolon
+                                    let after_semicolon = &lines[i][idx + 1..];
+                                    if !after_semicolon.trim().is_empty() {
+                                        result.push(after_semicolon);
+                                    }
                                     i += 1;
                                     break;
                                 }
@@ -111,9 +126,60 @@ fn extract_table_and_field_name(line: &str) -> Option<(String, String)> {
 fn main() -> Result<()> {
     let args = Args::parse();
 
+    // Determine output format
+    let output_format = if let Some(format_str) = &args.format {
+        match format_str.to_lowercase().as_str() {
+            "json" => OutputFormat::JsonSchema,
+            "typescript" | "ts" => OutputFormat::Typescript,
+            "dart" => OutputFormat::Dart,
+            "surql" => OutputFormat::Surql,
+            _ => {
+                anyhow::bail!(
+                    "Unknown format: {}. Supported formats: json, typescript, dart, surql",
+                    format_str
+                );
+            }
+        }
+    } else {
+        // Infer from file extension
+        OutputFormat::from_extension(args.output.to_str().unwrap_or(""))
+            .unwrap_or(OutputFormat::JsonSchema)
+    };
+
     // Read the input file
-    let content = fs::read_to_string(&args.input)
+    let mut content = fs::read_to_string(&args.input)
         .context(format!("Failed to read input file: {:?}", args.input))?;
+
+    // Append embedded meta tables
+    let meta_tables = include_str!("meta_tables.surql");
+    let meta_tables_remote = include_str!("meta_tables_remote.surql");
+    let meta_tables_client = include_str!("meta_tables_client.surql");
+
+    // Include base meta tables
+    content.push('\n');
+    content.push_str(meta_tables);
+    println!("  + Appended base meta_tables.surql");
+
+    // Include format-specific meta tables
+    if matches!(output_format, OutputFormat::Surql) {
+         content.push('\n');
+         content.push_str(meta_tables_remote);
+         println!("  + Appended meta_tables_remote.surql");
+    } else {
+         content.push('\n');
+         content.push_str(meta_tables_client);
+         println!("  + Appended meta_tables_client.surql");
+    }
+
+    // Append extra file if specified
+    if let Some(append_path) = &args.append {
+        let append_content = fs::read_to_string(append_path)
+            .context(format!("Failed to read append file: {:?}", append_path))?;
+        
+        content.push('\n');
+        content.push_str(&append_content);
+        println!("  + Appended schema from {:?}", append_path);
+    }
 
     // Parse the schema
     let mut parser = SchemaParser::new();
@@ -122,7 +188,14 @@ fn main() -> Result<()> {
         .context("Failed to parse SurrealDB schema")?;
 
     // Filter the raw schema content to remove fields with FOR select WHERE false
-    let raw_schema_content = filter_schema_for_client(&content, &parser)?;
+    let filtered_schema_content = filter_schema_for_client(&content, &parser)?;
+    
+    // Choose which content to use based on format
+    let raw_schema_content = if matches!(output_format, OutputFormat::Surql) {
+        content.clone()
+    } else {
+        filtered_schema_content.clone()
+    };
 
     println!(
         "Successfully parsed {} table(s) from {:?}",
@@ -151,24 +224,15 @@ fn main() -> Result<()> {
         serde_json::to_string(&json_schema).context("Failed to serialize JSON Schema")?
     };
 
-    // Determine output format
-    let output_format = if let Some(format_str) = &args.format {
-        match format_str.to_lowercase().as_str() {
-            "json" => OutputFormat::JsonSchema,
-            "typescript" | "ts" => OutputFormat::Typescript,
-            "dart" => OutputFormat::Dart,
-            _ => {
-                anyhow::bail!(
-                    "Unknown format: {}. Supported formats: json, typescript, dart",
-                    format_str
-                );
+    fn ensure_directory_exists(path: &std::path::Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() && !parent.exists() {
+                fs::create_dir_all(parent)
+                    .context(format!("Failed to create directory: {:?}", parent))?;
             }
         }
-    } else {
-        // Infer from file extension
-        OutputFormat::from_extension(args.output.to_str().unwrap_or(""))
-            .unwrap_or(OutputFormat::JsonSchema)
-    };
+        Ok(())
+    }
 
     if args.all {
         // Generate all formats
@@ -176,6 +240,7 @@ fn main() -> Result<()> {
 
         // Write JSON Schema
         let json_path = args.output.with_extension("json");
+        ensure_directory_exists(&json_path)?;
         fs::write(&json_path, &json_schema_string)
             .context(format!("Failed to write JSON Schema file: {:?}", json_path))?;
         println!("  ✓ JSON Schema: {:?}", json_path);
@@ -183,9 +248,10 @@ fn main() -> Result<()> {
         // Generate TypeScript
         let ts_gen = CodeGenerator::new_with_header(OutputFormat::Typescript, !args.no_header);
         let ts_code = ts_gen
-            .generate_with_schema(&json_schema_string, "Database", Some(&raw_schema_content))
+            .generate_with_schema(&json_schema_string, "Database", Some(&raw_schema_content), None)
             .context("Failed to generate TypeScript code")?;
         let ts_path = args.output.with_extension("ts");
+        ensure_directory_exists(&ts_path)?;
         fs::write(&ts_path, ts_code)
             .context(format!("Failed to write TypeScript file: {:?}", ts_path))?;
         println!("  ✓ TypeScript: {:?}", ts_path);
@@ -193,9 +259,10 @@ fn main() -> Result<()> {
         // Generate Dart
         let dart_gen = CodeGenerator::new_with_header(OutputFormat::Dart, !args.no_header);
         let dart_code = dart_gen
-            .generate_with_schema(&json_schema_string, "Database", Some(&raw_schema_content))
+            .generate_with_schema(&json_schema_string, "Database", Some(&raw_schema_content), None)
             .context("Failed to generate Dart code")?;
         let dart_path = args.output.with_extension("dart");
+        ensure_directory_exists(&dart_path)?;
         fs::write(&dart_path, dart_code)
             .context(format!("Failed to write Dart file: {:?}", dart_path))?;
         println!("  ✓ Dart: {:?}", dart_path);
@@ -203,11 +270,17 @@ fn main() -> Result<()> {
         println!("\nSuccessfully generated all formats!");
     } else {
         // Generate single format
-        let code_gen = CodeGenerator::new_with_header(output_format, !args.no_header);
-        let output_content = code_gen
-            .generate_with_schema(&json_schema_string, "Database", Some(&raw_schema_content))
-            .context("Failed to generate code")?;
+       // Generate spooky events
+    let is_client = !matches!(output_format, OutputFormat::Surql);
+    let spooky_events = spooky::generate_spooky_events(&parser.tables, &content, is_client);
 
+    // Generate code
+    let generator = CodeGenerator::new_with_header(output_format, !args.no_header);
+    let output_content = generator
+        .generate_with_schema(&json_schema_string, "Schema", Some(&raw_schema_content), Some(&spooky_events))
+        .context("Failed to generate output code")?;
+
+        ensure_directory_exists(&args.output)?;
         fs::write(&args.output, output_content)
             .context(format!("Failed to write output file: {:?}", args.output))?;
 
@@ -215,7 +288,22 @@ fn main() -> Result<()> {
             OutputFormat::JsonSchema => "JSON Schema",
             OutputFormat::Typescript => "TypeScript",
             OutputFormat::Dart => "Dart",
+            OutputFormat::Surql => "SurrealQL",
         };
+
+        if matches!(output_format, OutputFormat::Surql) {
+            // Compile and bundle modules
+            // Output dir is the directory containing args.output
+            if let Some(output_dir) = args.output.parent() {
+                 println!("\nProcessing Surrealism Modules...");
+                 if let Err(e) = modules::compile_modules(&args.modules_dir, output_dir) {
+                     eprintln!("Warning: Failed to compile modules: {}", e);
+                     // Don't fail the whole build for this? Or should we?
+                     // User said "compile and add", implies part of the process.
+                     // But if directory doesn't exist, we skip.
+                 }
+            }
+        }
 
         println!(
             "\nSuccessfully generated {} at {:?}",

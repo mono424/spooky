@@ -1,0 +1,13 @@
+[package]
+name = "xor_module"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+surrealism = "0.1"
+hex = { version = "0.4", default-features = false, features = ["alloc"] }
+# WASI target provides random backend
+

@@ -20,6 +20,12 @@ export type {
   SchemaStructure,
   TableModel,
   TableNames,
+  QueryResult,
+  RelatedFieldsMap,
+  RelationshipFieldsFromSchema,
+  GetRelationship,
+  RelatedFieldMapEntry,
+  InnerQuery,
 } from "@spooky/query-builder";
 
 // Re-export Surreal type and value
@@ -37,6 +43,7 @@ export async function createSpooky<S extends SchemaStructure>(
   // Run provisioning
   await runProvision(
     config.database,
+    config.namespace || "main",
     config.schemaSurql,
     databaseService,
     logger,

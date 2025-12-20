@@ -1,15 +1,25 @@
 services:
   surrealdb:
-    image: surrealdb/surrealdb:latest
+    image: surrealdb/surrealdb:v3.0.0-alpha.17-dev
     ports:
       - "8000:8000"
     environment:
       - SURREAL_USER=root
       - SURREAL_PASS=root
-      - SURREAL_CAPS_ALLOW_EXPERIMENTAL=record_references
+      - SURREAL_CAPS_ALLOW_EXPERIMENTAL=surrealism,files
+      - SURREAL_BUCKET_FOLDER_ALLOWLIST=/modules
+    command:
+      - start
+      - --allow-all
+      - --log
+      - info
+      - --user
+      - root
+      - --pass
+      - root
+      - memory
     volumes:
-      - ./schema.surql:/schema.surql:ro
-    command: start --log info --user root --pass root --allow-experimental=record_references memory
+      - ./.spooky/xor_module.surli:/modules/xor_module.surli:ro
     healthcheck:
       test: ["CMD", "/surreal", "isready", "--conn", "http://localhost:8000"]
       interval: 10s

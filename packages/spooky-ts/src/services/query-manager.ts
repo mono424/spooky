@@ -12,7 +12,7 @@ import {
   QueryEventTypes,
   GlobalQueryEventTypes,
 } from "./index.js";
-import { LiveHandler, RecordId, Uuid } from "surrealdb";
+import { RecordId, Uuid } from "surrealdb";
 import { decodeFromSpooky } from "./converter.js";
 import { Logger } from "./logger.js";
 import {
@@ -254,7 +254,7 @@ export class QueryManagerService<S extends SchemaStructure> {
       .map(
         ({ id, ...payload }) =>
           `UPSERT ${id} CONTENT ${this.surrealStringify(
-            id.tb.toString(),
+            id.table.toString(),
             payload
           )}`
       )
@@ -279,7 +279,7 @@ export class QueryManagerService<S extends SchemaStructure> {
 
     await Promise.all(
       records
-        .map(({ id }) => id.tb.toString())
+        .map(({ id }) => id.table.toString())
         .map((table) => this.refreshTableQueries(table))
     );
   }
@@ -511,15 +511,15 @@ export class QueryManagerService<S extends SchemaStructure> {
       }
     );
 
-    const handler: LiveHandler<Record<string, unknown>> = async (
-      action,
-      update
+    const handler = async (
+      action: string,
+      update: Record<string, unknown>
     ) => {
       this.eventSystem.addEvent({
         type: GlobalQueryEventTypes.RemoteLiveUpdate,
         payload: {
           queryHash: query.hash,
-          action: action,
+          action: action as any,
           update: update as Record<string, unknown>,
         },
       });

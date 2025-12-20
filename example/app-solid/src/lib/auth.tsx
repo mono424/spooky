@@ -94,8 +94,6 @@ export function AuthProvider(props: { children: JSX.Element }) {
       // Use the centralized signIn method from db object
       const res = await db.useRemote((db) =>
         db.signin({
-          namespace: dbConfig.namespace,
-          database: dbConfig.database,
           access: "account",
           variables: {
             username,
@@ -105,10 +103,13 @@ export function AuthProvider(props: { children: JSX.Element }) {
       );
 
       console.log("[AuthProvider] Sign in successful, token received");
-      await checkAuth(res);
+      await checkAuth(res.access || (res as any));
       console.log("[AuthProvider] Auth check complete after sign in");
     } catch (error) {
       console.error("[AuthProvider] Sign in failed:", error);
+      if (error instanceof Error && "cause" in error) {
+        console.error("Caused by:", (error as any).cause);
+      }
       throw error;
     }
   };
@@ -119,8 +120,6 @@ export function AuthProvider(props: { children: JSX.Element }) {
       // Use the centralized signUp method from db object
       const res = await db.useRemote((db) =>
         db.signup({
-          namespace: dbConfig.namespace,
-          database: dbConfig.database,
           access: "account",
           variables: {
             username,
@@ -130,10 +129,13 @@ export function AuthProvider(props: { children: JSX.Element }) {
       );
 
       console.log("[AuthProvider] Sign up successful, token received");
-      await checkAuth(res);
+      await checkAuth(res.access || (res as any));
       console.log("[AuthProvider] Auth check complete after sign up");
     } catch (error) {
       console.error("[AuthProvider] Sign up failed:", error);
+      if (error instanceof Error && "cause" in error) {
+        console.error("Caused by:", (error as any).cause);
+      }
       throw error;
     }
   };
@@ -145,6 +147,9 @@ export function AuthProvider(props: { children: JSX.Element }) {
       await db.deauthenticate();
     } catch (error) {
       console.error("Sign out failed:", error);
+      if (error instanceof Error && "cause" in error) {
+        console.error("Caused by:", (error as any).cause);
+      }
       throw error;
     }
   };

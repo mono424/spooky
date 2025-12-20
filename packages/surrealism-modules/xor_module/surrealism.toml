@@ -1,0 +1,8 @@
+[package]
+name = "xor_module"
+version = "0.1.0"
+organisation = "spooky"
+
+[build]
+target = "wasm32-unknown-unknown"
+release = true

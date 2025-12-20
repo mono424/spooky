@@ -1,44 +1,51 @@
-import { DatabaseService } from "./services/database.js";
-import { AuthManager } from "./services/auth.js";
 import { QueryManager } from "./services/query.js";
-import { MutationManager } from "./services/mutation.js";
+import { MutationManager } from "./services/mutation/mutation.js";
 import { SpookyConfig } from "./types.js";
+import { LocalDatabaseService, RemoteDatabaseService } from "./services/database/index.js";
+import { SpookySync } from "./services/sync/index.js";
 
-export interface SpookyClient {
-  query: (surrealql: string) => {
-    subscribe: (callback: (data: any) => void) => () => void;
-  };
-  mutation: {
-    create: <T extends Record<string, unknown>>(table: string, data: T) => Promise<T>;
-    update: <T extends Record<string, unknown>>(table: string, id: string, data: Partial<T>) => Promise<T>;
-    delete: (table: string, id: string) => Promise<void>;
-  };
-  auth: {
-    authenticate: (token: string) => Promise<void>;
-    deauthenticate: () => Promise<void>;
-  };
-  close: () => Promise<void>;
-}
+export class SpookyClient {
+  private local: LocalDatabaseService;
+  private remote: RemoteDatabaseService;
+  private queryManager: QueryManager;
+  private mutationManager: MutationManager;
+  private sync: SpookySync;
 
-export async function createSpooky(config: SpookyConfig): Promise<SpookyClient> {
-  const db = new DatabaseService(config);
-  await db.init();
+  constructor(config: SpookyConfig) {
+    this.local = new LocalDatabaseService(config);
+    this.remote = new RemoteDatabaseService(config);
+    this.mutationManager = new MutationManager(this.local);
+    this.queryManager = new QueryManager(this.local);
+    this.sync = new SpookySync(this.local, this.remote, this.mutationManager.events);
+  }
 
-  const auth = new AuthManager(db);
-  const queryManager = new QueryManager(db);
-  const mutationManager = new MutationManager(db);
+  async init() {
+    await this.local.connect();
+    await this.remote.connect();
+  }
 
-  return {
-    query: (surrealql: string) => {
-      // Register query immediately
-      const hashPromise = queryManager.register(surrealql);
-      
-      return {
-        subscribe: (callback: (data: any) => void) => {
-          let unsubscribe: (() => void) | undefined;
-          
-          hashPromise.then((hash) => {
-            unsubscribe = queryManager.subscribe(hash, callback);
+  async close() {
+    await this.local.close();
+    await this.remote.close();
+  }
+
+  authenticate(token: string) {
+    return this.remote.getClient().authenticate(token);
+  }
+
+  deauthenticate() {
+    return this.remote.getClient().invalidate();
+  }
+
+  query(surrealql: string) {
+    const hashPromise = this.queryManager.register(surrealql);
+    
+    return {
+      subscribe: (callback: (data: any) => void) => {
+        let unsubscribe: (() => void) | undefined;
+        
+        hashPromise.then((hash) => {
+          unsubscribe = this.queryManager.subscribe(hash, callback);
           });
 
           return () => {
@@ -46,18 +53,17 @@ export async function createSpooky(config: SpookyConfig): Promise<SpookyClient> 
           };
         },
       };
-    },
-    mutation: {
-      create: <T extends Record<string, unknown>>(table: string, data: T) => mutationManager.create<T>(table, data),
-      update: <T extends Record<string, unknown>>(table: string, id: string, data: Partial<T>) => mutationManager.update<T>(table, id, data),
-      delete: (table, id) => mutationManager.delete(table, id),
-    },
-    auth: {
-      authenticate: (token) => auth.authenticate(token),
-      deauthenticate: () => auth.deauthenticate(),
-    },
-    close: async () => {
-      await db.close();
-    },
-  };
+  }
+
+  create(table: string, data: Record<string, unknown>) {
+    return this.mutationManager.create(table, data);
+  }
+
+  update(table: string, id: string, data: Record<string, unknown>) {
+    return this.mutationManager.update(table, id, data);
+  }
+
+  delete(table: string, id: string) {
+    return this.mutationManager.delete(table, id);
+  }
 }

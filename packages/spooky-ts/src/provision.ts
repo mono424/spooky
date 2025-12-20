@@ -66,14 +66,19 @@ export const isSchemaUpToDate = async (
   hash: string
 ): Promise<boolean> => {
   try {
-    const result = await internalDb.query<SchemaRecord[]>(
+    const response = await internalDb.query(
       `SELECT hash, created_at FROM __schema ORDER BY created_at DESC LIMIT 1;`
     );
 
-    // In surrealdb 1.x, query returns [result] where result is an array of rows
-    if (result && result.length > 0 && Array.isArray(result[0]) && result[0].length > 0) {
-      const firstRow = result[0][0] as SchemaRecord;
-      return firstRow.hash === hash;
+    // In surrealdb v2, result is ActionResult[]
+    if (Array.isArray(response) && response.length > 0) {
+      const firstResult = response[0];
+      if (firstResult.status === "OK") {
+        const records = firstResult.result as SchemaRecord[];
+        if (Array.isArray(records) && records.length > 0) {
+          return records[0].hash === hash;
+        }
+      }
     }
     return false;
   } catch (error) {
@@ -86,14 +91,26 @@ export const isSchemaUpToDate = async (
  */
 export const dropMainDatabase = async (
   localDb: Surreal,
-  database: string
+  database: string,
+  namespace: string
 ): Promise<void> => {
   try {
+    // Switch to a temporary context to avoid dropping the active database
+    // which causes a hang in the connection
+    await localDb.use({ namespace: namespace, database: "temp_provisioning" });
     await localDb.query(`REMOVE DATABASE ${database};`);
   } catch (error) {
     // Ignore error if database doesn't exist
+  } finally {
+    // Re-create and switch back to the target database
+    try {
+      await localDb.query(`DEFINE DATABASE ${database};`);
+      await localDb.use({ namespace: namespace, database: database });
+    } catch (e) {
+      console.error("Error recreating database", e);
+      throw e;
+    }
   }
-  await localDb.query(`DEFINE DATABASE ${database};`);
 };
 
 /**
@@ -101,7 +118,8 @@ export const dropMainDatabase = async (
  */
 export const provisionSchema = async (
   localDb: Surreal,
-  schemaContent: string
+  schemaContent: string,
+  logger: Logger
 ): Promise<void> => {
   // Split into statements and execute them individually
   const statements = schemaContent
@@ -109,8 +127,22 @@ export const provisionSchema = async (
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 
-  for (const statement of statements) {
-    await localDb.query(statement);
+  logger.info(`[Provisioning] Found ${statements.length} statements to apply.`);
+
+  for (let i = 0; i < statements.length; i++) {
+    const statement = statements[i];
+    // DEBUG: Skip DEFINE INDEX to see if it's the blocker
+    if (statement.toUpperCase().startsWith("DEFINE INDEX")) {
+      logger.warn(`[Provisioning] SKIPPING statement: ${statement.substring(0, 50)}...`);
+      continue;
+    }
+    logger.info(`[Provisioning] (${i + 1}/${statements.length}) Executing: ${statement.substring(0, 50)}...`);
+    try {
+      await localDb.query(statement);
+    } catch (e) {
+      logger.error(`[Provisioning] Error executing statement: ${statement}`);
+      throw e;
+    }
   }
 };
 
@@ -127,8 +159,27 @@ export const recordSchemaHash = async (
   );
 };
 
+// Timeout helper
+const withTimeout = <T>(
+  promise: Promise<T>,
+  ms: number,
+  errorMessage: string
+): Promise<T> => {
+  let timeoutId: any;
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(errorMessage));
+    }, ms);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    clearTimeout(timeoutId);
+  });
+};
+
 export async function runProvision(
   database: string,
+  namespace: string,
   schemaSurql: string,
   databaseService: DatabaseService,
   logger: Logger,
@@ -138,42 +189,76 @@ export async function runProvision(
 
   logger.info("[Provisioning] Starting provision check...");
 
-  const result = await databaseService.useInternal(async (db: Surreal) => {
-    const schemaHash = await sha1(schemaSurql);
-    const isUpToDate = await isSchemaUpToDate(db, schemaHash);
-    let shouldMigrate = force || !isUpToDate;
+  try {
+    const result = await withTimeout(
+      databaseService.useInternal(async (db: Surreal) => {
+        logger.debug("[Provisioning] Computing schema hash...");
+        const schemaHash = await sha1(schemaSurql);
+        logger.debug(`[Provisioning] Computed hash: ${schemaHash}`);
+        
+        logger.debug("[Provisioning] Checking if schema is up to date...");
+        const isUpToDate = await isSchemaUpToDate(db, schemaHash);
+        let shouldMigrate = force || !isUpToDate;
 
-    return { shouldMigrate, schemaHash, isUpToDate };
-  });
-
-  logger.debug(`[Provisioning] Schema hash: ${result.schemaHash}`);
-  logger.debug(`[Provisioning] Schema up to date: ${result.isUpToDate}`);
-  logger.debug(`[Provisioning] Should migrate: ${result.shouldMigrate}`);
-
-  if (!result.shouldMigrate) {
-    logger.info(
-      "[Provisioning] Schema is up to date, skipping migration"
+        return { shouldMigrate, schemaHash, isUpToDate };
+      }),
+      5000,
+      "Timeout while checking schema status (5s)"
     );
-    return;
+
+    logger.debug(`[Provisioning] Schema hash: ${result.schemaHash}`);
+    logger.debug(`[Provisioning] Schema up to date: ${result.isUpToDate}`);
+    logger.debug(`[Provisioning] Should migrate: ${result.shouldMigrate}`);
+
+    if (!result.shouldMigrate) {
+      logger.info(
+        "[Provisioning] Schema is up to date, skipping migration"
+      );
+      return;
+    }
+
+    logger.info("[Provisioning] Initializing internal database schema...");
+    await withTimeout(
+      databaseService.useInternal(async (db: Surreal) => {
+        await initializeInternalDatabase(db);
+      }),
+      5000,
+      "Timeout while initializing internal database (5s)"
+    );
+
+    logger.info("[Provisioning] Starting schema migration...");
+    await databaseService.useLocal(async (db: Surreal) => {
+      logger.debug(`[Provisioning] Dropping database '${database}'...`);
+      await withTimeout(
+        dropMainDatabase(db, database, namespace),
+        10000,
+        "Timeout while dropping database (10s)"
+      );
+      logger.debug(`[Provisioning] Database '${database}' dropped/recreated.`);
+      
+      logger.debug("[Provisioning] Applying schema...");
+      await withTimeout(
+        provisionSchema(db, schemaSurql, logger),
+        30000,
+        "Timeout while applying schema (30s)"
+      );
+      logger.debug("[Provisioning] Schema applied successfully.");
+    });
+
+    logger.debug("[Provisioning] Recording schema hash...");
+    await withTimeout(
+      databaseService.useInternal(async (db: Surreal) => {
+        await recordSchemaHash(db, result.schemaHash);
+      }),
+      5000,
+      "Timeout while recording schema hash (5s)"
+    );
+
+    logger.info(
+      "[Provisioning] Database schema provisioned successfully"
+    );
+  } catch (error) {
+    logger.error(`[Provisioning] Failed: ${error instanceof Error ? error.message : String(error)}`);
+    throw error;
   }
-
-  logger.info("[Provisioning] Initializing internal database schema...");
-  await databaseService.useInternal(async (db: Surreal) => {
-    await initializeInternalDatabase(db);
-  });
-
-  logger.info("[Provisioning] Starting schema migration...");
-  await databaseService.useLocal(async (db: Surreal) => {
-    await dropMainDatabase(db, database);
-    await provisionSchema(db, schemaSurql);
-  });
-
-  logger.debug("[Provisioning] Recording schema hash...");
-  await databaseService.useInternal(async (db: Surreal) => {
-    await recordSchemaHash(db, result.schemaHash);
-  });
-
-  logger.info(
-    "[Provisioning] Database schema provisioned successfully"
-  );
 }

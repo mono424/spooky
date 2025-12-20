@@ -10,7 +10,8 @@ export const dbConfig = {
   storageStrategy: "indexeddb" as const,
   namespace: "main",
   database: "main",
-  remoteUrl: "ws://localhost:8000",
+  remoteUrl: "ws://localhost:8000/rpc",
+  // remoteUrl: "http://localhost:8000/rpc",
   provisionOptions: {
     force: false,
   },

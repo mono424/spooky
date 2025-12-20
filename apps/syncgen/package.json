@@ -28,7 +28,8 @@
     "build": "npm run build:rust && npm run build:vite && npm run build:types",
     "preview": "vite preview",
     "test": "vitest",
-    "lint": "eslint src"
+    "lint": "eslint src",
+    "prepare": "test -f ./dist/cli.js || npm run build"
   },
   "keywords": [
     "surrealdb",

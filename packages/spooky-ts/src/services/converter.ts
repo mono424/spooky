@@ -28,7 +28,7 @@ export function decodeFromSpooky<
     );
     if ((column.recordId || relation) && encoded[field] != null) {
       if (encoded[field] instanceof RecordId) {
-        encoded[field] = `${encoded[field].tb}:${encoded[field].id}`;
+        encoded[field] = `${encoded[field].table.toString()}:${encoded[field].id}`;
       } else if (
         relation &&
         (encoded[field] instanceof Object || encoded[field] instanceof Array)
