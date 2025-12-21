@@ -7,10 +7,13 @@ import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `create_result`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`
 
 Future<SurrealDatabase> connectDb({required String path}) =>
     RustLib.instance.api.crateConnectDb(path: path);
+
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner< Arc < RwLock < Option < TransactionConnection > > >>>
+abstract class ArcOptionTransactionConnection implements RustOpaqueInterface {}
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<DatabaseConnection>>
 abstract class DatabaseConnection implements RustOpaqueInterface {}
@@ -22,6 +25,8 @@ abstract class SurrealDatabase implements RustOpaqueInterface {
   DatabaseConnection get db;
 
   set db(DatabaseConnection db);
+
+  Future<SurrealTransaction> beginTransaction();
 
   Future<List<SurrealResult>> health();
 
@@ -57,6 +62,19 @@ abstract class SurrealDatabase implements RustOpaqueInterface {
   Future<List<SurrealResult>> useNs({required String ns});
 
   Future<List<SurrealResult>> version();
+}
+
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SurrealTransaction>>
+abstract class SurrealTransaction implements RustOpaqueInterface {
+  ArcOptionTransactionConnection get tx;
+
+  set tx(ArcOptionTransactionConnection tx);
+
+  Future<List<SurrealResult>> cancel();
+
+  Future<List<SurrealResult>> commit();
+
+  Future<List<SurrealResult>> query({required String query, String? vars});
 }
 
 class SurrealResult {

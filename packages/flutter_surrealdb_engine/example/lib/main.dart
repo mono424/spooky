@@ -191,6 +191,58 @@ class _MyAppState extends State<MyApp> {
     }
   }
 
+  Future<void> _testTransactionCommit() async {
+    if (_db == null) return;
+    try {
+      _log('--- Starting Commit Test ---');
+      final tx = await _db!.beginTransaction();
+      _log('Transaction started');
+
+      await tx.query(query: "CREATE person:tx_commit SET name = 'Commit Test'");
+      _log('Created person:tx_commit inside TX');
+
+      // Verify inside TX
+      final resInside = await tx.query(query: "SELECT * FROM person:tx_commit");
+      _log('Inside TX Query: ${resInside.first.result}');
+
+      // Verify outside TX (should be empty if isolated, but our current impl might be "read uncommitted" depending on backend)
+      // Actually, my Rust test showed full isolation.
+      final resOutsideBefore =
+          await _db!.queryDb(query: "SELECT * FROM person:tx_commit");
+      _log('Outside TX (Before Commit): ${resOutsideBefore.first.result}');
+
+      await tx.commit();
+      _log('Transaction committed');
+
+      final resOutsideAfter =
+          await _db!.queryDb(query: "SELECT * FROM person:tx_commit");
+      _log('Outside TX (After Commit): ${resOutsideAfter.first.result}');
+    } catch (e) {
+      _log('Transaction Commit Error: $e');
+    }
+  }
+
+  Future<void> _testTransactionCancel() async {
+    if (_db == null) return;
+    try {
+      _log('--- Starting Cancel Test ---');
+      final tx = await _db!.beginTransaction();
+      _log('Transaction started');
+
+      await tx.query(query: "CREATE person:tx_cancel SET name = 'Cancel Test'");
+      _log('Created person:tx_cancel inside TX');
+
+      await tx.cancel();
+      _log('Transaction cancelled');
+
+      final resOutside =
+          await _db!.queryDb(query: "SELECT * FROM person:tx_cancel");
+      _log('Outside TX (After Cancel): ${resOutside.first.result}');
+    } catch (e) {
+      _log('Transaction Cancel Error: $e');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -305,6 +357,21 @@ class _MyAppState extends State<MyApp> {
                     ElevatedButton(
                       onPressed: _executeQuery,
                       child: const Text('Execute Query'),
+                    ),
+                  ]),
+                  _buildSection('Transactions', [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                      children: [
+                        ElevatedButton(
+                          onPressed: _testTransactionCommit,
+                          child: const Text('Test Commit'),
+                        ),
+                        ElevatedButton(
+                          onPressed: _testTransactionCancel,
+                          child: const Text('Test Cancel'),
+                        ),
+                      ],
                     ),
                   ]),
                 ],

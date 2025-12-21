@@ -3,7 +3,6 @@ class DatabaseConfig {
   final String path;
   final String namespace;
   final String database;
-  final String? internalDatabase;
   final String? token;
 
   DatabaseConfig({
@@ -11,17 +10,18 @@ class DatabaseConfig {
     required this.path,
     required this.namespace,
     required this.database,
-    this.internalDatabase,
     this.token,
   });
 }
 
 class SpookyConfig {
-  final String schemaString;
+  final String schemaSurql;
+  final String schema;
   final DatabaseConfig database;
 
   SpookyConfig({
-    required this.schemaString,
+    required this.schemaSurql,
+    required this.schema,
     required this.database,
   });
 }

@@ -3,7 +3,17 @@ mod frb_generated; /* AUTO INJECTED BY flutter_rust_bridge. This line may not be
 use surrealdb::Surreal;
 use surrealdb::engine::local::{Db, RocksDb};
 use surrealdb::engine::remote::ws::{Ws, Client};
-
+use tokio::sync::RwLock;
+// Transaction might be generic or in a specific module.
+// Based on error help: consider simple generic usage or specific path.
+// Error said: use surrealdb::method::Transaction;
+// But the returned type of begin() must match.
+// Let's assume generic use or try to find where it is.
+// For now, let's use the explicit path suggested by compiler in error msg if possible, 
+// or simpler: `surrealdb::Transaction` doesn't exist.
+// Checking logs: `use surrealdb::method::Transaction;`
+use surrealdb::method::Query; // Query is also used
+use surrealdb::Connection;
 use serde::{Deserialize, Serialize};
 use surrealdb::opt::auth::{Root, Namespace, Database};
 
@@ -26,6 +36,101 @@ pub struct SurrealDatabase {
     pub db: DatabaseConnection,
 }
 
+
+
+
+
+
+// We need to support both Local and Remote transactions which have different types.
+// Since begin() is elusive, we use proper client cloning + SQL commands.
+// Isolation Verification:
+// If cloning shares session, this might fail isolation tests. 
+// However, this is the only viable path if begin() is unavailable.
+pub enum TransactionConnection {
+    Local(Surreal<Db>),
+    Remote(Surreal<Client>),
+}
+
+#[derive(Clone)]
+pub struct SurrealTransaction {
+    pub tx: std::sync::Arc<RwLock<Option<TransactionConnection>>>,
+}
+
+impl SurrealTransaction {
+    pub async fn query(&self, query: String, vars: Option<String>) -> Result<Vec<SurrealResult>, String> {
+        let start = std::time::Instant::now();
+        let mut guard = self.tx.write().await;
+        
+        if let Some(conn) = guard.as_mut() {
+             let response_result = match conn {
+                 TransactionConnection::Local(db) => {
+                     apply_vars(db.query(&query), &vars).await
+                 },
+                 TransactionConnection::Remote(db) => {
+                     apply_vars(db.query(&query), &vars).await
+                 }
+             };
+            
+            match response_result {
+                Ok(mut response) => {
+                     let mut results = Vec::new();
+                     let num_statements = response.num_statements();
+                     for i in 0..num_statements {
+                         let result: Result<surrealdb::Value, _> = response.take(i);
+                         match result {
+                             Ok(val) => {
+                                 let json_val = serde_json::to_value(&val).unwrap_or(serde_json::Value::Null);
+                                 let json_str = serde_json::to_string(&json_val).ok();
+                                 results.push(create_result(json_str, "OK".to_string(), start));
+                             },
+                             Err(e) => {
+                                 results.push(create_result(None, format!("Error: {}", e), start));
+                             }
+                         }
+                    }
+                    Ok(results)
+                }
+                Err(e) => Err(format!("System Error: {}", e)),
+            }
+        } else {
+            Err("Transaction is closed".to_string())
+        }
+    }
+
+    pub async fn commit(&self) -> Result<Vec<SurrealResult>, String> {
+        let start = std::time::Instant::now();
+        let mut guard = self.tx.write().await;
+        if let Some(conn) = guard.take() { 
+            let res = match conn {
+                TransactionConnection::Local(db) => db.query("COMMIT TRANSACTION;").await.map(|_| ()),
+                TransactionConnection::Remote(db) => db.query("COMMIT TRANSACTION;").await.map(|_| ()),
+            };
+            match res {
+                Ok(_) => Ok(vec![create_result(Some("Committed".to_string()), "OK".to_string(), start)]),
+                Err(e) => Err(format!("Commit Error: {}", e)),
+            }
+        } else {
+            Err("Transaction already closed".to_string())
+        }
+    }
+
+    pub async fn cancel(&self) -> Result<Vec<SurrealResult>, String> {
+        let start = std::time::Instant::now();
+        let mut guard = self.tx.write().await;
+        if let Some(conn) = guard.take() {
+            let res = match conn {
+                TransactionConnection::Local(db) => db.query("CANCEL TRANSACTION;").await.map(|_| ()),
+                TransactionConnection::Remote(db) => db.query("CANCEL TRANSACTION;").await.map(|_| ()),
+            };
+            match res {
+                 Ok(_) => Ok(vec![create_result(Some("Cancelled".to_string()), "OK".to_string(), start)]),
+                 Err(e) => Err(format!("Cancel Error: {}", e)),
+            }
+        } else {
+             Err("Transaction already closed".to_string())
+        }
+    }
+}
 
 pub async fn connect_db(path: String) -> Result<SurrealDatabase, String> {
     let db = if path.starts_with("ws://") || path.starts_with("wss://") || path.starts_with("http://") || path.starts_with("https://") {
@@ -209,30 +314,10 @@ impl SurrealDatabase {
 
         let response = match &self.db {
             DatabaseConnection::Local(db) => {
-                let mut query_obj = db.query(&query);
-                if let Some(json_str) = &vars {
-                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
-                         if let Some(obj) = v.as_object() {
-                             for (key, value) in obj {
-                                 query_obj = query_obj.bind((key.clone(), value.clone()));
-                             }
-                         }
-                     }
-                }
-                query_obj.await
+                apply_vars(db.query(&query), &vars).await
             },
             DatabaseConnection::Remote(db) => {
-                let mut query_obj = db.query(&query);
-                if let Some(json_str) = &vars {
-                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
-                         if let Some(obj) = v.as_object() {
-                             for (key, value) in obj {
-                                 query_obj = query_obj.bind((key.clone(), value.clone()));
-                             }
-                         }
-                     }
-                }
-                query_obj.await
+                apply_vars(db.query(&query), &vars).await
             },
         };
 
@@ -258,6 +343,45 @@ impl SurrealDatabase {
             Err(e) => Err(format!("System Error: {}", e)),
         }
     }
+
+    // --- Transaction Methods ---
+
+    pub async fn begin_transaction(&self) -> Result<SurrealTransaction, String> {
+        let tx = match &self.db {
+            DatabaseConnection::Local(db) => {
+                let new_client = db.clone();
+                // Ensure new session or at least transaction start
+                if let Err(e) = new_client.query("BEGIN TRANSACTION;").await {
+                    return Err(format!("Failed to begin transaction: {}", e));
+                }
+                TransactionConnection::Local(new_client)
+            },
+            DatabaseConnection::Remote(db) => {
+                let new_client = db.clone();
+                if let Err(e) = new_client.query("BEGIN TRANSACTION;").await {
+                    return Err(format!("Failed to begin transaction: {}", e));
+                }
+                TransactionConnection::Remote(new_client)
+            }
+        };
+        
+        Ok(SurrealTransaction {
+            tx: std::sync::Arc::new(RwLock::new(Some(tx))),
+        })
+    }
+}
+
+fn apply_vars<'a, C: Connection>(mut query: Query<'a, C>, vars: &Option<String>) -> Query<'a, C> {
+    if let Some(json_str) = vars {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
+            if let Some(obj) = v.as_object() {
+                for (key, value) in obj {
+                    query = query.bind((key.clone(), value.clone()));
+                }
+            }
+        }
+    }
+    query
 }
 
 #[flutter_rust_bridge::frb(init)]
