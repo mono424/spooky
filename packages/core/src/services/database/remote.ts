@@ -1,4 +1,4 @@
-import { Surreal } from "surrealdb";
+import { Surreal, SurrealTransaction } from "surrealdb";
 import { SpookyConfig } from "../../types.js";
 import { AbstractDatabaseService } from "./database.js";
 
@@ -12,6 +12,10 @@ export class RemoteDatabaseService extends AbstractDatabaseService {
 
   getConfig(): SpookyConfig<any>['database'] {
     return this.config;
+  }
+
+  tx(): Promise<SurrealTransaction> {
+    return this.client.beginTransaction();
   }
 
   async connect(): Promise<void> {

@@ -17,6 +17,10 @@ export class LocalDatabaseService extends AbstractDatabaseService {
     return this.config;
   }
 
+  tx(): Promise<SurrealTransaction> {
+    return this.client.beginTransaction();
+  }
+
   async connect(): Promise<void> {
     const { namespace, database } = this.getConfig();
     await this.client.connect("indxdb://spooky");

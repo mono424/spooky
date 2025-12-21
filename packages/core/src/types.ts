@@ -1,4 +1,4 @@
-import { SchemaStructure } from "@spooky/query-builder";
+import { RecordId, SchemaStructure } from "@spooky/query-builder";
 
 export interface EventSubscriptionOptions {
   priority?: number;
@@ -15,11 +15,12 @@ export interface SpookyConfig<S extends SchemaStructure> {
   schemaSurql: string;
 }
 
-export type QueryHash = number;
+export type QueryHash = string;
 
 export interface Incantation {
-  id: QueryHash;
+  id: RecordId<QueryHash>;
   surrealql: string;
   hash: number;
   lastActiveAt: number;
 }
+

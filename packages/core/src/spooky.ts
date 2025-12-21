@@ -1,4 +1,4 @@
-import { QueryManager } from "./services/query.js";
+import { QueryManager } from "./services/query/query.js";
 import { MutationManager } from "./services/mutation/mutation.js";
 import { SpookyConfig } from "./types.js";
 import { LocalDatabaseService, LocalMigrator, RemoteDatabaseService } from "./services/database/index.js";

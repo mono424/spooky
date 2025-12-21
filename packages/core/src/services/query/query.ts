@@ -1,37 +1,45 @@
-import { DatabaseService } from "./database.js";
-import { QueryHash, Incantation } from "../types.js";
+import { QueryHash, Incantation } from "../../types.js";
 import { Table } from "surrealdb";
+import { RemoteDatabaseService } from "../database/remote.js";
+import { LocalDatabaseService } from "../database/local.js";
 
 export class QueryManager {
   private subscriptions: Map<QueryHash, Set<(data: any) => void>> = new Map();
   private activeQueries: Map<QueryHash, Incantation> = new Map();
 
-  constructor(private db: DatabaseService) {}
+  constructor(private local: LocalDatabaseService, private remote: RemoteDatabaseService) {}
 
-  async register(surrealql: string): Promise<QueryHash> {
-    // 1. Calculate Query Hash (ID)
-    // We use a simple hash of the query string for now. 
-    // In a real implementation, this should be more robust.
-    const queryHash = this.hashString(surrealql);
+  async register(surrealql: string, params: Record<string, any>): Promise<QueryHash> {
+    const tx = await this.local.tx();
+    const [incantation] = await tx.query(`
+      LET $id = crypto::blake3({
+        surrealql: $surrealql,
+        params: $params
+      });
+      UPSERT _spooky_incantation:$id CONTENT {
+        Id: $id,
+        SurrealQL: $surrealql,
+        LastActiveAt: $lastActiveAt,
+        TTL: $ttl
+      };
+    `, {
+      surrealql,
+      params,
+      lastActiveAt: new Date(),
+      ttl: "10m",
+    }).collect<Incantation[]>();
+    await tx.commit();
 
-    if (this.activeQueries.has(queryHash)) {
-      return queryHash;
+    const incantationId = incantation.id.id.toString()
+    if (!this.activeQueries.has(incantationId)) {
+      this.activeQueries.set(incantationId, incantation);
+      this.initLifecycle(incantation);
     }
 
-    // 2. Local Initialization
-    const incantation: Incantation = {
-      id: queryHash,
-      surrealql,
-      hash: 0,
-      lastActiveAt: Date.now(),
-    };
-    this.activeQueries.set(queryHash, incantation);
-
-    // 3. Start Lifecycle
-    await this.initLifecycle(incantation);
-
-    return queryHash;
+    return incantationId;
   }
+
+  
 
   subscribe(queryHash: QueryHash, callback: (data: any) => void): () => void {
     if (!this.subscriptions.has(queryHash)) {
