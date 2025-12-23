@@ -64,7 +64,7 @@ DEFINE FUNCTION fn::incantation::register($config: object) {
             IncantationId: $id,
             Table:         $table,
             Where:         $filter,
-            SortFields:    [$sort_field]
+            SortFields:    [$sort_field],
             SortDirections: ['asc']
         };
     };
@@ -76,7 +76,6 @@ DEFINE FUNCTION fn::incantation::register($config: object) {
 
         UPSERT _spooky_incantation_tail CONTENT {
             IncantationId: $id,
-            SortField:     $sort_field, 
             TailValues:    [$tail_val] 
         };
     } ELSE {

@@ -222,9 +222,6 @@ class SpookyIncantationLookup {
     ///Record ID
     String id;
     String incantationId;
-    
-    ///Record ID
-    String recordId;
     List<String>? sortDirections;
     List<String>? sortFields;
 
@@ -233,7 +230,6 @@ class SpookyIncantationLookup {
         required this.where,
         required this.id,
         required this.incantationId,
-        required this.recordId,
         this.sortDirections,
         this.sortFields,
     });
@@ -243,7 +239,6 @@ class SpookyIncantationLookup {
         where: json["`Where`"],
         id: json["id"],
         incantationId: json["IncantationId"],
-        recordId: json["RecordId"],
         sortDirections: json["SortDirections"] == null ? [] : List<String>.from(json["SortDirections"]!.map((x) => x)),
         sortFields: json["SortFields"] == null ? [] : List<String>.from(json["SortFields"]!.map((x) => x)),
     );
@@ -253,7 +248,6 @@ class SpookyIncantationLookup {
         "`Where`": where,
         "id": id,
         "IncantationId": incantationId,
-        "RecordId": recordId,
         "SortDirections": sortDirections == null ? [] : List<dynamic>.from(sortDirections!.map((x) => x)),
         "SortFields": sortFields == null ? [] : List<dynamic>.from(sortFields!.map((x) => x)),
     };
@@ -591,10 +585,6 @@ PERMISSIONS FOR select, create, update WHERE true;
 -- Filter logic used to check if a dirty record matches this query
 -- Stored as an object e.g., { clause: \"importance >= 3\", args: [...] }
 DEFINE FIELD Where ON TABLE _spooky_incantation_lookup TYPE object DEFAULT {}
-PERMISSIONS FOR select, create, update WHERE true;
-
--- The specific record included in this result set
-DEFINE FIELD RecordId ON TABLE _spooky_incantation_lookup TYPE record
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- Sorting Metadata needed to maintain order
