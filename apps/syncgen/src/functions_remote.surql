@@ -22,7 +22,7 @@ DEFINE FUNCTION fn::spooky::view_hash($rid: record, $paths: array<string>) {
         
         -- If found, XOR it into the state
         IF $part_hash != NONE THEN {
-            $final_hash = mod::xor::blake3_xor($final_hash, $part_hash);
+            LET $final_hash = mod::xor::blake3_xor($final_hash, $part_hash);
         } END;
     };
 
@@ -48,7 +48,7 @@ DEFINE FUNCTION fn::incantation::register($config: object) {
     LET $query_hash = "";
     FOR $item IN $items {
         LET $h = fn::spooky::view_hash($item.id, $paths);
-        $query_hash = mod::xor::blake3_xor($query_hash, $h);
+        LET $query_hash = mod::xor::blake3_xor($query_hash, $h);
     };
 
     -- 2. UPDATE INCANTATION REGISTRY
