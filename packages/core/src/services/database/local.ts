@@ -1,4 +1,4 @@
-import { Surreal, SurrealTransaction } from "surrealdb";
+import { Surreal } from "surrealdb";
 import { createWasmEngines } from "@surrealdb/wasm";
 import { SpookyConfig } from "../../types.js";
 import { AbstractDatabaseService } from "./database.js";

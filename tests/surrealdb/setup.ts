@@ -81,7 +81,7 @@ export async function createTestDb() {
   const schemaPath = path.resolve(__dirname, '../../tests/.spooky/schema.gen.surql');
   
   if (fs.existsSync(schemaPath)) {
-      console.log("Loading schema from:", schemaPath);
+      console.log("Loading generated schema from:", schemaPath);
       let schema = fs.readFileSync(schemaPath, 'utf8');
       
       // No more mocking! Using real WASM module from .spooky

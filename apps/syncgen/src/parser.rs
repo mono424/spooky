@@ -67,10 +67,8 @@ impl SchemaParser {
         // Events may contain syntax that the parser doesn't fully support yet
         let processed_content = Self::remove_events(content);
 
-        // Create capabilities with experimental features enabled
-        let capabilities = Capabilities::default()
-            .with_experimental(ExperimentalTarget::RecordReferences.into())
-            .with_scripting(true);
+        // Create capabilities with all features enabled to support experimental syntax like mod::
+        let capabilities = Capabilities::all();
 
         let query = parse_with_capabilities(&processed_content, &capabilities)
             .context("Failed to parse SurrealDB schema file")?;

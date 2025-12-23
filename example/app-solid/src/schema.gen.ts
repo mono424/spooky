@@ -4,12 +4,35 @@
 export const schema = {
   tables: [
     {
+      name: 'thread' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
+        title: { type: 'string' as const, optional: false },
+        author: { type: 'string' as const, recordId: true, optional: false },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
+        content: { type: 'string' as const, optional: false },
+        comments: { type: 'string' as const, optional: true },
+      },
+      primaryKey: ['id'] as const
+    },
+    {
+      name: 'comment' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
+        thread: { type: 'string' as const, recordId: true, optional: false },
+        author: { type: 'string' as const, recordId: true, optional: false },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
+        content: { type: 'string' as const, optional: false },
+      },
+      primaryKey: ['id'] as const
+    },
+    {
       name: 'user' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
         username: { type: 'string' as const, optional: false },
-        comments: { type: 'string' as const, optional: true },
         threads: { type: 'string' as const, optional: true },
+        comments: { type: 'string' as const, optional: true },
       },
       primaryKey: ['id'] as const
     },
@@ -20,31 +43,20 @@ export const schema = {
       },
       primaryKey: ['id'] as const
     },
-    {
-      name: 'thread' as const,
-      columns: {
-        id: { type: 'string' as const, recordId: true, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
-        content: { type: 'string' as const, optional: false },
-        author: { type: 'string' as const, recordId: true, optional: false },
-        title: { type: 'string' as const, optional: false },
-        comments: { type: 'string' as const, optional: true },
-      },
-      primaryKey: ['id'] as const
-    },
-    {
-      name: 'comment' as const,
-      columns: {
-        id: { type: 'string' as const, recordId: true, optional: false },
-        thread: { type: 'string' as const, recordId: true, optional: false },
-        content: { type: 'string' as const, optional: false },
-        author: { type: 'string' as const, recordId: true, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
-      },
-      primaryKey: ['id'] as const
-    },
   ],
   relationships: [
+    {
+      from: 'user' as const,
+      field: 'threads' as const,
+      to: 'thread' as const,
+      cardinality: 'many' as const
+    },
+    {
+      from: 'user' as const,
+      field: 'comments' as const,
+      to: 'comment' as const,
+      cardinality: 'many' as const
+    },
     {
       from: 'comment' as const,
       field: 'thread' as const,
@@ -56,18 +68,6 @@ export const schema = {
       field: 'author' as const,
       to: 'user' as const,
       cardinality: 'one' as const
-    },
-    {
-      from: 'user' as const,
-      field: 'comments' as const,
-      to: 'comment' as const,
-      cardinality: 'many' as const
-    },
-    {
-      from: 'user' as const,
-      field: 'threads' as const,
-      to: 'thread' as const,
-      cardinality: 'many' as const
     },
     {
       from: 'thread' as const,
@@ -172,11 +172,15 @@ DEFINE FIELD Id ON TABLE _spooky_incantation TYPE string
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- The raw query string (for re-hydration/debugging)
-DEFINE FIELD SurrealQL ON TABLE _spooky_incantation TYPE string
+DEFINE FIELD SurrealQL ON TABLE _spooky_incantation TYPE option<string>
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- The raw query string (for re-hydration/debugging)
+DEFINE FIELD ClientId ON TABLE _spooky_incantation TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- The current XOR sum of all results in this query
-DEFINE FIELD Hash ON TABLE _spooky_incantation TYPE bytes
+DEFINE FIELD Hash ON TABLE _spooky_incantation TYPE string
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- For garbage collection (Heartbeat)
@@ -213,13 +217,13 @@ PERMISSIONS FOR select, create, update WHERE true;
 
 -- Filter logic used to check if a dirty record matches this query
 -- Stored as an object e.g., { clause: "importance >= 3", args: [...] }
-DEFINE FIELD Where ON TABLE _spooky_incantation_lookup TYPE object
+DEFINE FIELD Where ON TABLE _spooky_incantation_lookup TYPE object DEFAULT {}
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- Sorting Metadata needed to maintain order
-DEFINE FIELD SortFields ON TABLE _spooky_incantation_lookup TYPE array<string>
+DEFINE FIELD SortFields ON TABLE _spooky_incantation_lookup TYPE option<array<string>>
 PERMISSIONS FOR select, create, update WHERE true;
-DEFINE FIELD SortDirections ON TABLE _spooky_incantation_lookup TYPE array<string>
+DEFINE FIELD SortDirections ON TABLE _spooky_incantation_lookup TYPE option<array<string>>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- Indexes for performance
@@ -275,6 +279,7 @@ DEFINE INDEX idx_rel_unique ON TABLE _spooky_relationship COLUMNS ParentTable, C
 -- ==================================================
 -- SPOOKY SCHEMA
 -- The provisioned schema state for the database. Currently only used in local cache.
+-- Used in local-migrator.ts
 -- ==================================================
 
 DEFINE TABLE IF NOT EXISTS _spooky_schema SCHEMAFULL;
@@ -345,11 +350,19 @@ PERMISSIONS FOR select, create, update WHERE true;
 DEFINE EVENT OVERWRITE _spooky_comment_client_mutation ON TABLE comment
 WHEN $before != $after AND $event != "DELETE"
 THEN {
-    LET $new_intrinsic = crypto::blake3(<string>{
-        author: $after.author,
-        content: $after.content,
-        thread: $after.thread
-    });
+    LET $xor_sum = crypto::blake3("");
+    LET $h_author = crypto::blake3(<string>$after.author);
+    LET $xor_sum = mod::xor::blake3_xor($xor_sum, $h_author);
+    LET $h_content = crypto::blake3(<string>$after.content);
+    LET $xor_sum = mod::xor::blake3_xor($xor_sum, $h_content);
+    LET $h_thread = crypto::blake3(<string>$after.thread);
+    LET $xor_sum = mod::xor::blake3_xor($xor_sum, $h_thread);
+    LET $new_intrinsic = {
+        author: $h_author,
+        content: $h_content,
+        thread: $h_thread,
+        _xor: $xor_sum,
+    };
 
     UPSERT _spooky_data_hash CONTENT {
         RecordId: $after.id,
@@ -372,11 +385,19 @@ THEN {
 DEFINE EVENT OVERWRITE _spooky_thread_client_mutation ON TABLE thread
 WHEN $before != $after AND $event != "DELETE"
 THEN {
-    LET $new_intrinsic = crypto::blake3(<string>{
-        author: $after.author,
-        content: $after.content,
-        title: $after.title
-    });
+    LET $xor_sum = crypto::blake3("");
+    LET $h_author = crypto::blake3(<string>$after.author);
+    LET $xor_sum = mod::xor::blake3_xor($xor_sum, $h_author);
+    LET $h_content = crypto::blake3(<string>$after.content);
+    LET $xor_sum = mod::xor::blake3_xor($xor_sum, $h_content);
+    LET $h_title = crypto::blake3(<string>$after.title);
+    LET $xor_sum = mod::xor::blake3_xor($xor_sum, $h_title);
+    LET $new_intrinsic = {
+        author: $h_author,
+        content: $h_content,
+        title: $h_title,
+        _xor: $xor_sum,
+    };
 
     UPSERT _spooky_data_hash CONTENT {
         RecordId: $after.id,
@@ -399,9 +420,13 @@ THEN {
 DEFINE EVENT OVERWRITE _spooky_user_client_mutation ON TABLE user
 WHEN $before != $after AND $event != "DELETE"
 THEN {
-    LET $new_intrinsic = crypto::blake3(<string>{
-        username: $after.username
-    });
+    LET $xor_sum = crypto::blake3("");
+    LET $h_username = crypto::blake3(<string>$after.username);
+    LET $xor_sum = mod::xor::blake3_xor($xor_sum, $h_username);
+    LET $new_intrinsic = {
+        username: $h_username,
+        _xor: $xor_sum,
+    };
 
     UPSERT _spooky_data_hash CONTENT {
         RecordId: $after.id,

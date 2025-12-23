@@ -6,8 +6,6 @@ describe('Intrinsic Hash Logic', () => {
 
     beforeAll(async () => {
         db = await createTestDb();
-        // db is already configured for test_ns/test_db by setup.ts
-        // await db.use({ namespace: 'main', database: 'main' });
     });
 
     afterAll(async () => {

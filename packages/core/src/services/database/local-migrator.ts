@@ -22,8 +22,7 @@ export class LocalMigrator {
     const hash = await sha1(schemaSurql);
 
     const { database } = this.localDb.getConfig();
-    const dbClient = this.localDb.getClient();
-    const tx = await dbClient.beginTransaction();
+    const tx = await this.localDb.tx();
 
     if (await this.isSchemaUpToDate(tx, hash)) {
       console.info("[Provisioning] Schema is up to date, skipping migration");

@@ -170,29 +170,30 @@ class SpookyDataHash {
 }
 
 class SpookyIncantation {
-    
-    ///Any type
-    dynamic hash;
+    String? clientId;
+    String hash;
     
     ///Record ID
     String spookyIncantationId;
     String id;
     DateTime lastActiveAt;
-    String surrealQl;
+    String? surrealQl;
     
     ///ISO 8601 duration
     String ttl;
 
     SpookyIncantation({
+        this.clientId,
         required this.hash,
         required this.spookyIncantationId,
         required this.id,
         required this.lastActiveAt,
-        required this.surrealQl,
+        this.surrealQl,
         required this.ttl,
     });
 
     factory SpookyIncantation.fromJson(Map<String, dynamic> json) => SpookyIncantation(
+        clientId: json["ClientId"],
         hash: json["Hash"],
         spookyIncantationId: json["id"],
         id: json["Id"],
@@ -202,6 +203,7 @@ class SpookyIncantation {
     );
 
     Map<String, dynamic> toJson() => {
+        "ClientId": clientId,
         "Hash": hash,
         "id": spookyIncantationId,
         "Id": id,
@@ -220,16 +222,16 @@ class SpookyIncantationLookup {
     ///Record ID
     String id;
     String incantationId;
-    List<String> sortDirections;
-    List<String> sortFields;
+    List<String>? sortDirections;
+    List<String>? sortFields;
 
     SpookyIncantationLookup({
         required this.table,
         required this.where,
         required this.id,
         required this.incantationId,
-        required this.sortDirections,
-        required this.sortFields,
+        this.sortDirections,
+        this.sortFields,
     });
 
     factory SpookyIncantationLookup.fromJson(Map<String, dynamic> json) => SpookyIncantationLookup(
@@ -237,8 +239,8 @@ class SpookyIncantationLookup {
         where: json["`Where`"],
         id: json["id"],
         incantationId: json["IncantationId"],
-        sortDirections: List<String>.from(json["SortDirections"].map((x) => x)),
-        sortFields: List<String>.from(json["SortFields"].map((x) => x)),
+        sortDirections: json["SortDirections"] == null ? [] : List<String>.from(json["SortDirections"]!.map((x) => x)),
+        sortFields: json["SortFields"] == null ? [] : List<String>.from(json["SortFields"]!.map((x) => x)),
     );
 
     Map<String, dynamic> toJson() => {
@@ -246,8 +248,8 @@ class SpookyIncantationLookup {
         "`Where`": where,
         "id": id,
         "IncantationId": incantationId,
-        "SortDirections": List<dynamic>.from(sortDirections.map((x) => x)),
-        "SortFields": List<dynamic>.from(sortFields.map((x) => x)),
+        "SortDirections": sortDirections == null ? [] : List<dynamic>.from(sortDirections!.map((x) => x)),
+        "SortFields": sortFields == null ? [] : List<dynamic>.from(sortFields!.map((x) => x)),
     };
 }
 
@@ -537,11 +539,15 @@ DEFINE FIELD Id ON TABLE _spooky_incantation TYPE string
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- The raw query string (for re-hydration/debugging)
-DEFINE FIELD SurrealQL ON TABLE _spooky_incantation TYPE string
+DEFINE FIELD SurrealQL ON TABLE _spooky_incantation TYPE option<string>
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- The raw query string (for re-hydration/debugging)
+DEFINE FIELD ClientId ON TABLE _spooky_incantation TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- The current XOR sum of all results in this query
-DEFINE FIELD Hash ON TABLE _spooky_incantation TYPE bytes
+DEFINE FIELD Hash ON TABLE _spooky_incantation TYPE string
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- For garbage collection (Heartbeat)
@@ -578,13 +584,13 @@ PERMISSIONS FOR select, create, update WHERE true;
 
 -- Filter logic used to check if a dirty record matches this query
 -- Stored as an object e.g., { clause: \"importance >= 3\", args: [...] }
-DEFINE FIELD Where ON TABLE _spooky_incantation_lookup TYPE object
+DEFINE FIELD Where ON TABLE _spooky_incantation_lookup TYPE object DEFAULT {}
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- Sorting Metadata needed to maintain order
-DEFINE FIELD SortFields ON TABLE _spooky_incantation_lookup TYPE array<string>
+DEFINE FIELD SortFields ON TABLE _spooky_incantation_lookup TYPE option<array<string>>
 PERMISSIONS FOR select, create, update WHERE true;
-DEFINE FIELD SortDirections ON TABLE _spooky_incantation_lookup TYPE array<string>
+DEFINE FIELD SortDirections ON TABLE _spooky_incantation_lookup TYPE option<array<string>>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- Indexes for performance
@@ -640,6 +646,7 @@ DEFINE INDEX idx_rel_unique ON TABLE _spooky_relationship COLUMNS ParentTable, C
 -- ==================================================
 -- SPOOKY SCHEMA
 -- The provisioned schema state for the database. Currently only used in local cache.
+-- Used in local-migrator.ts
 -- ==================================================
 
 DEFINE TABLE IF NOT EXISTS _spooky_schema SCHEMAFULL;
@@ -710,11 +717,19 @@ PERMISSIONS FOR select, create, update WHERE true;
 DEFINE EVENT OVERWRITE _spooky_comment_client_mutation ON TABLE comment
 WHEN \$before != \$after AND \$event != \"DELETE\"
 THEN {
-    LET \$new_intrinsic = crypto::blake3(<string>{
-        author: \$after.author,
-        content: \$after.content,
-        thread: \$after.thread
-    });
+    LET \$xor_sum = crypto::blake3(\"\");
+    LET \$h_author = crypto::blake3(<string>\$after.author);
+    LET \$xor_sum = mod::xor::blake3_xor(\$xor_sum, \$h_author);
+    LET \$h_content = crypto::blake3(<string>\$after.content);
+    LET \$xor_sum = mod::xor::blake3_xor(\$xor_sum, \$h_content);
+    LET \$h_thread = crypto::blake3(<string>\$after.thread);
+    LET \$xor_sum = mod::xor::blake3_xor(\$xor_sum, \$h_thread);
+    LET \$new_intrinsic = {
+        author: \$h_author,
+        content: \$h_content,
+        thread: \$h_thread,
+        _xor: \$xor_sum,
+    };
 
     UPSERT _spooky_data_hash CONTENT {
         RecordId: \$after.id,
@@ -737,11 +752,19 @@ THEN {
 DEFINE EVENT OVERWRITE _spooky_thread_client_mutation ON TABLE thread
 WHEN \$before != \$after AND \$event != \"DELETE\"
 THEN {
-    LET \$new_intrinsic = crypto::blake3(<string>{
-        author: \$after.author,
-        content: \$after.content,
-        title: \$after.title
-    });
+    LET \$xor_sum = crypto::blake3(\"\");
+    LET \$h_author = crypto::blake3(<string>\$after.author);
+    LET \$xor_sum = mod::xor::blake3_xor(\$xor_sum, \$h_author);
+    LET \$h_content = crypto::blake3(<string>\$after.content);
+    LET \$xor_sum = mod::xor::blake3_xor(\$xor_sum, \$h_content);
+    LET \$h_title = crypto::blake3(<string>\$after.title);
+    LET \$xor_sum = mod::xor::blake3_xor(\$xor_sum, \$h_title);
+    LET \$new_intrinsic = {
+        author: \$h_author,
+        content: \$h_content,
+        title: \$h_title,
+        _xor: \$xor_sum,
+    };
 
     UPSERT _spooky_data_hash CONTENT {
         RecordId: \$after.id,
@@ -764,9 +787,13 @@ THEN {
 DEFINE EVENT OVERWRITE _spooky_user_client_mutation ON TABLE user
 WHEN \$before != \$after AND \$event != \"DELETE\"
 THEN {
-    LET \$new_intrinsic = crypto::blake3(<string>{
-        username: \$after.username
-    });
+    LET \$xor_sum = crypto::blake3(\"\");
+    LET \$h_username = crypto::blake3(<string>\$after.username);
+    LET \$xor_sum = mod::xor::blake3_xor(\$xor_sum, \$h_username);
+    LET \$new_intrinsic = {
+        username: \$h_username,
+        _xor: \$xor_sum,
+    };
 
     UPSERT _spooky_data_hash CONTENT {
         RecordId: \$after.id,

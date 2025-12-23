@@ -153,6 +153,7 @@ fn main() -> Result<()> {
     // Append embedded meta tables
     let meta_tables = include_str!("meta_tables.surql");
     let meta_tables_remote = include_str!("meta_tables_remote.surql");
+    let functions_remote = include_str!("functions_remote.surql");
     let meta_tables_client = include_str!("meta_tables_client.surql");
 
     // Include base meta tables
@@ -192,7 +193,11 @@ fn main() -> Result<()> {
     
     // Choose which content to use based on format
     let raw_schema_content = if matches!(output_format, OutputFormat::Surql) {
-        content.clone()
+        let mut c = content.clone();
+        c.push('\n');
+        c.push_str(functions_remote);
+        println!("  + Appended functions_remote.surql (post-parse)");
+        c
     } else {
         filtered_schema_content.clone()
     };
