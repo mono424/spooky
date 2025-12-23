@@ -3,30 +3,24 @@
 -- Usage: fn::spooky::view_hash(thread:123, ['comments'])
 -- ==================================================
 DEFINE FUNCTION fn::spooky::view_hash($rid: record, $paths: array<string>) {
-    -- 1. Fetch the Shadow Record
     LET $shadow = (SELECT * FROM ONLY _spooky_data_hash WHERE RecordId = $rid);
+    IF $shadow.RecordId == NONE { RETURN crypto::blake3(""); };
 
-    -- 2. Guard: If no shadow record exists, return generic empty hash (or handle error)
-    IF $shadow.RecordId == NONE THEN {
-        RETURN crypto::blake3("");
-    } END;
+    -- 1. Start with the Intrinsic Hash
+    LET $parts = [$shadow.IntrinsicHash];
 
-    -- 3. Base: The Intrinsic Hash (Scalar State) is ALWAYS included
-    LET $final_hash = $shadow.IntrinsicHash;
+    -- 2. Collect requested Composition Hashes (if they exist)
+    -- We use a subquery to map the $paths array to values safely
+    LET $extras = (
+        SELECT VALUE $shadow.CompositionHash[$this] 
+        FROM $paths 
+        WHERE $shadow.CompositionHash[$this] != NONE
+    );
 
-    -- 4. Composition: Selectively Mix in Dependencies
-    -- We iterate over the requested paths (e.g. 'comments', 'author')
-    FOR $path IN $paths {
-        -- Check if the CompositionHash object has this key
-        LET $part_hash = $shadow.CompositionHashes[$path];
-        
-        -- If found, XOR it into the state
-        IF $part_hash != NONE THEN {
-            LET $final_hash = mod::xor::blake3_xor($final_hash, $part_hash);
-        } END;
-    };
-
-    RETURN $final_hash;
+    -- 3. Combine and Aggregate
+    LET $all_parts = array::concat($parts, $extras);
+    
+    RETURN mod::xor::blake3_xor_multi($all_parts);
 };
 
 -- ==================================================
@@ -36,6 +30,7 @@ DEFINE FUNCTION fn::spooky::view_hash($rid: record, $paths: array<string>) {
 DEFINE FUNCTION fn::incantation::register($config: object) {
     -- UNPACK CONFIG
     LET $id         = $config.id;
+    LET $client_id   = $config.client_id;
     LET $items      = $config.items;
     LET $paths      = $config.paths;
     LET $table      = $config.table;
@@ -45,16 +40,18 @@ DEFINE FUNCTION fn::incantation::register($config: object) {
     LET $sort_field = $config.sort_field OR 'created_at';
     
     -- 1. CALCULATE AGGREGATE HASH
-    LET $query_hash = "";
-    FOR $item IN $items {
-        LET $h = fn::spooky::view_hash($item.id, $paths);
-        LET $query_hash = mod::xor::blake3_xor($query_hash, $h);
-    };
+    -- Improved: Use array aggregation instead of procedural loop to avoid init issues
+    LET $hashes = (
+        SELECT VALUE fn::spooky::view_hash(id, $paths) 
+        FROM $items
+    );
+    LET $query_hash = mod::xor::blake3_xor_multi($hashes);
 
     -- 2. UPDATE INCANTATION REGISTRY
     UPSERT _spooky_incantation CONTENT {
         Id:           $id,
         Hash:         $query_hash,
+        ClientId:     $client_id,
         LastActiveAt: time::now(),
         TTL:          1h
     };
@@ -66,8 +63,9 @@ DEFINE FUNCTION fn::incantation::register($config: object) {
         CREATE _spooky_incantation_lookup CONTENT {
             IncantationId: $id,
             Table:         $table,
-            RecordId:      $item.id,
-            Where:         $filter
+            Where:         $filter,
+            SortFields:    [$sort_field]
+            SortDirections: ['asc']
         };
     };
 

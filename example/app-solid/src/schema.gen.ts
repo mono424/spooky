@@ -4,23 +4,23 @@
 export const schema = {
   tables: [
     {
-      name: 'comment' as const,
-      columns: {
-        id: { type: 'string' as const, recordId: true, optional: false },
-        author: { type: 'string' as const, recordId: true, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
-        content: { type: 'string' as const, optional: false },
-        thread: { type: 'string' as const, recordId: true, optional: false },
-      },
-      primaryKey: ['id'] as const
-    },
-    {
       name: 'user' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
         username: { type: 'string' as const, optional: false },
-        threads: { type: 'string' as const, optional: true },
         comments: { type: 'string' as const, optional: true },
+        threads: { type: 'string' as const, optional: true },
+      },
+      primaryKey: ['id'] as const
+    },
+    {
+      name: 'comment' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
+        author: { type: 'string' as const, recordId: true, optional: false },
+        thread: { type: 'string' as const, recordId: true, optional: false },
+        content: { type: 'string' as const, optional: false },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
       },
       primaryKey: ['id'] as const
     },
@@ -36,8 +36,8 @@ export const schema = {
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
         author: { type: 'string' as const, recordId: true, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
         title: { type: 'string' as const, optional: false },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
         content: { type: 'string' as const, optional: false },
         comments: { type: 'string' as const, optional: true },
       },
@@ -46,13 +46,7 @@ export const schema = {
   ],
   relationships: [
     {
-      from: 'thread' as const,
-      field: 'author' as const,
-      to: 'user' as const,
-      cardinality: 'one' as const
-    },
-    {
-      from: 'thread' as const,
+      from: 'user' as const,
       field: 'comments' as const,
       to: 'comment' as const,
       cardinality: 'many' as const
@@ -61,12 +55,6 @@ export const schema = {
       from: 'user' as const,
       field: 'threads' as const,
       to: 'thread' as const,
-      cardinality: 'many' as const
-    },
-    {
-      from: 'user' as const,
-      field: 'comments' as const,
-      to: 'comment' as const,
       cardinality: 'many' as const
     },
     {
@@ -80,6 +68,18 @@ export const schema = {
       field: 'thread' as const,
       to: 'thread' as const,
       cardinality: 'one' as const
+    },
+    {
+      from: 'thread' as const,
+      field: 'author' as const,
+      to: 'user' as const,
+      cardinality: 'one' as const
+    },
+    {
+      from: 'thread' as const,
+      field: 'comments' as const,
+      to: 'comment' as const,
+      cardinality: 'many' as const
     },
   ]
 } as const;
@@ -172,15 +172,15 @@ DEFINE FIELD Id ON TABLE _spooky_incantation TYPE string
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- The raw query string (for re-hydration/debugging)
-DEFINE FIELD SurrealQL ON TABLE _spooky_incantation TYPE string
+DEFINE FIELD SurrealQL ON TABLE _spooky_incantation TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- The raw query string (for re-hydration/debugging)
-DEFINE FIELD ClientId ON TABLE _spooky_incantation TYPE string
+DEFINE FIELD ClientId ON TABLE _spooky_incantation TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- The current XOR sum of all results in this query
-DEFINE FIELD Hash ON TABLE _spooky_incantation TYPE bytes
+DEFINE FIELD Hash ON TABLE _spooky_incantation TYPE string
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- For garbage collection (Heartbeat)
@@ -220,10 +220,14 @@ PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD Where ON TABLE _spooky_incantation_lookup TYPE object DEFAULT {}
 PERMISSIONS FOR select, create, update WHERE true;
 
--- Sorting Metadata needed to maintain order
-DEFINE FIELD SortFields ON TABLE _spooky_incantation_lookup TYPE array<string>
+-- The specific record included in this result set
+DEFINE FIELD RecordId ON TABLE _spooky_incantation_lookup TYPE record
 PERMISSIONS FOR select, create, update WHERE true;
-DEFINE FIELD SortDirections ON TABLE _spooky_incantation_lookup TYPE array<string>
+
+-- Sorting Metadata needed to maintain order
+DEFINE FIELD SortFields ON TABLE _spooky_incantation_lookup TYPE option<array<string>>
+PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD SortDirections ON TABLE _spooky_incantation_lookup TYPE option<array<string>>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- Indexes for performance

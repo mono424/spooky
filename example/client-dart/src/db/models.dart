@@ -170,27 +170,25 @@ class SpookyDataHash {
 }
 
 class SpookyIncantation {
-    String clientId;
-    
-    ///Any type
-    dynamic hash;
+    String? clientId;
+    String hash;
     
     ///Record ID
     String spookyIncantationId;
     String id;
     DateTime lastActiveAt;
-    String surrealQl;
+    String? surrealQl;
     
     ///ISO 8601 duration
     String ttl;
 
     SpookyIncantation({
-        required this.clientId,
+        this.clientId,
         required this.hash,
         required this.spookyIncantationId,
         required this.id,
         required this.lastActiveAt,
-        required this.surrealQl,
+        this.surrealQl,
         required this.ttl,
     });
 
@@ -224,16 +222,20 @@ class SpookyIncantationLookup {
     ///Record ID
     String id;
     String incantationId;
-    List<String> sortDirections;
-    List<String> sortFields;
+    
+    ///Record ID
+    String recordId;
+    List<String>? sortDirections;
+    List<String>? sortFields;
 
     SpookyIncantationLookup({
         required this.table,
         required this.where,
         required this.id,
         required this.incantationId,
-        required this.sortDirections,
-        required this.sortFields,
+        required this.recordId,
+        this.sortDirections,
+        this.sortFields,
     });
 
     factory SpookyIncantationLookup.fromJson(Map<String, dynamic> json) => SpookyIncantationLookup(
@@ -241,8 +243,9 @@ class SpookyIncantationLookup {
         where: json["`Where`"],
         id: json["id"],
         incantationId: json["IncantationId"],
-        sortDirections: List<String>.from(json["SortDirections"].map((x) => x)),
-        sortFields: List<String>.from(json["SortFields"].map((x) => x)),
+        recordId: json["RecordId"],
+        sortDirections: json["SortDirections"] == null ? [] : List<String>.from(json["SortDirections"]!.map((x) => x)),
+        sortFields: json["SortFields"] == null ? [] : List<String>.from(json["SortFields"]!.map((x) => x)),
     );
 
     Map<String, dynamic> toJson() => {
@@ -250,8 +253,9 @@ class SpookyIncantationLookup {
         "`Where`": where,
         "id": id,
         "IncantationId": incantationId,
-        "SortDirections": List<dynamic>.from(sortDirections.map((x) => x)),
-        "SortFields": List<dynamic>.from(sortFields.map((x) => x)),
+        "RecordId": recordId,
+        "SortDirections": sortDirections == null ? [] : List<dynamic>.from(sortDirections!.map((x) => x)),
+        "SortFields": sortFields == null ? [] : List<dynamic>.from(sortFields!.map((x) => x)),
     };
 }
 
@@ -541,15 +545,15 @@ DEFINE FIELD Id ON TABLE _spooky_incantation TYPE string
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- The raw query string (for re-hydration/debugging)
-DEFINE FIELD SurrealQL ON TABLE _spooky_incantation TYPE string
+DEFINE FIELD SurrealQL ON TABLE _spooky_incantation TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- The raw query string (for re-hydration/debugging)
-DEFINE FIELD ClientId ON TABLE _spooky_incantation TYPE string
+DEFINE FIELD ClientId ON TABLE _spooky_incantation TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- The current XOR sum of all results in this query
-DEFINE FIELD Hash ON TABLE _spooky_incantation TYPE bytes
+DEFINE FIELD Hash ON TABLE _spooky_incantation TYPE string
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- For garbage collection (Heartbeat)
@@ -589,10 +593,14 @@ PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD Where ON TABLE _spooky_incantation_lookup TYPE object DEFAULT {}
 PERMISSIONS FOR select, create, update WHERE true;
 
--- Sorting Metadata needed to maintain order
-DEFINE FIELD SortFields ON TABLE _spooky_incantation_lookup TYPE array<string>
+-- The specific record included in this result set
+DEFINE FIELD RecordId ON TABLE _spooky_incantation_lookup TYPE record
 PERMISSIONS FOR select, create, update WHERE true;
-DEFINE FIELD SortDirections ON TABLE _spooky_incantation_lookup TYPE array<string>
+
+-- Sorting Metadata needed to maintain order
+DEFINE FIELD SortFields ON TABLE _spooky_incantation_lookup TYPE option<array<string>>
+PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD SortDirections ON TABLE _spooky_incantation_lookup TYPE option<array<string>>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- Indexes for performance
