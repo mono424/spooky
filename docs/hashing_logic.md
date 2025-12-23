@@ -8,6 +8,25 @@ The system relies on a shadow table, `_spooky_data_hash`, which maintains hash d
 
 ## Architecture
 
+```mermaid
+graph TD
+    classDef record fill:#f9f,stroke:#333,stroke-width:2px;
+    classDef hash fill:#e1f5fe,stroke:#01579b;
+
+    subgraph Record_State [Record State Construction]
+        direction TB
+        Scalars[Scalar Fields] --> Intrinsic[Intrinsic Hash]
+
+        Ref[Referenced Records] -->|Cascade Down| Comp[Composition Hash]
+        Dep[Dependent Records] -->|Bubble Up| Comp
+
+        Intrinsic -->|XOR| Total[Total Hash]
+        Comp -->|XOR| Total
+    end
+
+    class Intrinsic,Comp,Total hash;
+```
+
 For every tracked record `table:id`, there is a corresponding `_spooky_data_hash` record with `RecordId = table:id`. This record contains three primary hash components:
 
 1.  **IntrinsicHash**: Representative of the record's own scalar data.
