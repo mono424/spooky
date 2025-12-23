@@ -13,11 +13,7 @@ export class RemoteDatabaseService extends AbstractDatabaseService {
   getConfig(): SpookyConfig<any>['database'] {
     return this.config;
   }
-
-  tx(): Promise<SurrealTransaction> {
-    return this.client.beginTransaction();
-  }
-
+  
   async connect(): Promise<void> {
     const {endpoint, token, namespace, database} = this.getConfig();
     if (endpoint) {

@@ -14,11 +14,14 @@ export class SpookyClient<S extends SchemaStructure> {
   private sync: SpookySync;
 
   constructor(private config: SpookyConfig<S>) {
+    if (!this.config.clientId) {
+      this.config.clientId = crypto.randomUUID();
+    }
     this.local = new LocalDatabaseService(this.config.database);
     this.remote = new RemoteDatabaseService(this.config.database);
     this.migrator = new LocalMigrator(this.local);
     this.mutationManager = new MutationManager(this.local);
-    this.queryManager = new QueryManager(this.local);
+    this.queryManager = new QueryManager(this.local, this.remote, this.config.clientId);
     this.sync = new SpookySync(this.local, this.remote, this.mutationManager.events);
   }
 
@@ -41,22 +44,8 @@ export class SpookyClient<S extends SchemaStructure> {
     return this.remote.getClient().invalidate();
   }
 
-  query(surrealql: string) {
-    const hashPromise = this.queryManager.register(surrealql);
-    
-    return {
-      subscribe: (callback: (data: any) => void) => {
-        let unsubscribe: (() => void) | undefined;
-        
-        hashPromise.then((hash) => {
-          unsubscribe = this.queryManager.subscribe(hash, callback);
-          });
-
-          return () => {
-            if (unsubscribe) unsubscribe();
-          };
-        },
-      };
+  async queryAdHoc(sql: string, params: Record<string, any>, monitorId: string) {
+    return this.queryManager.queryAdHoc(sql, params, monitorId);
   }
 
   create(table: string, data: Record<string, unknown>) {

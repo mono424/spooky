@@ -11,6 +11,7 @@ export interface SpookyConfig<S extends SchemaStructure> {
     database: string;
     token?: string;
   };
+  clientId?: string;
   schema: S;
   schemaSurql: string;
 }

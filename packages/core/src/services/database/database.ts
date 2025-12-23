@@ -1,4 +1,4 @@
-import { Surreal } from "surrealdb";
+import { Surreal, SurrealTransaction } from "surrealdb";
 
 export abstract class AbstractDatabaseService {
   protected client: Surreal;
@@ -11,6 +11,10 @@ export abstract class AbstractDatabaseService {
 
   getClient(): Surreal {
     return this.client;
+  }
+
+  tx(): Promise<SurrealTransaction> {
+    return this.client.beginTransaction();
   }
 
   async close(): Promise<void> {

@@ -1,4 +1,4 @@
-import { Surreal, SurrealTransaction } from "surrealdb";
+import { Surreal } from "surrealdb";
 import { createWasmEngines } from "@surrealdb/wasm";
 import { SpookyConfig } from "../../types.js";
 import { AbstractDatabaseService } from "./database.js";
@@ -15,10 +15,6 @@ export class LocalDatabaseService extends AbstractDatabaseService {
 
   getConfig(): SpookyConfig<any>['database'] {
     return this.config;
-  }
-
-  tx(): Promise<SurrealTransaction> {
-    return this.client.beginTransaction();
   }
 
   async connect(): Promise<void> {
