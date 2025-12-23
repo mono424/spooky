@@ -14,6 +14,10 @@ DEFINE FIELD Id ON TABLE _spooky_incantation TYPE string
 DEFINE FIELD SurrealQL ON TABLE _spooky_incantation TYPE string
     PERMISSIONS FOR select, create, update WHERE true;
 
+-- The raw query string (for re-hydration/debugging)
+DEFINE FIELD ClientId ON TABLE _spooky_incantation TYPE string
+    PERMISSIONS FOR select, create, update WHERE true;
+
 -- The current XOR sum of all results in this query
 DEFINE FIELD Hash ON TABLE _spooky_incantation TYPE bytes
     PERMISSIONS FOR select, create, update WHERE true;
@@ -52,7 +56,7 @@ DEFINE FIELD Table ON TABLE _spooky_incantation_lookup TYPE string
 
 -- Filter logic used to check if a dirty record matches this query
 -- Stored as an object e.g., { clause: "importance >= 3", args: [...] }
-DEFINE FIELD Where ON TABLE _spooky_incantation_lookup TYPE object
+DEFINE FIELD Where ON TABLE _spooky_incantation_lookup TYPE object DEFAULT {}
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- Sorting Metadata needed to maintain order

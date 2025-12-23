@@ -7,7 +7,6 @@ let db: Surreal;
 describe('Hash Cascade Logic', () => {
     beforeAll(async () => {
         db = await createTestDb();
-        // db.use is handled in setup for test_db
     });
 
     afterAll(async () => {
@@ -84,8 +83,26 @@ describe('Hash Cascade Logic', () => {
         console.log("Final Thread Hash:", finalHash.TotalHash);
 
         // Assert record exists and has hashes
+        // Assert record exists and has hashes
         expect(finalHash.IntrinsicHash).toBeDefined();
+        // IntrinsicHash is now a SCALAR string (XOR of fields)
+        expect(typeof finalHash.IntrinsicHash).toBe('string');
+        
+        // CompositionHash is now an OBJECT containing breakdown
         expect(finalHash.CompositionHash).toBeDefined();
+        expect(typeof finalHash.CompositionHash).toBe('object');
+        
+        // Verify Intrinsic Fields are NOT in CompositionHash.
+        // Thread fields: title, content, author. These are in IntrinsicHash XOR.
+        expect(finalHash.CompositionHash).not.toHaveProperty('title');
+        expect(finalHash.CompositionHash).not.toHaveProperty('content');
+        
+        // Verify Dependency Keys (Thread has comments)
+        expect(finalHash.CompositionHash).toHaveProperty('comment');
+        
+        expect(finalHash.CompositionHash).toHaveProperty('_xor');
+        expect(typeof finalHash.CompositionHash._xor).toBe('string');
+        
         expect(finalHash.TotalHash).toBeDefined();
 
         // CRITICAL ASSERTION: TotalHash MUST change

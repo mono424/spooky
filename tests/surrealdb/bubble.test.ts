@@ -6,9 +6,7 @@ describe('Bubble Hash Logic', () => {
 
     beforeAll(async () => {
         db = await createTestDb();
-        // db is already configured for test_ns/test_db by setup.ts
-        // await db.use({ namespace: 'main', database: 'main' }); // Use the db configured in setup
-    });
+     });
 
     afterAll(async () => {
         await db.close();
