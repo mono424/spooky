@@ -1,0 +1,18 @@
+[package]
+name = "rust_lib_flutter_surrealdb_engine"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+flutter_rust_bridge = "=2.11.1"
+
+
+surrealdb = { git = "https://github.com/surrealdb/surrealdb", tag = "v3.0.0-alpha.17", features = ["kv-rocksdb", "protocol-ws", "protocol-http"] }
+surrealdb-types = { git = "https://github.com/surrealdb/surrealdb", tag = "v3.0.0-alpha.17" }
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+serde = "1.0.228"
+serde_json = "1.0.145"
