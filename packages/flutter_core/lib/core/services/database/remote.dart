@@ -10,9 +10,16 @@ class RemoteDatabaseService extends AbstractDatabaseService {
   static Future<RemoteDatabaseService> connect(DatabaseConfig config) async {
     SurrealDb? client;
     if (config.endpoint != null) {
-      client = await SurrealDb.connect(
-        mode: StorageMode.remote(url: config.endpoint!),
-      );
+      try {
+        client = await SurrealDb.connect(
+          mode: StorageMode.remote(url: config.endpoint!),
+        );
+      } catch (e) {
+        // Rethrow the error so it can be seen in the UI logs for debugging
+        throw Exception(
+          'Failed to connect to remote SurrealDB at ${config.endpoint}: $e',
+        );
+      }
     }
     return RemoteDatabaseService._(client, config);
   }

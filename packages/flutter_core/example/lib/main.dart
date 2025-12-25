@@ -26,13 +26,13 @@ class _SpookyExampleAppState extends State<SpookyExampleApp> {
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   final TextEditingController _namespaceController = TextEditingController(
-    text: 'spooky_dev',
+    text: 'main',
   );
   final TextEditingController _databaseController = TextEditingController(
-    text: 'spooky_db',
+    text: 'main',
   );
   final TextEditingController _endpointController = TextEditingController(
-    text: 'ws://localhost:8000/rpc',
+    text: 'ws://127.0.0.1:8000',
   );
 
   bool get _isInitialized => _client != null;
@@ -109,14 +109,27 @@ class _SpookyExampleAppState extends State<SpookyExampleApp> {
     try {
       _log("Attempting Sign In...");
 
+      if (_client!.remote.client == null) {
+        _log("Remote connection unavailable (Offline Mode). Cannot Sign In.");
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("Remote DB unavailable. Cannot Sign In."),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+
       // Using Remote client for demo purposes as default config has no remote endpoint.
       // Using Remote client for demo purposes as default config has no remote endpoint.
       final credentials = jsonEncode({
         "user": _emailController.text,
         "pass": _passwordController.text,
-        "NS": _namespaceController.text,
-        "DB": _databaseController.text,
-        "SC": "user", // Assuming scope 'user' for typical auth, or omit if root
+        "ns": _namespaceController.text,
+        "db": _databaseController.text,
+        "access": "account", // v3 uses 'access', matches 'Record' variant
       });
 
       final token = await _client!.remote.getClient.signin(
@@ -144,29 +157,40 @@ class _SpookyExampleAppState extends State<SpookyExampleApp> {
   Future<void> _signUp() async {
     if (_client == null) return;
     try {
-      _log("Attempting Sign Up (DEFINE USER)...");
+      _log("Attempting Sign Up (client.signup)...");
 
-      // Sign up via DEFINE USER query
-      final user = _emailController.text;
-      final pass = _passwordController.text;
-      final query =
-          "DEFINE USER $user ON DATABASE PASSWORD '$pass' ROLES OWNER;";
-
-      final result = await _client!.remote.getClient.query(
-        sql: query,
-        vars: "{}",
-      );
-
-      // Result is a JSON string of list of results
-      _log("Query Result: $result");
-
-      // Simple error check on string content
-      if (result.contains('"status":"ERR"')) {
-        throw Exception("Query failed: $result");
+      if (_client!.remote.client == null) {
+        _log("Remote connection unavailable (Offline Mode). Cannot Sign Up.");
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("Remote DB unavailable. Cannot Sign Up."),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
       }
 
-      _log("User Defined. Now Signing In...");
-      await _signIn();
+      // Prepare credentials for signup (Scope-based usually)
+      final credentials = jsonEncode({
+        "user": _emailController.text,
+        "pass": _passwordController.text,
+        "ns": _namespaceController.text,
+        "db": _databaseController.text,
+        "access": "account",
+      });
+
+      final token = await _client!.remote.getClient.signup(
+        credentialsJson: credentials,
+      );
+
+      _log("Sign Up Successful! Token: ${token.substring(0, 10)}...");
+
+      // Signup usually returns a token, effectively signing the user in.
+      setState(() {
+        _isLoggedIn = true;
+      });
     } catch (e) {
       _log("Error Signing Up: $e");
       if (mounted) {
@@ -184,6 +208,10 @@ class _SpookyExampleAppState extends State<SpookyExampleApp> {
     if (_client == null) return;
     try {
       _log("Querying Remote DB Info...");
+      if (_client!.remote.client == null) {
+        _log("Remote connection unavailable.");
+        return;
+      }
       final result = await _client!.remote.getClient.query(
         sql: "INFO FOR DB;",
         vars: "{}",
@@ -198,6 +226,10 @@ class _SpookyExampleAppState extends State<SpookyExampleApp> {
     if (_client == null) return;
     try {
       _log("Selecting from _spooky_schema...");
+      if (_client!.remote.client == null) {
+        _log("Remote connection unavailable.");
+        return;
+      }
       final result = await _client!.remote.getClient.query(
         sql: "SELECT * FROM user",
         vars: "{}",
@@ -359,7 +391,7 @@ class _SpookyExampleAppState extends State<SpookyExampleApp> {
                 controller: _endpointController,
                 decoration: const InputDecoration(
                   labelText: "Endpoint (Optional)",
-                  hintText: "ws://localhost:8000/rpc",
+                  hintText: "ws://127.0.0.1:8000",
                   border: OutlineInputBorder(),
                 ),
               ),
