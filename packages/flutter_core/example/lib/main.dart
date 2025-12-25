@@ -32,7 +32,7 @@ class _SpookyExampleAppState extends State<SpookyExampleApp> {
     text: 'main',
   );
   final TextEditingController _endpointController = TextEditingController(
-    text: 'ws://127.0.0.1:8000',
+    text: 'ws://127.0.0.1:8000/rpc',
   );
 
   bool get _isInitialized => _client != null;
@@ -391,7 +391,7 @@ class _SpookyExampleAppState extends State<SpookyExampleApp> {
                 controller: _endpointController,
                 decoration: const InputDecoration(
                   labelText: "Endpoint (Optional)",
-                  hintText: "ws://127.0.0.1:8000",
+                  hintText: "ws://127.0.0.1:8000/rpc",
                   border: OutlineInputBorder(),
                 ),
               ),

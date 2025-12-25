@@ -10,7 +10,7 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 flutter_rust_bridge = "=2.11.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 # Strict features: no RocksDB, no HTTP, no WS.
-surrealdb = { git = "https://github.com/surrealdb/surrealdb.git", features = ["kv-surrealkv", "kv-mem", "protocol-ws", "protocol-http"] }
+surrealdb = { git = "https://github.com/surrealdb/surrealdb.git", tag = "v3.0.0-alpha.17", features = ["kv-surrealkv", "kv-mem", "protocol-ws", "protocol-http"] }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

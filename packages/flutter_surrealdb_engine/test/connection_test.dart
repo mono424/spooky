@@ -32,7 +32,7 @@ void main() {
     // Create the client directly via FFI wrapper if possible, or use the high level class
     try {
       final client = await SurrealDb.connect(
-        mode: StorageMode.remote(url: 'ws://127.0.0.1:8000'),
+        mode: StorageMode.remote(url: 'ws://127.0.0.1:8000/rpc'),
       );
       print('Connected successfully!');
 
