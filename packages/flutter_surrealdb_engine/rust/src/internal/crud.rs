@@ -13,7 +13,7 @@ use anyhow::Result;
 pub async fn select(db: &Surreal<Any>, resource: String) -> Result<String> {
     // Select using query to handle serialization consistently
     let sql = format!("SELECT * FROM {}", resource);
-    super::query::query(db, sql, "{}".to_string()).await
+    super::query::query(db, sql, None).await
 }
 
 // Reference: mirrors the `create` method in JS SDK

@@ -98,7 +98,9 @@ impl SurrealDb {
 
     /// Execute a raw SQL query.
     /// `vars` should be a JSON string of bind variables, e.g. `{"id": "...", "val": 123}`.
-    pub async fn query(&self, sql: String, vars: String) -> anyhow::Result<String> {
+    /// Execute a raw SQL query.
+    /// `vars` should be a JSON string of bind variables, e.g. `{"id": "...", "val": 123}`.
+    pub async fn query(&self, sql: String, vars: Option<String>) -> anyhow::Result<String> {
         let db = self.get_db()?;
         Ok(query::query(&db, sql, vars).await?)
     }
@@ -132,7 +134,7 @@ impl SurrealDb {
 
     // --- Transaction ---
 
-    pub async fn transaction(&self, statements: String, vars: String) -> anyhow::Result<String> {
+    pub async fn transaction(&self, statements: String, vars: Option<String>) -> anyhow::Result<String> {
         let db = self.get_db()?;
         Ok(query::transaction(&db, statements, vars).await?)
     }

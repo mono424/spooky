@@ -457,7 +457,7 @@ fn wire__crate__api__client__SurrealDb_query_impl(
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SurrealDb>,
             >>::sse_decode(&mut deserializer);
             let api_sql = <String>::sse_decode(&mut deserializer);
-            let api_vars = <String>::sse_decode(&mut deserializer);
+            let api_vars = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
@@ -865,7 +865,7 @@ fn wire__crate__api__client__SurrealDb_transaction_impl(
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SurrealDb>,
             >>::sse_decode(&mut deserializer);
             let api_statements = <String>::sse_decode(&mut deserializer);
-            let api_vars = <String>::sse_decode(&mut deserializer);
+            let api_vars = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(

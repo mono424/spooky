@@ -29,7 +29,9 @@ abstract class SurrealDb implements RustOpaqueInterface {
 
   /// Execute a raw SQL query.
   /// `vars` should be a JSON string of bind variables, e.g. `{"id": "...", "val": 123}`.
-  Future<String> query({required String sql, required String vars});
+  /// Execute a raw SQL query.
+  /// `vars` should be a JSON string of bind variables, e.g. `{"id": "...", "val": 123}`.
+  Future<String> query({required String sql, String? vars});
 
   Future<void> queryBegin();
 
@@ -43,10 +45,7 @@ abstract class SurrealDb implements RustOpaqueInterface {
 
   Future<String> signup({required String credentialsJson});
 
-  Future<String> transaction({
-    required String statements,
-    required String vars,
-  });
+  Future<String> transaction({required String statements, String? vars});
 
   Future<String> update({required String resource, String? data});
 

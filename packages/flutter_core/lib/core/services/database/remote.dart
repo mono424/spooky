@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import './database.dart';
 import '../../types.dart';
 import 'package:flutter_surrealdb_engine/flutter_surrealdb_engine.dart';
@@ -40,5 +42,29 @@ class RemoteDatabaseService extends AbstractDatabaseService {
     } catch (e) {
       throw Exception('Error setting remote NS/DB: $e');
     }
+  }
+
+  Future<String> manualSignup({
+    required String username,
+    required String password,
+    required String namespace,
+    required String database,
+  }) async {
+    // 1. Create user via query (Requires public permissions or current auth)
+    // Since schema has "FOR create WHERE true", this works without auth.
+    final query =
+        "CREATE ONLY user SET username = \$username, password = crypto::argon2::generate(\$password);";
+    // vars is now named parameter type object!
+    await this.query(query, vars: {"username": username, "password": password});
+
+    // 2. Signin to get the token
+    final credentials = jsonEncode({
+      "ns": namespace,
+      "db": database,
+      "access": "account",
+      "username": username,
+      "password": password,
+    });
+    return await client!.signin(credentialsJson: credentials);
   }
 }

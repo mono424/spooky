@@ -34,7 +34,7 @@ class LocalMigration {
       for (var i = 0; i < statements.length; i++) {
         final statement = statements[i];
         try {
-          await localDb.query(sql: statement, vars: "{}");
+          await localDb.query(sql: statement);
           print(
             "[Provisioning] (${i + 1}/${statements.length}) Executed: ${statement.substring(0, statement.length > 50 ? 50 : statement.length)}...",
           );
@@ -64,7 +64,6 @@ class LocalMigration {
       final jsonResult = await db.query(
         sql:
             "SELECT hash, created_at FROM _spooky_schema ORDER BY created_at DESC LIMIT 1;",
-        vars: "{}",
       );
 
       // Parse the JSON result directly since new query returns String (JSON)
@@ -116,7 +115,6 @@ class LocalMigration {
       DEFINE DATABASE $database;
       USE DB $database;
     """,
-      vars: "{}",
     );
   }
 

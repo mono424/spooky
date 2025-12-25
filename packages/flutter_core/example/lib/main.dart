@@ -91,6 +91,7 @@ class _SpookyExampleAppState extends State<SpookyExampleApp> {
       );
 
       final client = await SpookyClient.init(config);
+      await client.createEvent();
 
       setState(() {
         _client = client;
@@ -159,7 +160,7 @@ class _SpookyExampleAppState extends State<SpookyExampleApp> {
     try {
       _log("Attempting Sign Up (client.signup)...");
 
-      if (_client!.remote.client == null) {
+      if (_client!.remote.getClient == null) {
         _log("Remote connection unavailable (Offline Mode). Cannot Sign Up.");
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -171,8 +172,8 @@ class _SpookyExampleAppState extends State<SpookyExampleApp> {
         }
         return;
       }
-      // Use the manual signup function (Workaround for v3 SIGNUP issues)
-      final token = await _client!.manualSignup(
+
+      final token = await _client!.remote.manualSignup(
         username: _emailController.text,
         password: _passwordController.text,
         namespace: _namespaceController.text,

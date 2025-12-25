@@ -1,30 +1,8 @@
 import 'dart:convert';
 import 'events.dart';
 import '../database/main.dart';
-
-enum MutationAction { create, update, delete }
-
-class MutationPayload {
-  final MutationAction action;
-  final String mutationId;
-  final String recordId;
-  final Map<String, dynamic>? data;
-
-  MutationPayload({
-    required this.action,
-    required this.recordId,
-    required this.mutationId,
-    this.data,
-  });
-}
-
-// Konkrete Implementierung deines Events
-class MutationEvent extends BaseEvent<List<MutationPayload>> {
-  static const String typeName = "MUTATION_CREATED";
-  MutationEvent(List<MutationPayload> mutations) : super(typeName, mutations);
-}
-
-// --- DIE ANWENDUNG ---
+import '../events/main.dart';
+import './mutation_querys.dart';
 
 class MutationManager {
   final LocalDatabaseService db;
@@ -35,8 +13,13 @@ class MutationManager {
   EventSystem<MutationEvent> get getEvents => events;
 
   Future<String> create(String table, Map<String, dynamic> data) async {
-    final json = jsonEncode(data);
-    final result = await db.getClient.create(resource: table, data: json);
+    final res = await db.query(
+      mutationCreateQuery,
+      vars: {'table': table, 'data': data},
+    );
+
+    print('schau mal das ist mein res: ');
+    print(res);
 
     // Create payload for event/sync
     // Note: In a real app we might parse the result to get the actual ID
@@ -46,9 +29,10 @@ class MutationManager {
       mutationId: DateTime.now().toIso8601String(),
       data: data,
     );
+
     events.addEvent(MutationEvent([payload]));
 
-    return result;
+    return "result";
   }
 
   Future<String> update(

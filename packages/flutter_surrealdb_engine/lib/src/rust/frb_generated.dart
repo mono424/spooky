@@ -106,7 +106,7 @@ abstract class RustLibApi extends BaseApi {
   Future<String> crateApiClientSurrealDbQuery({
     required SurrealDb that,
     required String sql,
-    required String vars,
+    String? vars,
   });
 
   Future<void> crateApiClientSurrealDbQueryBegin({required SurrealDb that});
@@ -133,7 +133,7 @@ abstract class RustLibApi extends BaseApi {
   Future<String> crateApiClientSurrealDbTransaction({
     required SurrealDb that,
     required String statements,
-    required String vars,
+    String? vars,
   });
 
   Future<String> crateApiClientSurrealDbUpdate({
@@ -421,7 +421,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Future<String> crateApiClientSurrealDbQuery({
     required SurrealDb that,
     required String sql,
-    required String vars,
+    String? vars,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -432,7 +432,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             serializer,
           );
           sse_encode_String(sql, serializer);
-          sse_encode_String(vars, serializer);
+          sse_encode_opt_String(vars, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -677,7 +677,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Future<String> crateApiClientSurrealDbTransaction({
     required SurrealDb that,
     required String statements,
-    required String vars,
+    String? vars,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -688,7 +688,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             serializer,
           );
           sse_encode_String(statements, serializer);
-          sse_encode_String(vars, serializer);
+          sse_encode_opt_String(vars, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -1188,7 +1188,9 @@ class SurrealDbImpl extends RustOpaque implements SurrealDb {
 
   /// Execute a raw SQL query.
   /// `vars` should be a JSON string of bind variables, e.g. `{"id": "...", "val": 123}`.
-  Future<String> query({required String sql, required String vars}) => RustLib
+  /// Execute a raw SQL query.
+  /// `vars` should be a JSON string of bind variables, e.g. `{"id": "...", "val": 123}`.
+  Future<String> query({required String sql, String? vars}) => RustLib
       .instance
       .api
       .crateApiClientSurrealDbQuery(that: this, sql: sql, vars: vars);
@@ -1217,14 +1219,12 @@ class SurrealDbImpl extends RustOpaque implements SurrealDb {
         credentialsJson: credentialsJson,
       );
 
-  Future<String> transaction({
-    required String statements,
-    required String vars,
-  }) => RustLib.instance.api.crateApiClientSurrealDbTransaction(
-    that: this,
-    statements: statements,
-    vars: vars,
-  );
+  Future<String> transaction({required String statements, String? vars}) =>
+      RustLib.instance.api.crateApiClientSurrealDbTransaction(
+        that: this,
+        statements: statements,
+        vars: vars,
+      );
 
   Future<String> update({required String resource, String? data}) =>
       RustLib.instance.api.crateApiClientSurrealDbUpdate(

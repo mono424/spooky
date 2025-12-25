@@ -5,17 +5,23 @@ use anyhow::Result;
 use surrealdb::types::Value;
 use surrealdb::IndexedResults;
 
-fn parse_vars(vars: &str) -> Result<HashMap<String, serde_json::Value>> {
-    if vars.is_empty() {
-        return Ok(HashMap::new());
+// Hilfsfunktion: Nimmt &str (Referenz), um unnötiges Klonen zu vermeiden
+fn parse_vars(vars: Option<&str>) -> Result<HashMap<String, serde_json::Value>> {
+    match vars {
+        // Wenn String da ist und nicht leer -> Parsen
+        Some(v) if !v.is_empty() => Ok(serde_json::from_str(v)?),
+        // Wenn None oder leer -> Leere Map
+        _ => Ok(HashMap::new()),
     }
-    Ok(serde_json::from_str(vars)?)
 }
 
-pub async fn query(db: &Surreal<Any>, sql: String, vars: String) -> Result<String> {
+// Hauptfunktion: Nimmt Option<String>, weil das gut für FFI/Bridge ist
+pub async fn query(db: &Surreal<Any>, sql: String, vars: Option<String>) -> Result<String> {
     let mut query = db.query(sql);
 
-    let parsed_vars = parse_vars(&vars)?;
+    // Hier wandeln wir Option<String> in Option<&str> um mit .as_deref()
+    let parsed_vars = parse_vars(vars.as_deref())?;
+    
     for (key, value) in parsed_vars {
         query = query.bind((key, value));
     }
@@ -27,14 +33,9 @@ pub async fn query(db: &Surreal<Any>, sql: String, vars: String) -> Result<Strin
     let mut output = Vec::with_capacity(num);
 
     for i in 0..num {
-        // take(i) returns Result<Value>
         match response.take::<Value>(i) {
             Ok(v3_val) => {
-                 // Convert v3 Value to serde_json::Value for output
-                 // v3 Value likely implements Serialize/Deserialize or conversion
-                 // If it implements Serialize, we can just push it to a collection that will be serialized?
-                 // But we want a uniform output format.
-                 // Let's assume v3 Value implements Serialize.
+                 // Convert Surreal Value to serde_json::Value
                  if let Ok(json_val) = serde_json::to_value(&v3_val) {
                      output.push(json_val);
                  } else {
@@ -51,13 +52,16 @@ pub async fn query(db: &Surreal<Any>, sql: String, vars: String) -> Result<Strin
     Ok(serde_json::to_string(&output)?)
 }
 
-pub async fn transaction(db: &Surreal<Any>, statements: String, vars: String) -> Result<String> {
+// Transaction nutzt auch Option<String> für Konsistenz
+pub async fn transaction(db: &Surreal<Any>, statements: String, vars: Option<String>) -> Result<String> {
     let stmts: Vec<String> = serde_json::from_str(&statements)?;
     let joined = stmts.join("; ");
     let sql = format!("BEGIN TRANSACTION; {}; COMMIT TRANSACTION;", joined);
+    // Hier geben wir vars einfach weiter
     query(db, sql, vars).await
 }
 
+// Die Helfer bleiben gleich...
 pub async fn query_begin(db: &Surreal<Any>) -> Result<()> {
     db.query("BEGIN TRANSACTION").await?;
     Ok(())

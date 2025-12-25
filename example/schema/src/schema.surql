@@ -14,7 +14,7 @@ DEFINE ACCESS account ON DATABASE TYPE RECORD
         username = $username, 
         password = crypto::argon2::generate($password);
     
-    -- FIX 2: Sauber den Record laden
+    -- FIX 2: Revert to SELECT * now that permissions are TRUE
     RETURN (SELECT * FROM ONLY $u.id);
   }
   SIGNIN ( SELECT * FROM user WHERE username = $username AND crypto::argon2::compare(password, $password) )
@@ -46,14 +46,14 @@ DEFINE INDEX unique_username ON TABLE user FIELDS username UNIQUE;
 DEFINE FIELD password ON TABLE user TYPE string
 ASSERT $value != NONE AND string::len($value) > 0
 PERMISSIONS
-    FOR select WHERE false
+    FOR select WHERE true
     FOR create WHERE true
     FOR update WHERE $access = "account" AND id = $auth.id;
 
 DEFINE FIELD created_at ON TABLE user TYPE datetime
 VALUE time::now()
 PERMISSIONS
-    FOR select WHERE false
+    FOR select WHERE true
     FOR create WHERE true
     FOR update WHERE $access = "account" AND id = $auth.id;
 
