@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter_surrealdb_engine/flutter_surrealdb_engine.dart';
 
 import 'types.dart';
@@ -39,6 +40,32 @@ class SpookyClient {
     // mutation.create('user', {'abs': 'hello'});
 
     return SpookyClient._(config, local, remote, migrator, mutation);
+  }
+
+  Future<String> manualSignup({
+    required String username,
+    required String password,
+    required String namespace,
+    required String database,
+  }) async {
+    // 1. Create user via query (Requires public permissions or current auth)
+    // Since schema has "FOR create WHERE true", this works without auth.
+    final query =
+        "CREATE ONLY user SET username = \$username, password = crypto::argon2::generate(\$password);";
+    final vars = jsonEncode({"username": username, "password": password});
+
+    // We assume remote is connected. If not, this throws nicely.
+    await remote.getClient.query(sql: query, vars: vars);
+
+    // 2. Signin to get the token
+    final credentials = jsonEncode({
+      "ns": namespace,
+      "db": database,
+      "access": "account",
+      "username": username,
+      "password": password,
+    });
+    return await remote.getClient.signin(credentialsJson: credentials);
   }
 
   Future<void> close() async {

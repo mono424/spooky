@@ -2,18 +2,27 @@
 -- SCOPES & AUTHENTICATION
 -- ##################################################################
 DEFINE ACCESS account ON DATABASE TYPE RECORD
-	SIGNUP {
-		IF string::len($username) <= 3 { THROW "Username must be longer than 3 characters" };
-		IF string::len($password) == 0 { THROW "Password cannot be empty" };
+  SIGNUP {
+    IF string::len($username) <= 3 { THROW "Username must be longer than 3 characters" };
+    IF string::len($password) == 0 { THROW "Password cannot be empty" };
 
-		LET $existing = (SELECT value id FROM user WHERE username = $username LIMIT 1)[0];
-		IF $existing != NONE { THROW "Username '" + <string>$username + "' is already taken" };
+    LET $existing = (SELECT value id FROM user WHERE username = $username LIMIT 1)[0];
+    IF $existing != NONE { THROW "Username '" + <string>$username + "' is already taken" };
 
-		LET $u = CREATE user SET username = $username, password = crypto::argon2::generate($password);
-		RETURN $u;
-	}
-	SIGNIN ( SELECT * FROM user WHERE username = $username AND crypto::argon2::compare(password, $password) )
-	DURATION FOR TOKEN 365d, FOR SESSION 365d
+    -- FIX 1: ONLY hinzufügen
+    LET $u = CREATE ONLY user SET 
+        username = $username, 
+        password = crypto::argon2::generate($password);
+    
+    -- FIX 2: Sauber den Record laden
+    RETURN (SELECT * FROM ONLY $u.id);
+  }
+  SIGNIN ( SELECT * FROM user WHERE username = $username AND crypto::argon2::compare(password, $password) )
+  
+  -- HIER IST DEINE NEUE ZEILE (Das ist super!)
+  WITH JWT ALGORITHM HS512 KEY 'spooky_secret_key'
+  
+  DURATION FOR TOKEN 365d, FOR SESSION 365d
 ;
 
 -- ##################################################################

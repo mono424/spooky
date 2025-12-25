@@ -423,9 +423,13 @@ class User {
     
     ///Reverse relationship: array of comment records
     List<String>? comments;
+    DateTime? createdAt;
     
     ///Record ID
     String id;
+    
+    ///Assert: $value != NONE AND string::len($value) > 0
+    String password;
     
     ///Reverse relationship: array of thread records
     List<String>? threads;
@@ -435,21 +439,27 @@ class User {
 
     User({
         this.comments,
+        this.createdAt,
         required this.id,
+        required this.password,
         this.threads,
         required this.username,
     });
 
     factory User.fromJson(Map<String, dynamic> json) => User(
         comments: json["comments"] == null ? [] : List<String>.from(json["comments"]!.map((x) => x)),
+        createdAt: json["created_at"] == null ? null : DateTime.parse(json["created_at"]),
         id: json["id"],
+        password: json["password"],
         threads: json["threads"] == null ? [] : List<String>.from(json["threads"]!.map((x) => x)),
         username: json["username"],
     );
 
     Map<String, dynamic> toJson() => {
         "comments": comments == null ? [] : List<dynamic>.from(comments!.map((x) => x)),
+        "created_at": createdAt?.toIso8601String(),
         "id": id,
+        "password": password,
         "threads": threads == null ? [] : List<dynamic>.from(threads!.map((x) => x)),
         "username": username,
     };
@@ -475,7 +485,13 @@ PERMISSIONS FOR select, create, update WHERE true;
     
 DEFINE INDEX unique_username ON TABLE user FIELDS username UNIQUE;
 
+DEFINE FIELD password ON TABLE user TYPE string
+ASSERT \$value != NONE AND string::len(\$value) > 0
+PERMISSIONS FOR select, create, update WHERE true;
 
+DEFINE FIELD created_at ON TABLE user TYPE datetime
+VALUE time::now()
+PERMISSIONS FOR select, create, update WHERE true;
 
 -- ##################################################################
 -- THREAD TABLE

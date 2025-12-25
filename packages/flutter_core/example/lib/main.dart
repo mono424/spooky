@@ -125,8 +125,8 @@ class _SpookyExampleAppState extends State<SpookyExampleApp> {
       // Using Remote client for demo purposes as default config has no remote endpoint.
       // Using Remote client for demo purposes as default config has no remote endpoint.
       final credentials = jsonEncode({
-        "user": _emailController.text,
-        "pass": _passwordController.text,
+        "username": _emailController.text,
+        "password": _passwordController.text,
         "ns": _namespaceController.text,
         "db": _databaseController.text,
         "access": "account", // v3 uses 'access', matches 'Record' variant
@@ -136,7 +136,7 @@ class _SpookyExampleAppState extends State<SpookyExampleApp> {
         credentialsJson: credentials,
       );
 
-      _log("Sign In Successful! Token: ${token.substring(0, 10)}...");
+      _log("Sign In Successful! Token: $token");
 
       setState(() {
         _isLoggedIn = true;
@@ -171,21 +171,15 @@ class _SpookyExampleAppState extends State<SpookyExampleApp> {
         }
         return;
       }
-
-      // Prepare credentials for signup (Scope-based usually)
-      final credentials = jsonEncode({
-        "user": _emailController.text,
-        "pass": _passwordController.text,
-        "ns": _namespaceController.text,
-        "db": _databaseController.text,
-        "access": "account",
-      });
-
-      final token = await _client!.remote.getClient.signup(
-        credentialsJson: credentials,
+      // Use the manual signup function (Workaround for v3 SIGNUP issues)
+      final token = await _client!.manualSignup(
+        username: _emailController.text,
+        password: _passwordController.text,
+        namespace: _namespaceController.text,
+        database: _databaseController.text,
       );
 
-      _log("Sign Up Successful! Token: ${token.substring(0, 10)}...");
+      _log("Sign Up Successful! Token: $token");
 
       // Signup usually returns a token, effectively signing the user in.
       setState(() {
