@@ -3,7 +3,7 @@ import UIKit
 import XCTest
 
 
-@testable import flutter_surrealdb_engine
+@testable import surrealdb
 
 // This demonstrates a simple unit test of the Swift portion of this plugin's implementation.
 //
@@ -12,7 +12,7 @@ import XCTest
 class RunnerTests: XCTestCase {
 
   func testGetPlatformVersion() {
-    let plugin = FlutterSurrealdbEnginePlugin()
+    let plugin = SurrealdbPlugin()
 
     let call = FlutterMethodCall(methodName: "getPlatformVersion", arguments: [])
 

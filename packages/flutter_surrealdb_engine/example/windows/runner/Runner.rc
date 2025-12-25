@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.example" "\0"
-            VALUE "FileDescription", "flutter_surrealdb_engine_example" "\0"
+            VALUE "FileDescription", "surrealdb_example" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "flutter_surrealdb_engine_example" "\0"
+            VALUE "InternalName", "surrealdb_example" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2025 com.example. All rights reserved." "\0"
-            VALUE "OriginalFilename", "flutter_surrealdb_engine_example.exe" "\0"
-            VALUE "ProductName", "flutter_surrealdb_engine_example" "\0"
+            VALUE "OriginalFilename", "surrealdb_example.exe" "\0"
+            VALUE "ProductName", "surrealdb_example" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

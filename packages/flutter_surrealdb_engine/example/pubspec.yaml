@@ -1,5 +1,5 @@
-name: flutter_surrealdb_engine_example
-description: "Demonstrates how to use the flutter_surrealdb_engine plugin."
+name: surrealdb_example
+description: "Demonstrates how to use the surrealdb plugin."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -16,7 +16,6 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  path_provider: ^2.1.5
 
   flutter_surrealdb_engine:
     # When depending on this package from a real application you should use:
@@ -29,6 +28,7 @@ dependencies:
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
+  path_provider: ^2.1.5
 
 dev_dependencies:
   integration_test:

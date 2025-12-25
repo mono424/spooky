@@ -7,7 +7,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
 )
 
 list(APPEND FLUTTER_FFI_PLUGIN_LIST
-  rust_lib_flutter_surrealdb_engine
+  rust_lib_surrealdb
 )
 
 set(PLUGIN_BUNDLED_LIBRARIES)

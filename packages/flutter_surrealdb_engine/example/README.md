@@ -1,6 +1,6 @@
-# flutter_surrealdb_engine_example
+# surrealdb_example
 
-Demonstrates how to use the flutter_surrealdb_engine plugin.
+Demonstrates how to use the surrealdb plugin.
 
 ## Getting Started
 

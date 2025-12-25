@@ -1,6 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application
-        android:label="flutter_surrealdb_engine_example"
+        android:label="surrealdb_example"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

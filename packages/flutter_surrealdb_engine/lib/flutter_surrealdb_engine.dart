@@ -1,11 +1,10 @@
-import 'flutter_surrealdb_engine_platform_interface.dart';
+import 'surrealdb_platform_interface.dart';
 
-export 'src/rust/lib.dart';
-export 'src/rust/frb_generated.dart';
-export 'src/surreal_result_extension.dart';
+export 'src/rust/api/client.dart';
+export 'src/rust/frb_generated.dart' show RustLib;
 
-class FlutterSurrealdbEngine {
+class Surrealdb {
   Future<String?> getPlatformVersion() {
-    return FlutterSurrealdbEnginePlatform.instance.getPlatformVersion();
+    return SurrealdbPlatform.instance.getPlatformVersion();
   }
 }

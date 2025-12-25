@@ -1,34 +1,34 @@
 PODS:
-  - flutter_surrealdb_engine (0.0.1):
-    - FlutterMacOS
   - FlutterMacOS (1.0.0)
   - path_provider_foundation (0.0.1):
     - Flutter
     - FlutterMacOS
-  - rust_lib_flutter_surrealdb_engine (0.0.1):
+  - rust_lib_surrealdb (0.0.1):
+    - FlutterMacOS
+  - surrealdb (0.0.1):
     - FlutterMacOS
 
 DEPENDENCIES:
-  - flutter_surrealdb_engine (from `Flutter/ephemeral/.symlinks/plugins/flutter_surrealdb_engine/macos`)
   - FlutterMacOS (from `Flutter/ephemeral`)
   - path_provider_foundation (from `Flutter/ephemeral/.symlinks/plugins/path_provider_foundation/darwin`)
-  - rust_lib_flutter_surrealdb_engine (from `Flutter/ephemeral/.symlinks/plugins/rust_lib_flutter_surrealdb_engine/macos`)
+  - rust_lib_surrealdb (from `Flutter/ephemeral/.symlinks/plugins/rust_lib_surrealdb/macos`)
+  - surrealdb (from `Flutter/ephemeral/.symlinks/plugins/surrealdb/macos`)
 
 EXTERNAL SOURCES:
-  flutter_surrealdb_engine:
-    :path: Flutter/ephemeral/.symlinks/plugins/flutter_surrealdb_engine/macos
   FlutterMacOS:
     :path: Flutter/ephemeral
   path_provider_foundation:
     :path: Flutter/ephemeral/.symlinks/plugins/path_provider_foundation/darwin
-  rust_lib_flutter_surrealdb_engine:
-    :path: Flutter/ephemeral/.symlinks/plugins/rust_lib_flutter_surrealdb_engine/macos
+  rust_lib_surrealdb:
+    :path: Flutter/ephemeral/.symlinks/plugins/rust_lib_surrealdb/macos
+  surrealdb:
+    :path: Flutter/ephemeral/.symlinks/plugins/surrealdb/macos
 
 SPEC CHECKSUMS:
-  flutter_surrealdb_engine: e182e646425619f829f156a00286307d7de7c3ef
   FlutterMacOS: d0db08ddef1a9af05a5ec4b724367152bb0500b1
   path_provider_foundation: bb55f6dbba17d0dccd6737fe6f7f34fbd0376880
-  rust_lib_flutter_surrealdb_engine: 46f5ee0c72506fbc93226b74a04b2e0dafb57322
+  rust_lib_surrealdb: e7750b8c1254a2e83cf41e19b1456605e88b76cd
+  surrealdb: cb07f882e73160607e135dcda20ba5c355208df9
 
 PODFILE CHECKSUM: 54d867c82ac51cbd61b565781b9fada492027009
 

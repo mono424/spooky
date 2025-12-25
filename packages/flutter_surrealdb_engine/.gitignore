@@ -18,53 +18,16 @@ migrate_working_dir/
 *.iws
 .idea/
 
-# VS Code related
-.vscode/
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
 
 # Flutter/Dart/Pub related
+# Libraries should not include pubspec.lock, per https://dart.dev/guides/libraries/private-files#pubspeclock.
+/pubspec.lock
 **/doc/api/
 .dart_tool/
-.flutter-plugins
 .flutter-plugins-dependencies
-.pub-cache/
-.pub/
 /build/
 /coverage/
-**/example
-
-# Rust related
-/target/
-/rust/target/
-**/*.rs.bk
-
-# Android related
-**/android/local.properties
-**/android/.gradle
-**/android/captures/
-**/android/gradlew
-**/android/gradlew.bat
-**/android/build/
-**/android/app/build/
-**/android/.cxx/
-
-# iOS/macOS related
-**/ios/Flutter/Generated.xcconfig
-**/ios/Flutter/app.flx
-**/ios/Flutter/app.zip
-**/ios/Flutter/flutter_assets/
-**/ios/Flutter/flutter_export_environment.sh
-**/ios/ServiceDefinitions.json
-**/ios/Runner/GeneratedPluginRegistrant.*
-**/macos/Flutter/Generated.xcconfig
-**/macos/Flutter/flutter_assets/
-**/macos/Flutter/flutter_export_environment.sh
-**/macos/Flutter/ephemeral/
-
-# Windows related
-**/windows/flutter/ephemeral/
-
-# Linux related
-**/linux/flutter/ephemeral/
-
-# Exceptions to above rules.
-!/example/build/

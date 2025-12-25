@@ -1,4 +1,4 @@
-name: rust_lib_flutter_surrealdb_engine
+name: rust_lib_surrealdb
 description: "Utility to build Rust code"
 version: 0.0.1
 publish_to: none

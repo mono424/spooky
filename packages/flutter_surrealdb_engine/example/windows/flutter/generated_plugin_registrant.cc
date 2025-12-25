@@ -6,9 +6,9 @@
 
 #include "generated_plugin_registrant.h"
 
-#include <flutter_surrealdb_engine/flutter_surrealdb_engine_plugin_c_api.h>
+#include <flutter_surrealdb_engine/surrealdb_plugin_c_api.h>
 
 void RegisterPlugins(flutter::PluginRegistry* registry) {
-  FlutterSurrealdbEnginePluginCApiRegisterWithRegistrar(
-      registry->GetRegistrarForPlugin("FlutterSurrealdbEnginePluginCApi"));
+  SurrealdbPluginCApiRegisterWithRegistrar(
+      registry->GetRegistrarForPlugin("SurrealdbPluginCApi"));
 }
