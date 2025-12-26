@@ -43,7 +43,7 @@ class SpookyClient {
   }
 
   Future createEvent() async {
-    const data = {'username': 'timothy', 'password': '123'};
+    const data = {'username': 'timrsodtdhy', 'password': '123'};
 
     await mutation.create('user', data);
   }

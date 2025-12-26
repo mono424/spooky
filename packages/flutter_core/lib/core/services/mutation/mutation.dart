@@ -3,6 +3,7 @@ import 'events.dart';
 import '../database/main.dart';
 import '../events/main.dart';
 import './mutation_querys.dart';
+import '../database/surreal_decoder.dart';
 
 class MutationManager {
   final LocalDatabaseService db;
@@ -19,7 +20,7 @@ class MutationManager {
     );
 
     print('schau mal das ist mein res: ');
-    print(res);
+    print(SurrealDecoder.decode(jsonDecode(res), removeNulls: true));
 
     // Create payload for event/sync
     // Note: In a real app we might parse the result to get the actual ID
