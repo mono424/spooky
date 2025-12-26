@@ -438,7 +438,7 @@ impl View {
                              // Handle nested fields? e.g. "author.name"
                              // Simple field access for now
                             if let Some(f_val) = obj.get(field) {
-                                return f_val == target_val;
+                                return compare_json_values(Some(f_val), Some(target_val)) == std::cmp::Ordering::Equal;
                             }
                         }
                     }
@@ -456,12 +456,12 @@ fn compare_json_values(a: Option<&Value>, b: Option<&Value>) -> std::cmp::Orderi
         (None, Some(_)) => std::cmp::Ordering::Less,
         (Some(_), None) => std::cmp::Ordering::Greater,
         (Some(xa), Some(xb)) => {
-            if let (Some(sa), Some(sb)) = (xa.as_str(), xb.as_str()) {
+            // Try numeric comparison first
+            if let (Some(na), Some(nb)) = (xa.as_f64(), xb.as_f64()) {
+                // Use epsilon for float equality? Or simple partial cmp
+                 na.partial_cmp(&nb).unwrap_or(std::cmp::Ordering::Equal)
+            } else if let (Some(sa), Some(sb)) = (xa.as_str(), xb.as_str()) {
                 sa.cmp(sb)
-            } else if let (Some(na), Some(nb)) = (xa.as_i64(), xb.as_i64()) {
-                na.cmp(&nb)
-            } else if let (Some(na), Some(nb)) = (xa.as_f64(), xb.as_f64()) {
-                na.partial_cmp(&nb).unwrap_or(std::cmp::Ordering::Equal)
             } else if let (Some(ba), Some(bb)) = (xa.as_bool(), xb.as_bool()) {
                 ba.cmp(&bb)
             } else {
