@@ -27,7 +27,7 @@ async function getContainer() {
         })
         .withBindMounts([
             { source: path.join(modulesDir, 'xor_module.surli'), target: "/modules/xor_module.surli" },
-            { source: path.join(modulesDir, 'dbsp.surli'), target: "/modules/dbsp.surli" }
+            { source: path.join(modulesDir, 'dbsp.surli'), target: "/modules/dbsp_module.surli" }
         ])
         .withUser("root") 
         .withCommand(["start", "--log", "trace", "--user", "root", "--pass", "root", "--allow-all", "--allow-experimental"]) 

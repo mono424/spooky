@@ -35,20 +35,45 @@ DEFINE FIELD TTL ON TABLE _spooky_incantation TYPE duration
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- Cleanup Triggers
--- When an incantation dies, clean up its lookup and tail records
-DEFINE EVENT _spooky_cascade_delete_lookup ON TABLE _spooky_incantation WHEN $event = "DELETE" THEN {
-    DELETE _spooky_incantation_lookup WHERE IncantationId = $before.Id;
-    DELETE _spooky_incantation_tail WHERE IncantationId = $before.Id;
+-- ==================================================
+-- SPOOKY MODULE STATE
+-- Global state storage for the DBSP WASM module
+-- ==================================================
+
+DEFINE TABLE _spooky_module_state SCHEMAFULL
+    PERMISSIONS FOR select, create, update WHERE true;
+
+-- The global singleton key (e.g. "global")
+DEFINE FIELD Id ON TABLE _spooky_module_state TYPE string
+    PERMISSIONS FOR select, create, update WHERE true;
+
+-- The serialized WASM memory state (huge JSON object)
+DEFINE FIELD State ON TABLE _spooky_module_state TYPE option<object>
+    PERMISSIONS FOR select, create, update WHERE true;
+
+-- Helper function to get or init state
+DEFINE FUNCTION fn::dbsp::get_state() {
+    RETURN (SELECT VALUE State FROM _spooky_module_state:global) OR {};
 };
+
+-- Helper function to save state
+DEFINE FUNCTION fn::dbsp::save_state($new_state: object) {
+    UPSERT _spooky_module_state:global SET State = $new_state;
+};
+
 
 -- Register with DBSP on creation
 DEFINE EVENT _spooky_dbsp_register ON TABLE _spooky_incantation WHEN $event = "CREATE" THEN {
-    fn::dbsp::register_query($after.Id, $after.SurrealQL);
+    let $state = fn::dbsp::get_state();
+    let $result = fn::dbsp::register_query($after.Id, $after.SurrealQL, $state);
+    fn::dbsp::save_state($result.new_state);
 };
 
 -- Unregister from DBSP on deletion
 DEFINE EVENT _spooky_dbsp_cleanup ON TABLE _spooky_incantation WHEN $event = "DELETE" THEN {
-    fn::dbsp::unregister_query($before.Id);
+    let $state = fn::dbsp::get_state();
+    let $result = fn::dbsp::unregister_query($before.Id, $state);
+    fn::dbsp::save_state($result.new_state);
 };
 
 
