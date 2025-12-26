@@ -70,6 +70,8 @@ DEFINE FIELD author ON TABLE thread TYPE record<user>;
 DEFINE FIELD created_at ON TABLE thread TYPE datetime
     VALUE time::now();
 
+DEFINE FIELD active ON TABLE thread TYPE bool VALUE $value OR false;
+
 -- ##################################################################
 -- COMMENT TABLE
 -- ##################################################################

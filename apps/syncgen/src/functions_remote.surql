@@ -35,12 +35,13 @@ DEFINE FUNCTION fn::incantation::register($config: object) {
     LET $paths      = $config.paths;
     LET $table      = $config.table;
     LET $filter     = $config.filter;
+    LET $query      = $config.query; -- Optional DBSP Plan JSON
     
-    -- NEW: Sorting Params (Default to created_at if missing)
+    -- Sorting Params (Default to created_at if missing)
     LET $sort_field = $config.sort_field OR 'created_at';
+    LET $tree_init = {}; 
     
     -- 1. CALCULATE AGGREGATE HASH
-    -- Improved: Use array aggregation instead of procedural loop to avoid init issues
     LET $hashes = (
         SELECT VALUE fn::spooky::view_hash(id, $paths) 
         FROM $items
@@ -48,38 +49,37 @@ DEFINE FUNCTION fn::incantation::register($config: object) {
     LET $query_hash = mod::xor::blake3_xor_multi($hashes);
 
     -- 2. UPDATE INCANTATION REGISTRY
-    UPSERT _spooky_incantation CONTENT {
+    -- Use String Cast for ID to avoid type::thing issues during schema load
+    LET $rid_str = "_spooky_incantation:" + $id;
+    LET $rid = <record>$rid_str;
+    
+    INSERT INTO _spooky_incantation {
+        id:           $rid,
         Id:           $id,
         Hash:         $query_hash,
         ClientId:     $client_id,
+        SurrealQL:    $query,
+        Tree:         <object>{},
         LastActiveAt: time::now(),
         TTL:          1h
     };
 
-    -- 3. REFRESH LOOKUPS
-    DELETE _spooky_incantation_lookup WHERE IncantationId = $id;
-    
-    FOR $item IN $items {
-        CREATE _spooky_incantation_lookup CONTENT {
-            IncantationId: $id,
-            Table:         $table,
-            Where:         $filter,
-            SortFields:    [$sort_field],
-            SortDirections: ['asc']
-        };
-    };
 
-    -- 4. HANDLE TAIL (Dynamic Cursor)
-    IF array::len($items) > 0 THEN {
-        LET $last = array::last($items);
-        LET $tail_val = $last[$sort_field];
 
-        UPSERT _spooky_incantation_tail CONTENT {
-            IncantationId: $id,
-            TailValues:    [$tail_val] 
-        };
-    } ELSE {
-        DELETE _spooky_incantation_tail WHERE IncantationId = $id;
+    -- 5. REGISTER WITH DBSP (If plan provided)
+    IF $query != NONE THEN {
+        LET $state = fn::dbsp::get_state();
+        LET $dbsp_res = mod::dbsp::register_query($id, $query, $state);
+        fn::dbsp::save_state($dbsp_res.new_state);
+        
+        LET $init_res = $dbsp_res.result;
+        IF $init_res != NONE THEN {
+            -- Update using the explicit ID
+            UPDATE $rid SET Hash = $init_res.hash, Tree = $init_res.tree;
+        } END;
+        
+        -- DEBUG: Return the entire result to inspect state
+        RETURN $dbsp_res;
     } END;
 
     RETURN $query_hash;

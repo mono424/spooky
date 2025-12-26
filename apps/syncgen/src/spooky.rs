@@ -215,7 +215,35 @@ pub fn generate_spooky_events(
         // Args: table, operation, id, record
         // ID: Use $after.id (since it's not a DELETE)
         // Operation: $event (CREATE or UPDATE)
-        events.push_str(&format!("    LET $dbsp_ok = mod::dbsp::ingest('{}', $event, <string>$after.id, $after);\n\n", table_name));
+        // Construct Plain Record for WASM (Sanitize Record Links to Strings)
+        events.push_str("    LET $plain_after = {\n");
+        events.push_str("        id: <string>$after.id,\n");
+        
+        let mut all_fields: Vec<_> = table.fields.keys().collect();
+        all_fields.sort();
+        
+        for field_name in all_fields {
+             let field_def = table.fields.get(field_name).unwrap();
+             match field_def.field_type {
+                 FieldType::Record(_) | FieldType::Datetime => {
+                     events.push_str(&format!("        {}: <string>$after.{},\n", field_name, field_name));
+                 },
+                 _ => {
+                     events.push_str(&format!("        {}: $after.{},\n", field_name, field_name));
+                 }
+             }
+        }
+        events.push_str("    };\n");
+
+        events.push_str("    LET $state = fn::dbsp::get_state();\n");
+        // Pass $plain_after instead of $after
+        // Note: Explicitly cast to object again just in case constructed object is weird
+        // Use record::id() to get clean ID string without backticks
+        events.push_str(&format!("    LET $dbsp_ok = mod::dbsp::ingest('{}', $event, <string>$after.id, $plain_after, $state);\n", table_name));
+        events.push_str("    fn::dbsp::save_state($dbsp_ok.new_state);\n");
+        events.push_str("    FOR $u IN $dbsp_ok.updates {\n");
+        events.push_str("        UPDATE _spooky_incantation SET Hash = $u.result_hash, Tree = $u.tree WHERE Id = $u.query_id;\n");
+        events.push_str("    };\n\n");
 
         // 1. New Intrinsic Hash
         // DO NOT hash the object as a string. Instead, construct the object with field hashes and calculate _xor.
@@ -527,7 +555,33 @@ pub fn generate_spooky_events(
         // ID: Use $before.id
         // Operation: "DELETE"
         // Record: $before (data being deleted)
-        events.push_str(&format!("    LET $dbsp_ok = mod::dbsp::ingest('{}', \"DELETE\", <string>$before.id, $before);\n\n", table_name));
+        // Construct Plain Record for WASM
+        events.push_str("    LET $plain_before = {\n");
+        events.push_str("        id: <string>$before.id,\n");
+        
+        let mut all_fields_del: Vec<_> = table.fields.keys().collect();
+        all_fields_del.sort();
+        
+        for field_name in all_fields_del {
+             let field_def = table.fields.get(field_name).unwrap();
+             match field_def.field_type {
+                 FieldType::Record(_) | FieldType::Datetime => {
+                     events.push_str(&format!("        {}: <string>$before.{},\n", field_name, field_name));
+                 },
+                 _ => {
+                     events.push_str(&format!("        {}: $before.{},\n", field_name, field_name));
+                 }
+             }
+        }
+        events.push_str("    };\n");
+
+        events.push_str("    LET $state = fn::dbsp::get_state();\n");
+        // Use record::id() to get clean ID string without backticks
+        events.push_str(&format!("    LET $dbsp_ok = mod::dbsp::ingest('{}', \"DELETE\", <string>$before.id, $plain_before, $state);\n", table_name));
+        events.push_str("    fn::dbsp::save_state($dbsp_ok.new_state);\n");
+        events.push_str("    FOR $u IN $dbsp_ok.updates {\n");
+        events.push_str("        UPDATE _spooky_incantation SET Hash = $u.result_hash, Tree = $u.tree WHERE Id = $u.query_id;\n");
+        events.push_str("    };\n\n");
 
         events.push_str("    LET $old_hash_data = (SELECT * FROM ONLY _spooky_data_hash WHERE RecordId = $before.id);\n");
         events.push_str("    LET $old_total = $old_hash_data.TotalHash;\n\n");
