@@ -1,4 +1,4 @@
-import { QueryHash, Incantation as IncantationData } from "../../types.js";
+import { QueryHash, Incantation as IncantationData, QueryTimeToLive } from "../../types.js";
 import { Table, RecordId } from "surrealdb";
 import { RemoteDatabaseService } from "../database/remote.js";
 import { LocalDatabaseService } from "../database/local.js";
@@ -9,16 +9,17 @@ export class QueryManager {
   // Using Map to store Incantation objects. Accessing via .values() gives "array of objects".
   private activeQueries: Map<QueryHash, Incantation> = new Map();
 
-  constructor(private local: LocalDatabaseService, private remote: RemoteDatabaseService, private clientId?: string) {}
+  constructor(private local: LocalDatabaseService, private remote: RemoteDatabaseService, private clientId?: string) {
 
-  async register(surrealql: string, params: Record<string, any>): Promise<QueryHash> {
+  }
+
+  async register(surrealql: string, params: Record<string, any>, ttl: QueryTimeToLive): Promise<QueryHash> {
     const id = await this.calculateHash({
       surrealql,
       params
     });
 
-    const tx = await this.local.tx();
-    const [incantationData] = await tx.query(`
+    const [incantationData] = await this.local.getClient().query(`
       UPSERT _spooky_incantation:$id CONTENT {
         id: $id,
         surrealql: $surrealql,
@@ -29,9 +30,8 @@ export class QueryManager {
       id,
       surrealql,
       lastActiveAt: new Date(),
-      ttl: "10m",
+      ttl,
     }).collect<IncantationData[]>();
-    await tx.commit();
 
     const incantationId = incantationData.id.id.toString();
     
@@ -44,11 +44,11 @@ export class QueryManager {
     return incantationId;
   }
 
-  async queryAdHoc(surrealql: string, params: Record<string, any>, monitorId: string): Promise<QueryHash> {
-      return this.register(surrealql, params);
+  async queryAdHoc(surrealql: string, params: Record<string, any>, ttl: QueryTimeToLive): Promise<QueryHash> {
+      return this.register(surrealql, params, ttl);
   }
 
-  subscribe(queryHash: QueryHash, callback: (data: any) => void): () => void {
+  private subscribe(queryHash: QueryHash, callback: (data: any) => void): () => void {
     if (!this.subscriptions.has(queryHash)) {
       this.subscriptions.set(queryHash, new Set());
     }

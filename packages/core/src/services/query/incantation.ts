@@ -1,10 +1,10 @@
-import { Incantation as IncantationData } from "../../types.js";
+import { Incantation as IncantationData, QueryTimeToLive } from "../../types.js";
 import { RecordId } from "surrealdb";
 import { RemoteDatabaseService } from "../database/remote.js";
 import { LocalDatabaseService } from "../database/local.js";
 
 // Helper to parse duration string like "10m" to ms
-function parseDuration(duration: string): number {
+function parseDuration(duration: QueryTimeToLive): number {
     const match = duration.match(/^(\d+)([smh])$/);
     if (!match) return 600000; // default 10m
     const val = parseInt(match[1], 10);
@@ -22,22 +22,22 @@ export class Incantation {
     public surrealql: string;
     public hash: string;
     public lastActiveAt: Date;
-    public ttl: string; // "10m"
     private ttlTimer: NodeJS.Timeout | null = null;
+    private ttl: QueryTimeToLive;
     private ttlDurationMs: number;
 
     constructor(
         data: IncantationData,
         private local: LocalDatabaseService,
-        private remote: RemoteDatabaseService
+        private remote: RemoteDatabaseService,
     ) {
         this.id = data.id;
         this.surrealql = data.surrealql;
         this.hash = data.hash;
         // Ensure Date object
         this.lastActiveAt = new Date(data.lastActiveAt);
-        this.ttl = "10m"; // Default or from data if available
-        this.ttlDurationMs = parseDuration(this.ttl);
+        this.ttl = data.ttl;
+        this.ttlDurationMs = parseDuration(data.ttl);
     }
 
     public async init() {
