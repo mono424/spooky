@@ -16,12 +16,35 @@ class SpookyExampleApp extends StatefulWidget {
   State<SpookyExampleApp> createState() => _SpookyExampleAppState();
 }
 
-class _SpookyExampleAppState extends State<SpookyExampleApp> {
+class _SpookyExampleAppState extends State<SpookyExampleApp>
+    with WidgetsBindingObserver {
   SpookyClient? _client;
   bool _isLoggedIn = false;
 
   final TextEditingController _logController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    // Try to close nicely if widget is disposed
+    _client?.close();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.detached) {
+      // Ensure we flush DB on exit!
+      _client?.close();
+    }
+  }
 
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
@@ -243,6 +266,33 @@ class _SpookyExampleAppState extends State<SpookyExampleApp> {
         backgroundColor: Colors.deepPurple,
         foregroundColor: Colors.white,
         actions: [
+          IconButton(
+            icon: const Icon(Icons.power_settings_new),
+            tooltip: "Disconnect / Close DB",
+            onPressed: () async {
+              _log("Flushing & Closing DB...");
+
+              // Force export/flush before closing (workaround for embedded persistence)
+              // Dump to a temp file we don't care about, just to trigger the engine snapshot
+              try {
+                final dumpPath = '${Directory.current.path}/db_dump.surql';
+                await _client?.local.export(dumpPath);
+                _log("DB flushed to $dumpPath");
+                try {
+                  await File(dumpPath).delete();
+                } catch (_) {}
+              } catch (e) {
+                _log("Flush warning: $e");
+              }
+
+              await _client?.close();
+              setState(() {
+                _client = null;
+                _isLoggedIn = false;
+              });
+              _log("Database Disconnected cleanly.");
+            },
+          ),
           if (_isLoggedIn)
             IconButton(
               icon: const Icon(Icons.logout),
@@ -266,7 +316,7 @@ class _SpookyExampleAppState extends State<SpookyExampleApp> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Icon(
-                  _isInitialized ? Icons.check_circle : Icons.error,
+                  _client != null ? Icons.check_circle : Icons.error,
                   size: 16,
                   color: _isInitialized
                       ? Colors.green.shade800

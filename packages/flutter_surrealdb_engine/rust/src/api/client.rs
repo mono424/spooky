@@ -153,4 +153,12 @@ impl SurrealDb {
         let db = self.get_db()?;
         Ok(query::query_cancel(&db).await?)
     }
+
+    // --- Maintenance ---
+    // Forces a flush by exporting to a temp path (hack for embedded persistence)
+    pub async fn export(&self, path: String) -> anyhow::Result<()> {
+         let db = self.get_db()?;
+         db.export(path).await?;
+         Ok(())
+    }
 }

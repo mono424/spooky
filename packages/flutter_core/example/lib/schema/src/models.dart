@@ -12,475 +12,527 @@ Schema schemaFromJson(String str) => Schema.fromJson(json.decode(str));
 String schemaToJson(Schema data) => json.encode(data.toJson());
 
 class Schema {
-    SpookyDataHash spookyDataHash;
-    SpookyIncantation spookyIncantation;
-    SpookyIncantationLookup spookyIncantationLookup;
-    SpookyIncantationTail spookyIncantationTail;
-    SpookyPendingMutations spookyPendingMutations;
-    SpookyRelationship spookyRelationship;
-    SpookySchema spookySchema;
-    Comment comment;
-    CommentedOn commentedOn;
-    Thread thread;
-    User user;
+  SpookyDataHash spookyDataHash;
+  SpookyIncantation spookyIncantation;
+  SpookyIncantationLookup spookyIncantationLookup;
+  SpookyIncantationTail spookyIncantationTail;
+  SpookyPendingMutations spookyPendingMutations;
+  SpookyRelationship spookyRelationship;
+  SpookySchema spookySchema;
+  Comment comment;
+  CommentedOn commentedOn;
+  Thread thread;
+  User user;
 
-    Schema({
-        required this.spookyDataHash,
-        required this.spookyIncantation,
-        required this.spookyIncantationLookup,
-        required this.spookyIncantationTail,
-        required this.spookyPendingMutations,
-        required this.spookyRelationship,
-        required this.spookySchema,
-        required this.comment,
-        required this.commentedOn,
-        required this.thread,
-        required this.user,
-    });
+  Schema({
+    required this.spookyDataHash,
+    required this.spookyIncantation,
+    required this.spookyIncantationLookup,
+    required this.spookyIncantationTail,
+    required this.spookyPendingMutations,
+    required this.spookyRelationship,
+    required this.spookySchema,
+    required this.comment,
+    required this.commentedOn,
+    required this.thread,
+    required this.user,
+  });
 
-    factory Schema.fromJson(Map<String, dynamic> json) => Schema(
-        spookyDataHash: SpookyDataHash.fromJson(json["_spooky_data_hash"]),
-        spookyIncantation: SpookyIncantation.fromJson(json["_spooky_incantation"]),
-        spookyIncantationLookup: SpookyIncantationLookup.fromJson(json["_spooky_incantation_lookup"]),
-        spookyIncantationTail: SpookyIncantationTail.fromJson(json["_spooky_incantation_tail"]),
-        spookyPendingMutations: SpookyPendingMutations.fromJson(json["_spooky_pending_mutations"]),
-        spookyRelationship: SpookyRelationship.fromJson(json["_spooky_relationship"]),
-        spookySchema: SpookySchema.fromJson(json["_spooky_schema"]),
-        comment: Comment.fromJson(json["comment"]),
-        commentedOn: CommentedOn.fromJson(json["commented_on"]),
-        thread: Thread.fromJson(json["thread"]),
-        user: User.fromJson(json["user"]),
-    );
+  factory Schema.fromJson(Map<String, dynamic> json) => Schema(
+    spookyDataHash: SpookyDataHash.fromJson(json["_spooky_data_hash"]),
+    spookyIncantation: SpookyIncantation.fromJson(json["_spooky_incantation"]),
+    spookyIncantationLookup: SpookyIncantationLookup.fromJson(
+      json["_spooky_incantation_lookup"],
+    ),
+    spookyIncantationTail: SpookyIncantationTail.fromJson(
+      json["_spooky_incantation_tail"],
+    ),
+    spookyPendingMutations: SpookyPendingMutations.fromJson(
+      json["_spooky_pending_mutations"],
+    ),
+    spookyRelationship: SpookyRelationship.fromJson(
+      json["_spooky_relationship"],
+    ),
+    spookySchema: SpookySchema.fromJson(json["_spooky_schema"]),
+    comment: Comment.fromJson(json["comment"]),
+    commentedOn: CommentedOn.fromJson(json["commented_on"]),
+    thread: Thread.fromJson(json["thread"]),
+    user: User.fromJson(json["user"]),
+  );
 
-    Map<String, dynamic> toJson() => {
-        "_spooky_data_hash": spookyDataHash.toJson(),
-        "_spooky_incantation": spookyIncantation.toJson(),
-        "_spooky_incantation_lookup": spookyIncantationLookup.toJson(),
-        "_spooky_incantation_tail": spookyIncantationTail.toJson(),
-        "_spooky_pending_mutations": spookyPendingMutations.toJson(),
-        "_spooky_relationship": spookyRelationship.toJson(),
-        "_spooky_schema": spookySchema.toJson(),
-        "comment": comment.toJson(),
-        "commented_on": commentedOn.toJson(),
-        "thread": thread.toJson(),
-        "user": user.toJson(),
-    };
+  Map<String, dynamic> toJson() => {
+    "_spooky_data_hash": spookyDataHash.toJson(),
+    "_spooky_incantation": spookyIncantation.toJson(),
+    "_spooky_incantation_lookup": spookyIncantationLookup.toJson(),
+    "_spooky_incantation_tail": spookyIncantationTail.toJson(),
+    "_spooky_pending_mutations": spookyPendingMutations.toJson(),
+    "_spooky_relationship": spookyRelationship.toJson(),
+    "_spooky_schema": spookySchema.toJson(),
+    "comment": comment.toJson(),
+    "commented_on": commentedOn.toJson(),
+    "thread": thread.toJson(),
+    "user": user.toJson(),
+  };
 }
 
 class Comment {
-    
-    ///Record ID of table: user
-    String author;
-    
-    ///Assert: $value != NONE AND string::len($value) > 0
-    String content;
-    DateTime? createdAt;
-    
-    ///Record ID
-    String id;
-    
-    ///Record ID of table: thread
-    String thread;
+  ///Record ID of table: user
+  String author;
 
-    Comment({
-        required this.author,
-        required this.content,
-        this.createdAt,
-        required this.id,
-        required this.thread,
-    });
+  ///Assert: $value != NONE AND string::len($value) > 0
+  String content;
+  DateTime? createdAt;
 
-    factory Comment.fromJson(Map<String, dynamic> json) => Comment(
-        author: json["author"],
-        content: json["content"],
-        createdAt: json["created_at"] == null ? null : DateTime.parse(json["created_at"]),
-        id: json["id"],
-        thread: json["thread"],
-    );
+  ///Record ID
+  String id;
 
-    Map<String, dynamic> toJson() => {
-        "author": author,
-        "content": content,
-        "created_at": createdAt?.toIso8601String(),
-        "id": id,
-        "thread": thread,
-    };
+  ///Record ID of table: thread
+  String thread;
+
+  Comment({
+    required this.author,
+    required this.content,
+    this.createdAt,
+    required this.id,
+    required this.thread,
+  });
+
+  factory Comment.fromJson(Map<String, dynamic> json) => Comment(
+    author: json["author"],
+    content: json["content"],
+    createdAt: json["created_at"] == null
+        ? null
+        : DateTime.parse(json["created_at"]),
+    id: json["id"],
+    thread: json["thread"],
+  );
+
+  Map<String, dynamic> toJson() => {
+    "author": author,
+    "content": content,
+    "created_at": createdAt?.toIso8601String(),
+    "id": id,
+    "thread": thread,
+  };
 }
 
 class CommentedOn {
-    
-    ///Record ID
-    String id;
+  ///Record ID
+  String id;
 
-    CommentedOn({
-        required this.id,
-    });
+  CommentedOn({required this.id});
 
-    factory CommentedOn.fromJson(Map<String, dynamic> json) => CommentedOn(
-        id: json["id"],
-    );
+  factory CommentedOn.fromJson(Map<String, dynamic> json) =>
+      CommentedOn(id: json["id"]);
 
-    Map<String, dynamic> toJson() => {
-        "id": id,
-    };
+  Map<String, dynamic> toJson() => {"id": id};
 }
 
 class SpookyDataHash {
-    String compositionHash;
-    
-    ///Record ID
-    String id;
-    String intrinsicHash;
-    bool isDirty;
-    bool pendingDelete;
-    
-    ///Record ID
-    String recordId;
-    String? totalHash;
+  String compositionHash;
 
-    SpookyDataHash({
-        required this.compositionHash,
-        required this.id,
-        required this.intrinsicHash,
-        required this.isDirty,
-        required this.pendingDelete,
-        required this.recordId,
-        this.totalHash,
-    });
+  ///Record ID
+  String id;
+  String intrinsicHash;
+  bool isDirty;
+  bool pendingDelete;
 
-    factory SpookyDataHash.fromJson(Map<String, dynamic> json) => SpookyDataHash(
-        compositionHash: json["CompositionHash"],
-        id: json["id"],
-        intrinsicHash: json["IntrinsicHash"],
-        isDirty: json["IsDirty"],
-        pendingDelete: json["PendingDelete"],
-        recordId: json["RecordId"],
-        totalHash: json["TotalHash"],
-    );
+  ///Record ID
+  String recordId;
+  String? totalHash;
 
-    Map<String, dynamic> toJson() => {
-        "CompositionHash": compositionHash,
-        "id": id,
-        "IntrinsicHash": intrinsicHash,
-        "IsDirty": isDirty,
-        "PendingDelete": pendingDelete,
-        "RecordId": recordId,
-        "TotalHash": totalHash,
-    };
+  SpookyDataHash({
+    required this.compositionHash,
+    required this.id,
+    required this.intrinsicHash,
+    required this.isDirty,
+    required this.pendingDelete,
+    required this.recordId,
+    this.totalHash,
+  });
+
+  factory SpookyDataHash.fromJson(Map<String, dynamic> json) => SpookyDataHash(
+    compositionHash: json["CompositionHash"],
+    id: json["id"],
+    intrinsicHash: json["IntrinsicHash"],
+    isDirty: json["IsDirty"],
+    pendingDelete: json["PendingDelete"],
+    recordId: json["RecordId"],
+    totalHash: json["TotalHash"],
+  );
+
+  Map<String, dynamic> toJson() => {
+    "CompositionHash": compositionHash,
+    "id": id,
+    "IntrinsicHash": intrinsicHash,
+    "IsDirty": isDirty,
+    "PendingDelete": pendingDelete,
+    "RecordId": recordId,
+    "TotalHash": totalHash,
+  };
 }
 
 class SpookyIncantation {
-    
-    ///Any type
-    dynamic hash;
-    
-    ///Record ID
-    String spookyIncantationId;
-    String id;
-    DateTime lastActiveAt;
-    String surrealQl;
-    
-    ///ISO 8601 duration
-    String ttl;
+  ///Any type
+  dynamic hash;
 
-    SpookyIncantation({
-        required this.hash,
-        required this.spookyIncantationId,
-        required this.id,
-        required this.lastActiveAt,
-        required this.surrealQl,
-        required this.ttl,
-    });
+  ///Record ID
+  String spookyIncantationId;
+  String id;
+  DateTime lastActiveAt;
+  String surrealQl;
 
-    factory SpookyIncantation.fromJson(Map<String, dynamic> json) => SpookyIncantation(
+  ///ISO 8601 duration
+  String ttl;
+
+  SpookyIncantation({
+    required this.hash,
+    required this.spookyIncantationId,
+    required this.id,
+    required this.lastActiveAt,
+    required this.surrealQl,
+    required this.ttl,
+  });
+
+  factory SpookyIncantation.fromJson(Map<String, dynamic> json) =>
+      SpookyIncantation(
         hash: json["Hash"],
         spookyIncantationId: json["id"],
         id: json["Id"],
         lastActiveAt: DateTime.parse(json["LastActiveAt"]),
         surrealQl: json["SurrealQL"],
         ttl: json["TTL"],
-    );
+      );
 
-    Map<String, dynamic> toJson() => {
-        "Hash": hash,
-        "id": spookyIncantationId,
-        "Id": id,
-        "LastActiveAt": lastActiveAt.toIso8601String(),
-        "SurrealQL": surrealQl,
-        "TTL": ttl,
-    };
+  Map<String, dynamic> toJson() => {
+    "Hash": hash,
+    "id": spookyIncantationId,
+    "Id": id,
+    "LastActiveAt": lastActiveAt.toIso8601String(),
+    "SurrealQL": surrealQl,
+    "TTL": ttl,
+  };
 }
 
 class SpookyIncantationLookup {
-    String table;
-    
-    ///Any type
-    dynamic where;
-    
-    ///Record ID
-    String id;
-    String incantationId;
-    List<String> sortDirections;
-    List<String> sortFields;
+  String table;
 
-    SpookyIncantationLookup({
-        required this.table,
-        required this.where,
-        required this.id,
-        required this.incantationId,
-        required this.sortDirections,
-        required this.sortFields,
-    });
+  ///Any type
+  dynamic where;
 
-    factory SpookyIncantationLookup.fromJson(Map<String, dynamic> json) => SpookyIncantationLookup(
+  ///Record ID
+  String id;
+  String incantationId;
+  List<String> sortDirections;
+  List<String> sortFields;
+
+  SpookyIncantationLookup({
+    required this.table,
+    required this.where,
+    required this.id,
+    required this.incantationId,
+    required this.sortDirections,
+    required this.sortFields,
+  });
+
+  factory SpookyIncantationLookup.fromJson(Map<String, dynamic> json) =>
+      SpookyIncantationLookup(
         table: json["`Table`"],
         where: json["`Where`"],
         id: json["id"],
         incantationId: json["IncantationId"],
         sortDirections: List<String>.from(json["SortDirections"].map((x) => x)),
         sortFields: List<String>.from(json["SortFields"].map((x) => x)),
-    );
+      );
 
-    Map<String, dynamic> toJson() => {
-        "`Table`": table,
-        "`Where`": where,
-        "id": id,
-        "IncantationId": incantationId,
-        "SortDirections": List<dynamic>.from(sortDirections.map((x) => x)),
-        "SortFields": List<dynamic>.from(sortFields.map((x) => x)),
-    };
+  Map<String, dynamic> toJson() => {
+    "`Table`": table,
+    "`Where`": where,
+    "id": id,
+    "IncantationId": incantationId,
+    "SortDirections": List<dynamic>.from(sortDirections.map((x) => x)),
+    "SortFields": List<dynamic>.from(sortFields.map((x) => x)),
+  };
 }
 
 class SpookyIncantationTail {
-    
-    ///Record ID
-    String id;
-    String incantationId;
-    List<dynamic> tailValues;
+  ///Record ID
+  String id;
+  String incantationId;
+  List<dynamic> tailValues;
 
-    SpookyIncantationTail({
-        required this.id,
-        required this.incantationId,
-        required this.tailValues,
-    });
+  SpookyIncantationTail({
+    required this.id,
+    required this.incantationId,
+    required this.tailValues,
+  });
 
-    factory SpookyIncantationTail.fromJson(Map<String, dynamic> json) => SpookyIncantationTail(
+  factory SpookyIncantationTail.fromJson(Map<String, dynamic> json) =>
+      SpookyIncantationTail(
         id: json["id"],
         incantationId: json["IncantationId"],
         tailValues: List<dynamic>.from(json["TailValues"].map((x) => x)),
-    );
+      );
 
-    Map<String, dynamic> toJson() => {
-        "id": id,
-        "IncantationId": incantationId,
-        "TailValues": List<dynamic>.from(tailValues.map((x) => x)),
-    };
+  Map<String, dynamic> toJson() => {
+    "id": id,
+    "IncantationId": incantationId,
+    "TailValues": List<dynamic>.from(tailValues.map((x) => x)),
+  };
 }
 
 class SpookyPendingMutations {
-    
-    ///Any type
-    String? data;
-    
-    ///Record ID
-    String id;
-    String mutationType;
-    
-    ///Record ID
-    String? recordId;
+  ///Any type
+  String? data;
 
-    SpookyPendingMutations({
-        this.data,
-        required this.id,
-        required this.mutationType,
-        this.recordId,
-    });
+  ///Record ID
+  String id;
+  String mutationType;
 
-    factory SpookyPendingMutations.fromJson(Map<String, dynamic> json) => SpookyPendingMutations(
+  ///Record ID
+  String? recordId;
+
+  SpookyPendingMutations({
+    this.data,
+    required this.id,
+    required this.mutationType,
+    this.recordId,
+  });
+
+  factory SpookyPendingMutations.fromJson(Map<String, dynamic> json) =>
+      SpookyPendingMutations(
         data: json["data"],
         id: json["id"],
         mutationType: json["mutation_type"],
         recordId: json["record_id"],
-    );
+      );
 
-    Map<String, dynamic> toJson() => {
-        "data": data,
-        "id": id,
-        "mutation_type": mutationType,
-        "record_id": recordId,
-    };
+  Map<String, dynamic> toJson() => {
+    "data": data,
+    "id": id,
+    "mutation_type": mutationType,
+    "record_id": recordId,
+  };
 }
 
 class SpookyRelationship {
-    String childField;
-    String childTable;
-    
-    ///Record ID
-    String id;
-    String parentTable;
-    
-    ///Assert: $value INSIDE ['COMPOSITION', 'REFERENCE']
-    String type;
+  String childField;
+  String childTable;
 
-    SpookyRelationship({
-        required this.childField,
-        required this.childTable,
-        required this.id,
-        required this.parentTable,
-        required this.type,
-    });
+  ///Record ID
+  String id;
+  String parentTable;
 
-    factory SpookyRelationship.fromJson(Map<String, dynamic> json) => SpookyRelationship(
+  ///Assert: $value INSIDE ['COMPOSITION', 'REFERENCE']
+  String type;
+
+  SpookyRelationship({
+    required this.childField,
+    required this.childTable,
+    required this.id,
+    required this.parentTable,
+    required this.type,
+  });
+
+  factory SpookyRelationship.fromJson(Map<String, dynamic> json) =>
+      SpookyRelationship(
         childField: json["ChildField"],
         childTable: json["ChildTable"],
         id: json["id"],
         parentTable: json["ParentTable"],
         type: json["Type"],
-    );
+      );
 
-    Map<String, dynamic> toJson() => {
-        "ChildField": childField,
-        "ChildTable": childTable,
-        "id": id,
-        "ParentTable": parentTable,
-        "Type": type,
-    };
+  Map<String, dynamic> toJson() => {
+    "ChildField": childField,
+    "ChildTable": childTable,
+    "id": id,
+    "ParentTable": parentTable,
+    "Type": type,
+  };
 }
 
 class SpookySchema {
-    DateTime? createdAt;
-    String hash;
-    String id;
+  DateTime? createdAt;
+  String hash;
+  String id;
 
-    SpookySchema({
-        this.createdAt,
-        required this.hash,
-        required this.id,
-    });
+  SpookySchema({this.createdAt, required this.hash, required this.id});
 
-    factory SpookySchema.fromJson(Map<String, dynamic> json) => SpookySchema(
-        createdAt: json["created_at"] == null ? null : DateTime.parse(json["created_at"]),
-        hash: json["hash"],
-        id: json["id"],
-    );
+  factory SpookySchema.fromJson(Map<String, dynamic> json) => SpookySchema(
+    createdAt: json["created_at"] == null
+        ? null
+        : DateTime.parse(json["created_at"]),
+    hash: json["hash"],
+    id: json["id"],
+  );
 
-    Map<String, dynamic> toJson() => {
-        "created_at": createdAt?.toIso8601String(),
-        "hash": hash,
-        "id": id,
-    };
+  Map<String, dynamic> toJson() => {
+    "created_at": createdAt?.toIso8601String(),
+    "hash": hash,
+    "id": id,
+  };
 }
 
 class Thread {
-    
-    ///Record ID of table: user
-    String author;
-    
-    ///Reverse relationship: array of comment records
-    List<String>? comments;
-    
-    ///Assert: $value != NONE AND string::len($value) > 0
-    String content;
-    DateTime? createdAt;
-    
-    ///Record ID
-    String id;
-    
-    ///Assert: $value != NONE AND string::len($value) > 0 AND string::len($value) <= 200
-    String title;
+  ///Record ID of table: user
+  String author;
 
-    Thread({
-        required this.author,
-        this.comments,
-        required this.content,
-        this.createdAt,
-        required this.id,
-        required this.title,
-    });
+  ///Reverse relationship: array of comment records
+  List<String>? comments;
 
-    factory Thread.fromJson(Map<String, dynamic> json) => Thread(
-        author: json["author"],
-        comments: json["comments"] == null ? [] : List<String>.from(json["comments"]!.map((x) => x)),
-        content: json["content"],
-        createdAt: json["created_at"] == null ? null : DateTime.parse(json["created_at"]),
-        id: json["id"],
-        title: json["title"],
-    );
+  ///Assert: $value != NONE AND string::len($value) > 0
+  String content;
+  DateTime? createdAt;
 
-    Map<String, dynamic> toJson() => {
-        "author": author,
-        "comments": comments == null ? [] : List<dynamic>.from(comments!.map((x) => x)),
-        "content": content,
-        "created_at": createdAt?.toIso8601String(),
-        "id": id,
-        "title": title,
-    };
+  ///Record ID
+  String id;
+
+  ///Assert: $value != NONE AND string::len($value) > 0 AND string::len($value) <= 200
+  String title;
+
+  Thread({
+    required this.author,
+    this.comments,
+    required this.content,
+    this.createdAt,
+    required this.id,
+    required this.title,
+  });
+
+  factory Thread.fromJson(Map<String, dynamic> json) => Thread(
+    author: json["author"],
+    comments: json["comments"] == null
+        ? []
+        : List<String>.from(json["comments"]!.map((x) => x)),
+    content: json["content"],
+    createdAt: json["created_at"] == null
+        ? null
+        : DateTime.parse(json["created_at"]),
+    id: json["id"],
+    title: json["title"],
+  );
+
+  Map<String, dynamic> toJson() => {
+    "author": author,
+    "comments": comments == null
+        ? []
+        : List<dynamic>.from(comments!.map((x) => x)),
+    "content": content,
+    "created_at": createdAt?.toIso8601String(),
+    "id": id,
+    "title": title,
+  };
 }
 
 class User {
-    
-    ///Reverse relationship: array of comment records
-    List<String>? comments;
-    
-    ///Record ID
-    String id;
-    
-    ///Reverse relationship: array of thread records
-    List<String>? threads;
-    
-    ///Assert: $value != NONE AND string::len($value) > 3
-    String username;
+  ///Reverse relationship: array of comment records
+  List<String>? comments;
 
-    User({
-        this.comments,
-        required this.id,
-        this.threads,
-        required this.username,
-    });
+  ///Record ID
+  String id;
 
-    factory User.fromJson(Map<String, dynamic> json) => User(
-        comments: json["comments"] == null ? [] : List<String>.from(json["comments"]!.map((x) => x)),
-        id: json["id"],
-        threads: json["threads"] == null ? [] : List<String>.from(json["threads"]!.map((x) => x)),
-        username: json["username"],
-    );
+  ///Reverse relationship: array of thread records
+  List<String>? threads;
 
-    Map<String, dynamic> toJson() => {
-        "comments": comments == null ? [] : List<dynamic>.from(comments!.map((x) => x)),
-        "id": id,
-        "threads": threads == null ? [] : List<dynamic>.from(threads!.map((x) => x)),
-        "username": username,
-    };
+  ///Assert: $value != NONE AND string::len($value) > 3
+  String username;
+
+  User({this.comments, required this.id, this.threads, required this.username});
+
+  factory User.fromJson(Map<String, dynamic> json) => User(
+    comments: json["comments"] == null
+        ? []
+        : List<String>.from(json["comments"]!.map((x) => x)),
+    id: json["id"],
+    threads: json["threads"] == null
+        ? []
+        : List<String>.from(json["threads"]!.map((x) => x)),
+    username: json["username"],
+  );
+
+  Map<String, dynamic> toJson() => {
+    "comments": comments == null
+        ? []
+        : List<dynamic>.from(comments!.map((x) => x)),
+    "id": id,
+    "threads": threads == null
+        ? []
+        : List<dynamic>.from(threads!.map((x) => x)),
+    "username": username,
+  };
 }
-
 
 /// The complete SurrealDB schema definition.
 /// This constant contains the raw .surql schema file content.
-const String SURQL_SCHEMA = r"""-- ###################################################################
+const String SURQL_SCHEMA =
+    r"""-- ##################################################################
 -- SCOPES & AUTHENTICATION
 -- ##################################################################
+DEFINE ACCESS account ON DATABASE TYPE RECORD
+  SIGNUP {
+    IF string::len($username) <= 3 { THROW "Username must be longer than 3 characters" };
+    IF string::len($password) == 0 { THROW "Password cannot be empty" };
+
+    LET $existing = (SELECT value id FROM user WHERE username = $username LIMIT 1)[0];
+    IF $existing != NONE { THROW "Username '" + <string>$username + "' is already taken" };
+
+    -- FIX 1: ONLY hinzufügen
+    LET $u = CREATE ONLY user SET 
+        username = $username, 
+        password = crypto::argon2::generate($password);
+    
+    -- FIX 2: Revert to SELECT * now that permissions are TRUE
+    RETURN (SELECT * FROM ONLY $u.id);
+  }
+  SIGNIN ( SELECT * FROM user WHERE username = $username AND crypto::argon2::compare(password, $password) )
+  
+  -- HIER IST DEINE NEUE ZEILE (Das ist super!)
+  WITH JWT ALGORITHM HS512 KEY 'spooky_secret_key'
+  
+  DURATION FOR TOKEN 365d, FOR SESSION 365d
+;
 
 -- ##################################################################
 -- USER TABLE
 -- ##################################################################
 
 DEFINE TABLE user SCHEMAFULL
-PERMISSIONS FOR select, create, update, delete WHERE true;
+PERMISSIONS
+  FOR update, delete WHERE $access = "account" AND id = $auth.id
+  FOR create, select WHERE true;
 
 DEFINE FIELD username ON TABLE user TYPE string
 ASSERT $value != NONE AND string::len($value) > 3
-PERMISSIONS FOR select, create, update WHERE true;
+PERMISSIONS
+    FOR select WHERE true
+    FOR create WHERE true
+    FOR update WHERE $access = "account" AND id = $auth.id;
     
 DEFINE INDEX unique_username ON TABLE user FIELDS username UNIQUE;
 
+DEFINE FIELD password ON TABLE user TYPE string
+ASSERT $value != NONE AND string::len($value) > 0
+PERMISSIONS
+    FOR select WHERE true
+    FOR create WHERE true
+    FOR update WHERE $access = "account" AND id = $auth.id;
 
+DEFINE FIELD created_at ON TABLE user TYPE datetime
+VALUE time::now()
+PERMISSIONS
+    FOR select WHERE true
+    FOR create WHERE true
+    FOR update WHERE $access = "account" AND id = $auth.id;
 
 -- ##################################################################
 -- THREAD TABLE
 -- ##################################################################
 
 DEFINE TABLE thread SCHEMAFULL
-PERMISSIONS FOR select, create, update, delete WHERE true
+  PERMISSIONS
+    FOR select WHERE true
+    FOR update, delete, create WHERE $access = "account" AND author.id = $auth.id
 ;
 
 
@@ -500,7 +552,9 @@ DEFINE FIELD created_at ON TABLE thread TYPE datetime
 -- ##################################################################
 
 DEFINE TABLE comment SCHEMAFULL
-PERMISSIONS FOR select, create, update, delete WHERE true
+  PERMISSIONS
+    FOR select WHERE true
+    FOR update, delete, create WHERE $access = "account" AND author.id = $auth.id
 ;
 
 DEFINE FIELD thread ON TABLE comment TYPE record<thread>; -- @parent
@@ -519,7 +573,7 @@ DEFINE FIELD created_at ON TABLE comment TYPE datetime
 
 DEFINE TABLE commented_on SCHEMAFULL TYPE RELATION
   FROM comment TO thread
-PERMISSIONS FOR select, create, update, delete WHERE true;
+  PERMISSIONS FOR select WHERE true;
 
 DEFINE EVENT comment_created ON TABLE comment WHEN $event = "CREATE" THEN
   RELATE ($after.id)->commented_on->($after.thread)

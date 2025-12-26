@@ -15,20 +15,21 @@ class LocalMigration {
     final database = local.getConfig.database;
     final localDb = local.getClient;
 
-    // Start a transaction
+    // Check if schema is up to date (outside transaction)
+    if (await _isSchemaUpToDate(localDb, hash)) {
+      print("[Provisioning] Schema is up to date, skipping migration");
+      return;
+    }
+
+    print("[Provisioning] Schema is not up to date, running migration");
+
+    // Recreate database (Global Op)
+    await _recreateDatabase(localDb, database);
+
+    // Start transaction for schema application
     await localDb.queryBegin();
 
     try {
-      if (await _isSchemaUpToDate(localDb, hash)) {
-        print("[Provisioning] Schema is up to date, skipping migration");
-        await localDb.queryCommit();
-        return;
-      }
-
-      print("[Provisioning] Schema is not up to date, running migration");
-
-      await _recreateDatabase(localDb, database);
-
       final statements = _splitSurqlStatements(schemaSurql);
 
       for (var i = 0; i < statements.length; i++) {
@@ -74,24 +75,16 @@ class LocalMigration {
       final List<dynamic> results = jsonDecode(jsonResult);
       if (results.isEmpty) return false;
 
-      final firstResult = results[0];
-      // Check status/result structure if wrapper exists
-      // Engine `query` returns the JSON directly from the Rust bridge.
-      // It mimics the structure: [{ status: 'OK', result: [ ... ], time: ... }]
-
-      if (firstResult['status'] != "OK" || firstResult['result'] == null) {
-        return false;
-      }
-
-      final resArray = SurrealDecoder.unwrap(
-        firstResult['result'],
-      ); // Unwrap the 'result' field
+      // Embedded engine returns direct values in the list
+      // For SELECT ... LIMIT 1, it returns {"Array": [ record ]} serialization
+      final resArray = SurrealDecoder.unwrap(results[0]);
 
       if (resArray is SurrealArray) {
         if (resArray.items.isNotEmpty) {
           final firstElement = resArray.items.first;
           if (firstElement is SurrealObject) {
             final remoteHashVal = firstElement.fields['hash'];
+            // SurrealStrand.toString() returns the string value
             final remoteHash = remoteHashVal?.toString();
 
             if (remoteHash != null && remoteHash == hash) {
@@ -122,8 +115,7 @@ class LocalMigration {
     // Parameter binding is supported in query logic of lib.rs
     final vars = jsonEncode({'hash': hash});
     await db.query(
-      sql:
-          "UPSERT _spooky_schema SET hash = \$hash, created_at = time::now() WHERE hash = \$hash;",
+      sql: "CREATE _spooky_schema SET hash = \$hash, created_at = time::now();",
       vars: vars,
     );
   }

@@ -98,6 +98,7 @@ class SurrealDecoder {
 
         switch (key) {
           case 'Strand':
+          case 'String':
             return SurrealStrand(value.toString());
           case 'Datetime':
             return SurrealDatetime(DateTime.parse(value.toString()));
@@ -111,7 +112,7 @@ class SurrealDecoder {
             return SurrealBool(value.toString().toLowerCase() == 'true');
           case 'Thing':
           case 'Id':
-             // Handle Thing/Id which might be just a string
+            // Handle Thing/Id which might be just a string
             return SurrealThing(value.toString());
           case 'None':
           case 'Null':

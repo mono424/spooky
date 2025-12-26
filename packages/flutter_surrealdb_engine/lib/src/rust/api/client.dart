@@ -23,6 +23,8 @@ abstract class SurrealDb implements RustOpaqueInterface {
 
   Future<String> delete({required String resource});
 
+  Future<void> export_({required String path});
+
   Future<void> invalidate();
 
   Future<String> merge({required String resource, String? data});

@@ -24,4 +24,10 @@ abstract class AbstractDatabaseService {
       vars: vars != null ? jsonEncode(vars) : null,
     );
   }
+
+  /// Exports the database to the specified path.
+  /// Useful for forcing a flush/backup.
+  Future<void> export(String path) async {
+    client?.export_(path: path);
+  }
 }
