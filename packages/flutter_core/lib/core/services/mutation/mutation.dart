@@ -20,7 +20,7 @@ class MutationManager {
     );
 
     print('schau mal das ist mein res: ');
-    print(SurrealDecoder.decode(jsonDecode(res), removeNulls: true));
+    print(SurrealDecoder.decode(res, removeNulls: true));
 
     // Create payload for event/sync
     // Note: In a real app we might parse the result to get the actual ID
