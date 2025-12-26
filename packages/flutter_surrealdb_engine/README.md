@@ -17,10 +17,10 @@ A powerful, high-performance Flutter plugin that embeds **SurrealDB** directly i
 
 ```mermaid
 graph TD
-    Dart[Flutter App (Dart)]
-    FFI[Dart FFI Bridge]
-    Rust[Rust Engine (flutter_surrealdb_engine)]
-    Surreal[SurrealDB Instance]
+    Dart["Flutter App (Dart)"]
+    FFI["Dart FFI Bridge"]
+    Rust["Rust Engine (flutter_surrealdb_engine)"]
+    Surreal["SurrealDB Instance"]
 
     Dart <-->|Calls| FFI
     FFI <-->|Invokes| Rust
