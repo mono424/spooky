@@ -97,12 +97,16 @@ pub struct IdTree {
 }
 
 // Helper to compute hash of a list of strings
+// Helper to compute hash of a list of strings
 pub fn compute_hash(items: &[String]) -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    items.join(",").hash(&mut hasher);
-    format!("{:x}", hasher.finish())
+    let mut hasher = blake3::Hasher::new();
+    // Join with null byte to avoid collision cases like ["ab", "c"] vs ["a", "bc"]
+    // Or just update iteratively
+    for item in items {
+        hasher.update(item.as_bytes());
+        hasher.update(&[0]); // Delimiter
+    }
+    hasher.finalize().to_hex().to_string()
 }
 
 impl IdTree {

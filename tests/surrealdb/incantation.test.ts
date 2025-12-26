@@ -25,20 +25,12 @@ describe('Spooky Incantations', () => {
     });
 
     test('should track active threads via incantation', async () => {
-        // 1. Prepare Query Plan for "Active Threads"
-        // Matches threads where "active" is true (or ID starts with "thread:active" if using mock filter)
-        // DBSP Mock uses "filter_prefix". 
-        // Let's use prefix "thread:active" for simplicity in mock, 
-        // but simulate a real scenario where we insert items with that prefix.
-        const plan = {
-            id: "view_active_threads",
-            source_table: "thread",
-            filter_prefix: "thread:active"
-        };
-        const planJson = JSON.stringify(plan);
+        // 1. Prepare Query Plan for "Active Threads" using SQL
+        // Matches threads where "id" starts with "thread:active"
+        const sql = "SELECT * FROM thread WHERE id = 'thread:active*'";
 
         // 2. Register Incantation via Generated Function
-        // Usage: fn::incantation::register({ id: '...', table: '...', query: 'JSON', ... })
+        // Usage: fn::incantation::register({ id: '...', table: '...', query: 'SQL', ... })
         const registerQuery = `
             RETURN fn::incantation::register({
                 id: "inc_active_threads",
@@ -47,7 +39,7 @@ describe('Spooky Incantations', () => {
                 paths: [],
                 table: "thread",
                 filter: {},
-                query: '${planJson}'
+                query: "${sql}"
             });
         `;
         const regRes = await runQuery(registerQuery);
@@ -157,5 +149,68 @@ describe('Spooky Incantations', () => {
         
         // Verify Hash changed
         expect(incRecord2.Hash).not.toBe(incRecord.Hash);
+    });
+
+    test('should update incantation hash deterministically (Reversion Test)', async () => {
+        // 1. Register a simple view
+        const sql = "SELECT * FROM det_item WHERE id = 'det:item*'";
+        
+        const registerQuery = `
+            RETURN fn::incantation::register({
+                id: "inc_det",
+                client_id: "client_1",
+                items: [],
+                paths: [],
+                table: "det_item",
+                filter: {},
+                query: "${sql}"
+            });
+        `;
+        const regRes = await runQuery(registerQuery);
+        expect(regRes[0]).toBeDefined();
+
+        // Helper to get current Hash
+        const getHash = async () => {
+            const r = await runQuery(`SELECT Hash FROM ONLY _spooky_incantation WHERE Id = 'inc_det'`);
+            return r[0] ? r[0].Hash : null;
+        };
+
+        // H1: Initial Hash (Empty)
+        const H1 = await getHash();
+        expect(H1).toBeDefined();
+
+        // 2. Ingest Item A -> H2
+        await runQuery(`CREATE det:item_a CONTENT { val: 1 }`);
+        const H2 = await getHash();
+        
+        expect(H2).not.toBe(H1);
+        console.log("H1 (Empty):", H1);
+        console.log("H2 (Item A):", H2);
+
+        // 3. Revert: Delete Item A -> Should return to H1
+        await runQuery(`DELETE det:item_a`);
+        const H3 = await getHash();
+        console.log("H3 (Reverted):", H3);
+
+        expect(H3).toBe(H1);
+
+        // 4. Determinism: CREATE Item A again (Same content) -> H4
+        // Note: ID must be same. Content same.
+        await runQuery(`CREATE det:item_a CONTENT { val: 1 }`);
+        const H4 = await getHash();
+        console.log("H4 (Re-Item A):", H4);
+        
+        expect(H4).toBe(H2);
+        
+        // 5. Different Item B -> H5
+        await runQuery(`CREATE det:item_b CONTENT { val: 2 }`);
+        // Note: det:item_b matches prefix det:item*.
+        const H5 = await getHash();
+        expect(H5).not.toBe(H2);
+        
+        // 6. Delete B -> Back to H4 (== H2)
+        await runQuery(`DELETE det:item_b`);
+        const H6 = await getHash();
+        expect(H6).toBe(H4);
     });
 });

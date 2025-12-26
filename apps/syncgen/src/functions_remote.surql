@@ -35,7 +35,7 @@ DEFINE FUNCTION fn::incantation::register($config: object) {
     LET $paths      = $config.paths;
     LET $table      = $config.table;
     LET $filter     = $config.filter;
-    LET $query      = $config.query; -- Optional DBSP Plan JSON
+    LET $query      = $config.query; -- Optional DBSP Plan (SQL String)
     
     -- Sorting Params (Default to created_at if missing)
     LET $sort_field = $config.sort_field OR 'created_at';
