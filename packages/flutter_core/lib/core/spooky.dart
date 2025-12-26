@@ -37,7 +37,6 @@ class SpookyClient {
     final migrator = LocalMigration(local);
     await migrator.provision(config.schemaSurql);
     final mutation = MutationManager(local);
-    // mutation.create('user', {'abs': 'hello'});
 
     return SpookyClient._(config, local, remote, migrator, mutation);
   }
