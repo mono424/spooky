@@ -1,47 +1,54 @@
-import { QueryHash, Incantation } from "../../types.js";
-import { Table } from "surrealdb";
+import { QueryHash, Incantation as IncantationData, QueryTimeToLive } from "../../types.js";
+import { Table, RecordId } from "surrealdb";
 import { RemoteDatabaseService } from "../database/remote.js";
 import { LocalDatabaseService } from "../database/local.js";
+import { Incantation } from "./incantation.js";
 
 export class QueryManager {
   private subscriptions: Map<QueryHash, Set<(data: any) => void>> = new Map();
+  // Using Map to store Incantation objects. Accessing via .values() gives "array of objects".
   private activeQueries: Map<QueryHash, Incantation> = new Map();
 
-  constructor(private local: LocalDatabaseService, private remote: RemoteDatabaseService) {}
+  constructor(private local: LocalDatabaseService, private remote: RemoteDatabaseService, private clientId?: string) {
 
-  async register(surrealql: string, params: Record<string, any>): Promise<QueryHash> {
-    const tx = await this.local.tx();
-    const [incantation] = await tx.query(`
-      LET $id = crypto::blake3({
-        surrealql: $surrealql,
-        params: $params
-      });
+  }
+
+  async register(surrealql: string, params: Record<string, any>, ttl: QueryTimeToLive): Promise<QueryHash> {
+    const id = await this.calculateHash({
+      surrealql,
+      params
+    });
+
+    const [incantationData] = await this.local.getClient().query(`
       UPSERT _spooky_incantation:$id CONTENT {
-        Id: $id,
-        SurrealQL: $surrealql,
-        LastActiveAt: $lastActiveAt,
-        TTL: $ttl
+        id: $id,
+        surrealql: $surrealql,
+        lastActiveAt: $lastActiveAt,
+        ttl: $ttl
       };
     `, {
+      id,
       surrealql,
-      params,
       lastActiveAt: new Date(),
-      ttl: "10m",
-    }).collect<Incantation[]>();
-    await tx.commit();
+      ttl,
+    }).collect<IncantationData[]>();
 
-    const incantationId = incantation.id.id.toString()
+    const incantationId = incantationData.id.id.toString();
+    
     if (!this.activeQueries.has(incantationId)) {
+      const incantation = new Incantation(incantationData, this.local, this.remote);
       this.activeQueries.set(incantationId, incantation);
-      this.initLifecycle(incantation);
+      await this.initLifecycle(incantation);
     }
 
     return incantationId;
   }
 
-  
+  async queryAdHoc(surrealql: string, params: Record<string, any>, ttl: QueryTimeToLive): Promise<QueryHash> {
+      return this.register(surrealql, params, ttl);
+  }
 
-  subscribe(queryHash: QueryHash, callback: (data: any) => void): () => void {
+  private subscribe(queryHash: QueryHash, callback: (data: any) => void): () => void {
     if (!this.subscriptions.has(queryHash)) {
       this.subscriptions.set(queryHash, new Set());
     }
@@ -56,7 +63,8 @@ export class QueryManager {
         subs.delete(callback);
         if (subs.size === 0) {
           this.subscriptions.delete(queryHash);
-          // Optional: Stop lifecycle if no subscribers
+          // Optional: Stop lifecycle if no subscribers.
+          // For now we keep incantations alive until app closes or explicit cleanup.
         }
       }
     };
@@ -64,10 +72,10 @@ export class QueryManager {
 
   private async initLifecycle(incantation: Incantation) {
     // 1. Local Hydration
-    await this.refreshLocal(incantation.id);
+    await this.refreshLocal(incantation.id.id.toString());
 
-    // 2. Remote Registration & Sync
-    await this.registerRemote(incantation);
+    // 2. Remote Registration & Sync (moved to Incantation class)
+    await incantation.init();
 
     // 3. Start Live Query
     await this.startLiveQuery(incantation);
@@ -77,7 +85,9 @@ export class QueryManager {
     const incantation = this.activeQueries.get(queryHash);
     if (!incantation) return;
 
-    const results = await this.db.queryLocal<any[]>(incantation.surrealql);
+    // Cast to any to bypass potential type mismatch in alpha version
+    const queryResult = await (this.local.getClient().query(incantation.surrealql) as any).collect();
+    const results = queryResult[0];
     const data = results;
 
     // Calculate Hash
@@ -91,69 +101,26 @@ export class QueryManager {
     return data;
   }
 
-  private async registerRemote(incantation: Incantation) {
-    // Check if incantation exists remotely
-    // This is a simplified version of the README's "Remote registration"
-    const remoteIncantation = await this.db.queryRemote<Incantation[]>(
-      `SELECT * FROM spooky_incantation WHERE id = $id`,
-      { id: incantation.id }
-    );
-
-    if (!remoteIncantation || remoteIncantation.length === 0) {
-      await this.db.queryRemote(`CREATE spooky_incantation CONTENT $data`, {
-        data: {
-          id: incantation.id,
-          surrealql: incantation.surrealql,
-          hash: 0, // Initial hash
-        }
-      });
-    }
-  }
-
   private async startLiveQuery(incantation: Incantation) {
-    // Listen to changes on the spooky_incantation table for this specific ID
-    // or listen to the actual query if supported.
-    // The README says: "First, we set up a LIVE QUERY that listens to that remote Incantation"
-    
-    const subscription = await this.db.getRemote().live(
-      new Table("spooky_incantation"),
+    const queryUuid = await this.remote.getClient().live(
+      new Table("_spooky_incantation"),
     );
 
-    // subscription is likely async iterable
-    (async () => {
-        try {
-            // @ts-ignore
-            for await (const msg of subscription) {
-                // Handle update
-                // For now just log or something, or trigger sync.
-                // console.log("Live update", msg);
-            }
-        } catch (e) {
-            console.error(e);
-        }
-    })();
+    await this.remote.subscribeLive(queryUuid.toString(), async (action, result) => {
+         if (action === 'UPDATE' || action === 'CREATE') {
+             const resultId = (result as any)?.id?.toString();
+             const targetId = incantation.id.toString();
+             
+             if (resultId === targetId) {
+                 await this.refreshLocal(incantation.id.id.toString());
+             }
+         }
+    });
   }
 
-  private async calculateHash(data: any): Promise<number> {
-    // Use DB-native hashing if possible, or a simple JS hash for now
-    const str = JSON.stringify(data);
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-      const char = str.charCodeAt(i);
-      hash = (hash << 5) - hash + char;
-      hash = hash & hash; // Convert to 32bit integer
-    }
-    return hash;
-  }
-
-  private hashString(str: string): number {
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-      const char = str.charCodeAt(i);
-      hash = (hash << 5) - hash + char;
-      hash = hash & hash;
-    }
-    return hash;
+  private async calculateHash(data: any): Promise<string> {
+    const result = await (this.local.getClient().query("RETURN crypto::blake3($data)", { data }) as any).collect();
+    return result[0] as string;
   }
 
   private notifySubscribers(queryHash: QueryHash, data: any) {

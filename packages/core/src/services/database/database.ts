@@ -20,4 +20,12 @@ export abstract class AbstractDatabaseService {
   async close(): Promise<void> {
     await this.client.close();
   }
+
+  async query<T>(query: string, vars?: Record<string, unknown>): Promise<T> {
+      const pending = this.client.query(query, vars) as any;
+      if (pending && typeof pending.collect === 'function') {
+          return await pending.collect() as T;
+      }
+      return await pending as T;
+  }
 }

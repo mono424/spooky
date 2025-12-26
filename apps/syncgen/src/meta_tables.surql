@@ -3,7 +3,7 @@
 -- The Registry of active Live Queries (Incantations).
 -- ==================================================
 
-DEFINE TABLE _spooky_incantation SCHEMAFULL
+DEFINE TABLE _spooky_incantation SCHEMALESS
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- The unique hash ID of the query + params
@@ -22,6 +22,10 @@ DEFINE FIELD ClientId ON TABLE _spooky_incantation TYPE option<string>
 DEFINE FIELD Hash ON TABLE _spooky_incantation TYPE string
     PERMISSIONS FOR select, create, update WHERE true;
 
+-- The Radix Tree of Result IDs for efficient sync
+DEFINE FIELD Tree ON TABLE _spooky_incantation TYPE any
+    PERMISSIONS FOR select, create, update WHERE true;
+
 -- For garbage collection (Heartbeat)
 DEFINE FIELD LastActiveAt ON TABLE _spooky_incantation TYPE datetime DEFAULT time::now()
     PERMISSIONS FOR select, create, update WHERE true;
@@ -31,64 +35,34 @@ DEFINE FIELD TTL ON TABLE _spooky_incantation TYPE duration
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- Cleanup Triggers
--- When an incantation dies, clean up its lookup and tail records
-DEFINE EVENT _spooky_cascade_delete_lookup ON TABLE _spooky_incantation WHEN $event = "DELETE" THEN {
-    DELETE _spooky_incantation_lookup WHERE IncantationId = $before.Id;
-    DELETE _spooky_incantation_tail WHERE IncantationId = $before.Id;
+-- ==================================================
+-- SPOOKY MODULE STATE
+-- Global state storage for the DBSP WASM module
+-- ==================================================
+
+DEFINE TABLE _spooky_module_state SCHEMALESS
+    PERMISSIONS FOR select, create, update WHERE true;
+
+-- The serialized WASM memory state (huge JSON object)
+DEFINE FIELD State ON TABLE _spooky_module_state TYPE option<object>
+    PERMISSIONS FOR select, create, update WHERE true;
+
+-- Helper function to get or init state
+DEFINE FUNCTION fn::dbsp::get_state() {
+    RETURN (SELECT VALUE State FROM _spooky_module_state:dbsp_state)[0] OR {};
 };
 
+-- Helper function to save state
+DEFINE FUNCTION fn::dbsp::save_state($new_state: object) {
+    UPSERT _spooky_module_state:dbsp_state SET State = $new_state;
+};
 
--- ==================================================
--- SPOOKY INCANTATION LOOKUP
--- The Reverse Index: Maps Tables -> Incantations
--- ==================================================
-
-DEFINE TABLE _spooky_incantation_lookup SCHEMAFULL
-    PERMISSIONS FOR select, create, update WHERE true;
-
--- Link to the parent Incantation
-DEFINE FIELD IncantationId ON TABLE _spooky_incantation_lookup TYPE string
-    PERMISSIONS FOR select, create, update WHERE true;
-
--- The primary table being queried (e.g., 'thread')
-DEFINE FIELD Table ON TABLE _spooky_incantation_lookup TYPE string
-    PERMISSIONS FOR select, create, update WHERE true;
-
--- Filter logic used to check if a dirty record matches this query
--- Stored as an object e.g., { clause: "importance >= 3", args: [...] }
-DEFINE FIELD Where ON TABLE _spooky_incantation_lookup TYPE object DEFAULT {}
-    PERMISSIONS FOR select, create, update WHERE true;
-
--- Sorting Metadata needed to maintain order
-DEFINE FIELD SortFields ON TABLE _spooky_incantation_lookup TYPE option<array<string>>
-    PERMISSIONS FOR select, create, update WHERE true;
-DEFINE FIELD SortDirections ON TABLE _spooky_incantation_lookup TYPE option<array<string>>
-    PERMISSIONS FOR select, create, update WHERE true; -- 'ASC', 'DESC'
-
--- Indexes for performance
-DEFINE INDEX idx_incantation ON TABLE _spooky_incantation_lookup COLUMNS IncantationId;
-DEFINE INDEX idx_table ON TABLE _spooky_incantation_lookup COLUMNS Table;
-
-
--- ==================================================
--- SPOOKY INCANTATION TAIL
--- Cursor Management for Pagination/Limits
--- ==================================================
-
-DEFINE TABLE _spooky_incantation_tail SCHEMAFULL
-    PERMISSIONS FOR select, create, update WHERE true;
-
--- Link to the parent Incantation
-DEFINE FIELD IncantationId ON TABLE _spooky_incantation_tail TYPE string
-    PERMISSIONS FOR select, create, update WHERE true;
-
--- The sort values of the *last* item in the current result set
--- Used to determine if a new record falls inside or outside the LIMIT window.
-DEFINE FIELD TailValues ON TABLE _spooky_incantation_tail TYPE array<any>
-    PERMISSIONS FOR select, create, update WHERE true;
-
-DEFINE INDEX idx_incantation ON TABLE _spooky_incantation_tail COLUMNS IncantationId UNIQUE;
-
+-- Unregister from DBSP on deletion
+DEFINE EVENT _spooky_dbsp_cleanup ON TABLE _spooky_incantation WHEN $event = "DELETE" THEN {
+    let $state = fn::dbsp::get_state();
+    let $result = mod::dbsp::unregister_query($before.Id, $state);
+    fn::dbsp::save_state($result.new_state);
+};
 
 -- ==================================================
 -- SPOOKY RELATIONSHIP
