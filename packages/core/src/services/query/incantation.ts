@@ -20,7 +20,7 @@ function parseDuration(duration: string): number {
 export class Incantation {
     public id: RecordId<string>;
     public surrealql: string;
-    public hash: number;
+    public hash: string;
     public lastActiveAt: Date;
     public ttl: string; // "10m"
     private ttlTimer: NodeJS.Timeout | null = null;

@@ -12,12 +12,13 @@ export class QueryManager {
   constructor(private local: LocalDatabaseService, private remote: RemoteDatabaseService, private clientId?: string) {}
 
   async register(surrealql: string, params: Record<string, any>): Promise<QueryHash> {
+    const id = await this.calculateHash({
+      surrealql,
+      params
+    });
+
     const tx = await this.local.tx();
     const [incantationData] = await tx.query(`
-      LET $id = crypto::blake3({
-        surrealql: $surrealql,
-        params: $params
-      });
       UPSERT _spooky_incantation:$id CONTENT {
         id: $id,
         surrealql: $surrealql,
@@ -25,8 +26,8 @@ export class QueryManager {
         ttl: $ttl
       };
     `, {
+      id,
       surrealql,
-      params,
       lastActiveAt: new Date(),
       ttl: "10m",
     }).collect<IncantationData[]>();
@@ -101,35 +102,25 @@ export class QueryManager {
   }
 
   private async startLiveQuery(incantation: Incantation) {
-    const subscription = await this.remote.getClient().live(
+    const queryUuid = await this.remote.getClient().live(
       new Table("_spooky_incantation"),
     );
 
-    (async () => {
-        try {
-            // @ts-ignore
-            for await (const msg of subscription) {
-                // Here we might receive updates about the incantation meta.
-                // For actual DATA updates, we might need a different mechanism or 
-                // the incantation query itself needs to be LIVE?
-                // The README usually implies Live Query on the data result?
-                // But specifically for Incantation logic, we listen to the meta table.
-            }
-        } catch (e) {
-            console.error(e);
-        }
-    })();
+    await this.remote.subscribeLive(queryUuid.toString(), async (action, result) => {
+         if (action === 'UPDATE' || action === 'CREATE') {
+             const resultId = (result as any)?.id?.toString();
+             const targetId = incantation.id.toString();
+             
+             if (resultId === targetId) {
+                 await this.refreshLocal(incantation.id.id.toString());
+             }
+         }
+    });
   }
 
-  private async calculateHash(data: any): Promise<number> {
-    const str = JSON.stringify(data);
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-        const char = str.charCodeAt(i);
-        hash = (hash << 5) - hash + char;
-        hash = hash & hash; 
-    }
-    return hash;
+  private async calculateHash(data: any): Promise<string> {
+    const result = await (this.local.getClient().query("RETURN crypto::blake3($data)", { data }) as any).collect();
+    return result[0] as string;
   }
 
   private notifySubscribers(queryHash: QueryHash, data: any) {

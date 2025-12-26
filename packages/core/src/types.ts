@@ -21,7 +21,7 @@ export type QueryHash = string;
 export interface Incantation {
   id: RecordId<QueryHash>;
   surrealql: string;
-  hash: number;
+  hash: string;
   lastActiveAt: number;
 }
 
