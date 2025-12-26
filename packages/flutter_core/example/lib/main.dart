@@ -58,6 +58,11 @@ class _SpookyExampleAppState extends State<SpookyExampleApp>
     text: 'ws://127.0.0.1:8000/rpc',
   );
 
+  bool _useDevSidecar = false;
+  final TextEditingController _devSidecarPortController = TextEditingController(
+    text: '5000',
+  );
+
   bool get _isInitialized => _client != null;
 
   void _log(String message) {
@@ -92,14 +97,6 @@ class _SpookyExampleAppState extends State<SpookyExampleApp>
       final dbPath = '${Directory.current.path}/db';
       await Directory(dbPath).create(recursive: true);
 
-      // In a real app, endpoint might come from user input or env vars
-      // For this example, we'll assume a local server or embedded if endpoint is null
-      // But standard login usually requires a remote endpoint.
-      // If using embedded, signin might work differently or not be needed if not using auth.
-      // Assuming user wants to test Auth, let's point to a default local instance or just use embedded with auth if supported.
-      // For now, let's keep it simple and assume we might connect to a server if we want strict auth,
-      // OR we are testing auth on the embedded one if configured.
-
       final config = SpookyConfig(
         schemaSurql: SURQL_SCHEMA,
         schema: 'test_schema',
@@ -110,6 +107,9 @@ class _SpookyExampleAppState extends State<SpookyExampleApp>
           endpoint: _endpointController.text.isEmpty
               ? null
               : _endpointController.text,
+          devSidecarPort: _useDevSidecar
+              ? int.tryParse(_devSidecarPortController.text)
+              : null,
         ),
       );
 
@@ -441,6 +441,43 @@ class _SpookyExampleAppState extends State<SpookyExampleApp>
                 ),
               ),
             ),
+            const SizedBox(height: 10),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Checkbox(
+                  value: _useDevSidecar,
+                  onChanged: (val) {
+                    setState(() {
+                      _useDevSidecar = val ?? false;
+                    });
+                  },
+                ),
+                const Text("Enable Dev Sidecar (Host Local Server)"),
+              ],
+            ),
+            if (_useDevSidecar) ...[
+              SizedBox(
+                width: 300,
+                child: TextField(
+                  controller: _devSidecarPortController,
+                  decoration: const InputDecoration(
+                    labelText: "Sidecar Port",
+                    hintText: "5000",
+                    border: OutlineInputBorder(),
+                  ),
+                  keyboardType: TextInputType.number,
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                "Credentials: root / root",
+                style: TextStyle(
+                  fontStyle: FontStyle.italic,
+                  color: Colors.grey,
+                ),
+              ),
+            ],
             const SizedBox(height: 20),
             ElevatedButton.icon(
               onPressed: _initSpooky,

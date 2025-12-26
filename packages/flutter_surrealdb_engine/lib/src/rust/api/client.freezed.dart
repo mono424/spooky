@@ -22,18 +22,21 @@ mixin _$StorageMode {
     required TResult Function() memory,
     required TResult Function(String path) disk,
     required TResult Function(String url) remote,
+    required TResult Function(String path, int port) devSidecar,
   }) => throw _privateConstructorUsedError;
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
     TResult? Function()? memory,
     TResult? Function(String path)? disk,
     TResult? Function(String url)? remote,
+    TResult? Function(String path, int port)? devSidecar,
   }) => throw _privateConstructorUsedError;
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
     TResult Function()? memory,
     TResult Function(String path)? disk,
     TResult Function(String url)? remote,
+    TResult Function(String path, int port)? devSidecar,
     required TResult orElse(),
   }) => throw _privateConstructorUsedError;
   @optionalTypeArgs
@@ -41,18 +44,21 @@ mixin _$StorageMode {
     required TResult Function(StorageMode_Memory value) memory,
     required TResult Function(StorageMode_Disk value) disk,
     required TResult Function(StorageMode_Remote value) remote,
+    required TResult Function(StorageMode_DevSidecar value) devSidecar,
   }) => throw _privateConstructorUsedError;
   @optionalTypeArgs
   TResult? mapOrNull<TResult extends Object?>({
     TResult? Function(StorageMode_Memory value)? memory,
     TResult? Function(StorageMode_Disk value)? disk,
     TResult? Function(StorageMode_Remote value)? remote,
+    TResult? Function(StorageMode_DevSidecar value)? devSidecar,
   }) => throw _privateConstructorUsedError;
   @optionalTypeArgs
   TResult maybeMap<TResult extends Object?>({
     TResult Function(StorageMode_Memory value)? memory,
     TResult Function(StorageMode_Disk value)? disk,
     TResult Function(StorageMode_Remote value)? remote,
+    TResult Function(StorageMode_DevSidecar value)? devSidecar,
     required TResult orElse(),
   }) => throw _privateConstructorUsedError;
 }
@@ -125,6 +131,7 @@ class _$StorageMode_MemoryImpl extends StorageMode_Memory {
     required TResult Function() memory,
     required TResult Function(String path) disk,
     required TResult Function(String url) remote,
+    required TResult Function(String path, int port) devSidecar,
   }) {
     return memory();
   }
@@ -135,6 +142,7 @@ class _$StorageMode_MemoryImpl extends StorageMode_Memory {
     TResult? Function()? memory,
     TResult? Function(String path)? disk,
     TResult? Function(String url)? remote,
+    TResult? Function(String path, int port)? devSidecar,
   }) {
     return memory?.call();
   }
@@ -145,6 +153,7 @@ class _$StorageMode_MemoryImpl extends StorageMode_Memory {
     TResult Function()? memory,
     TResult Function(String path)? disk,
     TResult Function(String url)? remote,
+    TResult Function(String path, int port)? devSidecar,
     required TResult orElse(),
   }) {
     if (memory != null) {
@@ -159,6 +168,7 @@ class _$StorageMode_MemoryImpl extends StorageMode_Memory {
     required TResult Function(StorageMode_Memory value) memory,
     required TResult Function(StorageMode_Disk value) disk,
     required TResult Function(StorageMode_Remote value) remote,
+    required TResult Function(StorageMode_DevSidecar value) devSidecar,
   }) {
     return memory(this);
   }
@@ -169,6 +179,7 @@ class _$StorageMode_MemoryImpl extends StorageMode_Memory {
     TResult? Function(StorageMode_Memory value)? memory,
     TResult? Function(StorageMode_Disk value)? disk,
     TResult? Function(StorageMode_Remote value)? remote,
+    TResult? Function(StorageMode_DevSidecar value)? devSidecar,
   }) {
     return memory?.call(this);
   }
@@ -179,6 +190,7 @@ class _$StorageMode_MemoryImpl extends StorageMode_Memory {
     TResult Function(StorageMode_Memory value)? memory,
     TResult Function(StorageMode_Disk value)? disk,
     TResult Function(StorageMode_Remote value)? remote,
+    TResult Function(StorageMode_DevSidecar value)? devSidecar,
     required TResult orElse(),
   }) {
     if (memory != null) {
@@ -269,6 +281,7 @@ class _$StorageMode_DiskImpl extends StorageMode_Disk {
     required TResult Function() memory,
     required TResult Function(String path) disk,
     required TResult Function(String url) remote,
+    required TResult Function(String path, int port) devSidecar,
   }) {
     return disk(path);
   }
@@ -279,6 +292,7 @@ class _$StorageMode_DiskImpl extends StorageMode_Disk {
     TResult? Function()? memory,
     TResult? Function(String path)? disk,
     TResult? Function(String url)? remote,
+    TResult? Function(String path, int port)? devSidecar,
   }) {
     return disk?.call(path);
   }
@@ -289,6 +303,7 @@ class _$StorageMode_DiskImpl extends StorageMode_Disk {
     TResult Function()? memory,
     TResult Function(String path)? disk,
     TResult Function(String url)? remote,
+    TResult Function(String path, int port)? devSidecar,
     required TResult orElse(),
   }) {
     if (disk != null) {
@@ -303,6 +318,7 @@ class _$StorageMode_DiskImpl extends StorageMode_Disk {
     required TResult Function(StorageMode_Memory value) memory,
     required TResult Function(StorageMode_Disk value) disk,
     required TResult Function(StorageMode_Remote value) remote,
+    required TResult Function(StorageMode_DevSidecar value) devSidecar,
   }) {
     return disk(this);
   }
@@ -313,6 +329,7 @@ class _$StorageMode_DiskImpl extends StorageMode_Disk {
     TResult? Function(StorageMode_Memory value)? memory,
     TResult? Function(StorageMode_Disk value)? disk,
     TResult? Function(StorageMode_Remote value)? remote,
+    TResult? Function(StorageMode_DevSidecar value)? devSidecar,
   }) {
     return disk?.call(this);
   }
@@ -323,6 +340,7 @@ class _$StorageMode_DiskImpl extends StorageMode_Disk {
     TResult Function(StorageMode_Memory value)? memory,
     TResult Function(StorageMode_Disk value)? disk,
     TResult Function(StorageMode_Remote value)? remote,
+    TResult Function(StorageMode_DevSidecar value)? devSidecar,
     required TResult orElse(),
   }) {
     if (disk != null) {
@@ -422,6 +440,7 @@ class _$StorageMode_RemoteImpl extends StorageMode_Remote {
     required TResult Function() memory,
     required TResult Function(String path) disk,
     required TResult Function(String url) remote,
+    required TResult Function(String path, int port) devSidecar,
   }) {
     return remote(url);
   }
@@ -432,6 +451,7 @@ class _$StorageMode_RemoteImpl extends StorageMode_Remote {
     TResult? Function()? memory,
     TResult? Function(String path)? disk,
     TResult? Function(String url)? remote,
+    TResult? Function(String path, int port)? devSidecar,
   }) {
     return remote?.call(url);
   }
@@ -442,6 +462,7 @@ class _$StorageMode_RemoteImpl extends StorageMode_Remote {
     TResult Function()? memory,
     TResult Function(String path)? disk,
     TResult Function(String url)? remote,
+    TResult Function(String path, int port)? devSidecar,
     required TResult orElse(),
   }) {
     if (remote != null) {
@@ -456,6 +477,7 @@ class _$StorageMode_RemoteImpl extends StorageMode_Remote {
     required TResult Function(StorageMode_Memory value) memory,
     required TResult Function(StorageMode_Disk value) disk,
     required TResult Function(StorageMode_Remote value) remote,
+    required TResult Function(StorageMode_DevSidecar value) devSidecar,
   }) {
     return remote(this);
   }
@@ -466,6 +488,7 @@ class _$StorageMode_RemoteImpl extends StorageMode_Remote {
     TResult? Function(StorageMode_Memory value)? memory,
     TResult? Function(StorageMode_Disk value)? disk,
     TResult? Function(StorageMode_Remote value)? remote,
+    TResult? Function(StorageMode_DevSidecar value)? devSidecar,
   }) {
     return remote?.call(this);
   }
@@ -476,6 +499,7 @@ class _$StorageMode_RemoteImpl extends StorageMode_Remote {
     TResult Function(StorageMode_Memory value)? memory,
     TResult Function(StorageMode_Disk value)? disk,
     TResult Function(StorageMode_Remote value)? remote,
+    TResult Function(StorageMode_DevSidecar value)? devSidecar,
     required TResult orElse(),
   }) {
     if (remote != null) {
@@ -497,4 +521,175 @@ abstract class StorageMode_Remote extends StorageMode {
   @JsonKey(includeFromJson: false, includeToJson: false)
   _$$StorageMode_RemoteImplCopyWith<_$StorageMode_RemoteImpl> get copyWith =>
       throw _privateConstructorUsedError;
+}
+
+/// @nodoc
+abstract class _$$StorageMode_DevSidecarImplCopyWith<$Res> {
+  factory _$$StorageMode_DevSidecarImplCopyWith(
+    _$StorageMode_DevSidecarImpl value,
+    $Res Function(_$StorageMode_DevSidecarImpl) then,
+  ) = __$$StorageMode_DevSidecarImplCopyWithImpl<$Res>;
+  @useResult
+  $Res call({String path, int port});
+}
+
+/// @nodoc
+class __$$StorageMode_DevSidecarImplCopyWithImpl<$Res>
+    extends _$StorageModeCopyWithImpl<$Res, _$StorageMode_DevSidecarImpl>
+    implements _$$StorageMode_DevSidecarImplCopyWith<$Res> {
+  __$$StorageMode_DevSidecarImplCopyWithImpl(
+    _$StorageMode_DevSidecarImpl _value,
+    $Res Function(_$StorageMode_DevSidecarImpl) _then,
+  ) : super(_value, _then);
+
+  /// Create a copy of StorageMode
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({Object? path = null, Object? port = null}) {
+    return _then(
+      _$StorageMode_DevSidecarImpl(
+        path: null == path
+            ? _value.path
+            : path // ignore: cast_nullable_to_non_nullable
+                  as String,
+        port: null == port
+            ? _value.port
+            : port // ignore: cast_nullable_to_non_nullable
+                  as int,
+      ),
+    );
+  }
+}
+
+/// @nodoc
+
+class _$StorageMode_DevSidecarImpl extends StorageMode_DevSidecar {
+  const _$StorageMode_DevSidecarImpl({required this.path, required this.port})
+    : super._();
+
+  @override
+  final String path;
+  @override
+  final int port;
+
+  @override
+  String toString() {
+    return 'StorageMode.devSidecar(path: $path, port: $port)';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$StorageMode_DevSidecarImpl &&
+            (identical(other.path, path) || other.path == path) &&
+            (identical(other.port, port) || other.port == port));
+  }
+
+  @override
+  int get hashCode => Object.hash(runtimeType, path, port);
+
+  /// Create a copy of StorageMode
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  @pragma('vm:prefer-inline')
+  _$$StorageMode_DevSidecarImplCopyWith<_$StorageMode_DevSidecarImpl>
+  get copyWith =>
+      __$$StorageMode_DevSidecarImplCopyWithImpl<_$StorageMode_DevSidecarImpl>(
+        this,
+        _$identity,
+      );
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function() memory,
+    required TResult Function(String path) disk,
+    required TResult Function(String url) remote,
+    required TResult Function(String path, int port) devSidecar,
+  }) {
+    return devSidecar(path, port);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function()? memory,
+    TResult? Function(String path)? disk,
+    TResult? Function(String url)? remote,
+    TResult? Function(String path, int port)? devSidecar,
+  }) {
+    return devSidecar?.call(path, port);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function()? memory,
+    TResult Function(String path)? disk,
+    TResult Function(String url)? remote,
+    TResult Function(String path, int port)? devSidecar,
+    required TResult orElse(),
+  }) {
+    if (devSidecar != null) {
+      return devSidecar(path, port);
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(StorageMode_Memory value) memory,
+    required TResult Function(StorageMode_Disk value) disk,
+    required TResult Function(StorageMode_Remote value) remote,
+    required TResult Function(StorageMode_DevSidecar value) devSidecar,
+  }) {
+    return devSidecar(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(StorageMode_Memory value)? memory,
+    TResult? Function(StorageMode_Disk value)? disk,
+    TResult? Function(StorageMode_Remote value)? remote,
+    TResult? Function(StorageMode_DevSidecar value)? devSidecar,
+  }) {
+    return devSidecar?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(StorageMode_Memory value)? memory,
+    TResult Function(StorageMode_Disk value)? disk,
+    TResult Function(StorageMode_Remote value)? remote,
+    TResult Function(StorageMode_DevSidecar value)? devSidecar,
+    required TResult orElse(),
+  }) {
+    if (devSidecar != null) {
+      return devSidecar(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class StorageMode_DevSidecar extends StorageMode {
+  const factory StorageMode_DevSidecar({
+    required final String path,
+    required final int port,
+  }) = _$StorageMode_DevSidecarImpl;
+  const StorageMode_DevSidecar._() : super._();
+
+  String get path;
+  int get port;
+
+  /// Create a copy of StorageMode
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  _$$StorageMode_DevSidecarImplCopyWith<_$StorageMode_DevSidecarImpl>
+  get copyWith => throw _privateConstructorUsedError;
 }

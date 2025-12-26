@@ -911,9 +911,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         return StorageMode_Disk(path: dco_decode_String(raw[1]));
       case 2:
         return StorageMode_Remote(url: dco_decode_String(raw[1]));
+      case 3:
+        return StorageMode_DevSidecar(
+          path: dco_decode_String(raw[1]),
+          port: dco_decode_u_16(raw[2]),
+        );
       default:
         throw Exception("unreachable");
     }
+  }
+
+  @protected
+  int dco_decode_u_16(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as int;
   }
 
   @protected
@@ -1024,9 +1035,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case 2:
         var var_url = sse_decode_String(deserializer);
         return StorageMode_Remote(url: var_url);
+      case 3:
+        var var_path = sse_decode_String(deserializer);
+        var var_port = sse_decode_u_16(deserializer);
+        return StorageMode_DevSidecar(path: var_path, port: var_port);
       default:
         throw UnimplementedError('');
     }
+  }
+
+  @protected
+  int sse_decode_u_16(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getUint16();
   }
 
   @protected
@@ -1153,7 +1174,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case StorageMode_Remote(url: final url):
         sse_encode_i_32(2, serializer);
         sse_encode_String(url, serializer);
+      case StorageMode_DevSidecar(path: final path, port: final port):
+        sse_encode_i_32(3, serializer);
+        sse_encode_String(path, serializer);
+        sse_encode_u_16(port, serializer);
     }
+  }
+
+  @protected
+  void sse_encode_u_16(int self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putUint16(self);
   }
 
   @protected
@@ -1232,10 +1263,6 @@ class SurrealDbImpl extends RustOpaque implements SurrealDb {
       .api
       .crateApiClientSurrealDbMerge(that: this, resource: resource, data: data);
 
-  /// Execute a raw SQL query.
-  /// `vars` should be a JSON string of bind variables, e.g. `{"id": "...", "val": 123}`.
-  /// Execute a raw SQL query.
-  /// `vars` should be a JSON string of bind variables, e.g. `{"id": "...", "val": 123}`.
   Future<String> query({required String sql, String? vars}) => RustLib
       .instance
       .api

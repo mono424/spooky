@@ -4,6 +4,8 @@ class DatabaseConfig {
   final String namespace;
   final String database;
   final String? token;
+  final String? devUrl;
+  final int? devSidecarPort;
 
   DatabaseConfig({
     this.endpoint,
@@ -11,6 +13,8 @@ class DatabaseConfig {
     required this.namespace,
     required this.database,
     this.token,
+    this.devUrl,
+    this.devSidecarPort,
   });
 }
 
@@ -44,7 +48,6 @@ class RecordId {
   @override
   int get hashCode => table.hashCode ^ id.hashCode;
 }
-
 
 // Similar to Incantation in TS
 class Incantation {

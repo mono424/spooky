@@ -9,6 +9,8 @@ import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'client.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `get_db`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ServerGuard`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `drop`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SurrealDb>>
 abstract class SurrealDb implements RustOpaqueInterface {
@@ -29,10 +31,6 @@ abstract class SurrealDb implements RustOpaqueInterface {
 
   Future<String> merge({required String resource, String? data});
 
-  /// Execute a raw SQL query.
-  /// `vars` should be a JSON string of bind variables, e.g. `{"id": "...", "val": 123}`.
-  /// Execute a raw SQL query.
-  /// `vars` should be a JSON string of bind variables, e.g. `{"id": "...", "val": 123}`.
   Future<String> query({required String sql, String? vars});
 
   Future<void> queryBegin();
@@ -61,4 +59,10 @@ sealed class StorageMode with _$StorageMode {
   const factory StorageMode.memory() = StorageMode_Memory;
   const factory StorageMode.disk({required String path}) = StorageMode_Disk;
   const factory StorageMode.remote({required String url}) = StorageMode_Remote;
+
+  /// Starts a local sidecar server connection (Desktop only)
+  const factory StorageMode.devSidecar({
+    required String path,
+    required int port,
+  }) = StorageMode_DevSidecar;
 }

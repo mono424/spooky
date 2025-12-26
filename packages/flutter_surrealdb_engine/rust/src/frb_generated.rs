@@ -1167,10 +1167,25 @@ impl SseDecode for crate::api::client::StorageMode {
                 let mut var_url = <String>::sse_decode(deserializer);
                 return crate::api::client::StorageMode::Remote { url: var_url };
             }
+            3 => {
+                let mut var_path = <String>::sse_decode(deserializer);
+                let mut var_port = <u16>::sse_decode(deserializer);
+                return crate::api::client::StorageMode::DevSidecar {
+                    path: var_path,
+                    port: var_port,
+                };
+            }
             _ => {
                 unimplemented!("");
             }
         }
+    }
+}
+
+impl SseDecode for u16 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        deserializer.cursor.read_u16::<NativeEndian>().unwrap()
     }
 }
 
@@ -1288,6 +1303,12 @@ impl flutter_rust_bridge::IntoDart for crate::api::client::StorageMode {
             crate::api::client::StorageMode::Remote { url } => {
                 [2.into_dart(), url.into_into_dart().into_dart()].into_dart()
             }
+            crate::api::client::StorageMode::DevSidecar { path, port } => [
+                3.into_dart(),
+                path.into_into_dart().into_dart(),
+                port.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
             _ => {
                 unimplemented!("");
             }
@@ -1373,10 +1394,22 @@ impl SseEncode for crate::api::client::StorageMode {
                 <i32>::sse_encode(2, serializer);
                 <String>::sse_encode(url, serializer);
             }
+            crate::api::client::StorageMode::DevSidecar { path, port } => {
+                <i32>::sse_encode(3, serializer);
+                <String>::sse_encode(path, serializer);
+                <u16>::sse_encode(port, serializer);
+            }
             _ => {
                 unimplemented!("");
             }
         }
+    }
+}
+
+impl SseEncode for u16 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        serializer.cursor.write_u16::<NativeEndian>(self).unwrap();
     }
 }
 

@@ -12,7 +12,12 @@ class LocalDatabaseService extends AbstractDatabaseService {
     final client = await SurrealDb.connect(
       mode: config.path == ":memory:"
           ? StorageMode.memory()
-          : StorageMode.disk(path: config.path),
+          : (config.devSidecarPort != null
+                ? StorageMode.devSidecar(
+                    path: config.path,
+                    port: config.devSidecarPort!,
+                  )
+                : StorageMode.disk(path: config.path)),
     );
     return LocalDatabaseService._(client, config);
   }
