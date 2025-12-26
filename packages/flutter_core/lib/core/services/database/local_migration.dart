@@ -84,8 +84,9 @@ class LocalMigration {
           final firstElement = resArray.items.first;
           if (firstElement is SurrealObject) {
             final remoteHashVal = firstElement.fields['hash'];
-            // SurrealStrand.toString() returns the string value
-            final remoteHash = remoteHashVal?.toString();
+            // SurrealStrand.toString() returns the JSON representation (quoted)
+            // We use .v to get the raw String value
+            final remoteHash = remoteHashVal?.v?.toString();
 
             if (remoteHash != null && remoteHash == hash) {
               return true;
