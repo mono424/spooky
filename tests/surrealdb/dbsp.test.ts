@@ -405,4 +405,70 @@ describe('DBSP Module Integration', () => {
         expect(up3_ord.result_ids).toContain("items:2"); // 20
         expect(up3_ord.result_ids).not.toContain("items:1"); // 10 (smallest, evicted)
     });
+
+    test('should handle complex AND/OR and multi-field ORDER BY', async () => {
+        // Setup:
+        // Items:
+        // 1. { category: 'A', score: 10, active: true } (id: items:1)
+        // 2. { category: 'A', score: 20, active: false } (id: items:2)
+        // 3. { category: 'B', score: 10, active: true } (id: items:3)
+        // 4. { category: 'A', score: 30, active: true } (id: items:4)
+        
+        // Query 1: AND/OR
+        // WHERE (category='A' OR category='B') AND active=true
+        // Matches: 1, 3, 4. (2 is inactive)
+        
+        // Query 2: Multi-field ORDER BY
+        // ORDER BY category ASC, score DESC LIMIT 2
+        // Sorted:
+        // A, 30 (4)
+        // A, 20 (2)
+        // A, 10 (1)
+        // B, 10 (3)
+        // Top 2: 4, 2. (items:4, items:2)
+        
+        const sqlFilter = "SELECT * FROM items WHERE (category = 'A' OR category = 'B') AND active = true";
+        const sqlOrder = "SELECT * FROM items ORDER BY category ASC, score DESC LIMIT 2";
+        
+        const Q = `
+            LET $s0 = fn::dbsp::get_state();
+            
+            LET $r1 = mod::dbsp::register_query("complex_filter", "${sqlFilter}", $s0);
+            LET $s1 = $r1.new_state;
+            
+            LET $r2 = mod::dbsp::register_query("multi_order", "${sqlOrder}", $s1);
+            LET $s2 = $r2.new_state;
+            
+            LET $i1 = { category: 'A', score: 10, active: true };
+            LET $i2 = { category: 'A', score: 20, active: false };
+            LET $i3 = { category: 'B', score: 10, active: true };
+            LET $i4 = { category: 'A', score: 30, active: true };
+            
+            LET $res = mod::dbsp::ingest("items", "CREATE", "items:1", $i1, $s2);
+            LET $res = mod::dbsp::ingest("items", "CREATE", "items:2", $i2, $res.new_state);
+            LET $res = mod::dbsp::ingest("items", "CREATE", "items:3", $i3, $res.new_state);
+            LET $res = mod::dbsp::ingest("items", "CREATE", "items:4", $i4, $res.new_state);
+            
+            RETURN $res.updates;
+        `;
+        
+        const res = await runQuery(Q);
+        const updates = res.length > 0 ? res[res.length-1] : [];
+        
+        // Check Filter: {1, 3, 4}
+        const uf = updates.find((u: any) => u.query_id === "complex_filter");
+        expect(uf).toBeDefined();
+        expect(uf.result_ids).toContain("items:1");
+        expect(uf.result_ids).toContain("items:3");
+        expect(uf.result_ids).toContain("items:4");
+        expect(uf.result_ids).not.toContain("items:2"); // active=false
+        
+        // Check Order: {4, 2}
+        const uo = updates.find((u: any) => u.query_id === "multi_order");
+        expect(uo).toBeDefined();
+        expect(uo.result_ids).toContain("items:4"); // A, 30
+        expect(uo.result_ids).toContain("items:2"); // A, 20
+        expect(uo.result_ids).not.toContain("items:1"); // A, 10 (3rd in A)
+        expect(uo.result_ids).not.toContain("items:3"); // B (after A)
+    });
 });
