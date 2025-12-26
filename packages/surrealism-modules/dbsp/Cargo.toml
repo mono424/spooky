@@ -20,3 +20,5 @@ ulid = "=1.1.0"
 # Dual getrandom config is required due to transitive deps
 getrandom = { version = "0.3", features = ["wasm_js"] }
 getrandom_old = { package = "getrandom", version = "0.2", features = ["js"] }
+surrealdb-core = { version = "2.3", default-features = false }
+anyhow = "1.0"
