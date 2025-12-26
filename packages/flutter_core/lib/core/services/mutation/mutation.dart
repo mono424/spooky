@@ -14,14 +14,23 @@ class MutationManager {
   EventSystem<MutationEvent> get getEvents => events;
 
   Future<String> create(String table, Map<String, dynamic> data) async {
-    final res = await db.query(
+    final resRaw = await db.query(
       mutationCreateQuery,
       vars: {'table': table, 'data': data},
     );
 
-    print('schau mal das ist mein res: ');
-    print(SurrealDecoder.decode(res, removeNulls: true));
+    final [response, ...] =
+        SurrealDecoder.decodeNative(resRaw, removeNulls: true) as List;
 
+    if (response != null && response['error'] != null) {
+      throw Exception('Mutation Error: ${response['error']}');
+    }
+
+    if (response == null ||
+        response['mutation_id'] == null ||
+        response['target'] == null) {
+      throw Exception('Response is not as expected ${response.toString()}');
+    }
     // Create payload for event/sync
     // Note: In a real app we might parse the result to get the actual ID
     final payload = MutationPayload(

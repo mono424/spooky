@@ -28,6 +28,6 @@ abstract class AbstractDatabaseService {
   /// Exports the database to the specified path.
   /// Useful for forcing a flush/backup.
   Future<void> export(String path) async {
-    client?.export_(path: path);
+    await client?.export_(path: path);
   }
 }
