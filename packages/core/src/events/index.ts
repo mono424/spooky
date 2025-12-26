@@ -1,6 +1,8 @@
+export type EventPayloadDefinition<P> = ([P] extends [never] ? { payload: undefined } : { payload: P })
+
 export type EventDefinition<T extends string, P> = {
   type: T;
-} & ([P] extends [never] ? {} : { payload: P });
+} & EventPayloadDefinition<P>;
 
 export type EventTypeMap = Record<
   string,
@@ -8,6 +10,9 @@ export type EventTypeMap = Record<
 >;
 
 export type Event<E extends EventTypeMap, T extends EventType<E>> = E[T];
+
+export type EventPayload<E extends EventTypeMap, T extends EventType<E>> =
+  E[T]["payload"]
 
 export type EventTypes<E extends EventTypeMap> = (keyof E)[];
 
@@ -72,6 +77,14 @@ export class EventSystem<E extends EventTypeMap> {
     return id;
   }
 
+  subscribeMany<T extends EventType<E>>(
+    types: T[],
+    handler: EventHandler<E, T>,
+    options?: EventSubscriptionOptions
+  ): number[] {
+    return types.map((type) => this.subscribe(type, handler, options));
+  }
+
   unsubscribe(id: number): boolean {
     const type = this.subscribersTypeMap.get(id);
     if (type) {
@@ -82,6 +95,15 @@ export class EventSystem<E extends EventTypeMap> {
     return false;
   }
 
+  emit<T extends EventType<E>, P extends EventPayload<E, T>>(type: T, payload: P): void {
+    const event = {
+      type,
+      payload,
+    } as unknown as Event<E, T>;
+    this.addEvent(event);
+  }
+  /// addEvent method to add an event to the buffer
+  /// similiar to emit, but takes a full event object
   addEvent<T extends EventType<E>>(event: Event<E, T>): void {
     this.buffer.push(event);
     this.scheduleProcessing();
