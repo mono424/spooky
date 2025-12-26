@@ -22,6 +22,10 @@ DEFINE FIELD ClientId ON TABLE _spooky_incantation TYPE option<string>
 DEFINE FIELD Hash ON TABLE _spooky_incantation TYPE string
     PERMISSIONS FOR select, create, update WHERE true;
 
+-- The Radix Tree of Result IDs for efficient sync
+DEFINE FIELD Tree ON TABLE _spooky_incantation TYPE object
+    PERMISSIONS FOR select, create, update WHERE true;
+
 -- For garbage collection (Heartbeat)
 DEFINE FIELD LastActiveAt ON TABLE _spooky_incantation TYPE datetime DEFAULT time::now()
     PERMISSIONS FOR select, create, update WHERE true;
@@ -35,6 +39,16 @@ DEFINE FIELD TTL ON TABLE _spooky_incantation TYPE duration
 DEFINE EVENT _spooky_cascade_delete_lookup ON TABLE _spooky_incantation WHEN $event = "DELETE" THEN {
     DELETE _spooky_incantation_lookup WHERE IncantationId = $before.Id;
     DELETE _spooky_incantation_tail WHERE IncantationId = $before.Id;
+};
+
+-- Register with DBSP on creation
+DEFINE EVENT _spooky_dbsp_register ON TABLE _spooky_incantation WHEN $event = "CREATE" THEN {
+    fn::dbsp::register_query($after.Id, $after.SurrealQL);
+};
+
+-- Unregister from DBSP on deletion
+DEFINE EVENT _spooky_dbsp_cleanup ON TABLE _spooky_incantation WHEN $event = "DELETE" THEN {
+    fn::dbsp::unregister_query($before.Id);
 };
 
 

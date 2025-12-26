@@ -211,6 +211,11 @@ pub fn generate_spooky_events(
         events.push_str(&format!("-- Table: {} Mutation\n", table_name));
         events.push_str(&format!("DEFINE EVENT OVERWRITE _spooky_{}_mutation ON TABLE {}\n", table_name, table_name));
         events.push_str("WHEN $before != $after AND $event != \"DELETE\"\nTHEN {\n");
+        // Inject DBSP Ingest Call
+        // Args: table, operation, id, record
+        // ID: Use $after.id (since it's not a DELETE)
+        // Operation: $event (CREATE or UPDATE)
+        events.push_str(&format!("    LET $dbsp_ok = mod::dbsp::ingest('{}', $event, <string>$after.id, $after);\n\n", table_name));
 
         // 1. New Intrinsic Hash
         // DO NOT hash the object as a string. Instead, construct the object with field hashes and calculate _xor.
@@ -517,6 +522,13 @@ pub fn generate_spooky_events(
         events.push_str(&format!("-- Table: {} Deletion\n", table_name));
         events.push_str(&format!("DEFINE EVENT OVERWRITE _spooky_{}_delete ON TABLE {}\n", table_name, table_name));
         events.push_str("WHEN $event = \"DELETE\"\nTHEN {\n");
+        // Inject DBSP Ingest Call
+        // Args: table, operation, id, record
+        // ID: Use $before.id
+        // Operation: "DELETE"
+        // Record: $before (data being deleted)
+        events.push_str(&format!("    LET $dbsp_ok = mod::dbsp::ingest('{}', \"DELETE\", <string>$before.id, $before);\n\n", table_name));
+
         events.push_str("    LET $old_hash_data = (SELECT * FROM ONLY _spooky_data_hash WHERE RecordId = $before.id);\n");
         events.push_str("    LET $old_total = $old_hash_data.TotalHash;\n\n");
 
