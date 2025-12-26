@@ -338,11 +338,17 @@ describe('DBSP Module Integration', () => {
 
     test('should handle ORDER BY and OR logic', async () => {
         // Setup: ORDER BY val DESC LIMIT 2
-        // Data: A(10), B(20), C(5).
-        // OR Logic: val=10 OR val=5
+        // Data: 
+        // 1. items:1 (val=10)
+        // 2. items:2 (val=20)
+        // 3. items:3 (val=100) -> Should be Top 1 in Val DESC sort.
+        
+        // ID Sort Limit 2: {items:1, items:2}
+        // Val DESC Limit 2: {items:3, items:2}
+        // Sets are DIFFERENT.
         
         const sqlOrder = "SELECT * FROM items ORDER BY val DESC LIMIT 2";
-        const sqlOr = "SELECT * FROM items WHERE val = 10 OR val = 5";
+        const sqlOr = "SELECT * FROM items WHERE val = 10 OR val = 100";
 
         const Q = `
             LET $s0 = fn::dbsp::get_state();
@@ -356,15 +362,15 @@ describe('DBSP Module Integration', () => {
             // Ingest
             LET $i1 = { id: 1, val: 10 };
             LET $i2 = { id: 2, val: 20 };
-            LET $i3 = { id: 3, val: 5 };
+            LET $i3 = { id: 3, val: 100 };
             
-            LET $res1 = mod::dbsp::ingest("items", "CREATE", "item:1", $i1, $s2);
+            LET $res1 = mod::dbsp::ingest("items", "CREATE", "items:1", $i1, $s2);
             LET $s3 = $res1.new_state;
             
-            LET $res2 = mod::dbsp::ingest("items", "CREATE", "item:2", $i2, $s3);
+            LET $res2 = mod::dbsp::ingest("items", "CREATE", "items:2", $i2, $s3);
             LET $s4 = $res2.new_state;
             
-            LET $res3 = mod::dbsp::ingest("items", "CREATE", "item:3", $i3, $s4);
+            LET $res3 = mod::dbsp::ingest("items", "CREATE", "items:3", $i3, $s4);
             
             RETURN {
                 up1: $res1.updates,
@@ -376,33 +382,27 @@ describe('DBSP Module Integration', () => {
         const res = await runQuery(Q);
         const R = (res && res.length > 0) ? res[res.length - 1] : {};
         
-        // Check OR view (val=10 OR val=5) -> Items 1 and 3 should be in. Item 2 (20) out.
-        // Check OR view (val=10 OR val=5) -> Items 1 and 3 should be in. Item 2 (20) out.
-        // Item 1 (10) added in step 1.
-        console.log("UP1 Updates:", JSON.stringify(R.up1, null, 2));
+        // Check OR view (val=10 OR val=100) -> Items 1 and 3 should be in. Item 2 (20) out.
+        // console.log("UP1 Updates:", JSON.stringify(R.up1, null, 2));
         const up1_or = R.up1.find((u: any) => u.query_id === "view_or");
         expect(up1_or).toBeDefined();
-        expect(up1_or.result_ids).toContain("item:1");
+        expect(up1_or.result_ids).toContain("items:1");
 
-        // Item 2 (20) added in step 2. Should NOT be in OR view.
+        // Item 2 (20) added.
         const up2_or = R.up2.find((u: any) => u.query_id === "view_or");
-        // It might be "defined" but empty or just not present if no change to set?
-        // If it was added to table but filtered out, no update to view.
-        if (up2_or) {
-             expect(up2_or.result_ids).not.toContain("item:2");
-        }
+        // Should not be in result set. If updated empty, fine.
+        if (up2_or) expect(up2_or.result_ids).not.toContain("items:2");
         
-        // Item 3 (5) added in step 3. Should be in OR view.
+        // Item 3 (100) added. Should be in OR view.
         const up3_or = R.up3.find((u: any) => u.query_id === "view_or");
         expect(up3_or).toBeDefined();
-        expect(up3_or.result_ids).toContain("item:3");
+        expect(up3_or.result_ids).toContain("items:3");
         
-        // Check ORDER BY view (DESC Limit 2) -> [20, 10]. (5 evicted/ignored)
-        // Step 3 state: {10, 20, 5}. Sorted DESC: 20, 10, 5. Top 2: 20, 10.
+        // Check ORDER BY view (DESC Limit 2) -> {items:3 (100), items:2 (20)}. Evict items:1 (10).
         const up3_ord = R.up3.find((u: any) => u.query_id === "view_order");
         expect(up3_ord).toBeDefined();
-        expect(up3_ord.result_ids).toContain("item:2"); // 20
-        expect(up3_ord.result_ids).toContain("item:1"); // 10
-        expect(up3_ord.result_ids).not.toContain("item:3"); // 5 (too small)
+        expect(up3_ord.result_ids).toContain("items:3"); // 100
+        expect(up3_ord.result_ids).toContain("items:2"); // 20
+        expect(up3_ord.result_ids).not.toContain("items:1"); // 10 (smallest, evicted)
     });
 });

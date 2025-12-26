@@ -591,7 +591,7 @@ fn register_query(id: String, plan_json: String, state: Value) -> Result<Value, 
         // Try parsing as SQL
         match converter::convert_surql_to_dbsp(&plan_json) {
             Ok(json_val) => {
-                println!("DBSP DEBUG: Converted SQL: {}", json_val);
+                // println!("DBSP DEBUG: Converted SQL: {}", json_val);
                 match serde_json::from_value::<Operator>(json_val) {
                     Ok(op) => op,
                     Err(e) => {

@@ -23,7 +23,7 @@ graph TD
 
     Client[Client App]:::client
     DB[(SurrealDB)]:::db
-    WASM[WASM Module (DBSP)]:::wasm
+    WASM["WASM Module (DBSP)"]:::wasm
     Syncgen[Syncgen Build Tool]
 
     subgraph Build Time
