@@ -36,6 +36,10 @@ class RecordId {
 
   const RecordId(this.table, this.id);
 
+  factory RecordId.fromString(String rawId) {
+    final [table, id] = rawId.split(':');
+    return RecordId(table, id);
+  }
   // Verhält sich wie in TS/Rust, wenn man es ausgibt
   @override
   String toString() => '$table:$id';

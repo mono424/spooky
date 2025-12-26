@@ -42,22 +42,6 @@ class SpookyClient {
     return SpookyClient._(config, local, remote, migrator, mutation);
   }
 
-  Future createEvent() async {
-    const data = {'username': 'timrsdodtdhy', 'password': '123'};
-
-    try {
-      await mutation.create('user', data);
-    } catch (e) {
-      if (e.toString().contains('Database index') &&
-          e.toString().contains('already contains')) {
-        // Ignore duplicate entry error
-        print("User already exists, skipping creation.");
-      } else {
-        rethrow;
-      }
-    }
-  }
-
   Future<void> close() async {
     await local.close();
     await remote.close();
