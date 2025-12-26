@@ -1,327 +1,323 @@
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
-use surrealdb_core::sql::{
-    Statement, Value as SqlValue, Expression, Operator as SqlOp, 
-    Number, Part, Field
-};
-use surrealdb_core::syn;
-use std::collections::HashSet;
 
-#[derive(Debug, Clone)]
-struct ParsedJoin {
-    left_table: String,
-    left_field: String,
-    right_table: String,
-    right_field: String,
-}
-
-#[derive(Debug, Clone)]
-struct ParsedFilter {
-    table: Option<String>,
-    field: String,
-    op: SqlOp,
-    value: SqlValue,
-}
-
-/// Converts a SurrealQL SELECT statement into a DBSP Operator JSON tree.
+/// Simple regex-based SQL parser to replace surrealdb-core dependency which breaks on WASM build
+/// Supports:
+/// SELECT * FROM table WHERE ...
+/// SELECT * FROM t1, t2 WHERE ...
+/// ... LIMIT n
+/// ... (SELECT ...) as field
 pub fn convert_surql_to_dbsp(sql: &str) -> Result<Value> {
-    let parsed = syn::parse(sql).map_err(|e| anyhow!("Parse error: {}", e))?;
-    let stmt = parsed.0.into_iter().next().ok_or_else(|| anyhow!("No statement found"))?;
-    process_statement(stmt)
-}
-
-fn process_statement(stmt: Statement) -> Result<Value> {
-    match stmt {
-        Statement::Select(select) => {
-            // 1. Identify Tables
-            let mut tables = Vec::new();
-            for w in select.what {
-                match w {
-                    SqlValue::Table(t) => tables.push(t.0.to_string()),
-                    _ => return Err(anyhow!("Only simple table selection supported (FROM table1, table2)")),
-                }
-            }
-            if tables.is_empty() {
-                return Err(anyhow!("No tables specified in FROM clause"));
-            }
-
-            // 2. Parse WHERE clause into disjoint conditions (Joins vs Filters)
-            let (mut filters, joins) = if let Some(cond) = select.cond {
-                parse_conditions(&cond.0)?
-            } else {
-                (Vec::new(), Vec::new())
-            };
-
-            // 3. Build Recursive Tree starting from the first table (Primary)
-            let root_table = tables[0].clone();
-            let mut visited = HashSet::new();
-            
-            let mut root_op = build_tree(&root_table, &tables, &joins, &mut filters, &mut visited)?;
-
-            // 4. Apply Projections (SELECT expr)
-            if !is_simple_wildcard(&select.expr) {
-                root_op = apply_projections(root_op, &select.expr)?;
-            }
-
-            // 5. Apply Limit
-            if let Some(limit) = select.limit {
-                let limit_val = match limit.0 {
-                    SqlValue::Number(n) => n.as_int() as usize,
-                    _ => 10
-                };
-                root_op = json!({
-                    "op": "limit",
-                    "limit": limit_val,
-                    "input": root_op
-                });
-            }
-
-            Ok(root_op)
-        },
-        Statement::Value(val) => {
-            if let SqlValue::Subquery(sub) = val {
-                let sql = sub.to_string();
-                let clean_sql = sql.trim_start_matches('(').trim_end_matches(')');
-                // We call the main public entry point which calls parse + process
-                convert_surql_to_dbsp(clean_sql)
-            } else {
-                Err(anyhow!("Unsupported value statement: {:?}", val))
-            }
-        },
-        _ => {
-            println!("Unsupported statement type: {:?}", stmt);
-            Err(anyhow!("Only SELECT statements are supported"))
-        }
-    }
-}
-
-fn is_simple_wildcard(exprs: &[Field]) -> bool {
-    if exprs.len() == 1 {
-        match &exprs[0] {
-            Field::All => return true,
-            _ => return false,
-        }
-    }
-    false
-}
-
-fn apply_projections(input: Value, exprs: &[Field]) -> Result<Value> {
-    let mut projections = Vec::new();
-
-    for field in exprs {
-        match field {
-            Field::All => {
-                projections.push(json!({ "type": "all" }));
-            },
-            Field::Single { expr, alias } => {
-                // Expr can be a Field (Idiom) or a Subquery
-                match expr {
-                    SqlValue::Idiom(idiom) => {
-                        let name = idiom.to_string(); // Simple field name
-                        projections.push(json!({ "type": "field", "name": name }));
-                    },
-                    SqlValue::Subquery(stmt) => {
-                        // Recursively parse the subquery
-                        // Subquery is Box<Statement>
-                        let sub_sql = stmt.to_string(); // Or re-parse from struct?
-                        // convert_surql_to_dbsp expects STR. 
-                        // But we have Statement struct.
-                        // We can modify convert_surql_to_dbsp to take Statement?
-                        // Or just reconstruct? to_string() works.
-                        let sub_op = convert_surql_to_dbsp(&sub_sql)?;
-                        
-                        let alias_name = if let Some(ident) = alias {
-                            ident.to_string()
-                        } else {
-                            "subquery".to_string()
-                        };
-
-                        projections.push(json!({
-                            "type": "subquery",
-                            "alias": alias_name,
-                            "plan": sub_op
-                        }));
-                    },
-                    _ => continue // Skip unsupported expressions
-                }
-            },
-            _ => continue // Skip other field types
-        }
-    }
-
-    Ok(json!({
-        "op": "project",
-        "input": input,
-        "projections": projections
-    }))
-}
-
-fn parse_conditions(expr_val: &SqlValue) -> Result<(Vec<ParsedFilter>, Vec<ParsedJoin>)> {
-    let mut filters = Vec::new();
-    let mut joins = Vec::new();
+    let clean_sql = sql.trim();
     
-    let mut exprs = Vec::new();
-    flatten_and(expr_val, &mut exprs);
+    // Extract LIMIT
+    let (mut query, limit) = extract_limit(clean_sql);
+    query = query.trim();
 
-    for expr in exprs {
-         if let SqlValue::Expression(e) = expr {
-            if let Expression::Binary { l, o, r } = *e.clone() {
-                let (l_table, l_field) = extract_field(&l).ok_or_else(|| anyhow!("Left side of condition must be a field"))?;
-                
-                if let Some((r_table, r_field)) = extract_field(&r) {
-                    let l_t = l_table.clone().unwrap_or_default();
-                    let r_t = r_table.clone().unwrap_or_default();
-                    
-                    if !l_t.is_empty() && !r_t.is_empty() && l_t != r_t {
-                        joins.push(ParsedJoin {
-                            left_table: l_t,
-                            left_field: l_field,
-                            right_table: r_t,
-                            right_field: r_field,
-                        });
-                        continue;
-                    }
-                }
+    // Extract SELECT ... FROM
+    // Use balanced search for FROM
+    let from_idx = find_keyword_balanced(query, " FROM ").ok_or(anyhow!("Missing FROM clause"))?;
+    
+    let select_part = query[6..from_idx].trim(); // skip "SELECT "
+    let rest = query[from_idx+6..].trim(); // skip " FROM "
 
-                filters.push(ParsedFilter {
-                    table: l_table,
-                    field: l_field,
-                    op: o,
-                    value: r,
-                });
-            }
-        }
+    // Extract WHERE
+    let (tables_part, where_part) = if let Some(where_idx) = find_keyword_balanced(rest, " WHERE ") {
+        (&rest[..where_idx], Some(&rest[where_idx+7..]))
+    } else {
+        (rest, None)
+    };
+
+    // Parse Tables
+    let tables: Vec<String> = tables_part.split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    
+    if tables.is_empty() {
+        return Err(anyhow!("No tables found"));
     }
 
-    Ok((filters, joins))
-}
-
-fn flatten_and(val: &SqlValue, out: &mut Vec<SqlValue>) {
-    if let SqlValue::Expression(expr) = val {
-        if let Expression::Binary { l, o, r } = *expr.clone() {
-             if let SqlOp::And = o {
-                 flatten_and(&l, out);
-                 flatten_and(&r, out);
-                 return;
-             }
-        }
-    }
-    out.push(val.clone());
-}
-
-fn extract_field(val: &SqlValue) -> Option<(Option<String>, String)> {
-    match val {
-        SqlValue::Idiom(idiom) => {
-            let parts = &idiom.0;
-            let clean = |p: &Part| p.to_string().trim_start_matches('.').to_string();
-            
-            if parts.len() == 1 {
-                 Some((None, clean(&parts[0])))
-            } else if parts.len() >= 2 {
-                 Some((Some(clean(&parts[0])), clean(&parts[1])))
-            } else {
-                None
-            }
-        },
-        _ => None
-    }
-}
-
-fn convert_value(val: &SqlValue) -> Option<(Value, bool)> {
-    match val {
-         SqlValue::Strand(s) => {
-             let str_val = s.0.clone();
-             if str_val.ends_with('*') {
-                 Some((str_val.trim_end_matches('*').to_string().into(), true))
-             } else {
-                 Some((str_val.into(), false))
-             }
-         },
-         SqlValue::Number(n) => {
-              match n {
-                 Number::Int(i) => Some((json!(i), false)),
-                 Number::Float(f) => Some((json!(f), false)),
-                 Number::Decimal(d) => Some((json!(d.to_string()), false)),
-                 _ => None
-             }
-         },
-         SqlValue::Bool(b) => Some((json!(b), false)),
-         SqlValue::Idiom(idiom) => {
-             // Check if it's a Param ($param...)
-             let s = idiom.to_string();
-             if s.contains("$parent") || s.contains("$") {
-                  // Special handling for params
-                  // Map $parent.author -> author via context?
-                  // We encode it as a Param object
-                  Some((json!({ "$param": s.trim_start_matches('$').trim_start_matches("parent.").to_string() }), false))
-             } else {
-                 None // Standard field?
-             }
-         },
-         SqlValue::Param(p) => {
-              Some((json!({ "$param": p.0.to_string() }), false))
-         },
-         _ => None 
-    }
-}
-
-fn build_tree(
-    current_table: &str, 
-    all_tables: &[String], 
-    joins: &[ParsedJoin], 
-    filters: &mut Vec<ParsedFilter>, 
-    visited: &mut HashSet<String>
-) -> Result<Value> {
-    visited.insert(current_table.to_string());
-
-    let mut op = json!({
+    let root_table = tables[0].clone();
+    
+    // Build Root Op
+    let mut root_op = json!({
         "op": "scan",
-        "table": current_table
+        "table": root_table
     });
 
-    let relevant_filters: Vec<_> = filters.iter().filter(|f| {
-        f.table.as_deref() == Some(current_table) || f.table.is_none()
-    }).collect();
-
-    for f in relevant_filters {
-         if let SqlOp::Equal = f.op {
-             if let Some((val, is_prefix)) = convert_value(&f.value) {
-                 let predicate = if is_prefix {
-                     json!({ "type": "prefix", "prefix": val })
-                 } else {
-                     json!({ "type": "eq", "field": f.field, "value": val })
-                 };
-
-                 op = json!({
-                     "op": "filter",
-                     "predicate": predicate,
-                     "input": op
-                 });
-             }
-         }
+    // Parse WHERE for Filters and Joins (BEFORE Projections)
+    if let Some(cond) = where_part {
+        root_op = apply_conditions(root_op, cond, &tables, &root_table)?;
     }
 
-    for join in joins {
-        let (other_table, my_field, other_field) = if join.left_table == current_table && !visited.contains(&join.right_table) {
-             (&join.right_table, &join.left_field, &join.right_field)
-        } else if join.right_table == current_table && !visited.contains(&join.left_table) {
-             (&join.left_table, &join.right_field, &join.left_field)
-        } else {
-            continue;
-        };
-
-        let right_op = build_tree(other_table, all_tables, joins, filters, visited)?;
-        
-        op = json!({
-            "op": "join",
-            "left": op,
-            "right": right_op,
-            "on": {
-                "left_field": my_field,
-                "right_field": other_field
-            }
+    // Parse Projections (if not just *)
+    if select_part != "*" {
+        if let Ok(projs) = parse_projections(select_part) {
+            root_op = json!({
+                "op": "project",
+                "input": root_op,
+                "projections": projs
+            });
+        }
+    }
+    
+    // Apply Limit
+    if let Some(l) = limit {
+        root_op = json!({
+            "op": "limit",
+            "limit": l,
+            "input": root_op
         });
     }
 
+    Ok(root_op)
+}
+
+fn find_keyword_balanced(s: &str, keyword: &str) -> Option<usize> {
+    let s_upper = s.to_uppercase();
+    let key_upper = keyword.to_uppercase();
+    let mut depth = 0;
+    
+    // Scan manually
+    // We iterate byte indices to be safe with slicing
+    for (i, c) in s.char_indices() {
+        if c == '(' { depth += 1; }
+        else if c == ')' { if depth > 0 { depth -= 1; } }
+        
+        if depth == 0 {
+            if s_upper[i..].starts_with(&key_upper) {
+                return Some(i);
+            }
+        }
+    }
+    None
+}
+
+fn extract_limit(sql: &str) -> (&str, Option<usize>) {
+    // We need balanced search for LIMIT too, technically, though usually at end.
+    // Use find_keyword_balanced implies searching from start. limit is at end.
+    // Try simple rfind first, but check if it's inside parens? 
+    // Actually, simple rfind is dangerous if subquery has limit.
+    // But convert_surql_to_dbsp is called recursively.
+    // The LIMIT for THIS query must be at the very end of the string (after WHERE).
+    // So we can check if the last " LIMIT " is at depth 0?
+    // Let's perform a full scan to be safe, find LAST limit at depth 0.
+    
+    let s_upper = sql.to_uppercase();
+    let mut depth = 0;
+    let mut last_limit_idx = None;
+    
+    for (i, c) in sql.char_indices() {
+        if c == '(' { depth += 1; }
+        else if c == ')' { if depth > 0 { depth -= 1; } }
+        
+        if depth == 0 {
+             if s_upper[i..].starts_with(" LIMIT ") {
+                 last_limit_idx = Some(i);
+             }
+        }
+    }
+    
+    if let Some(idx) = last_limit_idx {
+         let val_str = sql[idx+7..].trim();
+         if let Ok(n) = val_str.parse::<usize>() {
+             return (&sql[..idx], Some(n));
+         }
+    }
+    (sql, None)
+}
+
+fn parse_projections(proj_str: &str) -> Result<Vec<Value>> {
+    let parts = split_balanced(proj_str, ',');
+    let mut out = Vec::new();
+    
+    for p in parts {
+        let p = p.trim();
+        if p == "*" {
+            out.push(json!({ "type": "all" }));
+        } else if p.starts_with('(') && (p.to_uppercase().contains("SELECT")) {
+             // Subquery
+             let close_idx = p.rfind(')').unwrap_or(p.len());
+             if close_idx == 0 { continue; } // Safety
+             let sub_sql = &p[1..close_idx];
+             
+             let alias_part = if close_idx < p.len() {
+                 p[close_idx+1..].trim()
+             } else { "" };
+             
+             let alias = if alias_part.to_uppercase().starts_with("AS ") {
+                 alias_part[3..].trim().to_string()
+             } else if !alias_part.is_empty() {
+                 alias_part.to_string()
+             } else {
+                 "subquery".to_string()
+             };
+             
+             let sub_plan = convert_surql_to_dbsp(sub_sql)?;
+             
+             out.push(json!({
+                 "type": "subquery",
+                 "alias": alias,
+                 "plan": sub_plan
+             }));
+        } else {
+            out.push(json!({ "type": "field", "name": p }));
+        }
+    }
+    Ok(out)
+}
+
+fn split_balanced(s: &str, delim: char) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0;
+    
+    for c in s.chars() {
+        if c == '(' { depth += 1; }
+        else if c == ')' { if depth > 0 { depth -= 1; } }
+        
+        if c == delim && depth == 0 {
+            parts.push(current.trim().to_string());
+            current.clear();
+        } else {
+            current.push(c);
+        }
+    }
+    if !current.trim().is_empty() {
+        parts.push(current.trim().to_string());
+    }
+    parts
+}
+
+fn apply_conditions(mut op: Value, cond_str: &str, _tables: &[String], current_table: &str) -> Result<Value> {
+    // Split by " AND " balanced? WHERE clause shouldn't have parens usually unless nested AND/OR.
+    // SurQL doesn't support complex nested OR in our simple parser yet.
+    // But " AND " is standard.
+    // If subquery in WHERE? `WHERE id = (SELECT ...)`
+    // We need balanced split for AND.
+    // Re-use split_balanced but with string delimiter?
+    // Let's implement split_balanced_str.
+    
+    let parts = split_balanced_str(cond_str, " AND ");
+    
+    for part in parts {
+        let part = part.trim();
+        if part.is_empty() { continue; }
+        
+        let eq_parts: Vec<&str> = part.split('=').map(|s| s.trim()).collect();
+        if eq_parts.len() == 2 {
+            let left = eq_parts[0];
+            let right = eq_parts[1];
+            
+            let is_value = right.starts_with('\'') || right.starts_with('"') || right.chars().all(char::is_numeric) || right == "true" || right == "false";
+            
+            if is_value {
+                // Filter
+                let val_str = right.trim_matches('\'').trim_matches('"');
+                let is_prefix = val_str.ends_with('*');
+                let val_clean = val_str.trim_end_matches('*');
+                
+                let val_json: Value = if right == "true" { json!(true) } 
+                                      else if right == "false" { json!(false) }
+                                      else if let Ok(n) = right.parse::<i64>() { json!(n) }
+                                      else { json!(val_clean) };
+
+                let field = if left.contains('.') {
+                    left.split('.').nth(1).unwrap()
+                } else {
+                    left
+                };
+                
+                let predicate = if is_prefix {
+                     json!({ "type": "prefix", "prefix": val_clean })
+                } else {
+                     json!({ "type": "eq", "field": field, "value": val_json })
+                };
+
+                op = json!({
+                    "op": "filter",
+                    "predicate": predicate,
+                    "input": op
+                });
+            } else {
+                // Join or Param?
+                if right.starts_with('$') {
+                    // Filter with Param
+                     let field = if left.contains('.') { left.split('.').nth(1).unwrap() } else { left };
+                     let param_name = right.trim_start_matches('$').trim_start_matches("parent.");
+                     
+                     let predicate = json!({ 
+                         "type": "eq", 
+                         "field": field, 
+                         "value": { "$param": param_name } 
+                     });
+                     
+                     op = json!({
+                        "op": "filter",
+                        "predicate": predicate,
+                        "input": op
+                    });
+                } else {
+                    // Join
+                    let (l_tab, l_col) = extract_col(left);
+                    let (r_tab, r_col) = extract_col(right);
+                    
+                    let other_table = if l_tab == Some(current_table) { r_tab } else { l_tab };
+                    let (my_col, other_col) = if l_tab == Some(current_table) { (l_col, r_col) } else { (r_col, l_col) };
+                    
+                    if let Some(ot) = other_table {
+                         let right_op = json!({ "op": "scan", "table": ot });
+                         op = json!({
+                            "op": "join",
+                            "left": op,
+                            "right": right_op,
+                            "on": {
+                                "left_field": my_col,
+                                "right_field": other_col
+                            }
+                        });
+                    }
+                }
+            }
+        }
+    }
     Ok(op)
+}
+
+fn split_balanced_str(s: &str, delim: &str) -> Vec<String> {
+    // Naive implementation matching split_balanced logic roughly
+    // Just replace " AND " with special char? No.
+    // Manual scan.
+    let mut parts = Vec::new();
+    let mut last = 0;
+    let mut depth = 0;
+    let delim_len = delim.len();
+    
+    // We need to iterate char indices.
+    // If delim is " AND " (space and space).
+    // Simple logic:
+    for (i, c) in s.char_indices() {
+        if c == '(' { depth += 1; }
+        else if c == ')' { if depth > 0 { depth -= 1; } }
+        
+        if depth == 0 {
+             if s[i..].starts_with(delim) {
+                 parts.push(s[last..i].to_string());
+                 last = i + delim_len;
+             }
+        }
+    }
+    if last < s.len() {
+        parts.push(s[last..].to_string());
+    }
+    parts
+}
+
+fn extract_col(s: &str) -> (Option<&str>, &str) {
+    if let Some(idx) = s.find('.') {
+        (Some(&s[..idx]), &s[idx+1..])
+    } else {
+        (None, s)
+    }
 }
