@@ -175,7 +175,15 @@ pub enum Operator {
     Limit {
         input: Box<Operator>,
         limit: usize,
+        #[serde(default)]
+        order_by: Option<Vec<OrderSpec>>,
     }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct OrderSpec {
+    pub field: String,
+    pub direction: String, // "ASC" | "DESC"
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -197,7 +205,8 @@ pub struct JoinCondition {
 pub enum Predicate {
     Prefix { prefix: String },
     Eq { field: String, value: Value },
-    // Future support for: GT, LT, etc.
+    And { predicates: Vec<Predicate> },
+    Or { predicates: Vec<Predicate> },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -261,6 +270,8 @@ impl View {
 
         // Compute Result Set
         let mut result_ids: Vec<String> = self.cache.keys().cloned().collect();
+        // TODO: Apply top-level ORDER BY if we add it to QueryPlan later.
+        // For now, default ID sort is stable.
         result_ids.sort();
         
         let hash = compute_hash(&result_ids);
@@ -302,11 +313,31 @@ impl View {
                 // Identity for ZSet (ID set) unless we implement Map
                 self.eval_snapshot(input, db, context)
             },
-            Operator::Limit { input, limit } => {
+            Operator::Limit { input, limit, order_by } => {
                 let upstream = self.eval_snapshot(input, db, context);
                 let mut items: Vec<_> = upstream.into_iter().collect();
-                // implicit sort by key (ID)
-                items.sort_by(|a, b| a.0.cmp(&b.0)); 
+                
+                if let Some(orders) = order_by {
+                     items.sort_by(|a, b| {
+                         let row_a = self.get_row_value(&a.0, db);
+                         let row_b = self.get_row_value(&b.0, db);
+                         
+                         for ord in orders {
+                             let val_a = row_a.and_then(|r| r.as_object()).and_then(|o| o.get(&ord.field));
+                             let val_b = row_b.and_then(|r| r.as_object()).and_then(|o| o.get(&ord.field));
+                             
+                             let cmp = compare_json_values(val_a, val_b);
+                             if cmp != std::cmp::Ordering::Equal {
+                                 return if ord.direction.eq_ignore_ascii_case("DESC") { cmp.reverse() } else { cmp };
+                             }
+                         }
+                         // Fallback to ID
+                         a.0.cmp(&b.0)
+                     });
+                } else {
+                    // implicit sort by key (ID)
+                    items.sort_by(|a, b| a.0.cmp(&b.0)); 
+                }
                 
                 let mut out = HashMap::new();
                 for (i, (key, weight)) in items.into_iter().enumerate() {
@@ -358,6 +389,22 @@ impl View {
 
     fn check_predicate(&self, pred: &Predicate, key: &str, db: &Database, context: Option<&Value>) -> bool {
         match pred {
+            Predicate::And { predicates } => {
+                for p in predicates {
+                    if !self.check_predicate(p, key, db, context) {
+                        return false;
+                    }
+                }
+                true
+            },
+            Predicate::Or { predicates } => {
+                for p in predicates {
+                    if self.check_predicate(p, key, db, context) {
+                        return true;
+                    }
+                }
+                false
+            },
             Predicate::Prefix { prefix } => key.starts_with(prefix),
             Predicate::Eq { field, value } => {
                 // Check if value is a param
@@ -388,6 +435,8 @@ impl View {
                 if let Some(table) = db.tables.get(table_name) {
                     if let Some(row_val) = table.rows.get(key) {
                         if let Some(obj) = row_val.as_object() {
+                             // Handle nested fields? e.g. "author.name"
+                             // Simple field access for now
                             if let Some(f_val) = obj.get(field) {
                                 return f_val == target_val;
                             }
@@ -395,6 +444,29 @@ impl View {
                     }
                 }
                 false
+            }
+        }
+    }
+}
+
+// Helper for comparing JSON values (Partial implementation)
+fn compare_json_values(a: Option<&Value>, b: Option<&Value>) -> std::cmp::Ordering {
+    match (a, b) {
+        (None, None) => std::cmp::Ordering::Equal,
+        (None, Some(_)) => std::cmp::Ordering::Less,
+        (Some(_), None) => std::cmp::Ordering::Greater,
+        (Some(xa), Some(xb)) => {
+            if let (Some(sa), Some(sb)) = (xa.as_str(), xb.as_str()) {
+                sa.cmp(sb)
+            } else if let (Some(na), Some(nb)) = (xa.as_i64(), xb.as_i64()) {
+                na.cmp(&nb)
+            } else if let (Some(na), Some(nb)) = (xa.as_f64(), xb.as_f64()) {
+                na.partial_cmp(&nb).unwrap_or(std::cmp::Ordering::Equal)
+            } else if let (Some(ba), Some(bb)) = (xa.as_bool(), xb.as_bool()) {
+                ba.cmp(&bb)
+            } else {
+                // Fallback: compare string representation
+                xa.to_string().cmp(&xb.to_string())
             }
         }
     }
@@ -519,12 +591,17 @@ fn register_query(id: String, plan_json: String, state: Value) -> Result<Value, 
         // Try parsing as SQL
         match converter::convert_surql_to_dbsp(&plan_json) {
             Ok(json_val) => {
+                println!("DBSP DEBUG: Converted SQL: {}", json_val);
                 match serde_json::from_value::<Operator>(json_val) {
                     Ok(op) => op,
-                    Err(_) => Operator::Scan { table: plan_json } // Fallback
+                    Err(e) => {
+                        println!("DBSP DEBUG: JSON Deserialization Error: {}", e);
+                        Operator::Scan { table: plan_json } // Fallback
+                    }
                 }
             },
-            Err(_) => {
+            Err(e) => {
+                println!("DBSP DEBUG: SQL Parse Error: {}", e);
                 // Fallback for legacy simple format (just table string)
                 Operator::Scan { table: plan_json }
             }
