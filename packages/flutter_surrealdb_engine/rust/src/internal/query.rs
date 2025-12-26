@@ -36,15 +36,12 @@ pub async fn query(db: &Surreal<Any>, sql: String, vars: Option<String>) -> Resu
         match response.take::<Value>(i) {
             Ok(v3_val) => {
                  // Convert Surreal Value to serde_json::Value
-                 /*
+        
                  if let Ok(json_val) = serde_json::to_value(&v3_val) {
                      output.push(json_val);
                  } else {
                      output.push(serde_json::Value::Null);
                  }
-                 */
-                 let json_val: serde_json::Value = v3_val.into_json();
-                 output.push(json_val);
             },
             Err(e) => {
                  eprintln!("Error taking result {}: {}", i, e);
