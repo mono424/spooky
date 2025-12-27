@@ -130,20 +130,18 @@ export class SpookySync {
   }
 
   private async registerIncantation(event: RegisterEvent) {
-    console.log('[SpookySync] registerIncantation', event);
-    const { incantationId, surrealql, ttl } = event.payload;
+    const { incantationId, surrealql, params, ttl } = event.payload;
     try {
       await this.updateLocalIncantation(incantationId, {
         surrealql,
+        params,
         hash: '',
         tree: null,
       });
-      console.log('[SpookySync] updated local incantation, upserting remote...');
       await this.remote.query(`UPSERT $id CONTENT $content`, {
         id: incantationId,
-        content: { surrealql, ttl },
+        content: { surrealql, params, ttl },
       });
-      console.log('[SpookySync] remote upsert successful');
     } catch (e) {
       console.error('[SpookySync] registerIncantation error', e);
       throw e;
@@ -151,20 +149,16 @@ export class SpookySync {
   }
 
   private async syncIncantation(event: SyncEvent) {
-    console.log('[SpookySync] syncIncantation', event);
     const { incantationId, surrealql, localTree, localHash, remoteHash, remoteTree } =
       event.payload;
 
     const isDifferent = localHash !== remoteHash;
     if (!isDifferent) {
-      console.log('[SpookySync] hashes match, skipping sync');
       return;
     }
 
-    console.log('[SpookySync] hashes differ, caching missing records...');
     await this.cacheMissingRecords(localTree, remoteTree, surrealql);
 
-    console.log('[SpookySync] updating local incantation state...');
     await this.updateLocalIncantation(incantationId, {
       surrealql,
       hash: remoteHash,
@@ -177,35 +171,28 @@ export class SpookySync {
     remoteTree: any,
     surrealql: string
   ): Promise<IdTreeDiff> {
-    console.log('[SpookySync] cacheMissingRecords', { localTree, remoteTree, surrealql });
     if (!localTree) {
-      console.log('[SpookySync] no local tree, fetching all via query...');
       const [remoteResults] = await this.remote
         .getClient()
         .query(surrealql)
         .collect<[Record<string, any>[]]>();
-      console.log('[SpookySync] fetched records:', remoteResults?.length);
       await this.cacheResults(remoteResults);
       return { added: remoteResults.map((r) => r.id), updated: [], removed: [] };
     }
 
     const diff = diffIdTree(localTree, remoteTree);
-    console.log('[SpookySync] tree diff:', diff);
     const { added, updated } = diff;
     const idsToFetch = [...added, ...updated];
 
     if (idsToFetch.length === 0) {
-      console.log('[SpookySync] no IDs to fetch');
       return { added: [], updated: [], removed: [] };
     }
 
-    console.log('[SpookySync] fetching IDs:', idsToFetch);
     const [remoteResults] = await this.remote
       .getClient()
       .query('SELECT * FROM $ids', { ids: idsToFetch })
       .collect<[Record<string, any>[]]>();
 
-    console.log('[SpookySync] fetched specific records:', remoteResults);
     await this.cacheResults(remoteResults);
     return { added: remoteResults.map((r) => r.id), updated: [], removed: [] };
   }
@@ -214,28 +201,26 @@ export class SpookySync {
     incantationId: RecordId<string>,
     {
       surrealql,
+      params,
       hash,
       tree,
     }: {
       surrealql: string;
+      params?: Record<string, any>;
       hash: string;
       tree: any;
     }
   ) {
-    console.log('[SpookySync] updateLocalIncantation', { incantationId, surrealql });
     await this.updateIncantationRecord(incantationId, {
       hash,
       tree,
     });
 
     try {
-      console.log('[SpookySync] querying local db for fresh results...');
       const [cachedResults] = await this.local
         .getClient()
-        .query(surrealql)
+        .query(surrealql, params)
         .collect<[Record<string, any>[]]>();
-
-      console.log('[SpookySync] local query results:', cachedResults?.length);
 
       this.queryEvents.emit(QueryEventTypes.IncantationIncomingRemoteUpdate, {
         incantationId,
@@ -266,7 +251,6 @@ export class SpookySync {
 
   // TODO: support joined records
   private async cacheResults(results: Record<string, any>[]) {
-    console.log('[SpookySync] caching results:', results?.length);
     if (!results || results.length === 0) return;
     const tx = await this.local.getClient().beginTransaction();
     for (const record of results) {
@@ -275,7 +259,6 @@ export class SpookySync {
       }
     }
     await tx.commit();
-    console.log('[SpookySync] cache committed');
   }
 
   private async heartbeatIncantation(event: HeartbeatEvent) {

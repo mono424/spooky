@@ -89,6 +89,7 @@ export class QueryManager<S extends SchemaStructure> {
       .content({
         Id: id,
         SurrealQL: surrealql,
+        Params: params,
         ClientId: this.clientId,
         Hash: id,
         Tree: null,
@@ -100,6 +101,7 @@ export class QueryManager<S extends SchemaStructure> {
       const incantation = new Incantation({
         id: recordId,
         surrealql,
+        params,
         hash: id,
         lastActiveAt: Date.now(),
         ttl,
@@ -128,6 +130,7 @@ export class QueryManager<S extends SchemaStructure> {
     this.events.emit(QueryEventTypes.IncantationInitialized, {
       incantationId: incantation.id,
       surrealql: incantation.surrealql,
+      params: incantation.params,
       ttl: incantation.ttl,
     });
 
