@@ -66,9 +66,19 @@ export class LocalMigrator {
   }
 
   private async recreateDatabase(database: string) {
+    // Ensure temp db exists so we can switch to it
+    await this.localDb.query(`DEFINE DATABASE _spooky_temp;`);
+
+    try {
+      await this.localDb.query(`
+        USE DB _spooky_temp;
+        REMOVE DATABASE ${database};
+      `);
+    } catch (e) {
+      // Ignore error if database doesn't exist
+    }
+
     await this.localDb.query(`
-      USE DB _spooky_temp;
-      REMOVE DATABASE ${database};
       DEFINE DATABASE ${database};
       USE DB ${database};
     `);
