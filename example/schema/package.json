@@ -6,6 +6,7 @@
     "start": "docker-compose up -d",
     "stop": "docker-compose down",
     "dev": "pnpm build &&docker-compose up",
+    "dev:example": "pnpm dev",
     "build": "pnpm build:ts && pnpm build:dart && pnpm build:surql",
     "build:ts": "syncgen --format typescript --input ./src/schema.surql --output ../app-solid/src/schema.gen.ts",
     "build:dart": "syncgen --format dart --input ./src/schema.surql --output ../client-dart/src/db/models.dart",
