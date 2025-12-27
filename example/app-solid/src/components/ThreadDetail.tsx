@@ -1,4 +1,4 @@
-import { createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, For, Show } from "solid-js";
 import { useNavigate, useParams } from "@solidjs/router";
 import { db } from "../db";
 import { CommentForm } from "./CommentForm";
@@ -46,6 +46,10 @@ export function ThreadDetail() {
     })
   );
   const thread = () => threadResult.data() || null;
+  
+  createEffect(() => {
+    console.log("threa", thread());
+  });
 
   const handleBack = () => {
     navigate("/");

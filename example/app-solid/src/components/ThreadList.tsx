@@ -48,7 +48,7 @@ export function ThreadList() {
           each={threads()}
           fallback={
             <div class="border-2 border-dashed border-gray-800 p-12 text-center opacity-50">
-              <pre class="text-xs mb-4 text-gray-500 whitespace-pre leading-none">
+              <pre class="text-xs mb-4 text-gray-500 whitespace-pre leading-none font-mono">
     .---.
    /     \
    | (.) |

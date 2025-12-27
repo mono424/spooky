@@ -184,7 +184,9 @@ export class SpookySync {
       .getClient()
       .query('SELECT * FROM $ids', { ids: idsToFetch })
       .collect<[Record<string, any>[]]>();
+    console.log('remoteResults', remoteResults);
     await this.cacheResults(remoteResults);
+
     return { added: remoteResults.map((r) => r.id), updated: [], removed: [] };
   }
 
@@ -205,7 +207,7 @@ export class SpookySync {
       tree,
     });
 
-    const cachedResults = await this.local
+    const [cachedResults] = await this.local
       .getClient()
       .query(surrealql)
       .collect<[Record<string, any>[]]>();
