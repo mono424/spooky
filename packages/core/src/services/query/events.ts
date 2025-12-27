@@ -1,19 +1,15 @@
-import { RecordId } from "surrealdb";
-import {
-  createEventSystem,
-  EventDefinition,
-  EventSystem,
-} from "../../events/index.js";
-import { QueryTimeToLive } from "../../types.js";
+import { RecordId } from 'surrealdb';
+import { createEventSystem, EventDefinition, EventSystem } from '../../events/index.js';
+import { QueryTimeToLive } from '../../types.js';
 
 export const QueryEventTypes = {
-  IncantationInitialized: "QUERY_INCANTATION_INITIALIZED",
-  IncantationRemoteHashUpdate: "QUERY_INCANTATION_REMOTE_HASH_UPDATE",
-  IncantationTTLHeartbeat: "QUERY_INCANTATION_TTL_HEARTBEAT",
-  IncantationCleanup: "QUERY_INCANTATION_CLEANUP",
-  
+  IncantationInitialized: 'QUERY_INCANTATION_INITIALIZED',
+  IncantationRemoteHashUpdate: 'QUERY_INCANTATION_REMOTE_HASH_UPDATE',
+  IncantationTTLHeartbeat: 'QUERY_INCANTATION_TTL_HEARTBEAT',
+  IncantationCleanup: 'QUERY_INCANTATION_CLEANUP',
+
   // Sent from sync service
-  IncantationIncomingRemoteUpdate: "QUERY_INCANTATION_INCOMING_REMOTE_UPDATE",
+  IncantationIncomingRemoteUpdate: 'QUERY_INCANTATION_INCOMING_REMOTE_UPDATE',
 } as const;
 
 export type QueryEventTypeMap = {
@@ -24,7 +20,7 @@ export type QueryEventTypeMap = {
       surrealql: string;
       ttl: QueryTimeToLive;
     }
-  >,
+  >;
   [QueryEventTypes.IncantationRemoteHashUpdate]: EventDefinition<
     typeof QueryEventTypes.IncantationRemoteHashUpdate,
     {
@@ -41,14 +37,14 @@ export type QueryEventTypeMap = {
     {
       incantationId: RecordId<string>;
     }
-  >,
+  >;
 
   [QueryEventTypes.IncantationCleanup]: EventDefinition<
     typeof QueryEventTypes.IncantationCleanup,
     {
       incantationId: RecordId<string>;
     }
-  >,
+  >;
 
   [QueryEventTypes.IncantationIncomingRemoteUpdate]: EventDefinition<
     typeof QueryEventTypes.IncantationIncomingRemoteUpdate,
