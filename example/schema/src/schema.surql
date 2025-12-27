@@ -76,7 +76,7 @@ DEFINE FIELD title ON TABLE thread TYPE string
 DEFINE FIELD content ON TABLE thread TYPE string
     ASSERT $value != NONE AND string::len($value) > 0;
 
-DEFINE FIELD author ON TABLE thread TYPE record<user>;
+DEFINE FIELD author ON TABLE thread TYPE record<user>; -- @parent
 
 DEFINE FIELD created_at ON TABLE thread TYPE datetime
     VALUE time::now();

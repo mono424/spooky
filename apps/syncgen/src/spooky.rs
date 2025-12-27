@@ -213,12 +213,10 @@ pub fn generate_spooky_events(
         }
         events.push_str("    };\n");
 
-        events.push_str("    LET $state = fn::dbsp::get_state();\n");
         // Pass $plain_after instead of $after
         // Note: Explicitly cast to object again just in case constructed object is weird
         // Use record::id() to get clean ID string without backticks
-        events.push_str(&format!("    LET $dbsp_ok = mod::dbsp::ingest('{}', $event, <string>$after.id, $plain_after, $state);\n", table_name));
-        events.push_str("    fn::dbsp::save_state($dbsp_ok.new_state);\n");
+        events.push_str(&format!("    LET $dbsp_ok = mod::dbsp::ingest('{}', $event, <string>$after.id, $plain_after);\n", table_name));
         events.push_str("    FOR $u IN $dbsp_ok.updates {\n");
         events.push_str("        UPDATE _spooky_incantation SET Hash = $u.result_hash, Tree = $u.tree WHERE Id = $u.query_id;\n");
         events.push_str("    };\n\n");
@@ -553,10 +551,8 @@ pub fn generate_spooky_events(
         }
         events.push_str("    };\n");
 
-        events.push_str("    LET $state = fn::dbsp::get_state();\n");
         // Use record::id() to get clean ID string without backticks
-        events.push_str(&format!("    LET $dbsp_ok = mod::dbsp::ingest('{}', \"DELETE\", <string>$before.id, $plain_before, $state);\n", table_name));
-        events.push_str("    fn::dbsp::save_state($dbsp_ok.new_state);\n");
+        events.push_str(&format!("    LET $dbsp_ok = mod::dbsp::ingest('{}', \"DELETE\", <string>$before.id, $plain_before);\n", table_name));
         events.push_str("    FOR $u IN $dbsp_ok.updates {\n");
         events.push_str("        UPDATE _spooky_incantation SET Hash = $u.result_hash, Tree = $u.tree WHERE Id = $u.query_id;\n");
         events.push_str("    };\n\n");

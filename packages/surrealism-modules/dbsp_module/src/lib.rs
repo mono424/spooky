@@ -2,6 +2,28 @@ use surrealism::surrealism;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::sync::Mutex;
+use std::fs;
+
+lazy_static::lazy_static! {
+    static ref CIRCUIT: Mutex<Circuit> = Mutex::new(load_state());
+}
+
+fn load_state() -> Circuit {
+    // Try to load from "dbsp_state.json"
+    if let Ok(content) = fs::read_to_string("dbsp_state.json") {
+        serde_json::from_str(&content).unwrap_or_else(|_| Circuit::new())
+    } else {
+        Circuit::new()
+    }
+}
+
+fn save_state(circuit: &Circuit) {
+    if let Ok(content) = serde_json::to_string(circuit) {
+        // Ignore errors for now (best effort)
+        let _ = fs::write("dbsp_state.json", content);
+    }
+}
 
 pub mod converter; // Import converter module
 
@@ -562,7 +584,7 @@ pub struct MaterializedViewUpdate {
 #[derive(Serialize, Deserialize)]
 pub struct IngestResult {
     pub updates: Vec<MaterializedViewUpdate>,
-    pub new_state: Circuit,
+    // Removed new_state
 }
 
 // --- Interface ---
@@ -572,12 +594,8 @@ fn row_to_key(id: &str, _record: &Value) -> String {
 }
 
 #[surrealism]
-fn ingest(table: String, operation: String, id: String, record: Value, state: Value) -> Result<Value, &'static str> {
-    let mut circuit: Circuit = if state.is_null() {
-        Circuit::new()
-    } else {
-        serde_json::from_value(state).unwrap_or_else(|_| Circuit::new())
-    };
+fn ingest(table: String, operation: String, id: String, record: Value) -> Result<Value, &'static str> {
+    let mut circuit = CIRCUIT.lock().map_err(|_| "Failed to lock circuit")?;
     
     let key = row_to_key(&id, &record);
     let mut delta: ZSet = HashMap::new();
@@ -605,21 +623,23 @@ fn ingest(table: String, operation: String, id: String, record: Value, state: Va
     }
 
     let updates = circuit.step(table, delta);
+    save_state(&circuit);
     
     let result = IngestResult {
         updates,
-        new_state: circuit,
     };
 
     serde_json::to_value(result).map_err(|_| "Failed to serialize result")
 }
 
 #[surrealism]
-fn register_query(id: String, plan_json: String, state: Value) -> Result<Value, &'static str> {
-    let mut circuit: Circuit = if state.is_null() {
-        Circuit::new()
-    } else {
-        serde_json::from_value(state).unwrap_or_else(|_| Circuit::new())
+fn register_view(id: String, plan_val: Value) -> Result<Value, &'static str> {
+    println!("DEBUG: register_query called with id: {}", id);
+    let mut circuit = CIRCUIT.lock().map_err(|_| "Failed to lock circuit")?;
+
+    let plan_json = match plan_val {
+        Value::String(s) => s,
+        _ => plan_val.to_string()
     };
     
     let root_op = if let Ok(parsed_plan) = serde_json::from_str::<QueryPlan>(&plan_json) {
@@ -653,28 +673,24 @@ fn register_query(id: String, plan_json: String, state: Value) -> Result<Value, 
     };
     
     circuit.register_view(plan);
+    save_state(&circuit);
     
     let result = json!({
         "msg": format!("Registered view '{}'", circuit.views.last().unwrap().plan.id),
-        "new_state": circuit
     });
     
     Ok(result)
 }
 
 #[surrealism]
-fn unregister_query(id: String, state: Value) -> Result<Value, &'static str> {
-    let mut circuit: Circuit = if state.is_null() {
-        Circuit::new()
-    } else {
-        serde_json::from_value(state).unwrap_or_else(|_| Circuit::new())
-    };
+fn unregister_view(id: String) -> Result<Value, &'static str> {
+    let mut circuit = CIRCUIT.lock().map_err(|_| "Failed to lock circuit")?;
     
     circuit.unregister_view(&id);
+    save_state(&circuit);
     
     let result = json!({
         "msg": "View unregistered",
-        "new_state": circuit
     });
 
     Ok(result)
