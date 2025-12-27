@@ -13,7 +13,7 @@ import 'package:flutter_core_example/main.dart';
 void main() {
   testWidgets('Verify SpookyClient Testbed UI', (WidgetTester tester) async {
     // Build our app and trigger a frame.
-    await tester.pumpWidget(const MaterialApp(home: SpookyExampleApp()));
+    await tester.pumpWidget(const SpookyApp());
 
     // Verify that the title is present.
     expect(find.text('SpookyClient Testbed'), findsOneWidget);

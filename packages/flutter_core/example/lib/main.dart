@@ -5,18 +5,34 @@ import 'components/logs_panel.dart';
 import 'components/spooky_app_bar.dart';
 import 'components/view_switcher.dart';
 
+import 'core/theme.dart';
+
 void main() {
-  runApp(const MaterialApp(home: SpookyApp()));
+  runApp(const SpookyApp());
 }
 
-class SpookyApp extends StatefulWidget {
+class SpookyApp extends StatelessWidget {
   const SpookyApp({super.key});
 
   @override
-  State<SpookyApp> createState() => _SpookyAppState();
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'Spooky Example',
+      theme: SpookyTheme.theme,
+      home: const SpookyHome(),
+    );
+  }
 }
 
-class _SpookyAppState extends State<SpookyApp> with WidgetsBindingObserver {
+class SpookyHome extends StatefulWidget {
+  const SpookyHome({super.key});
+
+  @override
+  State<SpookyHome> createState() => _SpookyHomeState();
+}
+
+class _SpookyHomeState extends State<SpookyHome> with WidgetsBindingObserver {
   final SpookyController _controller = SpookyController();
 
   @override
@@ -64,27 +80,21 @@ class _SpookyAppState extends State<SpookyApp> with WidgetsBindingObserver {
                 client: _controller.client,
               ),
               Expanded(
-                child: Row(
-                  children: [
-                    Expanded(
-                      flex: 3,
-                      child: Padding(
-                        padding: const EdgeInsets.all(24.0),
-                        child: ViewSwitcher(
-                          controller: _controller,
-                          onError: _showErrorSnackBar,
-                        ),
-                      ),
-                    ),
-                    const VerticalDivider(width: 1),
-                    Expanded(
-                      flex: 2,
-                      child: LogsPanel(
-                        controller: _controller.logController,
-                        scrollController: _controller.scrollController,
-                      ),
-                    ),
-                  ],
+                flex: 3,
+                child: Padding(
+                  padding: const EdgeInsets.all(24.0),
+                  child: ViewSwitcher(
+                    controller: _controller,
+                    onError: _showErrorSnackBar,
+                  ),
+                ),
+              ),
+              const Divider(height: 1),
+              Expanded(
+                flex: 1,
+                child: LogsPanel(
+                  controller: _controller.logController,
+                  scrollController: _controller.scrollController,
                 ),
               ),
             ],

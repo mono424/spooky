@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_core_example/core/theme.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 class InitializationView extends StatelessWidget {
   final TextEditingController namespaceController;
@@ -23,84 +25,114 @@ class InitializationView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Text(
-            "Initialize Spooky Client to Begin",
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+      child: SingleChildScrollView(
+        // Make it responsive
+        padding: const EdgeInsets.all(24),
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 480), // Slightly wider
+          padding: const EdgeInsets.all(40), // More internal padding
+          decoration: BoxDecoration(
+            color: SpookyColors.surface,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: SpookyColors.white10),
           ),
-          const SizedBox(height: 20),
-          SizedBox(
-            width: 300,
-            child: TextField(
-              controller: namespaceController,
-              decoration: const InputDecoration(
-                labelText: "Namespace",
-                border: OutlineInputBorder(),
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          SizedBox(
-            width: 300,
-            child: TextField(
-              controller: databaseController,
-              decoration: const InputDecoration(
-                labelText: "Database",
-                border: OutlineInputBorder(),
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          SizedBox(
-            width: 300,
-            child: TextField(
-              controller: endpointController,
-              decoration: const InputDecoration(
-                labelText: "Endpoint (Optional)",
-                hintText: "ws://127.0.0.1:8000/rpc",
-                border: OutlineInputBorder(),
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Checkbox(value: useDevSidecar, onChanged: onDevSidecarChanged),
-              const Text("Enable Dev Sidecar (Host Local Server)"),
+              Text(
+                "Initialize Spooky Client",
+                style: GoogleFonts.outfit(
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                  color: SpookyColors.white,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 48), // Increased spacing
+              TextField(
+                controller: namespaceController,
+                decoration: const InputDecoration(
+                  labelText: "Namespace",
+                  prefixIcon: Icon(Icons.folder_open_outlined),
+                ),
+                style: const TextStyle(color: SpookyColors.white),
+              ),
+              const SizedBox(height: 24), // Increased spacing
+              TextField(
+                controller: databaseController,
+                decoration: const InputDecoration(
+                  labelText: "Database",
+                  prefixIcon: Icon(Icons.storage_outlined),
+                ),
+                style: const TextStyle(color: SpookyColors.white),
+              ),
+              const SizedBox(height: 24), // Increased spacing
+              TextField(
+                controller: endpointController,
+                decoration: const InputDecoration(
+                  labelText: "Endpoint (Optional)",
+                  hintText: "ws://127.0.0.1:8000/rpc",
+                  prefixIcon: Icon(Icons.cloud_outlined),
+                ),
+                style: const TextStyle(color: SpookyColors.white),
+              ),
+              const SizedBox(height: 32),
+              Container(
+                decoration: BoxDecoration(
+                  color: SpookyColors.white10,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: CheckboxListTile(
+                  value: useDevSidecar,
+                  onChanged: onDevSidecarChanged,
+                  title: const Text("Enable Dev"),
+                  activeColor: SpookyColors.primary,
+                  checkColor: Colors.white,
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 2,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+              if (useDevSidecar) ...[
+                const SizedBox(height: 24), // Increased spacing
+                TextField(
+                  controller: devSidecarPortController,
+                  decoration: const InputDecoration(
+                    labelText: "Sidecar Port",
+                    hintText: "5000",
+                    prefixIcon: Icon(Icons.lan_outlined),
+                  ),
+                  keyboardType: TextInputType.number,
+                  style: const TextStyle(color: SpookyColors.white),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  "Credentials: root / root",
+                  style: GoogleFonts.inter(
+                    fontStyle: FontStyle.italic,
+                    color: SpookyColors.white60,
+                    fontSize: 12,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+              const SizedBox(height: 48),
+              SizedBox(
+                height: 56,
+                child: ElevatedButton.icon(
+                  onPressed: onInit,
+                  icon: const Icon(Icons.bolt),
+                  label: const Text("Initialize Client"),
+                ),
+              ),
             ],
           ),
-          if (useDevSidecar) ...[
-            SizedBox(
-              width: 300,
-              child: TextField(
-                controller: devSidecarPortController,
-                decoration: const InputDecoration(
-                  labelText: "Sidecar Port",
-                  hintText: "5000",
-                  border: OutlineInputBorder(),
-                ),
-                keyboardType: TextInputType.number,
-              ),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              "Credentials: root / root",
-              style: TextStyle(fontStyle: FontStyle.italic, color: Colors.grey),
-            ),
-          ],
-          const SizedBox(height: 20),
-          ElevatedButton.icon(
-            onPressed: onInit,
-            icon: const Icon(Icons.play_arrow),
-            label: const Text("Initialize Client"),
-            style: ElevatedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }

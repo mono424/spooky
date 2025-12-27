@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_core_example/core/theme.dart';
 
 class SpookyAppBar extends StatelessWidget implements PreferredSizeWidget {
   final VoidCallback onDisconnect;
@@ -16,8 +17,10 @@ class SpookyAppBar extends StatelessWidget implements PreferredSizeWidget {
   Widget build(BuildContext context) {
     return AppBar(
       title: const Text('SpookyClient Testbed'),
-      backgroundColor: Colors.deepPurple,
-      foregroundColor: Colors.white,
+      backgroundColor: SpookyColors.background,
+      foregroundColor: SpookyColors.white,
+      elevation: 0,
+      centerTitle: true,
       actions: [
         IconButton(
           icon: const Icon(Icons.power_settings_new),

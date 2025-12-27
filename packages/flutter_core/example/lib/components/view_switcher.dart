@@ -29,12 +29,7 @@ class ViewSwitcher extends StatelessWidget {
     }
 
     if (!controller.isLoggedIn) {
-      return AuthView(
-        emailController: controller.emailController,
-        passwordController: controller.passwordController,
-        onSignIn: () => controller.signIn(onError: onError),
-        onSignUp: () => controller.signUp(onError: onError),
-      );
+      return AuthView(controller: controller);
     }
 
     return DashboardView(

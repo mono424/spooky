@@ -99,6 +99,29 @@ class SpookyController extends ChangeNotifier {
 
       final newClient = await SpookyClient.init(config);
       client = newClient;
+
+      // PROVISION REMOTE (Dev Mode)
+      if (useDevSidecar || endpointController.text.isNotEmpty) {
+        log("Provisioning Remote DB (Root auth)...");
+        try {
+          // 1. Sign in as Root to apply schema
+          await client!.remote.getClient.signin(
+            credentialsJson: jsonEncode({"user": "root", "pass": "root"}),
+          );
+
+          // 2. Apply Schema
+          await client!.remote.getClient.query(sql: SURQL_SCHEMA);
+          log("Remote Schema Applied successfully.");
+
+          // 3. Invalidate Root session (so we can sign up as user)
+          await client!.remote.getClient.invalidate();
+          log("Root session closed. Ready.");
+        } catch (e) {
+          log("Warning: Remote provisioning failed: $e");
+          // Proceed anyway, maybe it was already set up or different creds
+        }
+      }
+
       log("SpookyClient initialized successfully!");
     } catch (e, stack) {
       log("Error initializing: $e");
@@ -109,20 +132,19 @@ class SpookyController extends ChangeNotifier {
     }
   }
 
-  Future<void> signIn({required Function(String) onError}) async {
+  Future<void> signIn(String username, String password) async {
     if (client == null) return;
     try {
       log("Attempting Sign In...");
 
       if (client!.remote.client == null) {
         log("Remote connection unavailable (Offline Mode). Cannot Sign In.");
-        onError("Remote DB unavailable. Cannot Sign In.");
-        return;
+        throw Exception("Remote DB unavailable. Cannot Sign In.");
       }
 
       final credentials = jsonEncode({
-        "username": emailController.text,
-        "password": passwordController.text,
+        "username": username,
+        "password": password,
         "ns": namespaceController.text,
         "db": databaseController.text,
         "access": "account",
@@ -136,24 +158,23 @@ class SpookyController extends ChangeNotifier {
       notifyListeners();
     } catch (e) {
       log("Error Signing In: $e");
-      onError("Sign In Failed: $e");
+      rethrow;
     }
   }
 
-  Future<void> signUp({required Function(String) onError}) async {
+  Future<void> signUp(String username, String password) async {
     if (client == null) return;
     try {
       log("Attempting Sign Up (client.signup)...");
 
       if (client!.remote.getClient == null) {
         log("Remote connection unavailable (Offline Mode). Cannot Sign Up.");
-        onError("Remote DB unavailable. Cannot Sign Up.");
-        return;
+        throw Exception("Remote DB unavailable. Cannot Sign Up.");
       }
 
       final token = await client!.remote.manualSignup(
-        username: emailController.text,
-        password: passwordController.text,
+        username: username,
+        password: password,
         namespace: namespaceController.text,
         database: databaseController.text,
       );
@@ -163,7 +184,7 @@ class SpookyController extends ChangeNotifier {
       notifyListeners();
     } catch (e) {
       log("Error Signing Up: $e");
-      onError("Sign Up Failed: $e");
+      rethrow;
     }
   }
 

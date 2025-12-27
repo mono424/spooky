@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_core_example/core/theme.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 class LogsPanel extends StatelessWidget {
   final TextEditingController controller;
@@ -14,31 +16,68 @@ class LogsPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: [
+        // Header
         Container(
-          padding: const EdgeInsets.all(8),
-          color: Colors.grey.shade200,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: const BoxDecoration(
+            color: Color(0xFF1E1E1E), // VS Code header gray
+            border: Border(bottom: BorderSide(color: Colors.black, width: 1)),
+          ),
           width: double.infinity,
-          child: const Text(
-            "Logs",
-            style: TextStyle(fontWeight: FontWeight.bold),
+          child: Row(
+            children: [
+              const Icon(Icons.terminal, color: SpookyColors.primary, size: 14),
+              const SizedBox(width: 8),
+              Text(
+                "OUTPUT", // VS Code style
+                style: GoogleFonts.inter(
+                  fontWeight: FontWeight.bold,
+                  color: const Color(0xFFCCCCCC),
+                  fontSize: 11,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ],
           ),
         ),
+        // Content
         Expanded(
           child: Container(
-            color: Colors.black87,
-            child: TextField(
-              controller: controller,
-              scrollController: scrollController,
-              readOnly: true,
-              maxLines: null,
-              style: const TextStyle(
-                color: Colors.greenAccent,
-                fontFamily: 'Courier',
-                fontSize: 13,
-              ),
-              decoration: const InputDecoration(
-                contentPadding: EdgeInsets.all(12),
-                border: InputBorder.none,
+            color: const Color(0xFF000000), // Pure black
+            child: Scrollbar(
+              // Add scrollbar for better UX
+              controller: scrollController,
+              thumbVisibility: true,
+              child: TextField(
+                controller: controller,
+                scrollController: scrollController,
+                readOnly: true,
+                showCursor: false, // Hide blinking cursor
+                mouseCursor: SystemMouseCursors.text,
+                maxLines: null,
+                style: GoogleFonts.firaCode(
+                  color: const Color(
+                    0xFFCCCCCC,
+                  ), // VS Code default text color (not bright green)
+                  fontSize: 12,
+                  height: 1.4,
+                ),
+                decoration: const InputDecoration(
+                  contentPadding: EdgeInsets.all(8),
+                  border: InputBorder.none,
+                  isDense: true,
+                  filled: true,
+                  hoverColor: Colors.transparent, // Disable hover effect
+                  fillColor: const Color(0xFF000000), // Force pure black
+                  enabledBorder: const OutlineInputBorder(
+                    borderRadius: BorderRadius.zero,
+                    borderSide: BorderSide.none,
+                  ),
+                  focusedBorder: const OutlineInputBorder(
+                    borderRadius: BorderRadius.zero,
+                    borderSide: BorderSide.none,
+                  ),
+                ),
               ),
             ),
           ),
