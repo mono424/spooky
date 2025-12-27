@@ -29,18 +29,24 @@ export class LocalMigrator {
 
     await this.recreateDatabase(database);
 
-    const statements = schemaSurql
-      .split(';')
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0);
+    const statements = this.splitStatements(schemaSurql);
 
     for (let i = 0; i < statements.length; i++) {
       const statement = statements[i];
-      try {
-        await this.localDb.query(statement);
-        console.info(
-          `[Provisioning] (${i + 1}/${statements.length}) Executed: ${statement.substring(0, 50)}...`
+      // Strip comments to check if it's an index definition
+      const cleanStatement = statement.replace(/--.*/g, '').trim();
+      if (cleanStatement.toUpperCase().startsWith('DEFINE INDEX')) {
+        console.warn(
+          `[Provisioning] Skipping index definition: ${cleanStatement.substring(0, 50)}...`
         );
+        continue;
+      }
+      try {
+        console.info(
+          `[Provisioning] (${i + 1}/${statements.length}) Executing: ${statement.substring(0, 50)}...`
+        );
+        await this.localDb.query(statement);
+        console.info(`[Provisioning] (${i + 1}/${statements.length}) Done`);
       } catch (e) {
         console.error(
           `[Provisioning] (${i + 1}/${statements.length}) Error executing statement: ${statement}`
@@ -82,6 +88,79 @@ export class LocalMigrator {
       DEFINE DATABASE ${database};
       USE DB ${database};
     `);
+  }
+
+  private splitStatements(schema: string): string[] {
+    const statements: string[] = [];
+    let current = '';
+    let depth = 0;
+    let inQuote = false;
+    let quoteChar = '';
+    let inComment = false;
+
+    for (let i = 0; i < schema.length; i++) {
+      const char = schema[i];
+      const nextChar = schema[i + 1];
+
+      // Handle Comments
+      if (inComment) {
+        current += char;
+        if (char === '\n') {
+          inComment = false;
+        }
+        continue;
+      }
+
+      // Start of comment
+      if (!inQuote && char === '-' && nextChar === '-') {
+        inComment = true;
+        current += char;
+        continue;
+      }
+
+      if (inQuote) {
+        current += char;
+        if (char === quoteChar && schema[i - 1] !== '\\') {
+          inQuote = false;
+        }
+        continue;
+      }
+
+      if (char === '"' || char === "'") {
+        inQuote = true;
+        quoteChar = char;
+        current += char;
+        continue;
+      }
+
+      if (char === '{') {
+        depth++;
+        current += char;
+        continue;
+      }
+
+      if (char === '}') {
+        depth--;
+        current += char;
+        continue;
+      }
+
+      if (char === ';' && depth === 0) {
+        if (current.trim().length > 0) {
+          statements.push(current.trim());
+        }
+        current = '';
+        continue;
+      }
+
+      current += char;
+    }
+
+    if (current.trim().length > 0) {
+      statements.push(current.trim());
+    }
+
+    return statements;
   }
 
   private async createHashRecord(hash: string) {

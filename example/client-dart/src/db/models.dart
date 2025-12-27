@@ -14,7 +14,6 @@ String schemaToJson(Schema data) => json.encode(data.toJson());
 class Schema {
     SpookyDataHash spookyDataHash;
     SpookyIncantation spookyIncantation;
-    SpookyModuleState spookyModuleState;
     SpookyPendingMutations spookyPendingMutations;
     SpookyRelationship spookyRelationship;
     SpookySchema spookySchema;
@@ -26,7 +25,6 @@ class Schema {
     Schema({
         required this.spookyDataHash,
         required this.spookyIncantation,
-        required this.spookyModuleState,
         required this.spookyPendingMutations,
         required this.spookyRelationship,
         required this.spookySchema,
@@ -39,7 +37,6 @@ class Schema {
     factory Schema.fromJson(Map<String, dynamic> json) => Schema(
         spookyDataHash: SpookyDataHash.fromJson(json["_spooky_data_hash"]),
         spookyIncantation: SpookyIncantation.fromJson(json["_spooky_incantation"]),
-        spookyModuleState: SpookyModuleState.fromJson(json["_spooky_module_state"]),
         spookyPendingMutations: SpookyPendingMutations.fromJson(json["_spooky_pending_mutations"]),
         spookyRelationship: SpookyRelationship.fromJson(json["_spooky_relationship"]),
         spookySchema: SpookySchema.fromJson(json["_spooky_schema"]),
@@ -52,7 +49,6 @@ class Schema {
     Map<String, dynamic> toJson() => {
         "_spooky_data_hash": spookyDataHash.toJson(),
         "_spooky_incantation": spookyIncantation.toJson(),
-        "_spooky_module_state": spookyModuleState.toJson(),
         "_spooky_pending_mutations": spookyPendingMutations.toJson(),
         "_spooky_relationship": spookyRelationship.toJson(),
         "_spooky_schema": spookySchema.toJson(),
@@ -212,30 +208,6 @@ class SpookyIncantation {
         "SurrealQL": surrealQl,
         "Tree": tree,
         "TTL": ttl,
-    };
-}
-
-class SpookyModuleState {
-    
-    ///Record ID
-    String id;
-    
-    ///Any type
-    String? state;
-
-    SpookyModuleState({
-        required this.id,
-        this.state,
-    });
-
-    factory SpookyModuleState.fromJson(Map<String, dynamic> json) => SpookyModuleState(
-        id: json["id"],
-        state: json["State"],
-    );
-
-    Map<String, dynamic> toJson() => {
-        "id": id,
-        "State": state,
     };
 }
 
@@ -527,36 +499,6 @@ PERMISSIONS FOR select, create, update WHERE true;
 -- How long this Incantation stays alive without activity
 DEFINE FIELD TTL ON TABLE _spooky_incantation TYPE duration
 PERMISSIONS FOR select, create, update WHERE true;
-
--- Cleanup Triggers
--- ==================================================
--- SPOOKY MODULE STATE
--- Global state storage for the DBSP WASM module
--- ==================================================
-
-DEFINE TABLE _spooky_module_state SCHEMALESS
-PERMISSIONS FOR select, create, update, delete WHERE true;
-
--- The serialized WASM memory state (huge JSON object)
-DEFINE FIELD State ON TABLE _spooky_module_state TYPE option<object>
-PERMISSIONS FOR select, create, update WHERE true;
-
--- Helper function to get or init state
-DEFINE FUNCTION fn::dbsp::get_state() {
-    RETURN (SELECT VALUE State FROM _spooky_module_state:dbsp_state)[0] OR {};
-};
-
--- Helper function to save state
-DEFINE FUNCTION fn::dbsp::save_state(\$new_state: object) {
-    UPSERT _spooky_module_state:dbsp_state SET State = \$new_state;
-};
-
--- Unregister from DBSP on deletion
-DEFINE EVENT _spooky_dbsp_cleanup ON TABLE _spooky_incantation WHEN \$event = \"DELETE\" THEN {
-    let \$state = fn::dbsp::get_state();
-    let \$result = mod::dbsp::unregister_query(\$before.Id, \$state);
-    fn::dbsp::save_state(\$result.new_state);
-};
 
 -- ==================================================
 -- SPOOKY RELATIONSHIP

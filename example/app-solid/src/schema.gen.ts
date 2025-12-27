@@ -8,9 +8,16 @@ export const schema = {
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
         thread: { type: 'string' as const, recordId: true, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
-        content: { type: 'string' as const, optional: false },
         author: { type: 'string' as const, recordId: true, optional: false },
+        content: { type: 'string' as const, optional: false },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
+      },
+      primaryKey: ['id'] as const
+    },
+    {
+      name: 'commented_on' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
       },
       primaryKey: ['id'] as const
     },
@@ -25,21 +32,14 @@ export const schema = {
       primaryKey: ['id'] as const
     },
     {
-      name: 'commented_on' as const,
-      columns: {
-        id: { type: 'string' as const, recordId: true, optional: false },
-      },
-      primaryKey: ['id'] as const
-    },
-    {
       name: 'thread' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
-        author: { type: 'string' as const, recordId: true, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
-        title: { type: 'string' as const, optional: false },
         active: { type: 'boolean' as const, optional: true },
         content: { type: 'string' as const, optional: false },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
+        title: { type: 'string' as const, optional: false },
+        author: { type: 'string' as const, recordId: true, optional: false },
         comments: { type: 'string' as const, optional: true },
       },
       primaryKey: ['id'] as const
@@ -59,18 +59,6 @@ export const schema = {
       cardinality: 'one' as const
     },
     {
-      from: 'user' as const,
-      field: 'comments' as const,
-      to: 'comment' as const,
-      cardinality: 'many' as const
-    },
-    {
-      from: 'user' as const,
-      field: 'threads' as const,
-      to: 'thread' as const,
-      cardinality: 'many' as const
-    },
-    {
       from: 'thread' as const,
       field: 'author' as const,
       to: 'user' as const,
@@ -80,6 +68,18 @@ export const schema = {
       from: 'thread' as const,
       field: 'comments' as const,
       to: 'comment' as const,
+      cardinality: 'many' as const
+    },
+    {
+      from: 'user' as const,
+      field: 'comments' as const,
+      to: 'comment' as const,
+      cardinality: 'many' as const
+    },
+    {
+      from: 'user' as const,
+      field: 'threads' as const,
+      to: 'thread' as const,
       cardinality: 'many' as const
     },
   ]
@@ -197,36 +197,6 @@ PERMISSIONS FOR select, create, update WHERE true;
 -- How long this Incantation stays alive without activity
 DEFINE FIELD TTL ON TABLE _spooky_incantation TYPE duration
 PERMISSIONS FOR select, create, update WHERE true;
-
--- Cleanup Triggers
--- ==================================================
--- SPOOKY MODULE STATE
--- Global state storage for the DBSP WASM module
--- ==================================================
-
-DEFINE TABLE _spooky_module_state SCHEMALESS
-PERMISSIONS FOR select, create, update, delete WHERE true;
-
--- The serialized WASM memory state (huge JSON object)
-DEFINE FIELD State ON TABLE _spooky_module_state TYPE option<object>
-PERMISSIONS FOR select, create, update WHERE true;
-
--- Helper function to get or init state
-DEFINE FUNCTION fn::dbsp::get_state() {
-    RETURN (SELECT VALUE State FROM _spooky_module_state:dbsp_state)[0] OR {};
-};
-
--- Helper function to save state
-DEFINE FUNCTION fn::dbsp::save_state($new_state: object) {
-    UPSERT _spooky_module_state:dbsp_state SET State = $new_state;
-};
-
--- Unregister from DBSP on deletion
-DEFINE EVENT _spooky_dbsp_cleanup ON TABLE _spooky_incantation WHEN $event = "DELETE" THEN {
-    let $state = fn::dbsp::get_state();
-    let $result = mod::dbsp::unregister_query($before.Id, $state);
-    fn::dbsp::save_state($result.new_state);
-};
 
 -- ==================================================
 -- SPOOKY RELATIONSHIP

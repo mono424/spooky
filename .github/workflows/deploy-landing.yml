@@ -22,14 +22,7 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9.0.0
-
-      - name: Debug Environment
-        run: |
-          echo "Node version: $(node -v)"
-          echo "PNPM version: $(pnpm -v)"
-          echo "Lockfile header:"
-          head -n 5 pnpm-lock.yaml
+          version: 9.15.9
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -42,7 +35,7 @@ jobs:
         uses: actions/configure-pages@v5
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
 
       - name: Build with Astro
         working-directory: apps/landing-page
