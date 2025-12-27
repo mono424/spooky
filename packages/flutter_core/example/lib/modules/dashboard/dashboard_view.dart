@@ -4,11 +4,13 @@ import '../../components/action_card.dart';
 class DashboardView extends StatelessWidget {
   final VoidCallback onQueryRemote;
   final VoidCallback onSelectSchema;
+  final VoidCallback onOpenLiveQuery;
 
   const DashboardView({
     super.key,
     required this.onQueryRemote,
     required this.onSelectSchema,
+    required this.onOpenLiveQuery,
   });
 
   @override
@@ -35,6 +37,12 @@ class DashboardView extends StatelessWidget {
               icon: Icons.schema_outlined,
               onTap: onSelectSchema,
               color: Colors.orange.shade50,
+            ),
+            ActionCard(
+              title: "Live Query",
+              icon: Icons.broadcast_on_personal,
+              onTap: onOpenLiveQuery,
+              color: Colors.green.shade50,
             ),
           ],
         ),

@@ -4,12 +4,9 @@
 export const schema = {
   tables: [
     {
-      name: 'user' as const,
+      name: 'commented_on' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
-        username: { type: 'string' as const, optional: false },
-        threads: { type: 'string' as const, optional: true },
-        comments: { type: 'string' as const, optional: true },
       },
       primaryKey: ['id'] as const
     },
@@ -17,12 +14,24 @@ export const schema = {
       name: 'thread' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
-        active: { type: 'boolean' as const, optional: true },
-        title: { type: 'string' as const, optional: false },
         content: { type: 'string' as const, optional: false },
+        active: { type: 'boolean' as const, optional: true },
         author: { type: 'string' as const, recordId: true, optional: false },
         created_at: { type: 'string' as const, dateTime: true, optional: true },
+        title: { type: 'string' as const, optional: false },
         comments: { type: 'string' as const, optional: true },
+      },
+      primaryKey: ['id'] as const
+    },
+    {
+      name: 'user' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
+        password: { type: 'string' as const, optional: false },
+        username: { type: 'string' as const, optional: false },
+        comments: { type: 'string' as const, optional: true },
+        threads: { type: 'string' as const, optional: true },
       },
       primaryKey: ['id'] as const
     },
@@ -30,17 +39,10 @@ export const schema = {
       name: 'comment' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
-        author: { type: 'string' as const, recordId: true, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
         content: { type: 'string' as const, optional: false },
         thread: { type: 'string' as const, recordId: true, optional: false },
-      },
-      primaryKey: ['id'] as const
-    },
-    {
-      name: 'commented_on' as const,
-      columns: {
-        id: { type: 'string' as const, recordId: true, optional: false },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
+        author: { type: 'string' as const, recordId: true, optional: false },
       },
       primaryKey: ['id'] as const
     },
@@ -60,26 +62,26 @@ export const schema = {
     },
     {
       from: 'comment' as const,
-      field: 'author' as const,
-      to: 'user' as const,
-      cardinality: 'one' as const
-    },
-    {
-      from: 'comment' as const,
       field: 'thread' as const,
       to: 'thread' as const,
       cardinality: 'one' as const
     },
     {
-      from: 'user' as const,
-      field: 'threads' as const,
-      to: 'thread' as const,
-      cardinality: 'many' as const
+      from: 'comment' as const,
+      field: 'author' as const,
+      to: 'user' as const,
+      cardinality: 'one' as const
     },
     {
       from: 'user' as const,
       field: 'comments' as const,
       to: 'comment' as const,
+      cardinality: 'many' as const
+    },
+    {
+      from: 'user' as const,
+      field: 'threads' as const,
+      to: 'thread' as const,
       cardinality: 'many' as const
     },
   ]
@@ -96,17 +98,6 @@ export const SURQL_SCHEMA = `-- ################################################
 -- SCOPES & AUTHENTICATION
 -- ##################################################################
 
-DEFINE FUNCTION fn::polyfill::createAccount($username: string, $password: string) {
-  IF string::len($username) <= 3 { THROW "Username must be longer than 3 characters" };
-  IF string::len($password) == 0 { THROW "Password cannot be empty" };
-
-  LET $existing = (SELECT value id FROM user WHERE username = $username LIMIT 1)[0];
-  IF $existing != NONE { THROW "Username '" + <string>$username + "' is already taken" };
-
-  LET $u = CREATE user SET username = $username, password = crypto::argon2::generate($password);
-  RETURN $u;
-};
-
 -- ##################################################################
 -- USER TABLE
 -- ##################################################################
@@ -120,7 +111,13 @@ PERMISSIONS FOR select, create, update WHERE true;
     
 DEFINE INDEX unique_username ON TABLE user FIELDS username UNIQUE;
 
+DEFINE FIELD password ON TABLE user TYPE string
+ASSERT $value != NONE AND string::len($value) > 0
+PERMISSIONS FOR select, create, update WHERE true;
 
+DEFINE FIELD created_at ON TABLE user TYPE datetime
+VALUE time::now()
+PERMISSIONS FOR select, create, update WHERE true;
 
 -- ##################################################################
 -- THREAD TABLE
@@ -178,7 +175,7 @@ DEFINE EVENT comment_created ON TABLE comment WHEN $event = "CREATE" THEN
 -- The Registry of active Live Queries (Incantations).
 -- ==================================================
 
-DEFINE TABLE _spooky_incantation SCHEMALESS
+DEFINE TABLE _spooky_incantation SCHEMAFULL
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
 -- The unique hash ID of the query + params
@@ -197,10 +194,6 @@ PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD Hash ON TABLE _spooky_incantation TYPE string
 PERMISSIONS FOR select, create, update WHERE true;
 
--- The Radix Tree of Result IDs for efficient sync
-DEFINE FIELD Tree ON TABLE _spooky_incantation TYPE any
-PERMISSIONS FOR select, create, update WHERE true;
-
 -- For garbage collection (Heartbeat)
 DEFINE FIELD LastActiveAt ON TABLE _spooky_incantation TYPE datetime DEFAULT time::now()
 PERMISSIONS FOR select, create, update WHERE true;
@@ -208,6 +201,66 @@ PERMISSIONS FOR select, create, update WHERE true;
 -- How long this Incantation stays alive without activity
 DEFINE FIELD TTL ON TABLE _spooky_incantation TYPE duration
 PERMISSIONS FOR select, create, update WHERE true;
+
+-- Cleanup Triggers
+-- When an incantation dies, clean up its lookup and tail records
+DEFINE EVENT _spooky_cascade_delete_lookup ON TABLE _spooky_incantation WHEN $event = "DELETE" THEN {
+    DELETE _spooky_incantation_lookup WHERE IncantationId = $before.Id;
+    DELETE _spooky_incantation_tail WHERE IncantationId = $before.Id;
+};
+
+
+-- ==================================================
+-- SPOOKY INCANTATION LOOKUP
+-- The Reverse Index: Maps Tables -> Incantations
+-- ==================================================
+
+DEFINE TABLE _spooky_incantation_lookup SCHEMAFULL
+PERMISSIONS FOR select, create, update, delete WHERE true;
+
+-- Link to the parent Incantation
+DEFINE FIELD IncantationId ON TABLE _spooky_incantation_lookup TYPE string
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- The primary table being queried (e.g., 'thread')
+DEFINE FIELD Table ON TABLE _spooky_incantation_lookup TYPE string
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- Filter logic used to check if a dirty record matches this query
+-- Stored as an object e.g., { clause: "importance >= 3", args: [...] }
+DEFINE FIELD Where ON TABLE _spooky_incantation_lookup TYPE object DEFAULT {}
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- Sorting Metadata needed to maintain order
+DEFINE FIELD SortFields ON TABLE _spooky_incantation_lookup TYPE option<array<string>>
+PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD SortDirections ON TABLE _spooky_incantation_lookup TYPE option<array<string>>
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- Indexes for performance
+DEFINE INDEX idx_incantation ON TABLE _spooky_incantation_lookup COLUMNS IncantationId;
+DEFINE INDEX idx_table ON TABLE _spooky_incantation_lookup COLUMNS Table;
+
+
+-- ==================================================
+-- SPOOKY INCANTATION TAIL
+-- Cursor Management for Pagination/Limits
+-- ==================================================
+
+DEFINE TABLE _spooky_incantation_tail SCHEMAFULL
+PERMISSIONS FOR select, create, update, delete WHERE true;
+
+-- Link to the parent Incantation
+DEFINE FIELD IncantationId ON TABLE _spooky_incantation_tail TYPE string
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- The sort values of the *last* item in the current result set
+-- Used to determine if a new record falls inside or outside the LIMIT window.
+DEFINE FIELD TailValues ON TABLE _spooky_incantation_tail TYPE array<any>
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE INDEX idx_incantation ON TABLE _spooky_incantation_tail COLUMNS IncantationId UNIQUE;
+
 
 -- ==================================================
 -- SPOOKY RELATIONSHIP
@@ -288,17 +341,15 @@ DEFINE INDEX idx_record_id ON TABLE _spooky_data_hash COLUMNS RecordId UNIQUE;
 DEFINE TABLE _spooky_pending_mutations SCHEMAFULL
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
-DEFINE FIELD IF NOT EXISTS id ON _spooky_pending_mutations TYPE string;
-
-DEFINE FIELD IF NOT EXISTS MutationType ON _spooky_pending_mutations TYPE string
+DEFINE FIELD mutation_type ON TABLE _spooky_pending_mutations TYPE string
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- The target record ID (for update/delete) - maps to 'id' in the event object
-DEFINE FIELD IF NOT EXISTS RecordId ON _spooky_pending_mutations TYPE option<record>
+DEFINE FIELD record_id ON TABLE _spooky_pending_mutations TYPE option<record>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- The data payload (for create/update)
-DEFINE FIELD IF NOT EXISTS Data ON _spooky_pending_mutations TYPE option<object> FLEXIBLE
+DEFINE FIELD data ON TABLE _spooky_pending_mutations TYPE option<object> FLEXIBLE
 PERMISSIONS FOR select, create, update WHERE true;
 
 
@@ -310,10 +361,24 @@ PERMISSIONS FOR select, create, update WHERE true;
 DEFINE EVENT OVERWRITE _spooky_comment_client_mutation ON TABLE comment
 WHEN $before != $after AND $event != "DELETE"
 THEN {
+    LET $xor_sum = crypto::blake3("");
+    LET $h_author = crypto::blake3(<string>$after.author);
+    LET $xor_sum = mod::xor::blake3_xor($xor_sum, $h_author);
+    LET $h_content = crypto::blake3(<string>$after.content);
+    LET $xor_sum = mod::xor::blake3_xor($xor_sum, $h_content);
+    LET $h_thread = crypto::blake3(<string>$after.thread);
+    LET $xor_sum = mod::xor::blake3_xor($xor_sum, $h_thread);
+    LET $new_intrinsic = {
+        author: $h_author,
+        content: $h_content,
+        thread: $h_thread,
+        _xor: $xor_sum,
+    };
+
     UPSERT _spooky_data_hash CONTENT {
         RecordId: $after.id,
-        IntrinsicHash: "",
-        CompositionHash: "",
+        IntrinsicHash: $new_intrinsic,
+        CompositionHash: crypto::blake3(""), -- Empty for client
         TotalHash: NONE,
         IsDirty: true,
         PendingDelete: false
@@ -331,10 +396,27 @@ THEN {
 DEFINE EVENT OVERWRITE _spooky_thread_client_mutation ON TABLE thread
 WHEN $before != $after AND $event != "DELETE"
 THEN {
+    LET $xor_sum = crypto::blake3("");
+    LET $h_active = crypto::blake3(<string>$after.active);
+    LET $xor_sum = mod::xor::blake3_xor($xor_sum, $h_active);
+    LET $h_author = crypto::blake3(<string>$after.author);
+    LET $xor_sum = mod::xor::blake3_xor($xor_sum, $h_author);
+    LET $h_content = crypto::blake3(<string>$after.content);
+    LET $xor_sum = mod::xor::blake3_xor($xor_sum, $h_content);
+    LET $h_title = crypto::blake3(<string>$after.title);
+    LET $xor_sum = mod::xor::blake3_xor($xor_sum, $h_title);
+    LET $new_intrinsic = {
+        active: $h_active,
+        author: $h_author,
+        content: $h_content,
+        title: $h_title,
+        _xor: $xor_sum,
+    };
+
     UPSERT _spooky_data_hash CONTENT {
         RecordId: $after.id,
-        IntrinsicHash: "",
-        CompositionHash: "",
+        IntrinsicHash: $new_intrinsic,
+        CompositionHash: crypto::blake3(""), -- Empty for client
         TotalHash: NONE,
         IsDirty: true,
         PendingDelete: false
@@ -352,10 +434,18 @@ THEN {
 DEFINE EVENT OVERWRITE _spooky_user_client_mutation ON TABLE user
 WHEN $before != $after AND $event != "DELETE"
 THEN {
+    LET $xor_sum = crypto::blake3("");
+    LET $h_username = crypto::blake3(<string>$after.username);
+    LET $xor_sum = mod::xor::blake3_xor($xor_sum, $h_username);
+    LET $new_intrinsic = {
+        username: $h_username,
+        _xor: $xor_sum,
+    };
+
     UPSERT _spooky_data_hash CONTENT {
         RecordId: $after.id,
-        IntrinsicHash: "",
-        CompositionHash: "",
+        IntrinsicHash: $new_intrinsic,
+        CompositionHash: crypto::blake3(""), -- Empty for client
         TotalHash: NONE,
         IsDirty: true,
         PendingDelete: false

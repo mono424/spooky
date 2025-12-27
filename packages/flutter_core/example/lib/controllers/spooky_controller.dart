@@ -106,11 +106,17 @@ class SpookyController extends ChangeNotifier {
         try {
           // 1. Sign in as Root to apply schema
           await client!.remote.getClient.signin(
-            credentialsJson: jsonEncode({"user": "root", "pass": "root"}),
+            creds: jsonEncode({"user": "root", "pass": "root"}),
           );
 
           // 2. Apply Schema
-          await client!.remote.getClient.query(sql: SURQL_SCHEMA);
+          final schemaResult = await client!.remote.getClient.query(
+            sql: SURQL_SCHEMA,
+          );
+          if (schemaResult.contains("ERR") || schemaResult.contains("error")) {
+            log("SCHEMA ERROR: $schemaResult");
+            throw Exception("Schema application failed");
+          }
           log("Remote Schema Applied successfully.");
 
           // 3. Invalidate Root session (so we can sign up as user)
@@ -150,9 +156,7 @@ class SpookyController extends ChangeNotifier {
         "access": "account",
       });
 
-      final token = await client!.remote.getClient.signin(
-        credentialsJson: credentials,
-      );
+      final token = await client!.remote.getClient.signin(creds: credentials);
       log("Sign In Successful! Token: $token");
       isLoggedIn = true;
       notifyListeners();

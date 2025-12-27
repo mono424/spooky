@@ -32,10 +32,7 @@ class RemoteDatabaseService extends AbstractDatabaseService {
   Future<void> init() async {
     if (client == null) return;
     try {
-      await client!.useDb(
-        namespace: config.namespace,
-        database: config.database,
-      );
+      await client!.useDb(ns: config.namespace, db: config.database);
       if (config.token != null) {
         await client!.authenticate(token: config.token!);
       }
@@ -55,7 +52,15 @@ class RemoteDatabaseService extends AbstractDatabaseService {
     final query =
         "CREATE ONLY user SET username = \$username, password = crypto::argon2::generate(\$password);";
     // vars is now named parameter type object!
-    await this.query(query, vars: {"username": username, "password": password});
+    final response = await this.query(
+      query,
+      vars: {"username": username, "password": password},
+    );
+
+    // Check if creation failed
+    if (response.contains("error") || response.contains("Error")) {
+      throw Exception("Failed to create user: $response");
+    }
 
     // 2. Signin to get the token
     final credentials = jsonEncode({
@@ -65,6 +70,6 @@ class RemoteDatabaseService extends AbstractDatabaseService {
       "username": username,
       "password": password,
     });
-    return await client!.signin(credentialsJson: credentials);
+    return await client!.signin(creds: credentials);
   }
 }

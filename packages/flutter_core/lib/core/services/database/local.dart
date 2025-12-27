@@ -25,10 +25,7 @@ class LocalDatabaseService extends AbstractDatabaseService {
   @override
   Future<void> init() async {
     try {
-      await client!.useDb(
-        namespace: config.namespace,
-        database: config.database,
-      );
+      await client!.useDb(ns: config.namespace, db: config.database);
     } catch (e) {
       throw Exception('Error setting local NS/DB: $e');
     }

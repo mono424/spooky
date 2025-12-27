@@ -64,7 +64,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => 1953876643;
+  int get rustContentHash => 532811059;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -102,6 +102,11 @@ abstract class RustLibApi extends BaseApi {
 
   Future<void> crateApiClientSurrealDbInvalidate({required SurrealDb that});
 
+  Stream<String> crateApiClientSurrealDbLiveQuery({
+    required SurrealDb that,
+    required String tableName,
+  });
+
   Future<String> crateApiClientSurrealDbMerge({
     required SurrealDb that,
     required String resource,
@@ -127,17 +132,17 @@ abstract class RustLibApi extends BaseApi {
 
   Future<String> crateApiClientSurrealDbSignin({
     required SurrealDb that,
-    required String credentialsJson,
+    required String creds,
   });
 
   Future<String> crateApiClientSurrealDbSignup({
     required SurrealDb that,
-    required String credentialsJson,
+    required String creds,
   });
 
   Future<String> crateApiClientSurrealDbTransaction({
     required SurrealDb that,
-    required String statements,
+    required String stmts,
     String? vars,
   });
 
@@ -149,8 +154,8 @@ abstract class RustLibApi extends BaseApi {
 
   Future<void> crateApiClientSurrealDbUseDb({
     required SurrealDb that,
-    required String namespace,
-    required String database,
+    required String ns,
+    required String db,
   });
 
   RustArcIncrementStrongCountFnType
@@ -421,6 +426,49 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Stream<String> crateApiClientSurrealDbLiveQuery({
+    required SurrealDb that,
+    required String tableName,
+  }) {
+    final sink = RustStreamSink<String>();
+    unawaited(
+      handler.executeNormal(
+        NormalTask(
+          callFfi: (port_) {
+            final serializer = SseSerializer(generalizedFrbRustBinding);
+            sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDb(
+              that,
+              serializer,
+            );
+            sse_encode_String(tableName, serializer);
+            sse_encode_StreamSink_String_Sse(sink, serializer);
+            pdeCallFfi(
+              generalizedFrbRustBinding,
+              serializer,
+              funcId: 8,
+              port: port_,
+            );
+          },
+          codec: SseCodec(
+            decodeSuccessData: sse_decode_unit,
+            decodeErrorData: sse_decode_AnyhowException,
+          ),
+          constMeta: kCrateApiClientSurrealDbLiveQueryConstMeta,
+          argValues: [that, tableName, sink],
+          apiImpl: this,
+        ),
+      ),
+    );
+    return sink.stream;
+  }
+
+  TaskConstMeta get kCrateApiClientSurrealDbLiveQueryConstMeta =>
+      const TaskConstMeta(
+        debugName: "SurrealDb_live_query",
+        argNames: ["that", "tableName", "sink"],
+      );
+
+  @override
   Future<String> crateApiClientSurrealDbMerge({
     required SurrealDb that,
     required String resource,
@@ -439,7 +487,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 8,
+            funcId: 9,
             port: port_,
           );
         },
@@ -479,7 +527,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 9,
+            funcId: 10,
             port: port_,
           );
         },
@@ -513,7 +561,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 10,
+            funcId: 11,
             port: port_,
           );
         },
@@ -547,7 +595,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 11,
+            funcId: 12,
             port: port_,
           );
         },
@@ -581,7 +629,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 12,
+            funcId: 13,
             port: port_,
           );
         },
@@ -619,7 +667,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 13,
+            funcId: 14,
             port: port_,
           );
         },
@@ -643,7 +691,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @override
   Future<String> crateApiClientSurrealDbSignin({
     required SurrealDb that,
-    required String credentialsJson,
+    required String creds,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -653,45 +701,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          sse_encode_String(credentialsJson, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 14,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_String,
-          decodeErrorData: sse_decode_AnyhowException,
-        ),
-        constMeta: kCrateApiClientSurrealDbSigninConstMeta,
-        argValues: [that, credentialsJson],
-        apiImpl: this,
-      ),
-    );
-  }
-
-  TaskConstMeta get kCrateApiClientSurrealDbSigninConstMeta =>
-      const TaskConstMeta(
-        debugName: "SurrealDb_signin",
-        argNames: ["that", "credentialsJson"],
-      );
-
-  @override
-  Future<String> crateApiClientSurrealDbSignup({
-    required SurrealDb that,
-    required String credentialsJson,
-  }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDb(
-            that,
-            serializer,
-          );
-          sse_encode_String(credentialsJson, serializer);
+          sse_encode_String(creds, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -703,24 +713,23 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_String,
           decodeErrorData: sse_decode_AnyhowException,
         ),
-        constMeta: kCrateApiClientSurrealDbSignupConstMeta,
-        argValues: [that, credentialsJson],
+        constMeta: kCrateApiClientSurrealDbSigninConstMeta,
+        argValues: [that, creds],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiClientSurrealDbSignupConstMeta =>
+  TaskConstMeta get kCrateApiClientSurrealDbSigninConstMeta =>
       const TaskConstMeta(
-        debugName: "SurrealDb_signup",
-        argNames: ["that", "credentialsJson"],
+        debugName: "SurrealDb_signin",
+        argNames: ["that", "creds"],
       );
 
   @override
-  Future<String> crateApiClientSurrealDbTransaction({
+  Future<String> crateApiClientSurrealDbSignup({
     required SurrealDb that,
-    required String statements,
-    String? vars,
+    required String creds,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -730,8 +739,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          sse_encode_String(statements, serializer);
-          sse_encode_opt_String(vars, serializer);
+          sse_encode_String(creds, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -743,8 +751,48 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_String,
           decodeErrorData: sse_decode_AnyhowException,
         ),
+        constMeta: kCrateApiClientSurrealDbSignupConstMeta,
+        argValues: [that, creds],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiClientSurrealDbSignupConstMeta =>
+      const TaskConstMeta(
+        debugName: "SurrealDb_signup",
+        argNames: ["that", "creds"],
+      );
+
+  @override
+  Future<String> crateApiClientSurrealDbTransaction({
+    required SurrealDb that,
+    required String stmts,
+    String? vars,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDb(
+            that,
+            serializer,
+          );
+          sse_encode_String(stmts, serializer);
+          sse_encode_opt_String(vars, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 17,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
         constMeta: kCrateApiClientSurrealDbTransactionConstMeta,
-        argValues: [that, statements, vars],
+        argValues: [that, stmts, vars],
         apiImpl: this,
       ),
     );
@@ -753,7 +801,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiClientSurrealDbTransactionConstMeta =>
       const TaskConstMeta(
         debugName: "SurrealDb_transaction",
-        argNames: ["that", "statements", "vars"],
+        argNames: ["that", "stmts", "vars"],
       );
 
   @override
@@ -775,7 +823,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 17,
+            funcId: 18,
             port: port_,
           );
         },
@@ -799,8 +847,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @override
   Future<void> crateApiClientSurrealDbUseDb({
     required SurrealDb that,
-    required String namespace,
-    required String database,
+    required String ns,
+    required String db,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -810,12 +858,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          sse_encode_String(namespace, serializer);
-          sse_encode_String(database, serializer);
+          sse_encode_String(ns, serializer);
+          sse_encode_String(db, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 18,
+            funcId: 19,
             port: port_,
           );
         },
@@ -824,7 +872,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_AnyhowException,
         ),
         constMeta: kCrateApiClientSurrealDbUseDbConstMeta,
-        argValues: [that, namespace, database],
+        argValues: [that, ns, db],
         apiImpl: this,
       ),
     );
@@ -833,7 +881,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiClientSurrealDbUseDbConstMeta =>
       const TaskConstMeta(
         debugName: "SurrealDb_use_db",
-        argNames: ["that", "namespace", "database"],
+        argNames: ["that", "ns", "db"],
       );
 
   RustArcIncrementStrongCountFnType
@@ -875,6 +923,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return SurrealDbImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
+  @protected
+  RustStreamSink<String> dco_decode_StreamSink_String_Sse(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    throw UnimplementedError();
   }
 
   @protected
@@ -986,6 +1040,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       sse_decode_usize(deserializer),
       sse_decode_i_32(deserializer),
     );
+  }
+
+  @protected
+  RustStreamSink<String> sse_decode_StreamSink_String_Sse(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    throw UnimplementedError('Unreachable ()');
   }
 
   @protected
@@ -1128,6 +1190,23 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_StreamSink_String_Sse(
+    RustStreamSink<String> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(
+      self.setupAndSerialize(
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+      ),
+      serializer,
+    );
+  }
+
+  @protected
   void sse_encode_String(String self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_list_prim_u_8_strict(utf8.encoder.convert(self), serializer);
@@ -1258,6 +1337,9 @@ class SurrealDbImpl extends RustOpaque implements SurrealDb {
   Future<void> invalidate() =>
       RustLib.instance.api.crateApiClientSurrealDbInvalidate(that: this);
 
+  Stream<String> liveQuery({required String tableName}) => RustLib.instance.api
+      .crateApiClientSurrealDbLiveQuery(that: this, tableName: tableName);
+
   Future<String> merge({required String resource, String? data}) => RustLib
       .instance
       .api
@@ -1280,24 +1362,16 @@ class SurrealDbImpl extends RustOpaque implements SurrealDb {
   Future<String> select({required String resource}) => RustLib.instance.api
       .crateApiClientSurrealDbSelect(that: this, resource: resource);
 
-  Future<String> signin({required String credentialsJson}) =>
-      RustLib.instance.api.crateApiClientSurrealDbSignin(
-        that: this,
-        credentialsJson: credentialsJson,
-      );
+  Future<String> signin({required String creds}) => RustLib.instance.api
+      .crateApiClientSurrealDbSignin(that: this, creds: creds);
 
-  Future<String> signup({required String credentialsJson}) =>
-      RustLib.instance.api.crateApiClientSurrealDbSignup(
-        that: this,
-        credentialsJson: credentialsJson,
-      );
+  Future<String> signup({required String creds}) => RustLib.instance.api
+      .crateApiClientSurrealDbSignup(that: this, creds: creds);
 
-  Future<String> transaction({required String statements, String? vars}) =>
-      RustLib.instance.api.crateApiClientSurrealDbTransaction(
-        that: this,
-        statements: statements,
-        vars: vars,
-      );
+  Future<String> transaction({required String stmts, String? vars}) => RustLib
+      .instance
+      .api
+      .crateApiClientSurrealDbTransaction(that: this, stmts: stmts, vars: vars);
 
   Future<String> update({required String resource, String? data}) =>
       RustLib.instance.api.crateApiClientSurrealDbUpdate(
@@ -1306,10 +1380,8 @@ class SurrealDbImpl extends RustOpaque implements SurrealDb {
         data: data,
       );
 
-  Future<void> useDb({required String namespace, required String database}) =>
-      RustLib.instance.api.crateApiClientSurrealDbUseDb(
-        that: this,
-        namespace: namespace,
-        database: database,
-      );
+  Future<void> useDb({required String ns, required String db}) => RustLib
+      .instance
+      .api
+      .crateApiClientSurrealDbUseDb(that: this, ns: ns, db: db);
 }

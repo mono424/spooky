@@ -8,7 +8,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'client.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `get_db`
+// These functions are ignored because they are not marked as `pub`: `ensure_dir_exists`, `get_db`, `graceful_shutdown`, `kill_zombie_processes`, `spawn_sidecar_server`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ServerGuard`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `drop`
 
@@ -29,6 +29,8 @@ abstract class SurrealDb implements RustOpaqueInterface {
 
   Future<void> invalidate();
 
+  Stream<String> liveQuery({required String tableName});
+
   Future<String> merge({required String resource, String? data});
 
   Future<String> query({required String sql, String? vars});
@@ -41,15 +43,15 @@ abstract class SurrealDb implements RustOpaqueInterface {
 
   Future<String> select({required String resource});
 
-  Future<String> signin({required String credentialsJson});
+  Future<String> signin({required String creds});
 
-  Future<String> signup({required String credentialsJson});
+  Future<String> signup({required String creds});
 
-  Future<String> transaction({required String statements, String? vars});
+  Future<String> transaction({required String stmts, String? vars});
 
   Future<String> update({required String resource, String? data});
 
-  Future<void> useDb({required String namespace, required String database});
+  Future<void> useDb({required String ns, required String db});
 }
 
 @freezed

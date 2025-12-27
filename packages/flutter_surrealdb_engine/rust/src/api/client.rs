@@ -194,7 +194,7 @@ impl SurrealDb {
         }
     }
 
-    fn get_db(&self) -> anyhow::Result<Surreal<Any>> {
+    pub(crate) fn get_db(&self) -> anyhow::Result<Surreal<Any>> {
         let guard = self.db.lock().map_err(|e| anyhow::anyhow!("Mutex: {}", e))?;
         match &*guard {
             Some(db) => Ok(db.clone()),

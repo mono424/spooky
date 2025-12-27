@@ -3348,6 +3348,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "flutter_rust_bridge",
+ "futures-util",
+ "log",
  "serde",
  "serde_json",
  "surrealdb",
