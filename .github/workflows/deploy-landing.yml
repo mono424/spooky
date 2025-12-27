@@ -28,18 +28,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'pnpm'
 
       - name: Setup Pages
         id: pages
         uses: actions/configure-pages@v5
 
       - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile
-
-      - name: Build with Astro
-        working-directory: apps/landing-page
         run: |
+          rm -f pnpm-lock.yaml
+          pnpm install
           pnpm run build
 
       - name: Upload artifact
