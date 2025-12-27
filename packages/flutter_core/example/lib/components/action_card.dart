@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_core_example/core/theme.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 class ActionCard extends StatelessWidget {
   final String title;
@@ -24,20 +26,19 @@ class ActionCard extends StatelessWidget {
         width: 160,
         height: 120,
         decoration: BoxDecoration(
-          color: color ?? Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.grey.shade300),
+          color: SpookyColors.background,
+          border: Border.all(color: SpookyColors.white),
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 32, color: textColor ?? Colors.deepPurple),
+            Icon(icon, size: 32, color: SpookyColors.white),
             const SizedBox(height: 8),
             Text(
               title,
-              style: TextStyle(
+              style: GoogleFonts.spaceMono(
                 fontWeight: FontWeight.w600,
-                color: textColor ?? Colors.black87,
+                color: SpookyColors.white,
               ),
             ),
           ],

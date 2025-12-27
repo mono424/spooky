@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_core_example/core/theme.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 class SpookyAppBar extends StatelessWidget implements PreferredSizeWidget {
   final VoidCallback onDisconnect;
@@ -16,7 +17,14 @@ class SpookyAppBar extends StatelessWidget implements PreferredSizeWidget {
   @override
   Widget build(BuildContext context) {
     return AppBar(
-      title: const Text('SpookyClient Example'),
+      title: Text(
+        '[ SPOOKY_CLIENT_EXAMPLE ]',
+        style: GoogleFonts.spaceMono(
+          fontWeight: FontWeight.bold,
+          fontSize: 16,
+          letterSpacing: 1.2,
+        ),
+      ),
       backgroundColor: SpookyColors.background,
       foregroundColor: SpookyColors.white,
       elevation: 0,

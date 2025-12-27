@@ -499,7 +499,7 @@ class User {
 /// The complete SurrealDB schema definition.
 /// This constant contains the raw .surql schema file content.
 const String SURQL_SCHEMA =
-    r'''-- ##################################################################
+    """-- ##################################################################
 -- SCOPES & AUTHENTICATION
 -- ##################################################################
 
@@ -511,13 +511,13 @@ DEFINE TABLE user SCHEMAFULL
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
 DEFINE FIELD username ON TABLE user TYPE string
-ASSERT $value != NONE AND string::len($value) > 3
+ASSERT \$value != NONE AND string::len(\$value) > 3
 PERMISSIONS FOR select, create, update WHERE true;
     
 DEFINE INDEX unique_username ON TABLE user FIELDS username UNIQUE;
 
 DEFINE FIELD password ON TABLE user TYPE string
-ASSERT $value != NONE AND string::len($value) > 0
+ASSERT \$value != NONE AND string::len(\$value) > 0
 PERMISSIONS FOR select, create, update WHERE true;
 
 DEFINE FIELD created_at ON TABLE user TYPE datetime
@@ -534,17 +534,17 @@ PERMISSIONS FOR select, create, update, delete WHERE true
 
 
 DEFINE FIELD title ON TABLE thread TYPE string
-    ASSERT $value != NONE AND string::len($value) > 0 AND string::len($value) <= 200;
+    ASSERT \$value != NONE AND string::len(\$value) > 0 AND string::len(\$value) <= 200;
 
 DEFINE FIELD content ON TABLE thread TYPE string
-    ASSERT $value != NONE AND string::len($value) > 0;
+    ASSERT \$value != NONE AND string::len(\$value) > 0;
 
 DEFINE FIELD author ON TABLE thread TYPE record<user>;
 
 DEFINE FIELD created_at ON TABLE thread TYPE datetime
     VALUE time::now();
 
-DEFINE FIELD active ON TABLE thread TYPE bool VALUE $value OR false;
+DEFINE FIELD active ON TABLE thread TYPE bool VALUE \$value OR false;
 
 -- ##################################################################
 -- COMMENT TABLE
@@ -557,7 +557,7 @@ PERMISSIONS FOR select, create, update, delete WHERE true
 DEFINE FIELD thread ON TABLE comment TYPE record<thread>; -- @parent
 
 DEFINE FIELD content ON TABLE comment TYPE string
-    ASSERT $value != NONE AND string::len($value) > 0;
+    ASSERT \$value != NONE AND string::len(\$value) > 0;
 
 DEFINE FIELD author ON TABLE comment TYPE record<user>;
 
@@ -572,8 +572,8 @@ DEFINE TABLE commented_on SCHEMAFULL TYPE RELATION
   FROM comment TO thread
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
-DEFINE EVENT comment_created ON TABLE comment WHEN $event = "CREATE" THEN
-  RELATE ($after.id)->commented_on->($after.thread)
+DEFINE EVENT comment_created ON TABLE comment WHEN \$event = \"CREATE\" THEN
+  RELATE (\$after.id)->commented_on->(\$after.thread)
 ;
 -- ==================================================
 -- SPOOKY INCANTATION
@@ -609,9 +609,9 @@ PERMISSIONS FOR select, create, update WHERE true;
 
 -- Cleanup Triggers
 -- When an incantation dies, clean up its lookup and tail records
-DEFINE EVENT _spooky_cascade_delete_lookup ON TABLE _spooky_incantation WHEN $event = "DELETE" THEN {
-    DELETE _spooky_incantation_lookup WHERE IncantationId = $before.Id;
-    DELETE _spooky_incantation_tail WHERE IncantationId = $before.Id;
+DEFINE EVENT _spooky_cascade_delete_lookup ON TABLE _spooky_incantation WHEN \$event = \"DELETE\" THEN {
+    DELETE _spooky_incantation_lookup WHERE IncantationId = \$before.Id;
+    DELETE _spooky_incantation_tail WHERE IncantationId = \$before.Id;
 };
 
 
@@ -632,7 +632,7 @@ DEFINE FIELD Table ON TABLE _spooky_incantation_lookup TYPE string
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- Filter logic used to check if a dirty record matches this query
--- Stored as an object e.g., { clause: "importance >= 3", args: [...] }
+-- Stored as an object e.g., { clause: \"importance >= 3\", args: [...] }
 DEFINE FIELD Where ON TABLE _spooky_incantation_lookup TYPE object DEFAULT {}
 PERMISSIONS FOR select, create, update WHERE true;
 
@@ -686,7 +686,7 @@ PERMISSIONS FOR select, create, update WHERE true;
 
 -- The Logic Flow: 'COMPOSITION' (Bubble Up) or 'REFERENCE' (Cascade Down)
 DEFINE FIELD Type ON TABLE _spooky_relationship TYPE string 
-    ASSERT $value INSIDE ['COMPOSITION', 'REFERENCE']
+    ASSERT \$value INSIDE ['COMPOSITION', 'REFERENCE']
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- Enforce unique definition per relationship path
@@ -698,15 +698,15 @@ DEFINE INDEX idx_rel_unique ON TABLE _spooky_relationship COLUMNS ParentTable, C
 -- Used in local-migrator.ts
 -- ==================================================
 
-DEFINE TABLE _spooky_schema SCHEMAFULL;
-DEFINE FIELD id ON _spooky_schema TYPE string;
-DEFINE FIELD hash ON _spooky_schema TYPE string;
-DEFINE FIELD created_at ON _spooky_schema TYPE datetime VALUE time::now();
-DEFINE INDEX unique_hash ON _spooky_schema FIELDS hash UNIQUE;
+DEFINE TABLE IF NOT EXISTS _spooky_schema SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS id ON _spooky_schema TYPE string;
+DEFINE FIELD IF NOT EXISTS hash ON _spooky_schema TYPE string;
+DEFINE FIELD IF NOT EXISTS created_at ON _spooky_schema TYPE datetime VALUE time::now();
+DEFINE INDEX IF NOT EXISTS unique_hash ON _spooky_schema FIELDS hash UNIQUE;
 
 -- ==================================================
 -- SPOOKY DATA HASH (Client)
--- The "Shadow Graph" tracking the state of every record.
+-- The \"Shadow Graph\" tracking the state of every record.
 -- ==================================================
 
 DEFINE TABLE _spooky_data_hash SCHEMAFULL
@@ -721,7 +721,7 @@ DEFINE FIELD IntrinsicHash ON TABLE _spooky_data_hash TYPE object
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- H_composition: XOR sum of all dependent children's TotalHashes
-DEFINE FIELD CompositionHash ON TABLE _spooky_data_hash TYPE object
+DEFINE FIELD CompositionHash ON TABLE _spooky_data_hash TYPE string
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- H_total: Intrinsic XOR Composition
@@ -763,27 +763,27 @@ PERMISSIONS FOR select, create, update WHERE true;
 -- ==================================================
 
 -- Table: comment Client Mutation
-DEFINE EVENT _spooky_comment_client_mutation ON TABLE comment
-WHEN $before != $after AND $event != "DELETE"
+DEFINE EVENT OVERWRITE _spooky_comment_client_mutation ON TABLE comment
+WHEN \$before != \$after AND \$event != \"DELETE\"
 THEN {
-    LET $xor_sum = crypto::blake3("");
-    LET $h_author = crypto::blake3(<string>$after.author);
-    LET $xor_sum = crypto::blake3(<string>$xor_sum + <string>$h_author);
-    LET $h_content = crypto::blake3(<string>$after.content);
-    LET $xor_sum = crypto::blake3(<string>$xor_sum + <string>$h_content);
-    LET $h_thread = crypto::blake3(<string>$after.thread);
-    LET $xor_sum = crypto::blake3(<string>$xor_sum + <string>$h_thread);
-    LET $new_intrinsic = {
-        author: $h_author,
-        content: $h_content,
-        thread: $h_thread,
-        _xor: $xor_sum,
+    LET \$xor_sum = crypto::blake3(\"\");
+    LET \$h_author = crypto::blake3(<string>\$after.author);
+    LET \$xor_sum = mod::xor::blake3_xor(\$xor_sum, \$h_author);
+    LET \$h_content = crypto::blake3(<string>\$after.content);
+    LET \$xor_sum = mod::xor::blake3_xor(\$xor_sum, \$h_content);
+    LET \$h_thread = crypto::blake3(<string>\$after.thread);
+    LET \$xor_sum = mod::xor::blake3_xor(\$xor_sum, \$h_thread);
+    LET \$new_intrinsic = {
+        author: \$h_author,
+        content: \$h_content,
+        thread: \$h_thread,
+        _xor: \$xor_sum,
     };
 
     UPSERT _spooky_data_hash CONTENT {
-        RecordId: $after.id,
-        IntrinsicHash: $new_intrinsic,
-        CompositionHash: crypto::blake3(""), -- Empty for client
+        RecordId: \$after.id,
+        IntrinsicHash: \$new_intrinsic,
+        CompositionHash: crypto::blake3(\"\"), -- Empty for client
         TotalHash: NONE,
         IsDirty: true,
         PendingDelete: false
@@ -791,37 +791,37 @@ THEN {
 };
 
 -- Table: comment Client Deletion
-DEFINE EVENT _spooky_comment_client_delete ON TABLE comment
-WHEN $event = "DELETE"
+DEFINE EVENT OVERWRITE _spooky_comment_client_delete ON TABLE comment
+WHEN \$event = \"DELETE\"
 THEN {
-    UPDATE _spooky_data_hash SET PendingDelete = true WHERE RecordId = $before.id;
+    UPDATE _spooky_data_hash SET PendingDelete = true WHERE RecordId = \$before.id;
 };
 
 -- Table: thread Client Mutation
-DEFINE EVENT _spooky_thread_client_mutation ON TABLE thread
-WHEN $before != $after AND $event != "DELETE"
+DEFINE EVENT OVERWRITE _spooky_thread_client_mutation ON TABLE thread
+WHEN \$before != \$after AND \$event != \"DELETE\"
 THEN {
-    LET $xor_sum = crypto::blake3("");
-    LET $h_active = crypto::blake3(<string>$after.active);
-    LET $xor_sum = crypto::blake3(<string>$xor_sum + <string>$h_active);
-    LET $h_author = crypto::blake3(<string>$after.author);
-    LET $xor_sum = crypto::blake3(<string>$xor_sum + <string>$h_author);
-    LET $h_content = crypto::blake3(<string>$after.content);
-    LET $xor_sum = crypto::blake3(<string>$xor_sum + <string>$h_content);
-    LET $h_title = crypto::blake3(<string>$after.title);
-    LET $xor_sum = crypto::blake3(<string>$xor_sum + <string>$h_title);
-    LET $new_intrinsic = {
-        active: $h_active,
-        author: $h_author,
-        content: $h_content,
-        title: $h_title,
-        _xor: $xor_sum,
+    LET \$xor_sum = crypto::blake3(\"\");
+    LET \$h_active = crypto::blake3(<string>\$after.active);
+    LET \$xor_sum = mod::xor::blake3_xor(\$xor_sum, \$h_active);
+    LET \$h_author = crypto::blake3(<string>\$after.author);
+    LET \$xor_sum = mod::xor::blake3_xor(\$xor_sum, \$h_author);
+    LET \$h_content = crypto::blake3(<string>\$after.content);
+    LET \$xor_sum = mod::xor::blake3_xor(\$xor_sum, \$h_content);
+    LET \$h_title = crypto::blake3(<string>\$after.title);
+    LET \$xor_sum = mod::xor::blake3_xor(\$xor_sum, \$h_title);
+    LET \$new_intrinsic = {
+        active: \$h_active,
+        author: \$h_author,
+        content: \$h_content,
+        title: \$h_title,
+        _xor: \$xor_sum,
     };
 
     UPSERT _spooky_data_hash CONTENT {
-        RecordId: $after.id,
-        IntrinsicHash: $new_intrinsic,
-        CompositionHash: crypto::blake3(""), -- Empty for client
+        RecordId: \$after.id,
+        IntrinsicHash: \$new_intrinsic,
+        CompositionHash: crypto::blake3(\"\"), -- Empty for client
         TotalHash: NONE,
         IsDirty: true,
         PendingDelete: false
@@ -829,28 +829,28 @@ THEN {
 };
 
 -- Table: thread Client Deletion
-DEFINE EVENT _spooky_thread_client_delete ON TABLE thread
-WHEN $event = "DELETE"
+DEFINE EVENT OVERWRITE _spooky_thread_client_delete ON TABLE thread
+WHEN \$event = \"DELETE\"
 THEN {
-    UPDATE _spooky_data_hash SET PendingDelete = true WHERE RecordId = $before.id;
+    UPDATE _spooky_data_hash SET PendingDelete = true WHERE RecordId = \$before.id;
 };
 
 -- Table: user Client Mutation
-DEFINE EVENT _spooky_user_client_mutation ON TABLE user
-WHEN $before != $after AND $event != "DELETE"
+DEFINE EVENT OVERWRITE _spooky_user_client_mutation ON TABLE user
+WHEN \$before != \$after AND \$event != \"DELETE\"
 THEN {
-    LET $xor_sum = crypto::blake3("");
-    LET $h_username = crypto::blake3(<string>$after.username);
-    LET $xor_sum = crypto::blake3(<string>$xor_sum + <string>$h_username);
-    LET $new_intrinsic = {
-        username: $h_username,
-        _xor: $xor_sum,
+    LET \$xor_sum = crypto::blake3(\"\");
+    LET \$h_username = crypto::blake3(<string>\$after.username);
+    LET \$xor_sum = mod::xor::blake3_xor(\$xor_sum, \$h_username);
+    LET \$new_intrinsic = {
+        username: \$h_username,
+        _xor: \$xor_sum,
     };
 
     UPSERT _spooky_data_hash CONTENT {
-        RecordId: $after.id,
-        IntrinsicHash: $new_intrinsic,
-        CompositionHash: crypto::blake3(""), -- Empty for client
+        RecordId: \$after.id,
+        IntrinsicHash: \$new_intrinsic,
+        CompositionHash: crypto::blake3(\"\"), -- Empty for client
         TotalHash: NONE,
         IsDirty: true,
         PendingDelete: false
@@ -858,9 +858,9 @@ THEN {
 };
 
 -- Table: user Client Deletion
-DEFINE EVENT _spooky_user_client_delete ON TABLE user
-WHEN $event = "DELETE"
+DEFINE EVENT OVERWRITE _spooky_user_client_delete ON TABLE user
+WHEN \$event = \"DELETE\"
 THEN {
-    UPDATE _spooky_data_hash SET PendingDelete = true WHERE RecordId = $before.id;
+    UPDATE _spooky_data_hash SET PendingDelete = true WHERE RecordId = \$before.id;
 };
-''';
+""";

@@ -15,7 +15,7 @@ class LiveQueryView extends StatefulWidget {
 
 class _LiveQueryViewState extends State<LiveQueryView> {
   final TextEditingController _tableController = TextEditingController(
-    text: 'person',
+    text: 'user',
   );
   StreamSubscription<String>? _subscription;
   final List<String> _events = [];
@@ -23,12 +23,20 @@ class _LiveQueryViewState extends State<LiveQueryView> {
 
   void _toggleSubscription() async {
     if (_isListening) {
-      await _subscription?.cancel();
-      setState(() {
-        _isListening = false;
+      try {
+        await _subscription?.cancel();
         _subscription = null;
-        _events.add("[Local] Subscription cancelled.");
-      });
+        setState(() {
+          _isListening = false;
+          _events.add("[Local] Subscription cancelled.");
+        });
+      } catch (e) {
+        setState(() {
+          _isListening = false; // Force state update
+          _subscription = null;
+          _events.add("[Error] Cancel failed (forced stop): $e");
+        });
+      }
       return;
     }
 
@@ -82,15 +90,42 @@ class _LiveQueryViewState extends State<LiveQueryView> {
   Future<void> _createRecord() async {
     try {
       final tableName = _tableController.text;
-      await widget.controller.client!.remote.getClient.create(
+      final now = DateTime.now().millisecondsSinceEpoch;
+
+      // Adapted for 'user' table schema
+      final data = tableName == 'user'
+          ? {
+              "username": "user_$now",
+              "password": "password123",
+              /* required by schema */
+              "created_at": DateTime.now().toIso8601String(),
+            }
+          : {
+              "name": "Test Item $now",
+              "created_at": DateTime.now().toIso8601String(),
+            };
+
+      final result = await widget.controller.client!.remote.getClient.create(
         resource: tableName,
-        data: jsonEncode({
-          "name": "Test User",
-          "created_at": DateTime.now().toIso8601String(),
-        }),
+        data: jsonEncode(data),
       );
-      // Log happens automatically via stream if working
+
+      if (result.contains("ERR") || result.contains("error")) {
+        throw Exception("DB Error: $result");
+      }
+
+      setState(() {
+        _events.insert(0, "[Success] Created: $result");
+      });
     } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Create Error: $e"),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
       setState(() {
         _events.add("[Error] Create failed: $e");
       });
@@ -98,19 +133,40 @@ class _LiveQueryViewState extends State<LiveQueryView> {
   }
 
   Future<void> _updateRecord() async {
-    // This is hard to do without an ID, so we might just create another one
-    // Or we update ALL records in table (dangerous but effective for test)
     try {
       final tableName = _tableController.text;
-      // MERGE to all records in table
-      await widget.controller.client!.remote.getClient.query(
-        sql: "UPDATE type::table(\$tb) MERGE { updated_at: \$now };",
-        vars: jsonEncode({
-          "tb": tableName,
-          "now": DateTime.now().toIso8601String(),
-        }),
+      final now = DateTime.now().millisecondsSinceEpoch;
+
+      // Adapted for 'user' table which doesn't have updated_at
+      final updateQuery = tableName == 'user'
+          ? "UPDATE type::table(\$tb) MERGE { password: \$val };"
+          : "UPDATE type::table(\$tb) MERGE { updated_at: \$val };";
+
+      final val = tableName == 'user'
+          ? "pass_$now"
+          : DateTime.now().toIso8601String();
+
+      final result = await widget.controller.client!.remote.getClient.query(
+        sql: updateQuery,
+        vars: jsonEncode({"tb": tableName, "val": val}),
       );
+
+      if (result.contains("ERR") || result.contains("error")) {
+        throw Exception("DB Error: $result");
+      }
+
+      setState(() {
+        _events.insert(0, "[Success] Update All: $result");
+      });
     } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Update Error: $e"),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
       setState(() {
         _events.add("[Error] Update failed: $e");
       });

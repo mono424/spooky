@@ -80,21 +80,18 @@ class InitializationView extends StatelessWidget {
               const SizedBox(height: 24),
               Container(
                 decoration: BoxDecoration(
-                  color: SpookyColors.white10,
-                  borderRadius: BorderRadius.circular(4),
+                  color: SpookyColors.background,
+                  border: Border.all(color: SpookyColors.white),
                 ),
                 child: CheckboxListTile(
                   value: useDevSidecar,
                   onChanged: onDevSidecarChanged,
                   title: const Text("Enable Dev"),
-                  activeColor: SpookyColors.primary,
-                  checkColor: Colors.white,
+                  activeColor: SpookyColors.white,
+                  checkColor: SpookyColors.background,
                   contentPadding: const EdgeInsets.symmetric(
                     horizontal: 16,
                     vertical: 2,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(4),
                   ),
                 ),
               ),

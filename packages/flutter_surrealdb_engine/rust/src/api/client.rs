@@ -134,7 +134,8 @@ impl SurrealDb {
             // 2. Spawn Process
             println!("DevSidecar: Spawning attempt {}/5...", attempt);
             let mut child = Command::new("surreal")
-                .args(&["start", "--user", "root", "--pass", "root", "--bind", &bind_addr, &db_url_arg])
+                .args(&["start", "--allow-all", "--user", "root", "--pass", "root", "--bind", &bind_addr, &db_url_arg])
+                .env("SURREAL_CAPS_ALLOW_EXPERIMENTAL", "surrealism,files")
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::inherit()) // Logs visible in Flutter
                 .spawn()

@@ -20,19 +20,19 @@ class LogsPanel extends StatelessWidget {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           decoration: const BoxDecoration(
-            color: Color(0xFF1E1E1E), // VS Code header gray
-            border: Border(bottom: BorderSide(color: Colors.black, width: 1)),
+            color: Colors.black, // Strict Black
+            border: Border(bottom: BorderSide(color: Colors.white, width: 1)),
           ),
           width: double.infinity,
           child: Row(
             children: [
-              const Icon(Icons.terminal, color: SpookyColors.primary, size: 14),
+              const Icon(Icons.terminal, color: SpookyColors.white, size: 14),
               const SizedBox(width: 8),
               Text(
-                "OUTPUT", // VS Code style
-                style: GoogleFonts.inter(
+                "OUTPUT",
+                style: GoogleFonts.spaceMono(
                   fontWeight: FontWeight.bold,
-                  color: const Color(0xFFCCCCCC),
+                  color: SpookyColors.white,
                   fontSize: 11,
                   letterSpacing: 0.5,
                 ),
@@ -43,11 +43,10 @@ class LogsPanel extends StatelessWidget {
         // Content
         Expanded(
           child: Container(
-            color: const Color(0xFF000000), // Pure black
+            color: Colors.black, // Pure black
             child: Scrollbar(
               // Add scrollbar for better UX
               controller: scrollController,
-              thumbVisibility: true,
               child: TextField(
                 controller: controller,
                 scrollController: scrollController,
@@ -55,10 +54,8 @@ class LogsPanel extends StatelessWidget {
                 showCursor: false, // Hide blinking cursor
                 mouseCursor: SystemMouseCursors.text,
                 maxLines: null,
-                style: GoogleFonts.firaCode(
-                  color: const Color(
-                    0xFFCCCCCC,
-                  ), // VS Code default text color (not bright green)
+                style: GoogleFonts.spaceMono(
+                  color: SpookyColors.white,
                   fontSize: 12,
                   height: 1.4,
                 ),

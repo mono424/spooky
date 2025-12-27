@@ -28,7 +28,7 @@ class MutationResponse {
 const String mutationCreateQuery = r'''
   BEGIN TRANSACTION;
 
-    LET $created = (CREATE type::table($table) CONTENT $data)[0];
+    LET $created = CREATE ONLY type::table($table) CONTENT $data;
     LET $mutation = CREATE ONLY _spooky_pending_mutations SET
         mutation_type = 'create',
         record_id = $created.id,

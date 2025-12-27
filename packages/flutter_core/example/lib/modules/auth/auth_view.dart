@@ -120,10 +120,10 @@ class _AuthViewState extends State<AuthView> with TickerProviderStateMixin {
                           boxShadow: [
                             BoxShadow(
                               color: SpookyColors.primary.withOpacity(
-                                0.4,
-                              ), // Brighter
-                              blurRadius: 100, // Bigger blur
-                              spreadRadius: 20, // Bigger spread
+                                0.2,
+                              ), // Reduced opacity
+                              blurRadius: 60, // Reduced blur
+                              spreadRadius: 5, // Reduced spread
                             ),
                           ],
                         ),
@@ -136,8 +136,8 @@ class _AuthViewState extends State<AuthView> with TickerProviderStateMixin {
                   // Title
                   Text(
                     _isLogin ? 'Welcome Back' : 'Join the Spooky Side',
-                    style: GoogleFonts.outfit(
-                      fontSize: 32,
+                    style: GoogleFonts.spaceMono(
+                      fontSize: 24,
                       fontWeight: FontWeight.bold,
                       color: SpookyColors.white,
                     ),
@@ -148,8 +148,8 @@ class _AuthViewState extends State<AuthView> with TickerProviderStateMixin {
                     _isLogin
                         ? 'Enter your credentials to access the realm.'
                         : 'Create your account and start haunting.',
-                    style: GoogleFonts.inter(
-                      fontSize: 16,
+                    style: GoogleFonts.spaceMono(
+                      fontSize: 12,
                       color: SpookyColors.white60,
                     ),
                     textAlign: TextAlign.center,
@@ -163,7 +163,7 @@ class _AuthViewState extends State<AuthView> with TickerProviderStateMixin {
                       labelText: 'Username',
                       prefixIcon: Icon(Icons.person_outline),
                     ),
-                    style: const TextStyle(color: SpookyColors.white),
+                    style: GoogleFonts.spaceMono(color: SpookyColors.white),
                   ),
                   const SizedBox(height: 16),
                   TextField(
@@ -173,13 +173,13 @@ class _AuthViewState extends State<AuthView> with TickerProviderStateMixin {
                       prefixIcon: Icon(Icons.lock_outline),
                     ),
                     obscureText: true,
-                    style: const TextStyle(color: SpookyColors.white),
+                    style: GoogleFonts.spaceMono(color: SpookyColors.white),
                   ),
                   if (_error != null) ...[
                     const SizedBox(height: 16),
                     Text(
                       _error!,
-                      style: const TextStyle(color: SpookyColors.primary),
+                      style: GoogleFonts.spaceMono(color: Colors.redAccent),
                       textAlign: TextAlign.center,
                     ),
                   ],
@@ -191,7 +191,9 @@ class _AuthViewState extends State<AuthView> with TickerProviderStateMixin {
                     child: ElevatedButton(
                       onPressed: _isLoading ? null : _submit,
                       child: _isLoading
-                          ? const CircularProgressIndicator(color: Colors.white)
+                          ? const CircularProgressIndicator(
+                              color: SpookyColors.background,
+                            )
                           : Text(_isLogin ? 'Sign In' : 'Sign Up'),
                     ),
                   ),
@@ -210,7 +212,10 @@ class _AuthViewState extends State<AuthView> with TickerProviderStateMixin {
                     },
                     child: RichText(
                       text: TextSpan(
-                        style: GoogleFonts.inter(color: SpookyColors.white60),
+                        style: GoogleFonts.spaceMono(
+                          color: SpookyColors.white60,
+                          fontSize: 12,
+                        ),
                         children: [
                           TextSpan(
                             text: _isLogin
@@ -220,8 +225,9 @@ class _AuthViewState extends State<AuthView> with TickerProviderStateMixin {
                           TextSpan(
                             text: _isLogin ? 'Sign Up' : 'Sign In',
                             style: const TextStyle(
-                              color: SpookyColors.primary,
+                              color: SpookyColors.white,
                               fontWeight: FontWeight.bold,
+                              decoration: TextDecoration.underline,
                             ),
                           ),
                         ],
