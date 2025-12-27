@@ -48,3 +48,15 @@ export interface Incantation {
   ttl: QueryTimeToLive;
   tree: any;
 }
+
+export interface IdTree {
+  hash: string;
+  children?: Record<string, IdTree>;
+  leaves?: { id: string; hash: string }[];
+}
+
+export interface IdTreeDiff {
+  added: RecordId<string>[];
+  updated: RecordId<string>[];
+  removed: RecordId<string>[];
+}

@@ -14,8 +14,7 @@ String schemaToJson(Schema data) => json.encode(data.toJson());
 class Schema {
     SpookyDataHash spookyDataHash;
     SpookyIncantation spookyIncantation;
-    SpookyIncantationLookup spookyIncantationLookup;
-    SpookyIncantationTail spookyIncantationTail;
+    SpookyModuleState spookyModuleState;
     SpookyPendingMutations spookyPendingMutations;
     SpookyRelationship spookyRelationship;
     SpookySchema spookySchema;
@@ -27,8 +26,7 @@ class Schema {
     Schema({
         required this.spookyDataHash,
         required this.spookyIncantation,
-        required this.spookyIncantationLookup,
-        required this.spookyIncantationTail,
+        required this.spookyModuleState,
         required this.spookyPendingMutations,
         required this.spookyRelationship,
         required this.spookySchema,
@@ -41,8 +39,7 @@ class Schema {
     factory Schema.fromJson(Map<String, dynamic> json) => Schema(
         spookyDataHash: SpookyDataHash.fromJson(json["_spooky_data_hash"]),
         spookyIncantation: SpookyIncantation.fromJson(json["_spooky_incantation"]),
-        spookyIncantationLookup: SpookyIncantationLookup.fromJson(json["_spooky_incantation_lookup"]),
-        spookyIncantationTail: SpookyIncantationTail.fromJson(json["_spooky_incantation_tail"]),
+        spookyModuleState: SpookyModuleState.fromJson(json["_spooky_module_state"]),
         spookyPendingMutations: SpookyPendingMutations.fromJson(json["_spooky_pending_mutations"]),
         spookyRelationship: SpookyRelationship.fromJson(json["_spooky_relationship"]),
         spookySchema: SpookySchema.fromJson(json["_spooky_schema"]),
@@ -55,8 +52,7 @@ class Schema {
     Map<String, dynamic> toJson() => {
         "_spooky_data_hash": spookyDataHash.toJson(),
         "_spooky_incantation": spookyIncantation.toJson(),
-        "_spooky_incantation_lookup": spookyIncantationLookup.toJson(),
-        "_spooky_incantation_tail": spookyIncantationTail.toJson(),
+        "_spooky_module_state": spookyModuleState.toJson(),
         "_spooky_pending_mutations": spookyPendingMutations.toJson(),
         "_spooky_relationship": spookyRelationship.toJson(),
         "_spooky_schema": spookySchema.toJson(),
@@ -179,6 +175,9 @@ class SpookyIncantation {
     DateTime lastActiveAt;
     String? surrealQl;
     
+    ///Any type
+    dynamic tree;
+    
     ///ISO 8601 duration
     String ttl;
 
@@ -189,6 +188,7 @@ class SpookyIncantation {
         required this.id,
         required this.lastActiveAt,
         this.surrealQl,
+        required this.tree,
         required this.ttl,
     });
 
@@ -199,6 +199,7 @@ class SpookyIncantation {
         id: json["Id"],
         lastActiveAt: DateTime.parse(json["LastActiveAt"]),
         surrealQl: json["SurrealQL"],
+        tree: json["Tree"],
         ttl: json["TTL"],
     );
 
@@ -209,73 +210,32 @@ class SpookyIncantation {
         "Id": id,
         "LastActiveAt": lastActiveAt.toIso8601String(),
         "SurrealQL": surrealQl,
+        "Tree": tree,
         "TTL": ttl,
     };
 }
 
-class SpookyIncantationLookup {
-    String table;
+class SpookyModuleState {
+    
+    ///Record ID
+    String id;
     
     ///Any type
-    dynamic where;
-    
-    ///Record ID
-    String id;
-    String incantationId;
-    List<String>? sortDirections;
-    List<String>? sortFields;
+    String? state;
 
-    SpookyIncantationLookup({
-        required this.table,
-        required this.where,
+    SpookyModuleState({
         required this.id,
-        required this.incantationId,
-        this.sortDirections,
-        this.sortFields,
+        this.state,
     });
 
-    factory SpookyIncantationLookup.fromJson(Map<String, dynamic> json) => SpookyIncantationLookup(
-        table: json["`Table`"],
-        where: json["`Where`"],
+    factory SpookyModuleState.fromJson(Map<String, dynamic> json) => SpookyModuleState(
         id: json["id"],
-        incantationId: json["IncantationId"],
-        sortDirections: json["SortDirections"] == null ? [] : List<String>.from(json["SortDirections"]!.map((x) => x)),
-        sortFields: json["SortFields"] == null ? [] : List<String>.from(json["SortFields"]!.map((x) => x)),
-    );
-
-    Map<String, dynamic> toJson() => {
-        "`Table`": table,
-        "`Where`": where,
-        "id": id,
-        "IncantationId": incantationId,
-        "SortDirections": sortDirections == null ? [] : List<dynamic>.from(sortDirections!.map((x) => x)),
-        "SortFields": sortFields == null ? [] : List<dynamic>.from(sortFields!.map((x) => x)),
-    };
-}
-
-class SpookyIncantationTail {
-    
-    ///Record ID
-    String id;
-    String incantationId;
-    List<dynamic> tailValues;
-
-    SpookyIncantationTail({
-        required this.id,
-        required this.incantationId,
-        required this.tailValues,
-    });
-
-    factory SpookyIncantationTail.fromJson(Map<String, dynamic> json) => SpookyIncantationTail(
-        id: json["id"],
-        incantationId: json["IncantationId"],
-        tailValues: List<dynamic>.from(json["TailValues"].map((x) => x)),
+        state: json["State"],
     );
 
     Map<String, dynamic> toJson() => {
         "id": id,
-        "IncantationId": incantationId,
-        "TailValues": List<dynamic>.from(tailValues.map((x) => x)),
+        "State": state,
     };
 }
 
@@ -374,6 +334,7 @@ class SpookySchema {
 }
 
 class Thread {
+    bool? active;
     
     ///Record ID of table: user
     String author;
@@ -392,6 +353,7 @@ class Thread {
     String title;
 
     Thread({
+        this.active,
         required this.author,
         this.comments,
         required this.content,
@@ -401,6 +363,7 @@ class Thread {
     });
 
     factory Thread.fromJson(Map<String, dynamic> json) => Thread(
+        active: json["active"],
         author: json["author"],
         comments: json["comments"] == null ? [] : List<String>.from(json["comments"]!.map((x) => x)),
         content: json["content"],
@@ -410,6 +373,7 @@ class Thread {
     );
 
     Map<String, dynamic> toJson() => {
+        "active": active,
         "author": author,
         "comments": comments == null ? [] : List<dynamic>.from(comments!.map((x) => x)),
         "content": content,
@@ -497,6 +461,8 @@ DEFINE FIELD author ON TABLE thread TYPE record<user>;
 DEFINE FIELD created_at ON TABLE thread TYPE datetime
     VALUE time::now();
 
+DEFINE FIELD active ON TABLE thread TYPE bool VALUE \$value OR false;
+
 -- ##################################################################
 -- COMMENT TABLE
 -- ##################################################################
@@ -531,7 +497,7 @@ DEFINE EVENT comment_created ON TABLE comment WHEN \$event = \"CREATE\" THEN
 -- The Registry of active Live Queries (Incantations).
 -- ==================================================
 
-DEFINE TABLE _spooky_incantation SCHEMAFULL
+DEFINE TABLE _spooky_incantation SCHEMALESS
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
 -- The unique hash ID of the query + params
@@ -550,6 +516,10 @@ PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD Hash ON TABLE _spooky_incantation TYPE string
 PERMISSIONS FOR select, create, update WHERE true;
 
+-- The Radix Tree of Result IDs for efficient sync
+DEFINE FIELD Tree ON TABLE _spooky_incantation TYPE any
+PERMISSIONS FOR select, create, update WHERE true;
+
 -- For garbage collection (Heartbeat)
 DEFINE FIELD LastActiveAt ON TABLE _spooky_incantation TYPE datetime DEFAULT time::now()
 PERMISSIONS FOR select, create, update WHERE true;
@@ -559,64 +529,34 @@ DEFINE FIELD TTL ON TABLE _spooky_incantation TYPE duration
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- Cleanup Triggers
--- When an incantation dies, clean up its lookup and tail records
-DEFINE EVENT _spooky_cascade_delete_lookup ON TABLE _spooky_incantation WHEN \$event = \"DELETE\" THEN {
-    DELETE _spooky_incantation_lookup WHERE IncantationId = \$before.Id;
-    DELETE _spooky_incantation_tail WHERE IncantationId = \$before.Id;
+-- ==================================================
+-- SPOOKY MODULE STATE
+-- Global state storage for the DBSP WASM module
+-- ==================================================
+
+DEFINE TABLE _spooky_module_state SCHEMALESS
+PERMISSIONS FOR select, create, update, delete WHERE true;
+
+-- The serialized WASM memory state (huge JSON object)
+DEFINE FIELD State ON TABLE _spooky_module_state TYPE option<object>
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- Helper function to get or init state
+DEFINE FUNCTION fn::dbsp::get_state() {
+    RETURN (SELECT VALUE State FROM _spooky_module_state:dbsp_state)[0] OR {};
 };
 
+-- Helper function to save state
+DEFINE FUNCTION fn::dbsp::save_state(\$new_state: object) {
+    UPSERT _spooky_module_state:dbsp_state SET State = \$new_state;
+};
 
--- ==================================================
--- SPOOKY INCANTATION LOOKUP
--- The Reverse Index: Maps Tables -> Incantations
--- ==================================================
-
-DEFINE TABLE _spooky_incantation_lookup SCHEMAFULL
-PERMISSIONS FOR select, create, update, delete WHERE true;
-
--- Link to the parent Incantation
-DEFINE FIELD IncantationId ON TABLE _spooky_incantation_lookup TYPE string
-PERMISSIONS FOR select, create, update WHERE true;
-
--- The primary table being queried (e.g., 'thread')
-DEFINE FIELD Table ON TABLE _spooky_incantation_lookup TYPE string
-PERMISSIONS FOR select, create, update WHERE true;
-
--- Filter logic used to check if a dirty record matches this query
--- Stored as an object e.g., { clause: \"importance >= 3\", args: [...] }
-DEFINE FIELD Where ON TABLE _spooky_incantation_lookup TYPE object DEFAULT {}
-PERMISSIONS FOR select, create, update WHERE true;
-
--- Sorting Metadata needed to maintain order
-DEFINE FIELD SortFields ON TABLE _spooky_incantation_lookup TYPE option<array<string>>
-PERMISSIONS FOR select, create, update WHERE true;
-DEFINE FIELD SortDirections ON TABLE _spooky_incantation_lookup TYPE option<array<string>>
-PERMISSIONS FOR select, create, update WHERE true;
-
--- Indexes for performance
-DEFINE INDEX idx_incantation ON TABLE _spooky_incantation_lookup COLUMNS IncantationId;
-DEFINE INDEX idx_table ON TABLE _spooky_incantation_lookup COLUMNS Table;
-
-
--- ==================================================
--- SPOOKY INCANTATION TAIL
--- Cursor Management for Pagination/Limits
--- ==================================================
-
-DEFINE TABLE _spooky_incantation_tail SCHEMAFULL
-PERMISSIONS FOR select, create, update, delete WHERE true;
-
--- Link to the parent Incantation
-DEFINE FIELD IncantationId ON TABLE _spooky_incantation_tail TYPE string
-PERMISSIONS FOR select, create, update WHERE true;
-
--- The sort values of the *last* item in the current result set
--- Used to determine if a new record falls inside or outside the LIMIT window.
-DEFINE FIELD TailValues ON TABLE _spooky_incantation_tail TYPE array<any>
-PERMISSIONS FOR select, create, update WHERE true;
-
-DEFINE INDEX idx_incantation ON TABLE _spooky_incantation_tail COLUMNS IncantationId UNIQUE;
-
+-- Unregister from DBSP on deletion
+DEFINE EVENT _spooky_dbsp_cleanup ON TABLE _spooky_incantation WHEN \$event = \"DELETE\" THEN {
+    let \$state = fn::dbsp::get_state();
+    let \$result = mod::dbsp::unregister_query(\$before.Id, \$state);
+    fn::dbsp::save_state(\$result.new_state);
+};
 
 -- ==================================================
 -- SPOOKY RELATIONSHIP
@@ -753,6 +693,8 @@ DEFINE EVENT OVERWRITE _spooky_thread_client_mutation ON TABLE thread
 WHEN \$before != \$after AND \$event != \"DELETE\"
 THEN {
     LET \$xor_sum = crypto::blake3(\"\");
+    LET \$h_active = crypto::blake3(<string>\$after.active);
+    LET \$xor_sum = mod::xor::blake3_xor(\$xor_sum, \$h_active);
     LET \$h_author = crypto::blake3(<string>\$after.author);
     LET \$xor_sum = mod::xor::blake3_xor(\$xor_sum, \$h_author);
     LET \$h_content = crypto::blake3(<string>\$after.content);
@@ -760,6 +702,7 @@ THEN {
     LET \$h_title = crypto::blake3(<string>\$after.title);
     LET \$xor_sum = mod::xor::blake3_xor(\$xor_sum, \$h_title);
     LET \$new_intrinsic = {
+        active: \$h_active,
         author: \$h_author,
         content: \$h_content,
         title: \$h_title,

@@ -1,9 +1,13 @@
-import { QueryManager } from "./services/query/query.js";
-import { MutationManager } from "./services/mutation/mutation.js";
-import { SpookyConfig } from "./types.js";
-import { LocalDatabaseService, LocalMigrator, RemoteDatabaseService } from "./services/database/index.js";
-import { SpookySync } from "./services/sync/index.js";
-import { SchemaStructure } from "@spooky/query-builder";
+import { QueryManager } from './services/query/query.js';
+import { MutationManager } from './services/mutation/mutation.js';
+import { SpookyConfig, QueryTimeToLive } from './types.js';
+import {
+  LocalDatabaseService,
+  LocalMigrator,
+  RemoteDatabaseService,
+} from './services/database/index.js';
+import { SpookySync } from './services/sync/index.js';
+import { SchemaStructure } from '@spooky/query-builder';
 
 export class SpookyClient<S extends SchemaStructure> {
   private local: LocalDatabaseService;
@@ -22,7 +26,12 @@ export class SpookyClient<S extends SchemaStructure> {
     this.migrator = new LocalMigrator(this.local);
     this.mutationManager = new MutationManager(this.local);
     this.queryManager = new QueryManager(this.local, this.remote, this.config.clientId);
-    this.sync = new SpookySync(this.local, this.remote, this.mutationManager.events);
+    this.sync = new SpookySync(
+      this.local,
+      this.remote,
+      this.mutationManager.events,
+      this.queryManager.eventsSystem
+    );
   }
 
   async init() {
@@ -44,8 +53,8 @@ export class SpookyClient<S extends SchemaStructure> {
     return this.remote.getClient().invalidate();
   }
 
-  async queryAdHoc(sql: string, params: Record<string, any>, monitorId: string) {
-    return this.queryManager.queryAdHoc(sql, params, monitorId);
+  async queryAdHoc(sql: string, params: Record<string, any>, ttl: QueryTimeToLive) {
+    return this.queryManager.queryAdHoc(sql, params, ttl);
   }
 
   create(table: string, data: Record<string, unknown>) {

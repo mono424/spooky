@@ -1,6 +1,6 @@
 import { LocalDatabaseService, RemoteDatabaseService } from '../database/index.js';
 import { MutationEventSystem } from '../mutation/index.js';
-import { Incantation as IncantationData } from '../../types.js';
+import { IdTreeDiff, Incantation as IncantationData } from '../../types.js';
 import { QueryEventSystem, QueryEventTypes } from '../query/events.js';
 import { SyncQueueEventTypes } from './events.js';
 import {
@@ -14,6 +14,7 @@ import {
   UpQueue,
 } from './queue/index.js';
 import { RecordId } from 'surrealdb';
+import { diffIdTree } from './utils.js';
 
 export class SpookySync {
   private upQueue: UpQueue;
@@ -141,32 +142,58 @@ export class SpookySync {
     const isDifferent = localHash !== remoteHash;
     if (!isDifferent) return;
 
-    if (!localHash || !localTree) {
+    const diff = await this.cacheMissingRecords(localTree, remoteTree, surrealql);
+
+    await this.updateLocalIncantation(incantationId, {
+      surrealql,
+      hash: remoteHash,
+      tree: remoteTree,
+      diff,
+    });
+  }
+
+  private async cacheMissingRecords(
+    localTree: any,
+    remoteTree: any,
+    surrealql: string
+  ): Promise<IdTreeDiff> {
+    if (!localTree) {
       const [remoteResults] = await this.remote
         .getClient()
         .query(surrealql)
         .collect<[Record<string, any>[]]>();
-      await this.updateLocalIncantation(incantationId, {
-        hash: remoteHash,
-        tree: remoteTree,
-        records: remoteResults,
-      });
-      return;
+      await this.cacheResults(remoteResults);
+      return { added: remoteResults.map((r) => r.id), updated: [], removed: [] };
     }
 
-    // TODO: tree comparsion and single record updates
+    const diff = diffIdTree(localTree, remoteTree);
+    const { added, updated } = diff;
+    const idsToFetch = [...added, ...updated];
+
+    if (idsToFetch.length === 0) {
+      return { added: [], updated: [], removed: [] };
+    }
+
+    const [remoteResults] = await this.remote
+      .getClient()
+      .query('SELECT * FROM $ids', { ids: idsToFetch })
+      .collect<[Record<string, any>[]]>();
+    await this.cacheResults(remoteResults);
+    return { added: remoteResults.map((r) => r.id), updated: [], removed: [] };
   }
 
   private async updateLocalIncantation(
     incantationId: RecordId<string>,
     {
+      surrealql,
       hash,
       tree,
-      records,
+      diff,
     }: {
+      surrealql: string;
       hash: string;
       tree: any;
-      records: Record<string, any>[];
+      diff: IdTreeDiff;
     }
   ) {
     await this.updateIncantationRecord(incantationId, {
@@ -174,14 +201,17 @@ export class SpookySync {
       tree,
     });
 
+    const cachedResults = await this.local
+      .getClient()
+      .query(surrealql)
+      .collect<[Record<string, any>[]]>();
+
     this.queryEvents.emit(QueryEventTypes.IncantationIncomingRemoteUpdate, {
       incantationId,
       remoteHash: hash,
       remoteTree: tree,
-      records,
+      records: cachedResults,
     });
-
-    await this.cacheResults(records);
   }
 
   private async updateIncantationRecord(

@@ -10,6 +10,10 @@ export class QueryManager {
   private liveQueryUuid: string | null = null;
   private events: QueryEventSystem;
 
+  public get eventsSystem() {
+    return this.events;
+  }
+
   constructor(
     private local: LocalDatabaseService,
     private remote: RemoteDatabaseService,
