@@ -43,9 +43,7 @@ class SpookyTheme {
             fontSize: 16,
           ),
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
           elevation: 0,
         ),
       ),
@@ -58,15 +56,15 @@ class SpookyTheme {
         hintStyle: GoogleFonts.inter(color: SpookyColors.white60),
         labelStyle: GoogleFonts.inter(color: SpookyColors.white60),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(4),
           borderSide: BorderSide.none,
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(4),
           borderSide: BorderSide(color: SpookyColors.white10, width: 1),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(4),
           borderSide: BorderSide(color: SpookyColors.primary, width: 2),
         ),
         contentPadding: const EdgeInsets.symmetric(

@@ -16,17 +16,21 @@ class SpookyAppBar extends StatelessWidget implements PreferredSizeWidget {
   @override
   Widget build(BuildContext context) {
     return AppBar(
-      title: const Text('SpookyClient Testbed'),
+      title: const Text('SpookyClient Example'),
       backgroundColor: SpookyColors.background,
       foregroundColor: SpookyColors.white,
       elevation: 0,
       centerTitle: true,
       actions: [
-        IconButton(
-          icon: const Icon(Icons.power_settings_new),
-          tooltip: "Disconnect / Close DB",
-          onPressed: onDisconnect,
+        Padding(
+          padding: const EdgeInsets.only(right: 16.0),
+          child: IconButton(
+            icon: const Icon(Icons.power_settings_new),
+            tooltip: "Disconnect / Close DB",
+            onPressed: onDisconnect,
+          ),
         ),
+
         if (isLoggedIn)
           IconButton(icon: const Icon(Icons.logout), onPressed: onLogout),
       ],

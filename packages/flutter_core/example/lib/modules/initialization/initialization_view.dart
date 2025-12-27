@@ -33,7 +33,7 @@ class InitializationView extends StatelessWidget {
           padding: const EdgeInsets.all(40), // More internal padding
           decoration: BoxDecoration(
             color: SpookyColors.surface,
-            borderRadius: BorderRadius.circular(24),
+            borderRadius: BorderRadius.circular(4),
             border: Border.all(color: SpookyColors.white10),
           ),
           child: Column(
@@ -77,11 +77,11 @@ class InitializationView extends StatelessWidget {
                 ),
                 style: const TextStyle(color: SpookyColors.white),
               ),
-              const SizedBox(height: 32),
+              const SizedBox(height: 24),
               Container(
                 decoration: BoxDecoration(
                   color: SpookyColors.white10,
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(4),
                 ),
                 child: CheckboxListTile(
                   value: useDevSidecar,
@@ -94,7 +94,7 @@ class InitializationView extends StatelessWidget {
                     vertical: 2,
                   ),
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(4),
                   ),
                 ),
               ),
@@ -121,7 +121,7 @@ class InitializationView extends StatelessWidget {
                   textAlign: TextAlign.center,
                 ),
               ],
-              const SizedBox(height: 48),
+              const SizedBox(height: 24),
               SizedBox(
                 height: 56,
                 child: ElevatedButton.icon(
