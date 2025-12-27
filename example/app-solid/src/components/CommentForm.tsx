@@ -29,7 +29,7 @@ export function CommentForm(props: CommentFormProps) {
       const commentId = new RecordId("comment", Uuid.v4().toString().replace(/-/g, ""));
       
       await db.create("comment", {
-        id: commentId,
+        id: commentId.toString(),
         thread: props.thread().id,
         content: content().trim(),
         author: user.id,

@@ -104,21 +104,25 @@ export class QueryManager {
     });
   }
 
-  async subscribe(
+  subscribe(
     queryHash: string,
     callback: (records: Record<string, any>[]) => void,
-    options: { initial?: boolean } = {}
-  ) {
-    this.events.subscribe(QueryEventTypes.IncantationUpdated, (event) => {
+    options: { immediate?: boolean } = {}
+  ): () => void {
+    const id = this.events.subscribe(QueryEventTypes.IncantationUpdated, (event) => {
       if (event.payload.incantationId.id.toString() === queryHash) {
         callback(event.payload.records);
       }
     });
 
-    if (options.initial) {
+    if (options.immediate) {
       const records = this.activeQueries.get(queryHash)?.records ?? [];
-      return callback(records);
+      callback(records);
     }
+
+    return () => {
+      this.events.unsubscribe(id);
+    };
   }
 
   private async startLiveQuery() {

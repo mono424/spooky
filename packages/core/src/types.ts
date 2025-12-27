@@ -22,6 +22,12 @@ export type QueryTimeToLive =
   | '12h'
   | '1d';
 
+export interface SpookyQueryResult {
+  hash: string;
+}
+
+export type SpookyQueryResultPromise = Promise<SpookyQueryResult>;
+
 export interface EventSubscriptionOptions {
   priority?: number;
 }

@@ -4,9 +4,10 @@ import {
   SchemaStructure,
   TableNames,
   QueryResult,
-} from "@spooky/query-builder";
-import { createEffect, createSignal, onCleanup } from "solid-js";
-import { SyncedDb } from "..";
+} from '@spooky/query-builder';
+import { createEffect, createSignal, onCleanup } from 'solid-js';
+import { SyncedDb } from '..';
+import { SpookyQueryResultPromise } from '@spooky/core';
 
 export function useQuery<
   S extends SchemaStructure,
@@ -16,19 +17,42 @@ export function useQuery<
   },
   RelatedFields extends Record<string, any>,
   IsOne extends boolean,
-  TData = QueryResult<S, TableName, RelatedFields, IsOne> | null
+  TData = QueryResult<S, TableName, RelatedFields, IsOne> | null,
 >(
   db: SyncedDb<S>,
   finalQuery:
-    | FinalQuery<S, TableName, T, RelatedFields, IsOne>
+    | FinalQuery<S, TableName, T, RelatedFields, IsOne, SpookyQueryResultPromise>
     | (() =>
-        | FinalQuery<S, TableName, T, RelatedFields, IsOne>
+        | FinalQuery<S, TableName, T, RelatedFields, IsOne, SpookyQueryResultPromise>
         | null
         | undefined),
   options?: { enabled?: () => boolean }
 ) {
   const [data, setData] = createSignal<TData | undefined>(undefined);
   const [error, setError] = createSignal<Error | undefined>(undefined);
+  const [unsubscribe, setUnsubscribe] = createSignal<(() => void) | undefined>(undefined);
+
+  const spooky = db.getSpooky();
+
+  const initQuery = async (
+    query: FinalQuery<S, TableName, T, RelatedFields, IsOne, SpookyQueryResultPromise>
+  ) => {
+    console.log('[useQuery] init');
+    const { hash } = await query.run();
+    setError(undefined);
+
+    const unsub = await spooky.subscribe(
+      hash,
+      (e) => {
+        const data = (query.isOne ? e[0] : e) as TData;
+        console.log('[useQuery] Data updated', hash, data);
+        setData(() => data);
+      },
+      { immediate: true }
+    );
+
+    setUnsubscribe(() => unsub);
+  };
 
   createEffect(() => {
     const enabled = options?.enabled?.() ?? true;
@@ -39,30 +63,16 @@ export function useQuery<
       return;
     }
 
-    const query = typeof finalQuery === "function" ? finalQuery() : finalQuery;
+    // Init Query
+    const query = typeof finalQuery === 'function' ? finalQuery() : finalQuery;
     if (!query) {
       return;
     }
-    setError(undefined);
-    query.run();
-    console.log("[useQuery] init");
-    const spooky = db.getSpooky();
-    const subscriptionId = spooky.subscribeToQuery(
-      query.hash,
-      (e) => {
-        const data = (query.isOne ? e[0] : e) as TData;
-        console.log("[useQuery] Data updated", query.hash, data);
-        setData(() => data);
-      },
-      { immediately: true }
-    );
+    initQuery(query);
 
-    const cleanup = () => {
-      spooky.unsubscribeFromQuery(query.hash, subscriptionId);
-    };
-
+    // Cleanup
     onCleanup(() => {
-      cleanup?.();
+      unsubscribe?.();
     });
   });
 

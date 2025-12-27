@@ -9,7 +9,6 @@ import {
 import { db, dbConfig } from "../db";
 import { schema } from "../schema.gen";
 import {
-  AuthEventTypes,
   type GetTable,
   type TableModel,
   useQuery,
@@ -34,23 +33,8 @@ export function AuthProvider(props: { children: JSX.Element }) {
   const [isLoading, setIsLoading] = createSignal(true);
   const [isInitialized, setIsInitialized] = createSignal(false);
 
-  const subIds = [
-    spooky.subscribe(AuthEventTypes.Authenticated, (event) => {
-      console.log("[AuthProvider] Authenticated event received:", event);
-      setUserId(event.payload.userId.toString());
-      localStorage.setItem("token", event.payload.token);
-    }),
-    spooky.subscribe(AuthEventTypes.Deauthenticated, () => {
-      console.log("[AuthProvider] Deauthenticated event received");
-      setUserId(null);
-      localStorage.removeItem("token");
-    }),
-  ];
-
-  onCleanup(() => {
-    subIds.forEach((id) => spooky.unsubscribe(id));
-  });
-
+  // Remove subIds and onCleanup for events
+  
   // Only run query after auth is initialized and userId is available
   const userQuery = useQuery(
     db,
@@ -80,7 +64,29 @@ export function AuthProvider(props: { children: JSX.Element }) {
     setIsLoading(true);
     try {
       await db.authenticate(token);
-    } catch (error) {}
+      // Fetch current user ID
+      // We use useRemote to execute a raw query to get the authenticated user
+      const users = await db.useRemote(async (remote) => {
+         return await remote.query('SELECT * FROM user WHERE id = $auth.id');
+      });
+
+      // users is ActionResult[]
+      const firstRes = Array.isArray(users) ? users[0] : users;
+      const records = (firstRes as any).result || firstRes;
+      const currentUser = Array.isArray(records) && records.length > 0 ? records[0] : null;
+
+      if (currentUser && currentUser.id) {
+        setUserId(currentUser.id.toString());
+        localStorage.setItem("token", token);
+      } else {
+         // Token invalid or user not found
+         await signOut(); // Cleanup
+      }
+
+    } catch (error) {
+       console.error("Auth check failed", error);
+       await signOut();
+    }
     setIsLoading(false);
     setIsInitialized(true);
   };
@@ -91,10 +97,9 @@ export function AuthProvider(props: { children: JSX.Element }) {
   const signIn = async (username: string, password: string) => {
     try {
       console.log("[AuthProvider] Sign in attempt for:", username);
-      // Use the centralized signIn method from db object
       const res = await db.useRemote((db) =>
         db.signin({
-          access: "account",
+          access: "account", // namespace 'main' / database 'main' / access 'account'
           variables: {
             username,
             password,
@@ -103,7 +108,9 @@ export function AuthProvider(props: { children: JSX.Element }) {
       );
 
       console.log("[AuthProvider] Sign in successful, token received");
-      await checkAuth(res.access || (res as any));
+      // res is the token (string) in v2 usually, or { token: string }?
+      // In v2 it returns string (the token).
+      await checkAuth(res as unknown as string);
       console.log("[AuthProvider] Auth check complete after sign in");
     } catch (error) {
       console.error("[AuthProvider] Sign in failed:", error);
@@ -117,7 +124,6 @@ export function AuthProvider(props: { children: JSX.Element }) {
   const signUp = async (username: string, password: string) => {
     try {
       console.log("[AuthProvider] Sign up attempt for:", username);
-      // Use the centralized signUp method from db object
       const res = await db.useRemote((db) =>
         db.signup({
           access: "account",
@@ -129,7 +135,7 @@ export function AuthProvider(props: { children: JSX.Element }) {
       );
 
       console.log("[AuthProvider] Sign up successful, token received");
-      await checkAuth(res.access || (res as any));
+      await checkAuth(res as unknown as string);
       console.log("[AuthProvider] Auth check complete after sign up");
     } catch (error) {
       console.error("[AuthProvider] Sign up failed:", error);

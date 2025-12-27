@@ -149,12 +149,12 @@ importers:
 
   packages/client-solid:
     dependencies:
+      '@spooky/core':
+        specifier: workspace:*
+        version: link:../core
       '@spooky/query-builder':
         specifier: workspace:*
         version: link:../query-builder
-      '@spooky/spooky-ts':
-        specifier: workspace:*
-        version: link:../spooky-ts
       '@surrealdb/wasm':
         specifier: ^2.4.0
         version: 2.4.0(surrealdb@2.0.0-alpha.14(tslib@2.8.1)(typescript@5.9.3))

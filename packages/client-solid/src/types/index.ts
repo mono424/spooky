@@ -1,13 +1,8 @@
-import type { Surreal } from "surrealdb";
-import type { SyncedDb } from "../index";
-import { GenericSchema } from "../lib/models";
-import type { SpookyConfig } from "@spooky/spooky-ts";
-import type {
-  SchemaStructure,
-  TableNames,
-  GetTable,
-  TableModel,
-} from "@spooky/query-builder";
+import type { Surreal } from 'surrealdb';
+import type { SyncedDb } from '../index';
+import { GenericSchema } from '../lib/models';
+import type { SpookyConfig } from '@spooky/core';
+import type { SchemaStructure, TableNames, GetTable, TableModel } from '@spooky/query-builder';
 
 /**
  * Options for database provisioning
@@ -23,7 +18,7 @@ declare global {
   }
 }
 
-export type CacheStrategy = "memory" | "indexeddb";
+export type CacheStrategy = 'memory' | 'indexeddb';
 
 /**
  * Infer Schema type (Record<TableName, Model>) from schema const
@@ -36,18 +31,12 @@ export type InferSchemaFromConst<S extends SchemaStructure> = {
  * Infer Relationships type from schema const's relationships array
  * Converts from array format to nested object format
  */
-export type InferRelationshipsFromConst<
-  S extends SchemaStructure,
-  Schema extends GenericSchema
-> = {
+export type InferRelationshipsFromConst<S extends SchemaStructure, Schema extends GenericSchema> = {
   [TableName in TableNames<S>]: {
-    [Rel in Extract<
-      S["relationships"][number],
-      { from: TableName }
-    > as Rel["field"]]: {
-      model: Rel["to"] extends keyof Schema ? Schema[Rel["to"]] : any;
-      table: Rel["to"];
-      cardinality: Rel["cardinality"];
+    [Rel in Extract<S['relationships'][number], { from: TableName }> as Rel['field']]: {
+      model: Rel['to'] extends keyof Schema ? Schema[Rel['to']] : any;
+      table: Rel['to'];
+      cardinality: Rel['cardinality'];
     };
   };
 };
