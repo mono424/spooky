@@ -4,13 +4,36 @@
 export const schema = {
   tables: [
     {
+      name: 'user' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
+        username: { type: 'string' as const, optional: false },
+        threads: { type: 'string' as const, optional: true },
+        comments: { type: 'string' as const, optional: true },
+      },
+      primaryKey: ['id'] as const
+    },
+    {
       name: 'comment' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
         thread: { type: 'string' as const, recordId: true, optional: false },
-        author: { type: 'string' as const, recordId: true, optional: false },
-        content: { type: 'string' as const, optional: false },
         created_at: { type: 'string' as const, dateTime: true, optional: true },
+        content: { type: 'string' as const, optional: false },
+        author: { type: 'string' as const, recordId: true, optional: false },
+      },
+      primaryKey: ['id'] as const
+    },
+    {
+      name: 'thread' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
+        title: { type: 'string' as const, optional: false },
+        content: { type: 'string' as const, optional: false },
+        active: { type: 'boolean' as const, optional: true },
+        author: { type: 'string' as const, recordId: true, optional: false },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
+        comments: { type: 'string' as const, optional: true },
       },
       primaryKey: ['id'] as const
     },
@@ -21,31 +44,20 @@ export const schema = {
       },
       primaryKey: ['id'] as const
     },
-    {
-      name: 'user' as const,
-      columns: {
-        id: { type: 'string' as const, recordId: true, optional: false },
-        username: { type: 'string' as const, optional: false },
-        comments: { type: 'string' as const, optional: true },
-        threads: { type: 'string' as const, optional: true },
-      },
-      primaryKey: ['id'] as const
-    },
-    {
-      name: 'thread' as const,
-      columns: {
-        id: { type: 'string' as const, recordId: true, optional: false },
-        active: { type: 'boolean' as const, optional: true },
-        content: { type: 'string' as const, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
-        title: { type: 'string' as const, optional: false },
-        author: { type: 'string' as const, recordId: true, optional: false },
-        comments: { type: 'string' as const, optional: true },
-      },
-      primaryKey: ['id'] as const
-    },
   ],
   relationships: [
+    {
+      from: 'user' as const,
+      field: 'threads' as const,
+      to: 'thread' as const,
+      cardinality: 'many' as const
+    },
+    {
+      from: 'user' as const,
+      field: 'comments' as const,
+      to: 'comment' as const,
+      cardinality: 'many' as const
+    },
     {
       from: 'comment' as const,
       field: 'thread' as const,
@@ -68,18 +80,6 @@ export const schema = {
       from: 'thread' as const,
       field: 'comments' as const,
       to: 'comment' as const,
-      cardinality: 'many' as const
-    },
-    {
-      from: 'user' as const,
-      field: 'comments' as const,
-      to: 'comment' as const,
-      cardinality: 'many' as const
-    },
-    {
-      from: 'user' as const,
-      field: 'threads' as const,
-      to: 'thread' as const,
       cardinality: 'many' as const
     },
   ]
@@ -297,24 +297,10 @@ PERMISSIONS FOR select, create, update WHERE true;
 DEFINE EVENT OVERWRITE _spooky_comment_client_mutation ON TABLE comment
 WHEN $before != $after AND $event != "DELETE"
 THEN {
-    LET $xor_sum = crypto::blake3("");
-    LET $h_author = crypto::blake3(<string>$after.author);
-    LET $xor_sum = mod::xor::blake3_xor($xor_sum, $h_author);
-    LET $h_content = crypto::blake3(<string>$after.content);
-    LET $xor_sum = mod::xor::blake3_xor($xor_sum, $h_content);
-    LET $h_thread = crypto::blake3(<string>$after.thread);
-    LET $xor_sum = mod::xor::blake3_xor($xor_sum, $h_thread);
-    LET $new_intrinsic = {
-        author: $h_author,
-        content: $h_content,
-        thread: $h_thread,
-        _xor: $xor_sum,
-    };
-
     UPSERT _spooky_data_hash CONTENT {
         RecordId: $after.id,
-        IntrinsicHash: $new_intrinsic,
-        CompositionHash: crypto::blake3(""), -- Empty for client
+        IntrinsicHash: "",
+        CompositionHash: "",
         TotalHash: NONE,
         IsDirty: true,
         PendingDelete: false
@@ -332,27 +318,10 @@ THEN {
 DEFINE EVENT OVERWRITE _spooky_thread_client_mutation ON TABLE thread
 WHEN $before != $after AND $event != "DELETE"
 THEN {
-    LET $xor_sum = crypto::blake3("");
-    LET $h_active = crypto::blake3(<string>$after.active);
-    LET $xor_sum = mod::xor::blake3_xor($xor_sum, $h_active);
-    LET $h_author = crypto::blake3(<string>$after.author);
-    LET $xor_sum = mod::xor::blake3_xor($xor_sum, $h_author);
-    LET $h_content = crypto::blake3(<string>$after.content);
-    LET $xor_sum = mod::xor::blake3_xor($xor_sum, $h_content);
-    LET $h_title = crypto::blake3(<string>$after.title);
-    LET $xor_sum = mod::xor::blake3_xor($xor_sum, $h_title);
-    LET $new_intrinsic = {
-        active: $h_active,
-        author: $h_author,
-        content: $h_content,
-        title: $h_title,
-        _xor: $xor_sum,
-    };
-
     UPSERT _spooky_data_hash CONTENT {
         RecordId: $after.id,
-        IntrinsicHash: $new_intrinsic,
-        CompositionHash: crypto::blake3(""), -- Empty for client
+        IntrinsicHash: "",
+        CompositionHash: "",
         TotalHash: NONE,
         IsDirty: true,
         PendingDelete: false
@@ -370,18 +339,10 @@ THEN {
 DEFINE EVENT OVERWRITE _spooky_user_client_mutation ON TABLE user
 WHEN $before != $after AND $event != "DELETE"
 THEN {
-    LET $xor_sum = crypto::blake3("");
-    LET $h_username = crypto::blake3(<string>$after.username);
-    LET $xor_sum = mod::xor::blake3_xor($xor_sum, $h_username);
-    LET $new_intrinsic = {
-        username: $h_username,
-        _xor: $xor_sum,
-    };
-
     UPSERT _spooky_data_hash CONTENT {
         RecordId: $after.id,
-        IntrinsicHash: $new_intrinsic,
-        CompositionHash: crypto::blake3(""), -- Empty for client
+        IntrinsicHash: "",
+        CompositionHash: "",
         TotalHash: NONE,
         IsDirty: true,
         PendingDelete: false

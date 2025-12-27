@@ -63,34 +63,12 @@ pub fn generate_spooky_events(
             events.push_str(&format!("DEFINE EVENT OVERWRITE _spooky_{}_client_mutation ON TABLE {}\n", table_name, table_name));
             events.push_str("WHEN $before != $after AND $event != \"DELETE\"\nTHEN {\n");
 
-            // 1. New Intrinsic Hash
-            // 1. Calculate Field Hashes independent variables
-            events.push_str("    LET $xor_sum = crypto::blake3(\"\");\n");
-            
-            for field_name in &sorted_fields {
-                if **field_name == "password" || **field_name == "created_at" {
-                     continue;
-                }
-                // Calculate hash for field
-                events.push_str(&format!("    LET $h_{} = crypto::blake3(<string>$after.{});\n", field_name, field_name));
-                // Update XOR sum
-                events.push_str(&format!("    LET $xor_sum = mod::xor::blake3_xor($xor_sum, $h_{});\n", field_name));
-            }
-
-            // 2. Construct Intrinsic Hash Object
-            events.push_str("    LET $new_intrinsic = {\n");
-            for field_name in &sorted_fields {
-                if **field_name == "password" || **field_name == "created_at" { continue; }
-                events.push_str(&format!("        {}: $h_{},\n", field_name, field_name));
-            }
-            events.push_str("        _xor: $xor_sum,\n");
-            events.push_str("    };\n\n");
-
-            // 3. Upsert Meta Table with IsDirty = true
+            // Just mark as dirty. Hashes are irrelevant/empty until synced.
             events.push_str("    UPSERT _spooky_data_hash CONTENT {\n");
             events.push_str("        RecordId: $after.id,\n");
-            events.push_str("        IntrinsicHash: $new_intrinsic,\n");
-            events.push_str("        CompositionHash: crypto::blake3(\"\"), -- Empty for client\n");
+            // Use empty strings as placeholders since type is string
+            events.push_str("        IntrinsicHash: \"\",\n"); 
+            events.push_str("        CompositionHash: \"\",\n");
             events.push_str("        TotalHash: NONE,\n");
             events.push_str("        IsDirty: true,\n");
             events.push_str("        PendingDelete: false\n");

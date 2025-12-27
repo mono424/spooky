@@ -34,10 +34,11 @@ jobs:
         uses: actions/configure-pages@v5
 
       - name: Install dependencies
-        run: |
-          rm -f pnpm-lock.yaml
-          pnpm install
-          pnpm run build
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build with Astro
+        working-directory: apps/landing-page
+        run: pnpm run build
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
