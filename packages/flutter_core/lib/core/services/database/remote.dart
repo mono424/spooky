@@ -50,7 +50,7 @@ class RemoteDatabaseService extends AbstractDatabaseService {
     // 1. Create user via query (Requires public permissions or current auth)
     // Since schema has "FOR create WHERE true", this works without auth.
     final query =
-        "CREATE ONLY user SET username = \$username, password = crypto::argon2::generate(\$password);";
+        r'''CREATE ONLY user SET username = $username, password = crypto::argon2::generate($password);''';
     // vars is now named parameter type object!
     final response = await this.query(
       query,
