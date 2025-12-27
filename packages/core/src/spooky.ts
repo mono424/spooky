@@ -53,8 +53,12 @@ export class SpookyClient<S extends SchemaStructure> {
     return this.remote.getClient().invalidate();
   }
 
-  async queryAdHoc(sql: string, params: Record<string, any>, ttl: QueryTimeToLive) {
-    return this.queryManager.queryAdHoc(sql, params, ttl);
+  async query(sql: string, params: Record<string, any>, ttl: QueryTimeToLive) {
+    return this.queryManager.query(sql, params, ttl);
+  }
+
+  async subscribe(queryHash: string, callback: () => void) {
+    return this.queryManager.subscribe(queryHash, callback);
   }
 
   create(table: string, data: Record<string, unknown>) {

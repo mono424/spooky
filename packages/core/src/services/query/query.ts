@@ -42,6 +42,10 @@ export class QueryManager {
       return;
     }
     incantation.updateLocalState(records, remoteHash, remoteTree);
+    this.events.emit(QueryEventTypes.IncantationUpdated, {
+      incantationId,
+      records,
+    });
   }
 
   async register(
@@ -98,6 +102,23 @@ export class QueryManager {
         incantationId: incantation.id,
       });
     });
+  }
+
+  async subscribe(
+    queryHash: string,
+    callback: (records: Record<string, any>[]) => void,
+    options: { initial?: boolean } = {}
+  ) {
+    this.events.subscribe(QueryEventTypes.IncantationUpdated, (event) => {
+      if (event.payload.incantationId.id.toString() === queryHash) {
+        callback(event.payload.records);
+      }
+    });
+
+    if (options.initial) {
+      const records = this.activeQueries.get(queryHash)?.records ?? [];
+      return callback(records);
+    }
   }
 
   private async startLiveQuery() {

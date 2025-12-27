@@ -10,6 +10,9 @@ export const QueryEventTypes = {
 
   // Sent from sync service
   IncantationIncomingRemoteUpdate: 'QUERY_INCANTATION_INCOMING_REMOTE_UPDATE',
+
+  // Outside events
+  IncantationUpdated: 'QUERY_INCANTATION_UPDATED',
 } as const;
 
 export type QueryEventTypeMap = {
@@ -55,6 +58,14 @@ export type QueryEventTypeMap = {
       records: Record<string, any>[];
     }
   >;
+
+  [QueryEventTypes.IncantationUpdated]: EventDefinition<
+    typeof QueryEventTypes.IncantationUpdated,
+    {
+      incantationId: RecordId<string>;
+      records: Record<string, any>[];
+    }
+  >;
 };
 
 export type QueryEventSystem = EventSystem<QueryEventTypeMap>;
@@ -65,5 +76,6 @@ export function createQueryEventSystem(): QueryEventSystem {
     QueryEventTypes.IncantationRemoteHashUpdate,
     QueryEventTypes.IncantationCleanup,
     QueryEventTypes.IncantationIncomingRemoteUpdate,
+    QueryEventTypes.IncantationUpdated,
   ]);
 }

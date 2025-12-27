@@ -29,6 +29,10 @@ export class Incantation<T> {
   private ttlDurationMs: number;
   private results: T[] | null = null;
 
+  get records() {
+    return this.results;
+  }
+
   constructor(data: IncantationData) {
     this.id = data.id;
     this.surrealql = data.surrealql;
