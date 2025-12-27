@@ -26,13 +26,15 @@ export class QueryManager {
         id: $id,
         surrealql: $surrealql,
         lastActiveAt: $lastActiveAt,
-        ttl: $ttl
+        ttl: $ttl,
+        tree: $tree
       };
     `, {
       id,
       surrealql,
       lastActiveAt: new Date(),
       ttl,
+      tree: null,
     }).collect<IncantationData[]>();
 
     const incantationId = incantationData.id.id.toString();
@@ -77,18 +79,22 @@ export class QueryManager {
     await this.remote.subscribeLive(queryUuid.toString(), async (action, result) => {
          if (action === 'UPDATE' || action === 'CREATE') {
             const {id, hash, tree} = result;
-            if (!(id instanceof RecordId)) {
+            if (!(id instanceof RecordId) || !hash || !tree) {
                 return;
             }
 
-            if (!hash || !tree) {
+            const incantation = this.activeQueries.get(id.id.toString());
+            if (!incantation) {
                 return;
             }
 
             this.events.emit(QueryEventTypes.IncantationRemoteHashUpdate, {
               incantationId: id as RecordId<string>,
+              surrealql: incantation.surrealql,
+              localHash: incantation.hash,
+              localTree: incantation.tree,
               remoteHash: hash as string,
-              tree: tree as any,
+              remoteTree: tree as any,
             });
          }
     });

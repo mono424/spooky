@@ -22,6 +22,7 @@ export class Incantation<T> {
     public surrealql: string;
     public hash: string;
     public ttl: QueryTimeToLive;
+    public tree: any;
     public lastActiveAt: Date;
     private ttlTimer: NodeJS.Timeout | null = null;
     private ttlDurationMs: number;
@@ -34,6 +35,7 @@ export class Incantation<T> {
         this.id = data.id;
         this.surrealql = data.surrealql;
         this.hash = data.hash;
+        this.tree = data.tree;
         this.lastActiveAt = new Date(data.lastActiveAt);
         this.ttl = data.ttl;
         this.ttlDurationMs = parseDuration(data.ttl);

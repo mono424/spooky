@@ -26,5 +26,6 @@ export interface Incantation {
   hash: string;
   lastActiveAt: number;
   ttl: QueryTimeToLive;
+  tree: any;
 }
 

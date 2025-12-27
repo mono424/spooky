@@ -11,6 +11,9 @@ export const QueryEventTypes = {
   IncantationRemoteHashUpdate: "QUERY_INCANTATION_REMOTE_HASH_UPDATE",
   IncantationTTLHeartbeat: "QUERY_INCANTATION_TTL_HEARTBEAT",
   IncantationCleanup: "QUERY_INCANTATION_CLEANUP",
+  
+  // Sent from sync service
+  IncantationIncomingRemoteUpdate: "QUERY_INCANTATION_INCOMING_REMOTE_UPDATE",
 } as const;
 
 export type QueryEventTypeMap = {
@@ -26,8 +29,11 @@ export type QueryEventTypeMap = {
     typeof QueryEventTypes.IncantationRemoteHashUpdate,
     {
       incantationId: RecordId<string>;
+      surrealql: string;
+      localHash: string;
+      localTree: any;
       remoteHash: string;
-      tree: any;
+      remoteTree: any;
     }
   >;
   [QueryEventTypes.IncantationTTLHeartbeat]: EventDefinition<
@@ -35,11 +41,22 @@ export type QueryEventTypeMap = {
     {
       incantationId: RecordId<string>;
     }
-  >;
+  >,
+
   [QueryEventTypes.IncantationCleanup]: EventDefinition<
     typeof QueryEventTypes.IncantationCleanup,
     {
       incantationId: RecordId<string>;
+    }
+  >,
+
+  [QueryEventTypes.IncantationIncomingRemoteUpdate]: EventDefinition<
+    typeof QueryEventTypes.IncantationIncomingRemoteUpdate,
+    {
+      incantationId: RecordId<string>;
+      remoteHash: string;
+      remoteTree: any;
+      records: Record<string, any>[];
     }
   >;
 };
@@ -51,5 +68,6 @@ export function createQueryEventSystem(): QueryEventSystem {
     QueryEventTypes.IncantationInitialized,
     QueryEventTypes.IncantationRemoteHashUpdate,
     QueryEventTypes.IncantationCleanup,
+    QueryEventTypes.IncantationIncomingRemoteUpdate,
   ]);
 }

@@ -1,8 +1,10 @@
 import { LocalDatabaseService, RemoteDatabaseService } from "../database/index.js";
 import { MutationEventSystem } from "../mutation/index.js";
-import { QueryEventSystem } from "../query/events.js";
+import { Incantation as IncantationData } from "../../types.js";
+import { QueryEventSystem, QueryEventTypes } from "../query/events.js";
 import { SyncQueueEventTypes } from "./events.js";
 import { CleanupEvent, DownEvent, DownQueue, HeartbeatEvent, RegisterEvent, SyncEvent, UpEvent, UpQueue } from "./queue/index.js";
+import { RecordId } from "surrealdb";
 
 export class SpookySync {
   private upQueue: UpQueue;
@@ -121,12 +123,75 @@ export class SpookySync {
   }
 
   private async syncIncantation(event: SyncEvent) {
-    /// TODO get local tree, compare with remote tree, find diff, request diff
+    const { incantationId, surrealql, localTree, localHash, remoteHash, remoteTree } = event.payload;
+
+    const isDifferent = localHash !== remoteHash;
+    if (!isDifferent) return;
+
+    if (!localHash || !localTree) {
+      const [remoteResults] = await this.remote.getClient().query(surrealql).collect<[Record<string, any>[]]>();
+      await this.updateLocalIncantation(incantationId, {
+        hash: remoteHash,
+        tree: remoteTree,
+        records: remoteResults,
+      });
+      return;
+    }
+
+    // TODO: tree comparsion and single record updates
+  }
+
+  private async updateLocalIncantation(incantationId: RecordId<string>, {
+    hash,
+    tree,
+    records,
+  }: {
+    hash: string;
+    tree: any;
+    records: Record<string, any>[];
+  }) {
+    await this.updateIncantationRecord(incantationId, {
+      hash,
+      tree,
+    });
+
+    this.queryEvents.emit(QueryEventTypes.IncantationIncomingRemoteUpdate, {
+      incantationId,
+      remoteHash: hash,
+      remoteTree: tree,
+      records,
+    });
+
+    await this.cacheResults(records);
+  }
+
+  private async updateIncantationRecord(incantationId: RecordId<string>, {
+    hash,
+    tree,
+  }: {
+    hash: string;
+    tree: any;
+  }) {
+    await this.local.getClient().update(incantationId).content({
+      hash,
+      tree,
+    });
+  }
+
+  // TODO: support joined records
+  private async cacheResults(results: Record<string, any>[]) {
+    const tx = await this.local.getClient().beginTransaction();
+    for (const record of results) {
+      if (record.id) {
+        await tx.upsert(record.id).content(record);
+      }
+    }
+    await tx.commit();
   }
 
   private async heartbeatIncantation(event: HeartbeatEvent) {
-    await this.remote.getClient().update(event.payload.incantationId).patch({
-      lastActiveAt: new Date(),
+    await this.remote.getClient().query("fn::incantation::heartbeat($id)", {
+      id: event.payload.incantationId,
     });
   }
 

@@ -84,3 +84,7 @@ DEFINE FUNCTION fn::incantation::register($config: object) {
 
     RETURN $query_hash;
 };
+
+DEFINE FUNCTION fn::incantation::heartbeat($id: record) {
+    UPDATE $id SET LastActiveAt = time::now();
+};
