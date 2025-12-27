@@ -10,7 +10,7 @@ import {
   QueryEventTypes,
 } from './events.js';
 import { Event } from '../../events/index.js';
-import { decodeFromSpooky } from '../utils.js';
+import { decodeFromSpooky, encodeToSpooky } from '../utils.js';
 import { SchemaStructure, TableModel } from '@spooky/query-builder';
 
 export class QueryManager<S extends SchemaStructure> {

@@ -2,15 +2,19 @@ import { RecordId } from 'surrealdb';
 import { LocalDatabaseService } from '../database/index.js';
 import { createMutationEventSystem, MutationEventSystem, MutationEventTypes } from './events.js';
 import { parseRecordIdString } from '../utils.js';
+import { SchemaStructure } from '@spooky/query-builder';
 
-export class MutationManager {
+export class MutationManager<S extends SchemaStructure> {
   private _events: MutationEventSystem;
 
   get events(): MutationEventSystem {
     return this._events;
   }
 
-  constructor(private db: LocalDatabaseService) {
+  constructor(
+    private schema: S,
+    private db: LocalDatabaseService
+  ) {
     this._events = createMutationEventSystem();
   }
 

@@ -25,7 +25,7 @@ export class SpookyClient<S extends SchemaStructure> {
   private remote: RemoteDatabaseService;
   private migrator: LocalMigrator;
   private queryManager: QueryManager<S>;
-  private mutationManager: MutationManager;
+  private mutationManager: MutationManager<S>;
   private sync: SpookySync;
   private devTools: DevToolsService;
 
@@ -45,7 +45,7 @@ export class SpookyClient<S extends SchemaStructure> {
     this.local = new LocalDatabaseService(this.config.database);
     this.remote = new RemoteDatabaseService(this.config.database);
     this.migrator = new LocalMigrator(this.local);
-    this.mutationManager = new MutationManager(this.local);
+    this.mutationManager = new MutationManager(this.config.schema, this.local);
     this.queryManager = new QueryManager(
       this.config.schema,
       this.local,

@@ -18,7 +18,7 @@ const createQuery = ({
   return db
     .query("thread")
     .where({
-      id: threadId,
+      id: `thread:${threadId}`,
     })
     .related("author")
     .related("comments", (q) => {
@@ -48,7 +48,7 @@ export function ThreadDetail() {
   const thread = () => threadResult.data() || null;
   
   createEffect(() => {
-    console.log("threa", thread());
+    console.log("thread", thread());
   });
 
   const handleBack = () => {

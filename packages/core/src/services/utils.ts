@@ -62,7 +62,11 @@ export function encodeToSpooky<
       if (decoded[field] instanceof RecordId) {
         decoded[field] = decoded[field];
       } else if (typeof decoded[field] === 'string') {
-        decoded[field] = parseRecordIdString(decoded[field]);
+        if (!decoded[field].includes(':')) {
+          decoded[field] = new RecordId(tableName, decoded[field]);
+        } else {
+          decoded[field] = parseRecordIdString(decoded[field]);
+        }
       }
     }
 
