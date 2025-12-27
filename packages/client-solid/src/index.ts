@@ -178,6 +178,21 @@ export class SyncedDb<S extends SchemaStructure> {
     if (!this.spooky) throw new Error('SyncedDb not initialized');
     return await this.spooky.useRemote(fn);
   }
+  /**
+   * Access the remote database service directly
+   */
+  get remote(): SpookyClient<S>['remoteClient'] {
+    if (!this.spooky) throw new Error('SyncedDb not initialized');
+    return this.spooky.remoteClient;
+  }
+
+  /**
+   * Access the local database service directly
+   */
+  get local(): SpookyClient<S>['local'] {
+    if (!this.spooky) throw new Error('SyncedDb not initialized');
+    return this.spooky.localClient;
+  }
 }
 
 export * from './types';

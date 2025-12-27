@@ -6,7 +6,7 @@ import {
   Show,
   onCleanup,
 } from "solid-js";
-import { db, dbConfig } from "../db";
+import { db } from "../db";
 import { schema } from "../schema.gen";
 import {
   type GetTable,
@@ -66,17 +66,11 @@ export function AuthProvider(props: { children: JSX.Element }) {
       await db.authenticate(token);
       // Fetch current user ID
       // We use useRemote to execute a raw query to get the authenticated user
-      const users = await db.useRemote(async (remote) => {
-         return await remote.query('SELECT * FROM user WHERE id = $auth.id');
-      });
+      const [user] = await db.remote.query('SELECT * FROM ONLY user WHERE id = $auth.id').collect<[User]>();
+      console.log("[AuthProvider] Auth check complete, user:", user);
 
-      // users is ActionResult[]
-      const firstRes = Array.isArray(users) ? users[0] : users;
-      const records = (firstRes as any).result || firstRes;
-      const currentUser = Array.isArray(records) && records.length > 0 ? records[0] : null;
-
-      if (currentUser && currentUser.id) {
-        setUserId(currentUser.id.toString());
+      if (user && user.id) {
+        setUserId(user.id.toString());
         localStorage.setItem("token", token);
       } else {
          // Token invalid or user not found
@@ -97,16 +91,14 @@ export function AuthProvider(props: { children: JSX.Element }) {
   const signIn = async (username: string, password: string) => {
     try {
       console.log("[AuthProvider] Sign in attempt for:", username);
-      const res = await db.useRemote((db) =>
-        db.signin({
+      const res = await db.remote.signin({
           access: "account", // namespace 'main' / database 'main' / access 'account'
           variables: {
             username,
             password,
           },
-        })
-      );
-
+        });
+      console.log("[AuthProvider] Sign in result:", res);
       console.log("[AuthProvider] Sign in successful, token received");
       // res is the token (string) in v2 usually, or { token: string }?
       // In v2 it returns string (the token).
@@ -124,18 +116,14 @@ export function AuthProvider(props: { children: JSX.Element }) {
   const signUp = async (username: string, password: string) => {
     try {
       console.log("[AuthProvider] Sign up attempt for:", username);
-      const res = await db.useRemote((db) =>
-        db.signup({
-          access: "account",
-          variables: {
-            username,
-            password,
-          },
-        })
-      );
+      const res = await db.remote.query("fn::polyfill::createAccount($username, $password)", {
+          username,
+          password,
+        });
 
-      console.log("[AuthProvider] Sign up successful, token received");
-      await checkAuth(res as unknown as string);
+      console.log("[AuthProvider] Sign up successful, attempting sign in...");
+      // Auto-login after signup
+      await signIn(username, password);
       console.log("[AuthProvider] Auth check complete after sign up");
     } catch (error) {
       console.error("[AuthProvider] Sign up failed:", error);

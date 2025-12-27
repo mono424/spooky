@@ -398,6 +398,17 @@ const String SURQL_SCHEMA = "-- ################################################
 -- SCOPES & AUTHENTICATION
 -- ##################################################################
 
+DEFINE FUNCTION fn::polyfill::createAccount(\$username: string, \$password: string) {
+  IF string::len(\$username) <= 3 { THROW \"Username must be longer than 3 characters\" };
+  IF string::len(\$password) == 0 { THROW \"Password cannot be empty\" };
+
+  LET \$existing = (SELECT value id FROM user WHERE username = \$username LIMIT 1)[0];
+  IF \$existing != NONE { THROW \"Username '\" + <string>\$username + \"' is already taken\" };
+
+  LET \$u = CREATE user SET username = \$username, password = crypto::argon2::generate(\$password);
+  RETURN \$u;
+};
+
 -- ##################################################################
 -- USER TABLE
 -- ##################################################################

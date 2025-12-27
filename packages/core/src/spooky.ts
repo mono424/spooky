@@ -25,6 +25,14 @@ export class SpookyClient<S extends SchemaStructure> {
   private mutationManager: MutationManager;
   private sync: SpookySync;
 
+  get remoteClient() {
+    return this.remote.getClient();
+  }
+
+  get localClient() {
+    return this.local.getClient();
+  }
+
   constructor(private config: SpookyConfig<S>) {
     if (!this.config.clientId) {
       this.config.clientId = crypto.randomUUID();

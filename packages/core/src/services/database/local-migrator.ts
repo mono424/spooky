@@ -63,11 +63,9 @@ export class LocalMigrator {
 
   private async isSchemaUpToDate(hash: string): Promise<boolean> {
     try {
-      const response = await this.localDb.query<SchemaRecord[]>(
-        `SELECT hash, created_at FROM _spooky_schema ORDER BY created_at DESC LIMIT 1;`
+      const [lastSchemaRecord] = await this.localDb.query<any>(
+        `SELECT hash, created_at FROM ONLY _spooky_schema ORDER BY created_at DESC LIMIT 1;`
       );
-
-      const [lastSchemaRecord] = response;
       return lastSchemaRecord?.hash === hash;
     } catch (error) {
       return false;
