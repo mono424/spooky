@@ -54,27 +54,18 @@ export class QueryManager {
       params,
     });
 
-    const [incantationData] = await this.local
+    const recordId = new RecordId('_spooky_incantation', id);
+
+    const incantationData = await this.local
       .getClient()
-      .query(
-        `
-      UPSERT _spooky_incantation:$id CONTENT {
-        id: $id,
-        surrealql: $surrealql,
-        lastActiveAt: $lastActiveAt,
-        ttl: $ttl,
-        tree: $tree
-      };
-    `,
-        {
-          id,
-          surrealql,
-          lastActiveAt: new Date(),
-          ttl,
-          tree: null,
-        }
-      )
-      .collect<IncantationData[]>();
+      .upsert<IncantationData>(recordId)
+      .content({
+        surrealql,
+        lastActiveAt: Date.now(),
+        ttl,
+        tree: null,
+      })
+      .output('after');
 
     const incantationId = incantationData.id.id.toString();
 
@@ -87,7 +78,7 @@ export class QueryManager {
     return incantationId;
   }
 
-  async queryAdHoc(
+  async query(
     surrealql: string,
     params: Record<string, any>,
     ttl: QueryTimeToLive
