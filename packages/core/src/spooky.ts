@@ -45,6 +45,7 @@ export class SpookyClient<S extends SchemaStructure> {
   async init() {
     await this.local.connect();
     await this.remote.connect();
+    await this.queryManager.init();
     await this.migrator.provision(this.config.schemaSurql);
   }
 

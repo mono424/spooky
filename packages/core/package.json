@@ -11,6 +11,7 @@
     }
   },
   "scripts": {
+    "dev": "tsc --watch",
     "build": "tsc",
     "test": "vitest"
   },

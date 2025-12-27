@@ -30,7 +30,10 @@ export class QueryManager {
       QueryEventTypes.IncantationIncomingRemoteUpdate,
       this.handleIncomingRemoteUpdate.bind(this)
     );
-    this.startLiveQuery();
+  }
+
+  public async init() {
+    await this.startLiveQuery();
   }
 
   private handleIncomingRemoteUpdate(
