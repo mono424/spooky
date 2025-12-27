@@ -109,12 +109,9 @@ export class SyncedDb<S extends SchemaStructure> {
   /**
    * Create a new record in the database
    */
-  async create<TName extends TableNames<S>>(
-    tableName: TName,
-    payload: TableModel<GetTable<S, TName>> & { id?: string | RecordId }
-  ): Promise<void> {
+  async create(id: string, payload: Record<string, unknown>): Promise<void> {
     if (!this.spooky) throw new Error('SyncedDb not initialized');
-    await this.spooky.create(tableName as string, payload as Record<string, unknown>);
+    await this.spooky.create(id, payload as Record<string, unknown>);
   }
 
   /**

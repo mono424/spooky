@@ -31,6 +31,7 @@ export function useQuery<
   const [data, setData] = createSignal<TData | undefined>(undefined);
   const [error, setError] = createSignal<Error | undefined>(undefined);
   const [unsubscribe, setUnsubscribe] = createSignal<(() => void) | undefined>(undefined);
+  let prevQueryString: string | undefined;
 
   const spooky = db.getSpooky();
 
@@ -68,6 +69,14 @@ export function useQuery<
     if (!query) {
       return;
     }
+
+    // Prevent re-running if query hasn't changed
+    const queryString = JSON.stringify(query);
+    if (queryString === prevQueryString) {
+      return;
+    }
+    prevQueryString = queryString;
+
     initQuery(query);
 
     // Cleanup

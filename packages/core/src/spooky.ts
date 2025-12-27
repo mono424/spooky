@@ -17,6 +17,9 @@ import {
   TableNames,
 } from '@spooky/query-builder';
 
+import { DevToolsService } from './services/devtools-service.js';
+import { createLogger } from './services/logger.js';
+
 export class SpookyClient<S extends SchemaStructure> {
   private local: LocalDatabaseService;
   private remote: RemoteDatabaseService;
@@ -24,6 +27,7 @@ export class SpookyClient<S extends SchemaStructure> {
   private queryManager: QueryManager;
   private mutationManager: MutationManager;
   private sync: SpookySync;
+  private devTools: DevToolsService;
 
   get remoteClient() {
     return this.remote.getClient();
@@ -37,6 +41,7 @@ export class SpookyClient<S extends SchemaStructure> {
     if (!this.config.clientId) {
       this.config.clientId = crypto.randomUUID();
     }
+    const logger = createLogger('info'); // Default logger
     this.local = new LocalDatabaseService(this.config.database);
     this.remote = new RemoteDatabaseService(this.config.database);
     this.migrator = new LocalMigrator(this.local);
@@ -48,6 +53,13 @@ export class SpookyClient<S extends SchemaStructure> {
       this.mutationManager.events,
       this.queryManager.eventsSystem
     );
+    this.devTools = new DevToolsService(
+      this.mutationManager.events,
+      this.queryManager.eventsSystem,
+      this.local,
+      logger,
+      this.config.schema
+    );
   }
 
   async init() {
@@ -55,6 +67,7 @@ export class SpookyClient<S extends SchemaStructure> {
     await this.remote.connect();
     await this.queryManager.init();
     await this.migrator.provision(this.config.schemaSurql);
+    await this.sync.init();
   }
 
   async close() {
@@ -97,8 +110,8 @@ export class SpookyClient<S extends SchemaStructure> {
     return this.queryManager.subscribe(queryHash, callback, options);
   }
 
-  create(table: string, data: Record<string, unknown>) {
-    return this.mutationManager.create(table, data);
+  create(id: string, data: Record<string, unknown>) {
+    return this.mutationManager.create(id, data);
   }
 
   update(table: string, id: string, data: Record<string, unknown>) {

@@ -32,6 +32,8 @@ export interface EventSubscriptionOptions {
   priority?: number;
 }
 
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+
 export interface SpookyConfig<S extends SchemaStructure> {
   database: {
     endpoint?: string;
