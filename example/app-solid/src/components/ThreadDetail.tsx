@@ -1,4 +1,4 @@
-import { createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, For, Show } from "solid-js";
 import { useNavigate, useParams } from "@solidjs/router";
 import { db } from "../db";
 import { CommentForm } from "./CommentForm";
@@ -18,7 +18,7 @@ const createQuery = ({
   return db
     .query("thread")
     .where({
-      id: threadId,
+      id: `thread:${threadId}`,
     })
     .related("author")
     .related("comments", (q) => {
@@ -46,6 +46,10 @@ export function ThreadDetail() {
     })
   );
   const thread = () => threadResult.data() || null;
+  
+  createEffect(() => {
+    console.log("thread", thread());
+  });
 
   const handleBack = () => {
     navigate("/");

@@ -51,10 +51,14 @@ export type QueryHash = string;
 export interface Incantation {
   id: RecordId<QueryHash>;
   surrealql: string;
+  params?: Record<string, any>;
   hash: string;
   lastActiveAt: number;
   ttl: QueryTimeToLive;
   tree: any;
+  meta: {
+    tableName: string;
+  };
 }
 
 export interface IdTree {

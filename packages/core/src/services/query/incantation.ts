@@ -21,6 +21,7 @@ function parseDuration(duration: QueryTimeToLive): number {
 export class Incantation<T> {
   public id: RecordId<string>;
   public surrealql: string;
+  public params?: Record<string, any>;
   public hash: string;
   public ttl: QueryTimeToLive;
   public tree: any;
@@ -28,19 +29,28 @@ export class Incantation<T> {
   private ttlTimer: NodeJS.Timeout | null = null;
   private ttlDurationMs: number;
   private results: T[] | null = null;
+  private meta: {
+    tableName: string;
+  };
 
   get records() {
     return this.results;
   }
 
+  get tableName() {
+    return this.meta.tableName;
+  }
+
   constructor(data: IncantationData) {
     this.id = data.id;
     this.surrealql = data.surrealql;
+    this.params = data.params;
     this.hash = data.hash;
     this.tree = data.tree;
     this.lastActiveAt = new Date(data.lastActiveAt);
     this.ttl = data.ttl;
     this.ttlDurationMs = parseDuration(data.ttl);
+    this.meta = data.meta;
   }
 
   public updateLocalState(records: T[], hash: string, tree: any) {

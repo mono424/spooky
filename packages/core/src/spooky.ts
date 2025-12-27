@@ -24,8 +24,8 @@ export class SpookyClient<S extends SchemaStructure> {
   private local: LocalDatabaseService;
   private remote: RemoteDatabaseService;
   private migrator: LocalMigrator;
-  private queryManager: QueryManager;
-  private mutationManager: MutationManager;
+  private queryManager: QueryManager<S>;
+  private mutationManager: MutationManager<S>;
   private sync: SpookySync;
   private devTools: DevToolsService;
 
@@ -45,8 +45,13 @@ export class SpookyClient<S extends SchemaStructure> {
     this.local = new LocalDatabaseService(this.config.database);
     this.remote = new RemoteDatabaseService(this.config.database);
     this.migrator = new LocalMigrator(this.local);
-    this.mutationManager = new MutationManager(this.local);
-    this.queryManager = new QueryManager(this.local, this.remote, this.config.clientId);
+    this.mutationManager = new MutationManager(this.config.schema, this.local);
+    this.queryManager = new QueryManager(
+      this.config.schema,
+      this.local,
+      this.remote,
+      this.config.clientId
+    );
     this.sync = new SpookySync(
       this.local,
       this.remote,
@@ -92,14 +97,20 @@ export class SpookyClient<S extends SchemaStructure> {
       this.config.schema,
       table,
       async (q) => ({
-        hash: await this.queryManager.query(q.selectQuery.query, q.selectQuery.vars ?? {}, ttl),
+        hash: await this.queryManager.query(
+          table,
+          q.selectQuery.query,
+          q.selectQuery.vars ?? {},
+          ttl
+        ),
       }),
       options
     );
   }
 
   async queryRaw(sql: string, params: Record<string, any>, ttl: QueryTimeToLive) {
-    return this.queryManager.query(sql, params, ttl);
+    const tableName = sql.split('FROM ')[1].split(' ')[0];
+    return this.queryManager.query(tableName, sql, params, ttl);
   }
 
   async subscribe(
