@@ -12,6 +12,7 @@
   },
   "scripts": {
     "dev": "tsc --watch",
+    "dev:example": "pnpm dev",
     "build": "tsc",
     "test": "vitest"
   },

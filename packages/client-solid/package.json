@@ -15,6 +15,7 @@
   "scripts": {
     "build": "vite build",
     "build:watch": "vite build --watch",
+    "dev:example": "pnpm build:watch",
     "dev": "vite build --watch",
     "test": "vitest",
     "type-check": "tsc --noEmit"
