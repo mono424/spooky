@@ -35,12 +35,15 @@ export class LocalMigrator {
       const statement = statements[i];
       // Strip comments to check if it's an index definition
       const cleanStatement = statement.replace(/--.*/g, '').trim();
+
+      // SKIP INDEXES: WASM engine hangs on DEFINE INDEX (confirmed)
       if (cleanStatement.toUpperCase().startsWith('DEFINE INDEX')) {
         console.warn(
-          `[Provisioning] Skipping index definition: ${cleanStatement.substring(0, 50)}...`
+          `[Provisioning] Skipping index definition (WASM hang avoidance): ${cleanStatement.substring(0, 50)}...`
         );
         continue;
       }
+
       try {
         console.info(
           `[Provisioning] (${i + 1}/${statements.length}) Executing: ${statement.substring(0, 50)}...`
@@ -72,8 +75,11 @@ export class LocalMigrator {
   }
 
   private async recreateDatabase(database: string) {
-    // Ensure temp db exists so we can switch to it
-    await this.localDb.query(`DEFINE DATABASE _spooky_temp;`);
+    try {
+      await this.localDb.query(`DEFINE DATABASE _spooky_temp;`);
+    } catch (e) {
+      // Ignore if exists
+    }
 
     try {
       await this.localDb.query(`

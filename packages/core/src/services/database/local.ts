@@ -1,15 +1,17 @@
-import { Surreal } from "surrealdb";
-import { createWasmEngines } from "@surrealdb/wasm";
-import { SpookyConfig } from "../../types.js";
-import { AbstractDatabaseService } from "./database.js";
+import { Surreal } from 'surrealdb';
+import { createWasmEngines } from '@surrealdb/wasm';
+import { SpookyConfig } from '../../types.js';
+import { AbstractDatabaseService } from './database.js';
 
 export class LocalDatabaseService extends AbstractDatabaseService {
   private config: SpookyConfig<any>['database'];
 
   constructor(config: SpookyConfig<any>['database']) {
-    super(new Surreal({
-      engines: createWasmEngines(),
-    }));
+    super(
+      new Surreal({
+        engines: createWasmEngines(),
+      })
+    );
     this.config = config;
   }
 
@@ -19,7 +21,7 @@ export class LocalDatabaseService extends AbstractDatabaseService {
 
   async connect(): Promise<void> {
     const { namespace, database } = this.getConfig();
-    await this.client.connect("indxdb://spooky");
+    await this.client.connect('indxdb://spooky', {});
     await this.client.use({
       namespace,
       database,
