@@ -69,7 +69,7 @@ export function ThreadList() {
         >
           {(thread) => (
             <div
-              onClick={() => handleThreadClick(thread.id)}
+              onClick={() => handleThreadClick(thread.id.split(":")[1])}
               class="border border-white/40 p-5 cursor-pointer hover:border-white hover:bg-white/5 transition-none group relative block"
             >
               {/* ASCII Corner markers that appear on hover */}
@@ -83,7 +83,7 @@ export function ThreadList() {
                   {thread.title}
                 </h2>
                 <div class="text-[10px] text-gray-500 border border-gray-800 px-2 py-1 bg-black">
-                  ID: {thread.id.slice(0, 8)}
+                  ID: {thread.id.split(":")[1].slice(0, 8)}
                 </div>
               </div>
               
