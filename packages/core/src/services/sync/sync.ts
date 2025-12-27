@@ -129,6 +129,11 @@ export class SpookySync {
 
   private async registerIncantation(event: RegisterEvent) {
     const { incantationId, surrealql, ttl } = event.payload;
+    await this.updateLocalIncantation(incantationId, {
+      surrealql,
+      hash: '',
+      tree: null,
+    });
     await this.remote.getClient().upsert(incantationId).content({
       surrealql,
       ttl,
@@ -142,13 +147,12 @@ export class SpookySync {
     const isDifferent = localHash !== remoteHash;
     if (!isDifferent) return;
 
-    const diff = await this.cacheMissingRecords(localTree, remoteTree, surrealql);
+    await this.cacheMissingRecords(localTree, remoteTree, surrealql);
 
     await this.updateLocalIncantation(incantationId, {
       surrealql,
       hash: remoteHash,
       tree: remoteTree,
-      diff,
     });
   }
 
@@ -188,12 +192,10 @@ export class SpookySync {
       surrealql,
       hash,
       tree,
-      diff,
     }: {
       surrealql: string;
       hash: string;
       tree: any;
-      diff: IdTreeDiff;
     }
   ) {
     await this.updateIncantationRecord(incantationId, {

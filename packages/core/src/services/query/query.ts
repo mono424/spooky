@@ -3,7 +3,13 @@ import { Table, RecordId } from 'surrealdb';
 import { RemoteDatabaseService } from '../database/remote.js';
 import { LocalDatabaseService } from '../database/local.js';
 import { Incantation } from './incantation.js';
-import { createQueryEventSystem, QueryEventSystem, QueryEventTypes } from './events.js';
+import {
+  createQueryEventSystem,
+  QueryEventSystem,
+  QueryEventTypeMap,
+  QueryEventTypes,
+} from './events.js';
+import { Event } from '../../events/index.js';
 
 export class QueryManager {
   private activeQueries: Map<QueryHash, Incantation<any>> = new Map();
@@ -20,7 +26,22 @@ export class QueryManager {
     private clientId?: string
   ) {
     this.events = createQueryEventSystem();
+    this.events.subscribe(
+      QueryEventTypes.IncantationIncomingRemoteUpdate,
+      this.handleIncomingRemoteUpdate.bind(this)
+    );
     this.startLiveQuery();
+  }
+
+  private handleIncomingRemoteUpdate(
+    event: Event<QueryEventTypeMap, 'QUERY_INCANTATION_INCOMING_REMOTE_UPDATE'>
+  ) {
+    const { incantationId, records, remoteHash, remoteTree } = event.payload;
+    const incantation = this.activeQueries.get(incantationId.id.toString());
+    if (!incantation) {
+      return;
+    }
+    incantation.updateLocalState(records, remoteHash, remoteTree);
   }
 
   async register(
@@ -58,7 +79,7 @@ export class QueryManager {
     const incantationId = incantationData.id.id.toString();
 
     if (!this.activeQueries.has(incantationId)) {
-      const incantation = new Incantation(incantationData, this.local);
+      const incantation = new Incantation(incantationData);
       this.activeQueries.set(incantationId, incantation);
       await this.initLifecycle(incantation);
     }
@@ -75,17 +96,12 @@ export class QueryManager {
   }
 
   private async initLifecycle(incantation: Incantation<any>) {
-    // 1. Local Hydration
-    await incantation.reloadLocalState();
-
-    // 2. Remote Registration
     this.events.emit(QueryEventTypes.IncantationInitialized, {
       incantationId: incantation.id,
       surrealql: incantation.surrealql,
       ttl: incantation.ttl,
     });
 
-    // 3. Start TTL Heartbeat
     await incantation.startTTLHeartbeat(() => {
       this.events.emit(QueryEventTypes.IncantationTTLHeartbeat, {
         incantationId: incantation.id,

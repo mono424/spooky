@@ -1,7 +1,5 @@
 import { Incantation as IncantationData, QueryTimeToLive } from '../../types.js';
 import { RecordId } from 'surrealdb';
-import { RemoteDatabaseService } from '../database/remote.js';
-import { LocalDatabaseService } from '../database/local.js';
 
 // Helper to parse duration string like "10m" to ms
 function parseDuration(duration: QueryTimeToLive): number {
@@ -31,10 +29,7 @@ export class Incantation<T> {
   private ttlDurationMs: number;
   private results: T[] | null = null;
 
-  constructor(
-    data: IncantationData,
-    private local: LocalDatabaseService
-  ) {
+  constructor(data: IncantationData) {
     this.id = data.id;
     this.surrealql = data.surrealql;
     this.hash = data.hash;
@@ -44,9 +39,10 @@ export class Incantation<T> {
     this.ttlDurationMs = parseDuration(data.ttl);
   }
 
-  public async reloadLocalState() {
-    const [results] = await this.local.getClient().query(this.surrealql).collect<[T[]]>();
-    this.results = results;
+  public updateLocalState(records: T[], hash: string, tree: any) {
+    this.results = records;
+    this.hash = hash;
+    this.tree = tree;
   }
 
   public destroy() {
