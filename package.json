@@ -5,6 +5,7 @@
   "description": "Spooky monorepo",
   "scripts": {
     "dev": "pnpm -r --parallel dev",
+    "dev:example": "pnpm -r --parallel dev:example",
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "lint": "pnpm -r lint",
