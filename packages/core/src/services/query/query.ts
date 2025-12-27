@@ -1,5 +1,5 @@
 import { QueryHash, Incantation as IncantationData, QueryTimeToLive } from '../../types.js';
-import { Table, RecordId } from 'surrealdb';
+import { Table, RecordId, Duration } from 'surrealdb';
 import { RemoteDatabaseService } from '../database/remote.js';
 import { LocalDatabaseService } from '../database/local.js';
 import { Incantation } from './incantation.js';
@@ -67,17 +67,27 @@ export class QueryManager {
       .getClient()
       .upsert<IncantationData>(recordId)
       .content({
-        surrealql,
-        lastActiveAt: Date.now(),
-        ttl,
-        tree: null,
+        Id: id,
+        SurrealQL: surrealql,
+        ClientId: this.clientId,
+        Hash: id,
+        Tree: null,
+        LastActiveAt: new Date(),
+        TTL: new Duration(ttl),
       })
       .output('after');
 
-    const incantationId = incantationData.id.id.toString();
+    const incantationId = id;
 
     if (!this.activeQueries.has(incantationId)) {
-      const incantation = new Incantation(incantationData);
+      const incantation = new Incantation({
+        id: recordId,
+        surrealql,
+        hash: id,
+        lastActiveAt: Date.now(),
+        ttl,
+        tree: null,
+      });
       this.activeQueries.set(incantationId, incantation);
       await this.initLifecycle(incantation);
     }
@@ -156,8 +166,9 @@ export class QueryManager {
   }
 
   private async calculateHash(data: any): Promise<string> {
+    const content = JSON.stringify(data);
     const result = await (
-      this.local.getClient().query('RETURN crypto::blake3($data)', { data }) as any
+      this.local.getClient().query('RETURN crypto::blake3($content)', { content }) as any
     ).collect();
     return result[0] as string;
   }

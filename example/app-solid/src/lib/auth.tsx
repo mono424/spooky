@@ -30,6 +30,7 @@ const AuthContext = createContext<AuthContextType>();
 export function AuthProvider(props: { children: JSX.Element }) {
   const spooky = db.getSpooky();
   const [userId, setUserId] = createSignal<string | null>(null);
+  const [remoteUser, setRemoteUser] = createSignal<User | null>(null);
   const [isLoading, setIsLoading] = createSignal(true);
   const [isInitialized, setIsInitialized] = createSignal(false);
 
@@ -50,11 +51,11 @@ export function AuthProvider(props: { children: JSX.Element }) {
     }
   );
 
-  const user = () => userQuery.data() || null;
+  const user = () => userQuery.data() || remoteUser() || null;
 
   // Check for existing session on mount
-  const checkAuth = async (tkn?: string) => {
-    const token = tkn || localStorage.getItem("token");
+  const checkAuth = async (access?: string) => {
+    const token = access || localStorage.getItem("token");
     console.log("[AuthProvider] Checking auth with token:", !!token);
     if (!token) {
       setIsLoading(false);
@@ -71,6 +72,7 @@ export function AuthProvider(props: { children: JSX.Element }) {
 
       if (user && user.id) {
         setUserId(user.id.toString());
+        setRemoteUser(user);
         localStorage.setItem("token", token);
       } else {
          // Token invalid or user not found
@@ -91,18 +93,16 @@ export function AuthProvider(props: { children: JSX.Element }) {
   const signIn = async (username: string, password: string) => {
     try {
       console.log("[AuthProvider] Sign in attempt for:", username);
-      const res = await db.remote.signin({
+      const { access } = await db.remote.signin({
           access: "account", // namespace 'main' / database 'main' / access 'account'
           variables: {
             username,
             password,
           },
         });
-      console.log("[AuthProvider] Sign in result:", res);
+      console.log("[AuthProvider] Sign in result:", access);
       console.log("[AuthProvider] Sign in successful, token received");
-      // res is the token (string) in v2 usually, or { token: string }?
-      // In v2 it returns string (the token).
-      await checkAuth(res as unknown as string);
+      await checkAuth(access);
       console.log("[AuthProvider] Auth check complete after sign in");
     } catch (error) {
       console.error("[AuthProvider] Sign in failed:", error);
@@ -138,6 +138,7 @@ export function AuthProvider(props: { children: JSX.Element }) {
     try {
       localStorage.removeItem("token");
       setUserId(null);
+      setRemoteUser(null);
       await db.deauthenticate();
     } catch (error) {
       console.error("Sign out failed:", error);

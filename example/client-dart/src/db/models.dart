@@ -215,8 +215,6 @@ class SpookyPendingMutations {
     
     ///Any type
     String? data;
-    
-    ///Record ID
     String id;
     String mutationType;
     
@@ -231,17 +229,17 @@ class SpookyPendingMutations {
     });
 
     factory SpookyPendingMutations.fromJson(Map<String, dynamic> json) => SpookyPendingMutations(
-        data: json["data"],
+        data: json["Data"],
         id: json["id"],
-        mutationType: json["mutation_type"],
-        recordId: json["record_id"],
+        mutationType: json["MutationType"],
+        recordId: json["RecordId"],
     );
 
     Map<String, dynamic> toJson() => {
-        "data": data,
+        "Data": data,
         "id": id,
-        "mutation_type": mutationType,
-        "record_id": recordId,
+        "MutationType": mutationType,
+        "RecordId": recordId,
     };
 }
 
@@ -590,15 +588,17 @@ DEFINE INDEX idx_record_id ON TABLE _spooky_data_hash COLUMNS RecordId UNIQUE;
 DEFINE TABLE _spooky_pending_mutations SCHEMAFULL
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
-DEFINE FIELD mutation_type ON TABLE _spooky_pending_mutations TYPE string
+DEFINE FIELD IF NOT EXISTS id ON _spooky_pending_mutations TYPE string;
+
+DEFINE FIELD IF NOT EXISTS MutationType ON _spooky_pending_mutations TYPE string
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- The target record ID (for update/delete) - maps to 'id' in the event object
-DEFINE FIELD record_id ON TABLE _spooky_pending_mutations TYPE option<record>
+DEFINE FIELD IF NOT EXISTS RecordId ON _spooky_pending_mutations TYPE option<record>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- The data payload (for create/update)
-DEFINE FIELD data ON TABLE _spooky_pending_mutations TYPE option<object> FLEXIBLE
+DEFINE FIELD IF NOT EXISTS Data ON _spooky_pending_mutations TYPE option<object> FLEXIBLE
 PERMISSIONS FOR select, create, update WHERE true;
 
 

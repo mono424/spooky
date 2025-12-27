@@ -1,10 +1,5 @@
 import { IdTree, IdTreeDiff } from '../../types.js';
-import { RecordId } from 'surrealdb';
-
-const parseRecordIdString = (id: string): RecordId<string> => {
-  const [table, ...idParts] = id.split(':');
-  return new RecordId(table, idParts.join(':'));
-};
+import { parseRecordIdString } from '../utils.js';
 
 export function diffIdTree(local: IdTree | null, remote: IdTree | null): IdTreeDiff {
   const { added, removed, updated } = diffIdTreeInt(local, remote);

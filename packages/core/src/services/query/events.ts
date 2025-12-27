@@ -77,5 +77,6 @@ export function createQueryEventSystem(): QueryEventSystem {
     QueryEventTypes.IncantationCleanup,
     QueryEventTypes.IncantationIncomingRemoteUpdate,
     QueryEventTypes.IncantationUpdated,
+    QueryEventTypes.IncantationTTLHeartbeat,
   ]);
 }

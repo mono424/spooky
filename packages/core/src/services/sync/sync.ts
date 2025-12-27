@@ -38,6 +38,7 @@ export class SpookySync {
   }
 
   public async init() {
+    console.log('syncing down');
     if (this.isInit) throw new Error('SpookySync is already initialized');
     this.isInit = true;
     await this.initUpQueue();
@@ -115,6 +116,7 @@ export class SpookySync {
   }
 
   private async processDownEvent(event: DownEvent) {
+    console.log('down event', event);
     switch (event.type) {
       case 'register':
         return this.registerIncantation(event);
@@ -134,9 +136,9 @@ export class SpookySync {
       hash: '',
       tree: null,
     });
-    await this.remote.getClient().upsert(incantationId).content({
-      surrealql,
-      ttl,
+    await this.remote.query(`UPSERT $id CONTENT $content`, {
+      id: incantationId,
+      content: { surrealql, ttl },
     });
   }
 
@@ -226,9 +228,9 @@ export class SpookySync {
       tree: any;
     }
   ) {
-    await this.local.getClient().update(incantationId).content({
-      hash,
-      tree,
+    await this.local.query(`UPDATE $id MERGE $content`, {
+      id: incantationId,
+      content: { hash, tree },
     });
   }
 
@@ -250,6 +252,8 @@ export class SpookySync {
   }
 
   private async cleanupIncantation(event: CleanupEvent) {
-    await this.remote.getClient().delete(event.payload.incantationId);
+    await this.remote.query(`DELETE $id`, {
+      id: event.payload.incantationId,
+    });
   }
 }

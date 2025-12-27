@@ -2,7 +2,6 @@ import { SyncedDb } from '@spooky/client-solid';
 import { schema, SURQL_SCHEMA } from './schema.gen';
 
 // Database configuration
-// Database configuration
 export const dbConfig = {
   schema: schema,
   schemaSurql: SURQL_SCHEMA,
