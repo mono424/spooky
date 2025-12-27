@@ -37,11 +37,13 @@ export function CreateThreadDialog(props: CreateThreadDialogProps) {
       );
 
       await db.create("thread", {
-        id: `thread:${threadId.id.toString()}`,
+        id: threadId.toString(),
         title: title().trim(),
         content: content().trim(),
         author: user.id,
         created_at: new Date().toISOString(),
+        active: true,
+        comments: null,
       });
 
       props.onClose();

@@ -5,6 +5,8 @@ import react from "@astrojs/react";
 
 // https://astro.build/config
 export default defineConfig({
+  site: 'https://mono424.github.io',
+  base: '/spooky',
   integrations: [
     tailwind({
       applyBaseStyles: false,

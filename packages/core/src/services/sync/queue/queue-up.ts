@@ -1,7 +1,7 @@
 import { RecordId } from "surrealdb"
-import { MutationEventSystem, MutationEventTypes } from "../mutation/events.js"
-import { LocalDatabaseService } from "../database/index.js"
-import { createSyncQueueEventSystem, SyncQueueEventSystem, SyncQueueEventTypes } from "./events.js"
+import { MutationEventSystem, MutationEventTypes } from "../../mutation/events.js"
+import { LocalDatabaseService } from "../../database/index.js"
+import { createSyncQueueEventSystem, SyncQueueEventSystem, SyncQueueEventTypes } from "../events.js"
 
 export type CreateEvent = {
     type: "create",

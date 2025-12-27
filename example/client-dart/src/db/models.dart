@@ -14,8 +14,6 @@ String schemaToJson(Schema data) => json.encode(data.toJson());
 class Schema {
     SpookyDataHash spookyDataHash;
     SpookyIncantation spookyIncantation;
-    SpookyIncantationLookup spookyIncantationLookup;
-    SpookyIncantationTail spookyIncantationTail;
     SpookyPendingMutations spookyPendingMutations;
     SpookyRelationship spookyRelationship;
     SpookySchema spookySchema;
@@ -27,8 +25,6 @@ class Schema {
     Schema({
         required this.spookyDataHash,
         required this.spookyIncantation,
-        required this.spookyIncantationLookup,
-        required this.spookyIncantationTail,
         required this.spookyPendingMutations,
         required this.spookyRelationship,
         required this.spookySchema,
@@ -41,8 +37,6 @@ class Schema {
     factory Schema.fromJson(Map<String, dynamic> json) => Schema(
         spookyDataHash: SpookyDataHash.fromJson(json["_spooky_data_hash"]),
         spookyIncantation: SpookyIncantation.fromJson(json["_spooky_incantation"]),
-        spookyIncantationLookup: SpookyIncantationLookup.fromJson(json["_spooky_incantation_lookup"]),
-        spookyIncantationTail: SpookyIncantationTail.fromJson(json["_spooky_incantation_tail"]),
         spookyPendingMutations: SpookyPendingMutations.fromJson(json["_spooky_pending_mutations"]),
         spookyRelationship: SpookyRelationship.fromJson(json["_spooky_relationship"]),
         spookySchema: SpookySchema.fromJson(json["_spooky_schema"]),
@@ -55,8 +49,6 @@ class Schema {
     Map<String, dynamic> toJson() => {
         "_spooky_data_hash": spookyDataHash.toJson(),
         "_spooky_incantation": spookyIncantation.toJson(),
-        "_spooky_incantation_lookup": spookyIncantationLookup.toJson(),
-        "_spooky_incantation_tail": spookyIncantationTail.toJson(),
         "_spooky_pending_mutations": spookyPendingMutations.toJson(),
         "_spooky_relationship": spookyRelationship.toJson(),
         "_spooky_schema": spookySchema.toJson(),
@@ -179,6 +171,9 @@ class SpookyIncantation {
     DateTime lastActiveAt;
     String? surrealQl;
     
+    ///Any type
+    dynamic tree;
+    
     ///ISO 8601 duration
     String ttl;
 
@@ -189,6 +184,7 @@ class SpookyIncantation {
         required this.id,
         required this.lastActiveAt,
         this.surrealQl,
+        required this.tree,
         required this.ttl,
     });
 
@@ -199,6 +195,7 @@ class SpookyIncantation {
         id: json["Id"],
         lastActiveAt: DateTime.parse(json["LastActiveAt"]),
         surrealQl: json["SurrealQL"],
+        tree: json["Tree"],
         ttl: json["TTL"],
     );
 
@@ -209,73 +206,8 @@ class SpookyIncantation {
         "Id": id,
         "LastActiveAt": lastActiveAt.toIso8601String(),
         "SurrealQL": surrealQl,
+        "Tree": tree,
         "TTL": ttl,
-    };
-}
-
-class SpookyIncantationLookup {
-    String table;
-    
-    ///Any type
-    dynamic where;
-    
-    ///Record ID
-    String id;
-    String incantationId;
-    List<String>? sortDirections;
-    List<String>? sortFields;
-
-    SpookyIncantationLookup({
-        required this.table,
-        required this.where,
-        required this.id,
-        required this.incantationId,
-        this.sortDirections,
-        this.sortFields,
-    });
-
-    factory SpookyIncantationLookup.fromJson(Map<String, dynamic> json) => SpookyIncantationLookup(
-        table: json["`Table`"],
-        where: json["`Where`"],
-        id: json["id"],
-        incantationId: json["IncantationId"],
-        sortDirections: json["SortDirections"] == null ? [] : List<String>.from(json["SortDirections"]!.map((x) => x)),
-        sortFields: json["SortFields"] == null ? [] : List<String>.from(json["SortFields"]!.map((x) => x)),
-    );
-
-    Map<String, dynamic> toJson() => {
-        "`Table`": table,
-        "`Where`": where,
-        "id": id,
-        "IncantationId": incantationId,
-        "SortDirections": sortDirections == null ? [] : List<dynamic>.from(sortDirections!.map((x) => x)),
-        "SortFields": sortFields == null ? [] : List<dynamic>.from(sortFields!.map((x) => x)),
-    };
-}
-
-class SpookyIncantationTail {
-    
-    ///Record ID
-    String id;
-    String incantationId;
-    List<dynamic> tailValues;
-
-    SpookyIncantationTail({
-        required this.id,
-        required this.incantationId,
-        required this.tailValues,
-    });
-
-    factory SpookyIncantationTail.fromJson(Map<String, dynamic> json) => SpookyIncantationTail(
-        id: json["id"],
-        incantationId: json["IncantationId"],
-        tailValues: List<dynamic>.from(json["TailValues"].map((x) => x)),
-    );
-
-    Map<String, dynamic> toJson() => {
-        "id": id,
-        "IncantationId": incantationId,
-        "TailValues": List<dynamic>.from(tailValues.map((x) => x)),
     };
 }
 
@@ -374,6 +306,7 @@ class SpookySchema {
 }
 
 class Thread {
+    bool? active;
     
     ///Record ID of table: user
     String author;
@@ -392,6 +325,7 @@ class Thread {
     String title;
 
     Thread({
+        this.active,
         required this.author,
         this.comments,
         required this.content,
@@ -401,6 +335,7 @@ class Thread {
     });
 
     factory Thread.fromJson(Map<String, dynamic> json) => Thread(
+        active: json["active"],
         author: json["author"],
         comments: json["comments"] == null ? [] : List<String>.from(json["comments"]!.map((x) => x)),
         content: json["content"],
@@ -410,6 +345,7 @@ class Thread {
     );
 
     Map<String, dynamic> toJson() => {
+        "active": active,
         "author": author,
         "comments": comments == null ? [] : List<dynamic>.from(comments!.map((x) => x)),
         "content": content,
@@ -472,6 +408,17 @@ const String SURQL_SCHEMA = "-- ################################################
 -- SCOPES & AUTHENTICATION
 -- ##################################################################
 
+DEFINE FUNCTION fn::polyfill::createAccount(\$username: string, \$password: string) {
+  IF string::len(\$username) <= 3 { THROW \"Username must be longer than 3 characters\" };
+  IF string::len(\$password) == 0 { THROW \"Password cannot be empty\" };
+
+  LET \$existing = (SELECT value id FROM user WHERE username = \$username LIMIT 1)[0];
+  IF \$existing != NONE { THROW \"Username '\" + <string>\$username + \"' is already taken\" };
+
+  LET \$u = CREATE user SET username = \$username, password = crypto::argon2::generate(\$password);
+  RETURN \$u;
+};
+
 -- ##################################################################
 -- USER TABLE
 -- ##################################################################
@@ -513,6 +460,8 @@ DEFINE FIELD author ON TABLE thread TYPE record<user>;
 DEFINE FIELD created_at ON TABLE thread TYPE datetime
     VALUE time::now();
 
+DEFINE FIELD active ON TABLE thread TYPE bool VALUE \$value OR false;
+
 -- ##################################################################
 -- COMMENT TABLE
 -- ##################################################################
@@ -547,7 +496,7 @@ DEFINE EVENT comment_created ON TABLE comment WHEN \$event = \"CREATE\" THEN
 -- The Registry of active Live Queries (Incantations).
 -- ==================================================
 
-DEFINE TABLE _spooky_incantation SCHEMAFULL
+DEFINE TABLE _spooky_incantation SCHEMALESS
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
 -- The unique hash ID of the query + params
@@ -566,6 +515,10 @@ PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD Hash ON TABLE _spooky_incantation TYPE string
 PERMISSIONS FOR select, create, update WHERE true;
 
+-- The Radix Tree of Result IDs for efficient sync
+DEFINE FIELD Tree ON TABLE _spooky_incantation TYPE any
+PERMISSIONS FOR select, create, update WHERE true;
+
 -- For garbage collection (Heartbeat)
 DEFINE FIELD LastActiveAt ON TABLE _spooky_incantation TYPE datetime DEFAULT time::now()
 PERMISSIONS FOR select, create, update WHERE true;
@@ -573,66 +526,6 @@ PERMISSIONS FOR select, create, update WHERE true;
 -- How long this Incantation stays alive without activity
 DEFINE FIELD TTL ON TABLE _spooky_incantation TYPE duration
 PERMISSIONS FOR select, create, update WHERE true;
-
--- Cleanup Triggers
--- When an incantation dies, clean up its lookup and tail records
-DEFINE EVENT _spooky_cascade_delete_lookup ON TABLE _spooky_incantation WHEN \$event = \"DELETE\" THEN {
-    DELETE _spooky_incantation_lookup WHERE IncantationId = \$before.Id;
-    DELETE _spooky_incantation_tail WHERE IncantationId = \$before.Id;
-};
-
-
--- ==================================================
--- SPOOKY INCANTATION LOOKUP
--- The Reverse Index: Maps Tables -> Incantations
--- ==================================================
-
-DEFINE TABLE _spooky_incantation_lookup SCHEMAFULL
-PERMISSIONS FOR select, create, update, delete WHERE true;
-
--- Link to the parent Incantation
-DEFINE FIELD IncantationId ON TABLE _spooky_incantation_lookup TYPE string
-PERMISSIONS FOR select, create, update WHERE true;
-
--- The primary table being queried (e.g., 'thread')
-DEFINE FIELD Table ON TABLE _spooky_incantation_lookup TYPE string
-PERMISSIONS FOR select, create, update WHERE true;
-
--- Filter logic used to check if a dirty record matches this query
--- Stored as an object e.g., { clause: \"importance >= 3\", args: [...] }
-DEFINE FIELD Where ON TABLE _spooky_incantation_lookup TYPE object DEFAULT {}
-PERMISSIONS FOR select, create, update WHERE true;
-
--- Sorting Metadata needed to maintain order
-DEFINE FIELD SortFields ON TABLE _spooky_incantation_lookup TYPE option<array<string>>
-PERMISSIONS FOR select, create, update WHERE true;
-DEFINE FIELD SortDirections ON TABLE _spooky_incantation_lookup TYPE option<array<string>>
-PERMISSIONS FOR select, create, update WHERE true;
-
--- Indexes for performance
-DEFINE INDEX idx_incantation ON TABLE _spooky_incantation_lookup COLUMNS IncantationId;
-DEFINE INDEX idx_table ON TABLE _spooky_incantation_lookup COLUMNS Table;
-
-
--- ==================================================
--- SPOOKY INCANTATION TAIL
--- Cursor Management for Pagination/Limits
--- ==================================================
-
-DEFINE TABLE _spooky_incantation_tail SCHEMAFULL
-PERMISSIONS FOR select, create, update, delete WHERE true;
-
--- Link to the parent Incantation
-DEFINE FIELD IncantationId ON TABLE _spooky_incantation_tail TYPE string
-PERMISSIONS FOR select, create, update WHERE true;
-
--- The sort values of the *last* item in the current result set
--- Used to determine if a new record falls inside or outside the LIMIT window.
-DEFINE FIELD TailValues ON TABLE _spooky_incantation_tail TYPE array<any>
-PERMISSIONS FOR select, create, update WHERE true;
-
-DEFINE INDEX idx_incantation ON TABLE _spooky_incantation_tail COLUMNS IncantationId UNIQUE;
-
 
 -- ==================================================
 -- SPOOKY RELATIONSHIP
@@ -733,24 +626,10 @@ PERMISSIONS FOR select, create, update WHERE true;
 DEFINE EVENT OVERWRITE _spooky_comment_client_mutation ON TABLE comment
 WHEN \$before != \$after AND \$event != \"DELETE\"
 THEN {
-    LET \$xor_sum = crypto::blake3(\"\");
-    LET \$h_author = crypto::blake3(<string>\$after.author);
-    LET \$xor_sum = mod::xor::blake3_xor(\$xor_sum, \$h_author);
-    LET \$h_content = crypto::blake3(<string>\$after.content);
-    LET \$xor_sum = mod::xor::blake3_xor(\$xor_sum, \$h_content);
-    LET \$h_thread = crypto::blake3(<string>\$after.thread);
-    LET \$xor_sum = mod::xor::blake3_xor(\$xor_sum, \$h_thread);
-    LET \$new_intrinsic = {
-        author: \$h_author,
-        content: \$h_content,
-        thread: \$h_thread,
-        _xor: \$xor_sum,
-    };
-
     UPSERT _spooky_data_hash CONTENT {
         RecordId: \$after.id,
-        IntrinsicHash: \$new_intrinsic,
-        CompositionHash: crypto::blake3(\"\"), -- Empty for client
+        IntrinsicHash: \"\",
+        CompositionHash: \"\",
         TotalHash: NONE,
         IsDirty: true,
         PendingDelete: false
@@ -768,24 +647,10 @@ THEN {
 DEFINE EVENT OVERWRITE _spooky_thread_client_mutation ON TABLE thread
 WHEN \$before != \$after AND \$event != \"DELETE\"
 THEN {
-    LET \$xor_sum = crypto::blake3(\"\");
-    LET \$h_author = crypto::blake3(<string>\$after.author);
-    LET \$xor_sum = mod::xor::blake3_xor(\$xor_sum, \$h_author);
-    LET \$h_content = crypto::blake3(<string>\$after.content);
-    LET \$xor_sum = mod::xor::blake3_xor(\$xor_sum, \$h_content);
-    LET \$h_title = crypto::blake3(<string>\$after.title);
-    LET \$xor_sum = mod::xor::blake3_xor(\$xor_sum, \$h_title);
-    LET \$new_intrinsic = {
-        author: \$h_author,
-        content: \$h_content,
-        title: \$h_title,
-        _xor: \$xor_sum,
-    };
-
     UPSERT _spooky_data_hash CONTENT {
         RecordId: \$after.id,
-        IntrinsicHash: \$new_intrinsic,
-        CompositionHash: crypto::blake3(\"\"), -- Empty for client
+        IntrinsicHash: \"\",
+        CompositionHash: \"\",
         TotalHash: NONE,
         IsDirty: true,
         PendingDelete: false
@@ -803,18 +668,10 @@ THEN {
 DEFINE EVENT OVERWRITE _spooky_user_client_mutation ON TABLE user
 WHEN \$before != \$after AND \$event != \"DELETE\"
 THEN {
-    LET \$xor_sum = crypto::blake3(\"\");
-    LET \$h_username = crypto::blake3(<string>\$after.username);
-    LET \$xor_sum = mod::xor::blake3_xor(\$xor_sum, \$h_username);
-    LET \$new_intrinsic = {
-        username: \$h_username,
-        _xor: \$xor_sum,
-    };
-
     UPSERT _spooky_data_hash CONTENT {
         RecordId: \$after.id,
-        IntrinsicHash: \$new_intrinsic,
-        CompositionHash: crypto::blake3(\"\"), -- Empty for client
+        IntrinsicHash: \"\",
+        CompositionHash: \"\",
         TotalHash: NONE,
         IsDirty: true,
         PendingDelete: false

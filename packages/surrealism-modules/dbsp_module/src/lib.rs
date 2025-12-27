@@ -88,20 +88,23 @@ impl Database {
 // --- ID Tree Implementation ---
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct LeafItem {
+    pub id: String,
+    pub hash: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct IdTree {
     pub hash: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub children: Option<HashMap<String, IdTree>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub ids: Option<Vec<String>>,
+    pub leaves: Option<Vec<LeafItem>>,
 }
 
 // Helper to compute hash of a list of strings
-// Helper to compute hash of a list of strings
 pub fn compute_hash(items: &[String]) -> String {
     let mut hasher = blake3::Hasher::new();
-    // Join with null byte to avoid collision cases like ["ab", "c"] vs ["a", "bc"]
-    // Or just update iteratively
     for item in items {
         hasher.update(item.as_bytes());
         hasher.update(&[0]); // Delimiter
@@ -111,31 +114,39 @@ pub fn compute_hash(items: &[String]) -> String {
 
 impl IdTree {
     /// Recursively build the Radix Tree from a sorted list of IDs.
-    pub fn build(ids: Vec<String>) -> Self {
-        const THRESHOLD: usize = 100; // Max IDs per leaf node
+    pub fn build(items: Vec<LeafItem>) -> Self {
+        const THRESHOLD: usize = 100; // Max items per leaf node
 
-        if ids.len() <= THRESHOLD {
-            let hash = compute_hash(&ids);
+        if items.len() <= THRESHOLD {
+            // Hash the leaf items (id + hash)
+            let mut hasher = blake3::Hasher::new();
+            for item in &items {
+                hasher.update(item.id.as_bytes());
+                hasher.update(item.hash.as_bytes());
+                hasher.update(&[0]);
+            }
+            let hash = hasher.finalize().to_hex().to_string();
+
             return IdTree {
                 hash,
                 children: None,
-                ids: Some(ids),
+                leaves: Some(items),
             };
         }
 
-        // Split by first character (Simple Radix)
-        let mut groups: HashMap<String, Vec<String>> = HashMap::new();
-        for id in ids {
-            // Use first char as key, or empty if empty string
-            let prefix = id.chars().next().map(|c| c.to_string()).unwrap_or_else(|| "".to_string());
-            groups.entry(prefix).or_default().push(id);
+        // Split by first character of ID (Simple Radix)
+        let mut groups: HashMap<String, Vec<LeafItem>> = HashMap::new();
+        for item in items {
+            // Use first char as key
+            let prefix = item.id.chars().next().map(|c| c.to_string()).unwrap_or_else(|| "".to_string());
+            groups.entry(prefix).or_default().push(item);
         }
 
         let mut children = HashMap::new();
         let mut child_hashes = Vec::new();
 
-        for (prefix, group_ids) in groups {
-            let child_node = IdTree::build(group_ids);
+        for (prefix, group_items) in groups {
+            let child_node = IdTree::build(group_items);
             child_hashes.push(format!("{}:{}", prefix, child_node.hash));
             children.insert(prefix, child_node);
         }
@@ -147,7 +158,7 @@ impl IdTree {
         IdTree {
             hash,
             children: Some(children),
-            ids: None,
+            leaves: None,
         }
     }
 }
@@ -274,11 +285,39 @@ impl View {
         // For now, default ID sort is stable.
         result_ids.sort();
         
-        let hash = compute_hash(&result_ids);
+        // Build Leaf Items
+        let items: Vec<LeafItem> = result_ids.iter().map(|id| {
+            // Lookup row to get content
+            let val = self.get_row_value(id, db);
+            let hash = if let Some(v) = val {
+                // Try to get precomputed hash from record
+                if let Some(h) = v.get("IntrinsicHash").or_else(|| v.get("hash")).or_else(|| v.get("_hash")) {
+                    h.as_str().unwrap_or("0000").to_string()
+                } else {
+                    // Precomputed hash is mandatory
+                    panic!("Missing IntrinsicHash/hash/_hash on record {}", id);
+                }
+            } else {
+                 "0000".to_string() // Should not happen for valid views
+            };
+            LeafItem {
+                id: id.clone(),
+                hash,
+            }
+        }).collect();
+
+        // Compute root hash from items
+        // Note: IdTree::build computes its own hash, but we check change first.
+        // We can optimize by not building tree if hash is same... 
+        // But IdTree::build logic starts with full list.
+        // Let's build tree first? Or compute simple hash list same as IdTree?
+        // IdTree::build is efficient enough.
+        
+        let tree = IdTree::build(items);
+        let hash = tree.hash.clone();
 
         if hash != self.last_hash {
             self.last_hash = hash.clone();
-            let tree = IdTree::build(result_ids.clone());
             return Some(MaterializedViewUpdate {
                 query_id: self.plan.id.clone(),
                 result_hash: hash,

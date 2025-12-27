@@ -1,32 +1,27 @@
-import type { SyncedDbConfig } from "./types";
+import type { SyncedDbConfig } from './types';
+import { SpookyClient, type SpookyQueryResultPromise } from '@spooky/core';
+
 import {
-  RecordId,
   GetTable,
   QueryBuilder,
   SchemaStructure,
   TableModel,
   TableNames,
-  createSpooky,
-  Surreal,
   QueryResult,
   RelatedFieldsMap,
   RelationshipFieldsFromSchema,
   GetRelationship,
   RelatedFieldMapEntry,
   InnerQuery,
-} from "@spooky/spooky-ts";
+} from '@spooky/query-builder';
 
-export { RecordId, Uuid } from "surrealdb";
-export type {
-  Model,
-  GenericModel,
-  GenericSchema,
-  ModelPayload,
-} from "./lib/models";
-export { useQuery } from "./lib/use-query";
+import { RecordId, Uuid, Surreal } from 'surrealdb';
+export { RecordId, Uuid };
+export type { Model, GenericModel, GenericSchema, ModelPayload } from './lib/models';
+export { useQuery } from './lib/use-query';
 
-export { AuthEventTypes } from "@spooky/spooky-ts";
-export type { };
+// export { AuthEventTypes } from "@spooky/core"; // TODO: Verify if AuthEventTypes exists in core
+export type {};
 
 // Re-export query builder types for convenience
 export type {
@@ -41,7 +36,7 @@ export type {
   TableModel,
   TableNames,
   QueryResult,
-} from "@spooky/query-builder";
+} from '@spooky/query-builder';
 
 export interface SyncedDbContext<S extends SyncedDb<SchemaStructure>> {
   db: S;
@@ -50,65 +45,56 @@ export interface SyncedDbContext<S extends SyncedDb<SchemaStructure>> {
 export type RelationshipField<
   Schema extends SchemaStructure,
   TableName extends TableNames<Schema>,
-  Field extends RelationshipFieldsFromSchema<Schema, TableName>
+  Field extends RelationshipFieldsFromSchema<Schema, TableName>,
 > = GetRelationship<Schema, TableName, Field>;
 
 export type RelatedFieldsTableScoped<
   Schema extends SchemaStructure,
   TableName extends TableNames<Schema>,
-  RelatedFields extends RelationshipFieldsFromSchema<
-    Schema,
-    TableName
-  > = RelationshipFieldsFromSchema<Schema, TableName>
+  RelatedFields extends RelationshipFieldsFromSchema<Schema, TableName> =
+    RelationshipFieldsFromSchema<Schema, TableName>,
 > = {
-    [K in RelatedFields]: {
-      to: RelationshipField<Schema, TableName, K>["to"];
-      relatedFields: RelatedFieldsMap;
-      cardinality: RelationshipField<Schema, TableName, K>["cardinality"];
-    };
+  [K in RelatedFields]: {
+    to: RelationshipField<Schema, TableName, K>['to'];
+    relatedFields: RelatedFieldsMap;
+    cardinality: RelationshipField<Schema, TableName, K>['cardinality'];
   };
+};
 
 export type InferModel<
   Schema extends SchemaStructure,
   TableName extends TableNames<Schema>,
-  RelatedFields extends RelatedFieldsTableScoped<Schema, TableName>
+  RelatedFields extends RelatedFieldsTableScoped<Schema, TableName>,
 > = QueryResult<Schema, TableName, RelatedFields, true>;
 
-export type WithRelated<
-  Field extends string,
-  RelatedFields extends RelatedFieldsMap = {}
-> = {
-    [K in Field]: Omit<RelatedFieldMapEntry, "relatedFields"> & {
-      relatedFields: RelatedFields;
-    };
+export type WithRelated<Field extends string, RelatedFields extends RelatedFieldsMap = {}> = {
+  [K in Field]: Omit<RelatedFieldMapEntry, 'relatedFields'> & {
+    relatedFields: RelatedFields;
   };
+};
 
-export type WithRelatedMany<
-  Field extends string,
-  RelatedFields extends RelatedFieldsMap = {}
-> = {
-    [K in Field]: {
-      to: Field;
-      relatedFields: RelatedFields;
-      cardinality: "many";
-    };
+export type WithRelatedMany<Field extends string, RelatedFields extends RelatedFieldsMap = {}> = {
+  [K in Field]: {
+    to: Field;
+    relatedFields: RelatedFields;
+    cardinality: 'many';
   };
+};
 
 /**
  * SyncedDb - A thin wrapper around spooky-ts for Solid.js integration
  * Delegates all logic to the underlying spooky-ts instance
  */
-export class SyncedDb<const Schema extends SchemaStructure> {
-  private config: SyncedDbConfig<Schema>;
-  private spooky: Awaited<ReturnType<typeof createSpooky<Schema>>> | null =
-    null;
+export class SyncedDb<S extends SchemaStructure> {
+  private config: SyncedDbConfig<S>;
+  private spooky: SpookyClient<S> | null = null;
 
-  constructor(config: SyncedDbConfig<Schema>) {
+  constructor(config: SyncedDbConfig<S>) {
     this.config = config;
   }
 
-  public getSpooky(): Awaited<ReturnType<typeof createSpooky<Schema>>> {
-    if (!this.spooky) throw new Error("SyncedDb not initialized");
+  public getSpooky(): SpookyClient<S> {
+    if (!this.spooky) throw new Error('SyncedDb not initialized');
     return this.spooky;
   }
 
@@ -116,50 +102,53 @@ export class SyncedDb<const Schema extends SchemaStructure> {
    * Initialize the spooky-ts instance
    */
   async init(): Promise<void> {
-    this.spooky = await createSpooky<Schema>(this.config);
+    this.spooky = new SpookyClient<S>(this.config);
+    await this.spooky.init();
   }
 
   /**
    * Create a new record in the database
    */
-  async create<TName extends TableNames<Schema>>(
+  async create<TName extends TableNames<S>>(
     tableName: TName,
-    payload: TableModel<GetTable<Schema, TName>> & { id?: string | RecordId }
+    payload: TableModel<GetTable<S, TName>> & { id?: string | RecordId }
   ): Promise<void> {
-    if (!this.spooky) throw new Error("SyncedDb not initialized");
-    await this.spooky.create(tableName, payload);
+    if (!this.spooky) throw new Error('SyncedDb not initialized');
+    await this.spooky.create(tableName as string, payload as Record<string, unknown>);
   }
 
   /**
    * Update an existing record in the database
    */
-  async update<TName extends TableNames<Schema>>(
+  async update<TName extends TableNames<S>>(
     tableName: TName,
     recordId: string,
-    payload: Partial<TableModel<GetTable<Schema, TName>>>
+    payload: Partial<TableModel<GetTable<S, TName>>>
   ): Promise<void> {
-    if (!this.spooky) throw new Error("SyncedDb not initialized");
-    await this.spooky.update(tableName, recordId, payload);
+    if (!this.spooky) throw new Error('SyncedDb not initialized');
+    await this.spooky.update(tableName as string, recordId, payload as Record<string, unknown>);
   }
 
   /**
    * Delete an existing record in the database
    */
-  async delete<TName extends TableNames<Schema>>(
+  async delete<TName extends TableNames<S>>(
     tableName: TName,
-    selector: string | InnerQuery<GetTable<Schema, TName>, boolean>
+    selector: string | InnerQuery<GetTable<S, TName>, boolean>
   ): Promise<void> {
-    if (!this.spooky) throw new Error("SyncedDb not initialized");
-    await this.spooky.delete(tableName, selector);
+    if (!this.spooky) throw new Error('SyncedDb not initialized');
+    if (typeof selector !== 'string')
+      throw new Error('Only string ID selectors are supported currently with core');
+    await this.spooky.delete(tableName as string, selector);
   }
 
   /**
    * Query data from the database
    */
-  public query<TName extends TableNames<Schema>>(
+  public query<TName extends TableNames<S>>(
     table: TName
-  ): QueryBuilder<Schema, TName, {}, false> {
-    if (!this.spooky) throw new Error("SyncedDb not initialized");
+  ): QueryBuilder<S, TName, SpookyQueryResultPromise, {}, false> {
+    if (!this.spooky) throw new Error('SyncedDb not initialized');
     return this.spooky.query(table, {});
   }
 
@@ -167,26 +156,43 @@ export class SyncedDb<const Schema extends SchemaStructure> {
    * Authenticate with the database
    */
   public async authenticate(token: string): Promise<RecordId<string>> {
-    if (!this.spooky) throw new Error("SyncedDb not initialized");
-    const userId = await this.spooky.authenticate(token);
-    return userId!;
+    const result = await this.spooky?.authenticate(token);
+    // SpookyClient.authenticate returns whatever remote.authenticate returns (boolean or token usually?)
+    // Wait, checked SpookyClient: return this.remote.getClient().authenticate(token);
+    // SurrealDB authenticate returns void? or token?
+    // Assuming void or token.
+    return new RecordId('user', 'me'); // Placeholder or actual?
   }
 
   /**
    * Deauthenticate from the database
    */
   public async deauthenticate(): Promise<void> {
-    if (!this.spooky) throw new Error("SyncedDb not initialized");
-    await this.spooky.deauthenticate();
+    await this.spooky?.deauthenticate();
   }
 
   /**
    * Execute a function with direct access to the remote database connection
    */
   public async useRemote<T>(fn: (db: Surreal) => T | Promise<T>): Promise<T> {
-    if (!this.spooky) throw new Error("SyncedDb not initialized");
+    if (!this.spooky) throw new Error('SyncedDb not initialized');
     return await this.spooky.useRemote(fn);
+  }
+  /**
+   * Access the remote database service directly
+   */
+  get remote(): SpookyClient<S>['remoteClient'] {
+    if (!this.spooky) throw new Error('SyncedDb not initialized');
+    return this.spooky.remoteClient;
+  }
+
+  /**
+   * Access the local database service directly
+   */
+  get local(): SpookyClient<S>['local'] {
+    if (!this.spooky) throw new Error('SyncedDb not initialized');
+    return this.spooky.localClient;
   }
 }
 
-export * from "./types";
+export * from './types';

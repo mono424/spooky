@@ -1,6 +1,32 @@
-import { RecordId, SchemaStructure } from "@spooky/query-builder";
+import { RecordId, SchemaStructure } from '@spooky/query-builder';
 
-export type QueryTimeToLive = "1m" | "5m" | "10m" | "15m" | "20m" | "25m" | "30m" | "1h" | "2h" | "3h" | "4h" | "5h" | "6h" | "7h" | "8h" | "9h" | "10h" | "11h" | "12h" | "1d";
+export type QueryTimeToLive =
+  | '1m'
+  | '5m'
+  | '10m'
+  | '15m'
+  | '20m'
+  | '25m'
+  | '30m'
+  | '1h'
+  | '2h'
+  | '3h'
+  | '4h'
+  | '5h'
+  | '6h'
+  | '7h'
+  | '8h'
+  | '9h'
+  | '10h'
+  | '11h'
+  | '12h'
+  | '1d';
+
+export interface SpookyQueryResult {
+  hash: string;
+}
+
+export type SpookyQueryResultPromise = Promise<SpookyQueryResult>;
 
 export interface EventSubscriptionOptions {
   priority?: number;
@@ -26,5 +52,17 @@ export interface Incantation {
   hash: string;
   lastActiveAt: number;
   ttl: QueryTimeToLive;
+  tree: any;
 }
 
+export interface IdTree {
+  hash: string;
+  children?: Record<string, IdTree>;
+  leaves?: { id: string; hash: string }[];
+}
+
+export interface IdTreeDiff {
+  added: RecordId<string>[];
+  updated: RecordId<string>[];
+  removed: RecordId<string>[];
+}

@@ -28,3 +28,32 @@ DEFINE FIELD TotalHash ON TABLE _spooky_data_hash TYPE option<string>
 
 -- Fast lookup by the original record ID
 DEFINE INDEX idx_record_id ON TABLE _spooky_data_hash COLUMNS RecordId UNIQUE;
+
+-- ==================================================
+-- SPOOKY MODULE STATE
+-- Global state storage for the DBSP WASM module
+-- ==================================================
+
+DEFINE TABLE _spooky_module_state SCHEMALESS
+    PERMISSIONS FOR select, create, update WHERE true;
+
+-- The serialized WASM memory state (huge JSON object)
+DEFINE FIELD State ON TABLE _spooky_module_state TYPE option<object>
+    PERMISSIONS FOR select, create, update WHERE true;
+
+-- Helper function to get or init state
+DEFINE FUNCTION fn::dbsp::get_state() {
+    RETURN (SELECT VALUE State FROM _spooky_module_state:dbsp_state)[0] OR {};
+};
+
+-- Helper function to save state
+DEFINE FUNCTION fn::dbsp::save_state($new_state: object) {
+    UPSERT _spooky_module_state:dbsp_state SET State = $new_state;
+};
+
+-- Unregister from DBSP on deletion
+DEFINE EVENT _spooky_dbsp_cleanup ON TABLE _spooky_incantation WHEN $event = "DELETE" THEN {
+    let $state = fn::dbsp::get_state();
+    let $result = mod::dbsp::unregister_query($before.Id, $state);
+    fn::dbsp::save_state($result.new_state);
+};

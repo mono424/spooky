@@ -9,49 +9,83 @@ import Home from "./routes/index";
 import ThreadPage from "./routes/thread/[id]";
 import CreateThreadPage from "./routes/create-thread";
 
+// Defined outside component to preserve whitespace exactly
+const GHOST_ASCII = `
+   ▄▄████████▄▄
+ ▄██████████████▄
+ ████████████████
+ ████  ████  ████
+ ████████████████
+ ██████▀▄▄▀██████
+ ██████    ██████
+ ██████▄▀▀▄██████
+ ████████████████
+ ████████████████
+ ██▄ ▀█▄▀ █▀ ▄█▄█
+  ▀   ▀      ▀ ▀
+`;
+
 function Layout(props: any) {
   const auth = useAuth();
   const [showAuthDialog, setShowAuthDialog] = createSignal(false);
+  // Add state to track which mode to open the dialog in
+  const [authMode, setAuthMode] = createSignal<"signin" | "signup">("signin");
 
-  // Auto-close auth dialog when user is authenticated
   createEffect(() => {
     if (auth.user()) {
-      console.log("[Layout] User authenticated, closing auth dialog");
       setShowAuthDialog(false);
     }
   });
 
-  const handleAuthRequired = () => {
+  // Helper to open specific mode
+  const openAuth = (mode: "signin" | "signup") => {
+    setAuthMode(mode);
     setShowAuthDialog(true);
   };
 
   return (
-    <div class="min-h-screen bg-gray-50">
+    <div class="min-h-screen bg-black text-white font-mono selection:bg-white selection:text-black flex flex-col">
       {/* Header */}
-      <header class="bg-white shadow-sm border-b">
-        <div class="max-w-4xl mx-auto px-4 py-3">
+      <header class="bg-black border-b-2 border-white sticky top-0 z-50">
+        <div class="max-w-4xl mx-auto px-4 py-4">
           <div class="flex justify-between items-center">
-            <h1 class="text-xl font-bold text-gray-900">Thread App</h1>
+            <div class="flex items-center gap-2">
+              <span class="animate-pulse text-white font-bold">&gt;</span>
+              <h1 class="text-xl font-bold tracking-widest uppercase">
+                [ THREAD_APP ]
+              </h1>
+            </div>
+
             <Show
               when={auth.userId()}
               fallback={
-                <button
-                  onClick={handleAuthRequired}
-                  class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700"
-                >
-                  Sign In
-                </button>
+                <div class="flex space-x-4">
+                   {/* Header Login Button */}
+                  <button
+                    onClick={() => openAuth("signin")}
+                    class="hidden sm:block text-sm uppercase font-bold hover:underline decoration-white underline-offset-4"
+                  >
+                    Login
+                  </button>
+                   {/* Header Register Button */}
+                  <button
+                    onClick={() => openAuth("signup")}
+                    class="border-2 border-white px-4 py-1 uppercase font-bold text-sm hover:bg-white hover:text-black transition-none"
+                  >
+                    [ REGISTER ]
+                  </button>
+                </div>
               }
             >
-              <div class="flex items-center space-x-4">
-                <span class="text-gray-700">
-                  Welcome, {auth.user()?.username ?? "Guest"}
+              <div class="flex items-center space-x-6 text-sm">
+                <span class="text-gray-400 uppercase hidden sm:inline">
+                  USER: <span class="text-white">{auth.user()?.username ?? "GUEST"}</span>
                 </span>
                 <button
                   onClick={auth.signOut}
-                  class="text-gray-600 hover:text-gray-800"
+                  class="hover:underline decoration-white underline-offset-4 uppercase"
                 >
-                  Sign Out
+                  &lt;&lt; LOGOUT
                 </button>
               </div>
             </Show>
@@ -60,34 +94,64 @@ function Layout(props: any) {
       </header>
 
       {/* Main Content */}
-      <main>
+      <main class="flex-grow">
         <Show
           when={auth.userId()}
           fallback={
-            <div class="max-w-4xl mx-auto p-4">
-              <div class="text-center py-12">
-                <h2 class="text-2xl font-bold mb-4">Welcome to Thread App</h2>
-                <p class="text-gray-600 mb-6">
-                  Sign in to view and create threads
-                </p>
-                <button
-                  onClick={handleAuthRequired}
-                  class="bg-blue-600 text-white px-6 py-3 rounded-md hover:bg-blue-700"
-                >
-                  Get Started
-                </button>
+            <div class="max-w-4xl mx-auto p-4 h-full flex items-center justify-center min-h-[80vh]">
+              <div class="text-center w-full">
+                
+                {/* ASCII GHOST EYECATCHER */}
+                <div class="flex justify-center mb-10">
+                    <pre class="text-[10px] sm:text-xs md:text-sm leading-none font-bold whitespace-pre text-white tracking-tighter text-left">
+                        {GHOST_ASCII}
+                    </pre>
+                </div>
+
+                <div class="border-2 border-white p-8 max-w-lg mx-auto relative">
+                  <div class="absolute -top-3 left-4 bg-black px-2 uppercase font-bold text-sm border-x border-white">
+                    System Message
+                  </div>
+                  
+                  <h2 class="text-2xl font-bold mb-6 uppercase tracking-widest">
+                    Welcome to Thread App
+                  </h2>
+                  
+                  <p class="text-gray-400 mb-8 border-l-2 border-white pl-4 text-left font-mono text-sm">
+                    &gt; Access restricted.<br/>
+                    &gt; Authentication required.<br/>
+                    &gt; Please initialize session to continue.
+                  </p>
+                  
+                  <div class="flex flex-col gap-4">
+                    {/* Hero Login Button */}
+                    <button
+                        onClick={() => openAuth("signin")}
+                        class="w-full border-2 border-white bg-white text-black px-6 py-4 uppercase font-bold hover:bg-black hover:text-white hover:border-white transition-none"
+                    >
+                        [ INITIALIZE_SESSION ]
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           }
         >
-          {props.children}
+          <div class="max-w-4xl mx-auto p-4 border-x border-dashed border-white/20 min-h-screen">
+             {props.children}
+          </div>
         </Show>
       </main>
 
-      {/* Auth Dialog */}
+      <footer class="border-t border-white py-2 px-4 text-xs uppercase text-gray-500 flex justify-between bg-black">
+        <span>Status: ONLINE</span>
+        <span>v1.0.0_BUILD_FINAL</span>
+      </footer>
+
       <AuthDialog
         isOpen={showAuthDialog()}
         onClose={() => setShowAuthDialog(false)}
+        initialMode={authMode()} // Pass the mode here
       />
     </div>
   );
@@ -110,8 +174,13 @@ export default function App() {
     <Show
       when={isDbReady()}
       fallback={
-        <div class="min-h-screen flex items-center justify-center">
-          <div class="text-lg">Initializing...</div>
+        <div class="min-h-screen bg-black text-white font-mono flex flex-col items-center justify-center">
+          <pre class="mb-4 text-xs animate-pulse">
+            [ SYSTEM BOOT ]
+          </pre>
+          <div class="text-xl font-bold uppercase tracking-widest">
+             &gt; Initializing Database...<span class="animate-pulse">_</span>
+          </div>
         </div>
       }
     >

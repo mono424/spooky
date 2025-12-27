@@ -2,7 +2,7 @@ services:
   surrealdb:
     image: surrealdb/surrealdb:v3.0.0-alpha.17-dev
     ports:
-      - "8000:8000"
+      - '8000:8000'
     environment:
       - SURREAL_USER=root
       - SURREAL_PASS=root
@@ -20,8 +20,9 @@ services:
       - memory
     volumes:
       - ./.spooky/xor_module.surli:/modules/xor_module.surli:ro
+      - ./.spooky/dbsp_module.surli:/modules/dbsp_module.surli:ro
     healthcheck:
-      test: ["CMD", "/surreal", "isready", "--conn", "http://localhost:8000"]
+      test: ['CMD', '/surreal', 'isready', '--conn', 'http://localhost:8000']
       interval: 10s
       timeout: 5s
       retries: 5
@@ -41,4 +42,4 @@ services:
       -H 'surreal-db: main'
       -u root:root
       --data-binary @/remote.gen.surql && echo 'Schema migration completed successfully'"
-    restart: "no"
+    restart: 'no'

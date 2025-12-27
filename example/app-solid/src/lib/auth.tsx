@@ -6,10 +6,9 @@ import {
   Show,
   onCleanup,
 } from "solid-js";
-import { db, dbConfig } from "../db";
+import { db } from "../db";
 import { schema } from "../schema.gen";
 import {
-  AuthEventTypes,
   type GetTable,
   type TableModel,
   useQuery,
@@ -34,23 +33,8 @@ export function AuthProvider(props: { children: JSX.Element }) {
   const [isLoading, setIsLoading] = createSignal(true);
   const [isInitialized, setIsInitialized] = createSignal(false);
 
-  const subIds = [
-    spooky.subscribe(AuthEventTypes.Authenticated, (event) => {
-      console.log("[AuthProvider] Authenticated event received:", event);
-      setUserId(event.payload.userId.toString());
-      localStorage.setItem("token", event.payload.token);
-    }),
-    spooky.subscribe(AuthEventTypes.Deauthenticated, () => {
-      console.log("[AuthProvider] Deauthenticated event received");
-      setUserId(null);
-      localStorage.removeItem("token");
-    }),
-  ];
-
-  onCleanup(() => {
-    subIds.forEach((id) => spooky.unsubscribe(id));
-  });
-
+  // Remove subIds and onCleanup for events
+  
   // Only run query after auth is initialized and userId is available
   const userQuery = useQuery(
     db,
@@ -80,7 +64,23 @@ export function AuthProvider(props: { children: JSX.Element }) {
     setIsLoading(true);
     try {
       await db.authenticate(token);
-    } catch (error) {}
+      // Fetch current user ID
+      // We use useRemote to execute a raw query to get the authenticated user
+      const [user] = await db.remote.query('SELECT * FROM ONLY user WHERE id = $auth.id').collect<[User]>();
+      console.log("[AuthProvider] Auth check complete, user:", user);
+
+      if (user && user.id) {
+        setUserId(user.id.toString());
+        localStorage.setItem("token", token);
+      } else {
+         // Token invalid or user not found
+         await signOut(); // Cleanup
+      }
+
+    } catch (error) {
+       console.error("Auth check failed", error);
+       await signOut();
+    }
     setIsLoading(false);
     setIsInitialized(true);
   };
@@ -91,19 +91,18 @@ export function AuthProvider(props: { children: JSX.Element }) {
   const signIn = async (username: string, password: string) => {
     try {
       console.log("[AuthProvider] Sign in attempt for:", username);
-      // Use the centralized signIn method from db object
-      const res = await db.useRemote((db) =>
-        db.signin({
-          access: "account",
+      const res = await db.remote.signin({
+          access: "account", // namespace 'main' / database 'main' / access 'account'
           variables: {
             username,
             password,
           },
-        })
-      );
-
+        });
+      console.log("[AuthProvider] Sign in result:", res);
       console.log("[AuthProvider] Sign in successful, token received");
-      await checkAuth(res.access || (res as any));
+      // res is the token (string) in v2 usually, or { token: string }?
+      // In v2 it returns string (the token).
+      await checkAuth(res as unknown as string);
       console.log("[AuthProvider] Auth check complete after sign in");
     } catch (error) {
       console.error("[AuthProvider] Sign in failed:", error);
@@ -117,19 +116,14 @@ export function AuthProvider(props: { children: JSX.Element }) {
   const signUp = async (username: string, password: string) => {
     try {
       console.log("[AuthProvider] Sign up attempt for:", username);
-      // Use the centralized signUp method from db object
-      const res = await db.useRemote((db) =>
-        db.signup({
-          access: "account",
-          variables: {
-            username,
-            password,
-          },
-        })
-      );
+      const res = await db.remote.query("fn::polyfill::createAccount($username, $password)", {
+          username,
+          password,
+        });
 
-      console.log("[AuthProvider] Sign up successful, token received");
-      await checkAuth(res.access || (res as any));
+      console.log("[AuthProvider] Sign up successful, attempting sign in...");
+      // Auto-login after signup
+      await signIn(username, password);
       console.log("[AuthProvider] Auth check complete after sign up");
     } catch (error) {
       console.error("[AuthProvider] Sign up failed:", error);

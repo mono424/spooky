@@ -1,42 +1,83 @@
-import { QueryHash, Incantation as IncantationData, QueryTimeToLive } from "../../types.js";
-import { Table, RecordId } from "surrealdb";
-import { RemoteDatabaseService } from "../database/remote.js";
-import { LocalDatabaseService } from "../database/local.js";
-import { Incantation } from "./incantation.js";
+import { QueryHash, Incantation as IncantationData, QueryTimeToLive } from '../../types.js';
+import { Table, RecordId } from 'surrealdb';
+import { RemoteDatabaseService } from '../database/remote.js';
+import { LocalDatabaseService } from '../database/local.js';
+import { Incantation } from './incantation.js';
+import {
+  createQueryEventSystem,
+  QueryEventSystem,
+  QueryEventTypeMap,
+  QueryEventTypes,
+} from './events.js';
+import { Event } from '../../events/index.js';
 
 export class QueryManager {
-  private subscriptions: Map<QueryHash, Set<(data: any) => void>> = new Map();
-  // Using Map to store Incantation objects. Accessing via .values() gives "array of objects".
-  private activeQueries: Map<QueryHash, Incantation> = new Map();
+  private activeQueries: Map<QueryHash, Incantation<any>> = new Map();
+  private liveQueryUuid: string | null = null;
+  private events: QueryEventSystem;
 
-  constructor(private local: LocalDatabaseService, private remote: RemoteDatabaseService, private clientId?: string) {
-
+  public get eventsSystem() {
+    return this.events;
   }
 
-  async register(surrealql: string, params: Record<string, any>, ttl: QueryTimeToLive): Promise<QueryHash> {
+  constructor(
+    private local: LocalDatabaseService,
+    private remote: RemoteDatabaseService,
+    private clientId?: string
+  ) {
+    this.events = createQueryEventSystem();
+    this.events.subscribe(
+      QueryEventTypes.IncantationIncomingRemoteUpdate,
+      this.handleIncomingRemoteUpdate.bind(this)
+    );
+  }
+
+  public async init() {
+    await this.startLiveQuery();
+  }
+
+  private handleIncomingRemoteUpdate(
+    event: Event<QueryEventTypeMap, 'QUERY_INCANTATION_INCOMING_REMOTE_UPDATE'>
+  ) {
+    const { incantationId, records, remoteHash, remoteTree } = event.payload;
+    const incantation = this.activeQueries.get(incantationId.id.toString());
+    if (!incantation) {
+      return;
+    }
+    incantation.updateLocalState(records, remoteHash, remoteTree);
+    this.events.emit(QueryEventTypes.IncantationUpdated, {
+      incantationId,
+      records,
+    });
+  }
+
+  async register(
+    surrealql: string,
+    params: Record<string, any>,
+    ttl: QueryTimeToLive
+  ): Promise<QueryHash> {
     const id = await this.calculateHash({
       surrealql,
-      params
+      params,
     });
 
-    const [incantationData] = await this.local.getClient().query(`
-      UPSERT _spooky_incantation:$id CONTENT {
-        id: $id,
-        surrealql: $surrealql,
-        lastActiveAt: $lastActiveAt,
-        ttl: $ttl
-      };
-    `, {
-      id,
-      surrealql,
-      lastActiveAt: new Date(),
-      ttl,
-    }).collect<IncantationData[]>();
+    const recordId = new RecordId('_spooky_incantation', id);
+
+    const incantationData = await this.local
+      .getClient()
+      .upsert<IncantationData>(recordId)
+      .content({
+        surrealql,
+        lastActiveAt: Date.now(),
+        ttl,
+        tree: null,
+      })
+      .output('after');
 
     const incantationId = incantationData.id.id.toString();
-    
+
     if (!this.activeQueries.has(incantationId)) {
-      const incantation = new Incantation(incantationData, this.local, this.remote);
+      const incantation = new Incantation(incantationData);
       this.activeQueries.set(incantationId, incantation);
       await this.initLifecycle(incantation);
     }
@@ -44,89 +85,80 @@ export class QueryManager {
     return incantationId;
   }
 
-  async queryAdHoc(surrealql: string, params: Record<string, any>, ttl: QueryTimeToLive): Promise<QueryHash> {
-      return this.register(surrealql, params, ttl);
+  async query(
+    surrealql: string,
+    params: Record<string, any>,
+    ttl: QueryTimeToLive
+  ): Promise<QueryHash> {
+    return this.register(surrealql, params, ttl);
   }
 
-  private subscribe(queryHash: QueryHash, callback: (data: any) => void): () => void {
-    if (!this.subscriptions.has(queryHash)) {
-      this.subscriptions.set(queryHash, new Set());
-    }
-    this.subscriptions.get(queryHash)!.add(callback);
+  private async initLifecycle(incantation: Incantation<any>) {
+    this.events.emit(QueryEventTypes.IncantationInitialized, {
+      incantationId: incantation.id,
+      surrealql: incantation.surrealql,
+      ttl: incantation.ttl,
+    });
 
-    // Send current data if available
-    this.refreshLocal(queryHash).then((data) => callback(data));
+    await incantation.startTTLHeartbeat(() => {
+      this.events.emit(QueryEventTypes.IncantationTTLHeartbeat, {
+        incantationId: incantation.id,
+      });
+    });
+  }
+
+  subscribe(
+    queryHash: string,
+    callback: (records: Record<string, any>[]) => void,
+    options: { immediate?: boolean } = {}
+  ): () => void {
+    const id = this.events.subscribe(QueryEventTypes.IncantationUpdated, (event) => {
+      if (event.payload.incantationId.id.toString() === queryHash) {
+        callback(event.payload.records);
+      }
+    });
+
+    if (options.immediate) {
+      const records = this.activeQueries.get(queryHash)?.records ?? [];
+      callback(records);
+    }
 
     return () => {
-      const subs = this.subscriptions.get(queryHash);
-      if (subs) {
-        subs.delete(callback);
-        if (subs.size === 0) {
-          this.subscriptions.delete(queryHash);
-          // Optional: Stop lifecycle if no subscribers.
-          // For now we keep incantations alive until app closes or explicit cleanup.
-        }
-      }
+      this.events.unsubscribe(id);
     };
   }
 
-  private async initLifecycle(incantation: Incantation) {
-    // 1. Local Hydration
-    await this.refreshLocal(incantation.id.id.toString());
-
-    // 2. Remote Registration & Sync (moved to Incantation class)
-    await incantation.init();
-
-    // 3. Start Live Query
-    await this.startLiveQuery(incantation);
-  }
-
-  private async refreshLocal(queryHash: QueryHash): Promise<any> {
-    const incantation = this.activeQueries.get(queryHash);
-    if (!incantation) return;
-
-    // Cast to any to bypass potential type mismatch in alpha version
-    const queryResult = await (this.local.getClient().query(incantation.surrealql) as any).collect();
-    const results = queryResult[0];
-    const data = results;
-
-    // Calculate Hash
-    const hash = await this.calculateHash(data);
-    
-    if (hash !== incantation.hash) {
-      incantation.hash = hash;
-      this.notifySubscribers(queryHash, data);
-    }
-
-    return data;
-  }
-
-  private async startLiveQuery(incantation: Incantation) {
-    const queryUuid = await this.remote.getClient().live(
-      new Table("_spooky_incantation"),
-    );
+  private async startLiveQuery() {
+    const queryUuid = await this.remote.getClient().live(new Table('_spooky_incantation')).diff();
 
     await this.remote.subscribeLive(queryUuid.toString(), async (action, result) => {
-         if (action === 'UPDATE' || action === 'CREATE') {
-             const resultId = (result as any)?.id?.toString();
-             const targetId = incantation.id.toString();
-             
-             if (resultId === targetId) {
-                 await this.refreshLocal(incantation.id.id.toString());
-             }
-         }
+      if (action === 'UPDATE' || action === 'CREATE') {
+        const { id, hash, tree } = result;
+        if (!(id instanceof RecordId) || !hash || !tree) {
+          return;
+        }
+
+        const incantation = this.activeQueries.get(id.id.toString());
+        if (!incantation) {
+          return;
+        }
+
+        this.events.emit(QueryEventTypes.IncantationRemoteHashUpdate, {
+          incantationId: id as RecordId<string>,
+          surrealql: incantation.surrealql,
+          localHash: incantation.hash,
+          localTree: incantation.tree,
+          remoteHash: hash as string,
+          remoteTree: tree as any,
+        });
+      }
     });
   }
 
   private async calculateHash(data: any): Promise<string> {
-    const result = await (this.local.getClient().query("RETURN crypto::blake3($data)", { data }) as any).collect();
+    const result = await (
+      this.local.getClient().query('RETURN crypto::blake3($data)', { data }) as any
+    ).collect();
     return result[0] as string;
-  }
-
-  private notifySubscribers(queryHash: QueryHash, data: any) {
-    const subs = this.subscriptions.get(queryHash);
-    if (subs) {
-      subs.forEach((cb) => cb(data));
-    }
   }
 }

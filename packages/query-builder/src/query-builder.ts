@@ -1,4 +1,4 @@
-import { RecordId } from "surrealdb";
+import { RecordId } from 'surrealdb';
 import type {
   GenericModel,
   QueryInfo,
@@ -7,7 +7,7 @@ import type {
   RelatedQuery,
   SchemaAwareQueryModifier,
   SchemaAwareQueryModifierBuilder,
-} from "./types";
+} from './types';
 import type {
   TableNames,
   GetTable,
@@ -17,7 +17,7 @@ import type {
   SchemaStructure,
   TableFieldNames,
   ColumnSchema,
-} from "./table-schema";
+} from './table-schema';
 
 /**
  * Parse a string ID to RecordId
@@ -27,22 +27,18 @@ import type {
  * @param tableName - The table name to use if the ID doesn't contain ":"
  * @param fieldName - The field name to determine if this is an ID field
  */
-function parseStringToRecordId(
-  value: unknown,
-  tableName?: string,
-  fieldName?: string
-): unknown {
-  if (typeof value !== "string") return value;
+function parseStringToRecordId(value: unknown, tableName?: string, fieldName?: string): unknown {
+  if (typeof value !== 'string') return value;
 
   // If it already contains ":", parse it as a full record ID
-  if (value.includes(":")) {
-    const [table, ...idParts] = value.split(":");
-    const id = idParts.join(":"); // Handle IDs that contain colons
+  if (value.includes(':')) {
+    const [table, ...idParts] = value.split(':');
+    const id = idParts.join(':'); // Handle IDs that contain colons
     return new RecordId(table, id);
   }
 
   // If this is an "id" field and we have a table name, prepend it
-  if (fieldName === "id" && tableName) {
+  if (fieldName === 'id' && tableName) {
     return new RecordId(tableName, value);
   }
 
@@ -58,7 +54,7 @@ function parseStringToRecordId(
 function parseObjectIdsToRecordId(obj: unknown, tableName?: string): unknown {
   if (obj === null || obj === undefined) return obj;
 
-  if (typeof obj === "string") {
+  if (typeof obj === 'string') {
     return parseStringToRecordId(obj, tableName);
   }
 
@@ -66,12 +62,12 @@ function parseObjectIdsToRecordId(obj: unknown, tableName?: string): unknown {
     return obj.map((item) => parseObjectIdsToRecordId(item, tableName));
   }
 
-  if (typeof obj === "object" && obj.constructor === Object) {
+  if (typeof obj === 'object' && obj.constructor === Object) {
     const result: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(obj)) {
       // Parse recursively, passing the field name to identify ID fields
       result[key] =
-        typeof value === "string"
+        typeof value === 'string'
           ? parseStringToRecordId(value, tableName, key)
           : parseObjectIdsToRecordId(value, tableName);
     }
@@ -81,24 +77,20 @@ function parseObjectIdsToRecordId(obj: unknown, tableName?: string): unknown {
   return obj;
 }
 
-export type Executor<
-  T extends { columns: Record<string, ColumnSchema> },
-  R = void
-> = (query: InnerQuery<T, boolean>) => R;
+export type Executor<T extends { columns: Record<string, ColumnSchema> }, R = void> = (
+  query: InnerQuery<T, boolean>
+) => R;
 
 export class InnerQuery<
   T extends { columns: Record<string, ColumnSchema> },
   IsOne extends boolean,
-  R = void
+  R = void,
 > {
   private _hash: number;
   private _mainQuery: QueryInfo;
   private _selectQuery: QueryInfo;
   private _selectLiveQuery: QueryInfo;
-  private _subqueries: InnerQuery<
-    { columns: Record<string, ColumnSchema> },
-    boolean
-  >[];
+  private _subqueries: InnerQuery<{ columns: Record<string, ColumnSchema> }, boolean>[];
 
   constructor(
     private readonly _tableName: string,
@@ -106,15 +98,10 @@ export class InnerQuery<
     private readonly schema: SchemaStructure,
     private readonly executor: Executor<any, R>
   ) {
-    this._selectQuery = buildQueryFromOptions(
-      "SELECT",
-      this._tableName,
-      this.options,
-      this.schema
-    );
+    this._selectQuery = buildQueryFromOptions('SELECT', this._tableName, this.options, this.schema);
 
     this._mainQuery = buildQueryFromOptions(
-      "SELECT",
+      'SELECT',
       this._tableName,
       { ...this.options, related: [] },
       this.schema
@@ -123,7 +110,7 @@ export class InnerQuery<
     this._hash = this._selectQuery.hash;
 
     this._selectLiveQuery = buildQueryFromOptions(
-      "LIVE SELECT",
+      'LIVE SELECT',
       this._tableName,
       this.options,
       this.schema
@@ -141,10 +128,7 @@ export class InnerQuery<
     return this._mainQuery;
   }
 
-  get subqueries(): InnerQuery<
-    { columns: Record<string, ColumnSchema> },
-    boolean
-  >[] {
+  get subqueries(): InnerQuery<{ columns: Record<string, ColumnSchema> }, boolean>[] {
     return this._subqueries;
   }
 
@@ -173,22 +157,11 @@ export class InnerQuery<
   }
 
   public buildUpdateQuery(patches: any[]): QueryInfo {
-    return buildQueryFromOptions(
-      "UPDATE",
-      this._tableName,
-      this.options,
-      this.schema,
-      patches
-    );
+    return buildQueryFromOptions('UPDATE', this._tableName, this.options, this.schema, patches);
   }
 
   public buildDeleteQuery(): QueryInfo {
-    return buildQueryFromOptions(
-      "DELETE",
-      this._tableName,
-      this.options,
-      this.schema
-    );
+    return buildQueryFromOptions('DELETE', this._tableName, this.options, this.schema);
   }
 
   public getOptions(): QueryOptions<TableModel<T>, IsOne> {
@@ -199,22 +172,17 @@ export class InnerQuery<
 /**
  * Helper type to get the model type for a related table
  */
-type GetRelatedModel<
-  S extends SchemaStructure,
-  RelatedTableName extends string
-> = RelatedTableName extends TableNames<S>
-  ? TableModel<GetTable<S, RelatedTableName>>
-  : never;
+type GetRelatedModel<S extends SchemaStructure, RelatedTableName extends string> =
+  RelatedTableName extends TableNames<S> ? TableModel<GetTable<S, RelatedTableName>> : never;
 
 /**
  * Helper type to extract field names from RelatedFields
  */
-export type ExtractFieldNames<RelatedFields extends RelatedFieldsMap> =
-  keyof RelatedFields;
+export type ExtractFieldNames<RelatedFields extends RelatedFieldsMap> = keyof RelatedFields;
 
 export type RelatedFieldMapEntry = {
   to: string;
-  cardinality: "one" | "many";
+  cardinality: 'one' | 'many';
   relatedFields: RelatedFieldsMap;
 };
 
@@ -225,31 +193,28 @@ export type RelatedFieldsMap = Record<string, RelatedFieldMapEntry>;
  */
 export type BuildRelatedFields<
   S extends SchemaStructure,
-  RelatedFields extends RelatedFieldsMap
+  RelatedFields extends RelatedFieldsMap,
 > = {
-    [K in keyof RelatedFields]: QueryResult<
-      S,
-      RelatedFields[K]["to"],
-      RelatedFields[K]["relatedFields"],
-      RelatedFields[K]["cardinality"] extends "one" ? true : false
-    >;
-  };
+  [K in keyof RelatedFields]: QueryResult<
+    S,
+    RelatedFields[K]['to'],
+    RelatedFields[K]['relatedFields'],
+    RelatedFields[K]['cardinality'] extends 'one' ? true : false
+  >;
+};
 
 export type BuildResultModelOne<
   S extends SchemaStructure,
   TableName extends TableNames<S>,
-  RelatedFields extends RelatedFieldsMap
+  RelatedFields extends RelatedFieldsMap,
 > = Omit<TableModel<GetTable<S, TableName>>, ExtractFieldNames<RelatedFields>> &
   BuildRelatedFields<S, RelatedFields>;
 
 export type BuildResultModelMany<
   S extends SchemaStructure,
   TableName extends TableNames<S>,
-  RelatedFields extends RelatedFieldsMap
-> = (Omit<
-  TableModel<GetTable<S, TableName>>,
-  ExtractFieldNames<RelatedFields>
-> &
+  RelatedFields extends RelatedFieldsMap,
+> = (Omit<TableModel<GetTable<S, TableName>>, ExtractFieldNames<RelatedFields>> &
   BuildRelatedFields<S, RelatedFields>)[];
 
 /**
@@ -260,7 +225,7 @@ export type QueryResult<
   S extends SchemaStructure,
   TableName extends TableNames<S>,
   RelatedFields extends RelatedFieldsMap,
-  IsOne extends boolean
+  IsOne extends boolean,
 > = IsOne extends true
   ? BuildResultModelOne<S, TableName, RelatedFields>
   : BuildResultModelMany<S, TableName, RelatedFields>;
@@ -271,7 +236,7 @@ export class FinalQuery<
   T extends { columns: Record<string, ColumnSchema> },
   RelatedFields extends RelatedFieldsMap,
   IsOne extends boolean,
-  R = void
+  R = void,
 > {
   private _innerQuery: InnerQuery<T, IsOne, R>;
 
@@ -325,26 +290,23 @@ export class FinalQuery<
 class SchemaAwareQueryModifierBuilderImpl<
   S extends SchemaStructure,
   TableName extends TableNames<S>,
-  RelatedFields extends RelatedFieldsMap = {}
+  RelatedFields extends RelatedFieldsMap = {},
 > implements SchemaAwareQueryModifierBuilder<S, TableName, RelatedFields> {
-  private options: QueryOptions<TableModel<GetTable<S, TableName>>, boolean> =
-    {};
+  private options: QueryOptions<TableModel<GetTable<S, TableName>>, boolean> = {};
 
   constructor(
     private readonly tableName: TableName,
     private readonly schema: S
-  ) { }
+  ) {}
 
   where(conditions: Partial<TableModel<GetTable<S, TableName>>>): this {
     this.options.where = { ...this.options.where, ...conditions };
     return this;
   }
 
-  select(
-    ...fields: ((keyof TableModel<GetTable<S, TableName>> & string) | "*")[]
-  ): this {
+  select(...fields: ((keyof TableModel<GetTable<S, TableName>> & string) | '*')[]): this {
     if (this.options.select) {
-      throw new Error("Select can only be called once per query");
+      throw new Error('Select can only be called once per query');
     }
     this.options.select = fields;
     return this;
@@ -362,32 +324,30 @@ class SchemaAwareQueryModifierBuilderImpl<
 
   orderBy(
     field: keyof TableModel<GetTable<S, TableName>> & string,
-    direction: "asc" | "desc" = "asc"
+    direction: 'asc' | 'desc' = 'asc'
   ): this {
     this.options.orderBy = {
       ...this.options.orderBy,
       [field]: direction,
-    } as Partial<
-      Record<keyof TableModel<GetTable<S, TableName>>, "asc" | "desc">
-    >;
+    } as Partial<Record<keyof TableModel<GetTable<S, TableName>>, 'asc' | 'desc'>>;
     return this;
   }
 
   // Schema-aware implementation for nested relationships with full type inference
   related<
-    Field extends TableRelationships<S, TableName>["field"],
+    Field extends TableRelationships<S, TableName>['field'],
     Rel extends GetRelationship<S, TableName, Field>,
-    RelatedFields2 extends RelatedFieldsMap = {}
+    RelatedFields2 extends RelatedFieldsMap = {},
   >(
     relatedField: Field,
-    modifier?: SchemaAwareQueryModifier<S, Rel["to"], RelatedFields2>
+    modifier?: SchemaAwareQueryModifier<S, Rel['to'], RelatedFields2>
   ): SchemaAwareQueryModifierBuilderImpl<
     S,
     TableName,
     RelatedFields & {
       [K in Field]: {
-        to: Rel["to"];
-        cardinality: Rel["cardinality"];
+        to: Rel['to'];
+        cardinality: Rel['cardinality'];
         relatedFields: RelatedFields2;
       };
     }
@@ -396,9 +356,7 @@ class SchemaAwareQueryModifierBuilderImpl<
       this.options.related = [];
     }
 
-    const exists = this.options.related.some(
-      (r) => (r.alias || r.relatedTable) === relatedField
-    );
+    const exists = this.options.related.some((r) => (r.alias || r.relatedTable) === relatedField);
 
     if (!exists) {
       // Look up the relationship from schema
@@ -408,15 +366,13 @@ class SchemaAwareQueryModifierBuilderImpl<
 
       if (!relationship) {
         throw new Error(
-          `Relationship '${String(relatedField)}' not found for table '${this.tableName
-          }'`
+          `Relationship '${String(relatedField)}' not found for table '${this.tableName}'`
         );
       }
 
       const relatedTable = relationship.to;
       const cardinality = relationship.cardinality;
-      const foreignKeyField =
-        cardinality === "many" ? this.tableName : relatedField;
+      const foreignKeyField = cardinality === 'many' ? this.tableName : relatedField;
 
       this.options.related.push({
         relatedTable,
@@ -441,27 +397,23 @@ class SchemaAwareQueryModifierBuilderImpl<
 export class QueryBuilder<
   const S extends SchemaStructure,
   const TableName extends TableNames<S>,
+  const R = void,
   const RelatedFields extends RelatedFieldsMap = {},
   const IsOne extends boolean = false,
-  const R = void
 > {
   constructor(
     private readonly schema: S,
     private readonly tableName: TableName,
-    private readonly executer: Executor<GetTable<S, TableName>, R> = () =>
-      undefined as R,
-    private options: QueryOptions<
-      TableModel<GetTable<S, TableName>>,
-      IsOne
-    > = {}
-  ) { }
+    private readonly executer: Executor<GetTable<S, TableName>, R> = () => undefined as R,
+    private options: QueryOptions<TableModel<GetTable<S, TableName>>, IsOne> = {}
+  ) {}
 
   /**
    * Add additional where conditions
    */
   where(
     conditions: Partial<TableModel<GetTable<S, TableName>>>
-  ): QueryBuilder<S, TableName, RelatedFields, IsOne, R> {
+  ): QueryBuilder<S, TableName, R, RelatedFields, IsOne> {
     this.options.where = { ...this.options.where, ...conditions };
     return this;
   }
@@ -470,10 +422,10 @@ export class QueryBuilder<
    * Specify fields to select
    */
   select(
-    ...fields: ((keyof TableModel<GetTable<S, TableName>> & string) | "*")[]
-  ): QueryBuilder<S, TableName, RelatedFields, IsOne, R> {
+    ...fields: ((keyof TableModel<GetTable<S, TableName>> & string) | '*')[]
+  ): QueryBuilder<S, TableName, R, RelatedFields, IsOne> {
     if (this.options.select) {
-      throw new Error("Select can only be called once per query");
+      throw new Error('Select can only be called once per query');
     }
     this.options.select = fields;
     return this;
@@ -484,21 +436,19 @@ export class QueryBuilder<
    */
   orderBy(
     field: TableFieldNames<GetTable<S, TableName>>,
-    direction: "asc" | "desc" = "asc"
-  ): QueryBuilder<S, TableName, RelatedFields, IsOne, R> {
+    direction: 'asc' | 'desc' = 'asc'
+  ): QueryBuilder<S, TableName, R, RelatedFields, IsOne> {
     this.options.orderBy = {
       ...this.options.orderBy,
       [field]: direction,
-    } as Partial<
-      Record<keyof TableModel<GetTable<S, TableName>>, "asc" | "desc">
-    >;
+    } as Partial<Record<keyof TableModel<GetTable<S, TableName>>, 'asc' | 'desc'>>;
     return this;
   }
 
   /**
    * Add limit to the query (only for non-live queries)
    */
-  limit(count: number): QueryBuilder<S, TableName, RelatedFields, IsOne, R> {
+  limit(count: number): QueryBuilder<S, TableName, R, RelatedFields, IsOne> {
     this.options.limit = count;
     return this;
   }
@@ -506,13 +456,13 @@ export class QueryBuilder<
   /**
    * Add offset to the query (only for non-live queries)
    */
-  offset(count: number): QueryBuilder<S, TableName, RelatedFields, IsOne, R> {
+  offset(count: number): QueryBuilder<S, TableName, R, RelatedFields, IsOne> {
     this.options.offset = count;
     return this;
   }
 
-  one(): QueryBuilder<S, TableName, RelatedFields, true, R> {
-    return new QueryBuilder<S, TableName, RelatedFields, true, R>(
+  one(): QueryBuilder<S, TableName, R, RelatedFields, true> {
+    return new QueryBuilder<S, TableName, R, RelatedFields, true>(
       this.schema,
       this.tableName,
       this.executer,
@@ -526,36 +476,34 @@ export class QueryBuilder<
    * Now accumulates the related field in the type!
    */
   related<
-    Field extends TableRelationships<S, TableName>["field"],
+    Field extends TableRelationships<S, TableName>['field'],
     Rel extends GetRelationship<S, TableName, Field>,
-    RelatedFields2 extends RelatedFieldsMap = {}
+    RelatedFields2 extends RelatedFieldsMap = {},
   >(
     field: Field,
     modifierOrCardinality?:
-      | SchemaAwareQueryModifier<S, Rel["to"], RelatedFields2>
-      | Rel["cardinality"],
-    modifier?: SchemaAwareQueryModifier<S, Rel["to"], RelatedFields2>
+      | SchemaAwareQueryModifier<S, Rel['to'], RelatedFields2>
+      | Rel['cardinality'],
+    modifier?: SchemaAwareQueryModifier<S, Rel['to'], RelatedFields2>
   ): QueryBuilder<
     S,
     TableName,
+    R,
     RelatedFields & {
       [K in Field]: {
-        to: Rel["to"];
-        cardinality: Rel["cardinality"];
+        to: Rel['to'];
+        cardinality: Rel['cardinality'];
         relatedFields: RelatedFields2;
       };
     },
-    IsOne,
-    R
+    IsOne
   > {
     if (!this.options.related) {
       this.options.related = [];
     }
 
     // Check if field already exists
-    const exists = this.options.related.some(
-      (r) => (r.alias || r.relatedTable) === field
-    );
+    const exists = this.options.related.some((r) => (r.alias || r.relatedTable) === field);
 
     if (exists) {
       return this as any;
@@ -567,24 +515,18 @@ export class QueryBuilder<
     );
 
     if (!relationship) {
-      throw new Error(
-        `Relationship '${String(field)}' not found for table '${this.tableName
-        }'`
-      );
+      throw new Error(`Relationship '${String(field)}' not found for table '${this.tableName}'`);
     }
 
     // Determine cardinality and modifier based on arguments
-    let actualCardinality: "one" | "many";
-    let actualModifier: SchemaAwareQueryModifier<S, Rel["to"]> | undefined;
+    let actualCardinality: 'one' | 'many';
+    let actualModifier: SchemaAwareQueryModifier<S, Rel['to']> | undefined;
 
-    if (typeof modifierOrCardinality === "function") {
+    if (typeof modifierOrCardinality === 'function') {
       // Signature: related(field, modifier)
       actualCardinality = relationship.cardinality;
       actualModifier = modifierOrCardinality;
-    } else if (
-      modifierOrCardinality === "one" ||
-      modifierOrCardinality === "many"
-    ) {
+    } else if (modifierOrCardinality === 'one' || modifierOrCardinality === 'many') {
       // Signature: related(field, cardinality, modifier)
       actualCardinality = modifierOrCardinality;
       actualModifier = modifier;
@@ -596,18 +538,18 @@ export class QueryBuilder<
 
     // Determine foreign key field based on cardinality
     let foreignKeyField: string =
-      actualCardinality === "many" ? (this.tableName as string) : (field as string);
+      actualCardinality === 'many' ? (this.tableName as string) : (field as string);
 
-    if (actualCardinality === "many") {
+    if (actualCardinality === 'many') {
       // For one-to-many, we need to find the field on the child table that points back to the parent
       // We look for a relationship from Child -> Parent
       const reverseRelationships = this.schema.relationships.filter(
-        (r) => r.from === relationship.to && r.to === this.tableName && r.cardinality === "one"
+        (r) => r.from === relationship.to && r.to === this.tableName && r.cardinality === 'one'
       );
 
       if (reverseRelationships.length > 0) {
         // Prioritize field that matches parent table name
-        const exactMatch = reverseRelationships.find(r => r.field === this.tableName);
+        const exactMatch = reverseRelationships.find((r) => r.field === this.tableName);
         if (exactMatch) {
           foreignKeyField = exactMatch.field;
         } else {
@@ -624,9 +566,7 @@ export class QueryBuilder<
 
     // Cast the schema-aware modifier to the runtime type
     // At runtime, QueryModifierBuilderImpl will work correctly with the schema
-    const wrappedModifier = actualModifier as
-      | QueryModifier<GenericModel>
-      | undefined;
+    const wrappedModifier = actualModifier as QueryModifier<GenericModel> | undefined;
 
     this.options.related.push({
       relatedTable: relationship.to,
@@ -650,22 +590,13 @@ export class QueryBuilder<
    * Build query methods for SELECT and LIVE SELECT (custom implementation)
    * @returns FinalQuery object with select() method for custom usage
    */
-  build(): FinalQuery<
-    S,
-    TableName,
-    GetTable<S, TableName>,
-    RelatedFields,
-    IsOne,
-    R
-  > {
-    return new FinalQuery<
-      S,
-      TableName,
-      GetTable<S, TableName>,
-      RelatedFields,
-      IsOne,
-      R
-    >(this.tableName, this.options, this.schema, this.executer);
+  build(): FinalQuery<S, TableName, GetTable<S, TableName>, RelatedFields, IsOne, R> {
+    return new FinalQuery<S, TableName, GetTable<S, TableName>, RelatedFields, IsOne, R>(
+      this.tableName,
+      this.options,
+      this.schema,
+      this.executer
+    );
   }
 }
 
@@ -697,9 +628,10 @@ export function extractSubqueryQueryInfos<S extends SchemaStructure>(
 
   return options.related.map((rel) => {
     // Get base options from modifier
-    const subOptions = rel.modifier?.(
-      new SchemaAwareQueryModifierBuilderImpl(rel.relatedTable, schema)
-    )._getOptions() ?? {};
+    const subOptions =
+      rel
+        .modifier?.(new SchemaAwareQueryModifierBuilderImpl(rel.relatedTable, schema))
+        ._getOptions() ?? {};
 
     // Find relationship to determine how to filter
     const relationship = schema.relationships.find(
@@ -711,16 +643,16 @@ export function extractSubqueryQueryInfos<S extends SchemaStructure>(
       // rel.alias is guaranteed to be defined if relationship is found (matched r.field)
       let foreignKeyField = rel.alias!;
 
-      if (relationship.cardinality === "many") {
+      if (relationship.cardinality === 'many') {
         // For one-to-many, we need to find the field on the child table that points back to the parent
         // We look for a relationship from Child -> Parent
         const reverseRelationships = schema.relationships.filter(
-          (r) => r.from === rel.relatedTable && r.to === parentTableName && r.cardinality === "one"
+          (r) => r.from === rel.relatedTable && r.to === parentTableName && r.cardinality === 'one'
         );
 
         if (reverseRelationships.length > 0) {
           // Prioritize field that matches parent table name
-          const exactMatch = reverseRelationships.find(r => r.field === parentTableName);
+          const exactMatch = reverseRelationships.find((r) => r.field === parentTableName);
           if (exactMatch) {
             foreignKeyField = exactMatch.field;
           } else {
@@ -741,24 +673,23 @@ export function extractSubqueryQueryInfos<S extends SchemaStructure>(
       // Add parent filter to where clause
       subOptions.where = subOptions.where || {};
 
-      if (relationship.cardinality === "many") {
+      if (relationship.cardinality === 'many') {
         // One-to-Many: Child has foreign key to parent
         // WHERE $parentIds ∋ child.parent_id
-        (subOptions.where as any)[foreignKeyField] = { _op: "∋", _val: "$parentIds", _swap: true };
+        (subOptions.where as any)[foreignKeyField] = { _op: '∋', _val: '$parentIds', _swap: true };
       } else {
         // One-to-One: Parent has foreign key to child
         // WHERE $parent_<foreignKeyField> ∋ child.id
         // We use a dynamic variable name derived from the foreign key field on the parent
-        (subOptions.where as any).id = { _op: "∋", _val: `$parent_${foreignKeyField}`, _swap: true };
+        (subOptions.where as any).id = {
+          _op: '∋',
+          _val: `$parent_${foreignKeyField}`,
+          _swap: true,
+        };
       }
     }
 
-    return new InnerQuery(
-      rel.relatedTable,
-      subOptions,
-      schema,
-      executer
-    );
+    return new InnerQuery(rel.relatedTable, subOptions, schema, executer);
   });
 }
 
@@ -770,16 +701,8 @@ export function extractSubqueryQueryInfos<S extends SchemaStructure>(
  * @param schema - Optional schema for resolving nested relationships
  * @returns QueryInfo with the generated SQL and variables
  */
-export function buildQueryFromOptions<
-  TModel extends GenericModel,
-  IsOne extends boolean
->(
-  method:
-    | "SELECT"
-    | "LIVE SELECT"
-    | "LIVE SELECT DIFF"
-    | "UPDATE"
-    | "DELETE",
+export function buildQueryFromOptions<TModel extends GenericModel, IsOne extends boolean>(
+  method: 'SELECT' | 'LIVE SELECT' | 'LIVE SELECT DIFF' | 'UPDATE' | 'DELETE',
   tableName: string,
   options: QueryOptions<TModel, IsOne>,
   schema: SchemaStructure,
@@ -788,7 +711,7 @@ export function buildQueryFromOptions<
   if (options.isOne) {
     options.limit = 1;
   }
-  const isLiveQuery = method === "LIVE SELECT" || method === "LIVE SELECT DIFF";
+  const isLiveQuery = method === 'LIVE SELECT' || method === 'LIVE SELECT DIFF';
 
   // Parse where conditions to convert string IDs to RecordId
   const parsedWhere = options.where
@@ -796,33 +719,32 @@ export function buildQueryFromOptions<
     : undefined;
 
   // Build SELECT clause
-  let selectClause = "*";
+  let selectClause = '*';
 
-  if (method === "LIVE SELECT DIFF") {
-    selectClause = "";
+  if (method === 'LIVE SELECT DIFF') {
+    selectClause = '';
   } else {
     if (options.select && options.select.length > 0) {
-      selectClause = options.select.join(", ");
+      selectClause = options.select.join(', ');
     }
   }
 
   // Build related subqueries (fetch clauses)
-  let fetchClauses = "";
+  let fetchClauses = '';
   if (!isLiveQuery && options.related && options.related.length > 0) {
     const subqueries = options.related.map((rel) => buildSubquery(rel, schema));
-    fetchClauses = ", " + subqueries.join(", ");
+    fetchClauses = ', ' + subqueries.join(', ');
   }
 
   // Start building the query
-  let query = "";
+  let query = '';
 
-  if (method === "UPDATE") {
+  if (method === 'UPDATE') {
     query = `UPDATE ${tableName}`;
-  } else if (method === "DELETE") {
+  } else if (method === 'DELETE') {
     query = `DELETE FROM ${tableName}`;
   } else {
-    query = `${method}${selectClause ? ` ${selectClause}` : ""
-      }${fetchClauses} FROM ${tableName}`;
+    query = `${method}${selectClause ? ` ${selectClause}` : ''}${fetchClauses} FROM ${tableName}`;
   }
 
   // Build WHERE clause
@@ -833,11 +755,11 @@ export function buildQueryFromOptions<
       const varName = key;
 
       // Handle operator objects { _op, _val }
-      if (value && typeof value === "object" && "_op" in value && "_val" in value) {
+      if (value && typeof value === 'object' && '_op' in value && '_val' in value) {
         const { _op, _val, _swap } = value as { _op: string; _val: unknown; _swap?: boolean };
 
-        let rightSide = "";
-        if (typeof _val === "string" && _val.startsWith("$")) {
+        let rightSide = '';
+        if (typeof _val === 'string' && _val.startsWith('$')) {
           rightSide = _val;
         } else {
           vars[varName] = _val;
@@ -854,11 +776,11 @@ export function buildQueryFromOptions<
         conditions.push(`${key} = $${varName}`);
       }
     }
-    query += ` WHERE ${conditions.join(" AND ")}`;
+    query += ` WHERE ${conditions.join(' AND ')}`;
   }
 
   // Add PATCH for UPDATE
-  if (method === "UPDATE" && patches) {
+  if (method === 'UPDATE' && patches) {
     query += ` PATCH ${JSON.stringify(patches)}`;
   }
 
@@ -870,7 +792,7 @@ export function buildQueryFromOptions<
       const orderClauses = Object.entries(options.orderBy).map(
         ([field, direction]) => `${field} ${direction}`
       );
-      query += ` ORDER BY ${orderClauses.join(", ")}`;
+      query += ` ORDER BY ${orderClauses.join(', ')}`;
     }
 
     if (options.limit !== undefined) {
@@ -882,7 +804,7 @@ export function buildQueryFromOptions<
     }
   }
 
-  query += ";";
+  query += ';';
 
   console.log(`[buildQuery] Generated ${method} query:`, query);
   console.log(`[buildQuery] Query vars:`, vars);
@@ -892,7 +814,7 @@ export function buildQueryFromOptions<
     hash: cyrb53(
       `${query}::${Object.entries(vars)
         .map(([key, value]) => `${key}=${value}`)
-        .join("&")}`,
+        .join('&')}`,
       0
     ),
     vars: Object.keys(vars).length > 0 ? vars : undefined,
@@ -909,38 +831,35 @@ function buildSubquery(
   const { relatedTable, alias, modifier, cardinality } = rel;
   const foreignKeyField = rel.foreignKeyField || alias;
 
-  let subquerySelect = "*";
-  let subqueryWhere = "";
-  let subqueryOrderBy = "";
-  let subqueryLimit = "";
+  let subquerySelect = '*';
+  let subqueryWhere = '';
+  let subqueryOrderBy = '';
+  let subqueryLimit = '';
 
   // If there's a modifier, apply it to get the sub-options
   if (modifier) {
-    const modifierBuilder = new SchemaAwareQueryModifierBuilderImpl(
-      relatedTable,
-      schema
-    );
+    const modifierBuilder = new SchemaAwareQueryModifierBuilderImpl(relatedTable, schema);
     modifier(modifierBuilder);
     const subOptions = modifierBuilder._getOptions();
 
     // Build sub-select
     if (subOptions.select && subOptions.select.length > 0) {
-      subquerySelect = subOptions.select.join(", ");
+      subquerySelect = subOptions.select.join(', ');
     }
 
     // Build sub-where
     if (subOptions.where && Object.keys(subOptions.where).length > 0) {
-      const parsedSubWhere = parseObjectIdsToRecordId(
-        subOptions.where,
-        relatedTable
-      ) as Record<string, unknown>;
+      const parsedSubWhere = parseObjectIdsToRecordId(subOptions.where, relatedTable) as Record<
+        string,
+        unknown
+      >;
       const conditions = Object.entries(parsedSubWhere).map(([key, value]) => {
         if (value instanceof RecordId) {
           return `${key} = ${value.toString()}`;
         }
         return `${key} = ${JSON.stringify(value)}`;
       });
-      subqueryWhere = ` AND ${conditions.join(" AND ")}`;
+      subqueryWhere = ` AND ${conditions.join(' AND ')}`;
     }
 
     // Build sub-orderBy
@@ -948,7 +867,7 @@ function buildSubquery(
       const orderClauses = Object.entries(subOptions.orderBy).map(
         ([field, direction]) => `${field} ${direction}`
       );
-      subqueryOrderBy = ` ORDER BY ${orderClauses.join(", ")}`;
+      subqueryOrderBy = ` ORDER BY ${orderClauses.join(', ')}`;
     }
 
     // Build sub-limit
@@ -969,9 +888,7 @@ function buildSubquery(
           if (relationship) {
             // Use the resolved table name and add foreign key field
             const nestedForeignKeyField =
-              relationship.cardinality === "many"
-                ? relatedTable
-                : nestedRel.alias;
+              relationship.cardinality === 'many' ? relatedTable : nestedRel.alias;
 
             return {
               ...nestedRel,
@@ -987,18 +904,18 @@ function buildSubquery(
       const nestedSubqueries = resolvedNestedRels.map((nestedRel) =>
         buildSubquery(nestedRel, schema)
       );
-      subquerySelect += ", " + nestedSubqueries.join(", ");
+      subquerySelect += ', ' + nestedSubqueries.join(', ');
     }
   }
 
   // Determine the WHERE condition based on cardinality
   let whereCondition: string;
-  if (cardinality === "one") {
+  if (cardinality === 'one') {
     // For one-to-one, the related table's id matches parent's foreign key field
     whereCondition = `WHERE id=$parent.${foreignKeyField}`;
     // Add LIMIT 1 for one-to-one relationships if not already set
     if (!subqueryLimit) {
-      subqueryLimit = " LIMIT 1";
+      subqueryLimit = ' LIMIT 1';
     }
   } else {
     // For one-to-many, the related table has a foreign key field pointing to parent's id
@@ -1009,8 +926,8 @@ function buildSubquery(
   let subquery = `(SELECT ${subquerySelect} FROM ${relatedTable} ${whereCondition}${subqueryWhere}${subqueryOrderBy}${subqueryLimit})`;
 
   // For one-to-one relationships, select the first element
-  if (cardinality === "one") {
-    subquery += "[0]";
+  if (cardinality === 'one') {
+    subquery += '[0]';
   }
 
   subquery += ` AS ${alias}`;

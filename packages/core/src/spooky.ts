@@ -1,9 +1,21 @@
-import { QueryManager } from "./services/query/query.js";
-import { MutationManager } from "./services/mutation/mutation.js";
-import { SpookyConfig } from "./types.js";
-import { LocalDatabaseService, LocalMigrator, RemoteDatabaseService } from "./services/database/index.js";
-import { SpookySync } from "./services/sync/index.js";
-import { SchemaStructure } from "@spooky/query-builder";
+import { QueryManager } from './services/query/query.js';
+import { MutationManager } from './services/mutation/mutation.js';
+import { SpookyConfig, QueryTimeToLive, SpookyQueryResultPromise } from './types.js';
+import {
+  LocalDatabaseService,
+  LocalMigrator,
+  RemoteDatabaseService,
+} from './services/database/index.js';
+import { Surreal } from 'surrealdb';
+import { SpookySync } from './services/sync/index.js';
+import {
+  GetTable,
+  QueryBuilder,
+  QueryOptions,
+  SchemaStructure,
+  TableModel,
+  TableNames,
+} from '@spooky/query-builder';
 
 export class SpookyClient<S extends SchemaStructure> {
   private local: LocalDatabaseService;
@@ -12,6 +24,14 @@ export class SpookyClient<S extends SchemaStructure> {
   private queryManager: QueryManager;
   private mutationManager: MutationManager;
   private sync: SpookySync;
+
+  get remoteClient() {
+    return this.remote.getClient();
+  }
+
+  get localClient() {
+    return this.local.getClient();
+  }
 
   constructor(private config: SpookyConfig<S>) {
     if (!this.config.clientId) {
@@ -22,12 +42,18 @@ export class SpookyClient<S extends SchemaStructure> {
     this.migrator = new LocalMigrator(this.local);
     this.mutationManager = new MutationManager(this.local);
     this.queryManager = new QueryManager(this.local, this.remote, this.config.clientId);
-    this.sync = new SpookySync(this.local, this.remote, this.mutationManager.events);
+    this.sync = new SpookySync(
+      this.local,
+      this.remote,
+      this.mutationManager.events,
+      this.queryManager.eventsSystem
+    );
   }
 
   async init() {
     await this.local.connect();
     await this.remote.connect();
+    await this.queryManager.init();
     await this.migrator.provision(this.config.schemaSurql);
   }
 
@@ -44,8 +70,31 @@ export class SpookyClient<S extends SchemaStructure> {
     return this.remote.getClient().invalidate();
   }
 
-  async queryAdHoc(sql: string, params: Record<string, any>, monitorId: string) {
-    return this.queryManager.queryAdHoc(sql, params, monitorId);
+  query<Table extends TableNames<S>>(
+    table: Table,
+    options: QueryOptions<TableModel<GetTable<S, Table>>, false>,
+    ttl: QueryTimeToLive = '10m'
+  ): QueryBuilder<S, Table, SpookyQueryResultPromise> {
+    return new QueryBuilder<S, Table, SpookyQueryResultPromise>(
+      this.config.schema,
+      table,
+      async (q) => ({
+        hash: await this.queryManager.query(q.selectQuery.query, q.selectQuery.vars ?? {}, ttl),
+      }),
+      options
+    );
+  }
+
+  async queryRaw(sql: string, params: Record<string, any>, ttl: QueryTimeToLive) {
+    return this.queryManager.query(sql, params, ttl);
+  }
+
+  async subscribe(
+    queryHash: string,
+    callback: (records: Record<string, any>[]) => void,
+    options?: { immediate?: boolean }
+  ): Promise<() => void> {
+    return this.queryManager.subscribe(queryHash, callback, options);
   }
 
   create(table: string, data: Record<string, unknown>) {
@@ -58,5 +107,9 @@ export class SpookyClient<S extends SchemaStructure> {
 
   delete(table: string, id: string) {
     return this.mutationManager.delete(table, id);
+  }
+
+  async useRemote<T>(fn: (client: Surreal) => Promise<T> | T): Promise<T> {
+    return fn(this.remote.getClient());
   }
 }

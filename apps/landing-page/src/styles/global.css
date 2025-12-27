@@ -2,125 +2,122 @@
 @tailwind components;
 @tailwind utilities;
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+/* Removed Google Fonts import to rely on system Monospace for raw performance */
 
 @layer base {
   :root {
-    --primary-400: 242 112 137; /* #f27089 */
-    --primary-500: 233 69 96;   /* #E94560 */
-    --primary-600: 214 56 82;   /* #d63852 */
-    --primary-700: 184 42 67;   /* #b82a43 */
-    --secondary-900: 83 52 131; /* #533483 */
-    --navy-900: 15 52 96;       /* #0F3460 */
-    --deep-navy: 22 33 62;      /* #16213E */
+    --bg-color: #000000;
+    --text-color: #ffffff;
+    --cursor-color: #ffffff;
   }
 
   html {
-    font-family: 'Inter', system-ui, sans-serif;
+    /* Priority stack for the best monospace font available on the system */
+    font-family: Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+    scroll-behavior: auto; /* Remove smooth scroll for mechanical feel */
   }
 
   body {
-    @apply bg-deepNavy text-white antialiased;
+    @apply bg-black text-white;
+    /* Disable font smoothing for crisp, pixelated edges */
+    -webkit-font-smoothing: none;
+    -moz-osx-font-smoothing: grayscale;
+    overflow-x: hidden;
+  }
+
+  /* High contrast text selection */
+  ::selection {
+    background-color: var(--text-color);
+    color: var(--bg-color);
   }
 }
 
 @layer components {
+  /* Replaces the old .gradient-text */
   .gradient-text {
-    @apply bg-gradient-to-r from-primary-400 to-primary-600 bg-clip-text text-transparent;
+    @apply text-white underline decoration-2 decoration-white underline-offset-4;
   }
 
+  /* Replaces .glass-effect with a terminal box style */
   .glass-effect {
-    @apply bg-white/5 backdrop-blur-sm border border-white/10;
+    @apply bg-black border-2 border-white shadow-none backdrop-blur-none;
+  }
+
+  /* Utility for buttons and cards */
+  .ascii-box {
+    @apply border-2 border-white bg-black text-white transition-none;
+  }
+
+  .ascii-box:hover {
+    @apply bg-white text-black cursor-pointer;
   }
 }
 
 @layer utilities {
-  @keyframes float {
-    0%, 100% {
-      transform: translateY(0px);
+  /* Blink Animation
+     Used for cursors (e.g. <span class="animate-blink">_</span>) 
+  */
+  @keyframes blink {
+    0%,
+    100% {
+      opacity: 1;
     }
     50% {
-      transform: translateY(-20px);
-    }
-  }
-
-  @keyframes float-slow {
-    0%, 100% {
-      transform: translateY(0px);
-    }
-    50% {
-      transform: translateY(-20px);
-    }
-  }
-
-  @keyframes wobble {
-    0%, 100% {
-      transform: translateX(0px) rotate(0deg);
-    }
-    25% {
-      transform: translateX(8px) rotate(3deg);
-    }
-    75% {
-      transform: translateX(-8px) rotate(-3deg);
-    }
-  }
-
-  @keyframes fade-in {
-    from {
       opacity: 0;
-      transform: translateY(20px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
     }
   }
 
-  @keyframes slide-up {
-    from {
-      opacity: 0;
-      transform: translateY(40px);
+  /* Glitch/Shake Animation
+     Used for hover states or errors 
+  */
+  @keyframes glitch {
+    0% {
+      transform: translate(0);
     }
-    to {
-      opacity: 1;
-      transform: translateY(0);
+    20% {
+      transform: translate(-2px, 2px);
+    }
+    40% {
+      transform: translate(-2px, -2px);
+    }
+    60% {
+      transform: translate(2px, 2px);
+    }
+    80% {
+      transform: translate(2px, -2px);
+    }
+    100% {
+      transform: translate(0);
     }
   }
 
-  .animate-float {
-    animation: float 3s ease-in-out infinite;
+  .animate-blink {
+    animation: blink 1s step-end infinite;
   }
 
-  .animate-float-slow {
-    animation: float-slow 4s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+  .animate-glitch {
+    animation: glitch 0.2s cubic-bezier(0.25, 0.46, 0.45, 0.94) both infinite;
   }
 
-  .animate-wobble {
-    animation: wobble 2.5s ease-in-out infinite;
-  }
-
-  .animate-fade-in {
-    animation: fade-in 1s ease-out;
-  }
-
-  .animate-slide-up {
-    animation: slide-up 1s ease-out;
-  }
+  /* Removed float/wobble animations as they are too fluid for a terminal */
 }
 
-/* Custom scrollbar */
+/* Custom ASCII Scrollbar */
 ::-webkit-scrollbar {
-  width: 8px;
+  width: 12px;
+  background: #000000;
+  border-left: 1px solid #ffffff;
 }
 
 ::-webkit-scrollbar-track {
-  @apply bg-deepNavy-dark;
+  background: #000000;
 }
 
 ::-webkit-scrollbar-thumb {
-  @apply bg-secondary-900;
+  background: #ffffff;
+  border: 2px solid #000000; /* Creates a blocky look */
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  @apply bg-primary-500;
+  background: #aaaaaa;
 }
