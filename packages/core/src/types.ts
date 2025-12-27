@@ -55,6 +55,9 @@ export interface Incantation {
   lastActiveAt: number;
   ttl: QueryTimeToLive;
   tree: any;
+  meta: {
+    tableName: string;
+  };
 }
 
 export interface IdTree {

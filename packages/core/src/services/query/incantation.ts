@@ -28,9 +28,16 @@ export class Incantation<T> {
   private ttlTimer: NodeJS.Timeout | null = null;
   private ttlDurationMs: number;
   private results: T[] | null = null;
+  private meta: {
+    tableName: string;
+  };
 
   get records() {
     return this.results;
+  }
+
+  get tableName() {
+    return this.meta.tableName;
   }
 
   constructor(data: IncantationData) {
@@ -41,6 +48,7 @@ export class Incantation<T> {
     this.lastActiveAt = new Date(data.lastActiveAt);
     this.ttl = data.ttl;
     this.ttlDurationMs = parseDuration(data.ttl);
+    this.meta = data.meta;
   }
 
   public updateLocalState(records: T[], hash: string, tree: any) {

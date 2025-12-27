@@ -10,8 +10,10 @@ import {
   QueryEventTypes,
 } from './events.js';
 import { Event } from '../../events/index.js';
+import { decodeFromSpooky } from '../utils.js';
+import { SchemaStructure, TableModel } from '@spooky/query-builder';
 
-export class QueryManager {
+export class QueryManager<S extends SchemaStructure> {
   private activeQueries: Map<QueryHash, Incantation<any>> = new Map();
   private liveQueryUuid: string | null = null;
   private events: QueryEventSystem;
@@ -21,6 +23,7 @@ export class QueryManager {
   }
 
   constructor(
+    private schema: S,
     private local: LocalDatabaseService,
     private remote: RemoteDatabaseService,
     private clientId?: string
@@ -44,14 +47,31 @@ export class QueryManager {
     if (!incantation) {
       return;
     }
-    incantation.updateLocalState(records, remoteHash, remoteTree);
+
+    const outRecords = records.map((r) =>
+      decodeFromSpooky(
+        this.schema,
+        incantation.tableName,
+        r as unknown as TableModel<
+          Extract<
+            S['tables'][number],
+            {
+              name: string;
+            }
+          >
+        >
+      )
+    );
+
+    incantation.updateLocalState(outRecords, remoteHash, remoteTree);
     this.events.emit(QueryEventTypes.IncantationUpdated, {
       incantationId,
-      records,
+      records: outRecords,
     });
   }
 
-  async register(
+  private async register(
+    tableName: string,
     surrealql: string,
     params: Record<string, any>,
     ttl: QueryTimeToLive
@@ -63,7 +83,7 @@ export class QueryManager {
 
     const recordId = new RecordId('_spooky_incantation', id);
 
-    const incantationData = await this.local
+    await this.local
       .getClient()
       .upsert<IncantationData>(recordId)
       .content({
@@ -74,12 +94,9 @@ export class QueryManager {
         Tree: null,
         LastActiveAt: new Date(),
         TTL: new Duration(ttl),
-      })
-      .output('after');
+      });
 
-    const incantationId = id;
-
-    if (!this.activeQueries.has(incantationId)) {
+    if (!this.activeQueries.has(id)) {
       const incantation = new Incantation({
         id: recordId,
         surrealql,
@@ -87,20 +104,24 @@ export class QueryManager {
         lastActiveAt: Date.now(),
         ttl,
         tree: null,
+        meta: {
+          tableName,
+        },
       });
-      this.activeQueries.set(incantationId, incantation);
+      this.activeQueries.set(id, incantation);
       await this.initLifecycle(incantation);
     }
 
-    return incantationId;
+    return id;
   }
 
   async query(
+    tableName: string,
     surrealql: string,
     params: Record<string, any>,
     ttl: QueryTimeToLive
   ): Promise<QueryHash> {
-    return this.register(surrealql, params, ttl);
+    return this.register(tableName, surrealql, params, ttl);
   }
 
   private async initLifecycle(incantation: Incantation<any>) {

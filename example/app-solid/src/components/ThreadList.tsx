@@ -49,11 +49,14 @@ export function ThreadList() {
           fallback={
             <div class="border-2 border-dashed border-gray-800 p-12 text-center opacity-50">
               <pre class="text-xs mb-4 text-gray-500 whitespace-pre leading-none font-mono">
-    .---.
-   /     \
-   | (.) |
-   \     /
-    `---'
+              {`
+   _______
+-  /   ___  \\  -
+-  |  /   \\  |  -
+-  |  |   |  |  -
+-  |  \\___/  |  -
+-  \\________/  -
+              `}
               </pre>
               <div class="uppercase tracking-widest text-xs font-bold">
                 &lt; NULL_RESPONSE /&gt;
@@ -70,17 +73,17 @@ export function ThreadList() {
               class="border border-white/40 p-5 cursor-pointer hover:border-white hover:bg-white/5 transition-none group relative block"
             >
               {/* ASCII Corner markers that appear on hover */}
-              <div class="hidden group-hover:block absolute -top-1 -left-1 text-white text-[10px]">+</div>
-              <div class="hidden group-hover:block absolute -top-1 -right-1 text-white text-[10px]">+</div>
-              <div class="hidden group-hover:block absolute -bottom-1 -left-1 text-white text-[10px]">+</div>
-              <div class="hidden group-hover:block absolute -bottom-1 -right-1 text-white text-[10px]">+</div>
+              <div class="hidden group-hover:block absolute -top-3 -left-2 text-white text-[10px]">+</div>
+              <div class="hidden group-hover:block absolute -top-3 -right-2 text-white text-[10px]">+</div>
+              <div class="hidden group-hover:block absolute -bottom-3 -left-2 text-white text-[10px]">+</div>
+              <div class="hidden group-hover:block absolute -bottom-3 -right-2 text-white text-[10px]">+</div>
 
               <div class="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2 mb-2">
                 <h2 class="text-lg font-bold uppercase tracking-wide group-hover:text-green-400">
                   {thread.title}
                 </h2>
                 <div class="text-[10px] text-gray-500 border border-gray-800 px-2 py-1 bg-black">
-                  ID: {thread.id?.slice(0, 8)}
+                  ID: {thread.id.slice(0, 8)}
                 </div>
               </div>
               
