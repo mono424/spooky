@@ -186,7 +186,7 @@ export class SyncedDb<S extends SchemaStructure> {
   /**
    * Access the local database service directly
    */
-  get local(): SpookyClient<S>['local'] {
+  get local(): SpookyClient<S>['localClient'] {
     if (!this.spooky) throw new Error('SyncedDb not initialized');
     return this.spooky.localClient;
   }
