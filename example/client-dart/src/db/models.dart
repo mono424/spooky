@@ -546,7 +546,8 @@ PERMISSIONS FOR select, create, update WHERE true;
 DEFINE EVENT OVERWRITE _spooky_comment_client_mutation ON TABLE comment
 WHEN \$before != \$after AND \$event != \"DELETE\"
 THEN {
-    UPSERT _spooky_data_hash CONTENT {
+    LET \$hash_id = <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>\$after.id));
+    UPSERT \$hash_id CONTENT {
         RecordId: \$after.id,
         IntrinsicHash: \"\",
         CompositionHash: \"\",
@@ -560,14 +561,16 @@ THEN {
 DEFINE EVENT OVERWRITE _spooky_comment_client_delete ON TABLE comment
 WHEN \$event = \"DELETE\"
 THEN {
-    UPDATE _spooky_data_hash SET PendingDelete = true WHERE RecordId = \$before.id;
+    LET \$hash_id = <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>\$before.id));
+    UPDATE \$hash_id SET PendingDelete = true;
 };
 
 -- Table: thread Client Mutation
 DEFINE EVENT OVERWRITE _spooky_thread_client_mutation ON TABLE thread
 WHEN \$before != \$after AND \$event != \"DELETE\"
 THEN {
-    UPSERT _spooky_data_hash CONTENT {
+    LET \$hash_id = <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>\$after.id));
+    UPSERT \$hash_id CONTENT {
         RecordId: \$after.id,
         IntrinsicHash: \"\",
         CompositionHash: \"\",
@@ -581,14 +584,16 @@ THEN {
 DEFINE EVENT OVERWRITE _spooky_thread_client_delete ON TABLE thread
 WHEN \$event = \"DELETE\"
 THEN {
-    UPDATE _spooky_data_hash SET PendingDelete = true WHERE RecordId = \$before.id;
+    LET \$hash_id = <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>\$before.id));
+    UPDATE \$hash_id SET PendingDelete = true;
 };
 
 -- Table: user Client Mutation
 DEFINE EVENT OVERWRITE _spooky_user_client_mutation ON TABLE user
 WHEN \$before != \$after AND \$event != \"DELETE\"
 THEN {
-    UPSERT _spooky_data_hash CONTENT {
+    LET \$hash_id = <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>\$after.id));
+    UPSERT \$hash_id CONTENT {
         RecordId: \$after.id,
         IntrinsicHash: \"\",
         CompositionHash: \"\",
@@ -602,6 +607,7 @@ THEN {
 DEFINE EVENT OVERWRITE _spooky_user_client_delete ON TABLE user
 WHEN \$event = \"DELETE\"
 THEN {
-    UPDATE _spooky_data_hash SET PendingDelete = true WHERE RecordId = \$before.id;
+    LET \$hash_id = <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>\$before.id));
+    UPDATE \$hash_id SET PendingDelete = true;
 };
 ";

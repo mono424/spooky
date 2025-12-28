@@ -4,15 +4,12 @@
 export const schema = {
   tables: [
     {
-      name: 'thread' as const,
+      name: 'user' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
-        author: { type: 'string' as const, recordId: true, optional: false },
-        active: { type: 'boolean' as const, optional: true },
-        content: { type: 'string' as const, optional: false },
-        title: { type: 'string' as const, optional: false },
+        username: { type: 'string' as const, optional: false },
         comments: { type: 'string' as const, optional: true },
+        threads: { type: 'string' as const, optional: true },
       },
       primaryKey: ['id'] as const
     },
@@ -27,25 +24,40 @@ export const schema = {
       name: 'comment' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
+        thread: { type: 'string' as const, recordId: true, optional: false },
         content: { type: 'string' as const, optional: false },
         author: { type: 'string' as const, recordId: true, optional: false },
         created_at: { type: 'string' as const, dateTime: true, optional: true },
-        thread: { type: 'string' as const, recordId: true, optional: false },
       },
       primaryKey: ['id'] as const
     },
     {
-      name: 'user' as const,
+      name: 'thread' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
-        username: { type: 'string' as const, optional: false },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
+        active: { type: 'boolean' as const, optional: true },
+        content: { type: 'string' as const, optional: false },
+        title: { type: 'string' as const, optional: false },
+        author: { type: 'string' as const, recordId: true, optional: false },
         comments: { type: 'string' as const, optional: true },
-        threads: { type: 'string' as const, optional: true },
       },
       primaryKey: ['id'] as const
     },
   ],
   relationships: [
+    {
+      from: 'comment' as const,
+      field: 'thread' as const,
+      to: 'thread' as const,
+      cardinality: 'one' as const
+    },
+    {
+      from: 'comment' as const,
+      field: 'author' as const,
+      to: 'user' as const,
+      cardinality: 'one' as const
+    },
     {
       from: 'thread' as const,
       field: 'author' as const,
@@ -57,18 +69,6 @@ export const schema = {
       field: 'comments' as const,
       to: 'comment' as const,
       cardinality: 'many' as const
-    },
-    {
-      from: 'comment' as const,
-      field: 'author' as const,
-      to: 'user' as const,
-      cardinality: 'one' as const
-    },
-    {
-      from: 'comment' as const,
-      field: 'thread' as const,
-      to: 'thread' as const,
-      cardinality: 'one' as const
     },
     {
       from: 'user' as const,
@@ -286,7 +286,8 @@ PERMISSIONS FOR select, create, update WHERE true;
 DEFINE EVENT OVERWRITE _spooky_comment_client_mutation ON TABLE comment
 WHEN $before != $after AND $event != "DELETE"
 THEN {
-    UPSERT _spooky_data_hash CONTENT {
+    LET $hash_id = <record>("_spooky_data_hash:" + crypto::blake3(<string>$after.id));
+    UPSERT $hash_id CONTENT {
         RecordId: $after.id,
         IntrinsicHash: "",
         CompositionHash: "",
@@ -300,14 +301,16 @@ THEN {
 DEFINE EVENT OVERWRITE _spooky_comment_client_delete ON TABLE comment
 WHEN $event = "DELETE"
 THEN {
-    UPDATE _spooky_data_hash SET PendingDelete = true WHERE RecordId = $before.id;
+    LET $hash_id = <record>("_spooky_data_hash:" + crypto::blake3(<string>$before.id));
+    UPDATE $hash_id SET PendingDelete = true;
 };
 
 -- Table: thread Client Mutation
 DEFINE EVENT OVERWRITE _spooky_thread_client_mutation ON TABLE thread
 WHEN $before != $after AND $event != "DELETE"
 THEN {
-    UPSERT _spooky_data_hash CONTENT {
+    LET $hash_id = <record>("_spooky_data_hash:" + crypto::blake3(<string>$after.id));
+    UPSERT $hash_id CONTENT {
         RecordId: $after.id,
         IntrinsicHash: "",
         CompositionHash: "",
@@ -321,14 +324,16 @@ THEN {
 DEFINE EVENT OVERWRITE _spooky_thread_client_delete ON TABLE thread
 WHEN $event = "DELETE"
 THEN {
-    UPDATE _spooky_data_hash SET PendingDelete = true WHERE RecordId = $before.id;
+    LET $hash_id = <record>("_spooky_data_hash:" + crypto::blake3(<string>$before.id));
+    UPDATE $hash_id SET PendingDelete = true;
 };
 
 -- Table: user Client Mutation
 DEFINE EVENT OVERWRITE _spooky_user_client_mutation ON TABLE user
 WHEN $before != $after AND $event != "DELETE"
 THEN {
-    UPSERT _spooky_data_hash CONTENT {
+    LET $hash_id = <record>("_spooky_data_hash:" + crypto::blake3(<string>$after.id));
+    UPSERT $hash_id CONTENT {
         RecordId: $after.id,
         IntrinsicHash: "",
         CompositionHash: "",
@@ -342,6 +347,7 @@ THEN {
 DEFINE EVENT OVERWRITE _spooky_user_client_delete ON TABLE user
 WHEN $event = "DELETE"
 THEN {
-    UPDATE _spooky_data_hash SET PendingDelete = true WHERE RecordId = $before.id;
+    LET $hash_id = <record>("_spooky_data_hash:" + crypto::blake3(<string>$before.id));
+    UPDATE $hash_id SET PendingDelete = true;
 };
 `;

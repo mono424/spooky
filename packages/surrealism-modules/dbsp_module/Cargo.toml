@@ -24,3 +24,4 @@ getrandom_old = { package = "getrandom", version = "0.2" }
 # surrealdb-types = { version = "3.0.0-beta.1", features = [] }
 anyhow = "1.0"
 blake3 = { version = "1.5", default-features = false, features = ["std"] }
+regex = "1.12.2"

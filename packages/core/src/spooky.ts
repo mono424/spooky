@@ -26,7 +26,7 @@ export class SpookyClient<S extends SchemaStructure> {
   private migrator: LocalMigrator;
   private queryManager: QueryManager<S>;
   private mutationManager: MutationManager<S>;
-  private sync: SpookySync;
+  private sync: SpookySync<S>;
   private devTools: DevToolsService;
 
   get remoteClient() {
@@ -53,10 +53,12 @@ export class SpookyClient<S extends SchemaStructure> {
       this.config.clientId
     );
     this.sync = new SpookySync(
+      this.config.schema,
       this.local,
       this.remote,
       this.mutationManager.events,
-      this.queryManager.eventsSystem
+      this.queryManager.eventsSystem,
+      this.config.clientId
     );
     this.devTools = new DevToolsService(
       this.mutationManager.events,

@@ -164,22 +164,27 @@ export class QueryManager<S extends SchemaStructure> {
   }
 
   private async startLiveQuery() {
-    const queryUuid = await this.remote.getClient().live(new Table('_spooky_incantation')).diff();
+    const liveQuery = await this.remote.getClient().live(new Table('_spooky_incantation'));
 
-    await this.remote.subscribeLive(queryUuid.toString(), async (action, result) => {
+    console.log('live queryUuid', liveQuery);
+    await liveQuery.subscribe(async (message) => {
+      console.log('live query message', message);
+      const { action, recordId, value } = message;
       if (action === 'UPDATE' || action === 'CREATE') {
-        const { id, hash, tree } = result;
-        if (!(id instanceof RecordId) || !hash || !tree) {
+        console.log('live test', value);
+        const { Hash: hash, Tree: tree } = value;
+        if (!hash || !tree) {
           return;
         }
-
-        const incantation = this.activeQueries.get(id.id.toString());
+        console.log('live hash', hash);
+        console.log('live tree', tree);
+        const incantation = this.activeQueries.get(recordId.id.toString());
         if (!incantation) {
           return;
         }
 
         this.events.emit(QueryEventTypes.IncantationRemoteHashUpdate, {
-          incantationId: id as RecordId<string>,
+          incantationId: recordId,
           surrealql: incantation.surrealql,
           localHash: incantation.hash,
           localTree: incantation.tree,

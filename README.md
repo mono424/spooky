@@ -20,32 +20,36 @@ graph TD
     classDef client fill:#f9f,stroke:#333,stroke-width:2px;
     classDef db fill:#bbf,stroke:#333,stroke-width:2px;
     classDef wasm fill:#bfb,stroke:#333,stroke-width:2px;
+    classDef table fill:#fbb,stroke:#333,stroke-width:2px;
 
     Client[Client App]:::client
-    DB[(SurrealDB)]:::db
-    WASM["WASM Module (DBSP)"]:::wasm
     Syncgen[Syncgen Build Tool]
 
     subgraph Build Time
         Schema[.surql Schema] --> Syncgen
         RustModules[Rust Modules] --> Syncgen
-        Syncgen -->|Generates| Events[SurrealQL Triggers]
+        Syncgen -->|Generates| EventsDef[SurrealQL Triggers]
         Syncgen -->|Compiles| Surli[.surli Package]
     end
 
     subgraph Runtime
-        Client -->|1. Register Incantation| DB
-        Client -->|2. Writes Data| DB
+        subgraph Remote["Remote SurrealDB"]
+            direction TB
+            Events[SurrealQL Triggers]:::db
+            WASM["DBSP Module (WASM)"]:::wasm
+            Incantations[("_spooky_incantation")]:::table
 
-        DB -->|3. Trigger Event| Events
-        Events -->|4. Ingest| WASM
+            Events -->|Ingest| WASM
+            WASM -->|Process| WASM
+            WASM -->|Update| Incantations
+        end
 
-        WASM -->|5. Process Changes| WASM
-        WASM -->|6. Return Updates| Events
-        Events -->|7. Update Meta Table| Incantations[_spooky_incantation]
-
-        Incantations -->|8. Live Update| Client
+        Client <-->|1. Register / Live Sync| Incantations
+        Client <-->|2. CRUD Ops| Events
     end
+
+    EventsDef -.-> Events
+    Surli -.-> WASM
 ```
 
 ---

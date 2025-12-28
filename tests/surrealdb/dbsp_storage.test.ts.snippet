@@ -1,0 +1,36 @@
+
+  test('should trigger _spooky_thread_mutation event and create deterministic hash record', async () => {
+    // 1. Create a user (needed as author)
+    const user = await runQuery(`
+      CREATE user:mutation_test CONTENT {
+        username: "mutation_tester",
+        password: "password",
+        created_at: time::now()
+      }
+    `);
+    expect(user[0].id).toBe('user:mutation_test');
+
+    // 2. Create a thread (triggers _spooky_thread_mutation)
+    // This executes the generated event logic including UPSERT type::record(...)
+    const thread = await runQuery(`
+      CREATE thread:mutation_test CONTENT {
+        title: "Mutation Logic Test",
+        content: "Testing the generated event logic",
+        author: user:mutation_test,
+        created_at: time::now()
+      }
+    `);
+    expect(thread[0].id).toBe('thread:mutation_test');
+
+    // 3. Verify _spooky_data_hash record exists with deterministic ID
+    // ID should be crypto::blake3('thread:mutation_test')
+    // We can just select from it directly using the same logic function to verify
+    const hashCheck = await runQuery(`
+      LET $id = type::record('_spooky_data_hash', crypto::blake3('thread:mutation_test'));
+      SELECT * FROM $id;
+    `);
+
+    expect(hashCheck.length).toBe(1);
+    expect(hashCheck[0].RecordId).toBe('thread:mutation_test');
+    expect(hashCheck[0].id).toBeDefined();
+  });
