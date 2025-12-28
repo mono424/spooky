@@ -57,12 +57,10 @@ graph TD
 #### Responsibilities
 
 1.  **Type Generation**:
-
     - Parses `.surql` files and generates **TypeScript** and **Dart** interfaces.
     - Ensures strict type safety across the full stack.
 
 2.  **Module Compilation**:
-
     - Automatically detects Rust projects in the `modules/` directory.
     - Compiles them to `wasm32-wasip1`.
     - Bundles them into optimized `.surli` files (ZSTD-compressed TAR archives) ready for SurrealDB ingestion.
@@ -71,7 +69,6 @@ graph TD
     - This is the most critical feature. Syncgen rewrites your schema to inject intelligent **Triggers** on every table (`CREATE`, `UPDATE`, `DELETE`).
     - **Intrinsic Hashing**: It injects logic to calculate a deterministic `BLAKE3` hash for every record based on its fields.
     - **DBSP Hook**: It injects calls to `mod::dbsp::ingest` to forward all data changes to the WASM module.
-    - **Graph Propagation**: It generates "Bubble Up" logic (updating a parent's hash involves recalculating based on children) and "Cascade Down" logic (updating dependencies).
 
 #### Generated Schema Example
 
@@ -80,13 +77,11 @@ When you define a `thread` table, Syncgen generates something like this behind t
 ```sql
 DEFINE EVENT OVERWRITE _spooky_thread_mutation ON TABLE thread
 WHEN $before != $after AND $event != "DELETE" THEN {
-    -- 1. Calculate Field Hashes
-    LET $h_title = crypto::blake3(<string>$after.title);
-    LET $xor_intrinsic = mod::xor::blake3_xor($h_title, ...);
+    -- 1. Construct Plain Object
+    LET $plain_after = { id: <string>$after.id, title: $after.title, ... };
 
     -- 2. Call WASM Module
-    LET $dbsp_ok = mod::dbsp::ingest('thread', $event, <string>$after.id, $after, fn::dbsp::get_state());
-    fn::dbsp::save_state($dbsp_ok.new_state);
+    LET $dbsp_ok = mod::dbsp::ingest('thread', $event, <string>$after.id, $plain_after);
 
     -- 3. Update Incantations based on WASM output
     FOR $u IN $dbsp_ok.updates {
@@ -136,18 +131,15 @@ This system table acts as the synchronization primitive between Server and Clien
 #### The Lifecycle
 
 1.  **Registration**:
-
     - Client calculates `QueryHash` locally.
     - Client performs `UPSERT` on `_spooky_incantation`.
     - Client subscribes via `db.live('_spooky_incantation')`.
 
 2.  **Reactivity**:
-
     - When the WASM module detects a change in the query result (e.g., a new post matches `WHERE active = true`), it updates the `Hash` in this table.
     - The Client receives the update notification instantly.
 
 3.  **Synchronization**:
-
     - The Client checks `NewHash != OldHash`.
     - If changed, the Client can either re-fetch the query or use the `Tree` to fetch only missing items (Delta Sync).
 
@@ -175,11 +167,6 @@ The `Tree` field returned by the module is a compressed representation of the re
 - **Structure**: It groups Record IDs by common prefixes.
 - **Benefit**: Large result sets (e.g., 10k items) can be represented by a relatively small tree structure.
 - **Sync**: Clients can compare their local tree with the remote tree to identify exactly which IDs are missing or removed without fetching the entire list.
-
-### Bubble Up & Cascade Down
-
-- **Bubble Up (Composition)**: When a Child record changes (e.g., a `Post` is edited), the Parent record (`Thread`) needs its hash updated to reflect this change. Syncgen generates logic to propagate this hash change upwards.
-- **Cascade Down (Reference)**: When a Referenced record changes (e.g., `User` changes avatar), records referring to it (e.g., `Comment` by User) might need to be notified or "touched" so their views update.
 
 ---
 

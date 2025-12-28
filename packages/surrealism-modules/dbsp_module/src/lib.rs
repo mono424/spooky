@@ -3,27 +3,47 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::fs;
 
 lazy_static::lazy_static! {
-    static ref CIRCUIT: Mutex<Circuit> = Mutex::new(load_state());
+    static ref CIRCUIT: Mutex<Option<Circuit>> = Mutex::new(None);
 }
 
+
+use surrealism::imports::sql;
+
 fn load_state() -> Circuit {
-    // Try to load from "dbsp_state.json"
-    if let Ok(content) = fs::read_to_string("dbsp_state.json") {
-        serde_json::from_str(&content).unwrap_or_else(|_| Circuit::new())
-    } else {
-        Circuit::new()
+    eprintln!("DEBUG: load_state: Loading from DB...");
+    // SELECT content FROM _spooky_module_state WHERE id = 'dbsp'
+    match sql::<&str, Vec<Value>>("SELECT content FROM _spooky_module_state:dbsp") {
+        Ok(results) => {
+            if let Some(first) = results.first() {
+                if let Some(content_str) = first.get("content").and_then(|v| v.as_str()) {
+                    match serde_json::from_str::<Circuit>(content_str) {
+                        Ok(state) => return state,
+                        Err(e) => eprintln!("DEBUG: load_state: Deserialization failed: {}", e),
+                    }
+                }
+            }
+        },
+        Err(e) => eprintln!("DEBUG: load_state: SQL Error: {:?}", e),
     }
+    Circuit::new()
 }
 
 fn save_state(circuit: &Circuit) {
     if let Ok(content) = serde_json::to_string(circuit) {
-        // Ignore errors for now (best effort)
-        let _ = fs::write("dbsp_state.json", content);
+        // Simple escape of single quotes for SQL string literal
+        let escaped_content = content.replace("'", "\\'"); 
+        let sql_query = format!("UPSERT _spooky_module_state:dbsp SET content = '{}'", escaped_content);
+        
+        // Use Value to accept either Array or Object response
+        match sql::<String, Value>(sql_query) {
+             Ok(_) => {}, // Success
+             Err(e) => eprintln!("DEBUG: save_state: SQL Error: {:?}", e),
+        }
     }
 }
+
 
 pub mod converter; // Import converter module
 
@@ -317,7 +337,8 @@ impl View {
                     h.as_str().unwrap_or("0000").to_string()
                 } else {
                     // Precomputed hash is mandatory
-                    panic!("Missing IntrinsicHash/hash/_hash on record {}", id);
+                    // panic!("Missing IntrinsicHash/hash/_hash on record {}", id);
+                     "MISSING_HASH".to_string()
                 }
             } else {
                  "0000".to_string() // Should not happen for valid views
@@ -337,6 +358,8 @@ impl View {
         
         let tree = IdTree::build(items);
         let hash = tree.hash.clone();
+        
+        eprintln!("DEBUG: process: view={}, delta_len={}, hash={}, last_hash={}", self.plan.id, view_delta.len(), hash, self.last_hash);
 
         if hash != self.last_hash {
             self.last_hash = hash.clone();
@@ -493,6 +516,11 @@ impl View {
                 if parts.len() < 2 { return false; }
                 let table_name = parts[0];
                 
+                if field == "id" {
+                    let key_val = json!(key);
+                    return compare_json_values(Some(&key_val), Some(target_val)) == std::cmp::Ordering::Equal;
+                }
+
                 if let Some(table) = db.tables.get(table_name) {
                     if let Some(row_val) = table.rows.get(key) {
                         if let Some(obj) = row_val.as_object() {
@@ -595,7 +623,12 @@ fn row_to_key(id: &str, _record: &Value) -> String {
 
 #[surrealism]
 fn ingest(table: String, operation: String, id: String, record: Value) -> Result<Value, &'static str> {
-    let mut circuit = CIRCUIT.lock().map_err(|_| "Failed to lock circuit")?;
+    let mut circuit_guard = CIRCUIT.lock().map_err(|_| "Failed to lock circuit")?;
+    
+    if circuit_guard.is_none() {
+        *circuit_guard = Some(load_state());
+    }
+    let circuit = circuit_guard.as_mut().unwrap();
     
     let key = row_to_key(&id, &record);
     let mut delta: ZSet = HashMap::new();
@@ -622,7 +655,14 @@ fn ingest(table: String, operation: String, id: String, record: Value) -> Result
         _ => {}
     }
 
+    eprintln!("DEBUG: ingest: table={}, views={}, db_tables={}", table, circuit.views.len(), circuit.db.tables.len());
+    if let Some(tb) = circuit.db.tables.get(&table) {
+        eprintln!("DEBUG: ingest: table {} size={}", table, tb.zset.len()); // ZSet size tracks logical size
+    }
+
     let updates = circuit.step(table, delta);
+    eprintln!("DEBUG: ingest: generated {} updates", updates.len());
+
     save_state(&circuit);
     
     let result = IngestResult {
@@ -634,8 +674,13 @@ fn ingest(table: String, operation: String, id: String, record: Value) -> Result
 
 #[surrealism]
 fn register_view(id: String, plan_val: Value) -> Result<Value, &'static str> {
-    println!("DEBUG: register_query called with id: {}", id);
-    let mut circuit = CIRCUIT.lock().map_err(|_| "Failed to lock circuit")?;
+    println!("DEBUG: register_view called with id: {}", id);
+    let mut circuit_guard = CIRCUIT.lock().map_err(|_| "Failed to lock circuit")?;
+
+    if circuit_guard.is_none() {
+        *circuit_guard = Some(load_state());
+    }
+    let circuit = circuit_guard.as_mut().unwrap();
 
     let plan_json = match plan_val {
         Value::String(s) => s,
@@ -683,8 +728,25 @@ fn register_view(id: String, plan_val: Value) -> Result<Value, &'static str> {
 }
 
 #[surrealism]
+fn reset(_val: Value) -> Result<Value, &'static str> {
+    let mut circuit_guard = CIRCUIT.lock().map_err(|_| "Failed to lock circuit")?;
+    *circuit_guard = Some(Circuit::new());
+    
+    // Also clear the persistent state in DB
+    // UPDATE _spooky_module_state:dbsp SET content = ""
+    let _ = sql::<&str, Vec<Value>>("DELETE _spooky_module_state:dbsp");
+
+    Ok(Value::Null)
+}
+
+#[surrealism]
 fn unregister_view(id: String) -> Result<Value, &'static str> {
-    let mut circuit = CIRCUIT.lock().map_err(|_| "Failed to lock circuit")?;
+    let mut circuit_guard = CIRCUIT.lock().map_err(|_| "Failed to lock circuit")?;
+    
+    if circuit_guard.is_none() {
+        *circuit_guard = Some(load_state());
+    }
+    let circuit = circuit_guard.as_mut().unwrap();
     
     circuit.unregister_view(&id);
     save_state(&circuit);

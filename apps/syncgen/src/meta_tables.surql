@@ -34,27 +34,3 @@ DEFINE FIELD LastActiveAt ON TABLE _spooky_incantation TYPE datetime DEFAULT tim
 DEFINE FIELD TTL ON TABLE _spooky_incantation TYPE duration
     PERMISSIONS FOR select, create, update WHERE true;
 
--- ==================================================
--- SPOOKY RELATIONSHIP
--- The Graph Schema: Defines 'Bubble Up' vs 'Cascade Down'
--- ==================================================
-
-DEFINE TABLE _spooky_relationship SCHEMAFULL
-    PERMISSIONS FOR select, create, update WHERE true;
-
-DEFINE FIELD ParentTable ON TABLE _spooky_relationship TYPE string
-    PERMISSIONS FOR select, create, update WHERE true;
-DEFINE FIELD ChildTable ON TABLE _spooky_relationship TYPE string
-    PERMISSIONS FOR select, create, update WHERE true;
-
--- The field on the Child that holds the Parent's ID
-DEFINE FIELD ChildField ON TABLE _spooky_relationship TYPE string
-    PERMISSIONS FOR select, create, update WHERE true;
-
--- The Logic Flow: 'COMPOSITION' (Bubble Up) or 'REFERENCE' (Cascade Down)
-DEFINE FIELD Type ON TABLE _spooky_relationship TYPE string 
-    ASSERT $value INSIDE ['COMPOSITION', 'REFERENCE']
-    PERMISSIONS FOR select, create, update WHERE true;
-
--- Enforce unique definition per relationship path
-DEFINE INDEX idx_rel_unique ON TABLE _spooky_relationship COLUMNS ParentTable, ChildTable, ChildField UNIQUE;

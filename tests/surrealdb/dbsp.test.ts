@@ -11,6 +11,10 @@ describe('DBSP Module Integration', () => {
 
   beforeAll(async () => {
     db = await createTestDb();
+
+    // Explicitly reset module state to clear any persistent WASM memory from previous runs
+    await runQuery('RETURN mod::dbsp::reset({})');
+
     // Module is already loaded by setup.ts reading schema.gen.surql
     // Check sanity
     try {
@@ -31,20 +35,22 @@ describe('DBSP Module Integration', () => {
 
   test('should register a view and ingest data with incremental updates', async () => {
     // 1. Register View (SQL)
-    const sql = "SELECT * FROM users WHERE id = 'users:active*'";
+    const sql = "SELECT * FROM users_incr WHERE id = 'users_incr:active:1'";
 
     // REFACTORING TEST TO USE CHAINED QUERY
     // No state passing needed anymore!
     const chainedQuery = `
-            LET $r1 = mod::dbsp::register_view("view_users", "${sql}");
+            LET $r1 = mod::dbsp::register_view("view_users_incr", "${sql}");
             
-            LET $r2 = mod::dbsp::ingest("users", "CREATE", "users:active:1", { name: "Alice", active: true });
+            LET $r2 = mod::dbsp::ingest("users_incr", "CREATE", "users_incr:active:1", { name: "Alice", active: true, hash: "0000" });
             RETURN $r2.updates;
         `;
     const res2 = await runQuery(chainedQuery);
+    console.log('DEBUG: res2:', JSON.stringify(res2));
 
-    const updates = res2 && res2[0] ? res2[0] : [];
+    const updates = res2 && res2.length > 0 ? res2[res2.length - 1] : [];
     expect(Array.isArray(updates)).toBe(true);
+    expect(updates.length).toBeGreaterThan(0);
 
     // ... existing assertion logic ...
     // Note: With SQL, the ID is "view_users".
@@ -55,8 +61,8 @@ describe('DBSP Module Integration', () => {
     const sqlA = "SELECT * FROM users WHERE id = 'users:active*'";
     const sqlB = "SELECT * FROM threads WHERE id = 'threads:2024*'";
 
-    const userRec = { name: 'Bob', active: true };
-    const threadRec = { title: 'Hello' };
+    const userRec = { name: 'Bob', active: true, hash: '0000' };
+    const threadRec = { title: 'Hello', hash: '0000' };
 
     const chainedQuery = `
             LET $r1 = mod::dbsp::register_view("view_users_active", "${sqlA}");
@@ -103,8 +109,8 @@ describe('DBSP Module Integration', () => {
 
   test('should update id tree on data change', async () => {
     const sql = "SELECT * FROM tree_items WHERE id = 'item*'";
-    const item1 = JSON.stringify({ id: 'item:1', val: 'A' });
-    const item2 = JSON.stringify({ id: 'item:2', val: 'B' });
+    const item1 = JSON.stringify({ id: 'item:1', val: 'A', hash: '0000' });
+    const item2 = JSON.stringify({ id: 'item:2', val: 'B', hash: '0001' });
 
     const batchQuery = `
             LET $r1 = mod::dbsp::register_view("view_tree_test", "${sql}");
@@ -122,28 +128,14 @@ describe('DBSP Module Integration', () => {
         `;
 
     const results = await runQuery(batchQuery);
-    // ... assertions ...
-    const updates1Idx = 1; // Index changes because we removed GET STATE lines?
-    // Query results are returns.
-    // 1. $r1 (msg)
-    // 2. $r2.updates
-    // 3. $r3.updates
-    // 4. $r4.updates
-    // So indices are 0, 1, 2, 3?
-    // runQuery uses .collect() which returns array of results for each query statement in the semicolon separated list?
-    // Wait, .query() with multiple statements returns array of results.
-    // The batch query has 5 RETURN statements.
-    // Actually no, it has `LET ...; LET ...; RETURN ...`
-    // In SurrealDB, `LET` does not return output unless queried.
-    // The block above is a single script...
-    // "RETURN $r1; RETURN $r2.updates; ..." -> 4 outputs.
+    console.log('DEBUG: Tree Test Results:', JSON.stringify(results, null, 2));
 
     const updates1 = Array.isArray(results[1]) ? results[1] : [results[1]];
     const updates2 = Array.isArray(results[2]) ? results[2] : [results[2]];
     const updates3 = Array.isArray(results[3]) ? results[3] : [results[3]];
 
     const getHash = (updates: any[]) =>
-      updates && updates.length > 0 && updates[0].tree ? updates[0].tree.hash : null;
+      updates && updates.length > 0 && updates[0] && updates[0].tree ? updates[0].tree.hash : null;
     const hash1 = getHash(updates1);
     const hash2 = getHash(updates2);
     const hash3 = getHash(updates3);
@@ -161,10 +153,10 @@ describe('DBSP Module Integration', () => {
     const chainedQuery = `
             LET $r1 = mod::dbsp::register_view("view_join_sql", "${sqlJoin}");
             
-            LET $u = { id: 1, name: "Alice" };
+            LET $u = { id: 1, name: "Alice", hash: "0000" };
             LET $r2 = mod::dbsp::ingest("users", "CREATE", "users:1", $u);
             
-            LET $p = { id: 10, author: 1, title: "Hello" };
+            LET $p = { id: 10, author: 1, title: "Hello", hash: "0001" };
             LET $r3 = mod::dbsp::ingest("posts", "CREATE", "posts:10", $p);
             
             RETURN {
@@ -186,18 +178,18 @@ describe('DBSP Module Integration', () => {
   });
 
   test('should handle limit eviction', async () => {
-    const sql = 'SELECT * FROM users LIMIT 1';
+    const sql = 'SELECT * FROM users_limit LIMIT 1';
 
     const chainedQuery = `
             LET $r1 = mod::dbsp::register_view("view_limit_eviction", "${sql}");
             
             // Ingest User A (id 20)
-            LET $u1 = { id: 20, name: "A" };
-            LET $r2 = mod::dbsp::ingest("users", "CREATE", "users:20", $u1);
+            LET $u1 = { id: 20, name: "A", hash: "0000" };
+            LET $r2 = mod::dbsp::ingest("users_limit", "CREATE", "users_limit:20", $u1);
             
             // Ingest User B (id 10 - smaller, should evict A)
-            LET $u2 = { id: 10, name: "B" };
-            LET $r3 = mod::dbsp::ingest("users", "CREATE", "users:10", $u2);
+            LET $u2 = { id: 10, name: "B", hash: "0001" };
+            LET $r3 = mod::dbsp::ingest("users_limit", "CREATE", "users_limit:10", $u2);
             
             RETURN {
                 up1: $r2.updates,
@@ -214,8 +206,8 @@ describe('DBSP Module Integration', () => {
 
     const up2 = result.up2 ? result.up2[0] : null;
     expect(up2).toBeDefined();
-    expect(up2.result_ids).toContain('users:10');
-    expect(up2.result_ids).not.toContain('users:20');
+    expect(up2.result_ids).toContain('users_limit:10');
+    expect(up2.result_ids).not.toContain('users_limit:20');
   });
 
   test('should handle nested limit via subquery projection (SQL)', async () => {
@@ -242,34 +234,34 @@ describe('DBSP Module Integration', () => {
             
             // ... Actions (same as before) ...
             // Action 1: Create Users
-            LET $ua = { id: 1, status: 'active' };
-            LET $ub = { id: 2, status: 'inactive' };
+            LET $ua = { id: 1, status: 'active', hash: "0000" };
+            LET $ub = { id: 2, status: 'inactive', hash: "0000" };
             
             LET $r_a1 = mod::dbsp::ingest("user", "CREATE", "user:1", $ua);
             
             LET $r_a2 = mod::dbsp::ingest("user", "CREATE", "user:2", $ub);
             
             // Action 2: Posts for A
-            LET $p1 = { id: 10, author: 1 };
+            LET $p1 = { id: 10, author: 1, hash: "0000" };
             LET $r_p1 = mod::dbsp::ingest("post", "CREATE", "post:10", $p1);
             
-            LET $p2 = { id: 11, author: 1 };
+            LET $p2 = { id: 11, author: 1, hash: "0000" };
             LET $r_p2 = mod::dbsp::ingest("post", "CREATE", "post:11", $p2);
             
             // Action 3: Update User B -> Active
-            LET $ub_active = { id: 2, status: 'active' };
+            LET $ub_active = { id: 2, status: 'active', hash: "0001" };
             LET $r_upd = mod::dbsp::ingest("user", "UPDATE", "user:2", $ub_active);
             
             // Action 4: Posts for B
-            LET $p3 = { id: 12, author: 2 };
+            LET $p3 = { id: 12, author: 2, hash: "0000" };
             LET $r_p3 = mod::dbsp::ingest("post", "CREATE", "post:12", $p3);
             
-            LET $p4 = { id: 13, author: 2 };
+            LET $p4 = { id: 13, author: 2, hash: "0000" };
             LET $r_p4 = mod::dbsp::ingest("post", "CREATE", "post:13", $p4);
             
             // Action 5: Post 0 (Smallest ID)
             // Use padded ID to ensure "post:05" < "post:10" lexicographically
-            LET $p0 = { id: 5, author: 1 };
+            LET $p0 = { id: 5, author: 1, hash: "0000" };
             LET $r_p0 = mod::dbsp::ingest("post", "CREATE", "post:05", $p0);
             
             RETURN {
@@ -304,9 +296,9 @@ describe('DBSP Module Integration', () => {
             LET $r2 = mod::dbsp::register_view("view_or", "${sqlOr}");
             
             // Ingest
-            LET $i1 = { id: 1, val: 10 };
-            LET $i2 = { id: 2, val: 20 };
-            LET $i3 = { id: 3, val: 100 };
+            LET $i1 = { id: 1, val: 10, hash: "0000" };
+            LET $i2 = { id: 2, val: 20, hash: "0000" };
+            LET $i3 = { id: 3, val: 100, hash: "0000" };
             
             LET $res1 = mod::dbsp::ingest("items", "CREATE", "items:1", $i1);
             LET $res2 = mod::dbsp::ingest("items", "CREATE", "items:2", $i2);
@@ -353,10 +345,10 @@ describe('DBSP Module Integration', () => {
             LET $r1 = mod::dbsp::register_view("complex_filter", "${sqlFilter}");
             LET $r2 = mod::dbsp::register_view("multi_order", "${sqlOrder}");
             
-            LET $i1 = { category: 'A', score: 10, active: true };
-            LET $i2 = { category: 'A', score: 20, active: false };
-            LET $i3 = { category: 'B', score: 10, active: true };
-            LET $i4 = { category: 'A', score: 30, active: true };
+            LET $i1 = { category: 'A', score: 10, active: true, hash: "0000" };
+            LET $i2 = { category: 'A', score: 20, active: false, hash: "0000" };
+            LET $i3 = { category: 'B', score: 10, active: true, hash: "0000" };
+            LET $i4 = { category: 'A', score: 30, active: true, hash: "0000" };
             
             LET $res = mod::dbsp::ingest("items", "CREATE", "items:1", $i1);
             LET $res = mod::dbsp::ingest("items", "CREATE", "items:2", $i2);
