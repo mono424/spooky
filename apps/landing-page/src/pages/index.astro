@@ -2,6 +2,7 @@
 // src/pages/index.astro
 import '../styles/global.css';
 import { AsciiGhost } from '../components/AsciiGhost';
+import { ArchitectureDiagram } from '../components/ArchitectureDiagram';
 ---
 
 <html lang="en">
@@ -176,27 +177,7 @@ import { AsciiGhost } from '../components/AsciiGhost';
         <div
           class="border-4 border-double border-white p-4 flex items-center justify-center bg-black"
         >
-          <pre
-            class="text-[10px] sm:text-xs leading-tight font-bold">
-+-----------------------------------+
-|      ARCHITECTURE DIAGRAM         |
-+-----------------------------------+
-|                                   |
-|   [ CLIENT A ]     [ CLIENT B ]   |
-|        |                |         |
-|        v                v         |
-|   +--------------------------+    |
-|   |     LOCAL DATABASE       |    |
-|   +--------------------------+    |
-|              ^                    |
-|              | (SYNC PROTOCOL)    |
-|              v                    |
-|   +--------------------------+    |
-|   |     SPOOKY SERVER        |    |
-|   +--------------------------+    |
-|                                   |
-+-----------------------------------+
-          </pre>
+          <ArchitectureDiagram client:visible />
         </div>
       </div>
     </section>
