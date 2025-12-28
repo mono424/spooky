@@ -19,7 +19,7 @@ DEFINE FIELD ClientId ON TABLE _spooky_incantation TYPE option<string>
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- The current XOR sum of all results in this query
-DEFINE FIELD Hash ON TABLE _spooky_incantation TYPE string
+DEFINE FIELD Hash ON TABLE _spooky_incantation TYPE option<string>
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- The Radix Tree of Result IDs for efficient sync

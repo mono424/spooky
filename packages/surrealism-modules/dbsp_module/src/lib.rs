@@ -36,8 +36,8 @@ fn save_state(circuit: &Circuit) {
         let escaped_content = content.replace("'", "\\'"); 
         let sql_query = format!("UPSERT _spooky_module_state:dbsp SET content = '{}'", escaped_content);
         
-        // Use Value to accept either Array or Object response
-        match sql::<String, Value>(sql_query) {
+        // Use Vec<Value> to accept Array response
+        match sql::<String, Vec<Value>>(sql_query) {
              Ok(_) => {}, // Success
              Err(e) => eprintln!("DEBUG: save_state: SQL Error: {:?}", e),
         }

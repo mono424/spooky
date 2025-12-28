@@ -74,8 +74,9 @@ export class QueryManager<S extends SchemaStructure> {
     tableName: string,
     surrealql: string,
     params: Record<string, any>,
-    ttl: QueryTimeToLive
+    ttl: QueryTimeToLive = '10m'
   ): Promise<QueryHash> {
+    const effectiveTtl = ttl || '10m';
     const id = await this.calculateHash({
       surrealql,
       params,
@@ -94,7 +95,7 @@ export class QueryManager<S extends SchemaStructure> {
         Hash: id,
         Tree: null,
         LastActiveAt: new Date(),
-        TTL: new Duration(ttl),
+        TTL: new Duration(effectiveTtl),
       });
 
     if (!this.activeQueries.has(id)) {
@@ -104,7 +105,7 @@ export class QueryManager<S extends SchemaStructure> {
         params,
         hash: id,
         lastActiveAt: Date.now(),
-        ttl,
+        ttl: effectiveTtl,
         tree: null,
         meta: {
           tableName,
@@ -121,7 +122,7 @@ export class QueryManager<S extends SchemaStructure> {
     tableName: string,
     surrealql: string,
     params: Record<string, any>,
-    ttl: QueryTimeToLive
+    ttl: QueryTimeToLive = '10m'
   ): Promise<QueryHash> {
     return this.register(tableName, surrealql, params, ttl);
   }

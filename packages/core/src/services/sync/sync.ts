@@ -13,7 +13,7 @@ import {
   UpEvent,
   UpQueue,
 } from './queue/index.js';
-import { RecordId } from 'surrealdb';
+import { RecordId, Duration } from 'surrealdb';
 import { diffIdTree } from './utils.js';
 
 export class SpookySync {
@@ -131,6 +131,7 @@ export class SpookySync {
 
   private async registerIncantation(event: RegisterEvent) {
     const { incantationId, surrealql, params, ttl } = event.payload;
+    const effectiveTtl = ttl || '10m';
     try {
       await this.updateLocalIncantation(incantationId, {
         surrealql,
@@ -140,7 +141,13 @@ export class SpookySync {
       });
       await this.remote.query(`UPSERT $id CONTENT $content`, {
         id: incantationId,
-        content: { surrealql, params, ttl },
+        content: {
+          SurrealQL: surrealql,
+          Params: params,
+          TTL: new Duration(effectiveTtl),
+          Id: incantationId.id.toString(),
+          LastActiveAt: new Date(),
+        },
       });
     } catch (e) {
       console.error('[SpookySync] registerIncantation error', e);
