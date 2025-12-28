@@ -15,7 +15,6 @@ class Schema {
     SpookyDataHash spookyDataHash;
     SpookyIncantation spookyIncantation;
     SpookyPendingMutations spookyPendingMutations;
-    SpookyRelationship spookyRelationship;
     SpookySchema spookySchema;
     Comment comment;
     CommentedOn commentedOn;
@@ -26,7 +25,6 @@ class Schema {
         required this.spookyDataHash,
         required this.spookyIncantation,
         required this.spookyPendingMutations,
-        required this.spookyRelationship,
         required this.spookySchema,
         required this.comment,
         required this.commentedOn,
@@ -38,7 +36,6 @@ class Schema {
         spookyDataHash: SpookyDataHash.fromJson(json["_spooky_data_hash"]),
         spookyIncantation: SpookyIncantation.fromJson(json["_spooky_incantation"]),
         spookyPendingMutations: SpookyPendingMutations.fromJson(json["_spooky_pending_mutations"]),
-        spookyRelationship: SpookyRelationship.fromJson(json["_spooky_relationship"]),
         spookySchema: SpookySchema.fromJson(json["_spooky_schema"]),
         comment: Comment.fromJson(json["comment"]),
         commentedOn: CommentedOn.fromJson(json["commented_on"]),
@@ -50,7 +47,6 @@ class Schema {
         "_spooky_data_hash": spookyDataHash.toJson(),
         "_spooky_incantation": spookyIncantation.toJson(),
         "_spooky_pending_mutations": spookyPendingMutations.toJson(),
-        "_spooky_relationship": spookyRelationship.toJson(),
         "_spooky_schema": spookySchema.toJson(),
         "comment": comment.toJson(),
         "commented_on": commentedOn.toJson(),
@@ -240,42 +236,6 @@ class SpookyPendingMutations {
         "id": id,
         "MutationType": mutationType,
         "RecordId": recordId,
-    };
-}
-
-class SpookyRelationship {
-    String childField;
-    String childTable;
-    
-    ///Record ID
-    String id;
-    String parentTable;
-    
-    ///Assert: $value INSIDE ['COMPOSITION', 'REFERENCE']
-    String type;
-
-    SpookyRelationship({
-        required this.childField,
-        required this.childTable,
-        required this.id,
-        required this.parentTable,
-        required this.type,
-    });
-
-    factory SpookyRelationship.fromJson(Map<String, dynamic> json) => SpookyRelationship(
-        childField: json["ChildField"],
-        childTable: json["ChildTable"],
-        id: json["id"],
-        parentTable: json["ParentTable"],
-        type: json["Type"],
-    );
-
-    Map<String, dynamic> toJson() => {
-        "ChildField": childField,
-        "ChildTable": childTable,
-        "id": id,
-        "ParentTable": parentTable,
-        "Type": type,
     };
 }
 
@@ -509,30 +469,6 @@ PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD TTL ON TABLE _spooky_incantation TYPE duration
 PERMISSIONS FOR select, create, update WHERE true;
 
--- ==================================================
--- SPOOKY RELATIONSHIP
--- The Graph Schema: Defines 'Bubble Up' vs 'Cascade Down'
--- ==================================================
-
-DEFINE TABLE _spooky_relationship SCHEMAFULL
-PERMISSIONS FOR select, create, update, delete WHERE true;
-
-DEFINE FIELD ParentTable ON TABLE _spooky_relationship TYPE string
-PERMISSIONS FOR select, create, update WHERE true;
-DEFINE FIELD ChildTable ON TABLE _spooky_relationship TYPE string
-PERMISSIONS FOR select, create, update WHERE true;
-
--- The field on the Child that holds the Parent's ID
-DEFINE FIELD ChildField ON TABLE _spooky_relationship TYPE string
-PERMISSIONS FOR select, create, update WHERE true;
-
--- The Logic Flow: 'COMPOSITION' (Bubble Up) or 'REFERENCE' (Cascade Down)
-DEFINE FIELD Type ON TABLE _spooky_relationship TYPE string 
-    ASSERT \$value INSIDE ['COMPOSITION', 'REFERENCE']
-PERMISSIONS FOR select, create, update WHERE true;
-
--- Enforce unique definition per relationship path
-DEFINE INDEX idx_rel_unique ON TABLE _spooky_relationship COLUMNS ParentTable, ChildTable, ChildField UNIQUE;
 
 -- ==================================================
 -- SPOOKY SCHEMA
