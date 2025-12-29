@@ -1,8 +1,12 @@
 import 'dart:convert';
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../controllers/spooky_controller.dart';
 import '../../components/action_card.dart';
+import 'widgets/live_query_input.dart';
+import 'widgets/live_query_actions.dart';
+import 'widgets/live_query_logs.dart';
 
 class LiveQueryView extends StatefulWidget {
   final SpookyController controller;
@@ -44,36 +48,40 @@ class _LiveQueryViewState extends State<LiveQueryView> {
     if (tableName.isEmpty) return;
 
     try {
-      final stream = widget.controller.client!.remote.getClient.liveQuery(
+      final stream = widget.controller.client!.local!.getClient.liveQuery(
         tableName: tableName,
       );
       setState(() {
         _isListening = true;
         _events.add("[Local] Subscribing to '$tableName'...");
+        debugPrint("LiveQueryView: Subscribing to $tableName");
       });
 
       _subscription = stream.listen(
         (eventJson) {
+          debugPrint("LiveQueryView: Received event: $eventJson");
           // Parse prettily if possible
           try {
             final decoded = jsonDecode(eventJson);
             final pretty = const JsonEncoder.withIndent('  ').convert(decoded);
             setState(() {
-              _events.insert(0, "[Event] $pretty");
+              _events.insert(0, "[LIVE] $pretty");
             });
           } catch (_) {
             setState(() {
-              _events.insert(0, "[Raw] $eventJson");
+              _events.insert(0, "[LIVE RAW] $eventJson");
             });
           }
         },
         onError: (err) {
+          debugPrint("LiveQueryView: Stream error: $err");
           setState(() {
             _events.add("[Error] Stream error: $err");
             _isListening = false;
           });
         },
         onDone: () {
+          debugPrint("LiveQueryView: Stream closed (onDone)");
           setState(() {
             _events.add("[Done] Stream closed.");
             _isListening = false;
@@ -93,21 +101,14 @@ class _LiveQueryViewState extends State<LiveQueryView> {
       final now = DateTime.now().millisecondsSinceEpoch;
 
       // Adapted for 'user' table schema
-      final data = tableName == 'user'
-          ? {
-              "username": "user_$now",
-              "password": "password123",
-              /* required by schema */
-              "created_at": DateTime.now().toIso8601String(),
-            }
-          : {
-              "name": "Test Item $now",
-              "created_at": DateTime.now().toIso8601String(),
-            };
+      const String query =
+          r'''CREATE ONLY user SET username = $username, password = crypto::argon2::generate($password)''';
 
-      final result = await widget.controller.client!.remote.getClient.create(
-        resource: tableName,
-        data: jsonEncode(data),
+      final credentials = {"username": "user$now", "password": "password123"};
+
+      final result = await widget.controller.client!.local!.getClient.query(
+        sql: query,
+        vars: jsonEncode(credentials),
       );
 
       if (result.contains("ERR") || result.contains("error")) {
@@ -146,7 +147,7 @@ class _LiveQueryViewState extends State<LiveQueryView> {
           ? "pass_$now"
           : DateTime.now().toIso8601String();
 
-      final result = await widget.controller.client!.remote.getClient.query(
+      final result = await widget.controller.client!.local!.getClient.query(
         sql: updateQuery,
         vars: jsonEncode({"tb": tableName, "val": val}),
       );
@@ -173,6 +174,16 @@ class _LiveQueryViewState extends State<LiveQueryView> {
     }
   }
 
+  Future<void> _copyAllLogs() async {
+    final allText = _events.join('\n');
+    await Clipboard.setData(ClipboardData(text: allText));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("All logs copied to clipboard")),
+      );
+    }
+  }
+
   @override
   void dispose() {
     _subscription?.cancel();
@@ -183,67 +194,26 @@ class _LiveQueryViewState extends State<LiveQueryView> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Live Query Test")),
+      appBar: AppBar(
+        title: const Text("Live Query Test"),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.copy),
+            tooltip: "Copy All Logs",
+            onPressed: _copyAllLogs,
+          ),
+        ],
+      ),
       body: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _tableController,
-                    decoration: const InputDecoration(labelText: "Table Name"),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                ElevatedButton(
-                  onPressed: _toggleSubscription,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _isListening ? Colors.red : Colors.green,
-                  ),
-                  child: Text(
-                    _isListening ? "Stop Listening" : "Start Listening",
-                  ),
-                ),
-              ],
-            ),
+          LiveQueryInput(
+            controller: _tableController,
+            isListening: _isListening,
+            onToggle: _toggleSubscription,
           ),
-          Wrap(
-            spacing: 16,
-            children: [
-              ElevatedButton.icon(
-                onPressed: _createRecord,
-                icon: const Icon(Icons.add),
-                label: const Text("Create Record"),
-              ),
-              ElevatedButton.icon(
-                onPressed: _updateRecord,
-                icon: const Icon(Icons.update),
-                label: const Text("Update All"),
-              ),
-            ],
-          ),
+          LiveQueryActions(onCreate: _createRecord, onUpdate: _updateRecord),
           const Divider(),
-          Expanded(
-            child: ListView.builder(
-              itemCount: _events.length,
-              itemBuilder: (context, index) {
-                final text = _events[index];
-                return Container(
-                  padding: const EdgeInsets.all(8),
-                  color: index % 2 == 0 ? Colors.black12 : Colors.transparent,
-                  child: Text(
-                    text,
-                    style: const TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 12,
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
+          Expanded(child: LiveQueryLogs(events: _events)),
         ],
       ),
     );

@@ -4,6 +4,8 @@
 // ignore_for_file: unused_import, unused_element, unnecessary_import, duplicate_ignore, invalid_use_of_internal_member, annotate_overrides, non_constant_identifier_names, curly_braces_in_flow_control_structures, prefer_const_literals_to_create_immutables, unused_field
 
 import 'api/client.dart';
+import 'api/live_query/manager.dart';
+import 'api/live_query/models.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi' as ffi;
@@ -44,7 +46,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  RustStreamSink<String> dco_decode_StreamSink_String_Sse(dynamic raw);
+  RustStreamSink<LiveQueryEvent> dco_decode_StreamSink_live_query_event_Sse(
+    dynamic raw,
+  );
 
   @protected
   String dco_decode_String(dynamic raw);
@@ -53,7 +57,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   StorageMode dco_decode_box_autoadd_storage_mode(dynamic raw);
 
   @protected
+  int dco_decode_i_32(dynamic raw);
+
+  @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
+
+  @protected
+  LiveQueryAction dco_decode_live_query_action(dynamic raw);
+
+  @protected
+  LiveQueryEvent dco_decode_live_query_event(dynamic raw);
+
+  @protected
+  LiveQueryManager dco_decode_live_query_manager(dynamic raw);
 
   @protected
   String? dco_decode_opt_String(dynamic raw);
@@ -95,7 +111,7 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  RustStreamSink<String> sse_decode_StreamSink_String_Sse(
+  RustStreamSink<LiveQueryEvent> sse_decode_StreamSink_live_query_event_Sse(
     SseDeserializer deserializer,
   );
 
@@ -106,7 +122,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   StorageMode sse_decode_box_autoadd_storage_mode(SseDeserializer deserializer);
 
   @protected
+  int sse_decode_i_32(SseDeserializer deserializer);
+
+  @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
+
+  @protected
+  LiveQueryAction sse_decode_live_query_action(SseDeserializer deserializer);
+
+  @protected
+  LiveQueryEvent sse_decode_live_query_event(SseDeserializer deserializer);
+
+  @protected
+  LiveQueryManager sse_decode_live_query_manager(SseDeserializer deserializer);
 
   @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
@@ -125,9 +153,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   BigInt sse_decode_usize(SseDeserializer deserializer);
-
-  @protected
-  int sse_decode_i_32(SseDeserializer deserializer);
 
   @protected
   bool sse_decode_bool(SseDeserializer deserializer);
@@ -160,8 +185,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  void sse_encode_StreamSink_String_Sse(
-    RustStreamSink<String> self,
+  void sse_encode_StreamSink_live_query_event_Sse(
+    RustStreamSink<LiveQueryEvent> self,
     SseSerializer serializer,
   );
 
@@ -175,8 +200,29 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_i_32(int self, SseSerializer serializer);
+
+  @protected
   void sse_encode_list_prim_u_8_strict(
     Uint8List self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_live_query_action(
+    LiveQueryAction self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_live_query_event(
+    LiveQueryEvent self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_live_query_manager(
+    LiveQueryManager self,
     SseSerializer serializer,
   );
 
@@ -197,9 +243,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_usize(BigInt self, SseSerializer serializer);
-
-  @protected
-  void sse_encode_i_32(int self, SseSerializer serializer);
 
   @protected
   void sse_encode_bool(bool self, SseSerializer serializer);

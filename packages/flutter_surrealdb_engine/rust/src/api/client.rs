@@ -1,10 +1,9 @@
-// rust/src/api/client.rs
-
 use std::process::{Child, Command};
-use std::sync::Mutex;
+use tokio::sync::Mutex;
 use std::time::Duration;
 use std::path::Path;
 use surrealdb::engine::any::Any;
+use surrealdb::engine::local::{Mem, Db};
 use surrealdb::Surreal;
 use crate::internal::{auth, crud, query};
 
@@ -53,9 +52,15 @@ impl ServerGuard {
     }
 }
 
-// The main class exposed to Flutter
+// Helper enum to hold different client types
+#[derive(Clone)]
+pub enum SurrealClient {
+    Any(Surreal<Any>),
+    Mem(Surreal<Db>),
+}
+
 pub struct SurrealDb {
-    db: Mutex<Option<Surreal<Any>>>,
+    db: Mutex<Option<SurrealClient>>,
     #[allow(dead_code)] 
     server_guard: Mutex<Option<ServerGuard>>,
 }
@@ -69,36 +74,38 @@ impl SurrealDb {
     // =================================================================
 
     pub async fn connect(mode: StorageMode) -> anyhow::Result<SurrealDb> {
-        let (db, server_guard) = match mode {
+        let (db_client, server_guard) = match mode {
             StorageMode::Memory => {
-                let db = surrealdb::engine::any::connect("mem://").await?;
-                (db, None)
+                // Live Query Fix: Use Mem engine directly for in-memory databases
+                let db = Surreal::new::<Mem>(()).await?;
+                (SurrealClient::Mem(db), None)
             },
             StorageMode::Remote { url } => {
                 let db = surrealdb::engine::any::connect(url).await?;
-                (db, None)
+                (SurrealClient::Any(db), None)
             },
             StorageMode::Disk { path } => {
                 Self::ensure_dir_exists(&path);
                 let db = surrealdb::engine::any::connect(format!("surrealkv://{}", path)).await?;
-                (db, None)
+                (SurrealClient::Any(db), None)
             },
             StorageMode::DevSidecar { path, port } => {
                 Self::ensure_dir_exists(&path);
-                Self::spawn_sidecar_server(&path, port).await?
+                let (db, guard) = Self::spawn_sidecar_server(&path, port).await?;
+                (SurrealClient::Any(db), guard)
             }
         };
 
         Ok(SurrealDb {
-            db: Mutex::new(Some(db)),
+            db: Mutex::new(Some(db_client)),
             server_guard: Mutex::new(server_guard),
         })
     }
 
-    pub fn close(&self) -> anyhow::Result<()> {
-        let mut guard = self.db.lock().map_err(|e| anyhow::anyhow!("Mutex: {}", e))?;
+    pub async fn close(&self) -> anyhow::Result<()> {
+        let mut guard = self.db.lock().await;
         *guard = None;
-        let mut server = self.server_guard.lock().map_err(|e| anyhow::anyhow!("Mutex: {}", e))?;
+        let mut server = self.server_guard.lock().await;
         *server = None;
         Ok(())
     }
@@ -150,7 +157,6 @@ impl SurrealDb {
 
             // 4. Connect Loop
             let mut loop_guard = ServerGuard { process: child };
-            let mut connect_success = false;
             
             for _ in 0..20 { // ~4 seconds connection timeout
                 if let Ok(Some(_)) = loop_guard.process.try_wait() { break; } // Died while connecting
@@ -195,10 +201,10 @@ impl SurrealDb {
         }
     }
 
-    pub(crate) fn get_db(&self) -> anyhow::Result<Surreal<Any>> {
-        let guard = self.db.lock().map_err(|e| anyhow::anyhow!("Mutex: {}", e))?;
+    pub(crate) async fn get_db_client(&self) -> anyhow::Result<SurrealClient> {
+        let guard = self.db.lock().await;
         match &*guard {
-            Some(db) => Ok(db.clone()),
+            Some(client) => Ok(client.clone()),
             None => Err(anyhow::anyhow!("Database connection is closed")),
         }
     }
@@ -208,68 +214,135 @@ impl SurrealDb {
     // =================================================================
 
     pub async fn use_db(&self, ns: String, db: String) -> anyhow::Result<()> {
-        self.get_db()?.use_ns(ns).use_db(db).await?;
+        let guard = self.db.lock().await; 
+        if let Some(client) = &*guard {
+            match client {
+                SurrealClient::Any(c) => c.use_ns(ns).use_db(db).await?,
+                SurrealClient::Mem(c) => c.use_ns(ns).use_db(db).await?,
+            };
+        }
         Ok(())
     }
 
     pub async fn signup(&self, creds: String) -> anyhow::Result<String> {
-        Ok(auth::signup(&self.get_db()?, creds).await?)
+        let guard = self.db.lock().await;
+        if let Some(client) = &*guard {
+             return match client {
+                 SurrealClient::Any(c) => auth::signup(c, creds).await,
+                 SurrealClient::Mem(c) => auth::signup(c, creds).await,
+             };
+        }
+        Err(anyhow::anyhow!("Database not connected"))
     }
 
     pub async fn signin(&self, creds: String) -> anyhow::Result<String> {
-        Ok(auth::signin(&self.get_db()?, creds).await?)
+        let guard = self.db.lock().await;
+        if let Some(client) = &*guard {
+             return match client {
+                 SurrealClient::Any(c) => auth::signin(c, creds).await,
+                 SurrealClient::Mem(c) => auth::signin(c, creds).await,
+             };
+        }
+        Err(anyhow::anyhow!("Database not connected"))
     }
 
     pub async fn authenticate(&self, token: String) -> anyhow::Result<()> {
-        Ok(auth::authenticate(&self.get_db()?, token).await?)
+        let guard = self.db.lock().await;
+        if let Some(client) = &*guard {
+            match client {
+                SurrealClient::Any(c) => auth::authenticate(c, token).await?,
+                SurrealClient::Mem(c) => auth::authenticate(c, token).await?,
+            };
+        }
+        Ok(())
     }
 
     pub async fn invalidate(&self) -> anyhow::Result<()> {
-        Ok(auth::invalidate(&self.get_db()?).await?)
+        let guard = self.db.lock().await;
+        if let Some(client) = &*guard {
+            match client {
+                SurrealClient::Any(c) => auth::invalidate(c).await?,
+                SurrealClient::Mem(c) => auth::invalidate(c).await?,
+            };
+        }
+        Ok(())
     }
 
     pub async fn query(&self, sql: String, vars: Option<String>) -> anyhow::Result<String> {
-        Ok(query::query(&self.get_db()?, sql, vars).await?)
+        match self.get_db_client().await? {
+            SurrealClient::Any(c) => Ok(query::query(&c, sql, vars).await?),
+            SurrealClient::Mem(c) => Ok(query::query(&c, sql, vars).await?),
+        }
     }
 
     pub async fn select(&self, resource: String) -> anyhow::Result<String> {
-        Ok(crud::select(&self.get_db()?, resource).await?)
+        match self.get_db_client().await? {
+            SurrealClient::Any(c) => Ok(crud::select(&c, resource).await?),
+            SurrealClient::Mem(c) => Ok(crud::select(&c, resource).await?),
+        }
     }
 
     pub async fn create(&self, resource: String, data: Option<String>) -> anyhow::Result<String> {
-        Ok(crud::create(&self.get_db()?, resource, data).await?)
+         match self.get_db_client().await? {
+            SurrealClient::Any(c) => Ok(crud::create(&c, resource, data).await?),
+            SurrealClient::Mem(c) => Ok(crud::create(&c, resource, data).await?),
+        }
     }
 
     pub async fn update(&self, resource: String, data: Option<String>) -> anyhow::Result<String> {
-        Ok(crud::update(&self.get_db()?, resource, data).await?)
+         match self.get_db_client().await? {
+            SurrealClient::Any(c) => Ok(crud::update(&c, resource, data).await?),
+            SurrealClient::Mem(c) => Ok(crud::update(&c, resource, data).await?),
+        }
     }
 
     pub async fn merge(&self, resource: String, data: Option<String>) -> anyhow::Result<String> {
-        Ok(crud::merge(&self.get_db()?, resource, data).await?)
+         match self.get_db_client().await? {
+            SurrealClient::Any(c) => Ok(crud::merge(&c, resource, data).await?),
+            SurrealClient::Mem(c) => Ok(crud::merge(&c, resource, data).await?),
+        }
     }
 
     pub async fn delete(&self, resource: String) -> anyhow::Result<String> {
-        Ok(crud::delete(&self.get_db()?, resource).await?)
+         match self.get_db_client().await? {
+            SurrealClient::Any(c) => Ok(crud::delete(&c, resource).await?),
+            SurrealClient::Mem(c) => Ok(crud::delete(&c, resource).await?),
+        }
     }
 
     pub async fn transaction(&self, stmts: String, vars: Option<String>) -> anyhow::Result<String> {
-        Ok(query::transaction(&self.get_db()?, stmts, vars).await?)
+         match self.get_db_client().await? {
+            SurrealClient::Any(c) => Ok(query::transaction(&c, stmts, vars).await?),
+            SurrealClient::Mem(c) => Ok(query::transaction(&c, stmts, vars).await?),
+        }
     }
 
     pub async fn query_begin(&self) -> anyhow::Result<()> {
-        Ok(query::query_begin(&self.get_db()?).await?)
+        match self.get_db_client().await? {
+            SurrealClient::Any(c) => Ok(query::query_begin(&c).await?),
+            SurrealClient::Mem(c) => Ok(query::query_begin(&c).await?),
+        }
     }
 
     pub async fn query_commit(&self) -> anyhow::Result<()> {
-        Ok(query::query_commit(&self.get_db()?).await?)
+        match self.get_db_client().await? {
+            SurrealClient::Any(c) => Ok(query::query_commit(&c).await?),
+            SurrealClient::Mem(c) => Ok(query::query_commit(&c).await?),
+        }
     }
 
     pub async fn query_cancel(&self) -> anyhow::Result<()> {
-        Ok(query::query_cancel(&self.get_db()?).await?)
+        match self.get_db_client().await? {
+            SurrealClient::Any(c) => Ok(query::query_cancel(&c).await?),
+            SurrealClient::Mem(c) => Ok(query::query_cancel(&c).await?),
+        }
     }
 
     pub async fn export(&self, path: String) -> anyhow::Result<()> {
-         self.get_db()?.export(path).await?;
-         Ok(())
+         match self.get_db_client().await? {
+            SurrealClient::Any(c) => c.export(path).await?,
+            SurrealClient::Mem(c) => c.export(path).await?,
+        };
+        Ok(())
     }
 }

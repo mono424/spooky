@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 532811059;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 2122070457;
 
 // Section: executor
 
@@ -112,7 +112,7 @@ fn wire__crate__api__client__SurrealDb_close_impl(
     rust_vec_len_: i32,
     data_len_: i32,
 ) {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
         flutter_rust_bridge::for_generated::TaskInfo {
             debug_name: "SurrealDb_close",
             port: Some(port_),
@@ -132,9 +132,9 @@ fn wire__crate__api__client__SurrealDb_close_impl(
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SurrealDb>,
             >>::sse_decode(&mut deserializer);
             deserializer.end();
-            move |context| {
+            move |context| async move {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
-                    (move || {
+                    (move || async move {
                         let mut api_that_guard = None;
                         let decode_indices_ =
                             flutter_rust_bridge::for_generated::lockable_compute_decode_order(
@@ -144,14 +144,19 @@ fn wire__crate__api__client__SurrealDb_close_impl(
                             );
                         for i in decode_indices_ {
                             match i {
-                                0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                                0 => {
+                                    api_that_guard =
+                                        Some(api_that.lockable_decode_async_ref().await)
+                                }
                                 _ => unreachable!(),
                             }
                         }
                         let api_that_guard = api_that_guard.unwrap();
-                        let output_ok = crate::api::client::SurrealDb::close(&*api_that_guard)?;
+                        let output_ok =
+                            crate::api::client::SurrealDb::close(&*api_that_guard).await?;
                         Ok(output_ok)
-                    })(),
+                    })()
+                    .await,
                 )
             }
         },
@@ -427,6 +432,41 @@ fn wire__crate__api__client__SurrealDb_invalidate_impl(
         },
     )
 }
+fn wire__crate__api__client__SurrealDb_kill_query_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "SurrealDb_kill_query",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_query_uuid = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || {
+                        let output_ok = crate::api::client::SurrealDb::kill_query(api_query_uuid)?;
+                        Ok(output_ok)
+                    })(),
+                )
+            }
+        },
+    )
+}
 fn wire__crate__api__client__SurrealDb_live_query_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -453,10 +493,10 @@ fn wire__crate__api__client__SurrealDb_live_query_impl(
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SurrealDb>,
             >>::sse_decode(&mut deserializer);
             let api_table_name = <String>::sse_decode(&mut deserializer);
-            let api_sink =
-                <StreamSink<String, flutter_rust_bridge::for_generated::SseCodec>>::sse_decode(
-                    &mut deserializer,
-                );
+            let api_sink = <StreamSink<
+                crate::api::live_query::models::LiveQueryEvent,
+                flutter_rust_bridge::for_generated::SseCodec,
+            >>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
@@ -1141,6 +1181,77 @@ fn wire__crate__api__client__SurrealDb_use_db_impl(
         },
     )
 }
+fn wire__crate__api__live_query__models__live_query_event_handshake_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "live_query_event_handshake",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_query_uuid = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Result::<_, ()>::Ok(
+                        crate::api::live_query::models::LiveQueryEvent::handshake(api_query_uuid),
+                    )?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__live_query__manager__live_query_manager_kill_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "live_query_manager_kill",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_uuid = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || {
+                        let output_ok =
+                            crate::api::live_query::manager::LiveQueryManager::kill(&api_uuid)?;
+                        Ok(output_ok)
+                    })(),
+                )
+            }
+        },
+    )
+}
 
 // Section: related_funcs
 
@@ -1178,7 +1289,12 @@ impl SseDecode
     }
 }
 
-impl SseDecode for StreamSink<String, flutter_rust_bridge::for_generated::SseCodec> {
+impl SseDecode
+    for StreamSink<
+        crate::api::live_query::models::LiveQueryEvent,
+        flutter_rust_bridge::for_generated::SseCodec,
+    >
+{
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut inner = <String>::sse_decode(deserializer);
@@ -1194,6 +1310,13 @@ impl SseDecode for String {
     }
 }
 
+impl SseDecode for i32 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        deserializer.cursor.read_i32::<NativeEndian>().unwrap()
+    }
+}
+
 impl SseDecode for Vec<u8> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1203,6 +1326,44 @@ impl SseDecode for Vec<u8> {
             ans_.push(<u8>::sse_decode(deserializer));
         }
         return ans_;
+    }
+}
+
+impl SseDecode for crate::api::live_query::models::LiveQueryAction {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <i32>::sse_decode(deserializer);
+        return match inner {
+            0 => crate::api::live_query::models::LiveQueryAction::Create,
+            1 => crate::api::live_query::models::LiveQueryAction::Update,
+            2 => crate::api::live_query::models::LiveQueryAction::Delete,
+            3 => crate::api::live_query::models::LiveQueryAction::Unknown,
+            _ => unreachable!("Invalid variant for LiveQueryAction: {}", inner),
+        };
+    }
+}
+
+impl SseDecode for crate::api::live_query::models::LiveQueryEvent {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_action =
+            <crate::api::live_query::models::LiveQueryAction>::sse_decode(deserializer);
+        let mut var_result = <String>::sse_decode(deserializer);
+        let mut var_id = <Option<String>>::sse_decode(deserializer);
+        let mut var_queryUuid = <Option<String>>::sse_decode(deserializer);
+        return crate::api::live_query::models::LiveQueryEvent {
+            action: var_action,
+            result: var_result,
+            id: var_id,
+            query_uuid: var_queryUuid,
+        };
+    }
+}
+
+impl SseDecode for crate::api::live_query::manager::LiveQueryManager {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        return crate::api::live_query::manager::LiveQueryManager {};
     }
 }
 
@@ -1274,13 +1435,6 @@ impl SseDecode for usize {
     }
 }
 
-impl SseDecode for i32 {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        deserializer.cursor.read_i32::<NativeEndian>().unwrap()
-    }
-}
-
 impl SseDecode for bool {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1306,26 +1460,39 @@ fn pde_ffi_dispatcher_primary_impl(
         5 => wire__crate__api__client__SurrealDb_delete_impl(port, ptr, rust_vec_len, data_len),
         6 => wire__crate__api__client__SurrealDb_export_impl(port, ptr, rust_vec_len, data_len),
         7 => wire__crate__api__client__SurrealDb_invalidate_impl(port, ptr, rust_vec_len, data_len),
-        8 => wire__crate__api__client__SurrealDb_live_query_impl(port, ptr, rust_vec_len, data_len),
-        9 => wire__crate__api__client__SurrealDb_merge_impl(port, ptr, rust_vec_len, data_len),
-        10 => wire__crate__api__client__SurrealDb_query_impl(port, ptr, rust_vec_len, data_len),
-        11 => {
+        8 => wire__crate__api__client__SurrealDb_kill_query_impl(port, ptr, rust_vec_len, data_len),
+        9 => wire__crate__api__client__SurrealDb_live_query_impl(port, ptr, rust_vec_len, data_len),
+        10 => wire__crate__api__client__SurrealDb_merge_impl(port, ptr, rust_vec_len, data_len),
+        11 => wire__crate__api__client__SurrealDb_query_impl(port, ptr, rust_vec_len, data_len),
+        12 => {
             wire__crate__api__client__SurrealDb_query_begin_impl(port, ptr, rust_vec_len, data_len)
         }
-        12 => {
+        13 => {
             wire__crate__api__client__SurrealDb_query_cancel_impl(port, ptr, rust_vec_len, data_len)
         }
-        13 => {
+        14 => {
             wire__crate__api__client__SurrealDb_query_commit_impl(port, ptr, rust_vec_len, data_len)
         }
-        14 => wire__crate__api__client__SurrealDb_select_impl(port, ptr, rust_vec_len, data_len),
-        15 => wire__crate__api__client__SurrealDb_signin_impl(port, ptr, rust_vec_len, data_len),
-        16 => wire__crate__api__client__SurrealDb_signup_impl(port, ptr, rust_vec_len, data_len),
-        17 => {
+        15 => wire__crate__api__client__SurrealDb_select_impl(port, ptr, rust_vec_len, data_len),
+        16 => wire__crate__api__client__SurrealDb_signin_impl(port, ptr, rust_vec_len, data_len),
+        17 => wire__crate__api__client__SurrealDb_signup_impl(port, ptr, rust_vec_len, data_len),
+        18 => {
             wire__crate__api__client__SurrealDb_transaction_impl(port, ptr, rust_vec_len, data_len)
         }
-        18 => wire__crate__api__client__SurrealDb_update_impl(port, ptr, rust_vec_len, data_len),
-        19 => wire__crate__api__client__SurrealDb_use_db_impl(port, ptr, rust_vec_len, data_len),
+        19 => wire__crate__api__client__SurrealDb_update_impl(port, ptr, rust_vec_len, data_len),
+        20 => wire__crate__api__client__SurrealDb_use_db_impl(port, ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__live_query__models__live_query_event_handshake_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        22 => wire__crate__api__live_query__manager__live_query_manager_kill_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
         _ => unreachable!(),
     }
 }
@@ -1359,6 +1526,69 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<SurrealDb>> for SurrealDb {
     }
 }
 
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::live_query::models::LiveQueryAction {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            Self::Create => 0.into_dart(),
+            Self::Update => 1.into_dart(),
+            Self::Delete => 2.into_dart(),
+            Self::Unknown => 3.into_dart(),
+            _ => unreachable!(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::live_query::models::LiveQueryAction
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::live_query::models::LiveQueryAction>
+    for crate::api::live_query::models::LiveQueryAction
+{
+    fn into_into_dart(self) -> crate::api::live_query::models::LiveQueryAction {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::live_query::models::LiveQueryEvent {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.action.into_into_dart().into_dart(),
+            self.result.into_into_dart().into_dart(),
+            self.id.into_into_dart().into_dart(),
+            self.query_uuid.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::live_query::models::LiveQueryEvent
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::live_query::models::LiveQueryEvent>
+    for crate::api::live_query::models::LiveQueryEvent
+{
+    fn into_into_dart(self) -> crate::api::live_query::models::LiveQueryEvent {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::live_query::manager::LiveQueryManager {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        Vec::<u8>::new().into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::live_query::manager::LiveQueryManager
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::live_query::manager::LiveQueryManager>
+    for crate::api::live_query::manager::LiveQueryManager
+{
+    fn into_into_dart(self) -> crate::api::live_query::manager::LiveQueryManager {
+        self
+    }
+}
 // Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::client::StorageMode {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
@@ -1419,7 +1649,12 @@ impl SseEncode
     }
 }
 
-impl SseEncode for StreamSink<String, flutter_rust_bridge::for_generated::SseCodec> {
+impl SseEncode
+    for StreamSink<
+        crate::api::live_query::models::LiveQueryEvent,
+        flutter_rust_bridge::for_generated::SseCodec,
+    >
+{
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         unimplemented!("")
@@ -1433,6 +1668,13 @@ impl SseEncode for String {
     }
 }
 
+impl SseEncode for i32 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        serializer.cursor.write_i32::<NativeEndian>(self).unwrap();
+    }
+}
+
 impl SseEncode for Vec<u8> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -1441,6 +1683,39 @@ impl SseEncode for Vec<u8> {
             <u8>::sse_encode(item, serializer);
         }
     }
+}
+
+impl SseEncode for crate::api::live_query::models::LiveQueryAction {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(
+            match self {
+                crate::api::live_query::models::LiveQueryAction::Create => 0,
+                crate::api::live_query::models::LiveQueryAction::Update => 1,
+                crate::api::live_query::models::LiveQueryAction::Delete => 2,
+                crate::api::live_query::models::LiveQueryAction::Unknown => 3,
+                _ => {
+                    unimplemented!("");
+                }
+            },
+            serializer,
+        );
+    }
+}
+
+impl SseEncode for crate::api::live_query::models::LiveQueryEvent {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <crate::api::live_query::models::LiveQueryAction>::sse_encode(self.action, serializer);
+        <String>::sse_encode(self.result, serializer);
+        <Option<String>>::sse_encode(self.id, serializer);
+        <Option<String>>::sse_encode(self.query_uuid, serializer);
+    }
+}
+
+impl SseEncode for crate::api::live_query::manager::LiveQueryManager {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {}
 }
 
 impl SseEncode for Option<String> {
@@ -1506,13 +1781,6 @@ impl SseEncode for usize {
             .cursor
             .write_u64::<NativeEndian>(self as _)
             .unwrap();
-    }
-}
-
-impl SseEncode for i32 {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        serializer.cursor.write_i32::<NativeEndian>(self).unwrap();
     }
 }
 

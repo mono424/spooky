@@ -131,7 +131,7 @@ packages:
     source: hosted
     version: "2.11.1"
   flutter_surrealdb_engine:
-    dependency: transitive
+    dependency: "direct main"
     description:
       path: "../../flutter_surrealdb_engine"
       relative: true

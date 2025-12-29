@@ -177,10 +177,18 @@ class _AuthViewState extends State<AuthView> with TickerProviderStateMixin {
                   ),
                   if (_error != null) ...[
                     const SizedBox(height: 16),
-                    Text(
-                      _error!,
-                      style: GoogleFonts.spaceMono(color: Colors.redAccent),
-                      textAlign: TextAlign.center,
+                    DecoratedBox(
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.redAccent),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(8),
+                        child: Text(
+                          _error!,
+                          style: GoogleFonts.spaceMono(color: Colors.redAccent),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
                     ),
                   ],
                   const SizedBox(height: 32),

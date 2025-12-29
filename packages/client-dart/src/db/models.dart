@@ -14,147 +14,147 @@ Schema schemaFromJson(String str) => Schema.fromJson(json.decode(str));
 String schemaToJson(Schema data) => json.encode(data.toJson());
 
 class Schema {
-    Comment? comment;
-    Thread? thread;
-    User? user;
+  Comment? comment;
+  Thread? thread;
+  User? user;
 
-    Schema({
-        this.comment,
-        this.thread,
-        this.user,
-    });
+  Schema({this.comment, this.thread, this.user});
 
-    factory Schema.fromJson(Map<String, dynamic> json) => Schema(
-        comment: json["comment"] == null ? null : Comment.fromJson(json["comment"]),
-        thread: json["thread"] == null ? null : Thread.fromJson(json["thread"]),
-        user: json["user"] == null ? null : User.fromJson(json["user"]),
-    );
+  factory Schema.fromJson(Map<String, dynamic> json) => Schema(
+    comment: json["comment"] == null ? null : Comment.fromJson(json["comment"]),
+    thread: json["thread"] == null ? null : Thread.fromJson(json["thread"]),
+    user: json["user"] == null ? null : User.fromJson(json["user"]),
+  );
 
-    Map<String, dynamic> toJson() => {
-        "comment": comment?.toJson(),
-        "thread": thread?.toJson(),
-        "user": user?.toJson(),
-    };
+  Map<String, dynamic> toJson() => {
+    "comment": comment?.toJson(),
+    "thread": thread?.toJson(),
+    "user": user?.toJson(),
+  };
 }
 
 class Comment {
-    
-    ///Record ID of table: user
-    String author;
-    
-    ///Assert: $value != NONE AND string::len($value) > 0
-    String content;
-    DateTime? createdAt;
-    
-    ///Record ID
-    String id;
-    
-    ///Record ID of table: thread
-    String threadId;
+  ///Record ID of table: user
+  String author;
 
-    Comment({
-        required this.author,
-        required this.content,
-        this.createdAt,
-        required this.id,
-        required this.threadId,
-    });
+  ///Assert: $value != NONE AND string::len($value) > 0
+  String content;
+  DateTime? createdAt;
 
-    factory Comment.fromJson(Map<String, dynamic> json) => Comment(
-        author: json["author"],
-        content: json["content"],
-        createdAt: json["created_at"] == null ? null : DateTime.parse(json["created_at"]),
-        id: json["id"],
-        threadId: json["thread_id"],
-    );
+  ///Record ID
+  String id;
 
-    Map<String, dynamic> toJson() => {
-        "author": author,
-        "content": content,
-        "created_at": createdAt?.toIso8601String(),
-        "id": id,
-        "thread_id": threadId,
-    };
+  ///Record ID of table: thread
+  String threadId;
+
+  Comment({
+    required this.author,
+    required this.content,
+    this.createdAt,
+    required this.id,
+    required this.threadId,
+  });
+
+  factory Comment.fromJson(Map<String, dynamic> json) => Comment(
+    author: json["author"],
+    content: json["content"],
+    createdAt: json["created_at"] == null
+        ? null
+        : DateTime.parse(json["created_at"]),
+    id: json["id"],
+    threadId: json["thread_id"],
+  );
+
+  Map<String, dynamic> toJson() => {
+    "author": author,
+    "content": content,
+    "created_at": createdAt?.toIso8601String(),
+    "id": id,
+    "thread_id": threadId,
+  };
 }
 
 class Thread {
-    
-    ///Record ID of table: user
-    String author;
-    
-    ///Assert: $value != NONE AND string::len($value) > 0
-    String content;
-    DateTime? createdAt;
-    
-    ///Record ID
-    String id;
-    
-    ///Assert: $value != NONE AND string::len($value) > 0 AND string::len($value) <= 200
-    String title;
+  ///Record ID of table: user
+  String author;
 
-    Thread({
-        required this.author,
-        required this.content,
-        this.createdAt,
-        required this.id,
-        required this.title,
-    });
+  ///Assert: $value != NONE AND string::len($value) > 0
+  String content;
+  DateTime? createdAt;
 
-    factory Thread.fromJson(Map<String, dynamic> json) => Thread(
-        author: json["author"],
-        content: json["content"],
-        createdAt: json["created_at"] == null ? null : DateTime.parse(json["created_at"]),
-        id: json["id"],
-        title: json["title"],
-    );
+  ///Record ID
+  String id;
 
-    Map<String, dynamic> toJson() => {
-        "author": author,
-        "content": content,
-        "created_at": createdAt?.toIso8601String(),
-        "id": id,
-        "title": title,
-    };
+  ///Assert: $value != NONE AND string::len($value) > 0 AND string::len($value) <= 200
+  String title;
+
+  Thread({
+    required this.author,
+    required this.content,
+    this.createdAt,
+    required this.id,
+    required this.title,
+  });
+
+  factory Thread.fromJson(Map<String, dynamic> json) => Thread(
+    author: json["author"],
+    content: json["content"],
+    createdAt: json["created_at"] == null
+        ? null
+        : DateTime.parse(json["created_at"]),
+    id: json["id"],
+    title: json["title"],
+  );
+
+  Map<String, dynamic> toJson() => {
+    "author": author,
+    "content": content,
+    "created_at": createdAt?.toIso8601String(),
+    "id": id,
+    "title": title,
+  };
 }
 
 class User {
-    DateTime? createdAt;
-    
-    ///Record ID
-    String id;
-    
-    ///Assert: $value != NONE AND string::len($value) > 0
-    String password;
-    
-    ///Assert: $value != NONE AND string::is::alphanum($value) AND string::len($value) > 3
-    String username;
+  DateTime? createdAt;
 
-    User({
-        this.createdAt,
-        required this.id,
-        required this.password,
-        required this.username,
-    });
+  ///Record ID
+  String id;
 
-    factory User.fromJson(Map<String, dynamic> json) => User(
-        createdAt: json["created_at"] == null ? null : DateTime.parse(json["created_at"]),
-        id: json["id"],
-        password: json["password"],
-        username: json["username"],
-    );
+  ///Assert: $value != NONE AND string::len($value) > 0
+  String password;
 
-    Map<String, dynamic> toJson() => {
-        "created_at": createdAt?.toIso8601String(),
-        "id": id,
-        "password": password,
-        "username": username,
-    };
+  ///Assert: $value != NONE AND string::is::alphanum($value) AND string::len($value) > 3
+  String username;
+
+  User({
+    this.createdAt,
+    required this.id,
+    required this.password,
+    required this.username,
+  });
+
+  factory User.fromJson(Map<String, dynamic> json) => User(
+    createdAt: json["created_at"] == null
+        ? null
+        : DateTime.parse(json["created_at"]),
+    id: json["id"],
+    password: json["password"],
+    username: json["username"],
+  );
+
+  Map<String, dynamic> toJson() => {
+    "created_at": createdAt?.toIso8601String(),
+    "id": id,
+    "password": password,
+    "username": username,
+  };
 }
-
 
 /// The complete SurrealDB schema definition.
 /// This constant contains the raw .surql schema file content.
-const String SURQL_SCHEMA = "-- ##################################################################
+const String SURQL_SCHEMA =
+    """-- ##################################################################
 -- SCOPES & AUTHENTICATION
 -- ##################################################################
 DEFINE ACCESS account ON DATABASE TYPE RECORD
@@ -227,4 +227,4 @@ DEFINE FIELD author ON TABLE comment TYPE record<user>;
 DEFINE FIELD created_at ON TABLE comment TYPE datetime
     VALUE time::now();
 
-";
+""";

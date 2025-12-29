@@ -1,5 +1,5 @@
 use surrealdb::Surreal;
-use surrealdb::engine::any::Any;
+
 use std::collections::HashMap;
 use anyhow::Result;
 use surrealdb::types::Value;
@@ -16,7 +16,7 @@ fn parse_vars(vars: Option<&str>) -> Result<HashMap<String, serde_json::Value>> 
 }
 
 // Hauptfunktion: Nimmt Option<String>, weil das gut für FFI/Bridge ist
-pub async fn query(db: &Surreal<Any>, sql: String, vars: Option<String>) -> Result<String> {
+pub async fn query<C: surrealdb::Connection>(db: &Surreal<C>, sql: String, vars: Option<String>) -> Result<String> {
     let mut query = db.query(sql);
 
     // Hier wandeln wir Option<String> in Option<&str> um mit .as_deref()
@@ -53,7 +53,7 @@ pub async fn query(db: &Surreal<Any>, sql: String, vars: Option<String>) -> Resu
 }
 
 // Transaction nutzt auch Option<String> für Konsistenz
-pub async fn transaction(db: &Surreal<Any>, statements: String, vars: Option<String>) -> Result<String> {
+pub async fn transaction<C: surrealdb::Connection>(db: &Surreal<C>, statements: String, vars: Option<String>) -> Result<String> {
     let stmts: Vec<String> = serde_json::from_str(&statements)?;
     let joined = stmts.join("; ");
     let sql = format!("BEGIN TRANSACTION; {}; COMMIT TRANSACTION;", joined);
@@ -62,17 +62,17 @@ pub async fn transaction(db: &Surreal<Any>, statements: String, vars: Option<Str
 }
 
 // Die Helfer bleiben gleich...
-pub async fn query_begin(db: &Surreal<Any>) -> Result<()> {
+pub async fn query_begin<C: surrealdb::Connection>(db: &Surreal<C>) -> Result<()> {
     db.query("BEGIN TRANSACTION").await?;
     Ok(())
 }
 
-pub async fn query_commit(db: &Surreal<Any>) -> Result<()> {
+pub async fn query_commit<C: surrealdb::Connection>(db: &Surreal<C>) -> Result<()> {
     db.query("COMMIT TRANSACTION").await?;
     Ok(())
 }
 
-pub async fn query_cancel(db: &Surreal<Any>) -> Result<()> {
+pub async fn query_cancel<C: surrealdb::Connection>(db: &Surreal<C>) -> Result<()> {
     db.query("CANCEL TRANSACTION").await?;
     Ok(())
 }

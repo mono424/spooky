@@ -1,5 +1,5 @@
 use surrealdb::Surreal;
-use surrealdb::engine::any::Any;
+
 use anyhow::Result;
 use surrealdb::opt::auth::{Root, Namespace, Database, Record, Token};
 
@@ -14,7 +14,7 @@ enum AuthCredentials {
     Root { user: String, pass: String },
 }
 
-pub async fn signup(db: &Surreal<Any>, credentials: String) -> Result<String> {
+pub async fn signup<C: surrealdb::Connection>(db: &Surreal<C>, credentials: String) -> Result<String> {
     let creds: AuthCredentials = serde_json::from_str(&credentials)?;
     let token: Token = match creds {
         AuthCredentials::Root { .. } | AuthCredentials::Namespace { .. } | AuthCredentials::Database { .. } => {
@@ -30,7 +30,7 @@ pub async fn signup(db: &Surreal<Any>, credentials: String) -> Result<String> {
     Ok(serde_json::to_string(&token)?)
 }
 
-pub async fn signin(db: &Surreal<Any>, credentials: String) -> Result<String> {
+pub async fn signin<C: surrealdb::Connection>(db: &Surreal<C>, credentials: String) -> Result<String> {
     let creds: AuthCredentials = serde_json::from_str(&credentials)?;
     let token: Token = match creds {
         AuthCredentials::Root { user, pass } => {
@@ -52,14 +52,14 @@ pub async fn signin(db: &Surreal<Any>, credentials: String) -> Result<String> {
     Ok(serde_json::to_string(&token)?)
 }
 
-pub async fn authenticate(db: &Surreal<Any>, token: String) -> Result<()> {
+pub async fn authenticate<C: surrealdb::Connection>(db: &Surreal<C>, token: String) -> Result<()> {
     // We expect a serialized Token string (JSON)
     let token_obj: Token = serde_json::from_str(&token)?;
     db.authenticate(token_obj).await?;
     Ok(())
 }
 
-pub async fn invalidate(db: &Surreal<Any>) -> Result<()> {
+pub async fn invalidate<C: surrealdb::Connection>(db: &Surreal<C>) -> Result<()> {
     db.invalidate().await?;
     Ok(())
 }

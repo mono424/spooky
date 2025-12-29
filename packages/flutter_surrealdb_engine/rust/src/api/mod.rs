@@ -1,2 +1,3 @@
 pub mod client;
-pub mod live_queries;
+
+pub mod live_query;

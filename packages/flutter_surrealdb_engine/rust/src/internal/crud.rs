@@ -1,5 +1,4 @@
 use surrealdb::Surreal;
-use surrealdb::engine::any::Any;
 use anyhow::Result;
 // use surrealdb::sql::Value as SValue;
 // use surrealdb::sql::Object as SObject;
@@ -10,14 +9,14 @@ use anyhow::Result;
 // }
 
 // Reference: mirrors the `select` method in JS SDK
-pub async fn select(db: &Surreal<Any>, resource: String) -> Result<String> {
+pub async fn select<C: surrealdb::Connection>(db: &Surreal<C>, resource: String) -> Result<String> {
     // Select using query to handle serialization consistently
     let sql = format!("SELECT * FROM {}", resource);
     super::query::query(db, sql, None).await
 }
 
 // Reference: mirrors the `create` method in JS SDK
-pub async fn create(db: &Surreal<Any>, resource: String, data: Option<String>) -> Result<String> {
+pub async fn create<C: surrealdb::Connection>(db: &Surreal<C>, resource: String, data: Option<String>) -> Result<String> {
     // WORKAROUND: RETURN NONE to avoid serialization issues with hidden Thing structs in surrealkv
     let sql = format!("CREATE {} CONTENT $data RETURN NONE", resource);
     
@@ -37,18 +36,9 @@ pub async fn create(db: &Surreal<Any>, resource: String, data: Option<String>) -
     q.await?; // Execute
     Ok("{}".to_string())
 }
-/*
-    let mut response = q.await?;
-    // let result: Vec<SValue> = response.take(0)?;
-    // Try taking raw value
-    let result: SValue = response.take(0)?;
-    // If it's an array, serialize it. If it's a single object (unlikely for create unless single?), wrap.
-    // Usually CREATE returns generic array.
-    to_json(result)
-*/
 
 // Reference: mirrors the `update` method in JS SDK
-pub async fn update(db: &Surreal<Any>, resource: String, data: Option<String>) -> Result<String> {
+pub async fn update<C: surrealdb::Connection>(db: &Surreal<C>, resource: String, data: Option<String>) -> Result<String> {
     let sql = format!("UPDATE {} CONTENT $data RETURN NONE", resource);
     
     let mut q = db.query(sql);
@@ -68,7 +58,7 @@ pub async fn update(db: &Surreal<Any>, resource: String, data: Option<String>) -
 }
 
 // Reference: mirrors the `merge` method in JS SDK
-pub async fn merge(db: &Surreal<Any>, resource: String, data: Option<String>) -> Result<String> {
+pub async fn merge<C: surrealdb::Connection>(db: &Surreal<C>, resource: String, data: Option<String>) -> Result<String> {
     let sql = format!("UPDATE {} MERGE $data RETURN NONE", resource);
     
     let mut q = db.query(sql);
@@ -88,7 +78,7 @@ pub async fn merge(db: &Surreal<Any>, resource: String, data: Option<String>) ->
 }
 
 // Reference: mirrors the `delete` method in JS SDK
-pub async fn delete(db: &Surreal<Any>, resource: String) -> Result<String> {
+pub async fn delete<C: surrealdb::Connection>(db: &Surreal<C>, resource: String) -> Result<String> {
     // Delete via query to maintain consistency
     let sql = format!("DELETE {} RETURN NONE", resource);
     db.query(sql).await?;

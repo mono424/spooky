@@ -4,6 +4,8 @@
 // ignore_for_file: unused_import, unused_element, unnecessary_import, duplicate_ignore, invalid_use_of_internal_member, annotate_overrides, non_constant_identifier_names, curly_braces_in_flow_control_structures, prefer_const_literals_to_create_immutables, unused_field
 
 import 'api/client.dart';
+import 'api/live_query/manager.dart';
+import 'api/live_query/models.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'frb_generated.dart';
@@ -64,7 +66,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => 532811059;
+  int get rustContentHash => 2122070457;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -102,7 +104,9 @@ abstract class RustLibApi extends BaseApi {
 
   Future<void> crateApiClientSurrealDbInvalidate({required SurrealDb that});
 
-  Stream<String> crateApiClientSurrealDbLiveQuery({
+  Future<void> crateApiClientSurrealDbKillQuery({required String queryUuid});
+
+  Stream<LiveQueryEvent> crateApiClientSurrealDbLiveQuery({
     required SurrealDb that,
     required String tableName,
   });
@@ -156,6 +160,14 @@ abstract class RustLibApi extends BaseApi {
     required SurrealDb that,
     required String ns,
     required String db,
+  });
+
+  Future<LiveQueryEvent> crateApiLiveQueryModelsLiveQueryEventHandshake({
+    required String queryUuid,
+  });
+
+  Future<void> crateApiLiveQueryManagerLiveQueryManagerKill({
+    required String uuid,
   });
 
   RustArcIncrementStrongCountFnType
@@ -426,11 +438,42 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Stream<String> crateApiClientSurrealDbLiveQuery({
+  Future<void> crateApiClientSurrealDbKillQuery({required String queryUuid}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(queryUuid, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 8,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiClientSurrealDbKillQueryConstMeta,
+        argValues: [queryUuid],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiClientSurrealDbKillQueryConstMeta =>
+      const TaskConstMeta(
+        debugName: "SurrealDb_kill_query",
+        argNames: ["queryUuid"],
+      );
+
+  @override
+  Stream<LiveQueryEvent> crateApiClientSurrealDbLiveQuery({
     required SurrealDb that,
     required String tableName,
   }) {
-    final sink = RustStreamSink<String>();
+    final sink = RustStreamSink<LiveQueryEvent>();
     unawaited(
       handler.executeNormal(
         NormalTask(
@@ -441,11 +484,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
               serializer,
             );
             sse_encode_String(tableName, serializer);
-            sse_encode_StreamSink_String_Sse(sink, serializer);
+            sse_encode_StreamSink_live_query_event_Sse(sink, serializer);
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 8,
+              funcId: 9,
               port: port_,
             );
           },
@@ -487,7 +530,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 9,
+            funcId: 10,
             port: port_,
           );
         },
@@ -527,7 +570,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 10,
+            funcId: 11,
             port: port_,
           );
         },
@@ -561,7 +604,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 11,
+            funcId: 12,
             port: port_,
           );
         },
@@ -595,7 +638,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 12,
+            funcId: 13,
             port: port_,
           );
         },
@@ -629,7 +672,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 13,
+            funcId: 14,
             port: port_,
           );
         },
@@ -667,7 +710,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 14,
+            funcId: 15,
             port: port_,
           );
         },
@@ -705,7 +748,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 15,
+            funcId: 16,
             port: port_,
           );
         },
@@ -743,7 +786,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 16,
+            funcId: 17,
             port: port_,
           );
         },
@@ -783,7 +826,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 17,
+            funcId: 18,
             port: port_,
           );
         },
@@ -823,7 +866,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 18,
+            funcId: 19,
             port: port_,
           );
         },
@@ -863,7 +906,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 19,
+            funcId: 20,
             port: port_,
           );
         },
@@ -882,6 +925,72 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(
         debugName: "SurrealDb_use_db",
         argNames: ["that", "ns", "db"],
+      );
+
+  @override
+  Future<LiveQueryEvent> crateApiLiveQueryModelsLiveQueryEventHandshake({
+    required String queryUuid,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(queryUuid, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 21,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_live_query_event,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiLiveQueryModelsLiveQueryEventHandshakeConstMeta,
+        argValues: [queryUuid],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiLiveQueryModelsLiveQueryEventHandshakeConstMeta =>
+      const TaskConstMeta(
+        debugName: "live_query_event_handshake",
+        argNames: ["queryUuid"],
+      );
+
+  @override
+  Future<void> crateApiLiveQueryManagerLiveQueryManagerKill({
+    required String uuid,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(uuid, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 22,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiLiveQueryManagerLiveQueryManagerKillConstMeta,
+        argValues: [uuid],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiLiveQueryManagerLiveQueryManagerKillConstMeta =>
+      const TaskConstMeta(
+        debugName: "live_query_manager_kill",
+        argNames: ["uuid"],
       );
 
   RustArcIncrementStrongCountFnType
@@ -926,7 +1035,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  RustStreamSink<String> dco_decode_StreamSink_String_Sse(dynamic raw) {
+  RustStreamSink<LiveQueryEvent> dco_decode_StreamSink_live_query_event_Sse(
+    dynamic raw,
+  ) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     throw UnimplementedError();
   }
@@ -944,9 +1055,44 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  int dco_decode_i_32(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as int;
+  }
+
+  @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as Uint8List;
+  }
+
+  @protected
+  LiveQueryAction dco_decode_live_query_action(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return LiveQueryAction.values[raw as int];
+  }
+
+  @protected
+  LiveQueryEvent dco_decode_live_query_event(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return LiveQueryEvent(
+      action: dco_decode_live_query_action(arr[0]),
+      result: dco_decode_String(arr[1]),
+      id: dco_decode_opt_String(arr[2]),
+      queryUuid: dco_decode_opt_String(arr[3]),
+    );
+  }
+
+  @protected
+  LiveQueryManager dco_decode_live_query_manager(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.isNotEmpty)
+      throw Exception('unexpected arr length: expect 0 but see ${arr.length}');
+    return LiveQueryManager();
   }
 
   @protected
@@ -1043,7 +1189,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  RustStreamSink<String> sse_decode_StreamSink_String_Sse(
+  RustStreamSink<LiveQueryEvent> sse_decode_StreamSink_live_query_event_Sse(
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -1066,10 +1212,44 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  int sse_decode_i_32(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getInt32();
+  }
+
+  @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var len_ = sse_decode_i_32(deserializer);
     return deserializer.buffer.getUint8List(len_);
+  }
+
+  @protected
+  LiveQueryAction sse_decode_live_query_action(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return LiveQueryAction.values[inner];
+  }
+
+  @protected
+  LiveQueryEvent sse_decode_live_query_event(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_action = sse_decode_live_query_action(deserializer);
+    var var_result = sse_decode_String(deserializer);
+    var var_id = sse_decode_opt_String(deserializer);
+    var var_queryUuid = sse_decode_opt_String(deserializer);
+    return LiveQueryEvent(
+      action: var_action,
+      result: var_result,
+      id: var_id,
+      queryUuid: var_queryUuid,
+    );
+  }
+
+  @protected
+  LiveQueryManager sse_decode_live_query_manager(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return LiveQueryManager();
   }
 
   @protected
@@ -1130,12 +1310,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  int sse_decode_i_32(SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    return deserializer.buffer.getInt32();
-  }
-
-  @protected
   bool sse_decode_bool(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getUint8() != 0;
@@ -1190,15 +1364,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_StreamSink_String_Sse(
-    RustStreamSink<String> self,
+  void sse_encode_StreamSink_live_query_event_Sse(
+    RustStreamSink<LiveQueryEvent> self,
     SseSerializer serializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(
       self.setupAndSerialize(
         codec: SseCodec(
-          decodeSuccessData: sse_decode_String,
+          decodeSuccessData: sse_decode_live_query_event,
           decodeErrorData: sse_decode_AnyhowException,
         ),
       ),
@@ -1222,6 +1396,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_i_32(int self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putInt32(self);
+  }
+
+  @protected
   void sse_encode_list_prim_u_8_strict(
     Uint8List self,
     SseSerializer serializer,
@@ -1229,6 +1409,35 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     serializer.buffer.putUint8List(self);
+  }
+
+  @protected
+  void sse_encode_live_query_action(
+    LiveQueryAction self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_live_query_event(
+    LiveQueryEvent self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_live_query_action(self.action, serializer);
+    sse_encode_String(self.result, serializer);
+    sse_encode_opt_String(self.id, serializer);
+    sse_encode_opt_String(self.queryUuid, serializer);
+  }
+
+  @protected
+  void sse_encode_live_query_manager(
+    LiveQueryManager self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
   }
 
   @protected
@@ -1284,12 +1493,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_i_32(int self, SseSerializer serializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    serializer.buffer.putInt32(self);
-  }
-
-  @protected
   void sse_encode_bool(bool self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putUint8(self ? 1 : 0);
@@ -1337,7 +1540,9 @@ class SurrealDbImpl extends RustOpaque implements SurrealDb {
   Future<void> invalidate() =>
       RustLib.instance.api.crateApiClientSurrealDbInvalidate(that: this);
 
-  Stream<String> liveQuery({required String tableName}) => RustLib.instance.api
+  Stream<LiveQueryEvent> liveQuery({required String tableName}) => RustLib
+      .instance
+      .api
       .crateApiClientSurrealDbLiveQuery(that: this, tableName: tableName);
 
   Future<String> merge({required String resource, String? data}) => RustLib

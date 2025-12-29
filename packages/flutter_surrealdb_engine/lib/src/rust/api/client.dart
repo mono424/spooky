@@ -4,13 +4,14 @@
 // ignore_for_file: invalid_use_of_internal_member, unused_import, unnecessary_import
 
 import '../frb_generated.dart';
+import 'live_query/models.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'client.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `ensure_dir_exists`, `get_db`, `graceful_shutdown`, `kill_zombie_processes`, `spawn_sidecar_server`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ServerGuard`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `drop`
+// These functions are ignored because they are not marked as `pub`: `ensure_dir_exists`, `get_db_client`, `graceful_shutdown`, `kill_zombie_processes`, `spawn_sidecar_server`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ServerGuard`, `SurrealClient`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `drop`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SurrealDb>>
 abstract class SurrealDb implements RustOpaqueInterface {
@@ -29,7 +30,12 @@ abstract class SurrealDb implements RustOpaqueInterface {
 
   Future<void> invalidate();
 
-  Stream<String> liveQuery({required String tableName});
+  static Future<void> killQuery({required String queryUuid}) => RustLib
+      .instance
+      .api
+      .crateApiClientSurrealDbKillQuery(queryUuid: queryUuid);
+
+  Stream<LiveQueryEvent> liveQuery({required String tableName});
 
   Future<String> merge({required String resource, String? data});
 

@@ -3,7 +3,7 @@ import '../controllers/spooky_controller.dart';
 import '../modules/initialization/initialization_view.dart';
 import '../modules/auth/auth_view.dart';
 import '../modules/dashboard/dashboard_view.dart';
-import '../modules/live_query/live_query_view.dart';
+import '../modules/live_query/live_query_dashboard.dart';
 
 class ViewSwitcher extends StatelessWidget {
   final SpookyController controller;
@@ -39,7 +39,7 @@ class ViewSwitcher extends StatelessWidget {
       onOpenLiveQuery: () {
         Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (context) => LiveQueryView(controller: controller),
+            builder: (context) => LiveQueryDashboard(controller: controller),
           ),
         );
       },
