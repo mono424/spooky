@@ -80,6 +80,7 @@ export class QueryManager<S extends SchemaStructure> {
     const id = await this.calculateHash({
       surrealql,
       params,
+      clientId: this.clientId,
     });
 
     const recordId = new RecordId('_spooky_incantation', id);
