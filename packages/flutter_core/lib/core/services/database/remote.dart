@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 
 import './database.dart';
 import '../../types.dart';
@@ -72,5 +73,40 @@ class RemoteDatabaseService extends AbstractDatabaseService {
       "password": password,
     });
     return await client!.signin(creds: credentials);
+  }
+
+  /// Subscribe to a Live Query on the given table.
+  /// Mirrored from `remote.ts` but adapted for Dart SDK which uses `tableName` instead of UUID for initiation.
+  /// Returns a [StreamSubscription] that must be managed/cancelled by the caller.
+  StreamSubscription? subscribeLive({
+    required String tableName,
+    required void Function(String action, Map<String, dynamic> result) callback,
+  }) {
+    if (client == null) {
+      print(
+        "[RemoteDatabaseService] Warning: subscribeLive called but client is null",
+      );
+      return null;
+    }
+
+    // We use snapshot=false to match the 'diff' behavior of the TS implementation
+    return client!.liveQuery(tableName: tableName, snapshot: false).listen(
+      (event) {
+        try {
+          // Decode the result JSON
+          final result = jsonDecode(event.result);
+          if (result is Map<String, dynamic>) {
+            // Map action enum to string (CREATE, UPDATE, DELETE)
+            // TS expects uppercase: 'UPDATE', 'CREATE', etc.
+            final actionStr = event.action.name.toUpperCase();
+            callback(actionStr, result);
+          }
+        } catch (e) {
+          print("[RemoteDatabaseService] Error parsing live query result: $e");
+        }
+      },
+      onError: (e) =>
+          print("[RemoteDatabaseService] Live Query Stream Error: $e"),
+    );
   }
 }

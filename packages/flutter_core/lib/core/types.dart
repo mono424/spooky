@@ -160,3 +160,52 @@ class Incantation {
 }
 
 typedef QueryHash = int;
+
+/// Recursive Type for Radix Tree used in Sync
+class IdTree {
+  final String hash;
+  final Map<String, IdTree>? children;
+  final List<LeafNode>? leaves;
+
+  IdTree({required this.hash, this.children, this.leaves});
+
+  // Factory for dynamic JSON parsing
+  factory IdTree.fromJson(dynamic json) {
+    if (json == null) throw Exception("IdTree cannot be null");
+    // Depending on structure, assuming standard Map
+    return IdTree(
+      hash: json['hash'] ?? '',
+      children: json['children'] != null
+          ? (json['children'] as Map).map(
+              (k, v) => MapEntry(k.toString(), IdTree.fromJson(v)),
+            )
+          : null,
+      leaves: json['leaves'] != null
+          ? (json['leaves'] as List).map((l) => LeafNode.fromJson(l)).toList()
+          : null,
+    );
+  }
+}
+
+class LeafNode {
+  final String id;
+  final String hash;
+
+  LeafNode({required this.id, required this.hash});
+
+  factory LeafNode.fromJson(dynamic json) {
+    return LeafNode(id: json['id'], hash: json['hash']);
+  }
+}
+
+class IdTreeDiff {
+  final List<String> added;
+  final List<String> removed;
+  final List<String> updated;
+
+  IdTreeDiff({
+    this.added = const [],
+    this.removed = const [],
+    this.updated = const [],
+  });
+}
