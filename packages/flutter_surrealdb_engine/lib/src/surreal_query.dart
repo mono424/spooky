@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'package:flutter_surrealdb_engine/flutter_surrealdb_engine.dart';
 
 /// A query builder that supports both one-shot execution and live queries.
@@ -51,9 +52,15 @@ class SurrealQuery implements Future<String> {
   /// 1. Emits the initial snapshot (current state of the table).
   /// 2. Listens for real-time updates (Create, Update, Delete) and updates the local list accordingly.
   /// 3. Emits the updated list on every change.
+  String _sanitizeId(String id) {
+    // Remove backticks and single quotes that might wrap the ID or parts of it
+    return id.replaceAll('`', '').replaceAll("'", "");
+  }
+
+  /// Establishes a Live Query stream that automatically maintains a list of records.
   Stream<List<T>> live<T>(T Function(Map<String, dynamic> json) fromJson) {
-    // We use the internal connectLiveQuery to get the raw event stream
-    final stream = _db.liveQuery(tableName: _resource);
+    // We use the internal connectLiveQuery with snapshot enabled
+    final stream = _db.liveQuery(tableName: _resource, snapshot: true);
 
     late StreamController<List<T>> controller;
     final Map<String, T> _items = {};
@@ -63,55 +70,97 @@ class SurrealQuery implements Future<String> {
         final subscription = stream.listen(
           (event) {
             try {
+              print(
+                "QUERY DEBUG: Action: ${event.action} | Result: ${event.result.substring(0, min(event.result.length, 50))}",
+              );
+
               switch (event.action) {
                 case LiveQueryAction.snapshot:
-                  final List<dynamic> list = jsonDecode(event.result);
-                  _items.clear();
-                  for (var item in list) {
-                    if (item is Map<String, dynamic>) {
-                      // Ensure ID exists
-                      final id = item['id'] as String?;
-                      if (id != null) {
-                        _items[id] = fromJson(item);
+                  print("QUERY: Snapshot received. Parsing...");
+                  try {
+                    final List<dynamic> list = jsonDecode(event.result);
+                    print("QUERY: Snapshot List Size: ${list.length}");
+                    _items.clear();
+                    for (var item in list) {
+                      if (item is Map<String, dynamic>) {
+                        final rawId = item['id'] as String?;
+                        if (rawId != null) {
+                          final id = _sanitizeId(rawId);
+                          // Update item ID if needed (optional, but good for consistency)
+                          item['id'] = id;
+                          _items[id] = fromJson(item);
+                        } else {
+                          print(
+                            "QUERY WARNING: Item in snapshot has no ID: $item",
+                          );
+                        }
                       }
                     }
+                    controller.add(_items.values.toList());
+                    print("QUERY: Snapshot processed. Controller updated.");
+                  } catch (e) {
+                    print("QUERY ERROR (Snapshot): $e");
                   }
-                  controller.add(_items.values.toList());
                   break;
 
                 case LiveQueryAction.create:
                 case LiveQueryAction.update:
-                  // Result is the Record Record (JSON Object)
-                  final Map<String, dynamic> item = jsonDecode(event.result);
-                  final id = item['id'] as String?;
-                  if (id != null) {
-                    _items[id] = fromJson(item);
-                    controller.add(_items.values.toList());
+                  print("QUERY: Create/Update received.");
+                  try {
+                    final Map<String, dynamic> item = jsonDecode(event.result);
+                    final rawId = item['id'] as String?;
+                    if (rawId != null) {
+                      final id = _sanitizeId(rawId);
+                      print("QUERY: Upserting ID: $id (Raw: $rawId)");
+                      item['id'] = id; // Ensure generic map has clean ID
+                      _items[id] = fromJson(item);
+                      controller.add(_items.values.toList());
+                    } else {
+                      print("QUERY WARNING: Create/Update has no ID: $item");
+                    }
+                  } catch (e) {
+                    print("QUERY ERROR (Create/Update): $e");
                   }
                   break;
 
                 case LiveQueryAction.delete:
-                  // Result might be the ID or the Record.
-                  // Rely on event.id if available, or parse id from result.
+                  print("QUERY: Delete received. Event ID: ${event.id}");
                   String? id = event.id;
                   if (id == null) {
-                    // Try parsing result
+                    // Fallback parsing
                     try {
                       final parsed = jsonDecode(event.result);
-                      if (parsed is String)
+                      if (parsed is String) {
                         id = parsed;
-                      else if (parsed is Map)
+                        print("QUERY: Parsed ID from result string: $id");
+                      } else if (parsed is Map) {
                         id = parsed['id'];
+                        print("QUERY: Parsed ID from result map: $id");
+                      }
                     } catch (_) {}
                   }
 
                   if (id != null) {
-                    _items.remove(id);
-                    controller.add(_items.values.toList());
+                    id = _sanitizeId(id);
+                    print("QUERY: Removing item: $id");
+                    if (_items.containsKey(id)) {
+                      _items.remove(id);
+                      controller.add(_items.values.toList());
+                      print("QUERY: Item removed. List size: ${_items.length}");
+                    } else {
+                      print(
+                        "QUERY WARNING: Tried to delete $id but it was not in the local list. Known IDs: ${_items.keys.join(', ')}",
+                      );
+                    }
+                  } else {
+                    print(
+                      "QUERY ERROR: Could not determine ID for delete event.",
+                    );
                   }
                   break;
 
                 case LiveQueryAction.unknown:
+                  print("QUERY: Unknown action received.");
                   break;
               }
             } catch (e) {

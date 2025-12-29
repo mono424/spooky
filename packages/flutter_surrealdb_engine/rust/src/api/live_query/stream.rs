@@ -15,7 +15,8 @@ pub(crate) async fn run_live_query_loop<C: surrealdb::Connection>(
 ) {
     info!("Starting live query stream for: {} (UUID: {})", table_name, query_uuid);
 
-    let mut stream = match db.select(&table_name).live().await {
+    let resource = surrealdb::opt::Resource::Table(table_name.clone().into());
+    let mut stream = match db.select(resource).live().await {
         Ok(s) => s,
         Err(e) => {
             let _ = sink.add_error(anyhow::anyhow!("Init error: {}", e));

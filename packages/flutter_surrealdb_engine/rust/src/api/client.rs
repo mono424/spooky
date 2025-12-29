@@ -311,12 +311,24 @@ impl SurrealDb {
         Ok(())
     }
 
+    /// Starts a pure Live Query Stream (No Snapshot) - Legacy/Standard behavior
     pub async fn connect_live_query(
         &self,
         table: String,
         sink: crate::frb_generated::StreamSink<crate::api::live_query::models::LiveQueryEvent>,
     ) -> anyhow::Result<()> {
+        // Leverages the existing 'legacy' implementation in api/live_query/mod.rs
+        // This ensures identical behavior to the reference commit (Handshake, Manager, etc.)
+        self.live_query(table, sink).await
+    }
+
+    /// Starts a Live Query Stream WITH an initial Snapshot of the table
+    pub async fn connect_live_query_with_snapshot(
+        &self,
+        table: String,
+        sink: crate::frb_generated::StreamSink<crate::api::live_query::models::LiveQueryEvent>,
+    ) -> anyhow::Result<()> {
         let client = self.get_client().await?;
-        crate::api::realtime::connect_live_query(client, table, sink).await
+        crate::api::realtime::connect_live_query_with_snapshot(client, table, sink).await
     }
 }
