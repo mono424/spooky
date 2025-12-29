@@ -2,7 +2,7 @@ pub mod models;
 pub mod manager;
 pub mod stream;
 
-use crate::api::client::{SurrealDb, SurrealClient};
+use crate::api::client::SurrealDb;
 use crate::frb_generated::StreamSink;
 use crate::api::live_query::models::LiveQueryEvent;
 use crate::api::live_query::manager::LiveQueryManager;
@@ -18,7 +18,7 @@ impl SurrealDb {
         sink: StreamSink<LiveQueryEvent>,
     ) -> anyhow::Result<()> {
         // Need to match on client type to pass correct concrete type to generic run loop
-        let client_enum = self.get_db_client().await?;
+        let client = self.get_client().await?;
         let query_uuid = Uuid::new_v4().to_string();
         
         info!("LiveQuery: Starting for table '{}' with UUID: {}", table_name, query_uuid);
@@ -34,14 +34,7 @@ impl SurrealDb {
         let table_name_clone = table_name.clone();
 
         let handle = tokio::spawn(async move {
-            match client_enum {
-                SurrealClient::Any(db) => {
-                     run_live_query_loop(db, table_name_clone, sink, query_uuid_clone).await;
-                },
-                SurrealClient::Mem(db) => {
-                     run_live_query_loop(db, table_name_clone, sink, query_uuid_clone).await;
-                },
-            }
+            run_live_query_loop(client, table_name_clone, sink, query_uuid_clone).await;
         });
 
         // 3. Register Handle for Kill Switch

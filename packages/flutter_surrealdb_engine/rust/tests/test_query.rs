@@ -8,7 +8,7 @@ async fn test_simple_query() {
     db.use_db("test".to_string(), "test".to_string()).await.expect("Failed to use db");
 
     let sql = "RETURN [math::sum([1, 2])];".to_string(); 
-    let result_json = db.query(sql, "".to_string()).await.expect("Query failed");
+    let result_json = db.query(sql, None).await.expect("Query failed");
 
     let result: Vec<Value> = serde_json::from_str(&result_json).expect("Failed to parse JSON");
     

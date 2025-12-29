@@ -11,7 +11,7 @@ async fn test_transaction_batch() {
         "UPDATE account:10 SET balance = 200"
     ]);
     
-    let res_json = db.transaction(stmts.to_string(), "".to_string()).await.expect("Transaction batch failed");
+    let res_json = db.transaction(stmts.to_string(), None).await.expect("Transaction batch failed");
     
     let res: Vec<Value> = serde_json::from_str(&res_json).expect("Failed to parse");
     // Result should match number of statements executed inside transaction + BEGIN/COMMIT?

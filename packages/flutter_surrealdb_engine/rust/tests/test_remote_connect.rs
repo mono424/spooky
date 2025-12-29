@@ -22,7 +22,7 @@ async fn test_connect_remote() {
     
     // Execute a simple query
     // Query returns a JSON string, we expect it to be a valid JSON array
-    let result = db.query("INFO FOR DB;".to_string(), "{}".to_string()).await.expect("Query failed");
+    let result = db.query("INFO FOR DB;".to_string(), None).await.expect("Query failed");
     println!("Query result: {}", result);
     
     assert!(!result.contains("ERR"), "Query should not return error");

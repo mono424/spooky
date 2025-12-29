@@ -3161,7 +3161,6 @@ dependencies = [
  "futures",
  "futures-util",
  "log",
- "once_cell",
  "serde",
  "serde_json",
  "surrealdb",

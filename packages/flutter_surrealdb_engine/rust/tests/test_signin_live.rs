@@ -25,7 +25,7 @@ async fn test_live_signin_flow() {
     let create_sql = "CREATE ONLY user SET username = $username, password = crypto::argon2::generate($password);";
     let vars_json = format!(r#"{{"username": "{}", "password": "{}"}}"#, username, password);
     
-    let create_res = db.query(create_sql.to_string(), vars_json).await;
+    let create_res = db.query(create_sql.to_string(), Some(vars_json)).await;
     match create_res {
         Ok(res) => println!("User created: {}", res),
         Err(e) => panic!("Failed to create user: {:?}", e),

@@ -30,6 +30,7 @@ pub(crate) async fn run_live_query_loop<C: surrealdb::Connection>(
         let next_item: Option<surrealdb::Result<Notification<Value>>> = stream.next().await;
         match next_item {
             Some(Ok(notification)) => {
+                log::debug!("RUST: Received notification: {:?}", notification);
                 if let Err(e) = process_and_send(&notification, &sink) {
                     error!("Sink error, stopping: {}", e);
                     break;
@@ -59,7 +60,7 @@ fn process_and_send(
     };
 
     // Convert Surreal Value to generic JSON Value for easier handling & serialization
-    let json_data: JsonValue = serde_json::to_value(&notification.data).unwrap_or(JsonValue::Null);
+    let json_data: JsonValue = notification.data.clone().into_json_value();
 
     let id = json_data.get("id")
         .and_then(|v| v.as_str())

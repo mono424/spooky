@@ -33,7 +33,7 @@ async fn test_dev_sidecar_connect_and_query() {
     assert!(result.contains("Sidecar"));
 
     // 5. Close (should kill process)
-    db.close().expect("Failed to close");
+    db.close().await.expect("Failed to close");
 
     // Short sleep to ensure process cleanup logic runs (async drop/kill is fast but OS might lag)
     tokio::time::sleep(Duration::from_millis(500)).await;

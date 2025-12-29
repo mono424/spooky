@@ -1,7 +1,8 @@
-use rust_lib_surrealdb::api::client::SurrealDb; // Assumes usage of lib
+// use rust_lib_surrealdb::api::client::SurrealDb;
 use surrealdb::engine::any::connect;
 use surrealdb::Notification;
-use serde_json::{json, Value};
+use serde_json::{json, Value as JsonValue};
+use surrealdb::types::Value as SurrealValue;
 use tokio::time::{sleep, Duration};
 use futures_util::StreamExt;
 
@@ -10,7 +11,6 @@ use futures_util::StreamExt;
 // with "Internal error: Expected any, got record".
 // It is preserved here for future validation when upstream is fixed.
 #[tokio::test]
-#[ignore = "Blocked by upstream surrealdb issue: Expected any, got record"]
 async fn test_live_query_flow() -> anyhow::Result<()> {
     let db = connect("mem://").await?;
     db.use_ns("test").use_db("test").await?;
@@ -30,7 +30,7 @@ async fn test_live_query_flow() -> anyhow::Result<()> {
         
         while let Some(Ok(notification)) = stream.next().await {
             // Force type inference
-            let notification: Notification<Value> = notification;
+            let notification: Notification<SurrealValue> = notification;
             
             // Match Action enum directly as per user optimization using string workaround
             let action_debug = format!("{:?}", notification.action);
@@ -42,7 +42,9 @@ async fn test_live_query_flow() -> anyhow::Result<()> {
             };
             
             // Send simplified event
-            if tx.send((action_str, notification.data)).await.is_err() {
+            // Convert to JsonValue for compatibility with rx.recv assertions
+            let json_data: JsonValue = notification.data.into_json_value();
+            if tx.send((action_str, json_data)).await.is_err() {
                 break;
             }
         }
@@ -51,10 +53,11 @@ async fn test_live_query_flow() -> anyhow::Result<()> {
     sleep(Duration::from_millis(50)).await;
 
     // Trigger Create
-    let _: Option<Value> = db.create("person").content(json!({"name": "PING"})).await?;
+    let _: surrealdb::Result<Option<SurrealValue>> = db.create("person").content(json!({"name": "PING"})).await;
     
     // Expect PING
     let (action, data) = rx.recv().await.expect("Failed to receive PING");
+    println!("DEBUG: Received Data: {:?}", data);
     assert_eq!(action, "CREATE");
     assert_eq!(data["name"], "PING");
 

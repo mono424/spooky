@@ -12,7 +12,7 @@ use anyhow::Result;
 pub async fn select<C: surrealdb::Connection>(db: &Surreal<C>, resource: String) -> Result<String> {
     // Select using query to handle serialization consistently
     let sql = format!("SELECT * FROM {}", resource);
-    super::query::query(db, sql, None).await
+    super::queries::query(db, sql, None).await
 }
 
 // Reference: mirrors the `create` method in JS SDK
