@@ -1,12 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../controllers/spooky_controller.dart';
-import '../../controllers/spooky_controller.dart';
 import '../../core/theme.dart';
-import 'package:flutter_surrealdb_engine/flutter_surrealdb_engine.dart'; // Import for SurrealDb static methods
+import 'package:flutter_surrealdb_engine/flutter_surrealdb_engine.dart';
+
+// Modular Widgets
+import 'widgets/live_query_controls.dart';
+import 'widgets/live_query_logs.dart';
 
 class LiveQueryDashboard extends StatefulWidget {
   final SpookyController controller;
@@ -25,7 +27,7 @@ class _LiveQueryDashboardState extends State<LiveQueryDashboard> {
 
   // State
   bool _isListening = false;
-  final List<_LogEntry> _logs = [];
+  final List<LogEntry> _logs = []; // Use public LogEntry from logs widget
   final ScrollController _scrollController = ScrollController();
 
   void _addLog(String message, {bool isError = false, bool isLive = false}) {
@@ -33,7 +35,7 @@ class _LiveQueryDashboardState extends State<LiveQueryDashboard> {
     setState(() {
       _logs.insert(
         0,
-        _LogEntry(
+        LogEntry(
           message: message,
           timestamp: DateTime.now(),
           isError: isError,
@@ -177,236 +179,37 @@ class _LiveQueryDashboardState extends State<LiveQueryDashboard> {
       backgroundColor: SpookyColors.background,
       appBar: AppBar(
         title: Text(
-          "Live Query Dashboard",
+          "[ LIVE QUERY DASHBOARD ]",
           style: GoogleFonts.spaceMono(
             fontWeight: FontWeight.bold,
+            fontSize: 16, // Matches SpookyAppBar
+            letterSpacing: 1.2, // Matches SpookyAppBar
             color: SpookyColors.white,
           ),
         ),
         backgroundColor: SpookyColors.background,
         iconTheme: const IconThemeData(color: SpookyColors.white),
         elevation: 0,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.delete_sweep, color: SpookyColors.white60),
-            onPressed: _clearLogs,
-            tooltip: "Clear Logs",
-          ),
-        ],
+        centerTitle: true,
       ),
       body: Column(
         children: [
-          // 1. Control Panel
-          Container(
-            padding: const EdgeInsets.all(16),
-            color: SpookyColors.surface,
-            child: Column(
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _tableController,
-                        style: GoogleFonts.spaceMono(color: SpookyColors.white),
-                        decoration: InputDecoration(
-                          labelText: "Target Table",
-                          labelStyle: GoogleFonts.spaceMono(
-                            color: SpookyColors.white60,
-                          ),
-                          prefixIcon: const Icon(
-                            Icons.table_chart,
-                            color: SpookyColors.primary,
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.zero,
-                            borderSide: BorderSide(
-                              color: SpookyColors.white.withOpacity(0.1),
-                            ),
-                          ),
-                          focusedBorder: const OutlineInputBorder(
-                            borderRadius: BorderRadius.zero,
-                            borderSide: BorderSide(color: SpookyColors.primary),
-                          ),
-                          isDense: true,
-                          enabled: !_isListening, // Lock input while listening
-                          fillColor: _isListening
-                              ? SpookyColors.white.withOpacity(0.05)
-                              : null,
-                          filled: _isListening,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    _StatusIndicator(isListening: _isListening),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        onPressed: _toggleListener,
-                        style: ElevatedButton.styleFrom(
-                          shape: const RoundedRectangleBorder(
-                            borderRadius: BorderRadius.zero,
-                          ),
-                          backgroundColor: _isListening
-                              ? Colors.redAccent.withOpacity(0.1)
-                              : Colors.greenAccent.withOpacity(0.1),
-                          foregroundColor: _isListening
-                              ? Colors.redAccent
-                              : Colors.greenAccent,
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          side: BorderSide(
-                            color: _isListening
-                                ? Colors.redAccent
-                                : Colors.greenAccent,
-                          ),
-                        ),
-                        icon: Icon(
-                          _isListening ? Icons.stop : Icons.play_arrow,
-                        ),
-                        label: Text(
-                          _isListening
-                              ? "STOP SUBSCRIPTION"
-                              : "START SUBSCRIPTION",
-                          style: GoogleFonts.spaceMono(
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: _createRecord,
-                    style: OutlinedButton.styleFrom(
-                      shape: const RoundedRectangleBorder(
-                        borderRadius: BorderRadius.zero,
-                      ),
-                      foregroundColor: SpookyColors.white,
-                      side: const BorderSide(
-                        color: Colors.white, // Explicit white as requested
-                        width: 1.0,
-                      ),
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                    ),
-                    icon: const Icon(Icons.add_circle_outline),
-                    label: Text(
-                      "Create Test Record",
-                      style: GoogleFonts.spaceMono(),
-                    ),
-                  ),
-                ),
-              ],
-            ),
+          // 1. Controls
+          LiveQueryControls(
+            tableController: _tableController,
+            isListening: _isListening,
+            onToggleListener: _toggleListener,
+            onCreateRecord: _createRecord,
           ),
+
           const Divider(height: 1, color: SpookyColors.white10),
+
           // 2. Log Console
           Expanded(
-            child: Container(
-              color: const Color(0xFF0A0A0A), // Even darker for console
-              child: ListView.separated(
-                controller: _scrollController,
-                padding: const EdgeInsets.all(12),
-                itemCount: _logs.length,
-                separatorBuilder: (_, __) => Divider(
-                  color: SpookyColors.white.withOpacity(0.05),
-                  height: 1,
-                ),
-                itemBuilder: (context, index) {
-                  final log = _logs[index];
-                  return _LogItem(log: log);
-                },
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _StatusIndicator extends StatelessWidget {
-  final bool isListening;
-  const _StatusIndicator({required this.isListening});
-
-  @override
-  Widget build(BuildContext context) {
-    final color = isListening ? Colors.greenAccent : Colors.grey;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.zero, // Sharp edges
-        border: Border.all(color: color.withOpacity(0.5), width: 1),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            isListening ? Icons.sensors : Icons.sensors_off,
-            color: color,
-            size: 16,
-          ),
-          const SizedBox(width: 8),
-          Text(
-            isListening ? "ACTIVE" : "IDLE",
-            style: GoogleFonts.spaceMono(
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _LogEntry {
-  final String message;
-  final DateTime timestamp;
-  final bool isError;
-  final bool isLive;
-
-  _LogEntry({
-    required this.message,
-    required this.timestamp,
-    this.isError = false,
-    this.isLive = false,
-  });
-}
-
-class _LogItem extends StatelessWidget {
-  final _LogEntry log;
-
-  const _LogItem({required this.log});
-
-  @override
-  Widget build(BuildContext context) {
-    Color textColor = SpookyColors.white.withOpacity(0.7);
-    if (log.isError) textColor = Colors.redAccent;
-    if (log.isLive) textColor = Colors.greenAccent;
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            "${log.timestamp.hour.toString().padLeft(2, '0')}:${log.timestamp.minute.toString().padLeft(2, '0')}:${log.timestamp.second.toString().padLeft(2, '0')}",
-            style: GoogleFonts.spaceMono(
-              color: SpookyColors.white.withOpacity(0.3),
-              fontSize: 10,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: SelectableText(
-              log.message,
-              style: GoogleFonts.spaceMono(color: textColor, fontSize: 12),
+            child: LiveQueryLogs(
+              logs: _logs,
+              scrollController: _scrollController,
+              onClear: _clearLogs,
             ),
           ),
         ],
