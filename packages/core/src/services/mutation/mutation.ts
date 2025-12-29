@@ -25,9 +25,9 @@ export class MutationManager<S extends SchemaStructure> {
           
           LET $created = CREATE ONLY $id CONTENT $data;
           LET $mutation = CREATE ONLY $mid CONTENT {
-              MutationType: 'create',
-              RecordId: $created.id,
-              Data: $data
+              mutationType: 'create',
+              recordId: $created.id,
+              data: $data
           };
 
           RETURN {
@@ -78,8 +78,8 @@ export class MutationManager<S extends SchemaStructure> {
 
           LET $updated = UPDATE $id MERGE $data;
           LET $mutation = CREATE _spooky_pending_mutations SET 
-              mutation_type = 'update',
-              record_id = $id,
+              mutationType = 'update',
+              recordId = $id,
               data = $data; 
 
           RETURN {
@@ -125,8 +125,8 @@ export class MutationManager<S extends SchemaStructure> {
         
         DELETE $id;
         LET $mutation = CREATE _spooky_pending_mutations SET 
-            mutation_type = 'delete',
-            record_id = $id;
+            mutationType = 'delete',
+            recordId = $id;
         RETURN {
             mutation_id: $mutation.id
         };

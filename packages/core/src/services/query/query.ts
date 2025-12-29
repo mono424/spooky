@@ -82,30 +82,39 @@ export class QueryManager<S extends SchemaStructure> {
     });
 
     const recordId = new RecordId('_spooky_incantation', id);
+    let existing = await this.local.getClient().select<IncantationData>(recordId);
 
-    await this.local
-      .getClient()
-      .upsert<IncantationData>(recordId)
-      .content({
-        Id: id,
-        SurrealQL: surrealql,
-        Params: params,
-        ClientId: this.clientId,
-        Hash: id,
-        Tree: null,
-        LastActiveAt: new Date(),
-        TTL: new Duration(ttl),
-      });
+    if (!existing) {
+      existing = await this.local
+        .getClient()
+        .create<IncantationData>(recordId)
+        .content({
+          id: recordId,
+          surrealQL: surrealql,
+          params: params,
+          clientId: this.clientId,
+          hash: id,
+          tree: null,
+          lastActiveAt: new Date(),
+          ttl: new Duration(ttl),
+        });
+    }
+
+    if (!existing) {
+      throw new Error('Failed to create incantation');
+    }
+
+    console.log('existing', existing);
 
     if (!this.activeQueries.has(id)) {
       const incantation = new Incantation({
         id: recordId,
         surrealql,
         params,
-        hash: id,
-        lastActiveAt: Date.now(),
-        ttl,
-        tree: null,
+        hash: existing.hash,
+        lastActiveAt: existing.lastActiveAt,
+        ttl: existing.ttl,
+        tree: existing.tree,
         meta: {
           tableName,
         },

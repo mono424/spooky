@@ -1,17 +1,13 @@
-import { RecordId } from "surrealdb";
-import {
-  createEventSystem,
-  EventDefinition,
-  EventSystem,
-} from "../../events/index.js";
-import { QueryTimeToLive } from "../../types.js";
+import { RecordId, Duration } from 'surrealdb';
+import { createEventSystem, EventDefinition, EventSystem } from '../../events/index.js';
+import { QueryTimeToLive } from '../../types.js';
 
 export const SyncQueueEventTypes = {
-  MutationEnqueued: "MUTATION_ENQUEUED",
-  IncantationRegistrationEnqueued: "INCANTATION_REGISTRATION_ENQUEUED",
-  IncantationSyncEnqueued: "INCANTATION_SYNC_ENQUEUED",
-  IncantationTTLHeartbeatEnqueued: "INCANTATION_TTL_HEARTBEAT_ENQUEUED",
-  IncantationCleanupEnqueued: "INCANTATION_CLEANUP_ENQUEUED",
+  MutationEnqueued: 'MUTATION_ENQUEUED',
+  IncantationRegistrationEnqueued: 'INCANTATION_REGISTRATION_ENQUEUED',
+  IncantationSyncEnqueued: 'INCANTATION_SYNC_ENQUEUED',
+  IncantationTTLHeartbeatEnqueued: 'INCANTATION_TTL_HEARTBEAT_ENQUEUED',
+  IncantationCleanupEnqueued: 'INCANTATION_CLEANUP_ENQUEUED',
 } as const;
 
 export type SyncQueueEventTypeMap = {
@@ -21,11 +17,11 @@ export type SyncQueueEventTypeMap = {
   >;
   [SyncQueueEventTypes.IncantationRegistrationEnqueued]: EventDefinition<
     typeof SyncQueueEventTypes.IncantationRegistrationEnqueued,
-    { incantationId: RecordId<string>, surrealql: string, ttl: QueryTimeToLive }
+    { incantationId: RecordId<string>; surrealql: string; ttl: QueryTimeToLive | Duration }
   >;
   [SyncQueueEventTypes.IncantationSyncEnqueued]: EventDefinition<
     typeof SyncQueueEventTypes.IncantationSyncEnqueued,
-    { incantationId: RecordId<string>, remoteHash: string }
+    { incantationId: RecordId<string>; remoteHash: string }
   >;
   [SyncQueueEventTypes.IncantationTTLHeartbeatEnqueued]: EventDefinition<
     typeof SyncQueueEventTypes.IncantationTTLHeartbeatEnqueued,

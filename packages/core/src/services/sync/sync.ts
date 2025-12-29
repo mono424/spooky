@@ -1,6 +1,6 @@
 import { LocalDatabaseService, RemoteDatabaseService } from '../database/index.js';
 import { MutationEventSystem } from '../mutation/index.js';
-import { IdTreeDiff, Incantation as IncantationData } from '../../types.js';
+import { IdTreeDiff, Incantation, Incantation as IncantationData } from '../../types.js';
 import { QueryEventSystem, QueryEventTypes } from '../query/events.js';
 import { SyncQueueEventTypes } from './events.js';
 import {
@@ -136,7 +136,16 @@ export class SpookySync<S extends SchemaStructure> {
       case 'register':
         return this.registerIncantation(event);
       case 'sync':
-        return this.syncIncantation(event);
+        const { incantationId, surrealql, localTree, localHash, remoteHash, remoteTree } =
+          event.payload;
+        return this.syncIncantation({
+          incantationId,
+          surrealql,
+          localTree,
+          localHash,
+          remoteHash,
+          remoteTree,
+        });
       case 'heartbeat':
         return this.heartbeatIncantation(event);
       case 'cleanup':
@@ -148,21 +157,39 @@ export class SpookySync<S extends SchemaStructure> {
     const { incantationId, surrealql, params, ttl } = event.payload;
     const effectiveTtl = ttl || '10m';
     try {
-      await this.updateLocalIncantation(incantationId, {
+      let existing = await this.findIncatationRecord(incantationId);
+      console.log('[SpookySync] Register Incantation', existing);
+
+      const localHash = existing?.hash ?? '';
+      const localTree = existing?.tree ?? null;
+
+      await this.updateLocalIncantation(
+        incantationId,
+        {
+          surrealql,
+          params,
+          hash: localHash,
+          tree: localTree,
+        },
+        {
+          updateRecord: existing ? false : true,
+        }
+      );
+
+      const { hash: remoteHash, tree: remoteTree } = await this.createRemoteIncantation(
+        incantationId,
         surrealql,
         params,
-        hash: '',
-        tree: null,
-      });
-      await this.remote.query(`UPSERT $id CONTENT $content`, {
-        id: incantationId,
-        content: {
-          SurrealQL: surrealql,
-          Params: params,
-          TTL: new Duration(effectiveTtl),
-          LastActiveAt: new Date(),
-          ClientId: this.clientId,
-        },
+        effectiveTtl
+      );
+
+      await this.syncIncantation({
+        incantationId,
+        surrealql,
+        localTree,
+        localHash,
+        remoteHash,
+        remoteTree,
       });
     } catch (e) {
       console.error('[SpookySync] registerIncantation error', e);
@@ -170,9 +197,54 @@ export class SpookySync<S extends SchemaStructure> {
     }
   }
 
-  private async syncIncantation(event: SyncEvent) {
-    const { incantationId, surrealql, localTree, localHash, remoteHash, remoteTree } =
-      event.payload;
+  private async createRemoteIncantation(
+    incantationId: RecordId<string>,
+    surrealql: string,
+    params: any,
+    ttl: string | Duration
+  ) {
+    await this.remote
+      .getClient()
+      .upsert<Incantation>(incantationId)
+      .merge({
+        surrealQL: surrealql,
+        params,
+        ttl: typeof ttl === 'string' ? new Duration(ttl) : ttl,
+        lastActiveAt: new Date(),
+        clientId: this.clientId,
+      })
+      .output('after');
+
+    const [[{ id, hash, tree }]] = await this.remote
+      .getClient()
+      .query('SELECT id, hash, tree FROM $id', { id: incantationId })
+      .collect<[{ id: RecordId<string>; hash: string; tree: any }[]]>();
+
+    console.log('[SpookySync] createdRemoteIncantation', id, hash, tree);
+    return { hash, tree };
+  }
+
+  private async syncIncantation({
+    incantationId,
+    surrealql,
+    localTree,
+    localHash,
+    remoteHash,
+    remoteTree,
+  }: {
+    incantationId: RecordId<string>;
+    surrealql: string;
+    localTree: any;
+    localHash: string;
+    remoteHash: string;
+    remoteTree: any;
+  }) {
+    console.log('[SpookySync] syncIncantation', incantationId, {
+      localHash,
+      remoteHash,
+      localTree,
+      remoteTree,
+    });
 
     const isDifferent = localHash !== remoteHash;
     if (!isDifferent) {
@@ -181,11 +253,17 @@ export class SpookySync<S extends SchemaStructure> {
 
     await this.cacheMissingRecords(localTree, remoteTree, surrealql);
 
-    await this.updateLocalIncantation(incantationId, {
-      surrealql,
-      hash: remoteHash,
-      tree: remoteTree,
-    });
+    await this.updateLocalIncantation(
+      incantationId,
+      {
+        surrealql,
+        hash: remoteHash,
+        tree: remoteTree,
+      },
+      {
+        updateRecord: true,
+      }
+    );
   }
 
   private async cacheMissingRecords(
@@ -233,12 +311,19 @@ export class SpookySync<S extends SchemaStructure> {
       params?: Record<string, any>;
       hash: string;
       tree: any;
+    },
+    {
+      updateRecord = true,
+    }: {
+      updateRecord?: boolean;
     }
   ) {
-    await this.updateIncantationRecord(incantationId, {
-      hash,
-      tree,
-    });
+    if (updateRecord) {
+      await this.updateIncantationRecord(incantationId, {
+        hash,
+        tree,
+      });
+    }
 
     try {
       const [cachedResults] = await this.local
@@ -254,6 +339,18 @@ export class SpookySync<S extends SchemaStructure> {
       });
     } catch (e) {
       console.error('[SpookySync] failed to query local db or emit event', e);
+    }
+  }
+
+  private async findIncatationRecord(incantationId: RecordId<string>) {
+    try {
+      const [cachedResults] = await this.local
+        .getClient()
+        .query('SELECT * FROM ONLY $id', { id: incantationId })
+        .collect<[Record<string, any>]>();
+      return cachedResults;
+    } catch (e) {
+      return null;
     }
   }
 

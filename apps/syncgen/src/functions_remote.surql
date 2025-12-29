@@ -3,18 +3,18 @@
 -- Usage: fn::spooky::view_hash(thread:123, ['comments'])
 -- ==================================================
 DEFINE FUNCTION fn::spooky::view_hash($rid: record, $paths: array<string>) {
-    LET $shadow = (SELECT * FROM ONLY _spooky_data_hash WHERE RecordId = $rid);
-    IF $shadow.RecordId == NONE { RETURN crypto::blake3(""); };
+    LET $shadow = (SELECT * FROM ONLY _spooky_data_hash WHERE recordId = $rid);
+    IF $shadow.recordId == NONE { RETURN crypto::blake3(""); };
 
     -- 1. Start with the Intrinsic Hash
-    LET $parts = [$shadow.IntrinsicHash];
+    LET $parts = [$shadow.intrinsicHash];
 
     -- 2. Collect requested Composition Hashes (if they exist)
     -- We use a subquery to map the $paths array to values safely
     LET $extras = (
-        SELECT VALUE $shadow.CompositionHash[$this] 
+        SELECT VALUE $shadow.compositionHash[$this] 
         FROM $paths 
-        WHERE $shadow.CompositionHash[$this] != NONE
+        WHERE $shadow.compositionHash[$this] != NONE
     );
 
     -- 3. Combine and Aggregate
@@ -55,12 +55,12 @@ DEFINE FUNCTION fn::incantation::register($config: object) {
     
     INSERT INTO _spooky_incantation {
         id:           $rid,
-        Hash:         $query_hash,
-        ClientId:     $client_id,
-        SurrealQL:    $query,
-        Tree:         <object>{},
-        LastActiveAt: time::now(),
-        TTL:          1h
+        hash:         $query_hash,
+        clientId:     $client_id,
+        surrealQL:    $query,
+        tree:         <object>{},
+        lastActiveAt: time::now(),
+        ttl:          1h
     };
 
 
@@ -74,7 +74,7 @@ DEFINE FUNCTION fn::incantation::register($config: object) {
         LET $init_res = $dbsp_res.result;
         IF $init_res != NONE THEN {
             -- Update using the explicit ID
-            UPDATE $rid SET Hash = $init_res.hash, Tree = $init_res.tree;
+            UPDATE $rid SET hash = $init_res.hash, tree = $init_res.tree;
         } END;
         
         -- DEBUG: Return the entire result to inspect state
@@ -85,5 +85,5 @@ DEFINE FUNCTION fn::incantation::register($config: object) {
 };
 
 DEFINE FUNCTION fn::incantation::heartbeat($id: record) {
-    UPDATE $id SET LastActiveAt = time::now();
+    UPDATE $id SET lastActiveAt = time::now();
 };

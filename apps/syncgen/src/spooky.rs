@@ -67,13 +67,13 @@ pub fn generate_spooky_events(
             // Deterministic ID: hash of the source record ID
             events.push_str("    LET $hash_id = <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>$after.id));\n");
             events.push_str("    UPSERT $hash_id CONTENT {\n");
-            events.push_str("        RecordId: $after.id,\n");
+            events.push_str("        recordId: $after.id,\n");
             // Use empty strings as placeholders since type is string
-            events.push_str("        IntrinsicHash: \"\",\n"); 
-            events.push_str("        CompositionHash: \"\",\n");
-            events.push_str("        TotalHash: NONE,\n");
-            events.push_str("        IsDirty: true,\n");
-            events.push_str("        PendingDelete: false\n");
+            events.push_str("        intrinsicHash: \"\",\n"); 
+            events.push_str("        compositionHash: \"\",\n");
+            events.push_str("        totalHash: NONE,\n");
+            events.push_str("        isDirty: true,\n");
+            events.push_str("        pendingDelete: false\n");
             events.push_str("    };\n");
             events.push_str("};\n\n");
 
@@ -89,7 +89,7 @@ pub fn generate_spooky_events(
             // _spooky_data_hash uses RecordId as key. So we can update it directly.
             // Update by Deterministic ID
             events.push_str("    LET $hash_id = <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>$before.id));\n");
-            events.push_str("    UPDATE $hash_id SET PendingDelete = true;\n");
+            events.push_str("    UPDATE $hash_id SET pendingDelete = true;\n");
             events.push_str("};\n\n");
         }
 
@@ -107,9 +107,9 @@ pub fn generate_spooky_events(
     events.push_str("WHEN $before != $after AND $event != \"DELETE\"\n");
     events.push_str("THEN {\n");
     // TotalHash = IntrinsicHash (string) XOR CompositionHash._xor (string)
-    events.push_str("    LET $new_total = mod::xor::blake3_xor($after.IntrinsicHash, $after.CompositionHash._xor);\n");
-    events.push_str("    IF $new_total != $after.TotalHash THEN {\n");
-    events.push_str("        UPDATE $after.id SET TotalHash = $new_total;\n");
+    events.push_str("    LET $new_total = mod::xor::blake3_xor($after.intrinsicHash, $after.compositionHash._xor);\n");
+    events.push_str("    IF $new_total != $after.totalHash THEN {\n");
+    events.push_str("        UPDATE $after.id SET totalHash = $new_total;\n");
     events.push_str("    } END;\n");
     events.push_str("};\n\n");
 
@@ -231,7 +231,7 @@ pub fn generate_spooky_events(
                     reference_fields.push(field_name.to_string());
                     
                     // Lookup by Deterministic ID and extract first item
-                    events.push_str(&format!("    LET $ref_hash_{} = IF $after.{} != NONE THEN (SELECT TotalHash FROM <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>$after.{})))[0].TotalHash ELSE crypto::blake3(\"\") END;\n", field_name, field_name, field_name));
+                    events.push_str(&format!("    LET $ref_hash_{} = IF $after.{} != NONE THEN (SELECT totalHash FROM <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>$after.{})))[0].totalHash ELSE crypto::blake3(\"\") END;\n", field_name, field_name, field_name));
                     events.push_str(&format!("    LET $ref_hash_{} = IF $ref_hash_{} != NONE THEN $ref_hash_{} ELSE crypto::blake3(\"\") END;\n", field_name, field_name, field_name));
                     
                     events.push_str(&format!("    LET $xor_composition = mod::xor::blake3_xor($xor_composition, $ref_hash_{});\n", field_name));
@@ -268,7 +268,7 @@ pub fn generate_spooky_events(
         
         // Extract Dependency Hashes & Accumulate Composition XOR
         for dep_table in &dependent_tables {
-            events.push_str(&format!("    LET $h_{} = IF $old_hash_data.RecordId != NONE THEN $old_hash_data.CompositionHash.{} ELSE crypto::blake3(\"\") END;\n", dep_table, dep_table));
+            events.push_str(&format!("    LET $h_{} = IF $old_hash_data.recordId != NONE THEN $old_hash_data.compositionHash.{} ELSE crypto::blake3(\"\") END;\n", dep_table, dep_table));
             events.push_str(&format!("    LET $xor_composition = mod::xor::blake3_xor($xor_composition, $h_{});\n", dep_table));
         }
 
@@ -315,7 +315,7 @@ pub fn generate_spooky_events(
         // Inject Hashes for DBSP
         events.push_str("        IntrinsicHash: $new_total_calculated,\n");
         events.push_str("        _hash: $new_total_calculated,\n");
-        events.push_str("        TotalHash: $new_total_calculated,\n"); 
+        events.push_str("        totalHash: $new_total_calculated,\n"); 
         events.push_str("    };\n");
 
         // Pass $plain_after instead of $after
@@ -324,16 +324,16 @@ pub fn generate_spooky_events(
         // Pass object directly (sanitized fields)
         events.push_str(&format!("    LET $dbsp_ok = mod::dbsp::ingest('{}', $event, <string>($after.id OR \"\"), $plain_after);\n", table_name));
         events.push_str("    FOR $u IN $dbsp_ok.updates {\n");
-        events.push_str("        UPDATE _spooky_incantation SET Hash = $u.result_hash, Tree = $u.tree WHERE Id = $u.query_id;\n");
+        events.push_str("        UPDATE _spooky_incantation SET hash = $u.result_hash, tree = $u.tree WHERE id = $u.query_id;\n");
         events.push_str("    };\n");
         events.push_str("    LET $saved = mod::dbsp::save_state(NONE);\n\n");
         // 4. Upsert Meta Table
         events.push_str("    LET $hash_id = <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>$after.id));\n");
         events.push_str("    UPSERT $hash_id CONTENT {\n");
-        events.push_str("        RecordId: $after.id,\n");
-        events.push_str("        IntrinsicHash: $xor_intrinsic,\n");
-        events.push_str("        CompositionHash: $new_composition,\n");
-        events.push_str("        TotalHash: NONE -- Placeholder, will be recalculated by event\n");
+        events.push_str("        recordId: $after.id,\n");
+        events.push_str("        intrinsicHash: $xor_intrinsic,\n");
+        events.push_str("        compositionHash: $new_composition,\n");
+        events.push_str("        totalHash: NONE -- Placeholder, will be recalculated by event\n");
         events.push_str("    };\n\n");
 
 
@@ -350,7 +350,7 @@ pub fn generate_spooky_events(
              
              // Wait, $xor_composition is calculated above. So we can use it.
              events.push_str("    LET $new_total = mod::xor::blake3_xor($xor_intrinsic, $xor_composition);\n");
-             events.push_str("    LET $old_total = IF $old_hash_data.RecordId != NONE THEN $old_hash_data.TotalHash ELSE $new_total END;\n");
+             events.push_str("    LET $old_total = IF $old_hash_data.recordId != NONE THEN $old_hash_data.totalHash ELSE $new_total END;\n");
              
              // BUT: The stored TotalHash might be stale if we are in the middle of a transaction? 
              // No, existing logic relies on $old_hash_data.TotalHash.
@@ -367,7 +367,7 @@ pub fn generate_spooky_events(
              // For Bubble Up, if the record didn't exist, its contribution to parent was 0.
              // So `ELSE crypto::blake3("")` (Empty Hash) is more correct for the "Previous State".
              
-             events.push_str("    LET $old_total_for_delta = IF $old_hash_data.RecordId != NONE THEN $old_hash_data.TotalHash ELSE crypto::blake3(\"\") END;\n");
+             events.push_str("    LET $old_total_for_delta = IF $old_hash_data.recordId != NONE THEN $old_hash_data.totalHash ELSE crypto::blake3(\"\") END;\n");
              // But wait, if I Update a field, $old_total works.
              // If I Create, $old_total_for_delta should be Empty Hash.
              
@@ -394,21 +394,21 @@ pub fn generate_spooky_events(
              events.push_str(&format!("    IF $before.{} = $after.{} THEN {{\n", parent_field, parent_field));
              events.push_str("        LET $delta = mod::xor::blake3_xor($old_total_for_delta, $new_total_calculated);\n");
              events.push_str("        UPDATE _spooky_data_hash SET\n");
-             events.push_str(&format!("            CompositionHash.{} = mod::xor::blake3_xor((CompositionHash.{} OR $empty_hash), $delta),\n", table_name, table_name));
-             events.push_str("            CompositionHash._xor = mod::xor::blake3_xor(CompositionHash._xor, $delta)\n");
+             events.push_str(&format!("            compositionHash.{} = mod::xor::blake3_xor((compositionHash.{} OR $empty_hash), $delta),\n", table_name, table_name));
+             events.push_str("            compositionHash._xor = mod::xor::blake3_xor(compositionHash._xor, $delta)\n");
              events.push_str(&format!("        WHERE id = <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>$after.{}));\n", parent_field));
              events.push_str("    } ELSE {\n");
 
              // Remove contribution from Old Parent
              events.push_str("        UPDATE _spooky_data_hash SET\n");
-             events.push_str(&format!("            CompositionHash.{} = mod::xor::blake3_xor((CompositionHash.{} OR $empty_hash), $old_total_for_delta),\n", table_name, table_name));
-             events.push_str("            CompositionHash._xor = mod::xor::blake3_xor(CompositionHash._xor, $old_total_for_delta)\n");
+             events.push_str(&format!("            compositionHash.{} = mod::xor::blake3_xor((compositionHash.{} OR $empty_hash), $old_total_for_delta),\n", table_name, table_name));
+             events.push_str("            compositionHash._xor = mod::xor::blake3_xor(compositionHash._xor, $old_total_for_delta)\n");
              events.push_str(&format!("        WHERE id = <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>$before.{})) AND id != NONE;\n\n", parent_field));
 
              // Add contribution to New Parent
              events.push_str("        UPDATE _spooky_data_hash SET\n");
-             events.push_str(&format!("            CompositionHash.{} = mod::xor::blake3_xor((CompositionHash.{} OR $empty_hash), $new_total_calculated),\n", table_name, table_name));
-             events.push_str("            CompositionHash._xor = mod::xor::blake3_xor(CompositionHash._xor, $new_total_calculated)\n");
+             events.push_str(&format!("            compositionHash.{} = mod::xor::blake3_xor((compositionHash.{} OR $empty_hash), $new_total_calculated),\n", table_name, table_name));
+             events.push_str("            compositionHash._xor = mod::xor::blake3_xor(compositionHash._xor, $new_total_calculated)\n");
              events.push_str(&format!("        WHERE id = <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>$after.{})) AND id != NONE;\n", parent_field));
              events.push_str("    } END;\n\n");
         }
@@ -543,19 +543,19 @@ pub fn generate_spooky_events(
         // Pass object directly (sanitized fields)
         events.push_str(&format!("    LET $dbsp_ok = mod::dbsp::ingest('{}', \"DELETE\", <string>($before.id OR \"\"), $plain_before);\n", table_name));
         events.push_str("    FOR $u IN $dbsp_ok.updates {\n");
-        events.push_str("        UPDATE _spooky_incantation SET Hash = $u.result_hash, Tree = $u.tree WHERE Id = $u.query_id;\n");
+        events.push_str("        UPDATE _spooky_incantation SET hash = $u.result_hash, tree = $u.tree WHERE id = $u.query_id;\n");
         events.push_str("    };\n");
         events.push_str("    LET $saved = mod::dbsp::save_state(NONE);\n\n");
 
         events.push_str("    LET $old_hash_data = (SELECT * FROM <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>$before.id)))[0];\n");
-        events.push_str("    LET $old_total = $old_hash_data.TotalHash;\n\n");
+        events.push_str("    LET $old_total = $old_hash_data.totalHash;\n\n");
 
         if let Some(parent_field) = parent_field_opt {
              events.push_str(&format!("    -- BUBBLE UP Delete to Parent\n"));
              events.push_str(&format!("    IF $old_total != NONE AND $before.{} != NONE THEN {{\n", parent_field));
              events.push_str("        UPDATE _spooky_data_hash SET\n");
-             events.push_str(&format!("            CompositionHash.{} = mod::xor::blake3_xor((CompositionHash.{} OR $empty_hash), $old_total),\n", table_name, table_name));
-             events.push_str("            CompositionHash._xor = mod::xor::blake3_xor(CompositionHash._xor, $old_total)\n");
+             events.push_str(&format!("            compositionHash.{} = mod::xor::blake3_xor((compositionHash.{} OR $empty_hash), $old_total),\n", table_name, table_name));
+             events.push_str("            compositionHash._xor = mod::xor::blake3_xor(compositionHash._xor, $old_total)\n");
              events.push_str(&format!("        WHERE id = <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>$before.{}));\n", parent_field));
              events.push_str("    } END;\n\n");
         }

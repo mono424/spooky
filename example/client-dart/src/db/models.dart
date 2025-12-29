@@ -137,23 +137,23 @@ class SpookyDataHash {
     });
 
     factory SpookyDataHash.fromJson(Map<String, dynamic> json) => SpookyDataHash(
-        compositionHash: json["CompositionHash"],
+        compositionHash: json["compositionHash"],
         id: json["id"],
-        intrinsicHash: json["IntrinsicHash"],
-        isDirty: json["IsDirty"],
-        pendingDelete: json["PendingDelete"],
-        recordId: json["RecordId"],
-        totalHash: json["TotalHash"],
+        intrinsicHash: json["intrinsicHash"],
+        isDirty: json["isDirty"],
+        pendingDelete: json["pendingDelete"],
+        recordId: json["recordId"],
+        totalHash: json["totalHash"],
     );
 
     Map<String, dynamic> toJson() => {
-        "CompositionHash": compositionHash,
+        "compositionHash": compositionHash,
         "id": id,
-        "IntrinsicHash": intrinsicHash,
-        "IsDirty": isDirty,
-        "PendingDelete": pendingDelete,
-        "RecordId": recordId,
-        "TotalHash": totalHash,
+        "intrinsicHash": intrinsicHash,
+        "isDirty": isDirty,
+        "pendingDelete": pendingDelete,
+        "recordId": recordId,
+        "totalHash": totalHash,
     };
 }
 
@@ -183,23 +183,23 @@ class SpookyIncantation {
     });
 
     factory SpookyIncantation.fromJson(Map<String, dynamic> json) => SpookyIncantation(
-        clientId: json["ClientId"],
-        hash: json["Hash"],
+        clientId: json["clientId"],
+        hash: json["hash"],
         id: json["id"],
-        lastActiveAt: DateTime.parse(json["LastActiveAt"]),
-        surrealQl: json["SurrealQL"],
-        tree: json["Tree"],
-        ttl: json["TTL"],
+        lastActiveAt: DateTime.parse(json["lastActiveAt"]),
+        surrealQl: json["surrealQL"],
+        tree: json["tree"],
+        ttl: json["ttl"],
     );
 
     Map<String, dynamic> toJson() => {
-        "ClientId": clientId,
-        "Hash": hash,
+        "clientId": clientId,
+        "hash": hash,
         "id": id,
-        "LastActiveAt": lastActiveAt.toIso8601String(),
-        "SurrealQL": surrealQl,
-        "Tree": tree,
-        "TTL": ttl,
+        "lastActiveAt": lastActiveAt.toIso8601String(),
+        "surrealQL": surrealQl,
+        "tree": tree,
+        "ttl": ttl,
     };
 }
 
@@ -221,17 +221,17 @@ class SpookyPendingMutations {
     });
 
     factory SpookyPendingMutations.fromJson(Map<String, dynamic> json) => SpookyPendingMutations(
-        data: json["Data"],
+        data: json["data"],
         id: json["id"],
-        mutationType: json["MutationType"],
-        recordId: json["RecordId"],
+        mutationType: json["mutationType"],
+        recordId: json["recordId"],
     );
 
     Map<String, dynamic> toJson() => {
-        "Data": data,
+        "data": data,
         "id": id,
-        "MutationType": mutationType,
-        "RecordId": recordId,
+        "mutationType": mutationType,
+        "recordId": recordId,
     };
 }
 
@@ -438,27 +438,28 @@ DEFINE TABLE _spooky_incantation SCHEMALESS
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
 -- The raw query string (for re-hydration/debugging)
-DEFINE FIELD SurrealQL ON TABLE _spooky_incantation TYPE option<string>
+-- The raw query string (for re-hydration/debugging)
+DEFINE FIELD surrealQL ON TABLE _spooky_incantation TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- The raw query string (for re-hydration/debugging)
-DEFINE FIELD ClientId ON TABLE _spooky_incantation TYPE option<string>
+DEFINE FIELD clientId ON TABLE _spooky_incantation TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- The current XOR sum of all results in this query
-DEFINE FIELD Hash ON TABLE _spooky_incantation TYPE option<string>
+DEFINE FIELD hash ON TABLE _spooky_incantation TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- The Radix Tree of Result IDs for efficient sync
-DEFINE FIELD Tree ON TABLE _spooky_incantation TYPE any
+DEFINE FIELD tree ON TABLE _spooky_incantation TYPE any
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- For garbage collection (Heartbeat)
-DEFINE FIELD LastActiveAt ON TABLE _spooky_incantation TYPE datetime DEFAULT time::now()
+DEFINE FIELD lastActiveAt ON TABLE _spooky_incantation TYPE datetime DEFAULT time::now()
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- How long this Incantation stays alive without activity
-DEFINE FIELD TTL ON TABLE _spooky_incantation TYPE duration
+DEFINE FIELD ttl ON TABLE _spooky_incantation TYPE duration
 PERMISSIONS FOR select, create, update WHERE true;
 
 
@@ -483,30 +484,30 @@ DEFINE TABLE _spooky_data_hash SCHEMAFULL
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
 -- The actual record being tracked (e.g., comment:abc, thread:123)
-DEFINE FIELD RecordId ON TABLE _spooky_data_hash TYPE record
+DEFINE FIELD recordId ON TABLE _spooky_data_hash TYPE record
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- H_intrinsic: BLAKE3 hash of the record's own scalar fields
-DEFINE FIELD IntrinsicHash ON TABLE _spooky_data_hash TYPE string
+DEFINE FIELD intrinsicHash ON TABLE _spooky_data_hash TYPE string
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- H_composition: XOR sum of all dependent children's TotalHashes
-DEFINE FIELD CompositionHash ON TABLE _spooky_data_hash TYPE string
+DEFINE FIELD compositionHash ON TABLE _spooky_data_hash TYPE string
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- H_total: Intrinsic XOR Composition
-DEFINE FIELD TotalHash ON TABLE _spooky_data_hash TYPE option<string>
+DEFINE FIELD totalHash ON TABLE _spooky_data_hash TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- CLIENT-SPECIFIC FIELDS
-DEFINE FIELD IsDirty ON TABLE _spooky_data_hash TYPE bool DEFAULT false
+DEFINE FIELD isDirty ON TABLE _spooky_data_hash TYPE bool DEFAULT false
 PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD PendingDelete ON TABLE _spooky_data_hash TYPE bool DEFAULT false
+DEFINE FIELD pendingDelete ON TABLE _spooky_data_hash TYPE bool DEFAULT false
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- Fast lookup by the original record ID
-DEFINE INDEX idx_record_id ON TABLE _spooky_data_hash COLUMNS RecordId UNIQUE;
+DEFINE INDEX idx_record_id ON TABLE _spooky_data_hash COLUMNS recordId UNIQUE;
 
 -- ==================================================
 -- SPOOKY EVENTS
@@ -518,15 +519,15 @@ PERMISSIONS FOR select, create, update, delete WHERE true;
 
 DEFINE FIELD IF NOT EXISTS id ON _spooky_pending_mutations TYPE string;
 
-DEFINE FIELD IF NOT EXISTS MutationType ON _spooky_pending_mutations TYPE string
+DEFINE FIELD IF NOT EXISTS mutationType ON _spooky_pending_mutations TYPE string
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- The target record ID (for update/delete) - maps to 'id' in the event object
-DEFINE FIELD IF NOT EXISTS RecordId ON _spooky_pending_mutations TYPE option<record>
+DEFINE FIELD IF NOT EXISTS recordId ON _spooky_pending_mutations TYPE option<record>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- The data payload (for create/update)
-DEFINE FIELD IF NOT EXISTS Data ON _spooky_pending_mutations TYPE option<object> FLEXIBLE
+DEFINE FIELD IF NOT EXISTS data ON _spooky_pending_mutations TYPE option<object> FLEXIBLE
 PERMISSIONS FOR select, create, update WHERE true;
 
 
@@ -540,12 +541,12 @@ WHEN \$before != \$after AND \$event != \"DELETE\"
 THEN {
     LET \$hash_id = <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>\$after.id));
     UPSERT \$hash_id CONTENT {
-        RecordId: \$after.id,
-        IntrinsicHash: \"\",
-        CompositionHash: \"\",
-        TotalHash: NONE,
-        IsDirty: true,
-        PendingDelete: false
+        recordId: \$after.id,
+        intrinsicHash: \"\",
+        compositionHash: \"\",
+        totalHash: NONE,
+        isDirty: true,
+        pendingDelete: false
     };
 };
 
@@ -554,7 +555,7 @@ DEFINE EVENT OVERWRITE _spooky_comment_client_delete ON TABLE comment
 WHEN \$event = \"DELETE\"
 THEN {
     LET \$hash_id = <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>\$before.id));
-    UPDATE \$hash_id SET PendingDelete = true;
+    UPDATE \$hash_id SET pendingDelete = true;
 };
 
 -- Table: thread Client Mutation
@@ -563,12 +564,12 @@ WHEN \$before != \$after AND \$event != \"DELETE\"
 THEN {
     LET \$hash_id = <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>\$after.id));
     UPSERT \$hash_id CONTENT {
-        RecordId: \$after.id,
-        IntrinsicHash: \"\",
-        CompositionHash: \"\",
-        TotalHash: NONE,
-        IsDirty: true,
-        PendingDelete: false
+        recordId: \$after.id,
+        intrinsicHash: \"\",
+        compositionHash: \"\",
+        totalHash: NONE,
+        isDirty: true,
+        pendingDelete: false
     };
 };
 
@@ -577,7 +578,7 @@ DEFINE EVENT OVERWRITE _spooky_thread_client_delete ON TABLE thread
 WHEN \$event = \"DELETE\"
 THEN {
     LET \$hash_id = <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>\$before.id));
-    UPDATE \$hash_id SET PendingDelete = true;
+    UPDATE \$hash_id SET pendingDelete = true;
 };
 
 -- Table: user Client Mutation
@@ -586,12 +587,12 @@ WHEN \$before != \$after AND \$event != \"DELETE\"
 THEN {
     LET \$hash_id = <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>\$after.id));
     UPSERT \$hash_id CONTENT {
-        RecordId: \$after.id,
-        IntrinsicHash: \"\",
-        CompositionHash: \"\",
-        TotalHash: NONE,
-        IsDirty: true,
-        PendingDelete: false
+        recordId: \$after.id,
+        intrinsicHash: \"\",
+        compositionHash: \"\",
+        totalHash: NONE,
+        isDirty: true,
+        pendingDelete: false
     };
 };
 
@@ -600,6 +601,6 @@ DEFINE EVENT OVERWRITE _spooky_user_client_delete ON TABLE user
 WHEN \$event = \"DELETE\"
 THEN {
     LET \$hash_id = <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>\$before.id));
-    UPDATE \$hash_id SET PendingDelete = true;
+    UPDATE \$hash_id SET pendingDelete = true;
 };
 ";

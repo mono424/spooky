@@ -48,13 +48,15 @@ export interface SpookyConfig<S extends SchemaStructure> {
 
 export type QueryHash = string;
 
+import { Duration } from 'surrealdb';
+
 export interface Incantation {
   id: RecordId<QueryHash>;
   surrealql: string;
   params?: Record<string, any>;
   hash: string;
-  lastActiveAt: number;
-  ttl: QueryTimeToLive;
+  lastActiveAt: number | Date | string;
+  ttl: QueryTimeToLive | Duration;
   tree: any;
   meta: {
     tableName: string;

@@ -1,4 +1,4 @@
-import { RecordId } from 'surrealdb';
+import { RecordId, Duration } from 'surrealdb';
 import { createEventSystem, EventDefinition, EventSystem } from '../../events/index.js';
 import { QueryTimeToLive } from '../../types.js';
 
@@ -22,7 +22,7 @@ export type QueryEventTypeMap = {
       incantationId: RecordId<string>;
       surrealql: string;
       params?: Record<string, any>;
-      ttl: QueryTimeToLive;
+      ttl: QueryTimeToLive | Duration;
     }
   >;
   [QueryEventTypes.IncantationRemoteHashUpdate]: EventDefinition<
