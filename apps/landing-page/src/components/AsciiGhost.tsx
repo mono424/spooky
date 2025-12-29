@@ -60,7 +60,7 @@ export const AsciiGhost = () => {
     });
 
     return (
-        <pre className="text-[8px] sm:text-[10px] md:text-xs leading-none font-bold mb-10 whitespace-pre overflow-x-hidden text-center mx-auto text-white tracking-tighter select-none cursor-default">
+        <pre className="text-[8px] sm:text-[10px] md:text-xs leading-none font-bold mb-10 whitespace-pre overflow-x-hidden text-center mx-auto text-white tracking-tighter select-none cursor-default overflow-y-hidden">
             {renderedRows.join('\n')}
         </pre>
     );

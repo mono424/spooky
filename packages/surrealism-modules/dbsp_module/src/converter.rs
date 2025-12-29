@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 /// ... ORDER BY field1 ASC, field2 DESC
 /// ... LIMIT n
 pub fn convert_surql_to_dbsp(sql: &str) -> Result<Value> {
-    let clean_sql = sql.trim();
+    let clean_sql = sql.trim().trim_end_matches(';');
     
     // 1. naive parsing: SELECT <projections> FROM <tables> [WHERE <cond>] [ORDER BY <orders>] [LIMIT <n>]
     
@@ -110,7 +110,7 @@ fn find_keyword_balanced(s: &str, keyword: &str) -> Option<usize> {
 
 fn extract_limit(sql: &str) -> (&str, Option<usize>) {
     if let Some(idx) = find_keyword_balanced(sql, " LIMIT ") {
-         let val_str = sql[idx+7..].trim();
+         let val_str = sql[idx+7..].trim().trim_end_matches(';');
          if let Ok(n) = val_str.parse::<usize>() {
              return (&sql[..idx], Some(n));
          }

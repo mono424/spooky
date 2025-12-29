@@ -13,28 +13,43 @@ import {
   UpEvent,
   UpQueue,
 } from './queue/index.js';
-import { RecordId } from 'surrealdb';
+import { RecordId, Duration } from 'surrealdb';
 import { diffIdTree } from './utils.js';
+import { SchemaStructure } from '@spooky/query-builder';
 
-export class SpookySync {
+export class SpookySync<S extends SchemaStructure> {
   private upQueue: UpQueue;
   private downQueue: DownQueue;
   private isInit: boolean = false;
   private isSyncingUp: boolean = false;
   private isSyncingDown: boolean = false;
+  private relationshipMap: Map<string, Set<string>> = new Map();
 
   get isSyncing() {
     return this.isSyncingUp || this.isSyncingDown;
   }
 
   constructor(
+    private schema: S,
     private local: LocalDatabaseService,
     private remote: RemoteDatabaseService,
     private mutationEvents: MutationEventSystem,
-    private queryEvents: QueryEventSystem
+    private queryEvents: QueryEventSystem,
+    private clientId: string
   ) {
     this.upQueue = new UpQueue(this.local);
     this.downQueue = new DownQueue(this.local);
+    this.buildRelationshipMap();
+  }
+
+  private buildRelationshipMap() {
+    if (!this.schema?.relationships) return;
+    for (const rel of this.schema.relationships) {
+      if (!this.relationshipMap.has(rel.from)) {
+        this.relationshipMap.set(rel.from, new Set());
+      }
+      this.relationshipMap.get(rel.from)?.add(rel.field);
+    }
   }
 
   public async init() {
@@ -131,6 +146,7 @@ export class SpookySync {
 
   private async registerIncantation(event: RegisterEvent) {
     const { incantationId, surrealql, params, ttl } = event.payload;
+    const effectiveTtl = ttl || '10m';
     try {
       await this.updateLocalIncantation(incantationId, {
         surrealql,
@@ -140,7 +156,13 @@ export class SpookySync {
       });
       await this.remote.query(`UPSERT $id CONTENT $content`, {
         id: incantationId,
-        content: { surrealql, params, ttl },
+        content: {
+          SurrealQL: surrealql,
+          Params: params,
+          TTL: new Duration(effectiveTtl),
+          LastActiveAt: new Date(),
+          ClientId: this.clientId,
+        },
       });
     } catch (e) {
       console.error('[SpookySync] registerIncantation error', e);
@@ -176,6 +198,8 @@ export class SpookySync {
         .getClient()
         .query(surrealql)
         .collect<[Record<string, any>[]]>();
+      // TODO: flatten the records array, to not have nested dependencies but a flat list of records
+      // for this it should use the schema to find relationships
       await this.cacheResults(remoteResults);
       return { added: remoteResults.map((r) => r.id), updated: [], removed: [] };
     }
@@ -243,22 +267,88 @@ export class SpookySync {
       tree: any;
     }
   ) {
-    await this.local.query(`UPDATE $id MERGE $content`, {
-      id: incantationId,
-      content: { hash, tree },
-    });
+    try {
+      console.log('[SpookySync] Updating local incantation', { incantationId, hash, tree });
+      await this.local.query(`UPDATE $id MERGE $content`, {
+        id: incantationId,
+        content: { hash, tree },
+      });
+    } catch (e) {
+      console.error('[SpookySync] Failed to update local incantation record', e);
+      throw e;
+    }
   }
 
-  // TODO: support joined records
   private async cacheResults(results: Record<string, any>[]) {
     if (!results || results.length === 0) return;
-    const tx = await this.local.getClient().beginTransaction();
-    for (const record of results) {
+    console.log(results);
+    const flatResults = this.flattenResults(results);
+    console.log('Flattend', {
+      results,
+      flatResults,
+    });
+    for (const record of flatResults) {
       if (record.id) {
-        await tx.upsert(record.id).content(record);
+        await this.local.getClient().upsert(record.id).content(record);
       }
     }
-    await tx.commit();
+  }
+
+  /**
+   * Recursively flattens a list of records, extracting nested objects that look like records (have an 'id')
+   * into the top-level list, and replacing them with their ID in the parent.
+   *
+   * schema-aware: Only flattens fields that are defined as relationships in the schema for the specific table.
+   */
+  private flattenResults(
+    results: Record<string, any>[],
+    visited: Set<string> = new Set(),
+    flattened: Record<string, any>[] = []
+  ): Record<string, any>[] {
+    for (const record of results) {
+      if (!record) continue;
+
+      // 1. Identify the Record
+      let recordIdStr: string | undefined;
+      let tableName: string | undefined;
+
+      if (record.id && record.id instanceof RecordId) {
+        recordIdStr = record.id.toString();
+        tableName = record.id.table.name;
+      }
+
+      // 2. Cycle Detection / Deduplication
+      if (recordIdStr) {
+        if (visited.has(recordIdStr)) continue;
+        visited.add(recordIdStr);
+      }
+
+      // 3. Create a shallow copy to modify fields without mutating original
+      const processedRecord: Record<string, any> = { ...record };
+
+      // 4. Handle Relationships recursively
+      if (tableName && this.relationshipMap.has(tableName)) {
+        const validFields = this.relationshipMap.get(tableName)!;
+
+        for (const key of validFields) {
+          if (!(key in processedRecord)) continue;
+
+          const value = processedRecord[key];
+
+          if (value && typeof value === 'object') {
+            if (Array.isArray(value)) {
+              processedRecord[key] = this.flattenResults(value, visited, flattened);
+            } else if (value.id && value.id instanceof RecordId) {
+              this.flattenResults([value], visited, flattened);
+              processedRecord[key] = value.id;
+            }
+          }
+        }
+      }
+      flattened.push(processedRecord);
+    }
+
+    return flattened;
   }
 
   private async heartbeatIncantation(event: HeartbeatEvent) {

@@ -55,7 +55,6 @@ DEFINE FUNCTION fn::incantation::register($config: object) {
     
     INSERT INTO _spooky_incantation {
         id:           $rid,
-        Id:           $id,
         Hash:         $query_hash,
         ClientId:     $client_id,
         SurrealQL:    $query,

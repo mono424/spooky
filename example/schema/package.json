@@ -5,13 +5,13 @@
   "scripts": {
     "start": "docker-compose up -d",
     "stop": "docker-compose down",
-    "dev": "pnpm build &&docker-compose up",
-    "dev:example": "pnpm dev",
+    "dev": "pnpm build && docker-compose up",
+    "dev:example": "pnpm db:reset && pnpm dev",
     "build": "pnpm build:ts && pnpm build:dart && pnpm build:surql",
     "build:ts": "syncgen --format typescript --input ./src/schema.surql --output ../app-solid/src/schema.gen.ts",
     "build:dart": "syncgen --format dart --input ./src/schema.surql --output ../client-dart/src/db/models.dart",
     "build:surql": "syncgen --input ./src/schema.surql --output ./.spooky/remote.gen.surql --modules-dir ../../packages/surrealism-modules",
-    "db:reset": "docker-compose down -v && pnpm dev"
+    "db:reset": "docker-compose down -v"
   },
   "keywords": [
     "database",

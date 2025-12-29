@@ -1,11 +1,8 @@
 ---
 // src/pages/index.astro
-import "../styles/global.css";
-// import Navigation from "../components/Navigation";
-// import FeatureCard from "../components/FeatureCard";
-// import ContactForm from "../components/ContactForm";
-// import { Button } from "../components/ui/button";
-import { AsciiGhost } from "../components/AsciiGhost";
+import '../styles/global.css';
+import { AsciiGhost } from '../components/AsciiGhost';
+import { ArchitectureDiagram } from '../components/ArchitectureDiagram';
 ---
 
 <html lang="en">
@@ -18,40 +15,71 @@ import { AsciiGhost } from "../components/AsciiGhost";
     <title>SPOOKY SYNC</title>
   </head>
   <body class="min-h-screen flex flex-col">
-    
     <div class="border-b border-white border-dashed p-4 uppercase sticky top-0 bg-black z-50">
-        <nav class="max-w-7xl mx-auto flex justify-between items-center">
-            <span class="font-bold tracking-widest">[ SPOOKY_SYNC ]</span>
-            <div class="space-x-4 hidden md:block font-mono text-sm">
-                <a href="#home" class="hover:bg-white hover:text-black px-2 transition-none">[ HOME ]</a>
-                <a href="#features" class="hover:bg-white hover:text-black px-2 transition-none">[ FEATURES ]</a>
-                <a href="#about" class="hover:bg-white hover:text-black px-2 transition-none">[ DOCS ]</a>
-                <a href="https://github.com/mono424/spooky" target="_blank" class="hover:bg-white hover:text-black px-2 transition-none">[ GITHUB ]</a>
-            </div>
-        </nav>
+      <nav class="max-w-7xl mx-auto flex justify-between items-center">
+        <span class="font-bold tracking-widest">[ SPOOKY_SYNC ]</span>
+        <div class="space-x-4 hidden md:block font-mono text-sm">
+          <a href="#home" class="hover:bg-white hover:text-black px-2 transition-none">[ HOME ]</a>
+          <a href="#features" class="hover:bg-white hover:text-black px-2 transition-none"
+            >[ FEATURES ]</a
+          >
+          <a href="#about" class="hover:bg-white hover:text-black px-2 transition-none">[ DOCS ]</a>
+          <a
+            href="https://github.com/mono424/spooky"
+            target="_blank"
+            class="hover:bg-white hover:text-black px-2 transition-none">[ GITHUB ]</a
+          >
+        </div>
+      </nav>
     </div>
 
-    <section id="home" class="min-h-screen flex items-center justify-center relative border-b border-white py-20">
+    <section
+      id="home"
+      class="min-h-screen flex items-center justify-center relative border-b border-white py-20"
+    >
       <div class="max-w-5xl mx-auto px-4 text-center">
-        
-<AsciiGhost client:load />
+        <AsciiGhost client:load />
 
         <h1 class="text-2xl md:text-4xl font-bold mb-6 uppercase tracking-widest">
           [ SPOOKY_SYNC ]
         </h1>
 
-        <div class="text-base md:text-xl mb-12 max-w-2xl mx-auto font-mono border-l-2 border-white pl-4 text-left bg-white/5 p-4">
-          <p>&gt; ENABLES OFFLINE FIRST APPLICATIONS</p>
-          <p>&gt; AND REAL-TIME COLLABORATION</p>
-          <p>&gt; WITH END-TO-END TYPE-SAFETY</p>
-          <p>&gt; BUILD ON TOP OF SURREALDB<span class="animate-blink">_</span></p>
+        <div
+          class="text-left font-mono text-xs md:text-sm max-w-xl mx-auto mb-12 border-2 border-white bg-black shadow-[5px_5px_0px_0px_white] relative z-10"
+        >
+          <div
+            class="border-b-2 border-white bg-white text-black px-3 py-1 font-bold flex justify-between items-center uppercase"
+          >
+            <span>src/queries.ts</span>
+            <span>[ TS ]</span>
+          </div>
+          <div class="p-6 overflow-x-auto bg-black text-gray-300">
+            <pre><code><span class="text-white font-bold">const</span> thread = <span class="text-white font-bold">await</span> db
+  .query(<span class="text-green-400">"thread"</span>)
+  .where(&#123;
+    id: params.id 
+  &#125;)
+  .related(<span class="text-green-400">"author"</span>)
+  .related(<span class="text-green-400">"comments"</span>, (q) => q
+    .related(<span class="text-green-400">"author"</span>)
+    .orderBy(<span class="text-green-400">"created_at"</span>, <span class="text-green-400">"desc"</span>)
+    .limit(10)
+  )
+  .one();<span class="animate-blink inline-block w-2 h-4 bg-white ml-1 align-middle" /></code></pre>
+          </div>
         </div>
-        
         <div class="flex flex-col sm:flex-row gap-6 justify-center items-center">
-          <a href="#contact" class="border-2 border-white bg-white text-black px-8 py-3 hover:bg-black hover:text-white transition-none uppercase font-bold">
+          <a
+            href="#contact"
+            class="border-2 border-white bg-white text-black px-8 py-3 hover:bg-black hover:text-white transition-none uppercase font-bold"
+          >
             [ EXECUTE_START ]
           </a>
-          <a href="https://github.com" target="_blank" class="border-2 border-white px-8 py-3 hover:bg-white hover:text-black transition-none uppercase font-bold">
+          <a
+            href="https://github.com"
+            target="_blank"
+            class="border-2 border-white px-8 py-3 hover:bg-white hover:text-black transition-none uppercase font-bold"
+          >
             &gt;&gt; VIEW_SOURCE_CODE
           </a>
         </div>
@@ -61,13 +89,13 @@ import { AsciiGhost } from "../components/AsciiGhost";
     <section id="features" class="py-20 border-b border-white">
       <div class="max-w-7xl mx-auto px-4">
         <div class="mb-16 border-b border-dashed border-white pb-4">
-          <h2 class="text-3xl font-bold uppercase">
-            // SYSTEM_MODULES
-          </h2>
+          <h2 class="text-3xl font-bold uppercase">// SYSTEM_MODULES</h2>
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div class="border-2 border-white p-6 hover:bg-white hover:text-black transition-none group relative">
+          <div
+            class="border-2 border-white p-6 hover:bg-white hover:text-black transition-none group relative"
+          >
             <span class="absolute top-1 left-2 text-xs">+</span>
             <span class="absolute top-1 right-2 text-xs">+</span>
             <span class="absolute bottom-1 left-2 text-xs">+</span>
@@ -75,34 +103,38 @@ import { AsciiGhost } from "../components/AsciiGhost";
 
             <div class="text-xl mb-4 font-bold group-hover:underline">Please Wait...</div>
             <p class="text-sm font-mono">
-              &gt; Latency: &lt; 100ms.<br>
-              &gt; Status: INSTANT.<br>
+              &gt; Latency: &lt; 100ms.<br />
+              &gt; Status: INSTANT.<br />
               &gt; Powers collaborative workflows via WebSockets.
             </p>
           </div>
 
-          <div class="border-2 border-white p-6 hover:bg-white hover:text-black transition-none group relative">
-             <span class="absolute top-1 left-2 text-xs">+</span>
-             <span class="absolute top-1 right-2 text-xs">+</span>
-             <span class="absolute bottom-1 left-2 text-xs">+</span>
-             <span class="absolute bottom-1 right-2 text-xs">+</span>
-             <div class="text-xl mb-4 font-bold group-hover:underline">Offline-First Arch</div>
-             <p class="text-sm font-mono">
-              &gt; Network: OPTIONAL.<br>
-              &gt; Conflict_Res: AUTOMATIC.<br>
+          <div
+            class="border-2 border-white p-6 hover:bg-white hover:text-black transition-none group relative"
+          >
+            <span class="absolute top-1 left-2 text-xs">+</span>
+            <span class="absolute top-1 right-2 text-xs">+</span>
+            <span class="absolute bottom-1 left-2 text-xs">+</span>
+            <span class="absolute bottom-1 right-2 text-xs">+</span>
+            <div class="text-xl mb-4 font-bold group-hover:underline">Offline-First Arch</div>
+            <p class="text-sm font-mono">
+              &gt; Network: OPTIONAL.<br />
+              &gt; Conflict_Res: AUTOMATIC.<br />
               &gt; Local-first architecture stores data in IndexedDB.
             </p>
           </div>
 
-          <div class="border-2 border-white p-6 hover:bg-white hover:text-black transition-none group relative">
-             <span class="absolute top-1 left-2 text-xs">+</span>
-             <span class="absolute top-1 right-2 text-xs">+</span>
-             <span class="absolute bottom-1 left-2 text-xs">+</span>
-             <span class="absolute bottom-1 right-2 text-xs">+</span>
-             <div class="text-xl mb-4 font-bold group-hover:underline">Type-Safe & Secure</div>
-             <p class="text-sm font-mono">
-              &gt; Lang: TYPESCRIPT/DART.<br>
-              &gt; Schema: STRICT.<br>
+          <div
+            class="border-2 border-white p-6 hover:bg-white hover:text-black transition-none group relative"
+          >
+            <span class="absolute top-1 left-2 text-xs">+</span>
+            <span class="absolute top-1 right-2 text-xs">+</span>
+            <span class="absolute bottom-1 left-2 text-xs">+</span>
+            <span class="absolute bottom-1 right-2 text-xs">+</span>
+            <div class="text-xl mb-4 font-bold group-hover:underline">Type-Safe & Secure</div>
+            <p class="text-sm font-mono">
+              &gt; Lang: TYPESCRIPT/DART.<br />
+              &gt; Schema: STRICT.<br />
               &gt; End-to-end type safety generated from schema.
             </p>
           </div>
@@ -113,7 +145,9 @@ import { AsciiGhost } from "../components/AsciiGhost";
     <section id="about" class="py-20 border-b border-white">
       <div class="max-w-7xl mx-auto px-4 grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
         <div>
-          <h2 class="text-3xl font-bold mb-6 uppercase decoration-dashed underline underline-offset-8">
+          <h2
+            class="text-3xl font-bold mb-6 uppercase decoration-dashed underline underline-offset-8"
+          >
             README.md
           </h2>
           <div class="space-y-4 text-sm md:text-base font-mono">
@@ -121,72 +155,70 @@ import { AsciiGhost } from "../components/AsciiGhost";
               <span class="font-bold text-green-500">user@spooky:~$</span> less README.md
             </p>
             <p class="border-l-2 border-white pl-4 py-2">
-              Spooky is a production-ready sync engine designed for modern
-              real-time applications. It bypasses traditional REST APIs
-              in favor of direct state synchronization.
+              Spooky is a production-ready sync engine designed for modern real-time applications.
+              It bypasses traditional REST APIs in favor of direct state synchronization.
             </p>
             <p class="border-l-2 border-white pl-4 py-2">
-              Built on SurrealDB, Spooky provides authentication-agnostic
-              security. It allows you to integrate with any identity provider
-              while maintaining fine-grained access control.
+              Built on SurrealDB, Spooky provides authentication-agnostic security. It allows you to
+              integrate with any identity provider while maintaining fine-grained access control.
             </p>
             <div class="mt-8">
-               <a href="https://github.com/mono424/spooky" target="_blank" class="inline-block border-2 border-white bg-black text-white px-6 py-2 hover:bg-white hover:text-black transition-none uppercase font-bold">
-                 [ READ_FULL_DOCS ]
-               </a>
+              <a
+                href="https://github.com/mono424/spooky"
+                target="_blank"
+                class="inline-block border-2 border-white bg-black text-white px-6 py-2 hover:bg-white hover:text-black transition-none uppercase font-bold"
+              >
+                [ READ_FULL_DOCS ]
+              </a>
             </div>
           </div>
         </div>
-        
-        <div class="border-4 border-double border-white p-4 flex items-center justify-center bg-black">
-          <pre class="text-[10px] sm:text-xs leading-tight font-bold">
-+-----------------------------------+
-|      ARCHITECTURE DIAGRAM         |
-+-----------------------------------+
-|                                   |
-|   [ CLIENT A ]     [ CLIENT B ]   |
-|        |                |         |
-|        v                v         |
-|   +--------------------------+    |
-|   |     LOCAL DATABASE       |    |
-|   +--------------------------+    |
-|              ^                    |
-|              | (SYNC PROTOCOL)    |
-|              v                    |
-|   +--------------------------+    |
-|   |     SPOOKY SERVER        |    |
-|   +--------------------------+    |
-|                                   |
-+-----------------------------------+
-          </pre>
+
+        <div
+          class="border-4 border-double border-white p-4 flex items-center justify-center bg-black"
+        >
+          <ArchitectureDiagram client:visible />
         </div>
       </div>
     </section>
 
     <section id="contact" class="py-20">
       <div class="max-w-4xl mx-auto px-4 text-center">
-        <h2 class="text-3xl font-bold mb-8 uppercase">
-          &lt; INPUT_TERMINAL /&gt;
-        </h2>
+        <h2 class="text-3xl font-bold mb-8 uppercase">&lt; INPUT_TERMINAL /&gt;</h2>
         <div class="border-2 border-white p-8 bg-black text-left font-mono relative">
-            <span class="absolute top-0 left-0 bg-white text-black px-2 text-xs font-bold">WRITE_MESSAGE</span>
-             <div class="space-y-6">
-                <div>
-                    <label class="block mb-2">&gt; ENTER_NAME:</label>
-                    <input type="text" class="w-full bg-black border-b-2 border-white outline-none p-2 focus:bg-white focus:text-black transition-none rounded-none" placeholder="_" />
-                </div>
-                <div>
-                    <label class="block mb-2">&gt; ENTER_EMAIL:</label>
-                    <input type="email" class="w-full bg-black border-b-2 border-white outline-none p-2 focus:bg-white focus:text-black transition-none rounded-none" placeholder="_" />
-                </div>
-                <div>
-                    <label class="block mb-2">&gt; MESSAGE_BODY:</label>
-                    <textarea rows="4" class="w-full bg-black border-2 border-white outline-none p-2 focus:bg-white focus:text-black transition-none rounded-none resize-none" placeholder="Type message here..."></textarea>
-                </div>
-                <button class="w-full border-2 border-white bg-white text-black py-4 uppercase font-bold hover:bg-black hover:text-white hover:border-white transition-none">
-                    [ TRANSMIT_DATA ]
-                </button>
-             </div>
+          <span class="absolute top-0 left-0 bg-white text-black px-2 text-xs font-bold"
+            >WRITE_MESSAGE</span
+          >
+          <div class="space-y-6">
+            <div>
+              <label class="block mb-2">&gt; ENTER_NAME:</label>
+              <input
+                type="text"
+                class="w-full bg-black border-b-2 border-white outline-none p-2 focus:bg-white focus:text-black transition-none rounded-none"
+                placeholder="_"
+              />
+            </div>
+            <div>
+              <label class="block mb-2">&gt; ENTER_EMAIL:</label>
+              <input
+                type="email"
+                class="w-full bg-black border-b-2 border-white outline-none p-2 focus:bg-white focus:text-black transition-none rounded-none"
+                placeholder="_"
+              />
+            </div>
+            <div>
+              <label class="block mb-2">&gt; MESSAGE_BODY:</label>
+              <textarea
+                rows="4"
+                class="w-full bg-black border-2 border-white outline-none p-2 focus:bg-white focus:text-black transition-none rounded-none resize-none"
+                placeholder="Type message here..."></textarea>
+            </div>
+            <button
+              class="w-full border-2 border-white bg-white text-black py-4 uppercase font-bold hover:bg-black hover:text-white hover:border-white transition-none"
+            >
+              [ TRANSMIT_DATA ]
+            </button>
+          </div>
         </div>
       </div>
     </section>
@@ -194,7 +226,7 @@ import { AsciiGhost } from "../components/AsciiGhost";
     <footer class="py-12 border-t-4 border-white border-double">
       <div class="max-w-7xl mx-auto px-4 flex flex-col md:flex-row justify-between items-center">
         <div class="mb-4 md:mb-0 font-bold flex items-center relative">
-           <pre class="text-[6px] leading-none mr-2">
+          <pre class="text-[6px] leading-none mr-2">
   .-.
  (o o)
  | O \
@@ -209,6 +241,5 @@ import { AsciiGhost } from "../components/AsciiGhost";
         </div>
       </div>
     </footer>
-
   </body>
 </html>

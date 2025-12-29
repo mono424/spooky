@@ -4,23 +4,23 @@
 export const schema = {
   tables: [
     {
-      name: 'user' as const,
+      name: 'comment' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
-        username: { type: 'string' as const, optional: false },
-        comments: { type: 'string' as const, optional: true },
-        threads: { type: 'string' as const, optional: true },
+        thread: { type: 'string' as const, recordId: true, optional: false },
+        author: { type: 'string' as const, recordId: true, optional: false },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
+        content: { type: 'string' as const, optional: false },
       },
       primaryKey: ['id'] as const
     },
     {
-      name: 'comment' as const,
+      name: 'user' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
-        content: { type: 'string' as const, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
-        author: { type: 'string' as const, recordId: true, optional: false },
-        thread: { type: 'string' as const, recordId: true, optional: false },
+        username: { type: 'string' as const, optional: false },
+        threads: { type: 'string' as const, optional: true },
+        comments: { type: 'string' as const, optional: true },
       },
       primaryKey: ['id'] as const
     },
@@ -29,10 +29,10 @@ export const schema = {
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
         title: { type: 'string' as const, optional: false },
-        author: { type: 'string' as const, recordId: true, optional: false },
-        content: { type: 'string' as const, optional: false },
         created_at: { type: 'string' as const, dateTime: true, optional: true },
+        content: { type: 'string' as const, optional: false },
         active: { type: 'boolean' as const, optional: true },
+        author: { type: 'string' as const, recordId: true, optional: false },
         comments: { type: 'string' as const, optional: true },
       },
       primaryKey: ['id'] as const
@@ -47,7 +47,25 @@ export const schema = {
   ],
   relationships: [
     {
-      from: 'user' as const,
+      from: 'comment' as const,
+      field: 'thread' as const,
+      to: 'thread' as const,
+      cardinality: 'one' as const
+    },
+    {
+      from: 'comment' as const,
+      field: 'author' as const,
+      to: 'user' as const,
+      cardinality: 'one' as const
+    },
+    {
+      from: 'thread' as const,
+      field: 'author' as const,
+      to: 'user' as const,
+      cardinality: 'one' as const
+    },
+    {
+      from: 'thread' as const,
       field: 'comments' as const,
       to: 'comment' as const,
       cardinality: 'many' as const
@@ -59,28 +77,10 @@ export const schema = {
       cardinality: 'many' as const
     },
     {
-      from: 'thread' as const,
-      field: 'author' as const,
-      to: 'user' as const,
-      cardinality: 'one' as const
-    },
-    {
-      from: 'thread' as const,
+      from: 'user' as const,
       field: 'comments' as const,
       to: 'comment' as const,
       cardinality: 'many' as const
-    },
-    {
-      from: 'comment' as const,
-      field: 'author' as const,
-      to: 'user' as const,
-      cardinality: 'one' as const
-    },
-    {
-      from: 'comment' as const,
-      field: 'thread' as const,
-      to: 'thread' as const,
-      cardinality: 'one' as const
     },
   ]
 } as const;
@@ -137,7 +137,7 @@ DEFINE FIELD title ON TABLE thread TYPE string
 DEFINE FIELD content ON TABLE thread TYPE string
     ASSERT $value != NONE AND string::len($value) > 0;
 
-DEFINE FIELD author ON TABLE thread TYPE record<user>;
+DEFINE FIELD author ON TABLE thread TYPE record<user>; -- @parent
 
 DEFINE FIELD created_at ON TABLE thread TYPE datetime
     VALUE time::now();
@@ -181,10 +181,6 @@ DEFINE EVENT comment_created ON TABLE comment WHEN $event = "CREATE" THEN
 DEFINE TABLE _spooky_incantation SCHEMALESS
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
--- The unique hash ID of the query + params
-DEFINE FIELD Id ON TABLE _spooky_incantation TYPE string
-PERMISSIONS FOR select, create, update WHERE true;
-
 -- The raw query string (for re-hydration/debugging)
 DEFINE FIELD SurrealQL ON TABLE _spooky_incantation TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
@@ -194,7 +190,7 @@ DEFINE FIELD ClientId ON TABLE _spooky_incantation TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- The current XOR sum of all results in this query
-DEFINE FIELD Hash ON TABLE _spooky_incantation TYPE string
+DEFINE FIELD Hash ON TABLE _spooky_incantation TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- The Radix Tree of Result IDs for efficient sync
@@ -209,30 +205,6 @@ PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD TTL ON TABLE _spooky_incantation TYPE duration
 PERMISSIONS FOR select, create, update WHERE true;
 
--- ==================================================
--- SPOOKY RELATIONSHIP
--- The Graph Schema: Defines 'Bubble Up' vs 'Cascade Down'
--- ==================================================
-
-DEFINE TABLE _spooky_relationship SCHEMAFULL
-PERMISSIONS FOR select, create, update, delete WHERE true;
-
-DEFINE FIELD ParentTable ON TABLE _spooky_relationship TYPE string
-PERMISSIONS FOR select, create, update WHERE true;
-DEFINE FIELD ChildTable ON TABLE _spooky_relationship TYPE string
-PERMISSIONS FOR select, create, update WHERE true;
-
--- The field on the Child that holds the Parent's ID
-DEFINE FIELD ChildField ON TABLE _spooky_relationship TYPE string
-PERMISSIONS FOR select, create, update WHERE true;
-
--- The Logic Flow: 'COMPOSITION' (Bubble Up) or 'REFERENCE' (Cascade Down)
-DEFINE FIELD Type ON TABLE _spooky_relationship TYPE string 
-    ASSERT $value INSIDE ['COMPOSITION', 'REFERENCE']
-PERMISSIONS FOR select, create, update WHERE true;
-
--- Enforce unique definition per relationship path
-DEFINE INDEX idx_rel_unique ON TABLE _spooky_relationship COLUMNS ParentTable, ChildTable, ChildField UNIQUE;
 
 -- ==================================================
 -- SPOOKY SCHEMA
@@ -310,7 +282,8 @@ PERMISSIONS FOR select, create, update WHERE true;
 DEFINE EVENT OVERWRITE _spooky_comment_client_mutation ON TABLE comment
 WHEN $before != $after AND $event != "DELETE"
 THEN {
-    UPSERT _spooky_data_hash CONTENT {
+    LET $hash_id = <record>("_spooky_data_hash:" + crypto::blake3(<string>$after.id));
+    UPSERT $hash_id CONTENT {
         RecordId: $after.id,
         IntrinsicHash: "",
         CompositionHash: "",
@@ -324,14 +297,16 @@ THEN {
 DEFINE EVENT OVERWRITE _spooky_comment_client_delete ON TABLE comment
 WHEN $event = "DELETE"
 THEN {
-    UPDATE _spooky_data_hash SET PendingDelete = true WHERE RecordId = $before.id;
+    LET $hash_id = <record>("_spooky_data_hash:" + crypto::blake3(<string>$before.id));
+    UPDATE $hash_id SET PendingDelete = true;
 };
 
 -- Table: thread Client Mutation
 DEFINE EVENT OVERWRITE _spooky_thread_client_mutation ON TABLE thread
 WHEN $before != $after AND $event != "DELETE"
 THEN {
-    UPSERT _spooky_data_hash CONTENT {
+    LET $hash_id = <record>("_spooky_data_hash:" + crypto::blake3(<string>$after.id));
+    UPSERT $hash_id CONTENT {
         RecordId: $after.id,
         IntrinsicHash: "",
         CompositionHash: "",
@@ -345,14 +320,16 @@ THEN {
 DEFINE EVENT OVERWRITE _spooky_thread_client_delete ON TABLE thread
 WHEN $event = "DELETE"
 THEN {
-    UPDATE _spooky_data_hash SET PendingDelete = true WHERE RecordId = $before.id;
+    LET $hash_id = <record>("_spooky_data_hash:" + crypto::blake3(<string>$before.id));
+    UPDATE $hash_id SET PendingDelete = true;
 };
 
 -- Table: user Client Mutation
 DEFINE EVENT OVERWRITE _spooky_user_client_mutation ON TABLE user
 WHEN $before != $after AND $event != "DELETE"
 THEN {
-    UPSERT _spooky_data_hash CONTENT {
+    LET $hash_id = <record>("_spooky_data_hash:" + crypto::blake3(<string>$after.id));
+    UPSERT $hash_id CONTENT {
         RecordId: $after.id,
         IntrinsicHash: "",
         CompositionHash: "",
@@ -366,6 +343,7 @@ THEN {
 DEFINE EVENT OVERWRITE _spooky_user_client_delete ON TABLE user
 WHEN $event = "DELETE"
 THEN {
-    UPDATE _spooky_data_hash SET PendingDelete = true WHERE RecordId = $before.id;
+    LET $hash_id = <record>("_spooky_data_hash:" + crypto::blake3(<string>$before.id));
+    UPDATE $hash_id SET PendingDelete = true;
 };
 `;

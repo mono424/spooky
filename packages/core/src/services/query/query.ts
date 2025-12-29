@@ -26,7 +26,7 @@ export class QueryManager<S extends SchemaStructure> {
     private schema: S,
     private local: LocalDatabaseService,
     private remote: RemoteDatabaseService,
-    private clientId?: string
+    private clientId: string
   ) {
     this.events = createQueryEventSystem();
     this.events.subscribe(
@@ -74,11 +74,13 @@ export class QueryManager<S extends SchemaStructure> {
     tableName: string,
     surrealql: string,
     params: Record<string, any>,
-    ttl: QueryTimeToLive
+    ttl: QueryTimeToLive = '10m'
   ): Promise<QueryHash> {
+    const effectiveTtl = ttl || '10m';
     const id = await this.calculateHash({
       surrealql,
       params,
+      clientId: this.clientId,
     });
 
     const recordId = new RecordId('_spooky_incantation', id);
@@ -94,7 +96,7 @@ export class QueryManager<S extends SchemaStructure> {
         Hash: id,
         Tree: null,
         LastActiveAt: new Date(),
-        TTL: new Duration(ttl),
+        TTL: new Duration(effectiveTtl),
       });
 
     if (!this.activeQueries.has(id)) {
@@ -104,7 +106,7 @@ export class QueryManager<S extends SchemaStructure> {
         params,
         hash: id,
         lastActiveAt: Date.now(),
-        ttl,
+        ttl: effectiveTtl,
         tree: null,
         meta: {
           tableName,
@@ -121,7 +123,7 @@ export class QueryManager<S extends SchemaStructure> {
     tableName: string,
     surrealql: string,
     params: Record<string, any>,
-    ttl: QueryTimeToLive
+    ttl: QueryTimeToLive = '10m'
   ): Promise<QueryHash> {
     return this.register(tableName, surrealql, params, ttl);
   }
@@ -163,22 +165,31 @@ export class QueryManager<S extends SchemaStructure> {
   }
 
   private async startLiveQuery() {
-    const queryUuid = await this.remote.getClient().live(new Table('_spooky_incantation')).diff();
+    await this.remote
+      .getClient()
+      .query('LET $_spooky_client_id = $clientId', { clientId: this.clientId });
+    const liveQuery = await this.remote.getClient().live(new Table('_spooky_incantation'));
 
-    await this.remote.subscribeLive(queryUuid.toString(), async (action, result) => {
+    console.log('live queryUuid', liveQuery);
+    await liveQuery.subscribe(async (message) => {
+      console.log('live query message', message);
+      const { action, recordId, value } = message;
       if (action === 'UPDATE' || action === 'CREATE') {
-        const { id, hash, tree } = result;
-        if (!(id instanceof RecordId) || !hash || !tree) {
+        const { Hash: hash, Tree: tree } = value;
+        if (!hash || !tree) {
           return;
         }
-
-        const incantation = this.activeQueries.get(id.id.toString());
+        const incantation = this.activeQueries.get(recordId.id.toString());
         if (!incantation) {
           return;
         }
 
+        console.log('live test', value);
+        console.log('live hash', hash);
+        console.log('live tree', tree);
+
         this.events.emit(QueryEventTypes.IncantationRemoteHashUpdate, {
-          incantationId: id as RecordId<string>,
+          incantationId: recordId,
           surrealql: incantation.surrealql,
           localHash: incantation.hash,
           localTree: incantation.tree,

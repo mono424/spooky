@@ -23,7 +23,7 @@ async function getContainer() {
       .withExposedPorts(8000)
       .withEnvironment({
         SURREAL_BUCKET_FOLDER_ALLOWLIST: '/modules',
-        SURREAL_CAPS_ALLOW_EXPERIMENTAL: 'surrealism,files',
+        SURREAL_CAPS_ALLOW_EXPERIMENTAL: 'surrealism,files,kv',
       })
       .withBindMounts([
         { source: path.join(modulesDir, 'xor_module.surli'), target: '/modules/xor_module.surli' },

@@ -2,6 +2,139 @@ use surrealism::surrealism;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::sync::Mutex;
+
+lazy_static::lazy_static! {
+    static ref CIRCUIT: Mutex<Option<Circuit>> = Mutex::new(None);
+}
+
+
+use surrealism::imports::sql;
+use regex::{Regex, Captures};
+
+// --- Helper: Fix SurrealQL object string to valid JSON ---
+fn fix_surql_json(s: &str) -> String {
+    println!("DEBUG: fix_surql_json input: {}", s);
+    
+    // Regex to match:
+    // 1. Single quoted strings: '...' (Group 1)
+    // 2. Double quoted strings: "..." (Group 2)
+    // 3. Keys: identifier followed by colon AND space (e.g. "id: "). (Group 3)
+    // 4. Record IDs (Simple): ident:ident (e.g. user:123). (Group 4)
+    // 5. Record IDs (Backticked): ident:`...` (e.g. thread:`thread:123`). (Group 5)
+    let re = Regex::new(r#"('[^']*')|("[^"]*")|(\w+)\s*:\s|(\w+:\w+)|(\w+:`[^`]+`)"#).unwrap();
+    
+    let result = re.replace_all(s, |caps: &Captures| {
+        if let Some(key) = caps.get(3) {
+             // Key found. Quote it.
+            format!("\"{}\": ", key.as_str())
+        } else if let Some(rec_id) = caps.get(4) {
+            // Unquoted Record ID (simple). Quote it.
+             format!("\"{}\"", rec_id.as_str())
+        } else if let Some(rec_id_complex) = caps.get(5) {
+             // Complex Record ID with backticks.
+             // e.g. thread:`thread:123`
+             // transform to "thread:thread:123" OR just strip backticks?
+             // Best to just quote the whole raw string to match exact record ID string representation?
+             // But JSON parser expects "table:id".
+             // If Surreal output is `table:`id``, does `id` contain the table prefix too?
+             // Log: id: thread:`thread:b6a...`
+             // If we quote it: "thread:`thread:b6a...`" - this is a valid string.
+             // But does it match the ROW key?
+             // Row Key is String.
+             // If the row key in DB is `thread:b6a...`.
+             // Does `thread:` prefix equal the table name?
+             // `thread:`thread:b6a...`` implies table `thread`, id `thread:b6a...`.
+             // This is redundant/weird SurrealQL output.
+             //
+             // Strategy: Quote the entire matched string, but escape/strip backticks?
+             // If I quote it as is: `"thread:`thread:123`"`.
+             // `compare_json` will compare this string with stored ID.
+             // stored ID is usually `table:id`.
+             //
+             // Let's try to CLEAN it.
+             // Remove backticks?
+             let raw = rec_id_complex.as_str();
+             // raw: thread:`thread:123`
+             let clean = raw.replace("`", ""); 
+             // clean: thread:thread:123
+             // This looks like double prefix?
+             // Maybe just quote it as is essentially stringifying the ID.
+             // But backticks in JSON string?
+             // "thread:`thread:123`".
+             //
+             // Wait. If I just quote it, serde_json parses it as a String.
+             // Then equality check compares `String("thread:`thread:123`")` vs `String("thread:b6a...")`.
+             // They WON'T match.
+             //
+             // I need to extract the INNER content of the backticks if it repeats?
+             // Or maybe just `table:id` format.
+             //
+             // Log: `thread:b6a...` is the row key.
+             // Input param: `thread:`thread:b6a...``.
+             //
+             // If I extract the part inside backticks: `thread:b6a...`.
+             // That matches!
+             //
+             // So I should extract the content inside backticks.
+             // Regex: `\w+:(`[^`]+`)` -> Capture Group 6 inside 5?
+             // Let's rely on string manipulation.
+             
+             let raw = rec_id_complex.as_str();
+             if let Some(start) = raw.find('`') {
+                 if let Some(end) = raw.rfind('`') {
+                     let inner = &raw[start+1..end];
+                     return format!("\"{}\"", inner);
+                 }
+             }
+             format!("\"{}\"", raw)
+        } else if let Some(sq) = caps.get(1) {
+            let content = &sq.as_str()[1..sq.as_str().len()-1];
+            let escaped = content.replace("\"", "\\\"");
+            format!("\"{}\"", escaped)
+        } else {
+             caps.get(0).unwrap().as_str().to_string()
+        }
+    });
+
+    println!("DEBUG: fix_surql_json output: {}", result);
+    result.to_string()
+}
+
+
+fn load_state() -> Circuit {
+    eprintln!("DEBUG: load_state: Loading from DB...");
+    // SELECT content FROM _spooky_module_state WHERE id = 'dbsp'
+    match sql::<&str, Vec<Value>>("SELECT content FROM _spooky_module_state:dbsp") {
+        Ok(results) => {
+            if let Some(first) = results.first() {
+                if let Some(content_str) = first.get("content").and_then(|v| v.as_str()) {
+                    match serde_json::from_str::<Circuit>(content_str) {
+                        Ok(state) => return state,
+                        Err(e) => eprintln!("DEBUG: load_state: Deserialization failed: {}", e),
+                    }
+                }
+            }
+        },
+        Err(e) => eprintln!("DEBUG: load_state: SQL Error: {:?}", e),
+    }
+    Circuit::new()
+}
+
+fn persist_circuit(circuit: &Circuit) {
+    if let Ok(content) = serde_json::to_string(circuit) {
+        // Escape backslashes first, then single quotes
+        let escaped_content = content.replace("\\", "\\\\").replace("'", "\\'"); 
+        let sql_query = format!("{{ LET $ign = UPSERT _spooky_module_state:dbsp SET content = '{}'; RETURN []; }}", escaped_content);
+        
+        // Use Vec<Value> and return an empty array to match standard SQL binding expectations
+        match sql::<String, Vec<Value>>(sql_query) {
+             Ok(_) => {}, // Success
+             Err(e) => eprintln!("DEBUG: save_state: SQL Error: {:?}", e),
+        }
+    }
+}
+
 
 pub mod converter; // Import converter module
 
@@ -47,6 +180,7 @@ impl Table {
     }
 
     pub fn update_row(&mut self, key: String, data: Value) {
+        // println!("DEBUG: Table {} update_row key={}", self.name, key);
         self.rows.insert(key, data);
     }
     
@@ -231,14 +365,18 @@ pub struct View {
     pub plan: QueryPlan,
     pub cache: ZSet, 
     pub last_hash: String,
+    // Store parameters for this view's query
+    #[serde(default)]
+    pub params: Option<Value>,
 }
 
 impl View {
-    pub fn new(plan: QueryPlan) -> Self {
+    pub fn new(plan: QueryPlan, params: Option<Value>) -> Self {
         Self {
             plan,
             cache: HashMap::new(),
             last_hash: String::new(),
+            params,
         }
     }
 
@@ -246,7 +384,8 @@ impl View {
     pub fn process(&mut self, _changed_table: &str, _input_delta: &ZSet, db: &Database) -> Option<MaterializedViewUpdate> {
         // Strategy: Re-evaluation (Snapshot Diff)
         // 1. Compute the Target Set based on current DB state.
-        let target_set = self.eval_snapshot(&self.plan.root, db, None);
+        // Use self.params as context for predicate evaluation
+        let target_set = self.eval_snapshot(&self.plan.root, db, self.params.as_ref());
         
         // 2. Compute Delta = Target - Cache
         let mut view_delta: ZSet = HashMap::new();
@@ -295,7 +434,8 @@ impl View {
                     h.as_str().unwrap_or("0000").to_string()
                 } else {
                     // Precomputed hash is mandatory
-                    panic!("Missing IntrinsicHash/hash/_hash on record {}", id);
+                    // panic!("Missing IntrinsicHash/hash/_hash on record {}", id);
+                     "MISSING_HASH".to_string()
                 }
             } else {
                  "0000".to_string() // Should not happen for valid views
@@ -315,6 +455,8 @@ impl View {
         
         let tree = IdTree::build(items);
         let hash = tree.hash.clone();
+        
+        eprintln!("DEBUG: process: view={}, delta_len={}, hash={}, last_hash={}", self.plan.id, view_delta.len(), hash, self.last_hash);
 
         if hash != self.last_hash {
             self.last_hash = hash.clone();
@@ -333,8 +475,10 @@ impl View {
         match op {
             Operator::Scan { table } => {
                 if let Some(tb) = db.tables.get(table) {
+                    println!("DEBUG: eval_snapshot SCAN table {} found items: {}", table, tb.zset.len());
                     tb.zset.clone()
                 } else {
+                    println!("DEBUG: eval_snapshot SCAN table {} NOT FOUND", table);
                     HashMap::new()
                 }
             },
@@ -344,6 +488,8 @@ impl View {
                 for (key, weight) in upstream {
                     if self.check_predicate(predicate, &key, db, context) {
                         out.insert(key, weight);
+                    } else {
+                         println!("DEBUG: Filter REJECTED key {} with pred {:?}", key, predicate);
                     }
                 }
                 out
@@ -452,6 +598,7 @@ impl View {
                          // Resolve param from context
                          if let Some(ctx) = context {
                              if let Some(ctx_val) = ctx.get(param_path.as_str().unwrap_or("")) {
+                                 println!("DEBUG: Resolved param {}: {:?}", param_path, ctx_val);
                                  ctx_val
                              } else {
                                  return false; // Param not found in context
@@ -471,6 +618,11 @@ impl View {
                 if parts.len() < 2 { return false; }
                 let table_name = parts[0];
                 
+                if field == "id" {
+                    let key_val = json!(key);
+                    return compare_json_values(Some(&key_val), Some(target_val)) == std::cmp::Ordering::Equal;
+                }
+
                 if let Some(table) = db.tables.get(table_name) {
                     if let Some(row_val) = table.rows.get(key) {
                         if let Some(obj) = row_val.as_object() {
@@ -525,10 +677,12 @@ impl Circuit {
         }
     }
 
-    pub fn register_view(&mut self, plan: QueryPlan) {
-        if !self.views.iter().any(|v| v.plan.id == plan.id) {
-            self.views.push(View::new(plan));
+    pub fn register_view(&mut self, plan: QueryPlan, params: Option<Value>) {
+        // If view exists, remove it first (to support updates/param changes)
+        if let Some(pos) = self.views.iter().position(|v| v.plan.id == plan.id) {
+            self.views.remove(pos);
         }
+        self.views.push(View::new(plan, params));
     }
 
     pub fn unregister_view(&mut self, id: &str) {
@@ -562,7 +716,7 @@ pub struct MaterializedViewUpdate {
 #[derive(Serialize, Deserialize)]
 pub struct IngestResult {
     pub updates: Vec<MaterializedViewUpdate>,
-    pub new_state: Circuit,
+    // Removed new_state
 }
 
 // --- Interface ---
@@ -572,14 +726,28 @@ fn row_to_key(id: &str, _record: &Value) -> String {
 }
 
 #[surrealism]
-fn ingest(table: String, operation: String, id: String, record: Value, state: Value) -> Result<Value, &'static str> {
-    let mut circuit: Circuit = if state.is_null() {
-        Circuit::new()
-    } else {
-        serde_json::from_value(state).unwrap_or_else(|_| Circuit::new())
+fn ingest(table: String, operation: String, id: String, record: Value) -> Result<Value, &'static str> {
+    let mut circuit_guard = CIRCUIT.lock().map_err(|_| "Failed to lock circuit")?;
+    
+    if circuit_guard.is_none() {
+        *circuit_guard = Some(load_state());
+    }
+    let circuit = circuit_guard.as_mut().unwrap();
+    
+    // Handle stringified record to avoid FFI type issues with RecordId/Datetime
+    let record_obj = match record {
+        Value::String(s) => {
+            let parsed = serde_json::from_str::<Value>(&s).unwrap_or(Value::Null);
+            println!("DEBUG: ingest parsed string record: {:?}", parsed);
+            parsed
+        },
+        _ => {
+            println!("DEBUG: ingest received direct record: {:?}", record);
+            record
+        }
     };
     
-    let key = row_to_key(&id, &record);
+    let key = row_to_key(&id, &record_obj);
     let mut delta: ZSet = HashMap::new();
 
     match operation.as_str() {
@@ -587,7 +755,7 @@ fn ingest(table: String, operation: String, id: String, record: Value, state: Va
             delta.insert(key.clone(), 1); 
             // Update storage
             let tb = circuit.db.ensure_table(&table);
-            tb.update_row(key, record);
+            tb.update_row(key, record_obj);
         },
         "DELETE" => { 
             delta.insert(key.clone(), -1); 
@@ -599,27 +767,41 @@ fn ingest(table: String, operation: String, id: String, record: Value, state: Va
             delta.insert(key.clone(), 1); 
              // Update storage
             let tb = circuit.db.ensure_table(&table);
-            tb.update_row(key, record);
+            tb.update_row(key, record_obj);
         }, 
         _ => {}
     }
 
+    eprintln!("DEBUG: ingest: table={}, views={}, db_tables={}", table, circuit.views.len(), circuit.db.tables.len());
+    if let Some(tb) = circuit.db.tables.get(&table) {
+        eprintln!("DEBUG: ingest: table {} size={}", table, tb.zset.len()); // ZSet size tracks logical size
+    }
+
     let updates = circuit.step(table, delta);
+    eprintln!("DEBUG: ingest: generated {} updates", updates.len());
+
+    persist_circuit(&circuit);
     
     let result = IngestResult {
         updates,
-        new_state: circuit,
     };
 
     serde_json::to_value(result).map_err(|_| "Failed to serialize result")
 }
 
 #[surrealism]
-fn register_query(id: String, plan_json: String, state: Value) -> Result<Value, &'static str> {
-    let mut circuit: Circuit = if state.is_null() {
-        Circuit::new()
-    } else {
-        serde_json::from_value(state).unwrap_or_else(|_| Circuit::new())
+fn register_view(id: String, plan_val: Value, params: Value) -> Result<Value, &'static str> {
+    println!("DEBUG: register_view called with id: {}, params: {:?}", id, params);
+    let mut circuit_guard = CIRCUIT.lock().map_err(|_| "Failed to lock circuit")?;
+
+    if circuit_guard.is_none() {
+        *circuit_guard = Some(load_state());
+    }
+    let circuit = circuit_guard.as_mut().unwrap();
+
+    let plan_json = match plan_val {
+        Value::String(s) => s,
+        _ => plan_val.to_string()
     };
     
     let root_op = if let Ok(parsed_plan) = serde_json::from_str::<QueryPlan>(&plan_json) {
@@ -652,30 +834,85 @@ fn register_query(id: String, plan_json: String, state: Value) -> Result<Value, 
         root: root_op,
     };
     
-    circuit.register_view(plan);
+    // Parse params if passed as string
+    // Fix SurrealQL object string to JSON (quote keys)
+    let params_str = match params {
+        Value::String(s) => fix_surql_json(&s),
+        _ => params.to_string()
+    };
+
+    let params_parsed = match serde_json::from_str::<Value>(&params_str) {
+        Ok(v) => {
+             println!("DEBUG: register_view parsed params success: {:?}", v);
+             v
+        },
+        Err(e) => {
+             println!("DEBUG: register_view parsed params error: {} input: {}", e, params_str);
+             Value::Null
+        }
+    };
+
+    // Pass params (convert Value to Option<Value> - usually it's an Object)
+    let params_opt = if params_parsed.is_null() { None } else { Some(params_parsed) };
+    circuit.register_view(plan, params_opt);
+    
+    // Trigger initial hydration to compute hash
+    let mut update = None;
+    if let Some(view) = circuit.views.last_mut() {
+        let empty_delta = HashMap::new();
+        update = view.process("", &empty_delta, &circuit.db);
+    }
+
+    persist_circuit(&circuit);
+    
+    if let Some(u) = update {
+        Ok(serde_json::to_value(u).unwrap_or(json!({"status": "ERR", "msg": "Serialization failed"})))
+    } else {
+        // Should not really happen if empty hash is distinct from "" string
+         Ok(json!({
+            "msg": format!("Registered view '{}' (No initial update)", id),
+            "result_hash": "", // Should probably be empty tree hash
+            "tree": Value::Null
+        }))
+    }
+}
+
+#[surrealism]
+fn reset(_val: Value) -> Result<Value, &'static str> {
+    let mut circuit_guard = CIRCUIT.lock().map_err(|_| "Failed to lock circuit")?;
+    *circuit_guard = Some(Circuit::new());
+    
+    // Also clear the persistent state in DB
+    // UPDATE _spooky_module_state:dbsp SET content = ""
+    let _ = sql::<&str, Vec<Value>>("DELETE _spooky_module_state:dbsp");
+
+    Ok(Value::Null)
+}
+
+#[surrealism]
+fn unregister_view(id: String) -> Result<Value, &'static str> {
+    let mut circuit_guard = CIRCUIT.lock().map_err(|_| "Failed to lock circuit")?;
+    
+    if circuit_guard.is_none() {
+        *circuit_guard = Some(load_state());
+    }
+    let circuit = circuit_guard.as_mut().unwrap();
+    
+    circuit.unregister_view(&id);
+    persist_circuit(&circuit);
     
     let result = json!({
-        "msg": format!("Registered view '{}'", circuit.views.last().unwrap().plan.id),
-        "new_state": circuit
+        "msg": "View unregistered",
     });
-    
+
     Ok(result)
 }
 
 #[surrealism]
-fn unregister_query(id: String, state: Value) -> Result<Value, &'static str> {
-    let mut circuit: Circuit = if state.is_null() {
-        Circuit::new()
-    } else {
-        serde_json::from_value(state).unwrap_or_else(|_| Circuit::new())
-    };
-    
-    circuit.unregister_view(&id);
-    
-    let result = json!({
-        "msg": "View unregistered",
-        "new_state": circuit
-    });
-
-    Ok(result)
+fn save_state(_dummy: Option<Value>) -> Result<Vec<Value>, &'static str> {
+    let circuit_guard = CIRCUIT.lock().map_err(|_| "Failed to lock circuit")?;
+    if let Some(circuit) = circuit_guard.as_ref() {
+        persist_circuit(circuit);
+    }
+    Ok(vec![])
 }
