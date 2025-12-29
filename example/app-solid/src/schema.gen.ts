@@ -4,30 +4,23 @@
 export const schema = {
   tables: [
     {
-      name: 'user' as const,
-      columns: {
-        id: { type: 'string' as const, recordId: true, optional: false },
-        username: { type: 'string' as const, optional: false },
-        comments: { type: 'string' as const, optional: true },
-        threads: { type: 'string' as const, optional: true },
-      },
-      primaryKey: ['id'] as const
-    },
-    {
-      name: 'commented_on' as const,
-      columns: {
-        id: { type: 'string' as const, recordId: true, optional: false },
-      },
-      primaryKey: ['id'] as const
-    },
-    {
       name: 'comment' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
         thread: { type: 'string' as const, recordId: true, optional: false },
-        content: { type: 'string' as const, optional: false },
         author: { type: 'string' as const, recordId: true, optional: false },
         created_at: { type: 'string' as const, dateTime: true, optional: true },
+        content: { type: 'string' as const, optional: false },
+      },
+      primaryKey: ['id'] as const
+    },
+    {
+      name: 'user' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
+        username: { type: 'string' as const, optional: false },
+        threads: { type: 'string' as const, optional: true },
+        comments: { type: 'string' as const, optional: true },
       },
       primaryKey: ['id'] as const
     },
@@ -35,12 +28,19 @@ export const schema = {
       name: 'thread' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
-        active: { type: 'boolean' as const, optional: true },
-        content: { type: 'string' as const, optional: false },
         title: { type: 'string' as const, optional: false },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
+        content: { type: 'string' as const, optional: false },
+        active: { type: 'boolean' as const, optional: true },
         author: { type: 'string' as const, recordId: true, optional: false },
         comments: { type: 'string' as const, optional: true },
+      },
+      primaryKey: ['id'] as const
+    },
+    {
+      name: 'commented_on' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
       },
       primaryKey: ['id'] as const
     },
@@ -72,14 +72,14 @@ export const schema = {
     },
     {
       from: 'user' as const,
-      field: 'comments' as const,
-      to: 'comment' as const,
+      field: 'threads' as const,
+      to: 'thread' as const,
       cardinality: 'many' as const
     },
     {
       from: 'user' as const,
-      field: 'threads' as const,
-      to: 'thread' as const,
+      field: 'comments' as const,
+      to: 'comment' as const,
       cardinality: 'many' as const
     },
   ]
@@ -180,10 +180,6 @@ DEFINE EVENT comment_created ON TABLE comment WHEN $event = "CREATE" THEN
 
 DEFINE TABLE _spooky_incantation SCHEMALESS
 PERMISSIONS FOR select, create, update, delete WHERE true;
-
--- The unique hash ID of the query + params
-DEFINE FIELD Id ON TABLE _spooky_incantation TYPE string
-PERMISSIONS FOR select, create, update WHERE true;
 
 -- The raw query string (for re-hydration/debugging)
 DEFINE FIELD SurrealQL ON TABLE _spooky_incantation TYPE option<string>

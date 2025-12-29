@@ -160,7 +160,6 @@ export class SpookySync<S extends SchemaStructure> {
           SurrealQL: surrealql,
           Params: params,
           TTL: new Duration(effectiveTtl),
-          Id: incantationId.id.toString(),
           LastActiveAt: new Date(),
           ClientId: this.clientId,
         },
@@ -268,10 +267,16 @@ export class SpookySync<S extends SchemaStructure> {
       tree: any;
     }
   ) {
-    await this.local.query(`UPDATE $id MERGE $content`, {
-      id: incantationId,
-      content: { hash, tree },
-    });
+    try {
+      console.log('[SpookySync] Updating local incantation', { incantationId, hash, tree });
+      await this.local.query(`UPDATE $id MERGE $content`, {
+        id: incantationId,
+        content: { hash, tree },
+      });
+    } catch (e) {
+      console.error('[SpookySync] Failed to update local incantation record', e);
+      throw e;
+    }
   }
 
   private async cacheResults(results: Record<string, any>[]) {

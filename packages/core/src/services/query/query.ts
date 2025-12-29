@@ -26,7 +26,7 @@ export class QueryManager<S extends SchemaStructure> {
     private schema: S,
     private local: LocalDatabaseService,
     private remote: RemoteDatabaseService,
-    private clientId?: string
+    private clientId: string
   ) {
     this.events = createQueryEventSystem();
     this.events.subscribe(
@@ -164,6 +164,9 @@ export class QueryManager<S extends SchemaStructure> {
   }
 
   private async startLiveQuery() {
+    await this.remote
+      .getClient()
+      .query('LET $_spooky_client_id = $clientId', { clientId: this.clientId });
     const liveQuery = await this.remote.getClient().live(new Table('_spooky_incantation'));
 
     console.log('live queryUuid', liveQuery);
@@ -171,17 +174,18 @@ export class QueryManager<S extends SchemaStructure> {
       console.log('live query message', message);
       const { action, recordId, value } = message;
       if (action === 'UPDATE' || action === 'CREATE') {
-        console.log('live test', value);
         const { Hash: hash, Tree: tree } = value;
         if (!hash || !tree) {
           return;
         }
-        console.log('live hash', hash);
-        console.log('live tree', tree);
         const incantation = this.activeQueries.get(recordId.id.toString());
         if (!incantation) {
           return;
         }
+
+        console.log('live test', value);
+        console.log('live hash', hash);
+        console.log('live tree', tree);
 
         this.events.emit(QueryEventTypes.IncantationRemoteHashUpdate, {
           incantationId: recordId,

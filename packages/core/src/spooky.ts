@@ -38,27 +38,22 @@ export class SpookyClient<S extends SchemaStructure> {
   }
 
   constructor(private config: SpookyConfig<S>) {
-    if (!this.config.clientId) {
-      this.config.clientId = crypto.randomUUID();
-    }
+    const clientId = this.config.clientId ?? this.loadOrGenerateClientId();
+    this.persistClientId(clientId);
+
     const logger = createLogger('info'); // Default logger
     this.local = new LocalDatabaseService(this.config.database);
     this.remote = new RemoteDatabaseService(this.config.database);
     this.migrator = new LocalMigrator(this.local);
     this.mutationManager = new MutationManager(this.config.schema, this.local);
-    this.queryManager = new QueryManager(
-      this.config.schema,
-      this.local,
-      this.remote,
-      this.config.clientId
-    );
+    this.queryManager = new QueryManager(this.config.schema, this.local, this.remote, clientId);
     this.sync = new SpookySync(
       this.config.schema,
       this.local,
       this.remote,
       this.mutationManager.events,
       this.queryManager.eventsSystem,
-      this.config.clientId
+      clientId
     );
     this.devTools = new DevToolsService(
       this.mutationManager.events,
@@ -137,5 +132,30 @@ export class SpookyClient<S extends SchemaStructure> {
 
   async useRemote<T>(fn: (client: Surreal) => Promise<T> | T): Promise<T> {
     return fn(this.remote.getClient());
+  }
+
+  private persistClientId(id: string) {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('spooky_client_id', id);
+      }
+    } catch (e) {
+      console.warn('[SpookyClient] Failed to persist client ID', e);
+    }
+  }
+
+  private loadOrGenerateClientId(): string {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const stored = localStorage.getItem('spooky_client_id');
+        if (stored) return stored;
+      }
+    } catch (e) {
+      console.warn('[SpookyClient] Failed to load client ID', e);
+    }
+
+    const newId = crypto.randomUUID();
+    this.persistClientId(newId);
+    return newId;
   }
 }

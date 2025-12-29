@@ -162,7 +162,6 @@ class SpookyIncantation {
     String? hash;
     
     ///Record ID
-    String spookyIncantationId;
     String id;
     DateTime lastActiveAt;
     String? surrealQl;
@@ -176,7 +175,6 @@ class SpookyIncantation {
     SpookyIncantation({
         this.clientId,
         this.hash,
-        required this.spookyIncantationId,
         required this.id,
         required this.lastActiveAt,
         this.surrealQl,
@@ -187,8 +185,7 @@ class SpookyIncantation {
     factory SpookyIncantation.fromJson(Map<String, dynamic> json) => SpookyIncantation(
         clientId: json["ClientId"],
         hash: json["Hash"],
-        spookyIncantationId: json["id"],
-        id: json["Id"],
+        id: json["id"],
         lastActiveAt: DateTime.parse(json["LastActiveAt"]),
         surrealQl: json["SurrealQL"],
         tree: json["Tree"],
@@ -198,8 +195,7 @@ class SpookyIncantation {
     Map<String, dynamic> toJson() => {
         "ClientId": clientId,
         "Hash": hash,
-        "id": spookyIncantationId,
-        "Id": id,
+        "id": id,
         "LastActiveAt": lastActiveAt.toIso8601String(),
         "SurrealQL": surrealQl,
         "Tree": tree,
@@ -440,10 +436,6 @@ DEFINE EVENT comment_created ON TABLE comment WHEN \$event = \"CREATE\" THEN
 
 DEFINE TABLE _spooky_incantation SCHEMALESS
 PERMISSIONS FOR select, create, update, delete WHERE true;
-
--- The unique hash ID of the query + params
-DEFINE FIELD Id ON TABLE _spooky_incantation TYPE string
-PERMISSIONS FOR select, create, update WHERE true;
 
 -- The raw query string (for re-hydration/debugging)
 DEFINE FIELD SurrealQL ON TABLE _spooky_incantation TYPE option<string>
