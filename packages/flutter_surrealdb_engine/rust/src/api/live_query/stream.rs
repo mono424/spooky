@@ -45,7 +45,7 @@ pub(crate) async fn run_live_query_loop<C: surrealdb::Connection>(
     LiveQueryManager::unregister(&query_uuid);
 }
 
-fn process_and_send(
+pub(crate) fn process_and_send(
     notification: &Notification<Value>, 
     sink: &StreamSink<LiveQueryEvent>
 ) -> anyhow::Result<()> {

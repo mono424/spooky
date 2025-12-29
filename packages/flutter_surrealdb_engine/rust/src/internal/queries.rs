@@ -2,8 +2,9 @@ use surrealdb::Surreal;
 
 use std::collections::HashMap;
 use anyhow::Result;
+use crate::frb_generated::StreamSink;
 use surrealdb::types::Value;
-use surrealdb::IndexedResults;
+// use surrealdb::IndexedResults;
 
 // Hilfsfunktion: Nimmt &str (Referenz), um unnötiges Klonen zu vermeiden
 fn parse_vars(vars: Option<&str>) -> Result<HashMap<String, serde_json::Value>> {
@@ -26,22 +27,22 @@ pub async fn query<C: surrealdb::Connection>(db: &Surreal<C>, sql: String, vars:
         query = query.bind((key, value));
     }
 
-    let mut response: IndexedResults = query.await?;
+    let mut response: surrealdb::IndexedResults = query.await?;
     
-    // Check available results count
-    let num = response.results.len();
-    let mut output = Vec::with_capacity(num);
+    // In v3, IndexedResults might be a Map <usize, QueryResult> or Vec.
+    // Error suggested it yields tuples (usize, ...).
+    // Let's assume it is a Map or just iterate values if possible.
+    // If it is a BTreeMap<usize, QueryResult>, into_iter yields (usize, QueryResult).
+    
+    let results = response.results;
+    let mut output = Vec::with_capacity(results.len());
 
-    for i in 0..num {
-        match response.take::<Value>(i) {
+    for (_i, result) in results {
+        let value_result = result.1; // Attempt to access result via tuple index
+
+        match value_result {
             Ok(v3_val) => {
-                // Convert Surreal Value to serde_json::Value
-
-                if let Ok(json_val) = serde_json::to_value(&v3_val) {
-                    output.push(json_val);
-                } else {
-                    output.push(serde_json::Value::Null);
-                }
+                output.push(v3_val.into_json_value());
             },
             Err(e) => {
                  output.push(serde_json::json!({ "error": e.to_string() }));

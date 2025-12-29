@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../controllers/spooky_controller.dart';
-import '../../components/action_card.dart';
 import 'widgets/live_query_input.dart';
 import 'widgets/live_query_actions.dart';
 import 'widgets/live_query_logs.dart';
@@ -21,9 +20,39 @@ class _LiveQueryViewState extends State<LiveQueryView> {
   final TextEditingController _tableController = TextEditingController(
     text: 'user',
   );
-  StreamSubscription<String>? _subscription;
-  final List<String> _events = [];
+  final ScrollController _logScrollController = ScrollController();
+
+  StreamSubscription<List<Map<String, dynamic>>>? _subscription;
+  final List<LogEntry> _logs = []; // Changed to LogEntry
   bool _isListening = false;
+
+  @override
+  void dispose() {
+    _subscription?.cancel();
+    _tableController.dispose();
+    _logScrollController.dispose();
+    super.dispose();
+  }
+
+  void _addLog(String message, {bool isError = false, bool isLive = false}) {
+    setState(() {
+      _logs.insert(
+        0,
+        LogEntry(
+          message: message,
+          timestamp: DateTime.now(),
+          isError: isError,
+          isLive: isLive,
+        ),
+      );
+    });
+  }
+
+  void _clearLogs() {
+    setState(() {
+      _logs.clear();
+    });
+  }
 
   void _toggleSubscription() async {
     if (_isListening) {
@@ -32,14 +61,14 @@ class _LiveQueryViewState extends State<LiveQueryView> {
         _subscription = null;
         setState(() {
           _isListening = false;
-          _events.add("[Local] Subscription cancelled.");
         });
+        _addLog("[Local] Subscription cancelled.");
       } catch (e) {
         setState(() {
           _isListening = false; // Force state update
           _subscription = null;
-          _events.add("[Error] Cancel failed (forced stop): $e");
         });
+        _addLog("[Error] Cancel failed (forced stop): $e", isError: true);
       }
       return;
     }
@@ -48,56 +77,48 @@ class _LiveQueryViewState extends State<LiveQueryView> {
     if (tableName.isEmpty) return;
 
     try {
-      final stream = widget.controller.client!.local!.getClient.liveQuery(
-        tableName: tableName,
-      );
+      // Use High-Level API
+      final client = widget.controller.client;
+      if (client == null) throw Exception("Client is null");
+
+      final stream = client.local.getClient
+          .select(resource: tableName)
+          .live((json) => json); // Return the map directly
+
       setState(() {
         _isListening = true;
-        _events.add("[Local] Subscribing to '$tableName'...");
-        debugPrint("LiveQueryView: Subscribing to $tableName");
       });
+      _addLog("[Local] Subscribing to '$tableName' (High-Level)...");
+      debugPrint("LiveQueryView: Subscribing to $tableName");
 
       _subscription = stream.listen(
-        (eventJson) {
-          debugPrint("LiveQueryView: Received event: $eventJson");
-          // Parse prettily if possible
-          try {
-            final decoded = jsonDecode(eventJson);
-            final pretty = const JsonEncoder.withIndent('  ').convert(decoded);
-            setState(() {
-              _events.insert(0, "[LIVE] $pretty");
-            });
-          } catch (_) {
-            setState(() {
-              _events.insert(0, "[LIVE RAW] $eventJson");
-            });
-          }
+        (items) {
+          debugPrint("LiveQueryView: Received update: ${items.length} items");
+          final pretty = const JsonEncoder.withIndent('  ').convert(items);
+          _addLog("[LIVE STATE] ${items.length} items:\n$pretty", isLive: true);
         },
         onError: (err) {
           debugPrint("LiveQueryView: Stream error: $err");
+          _addLog("[Error] Stream error: $err", isError: true);
           setState(() {
-            _events.add("[Error] Stream error: $err");
             _isListening = false;
           });
         },
         onDone: () {
           debugPrint("LiveQueryView: Stream closed (onDone)");
+          _addLog("[Done] Stream closed.");
           setState(() {
-            _events.add("[Done] Stream closed.");
             _isListening = false;
           });
         },
       );
     } catch (e) {
-      setState(() {
-        _events.add("[Error] Failed to start live query: $e");
-      });
+      _addLog("[Error] Failed to start live query: $e", isError: true);
     }
   }
 
   Future<void> _createRecord() async {
     try {
-      final tableName = _tableController.text;
       final now = DateTime.now().millisecondsSinceEpoch;
 
       // Adapted for 'user' table schema
@@ -106,7 +127,10 @@ class _LiveQueryViewState extends State<LiveQueryView> {
 
       final credentials = {"username": "user$now", "password": "password123"};
 
-      final result = await widget.controller.client!.local!.getClient.query(
+      final client = widget.controller.client;
+      if (client == null) throw Exception("Client is null");
+
+      final result = await client.local.getClient.query(
         sql: query,
         vars: jsonEncode(credentials),
       );
@@ -115,9 +139,7 @@ class _LiveQueryViewState extends State<LiveQueryView> {
         throw Exception("DB Error: $result");
       }
 
-      setState(() {
-        _events.insert(0, "[Success] Created: $result");
-      });
+      _addLog("[Success] Created: $result");
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -127,9 +149,7 @@ class _LiveQueryViewState extends State<LiveQueryView> {
           ),
         );
       }
-      setState(() {
-        _events.add("[Error] Create failed: $e");
-      });
+      _addLog("[Error] Create failed: $e", isError: true);
     }
   }
 
@@ -147,7 +167,10 @@ class _LiveQueryViewState extends State<LiveQueryView> {
           ? "pass_$now"
           : DateTime.now().toIso8601String();
 
-      final result = await widget.controller.client!.local!.getClient.query(
+      final client = widget.controller.client;
+      if (client == null) throw Exception("Client is null");
+
+      final result = await client.local.getClient.query(
         sql: updateQuery,
         vars: jsonEncode({"tb": tableName, "val": val}),
       );
@@ -156,9 +179,7 @@ class _LiveQueryViewState extends State<LiveQueryView> {
         throw Exception("DB Error: $result");
       }
 
-      setState(() {
-        _events.insert(0, "[Success] Update All: $result");
-      });
+      _addLog("[Success] Update All: $result");
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -168,14 +189,12 @@ class _LiveQueryViewState extends State<LiveQueryView> {
           ),
         );
       }
-      setState(() {
-        _events.add("[Error] Update failed: $e");
-      });
+      _addLog("[Error] Update failed: $e", isError: true);
     }
   }
 
   Future<void> _copyAllLogs() async {
-    final allText = _events.join('\n');
+    final allText = _logs.map((e) => "${e.timestamp}: ${e.message}").join('\n');
     await Clipboard.setData(ClipboardData(text: allText));
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -185,17 +204,10 @@ class _LiveQueryViewState extends State<LiveQueryView> {
   }
 
   @override
-  void dispose() {
-    _subscription?.cancel();
-    _tableController.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Live Query Test"),
+        title: const Text("Live Query Test (High Level)"),
         actions: [
           IconButton(
             icon: const Icon(Icons.copy),
@@ -213,7 +225,13 @@ class _LiveQueryViewState extends State<LiveQueryView> {
           ),
           LiveQueryActions(onCreate: _createRecord, onUpdate: _updateRecord),
           const Divider(),
-          Expanded(child: LiveQueryLogs(events: _events)),
+          Expanded(
+            child: LiveQueryLogs(
+              logs: _logs,
+              scrollController: _logScrollController,
+              onClear: _clearLogs,
+            ),
+          ),
         ],
       ),
     );

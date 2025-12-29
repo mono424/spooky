@@ -310,4 +310,13 @@ impl SurrealDb {
         client.export(path).await?;
         Ok(())
     }
+
+    pub async fn connect_live_query(
+        &self,
+        table: String,
+        sink: crate::frb_generated::StreamSink<crate::api::live_query::models::LiveQueryEvent>,
+    ) -> anyhow::Result<()> {
+        let client = self.get_client().await?;
+        crate::api::realtime::connect_live_query(client, table, sink).await
+    }
 }

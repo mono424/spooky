@@ -14,7 +14,10 @@ void main() {
     // 1. Setup Database
     // Connect to embedded database
     // Connect to devSidecar
-    final db = await SurrealDb.connect(mode: StorageMode.memory());
+    // Connect to devSidecar
+    final db = await SurrealDb.connect(
+      mode: StorageMode.devSidecar(path: 'test_db', port: 5500),
+    );
 
     // Auth: For embedded KV, we might have implicit root access or no auth required initially.
     // Try skipping auth.
@@ -38,9 +41,11 @@ void main() {
           "TEST: Received Event: ${event.action} - ${event.result} (UUID: ${event.queryUuid})",
         );
 
-        if (event.action == LiveQueryAction.unknown &&
+        if (event.action == LiveQueryAction.snapshot &&
             event.queryUuid != null) {
-          print("TEST: Handshake received with UUID: ${event.queryUuid}");
+          print(
+            "TEST: Snapshot/Handshake received with UUID: ${event.queryUuid} Data: ${event.result}",
+          );
           return;
         }
 
@@ -78,7 +83,7 @@ void main() {
       print("TEST: Cancelling subscription...");
       try {
         await subscription.cancel().timeout(
-          const Duration(seconds: 2),
+          const Duration(seconds: 10),
           onTimeout: () {
             print(
               "TEST: Subscription cancel timed out (expected if stream is blocked)",

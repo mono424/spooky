@@ -6,6 +6,8 @@ import 'src/rust/api/live_query/models.dart';
 export 'src/rust/api/client.dart' show StorageMode;
 export 'src/rust/frb_generated.dart' show RustLib;
 export 'src/rust/api/live_query/models.dart';
+export 'src/surreal_query.dart';
+import 'src/surreal_query.dart';
 
 /// Wrapper around the generated SurrealDb to provide enhanced functionality
 /// specifically for Live Query cancellations.
@@ -40,7 +42,8 @@ class SurrealDb {
       generated.SurrealDb.killQuery(queryUuid: queryUuid);
 
   Stream<LiveQueryEvent> liveQuery({required String tableName}) {
-    final stream = _inner.liveQuery(tableName: tableName);
+    // Use the new connectLiveQuery which guarantees Snapshot + Stream
+    final stream = _inner.connectLiveQuery(table: tableName);
     String? capturedUuid;
 
     // Create a controller to intercept the stream
@@ -49,7 +52,7 @@ class SurrealDb {
     controller.onListen = () {
       final subscription = stream.listen(
         (event) {
-          // Capture UUID from Handshake or any event carrying it
+          // Capture UUID from Snapshot event or any event carrying it
           if (event.queryUuid != null && capturedUuid == null) {
             capturedUuid = event.queryUuid;
           }
@@ -62,11 +65,13 @@ class SurrealDb {
       controller.onCancel = () async {
         if (capturedUuid != null) {
           print("Auto-Killing Query: $capturedUuid");
-          try {
-            await generated.SurrealDb.killQuery(queryUuid: capturedUuid!);
-          } catch (e) {
-            print("Error killing query: $e");
-          }
+          // Fire and forget (or with short timeout) to avoid blocking UI if backend is locked
+          // We don't await this strictly for the subscription cancel to proceed
+          generated.SurrealDb.killQuery(
+            queryUuid: capturedUuid!,
+          ).timeout(const Duration(milliseconds: 500)).catchError((e) {
+            print("Error killing query (timeout/ignore): $e");
+          });
         }
         await subscription.cancel();
       };
@@ -87,7 +92,14 @@ class SurrealDb {
 
   Future<void> queryCommit() => _inner.queryCommit();
 
-  Future<String> select({required String resource}) =>
+  /// Selects all records from a table or a specific record.
+  /// Returns a [SurrealQuery] which can be awaited to get the result once,
+  /// or used to start a [live] query.
+  SurrealQuery select({required String resource}) =>
+      SurrealQuery(this, resource);
+
+  /// Helper method for one-shot select (used by SurrealQuery)
+  Future<String> selectOne({required String resource}) =>
       _inner.select(resource: resource);
 
   Future<String> signin({required String creds}) => _inner.signin(creds: creds);

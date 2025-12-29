@@ -6,6 +6,7 @@ pub enum LiveQueryAction {
     Create,
     Update,
     Delete,
+    Snapshot,
     Unknown,
 }
 
