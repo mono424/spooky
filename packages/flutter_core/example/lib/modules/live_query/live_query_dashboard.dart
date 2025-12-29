@@ -218,11 +218,13 @@ class _LiveQueryDashboardState extends State<LiveQueryDashboard> {
                             color: SpookyColors.primary,
                           ),
                           enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.zero,
                             borderSide: BorderSide(
                               color: SpookyColors.white.withOpacity(0.1),
                             ),
                           ),
                           focusedBorder: const OutlineInputBorder(
+                            borderRadius: BorderRadius.zero,
                             borderSide: BorderSide(color: SpookyColors.primary),
                           ),
                           isDense: true,
@@ -245,6 +247,9 @@ class _LiveQueryDashboardState extends State<LiveQueryDashboard> {
                       child: ElevatedButton.icon(
                         onPressed: _toggleListener,
                         style: ElevatedButton.styleFrom(
+                          shape: const RoundedRectangleBorder(
+                            borderRadius: BorderRadius.zero,
+                          ),
                           backgroundColor: _isListening
                               ? Colors.redAccent.withOpacity(0.1)
                               : Colors.greenAccent.withOpacity(0.1),
@@ -279,9 +284,13 @@ class _LiveQueryDashboardState extends State<LiveQueryDashboard> {
                   child: OutlinedButton.icon(
                     onPressed: _createRecord,
                     style: OutlinedButton.styleFrom(
+                      shape: const RoundedRectangleBorder(
+                        borderRadius: BorderRadius.zero,
+                      ),
                       foregroundColor: SpookyColors.white,
-                      side: BorderSide(
-                        color: SpookyColors.white.withOpacity(0.3),
+                      side: const BorderSide(
+                        color: Colors.white, // Explicit white as requested
+                        width: 1.0,
                       ),
                       padding: const EdgeInsets.symmetric(vertical: 16),
                     ),
@@ -332,7 +341,7 @@ class _StatusIndicator extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
         color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(4),
+        borderRadius: BorderRadius.zero, // Sharp edges
         border: Border.all(color: color.withOpacity(0.5), width: 1),
       ),
       child: Row(
