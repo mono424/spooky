@@ -76,7 +76,6 @@ class RemoteDatabaseService extends AbstractDatabaseService {
   }
 
   /// Subscribe to a Live Query on the given table.
-  /// Mirrored from `remote.ts` but adapted for Dart SDK which uses `tableName` instead of UUID for initiation.
   /// Returns a [StreamSubscription] that must be managed/cancelled by the caller.
   StreamSubscription? subscribeLive({
     required String tableName,
@@ -108,5 +107,15 @@ class RemoteDatabaseService extends AbstractDatabaseService {
       onError: (e) =>
           print("[RemoteDatabaseService] Live Query Stream Error: $e"),
     );
+  }
+
+  Future<void> authenticate(String token) async {
+    if (client == null) throw Exception("Remote client unavailable");
+    await client!.authenticate(token: token);
+  }
+
+  Future<void> invalidate() async {
+    if (client == null) return;
+    await client!.invalidate();
   }
 }

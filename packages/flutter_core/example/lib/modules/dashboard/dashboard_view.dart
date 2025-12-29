@@ -5,12 +5,14 @@ class DashboardView extends StatelessWidget {
   final VoidCallback onQueryRemote;
   final VoidCallback onSelectSchema;
   final VoidCallback onOpenLiveQuery;
+  final VoidCallback onOpenChat;
 
   const DashboardView({
     super.key,
     required this.onQueryRemote,
     required this.onSelectSchema,
     required this.onOpenLiveQuery,
+    required this.onOpenChat,
   });
 
   @override
@@ -40,6 +42,11 @@ class DashboardView extends StatelessWidget {
               title: "Live Query",
               icon: Icons.broadcast_on_personal,
               onTap: onOpenLiveQuery,
+            ),
+            ActionCard(
+              title: "Spooky Chat",
+              icon: Icons.chat_bubble_outline,
+              onTap: onOpenChat,
             ),
           ],
         ),

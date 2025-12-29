@@ -4,6 +4,7 @@ import '../modules/initialization/initialization_view.dart';
 import '../modules/auth/auth_view.dart';
 import '../modules/dashboard/dashboard_view.dart';
 import '../modules/live_query/live_query_dashboard.dart';
+import '../modules/chat/chat_dashboard.dart';
 
 class ViewSwitcher extends StatelessWidget {
   final SpookyController controller;
@@ -40,6 +41,15 @@ class ViewSwitcher extends StatelessWidget {
         Navigator.of(context).push(
           MaterialPageRoute(
             builder: (context) => LiveQueryDashboard(controller: controller),
+          ),
+        );
+      },
+      onOpenChat: () {
+        // Import necessary? No, ViewSwitcher imports modules/chat/chat_dashboard.dart?
+        // I need to add import to ViewSwitcher
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => ChatDashboard(controller: controller),
           ),
         );
       },

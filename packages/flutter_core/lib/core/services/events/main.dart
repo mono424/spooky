@@ -104,7 +104,7 @@ class EventSystem<E extends BaseEvent> {
       stream = stream.take(1);
     }
 
-    return stream.listen(handler) as StreamSubscription<S>;
+    return stream.cast<S>().listen(handler);
   }
 
   /// Schließt das System

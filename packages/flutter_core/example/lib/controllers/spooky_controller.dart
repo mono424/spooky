@@ -253,4 +253,28 @@ class SpookyController extends ChangeNotifier {
     log("Logged out.");
     notifyListeners();
   }
+
+  // --- Proxy Methods for SpookyClient ---
+
+  Future<Map<String, dynamic>?> create(
+    String id,
+    Map<String, dynamic> data,
+  ) async {
+    if (client == null) throw Exception("Client not initialized");
+    return client!.create(id, data);
+  }
+
+  Future<Map<String, dynamic>?> update(
+    String table,
+    String id,
+    Map<String, dynamic> data,
+  ) async {
+    if (client == null) throw Exception("Client not initialized");
+    return client!.update(table, id, data);
+  }
+
+  Future<void> delete(String table, String id) async {
+    if (client == null) throw Exception("Client not initialized");
+    return client!.delete(table, id);
+  }
 }

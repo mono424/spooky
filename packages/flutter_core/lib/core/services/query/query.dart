@@ -251,7 +251,6 @@ class QueryManager {
       final rawList = jsonDecode(resultJson);
       // Usually returns [ "hash..." ] if it's a RETURN value query
       if (rawList is List && rawList.isNotEmpty) {
-        final first = rawList[0];
         // Check if it wrapped in status/result object or pure value (depends on driver)
         // The Rust engine usually returns `[{ "status": "OK", "result": "hash" }]`
         // extractResult handles this.

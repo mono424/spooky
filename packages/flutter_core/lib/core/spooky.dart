@@ -74,8 +74,8 @@ class SpookyClient {
     final sync = SpookySync(
       local: local,
       remote: remote,
-      mutationEvents: mutation.events,
-      queryEvents: queryManager.eventsSystem,
+      mutationEvents: mutation.getEvents,
+      queryEvents: queryManager.events,
     );
     await sync.init();
 
@@ -125,20 +125,23 @@ class SpookyClient {
   }
 
   // Wrappers for Mutation Manager
-  Future<Map<String, dynamic>> create(String id, Map<String, dynamic> data) {
-    return mutation.create(id, data);
+  Future<Map<String, dynamic>?> create(String id, Map<String, dynamic> data) {
+    final table = id.split(':').first;
+    final dataWithId = {...data, 'id': id};
+    return mutation.create(table, dataWithId);
   }
 
-  Future<Map<String, dynamic>> update(
+  Future<Map<String, dynamic>?> update(
     String table,
     String id,
     Map<String, dynamic> data,
   ) {
-    return mutation.update(table, id, data);
+    return mutation.update(id, data);
   }
 
   Future<void> delete(String table, String id) {
-    return mutation.delete(table, id);
+    // We ignore table as id is sufficient for delete(rid)
+    return mutation.delete(id);
   }
 
   // Auth delegates

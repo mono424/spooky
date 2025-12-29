@@ -108,7 +108,8 @@ class UpQueue {
   Future<void> loadFromDatabase() async {
     try {
       // Dart engine query usually returns JSON string
-      final resSql = await local.query(
+      // Dart engine query usually returns JSON string
+      await local.query(
         "SELECT * FROM _spooky_pending_mutations ORDER BY created_at ASC",
       );
       // extractResult or custom parsing?
