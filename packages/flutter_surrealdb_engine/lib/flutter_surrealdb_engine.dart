@@ -41,15 +41,25 @@ class SurrealDb {
   static Future<void> killQuery({required String queryUuid}) =>
       generated.SurrealDb.killQuery(queryUuid: queryUuid);
 
-  Stream<LiveQueryEvent> liveQuery({required String tableName}) {
-    // Use the new connectLiveQuery which guarantees Snapshot + Stream
-    final stream = _inner.connectLiveQuery(table: tableName);
+  Stream<LiveQueryEvent> liveQuery({
+    required String tableName,
+    bool snapshot = false,
+  }) {
+    // Select implementation based on flag
+    // snapshot=true:  Connects to 'Snapshot + Stream' backend
+    // snapshot=false: Connects to 'Pure Stream' backend
     String? capturedUuid;
 
     // Create a controller to intercept the stream
     final controller = StreamController<LiveQueryEvent>();
 
     controller.onListen = () {
+      // Lazy initialization: Connect to Rust only when listened to
+      // This prevents losing initial events (Snapshot/Handshake) that happen immediately
+      final stream = snapshot
+          ? _inner.connectLiveQueryWithSnapshot(table: tableName)
+          : _inner.connectLiveQuery(table: tableName);
+
       final subscription = stream.listen(
         (event) {
           // Capture UUID from Snapshot event or any event carrying it
@@ -73,7 +83,14 @@ class SurrealDb {
             print("Error killing query (timeout/ignore): $e");
           });
         }
-        await subscription.cancel();
+        // Await subscription cancel with a timeout to prevent UI hangs if Rust backend is locked
+        try {
+          await subscription.cancel().timeout(
+            const Duration(milliseconds: 500),
+          );
+        } catch (e) {
+          print("Warning: Subscription cancel timed out: $e");
+        }
       };
     };
 

@@ -9,6 +9,7 @@ import 'package:flutter_surrealdb_engine/flutter_surrealdb_engine.dart';
 // Modular Widgets
 import 'widgets/live_query_controls.dart';
 import 'widgets/live_query_logs.dart';
+import 'live_query_view.dart';
 
 class LiveQueryDashboard extends StatefulWidget {
   final SpookyController controller;
@@ -67,6 +68,7 @@ class _LiveQueryDashboardState extends State<LiveQueryDashboard> {
 
       final stream = widget.controller.client!.local!.getClient.liveQuery(
         tableName: tableName,
+        snapshot: true,
       );
 
       _subscription = stream.listen(
@@ -119,6 +121,8 @@ class _LiveQueryDashboardState extends State<LiveQueryDashboard> {
       _subscription = null;
 
       // KILL SWITCH
+      // The StreamSubscription wrapper in flutter_surrealdb_engine automatically calls killQuery on cancel.
+      // We do NOT need to call it manually here, as that causes double-invocations and potential hangs.
       if (_activeQueryUuid != null) {
         _addLog("🔪 Sending Kill Switch for $_activeQueryUuid...");
         await SurrealDb.killQuery(queryUuid: _activeQueryUuid!);
@@ -145,15 +149,18 @@ class _LiveQueryDashboardState extends State<LiveQueryDashboard> {
           r'''CREATE ONLY user SET username = $username, password = crypto::argon2::generate($password)''';
       final credentials = {"username": "user$now", "password": "password123"};
 
-      final result = await widget.controller.client!.local!.getClient.query(
-        sql: query,
-        vars: jsonEncode(credentials),
+      // Use create() directly to match integration test behavior
+      final result = await widget.controller.client!.local!.getClient.create(
+        resource: 'user',
+        data: jsonEncode(credentials),
       );
 
-      if (result.contains("ERR") || result.contains("error")) {
-        throw Exception(result);
-      }
-      _addLog("Created User: user$now");
+      final dynamic decoded = jsonDecode(result);
+      // SurrealDB create often returns a list of created records
+      final id = decoded is List && decoded.isNotEmpty
+          ? decoded[0]['id']
+          : decoded['id'];
+      _addLog("Created User: $id");
     } catch (e) {
       _addLog("Create Failed: $e", isError: true);
     }
@@ -163,6 +170,42 @@ class _LiveQueryDashboardState extends State<LiveQueryDashboard> {
     setState(() {
       _logs.clear();
     });
+  }
+
+  Future<void> _runDiagnostics() async {
+    _addLog("--- DIAGNOSTICS START ---");
+    try {
+      final client = widget.controller.client;
+      if (client == null) {
+        _addLog("Client is NULL", isError: true);
+        return;
+      }
+      if (client.local == null) {
+        _addLog("Local Service is NULL", isError: true);
+        return;
+      }
+
+      _addLog("Checking DB Connection...");
+      final info = await client.local!.getClient.query(sql: "INFO FOR DB");
+      _addLog("INFO FOR DB: $info");
+
+      _addLog("Checking 'user' table count...");
+      final count = await client.local!.getClient.query(
+        sql: "SELECT count() FROM user",
+      );
+      _addLog("Count: $count");
+
+      _addLog("Checking permissions (Schema)...");
+      final schema = await client.local!.getClient.query(
+        sql: "INFO FOR TABLE user",
+      );
+      _addLog("Schema: $schema");
+
+      _addLog("Diagnosis: Backend seems responsive.");
+    } catch (e) {
+      _addLog("DIAGNOSIS FAILED: $e", isError: true);
+    }
+    _addLog("--- DIAGNOSTICS END ---");
   }
 
   @override
@@ -191,6 +234,20 @@ class _LiveQueryDashboardState extends State<LiveQueryDashboard> {
         iconTheme: const IconThemeData(color: SpookyColors.white),
         elevation: 0,
         centerTitle: true,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.preview),
+            tooltip: "Visual Demo",
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) =>
+                      LiveQueryView(controller: widget.controller),
+                ),
+              );
+            },
+          ),
+        ],
       ),
       body: Column(
         children: [
@@ -200,6 +257,12 @@ class _LiveQueryDashboardState extends State<LiveQueryDashboard> {
             isListening: _isListening,
             onToggleListener: _toggleListener,
             onCreateRecord: _createRecord,
+          ),
+          ElevatedButton.icon(
+            onPressed: _runDiagnostics,
+            icon: const Icon(Icons.bug_report),
+            label: const Text("Run Diagnostics"),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
           ),
 
           const Divider(height: 1, color: SpookyColors.white10),

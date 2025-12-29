@@ -17,10 +17,11 @@ class RemoteDatabaseService extends AbstractDatabaseService {
           mode: StorageMode.remote(url: config.endpoint!),
         );
       } catch (e) {
-        // Rethrow the error so it can be seen in the UI logs for debugging
-        throw Exception(
-          'Failed to connect to remote SurrealDB at ${config.endpoint}: $e',
+        // Log the error but don't crash. Return service in "offline" mode (client = null).
+        print(
+          'Warning: Failed to connect to remote SurrealDB at ${config.endpoint}: $e',
         );
+        // We do NOT rethrow here. The app will proceed with client = null.
       }
     }
     return RemoteDatabaseService._(client, config);

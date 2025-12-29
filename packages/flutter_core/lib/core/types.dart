@@ -1,3 +1,87 @@
+enum QueryTimeToLive {
+  oneMinute,
+  fiveMinutes,
+  tenMinutes,
+  fifteenMinutes,
+  twentyMinutes,
+  twentyFiveMinutes,
+  thirtyMinutes,
+  oneHour,
+  twoHours,
+  threeHours,
+  fourHours,
+  fiveHours,
+  sixHours,
+  sevenHours,
+  eightHours,
+  nineHours,
+  tenHours,
+  elevenHours,
+  twelveHours,
+  oneDay,
+}
+
+/// Extension, um das Enum in den String-Wert für SurrealDB umzuwandeln
+/// und von einem String zurück in das Enum zu parsen.
+extension QueryTimeToLiveExtension on QueryTimeToLive {
+  /// Gibt den String-Wert zurück (z.B. '10m', '1h').
+  String get value {
+    switch (this) {
+      case QueryTimeToLive.oneMinute:
+        return '1m';
+      case QueryTimeToLive.fiveMinutes:
+        return '5m';
+      case QueryTimeToLive.tenMinutes:
+        return '10m';
+      case QueryTimeToLive.fifteenMinutes:
+        return '15m';
+      case QueryTimeToLive.twentyMinutes:
+        return '20m';
+      case QueryTimeToLive.twentyFiveMinutes:
+        return '25m';
+      case QueryTimeToLive.thirtyMinutes:
+        return '30m';
+      case QueryTimeToLive.oneHour:
+        return '1h';
+      case QueryTimeToLive.twoHours:
+        return '2h';
+      case QueryTimeToLive.threeHours:
+        return '3h';
+      case QueryTimeToLive.fourHours:
+        return '4h';
+      case QueryTimeToLive.fiveHours:
+        return '5h';
+      case QueryTimeToLive.sixHours:
+        return '6h';
+      case QueryTimeToLive.sevenHours:
+        return '7h';
+      case QueryTimeToLive.eightHours:
+        return '8h';
+      case QueryTimeToLive.nineHours:
+        return '9h';
+      case QueryTimeToLive.tenHours:
+        return '10h';
+      case QueryTimeToLive.elevenHours:
+        return '11h';
+      case QueryTimeToLive.twelveHours:
+        return '12h';
+      case QueryTimeToLive.oneDay:
+        return '1d';
+    }
+  }
+
+  /// Erstellt ein Enum aus einem String (z.B. aus der DB).
+  /// Fallback ist '10m', falls der String unbekannt ist (analog zur TS-Logik).
+  static QueryTimeToLive fromString(String val) {
+    try {
+      return QueryTimeToLive.values.firstWhere((e) => e.value == val);
+    } catch (_) {
+      // In query/incantation.ts ist der Default 600000ms (= 10m)
+      return QueryTimeToLive.tenMinutes;
+    }
+  }
+}
+
 class DatabaseConfig {
   final String? endpoint;
   final String path;

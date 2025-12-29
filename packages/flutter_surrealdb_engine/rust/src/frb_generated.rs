@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1749463254;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1927647617;
 
 // Section: executor
 
@@ -255,6 +255,72 @@ fn wire__crate__api__client__SurrealDb_connect_live_query_impl(
                             api_sink,
                         )
                         .await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__client__SurrealDb_connect_live_query_with_snapshot_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "SurrealDb_connect_live_query_with_snapshot",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SurrealDb>,
+            >>::sse_decode(&mut deserializer);
+            let api_table = <String>::sse_decode(&mut deserializer);
+            let api_sink = <StreamSink<
+                crate::api::live_query::models::LiveQueryEvent,
+                flutter_rust_bridge::for_generated::SseCodec,
+            >>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || async move {
+                        let mut api_that_guard = None;
+                        let decode_indices_ =
+                            flutter_rust_bridge::for_generated::lockable_compute_decode_order(
+                                vec![flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                    &api_that, 0, false,
+                                )],
+                            );
+                        for i in decode_indices_ {
+                            match i {
+                                0 => {
+                                    api_that_guard =
+                                        Some(api_that.lockable_decode_async_ref().await)
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
+                        let api_that_guard = api_that_guard.unwrap();
+                        let output_ok =
+                            crate::api::client::SurrealDb::connect_live_query_with_snapshot(
+                                &*api_that_guard,
+                                api_table,
+                                api_sink,
+                            )
+                            .await?;
                         Ok(output_ok)
                     })()
                     .await,
@@ -1528,40 +1594,48 @@ fn pde_ffi_dispatcher_primary_impl(
             rust_vec_len,
             data_len,
         ),
-        5 => wire__crate__api__client__SurrealDb_create_impl(port, ptr, rust_vec_len, data_len),
-        6 => wire__crate__api__client__SurrealDb_delete_impl(port, ptr, rust_vec_len, data_len),
-        7 => wire__crate__api__client__SurrealDb_export_impl(port, ptr, rust_vec_len, data_len),
-        8 => wire__crate__api__client__SurrealDb_invalidate_impl(port, ptr, rust_vec_len, data_len),
-        9 => wire__crate__api__client__SurrealDb_kill_query_impl(port, ptr, rust_vec_len, data_len),
-        10 => {
-            wire__crate__api__client__SurrealDb_live_query_impl(port, ptr, rust_vec_len, data_len)
-        }
-        11 => wire__crate__api__client__SurrealDb_merge_impl(port, ptr, rust_vec_len, data_len),
-        12 => wire__crate__api__client__SurrealDb_query_impl(port, ptr, rust_vec_len, data_len),
-        13 => {
-            wire__crate__api__client__SurrealDb_query_begin_impl(port, ptr, rust_vec_len, data_len)
-        }
-        14 => {
-            wire__crate__api__client__SurrealDb_query_cancel_impl(port, ptr, rust_vec_len, data_len)
-        }
-        15 => {
-            wire__crate__api__client__SurrealDb_query_commit_impl(port, ptr, rust_vec_len, data_len)
-        }
-        16 => wire__crate__api__client__SurrealDb_select_impl(port, ptr, rust_vec_len, data_len),
-        17 => wire__crate__api__client__SurrealDb_signin_impl(port, ptr, rust_vec_len, data_len),
-        18 => wire__crate__api__client__SurrealDb_signup_impl(port, ptr, rust_vec_len, data_len),
-        19 => {
-            wire__crate__api__client__SurrealDb_transaction_impl(port, ptr, rust_vec_len, data_len)
-        }
-        20 => wire__crate__api__client__SurrealDb_update_impl(port, ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__client__SurrealDb_use_db_impl(port, ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__live_query__models__live_query_event_handshake_impl(
+        5 => wire__crate__api__client__SurrealDb_connect_live_query_with_snapshot_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        23 => wire__crate__api__live_query__manager__live_query_manager_kill_impl(
+        6 => wire__crate__api__client__SurrealDb_create_impl(port, ptr, rust_vec_len, data_len),
+        7 => wire__crate__api__client__SurrealDb_delete_impl(port, ptr, rust_vec_len, data_len),
+        8 => wire__crate__api__client__SurrealDb_export_impl(port, ptr, rust_vec_len, data_len),
+        9 => wire__crate__api__client__SurrealDb_invalidate_impl(port, ptr, rust_vec_len, data_len),
+        10 => {
+            wire__crate__api__client__SurrealDb_kill_query_impl(port, ptr, rust_vec_len, data_len)
+        }
+        11 => {
+            wire__crate__api__client__SurrealDb_live_query_impl(port, ptr, rust_vec_len, data_len)
+        }
+        12 => wire__crate__api__client__SurrealDb_merge_impl(port, ptr, rust_vec_len, data_len),
+        13 => wire__crate__api__client__SurrealDb_query_impl(port, ptr, rust_vec_len, data_len),
+        14 => {
+            wire__crate__api__client__SurrealDb_query_begin_impl(port, ptr, rust_vec_len, data_len)
+        }
+        15 => {
+            wire__crate__api__client__SurrealDb_query_cancel_impl(port, ptr, rust_vec_len, data_len)
+        }
+        16 => {
+            wire__crate__api__client__SurrealDb_query_commit_impl(port, ptr, rust_vec_len, data_len)
+        }
+        17 => wire__crate__api__client__SurrealDb_select_impl(port, ptr, rust_vec_len, data_len),
+        18 => wire__crate__api__client__SurrealDb_signin_impl(port, ptr, rust_vec_len, data_len),
+        19 => wire__crate__api__client__SurrealDb_signup_impl(port, ptr, rust_vec_len, data_len),
+        20 => {
+            wire__crate__api__client__SurrealDb_transaction_impl(port, ptr, rust_vec_len, data_len)
+        }
+        21 => wire__crate__api__client__SurrealDb_update_impl(port, ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__client__SurrealDb_use_db_impl(port, ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__live_query__models__live_query_event_handshake_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        24 => wire__crate__api__live_query__manager__live_query_manager_kill_impl(
             port,
             ptr,
             rust_vec_len,

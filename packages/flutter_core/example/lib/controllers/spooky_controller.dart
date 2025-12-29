@@ -26,7 +26,7 @@ class SpookyController extends ChangeNotifier {
   );
 
   // Dev Sidecar
-  bool useDevSidecar = false;
+  bool useDevSidecar = true;
   final TextEditingController devSidecarPortController = TextEditingController(
     text: '5000',
   );

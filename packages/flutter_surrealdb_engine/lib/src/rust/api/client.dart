@@ -22,7 +22,11 @@ abstract class SurrealDb implements RustOpaqueInterface {
   static Future<SurrealDb> connect({required StorageMode mode}) =>
       RustLib.instance.api.crateApiClientSurrealDbConnect(mode: mode);
 
+  /// Starts a pure Live Query Stream (No Snapshot) - Legacy/Standard behavior
   Stream<LiveQueryEvent> connectLiveQuery({required String table});
+
+  /// Starts a Live Query Stream WITH an initial Snapshot of the table
+  Stream<LiveQueryEvent> connectLiveQueryWithSnapshot({required String table});
 
   Future<String> create({required String resource, String? data});
 

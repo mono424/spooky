@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 class SpookyColors {
   static const primary = Colors.white;
   static const secondary = Color(0xFF1a1a1a); // Dark Grey
+  static const card = Color(0xFF1a1a1a); // Dark Grey Card
   static const background = Colors.black;
   static const surface = Colors.black;
   static const accent = Colors.white;
