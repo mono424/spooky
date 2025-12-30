@@ -12,7 +12,6 @@ Schema schemaFromJson(String str) => Schema.fromJson(json.decode(str));
 String schemaToJson(Schema data) => json.encode(data.toJson());
 
 class Schema {
-    SpookyDataHash spookyDataHash;
     SpookyIncantation spookyIncantation;
     SpookyPendingMutations spookyPendingMutations;
     SpookySchema spookySchema;
@@ -22,7 +21,6 @@ class Schema {
     User user;
 
     Schema({
-        required this.spookyDataHash,
         required this.spookyIncantation,
         required this.spookyPendingMutations,
         required this.spookySchema,
@@ -33,7 +31,6 @@ class Schema {
     });
 
     factory Schema.fromJson(Map<String, dynamic> json) => Schema(
-        spookyDataHash: SpookyDataHash.fromJson(json["_spooky_data_hash"]),
         spookyIncantation: SpookyIncantation.fromJson(json["_spooky_incantation"]),
         spookyPendingMutations: SpookyPendingMutations.fromJson(json["_spooky_pending_mutations"]),
         spookySchema: SpookySchema.fromJson(json["_spooky_schema"]),
@@ -44,7 +41,6 @@ class Schema {
     );
 
     Map<String, dynamic> toJson() => {
-        "_spooky_data_hash": spookyDataHash.toJson(),
         "_spooky_incantation": spookyIncantation.toJson(),
         "_spooky_pending_mutations": spookyPendingMutations.toJson(),
         "_spooky_schema": spookySchema.toJson(),
@@ -110,50 +106,6 @@ class CommentedOn {
 
     Map<String, dynamic> toJson() => {
         "id": id,
-    };
-}
-
-class SpookyDataHash {
-    String compositionHash;
-    
-    ///Record ID
-    String id;
-    String intrinsicHash;
-    bool isDirty;
-    bool pendingDelete;
-    
-    ///Record ID
-    String recordId;
-    String? totalHash;
-
-    SpookyDataHash({
-        required this.compositionHash,
-        required this.id,
-        required this.intrinsicHash,
-        required this.isDirty,
-        required this.pendingDelete,
-        required this.recordId,
-        this.totalHash,
-    });
-
-    factory SpookyDataHash.fromJson(Map<String, dynamic> json) => SpookyDataHash(
-        compositionHash: json["compositionHash"],
-        id: json["id"],
-        intrinsicHash: json["intrinsicHash"],
-        isDirty: json["isDirty"],
-        pendingDelete: json["pendingDelete"],
-        recordId: json["recordId"],
-        totalHash: json["totalHash"],
-    );
-
-    Map<String, dynamic> toJson() => {
-        "compositionHash": compositionHash,
-        "id": id,
-        "intrinsicHash": intrinsicHash,
-        "isDirty": isDirty,
-        "pendingDelete": pendingDelete,
-        "recordId": recordId,
-        "totalHash": totalHash,
     };
 }
 
@@ -477,37 +429,8 @@ DEFINE INDEX IF NOT EXISTS unique_hash ON _spooky_schema FIELDS hash UNIQUE;
 
 -- ==================================================
 -- SPOOKY DATA HASH (Client)
--- The \"Shadow Graph\" tracking the state of every record.
+-- Removed: Replaced by DBSP Module Internal Hashing
 -- ==================================================
-
-DEFINE TABLE _spooky_data_hash SCHEMAFULL
-PERMISSIONS FOR select, create, update, delete WHERE true;
-
--- The actual record being tracked (e.g., comment:abc, thread:123)
-DEFINE FIELD recordId ON TABLE _spooky_data_hash TYPE record
-PERMISSIONS FOR select, create, update WHERE true;
-
--- H_intrinsic: BLAKE3 hash of the record's own scalar fields
-DEFINE FIELD intrinsicHash ON TABLE _spooky_data_hash TYPE string
-PERMISSIONS FOR select, create, update WHERE true;
-
--- H_composition: XOR sum of all dependent children's TotalHashes
-DEFINE FIELD compositionHash ON TABLE _spooky_data_hash TYPE string
-PERMISSIONS FOR select, create, update WHERE true;
-
--- H_total: Intrinsic XOR Composition
-DEFINE FIELD totalHash ON TABLE _spooky_data_hash TYPE option<string>
-PERMISSIONS FOR select, create, update WHERE true;
-
--- CLIENT-SPECIFIC FIELDS
-DEFINE FIELD isDirty ON TABLE _spooky_data_hash TYPE bool DEFAULT false
-PERMISSIONS FOR select, create, update WHERE true;
-
-DEFINE FIELD pendingDelete ON TABLE _spooky_data_hash TYPE bool DEFAULT false
-PERMISSIONS FOR select, create, update WHERE true;
-
--- Fast lookup by the original record ID
-DEFINE INDEX idx_record_id ON TABLE _spooky_data_hash COLUMNS recordId UNIQUE;
 
 -- ==================================================
 -- SPOOKY EVENTS
@@ -539,68 +462,41 @@ PERMISSIONS FOR select, create, update WHERE true;
 DEFINE EVENT OVERWRITE _spooky_comment_client_mutation ON TABLE comment
 WHEN \$before != \$after AND \$event != \"DELETE\"
 THEN {
-    LET \$hash_id = <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>\$after.id));
-    UPSERT \$hash_id CONTENT {
-        recordId: \$after.id,
-        intrinsicHash: \"\",
-        compositionHash: \"\",
-        totalHash: NONE,
-        isDirty: true,
-        pendingDelete: false
-    };
+    -- No-op for now. Client mutation sync logic moved to DBSP.
 };
 
 -- Table: comment Client Deletion
 DEFINE EVENT OVERWRITE _spooky_comment_client_delete ON TABLE comment
 WHEN \$event = \"DELETE\"
 THEN {
-    LET \$hash_id = <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>\$before.id));
-    UPDATE \$hash_id SET pendingDelete = true;
+    -- No-op for now.
 };
 
 -- Table: thread Client Mutation
 DEFINE EVENT OVERWRITE _spooky_thread_client_mutation ON TABLE thread
 WHEN \$before != \$after AND \$event != \"DELETE\"
 THEN {
-    LET \$hash_id = <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>\$after.id));
-    UPSERT \$hash_id CONTENT {
-        recordId: \$after.id,
-        intrinsicHash: \"\",
-        compositionHash: \"\",
-        totalHash: NONE,
-        isDirty: true,
-        pendingDelete: false
-    };
+    -- No-op for now. Client mutation sync logic moved to DBSP.
 };
 
 -- Table: thread Client Deletion
 DEFINE EVENT OVERWRITE _spooky_thread_client_delete ON TABLE thread
 WHEN \$event = \"DELETE\"
 THEN {
-    LET \$hash_id = <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>\$before.id));
-    UPDATE \$hash_id SET pendingDelete = true;
+    -- No-op for now.
 };
 
 -- Table: user Client Mutation
 DEFINE EVENT OVERWRITE _spooky_user_client_mutation ON TABLE user
 WHEN \$before != \$after AND \$event != \"DELETE\"
 THEN {
-    LET \$hash_id = <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>\$after.id));
-    UPSERT \$hash_id CONTENT {
-        recordId: \$after.id,
-        intrinsicHash: \"\",
-        compositionHash: \"\",
-        totalHash: NONE,
-        isDirty: true,
-        pendingDelete: false
-    };
+    -- No-op for now. Client mutation sync logic moved to DBSP.
 };
 
 -- Table: user Client Deletion
 DEFINE EVENT OVERWRITE _spooky_user_client_delete ON TABLE user
 WHEN \$event = \"DELETE\"
 THEN {
-    LET \$hash_id = <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>\$before.id));
-    UPDATE \$hash_id SET pendingDelete = true;
+    -- No-op for now.
 };
 ";

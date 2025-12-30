@@ -1,29 +1,4 @@
 -- ==================================================
--- FUNCTION: CALCULATE VIEW HASH
--- Usage: fn::spooky::view_hash(thread:123, ['comments'])
--- ==================================================
-DEFINE FUNCTION fn::spooky::view_hash($rid: record, $paths: array<string>) {
-    LET $shadow = (SELECT * FROM ONLY _spooky_data_hash WHERE recordId = $rid);
-    IF $shadow.recordId == NONE { RETURN crypto::blake3(""); };
-
-    -- 1. Start with the Intrinsic Hash
-    LET $parts = [$shadow.intrinsicHash];
-
-    -- 2. Collect requested Composition Hashes (if they exist)
-    -- We use a subquery to map the $paths array to values safely
-    LET $extras = (
-        SELECT VALUE $shadow.compositionHash[$this] 
-        FROM $paths 
-        WHERE $shadow.compositionHash[$this] != NONE
-    );
-
-    -- 3. Combine and Aggregate
-    LET $all_parts = array::concat($parts, $extras);
-    
-    RETURN mod::xor::blake3_xor_multi($all_parts);
-};
-
--- ==================================================
 -- FUNCTION: REGISTER INCANTATION (With Sorting)
 -- Usage: fn::incantation::register({ ... sort_field: 'created_at' ... })
 -- ==================================================
@@ -35,19 +10,12 @@ DEFINE FUNCTION fn::incantation::register($config: object) {
     LET $paths      = $config.paths;
     LET $table      = $config.table;
     LET $filter     = $config.filter;
-    LET $query      = $config.query; -- Optional DBSP Plan (SQL String)
+    LET $query      = $config.query; -- DBSP Plan (SQL String) REQUIRED
     
     -- Sorting Params (Default to created_at if missing)
     LET $sort_field = $config.sort_field OR 'created_at';
     LET $tree_init = {}; 
     
-    -- 1. CALCULATE AGGREGATE HASH
-    LET $hashes = (
-        SELECT VALUE fn::spooky::view_hash(id, $paths) 
-        FROM $items
-    );
-    LET $query_hash = mod::xor::blake3_xor_multi($hashes);
-
     -- 2. UPDATE INCANTATION REGISTRY
     -- Use String Cast for ID to avoid type::thing issues during schema load
     LET $rid_str = "_spooky_incantation:" + $id;
@@ -55,7 +23,7 @@ DEFINE FUNCTION fn::incantation::register($config: object) {
     
     INSERT INTO _spooky_incantation {
         id:           $rid,
-        hash:         $query_hash,
+        hash:         NONE, -- Will be populated by DBSP
         clientId:     $client_id,
         surrealQL:    $query,
         tree:         <object>{},
@@ -63,9 +31,7 @@ DEFINE FUNCTION fn::incantation::register($config: object) {
         ttl:          1h
     };
 
-
-
-    -- 5. REGISTER WITH DBSP (If plan provided)
+    -- 5. REGISTER WITH DBSP
     IF $query != NONE THEN {
         LET $state = fn::dbsp::get_state();
         LET $dbsp_res = mod::dbsp::register_query($id, $query, $state);
@@ -81,7 +47,7 @@ DEFINE FUNCTION fn::incantation::register($config: object) {
         RETURN $dbsp_res;
     } END;
 
-    RETURN $query_hash;
+    RETURN NONE;
 };
 
 DEFINE FUNCTION fn::incantation::heartbeat($id: record) {

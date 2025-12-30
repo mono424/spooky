@@ -97,4 +97,12 @@ fn reset(_val: Value) -> Result<Value, &'static str> {
     Ok(Value::Null)
 }
 
+#[surrealism]
+fn save_state(_val: Value) -> Result<Value, &'static str> {
+    let _ = with_circuit(|circuit| {
+        persistence::save(circuit);
+    })?;
+    Ok(Value::Null)
+}
+
 
