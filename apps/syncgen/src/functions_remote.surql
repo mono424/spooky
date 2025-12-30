@@ -35,7 +35,7 @@ DEFINE FUNCTION fn::incantation::register($config: object) {
     IF $query != NONE THEN {
         -- Call register_view(id, plan, params)
         -- Note: lib.rs handles persistence internally now.
-        LET $dbsp_res = mod::dbsp::register_view($id, $query, {});
+        LET $dbsp_res = mod::dbsp::register_view($rid_str, $query, {});
         
         LET $init_res = $dbsp_res.result;
         IF $init_res != NONE THEN {

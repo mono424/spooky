@@ -45,14 +45,26 @@ fn ingest(
         .to_string();
 
     // B. Run Engine
-    let updates = with_circuit(|circuit| {
-        let result = circuit.ingest_record(table, operation, id, clean_record, hash);
-        // C. Save (Inside lock to ensure consistency)
+    // B. Run Engine
+    let _ = with_circuit(|circuit| {
+        let updates = circuit.ingest_record(table, operation, id, clean_record, hash);
+
+        // C. Apply Updates Directly (Side Effects)
+        for update in updates {
+            persistence::apply_incantation_update(
+                &update.query_id,
+                &update.result_hash,
+                &update.tree,
+            );
+        }
+
+        // D. Save State
         persistence::save(circuit);
-        result
+        Vec::<crate::engine::view::MaterializedViewUpdate>::new()
     })?;
 
-    Ok(serde_json::to_value(json!({ "updates": updates })).unwrap())
+    // Return success but no updates payload (managed internally now)
+    Ok(serde_json::to_value(json!({ "updates": [] })).unwrap())
 }
 
 #[surrealism]
