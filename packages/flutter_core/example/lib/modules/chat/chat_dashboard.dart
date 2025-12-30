@@ -126,7 +126,7 @@ class _ChatDashboardState extends State<ChatDashboard> {
                     'title': titleController.text,
                     'content': contentController.text,
                     'active': true,
-                    'author': r'user:yvr0aici6qn0f1ohf55v',
+                    'author': {'tb': 'user', 'id': 'yvr0aici6qn0f1ohf55v'},
                     'created_at': DateTime.now().toIso8601String(),
                   });
 

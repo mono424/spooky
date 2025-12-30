@@ -55,7 +55,7 @@ class EventSystem<E extends BaseEvent> {
   /// Da dein EventSystem<MutationEvent> ist, ist T meistens MutationEvent.
   StreamSubscription<T> subscribe<T extends E>(
     void Function(T event) handler, {
-    bool immediately = false,
+    bool immediately = true,
     bool once = false,
   }) {
     return _subscribeInternal<T>(

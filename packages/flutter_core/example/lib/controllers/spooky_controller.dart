@@ -108,20 +108,6 @@ class SpookyController extends ChangeNotifier {
           await client!.remote.getClient.signin(
             creds: jsonEncode({"user": "root", "pass": "root"}),
           );
-
-          // 2. Apply Schema
-          final schemaResult = await client!.remote.getClient.query(
-            sql: SURQL_SCHEMA,
-          );
-          if (schemaResult.contains("ERR") || schemaResult.contains("error")) {
-            log("SCHEMA ERROR: $schemaResult");
-            throw Exception("Schema application failed");
-          }
-          log("Remote Schema Applied successfully.");
-
-          // 3. Invalidate Root session (so we can sign up as user)
-          await client!.remote.getClient.invalidate();
-          log("Root session closed. Ready.");
         } catch (e) {
           log("Warning: Remote provisioning failed: $e");
           // Proceed anyway, maybe it was already set up or different creds

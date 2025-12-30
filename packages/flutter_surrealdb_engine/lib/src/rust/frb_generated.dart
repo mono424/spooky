@@ -6,6 +6,7 @@
 import 'api/client.dart';
 import 'api/live_query/manager.dart';
 import 'api/live_query/models.dart';
+import 'api/models.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'frb_generated.dart';
@@ -66,7 +67,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => -1927647617;
+  int get rustContentHash => 719217453;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -179,6 +180,13 @@ abstract class RustLibApi extends BaseApi {
   Future<void> crateApiLiveQueryManagerLiveQueryManagerKill({
     required String uuid,
   });
+
+  Future<RecordId> crateApiModelsRecordIdNew({
+    required String tb,
+    required String id,
+  });
+
+  String crateApiModelsRecordIdToString({required RecordId that});
 
   RustArcIncrementStrongCountFnType
   get rust_arc_increment_strong_count_SurrealDb;
@@ -1091,6 +1099,61 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         argNames: ["uuid"],
       );
 
+  @override
+  Future<RecordId> crateApiModelsRecordIdNew({
+    required String tb,
+    required String id,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(tb, serializer);
+          sse_encode_String(id, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 25,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_record_id,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiModelsRecordIdNewConstMeta,
+        argValues: [tb, id],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiModelsRecordIdNewConstMeta =>
+      const TaskConstMeta(debugName: "record_id_new", argNames: ["tb", "id"]);
+
+  @override
+  String crateApiModelsRecordIdToString({required RecordId that}) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_box_autoadd_record_id(that, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 26)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiModelsRecordIdToStringConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiModelsRecordIdToStringConstMeta =>
+      const TaskConstMeta(debugName: "record_id_to_string", argNames: ["that"]);
+
   RustArcIncrementStrongCountFnType
   get rust_arc_increment_strong_count_SurrealDb => wire
       .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSurrealDb;
@@ -1147,6 +1210,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  RecordId dco_decode_box_autoadd_record_id(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_record_id(raw);
+  }
+
+  @protected
   StorageMode dco_decode_box_autoadd_storage_mode(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_storage_mode(raw);
@@ -1197,6 +1266,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   String? dco_decode_opt_String(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_String(raw);
+  }
+
+  @protected
+  RecordId dco_decode_record_id(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return RecordId(
+      tb: dco_decode_String(arr[0]),
+      id: dco_decode_String(arr[1]),
+    );
   }
 
   @protected
@@ -1302,6 +1383,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  RecordId sse_decode_box_autoadd_record_id(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_record_id(deserializer));
+  }
+
+  @protected
   StorageMode sse_decode_box_autoadd_storage_mode(
     SseDeserializer deserializer,
   ) {
@@ -1359,6 +1446,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     } else {
       return null;
     }
+  }
+
+  @protected
+  RecordId sse_decode_record_id(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_tb = sse_decode_String(deserializer);
+    var var_id = sse_decode_String(deserializer);
+    return RecordId(tb: var_tb, id: var_id);
   }
 
   @protected
@@ -1485,6 +1580,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_record_id(
+    RecordId self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_record_id(self, serializer);
+  }
+
+  @protected
   void sse_encode_box_autoadd_storage_mode(
     StorageMode self,
     SseSerializer serializer,
@@ -1546,6 +1650,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     if (self != null) {
       sse_encode_String(self, serializer);
     }
+  }
+
+  @protected
+  void sse_encode_record_id(RecordId self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.tb, serializer);
+    sse_encode_String(self.id, serializer);
   }
 
   @protected

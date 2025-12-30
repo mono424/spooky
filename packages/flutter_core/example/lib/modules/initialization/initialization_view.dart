@@ -41,7 +41,8 @@ class InitializationView extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(
-                "Initialize Spooky Client",
+                "Initialize Spooky Client ",
+
                 style: GoogleFonts.outfit(
                   fontSize: 28,
                   fontWeight: FontWeight.bold,
