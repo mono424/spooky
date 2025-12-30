@@ -1,12 +1,12 @@
-use surrealism::surrealism;
 use serde_json::{json, Value};
 use std::sync::Mutex;
+use surrealism::surrealism;
 
 // 1. Declare Modules
 mod converter;
-mod sanitizer;
-mod persistence;
 mod engine;
+mod persistence;
+mod sanitizer;
 
 use engine::Circuit;
 
@@ -17,7 +17,9 @@ lazy_static::lazy_static! {
 
 // Helper to get circuit access
 fn with_circuit<F, R>(f: F) -> Result<R, &'static str>
-where F: FnOnce(&mut Circuit) -> R {
+where
+    F: FnOnce(&mut Circuit) -> R,
+{
     let mut lock = CIRCUIT.lock().map_err(|_| "Failed to lock")?;
     if lock.is_none() {
         *lock = Some(persistence::load());
@@ -28,12 +30,19 @@ where F: FnOnce(&mut Circuit) -> R {
 // 3. Clean Macros
 
 #[surrealism]
-fn ingest(table: String, operation: String, id: String, record: Value) -> Result<Value, &'static str> {
+fn ingest(
+    table: String,
+    operation: String,
+    id: String,
+    record: Value,
+) -> Result<Value, &'static str> {
     // A. Sanitize
     let clean_record = sanitizer::normalize_record(record);
 
     // Hash the record for integrity/verification
-    let hash = blake3::hash(clean_record.to_string().as_bytes()).to_hex().to_string();
+    let hash = blake3::hash(clean_record.to_string().as_bytes())
+        .to_hex()
+        .to_string();
 
     // B. Run Engine
     let updates = with_circuit(|circuit| {
@@ -53,28 +62,31 @@ fn register_view(id: String, plan_val: Value, params: Value) -> Result<Value, &'
         Value::String(ref s) => s.as_str(),
         _ => return Err("Plan must be a string"),
     };
-    
+
     // Use the existing converter, now cleaner to call
-    // Note: converter might not be pub in mod? 
+    // Note: converter might not be pub in mod?
     // If it's `mod converter`, we need `pub mod` or `use converter::...` if functions are pub.
     // Assuming converter functions are pub.
     let root_op_val = converter::convert_surql_to_dbsp(plan_json)
         .or_else(|_| serde_json::from_str(plan_json))
         .map_err(|_| "Invalid Query Plan")?;
 
-    let root_op: engine::view::Operator = serde_json::from_value(root_op_val)
-        .map_err(|_| "Failed to map JSON to Operator")?;
+    let root_op: engine::view::Operator =
+        serde_json::from_value(root_op_val).map_err(|_| "Failed to map JSON to Operator")?;
 
     let safe_params = sanitizer::parse_params(params);
 
     // B. Run Engine
     let update = with_circuit(|circuit| {
         // Construct Plan struct here or inside engine
-        let plan = engine::view::QueryPlan { id: id.clone(), root: root_op }; 
-        circuit.register_view(plan, safe_params);
+        let plan = engine::view::QueryPlan {
+            id: id.clone(),
+            root: root_op,
+        };
+        let initial_res = circuit.register_view(plan, safe_params);
         persistence::save(circuit);
         // Return initial update if needed
-        json!({ "msg": "Registered", "id": id }) 
+        json!({ "msg": "Registered", "id": id, "result": initial_res })
     })?;
 
     Ok(update)
@@ -104,5 +116,3 @@ fn save_state(_val: Value) -> Result<Value, &'static str> {
     })?;
     Ok(Value::Null)
 }
-
-

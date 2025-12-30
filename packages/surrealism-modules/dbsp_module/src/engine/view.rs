@@ -1,12 +1,12 @@
+use crate::engine::circuit::Database;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
-use crate::engine::circuit::Database; // Forward declaration logic
+use std::collections::HashMap; // Forward declaration logic
 
 // --- Data Model ---
 
 pub type Weight = i64;
-pub type RowKey = String; 
+pub type RowKey = String;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Row {
@@ -69,7 +69,12 @@ impl IdTree {
         let mut groups: HashMap<String, Vec<LeafItem>> = HashMap::new();
         for item in items {
             // Use first char as key
-            let prefix = item.id.chars().next().map(|c| c.to_string()).unwrap_or_else(|| "".to_string());
+            let prefix = item
+                .id
+                .chars()
+                .next()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "".to_string());
             groups.entry(prefix).or_default().push(item);
         }
 
@@ -94,21 +99,22 @@ impl IdTree {
     }
 }
 
-
 // --- View / Circuit Model ---
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "op", rename_all = "lowercase")]
 pub enum Operator {
-    Scan { table: String },
-    Filter { 
+    Scan {
+        table: String,
+    },
+    Filter {
         input: Box<Operator>,
-        predicate: Predicate 
+        predicate: Predicate,
     },
     Join {
         left: Box<Operator>,
         right: Box<Operator>,
-        on: JoinCondition, 
+        on: JoinCondition,
     },
     Project {
         input: Box<Operator>,
@@ -119,7 +125,7 @@ pub enum Operator {
         limit: usize,
         #[serde(default)]
         order_by: Option<Vec<OrderSpec>>,
-    }
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -133,7 +139,7 @@ pub struct OrderSpec {
 pub enum Projection {
     All,
     Field { name: String },
-    Subquery { alias: String, plan: Box<Operator> }
+    Subquery { alias: String, plan: Box<Operator> },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -168,7 +174,7 @@ pub struct MaterializedViewUpdate {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct View {
     pub plan: QueryPlan,
-    pub cache: ZSet, 
+    pub cache: ZSet,
     pub last_hash: String,
     // Store parameters for this view's query
     #[serde(default)]
@@ -186,15 +192,20 @@ impl View {
     }
 
     /// Incrementally process a Delta from the circuit.
-    pub fn process(&mut self, _changed_table: &str, _input_delta: &ZSet, db: &Database) -> Option<MaterializedViewUpdate> {
+    pub fn process(
+        &mut self,
+        _changed_table: &str,
+        _input_delta: &ZSet,
+        db: &Database,
+    ) -> Option<MaterializedViewUpdate> {
         // Strategy: Re-evaluation (Snapshot Diff)
         // 1. Compute the Target Set based on current DB state.
         // Use self.params as context for predicate evaluation
         let target_set = self.eval_snapshot(&self.plan.root, db, self.params.as_ref());
-        
+
         // 2. Compute Delta = Target - Cache
         let mut view_delta: ZSet = HashMap::new();
-        
+
         // Add new/updated items
         for (key, &new_weight) in &target_set {
             let old_weight = self.cache.get(key).cloned().unwrap_or(0);
@@ -202,16 +213,16 @@ impl View {
                 view_delta.insert(key.clone(), new_weight - old_weight);
             }
         }
-        
+
         // Remove deleted items (present in cache but not in target)
         for (key, &old_weight) in &self.cache {
             if !target_set.contains_key(key) {
                 view_delta.insert(key.clone(), 0 - old_weight);
             }
         }
-        
+
         if view_delta.is_empty() {
-             return None;
+            return None;
         }
 
         // 3. Update Cache & Emit
@@ -228,35 +239,34 @@ impl View {
         // TODO: Apply top-level ORDER BY if we add it to QueryPlan later.
         // For now, default ID sort is stable.
         result_ids.sort();
-        
+
         // Build Leaf Items
-        let items: Vec<LeafItem> = result_ids.iter().map(|id| {
-            // Lookup row to get content
-            let val = self.get_row_value(id, db);
-            let hash = if let Some(v) = val {
-                // Try to get precomputed hash from record
-                if let Some(h) = v.get("IntrinsicHash").or_else(|| v.get("hash")).or_else(|| v.get("_hash")) {
-                    h.as_str().unwrap_or("0000").to_string()
-                } else {
-                    // Precomputed hash is mandatory
-                    // panic!("Missing IntrinsicHash/hash/_hash on record {}", id);
-                     "MISSING_HASH".to_string()
+        let items: Vec<LeafItem> = result_ids
+            .iter()
+            .map(|id| {
+                // Get Hash from DB Cache
+                let hash = self
+                    .get_row_hash(id, db)
+                    .unwrap_or_else(|| "0000".to_string());
+                LeafItem {
+                    id: id.clone(),
+                    hash,
                 }
-            } else {
-                 "0000".to_string() // Should not happen for valid views
-            };
-            LeafItem {
-                id: id.clone(),
-                hash,
-            }
-        }).collect();
+            })
+            .collect();
 
         // Compute root hash from items
         // Note: IdTree::build computes its own hash, but we check change first.
         let tree = IdTree::build(items);
         let hash = tree.hash.clone();
-        
-        eprintln!("DEBUG: process: view={}, delta_len={}, hash={}, last_hash={}", self.plan.id, view_delta.len(), hash, self.last_hash);
+
+        eprintln!(
+            "DEBUG: process: view={}, delta_len={}, hash={}, last_hash={}",
+            self.plan.id,
+            view_delta.len(),
+            hash,
+            self.last_hash
+        );
 
         if hash != self.last_hash {
             self.last_hash = hash.clone();
@@ -282,7 +292,7 @@ impl View {
                     // println!("DEBUG: eval_snapshot SCAN table {} NOT FOUND", table);
                     HashMap::new()
                 }
-            },
+            }
             Operator::Filter { input, predicate } => {
                 let upstream = self.eval_snapshot(input, db, context);
                 let mut out = HashMap::new();
@@ -290,41 +300,56 @@ impl View {
                     if self.check_predicate(predicate, &key, db, context) {
                         out.insert(key, weight);
                     } else {
-                         // println!("DEBUG: Filter REJECTED key {} with pred {:?}", key, predicate);
+                        // println!("DEBUG: Filter REJECTED key {} with pred {:?}", key, predicate);
                     }
                 }
                 out
-            },
-            Operator::Project { input, projections: _ } => {
+            }
+            Operator::Project {
+                input,
+                projections: _,
+            } => {
                 // Identity for ZSet (ID set) unless we implement Map
                 self.eval_snapshot(input, db, context)
-            },
-            Operator::Limit { input, limit, order_by } => {
+            }
+            Operator::Limit {
+                input,
+                limit,
+                order_by,
+            } => {
                 let upstream = self.eval_snapshot(input, db, context);
                 let mut items: Vec<_> = upstream.into_iter().collect();
-                
+
                 if let Some(orders) = order_by {
-                     items.sort_by(|a, b| {
-                         let row_a = self.get_row_value(&a.0, db);
-                         let row_b = self.get_row_value(&b.0, db);
-                         
-                         for ord in orders {
-                             let val_a = row_a.and_then(|r| r.as_object()).and_then(|o| o.get(&ord.field));
-                             let val_b = row_b.and_then(|r| r.as_object()).and_then(|o| o.get(&ord.field));
-                             
-                             let cmp = compare_json_values(val_a, val_b);
-                             if cmp != std::cmp::Ordering::Equal {
-                                 return if ord.direction.eq_ignore_ascii_case("DESC") { cmp.reverse() } else { cmp };
-                             }
-                         }
-                         // Fallback to ID
-                         a.0.cmp(&b.0)
-                     });
+                    items.sort_by(|a, b| {
+                        let row_a = self.get_row_value(&a.0, db);
+                        let row_b = self.get_row_value(&b.0, db);
+
+                        for ord in orders {
+                            let val_a = row_a
+                                .and_then(|r| r.as_object())
+                                .and_then(|o| o.get(&ord.field));
+                            let val_b = row_b
+                                .and_then(|r| r.as_object())
+                                .and_then(|o| o.get(&ord.field));
+
+                            let cmp = compare_json_values(val_a, val_b);
+                            if cmp != std::cmp::Ordering::Equal {
+                                return if ord.direction.eq_ignore_ascii_case("DESC") {
+                                    cmp.reverse()
+                                } else {
+                                    cmp
+                                };
+                            }
+                        }
+                        // Fallback to ID
+                        a.0.cmp(&b.0)
+                    });
                 } else {
                     // implicit sort by key (ID)
-                    items.sort_by(|a, b| a.0.cmp(&b.0)); 
+                    items.sort_by(|a, b| a.0.cmp(&b.0));
                 }
-                
+
                 let mut out = HashMap::new();
                 for (i, (key, weight)) in items.into_iter().enumerate() {
                     if i < *limit {
@@ -334,7 +359,7 @@ impl View {
                     }
                 }
                 out
-            },
+            }
             Operator::Join { left, right, on } => {
                 // Nested Loop Join on Full Snapshots
                 let s_left = self.eval_snapshot(left, db, context);
@@ -342,25 +367,30 @@ impl View {
                 let mut out = HashMap::new();
 
                 for (l_key, l_weight) in &s_left {
-                     let l_val_opt = self.get_row_value(l_key, db);
-                     if l_val_opt.is_none() { continue; }
-                     let l_val = l_val_opt.unwrap();
-                     
-                     // Get Join Field Value
-                     let l_field_val = l_val.as_object().and_then(|o| o.get(&on.left_field));
-                     if l_field_val.is_none() { continue; }
+                    let l_val_opt = self.get_row_value(l_key, db);
+                    if l_val_opt.is_none() {
+                        continue;
+                    }
+                    let l_val = l_val_opt.unwrap();
 
-                     for (r_key, r_weight) in &s_right {
-                         let r_val_opt = self.get_row_value(r_key, db);
-                         if let Some(r_val) = r_val_opt {
-                             let r_field_val = r_val.as_object().and_then(|o| o.get(&on.right_field));
-                             if l_field_val == r_field_val {
-                                 // Match!
-                                 let w = l_weight * r_weight;
-                                 *out.entry(l_key.clone()).or_insert(0) += w;
-                             }
+                    // Get Join Field Value
+                    let l_field_val = l_val.as_object().and_then(|o| o.get(&on.left_field));
+                    if l_field_val.is_none() {
+                        continue;
+                    }
+
+                    for (r_key, r_weight) in &s_right {
+                        let r_val_opt = self.get_row_value(r_key, db);
+                        if let Some(r_val) = r_val_opt {
+                            let r_field_val =
+                                r_val.as_object().and_then(|o| o.get(&on.right_field));
+                            if l_field_val == r_field_val {
+                                // Match!
+                                let w = l_weight * r_weight;
+                                *out.entry(l_key.clone()).or_insert(0) += w;
+                            }
                         }
-                     }
+                    }
                 }
                 out
             }
@@ -368,12 +398,28 @@ impl View {
     }
 
     fn get_row_value<'a>(&self, key: &str, db: &'a Database) -> Option<&'a Value> {
-         let parts: Vec<&str> = key.splitn(2, ':').collect();
-         if parts.len() < 2 { return None; }
-         db.tables.get(parts[0])?.rows.get(key)
+        let parts: Vec<&str> = key.splitn(2, ':').collect();
+        if parts.len() < 2 {
+            return None;
+        }
+        db.tables.get(parts[0])?.rows.get(key)
     }
 
-    fn check_predicate(&self, pred: &Predicate, key: &str, db: &Database, context: Option<&Value>) -> bool {
+    fn get_row_hash(&self, key: &str, db: &Database) -> Option<String> {
+        let parts: Vec<&str> = key.splitn(2, ':').collect();
+        if parts.len() < 2 {
+            return None;
+        }
+        db.tables.get(parts[0])?.hashes.get(key).cloned()
+    }
+
+    fn check_predicate(
+        &self,
+        pred: &Predicate,
+        key: &str,
+        db: &Database,
+        context: Option<&Value>,
+    ) -> bool {
         match pred {
             Predicate::And { predicates } => {
                 for p in predicates {
@@ -382,7 +428,7 @@ impl View {
                     }
                 }
                 true
-            },
+            }
             Predicate::Or { predicates } => {
                 for p in predicates {
                     if self.check_predicate(p, key, db, context) {
@@ -390,23 +436,23 @@ impl View {
                     }
                 }
                 false
-            },
+            }
             Predicate::Prefix { prefix } => key.starts_with(prefix),
             Predicate::Eq { field, value } => {
                 // Check if value is a param
                 let target_val = if let Some(obj) = value.as_object() {
                     if let Some(param_path) = obj.get("$param") {
-                         // Resolve param from context
-                         if let Some(ctx) = context {
-                             if let Some(ctx_val) = ctx.get(param_path.as_str().unwrap_or("")) {
-                                 // println!("DEBUG: Resolved param {}: {:?}", param_path, ctx_val);
-                                 ctx_val
-                             } else {
-                                 return false; // Param not found in context
-                             }
-                         } else {
-                             return false; // No context
-                         }
+                        // Resolve param from context
+                        if let Some(ctx) = context {
+                            if let Some(ctx_val) = ctx.get(param_path.as_str().unwrap_or("")) {
+                                // println!("DEBUG: Resolved param {}: {:?}", param_path, ctx_val);
+                                ctx_val
+                            } else {
+                                return false; // Param not found in context
+                            }
+                        } else {
+                            return false; // No context
+                        }
                     } else {
                         value
                     }
@@ -416,21 +462,25 @@ impl View {
 
                 // Find table from key
                 let parts: Vec<&str> = key.splitn(2, ':').collect();
-                if parts.len() < 2 { return false; }
+                if parts.len() < 2 {
+                    return false;
+                }
                 let table_name = parts[0];
-                
+
                 if field == "id" {
                     let key_val = json!(key);
-                    return compare_json_values(Some(&key_val), Some(target_val)) == std::cmp::Ordering::Equal;
+                    return compare_json_values(Some(&key_val), Some(target_val))
+                        == std::cmp::Ordering::Equal;
                 }
 
                 if let Some(table) = db.tables.get(table_name) {
                     if let Some(row_val) = table.rows.get(key) {
                         if let Some(obj) = row_val.as_object() {
-                             // Handle nested fields? e.g. "author.name"
-                             // Simple field access for now
+                            // Handle nested fields? e.g. "author.name"
+                            // Simple field access for now
                             if let Some(f_val) = obj.get(field) {
-                                return compare_json_values(Some(f_val), Some(target_val)) == std::cmp::Ordering::Equal;
+                                return compare_json_values(Some(f_val), Some(target_val))
+                                    == std::cmp::Ordering::Equal;
                             }
                         }
                     }
@@ -451,7 +501,7 @@ fn compare_json_values(a: Option<&Value>, b: Option<&Value>) -> std::cmp::Orderi
             // Try numeric comparison first
             if let (Some(na), Some(nb)) = (xa.as_f64(), xb.as_f64()) {
                 // Use epsilon for float equality? Or simple partial cmp
-                 na.partial_cmp(&nb).unwrap_or(std::cmp::Ordering::Equal)
+                na.partial_cmp(&nb).unwrap_or(std::cmp::Ordering::Equal)
             } else if let (Some(sa), Some(sb)) = (xa.as_str(), xb.as_str()) {
                 sa.cmp(sb)
             } else if let (Some(ba), Some(bb)) = (xa.as_bool(), xb.as_bool()) {

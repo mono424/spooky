@@ -89,22 +89,55 @@ export class QueryManager<S extends SchemaStructure> {
     });
 
     const recordId = new RecordId('_spooky_incantation', id);
-    let existing = await this.local.getClient().select<IncantationData>(recordId);
+
+    // Helper for retrying DB operations (e.g. "Can not open transaction")
+    const withRetry = async <T>(
+      operation: () => Promise<T>,
+      retries = 3,
+      delayMs = 100
+    ): Promise<T> => {
+      let lastError;
+      for (let i = 0; i < retries; i++) {
+        try {
+          return await operation();
+        } catch (err: any) {
+          lastError = err;
+          // Check for transaction error or generic connection issues
+          if (
+            err?.message?.includes('Can not open transaction') ||
+            err?.message?.includes('transaction')
+          ) {
+            console.warn(
+              `[QueryManager] Retry ${i + 1}/${retries} due to transaction error:`,
+              err.message
+            );
+            await new Promise((res) => setTimeout(res, delayMs * (i + 1))); // Linear backoff
+            continue;
+          }
+          throw err;
+        }
+      }
+      throw lastError;
+    };
+
+    let existing = await withRetry(() => this.local.getClient().select<IncantationData>(recordId));
 
     if (!existing) {
-      existing = await this.local
-        .getClient()
-        .create<IncantationData>(recordId)
-        .content({
-          id: recordId,
-          surrealQL: surrealql,
-          params: params,
-          clientId: this.clientId,
-          hash: id,
-          tree: null,
-          lastActiveAt: new Date(),
-          ttl: new Duration(ttl),
-        });
+      existing = await withRetry(() =>
+        this.local
+          .getClient()
+          .create<IncantationData>(recordId)
+          .content({
+            id: recordId,
+            surrealQL: surrealql,
+            params: params,
+            clientId: this.clientId,
+            hash: id,
+            tree: null,
+            lastActiveAt: new Date(),
+            ttl: new Duration(ttl),
+          })
+      );
     }
 
     if (!existing) {

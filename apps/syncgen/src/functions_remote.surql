@@ -33,17 +33,17 @@ DEFINE FUNCTION fn::incantation::register($config: object) {
 
     -- 5. REGISTER WITH DBSP
     IF $query != NONE THEN {
-        LET $state = fn::dbsp::get_state();
-        LET $dbsp_res = mod::dbsp::register_query($id, $query, $state);
-        fn::dbsp::save_state($dbsp_res.new_state);
+        -- Call register_view(id, plan, params)
+        -- Note: lib.rs handles persistence internally now.
+        LET $dbsp_res = mod::dbsp::register_view($id, $query, {});
         
         LET $init_res = $dbsp_res.result;
         IF $init_res != NONE THEN {
             -- Update using the explicit ID
-            UPDATE $rid SET hash = $init_res.hash, tree = $init_res.tree;
+            UPDATE $rid SET hash = $init_res.result_hash, tree = $init_res.tree;
         } END;
         
-        -- DEBUG: Return the entire result to inspect state
+        -- DEBUG: Return the entire result
         RETURN $dbsp_res;
     } END;
 

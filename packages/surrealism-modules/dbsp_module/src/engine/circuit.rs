@@ -1,7 +1,7 @@
+use super::view::{MaterializedViewUpdate, QueryPlan, RowKey, View, ZSet};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use super::view::{View, ZSet, MaterializedViewUpdate, QueryPlan, RowKey};
 
 // --- Table & Database ---
 
@@ -29,7 +29,7 @@ impl Table {
         self.rows.insert(key.clone(), data);
         self.hashes.insert(key, hash);
     }
-    
+
     pub fn delete_row(&mut self, key: &str) {
         self.rows.remove(key);
         self.hashes.remove(key);
@@ -66,7 +66,6 @@ impl Database {
     }
 }
 
-
 // --- Circuit ---
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -84,17 +83,26 @@ impl Circuit {
     }
 
     // THE NEW BLACK BOX METHOD
-    pub fn ingest_record(&mut self, table: String, op: String, id: String, record: Value, hash: String) -> Vec<MaterializedViewUpdate> {
-        let key = id; 
-        
+    pub fn ingest_record(
+        &mut self,
+        table: String,
+        op: String,
+        id: String,
+        record: Value,
+        hash: String,
+    ) -> Vec<MaterializedViewUpdate> {
+        let key = id;
+
         // 1. Calculate Delta internally
         let weight: i64 = match op.as_str() {
             "CREATE" | "UPDATE" => 1,
             "DELETE" => -1,
             _ => 0,
         };
-        
-        if weight == 0 { return vec![]; }
+
+        if weight == 0 {
+            return vec![];
+        }
 
         let mut delta = std::collections::HashMap::new();
         delta.insert(key.clone(), weight);
@@ -113,12 +121,22 @@ impl Circuit {
         self.step(table, delta)
     }
 
-    pub fn register_view(&mut self, plan: QueryPlan, params: Option<Value>) {
+    pub fn register_view(
+        &mut self,
+        plan: QueryPlan,
+        params: Option<Value>,
+    ) -> Option<MaterializedViewUpdate> {
         // If view exists, remove it first (to support updates/param changes)
         if let Some(pos) = self.views.iter().position(|v| v.plan.id == plan.id) {
             self.views.remove(pos);
         }
-        self.views.push(View::new(plan, params));
+        let mut view = View::new(plan, params);
+
+        // Initial Hydration: Process with empty delta to force snapshot eval against current DB
+        let initial_update = view.process("", &HashMap::new(), &self.db);
+
+        self.views.push(view);
+        initial_update
     }
 
     #[allow(dead_code)]
@@ -136,9 +154,9 @@ impl Circuit {
         // 2. Propagate Delta to Views
         let mut updates = Vec::new();
         for i in 0..self.views.len() {
-             if let Some(update) = self.views[i].process(&table, &delta, &self.db) {
-                 updates.push(update);
-             }
+            if let Some(update) = self.views[i].process(&table, &delta, &self.db) {
+                updates.push(update);
+            }
         }
         updates
     }
