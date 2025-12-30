@@ -1,5 +1,5 @@
 import { QueryHash, Incantation as IncantationData, QueryTimeToLive } from '../../types.js';
-import { Table, RecordId, Duration } from 'surrealdb';
+import { Table, RecordId, Duration, Uuid } from 'surrealdb';
 import { RemoteDatabaseService } from '../database/remote.js';
 import { LocalDatabaseService } from '../database/local.js';
 import { Incantation } from './incantation.js';
@@ -219,9 +219,17 @@ export class QueryManager<S extends SchemaStructure> {
   }
 
   private async startLiveQuery() {
-    const queryUuid = await this.remote.getClient().live(new Table('_spooky_incantation')).diff();
+    // const queryUuid = await this.remote.getClient().live(new Table('_spooky_incantation')).diff();
+    const [queryUuid] = await this.remote
+      .getClient()
+      .query('LIVE SELECT * FROM _spooky_incantation WHERE clientId = $clientId', {
+        clientId: this.clientId,
+      })
+      .collect<[Uuid]>();
 
+    console.log('XXLIVE QUERY REGISTER', queryUuid, this.clientId);
     await this.remote.subscribeLive(queryUuid.toString(), async (action, result) => {
+      console.log('XXLIVE QUERY', action, result);
       if (action === 'UPDATE' || action === 'CREATE') {
         const { id, hash, tree } = result;
         if (!(id instanceof RecordId) || !hash || !tree) {
