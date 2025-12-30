@@ -63,6 +63,12 @@ export class QueryManager<S extends SchemaStructure> {
       )
     );
 
+    console.log('[QueryManager] handleIncomingRemoteUpdate', {
+      incantationId: incantationId.toString(),
+      queryHash: incantationId.id.toString(),
+      recordCount: records.length,
+    });
+
     incantation.updateLocalState(outRecords, remoteHash, remoteTree);
     this.events.emit(QueryEventTypes.IncantationUpdated, {
       incantationId,
@@ -77,6 +83,7 @@ export class QueryManager<S extends SchemaStructure> {
     ttl: QueryTimeToLive
   ): Promise<QueryHash> {
     const id = await this.calculateHash({
+      clientId: this.clientId,
       surrealql,
       params,
     });
@@ -156,8 +163,15 @@ export class QueryManager<S extends SchemaStructure> {
     options: { immediate?: boolean } = {}
   ): () => void {
     const id = this.events.subscribe(QueryEventTypes.IncantationUpdated, (event) => {
-      if (event.payload.incantationId.id.toString() === queryHash) {
+      const incomingId = event.payload.incantationId.id.toString();
+      if (incomingId === queryHash) {
+        console.log('[QueryManager] Subscription callback triggered', {
+          queryHash,
+          recordCount: event.payload.records.length,
+        });
         callback(event.payload.records);
+      } else {
+        // console.log('[QueryManager] Subscription ignored mismatch', { incomingId, queryHash });
       }
     });
 

@@ -25,3 +25,4 @@ getrandom_old = { package = "getrandom", version = "0.2" }
 anyhow = "1.0"
 blake3 = { version = "1.5", default-features = false, features = ["std"] }
 regex = "1.12.2"
+

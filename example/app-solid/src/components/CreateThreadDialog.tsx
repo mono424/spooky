@@ -3,6 +3,7 @@ import { useNavigate } from "@solidjs/router";
 import { db } from "../db";
 import { useAuth } from "../lib/auth";
 import { Uuid } from "@spooky/client-solid";
+import { RecordId } from "surrealdb";
 
 interface CreateThreadDialogProps {
   isOpen: boolean;
@@ -36,7 +37,7 @@ export function CreateThreadDialog(props: CreateThreadDialogProps) {
       await db.create(threadId, {
         title: title().trim(),
         content: content().trim(),
-        author: user.id,
+        author: new RecordId('user', user.id.toString().split(':')[1]),
         active: true,
       });
 

@@ -8,7 +8,7 @@ export const dbConfig = {
   database: {
     namespace: 'main',
     database: 'main',
-    endpoint: 'ws://localhost:8000/rpc',
+    endpoint: 'ws://localhost:8666/rpc',
     // auth: { ... } // If needed later
   },
 } as const;

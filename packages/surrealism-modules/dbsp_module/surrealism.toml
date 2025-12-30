@@ -1,8 +1,6 @@
 [package]
 name = "dbsp_module"
-version = "0.1.0"
 organisation = "spooky"
-
-[build]
-target = "wasm32-unknown-unknown"
-release = true
+version = "0.1.0"
+description = "Incremental View Maintenance for SurrealDB"
+authors = ["Spooky Authors"]

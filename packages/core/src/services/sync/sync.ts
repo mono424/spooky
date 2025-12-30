@@ -286,6 +286,8 @@ export class SpookySync<S extends SchemaStructure> {
     const { added, updated } = diff;
     const idsToFetch = [...added, ...updated];
 
+    console.log('[SpookySync] cacheMissingRecords diff', { added, updated, idsToFetch });
+
     if (idsToFetch.length === 0) {
       return { added: [], updated: [], removed: [] };
     }
@@ -330,6 +332,12 @@ export class SpookySync<S extends SchemaStructure> {
         .getClient()
         .query(surrealql, params)
         .collect<[Record<string, any>[]]>();
+
+      console.log('[SpookySync] updateLocalIncantation query result', {
+        incantationId: incantationId.toString(),
+        recordCount: cachedResults?.length,
+        firstRecord: cachedResults?.[0],
+      });
 
       this.queryEvents.emit(QueryEventTypes.IncantationIncomingRemoteUpdate, {
         incantationId,
