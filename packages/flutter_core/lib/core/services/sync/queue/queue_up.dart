@@ -1,8 +1,10 @@
 import 'dart:async';
 import '../../database/local.dart';
 import '../../mutation/events.dart'; // MutationEvent, MutationAction
+import '../../mutation/mutation_querys.dart'; // MutationPayload
 import '../events.dart'; // SyncQueueEventSystem, SyncQueueEventTypes
 import '../../events/main.dart'; // BaseEvent, EventSystem
+import '../../query/utils.dart'; // extractResult
 
 // Internal type for valid UpEvents used in the queue
 abstract class UpEvent {
@@ -107,32 +109,55 @@ class UpQueue {
 
   Future<void> loadFromDatabase() async {
     try {
-      // Dart engine query usually returns JSON string
-      // Dart engine query usually returns JSON string
-      await local.query(
+      final resStr = await local.query(
         "SELECT * FROM _spooky_pending_mutations ORDER BY created_at ASC",
       );
-      // extractResult or custom parsing?
-      // Let's assume standard extraction for now using jsonDecode
-      // Note: extractResult helper from query/utils.dart could be useful if imported.
-      // But query/utils is in sibling folder.
-      // We will do inline parsing for simplicity or duplicate extractResult logic.
 
-      // Let's rely on basic Parsing assuming the response structure
-      // (engine might return `[{status: 'OK', result: [...]}]`)
-      // But `rawResult` logic from TS suggests we might get list directly?
-      // No, Dart Rust Engine returns stringified JSON of the Response Array.
+      final dynamic raw = extractResult(resStr);
+      List<Map<String, dynamic>> mutations = [];
 
-      /*
-        r.mutation_type (string)
-        r.id (record ID of the mutation itself)
-        r.record_id (target record)
-        r.data
-      */
-      // For now, stub implementation of parsing as user might need extractResult.
+      if (raw is List) {
+        mutations = raw.cast<Map<String, dynamic>>();
+      }
 
-      // TODO: Implement proper parsing here when extractResult is shared or accessible.
-      // For now we assume no persisted events or user handles DB init differently.
+      for (final r in mutations) {
+        // Map DB record to MutationPayload structure
+        // r['mutation_type']: 'create' | 'update' | 'delete'
+        // r['record_id']: string (the ID of the modified record)
+        // r['data']: JSON object
+        // r['id']: string (the ID of the pending mutation)
+
+        final typeStr = r['mutation_type'] as String?;
+        final recordId = r['record_id'] as String?;
+        final data = r['data'] as Map<String, dynamic>?;
+        final mutationId = r['id'] as String;
+
+        if (typeStr == null || recordId == null) continue;
+
+        MutationAction action;
+        switch (typeStr) {
+          case 'create':
+            action = MutationAction.create;
+            break;
+          case 'update':
+            action = MutationAction.update;
+            break;
+          case 'delete':
+            action = MutationAction.delete;
+            break;
+          default:
+            continue;
+        }
+
+        final payload = MutationPayload(
+          action: action,
+          recordId: recordId,
+          mutationId: mutationId,
+          data: data,
+        );
+
+        _handleMutationPayload(payload);
+      }
     } catch (error) {
       print("Failed to load pending mutations: $error");
     }

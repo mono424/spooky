@@ -55,7 +55,7 @@ class _ThreadViewState extends State<ThreadView> {
     try {
       // Parameterized query for safety and correct Live Query targeting
       final sql =
-          'SELECT * FROM comment WHERE thread = \$threadId ORDER BY created_at ASC';
+          "SELECT * FROM comment WHERE thread = \$threadId ORDER BY created_at ASC";
       final params = {'threadId': widget.threadId};
 
       // Register Query
@@ -102,6 +102,7 @@ class _ThreadViewState extends State<ThreadView> {
       await widget.controller.create(id, {
         'content': text,
         'thread': widget.threadId,
+        'author': "type::record('user:yvr0aici6qn0f1ohf55v')",
         // 'author': ... see ChatDashboard note.
       });
     } catch (e) {

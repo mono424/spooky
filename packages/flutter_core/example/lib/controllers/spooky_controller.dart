@@ -138,6 +138,8 @@ class SpookyController extends ChangeNotifier {
     }
   }
 
+  String? userId;
+
   Future<void> signIn(String username, String password) async {
     if (client == null) return;
     try {
@@ -158,6 +160,22 @@ class SpookyController extends ChangeNotifier {
 
       final token = await client!.remote.getClient.signin(creds: credentials);
       log("Sign In Successful! Token: $token");
+
+      // Fetch User ID
+      try {
+        final authResult = await client!.remote.getClient.query(
+          sql: "SELECT value id FROM \$auth",
+        );
+
+        final parsed = extractResult(authResult);
+        if (parsed is List && parsed.isNotEmpty) {
+          userId = parsed[0].toString();
+          log("Authenticated as User ID: $userId");
+        }
+      } catch (e) {
+        log("Warning: Could not fetch User ID: $e");
+      }
+
       isLoggedIn = true;
       notifyListeners();
     } catch (e) {

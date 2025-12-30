@@ -15,7 +15,6 @@ class Schema {
   SpookyDataHash spookyDataHash;
   SpookyIncantation spookyIncantation;
   SpookyPendingMutations spookyPendingMutations;
-  SpookyRelationship spookyRelationship;
   SpookySchema spookySchema;
   Comment comment;
   CommentedOn commentedOn;
@@ -26,7 +25,6 @@ class Schema {
     required this.spookyDataHash,
     required this.spookyIncantation,
     required this.spookyPendingMutations,
-    required this.spookyRelationship,
     required this.spookySchema,
     required this.comment,
     required this.commentedOn,
@@ -40,9 +38,6 @@ class Schema {
     spookyPendingMutations: SpookyPendingMutations.fromJson(
       json["_spooky_pending_mutations"],
     ),
-    spookyRelationship: SpookyRelationship.fromJson(
-      json["_spooky_relationship"],
-    ),
     spookySchema: SpookySchema.fromJson(json["_spooky_schema"]),
     comment: Comment.fromJson(json["comment"]),
     commentedOn: CommentedOn.fromJson(json["commented_on"]),
@@ -54,7 +49,6 @@ class Schema {
     "_spooky_data_hash": spookyDataHash.toJson(),
     "_spooky_incantation": spookyIncantation.toJson(),
     "_spooky_pending_mutations": spookyPendingMutations.toJson(),
-    "_spooky_relationship": spookyRelationship.toJson(),
     "_spooky_schema": spookySchema.toJson(),
     "comment": comment.toJson(),
     "commented_on": commentedOn.toJson(),
@@ -162,10 +156,9 @@ class SpookyDataHash {
 
 class SpookyIncantation {
   String? clientId;
-  String hash;
+  String? hash;
 
   ///Record ID
-  String spookyIncantationId;
   String id;
   DateTime lastActiveAt;
   String? surrealQl;
@@ -178,8 +171,7 @@ class SpookyIncantation {
 
   SpookyIncantation({
     this.clientId,
-    required this.hash,
-    required this.spookyIncantationId,
+    this.hash,
     required this.id,
     required this.lastActiveAt,
     this.surrealQl,
@@ -191,8 +183,7 @@ class SpookyIncantation {
       SpookyIncantation(
         clientId: json["ClientId"],
         hash: json["Hash"],
-        spookyIncantationId: json["id"],
-        id: json["Id"],
+        id: json["id"],
         lastActiveAt: DateTime.parse(json["LastActiveAt"]),
         surrealQl: json["SurrealQL"],
         tree: json["Tree"],
@@ -202,8 +193,7 @@ class SpookyIncantation {
   Map<String, dynamic> toJson() => {
     "ClientId": clientId,
     "Hash": hash,
-    "id": spookyIncantationId,
-    "Id": id,
+    "id": id,
     "LastActiveAt": lastActiveAt.toIso8601String(),
     "SurrealQL": surrealQl,
     "Tree": tree,
@@ -240,43 +230,6 @@ class SpookyPendingMutations {
     "id": id,
     "MutationType": mutationType,
     "RecordId": recordId,
-  };
-}
-
-class SpookyRelationship {
-  String childField;
-  String childTable;
-
-  ///Record ID
-  String id;
-  String parentTable;
-
-  ///Assert: $value INSIDE ['COMPOSITION', 'REFERENCE']
-  String type;
-
-  SpookyRelationship({
-    required this.childField,
-    required this.childTable,
-    required this.id,
-    required this.parentTable,
-    required this.type,
-  });
-
-  factory SpookyRelationship.fromJson(Map<String, dynamic> json) =>
-      SpookyRelationship(
-        childField: json["ChildField"],
-        childTable: json["ChildTable"],
-        id: json["id"],
-        parentTable: json["ParentTable"],
-        type: json["Type"],
-      );
-
-  Map<String, dynamic> toJson() => {
-    "ChildField": childField,
-    "ChildTable": childTable,
-    "id": id,
-    "ParentTable": parentTable,
-    "Type": type,
   };
 }
 
@@ -361,13 +314,9 @@ class Thread {
 class User {
   ///Reverse relationship: array of comment records
   List<String>? comments;
-  DateTime? createdAt;
 
   ///Record ID
   String id;
-
-  ///Assert: $value != NONE AND string::len($value) > 0
-  String password;
 
   ///Reverse relationship: array of thread records
   List<String>? threads;
@@ -375,24 +324,13 @@ class User {
   ///Assert: $value != NONE AND string::len($value) > 3
   String username;
 
-  User({
-    this.comments,
-    this.createdAt,
-    required this.id,
-    required this.password,
-    this.threads,
-    required this.username,
-  });
+  User({this.comments, required this.id, this.threads, required this.username});
 
   factory User.fromJson(Map<String, dynamic> json) => User(
     comments: json["comments"] == null
         ? []
         : List<String>.from(json["comments"]!.map((x) => x)),
-    createdAt: json["created_at"] == null
-        ? null
-        : DateTime.parse(json["created_at"]),
     id: json["id"],
-    password: json["password"],
     threads: json["threads"] == null
         ? []
         : List<String>.from(json["threads"]!.map((x) => x)),
@@ -403,9 +341,7 @@ class User {
     "comments": comments == null
         ? []
         : List<dynamic>.from(comments!.map((x) => x)),
-    "created_at": createdAt?.toIso8601String(),
     "id": id,
-    "password": password,
     "threads": threads == null
         ? []
         : List<dynamic>.from(threads!.map((x) => x)),
@@ -420,6 +356,17 @@ const String SURQL_SCHEMA =
 -- SCOPES & AUTHENTICATION
 -- ##################################################################
 
+DEFINE FUNCTION fn::polyfill::createAccount(\$username: string, \$password: string) {
+  IF string::len(\$username) <= 3 { THROW \"Username must be longer than 3 characters\" };
+  IF string::len(\$password) == 0 { THROW \"Password cannot be empty\" };
+
+  LET \$existing = (SELECT value id FROM user WHERE username = \$username LIMIT 1)[0];
+  IF \$existing != NONE { THROW \"Username '\" + <string>\$username + \"' is already taken\" };
+
+  LET \$u = CREATE user SET username = \$username, password = crypto::argon2::generate(\$password);
+  RETURN \$u;
+};
+
 -- ##################################################################
 -- USER TABLE
 -- ##################################################################
@@ -433,13 +380,7 @@ PERMISSIONS FOR select, create, update WHERE true;
     
 DEFINE INDEX unique_username ON TABLE user FIELDS username UNIQUE;
 
-DEFINE FIELD password ON TABLE user TYPE string
-ASSERT \$value != NONE AND string::len(\$value) > 0
-PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD created_at ON TABLE user TYPE datetime
-VALUE time::now()
-PERMISSIONS FOR select, create, update WHERE true;
 
 -- ##################################################################
 -- THREAD TABLE
@@ -500,10 +441,6 @@ DEFINE EVENT comment_created ON TABLE comment WHEN \$event = \"CREATE\" THEN
 DEFINE TABLE _spooky_incantation SCHEMALESS
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
--- The unique hash ID of the query + params
-DEFINE FIELD Id ON TABLE _spooky_incantation TYPE string
-PERMISSIONS FOR select, create, update WHERE true;
-
 -- The raw query string (for re-hydration/debugging)
 DEFINE FIELD SurrealQL ON TABLE _spooky_incantation TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
@@ -513,7 +450,7 @@ DEFINE FIELD ClientId ON TABLE _spooky_incantation TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- The current XOR sum of all results in this query
-DEFINE FIELD Hash ON TABLE _spooky_incantation TYPE string
+DEFINE FIELD Hash ON TABLE _spooky_incantation TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- The Radix Tree of Result IDs for efficient sync
@@ -528,30 +465,6 @@ PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD TTL ON TABLE _spooky_incantation TYPE duration
 PERMISSIONS FOR select, create, update WHERE true;
 
--- ==================================================
--- SPOOKY RELATIONSHIP
--- The Graph Schema: Defines 'Bubble Up' vs 'Cascade Down'
--- ==================================================
-
-DEFINE TABLE _spooky_relationship SCHEMAFULL
-PERMISSIONS FOR select, create, update, delete WHERE true;
-
-DEFINE FIELD ParentTable ON TABLE _spooky_relationship TYPE string
-PERMISSIONS FOR select, create, update WHERE true;
-DEFINE FIELD ChildTable ON TABLE _spooky_relationship TYPE string
-PERMISSIONS FOR select, create, update WHERE true;
-
--- The field on the Child that holds the Parent's ID
-DEFINE FIELD ChildField ON TABLE _spooky_relationship TYPE string
-PERMISSIONS FOR select, create, update WHERE true;
-
--- The Logic Flow: 'COMPOSITION' (Bubble Up) or 'REFERENCE' (Cascade Down)
-DEFINE FIELD Type ON TABLE _spooky_relationship TYPE string 
-    ASSERT \$value INSIDE ['COMPOSITION', 'REFERENCE']
-PERMISSIONS FOR select, create, update WHERE true;
-
--- Enforce unique definition per relationship path
-DEFINE INDEX idx_rel_unique ON TABLE _spooky_relationship COLUMNS ParentTable, ChildTable, ChildField UNIQUE;
 
 -- ==================================================
 -- SPOOKY SCHEMA
@@ -629,7 +542,8 @@ PERMISSIONS FOR select, create, update WHERE true;
 DEFINE EVENT OVERWRITE _spooky_comment_client_mutation ON TABLE comment
 WHEN \$before != \$after AND \$event != \"DELETE\"
 THEN {
-    UPSERT _spooky_data_hash CONTENT {
+    LET \$hash_id = <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>\$after.id));
+    UPSERT \$hash_id CONTENT {
         RecordId: \$after.id,
         IntrinsicHash: \"\",
         CompositionHash: \"\",
@@ -643,14 +557,16 @@ THEN {
 DEFINE EVENT OVERWRITE _spooky_comment_client_delete ON TABLE comment
 WHEN \$event = \"DELETE\"
 THEN {
-    UPDATE _spooky_data_hash SET PendingDelete = true WHERE RecordId = \$before.id;
+    LET \$hash_id = <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>\$before.id));
+    UPDATE \$hash_id SET PendingDelete = true;
 };
 
 -- Table: thread Client Mutation
 DEFINE EVENT OVERWRITE _spooky_thread_client_mutation ON TABLE thread
 WHEN \$before != \$after AND \$event != \"DELETE\"
 THEN {
-    UPSERT _spooky_data_hash CONTENT {
+    LET \$hash_id = <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>\$after.id));
+    UPSERT \$hash_id CONTENT {
         RecordId: \$after.id,
         IntrinsicHash: \"\",
         CompositionHash: \"\",
@@ -664,14 +580,16 @@ THEN {
 DEFINE EVENT OVERWRITE _spooky_thread_client_delete ON TABLE thread
 WHEN \$event = \"DELETE\"
 THEN {
-    UPDATE _spooky_data_hash SET PendingDelete = true WHERE RecordId = \$before.id;
+    LET \$hash_id = <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>\$before.id));
+    UPDATE \$hash_id SET PendingDelete = true;
 };
 
 -- Table: user Client Mutation
 DEFINE EVENT OVERWRITE _spooky_user_client_mutation ON TABLE user
 WHEN \$before != \$after AND \$event != \"DELETE\"
 THEN {
-    UPSERT _spooky_data_hash CONTENT {
+    LET \$hash_id = <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>\$after.id));
+    UPSERT \$hash_id CONTENT {
         RecordId: \$after.id,
         IntrinsicHash: \"\",
         CompositionHash: \"\",
@@ -685,6 +603,7 @@ THEN {
 DEFINE EVENT OVERWRITE _spooky_user_client_delete ON TABLE user
 WHEN \$event = \"DELETE\"
 THEN {
-    UPDATE _spooky_data_hash SET PendingDelete = true WHERE RecordId = \$before.id;
+    LET \$hash_id = <record>(\"_spooky_data_hash:\" + crypto::blake3(<string>\$before.id));
+    UPDATE \$hash_id SET PendingDelete = true;
 };
 """;

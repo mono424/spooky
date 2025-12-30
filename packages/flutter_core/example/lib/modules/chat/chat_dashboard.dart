@@ -109,20 +109,37 @@ class _ChatDashboardState extends State<ChatDashboard> {
                 // We'll trust the mutation manager or backend to validate.
                 // But we need to pass data.
 
-                await widget.controller.create(id, {
-                  'title': titleController.text,
-                  'content': contentController.text,
-                  'active': true,
-                  // 'author': ... ideally set by backend or passed here
-                });
+                if (widget.controller.userId == null) {
+                  widget.controller.log(
+                    "Error: User ID not found. Cannot create thread.",
+                  );
+                  return;
+                }
 
-                // Note: If 'author' is required by schema, this might fail
+                try {
+                  // Use controller.create with explicit record field definition
+                  // This handles:
+                  // 1. Thread creation (Remote + Local)
+                  // 2. Pending Mutation creation (Sync)
+                  // 3. Record ID coercion (via recordFields)
+                  await widget.controller.create(id, {
+                    'title': titleController.text,
+                    'content': contentController.text,
+                    'active': true,
+                    'author': r'user:yvr0aici6qn0f1ohf55v',
+                    'created_at': DateTime.now().toIso8601String(),
+                  });
+
+                  widget.controller.log("Thread created");
+                } catch (e) {
+                  widget.controller.log("Creation Error: $e");
+                  rethrow;
+                }
                 // if the Session isn't automatically applying it or we don't send it.
                 // Schema: DEFINE FIELD author ... TYPE record<user>
                 // PERMISSIONS ... create WHERE $access="account" AND author.id = $auth.id
                 // So we MUST send author: $auth.id?
                 // Usually SurrealDB $auth param handles it if we use `Create` but here we send data map.
-                // Let's try sending author as the current auth token ID if we knew it to be safe.
                 // But typically `author: $auth.id` could be a default value in schema?
                 // Schema has no default.
                 // So the USER must allow `author` to be set.

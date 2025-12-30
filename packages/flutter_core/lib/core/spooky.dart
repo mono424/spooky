@@ -14,6 +14,7 @@ export 'services/database/local.dart';
 export 'services/database/remote.dart';
 export 'services/mutation/main.dart';
 export 'services/query/query.dart';
+export 'services/query/utils.dart'; // extractResult
 
 class SpookyClient {
   final SpookyConfig config;
@@ -126,9 +127,7 @@ class SpookyClient {
 
   // Wrappers for Mutation Manager
   Future<Map<String, dynamic>?> create(String id, Map<String, dynamic> data) {
-    final table = id.split(':').first;
-    final dataWithId = {...data, 'id': id};
-    return mutation.create(table, dataWithId);
+    return mutation.create(id, data);
   }
 
   Future<Map<String, dynamic>?> update(

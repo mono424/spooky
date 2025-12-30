@@ -13,12 +13,19 @@ class MutationManager {
   EventSystem<MutationEvent> get getEvents => events;
 
   Future<Map<String, dynamic>?> create(
-    String table,
+    String rid,
     Map<String, dynamic> data,
   ) async {
+    // Identify fields that need record casting and remove them from CONTENT payload
+    // to prevent schema mismatch errors (String vs record<T>).
+    // These will be re-added via SET clause with explicit type::record() casting.
+    final contentData = Map<String, dynamic>.from(data);
+    contentData.remove('author');
+    contentData.remove('thread');
+
     final resRaw = await db.query(
       mutationCreateQuery,
-      vars: {'table': table, 'data': data},
+      vars: {'id': rid, 'content': contentData, 'data': data},
     );
 
     final [response, ...] =

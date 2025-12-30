@@ -49,10 +49,9 @@ class RemoteDatabaseService extends AbstractDatabaseService {
     required String namespace,
     required String database,
   }) async {
-    // 1. Create user via query (Requires public permissions or current auth)
-    // Since schema has "FOR create WHERE true", this works without auth.
+    // 1. Create user via polyfill function (Bypasses WASM/Scope issues)
     final query =
-        r'''CREATE ONLY user SET username = $username, password = crypto::argon2::generate($password);''';
+        r'''RETURN fn::polyfill::createAccount($username, $password);''';
     // vars is now named parameter type object!
     final response = await this.query(
       query,

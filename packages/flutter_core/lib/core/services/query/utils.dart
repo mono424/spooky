@@ -10,19 +10,19 @@ dynamic extractResult(String jsonString) {
   // Wir nehmen das erste Ergebnis (da wir meist nur 1 Query senden)
   final firstQuery = rawList[0];
 
-  if (firstQuery['status'] != 'OK') {
-    throw Exception(
-      'SurrealDB Query Error: ${firstQuery['detail'] ?? "Unknown"}',
-    );
+  // Check if standard response object (Map) or raw result
+  if (firstQuery is Map<String, dynamic>) {
+    if (firstQuery['status'] != 'OK') {
+      throw Exception(
+        'SurrealDB Query Error: ${firstQuery['detail'] ?? "Unknown"}',
+      );
+    }
+    final rawResult = firstQuery['result'];
+    if (rawResult == null) return null;
+    final wrapped = SurrealDecoder.unwrap(rawResult);
+    return wrapped.v;
+  } else {
+    // Treat as direct result (e.g. RETURN "foo" -> ["foo"])
+    return firstQuery;
   }
-
-  // Das eigentliche 'result' Feld holen und via SurrealDecoder in Dart-Objekte wandeln
-  final rawResult = firstQuery['result'];
-
-  // Wenn result null ist, gib null zurück
-  if (rawResult == null) return null;
-
-  // SurrealDecoder nutzen, um Wrappings wie "Strand", "Number" zu entfernen
-  final wrapped = SurrealDecoder.unwrap(rawResult);
-  return wrapped.v;
 }
