@@ -3,12 +3,11 @@ use std::sync::Mutex;
 use surrealism::surrealism;
 
 // 1. Declare Modules
-mod converter;
-mod engine;
+// 1. Declare Modules
 mod persistence;
-mod sanitizer;
 
 use engine::Circuit;
+use spooky_stream_processor::{converter, engine, sanitizer};
 
 // 2. Global State Wrapper
 lazy_static::lazy_static! {

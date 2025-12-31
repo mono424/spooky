@@ -1,5 +1,5 @@
-use crate::engine::Circuit;
 use serde_json::Value;
+use spooky_stream_processor::engine::Circuit;
 use surrealism::imports::sql;
 
 pub fn load() -> Circuit {
@@ -42,7 +42,11 @@ pub fn clear() {
     let _ = sql::<&str, Vec<Value>>("DELETE _spooky_module_state:dbsp");
 }
 
-pub fn apply_incantation_update(id: &str, hash: &str, tree: &crate::engine::view::IdTree) {
+pub fn apply_incantation_update(
+    id: &str,
+    hash: &str,
+    tree: &spooky_stream_processor::engine::view::IdTree,
+) {
     if let Ok(tree_json) = serde_json::to_string(tree) {
         // Handle ID: If it already starts with table prefix, use it as is (but ensured string).
         // Otherwise preped.
@@ -74,7 +78,7 @@ pub fn apply_incantation_update(id: &str, hash: &str, tree: &crate::engine::view
 pub fn upsert_incantation(
     id: &str,
     hash: &str,
-    tree: &crate::engine::view::IdTree,
+    tree: &spooky_stream_processor::engine::view::IdTree,
     client_id: &str,
     surrealql: &str,
     params: &Value,

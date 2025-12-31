@@ -1,7 +1,7 @@
 import { LocalDatabaseService, RemoteDatabaseService } from '../database/index.js';
-import { MutationEventSystem } from '../mutation/index.js';
-import { IdTreeDiff, Incantation, Incantation as IncantationData } from '../../types.js';
-import { QueryEventSystem, QueryEventTypes } from '../query/events.js';
+import { MutationEventSystem, MutationEventTypes } from '../mutation/index.js';
+import { IdTreeDiff } from '../../types.js';
+import { QueryEventTypes } from '../query/events.js';
 import { SyncQueueEventTypes } from './events.js';
 import {
   CleanupEvent,
@@ -9,13 +9,13 @@ import {
   DownQueue,
   HeartbeatEvent,
   RegisterEvent,
-  SyncEvent,
   UpEvent,
   UpQueue,
 } from './queue/index.js';
 import { RecordId, Duration } from 'surrealdb';
 import { diffIdTree } from './utils.js';
 import { SchemaStructure } from '@spooky/query-builder';
+import { QueryManager } from '../query/index.js';
 
 export class SpookySync<S extends SchemaStructure> {
   private upQueue: UpQueue;
@@ -33,8 +33,8 @@ export class SpookySync<S extends SchemaStructure> {
     private schema: S,
     private local: LocalDatabaseService,
     private remote: RemoteDatabaseService,
+    private query: QueryManager<S>,
     private mutationEvents: MutationEventSystem,
-    private queryEvents: QueryEventSystem,
     private clientId: string
   ) {
     this.upQueue = new UpQueue(this.local);
@@ -53,7 +53,6 @@ export class SpookySync<S extends SchemaStructure> {
   }
 
   public async init() {
-    console.log('syncing down');
     if (this.isInit) throw new Error('SpookySync is already initialized');
     this.isInit = true;
     await this.initUpQueue();
@@ -65,19 +64,26 @@ export class SpookySync<S extends SchemaStructure> {
   private async initUpQueue() {
     await this.upQueue.loadFromDatabase();
     this.upQueue.events.subscribe(SyncQueueEventTypes.MutationEnqueued, this.syncUp.bind(this));
+
+    /// TODO: In the future we can think about using DBSP or something smarter
+    /// to update only the queries that are really affected by the change not every
+    /// query that just involves this table.
+    this.mutationEvents.subscribe(MutationEventTypes.MutationCreated, (event) => {
+      const { payload } = event;
+      for (const element of payload) {
+        this.refreshFromLocalCache(element.record_id.table.toString());
+      }
+    });
+
     this.upQueue.listenForMutations(this.mutationEvents);
   }
 
   private async initDownQueue() {
-    this.downQueue.events.subscribeMany(
-      [
-        SyncQueueEventTypes.IncantationRegistrationEnqueued,
-        SyncQueueEventTypes.IncantationSyncEnqueued,
-        SyncQueueEventTypes.IncantationCleanupEnqueued,
-      ],
+    this.downQueue.events.subscribe(
+      SyncQueueEventTypes.QueryItemEnqueued,
       this.syncDown.bind(this)
     );
-    this.downQueue.listenForQueries(this.queryEvents);
+    this.downQueue.listenForQueries(this.query.eventsSystem);
   }
 
   private async syncUp() {
@@ -127,6 +133,9 @@ export class SpookySync<S extends SchemaStructure> {
           id: event.record_id,
         });
         break;
+      default:
+        console.error('[SpookySync] processUpEvent unknown event type', event);
+        return;
     }
   }
 
@@ -151,6 +160,25 @@ export class SpookySync<S extends SchemaStructure> {
         return this.heartbeatIncantation(event);
       case 'cleanup':
         return this.cleanupIncantation(event);
+    }
+  }
+
+  private async refreshFromLocalCache(table: string) {
+    const queries = this.query.getQueriesThatInvolveTable(table);
+    console.log('[SpookySync] refreshFromLocalCache', table, [...queries]);
+    for (const query of queries) {
+      this.updateLocalIncantation(
+        query.id,
+        {
+          surrealql: query.surrealql,
+          params: query.params,
+          hash: '',
+          tree: null,
+        },
+        {
+          updateRecord: false,
+        }
+      );
     }
   }
 
@@ -332,23 +360,31 @@ export class SpookySync<S extends SchemaStructure> {
     }
 
     try {
+      console.log('[SpookySync] updateLocalIncantation Loading cached results start', {
+        incantationId,
+        surrealql,
+        params,
+      });
       const [cachedResults] = await this.local
         .getClient()
-        .query(surrealql, params)
+        .query(surrealql, { ...params })
         .collect<[Record<string, any>[]]>();
-      console.log('[SpookySync] Loading cached results', {
+      console.log('[SpookySync] updateLocalIncantation Loading cached results done', {
         incantationId: incantationId.toString(),
         recordCount: cachedResults?.length,
       });
 
-      this.queryEvents.emit(QueryEventTypes.IncantationIncomingRemoteUpdate, {
+      this.query.eventsSystem.emit(QueryEventTypes.IncantationIncomingRemoteUpdate, {
         incantationId,
         remoteHash: hash,
         remoteTree: tree,
         records: cachedResults,
       });
     } catch (e) {
-      console.error('[SpookySync] failed to query local db or emit event', e);
+      console.error(
+        '[SpookySync] updateLocalIncantation failed to query local db or emit event',
+        e
+      );
     }
   }
 

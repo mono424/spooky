@@ -73,6 +73,10 @@ export class Incantation<T> {
     this.meta = data.meta;
   }
 
+  public invlovesTable(tableName: string) {
+    return this.tableName === tableName;
+  }
+
   public updateLocalState(records: T[], hash: string, tree: any) {
     this.results = records;
     this.hash = hash;

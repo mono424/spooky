@@ -51,8 +51,8 @@ export class SpookyClient<S extends SchemaStructure> {
       this.config.schema,
       this.local,
       this.remote,
+      this.queryManager,
       this.mutationManager.events,
-      this.queryManager.eventsSystem,
       clientId
     );
     this.devTools = new DevToolsService(

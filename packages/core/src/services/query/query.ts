@@ -35,6 +35,10 @@ export class QueryManager<S extends SchemaStructure> {
     );
   }
 
+  public getQueriesThatInvolveTable(tableName: string) {
+    return [...this.activeQueries.values().filter((q) => q.invlovesTable(tableName))];
+  }
+
   private async setClientId() {
     await this.remote.getClient().set('_spooky_client_id', this.clientId);
     console.log('clientId set', this.clientId);
@@ -245,6 +249,7 @@ export class QueryManager<S extends SchemaStructure> {
 
         const incantation = this.activeQueries.get(id.id.toString());
         if (!incantation) {
+          console.warn('[QueryManager] Live update for unknown incantation', id);
           return;
         }
 
