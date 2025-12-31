@@ -98,7 +98,8 @@ export class QueryManager<S extends SchemaStructure> {
     tableName: string,
     surrealql: string,
     params: Record<string, any>,
-    ttl: QueryTimeToLive
+    ttl: QueryTimeToLive,
+    involvedTables: string[] = []
   ): Promise<QueryHash> {
     const id = await this.calculateHash({
       clientId: this.clientId,
@@ -163,12 +164,21 @@ export class QueryManager<S extends SchemaStructure> {
             tree: null,
             lastActiveAt: new Date(),
             ttl: new Duration(ttl),
+            meta: {
+              tableName,
+              involvedTables,
+            },
           })
       );
     }
 
     if (!existing) {
       throw new Error('Failed to create or retrieve incantation');
+    }
+
+    // Ensure we update meta if retrieving existing incantation
+    if (!existing.meta?.involvedTables && involvedTables.length > 0) {
+      // We don't necessarily update DB for this ephemeral data, but we use it for local Incantation instance
     }
 
     if (!this.activeQueries.has(id)) {
@@ -182,6 +192,7 @@ export class QueryManager<S extends SchemaStructure> {
         tree: existing.tree,
         meta: {
           tableName,
+          involvedTables,
         },
       });
       this.activeQueries.set(id, incantation);
@@ -195,9 +206,10 @@ export class QueryManager<S extends SchemaStructure> {
     tableName: string,
     surrealql: string,
     params: Record<string, any>,
-    ttl: QueryTimeToLive
+    ttl: QueryTimeToLive,
+    involvedTables: string[] = []
   ): Promise<QueryHash> {
-    return this.register(tableName, surrealql, params, ttl);
+    return this.register(tableName, surrealql, params, ttl, involvedTables);
   }
 
   private async initLifecycle(incantation: Incantation<any>) {

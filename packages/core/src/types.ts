@@ -1,7 +1,7 @@
 import { RecordId, SchemaStructure } from '@spooky/query-builder';
 import { Level } from 'pino';
 
-export { Level } from 'pino';
+export type { Level } from 'pino';
 
 export type QueryTimeToLive =
   | '1m'
@@ -62,6 +62,7 @@ export interface Incantation {
   tree: any;
   meta: {
     tableName: string;
+    involvedTables?: string[];
   };
 }
 

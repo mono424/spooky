@@ -14,7 +14,7 @@ export const dbConfig = {
   },
 } satisfies SyncedDbConfig<typeof schema>;
 
-export const db = new SyncedDb(dbConfig);
+export const db = new SyncedDb<typeof schema>(dbConfig);
 
 // Initialize the database
 let initializationPromise: Promise<void> | null = null;

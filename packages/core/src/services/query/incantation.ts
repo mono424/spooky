@@ -49,9 +49,7 @@ export class Incantation<T> {
   private ttlTimer: NodeJS.Timeout | null = null;
   private ttlDurationMs: number;
   private results: T[] | null = null;
-  private meta: {
-    tableName: string;
-  };
+  private meta: IncantationData['meta'];
 
   get records() {
     return this.results;
@@ -74,7 +72,8 @@ export class Incantation<T> {
   }
 
   public invlovesTable(tableName: string) {
-    return this.tableName === tableName;
+    if (this.tableName === tableName) return true;
+    return this.meta.involvedTables?.includes(tableName) ?? false;
   }
 
   public updateLocalState(records: T[], hash: string, tree: any) {
