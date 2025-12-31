@@ -176,11 +176,6 @@ export class QueryManager<S extends SchemaStructure> {
       throw new Error('Failed to create or retrieve incantation');
     }
 
-    // Ensure we update meta if retrieving existing incantation
-    if (!existing.meta?.involvedTables && involvedTables.length > 0) {
-      // We don't necessarily update DB for this ephemeral data, but we use it for local Incantation instance
-    }
-
     if (!this.activeQueries.has(id)) {
       const incantation = new Incantation({
         id: recordId,
