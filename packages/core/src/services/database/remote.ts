@@ -33,19 +33,15 @@ export class RemoteDatabaseService extends AbstractDatabaseService {
     uuid: string,
     callback: (action: string, result: Record<string, unknown>) => void
   ) {
-    // @ts-ignore
-    if (typeof this.client.liveQuery === 'function') {
+    try {
+      // Correct API for SurrealDB v2+ is .subscribe(uuid)
       // @ts-ignore
-      const iterator = this.client.liveQuery(uuid);
-      (async () => {
-        try {
-          for await (const msg of iterator) {
-            callback(msg.action, msg.result as Record<string, unknown>);
-          }
-        } catch (e) {
-          console.error('Live query loop error', e);
-        }
-      })();
+      await this.client.subscribe(uuid, (action: string, result: Record<string, unknown>) => {
+        console.log('[RemoteService] Live Event:', action, result);
+        callback(action, result);
+      });
+    } catch (e) {
+      console.error('Live query subscription error', e);
     }
   }
   async signin(params: any): Promise<any> {

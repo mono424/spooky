@@ -35,7 +35,14 @@ export class QueryManager<S extends SchemaStructure> {
     );
   }
 
+  private async setClientId() {
+    await this.remote.getClient().set('_spooky_client_id', this.clientId);
+    console.log('clientId set', this.clientId);
+    // .query('LET $_spooky_client_id = $clientId', { clientId: this.clientId });
+  }
+
   public async init() {
+    await this.setClientId();
     await this.startLiveQuery();
   }
 
@@ -228,10 +235,10 @@ export class QueryManager<S extends SchemaStructure> {
       .collect<[Uuid]>();
 
     console.log('XXLIVE QUERY REGISTER', queryUuid, this.clientId);
-    await this.remote.subscribeLive(queryUuid.toString(), async (action, result) => {
-      console.log('XXLIVE QUERY', action, result);
-      if (action === 'UPDATE' || action === 'CREATE') {
-        const { id, hash, tree } = result;
+    (await this.remote.getClient().liveOf(queryUuid)).subscribe((message) => {
+      console.log('XXLIVE QUERY', message);
+      if (message.action === 'UPDATE' || message.action === 'CREATE') {
+        const { id, hash, tree } = message.value;
         if (!(id instanceof RecordId) || !hash || !tree) {
           return;
         }

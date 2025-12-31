@@ -68,40 +68,91 @@ fn ingest(
 }
 
 #[surrealism]
-fn register_view(id: String, plan_val: Value, params: Value) -> Result<Value, &'static str> {
-    // A. Parse
-    let plan_json = match plan_val {
-        Value::String(ref s) => s.as_str(),
-        _ => return Err("Plan must be a string"),
-    };
+fn version(_args: Value) -> Result<Value, &'static str> {
+    Ok(json!("0.1.1-debug")) // Increment this to verify new build is loaded
+}
 
-    // Use the existing converter, now cleaner to call
-    // Note: converter might not be pub in mod?
-    // If it's `mod converter`, we need `pub mod` or `use converter::...` if functions are pub.
-    // Assuming converter functions are pub.
-    let root_op_val = converter::convert_surql_to_dbsp(plan_json)
-        .or_else(|_| serde_json::from_str(plan_json))
+#[surrealism]
+fn register_view(config: Value) -> Result<Value, &'static str> {
+    eprintln!("DEBUG: register_view START v0.1.1-debug");
+    eprintln!("DEBUG: Received config: {}", config);
+
+    // A. Unpack Config
+    let id = config
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing or invalid 'id'")?
+        .to_string();
+    let surrealql = config
+        .get("surrealQL")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing or invalid 'surrealQL'")?
+        .to_string();
+    let params = config.get("params").cloned().unwrap_or(json!({}));
+    let client_id = config
+        .get("clientId")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing or invalid 'clientId'")?
+        .to_string();
+    // Assuming ttl and lastActiveAt are passed formatted as strings (even if Duration/Datetime in Surreal)
+    let ttl = config
+        .get("ttl")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing or invalid 'ttl'")?
+        .to_string();
+    let last_active_at = config
+        .get("lastActiveAt")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing or invalid 'lastActiveAt'")?
+        .to_string();
+
+    // B. Parse Query Plan
+    let root_op_val = converter::convert_surql_to_dbsp(&surrealql)
+        .or_else(|_| serde_json::from_str(&surrealql))
         .map_err(|_| "Invalid Query Plan")?;
 
     let root_op: engine::view::Operator =
         serde_json::from_value(root_op_val).map_err(|_| "Failed to map JSON to Operator")?;
 
-    let safe_params = sanitizer::parse_params(params);
+    let safe_params = sanitizer::parse_params(params.clone());
 
-    // B. Run Engine
-    let update = with_circuit(|circuit| {
-        // Construct Plan struct here or inside engine
+    // C. Run Engine & Persist
+    let result = with_circuit(|circuit| {
         let plan = engine::view::QueryPlan {
             id: id.clone(),
             root: root_op,
         };
         let initial_res = circuit.register_view(plan, safe_params);
+
+        // Unwrap the Option
+        let res = initial_res.expect("Failed to get initial view result");
+
+        // Extract result data
+        let hash = res.result_hash.clone();
+        let tree = res.tree.clone();
+
+        // Persist to SurrealDB directly
+        persistence::upsert_incantation(
+            &id,
+            &hash,
+            &tree,
+            &client_id,
+            &surrealql,
+            &params,
+            &ttl,
+            &last_active_at,
+        );
+
         persistence::save(circuit);
-        // Return initial update if needed
-        json!({ "msg": "Registered", "id": id, "result": initial_res })
+
+        // Return hash and tree
+        json!({
+            "hash": hash,
+            "tree": tree
+        })
     })?;
 
-    Ok(update)
+    Ok(result)
 }
 
 #[surrealism]

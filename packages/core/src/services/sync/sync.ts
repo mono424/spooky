@@ -203,24 +203,22 @@ export class SpookySync<S extends SchemaStructure> {
     params: any,
     ttl: string | Duration
   ) {
-    await this.remote
+    // Delegate to remote function which handles DBSP registration & persistence
+    const [{ hash, tree }] = await this.remote
       .getClient()
-      .upsert<Incantation>(incantationId)
-      .merge({
-        surrealQL: surrealql,
-        params,
-        ttl: typeof ttl === 'string' ? new Duration(ttl) : ttl,
-        lastActiveAt: new Date(),
-        clientId: this.clientId,
+      .query('fn::incantation::register($config)', {
+        config: {
+          id: incantationId,
+          surrealQL: surrealql,
+          params,
+          ttl: typeof ttl === 'string' ? new Duration(ttl) : ttl,
+          lastActiveAt: new Date(),
+          clientId: this.clientId,
+        },
       })
-      .output('after');
+      .collect<[{ hash: string; tree: any }]>();
 
-    const [[{ id, hash, tree }]] = await this.remote
-      .getClient()
-      .query('SELECT id, hash, tree FROM $id', { id: incantationId })
-      .collect<[{ id: RecordId<string>; hash: string; tree: any }[]]>();
-
-    console.log('[SpookySync] createdRemoteIncantation', id, hash, tree);
+    console.log('[SpookySync] createdRemoteIncantation', incantationId, hash, tree);
     return { hash, tree };
   }
 

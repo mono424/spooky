@@ -70,3 +70,42 @@ pub fn apply_incantation_update(id: &str, hash: &str, tree: &crate::engine::view
         }
     }
 }
+
+pub fn upsert_incantation(
+    id: &str,
+    hash: &str,
+    tree: &crate::engine::view::IdTree,
+    client_id: &str,
+    surrealql: &str,
+    params: &Value,
+    ttl: &str,
+    last_active_at: &str,
+) {
+    if let Ok(tree_json) = serde_json::to_string(tree) {
+        let full_id = if id.starts_with("_spooky_incantation:") {
+            id.to_string()
+        } else {
+            format!("_spooky_incantation:{}", id)
+        };
+
+        let escaped_tree = tree_json.replace("\\", "\\\\").replace("'", "\\'");
+        let escaped_query = surrealql.replace("\\", "\\\\").replace("'", "\\'");
+        let params_json = serde_json::to_string(params).unwrap_or("{}".to_string());
+        let escaped_params = params_json.replace("\\", "\\\\").replace("'", "\\'");
+
+        // Ensure values are safe for SQL string injection
+        let escaped_client_id = client_id.replace("\\", "\\\\").replace("'", "\\'");
+        let escaped_ttl = ttl.replace("\\", "\\\\").replace("'", "\\'");
+        let escaped_last_active = last_active_at.replace("\\", "\\\\").replace("'", "\\'");
+
+        let sql_query = format!(
+            "{{ LET $ign = UPSERT <record>'{}' SET hash = '{}', tree = {}, clientId = '{}', surrealQL = '{}', params = {}, ttl = <duration>'{}', lastActiveAt = <datetime>'{}'; RETURN []; }}",
+            full_id, hash, escaped_tree, escaped_client_id, escaped_query, escaped_params, escaped_ttl, escaped_last_active
+        );
+
+        match sql::<String, Vec<Value>>(sql_query) {
+            Ok(_) => {} // Success
+            Err(e) => eprintln!("DEBUG: upsert_incantation: SQL Error for {}: {:?}", id, e),
+        }
+    }
+}

@@ -2,18 +2,10 @@
 DEFINE TABLE _spooky_module_state SCHEMALESS PERMISSIONS FULL;
 
 -- Unregister from DBSP on deletion
+-- Unregister from DBSP on deletion
 DEFINE EVENT _spooky_dbsp_cleanup ON TABLE _spooky_incantation WHEN $event = "DELETE" THEN {
-    let $result = mod::dbsp::unregister_query(<string>$before.id);
+    let $result = mod::dbsp::unregister_view(<string>$before.id);
 };
 
--- Register with DBSP on creation or update
--- Register with DBSP on creation or update
-DEFINE EVENT _spooky_dbsp_register ON TABLE _spooky_incantation WHEN $event = "CREATE" OR ($event = "UPDATE" AND ($after.surrealQL != $before.surrealQL OR $after.params != $before.params)) THEN {
-    LET $res = mod::dbsp::register_view(<string>$after.id, $after.surrealQL, <string>($after.params OR {}));
-    -- Update the incantation with the initial hash computed by DBSP
-    -- Result format: { msg: "...", id: "...", result: { result_hash: "...", tree: ... } }
-    LET $init_res = $res.result;
-    IF $init_res != NONE THEN {
-        UPDATE _spooky_incantation SET hash = $init_res.result_hash, tree = $init_res.tree WHERE id = $after.id; 
-    } END;
-};
+-- Note: Registration is now handled explicitly by fn::incantation::register calling mod::dbsp::register_view
+-- The previous _spooky_dbsp_register event is removed to prevent recursion and double-registration.
