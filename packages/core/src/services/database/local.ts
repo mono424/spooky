@@ -1,16 +1,18 @@
 import { Surreal } from 'surrealdb';
 import { createWasmEngines } from '@surrealdb/wasm';
 import { SpookyConfig } from '../../types.js';
+import { Logger } from '../logger.js';
 import { AbstractDatabaseService } from './database.js';
 
 export class LocalDatabaseService extends AbstractDatabaseService {
   private config: SpookyConfig<any>['database'];
 
-  constructor(config: SpookyConfig<any>['database']) {
+  constructor(config: SpookyConfig<any>['database'], logger: Logger) {
     super(
       new Surreal({
         engines: createWasmEngines(),
-      })
+      }),
+      logger
     );
     this.config = config;
   }

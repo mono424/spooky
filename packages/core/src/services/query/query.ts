@@ -28,9 +28,10 @@ export class QueryManager<S extends SchemaStructure> {
     private schema: S,
     private local: LocalDatabaseService,
     private remote: RemoteDatabaseService,
-    private clientId?: string
+    private clientId: string | undefined, // undefined is valid for optional clientId, but argument position is fixed
+    logger: Logger
   ) {
-    this.logger = createLogger('info').child({ service: 'QueryManager' });
+    this.logger = logger.child({ service: 'QueryManager' });
     this.events = createQueryEventSystem();
     this.events.subscribe(
       QueryEventTypes.IncantationIncomingRemoteUpdate,

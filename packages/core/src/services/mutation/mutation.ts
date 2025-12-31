@@ -15,9 +15,10 @@ export class MutationManager<S extends SchemaStructure> {
 
   constructor(
     private schema: S,
-    private db: LocalDatabaseService
+    private db: LocalDatabaseService,
+    logger: Logger
   ) {
-    this.logger = createLogger('info').child({ service: 'MutationManager' });
+    this.logger = logger.child({ service: 'MutationManager' });
     this._events = createMutationEventSystem();
   }
 

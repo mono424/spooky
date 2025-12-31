@@ -1,12 +1,13 @@
 import { Surreal, SurrealTransaction } from 'surrealdb';
 import { SpookyConfig } from '../../types.js';
+import { Logger } from '../logger.js';
 import { AbstractDatabaseService } from './database.js';
 
 export class RemoteDatabaseService extends AbstractDatabaseService {
   private config: SpookyConfig<any>['database'];
 
-  constructor(config: SpookyConfig<any>['database']) {
-    super(new Surreal());
+  constructor(config: SpookyConfig<any>['database'], logger: Logger) {
+    super(new Surreal(), logger);
     this.config = config;
   }
 

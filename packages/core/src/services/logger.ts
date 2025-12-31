@@ -1,9 +1,9 @@
 import pino, { type Logger as PinoLogger } from 'pino';
-import { LogLevel } from '../types.js';
+import { Level } from 'pino';
 
 export type Logger = PinoLogger;
 
-export function createLogger(level: LogLevel = 'info'): Logger {
+export function createLogger(level: Level = 'info'): Logger {
   return pino({
     level,
     browser: {

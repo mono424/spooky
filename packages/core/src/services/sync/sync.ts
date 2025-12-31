@@ -37,9 +37,10 @@ export class SpookySync<S extends SchemaStructure> {
     private remote: RemoteDatabaseService,
     private query: QueryManager<S>,
     private mutationEvents: MutationEventSystem,
-    private clientId: string
+    private clientId: string,
+    logger: Logger
   ) {
-    this.logger = createLogger('info').child({ service: 'SpookySync' });
+    this.logger = logger.child({ service: 'SpookySync' });
     this.upQueue = new UpQueue(this.local);
     this.downQueue = new DownQueue(this.local);
     this.buildRelationshipMap();

@@ -5,9 +5,9 @@ export abstract class AbstractDatabaseService {
   protected client: Surreal;
   protected logger: Logger;
 
-  constructor(client: Surreal) {
+  constructor(client: Surreal, logger: Logger) {
     this.client = client;
-    this.logger = createLogger('info').child({ service: 'Database' });
+    this.logger = logger.child({ service: 'Database' });
   }
 
   abstract connect(): Promise<void>;

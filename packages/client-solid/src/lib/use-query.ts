@@ -38,7 +38,6 @@ export function useQuery<
   const initQuery = async (
     query: FinalQuery<S, TableName, T, RelatedFields, IsOne, SpookyQueryResultPromise>
   ) => {
-    console.log('[useQuery] init');
     const { hash } = await query.run();
     setError(undefined);
 
@@ -46,7 +45,6 @@ export function useQuery<
       hash,
       (e) => {
         const data = (query.isOne ? e[0] : e) as TData;
-        console.log('[useQuery] Data updated', hash, data);
         setData(() => data);
       },
       { immediate: true }

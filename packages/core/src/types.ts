@@ -1,4 +1,7 @@
 import { RecordId, SchemaStructure } from '@spooky/query-builder';
+import { Level } from 'pino';
+
+export { Level } from 'pino';
 
 export type QueryTimeToLive =
   | '1m'
@@ -32,8 +35,6 @@ export interface EventSubscriptionOptions {
   priority?: number;
 }
 
-export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
-
 export interface SpookyConfig<S extends SchemaStructure> {
   database: {
     endpoint?: string;
@@ -44,6 +45,7 @@ export interface SpookyConfig<S extends SchemaStructure> {
   clientId?: string;
   schema: S;
   schemaSurql: string;
+  logLevel: Level;
 }
 
 export type QueryHash = string;
