@@ -233,18 +233,22 @@ export class SpookySync<S extends SchemaStructure> {
     params: any,
     ttl: string | Duration
   ) {
+    const config = {
+      id: incantationId,
+      surrealQL: surrealql,
+      params,
+      ttl: typeof ttl === 'string' ? new Duration(ttl) : ttl,
+      lastActiveAt: new Date(),
+      clientId: this.clientId,
+    };
+
+    const safeConfig = JSON.parse(JSON.stringify(config));
+
     // Delegate to remote function which handles DBSP registration & persistence
     const [{ hash, tree }] = await this.remote.query<[{ hash: string; tree: any }]>(
       'fn::incantation::register($config)',
       {
-        config: {
-          id: incantationId,
-          surrealQL: surrealql,
-          params,
-          ttl: typeof ttl === 'string' ? new Duration(ttl) : ttl,
-          lastActiveAt: new Date(),
-          clientId: this.clientId,
-        },
+        config: safeConfig,
       }
     );
 
@@ -357,23 +361,12 @@ export class SpookySync<S extends SchemaStructure> {
 
     try {
       console.log('[SpookySync] updateLocalIncantation Loading cached results start', {
-        incantationId,
+        incantationId: incantationId.toString(),
         surrealql,
         params,
       });
 
-      const safeParams = params
-        ? JSON.parse(
-            JSON.stringify(params, (key, value) => {
-              return value;
-            })
-          )
-        : {};
-
-      const [cachedResults] = await this.local.query<[Record<string, any>[]]>(
-        surrealql,
-        safeParams
-      );
+      const [cachedResults] = await this.local.query<[Record<string, any>[]]>(surrealql, params);
       console.log('[SpookySync] updateLocalIncantation Loading cached results done', {
         incantationId: incantationId.toString(),
         recordCount: cachedResults?.length,

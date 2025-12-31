@@ -124,7 +124,20 @@ fn register_view(config: Value) -> Result<Value, &'static str> {
         let initial_res = circuit.register_view(plan, safe_params);
 
         // Unwrap the Option
-        let res = initial_res.expect("Failed to get initial view result");
+        // Unwrap the Option or create default for empty view
+        let res = initial_res.unwrap_or_else(|| {
+            let empty_hash = blake3::hash(&[]).to_hex().to_string();
+            engine::view::MaterializedViewUpdate {
+                query_id: id.clone(),
+                result_hash: empty_hash.clone(),
+                result_ids: vec![],
+                tree: engine::view::IdTree {
+                    hash: empty_hash,
+                    children: None,
+                    leaves: Some(vec![]),
+                },
+            }
+        });
 
         // Extract result data
         let hash = res.result_hash.clone();
