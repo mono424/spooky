@@ -167,7 +167,7 @@ export class SpookySync<S extends SchemaStructure> {
     const queries = this.query.getQueriesThatInvolveTable(table);
     console.log('[SpookySync] refreshFromLocalCache', table, [...queries]);
     for (const query of queries) {
-      this.updateLocalIncantation(
+      await this.updateLocalIncantation(
         query.id,
         {
           surrealql: query.surrealql,
@@ -234,9 +234,9 @@ export class SpookySync<S extends SchemaStructure> {
     ttl: string | Duration
   ) {
     // Delegate to remote function which handles DBSP registration & persistence
-    const [{ hash, tree }] = await this.remote
-      .getClient()
-      .query('fn::incantation::register($config)', {
+    const [{ hash, tree }] = await this.remote.query<[{ hash: string; tree: any }]>(
+      'fn::incantation::register($config)',
+      {
         config: {
           id: incantationId,
           surrealQL: surrealql,
@@ -245,8 +245,8 @@ export class SpookySync<S extends SchemaStructure> {
           lastActiveAt: new Date(),
           clientId: this.clientId,
         },
-      })
-      .collect<[{ hash: string; tree: any }]>();
+      }
+    );
 
     console.log('[SpookySync] createdRemoteIncantation', incantationId, hash, tree);
     return { hash, tree };
@@ -304,10 +304,7 @@ export class SpookySync<S extends SchemaStructure> {
     surrealql: string
   ): Promise<IdTreeDiff> {
     if (!localTree) {
-      const [remoteResults] = await this.remote
-        .getClient()
-        .query(surrealql)
-        .collect<[Record<string, any>[]]>();
+      const [remoteResults] = await this.remote.query<[Record<string, any>[]]>(surrealql);
       // TODO: flatten the records array, to not have nested dependencies but a flat list of records
       // for this it should use the schema to find relationships
       await this.cacheResults(remoteResults);
@@ -324,10 +321,9 @@ export class SpookySync<S extends SchemaStructure> {
       return { added: [], updated: [], removed: [] };
     }
 
-    const [remoteResults] = await this.remote
-      .getClient()
-      .query('SELECT * FROM $ids', { ids: idsToFetch })
-      .collect<[Record<string, any>[]]>();
+    const [remoteResults] = await this.remote.query<[Record<string, any>[]]>('SELECT * FROM $ids', {
+      ids: idsToFetch,
+    });
 
     await this.cacheResults(remoteResults);
     return { added: remoteResults.map((r) => r.id), updated: [], removed: [] };
@@ -365,10 +361,19 @@ export class SpookySync<S extends SchemaStructure> {
         surrealql,
         params,
       });
-      const [cachedResults] = await this.local
-        .getClient()
-        .query(surrealql, { ...params })
-        .collect<[Record<string, any>[]]>();
+
+      const safeParams = params
+        ? JSON.parse(
+            JSON.stringify(params, (key, value) => {
+              return value;
+            })
+          )
+        : {};
+
+      const [cachedResults] = await this.local.query<[Record<string, any>[]]>(
+        surrealql,
+        safeParams
+      );
       console.log('[SpookySync] updateLocalIncantation Loading cached results done', {
         incantationId: incantationId.toString(),
         recordCount: cachedResults?.length,
@@ -390,10 +395,12 @@ export class SpookySync<S extends SchemaStructure> {
 
   private async findIncatationRecord(incantationId: RecordId<string>) {
     try {
-      const [cachedResults] = await this.local
-        .getClient()
-        .query('SELECT * FROM ONLY $id', { id: incantationId })
-        .collect<[Record<string, any>]>();
+      const [cachedResults] = await this.local.query<[Record<string, any>]>(
+        'SELECT * FROM ONLY $id',
+        {
+          id: incantationId,
+        }
+      );
       return cachedResults;
     } catch (e) {
       return null;
@@ -495,7 +502,7 @@ export class SpookySync<S extends SchemaStructure> {
   }
 
   private async heartbeatIncantation(event: HeartbeatEvent) {
-    await this.remote.getClient().query('fn::incantation::heartbeat($id)', {
+    await this.remote.query('fn::incantation::heartbeat($id)', {
       id: event.payload.incantationId,
     });
   }

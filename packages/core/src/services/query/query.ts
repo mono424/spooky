@@ -131,7 +131,11 @@ export class QueryManager<S extends SchemaStructure> {
       throw lastError;
     };
 
-    let existing = await withRetry(() => this.local.getClient().select<IncantationData>(recordId));
+    let [existing] = await withRetry(() =>
+      this.local.query<[IncantationData]>('SELECT * FROM ONLY $id', {
+        id: recordId,
+      })
+    );
 
     if (!existing) {
       existing = await withRetry(() =>
@@ -152,10 +156,8 @@ export class QueryManager<S extends SchemaStructure> {
     }
 
     if (!existing) {
-      throw new Error('Failed to create incantation');
+      throw new Error('Failed to create or retrieve incantation');
     }
-
-    console.log('existing', existing);
 
     if (!this.activeQueries.has(id)) {
       const incantation = new Incantation({
@@ -231,16 +233,14 @@ export class QueryManager<S extends SchemaStructure> {
 
   private async startLiveQuery() {
     // const queryUuid = await this.remote.getClient().live(new Table('_spooky_incantation')).diff();
-    const [queryUuid] = await this.remote
-      .getClient()
-      .query('LIVE SELECT * FROM _spooky_incantation WHERE clientId = $clientId', {
+    const [queryUuid] = await this.remote.query<[Uuid]>(
+      'LIVE SELECT * FROM _spooky_incantation WHERE clientId = $clientId',
+      {
         clientId: this.clientId,
-      })
-      .collect<[Uuid]>();
+      }
+    );
 
-    console.log('XXLIVE QUERY REGISTER', queryUuid, this.clientId);
     (await this.remote.getClient().liveOf(queryUuid)).subscribe((message) => {
-      console.log('XXLIVE QUERY', message);
       if (message.action === 'UPDATE' || message.action === 'CREATE') {
         const { id, hash, tree } = message.value;
         if (!(id instanceof RecordId) || !hash || !tree) {
@@ -285,9 +285,9 @@ export class QueryManager<S extends SchemaStructure> {
 
     // Simplest fallback for now:
     console.warn('[QueryManager] crypto.subtle not found, using DB fallback (may fail)');
-    const result = await (
-      this.local.getClient().query('RETURN crypto::blake3($content)', { content }) as any
-    ).collect();
-    return result[0] as string;
+    const [result] = await this.local.query<[string]>('RETURN crypto::blake3($content)', {
+      content,
+    });
+    return result;
   }
 }

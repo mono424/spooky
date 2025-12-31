@@ -29,21 +29,6 @@ export class RemoteDatabaseService extends AbstractDatabaseService {
     }
   }
 
-  async subscribeLive(
-    uuid: string,
-    callback: (action: string, result: Record<string, unknown>) => void
-  ) {
-    try {
-      // Correct API for SurrealDB v2+ is .subscribe(uuid)
-      // @ts-ignore
-      await this.client.subscribe(uuid, (action: string, result: Record<string, unknown>) => {
-        console.log('[RemoteService] Live Event:', action, result);
-        callback(action, result);
-      });
-    } catch (e) {
-      console.error('Live query subscription error', e);
-    }
-  }
   async signin(params: any): Promise<any> {
     return this.client.signin(params);
   }
