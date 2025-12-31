@@ -6,6 +6,10 @@ export const parseRecordIdString = (id: string): RecordId<string> => {
   return new RecordId(table, idParts.join(':'));
 };
 
+import { createLogger } from './logger.js';
+
+const logger = createLogger('info').child({ module: 'utils' });
+
 export function decodeFromSpooky<S extends SchemaStructure, T extends TableNames<S>>(
   schema: S,
   tableName: T,
@@ -39,7 +43,7 @@ export function decodeFromSpooky<S extends SchemaStructure, T extends TableNames
     }
   }
 
-  console.log('encoded', encoded);
+  logger.trace({ encoded }, 'Decoded record');
 
   return encoded as TableModel<GetTable<S, T>>;
 }

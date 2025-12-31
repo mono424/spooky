@@ -3,9 +3,11 @@ import { LocalDatabaseService } from '../database/index.js';
 import { createMutationEventSystem, MutationEventSystem, MutationEventTypes } from './events.js';
 import { parseRecordIdString } from '../utils.js';
 import { SchemaStructure } from '@spooky/query-builder';
+import { createLogger, Logger } from '../logger.js';
 
 export class MutationManager<S extends SchemaStructure> {
   private _events: MutationEventSystem;
+  private logger: Logger;
 
   get events(): MutationEventSystem {
     return this._events;
@@ -15,6 +17,7 @@ export class MutationManager<S extends SchemaStructure> {
     private schema: S,
     private db: LocalDatabaseService
   ) {
+    this.logger = createLogger('info').child({ service: 'MutationManager' });
     this._events = createMutationEventSystem();
   }
 
@@ -31,10 +34,15 @@ export class MutationManager<S extends SchemaStructure> {
           err?.message?.includes('transaction') ||
           err?.message?.includes('Database is busy')
         ) {
-          console.warn(
-            `[MutationManager] Retry ${i + 1}/${retries} due to transaction error:`,
-            err.message
+          this.logger.warn(
+            {
+              attempt: i + 1,
+              retries,
+              error: err.message,
+            },
+            'Retrying DB operation due to transaction error'
           );
+
           await new Promise((res) => setTimeout(res, delayMs * (i + 1)));
           continue;
         }
@@ -71,7 +79,8 @@ export class MutationManager<S extends SchemaStructure> {
         data,
       })
     );
-    console.log(response);
+
+    this.logger.debug({ response }, 'Create mutation response');
 
     const result = response;
 

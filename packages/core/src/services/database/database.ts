@@ -1,10 +1,13 @@
 import { Surreal, SurrealTransaction } from 'surrealdb';
+import { createLogger, Logger } from '../logger.js';
 
 export abstract class AbstractDatabaseService {
   protected client: Surreal;
+  protected logger: Logger;
 
   constructor(client: Surreal) {
     this.client = client;
+    this.logger = createLogger('info').child({ service: 'Database' });
   }
 
   abstract connect(): Promise<void>;
@@ -27,6 +30,7 @@ export abstract class AbstractDatabaseService {
       this.queryQueue = this.queryQueue
         .then(async () => {
           try {
+            this.logger.debug({ query, vars }, 'Executing query');
             const pending = this.client.query(query, vars);
             let result;
             if (pending && typeof pending.collect === 'function') {
@@ -35,7 +39,9 @@ export abstract class AbstractDatabaseService {
               result = await pending;
             }
             resolve(result as T);
+            this.logger.trace({ query, result }, 'Query executed successfully');
           } catch (err) {
+            this.logger.error({ query, vars, err }, 'Query execution failed');
             reject(err);
           }
         })
@@ -46,6 +52,7 @@ export abstract class AbstractDatabaseService {
   }
 
   async close(): Promise<void> {
+    this.logger.info('Closing database connection');
     await this.client.close();
   }
 }

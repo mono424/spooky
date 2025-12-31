@@ -3,6 +3,7 @@ import { Table, RecordId, Duration, Uuid } from 'surrealdb';
 import { RemoteDatabaseService } from '../database/remote.js';
 import { LocalDatabaseService } from '../database/local.js';
 import { Incantation } from './incantation.js';
+import { createLogger, Logger } from '../logger.js';
 import {
   createQueryEventSystem,
   QueryEventSystem,
@@ -17,6 +18,7 @@ export class QueryManager<S extends SchemaStructure> {
   private activeQueries: Map<QueryHash, Incantation<any>> = new Map();
   private liveQueryUuid: string | null = null;
   private events: QueryEventSystem;
+  private logger: Logger;
 
   public get eventsSystem() {
     return this.events;
@@ -28,6 +30,7 @@ export class QueryManager<S extends SchemaStructure> {
     private remote: RemoteDatabaseService,
     private clientId?: string
   ) {
+    this.logger = createLogger('info').child({ service: 'QueryManager' });
     this.events = createQueryEventSystem();
     this.events.subscribe(
       QueryEventTypes.IncantationIncomingRemoteUpdate,
@@ -41,7 +44,7 @@ export class QueryManager<S extends SchemaStructure> {
 
   private async setClientId() {
     await this.remote.getClient().set('_spooky_client_id', this.clientId);
-    console.log('clientId set', this.clientId);
+    this.logger.debug({ clientId: this.clientId }, 'ClientId set');
     // .query('LET $_spooky_client_id = $clientId', { clientId: this.clientId });
   }
 
@@ -74,11 +77,14 @@ export class QueryManager<S extends SchemaStructure> {
       )
     );
 
-    console.log('[QueryManager] handleIncomingRemoteUpdate', {
-      incantationId: incantationId.toString(),
-      queryHash: incantationId.id.toString(),
-      recordCount: records.length,
-    });
+    this.logger.debug(
+      {
+        incantationId: incantationId.toString(),
+        queryHash: incantationId.id.toString(),
+        recordCount: records.length,
+      },
+      'Handling incoming remote update'
+    );
 
     incantation.updateLocalState(outRecords, remoteHash, remoteTree);
     this.events.emit(QueryEventTypes.IncantationUpdated, {
@@ -118,10 +124,15 @@ export class QueryManager<S extends SchemaStructure> {
             err?.message?.includes('Can not open transaction') ||
             err?.message?.includes('transaction')
           ) {
-            console.warn(
-              `[QueryManager] Retry ${i + 1}/${retries} due to transaction error:`,
-              err.message
+            this.logger.warn(
+              {
+                attempt: i + 1,
+                retries,
+                error: err.message,
+              },
+              'Retrying DB operation due to transaction error'
             );
+
             await new Promise((res) => setTimeout(res, delayMs * (i + 1))); // Linear backoff
             continue;
           }
@@ -211,13 +222,17 @@ export class QueryManager<S extends SchemaStructure> {
     const id = this.events.subscribe(QueryEventTypes.IncantationUpdated, (event) => {
       const incomingId = event.payload.incantationId.id.toString();
       if (incomingId === queryHash) {
-        console.log('[QueryManager] Subscription callback triggered', {
-          queryHash,
-          recordCount: event.payload.records.length,
-        });
+        this.logger.debug(
+          {
+            queryHash,
+            recordCount: event.payload.records.length,
+          },
+          'Subscription callback triggered'
+        );
+
         callback(event.payload.records);
       } else {
-        // console.log('[QueryManager] Subscription ignored mismatch', { incomingId, queryHash });
+        // this.logger.trace({ incomingId, queryHash }, 'Subscription ignored mismatch');
       }
     });
 
@@ -249,7 +264,7 @@ export class QueryManager<S extends SchemaStructure> {
 
         const incantation = this.activeQueries.get(id.id.toString());
         if (!incantation) {
-          console.warn('[QueryManager] Live update for unknown incantation', id);
+          this.logger.warn({ id: id.toString() }, 'Live update for unknown incantation');
           return;
         }
 
@@ -284,7 +299,7 @@ export class QueryManager<S extends SchemaStructure> {
     // No, DB call is broken.
 
     // Simplest fallback for now:
-    console.warn('[QueryManager] crypto.subtle not found, using DB fallback (may fail)');
+    this.logger.warn('crypto.subtle not found, using DB fallback (may fail)');
     const [result] = await this.local.query<[string]>('RETURN crypto::blake3($content)', {
       content,
     });

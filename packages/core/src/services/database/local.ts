@@ -21,10 +21,17 @@ export class LocalDatabaseService extends AbstractDatabaseService {
 
   async connect(): Promise<void> {
     const { namespace, database } = this.getConfig();
-    await this.client.connect('indxdb://spooky', {});
-    await this.client.use({
-      namespace,
-      database,
-    });
+    this.logger.info({ namespace, database }, 'Connecting to local database');
+    try {
+      await this.client.connect('indxdb://spooky', {});
+      await this.client.use({
+        namespace,
+        database,
+      });
+      this.logger.info('Connected to local database');
+    } catch (err) {
+      this.logger.error({ err }, 'Failed to connect to local database');
+      throw err;
+    }
   }
 }

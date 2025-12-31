@@ -3,6 +3,7 @@ import { MutationEventSystem, MutationEventTypes } from '../mutation/index.js';
 import { IdTreeDiff } from '../../types.js';
 import { QueryEventTypes } from '../query/events.js';
 import { SyncQueueEventTypes } from './events.js';
+import { createLogger, Logger } from '../logger.js';
 import {
   CleanupEvent,
   DownEvent,
@@ -24,6 +25,7 @@ export class SpookySync<S extends SchemaStructure> {
   private isSyncingUp: boolean = false;
   private isSyncingDown: boolean = false;
   private relationshipMap: Map<string, Set<string>> = new Map();
+  private logger: Logger;
 
   get isSyncing() {
     return this.isSyncingUp || this.isSyncingDown;
@@ -37,6 +39,7 @@ export class SpookySync<S extends SchemaStructure> {
     private mutationEvents: MutationEventSystem,
     private clientId: string
   ) {
+    this.logger = createLogger('info').child({ service: 'SpookySync' });
     this.upQueue = new UpQueue(this.local);
     this.downQueue = new DownQueue(this.local);
     this.buildRelationshipMap();
@@ -134,13 +137,13 @@ export class SpookySync<S extends SchemaStructure> {
         });
         break;
       default:
-        console.error('[SpookySync] processUpEvent unknown event type', event);
+        this.logger.error({ event }, 'processUpEvent unknown event type');
         return;
     }
   }
 
   private async processDownEvent(event: DownEvent) {
-    console.log('down event', event);
+    this.logger.debug({ event }, 'Processing down event');
     switch (event.type) {
       case 'register':
         return this.registerIncantation(event);
@@ -165,7 +168,7 @@ export class SpookySync<S extends SchemaStructure> {
 
   private async refreshFromLocalCache(table: string) {
     const queries = this.query.getQueriesThatInvolveTable(table);
-    console.log('[SpookySync] refreshFromLocalCache', table, [...queries]);
+    this.logger.debug({ table, queries: [...queries] }, 'refreshFromLocalCache');
     for (const query of queries) {
       await this.updateLocalIncantation(
         query.id,
@@ -187,7 +190,7 @@ export class SpookySync<S extends SchemaStructure> {
     const effectiveTtl = ttl || '10m';
     try {
       let existing = await this.findIncatationRecord(incantationId);
-      console.log('[SpookySync] Register Incantation', existing);
+      this.logger.debug({ existing }, 'Register Incantation state');
 
       const localHash = existing?.hash ?? '';
       const localTree = existing?.tree ?? null;
@@ -222,7 +225,7 @@ export class SpookySync<S extends SchemaStructure> {
         params,
       });
     } catch (e) {
-      console.error('[SpookySync] registerIncantation error', e);
+      this.logger.error({ err: e }, 'registerIncantation error');
       throw e;
     }
   }
@@ -252,7 +255,10 @@ export class SpookySync<S extends SchemaStructure> {
       }
     );
 
-    console.log('[SpookySync] createdRemoteIncantation', incantationId, hash, tree);
+    this.logger.debug(
+      { incantationId: incantationId.toString(), hash, tree },
+      'createdRemoteIncantation'
+    );
     return { hash, tree };
   }
 
@@ -273,13 +279,17 @@ export class SpookySync<S extends SchemaStructure> {
     remoteTree: any;
     params: Record<string, any>;
   }) {
-    console.log('[SpookySync] syncIncantation', incantationId, {
-      localHash,
-      remoteHash,
-      localTree,
-      remoteTree,
-      params,
-    });
+    this.logger.debug(
+      {
+        incantationId: incantationId.toString(),
+        localHash,
+        remoteHash,
+        localTree,
+        remoteTree,
+        params,
+      },
+      'syncIncantation'
+    );
 
     const isDifferent = localHash !== remoteHash;
     if (!isDifferent) {
@@ -319,7 +329,7 @@ export class SpookySync<S extends SchemaStructure> {
     const { added, updated } = diff;
     const idsToFetch = [...added, ...updated];
 
-    console.log('[SpookySync] cacheMissingRecords diff', { added, updated, idsToFetch });
+    this.logger.debug({ added, updated, idsToFetch }, 'cacheMissingRecords diff');
 
     if (idsToFetch.length === 0) {
       return { added: [], updated: [], removed: [] };
@@ -360,17 +370,24 @@ export class SpookySync<S extends SchemaStructure> {
     }
 
     try {
-      console.log('[SpookySync] updateLocalIncantation Loading cached results start', {
-        incantationId: incantationId.toString(),
-        surrealql,
-        params,
-      });
+      this.logger.debug(
+        {
+          incantationId: incantationId.toString(),
+          surrealql,
+          params,
+        },
+        'updateLocalIncantation Loading cached results start'
+      );
 
       const [cachedResults] = await this.local.query<[Record<string, any>[]]>(surrealql, params);
-      console.log('[SpookySync] updateLocalIncantation Loading cached results done', {
-        incantationId: incantationId.toString(),
-        recordCount: cachedResults?.length,
-      });
+
+      this.logger.debug(
+        {
+          incantationId: incantationId.toString(),
+          recordCount: cachedResults?.length,
+        },
+        'updateLocalIncantation Loading cached results done'
+      );
 
       this.query.eventsSystem.emit(QueryEventTypes.IncantationIncomingRemoteUpdate, {
         incantationId,
@@ -379,9 +396,9 @@ export class SpookySync<S extends SchemaStructure> {
         records: cachedResults,
       });
     } catch (e) {
-      console.error(
-        '[SpookySync] updateLocalIncantation failed to query local db or emit event',
-        e
+      this.logger.error(
+        { err: e },
+        'updateLocalIncantation failed to query local db or emit event'
       );
     }
   }
@@ -411,25 +428,26 @@ export class SpookySync<S extends SchemaStructure> {
     }
   ) {
     try {
-      console.log('[SpookySync] Updating local incantation', { incantationId, hash, tree });
+      this.logger.debug(
+        { incantationId: incantationId.toString(), hash, tree },
+        'Updating local incantation'
+      );
       await this.local.query(`UPDATE $id MERGE $content`, {
         id: incantationId,
         content: { hash, tree },
       });
     } catch (e) {
-      console.error('[SpookySync] Failed to update local incantation record', e);
+      this.logger.error({ err: e }, 'Failed to update local incantation record');
       throw e;
     }
   }
 
   private async cacheResults(results: Record<string, any>[]) {
     if (!results || results.length === 0) return;
-    console.log(results);
+    this.logger.trace({ results }, 'cacheResults raw');
     const flatResults = this.flattenResults(results);
-    console.log('Flattend', {
-      results,
-      flatResults,
-    });
+    this.logger.trace({ flatResults }, 'cacheResults flattened');
+
     for (const record of flatResults) {
       if (record.id) {
         await this.local.getClient().upsert(record.id).content(record);
