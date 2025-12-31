@@ -186,7 +186,7 @@ export class QueryManager<S extends SchemaStructure> {
     this.events.emit(QueryEventTypes.IncantationInitialized, {
       incantationId: incantation.id,
       surrealql: incantation.surrealql,
-      params: incantation.params,
+      params: incantation.params ?? {},
       ttl: incantation.ttl,
     });
 
@@ -251,6 +251,7 @@ export class QueryManager<S extends SchemaStructure> {
         this.events.emit(QueryEventTypes.IncantationRemoteHashUpdate, {
           incantationId: id as RecordId<string>,
           surrealql: incantation.surrealql,
+          params: incantation.params ?? {},
           localHash: incantation.hash,
           localTree: incantation.tree,
           remoteHash: hash as string,

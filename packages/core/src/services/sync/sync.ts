@@ -136,7 +136,7 @@ export class SpookySync<S extends SchemaStructure> {
       case 'register':
         return this.registerIncantation(event);
       case 'sync':
-        const { incantationId, surrealql, localTree, localHash, remoteHash, remoteTree } =
+        const { incantationId, surrealql, params, localTree, localHash, remoteHash, remoteTree } =
           event.payload;
         return this.syncIncantation({
           incantationId,
@@ -145,6 +145,7 @@ export class SpookySync<S extends SchemaStructure> {
           localHash,
           remoteHash,
           remoteTree,
+          params,
         });
       case 'heartbeat':
         return this.heartbeatIncantation(event);
@@ -190,6 +191,7 @@ export class SpookySync<S extends SchemaStructure> {
         localHash,
         remoteHash,
         remoteTree,
+        params,
       });
     } catch (e) {
       console.error('[SpookySync] registerIncantation error', e);
@@ -229,6 +231,7 @@ export class SpookySync<S extends SchemaStructure> {
     localHash,
     remoteHash,
     remoteTree,
+    params,
   }: {
     incantationId: RecordId<string>;
     surrealql: string;
@@ -236,12 +239,14 @@ export class SpookySync<S extends SchemaStructure> {
     localHash: string;
     remoteHash: string;
     remoteTree: any;
+    params: Record<string, any>;
   }) {
     console.log('[SpookySync] syncIncantation', incantationId, {
       localHash,
       remoteHash,
       localTree,
       remoteTree,
+      params,
     });
 
     const isDifferent = localHash !== remoteHash;
@@ -255,6 +260,7 @@ export class SpookySync<S extends SchemaStructure> {
       incantationId,
       {
         surrealql,
+        params,
         hash: remoteHash,
         tree: remoteTree,
       },
@@ -330,11 +336,9 @@ export class SpookySync<S extends SchemaStructure> {
         .getClient()
         .query(surrealql, params)
         .collect<[Record<string, any>[]]>();
-
-      console.log('[SpookySync] updateLocalIncantation query result', {
+      console.log('[SpookySync] Loading cached results', {
         incantationId: incantationId.toString(),
         recordCount: cachedResults?.length,
-        firstRecord: cachedResults?.[0],
       });
 
       this.queryEvents.emit(QueryEventTypes.IncantationIncomingRemoteUpdate, {

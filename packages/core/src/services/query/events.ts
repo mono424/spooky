@@ -21,7 +21,7 @@ export type QueryEventTypeMap = {
     {
       incantationId: RecordId<string>;
       surrealql: string;
-      params?: Record<string, any>;
+      params: Record<string, any>;
       ttl: QueryTimeToLive | Duration;
     }
   >;
@@ -30,6 +30,7 @@ export type QueryEventTypeMap = {
     {
       incantationId: RecordId<string>;
       surrealql: string;
+      params: Record<string, any>;
       localHash: string;
       localTree: any;
       remoteHash: string;
