@@ -1,0 +1,13 @@
+[package]
+name = "spooky-sidecar"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0"
+axum = "0.7"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+surrealdb = { version = "2.0", features = ["protocol-ws"] }
+tokio = { version = "1.0", features = ["full"] }
+spooky-stream-processor = { path = "../../packages/spooky-stream-processor" }

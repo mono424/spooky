@@ -3,11 +3,10 @@ use std::sync::Mutex;
 use surrealism::surrealism;
 
 // 1. Declare Modules
-// 1. Declare Modules
 mod persistence;
 
-use engine::Circuit;
-use spooky_stream_processor::{converter, engine, sanitizer};
+use spooky_stream_processor::engine::view::{IdTree, Operator};
+use spooky_stream_processor::{converter, sanitizer, Circuit, MaterializedViewUpdate, QueryPlan};
 
 // 2. Global State Wrapper
 lazy_static::lazy_static! {
@@ -44,7 +43,6 @@ fn ingest(
         .to_string();
 
     // B. Run Engine
-    // B. Run Engine
     let _ = with_circuit(|circuit| {
         let updates = circuit.ingest_record(table, operation, id, clean_record, hash);
 
@@ -59,7 +57,7 @@ fn ingest(
 
         // D. Save State
         persistence::save(circuit);
-        Vec::<crate::engine::view::MaterializedViewUpdate>::new()
+        Vec::<MaterializedViewUpdate>::new()
     })?;
 
     // Return success but no updates payload (managed internally now)
@@ -68,12 +66,12 @@ fn ingest(
 
 #[surrealism]
 fn version(_args: Value) -> Result<Value, &'static str> {
-    Ok(json!("0.1.1-debug")) // Increment this to verify new build is loaded
+    Ok(json!("0.1.2-debug")) // Increment this to verify new build is loaded
 }
 
 #[surrealism]
 fn register_view(config: Value) -> Result<Value, &'static str> {
-    eprintln!("DEBUG: register_view START v0.1.1-debug");
+    eprintln!("DEBUG: register_view START v0.1.2-debug");
     eprintln!("DEBUG: Received config: {}", config);
 
     // A. Unpack Config
@@ -110,14 +108,14 @@ fn register_view(config: Value) -> Result<Value, &'static str> {
         .or_else(|_| serde_json::from_str(&surrealql))
         .map_err(|_| "Invalid Query Plan")?;
 
-    let root_op: engine::view::Operator =
+    let root_op: Operator =
         serde_json::from_value(root_op_val).map_err(|_| "Failed to map JSON to Operator")?;
 
     let safe_params = sanitizer::parse_params(params.clone());
 
     // C. Run Engine & Persist
     let result = with_circuit(|circuit| {
-        let plan = engine::view::QueryPlan {
+        let plan = QueryPlan {
             id: id.clone(),
             root: root_op,
         };
@@ -127,11 +125,11 @@ fn register_view(config: Value) -> Result<Value, &'static str> {
         // Unwrap the Option or create default for empty view
         let res = initial_res.unwrap_or_else(|| {
             let empty_hash = blake3::hash(&[]).to_hex().to_string();
-            engine::view::MaterializedViewUpdate {
+            MaterializedViewUpdate {
                 query_id: id.clone(),
                 result_hash: empty_hash.clone(),
                 result_ids: vec![],
-                tree: engine::view::IdTree {
+                tree: IdTree {
                     hash: empty_hash,
                     children: None,
                     leaves: Some(vec![]),

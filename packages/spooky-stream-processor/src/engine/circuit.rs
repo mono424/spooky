@@ -161,3 +161,30 @@ impl Circuit {
         updates
     }
 }
+
+use crate::StreamProcessor;
+
+impl StreamProcessor for Circuit {
+    fn ingest_record(
+        &mut self,
+        table: String,
+        op: String,
+        id: String,
+        record: Value,
+        hash: String,
+    ) -> Vec<MaterializedViewUpdate> {
+        self.ingest_record(table, op, id, record, hash)
+    }
+
+    fn register_view(
+        &mut self,
+        plan: QueryPlan,
+        params: Option<Value>,
+    ) -> Option<MaterializedViewUpdate> {
+        self.register_view(plan, params)
+    }
+
+    fn unregister_view(&mut self, id: &str) {
+        self.unregister_view(id)
+    }
+}
