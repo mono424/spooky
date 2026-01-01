@@ -17,14 +17,18 @@ use surrealdb::opt::auth::Root;
 use surrealdb::Surreal;
 use tracing::{info, error, debug, instrument};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tokio::signal;
 
 mod persistence;
+mod background_saver;
+use background_saver::BackgroundSaver;
 
 #[derive(Clone)]
 struct AppState {
     db: Surreal<Client>,
     processor: Arc<Mutex<Box<Circuit>>>,
     persistence_path: PathBuf,
+    saver: Arc<BackgroundSaver>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -34,7 +38,7 @@ struct IngestRequest {
     id: String,
     record: Value,
     #[serde(default)]
-    _hash: String, // Kept for parity, but typically sidecar might calculate this? Plugin calculates it.
+    _hash: String, 
 }
 
 #[derive(Deserialize, Debug)]
@@ -73,7 +77,6 @@ async fn main() -> anyhow::Result<()> {
     let _auth_secret = std::env::var("SPOOKY_AUTH_SECRET").expect("SPOOKY_AUTH_SECRET must be set");
 
     // SurrealDB Config
-    // SurrealDB Config
     let db_addr = std::env::var("SURREALDB_ADDR").unwrap_or_else(|_| "127.0.0.1:8000".to_string());
     let db_user = std::env::var("SURREALDB_USER").unwrap_or_else(|_| "root".to_string());
     let db_pass = std::env::var("SURREALDB_PASS").unwrap_or_else(|_| "root".to_string());
@@ -92,10 +95,25 @@ async fn main() -> anyhow::Result<()> {
     let processor = persistence::load_circuit(&persistence_path);
     let processor_arc = Arc::new(Mutex::new(Box::new(processor)));
 
+    // Initialize Background Saver
+    let debounce_ms = 2000; // 2 seconds
+    let saver = Arc::new(BackgroundSaver::new(
+        persistence_path.clone(),
+        processor_arc.clone(),
+        debounce_ms,
+    ));
+    
+    // Spawn saver task
+    let saver_clone = saver.clone();
+    tokio::spawn(async move {
+        saver_clone.run().await;
+    });
+
     let state = AppState {
         db,
         processor: processor_arc,
         persistence_path,
+        saver: saver.clone(),
     };
 
     let app = Router::new()
@@ -112,10 +130,44 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(listener_addr).await.context("Failed to bind port")?;
     info!("Listening on {}", listener_addr);
     
-    axum::serve(listener, app).await.context("Server error")?;
+    // Graceful shutdown
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal(saver))
+        .await
+        .context("Server error")?;
 
     Ok(())
 }
+
+async fn shutdown_signal(saver: Arc<BackgroundSaver>) {
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+
+    info!("Signal received, starting graceful shutdown");
+    saver.signal_shutdown();
+    // Give a moment for the saver to finish
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+}
+
 
 async fn auth_middleware(req: Request, next: Next) -> Response {
     let auth_header = req.headers().get(AUTHORIZATION);
@@ -149,10 +201,8 @@ async fn ingest_handler(
             clean_record,
             hash
         );
-        // Persist state after mutation
-        if let Err(e) = persistence::save_circuit(&state.persistence_path, &circuit) {
-            error!("Failed to auto-save persistence: {}", e);
-        }
+        // Trigger async save instead of blocking
+        state.saver.trigger_save();
         ups
     };
 
@@ -167,13 +217,8 @@ async fn ingest_handler(
 #[instrument(skip(state))]
 async fn register_view_handler(
     State(state): State<AppState>,
-    Json(payload): Json<Value>, // Accept raw value to pass to prepare logic
+    Json(payload): Json<Value>, 
 ) ->  impl IntoResponse {
-    // Parse using centralized logic
-    // We construct a Value from the payload or adjust the handler to take raw JSON
-    // The previous handler took specific struct. To reuse centralized logic which takes Value, 
-    // we should accept Json<Value>.
-    
     let result = spooky_stream_processor::service::view::prepare_registration(payload);
     let data = match result {
         Ok(d) => d,
@@ -184,29 +229,18 @@ async fn register_view_handler(
 
     let update = {
         let mut circuit = state.processor.lock().unwrap();
-        // Clone params for usage in circuit, keeping original for construction of record
         let res = circuit.register_view(data.plan.clone(), data.safe_params);
-        if let Err(e) = persistence::save_circuit(&state.persistence_path, &circuit) {
-            error!("Failed to auto-save persistence: {}", e);
-        }
+        state.saver.trigger_save();
         res
     };
 
     let result_update = update.unwrap_or_else(|| spooky_stream_processor::service::view::default_result(&data.plan.id));
 
-    // Validating Metadata storage (Incantation Metadata + Result)
-    // We construct the query using the prepared metadata from service
     let m = &data.metadata;
     let query = "UPSERT type::thing('_spooky_incantation', $id) SET hash = $hash, tree = $tree, clientId = $clientId, surrealQL = $surrealQL, params = $params, ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt";
     
-    // Extract values as owned strings to satisfy lifetime requirements if needed, or rely on bind taking ownership if possible.
-    // bind takes impl Into<Value>. If we pass &str, it should work unless `query` async block lifetime issue.
-    // The error says "borrowed value does not live long enough ... argument requires that `data.metadata` is borrowed for `'static`"
-    // This is likely due to `state.db.query(...)` returning a future that escapes the function or block where `m` lives, 
-    // or specifically `bind` capturing arguments.
-    // Cloning the strings solves it.
-    
-    let id_str = m["id"].as_str().unwrap().to_string();
+    let raw_id = m["id"].as_str().unwrap();
+    let id_str = raw_id.strip_prefix("_spooky_incantation:").unwrap_or(raw_id).to_string();
     let client_id_str = m["clientId"].as_str().unwrap().to_string();
     let surql_str = m["surrealQL"].as_str().unwrap().to_string();
     let ttl_str = m["ttl"].as_str().unwrap().to_string();
@@ -244,9 +278,7 @@ async fn unregister_view_handler(
     {
         let mut circuit = state.processor.lock().unwrap();
         circuit.unregister_view(&payload.id);
-        if let Err(e) = persistence::save_circuit(&state.persistence_path, &circuit) {
-            error!("Failed to auto-save persistence: {}", e);
-        }
+        state.saver.trigger_save();
     }
     Json(json!({ "msg": "Unregistered", "id": payload.id }))
 }
@@ -256,24 +288,20 @@ async fn reset_handler(State(state): State<AppState>) -> Json<Value> {
     {
         let mut circuit = state.processor.lock().unwrap();
         *circuit = Box::new(Circuit::new());
-        // Also clear persistence file
         if state.persistence_path.exists() {
              let _ = std::fs::remove_file(&state.persistence_path);
         }
-        // Save empty state
-         let _ = persistence::save_circuit(&state.persistence_path, &circuit);
+        // For reset, we might want immediate save to confirm empty state
+        state.saver.trigger_save();
     }
     Json(Value::Null)
 }
 
 async fn save_handler(State(state): State<AppState>) -> Json<Value> {
     info!("Force saving state");
-    {
-        let circuit = state.processor.lock().unwrap();
-        if let Err(e) = persistence::save_circuit(&state.persistence_path, &circuit) {
-            return Json(json!({ "error": e.to_string() }));
-        }
-    }
+    // Trigger immediate background save? Or force sync?
+    // Let's trigger background save, good enough for "Save" endpoint usually
+    state.saver.trigger_save();
     Json(Value::Null)
 }
 
@@ -282,10 +310,11 @@ async fn version_handler() -> Json<Value> {
 }
 
 async fn update_incantation_in_db(db: &Surreal<Client>, update: &MaterializedViewUpdate) {
-    // Simply update hash and tree for the existing incantation
     let query = "UPDATE type::thing('_spooky_incantation', $id) SET hash = $hash, tree = $tree";
+    let raw_id = &update.query_id;
+    let id_str = raw_id.strip_prefix("_spooky_incantation:").unwrap_or(raw_id).to_string();
     if let Err(e) = db.query(query)
-        .bind(("id", update.query_id.clone()))
+        .bind(("id", id_str))
         .bind(("hash", update.result_hash.clone()))
         .bind(("tree", update.tree.clone()))
         .await 
