@@ -246,21 +246,17 @@ export class SpookySync<S extends SchemaStructure> {
       clientId: this.clientId,
     };
 
-    const safeConfig = JSON.parse(JSON.stringify(config));
-
     // Delegate to remote function which handles DBSP registration & persistence
-    const [{ hash, tree }] = await this.remote.query<[{ hash: string; tree: any }]>(
-      'fn::incantation::register($config)',
-      {
-        config: safeConfig,
-      }
-    );
+    await this.remote.query('fn::incantation::register($config)', {
+      config,
+    });
 
     this.logger.debug(
-      { incantationId: incantationId.toString(), hash, tree },
-      'createdRemoteIncantation'
+      { incantationId: incantationId.toString() },
+      'createdRemoteIncantation (async)'
     );
-    return { hash, tree };
+    // Return empty placeholders; true sync happens via Live Query updates
+    return { hash: '', tree: null };
   }
 
   private async syncIncantation({

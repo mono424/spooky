@@ -18,5 +18,6 @@ DEFINE FUNCTION fn::incantation::register($config: object) {
     };
     
     -- Call DBSP module directly
-    RETURN mod::dbsp::register_view($module_config);
+    mod::dbsp::register_view($module_config);
+    RETURN NONE;
 };

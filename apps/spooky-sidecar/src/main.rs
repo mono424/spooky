@@ -187,7 +187,7 @@ async fn auth_middleware(req: Request, next: Next) -> Response {
 async fn ingest_handler(
     State(state): State<AppState>,
     Json(payload): Json<IngestRequest>,
-) -> Json<Vec<MaterializedViewUpdate>> {
+) -> impl IntoResponse {
     debug!("Received ingest request");
 
     let (clean_record, hash) = spooky_stream_processor::service::ingest::prepare(payload.record);
@@ -211,7 +211,7 @@ async fn ingest_handler(
         update_incantation_in_db(&state.db, update).await;
     }
 
-    Json(updates)
+    StatusCode::OK
 }
 
 #[instrument(skip(state))]
@@ -263,27 +263,24 @@ async fn register_view_handler(
         return (StatusCode::INTERNAL_SERVER_ERROR, "DB Error").into_response();
     }
 
-    Json(json!({
-        "hash": result_update.result_hash,
-        "tree": result_update.tree
-    })).into_response()
+    StatusCode::OK.into_response()
 }
 
 #[instrument(skip(state))]
 async fn unregister_view_handler(
     State(state): State<AppState>,
     Json(payload): Json<UnregisterViewRequest>,
-) -> Json<Value> {
+) -> impl IntoResponse {
     debug!("Unregistering view {}", payload.id);
     {
         let mut circuit = state.processor.lock().unwrap();
         circuit.unregister_view(&payload.id);
         state.saver.trigger_save();
     }
-    Json(json!({ "msg": "Unregistered", "id": payload.id }))
+    StatusCode::OK
 }
 
-async fn reset_handler(State(state): State<AppState>) -> Json<Value> {
+async fn reset_handler(State(state): State<AppState>) -> impl IntoResponse {
     info!("Resetting circuit state");
     {
         let mut circuit = state.processor.lock().unwrap();
@@ -294,18 +291,18 @@ async fn reset_handler(State(state): State<AppState>) -> Json<Value> {
         // For reset, we might want immediate save to confirm empty state
         state.saver.trigger_save();
     }
-    Json(Value::Null)
+    StatusCode::OK
 }
 
-async fn save_handler(State(state): State<AppState>) -> Json<Value> {
+async fn save_handler(State(state): State<AppState>) -> impl IntoResponse {
     info!("Force saving state");
     // Trigger immediate background save? Or force sync?
     // Let's trigger background save, good enough for "Save" endpoint usually
     state.saver.trigger_save();
-    Json(Value::Null)
+    StatusCode::OK
 }
 
-async fn version_handler() -> Json<Value> {
+async fn version_handler() -> impl IntoResponse {
     Json(json!("0.1.0"))
 }
 
