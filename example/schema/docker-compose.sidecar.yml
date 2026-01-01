@@ -36,11 +36,11 @@ services:
       - '3000:3000'
     environment:
       - RUST_LOG=debug
-      - SURREALDB_URL=ws://surrealdb:8000
-      - SURREALDB_NAMESPACE=main
-      - SURREALDB_DATABASE=main
-      - SURREALDB_USERNAME=root
-      - SURREALDB_PASSWORD=root
+      - SURREALDB_ADDR=ws://surrealdb:8000
+      - SURREALDB_NS=main
+      - SURREALDB_DB=main
+      - SURREALDB_USER=root
+      - SURREALDB_PASS=root
       - SPOOKY_AUTH_SECRET=mysecret
       - SPOOKY_PERSISTENCE_FILE=/data/spooky_state.json
     volumes:

@@ -73,6 +73,7 @@ async fn main() -> anyhow::Result<()> {
     let _auth_secret = std::env::var("SPOOKY_AUTH_SECRET").expect("SPOOKY_AUTH_SECRET must be set");
 
     // SurrealDB Config
+    // SurrealDB Config
     let db_addr = std::env::var("SURREALDB_ADDR").unwrap_or_else(|_| "127.0.0.1:8000".to_string());
     let db_user = std::env::var("SURREALDB_USER").unwrap_or_else(|_| "root".to_string());
     let db_pass = std::env::var("SURREALDB_PASS").unwrap_or_else(|_| "root".to_string());
