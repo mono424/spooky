@@ -1,8 +1,9 @@
 import { QueryHash, Incantation as IncantationData, QueryTimeToLive } from '../../types.js';
-import { Table, RecordId, Duration } from 'surrealdb';
+import { Table, RecordId, Duration, Uuid } from 'surrealdb';
 import { RemoteDatabaseService } from '../database/remote.js';
 import { LocalDatabaseService } from '../database/local.js';
 import { Incantation } from './incantation.js';
+import { createLogger, Logger } from '../logger.js';
 import {
   createQueryEventSystem,
   QueryEventSystem,
@@ -17,6 +18,7 @@ export class QueryManager<S extends SchemaStructure> {
   private activeQueries: Map<QueryHash, Incantation<any>> = new Map();
   private liveQueryUuid: string | null = null;
   private events: QueryEventSystem;
+  private logger: Logger;
 
   public get eventsSystem() {
     return this.events;
@@ -26,8 +28,10 @@ export class QueryManager<S extends SchemaStructure> {
     private schema: S,
     private local: LocalDatabaseService,
     private remote: RemoteDatabaseService,
-    private clientId: string
+    private clientId: string | undefined, // undefined is valid for optional clientId, but argument position is fixed
+    logger: Logger
   ) {
+    this.logger = logger.child({ service: 'QueryManager' });
     this.events = createQueryEventSystem();
     this.events.subscribe(
       QueryEventTypes.IncantationIncomingRemoteUpdate,
@@ -35,7 +39,18 @@ export class QueryManager<S extends SchemaStructure> {
     );
   }
 
+  public getQueriesThatInvolveTable(tableName: string) {
+    return [...this.activeQueries.values().filter((q) => q.invlovesTable(tableName))];
+  }
+
+  private async setClientId() {
+    await this.remote.getClient().set('_spooky_client_id', this.clientId);
+    this.logger.debug({ clientId: this.clientId }, 'ClientId set');
+    // .query('LET $_spooky_client_id = $clientId', { clientId: this.clientId });
+  }
+
   public async init() {
+    await this.setClientId();
     await this.startLiveQuery();
   }
 
@@ -63,6 +78,15 @@ export class QueryManager<S extends SchemaStructure> {
       )
     );
 
+    this.logger.debug(
+      {
+        incantationId: incantationId.toString(),
+        queryHash: incantationId.id.toString(),
+        recordCount: records.length,
+      },
+      'Handling incoming remote update'
+    );
+
     incantation.updateLocalState(outRecords, remoteHash, remoteTree);
     this.events.emit(QueryEventTypes.IncantationUpdated, {
       incantationId,
@@ -74,42 +98,96 @@ export class QueryManager<S extends SchemaStructure> {
     tableName: string,
     surrealql: string,
     params: Record<string, any>,
-    ttl: QueryTimeToLive = '10m'
+    ttl: QueryTimeToLive,
+    involvedTables: string[] = []
   ): Promise<QueryHash> {
-    const effectiveTtl = ttl || '10m';
     const id = await this.calculateHash({
+      clientId: this.clientId,
       surrealql,
       params,
-      clientId: this.clientId,
     });
 
     const recordId = new RecordId('_spooky_incantation', id);
 
-    await this.local
-      .getClient()
-      .upsert<IncantationData>(recordId)
-      .content({
-        Id: id,
-        SurrealQL: surrealql,
-        Params: params,
-        ClientId: this.clientId,
-        Hash: id,
-        Tree: null,
-        LastActiveAt: new Date(),
-        TTL: new Duration(effectiveTtl),
-      });
+    // Helper for retrying DB operations (e.g. "Can not open transaction")
+    const withRetry = async <T>(
+      operation: () => Promise<T>,
+      retries = 3,
+      delayMs = 100
+    ): Promise<T> => {
+      let lastError;
+      for (let i = 0; i < retries; i++) {
+        try {
+          return await operation();
+        } catch (err: any) {
+          lastError = err;
+          // Check for transaction error or generic connection issues
+          if (
+            err?.message?.includes('Can not open transaction') ||
+            err?.message?.includes('transaction')
+          ) {
+            this.logger.warn(
+              {
+                attempt: i + 1,
+                retries,
+                error: err.message,
+              },
+              'Retrying DB operation due to transaction error'
+            );
+
+            await new Promise((res) => setTimeout(res, delayMs * (i + 1))); // Linear backoff
+            continue;
+          }
+          throw err;
+        }
+      }
+      throw lastError;
+    };
+
+    let [existing] = await withRetry(() =>
+      this.local.query<[IncantationData]>('SELECT * FROM ONLY $id', {
+        id: recordId,
+      })
+    );
+
+    if (!existing) {
+      existing = await withRetry(() =>
+        this.local
+          .getClient()
+          .create<IncantationData>(recordId)
+          .content({
+            id: recordId,
+            surrealQL: surrealql,
+            params: params,
+            clientId: this.clientId,
+            hash: id,
+            tree: null,
+            lastActiveAt: new Date(),
+            ttl: new Duration(ttl),
+            meta: {
+              tableName,
+              involvedTables,
+            },
+          })
+      );
+    }
+
+    if (!existing) {
+      throw new Error('Failed to create or retrieve incantation');
+    }
 
     if (!this.activeQueries.has(id)) {
       const incantation = new Incantation({
         id: recordId,
         surrealql,
         params,
-        hash: id,
-        lastActiveAt: Date.now(),
-        ttl: effectiveTtl,
-        tree: null,
+        hash: existing.hash,
+        lastActiveAt: existing.lastActiveAt,
+        ttl: existing.ttl,
+        tree: existing.tree,
         meta: {
           tableName,
+          involvedTables,
         },
       });
       this.activeQueries.set(id, incantation);
@@ -123,16 +201,17 @@ export class QueryManager<S extends SchemaStructure> {
     tableName: string,
     surrealql: string,
     params: Record<string, any>,
-    ttl: QueryTimeToLive = '10m'
+    ttl: QueryTimeToLive,
+    involvedTables: string[] = []
   ): Promise<QueryHash> {
-    return this.register(tableName, surrealql, params, ttl);
+    return this.register(tableName, surrealql, params, ttl, involvedTables);
   }
 
   private async initLifecycle(incantation: Incantation<any>) {
     this.events.emit(QueryEventTypes.IncantationInitialized, {
       incantationId: incantation.id,
       surrealql: incantation.surrealql,
-      params: incantation.params,
+      params: incantation.params ?? {},
       ttl: incantation.ttl,
     });
 
@@ -149,8 +228,19 @@ export class QueryManager<S extends SchemaStructure> {
     options: { immediate?: boolean } = {}
   ): () => void {
     const id = this.events.subscribe(QueryEventTypes.IncantationUpdated, (event) => {
-      if (event.payload.incantationId.id.toString() === queryHash) {
+      const incomingId = event.payload.incantationId.id.toString();
+      if (incomingId === queryHash) {
+        this.logger.debug(
+          {
+            queryHash,
+            recordCount: event.payload.records.length,
+          },
+          'Subscription callback triggered'
+        );
+
         callback(event.payload.records);
+      } else {
+        // this.logger.trace({ incomingId, queryHash }, 'Subscription ignored mismatch');
       }
     });
 
@@ -165,32 +255,31 @@ export class QueryManager<S extends SchemaStructure> {
   }
 
   private async startLiveQuery() {
-    await this.remote
-      .getClient()
-      .query('LET $_spooky_client_id = $clientId', { clientId: this.clientId });
-    const liveQuery = await this.remote.getClient().live(new Table('_spooky_incantation'));
+    // const queryUuid = await this.remote.getClient().live(new Table('_spooky_incantation')).diff();
+    const [queryUuid] = await this.remote.query<[Uuid]>(
+      'LIVE SELECT * FROM _spooky_incantation WHERE clientId = $clientId',
+      {
+        clientId: this.clientId,
+      }
+    );
 
-    console.log('live queryUuid', liveQuery);
-    await liveQuery.subscribe(async (message) => {
-      console.log('live query message', message);
-      const { action, recordId, value } = message;
-      if (action === 'UPDATE' || action === 'CREATE') {
-        const { Hash: hash, Tree: tree } = value;
-        if (!hash || !tree) {
+    (await this.remote.getClient().liveOf(queryUuid)).subscribe((message) => {
+      if (message.action === 'UPDATE' || message.action === 'CREATE') {
+        const { id, hash, tree } = message.value;
+        if (!(id instanceof RecordId) || !hash || !tree) {
           return;
         }
-        const incantation = this.activeQueries.get(recordId.id.toString());
+
+        const incantation = this.activeQueries.get(id.id.toString());
         if (!incantation) {
+          this.logger.warn({ id: id.toString() }, 'Live update for unknown incantation');
           return;
         }
-
-        console.log('live test', value);
-        console.log('live hash', hash);
-        console.log('live tree', tree);
 
         this.events.emit(QueryEventTypes.IncantationRemoteHashUpdate, {
-          incantationId: recordId,
+          incantationId: id as RecordId<string>,
           surrealql: incantation.surrealql,
+          params: incantation.params ?? {},
           localHash: incantation.hash,
           localTree: incantation.tree,
           remoteHash: hash as string,
@@ -202,9 +291,26 @@ export class QueryManager<S extends SchemaStructure> {
 
   private async calculateHash(data: any): Promise<string> {
     const content = JSON.stringify(data);
-    const result = await (
-      this.local.getClient().query('RETURN crypto::blake3($content)', { content }) as any
-    ).collect();
-    return result[0] as string;
+
+    // Use Web Crypto API if available (Browser)
+    if (typeof crypto !== 'undefined' && crypto.subtle) {
+      const msgBuffer = new TextEncoder().encode(content);
+      const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    // Fallback for Node.js (if applicable in this environment)
+    // Assuming we are in a browser-like environment primarily due to 'use-query.ts' usage.
+    // If strict Node support is needed, we'd import 'crypto'.
+    // But for now, let's fall back to a simple non-crypto hash or try to keep the DB call?
+    // No, DB call is broken.
+
+    // Simplest fallback for now:
+    this.logger.warn('crypto.subtle not found, using DB fallback (may fail)');
+    const [result] = await this.local.query<[string]>('RETURN crypto::blake3($content)', {
+      content,
+    });
+    return result;
   }
 }

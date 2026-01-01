@@ -4,29 +4,6 @@
 export const schema = {
   tables: [
     {
-      name: 'user' as const,
-      columns: {
-        id: { type: 'string' as const, recordId: true, optional: false },
-        username: { type: 'string' as const, optional: false },
-        threads: { type: 'string' as const, optional: true },
-        comments: { type: 'string' as const, optional: true },
-      },
-      primaryKey: ['id'] as const
-    },
-    {
-      name: 'thread' as const,
-      columns: {
-        id: { type: 'string' as const, recordId: true, optional: false },
-        content: { type: 'string' as const, optional: false },
-        active: { type: 'boolean' as const, optional: true },
-        title: { type: 'string' as const, optional: false },
-        author: { type: 'string' as const, recordId: true, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
-        comments: { type: 'string' as const, optional: true },
-      },
-      primaryKey: ['id'] as const
-    },
-    {
       name: 'commented_on' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
@@ -37,10 +14,33 @@ export const schema = {
       name: 'comment' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
+        content: { type: 'string' as const, optional: false },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
         thread: { type: 'string' as const, recordId: true, optional: false },
+        author: { type: 'string' as const, recordId: true, optional: false },
+      },
+      primaryKey: ['id'] as const
+    },
+    {
+      name: 'thread' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
+        content: { type: 'string' as const, optional: false },
+        title: { type: 'string' as const, optional: false },
         created_at: { type: 'string' as const, dateTime: true, optional: true },
         author: { type: 'string' as const, recordId: true, optional: false },
-        content: { type: 'string' as const, optional: false },
+        active: { type: 'boolean' as const, optional: true },
+        comments: { type: 'string' as const, optional: true },
+      },
+      primaryKey: ['id'] as const
+    },
+    {
+      name: 'user' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
+        username: { type: 'string' as const, optional: false },
+        comments: { type: 'string' as const, optional: true },
+        threads: { type: 'string' as const, optional: true },
       },
       primaryKey: ['id'] as const
     },
@@ -60,14 +60,14 @@ export const schema = {
     },
     {
       from: 'user' as const,
-      field: 'threads' as const,
-      to: 'thread' as const,
+      field: 'comments' as const,
+      to: 'comment' as const,
       cardinality: 'many' as const
     },
     {
       from: 'user' as const,
-      field: 'comments' as const,
-      to: 'comment' as const,
+      field: 'threads' as const,
+      to: 'thread' as const,
       cardinality: 'many' as const
     },
     {
@@ -182,27 +182,28 @@ DEFINE TABLE _spooky_incantation SCHEMALESS
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
 -- The raw query string (for re-hydration/debugging)
-DEFINE FIELD SurrealQL ON TABLE _spooky_incantation TYPE option<string>
+-- The raw query string (for re-hydration/debugging)
+DEFINE FIELD surrealQL ON TABLE _spooky_incantation TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- The raw query string (for re-hydration/debugging)
-DEFINE FIELD ClientId ON TABLE _spooky_incantation TYPE option<string>
+DEFINE FIELD clientId ON TABLE _spooky_incantation TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- The current XOR sum of all results in this query
-DEFINE FIELD Hash ON TABLE _spooky_incantation TYPE option<string>
+DEFINE FIELD hash ON TABLE _spooky_incantation TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- The Radix Tree of Result IDs for efficient sync
-DEFINE FIELD Tree ON TABLE _spooky_incantation TYPE any
+DEFINE FIELD tree ON TABLE _spooky_incantation TYPE any
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- For garbage collection (Heartbeat)
-DEFINE FIELD LastActiveAt ON TABLE _spooky_incantation TYPE datetime DEFAULT time::now()
+DEFINE FIELD lastActiveAt ON TABLE _spooky_incantation TYPE datetime DEFAULT time::now()
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- How long this Incantation stays alive without activity
-DEFINE FIELD TTL ON TABLE _spooky_incantation TYPE duration
+DEFINE FIELD ttl ON TABLE _spooky_incantation TYPE duration
 PERMISSIONS FOR select, create, update WHERE true;
 
 
@@ -220,37 +221,8 @@ DEFINE INDEX IF NOT EXISTS unique_hash ON _spooky_schema FIELDS hash UNIQUE;
 
 -- ==================================================
 -- SPOOKY DATA HASH (Client)
--- The "Shadow Graph" tracking the state of every record.
+-- Removed: Replaced by DBSP Module Internal Hashing
 -- ==================================================
-
-DEFINE TABLE _spooky_data_hash SCHEMAFULL
-PERMISSIONS FOR select, create, update, delete WHERE true;
-
--- The actual record being tracked (e.g., comment:abc, thread:123)
-DEFINE FIELD RecordId ON TABLE _spooky_data_hash TYPE record
-PERMISSIONS FOR select, create, update WHERE true;
-
--- H_intrinsic: BLAKE3 hash of the record's own scalar fields
-DEFINE FIELD IntrinsicHash ON TABLE _spooky_data_hash TYPE string
-PERMISSIONS FOR select, create, update WHERE true;
-
--- H_composition: XOR sum of all dependent children's TotalHashes
-DEFINE FIELD CompositionHash ON TABLE _spooky_data_hash TYPE string
-PERMISSIONS FOR select, create, update WHERE true;
-
--- H_total: Intrinsic XOR Composition
-DEFINE FIELD TotalHash ON TABLE _spooky_data_hash TYPE option<string>
-PERMISSIONS FOR select, create, update WHERE true;
-
--- CLIENT-SPECIFIC FIELDS
-DEFINE FIELD IsDirty ON TABLE _spooky_data_hash TYPE bool DEFAULT false
-PERMISSIONS FOR select, create, update WHERE true;
-
-DEFINE FIELD PendingDelete ON TABLE _spooky_data_hash TYPE bool DEFAULT false
-PERMISSIONS FOR select, create, update WHERE true;
-
--- Fast lookup by the original record ID
-DEFINE INDEX idx_record_id ON TABLE _spooky_data_hash COLUMNS RecordId UNIQUE;
 
 -- ==================================================
 -- SPOOKY EVENTS
@@ -262,15 +234,15 @@ PERMISSIONS FOR select, create, update, delete WHERE true;
 
 DEFINE FIELD IF NOT EXISTS id ON _spooky_pending_mutations TYPE string;
 
-DEFINE FIELD IF NOT EXISTS MutationType ON _spooky_pending_mutations TYPE string
+DEFINE FIELD IF NOT EXISTS mutationType ON _spooky_pending_mutations TYPE string
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- The target record ID (for update/delete) - maps to 'id' in the event object
-DEFINE FIELD IF NOT EXISTS RecordId ON _spooky_pending_mutations TYPE option<record>
+DEFINE FIELD IF NOT EXISTS recordId ON _spooky_pending_mutations TYPE option<record>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- The data payload (for create/update)
-DEFINE FIELD IF NOT EXISTS Data ON _spooky_pending_mutations TYPE option<object> FLEXIBLE
+DEFINE FIELD IF NOT EXISTS data ON _spooky_pending_mutations TYPE option<object> FLEXIBLE
 PERMISSIONS FOR select, create, update WHERE true;
 
 
@@ -282,68 +254,41 @@ PERMISSIONS FOR select, create, update WHERE true;
 DEFINE EVENT OVERWRITE _spooky_comment_client_mutation ON TABLE comment
 WHEN $before != $after AND $event != "DELETE"
 THEN {
-    LET $hash_id = <record>("_spooky_data_hash:" + crypto::blake3(<string>$after.id));
-    UPSERT $hash_id CONTENT {
-        RecordId: $after.id,
-        IntrinsicHash: "",
-        CompositionHash: "",
-        TotalHash: NONE,
-        IsDirty: true,
-        PendingDelete: false
-    };
+    -- No-op for now. Client mutation sync logic moved to DBSP.
 };
 
 -- Table: comment Client Deletion
 DEFINE EVENT OVERWRITE _spooky_comment_client_delete ON TABLE comment
 WHEN $event = "DELETE"
 THEN {
-    LET $hash_id = <record>("_spooky_data_hash:" + crypto::blake3(<string>$before.id));
-    UPDATE $hash_id SET PendingDelete = true;
+    -- No-op for now.
 };
 
 -- Table: thread Client Mutation
 DEFINE EVENT OVERWRITE _spooky_thread_client_mutation ON TABLE thread
 WHEN $before != $after AND $event != "DELETE"
 THEN {
-    LET $hash_id = <record>("_spooky_data_hash:" + crypto::blake3(<string>$after.id));
-    UPSERT $hash_id CONTENT {
-        RecordId: $after.id,
-        IntrinsicHash: "",
-        CompositionHash: "",
-        TotalHash: NONE,
-        IsDirty: true,
-        PendingDelete: false
-    };
+    -- No-op for now. Client mutation sync logic moved to DBSP.
 };
 
 -- Table: thread Client Deletion
 DEFINE EVENT OVERWRITE _spooky_thread_client_delete ON TABLE thread
 WHEN $event = "DELETE"
 THEN {
-    LET $hash_id = <record>("_spooky_data_hash:" + crypto::blake3(<string>$before.id));
-    UPDATE $hash_id SET PendingDelete = true;
+    -- No-op for now.
 };
 
 -- Table: user Client Mutation
 DEFINE EVENT OVERWRITE _spooky_user_client_mutation ON TABLE user
 WHEN $before != $after AND $event != "DELETE"
 THEN {
-    LET $hash_id = <record>("_spooky_data_hash:" + crypto::blake3(<string>$after.id));
-    UPSERT $hash_id CONTENT {
-        RecordId: $after.id,
-        IntrinsicHash: "",
-        CompositionHash: "",
-        TotalHash: NONE,
-        IsDirty: true,
-        PendingDelete: false
-    };
+    -- No-op for now. Client mutation sync logic moved to DBSP.
 };
 
 -- Table: user Client Deletion
 DEFINE EVENT OVERWRITE _spooky_user_client_delete ON TABLE user
 WHEN $event = "DELETE"
 THEN {
-    LET $hash_id = <record>("_spooky_data_hash:" + crypto::blake3(<string>$before.id));
-    UPDATE $hash_id SET PendingDelete = true;
+    -- No-op for now.
 };
 `;

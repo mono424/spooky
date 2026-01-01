@@ -806,9 +806,6 @@ export function buildQueryFromOptions<TModel extends GenericModel, IsOne extends
 
   query += ';';
 
-  console.log(`[buildQuery] Generated ${method} query:`, query);
-  console.log(`[buildQuery] Query vars:`, vars);
-
   return {
     query,
     hash: cyrb53(

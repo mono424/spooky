@@ -3,6 +3,7 @@ import { useNavigate } from "@solidjs/router";
 import { db } from "../db";
 import { useAuth } from "../lib/auth";
 import { Uuid } from "@spooky/client-solid";
+import { RecordId } from "surrealdb";
 
 interface CreateThreadDialogProps {
   isOpen: boolean;
@@ -31,16 +32,17 @@ export function CreateThreadDialog(props: CreateThreadDialogProps) {
       }
 
       // Generate a record ID before creating
-      const threadId = `thread:${Uuid.v4().toString().replace(/-/g, "")}`;
+      const genId = Uuid.v4().toString().replace(/-/g, "");
+      const threadId = `thread:${genId}`;
       await db.create(threadId, {
         title: title().trim(),
         content: content().trim(),
-        author: user.id,
+        author: new RecordId('user', user.id.toString().split(':')[1]),
         active: true,
       });
 
       handleClose();
-      navigate(`/thread/${threadId}`);
+      navigate(`/thread/${genId}`);
     } catch (err) {
       console.error("Failed to create thread:", err);
       setError(err instanceof Error ? err.message : "Failed to create thread");

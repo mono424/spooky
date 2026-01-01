@@ -1,19 +1,20 @@
-import { SyncedDb } from '@spooky/client-solid';
+import { SyncedDb, SyncedDbConfig } from '@spooky/client-solid';
 import { schema, SURQL_SCHEMA } from './schema.gen';
 
 // Database configuration
 export const dbConfig = {
+  logLevel: 'trace',
   schema: schema,
   schemaSurql: SURQL_SCHEMA,
   database: {
     namespace: 'main',
     database: 'main',
-    endpoint: 'ws://localhost:8000/rpc',
+    endpoint: 'ws://localhost:8666/rpc',
     // auth: { ... } // If needed later
   },
-} as const;
+} satisfies SyncedDbConfig<typeof schema>;
 
-export const db = new SyncedDb(dbConfig);
+export const db = new SyncedDb<typeof schema>(dbConfig);
 
 // Initialize the database
 let initializationPromise: Promise<void> | null = null;
@@ -23,11 +24,8 @@ export function initDatabase(): Promise<void> {
 
   initializationPromise = (async () => {
     try {
-      console.log('Initializing database...');
       await db.init();
-      console.log('Database initialized successfully');
     } catch (error) {
-      console.error('Failed to initialize database:', error);
       initializationPromise = null; // Allow retrying if it failed
       throw error;
     }

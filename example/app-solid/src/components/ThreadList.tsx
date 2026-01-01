@@ -12,7 +12,7 @@ export function ThreadList() {
       .related("author")
       .orderBy("created_at", "desc")
       .orderBy("id", "asc")
-      .limit(100)
+      .limit(10)
       .build()
   );
   

@@ -137,7 +137,7 @@ export class DevToolsService {
             );
             return result || [];
           } catch (e) {
-            this.logger.error('Failed to get table data', e);
+            this.logger.error({ err: e }, 'Failed to get table data');
             return [];
           }
         },

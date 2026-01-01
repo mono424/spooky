@@ -3,9 +3,11 @@ import { LocalDatabaseService } from '../database/index.js';
 import { createMutationEventSystem, MutationEventSystem, MutationEventTypes } from './events.js';
 import { parseRecordIdString } from '../utils.js';
 import { SchemaStructure } from '@spooky/query-builder';
+import { createLogger, Logger } from '../logger.js';
 
 export class MutationManager<S extends SchemaStructure> {
   private _events: MutationEventSystem;
+  private logger: Logger;
 
   get events(): MutationEventSystem {
     return this._events;
@@ -13,9 +15,42 @@ export class MutationManager<S extends SchemaStructure> {
 
   constructor(
     private schema: S,
-    private db: LocalDatabaseService
+    private db: LocalDatabaseService,
+    logger: Logger
   ) {
+    this.logger = logger.child({ service: 'MutationManager' });
     this._events = createMutationEventSystem();
+  }
+
+  // Helper for retrying DB operations
+  private async withRetry<T>(operation: () => Promise<T>, retries = 3, delayMs = 100): Promise<T> {
+    let lastError;
+    for (let i = 0; i < retries; i++) {
+      try {
+        return await operation();
+      } catch (err: any) {
+        lastError = err;
+        if (
+          err?.message?.includes('Can not open transaction') ||
+          err?.message?.includes('transaction') ||
+          err?.message?.includes('Database is busy')
+        ) {
+          this.logger.warn(
+            {
+              attempt: i + 1,
+              retries,
+              error: err.message,
+            },
+            'Retrying DB operation due to transaction error'
+          );
+
+          await new Promise((res) => setTimeout(res, delayMs * (i + 1)));
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw lastError;
   }
 
   async create<T extends Record<string, unknown>>(id: string, data: T): Promise<T> {
@@ -25,9 +60,9 @@ export class MutationManager<S extends SchemaStructure> {
           
           LET $created = CREATE ONLY $id CONTENT $data;
           LET $mutation = CREATE ONLY $mid CONTENT {
-              MutationType: 'create',
-              RecordId: $created.id,
-              Data: $data
+              mutationType: 'create',
+              recordId: $created.id,
+              data: $data
           };
 
           RETURN {
@@ -38,12 +73,15 @@ export class MutationManager<S extends SchemaStructure> {
           COMMIT TRANSACTION;
       `;
 
-    const [response] = await this.db.query<[{ target: T; mutation_id: RecordId }]>(query, {
-      id: parseRecordIdString(id),
-      mid: parseRecordIdString(mutationId),
-      data,
-    });
-    console.log(response);
+    const [response] = await this.withRetry(() =>
+      this.db.query<[{ target: T; mutation_id: RecordId }]>(query, {
+        id: parseRecordIdString(id),
+        mid: parseRecordIdString(mutationId),
+        data,
+      })
+    );
+
+    this.logger.debug({ response }, 'Create mutation response');
 
     const result = response;
 
@@ -71,15 +109,15 @@ export class MutationManager<S extends SchemaStructure> {
     id: string,
     data: Partial<T>
   ): Promise<T> {
-    const rid = new RecordId(table, id);
+    const rid = id.includes(':') ? parseRecordIdString(id) : new RecordId(table, id);
 
     const query = `
           BEGIN TRANSACTION;
 
           LET $updated = UPDATE $id MERGE $data;
           LET $mutation = CREATE _spooky_pending_mutations SET 
-              mutation_type = 'update',
-              record_id = $id,
+              mutationType = 'update',
+              recordId = $id,
               data = $data; 
 
           RETURN {
@@ -91,10 +129,12 @@ export class MutationManager<S extends SchemaStructure> {
       `;
 
     // The return type is an array containing our custom object
-    const [response] = await this.db.query<[{ target: T; mutation_id: RecordId }]>(query, {
-      id: rid,
-      data,
-    });
+    const [response] = await this.withRetry(() =>
+      this.db.query<[{ target: T; mutation_id: RecordId }]>(query, {
+        id: rid,
+        data,
+      })
+    );
 
     const result = response;
 
@@ -118,15 +158,15 @@ export class MutationManager<S extends SchemaStructure> {
   }
 
   async delete(table: string, id: string): Promise<void> {
-    const rid = new RecordId(table, id);
+    const rid = id.includes(':') ? parseRecordIdString(id) : new RecordId(table, id);
 
     const query = `
         BEGIN TRANSACTION;
         
         DELETE $id;
         LET $mutation = CREATE _spooky_pending_mutations SET 
-            mutation_type = 'delete',
-            record_id = $id;
+            mutationType = 'delete',
+            recordId = $id;
         RETURN {
             mutation_id: $mutation.id
         };
@@ -134,7 +174,9 @@ export class MutationManager<S extends SchemaStructure> {
         COMMIT TRANSACTION;
     `;
 
-    const [response] = await this.db.query<[{ mutation_id: RecordId }]>(query, { id: rid });
+    const [response] = await this.withRetry(() =>
+      this.db.query<[{ mutation_id: RecordId }]>(query, { id: rid })
+    );
 
     const result = response;
 

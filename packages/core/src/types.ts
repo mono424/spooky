@@ -1,4 +1,7 @@
 import { RecordId, SchemaStructure } from '@spooky/query-builder';
+import { Level } from 'pino';
+
+export type { Level } from 'pino';
 
 export type QueryTimeToLive =
   | '1m'
@@ -32,8 +35,6 @@ export interface EventSubscriptionOptions {
   priority?: number;
 }
 
-export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
-
 export interface SpookyConfig<S extends SchemaStructure> {
   database: {
     endpoint?: string;
@@ -44,20 +45,24 @@ export interface SpookyConfig<S extends SchemaStructure> {
   clientId?: string;
   schema: S;
   schemaSurql: string;
+  logLevel: Level;
 }
 
 export type QueryHash = string;
+
+import { Duration } from 'surrealdb';
 
 export interface Incantation {
   id: RecordId<QueryHash>;
   surrealql: string;
   params?: Record<string, any>;
   hash: string;
-  lastActiveAt: number;
-  ttl: QueryTimeToLive;
+  lastActiveAt: number | Date | string;
+  ttl: QueryTimeToLive | Duration;
   tree: any;
   meta: {
     tableName: string;
+    involvedTables?: string[];
   };
 }
 

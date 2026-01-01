@@ -1,5 +1,5 @@
 import { createTestDb, clearTestDb } from './setup';
-import { Surreal } from 'surrealdb';
+import { Surreal, RecordId } from 'surrealdb';
 
 describe('DBSP Storage Persistence', () => {
   let db: Surreal;
@@ -59,12 +59,12 @@ describe('DBSP Storage Persistence', () => {
     const autoIncantId = 'auto_test_view';
     const autoIncantSql = `
       UPSERT _spooky_incantation:${autoIncantId} CONTENT {
-        Id: '${autoIncantId}',
-        SurrealQL: 'SELECT * FROM storage_items',
-        Params: {},
-        TTL: 10m,
-        LastActiveAt: time::now(),
-        ClientId: 'test-client'
+        id: '${autoIncantId}',
+        surrealQL: 'SELECT * FROM storage_items',
+        params: {},
+        ttl: 10m,
+        lastActiveAt: time::now(),
+        clientId: 'test-client'
       };
     `;
     await runQuery(autoIncantSql);
@@ -77,9 +77,9 @@ describe('DBSP Storage Persistence', () => {
     const autoRecords = autoRes[0].result || autoRes[0];
     const autoRecord = Array.isArray(autoRecords) ? autoRecords[0] : autoRecords;
 
-    expect(autoRecord.Hash).toBeDefined();
-    expect(autoRecord.Hash).not.toBe('');
-    expect(autoRecord.Hash).not.toBe('NONE');
+    expect(autoRecord.hash).toBeDefined();
+    expect(autoRecord.hash).not.toBe('');
+    expect(autoRecord.hash).not.toBe('NONE');
 
     // Verify it registered in module state too
     const circuitRes = await runQuery('SELECT content FROM _spooky_module_state:dbsp');
@@ -97,12 +97,12 @@ describe('DBSP Storage Persistence', () => {
     await runQuery(`CREATE user:alice SET username = 'alice', password = 'password123';`);
     const paramIncantSql = `
       UPSERT _spooky_incantation:${paramIncantId} CONTENT {
-        Id: '${paramIncantId}',
-        SurrealQL: 'SELECT * FROM user WHERE id = $id',
-        Params: { id: "user:alice" },
-        TTL: 10m,
-        LastActiveAt: time::now(),
-        ClientId: 'test-client-param'
+        id: '${paramIncantId}',
+        surrealQL: 'SELECT * FROM user WHERE id = $id',
+        params: { id: "user:alice" },
+        ttl: 10m,
+        lastActiveAt: time::now(),
+        clientId: 'test-client-param'
       };
     `;
     await runQuery(paramIncantSql);
@@ -112,9 +112,9 @@ describe('DBSP Storage Persistence', () => {
     const paramRes = await runQuery(checkParamSql);
     const paramRecord = (paramRes[0].result || paramRes[0])[0];
 
-    expect(paramRecord.Hash).toBeDefined();
-    expect(paramRecord.Hash).not.toBe('');
-    expect(paramRecord.Hash).not.toBe('NONE');
+    expect(paramRecord.hash).toBeDefined();
+    expect(paramRecord.hash).not.toBe('');
+    expect(paramRecord.hash).not.toBe('NONE');
 
     const state = JSON.parse(records[0].content);
     expect(state.db).toBeDefined();
@@ -140,17 +140,17 @@ describe('DBSP Storage Persistence', () => {
     await runQuery(`
       LET $params = { id: thread:test_parsing };
       UPSERT _spooky_incantation:parsing_test_view SET 
-          Id = '${viewName}', 
-          SurrealQL = "${query}", 
-          Params = $params,
-          TTL = 1h;
+          id = '${viewName}', 
+          surrealQL = "${query}", 
+          params = $params,
+          ttl = 1h;
     `);
 
     // Check if Hash is populated
     const records = await runQuery(`SELECT * FROM _spooky_incantation:parsing_test_view`);
     const record = (records[0].result || records[0])[0];
-    expect(record.Hash).toBeDefined();
-    expect(record.Hash).not.toBe('');
+    expect(record.hash).toBeDefined();
+    expect(record.hash).not.toBe('');
   }, 20000);
 
   test('should handle backticked record ID parameters (SurrealQL complex style)', async () => {
@@ -179,18 +179,19 @@ describe('DBSP Storage Persistence', () => {
     await runQuery(`
       LET $res = mod::dbsp::register_view('${viewName}', "${query}", "${trickyParams}");
       UPSERT _spooky_incantation:complex_test_view SET 
-          Id = '${viewName}', 
-          SurrealQL = "${query}", 
-          Params = { id: ${threadId} },
-          Hash = $res.result_hash,
-          TTL = 1h;
+          id = '${viewName}', 
+          surrealQL = "${query}", 
+          params = { id: ${threadId} },
+          hash = $res.result_hash,
+          ttl = 1h;
     `);
 
     // Check if Hash is populated
     const records = await runQuery(`SELECT * FROM _spooky_incantation:complex_test_view`);
     const record = (records[0].result || records[0])[0];
-    expect(record.Hash).toBeDefined();
-    expect(record.Hash).not.toBe('');
+    expect(record.hash).toBeDefined();
+    expect(record.hash).not.toBe('');
+    expect(record.hash).not.toBe('');
   }, 20000);
 
   test('should handle LIMIT with trailing semicolon (SQL parser regression)', async () => {
@@ -209,18 +210,18 @@ describe('DBSP Storage Persistence', () => {
     await runQuery(`
       LET $res = mod::dbsp::register_view('${viewName}', "${query}", "${params}");
       UPSERT _spooky_incantation:${viewName} SET 
-          Id = '${viewName}', 
-          SurrealQL = "${query}", 
-          Params = { id: ${threadId} },
-          Hash = $res.result_hash,
-          TTL = 1h;
+          id = '${viewName}', 
+          surrealQL = "${query}", 
+          params = { id: ${threadId} },
+          hash = $res.result_hash,
+          ttl = 1h;
     `);
 
     const records = await runQuery(`SELECT * FROM _spooky_incantation:${viewName}`);
     const record = (records[0].result || records[0])[0];
 
-    expect(record.Hash).toBeDefined();
-    expect(record.Hash).not.toBe('');
+    expect(record.hash).toBeDefined();
+    expect(record.hash).not.toBe('');
   }, 20000);
 
   test('should handle view updates (Deduplication bug regression)', async () => {
@@ -232,16 +233,16 @@ describe('DBSP Storage Persistence', () => {
     await runQuery(`
       LET $res = mod::dbsp::register_view('${viewName}', "${query}", "${initialParams}");
       UPSERT _spooky_incantation:${viewName} SET 
-        Id = '${viewName}',
-        SurrealQL = "${query}",
-        Params = ${initialParams},
-        Hash = $res.result_hash,
-        TTL = 1h;
+        id = '${viewName}',
+        surrealQL = "${query}",
+        params = ${initialParams},
+        hash = $res.result_hash,
+        ttl = 1h;
     `);
 
     let records = await runQuery(`SELECT * FROM _spooky_incantation:${viewName}`);
     let record = (records[0].result || records[0])[0];
-    const initialHash = record.Hash;
+    const initialHash = record.hash;
     expect(initialHash).not.toBe('');
 
     // 2. Register SAME view with DIFFERENT params (target non-existent user)
@@ -253,20 +254,20 @@ describe('DBSP Storage Persistence', () => {
     await runQuery(`
       LET $res = mod::dbsp::register_view('${viewName}', "${query}", "${newParams}");
       UPSERT _spooky_incantation:${viewName} SET 
-        Id = '${viewName}',
-        SurrealQL = "${query}",
-        Params = ${newParams},
-        Hash = $res.result_hash,
-        TTL = 1h;
+        id = '${viewName}',
+        surrealQL = "${query}",
+        params = ${newParams},
+        hash = $res.result_hash,
+        ttl = 1h;
     `);
 
     records = await runQuery(`SELECT * FROM _spooky_incantation:${viewName}`);
     record = (records[0].result || records[0])[0];
 
-    expect(record.Hash).toBeDefined();
-    expect(record.Hash).not.toBe('');
+    expect(record.hash).toBeDefined();
+    expect(record.hash).not.toBe('');
     // Ensure we actually got a result (validating params updated)
-    expect(record.Hash).not.toEqual(initialHash);
+    expect(record.hash).not.toEqual(initialHash);
   }, 20000);
 
   test('should persist state correctly with control characters (newlines) in content', async () => {
@@ -286,11 +287,11 @@ describe('DBSP Storage Persistence', () => {
     await runQuery(`
       LET $res = mod::dbsp::register_view('${viewName}', "${query}", "${params}");
       UPSERT _spooky_incantation:${viewName} SET 
-          Id = '${viewName}', 
-          SurrealQL = "${query}", 
-          Params = ${params},
-          Hash = $res.result_hash,
-          TTL = 1h;
+          id = '${viewName}', 
+          surrealQL = "${query}", 
+          params = ${params},
+          hash = $res.result_hash,
+          ttl = 1h;
     `);
 
     // 2. Force Reload (by registering another view or triggering ingest)
@@ -355,12 +356,12 @@ describe('DBSP Storage Persistence', () => {
     // 1. Create a thread record (mutation) - Ensure cleanup/isolation via unique ID
     const createQuery = `
       UPSERT _spooky_incantation:${incantId} CONTENT {
-        Id: '${incantId}',
-        SurrealQL: 'SELECT * FROM thread',
-        Params: {},
-        TTL: 10m,
-        LastActiveAt: time::now(),
-        ClientId: 'test-client'
+        id: '${incantId}',
+        surrealQL: 'SELECT * FROM thread',
+        params: {},
+        ttl: 10m,
+        lastActiveAt: time::now(),
+        clientId: 'test-client'
       };
 
       CREATE ${threadId} SET 
@@ -388,7 +389,7 @@ describe('DBSP Storage Persistence', () => {
     // We can just select from it directly using the same logic function to verify
     // Verify alternative syntax: casting string to record
     const hashCheck = await runQuery(`
-      SELECT * FROM _spooky_data_hash WHERE RecordId = '${threadId}' OR RecordId = <record>'${threadId}';
+      SELECT * FROM _spooky_data_hash WHERE recordId = '${threadId}' OR recordId = <record>'${threadId}';
     `);
 
     // hashCheck might be array of records directly or [[records]] depending on driver version/query type
@@ -403,16 +404,16 @@ describe('DBSP Storage Persistence', () => {
     }
 
     expect(hashRecord).toBeDefined();
-    expect(hashRecord.RecordId.toString()).toBe(threadId);
+    expect(hashRecord.recordId.toString()).toBe(threadId);
 
     expect(hashRecord.id.toString()).toMatch(/_spooky_data_hash:.+/);
 
     // 4. Verify Merkle Tree in _spooky_incantation does NOT have MISSING_HASH
     const incantations = await runQuery(`SELECT * FROM _spooky_incantation:${incantId}`);
     const tree =
-      incantations[0]?.result?.[0]?.Tree ||
-      incantations[0]?.Tree ||
-      (Array.isArray(incantations[0]) ? incantations[0][0]?.Tree : undefined);
+      incantations[0]?.result?.[0]?.tree ||
+      incantations[0]?.tree ||
+      (Array.isArray(incantations[0]) ? incantations[0][0]?.tree : undefined);
 
     // Check if we have valid query results
     if (tree) {

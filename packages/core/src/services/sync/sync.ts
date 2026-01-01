@@ -1,21 +1,22 @@
 import { LocalDatabaseService, RemoteDatabaseService } from '../database/index.js';
-import { MutationEventSystem } from '../mutation/index.js';
-import { IdTreeDiff, Incantation as IncantationData } from '../../types.js';
-import { QueryEventSystem, QueryEventTypes } from '../query/events.js';
+import { MutationEventSystem, MutationEventTypes } from '../mutation/index.js';
+import { IdTreeDiff } from '../../types.js';
+import { QueryEventTypes } from '../query/events.js';
 import { SyncQueueEventTypes } from './events.js';
+import { createLogger, Logger } from '../logger.js';
 import {
   CleanupEvent,
   DownEvent,
   DownQueue,
   HeartbeatEvent,
   RegisterEvent,
-  SyncEvent,
   UpEvent,
   UpQueue,
 } from './queue/index.js';
 import { RecordId, Duration } from 'surrealdb';
 import { diffIdTree } from './utils.js';
 import { SchemaStructure } from '@spooky/query-builder';
+import { QueryManager } from '../query/index.js';
 
 export class SpookySync<S extends SchemaStructure> {
   private upQueue: UpQueue;
@@ -24,6 +25,7 @@ export class SpookySync<S extends SchemaStructure> {
   private isSyncingUp: boolean = false;
   private isSyncingDown: boolean = false;
   private relationshipMap: Map<string, Set<string>> = new Map();
+  private logger: Logger;
 
   get isSyncing() {
     return this.isSyncingUp || this.isSyncingDown;
@@ -33,10 +35,12 @@ export class SpookySync<S extends SchemaStructure> {
     private schema: S,
     private local: LocalDatabaseService,
     private remote: RemoteDatabaseService,
+    private query: QueryManager<S>,
     private mutationEvents: MutationEventSystem,
-    private queryEvents: QueryEventSystem,
-    private clientId: string
+    private clientId: string,
+    logger: Logger
   ) {
+    this.logger = logger.child({ service: 'SpookySync' });
     this.upQueue = new UpQueue(this.local);
     this.downQueue = new DownQueue(this.local);
     this.buildRelationshipMap();
@@ -53,7 +57,6 @@ export class SpookySync<S extends SchemaStructure> {
   }
 
   public async init() {
-    console.log('syncing down');
     if (this.isInit) throw new Error('SpookySync is already initialized');
     this.isInit = true;
     await this.initUpQueue();
@@ -65,19 +68,26 @@ export class SpookySync<S extends SchemaStructure> {
   private async initUpQueue() {
     await this.upQueue.loadFromDatabase();
     this.upQueue.events.subscribe(SyncQueueEventTypes.MutationEnqueued, this.syncUp.bind(this));
+
+    /// TODO: In the future we can think about using DBSP or something smarter
+    /// to update only the queries that are really affected by the change not every
+    /// query that just involves this table.
+    this.mutationEvents.subscribe(MutationEventTypes.MutationCreated, (event) => {
+      const { payload } = event;
+      for (const element of payload) {
+        this.refreshFromLocalCache(element.record_id.table.toString());
+      }
+    });
+
     this.upQueue.listenForMutations(this.mutationEvents);
   }
 
   private async initDownQueue() {
-    this.downQueue.events.subscribeMany(
-      [
-        SyncQueueEventTypes.IncantationRegistrationEnqueued,
-        SyncQueueEventTypes.IncantationSyncEnqueued,
-        SyncQueueEventTypes.IncantationCleanupEnqueued,
-      ],
+    this.downQueue.events.subscribe(
+      SyncQueueEventTypes.QueryItemEnqueued,
       this.syncDown.bind(this)
     );
-    this.downQueue.listenForQueries(this.queryEvents);
+    this.downQueue.listenForQueries(this.query.eventsSystem);
   }
 
   private async syncUp() {
@@ -127,16 +137,29 @@ export class SpookySync<S extends SchemaStructure> {
           id: event.record_id,
         });
         break;
+      default:
+        this.logger.error({ event }, 'processUpEvent unknown event type');
+        return;
     }
   }
 
   private async processDownEvent(event: DownEvent) {
-    console.log('down event', event);
+    this.logger.debug({ event }, 'Processing down event');
     switch (event.type) {
       case 'register':
         return this.registerIncantation(event);
       case 'sync':
-        return this.syncIncantation(event);
+        const { incantationId, surrealql, params, localTree, localHash, remoteHash, remoteTree } =
+          event.payload;
+        return this.syncIncantation({
+          incantationId,
+          surrealql,
+          localTree,
+          localHash,
+          remoteHash,
+          remoteTree,
+          params,
+        });
       case 'heartbeat':
         return this.heartbeatIncantation(event);
       case 'cleanup':
@@ -144,35 +167,130 @@ export class SpookySync<S extends SchemaStructure> {
     }
   }
 
+  private async refreshFromLocalCache(table: string) {
+    const queries = this.query.getQueriesThatInvolveTable(table);
+    this.logger.debug({ table, queries: [...queries] }, 'refreshFromLocalCache');
+    for (const query of queries) {
+      await this.updateLocalIncantation(
+        query.id,
+        {
+          surrealql: query.surrealql,
+          params: query.params,
+          hash: '',
+          tree: null,
+        },
+        {
+          updateRecord: false,
+        }
+      );
+    }
+  }
+
   private async registerIncantation(event: RegisterEvent) {
     const { incantationId, surrealql, params, ttl } = event.payload;
     const effectiveTtl = ttl || '10m';
     try {
-      await this.updateLocalIncantation(incantationId, {
+      let existing = await this.findIncatationRecord(incantationId);
+      this.logger.debug({ existing }, 'Register Incantation state');
+
+      const localHash = existing?.hash ?? '';
+      const localTree = existing?.tree ?? null;
+
+      await this.updateLocalIncantation(
+        incantationId,
+        {
+          surrealql,
+          params,
+          hash: localHash,
+          tree: localTree,
+        },
+        {
+          updateRecord: existing ? false : true,
+        }
+      );
+
+      const { hash: remoteHash, tree: remoteTree } = await this.createRemoteIncantation(
+        incantationId,
         surrealql,
         params,
-        hash: '',
-        tree: null,
-      });
-      await this.remote.query(`UPSERT $id CONTENT $content`, {
-        id: incantationId,
-        content: {
-          SurrealQL: surrealql,
-          Params: params,
-          TTL: new Duration(effectiveTtl),
-          LastActiveAt: new Date(),
-          ClientId: this.clientId,
-        },
+        effectiveTtl
+      );
+
+      await this.syncIncantation({
+        incantationId,
+        surrealql,
+        localTree,
+        localHash,
+        remoteHash,
+        remoteTree,
+        params,
       });
     } catch (e) {
-      console.error('[SpookySync] registerIncantation error', e);
+      this.logger.error({ err: e }, 'registerIncantation error');
       throw e;
     }
   }
 
-  private async syncIncantation(event: SyncEvent) {
-    const { incantationId, surrealql, localTree, localHash, remoteHash, remoteTree } =
-      event.payload;
+  private async createRemoteIncantation(
+    incantationId: RecordId<string>,
+    surrealql: string,
+    params: any,
+    ttl: string | Duration
+  ) {
+    const config = {
+      id: incantationId,
+      surrealQL: surrealql,
+      params,
+      ttl: typeof ttl === 'string' ? new Duration(ttl) : ttl,
+      lastActiveAt: new Date(),
+      clientId: this.clientId,
+    };
+
+    const safeConfig = JSON.parse(JSON.stringify(config));
+
+    // Delegate to remote function which handles DBSP registration & persistence
+    const [{ hash, tree }] = await this.remote.query<[{ hash: string; tree: any }]>(
+      'fn::incantation::register($config)',
+      {
+        config: safeConfig,
+      }
+    );
+
+    this.logger.debug(
+      { incantationId: incantationId.toString(), hash, tree },
+      'createdRemoteIncantation'
+    );
+    return { hash, tree };
+  }
+
+  private async syncIncantation({
+    incantationId,
+    surrealql,
+    localTree,
+    localHash,
+    remoteHash,
+    remoteTree,
+    params,
+  }: {
+    incantationId: RecordId<string>;
+    surrealql: string;
+    localTree: any;
+    localHash: string;
+    remoteHash: string;
+    remoteTree: any;
+    params: Record<string, any>;
+  }) {
+    this.logger.debug(
+      {
+        incantationId: incantationId.toString(),
+        localHash,
+        remoteHash,
+        localTree,
+        remoteTree,
+        params,
+      },
+      'syncIncantation'
+    );
 
     const isDifferent = localHash !== remoteHash;
     if (!isDifferent) {
@@ -181,11 +299,18 @@ export class SpookySync<S extends SchemaStructure> {
 
     await this.cacheMissingRecords(localTree, remoteTree, surrealql);
 
-    await this.updateLocalIncantation(incantationId, {
-      surrealql,
-      hash: remoteHash,
-      tree: remoteTree,
-    });
+    await this.updateLocalIncantation(
+      incantationId,
+      {
+        surrealql,
+        params,
+        hash: remoteHash,
+        tree: remoteTree,
+      },
+      {
+        updateRecord: true,
+      }
+    );
   }
 
   private async cacheMissingRecords(
@@ -194,10 +319,7 @@ export class SpookySync<S extends SchemaStructure> {
     surrealql: string
   ): Promise<IdTreeDiff> {
     if (!localTree) {
-      const [remoteResults] = await this.remote
-        .getClient()
-        .query(surrealql)
-        .collect<[Record<string, any>[]]>();
+      const [remoteResults] = await this.remote.query<[Record<string, any>[]]>(surrealql);
       // TODO: flatten the records array, to not have nested dependencies but a flat list of records
       // for this it should use the schema to find relationships
       await this.cacheResults(remoteResults);
@@ -208,14 +330,15 @@ export class SpookySync<S extends SchemaStructure> {
     const { added, updated } = diff;
     const idsToFetch = [...added, ...updated];
 
+    this.logger.debug({ added, updated, idsToFetch }, 'cacheMissingRecords diff');
+
     if (idsToFetch.length === 0) {
       return { added: [], updated: [], removed: [] };
     }
 
-    const [remoteResults] = await this.remote
-      .getClient()
-      .query('SELECT * FROM $ids', { ids: idsToFetch })
-      .collect<[Record<string, any>[]]>();
+    const [remoteResults] = await this.remote.query<[Record<string, any>[]]>('SELECT * FROM $ids', {
+      ids: idsToFetch,
+    });
 
     await this.cacheResults(remoteResults);
     return { added: remoteResults.map((r) => r.id), updated: [], removed: [] };
@@ -233,27 +356,65 @@ export class SpookySync<S extends SchemaStructure> {
       params?: Record<string, any>;
       hash: string;
       tree: any;
+    },
+    {
+      updateRecord = true,
+    }: {
+      updateRecord?: boolean;
     }
   ) {
-    await this.updateIncantationRecord(incantationId, {
-      hash,
-      tree,
-    });
+    if (updateRecord) {
+      await this.updateIncantationRecord(incantationId, {
+        hash,
+        tree,
+      });
+    }
 
     try {
-      const [cachedResults] = await this.local
-        .getClient()
-        .query(surrealql, params)
-        .collect<[Record<string, any>[]]>();
+      this.logger.debug(
+        {
+          incantationId: incantationId.toString(),
+          surrealql,
+          params,
+        },
+        'updateLocalIncantation Loading cached results start'
+      );
 
-      this.queryEvents.emit(QueryEventTypes.IncantationIncomingRemoteUpdate, {
+      const [cachedResults] = await this.local.query<[Record<string, any>[]]>(surrealql, params);
+
+      this.logger.debug(
+        {
+          incantationId: incantationId.toString(),
+          recordCount: cachedResults?.length,
+        },
+        'updateLocalIncantation Loading cached results done'
+      );
+
+      this.query.eventsSystem.emit(QueryEventTypes.IncantationIncomingRemoteUpdate, {
         incantationId,
         remoteHash: hash,
         remoteTree: tree,
         records: cachedResults,
       });
     } catch (e) {
-      console.error('[SpookySync] failed to query local db or emit event', e);
+      this.logger.error(
+        { err: e },
+        'updateLocalIncantation failed to query local db or emit event'
+      );
+    }
+  }
+
+  private async findIncatationRecord(incantationId: RecordId<string>) {
+    try {
+      const [cachedResults] = await this.local.query<[Record<string, any>]>(
+        'SELECT * FROM ONLY $id',
+        {
+          id: incantationId,
+        }
+      );
+      return cachedResults;
+    } catch (e) {
+      return null;
     }
   }
 
@@ -268,25 +429,26 @@ export class SpookySync<S extends SchemaStructure> {
     }
   ) {
     try {
-      console.log('[SpookySync] Updating local incantation', { incantationId, hash, tree });
+      this.logger.debug(
+        { incantationId: incantationId.toString(), hash, tree },
+        'Updating local incantation'
+      );
       await this.local.query(`UPDATE $id MERGE $content`, {
         id: incantationId,
         content: { hash, tree },
       });
     } catch (e) {
-      console.error('[SpookySync] Failed to update local incantation record', e);
+      this.logger.error({ err: e }, 'Failed to update local incantation record');
       throw e;
     }
   }
 
   private async cacheResults(results: Record<string, any>[]) {
     if (!results || results.length === 0) return;
-    console.log(results);
+    this.logger.trace({ results }, 'cacheResults raw');
     const flatResults = this.flattenResults(results);
-    console.log('Flattend', {
-      results,
-      flatResults,
-    });
+    this.logger.trace({ flatResults }, 'cacheResults flattened');
+
     for (const record of flatResults) {
       if (record.id) {
         await this.local.getClient().upsert(record.id).content(record);
@@ -352,7 +514,7 @@ export class SpookySync<S extends SchemaStructure> {
   }
 
   private async heartbeatIncantation(event: HeartbeatEvent) {
-    await this.remote.getClient().query('fn::incantation::heartbeat($id)', {
+    await this.remote.query('fn::incantation::heartbeat($id)', {
       id: event.payload.incantationId,
     });
   }

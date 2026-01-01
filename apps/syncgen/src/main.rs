@@ -1,8 +1,8 @@
 mod codegen;
 mod json_schema;
+mod modules;
 mod parser;
 mod spooky;
-mod modules;
 
 use anyhow::{Context, Result};
 use clap::Parser as ClapParser;
@@ -49,6 +49,18 @@ struct Args {
     /// Directory containing Surrealism modules to compile and bundle
     #[arg(long, default_value = "../../packages/surrealism-modules")]
     modules_dir: PathBuf,
+
+    /// Generation mode: "surrealism" (embedded WASM) or "sidecar" (HTTP calls)
+    #[arg(long, default_value = "surrealism")]
+    mode: String,
+
+    /// Spooky Sidecar Endpoint URL (required if mode is "sidecar")
+    #[arg(long)]
+    sidecar_endpoint: Option<String>,
+
+    /// Spooky Sidecar Auth Secret (required if mode is "sidecar")
+    #[arg(long)]
+    sidecar_secret: Option<String>,
 }
 
 /// Filter schema content to remove field definitions with FOR select WHERE false
@@ -70,7 +82,10 @@ fn filter_schema_for_client(content: &str, parser: &SchemaParser) -> Result<Stri
                     if let Some(field) = table.fields.get(&field_name) {
                         if field.should_strip {
                             // Skip this entire field definition (until semicolon)
-                            println!("  → Removing field '{}' from table '{}' in client schema", field_name, table_name);
+                            println!(
+                                "  → Removing field '{}' from table '{}' in client schema",
+                                field_name, table_name
+                            );
                             while i < lines.len() {
                                 if let Some(idx) = lines[i].find(';') {
                                     // Check if there is content after the semicolon
@@ -163,20 +178,20 @@ fn main() -> Result<()> {
 
     // Include format-specific meta tables
     if matches!(output_format, OutputFormat::Surql) {
-         content.push('\n');
-         content.push_str(meta_tables_remote);
-         println!("  + Appended meta_tables_remote.surql");
+        content.push('\n');
+        content.push_str(meta_tables_remote);
+        println!("  + Appended meta_tables_remote.surql");
     } else {
-         content.push('\n');
-         content.push_str(meta_tables_client);
-         println!("  + Appended meta_tables_client.surql");
+        content.push('\n');
+        content.push_str(meta_tables_client);
+        println!("  + Appended meta_tables_client.surql");
     }
 
     // Append extra file if specified
     if let Some(append_path) = &args.append {
         let append_content = fs::read_to_string(append_path)
             .context(format!("Failed to read append file: {:?}", append_path))?;
-        
+
         content.push('\n');
         content.push_str(&append_content);
         println!("  + Appended schema from {:?}", append_path);
@@ -190,7 +205,7 @@ fn main() -> Result<()> {
 
     // Filter the raw schema content to remove fields with FOR select WHERE false
     let filtered_schema_content = filter_schema_for_client(&content, &parser)?;
-    
+
     // Choose which content to use based on format
     let raw_schema_content = if matches!(output_format, OutputFormat::Surql) {
         let mut c = content.clone();
@@ -253,7 +268,12 @@ fn main() -> Result<()> {
         // Generate TypeScript
         let ts_gen = CodeGenerator::new_with_header(OutputFormat::Typescript, !args.no_header);
         let ts_code = ts_gen
-            .generate_with_schema(&json_schema_string, "Database", Some(&raw_schema_content), None)
+            .generate_with_schema(
+                &json_schema_string,
+                "Database",
+                Some(&raw_schema_content),
+                None,
+            )
             .context("Failed to generate TypeScript code")?;
         let ts_path = args.output.with_extension("ts");
         ensure_directory_exists(&ts_path)?;
@@ -264,7 +284,12 @@ fn main() -> Result<()> {
         // Generate Dart
         let dart_gen = CodeGenerator::new_with_header(OutputFormat::Dart, !args.no_header);
         let dart_code = dart_gen
-            .generate_with_schema(&json_schema_string, "Database", Some(&raw_schema_content), None)
+            .generate_with_schema(
+                &json_schema_string,
+                "Database",
+                Some(&raw_schema_content),
+                None,
+            )
             .context("Failed to generate Dart code")?;
         let dart_path = args.output.with_extension("dart");
         ensure_directory_exists(&dart_path)?;
@@ -275,15 +300,27 @@ fn main() -> Result<()> {
         println!("\nSuccessfully generated all formats!");
     } else {
         // Generate single format
-       // Generate spooky events
-    let is_client = !matches!(output_format, OutputFormat::Surql);
-    let spooky_events = spooky::generate_spooky_events(&parser.tables, &content, is_client);
+        // Generate spooky events
+        let is_client = !matches!(output_format, OutputFormat::Surql);
+        let spooky_events = spooky::generate_spooky_events(
+            &parser.tables,
+            &content,
+            is_client,
+            &args.mode,
+            args.sidecar_endpoint.as_deref(),
+            args.sidecar_secret.as_deref(),
+        );
 
-    // Generate code
-    let generator = CodeGenerator::new_with_header(output_format, !args.no_header);
-    let output_content = generator
-        .generate_with_schema(&json_schema_string, "Schema", Some(&raw_schema_content), Some(&spooky_events))
-        .context("Failed to generate output code")?;
+        // Generate code
+        let generator = CodeGenerator::new_with_header(output_format, !args.no_header);
+        let output_content = generator
+            .generate_with_schema(
+                &json_schema_string,
+                "Schema",
+                Some(&raw_schema_content),
+                Some(&spooky_events),
+            )
+            .context("Failed to generate output code")?;
 
         ensure_directory_exists(&args.output)?;
         fs::write(&args.output, output_content)
@@ -300,13 +337,13 @@ fn main() -> Result<()> {
             // Compile and bundle modules
             // Output dir is the directory containing args.output
             if let Some(output_dir) = args.output.parent() {
-                 println!("\nProcessing Surrealism Modules...");
-                 if let Err(e) = modules::compile_modules(&args.modules_dir, output_dir) {
-                     eprintln!("Warning: Failed to compile modules: {}", e);
-                     // Don't fail the whole build for this? Or should we?
-                     // User said "compile and add", implies part of the process.
-                     // But if directory doesn't exist, we skip.
-                 }
+                println!("\nProcessing Surrealism Modules...");
+                if let Err(e) = modules::compile_modules(&args.modules_dir, output_dir) {
+                    eprintln!("Warning: Failed to compile modules: {}", e);
+                    // Don't fail the whole build for this? Or should we?
+                    // User said "compile and add", implies part of the process.
+                    // But if directory doesn't exist, we skip.
+                }
             }
         }
 

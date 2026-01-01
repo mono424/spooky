@@ -1,4 +1,5 @@
 import type { Surreal } from 'surrealdb';
+import { Logger, createLogger } from '../logger.js';
 import { LocalDatabaseService } from './local.js';
 
 export interface SchemaRecord {
@@ -15,7 +16,16 @@ export const sha1 = async (str: string): Promise<string> => {
 };
 
 export class LocalMigrator {
-  constructor(private localDb: LocalDatabaseService) {}
+  private logger: Logger;
+
+  constructor(
+    private localDb: LocalDatabaseService,
+    logger: Logger
+  ) {
+    this.logger = logger.child({ service: 'LocalMigrator' });
+    logger?.child({ service: 'LocalMigrator' }) ??
+      createLogger('info').child({ service: 'LocalMigrator' });
+  }
 
   async provision(schemaSurql: string): Promise<void> {
     const hash = await sha1(schemaSurql);
@@ -23,7 +33,7 @@ export class LocalMigrator {
     const { database } = this.localDb.getConfig();
 
     if (await this.isSchemaUpToDate(hash)) {
-      console.info('[Provisioning] Schema is up to date, skipping migration');
+      this.logger.info('[Provisioning] Schema is up to date, skipping migration');
       return;
     }
 
@@ -38,20 +48,20 @@ export class LocalMigrator {
 
       // SKIP INDEXES: WASM engine hangs on DEFINE INDEX (confirmed)
       if (cleanStatement.toUpperCase().startsWith('DEFINE INDEX')) {
-        console.warn(
+        this.logger.warn(
           `[Provisioning] Skipping index definition (WASM hang avoidance): ${cleanStatement.substring(0, 50)}...`
         );
         continue;
       }
 
       try {
-        console.info(
+        this.logger.info(
           `[Provisioning] (${i + 1}/${statements.length}) Executing: ${statement.substring(0, 50)}...`
         );
         await this.localDb.query(statement);
-        console.info(`[Provisioning] (${i + 1}/${statements.length}) Done`);
+        this.logger.info(`[Provisioning] (${i + 1}/${statements.length}) Done`);
       } catch (e) {
-        console.error(
+        this.logger.error(
           `[Provisioning] (${i + 1}/${statements.length}) Error executing statement: ${statement}`
         );
         throw e;

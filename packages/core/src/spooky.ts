@@ -41,19 +41,26 @@ export class SpookyClient<S extends SchemaStructure> {
     const clientId = this.config.clientId ?? this.loadOrGenerateClientId();
     this.persistClientId(clientId);
 
-    const logger = createLogger('info'); // Default logger
-    this.local = new LocalDatabaseService(this.config.database);
-    this.remote = new RemoteDatabaseService(this.config.database);
-    this.migrator = new LocalMigrator(this.local);
-    this.mutationManager = new MutationManager(this.config.schema, this.local);
-    this.queryManager = new QueryManager(this.config.schema, this.local, this.remote, clientId);
+    const logger = createLogger(config.logLevel ?? 'info');
+    this.local = new LocalDatabaseService(this.config.database, logger);
+    this.remote = new RemoteDatabaseService(this.config.database, logger);
+    this.migrator = new LocalMigrator(this.local, logger);
+    this.mutationManager = new MutationManager(this.config.schema, this.local, logger);
+    this.queryManager = new QueryManager(
+      this.config.schema,
+      this.local,
+      this.remote,
+      clientId,
+      logger
+    );
     this.sync = new SpookySync(
       this.config.schema,
       this.local,
       this.remote,
+      this.queryManager,
       this.mutationManager.events,
-      this.queryManager.eventsSystem,
-      clientId
+      clientId,
+      logger
     );
     this.devTools = new DevToolsService(
       this.mutationManager.events,
