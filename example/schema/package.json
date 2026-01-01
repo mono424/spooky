@@ -13,7 +13,7 @@
     "build:dart": "syncgen --format dart --input ./src/schema.surql --output ../client-dart/src/db/models.dart",
     "build:surql": "pnpm build:remote:surrealism && pnpm build:remote:sidecar",
     "build:remote:surrealism": "syncgen --input ./src/schema.surql --output ./.spooky/remote-surrealism.gen.surql --mode surrealism --modules-dir ../../packages/surrealism-modules",
-    "build:remote:sidecar": "syncgen --input ./src/schema.surql --output ./.spooky/remote-sidecar.gen.surql --mode sidecar --sidecar-endpoint http://localhost:3000 --sidecar-secret mysecret --modules-dir ../../packages/surrealism-modules"
+    "build:remote:sidecar": "syncgen --input ./src/schema.surql --output ./.spooky/remote-sidecar.gen.surql --mode sidecar --sidecar-endpoint http://spooky-sidecar:3000 --sidecar-secret mysecret --modules-dir ../../packages/surrealism-modules"
   },
   "keywords": [
     "database",
