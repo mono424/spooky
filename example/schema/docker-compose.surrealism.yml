@@ -34,7 +34,7 @@ services:
       surrealdb:
         condition: service_healthy
     volumes:
-      - ./.spooky/remote-sidecar.gen.surql:/remote.gen.surql:ro
+      - ./.spooky/remote-surrealism.gen.surql:/remote.gen.surql:ro
       - ./migrate.sh:/migrate.sh:ro
     command: ['sh', '/migrate.sh']
     restart: 'no'
