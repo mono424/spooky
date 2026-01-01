@@ -1,0 +1,69 @@
+services:
+  surrealdb:
+    image: surrealdb/surrealdb:v3.0.0-beta.1
+    ports:
+      - '8666:8000'
+    environment:
+      - SURREAL_USER=root
+      - SURREAL_PASS=root
+      - SURREAL_CAPS_ALLOW_EXPERIMENTAL=surrealism,files
+      - SURREAL_BUCKET_FOLDER_ALLOWLIST=/modules
+    command:
+      - start
+      - --allow-all
+      - --log
+      - info
+      - --user
+      - root
+      - --pass
+      - root
+      - memory
+    volumes:
+      - ./.spooky/xor_module.surli:/modules/xor_module.surli:ro
+      - ./.spooky/dbsp_module.surli:/modules/dbsp_module.surli:ro
+    healthcheck:
+      test: ['CMD', '/surreal', 'isready', '--conn', 'http://localhost:8000']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  spooky-sidecar:
+    build:
+      context: ../../
+      dockerfile: apps/spooky-sidecar/Dockerfile
+    ports:
+      - '3000:3000'
+    environment:
+      - RUST_LOG=debug
+      - SURREALDB_URL=ws://surrealdb:8000
+      - SURREALDB_NAMESPACE=main
+      - SURREALDB_DATABASE=main
+      - SURREALDB_USERNAME=root
+      - SURREALDB_PASSWORD=root
+      - SPOOKY_AUTH_SECRET=mysecret
+      - SPOOKY_PERSISTENCE_FILE=/data/spooky_state.json
+    volumes:
+      - ./.spooky/sidecar_data:/data
+    depends_on:
+      surrealdb:
+        condition: service_healthy
+    restart: unless-stopped
+
+  schema-migration:
+    image: curlimages/curl:latest
+    depends_on:
+      surrealdb:
+        condition: service_healthy
+      spooky-sidecar:
+        condition: service_started
+    volumes:
+      - ./.spooky/remote.gen.surql:/remote.gen.surql:ro
+    command: >
+      sh -c "curl -X POST http://surrealdb:8000/sql
+      -H 'Accept: application/json'
+      -H 'surreal-ns: main'
+      -H 'surreal-db: main'
+      -u root:root
+      --data-binary @/remote.gen.surql && echo 'Schema migration completed successfully'"
+    restart: 'no'
