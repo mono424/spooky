@@ -255,7 +255,7 @@ export class QueryManager<S extends SchemaStructure> {
   }
 
   private async startLiveQuery() {
-    // const queryUuid = await this.remote.getClient().live(new Table('_spooky_incantation')).diff();
+    this.logger.debug({ clientId: this.clientId }, 'Starting live query');
     const [queryUuid] = await this.remote.query<[Uuid]>(
       'LIVE SELECT * FROM _spooky_incantation WHERE clientId = $clientId',
       {
@@ -264,6 +264,7 @@ export class QueryManager<S extends SchemaStructure> {
     );
 
     (await this.remote.getClient().liveOf(queryUuid)).subscribe((message) => {
+      this.logger.debug({ message }, 'Live update received');
       if (message.action === 'UPDATE' || message.action === 'CREATE') {
         const { id, hash, tree } = message.value;
         if (!(id instanceof RecordId) || !hash || !tree) {
@@ -291,26 +292,9 @@ export class QueryManager<S extends SchemaStructure> {
 
   private async calculateHash(data: any): Promise<string> {
     const content = JSON.stringify(data);
-
-    // Use Web Crypto API if available (Browser)
-    if (typeof crypto !== 'undefined' && crypto.subtle) {
-      const msgBuffer = new TextEncoder().encode(content);
-      const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
-      const hashArray = Array.from(new Uint8Array(hashBuffer));
-      return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
-    }
-
-    // Fallback for Node.js (if applicable in this environment)
-    // Assuming we are in a browser-like environment primarily due to 'use-query.ts' usage.
-    // If strict Node support is needed, we'd import 'crypto'.
-    // But for now, let's fall back to a simple non-crypto hash or try to keep the DB call?
-    // No, DB call is broken.
-
-    // Simplest fallback for now:
-    this.logger.warn('crypto.subtle not found, using DB fallback (may fail)');
-    const [result] = await this.local.query<[string]>('RETURN crypto::blake3($content)', {
-      content,
-    });
-    return result;
+    const msgBuffer = new TextEncoder().encode(content);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
   }
 }
