@@ -5,8 +5,7 @@ use surrealism::surrealism;
 // 1. Declare Modules
 mod persistence;
 
-use spooky_stream_processor::engine::view::{IdTree, Operator};
-use spooky_stream_processor::{converter, sanitizer, Circuit, MaterializedViewUpdate, QueryPlan};
+use spooky_stream_processor::{Circuit, MaterializedViewUpdate};
 
 // 2. Global State Wrapper
 lazy_static::lazy_static! {
@@ -34,13 +33,8 @@ fn ingest(
     id: String,
     record: Value,
 ) -> Result<Value, &'static str> {
-    // A. Sanitize
-    let clean_record = sanitizer::normalize_record(record);
-
-    // Hash the record for integrity/verification
-    let hash = blake3::hash(clean_record.to_string().as_bytes())
-        .to_hex()
-        .to_string();
+    // A. Prepare (Normalize & Hash) using centralized logic
+    let (clean_record, hash) = spooky_stream_processor::service::ingest::prepare(record);
 
     // B. Run Engine
     let _ = with_circuit(|circuit| {
@@ -66,91 +60,45 @@ fn ingest(
 
 #[surrealism]
 fn version(_args: Value) -> Result<Value, &'static str> {
-    Ok(json!("0.1.2-debug")) // Increment this to verify new build is loaded
+    Ok(json!("0.1.3-refactor")) // Increment for visibility
 }
 
 #[surrealism]
 fn register_view(config: Value) -> Result<Value, &'static str> {
-    eprintln!("DEBUG: register_view START v0.1.2-debug");
-    eprintln!("DEBUG: Received config: {}", config);
+    // Use centralized preparation
+    let data =
+        spooky_stream_processor::service::view::prepare_registration(config).map_err(|e| {
+            eprintln!("DEBUG: prepare_registration failed: {}", e);
+            "Invalid Configuration"
+        })?;
 
-    // A. Unpack Config
-    let id = config
-        .get("id")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing or invalid 'id'")?
-        .to_string();
-    let surrealql = config
-        .get("surrealQL")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing or invalid 'surrealQL'")?
-        .to_string();
-    let params = config.get("params").cloned().unwrap_or(json!({}));
-    let client_id = config
-        .get("clientId")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing or invalid 'clientId'")?
-        .to_string();
-    // Assuming ttl and lastActiveAt are passed formatted as strings (even if Duration/Datetime in Surreal)
-    let ttl = config
-        .get("ttl")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing or invalid 'ttl'")?
-        .to_string();
-    let last_active_at = config
-        .get("lastActiveAt")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing or invalid 'lastActiveAt'")?
-        .to_string();
-
-    // B. Parse Query Plan
-    let root_op_val = converter::convert_surql_to_dbsp(&surrealql)
-        .or_else(|_| serde_json::from_str(&surrealql))
-        .map_err(|_| "Invalid Query Plan")?;
-
-    let root_op: Operator =
-        serde_json::from_value(root_op_val).map_err(|_| "Failed to map JSON to Operator")?;
-
-    let safe_params = sanitizer::parse_params(params.clone());
-
-    // C. Run Engine & Persist
     let result = with_circuit(|circuit| {
-        let plan = QueryPlan {
-            id: id.clone(),
-            root: root_op,
-        };
-        let initial_res = circuit.register_view(plan, safe_params);
+        let plan = data.plan;
+        let initial_res = circuit.register_view(plan.clone(), data.safe_params);
 
-        // Unwrap the Option
-        // Unwrap the Option or create default for empty view
-        let res = initial_res.unwrap_or_else(|| {
-            let empty_hash = blake3::hash(&[]).to_hex().to_string();
-            MaterializedViewUpdate {
-                query_id: id.clone(),
-                result_hash: empty_hash.clone(),
-                result_ids: vec![],
-                tree: IdTree {
-                    hash: empty_hash,
-                    children: None,
-                    leaves: Some(vec![]),
-                },
-            }
-        });
+        // Standard default result handling
+        let res = initial_res
+            .unwrap_or_else(|| spooky_stream_processor::service::view::default_result(&plan.id));
 
         // Extract result data
         let hash = res.result_hash.clone();
         let tree = res.tree.clone();
 
-        // Persist to SurrealDB directly
+        // Persist to SurrealDB directly using prepared metadata
+        // Note: We need to extract fields from metadata map for the specific persistence signature or update persistence to take map.
+        // Existing persistence signature takes individual args. Let's unpack data.metadata.
+        // data.metadata["id"] etc.
+
+        let m = &data.metadata;
         persistence::upsert_incantation(
-            &id,
+            m["id"].as_str().unwrap(),
             &hash,
             &tree,
-            &client_id,
-            &surrealql,
-            &params,
-            &ttl,
-            &last_active_at,
+            m["clientId"].as_str().unwrap(),
+            m["surrealQL"].as_str().unwrap(),
+            &m["safe_params"], // Use the safe params we stored
+            m["ttl"].as_str().unwrap(),
+            m["lastActiveAt"].as_str().unwrap(),
         );
 
         persistence::save(circuit);

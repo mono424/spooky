@@ -1,6 +1,7 @@
 pub mod converter;
 pub mod engine;
 pub mod sanitizer;
+pub mod service;
 
 use serde_json::Value;
 
