@@ -41,6 +41,7 @@ fi
 
 # Check if _spooky_incantation exists
 RESPONSE=$(check_table)
+echo "Check Response: $RESPONSE"
 
 # Check for curl error or invalid response
 if [ -z "$RESPONSE" ]; then
@@ -48,10 +49,10 @@ if [ -z "$RESPONSE" ]; then
   exit 1
 fi
 
-if echo "$RESPONSE" | grep -q "_spooky_incantation"; then
-  echo "Table '_spooky_incantation' found. Skipping migration."
+if echo "$RESPONSE" | grep -q "\"_spooky_schema\":"; then
+  echo "Migration tracker '_spooky_schema' found. Skipping migration."
 else
-  echo "Table '_spooky_incantation' NOT found. Running migration..."
+  echo "Migration tracker missing (or DB empty). Running migration..."
   # Run migration and capture output
   MIGRATION_OUTPUT=$(curl -sS -X POST "${SURREAL_URL}/sql" \
     -H 'Accept: application/json' \

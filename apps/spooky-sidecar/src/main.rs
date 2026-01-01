@@ -310,15 +310,32 @@ async fn version_handler() -> Json<Value> {
 }
 
 async fn update_incantation_in_db(db: &Surreal<Client>, update: &MaterializedViewUpdate) {
-    let query = "UPDATE type::thing('_spooky_incantation', $id) SET hash = $hash, tree = $tree";
+    let query = "UPDATE type::thing('_spooky_incantation', $id) SET hash = $hash, tree = $tree RETURN AFTER";
     let raw_id = &update.query_id;
     let id_str = raw_id.strip_prefix("_spooky_incantation:").unwrap_or(raw_id).to_string();
-    if let Err(e) = db.query(query)
-        .bind(("id", id_str))
+    
+    debug!("Updating incantation {} with hash {}", id_str, update.result_hash);
+    
+    match db.query(query)
+        .bind(("id", id_str.clone()))
         .bind(("hash", update.result_hash.clone()))
         .bind(("tree", update.tree.clone()))
         .await 
     {
-        error!("Failed to update incantation result in DB: {}", e);
+        Ok(mut response) => {
+            // Check if we got a record back, using Vec<surrealdb::sql::Value> to handle the result set array
+            match response.take::<Vec<surrealdb::sql::Value>>(0) {
+                Ok(records) => {
+                    if !records.is_empty() {
+                         debug!("Successfully updated incantation: {:?}", records[0]);
+                    } else {
+                         // Empty array means no records found/updated
+                         error!("Update executed but no records returned for id: {}. Record might not exist.", id_str);
+                    }
+                },
+                Err(e) => error!("Failed to parse update response: {}", e),
+            }
+        },
+        Err(e) => error!("Failed to update incantation result in DB: {}", e),
     }
 }
