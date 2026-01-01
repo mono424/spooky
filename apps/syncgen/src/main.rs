@@ -220,7 +220,7 @@ fn main() -> Result<()> {
             let endpoint = args
                 .sidecar_endpoint
                 .as_deref()
-                .unwrap_or("http://localhost:3000");
+                .unwrap_or("http://localhost:8667");
             let secret = args.sidecar_secret.as_deref().unwrap_or("");
 
             // Inject variables into sidecar template
@@ -236,7 +236,7 @@ fn main() -> Result<()> {
             // We need to match the exact string from meta_tables_remote.surql
             let unregister_call = "let $result = mod::dbsp::unregister_view(<string>$before.id);";
             let unregister_http = format!(
-                "let $payload = {{ id: <string>$before.id }};\n    let $result = http::post('{}/unregister_view', $payload, {{ \"Authorization\": \"Bearer {}\" }});",
+                "let $payload = {{ id: <string>$before.id }};\n    let $result = http::post('{}/view/unregister', $payload, {{ \"Authorization\": \"Bearer {}\" }});",
                 endpoint, secret
             );
             c = c.replace(unregister_call, &unregister_http);

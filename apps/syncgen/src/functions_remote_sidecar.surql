@@ -17,5 +17,5 @@ DEFINE FUNCTION fn::incantation::register($config: object) {
     };
 
     -- Call Sidecar via HTTP
-    RETURN http::post('{{SIDECAR_ENDPOINT}}/register_view', $module_config, { "Authorization": "Bearer {{SIDECAR_SECRET}}" });
+    RETURN http::post('{{SIDECAR_ENDPOINT}}/view/register', $module_config, { "Authorization": "Bearer {{SIDECAR_SECRET}}" });
 };

@@ -35,7 +35,7 @@ services:
       context: ../../
       dockerfile: apps/spooky-sidecar/Dockerfile
     ports:
-      - '3000:3000'
+      - '8667:8667'
     environment:
       - RUST_LOG=debug
       - SURREALDB_ADDR=surrealdb:8000/rpc

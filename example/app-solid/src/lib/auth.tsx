@@ -67,7 +67,19 @@ export function AuthProvider(props: { children: JSX.Element }) {
       await db.authenticate(token);
       // Fetch current user ID
       // We use useRemote to execute a raw query to get the authenticated user
-      const [user] = await db.remote.query('SELECT * FROM ONLY user WHERE id = $auth.id').collect<[User]>();
+      // Changed from ONLY to normal select to handle case where user doesn't exist without throwing
+      // Must use .collect() to get the results array from the PendingQuery
+      const result = await db.remote.query('SELECT * FROM user WHERE id = $auth.id LIMIT 1').collect();
+      console.log("[AuthProvider] Raw query result:", result);
+      
+      // Handle potential return types (Array of results vs Single result)
+      // With .collect(), result should be Response[] or Record[]
+      // For SELECT *, it usually returns [[record]] (array of query results, each being array of records)
+      const userResult = Array.isArray(result) ? result[0] : result;
+      // In SurrealDB 2.x JS, result[0] is the result of first query statement, which is generic array of records?
+      // Let's assume result[0] is the array of users found.
+      const users = userResult; 
+      const user = Array.isArray(users) ? users[0] : users;
       console.log("[AuthProvider] Auth check complete, user:", user);
 
       if (user && user.id) {

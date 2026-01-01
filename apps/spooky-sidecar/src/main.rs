@@ -108,7 +108,7 @@ async fn main() -> anyhow::Result<()> {
         .layer(middleware::from_fn(auth_middleware))
         .with_state(state);
 
-    let listener_addr = "0.0.0.0:3000";
+    let listener_addr = "0.0.0.0:8667";
     let listener = tokio::net::TcpListener::bind(listener_addr).await.context("Failed to bind port")?;
     info!("Listening on {}", listener_addr);
     

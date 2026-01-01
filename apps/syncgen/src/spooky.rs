@@ -126,7 +126,7 @@ pub fn generate_spooky_events(
         events.push_str("    };\n");
 
         if is_sidecar {
-            let endpoint = sidecar_endpoint.unwrap_or("http://localhost:3000");
+            let endpoint = sidecar_endpoint.unwrap_or("http://localhost:8667");
             let secret = sidecar_secret.unwrap_or("");
             let url = format!("{}/ingest", endpoint);
 
@@ -192,7 +192,7 @@ pub fn generate_spooky_events(
         events.push_str("    };\n");
 
         if is_sidecar {
-            let endpoint = sidecar_endpoint.unwrap_or("http://localhost:3000");
+            let endpoint = sidecar_endpoint.unwrap_or("http://localhost:8667");
             let secret = sidecar_secret.unwrap_or("");
             let url = format!("{}/ingest", endpoint);
 
