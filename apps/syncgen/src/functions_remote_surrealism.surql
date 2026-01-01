@@ -17,7 +17,16 @@ DEFINE FUNCTION fn::incantation::register($config: object) {
         lastActiveAt: <string>time::now()
     };
     
+    -- Check if Incantation already exists
+    LET $existing = SELECT * FROM type::thing('_spooky_incantation', $config.id);
+
+    IF array::len($existing) > 0 THEN {
+        RETURN { hash: $existing[0].hash, tree: $existing[0].tree };
+    } END;
+
     -- Call DBSP module directly
     mod::dbsp::register_view($module_config);
-    RETURN NONE;
+
+    -- Return empty placeholders
+    RETURN { hash: "", tree: NONE };
 };

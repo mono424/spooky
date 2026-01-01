@@ -14,7 +14,7 @@ services:
       - 0.0.0.0:8000
       - --allow-all
       - --log
-      - info
+      - trace
       - --user
       - root
       - --pass

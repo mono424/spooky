@@ -386,7 +386,11 @@ DEFINE EVENT comment_created ON TABLE comment WHEN \$event = \"CREATE\" THEN
 -- The Registry of active Live Queries (Incantations).
 -- ==================================================
 
-DEFINE TABLE _spooky_incantation SCHEMALESS
+DEFINE TABLE OVERWRITE _spooky_incantation SCHEMALESS
+PERMISSIONS FOR select, create, update, delete WHERE true;
+
+-- Migration Tracker (used by migrate.sh)
+DEFINE TABLE OVERWRITE _spooky_schema SCHEMALESS
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
 -- The raw query string (for re-hydration/debugging)

@@ -16,7 +16,16 @@ DEFINE FUNCTION fn::incantation::register($config: object) {
         lastActiveAt: <string>time::now()
     };
 
+    -- Check if Incantation already exists
+    LET $existing = SELECT * FROM type::thing('_spooky_incantation', $config.id);
+
+    IF array::len($existing) > 0 THEN {
+        RETURN { hash: $existing[0].hash, tree: $existing[0].tree };
+    } END;
+
     -- Call Sidecar via HTTP
     http::post('{{SIDECAR_ENDPOINT}}/view/register', $module_config, { "Authorization": "Bearer {{SIDECAR_SECRET}}" });
-    RETURN NONE;
+    
+    -- Return empty placeholders
+    RETURN { hash: "", tree: NONE };
 };

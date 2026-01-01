@@ -147,7 +147,8 @@ export class SpookySync<S extends SchemaStructure> {
     this.logger.debug({ event }, 'Processing down event');
     switch (event.type) {
       case 'register':
-        return this.registerIncantation(event);
+        await this.registerIncantation(event);
+        return;
       case 'sync':
         const { incantationId, surrealql, params, localTree, localHash, remoteHash, remoteTree } =
           event.payload;
@@ -246,17 +247,21 @@ export class SpookySync<S extends SchemaStructure> {
       clientId: this.clientId,
     };
 
+    const { ttl: _, ...safeConfig } = config;
+
     // Delegate to remote function which handles DBSP registration & persistence
-    await this.remote.query('fn::incantation::register($config)', {
-      config,
-    });
+    const [{ hash, tree }] = await this.remote.query<[{ hash: string; tree: any }]>(
+      'fn::incantation::register($config)',
+      {
+        config: safeConfig,
+      }
+    );
 
     this.logger.debug(
-      { incantationId: incantationId.toString() },
-      'createdRemoteIncantation (async)'
+      { incantationId: incantationId.toString(), hash, tree },
+      'createdRemoteIncantation'
     );
-    // Return empty placeholders; true sync happens via Live Query updates
-    return { hash: '', tree: null };
+    return { hash, tree };
   }
 
   private async syncIncantation({
