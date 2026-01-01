@@ -169,6 +169,8 @@ fn main() -> Result<()> {
     let meta_tables = include_str!("meta_tables.surql");
     let meta_tables_remote = include_str!("meta_tables_remote.surql");
     let functions_remote = include_str!("functions_remote.surql");
+    let functions_remote_sidecar = include_str!("functions_remote_sidecar.surql");
+    let functions_remote_surrealism = include_str!("functions_remote_surrealism.surql");
     let meta_tables_client = include_str!("meta_tables_client.surql");
 
     // Include base meta tables
@@ -211,7 +213,38 @@ fn main() -> Result<()> {
         let mut c = content.clone();
         c.push('\n');
         c.push_str(functions_remote);
-        println!("  + Appended functions_remote.surql (post-parse)");
+        println!("  + Appended functions_remote.surql (common)");
+
+        if args.mode == "sidecar" {
+            println!("  → Sidecar mode detected: Using sidecar specific remote functions");
+            let endpoint = args
+                .sidecar_endpoint
+                .as_deref()
+                .unwrap_or("http://localhost:3000");
+            let secret = args.sidecar_secret.as_deref().unwrap_or("");
+
+            // Inject variables into sidecar template
+            let mut sidecar_fn = functions_remote_sidecar.to_string();
+            sidecar_fn = sidecar_fn.replace("{{SIDECAR_ENDPOINT}}", endpoint);
+            sidecar_fn = sidecar_fn.replace("{{SIDECAR_SECRET}}", secret);
+
+            c.push('\n');
+            c.push_str(&sidecar_fn);
+            println!("  + Appended functions_remote_sidecar.surql (injected)");
+
+            // Replace unregister_view (still needed as it's in meta_tables_remote.surql)
+            // We need to match the exact string from meta_tables_remote.surql
+            let unregister_call = "let $result = mod::dbsp::unregister_view(<string>$before.id);";
+            let unregister_http = format!(
+                "let $payload = {{ id: <string>$before.id }};\n    let $result = http::post('{}/unregister_view', $payload, {{ \"Authorization\": \"Bearer {}\" }});",
+                endpoint, secret
+            );
+            c = c.replace(unregister_call, &unregister_http);
+        } else {
+            c.push('\n');
+            c.push_str(functions_remote_surrealism);
+            println!("  + Appended functions_remote_surrealism.surql");
+        }
         c
     } else {
         filtered_schema_content.clone()
@@ -312,7 +345,8 @@ fn main() -> Result<()> {
         );
 
         // Generate code
-        let generator = CodeGenerator::new_with_header(output_format, !args.no_header);
+        let include_modules = args.mode == "surrealism";
+        let generator = CodeGenerator::new(output_format, !args.no_header, include_modules);
         let output_content = generator
             .generate_with_schema(
                 &json_schema_string,
@@ -333,7 +367,7 @@ fn main() -> Result<()> {
             OutputFormat::Surql => "SurrealQL",
         };
 
-        if matches!(output_format, OutputFormat::Surql) {
+        if matches!(output_format, OutputFormat::Surql) && args.mode == "surrealism" {
             // Compile and bundle modules
             // Output dir is the directory containing args.output
             if let Some(output_dir) = args.output.parent() {

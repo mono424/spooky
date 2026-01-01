@@ -29,14 +29,20 @@ impl OutputFormat {
 pub struct CodeGenerator {
     format: OutputFormat,
     include_header: bool,
+    include_modules: bool,
 }
 
 impl CodeGenerator {
-    pub fn new_with_header(format: OutputFormat, include_header: bool) -> Self {
+    pub fn new(format: OutputFormat, include_header: bool, include_modules: bool) -> Self {
         Self {
             format,
             include_header,
+            include_modules,
         }
+    }
+
+    pub fn new_with_header(format: OutputFormat, include_header: bool) -> Self {
+        Self::new(format, include_header, true) // Default to true for backward compat
     }
 
     pub fn generate(&self, json_schema_content: &str, _top_level_name: &str) -> Result<String> {
@@ -57,16 +63,18 @@ impl CodeGenerator {
             OutputFormat::Surql => {
                 let mut schema = String::new();
 
-                // Add module definitions section
-                schema.push_str("\n-- ==================================================\n");
-                schema.push_str("-- SURREALISM MODULES\n");
-                schema.push_str("-- ==================================================\n");
-                schema.push_str("\n-- Define bucket for module files\n");
-                schema.push_str("DEFINE BUCKET IF NOT EXISTS modules BACKEND \"file:/modules\";\n\n");
-                schema.push_str("-- Define the XOR module\n");
-                schema.push_str("DEFINE MODULE mod::xor AS f\"modules:/xor_module.surli\";\n\n");
-                schema.push_str("-- Define the DBSP module\n");
-                schema.push_str("DEFINE MODULE mod::dbsp AS f\"modules:/dbsp_module.surli\";\n\n");
+                if self.include_modules {
+                    // Add module definitions section
+                    schema.push_str("\n-- ==================================================\n");
+                    schema.push_str("-- SURREALISM MODULES\n");
+                    schema.push_str("-- ==================================================\n");
+                    schema.push_str("\n-- Define bucket for module files\n");
+                    schema.push_str("DEFINE BUCKET IF NOT EXISTS modules BACKEND \"file:/modules\";\n\n");
+                    schema.push_str("-- Define the XOR module\n");
+                    schema.push_str("DEFINE MODULE mod::xor AS f\"modules:/xor_module.surli\";\n\n");
+                    schema.push_str("-- Define the DBSP module\n");
+                    schema.push_str("DEFINE MODULE mod::dbsp AS f\"modules:/dbsp_module.surli\";\n\n");
+                }
 
                 // Add the main schema content
                 schema.push_str(raw_schema.unwrap_or(""));
