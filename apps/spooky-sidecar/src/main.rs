@@ -237,7 +237,7 @@ async fn register_view_handler(
     let result_update = update.unwrap_or_else(|| spooky_stream_processor::service::view::default_result(&data.plan.id));
 
     let m = &data.metadata;
-    let query = "UPSERT type::thing('_spooky_incantation', $id) SET hash = $hash, tree = $tree, clientId = $clientId, surrealQL = $surrealQL, params = $params, ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt";
+    let query = "UPSERT type::thing('_spooky_incantation', $id) SET hash = <string>$hash, tree = $tree, clientId = <string>$clientId, surrealQL = <string>$surrealQL, params = $params, ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt";
     
     let raw_id = m["id"].as_str().unwrap();
     let id_str = raw_id.strip_prefix("_spooky_incantation:").unwrap_or(raw_id).to_string();
@@ -309,8 +309,14 @@ async fn version_handler() -> Json<Value> {
     Json(json!("0.1.0"))
 }
 
+#[derive(Debug, Deserialize)]
+struct IncantationUpdateResult {
+    id: surrealdb::sql::Thing,
+    hash: String,
+}
+
 async fn update_incantation_in_db(db: &Surreal<Client>, update: &MaterializedViewUpdate) {
-    let query = "UPDATE type::thing('_spooky_incantation', $id) SET hash = $hash, tree = $tree RETURN AFTER";
+    let query = "UPDATE type::thing('_spooky_incantation', $id) SET hash = <string>$hash, tree = $tree RETURN AFTER";
     let raw_id = &update.query_id;
     let id_str = raw_id.strip_prefix("_spooky_incantation:").unwrap_or(raw_id).to_string();
     
@@ -323,8 +329,8 @@ async fn update_incantation_in_db(db: &Surreal<Client>, update: &MaterializedVie
         .await 
     {
         Ok(mut response) => {
-            // Check if we got a record back, using Vec<surrealdb::sql::Value> to handle the result set array
-            match response.take::<Vec<surrealdb::sql::Value>>(0) {
+            // Use a typed struct to avoid serde issues with generic Value enum variants
+            match response.take::<Vec<IncantationUpdateResult>>(0) {
                 Ok(records) => {
                     if !records.is_empty() {
                          debug!("Successfully updated incantation: {:?}", records[0]);
