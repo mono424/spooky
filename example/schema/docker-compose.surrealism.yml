@@ -33,8 +33,6 @@ services:
     depends_on:
       surrealdb:
         condition: service_healthy
-      spooky-sidecar:
-        condition: service_started
     volumes:
       - ./.spooky/remote-sidecar.gen.surql:/remote.gen.surql:ro
       - ./migrate.sh:/migrate.sh:ro
