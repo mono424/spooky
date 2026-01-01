@@ -1,6 +1,6 @@
 services:
   surrealdb:
-    image: surrealdb/surrealdb:v3.0.0-beta.1
+    image: surrealdb/surrealdb:v2.1.2
     ports:
       - '8666:8000'
     environment:
@@ -10,6 +10,8 @@ services:
       - SURREAL_BUCKET_FOLDER_ALLOWLIST=/modules
     command:
       - start
+      - --bind
+      - 0.0.0.0:8000
       - --allow-all
       - --log
       - info
@@ -36,7 +38,7 @@ services:
       - '3000:3000'
     environment:
       - RUST_LOG=debug
-      - SURREALDB_ADDR=ws://surrealdb:8000
+      - SURREALDB_ADDR=surrealdb:8000/rpc
       - SURREALDB_NS=main
       - SURREALDB_DB=main
       - SURREALDB_USER=root
@@ -58,12 +60,7 @@ services:
       spooky-sidecar:
         condition: service_started
     volumes:
-      - ./.spooky/remote.gen.surql:/remote.gen.surql:ro
-    command: >
-      sh -c "curl -X POST http://surrealdb:8000/sql
-      -H 'Accept: application/json'
-      -H 'surreal-ns: main'
-      -H 'surreal-db: main'
-      -u root:root
-      --data-binary @/remote.gen.surql && echo 'Schema migration completed successfully'"
+      - ./.spooky/remote-sidecar.gen.surql:/remote.gen.surql:ro
+      - ./migrate.sh:/migrate.sh:ro
+    command: ['sh', '/migrate.sh']
     restart: 'no'

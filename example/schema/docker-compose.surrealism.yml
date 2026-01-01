@@ -33,13 +33,10 @@ services:
     depends_on:
       surrealdb:
         condition: service_healthy
+      spooky-sidecar:
+        condition: service_started
     volumes:
-      - ./.spooky/remote.gen.surql:/remote.gen.surql:ro
-    command: >
-      sh -c "curl -X POST http://surrealdb:8000/sql
-      -H 'Accept: application/json'
-      -H 'surreal-ns: main'
-      -H 'surreal-db: main'
-      -u root:root
-      --data-binary @/remote.gen.surql && echo 'Schema migration completed successfully'"
+      - ./.spooky/remote-sidecar.gen.surql:/remote.gen.surql:ro
+      - ./migrate.sh:/migrate.sh:ro
+    command: ['sh', '/migrate.sh']
     restart: 'no'
