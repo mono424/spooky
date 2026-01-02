@@ -239,7 +239,7 @@ export class SpookySync<S extends SchemaStructure> {
     ttl: string | Duration
   ) {
     const config = {
-      id: incantationId,
+      id: incantationId.id,
       surrealQL: surrealql,
       params,
       ttl: typeof ttl === 'string' ? new Duration(ttl) : ttl,

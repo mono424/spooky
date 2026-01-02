@@ -47,14 +47,48 @@ pub fn fix_surql_json(s: &str) -> String {
 pub fn normalize_record(record: Value) -> Value {
     match record {
         Value::String(s) => {
-            let parsed = serde_json::from_str::<Value>(&s).unwrap_or(Value::Null);
-            println!("DEBUG: normalize_record parsed string record: {:?}", parsed);
-            parsed
+             // Try to parse string as JSON, if it looks like it
+             // But be careful not to double parse simple strings
+             if (s.starts_with('{') && s.ends_with('}')) || (s.starts_with('[') && s.ends_with(']')) {
+                 if let Ok(parsed) = serde_json::from_str::<Value>(&s) {
+                     // Recurse on the parsed value
+                     return normalize_record(parsed);
+                 }
+             }
+             // Otherwise return the string as is (SurrealDB string IDs are just strings)
+             Value::String(s)
         },
-        _ => {
-            println!("DEBUG: normalize_record received direct record: {:?}", record);
-            record
-        }
+        Value::Object(map) => {
+            // Check for SurrealDB Record ID object format { tb: "table", id: "id" }
+            if map.len() == 2 && map.contains_key("tb") && map.contains_key("id") {
+                let tb = map.get("tb").and_then(|v| v.as_str());
+                let id = map.get("id");
+                
+                if let (Some(tb_str), Some(id_val)) = (tb, id) {
+                    let id_str = match id_val {
+                        Value::String(s) => s.clone(),
+                        Value::Number(n) => n.to_string(),
+                         _ => id_val.to_string() 
+                    };
+                    
+                    // Format: table:id
+                    // Note: If id already contains table prefix (which happens sometimes), don't double it?
+                    // But standard { tb: "t", id: "i" } usually means t:i
+                    return Value::String(format!("{}:{}", tb_str, id_str));
+                }
+            }
+            
+            // Otherwise recurse on all fields
+            let mut new_map = serde_json::Map::new();
+            for (k, v) in map {
+                new_map.insert(k, normalize_record(v));
+            }
+            Value::Object(new_map)
+        },
+        Value::Array(arr) => {
+            Value::Array(arr.into_iter().map(normalize_record).collect())
+        },
+        _ => record
     }
 }
 

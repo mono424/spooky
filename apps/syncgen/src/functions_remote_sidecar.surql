@@ -17,7 +17,7 @@ DEFINE FUNCTION fn::incantation::register($config: object) {
     };
 
     -- Check if Incantation already exists
-    LET $inc_id = type::record('_spooky_incantation', $config.id);
+    LET $inc_id = <record>('_spooky_incantation:' + <string>$config.id);
     LET $existing = SELECT * FROM $inc_id;
 
     IF array::len($existing) > 0 THEN {
