@@ -1,175 +1,247 @@
 # Flutter SurrealDB Engine
 
-A powerful, high-performance Flutter plugin that embeds **SurrealDB** directly into your application using Rust and Dart FFI.
+![SurrealDB + Flutter](https://raw.githubusercontent.com/surrealdb/surrealdb/main/img/wide.png)
 
-`flutter_surrealdb_engine` allows you to run a full SurrealDB instance locally on your device (iOS, Android, macOS, Windows, Linux) without needing a separate server, or connect to a remote instance with the same API.
+[![Pub Version](https://img.shields.io/pub/v/flutter_surrealdb_engine)](https://pub.dev/packages/flutter_surrealdb_engine)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-## Features
+**The ultimate SurrealDB integration for Flutter.** 
 
-- 🚀 **Embedded SurrealDB**: Run SurrealDB in-memory or on-disk directly within your Flutter app.
-- 🌐 **Remote Connection**: Connect to remote SurrealDB instances via WebSocket/HTTP.
-- ⚡ **High Performance**: Built with Rust and `flutter_rust_bridge` for near-native performance.
-- 🛠 **Dev Sidecar**: Spawn a local sidecar server for development and debugging.
-- 🔒 **Authentication**: Built-in support for Signup, Signin, and JWT authentication.
-- 📦 **ACID Transactions**: Full support for transactions and complex queries.
+Embed a full SurrealDB instance directly into your iOS, Android, macOS, Windows, and Linux apps, or connect to a remote server with a unified, high-performance API.
 
-## Architecture
+---
+
+## ⚡ Features
+
+*   **📱 Embedded Engine**: Run SurrealDB locally on-device. No internet required.
+*   **🔄 Sync Ready**: Perfect foundation for offline-first apps that sync when online.
+*   **🚀 High Performance**: Zero-copy (where possible) FFI bridge to the official Rust core.
+*   **🛠 Type-Safe Queries**: strict schema support with client-side RecordID parsing.
+*   **📡 Live Queries**: Real-time subscriptions to table changes.
+*   **🔐 Auth & Security**: Built-in JWT handling, Scope authentication, and RBAC.
+
+---
+
+## 🏗 Architecture
+
+`flutter_surrealdb_engine` bridges the gap between Dart and the high-performance Rust core of SurrealDB.
 
 ```mermaid
-graph TD
-    Dart["Flutter App (Dart)"]
-    FFI["Dart FFI Bridge"]
-    Rust["Rust Engine (flutter_surrealdb_engine)"]
-    Surreal["SurrealDB Instance"]
+flowchart TD
+    subgraph Flutter["Flutter Application"]
+        UI[UI Widgets]
+        DartSDK[Dart SDK Wrapper]
+    end
 
-    Dart <-->|Calls| FFI
-    FFI <-->|Invokes| Rust
-    Rust <-->|Embeds/Connects| Surreal
+    subgraph Bridge["FFI Layer (flutter_rust_bridge)"]
+        CAPI[C-API Interface]
+        Converter[Type Converter]
+    end
+
+    subgraph Rust["Rust Engine"]
+        Core[SurrealDB Core]
+        Storage[(Storage Engine)]
+        Remote[Remote Client]
+    end
+
+    UI -->|Calls| DartSDK
+    DartSDK <-->|FFI| CAPI
+    CAPI <--> Converter
+    Converter <-->|Action| Core
+    Core <-->|Reads/Writes| Storage
+    Core <-->|WebSocket| Remote
 ```
 
-## Installation
+### How it Works
 
-Add `flutter_surrealdb_engine` to your `pubspec.yaml`:
+1.  **Dart Layer**: You interact with a clean, idiomatic Dart API (`SurrealDb`).
+2.  **FFI Bridge**: Calls are significantly faster than MethodChannels because they compile directly to native machine code.
+3.  **Rust Middleware**: We've implemented a smart middleware (via `queryTyped`) that intercepts your Dart objects (like `RecordId`) and converts them into native SurrealDB types before they even hit the database engine.
+4.  **Engine**: The query is executed by the actual embedded SurrealDB library (the exactly same one running on servers).
+
+---
+
+## 🚀 Getting Started
+
+### 1. Installation
+
+Add the package to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  flutter_surrealdb_engine:
-    path: packages/flutter_surrealdb_engine # or git url
+  flutter_surrealdb_engine: ^0.1.0
 ```
 
-## Usage
+### 2. Initialization
 
-### 1. Initialization
-
-Before using the library, you must initialize the Rust bridge. This is typically done in your `main()` function.
+Initialize the Rust bridge in your `main.dart` before running the app.
 
 ```dart
 import 'package:flutter_surrealdb_engine/flutter_surrealdb_engine.dart';
 
 void main() async {
-  // Initialize the Rust bridge
+  WidgetsFlutterBinding.ensureInitialized();
+  
+  // Initialize the native rust library
   await RustLib.init();
   
   runApp(const MyApp());
 }
 ```
 
-### 2. Connecting to a Database
+---
 
-You can connect to an in-memory database, a local file-based database, or a remote server.
+## 💡 Usage Examples
 
-#### In-Memory (Ephemeral)
-Great for testing or temporary data.
+### Connecting
+
+Choose your storage strategy based on your use case.
 
 ```dart
+// 1. In-Memory (Great for testing/cache)
 final db = await SurrealDb.connect(
   mode: const StorageMode.memory(),
 );
-```
 
-#### File-Based (Persistent)
-Stores data locally on the device.
-
-```dart
+// 2. Persistent Local Storage (Offline-first apps)
 final db = await SurrealDb.connect(
-  mode: const StorageMode.disk(path: '/path/to/database.db'),
+  mode: const StorageMode.disk(path: 'docs/my_app.db'),
 );
-```
 
-#### Remote Server
-Connect to an existing SurrealDB instance.
-
-```dart
+// 3. Remote Server (Traditional backend)
 final db = await SurrealDb.connect(
-  mode: const StorageMode.remote(url: 'ws://localhost:8000'),
+  mode: const StorageMode.remote(url: 'ws://localhost:8000/rpc'),
 );
 ```
 
-### 3. Authentication & Setup
+### Authentication
 
-Once connected, you typically need to sign in and select a namespace/database.
+Support for both root (admin) access and scoped user authentication.
 
 ```dart
-// Select Namespace and Database
-await db.useDb(namespace: 'test', database: 'test');
-
-// Sign Up (Create new user)
-final token = await db.signup(
-  credentialsJson: '{"user": "root", "pass": "root", "NS": "test", "DB": "test", "SC": "user"}',
+// Admin Access
+await db.signin(
+  creds: jsonEncode({"user": "root", "pass": "root"}),
 );
 
-// Sign In (Existing user)
+// User Authentication (Scope)
 final token = await db.signin(
-  credentialsJson: '{"user": "root", "pass": "root", "NS": "test", "DB": "test", "SC": "user"}',
+  creds: jsonEncode({
+    "NS": "my_ns",
+    "DB": "my_db",
+    "SC": "user_scope",
+    "user": "john_doe",
+    "pass": "123456",
+  }),
 );
 ```
 
-### 4. CRUD Operations
+### CRUD Operations
 
-Perform standard Create, Read, Update, Delete operations.
+Standard operations are simple and async.
 
 ```dart
-// Create a new record
-final created = await db.create(
-  resource: 'person',
-  data: '{"name": "John Doe", "age": 30}',
+// CREATE
+final user = await db.create(
+  resource: 'user', 
+  data: jsonEncode({'name': 'John', 'role': 'admin'}),
 );
 
-// Select records
-final people = await db.select(resource: 'person');
+// SELECT
+final users = await db.select(resource: 'user');
 
-// Update a record
-final updated = await db.update(
-  resource: 'person:ow485n29',
-  data: '{"name": "John Smith", "age": 31}',
+// UPDATE
+await db.merge(
+  resource: 'user:john', 
+  data: jsonEncode({'active': true}),
 );
 
-// Delete a record
-await db.delete(resource: 'person:ow485n29');
+// DELETE
+await db.delete(resource: 'user:john');
 ```
 
-### 5. Custom Queries
+---
 
-Execute raw SurrealQL queries.
+## 🧠 Advanced: Typed Queries & Strict Schemas
+
+If your database uses `SCHEMAFULL` with strictly typed `record<table_name>` fields, generic JSON strings won't pass validation. 
+
+Use **`queryTyped`** and the **`RecordId`** helper class to solve this.
+
+### The Problem
+Sending `author: "user:123"` in a JSON string gets interpreted as a simple String, causing a schema mismatch error.
+
+### The Solution
 
 ```dart
-final result = await db.query(
-  sql: 'SELECT * FROM person WHERE age > \$age',
-  vars: '{"age": 25}',
+import 'package:flutter_surrealdb_engine/flutter_surrealdb_engine.dart';
+
+// 1. Create a strongly typed RecordId
+final authorId = RecordId.fromString("user:123");
+
+// 2. Use queryTyped
+await db.queryTyped(
+  sql: "CREATE post CONTENT $data",
+  vars: jsonEncode({
+    "data": {
+      "title": "My Deep Dive",
+      // This is automatically converted to a native Record Link!
+      "author": authorId 
+    }
+  }),
 );
 ```
 
-### 6. Transactions
+**Sequence Diagram:**
 
-You can run multiple queries within a single transaction.
+```mermaid
+sequenceDiagram
+    participant Dart
+    participant Middleware
+    participant SurrealDB
+    
+    Dart->>Middleware: queryTyped(vars: { author: {"table":"user", "key":"123"} })
+    Note over Middleware: Detects RecordId Structure
+    Middleware->>Middleware: Converts JSON -> types::RecordId
+    Middleware->>SurrealDB: Execute Query with Native Types
+    SurrealDB-->>Dart: Success (Record Link Verified)
+```
+
+---
+
+## 📡 Live Queries (Realtime)
+
+Subscribe to changes in real-time. This works for both local and remote databases!
 
 ```dart
-await db.transaction(
-  statements: '''
-    CREATE person:1 CONTENT { name: 'Alice' };
-    CREATE person:2 CONTENT { name: 'Bob' };
-    RELATE person:1->knows->person:2;
-  ''',
+final stream = db.liveQuery(
+  tableName: 'notification',
+  snapshot: true, // Get existing data first?
 );
+
+stream.listen((event) {
+  switch (event.action) {
+    case Action.CREATE:
+      print("New notification: ${event.result}");
+      break;
+    case Action.UPDATE:
+      print("Updated notification: ${event.result}");
+      break;
+    case Action.DELETE:
+      print("Deleted notification: ${event.result}");
+      break;
+  }
+});
 ```
 
-## API Reference
+---
 
-| Method | Description |
-|--------|-------------|
-| `connect` | Establishes a connection to the database (Memory, Disk, or Remote). |
-| `useDb` | Selects the namespace and database to use. |
-| `signup` | Registers a new user and returns a sequence token. |
-| `signin` | Authenticates an existing user and returns a token. |
-| `invalidate` | Invalidates the current session/authentication. |
-| `query` | Executes a raw SurrealQL query with optional variables. |
-| `select` | Selects all records from a table or a specific record ID. |
-| `create` | Creates a new record. |
-| `update` | Updates an existing record. |
-| `merge` | Merges data into an existing record. |
-| `delete` | Deletes a record or table. |
-| `export_` | Exports the database to a file (only for local instances). |
+## 🤝 Contributing
 
-## License
+We welcome contributions! Please open an issue or submit a PR.
 
-MIT
+1.  Fork the repo
+2.  Create your feature branch (`git checkout -b feature/amazing-feature`)
+3.  Commit your changes (`git commit -m 'Add some amazing feature'`)
+4.  Push to the branch (`git push origin feature/amazing-feature`)
+5.  Open a Pull Request
