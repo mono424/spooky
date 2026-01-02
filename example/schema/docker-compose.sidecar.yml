@@ -14,7 +14,7 @@ services:
       - 0.0.0.0:8000
       - --allow-all
       - --log
-      - info
+      - trace
       - --user
       - root
       - --pass
@@ -35,7 +35,7 @@ services:
       context: ../../
       dockerfile: apps/spooky-sidecar/Dockerfile
     ports:
-      - '3000:3000'
+      - '8667:8667'
     environment:
       - RUST_LOG=debug
       - SURREALDB_ADDR=surrealdb:8000/rpc
@@ -50,6 +50,8 @@ services:
     depends_on:
       surrealdb:
         condition: service_healthy
+      schema-migration:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   schema-migration:
@@ -57,8 +59,6 @@ services:
     depends_on:
       surrealdb:
         condition: service_healthy
-      spooky-sidecar:
-        condition: service_started
     volumes:
       - ./.spooky/remote-sidecar.gen.surql:/remote.gen.surql:ro
       - ./migrate.sh:/migrate.sh:ro

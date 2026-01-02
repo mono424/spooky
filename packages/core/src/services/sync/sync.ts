@@ -147,7 +147,8 @@ export class SpookySync<S extends SchemaStructure> {
     this.logger.debug({ event }, 'Processing down event');
     switch (event.type) {
       case 'register':
-        return this.registerIncantation(event);
+        await this.registerIncantation(event);
+        return;
       case 'sync':
         const { incantationId, surrealql, params, localTree, localHash, remoteHash, remoteTree } =
           event.payload;
@@ -238,7 +239,7 @@ export class SpookySync<S extends SchemaStructure> {
     ttl: string | Duration
   ) {
     const config = {
-      id: incantationId,
+      id: incantationId.id,
       surrealQL: surrealql,
       params,
       ttl: typeof ttl === 'string' ? new Duration(ttl) : ttl,
@@ -246,7 +247,7 @@ export class SpookySync<S extends SchemaStructure> {
       clientId: this.clientId,
     };
 
-    const safeConfig = JSON.parse(JSON.stringify(config));
+    const { ttl: _, ...safeConfig } = config;
 
     // Delegate to remote function which handles DBSP registration & persistence
     const [{ hash, tree }] = await this.remote.query<[{ hash: string; tree: any }]>(

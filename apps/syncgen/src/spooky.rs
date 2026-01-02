@@ -126,7 +126,7 @@ pub fn generate_spooky_events(
         events.push_str("    };\n");
 
         if is_sidecar {
-            let endpoint = sidecar_endpoint.unwrap_or("http://localhost:3000");
+            let endpoint = sidecar_endpoint.unwrap_or("http://localhost:8667");
             let secret = sidecar_secret.unwrap_or("");
             let url = format!("{}/ingest", endpoint);
 
@@ -144,13 +144,16 @@ pub fn generate_spooky_events(
 
             // Construct HTTP call
             events.push_str(&format!(
-                 "    LET $res = http::post('{}', $payload, {{ \"Authorization\": \"Bearer {}\" }});\n",
-                 url, secret
-             ));
+                "    http::post('{}', $payload, {{ \"Authorization\": \"Bearer {}\" }});\n",
+                url, secret
+            ));
         } else {
             // Surrealism / WASM Mode
-            events.push_str(&format!("    LET $dbsp_ok = mod::dbsp::ingest('{}', $event, <string>($after.id OR \"\"), $plain_after);\n", table_name));
-            events.push_str("    LET $saved = mod::dbsp::save_state(NONE);\n");
+            events.push_str(&format!(
+                "    mod::dbsp::ingest('{}', $event, <string>($after.id OR \"\"), $plain_after);\n",
+                table_name
+            ));
+            events.push_str("    mod::dbsp::save_state(NONE);\n");
         }
 
         events.push_str("};\n\n");
@@ -192,7 +195,7 @@ pub fn generate_spooky_events(
         events.push_str("    };\n");
 
         if is_sidecar {
-            let endpoint = sidecar_endpoint.unwrap_or("http://localhost:3000");
+            let endpoint = sidecar_endpoint.unwrap_or("http://localhost:8667");
             let secret = sidecar_secret.unwrap_or("");
             let url = format!("{}/ingest", endpoint);
 
@@ -205,12 +208,12 @@ pub fn generate_spooky_events(
             events.push_str("    };\n");
 
             events.push_str(&format!(
-                 "    LET $res = http::post('{}', $payload, {{ \"Authorization\": \"Bearer {}\" }});\n",
-                 url, secret
-             ));
+                "    http::post('{}', $payload, {{ \"Authorization\": \"Bearer {}\" }});\n",
+                url, secret
+            ));
         } else {
-            events.push_str(&format!("    LET $dbsp_ok = mod::dbsp::ingest('{}', \"DELETE\", <string>($before.id OR \"\"), $plain_before);\n", table_name));
-            events.push_str("    LET $saved = mod::dbsp::save_state(NONE);\n");
+            events.push_str(&format!("    mod::dbsp::ingest('{}', \"DELETE\", <string>($before.id OR \"\"), $plain_before);\n", table_name));
+            events.push_str("    mod::dbsp::save_state(NONE);\n");
         }
 
         events.push_str("};\n\n");

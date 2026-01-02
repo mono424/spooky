@@ -34,7 +34,7 @@ ENV RUST_LOG=info
 ENV SPOOKY_PERSISTENCE_FILE=/data/spooky_state.json
 
 # Expose port
-EXPOSE 3000
+EXPOSE 8667
 
 # Command to run
 CMD ["spooky-sidecar"]

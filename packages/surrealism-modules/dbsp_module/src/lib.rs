@@ -55,7 +55,7 @@ fn ingest(
     })?;
 
     // Return success but no updates payload (managed internally now)
-    Ok(serde_json::to_value(json!({ "updates": [] })).unwrap())
+    Ok(Value::Null)
 }
 
 #[surrealism]
@@ -103,14 +103,11 @@ fn register_view(config: Value) -> Result<Value, &'static str> {
 
         persistence::save(circuit);
 
-        // Return hash and tree
-        json!({
-            "hash": hash,
-            "tree": tree
-        })
+        // Return nothing, just updating internal state
+        Value::Null
     })?;
 
-    Ok(result)
+    Ok(Value::Null)
 }
 
 #[surrealism]
@@ -119,7 +116,7 @@ fn unregister_view(id: String) -> Result<Value, &'static str> {
         circuit.unregister_view(&id);
         persistence::save(circuit);
     })?;
-    Ok(json!({ "msg": "Unregistered", "id": id }))
+    Ok(Value::Null)
 }
 
 #[surrealism]
