@@ -7,6 +7,7 @@ export 'src/rust/api/client.dart' show StorageMode;
 export 'src/rust/frb_generated.dart' show RustLib;
 export 'src/rust/api/live_query/models.dart';
 export 'src/surreal_query.dart';
+export 'src/models/record_id.dart';
 import 'src/surreal_query.dart';
 
 /// Wrapper around the generated SurrealDb to provide enhanced functionality
@@ -102,6 +103,9 @@ class SurrealDb {
 
   Future<String> query({required String sql, String? vars}) =>
       _inner.query(sql: sql, vars: vars);
+
+  Future<String> queryTyped({required String sql, String? vars}) =>
+      _inner.queryTyped(sql: sql, vars: vars);
 
   Future<void> queryBegin() => _inner.queryBegin();
 

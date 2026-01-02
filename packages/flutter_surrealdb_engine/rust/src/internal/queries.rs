@@ -1,39 +1,39 @@
 use surrealdb::Surreal;
-
-use std::collections::HashMap;
 use anyhow::Result;
-use crate::frb_generated::StreamSink;
-use surrealdb::types::Value;
-// use surrealdb::IndexedResults;
-
-// Hilfsfunktion: Nimmt &str (Referenz), um unnötiges Klonen zu vermeiden
-fn parse_vars(vars: Option<&str>) -> Result<HashMap<String, serde_json::Value>> {
-    match vars {
-        // Wenn String da ist und nicht leer -> Parsen
-        Some(v) if !v.is_empty() => Ok(serde_json::from_str(v)?),
-        // Wenn None oder leer -> Leere Map
-        _ => Ok(HashMap::new()),
-    }
-}
+use crate::internal::converter; 
 
 // Hauptfunktion: Nimmt Option<String>, weil das gut für FFI/Bridge ist
+// Classic Query: Binds JSON as generic Map (No Value conversion)
 pub async fn query<C: surrealdb::Connection>(db: &Surreal<C>, sql: String, vars: Option<String>) -> Result<String> {
     let mut query = db.query(sql);
-
-    // Hier wandeln wir Option<String> in Option<&str> um mit .as_deref()
-    let parsed_vars = parse_vars(vars.as_deref())?;
+    let parsed_vars = converter::parse_vars(vars.as_deref())?;
     
     for (key, value) in parsed_vars {
         query = query.bind((key, value));
     }
 
     let mut response: surrealdb::IndexedResults = query.await?;
+    process_results(response)
+}
+
+// Typed Query: Uses json_to_surreal middleware for RecordId conversion
+pub async fn query_typed<C: surrealdb::Connection>(db: &Surreal<C>, sql: String, vars: Option<String>) -> Result<String> {
+    let mut query = db.query(sql);
+
+    // Hier wandeln wir Option<String> in Option<&str> um mit .as_deref()
+    let parsed_vars = converter::parse_vars(vars.as_deref())?;
     
-    // In v3, IndexedResults might be a Map <usize, QueryResult> or Vec.
-    // Error suggested it yields tuples (usize, ...).
-    // Let's assume it is a Map or just iterate values if possible.
-    // If it is a BTreeMap<usize, QueryResult>, into_iter yields (usize, QueryResult).
-    
+    for (key, value) in parsed_vars {
+        let surreal_val = converter::json_to_surreal(value);
+        query = query.bind((key, surreal_val));
+    }
+
+    let mut response: surrealdb::IndexedResults = query.await?;
+    process_results(response)
+}
+
+// Helper to avoid duplication in result processing
+fn process_results(response: surrealdb::IndexedResults) -> Result<String> {
     let results = response.results;
     let mut output = Vec::with_capacity(results.len());
 
@@ -58,11 +58,10 @@ pub async fn transaction<C: surrealdb::Connection>(db: &Surreal<C>, statements: 
     let stmts: Vec<String> = serde_json::from_str(&statements)?;
     let joined = stmts.join("; ");
     let sql = format!("BEGIN TRANSACTION; {}; COMMIT TRANSACTION;", joined);
-    // Hier geben wir vars einfach weiter
+    // Uses classic query by default
     query(db, sql, vars).await
 }
 
-// Die Helfer bleiben gleich...
 pub async fn query_begin<C: surrealdb::Connection>(db: &Surreal<C>) -> Result<()> {
     db.query("BEGIN TRANSACTION").await?;
     Ok(())

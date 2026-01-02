@@ -63,7 +63,7 @@ class SurrealQuery implements Future<String> {
     final stream = _db.liveQuery(tableName: _resource, snapshot: true);
 
     late StreamController<List<T>> controller;
-    final Map<String, T> _items = {};
+    final Map<String, T> items = {};
 
     controller = StreamController<List<T>>(
       onListen: () {
@@ -80,7 +80,7 @@ class SurrealQuery implements Future<String> {
                   try {
                     final List<dynamic> list = jsonDecode(event.result);
                     print("QUERY: Snapshot List Size: ${list.length}");
-                    _items.clear();
+                    items.clear();
                     for (var item in list) {
                       if (item is Map<String, dynamic>) {
                         final rawId = item['id'] as String?;
@@ -88,7 +88,7 @@ class SurrealQuery implements Future<String> {
                           final id = _sanitizeId(rawId);
                           // Update item ID if needed (optional, but good for consistency)
                           item['id'] = id;
-                          _items[id] = fromJson(item);
+                          items[id] = fromJson(item);
                         } else {
                           print(
                             "QUERY WARNING: Item in snapshot has no ID: $item",
@@ -96,7 +96,7 @@ class SurrealQuery implements Future<String> {
                         }
                       }
                     }
-                    controller.add(_items.values.toList());
+                    controller.add(items.values.toList());
                     print("QUERY: Snapshot processed. Controller updated.");
                   } catch (e) {
                     print("QUERY ERROR (Snapshot): $e");
@@ -113,8 +113,8 @@ class SurrealQuery implements Future<String> {
                       final id = _sanitizeId(rawId);
                       print("QUERY: Upserting ID: $id (Raw: $rawId)");
                       item['id'] = id; // Ensure generic map has clean ID
-                      _items[id] = fromJson(item);
-                      controller.add(_items.values.toList());
+                      items[id] = fromJson(item);
+                      controller.add(items.values.toList());
                     } else {
                       print("QUERY WARNING: Create/Update has no ID: $item");
                     }
@@ -143,13 +143,13 @@ class SurrealQuery implements Future<String> {
                   if (id != null) {
                     id = _sanitizeId(id);
                     print("QUERY: Removing item: $id");
-                    if (_items.containsKey(id)) {
-                      _items.remove(id);
-                      controller.add(_items.values.toList());
-                      print("QUERY: Item removed. List size: ${_items.length}");
+                    if (items.containsKey(id)) {
+                      items.remove(id);
+                      controller.add(items.values.toList());
+                      print("QUERY: Item removed. List size: ${items.length}");
                     } else {
                       print(
-                        "QUERY WARNING: Tried to delete $id but it was not in the local list. Known IDs: ${_items.keys.join(', ')}",
+                        "QUERY WARNING: Tried to delete $id but it was not in the local list. Known IDs: ${items.keys.join(', ')}",
                       );
                     }
                   } else {

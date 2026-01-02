@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 719217453;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 2130979723;
 
 // Section: executor
 
@@ -955,6 +955,68 @@ fn wire__crate__api__client__SurrealDb_query_commit_impl(
         },
     )
 }
+fn wire__crate__api__client__SurrealDb_query_typed_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "SurrealDb_query_typed",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SurrealDb>,
+            >>::sse_decode(&mut deserializer);
+            let api_sql = <String>::sse_decode(&mut deserializer);
+            let api_vars = <Option<String>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || async move {
+                        let mut api_that_guard = None;
+                        let decode_indices_ =
+                            flutter_rust_bridge::for_generated::lockable_compute_decode_order(
+                                vec![flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                    &api_that, 0, false,
+                                )],
+                            );
+                        for i in decode_indices_ {
+                            match i {
+                                0 => {
+                                    api_that_guard =
+                                        Some(api_that.lockable_decode_async_ref().await)
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
+                        let api_that_guard = api_that_guard.unwrap();
+                        let output_ok = crate::api::client::SurrealDb::query_typed(
+                            &*api_that_guard,
+                            api_sql,
+                            api_vars,
+                        )
+                        .await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
 fn wire__crate__api__client__SurrealDb_select_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -1699,27 +1761,30 @@ fn pde_ffi_dispatcher_primary_impl(
         16 => {
             wire__crate__api__client__SurrealDb_query_commit_impl(port, ptr, rust_vec_len, data_len)
         }
-        17 => wire__crate__api__client__SurrealDb_select_impl(port, ptr, rust_vec_len, data_len),
-        18 => wire__crate__api__client__SurrealDb_signin_impl(port, ptr, rust_vec_len, data_len),
-        19 => wire__crate__api__client__SurrealDb_signup_impl(port, ptr, rust_vec_len, data_len),
-        20 => {
+        17 => {
+            wire__crate__api__client__SurrealDb_query_typed_impl(port, ptr, rust_vec_len, data_len)
+        }
+        18 => wire__crate__api__client__SurrealDb_select_impl(port, ptr, rust_vec_len, data_len),
+        19 => wire__crate__api__client__SurrealDb_signin_impl(port, ptr, rust_vec_len, data_len),
+        20 => wire__crate__api__client__SurrealDb_signup_impl(port, ptr, rust_vec_len, data_len),
+        21 => {
             wire__crate__api__client__SurrealDb_transaction_impl(port, ptr, rust_vec_len, data_len)
         }
-        21 => wire__crate__api__client__SurrealDb_update_impl(port, ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__client__SurrealDb_use_db_impl(port, ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__live_query__models__live_query_event_handshake_impl(
+        22 => wire__crate__api__client__SurrealDb_update_impl(port, ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__client__SurrealDb_use_db_impl(port, ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__live_query__models__live_query_event_handshake_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        24 => wire__crate__api__live_query__manager__live_query_manager_kill_impl(
+        25 => wire__crate__api__live_query__manager__live_query_manager_kill_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        25 => wire__crate__api__models__record_id_new_impl(port, ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__models__record_id_new_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -1732,7 +1797,7 @@ fn pde_ffi_dispatcher_sync_impl(
 ) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
-        26 => wire__crate__api__models__record_id_to_string_impl(ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__models__record_id_to_string_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }

@@ -260,6 +260,11 @@ impl SurrealDb {
         Ok(queries::query(&client, sql, vars).await?)
     }
 
+    pub async fn query_typed(&self, sql: String, vars: Option<String>) -> anyhow::Result<String> {
+        let client = self.get_client().await?;
+        Ok(queries::query_typed(&client, sql, vars).await?)
+    }
+
     pub async fn select(&self, resource: String) -> anyhow::Result<String> {
         let client = self.get_client().await?;
         Ok(crud::select(&client, resource).await?)

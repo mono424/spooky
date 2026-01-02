@@ -112,10 +112,11 @@ class _HomePageState extends State<HomePage> {
     setState(() => _isLoading = true);
     try {
       final res = await action();
-      if (res != null)
+      if (res != null) {
         _log("Result: $res");
-      else
+      } else {
         _log("Success");
+      }
     } catch (e) {
       _log("Error: $e");
     } finally {

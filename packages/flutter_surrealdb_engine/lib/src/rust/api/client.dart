@@ -53,6 +53,8 @@ abstract class SurrealDb implements RustOpaqueInterface {
 
   Future<void> queryCommit();
 
+  Future<String> queryTyped({required String sql, String? vars});
+
   Future<String> select({required String resource});
 
   Future<String> signin({required String creds});
