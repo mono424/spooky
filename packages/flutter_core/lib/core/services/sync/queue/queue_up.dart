@@ -67,7 +67,7 @@ class UpQueue {
   }
 
   Future<void> removeEventFromDatabase(String mutationId) {
-    return local.query("DELETE \$id", vars: {'id': mutationId});
+    return local.query("DELETE type::record(\$id)", vars: {'id': mutationId});
   }
 
   void listenForMutations(EventSystem<dynamic> mutationEvents) {
@@ -80,38 +80,44 @@ class UpQueue {
   }
 
   void _handleMutationPayload(MutationPayload mutation) {
+    final event = _payloadToUpEvent(mutation);
+    if (event != null) push(event);
+  }
+
+  void _addToQueueInternal(MutationPayload mutation) {
+    final event = _payloadToUpEvent(mutation);
+    if (event != null) queue.add(event);
+  }
+
+  UpEvent? _payloadToUpEvent(MutationPayload mutation) {
     switch (mutation.type) {
       case MutationAction.create:
         if (mutation.data != null) {
-          push(
-            CreateEvent(
-              mutation.mutation_id,
-              mutation.record_id,
-              mutation.data!,
-            ),
+          return CreateEvent(
+            mutation.mutation_id,
+            mutation.record_id,
+            mutation.data!,
           );
         }
         break;
       case MutationAction.update:
         if (mutation.data != null) {
-          push(
-            UpdateEvent(
-              mutation.mutation_id,
-              mutation.record_id,
-              mutation.data!,
-            ),
+          return UpdateEvent(
+            mutation.mutation_id,
+            mutation.record_id,
+            mutation.data!,
           );
         }
         break;
       case MutationAction.delete:
-        push(DeleteEvent(mutation.mutation_id, mutation.record_id));
-        break;
+        return DeleteEvent(mutation.mutation_id, mutation.record_id);
     }
+    return null;
   }
 
   Future<void> loadFromDatabase() async {
     try {
-      final resStr = await local.query(
+      final resStr = await local.query<String>(
         "SELECT * FROM _spooky_pending_mutations ORDER BY created_at ASC",
       );
 
@@ -122,11 +128,14 @@ class UpQueue {
         mutations = raw.cast<Map<String, dynamic>>();
       }
 
+      // Match TS: Clear queue/cache from DB as authoritative source
+      queue.clear();
+
       for (final r in mutations) {
         final typeStr = r['mutationType'] as String?;
         final recordId = r['recordId'] as String?;
         final data = r['data'] as Map<String, dynamic>?;
-        final mutationId = r['id'] as String;
+        final mutationId = r['id'].toString();
 
         if (typeStr == null || recordId == null) continue;
 
@@ -144,7 +153,8 @@ class UpQueue {
           data: data,
         );
 
-        _handleMutationPayload(payload);
+        // Directly add to queue without emitting events (TS behavior)
+        _addToQueueInternal(payload);
       }
     } catch (error) {
       print("Failed to load pending mutations: $error");
