@@ -86,7 +86,7 @@ async fn main() -> anyhow::Result<()> {
     info!("Connecting to SurrealDB at {}", db_addr);
 
     let db = Surreal::new::<Ws>(db_addr).await.context("Failed to connect to SurrealDB")?;
-    db.signin(Root { username: &db_user, password: &db_pass }).await.context("Failed to signin")?;
+    db.signin(Root { username: db_user.clone(), password: db_pass.clone() }).await.context("Failed to signin")?;
     db.use_ns(&db_ns).use_db(&db_db).await.context("Failed to select ns/db")?;
 
     info!("Connected to SurrealDB");
@@ -250,7 +250,7 @@ async fn register_view_handler(
     let db_res = state.db.query(query)
         .bind(("id", id_str))
         .bind(("hash", result_update.result_hash.clone()))
-        .bind(("tree", result_update.tree.clone()))
+        .bind(("tree", json!(result_update.tree)))
         .bind(("clientId", client_id_str))
         .bind(("surrealQL", surql_str))
         .bind(("params", params_val))
@@ -306,11 +306,7 @@ async fn version_handler() -> impl IntoResponse {
     Json(json!("0.1.0"))
 }
 
-#[derive(Debug, Deserialize)]
-struct IncantationUpdateResult {
-    id: surrealdb::sql::Thing,
-    hash: String,
-}
+
 
 async fn update_incantation_in_db(db: &Surreal<Client>, update: &MaterializedViewUpdate) {
     let query = "UPDATE type::thing('_spooky_incantation', $id) SET hash = <string>$hash, tree = $tree RETURN AFTER";
@@ -322,12 +318,12 @@ async fn update_incantation_in_db(db: &Surreal<Client>, update: &MaterializedVie
     match db.query(query)
         .bind(("id", id_str.clone()))
         .bind(("hash", update.result_hash.clone()))
-        .bind(("tree", update.tree.clone()))
+        .bind(("tree", json!(update.tree)))
         .await 
     {
         Ok(mut response) => {
-            // Use a typed struct to avoid serde issues with generic Value enum variants
-            match response.take::<Vec<IncantationUpdateResult>>(0) {
+            // Use basic Value to check existence
+            match response.take::<Vec<serde_json::Value>>(0) {
                 Ok(records) => {
                     if !records.is_empty() {
                          debug!("Successfully updated incantation: {:?}", records[0]);
