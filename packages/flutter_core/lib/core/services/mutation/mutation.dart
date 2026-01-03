@@ -1,8 +1,8 @@
+import 'package:flutter_surrealdb_engine/flutter_surrealdb_engine.dart'; // RecordId
+import 'mutation_querys.dart';
+import '../database/main.dart'; // LocalDatabaseService
 import 'events.dart';
-import '../database/main.dart';
-import '../events/main.dart';
-import './mutation_querys.dart';
-import '../database/surreal_decoder.dart';
+import '../events/main.dart'; // EventSystem
 
 class MutationManager {
   final LocalDatabaseService db;
@@ -12,87 +12,133 @@ class MutationManager {
 
   EventSystem<MutationEvent> get getEvents => events;
 
-  Future<Map<String, dynamic>?> create(
-    String rid,
-    Map<String, dynamic> data,
-  ) async {
-    // Identify fields that need record casting and remove them from CONTENT payload
-    // to prevent schema mismatch errors (String vs record<T>).
-    // These will be re-added via SET clause with explicit type::record() casting.
-    final contentData = Map<String, dynamic>.from(data);
-    contentData.remove('author');
-    contentData.remove('thread');
-
-    final resRaw = await db.query(
-      mutationCreateQuery,
-      vars: {'id': rid, 'content': contentData, 'data': data},
-    );
-
-    final [response, ...] =
-        SurrealDecoder.decodeNative(resRaw, removeNulls: true) as List;
-
-    if (response != null && response['error'] != null) {
-      throw Exception('Mutation Error: ${response['error']}');
+  // Helper for retrying DB operations (matches Core's withRetry)
+  Future<T> _withRetry<T>(
+    Future<T> Function() operation, {
+    int retries = 3,
+    int delayMs = 100,
+  }) async {
+    dynamic lastError;
+    for (var i = 0; i < retries; i++) {
+      try {
+        return await operation();
+      } catch (err) {
+        lastError = err;
+        final msg = err.toString();
+        if (msg.contains('Can not open transaction') ||
+            msg.contains('transaction') ||
+            msg.contains('Database is busy')) {
+          print(
+            'Retrying DB operation due to transaction error: attempt ${i + 1}',
+          );
+          await Future.delayed(Duration(milliseconds: delayMs * (i + 1)));
+          continue;
+        }
+        rethrow;
+      }
     }
-
-    if (response == null) return null;
-
-    final mutationResponse = MutationResponse.fromJson(response);
-    // Create payload for event/sync
-    // Note: In a real app we might parse the result to get the actual ID
-    final payload = MutationPayload(
-      action: MutationAction.create,
-      recordId: mutationResponse.target.id, // Placeholder until we parse result
-      mutationId: mutationResponse.mutationID,
-      data: data,
-    );
-
-    events.addEvent(MutationEvent([payload]));
-
-    return mutationResponse.target.record;
+    throw lastError;
   }
 
-  Future<Map<String, dynamic>?> update(
-    String rid,
+  Future<MutationResponse> create(
+    RecordId id,
     Map<String, dynamic> data,
   ) async {
-    final resRaw = await db.query(
-      mutationUpdateQuery,
-      vars: {'id': rid, 'data': data},
+    final response = await _withRetry<MutationResponse?>(() async {
+      final res = await db.queryTyped<String>(
+        mutationCreateQuery,
+        vars: {'id': id, 'data': data},
+      );
+
+      final [response, ...] =
+          SurrealDecoder.decodeNative(res, removeNulls: true) as List;
+
+      if (response != null && response['error'] != null) {
+        throw Exception('Mutation Error: ${response['error']}');
+      }
+
+      if (response == null) return null;
+
+      return MutationResponse.fromJson(response);
+    });
+
+    events.addEvent(
+      MutationEvent([
+        MutationPayload(
+          type: MutationAction.create,
+          mutation_id: response!.mutationID,
+          record_id: response.target!.id,
+          data: data,
+        ),
+      ]),
     );
 
-    final [response, ...] =
-        SurrealDecoder.decodeNative(resRaw, removeNulls: true) as List;
-
-    if (response != null && response['error'] != null) {
-      throw Exception('Mutation Error: ${response['error']}');
-    }
-
-    if (response == null) return null;
-
-    final mutationResponse = MutationResponse.fromJson(response);
-
-    final payload = MutationPayload(
-      action: MutationAction.update,
-      recordId: mutationResponse.target.id,
-      mutationId: mutationResponse.mutationID,
-      data: data,
-    );
-    events.addEvent(MutationEvent([payload]));
-
-    return mutationResponse.target.record;
+    return response;
   }
 
-  Future<void> delete(String rid) async {
-    final resRaw = await db.query(mutationDeleteQuery, vars: {'id': rid});
-    final [..., response] =
-        SurrealDecoder.decodeNative(resRaw, removeNulls: true) as List;
+  Future<MutationResponse> update(
+    RecordId id,
+    Map<String, dynamic> data,
+  ) async {
+    final response = await _withRetry(() async {
+      final res = await db.queryTyped<String>(
+        mutationUpdateQuery,
+        vars: {'id': id, 'data': data},
+      );
 
-    final payload = MutationPayload(
-      action: MutationAction.delete,
-      recordId: rid,
-      mutationId: response['mutation_id'],
+      final [response, ...] =
+          SurrealDecoder.decodeNative(res, removeNulls: true) as List;
+
+      if (response != null && response['error'] != null) {
+        throw Exception('Mutation Error: ${response['error']}');
+      }
+
+      if (response == null) return null;
+
+      return MutationResponse.fromJson(response);
+    });
+
+    events.addEvent(
+      MutationEvent([
+        MutationPayload(
+          type: MutationAction.update,
+          mutation_id: response!.mutationID,
+          record_id: response.target!.id,
+          data: data,
+        ),
+      ]),
     );
-    events.addEvent(MutationEvent([payload]));
+
+    return response;
+  }
+
+  Future<void> delete(RecordId id) async {
+    final response = await _withRetry(() async {
+      final res = await db.queryTyped<String>(
+        mutationDeleteQuery,
+        vars: {'id': id},
+      );
+
+      final [..., response] =
+          SurrealDecoder.decodeNative(res, removeNulls: true) as List;
+
+      if (response != null && response['error'] != null) {
+        throw Exception('Mutation Error: ${response['error']}');
+      }
+
+      if (response == null) return null;
+
+      return MutationResponse.fromJson(response);
+    });
+
+    events.addEvent(
+      MutationEvent([
+        MutationPayload(
+          type: MutationAction.delete,
+          mutation_id: response!.mutationID,
+          record_id: id.toString(),
+        ),
+      ]),
+    );
   }
 }

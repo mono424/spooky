@@ -114,29 +114,6 @@ class SpookyConfig {
   });
 }
 
-class RecordId {
-  final String table;
-  final dynamic id;
-
-  const RecordId(this.table, this.id);
-
-  factory RecordId.fromString(String rawId) {
-    final [table, id] = rawId.split(':');
-    return RecordId(table, id);
-  }
-  // Verhält sich wie in TS/Rust, wenn man es ausgibt
-  @override
-  String toString() => '$table:$id';
-
-  // Hilfreich für Vergleiche
-  @override
-  bool operator ==(Object other) =>
-      other is RecordId && other.table == table && other.id == id;
-
-  @override
-  int get hashCode => table.hashCode ^ id.hashCode;
-}
-
 // Similar to Incantation in TS
 class Incantation {
   final int id;

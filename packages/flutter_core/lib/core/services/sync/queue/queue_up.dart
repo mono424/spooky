@@ -1,7 +1,6 @@
 import 'dart:async';
 import '../../database/local.dart';
-import '../../mutation/events.dart'; // MutationEvent, MutationAction
-// MutationPayload
+import '../../mutation/events.dart'; // MutationEvent, MutationPayload
 import '../events.dart'; // SyncQueueEventSystem, SyncQueueEventTypes
 import '../../events/main.dart'; // BaseEvent, EventSystem
 import '../../query/utils.dart'; // extractResult
@@ -68,11 +67,6 @@ class UpQueue {
   }
 
   Future<void> removeEventFromDatabase(String mutationId) {
-    // mutationId is likely just the ID part or full things.
-    // In mutation/mutation.ts we store it as `_spooky_pending_mutations:UUID`.
-    // The incoming mutationId here usually matches that.
-    // If it's just the ID part, we might need to prefix.
-    // Assuming it's fully qualified or we can just delete by ID.
     return local.query("DELETE \$id", vars: {'id': mutationId});
   }
 
@@ -86,23 +80,31 @@ class UpQueue {
   }
 
   void _handleMutationPayload(MutationPayload mutation) {
-    switch (mutation.action) {
+    switch (mutation.type) {
       case MutationAction.create:
         if (mutation.data != null) {
           push(
-            CreateEvent(mutation.mutationId, mutation.recordId, mutation.data!),
+            CreateEvent(
+              mutation.mutation_id,
+              mutation.record_id,
+              mutation.data!,
+            ),
           );
         }
         break;
       case MutationAction.update:
         if (mutation.data != null) {
           push(
-            UpdateEvent(mutation.mutationId, mutation.recordId, mutation.data!),
+            UpdateEvent(
+              mutation.mutation_id,
+              mutation.record_id,
+              mutation.data!,
+            ),
           );
         }
         break;
       case MutationAction.delete:
-        push(DeleteEvent(mutation.mutationId, mutation.recordId));
+        push(DeleteEvent(mutation.mutation_id, mutation.record_id));
         break;
     }
   }
@@ -121,38 +123,24 @@ class UpQueue {
       }
 
       for (final r in mutations) {
-        // Map DB record to MutationPayload structure
-        // r['mutation_type']: 'create' | 'update' | 'delete'
-        // r['record_id']: string (the ID of the modified record)
-        // r['data']: JSON object
-        // r['id']: string (the ID of the pending mutation)
-
-        final typeStr = r['mutation_type'] as String?;
-        final recordId = r['record_id'] as String?;
+        final typeStr = r['mutationType'] as String?;
+        final recordId = r['recordId'] as String?;
         final data = r['data'] as Map<String, dynamic>?;
         final mutationId = r['id'] as String;
 
         if (typeStr == null || recordId == null) continue;
 
-        MutationAction action;
-        switch (typeStr) {
-          case 'create':
-            action = MutationAction.create;
-            break;
-          case 'update':
-            action = MutationAction.update;
-            break;
-          case 'delete':
-            action = MutationAction.delete;
-            break;
-          default:
-            continue;
-        }
+        MutationAction? action;
+        try {
+          action = MutationAction.values.firstWhere((e) => e.name == typeStr);
+        } catch (_) {}
+
+        if (action == null) continue;
 
         final payload = MutationPayload(
-          action: action,
-          recordId: recordId,
-          mutationId: mutationId,
+          type: action,
+          record_id: recordId,
+          mutation_id: mutationId,
           data: data,
         );
 

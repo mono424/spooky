@@ -4,23 +4,25 @@ class MutationTargetResponse {
 
   MutationTargetResponse({required this.id, required this.record});
 
-  factory MutationTargetResponse.fromJason(Map<String, dynamic> json) {
+  factory MutationTargetResponse.fromJson(Map<String, dynamic> json) {
     return MutationTargetResponse(id: json['id'] as String, record: json);
   }
 }
 
 class MutationResponse {
   final String mutationID;
-  final MutationTargetResponse target;
+  final MutationTargetResponse? target;
 
-  MutationResponse({required this.mutationID, required this.target});
+  MutationResponse({required this.mutationID, this.target});
 
   factory MutationResponse.fromJson(Map<String, dynamic> json) {
     return MutationResponse(
       mutationID: json['mutation_id'] as String,
-      target: MutationTargetResponse.fromJason(
-        json['target'] as Map<String, dynamic>,
-      ),
+      target: json['target'] != null
+          ? MutationTargetResponse.fromJson(
+              json['target'] as Map<String, dynamic>,
+            )
+          : null,
     );
   }
 }
@@ -29,10 +31,11 @@ const String mutationCreateQuery = r'''
   BEGIN TRANSACTION;
 
     LET $created = CREATE ONLY type::record($id) CONTENT $data;
-    LET $mutation = CREATE ONLY _spooky_pending_mutations SET
-        mutation_type = 'create',
-        record_id = $created.id,
-        data = $data;
+    LET $mutation = CREATE ONLY _spooky_pending_mutations CONTENT {
+        mutationType: 'create',
+        recordId: $created.id,
+        data: $data
+    };
 
     RETURN {
         target: $created,
@@ -47,8 +50,8 @@ const String mutationUpdateQuery = r'''
 
     LET $updated = UPDATE ONLY type::record($id) MERGE $data;
     LET $mutation = CREATE ONLY _spooky_pending_mutations SET
-        mutation_type = 'update',
-        record_id = type::record($id),
+        mutationType = 'update',
+        recordId = type::record($id),
         data = $data;
 
     RETURN {
@@ -64,8 +67,8 @@ const String mutationDeleteQuery = r'''
 
     DELETE type::record($id);
     LET $mutation = CREATE ONLY _spooky_pending_mutations SET
-        mutation_type = 'delete',
-        record_id = type::record($id);
+        mutationType = 'delete',
+        recordId = type::record($id);
     RETURN {
         mutation_id: $mutation.id
     };
