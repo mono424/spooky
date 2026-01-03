@@ -8,6 +8,7 @@ import 'services/database/local_migration.dart';
 import 'services/mutation/main.dart'; // MutationManager
 import 'services/query/query.dart'; // QueryManager
 import 'services/sync/sync.dart'; // SpookySync
+import 'services/mutation/mutation_querys.dart'; // MutationResponse
 
 export 'types.dart';
 export 'services/database/local.dart';
@@ -44,10 +45,10 @@ class SpookyClient {
     }
 
     // 1. Initialize DB Services
-    final local = await LocalDatabaseService.connect(config.database);
+    final local = await LocalDatabaseService.create(config.database);
     await local.init();
 
-    final remote = await RemoteDatabaseService.connect(config.database);
+    final remote = await RemoteDatabaseService.create(config.database);
     await remote.init();
 
     // 2. Run Migrations (Provision Schema)
@@ -126,21 +127,31 @@ class SpookyClient {
   }
 
   // Wrappers for Mutation Manager
-  Future<Map<String, dynamic>?> create(String id, Map<String, dynamic> data) {
-    return mutation.create(id, data);
+  Future<MutationResponse> create(String id, Map<String, dynamic> data) {
+    RecordId recordId;
+    if (id.contains(':')) {
+      recordId = RecordId.fromString(id);
+    } else {
+      // Only partial support if we don't know the table?
+      // Ideally we need table and id.
+      // Fallback: try parsing or assume user is sending ID format string
+      throw Exception(
+        "Create requires a full RecordId string (table:id) or use a method that supplies table.",
+      );
+    }
+    return mutation.create(recordId, data);
   }
 
-  Future<Map<String, dynamic>?> update(
+  Future<MutationResponse> update(
     String table,
     String id,
     Map<String, dynamic> data,
   ) {
-    return mutation.update(id, data);
+    return mutation.update(RecordId(table: table, key: id), data);
   }
 
   Future<void> delete(String table, String id) {
-    // We ignore table as id is sufficient for delete(rid)
-    return mutation.delete(id);
+    return mutation.delete(RecordId(table: table, key: id));
   }
 
   // Auth delegates

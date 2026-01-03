@@ -10,7 +10,8 @@ class RemoteDatabaseService extends AbstractDatabaseService {
 
   RemoteDatabaseService._(super.client, this.config);
 
-  static Future<RemoteDatabaseService> connect(DatabaseConfig config) async {
+  // Renamed from connect to avoid conflict with instance method
+  static Future<RemoteDatabaseService> create(DatabaseConfig config) async {
     SurrealDb? client;
     if (config.endpoint != null) {
       try {
@@ -26,6 +27,13 @@ class RemoteDatabaseService extends AbstractDatabaseService {
       }
     }
     return RemoteDatabaseService._(client, config);
+  }
+
+  @override
+  Future<void> connect() async {
+    // If client is null, maybe try to reconnect?
+    // For now, no-op or re-init logic if we supported it.
+    // The original init() logic (below) handles useDb/auth.
   }
 
   DatabaseConfig get getConfig => config;
