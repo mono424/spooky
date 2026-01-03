@@ -3,6 +3,48 @@
 import '../styles/global.css';
 import { AsciiGhost } from '../components/AsciiGhost';
 import { ArchitectureDiagram } from '../components/ArchitectureDiagram';
+import { LiveCodeEditor } from '../components/LiveCodeEditor';
+import SchemaGenerator from '../components/SchemaGenerator';
+import GitHubStars from '../components/GitHubStars';
+
+const schemaCode = `DEFINE TABLE user SCHEMAFULL;
+DEFINE FIELD username ON user TYPE string;
+
+DEFINE TABLE thread SCHEMAFULL;
+DEFINE FIELD title ON thread TYPE string;
+DEFINE FIELD author ON thread TYPE record<user>;`;
+
+const generatedCode = `export type User = {
+  id: string;
+  username: string;
+};
+
+export type Thread = {
+  id: string;
+  title: string;
+  author: User | string;
+};`;
+
+const solidQueryCode = `import { useQuery } from "@spooky/client-solid";
+import { db } from "../db";
+
+const ThreadList = () => {
+  const result = useQuery(db, () =>
+    db.query("thread")
+      .related("comments")
+      .orderBy("created_at", "desc")
+      .limit(10)
+      .build()
+  );
+
+  return (
+    <For each={result.data()}>
+      {(thread) => (
+        <div>{thread.title} by {thread.author.username}</div>
+      )}
+    </For>
+  );
+};`;
 ---
 
 <html lang="en">
@@ -11,7 +53,18 @@ import { ArchitectureDiagram } from '../components/ArchitectureDiagram';
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="generator" content={Astro.generator} />
-    <meta name="description" content="Spooky Sync - The Future of Real-Time Data Synchronization" />
+    <meta name="description" content="Spooky Sync - A SurrealDB native Sync Engine" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content={Astro.url} />
+    <meta property="og:title" content="SPOOKY SYNC" />
+    <meta property="og:description" content="Spooky Sync - A SurrealDB native Sync Engine" />
+    <meta property="og:image" content="/logo.svg" />
+
+    <meta property="twitter:card" content="summary_large_image" />
+    <meta property="twitter:url" content={Astro.url} />
+    <meta property="twitter:title" content="SPOOKY SYNC" />
+    <meta property="twitter:description" content="Spooky Sync - A SurrealDB native Sync Engine" />
+    <meta property="twitter:image" content="/logo.svg" />
     <title>SPOOKY SYNC</title>
   </head>
   <body class="min-h-screen flex flex-col">
@@ -24,11 +77,7 @@ import { ArchitectureDiagram } from '../components/ArchitectureDiagram';
             >[ FEATURES ]</a
           >
           <a href="#about" class="hover:bg-white hover:text-black px-2 transition-none">[ DOCS ]</a>
-          <a
-            href="https://github.com/mono424/spooky"
-            target="_blank"
-            class="hover:bg-white hover:text-black px-2 transition-none">[ GITHUB ]</a
-          >
+          <GitHubStars client:visible />
         </div>
       </nav>
     </div>
@@ -45,10 +94,10 @@ import { ArchitectureDiagram } from '../components/ArchitectureDiagram';
         </h1>
 
         <div
-          class="text-left font-mono text-xs md:text-sm max-w-xl mx-auto mb-12 border-2 border-white bg-black shadow-[5px_5px_0px_0px_white] relative z-10"
+          class="text-left font-mono text-xs md:text-sm max-w-xl mx-auto mb-12 border-2 border-white bg-black shadow-[5px_5px_0px_0px_#eeeeee] relative z-10"
         >
           <div
-            class="border-b-2 border-white bg-white text-black px-3 py-1 font-bold flex justify-between items-center uppercase"
+            class="border-b-2 border-white bg-paper text-black px-3 py-1 font-bold flex justify-between items-center uppercase"
           >
             <span>src/queries.ts</span>
             <span>[ TS ]</span>
@@ -76,7 +125,7 @@ import { ArchitectureDiagram } from '../components/ArchitectureDiagram';
             [ EXECUTE_START ]
           </a>
           <a
-            href="https://github.com"
+            href="https://github.com/mono424/spooky"
             target="_blank"
             class="border-2 border-white px-8 py-3 hover:bg-white hover:text-black transition-none uppercase font-bold"
           >
@@ -86,7 +135,7 @@ import { ArchitectureDiagram } from '../components/ArchitectureDiagram';
       </div>
     </section>
 
-    <section id="features" class="py-20 border-b border-white">
+    <section id="features" class="py-20">
       <div class="max-w-7xl mx-auto px-4">
         <div class="mb-16 border-b border-dashed border-white pb-4">
           <h2 class="text-3xl font-bold uppercase">// SYSTEM_MODULES</h2>
@@ -140,10 +189,7 @@ import { ArchitectureDiagram } from '../components/ArchitectureDiagram';
           </div>
         </div>
       </div>
-    </section>
-
-    <section id="about" class="py-20 border-b border-white">
-      <div class="max-w-7xl mx-auto px-4 grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
+      <div class="max-w-7xl mx-auto mt-20 px-4 grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
         <div>
           <h2
             class="text-3xl font-bold mb-6 uppercase decoration-dashed underline underline-offset-8"
@@ -178,6 +224,503 @@ import { ArchitectureDiagram } from '../components/ArchitectureDiagram';
           class="border-4 border-double border-white p-4 flex items-center justify-center bg-black"
         >
           <ArchitectureDiagram client:visible />
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION 1: SCHEMA & TYPES -->
+    <section class="py-24 border-b border-white/10 relative">
+      <div
+        class="absolute inset-0 opacity-[0.03] pointer-events-none"
+        style="background-image: linear-gradient(to right, #ffffff 1px, transparent 1px), linear-gradient(to bottom, #ffffff 1px, transparent 1px); background-size: 40px 40px;"
+      >
+      </div>
+
+      <div class="max-w-7xl mx-auto px-4 relative z-10">
+        <div
+          class="mb-16 flex flex-col md:flex-row justify-between items-end border-b border-white/10 pb-6"
+        >
+          <div>
+            <h2 class="text-3xl font-bold uppercase tracking-widest text-white mb-2">
+              // SCHEMA_FIRST
+            </h2>
+            <p class="font-mono text-gray-500 text-sm max-w-md">
+              Your database is your source of truth. We introspect your schema to generate strict
+              TypeScript definitions automatically.
+            </p>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+          <div class="lg:col-span-3 space-y-6">
+            <div class="border border-[#333] bg-[#0a0a0a] rounded-sm p-4 h-full min-h-[400px]">
+              <div
+                class="text-[10px] uppercase tracking-widest text-gray-500 mb-4 font-bold border-b border-[#222] pb-2"
+              >
+                Project Explorer
+              </div>
+              <div class="font-mono text-sm space-y-1">
+                <div class="text-gray-400 flex items-center gap-2">
+                  <span class="text-gray-600">▾</span> 📁 apps
+                </div>
+                <div class="pl-4 text-gray-500 border-l border-[#222] ml-1">
+                  <div class="py-1 cursor-pointer transition-colors">📁 solid-app</div>
+                  <div class="pl-4 border-l border-[#222] ml-1">
+                    <div class="py-1 cursor-pointer transition-colors">📁 src</div>
+                    <div class="py-1 text-purple-400 group flex items-center justify-between">
+                      <span>⚡ schema.gen.ts</span>
+                    </div>
+                    <div class="py-1 text-gray-600">⚙️ package.json</div>
+                  </div>
+                  <div class="py-1 cursor-pointer transition-colors block">📁 flutter-app</div>
+                </div>
+
+                <div class="text-gray-400 flex items-center gap-2 mt-2">
+                  <span class="text-gray-600">▾</span> 📁 packages
+                </div>
+                <div class="pl-4 border-l border-[#222] ml-1">
+                  <div class="py-1 text-gray-500">📁 schema</div>
+                  <div class="pl-4 border-l border-[#222] ml-1">
+                    <div
+                      class="py-1 text-green-400 bg-green-900/20 -mx-2 px-2 rounded flex justify-between items-center group cursor-pointer"
+                    >
+                      <span>⚡ schema.surql</span>
+                    </div>
+                    <div class="py-1 text-gray-600">⚙️ package.json</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="mt-8 text-xs text-gray-500 border-t border-[#222] pt-4 leading-relaxed">
+                <span class="text-green-500 font-bold">TIP:</span> Add a pre-commit hook to automatically
+                update all types on schema change.
+              </div>
+            </div>
+          </div>
+
+          <div class="lg:col-span-9">
+            <SchemaGenerator client:visible />
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION 2: REMOTE QUERYING -->
+    <section class="py-24 border-b border-white/10 relative">
+      <div
+        class="absolute inset-0 opacity-[0.03] pointer-events-none"
+        style="background-image: linear-gradient(to right, #ffffff 1px, transparent 1px), linear-gradient(to bottom, #ffffff 1px, transparent 1px); background-size: 40px 40px;"
+      >
+      </div>
+
+      <div class="max-w-7xl mx-auto px-4 relative z-10">
+        <div
+          class="mb-16 flex flex-col md:flex-row justify-between items-end border-b border-white/10 pb-6"
+        >
+          <div>
+            <h2 class="text-3xl font-bold uppercase tracking-widest text-white mb-2">
+              // DEVELOPER_EXPERIENCE
+            </h2>
+            <p class="font-mono text-gray-500 text-sm max-w-md">
+              Spooky is built by developers for developers with framework-native queries with full
+              reactivity and type safety.
+            </p>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
+          <div class="order-2 lg:order-1">
+            <LiveCodeEditor client:visible filename="ThreadList.tsx" initialCode={solidQueryCode} />
+          </div>
+          <div class="order-1 lg:order-2 font-mono">
+            <div class="mb-4 relative overflow-hidden group">
+              <!-- Decorative background glow -->
+              <div
+                class="absolute -right-10 -bottom-10 w-32 h-32 bg-blue-500/5 blur-3xl rounded-full pointer-events-none"
+              >
+              </div>
+
+              <div class="border border-[#222] bg-[#080808] p-5 relative z-10">
+                <div class="flex items-center gap-3 mb-4">
+                  <div
+                    class="w-8 h-8 bg-blue-900/10 border border-blue-500/20 flex items-center justify-center text-blue-500"
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <path
+                        d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"
+                      ></path>
+                      <path d="M5 3v4"></path>
+                      <path d="M9 3v4"></path>
+                      <path d="M3 5h4"></path>
+                      <path d="M3 9h4"></path>
+                    </svg>
+                  </div>
+                  <div>
+                    <div
+                      class="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-0.5"
+                    >
+                      INTELLISENSE_EVERYWHERE
+                    </div>
+                    <div class="text-sm font-bold text-white uppercase">
+                      Context-Aware Autocomplete
+                    </div>
+                  </div>
+                </div>
+
+                <p class="text-xs text-gray-400 font-mono leading-relaxed">
+                  Context-aware autocomplete knows your schema inside out. It suggests sort fields,
+                  relations, and filter operations appropriate for your current query context.
+                </p>
+              </div>
+            </div>
+            <div class="mt-8 relative overflow-hidden group">
+              <!-- Decorative background glow -->
+              <div
+                class="absolute -right-10 -bottom-10 w-32 h-32 bg-green-500/5 blur-3xl rounded-full pointer-events-none"
+              >
+              </div>
+
+              <div class="border border-[#222] bg-[#080808] p-5 relative z-10">
+                <div class="flex items-center gap-3 mb-4">
+                  <div
+                    class="w-8 h-8 bg-yellow-900/10 border border-yellow-500/20 flex items-center justify-center text-yellow-500"
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <path
+                        d="M15 14c.2-1 .7-1.7 1.5-2.5 1-1 1.5-2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"
+                      ></path><path d="M9 18h6"></path><path d="M10 22h4"></path>
+                    </svg>
+                  </div>
+                  <div>
+                    <div
+                      class="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-0.5"
+                    >
+                      TYPESAFETY_EVERYWHERE
+                    </div>
+                    <div class="text-sm font-bold text-white uppercase">Real-Time Feedback</div>
+                  </div>
+                </div>
+
+                <p class="text-xs text-gray-400 font-mono mb-4 leading-relaxed">
+                  Your queries are continuously validated against your schema. Type mismatches,
+                  invalid fields, and logic errors are detected instantly and highlighted directly
+                  inside the code editor, ensuring your code is correct before execution. Try
+                  yourself and fix the type error on the left.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION 3: DEPLOYMENT MODES -->
+    <section class="py-24 border-b border-white/10 bg-black">
+      <div class="max-w-7xl mx-auto px-4">
+        <div class="mb-16 text-center">
+          <h2 class="text-3xl font-bold uppercase tracking-widest text-white mb-4">
+            // ARCHITECTURE_MODES
+          </h2>
+          <p class="font-mono text-gray-500 max-w-3xl mx-auto text-sm md:text-base leading-relaxed">
+            Spooky uses <span class="text-white">Icremental View Maintanence</span> to track client query
+            hashes, known as <span class="text-purple-400 font-bold">Incantations</span>. These are
+            stored in the <code class="bg-[#222] px-1 py-0.5 rounded text-gray-300"
+              >_spooky_incantations</code
+            > table. Choose your runtime based on your performance needs.
+          </p>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 max-w-6xl mx-auto">
+          <div
+            class="group border border-[#333] bg-[#0a0a0a] hover:border-purple-500/30 transition-colors duration-300 relative overflow-hidden rounded-sm flex flex-col"
+          >
+            <div
+              class="absolute top-0 left-0 bg-[#222] text-[10px] font-bold px-3 py-1 text-gray-400 border-r border-b border-[#333] uppercase tracking-wider"
+            >
+              Mode_A
+            </div>
+
+            <div class="p-8 pt-12 flex-1 flex flex-col">
+              <div class="flex justify-between items-baseline mb-6">
+                <h3 class="text-xl font-bold text-white">Surrealism (WASM)</h3>
+                <span
+                  class="text-[10px] font-bold font-mono text-black bg-purple-400 px-2 py-1 rounded-sm uppercase"
+                  >Local / Testing</span
+                >
+              </div>
+
+              <div class="w-full flex flex-col gap-4 font-mono mb-8">
+                <!-- CLIENTS LAYER -->
+                <div class="flex justify-center gap-10 relative z-10">
+                  <div class="flex flex-col items-center gap-1 group/client">
+                    <div
+                      class="h-8 w-8 border border-gray-600 rounded bg-[#111] flex items-center justify-center text-gray-400 group-hover/client:border-white group-hover/client:text-white transition-colors"
+                    >
+                      <span class="text-[10px]">DEV</span>
+                    </div>
+                    <span class="text-[8px] text-gray-600">Developer</span>
+                    <div
+                      class="w-[1px] h-full bg-gradient-to-b from-transparent via-gray-700 to-gray-700"
+                    >
+                    </div>
+                  </div>
+                  <div class="flex flex-col items-center gap-1 group/client">
+                    <div
+                      class="h-8 w-8 border border-gray-600 rounded bg-[#111] flex items-center justify-center text-gray-400 group-hover/client:border-white group-hover/client:text-white transition-colors"
+                    >
+                      <span class="text-[10px]">TEST</span>
+                    </div>
+                    <span class="text-[8px] text-gray-600">Vitest</span>
+                    <div
+                      class="w-[1px] h-full bg-gradient-to-b from-transparent via-gray-700 to-gray-700"
+                    >
+                    </div>
+                  </div>
+                </div>
+
+                <!-- INFRASTRUCTURE BOX -->
+                <div
+                  class="border border-dashed border-[#333] p-3 rounded bg-[#0f0f0f] relative mt-2"
+                >
+                  <div
+                    class="absolute -top-2 left-3 bg-[#0f0f0f] px-1 text-[8px] text-gray-500 font-bold uppercase tracking-wider"
+                  >
+                    Local Infrastructure
+                  </div>
+
+                  <div class="flex gap-2">
+                    <!-- SURREALDB CONTAINER -->
+                    <div
+                      class="flex-1 border border-purple-900/40 bg-purple-900/5 p-2 rounded flex flex-col gap-2 relative overflow-hidden mb-9"
+                    >
+                      <div
+                        class="flex items-center justify-between border-b border-purple-900/20 pb-1 relative z-10"
+                      >
+                        <span class="text-[9px] font-bold text-purple-400">SURREALDB</span>
+                        <span class="h-1.5 w-1.5 rounded-full bg-purple-500 animate-pulse"></span>
+                      </div>
+
+                      <!-- EMBEDDED WASM -->
+                      <div
+                        class="bg-black/50 border border-purple-500/30 p-2 rounded relative z-10"
+                      >
+                        <div class="flex justify-between items-center mb-1">
+                          <span class="text-[8px] font-bold text-gray-300"
+                            >Spooky Stream Processor (WASM)</span
+                          >
+                          <span class="text-[8px] text-orange-400">Ephemeral</span>
+                        </div>
+                        <div class="h-1 w-full bg-gray-800 rounded overflow-hidden">
+                          <div class="h-full bg-purple-500/50 w-full animate-pulse"></div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="mt-auto">
+                <p class="text-xs text-gray-500 mb-4 font-mono leading-relaxed">
+                  The Spooky Stream Processor executes directly within SurrealDB—ideal for <span
+                    class="text-gray-300">automated testing scenarios</span
+                  >, CI/CD pipelines, and local development.
+                </p>
+                <ul class="space-y-2 font-mono text-xs text-gray-500 border-t border-[#222] pt-4">
+                  <li class="flex items-start gap-2">
+                    <span class="text-purple-400">✔</span> Zero setup (runs inside `surreal start`).
+                  </li>
+                  <li class="flex items-start gap-2">
+                    <span class="text-orange-400">⚠</span>
+                    <span
+                      class="relative group/tooltip cursor-help border-b border-dotted border-gray-600"
+                    >
+                      High I/O overhead (State Rehydration).
+                      <div
+                        class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 p-3 bg-[#111] border border-[#333] text-[10px] text-gray-400 opacity-0 group-hover/tooltip:opacity-100 transition-opacity pointer-events-none z-50 shadow-xl rounded font-normal normal-case"
+                      >
+                        The DBSP processor runs as an embedded WASM function. Since WASM memory is
+                        ephemeral, the entire state must be loaded and saved to the database on
+                        every execution.
+                        <div
+                          class="absolute top-full left-1/2 -translate-x-1/2 -mt-1 border-4 border-transparent border-t-[#333]"
+                        >
+                        </div>
+                      </div>
+                    </span>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <div
+            class="group border border-[#333] bg-[#0a0a0a] hover:border-green-500/30 transition-colors duration-300 relative overflow-hidden rounded-sm flex flex-col"
+          >
+            <div
+              class="absolute top-0 left-0 bg-[#222] text-[10px] font-bold px-3 py-1 text-gray-400 border-r border-b border-[#333] uppercase tracking-wider"
+            >
+              Mode_B
+            </div>
+
+            <div class="p-8 pt-12 flex-1 flex flex-col">
+              <div class="flex justify-between items-baseline mb-6">
+                <h3 class="text-xl font-bold text-white">Sidecar Daemon</h3>
+                <span
+                  class="text-[10px] font-bold font-mono text-black bg-green-500 px-2 py-1 rounded-sm uppercase"
+                  >Production</span
+                >
+              </div>
+
+              <div class="w-full flex flex-col gap-4 font-mono mb-8">
+                <!-- CLIENTS LAYER -->
+                <div class="flex justify-center gap-8 relative z-10">
+                  <div class="flex flex-col items-center gap-1 group/client">
+                    <div
+                      class="h-8 w-8 border border-gray-600 rounded bg-[#111] flex items-center justify-center text-gray-400 group-hover/client:border-white group-hover/client:text-white transition-colors"
+                    >
+                      <span class="text-[10px]">WEB</span>
+                    </div>
+                    <span class="text-[8px] text-gray-600">React/Solid</span>
+                    <div
+                      class="w-[1px] h-full bg-gradient-to-b from-transparent via-gray-700 to-gray-700"
+                    >
+                    </div>
+                  </div>
+                  <div class="flex flex-col items-center gap-1 group/client">
+                    <div
+                      class="h-8 w-8 border border-gray-600 rounded bg-[#111] flex items-center justify-center text-gray-400 group-hover/client:border-white group-hover/client:text-white transition-colors"
+                    >
+                      <span class="text-[10px]">APP</span>
+                    </div>
+                    <span class="text-[8px] text-gray-600">Flutter/iOS</span>
+                    <div
+                      class="w-[1px] h-full bg-gradient-to-b from-transparent via-gray-700 to-gray-700"
+                    >
+                    </div>
+                  </div>
+                </div>
+
+                <!-- INFRASTRUCTURE BOX -->
+                <div
+                  class="border border-dashed border-[#333] p-3 rounded bg-[#0f0f0f] relative mt-2"
+                >
+                  <div
+                    class="absolute -top-2 left-3 bg-[#0f0f0f] px-1 text-[8px] text-gray-500 font-bold uppercase tracking-wider"
+                  >
+                    Server Infrastructure
+                  </div>
+
+                  <div class="flex gap-2">
+                    <!-- SURREALDB NODE -->
+                    <div
+                      class="flex-1 border border-blue-900/40 bg-blue-900/5 p-2 rounded flex flex-col gap-2"
+                    >
+                      <div
+                        class="flex items-center justify-between border-b border-blue-900/20 pb-1"
+                      >
+                        <span class="text-[9px] font-bold text-blue-400">SURREALDB</span>
+                        <span class="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse"></span>
+                      </div>
+                      <div class="space-y-1">
+                        <div
+                          class="bg-blue-900/10 border border-blue-900/20 px-1.5 py-1 rounded text-[8px] text-blue-200/70"
+                        >
+                          Tables & Auth
+                        </div>
+                        <div
+                          class="bg-blue-900/10 border border-blue-900/20 px-1.5 py-1 rounded text-[8px] text-blue-200/70"
+                        >
+                          Live Query Hub
+                        </div>
+                        <div
+                          class="bg-blue-900/10 border border-blue-900/20 px-1.5 py-1 rounded text-[8px] text-blue-200/70"
+                        >
+                          Event Triggers
+                        </div>
+                      </div>
+                    </div>
+
+                    <!-- RPC CONNECT -->
+                    <div
+                      class="flex flex-col justify-center items-center gap-0.5 text-[8px] text-gray-600 w-8 shrink-0"
+                    >
+                      <span>RPC</span>
+                      <div class="w-full h-[1px] bg-gray-700"></div>
+                      <span>SYNC</span>
+                    </div>
+
+                    <!-- SIDECAR NODE -->
+                    <div
+                      class="flex-1 border border-green-900/40 bg-green-900/10 p-2 rounded shadow-[0_0_20px_rgba(22,197,94,0.05)] flex flex-col gap-2"
+                    >
+                      <div
+                        class="flex items-center justify-between border-b border-green-900/20 pb-1"
+                      >
+                        <span class="text-[9px] font-bold text-green-400">SIDECAR</span>
+                        <span
+                          class="h-1.5 w-1.5 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.8)]"
+                        ></span>
+                      </div>
+                      <div class="space-y-1">
+                        <div
+                          class="bg-green-900/20 border border-green-900/30 px-1.5 py-1 rounded text-[8px] text-green-200/80 font-bold flex items-center gap-1"
+                        >
+                          <span>⚡</span> DBSP Engine
+                        </div>
+                        <div
+                          class="bg-green-900/20 border border-green-900/30 px-1.5 py-1 rounded text-[8px] text-green-200/80"
+                        >
+                          Incantation Mgr
+                        </div>
+                        <div
+                          class="bg-green-900/20 border border-green-900/30 px-1.5 py-1 rounded text-[8px] text-green-200/80"
+                        >
+                          In-Memory State
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="mt-auto">
+                <p class="text-xs text-gray-500 mb-4 font-mono leading-relaxed">
+                  The Sidecar runs as a separate process. It keeps the DBSP state in <span
+                    class="text-gray-300">RAM</span
+                  >, eliminating the need to save/load state on every request. It updates the
+                  database via RPC.
+                </p>
+                <ul class="space-y-2 font-mono text-xs text-gray-500 border-t border-[#222] pt-4">
+                  <li class="flex items-start gap-2">
+                    <span class="text-green-400">✔</span> High Performance (In-Memory State).
+                  </li>
+                  <li class="flex items-start gap-2">
+                    <span class="text-green-400">✔</span> Scalable for production loads.
+                  </li>
+                </ul>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </section>
