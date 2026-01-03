@@ -300,7 +300,7 @@ class User {
 
 /// The complete SurrealDB schema definition.
 /// This constant contains the raw .surql schema file content.
-const String SURQL_SCHEMA = "-- ##################################################################
+const String SURQL_SCHEMA = """-- ##################################################################
 -- SCOPES & AUTHENTICATION
 -- ##################################################################
 
@@ -499,4 +499,4 @@ WHEN \$event = \"DELETE\"
 THEN {
     -- No-op for now.
 };
-";
+""";

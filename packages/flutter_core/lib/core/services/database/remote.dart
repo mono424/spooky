@@ -29,6 +29,14 @@ class RemoteDatabaseService extends AbstractDatabaseService {
     return RemoteDatabaseService._(client, config);
   }
 
+  // To allow testing with in-memory client
+  static RemoteDatabaseService createWithClient(
+    SurrealDb client,
+    DatabaseConfig config,
+  ) {
+    return RemoteDatabaseService._(client, config);
+  }
+
   @override
   Future<void> connect() async {
     // If client is null, maybe try to reconnect?
