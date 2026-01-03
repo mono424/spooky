@@ -55,16 +55,16 @@ const ThreadList = () => {
     <meta name="generator" content={Astro.generator} />
     <meta name="description" content="Spooky Sync - A SurrealDB native Sync Engine" />
     <meta property="og:type" content="website" />
-    <meta property="og:url" content={Astro.url} />
+    <meta property="og:url" content={Astro.site} />
     <meta property="og:title" content="SPOOKY SYNC" />
     <meta property="og:description" content="Spooky Sync - A SurrealDB native Sync Engine" />
-    <meta property="og:image" content="/spooky/social_card.svg" />
+    <meta property="og:image" content={new URL('/spooky/social_card.png', Astro.site)} />
 
     <meta property="twitter:card" content="summary_large_image" />
-    <meta property="twitter:url" content={Astro.url} />
+    <meta property="twitter:url" content={Astro.site} />
     <meta property="twitter:title" content="SPOOKY SYNC" />
     <meta property="twitter:description" content="Spooky Sync - A SurrealDB native Sync Engine" />
-    <meta property="twitter:image" content="/spooky/social_card.svg" />
+    <meta property="twitter:image" content={new URL('/spooky/social_card.png', Astro.site)} />
     <title>SPOOKY SYNC</title>
   </head>
   <body class="min-h-screen flex flex-col">
