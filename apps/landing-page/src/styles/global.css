@@ -102,22 +102,17 @@
   /* Removed float/wobble animations as they are too fluid for a terminal */
 }
 
-/* Custom ASCII Scrollbar */
+/* Custom Invisible Scrollbar */
 ::-webkit-scrollbar {
-  width: 12px;
-  background: #000000;
-  border-left: 1px solid #ffffff;
+  width: 0px;
+  background: transparent;
+  display: none; /* Safely hide it */
 }
 
 ::-webkit-scrollbar-track {
-  background: #000000;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #ffffff;
-  border: 2px solid #000000; /* Creates a blocky look */
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #aaaaaa;
+  background: transparent;
 }

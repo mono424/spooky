@@ -48,6 +48,7 @@ export default {
           light: "#0f1520",
           dark: "#050810",
         },
+        paper: "#eeeeee", // Off-white for terminals/sections
       },
       fontFamily: {
         sans: ["Inter", "system-ui", "sans-serif"],
