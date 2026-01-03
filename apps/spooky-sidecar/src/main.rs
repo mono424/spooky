@@ -237,10 +237,16 @@ async fn register_view_handler(
     let result_update = update.unwrap_or_else(|| spooky_stream_processor::service::view::default_result(&data.plan.id));
 
     let m = &data.metadata;
-    let query = "UPSERT type::thing('_spooky_incantation', $id) SET hash = <string>$hash, tree = $tree, clientId = <string>$clientId, surrealQL = <string>$surrealQL, params = $params, ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt";
+    let query = "UPSERT <record>$id SET hash = <string>$hash, tree = $tree, clientId = <string>$clientId, surrealQL = <string>$surrealQL, params = $params, ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt";
     
     let raw_id = m["id"].as_str().unwrap();
-    let id_str = raw_id.strip_prefix("_spooky_incantation:").unwrap_or(raw_id).to_string();
+    // For <record> cast we need the full ID "table:id"
+    let id_str = if raw_id.starts_with("_spooky_incantation:") {
+        raw_id.to_string()
+    } else {
+        format!("_spooky_incantation:{}", raw_id)
+    };
+
     let client_id_str = m["clientId"].as_str().unwrap().to_string();
     let surql_str = m["surrealQL"].as_str().unwrap().to_string();
     let ttl_str = m["ttl"].as_str().unwrap().to_string();
@@ -309,9 +315,14 @@ async fn version_handler() -> impl IntoResponse {
 
 
 async fn update_incantation_in_db(db: &Surreal<Client>, update: &MaterializedViewUpdate) {
-    let query = "UPDATE type::thing('_spooky_incantation', $id) SET hash = <string>$hash, tree = $tree RETURN AFTER";
+    let query = "UPDATE <record>$id SET hash = <string>$hash, tree = $tree RETURN AFTER";
     let raw_id = &update.query_id;
-    let id_str = raw_id.strip_prefix("_spooky_incantation:").unwrap_or(raw_id).to_string();
+    // For <record> cast we need the full ID "table:id"
+    let id_str = if raw_id.starts_with("_spooky_incantation:") {
+        raw_id.to_string()
+    } else {
+        format!("_spooky_incantation:{}", raw_id)
+    };
     
     debug!("Updating incantation {} with hash {}", id_str, update.result_hash);
     
