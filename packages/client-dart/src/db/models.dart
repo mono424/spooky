@@ -153,45 +153,42 @@ class User {
 
 /// The complete SurrealDB schema definition.
 /// This constant contains the raw .surql schema file content.
-const String SURQL_SCHEMA =
-    """-- ##################################################################
+const String SURQL_SCHEMA = """-- ##################################################################
 -- SCOPES & AUTHENTICATION
 -- ##################################################################
-DEFINE ACCESS account ON DATABASE TYPE RECORD
-	SIGNUP ( CREATE user SET username = \$username, password = crypto::argon2::generate(\$password) )
-	SIGNIN ( SELECT * FROM user WHERE username = \$username AND crypto::argon2::compare(password, \$password) )
-	DURATION FOR TOKEN 15m, FOR SESSION 12h
-;
+
+DEFINE FUNCTION fn::polyfill::createAccount(\$username: string, \$password: string) {
+  IF string::len(\$username) <= 3 { THROW \"Username must be longer than 3 characters\" };
+  IF string::len(\$password) == 0 { THROW \"Password cannot be empty\" };
+
+  LET \$existing = (SELECT value id FROM user WHERE username = \$username LIMIT 1)[0];
+  IF \$existing != NONE { THROW \"Username '\" + <string>\$username + \"' is already taken\" };
+
+  LET \$u = CREATE user SET username = \$username, password = crypto::argon2::generate(\$password);
+  RETURN \$u;
+};
 
 -- ##################################################################
 -- USER TABLE
 -- ##################################################################
 
 DEFINE TABLE user SCHEMAFULL
-  PERMISSIONS FOR select, update, delete, create
-  WHERE \$access = \"account\"
-  AND id = \$auth.id
-;
+PERMISSIONS FOR select, create, update, delete WHERE true;
 
 DEFINE FIELD username ON TABLE user TYPE string
-    ASSERT \$value != NONE AND string::is::alphanum(\$value) AND string::len(\$value) > 3;
+ASSERT \$value != NONE AND string::len(\$value) > 3
+PERMISSIONS FOR select, create, update WHERE true;
     
 DEFINE INDEX unique_username ON TABLE user FIELDS username UNIQUE;
 
-DEFINE FIELD password ON TABLE user TYPE string
-    ASSERT \$value != NONE AND string::len(\$value) > 0;
 
-DEFINE FIELD created_at ON TABLE user TYPE datetime
-    VALUE time::now();
 
 -- ##################################################################
 -- THREAD TABLE
 -- ##################################################################
 
 DEFINE TABLE thread SCHEMAFULL
-  PERMISSIONS
-    FOR select WHERE true
-    FOR update, delete, create WHERE \$access = \"account\" AND author.id = \$auth.id
+PERMISSIONS FOR select, create, update, delete WHERE true
 ;
 
 
@@ -201,23 +198,22 @@ DEFINE FIELD title ON TABLE thread TYPE string
 DEFINE FIELD content ON TABLE thread TYPE string
     ASSERT \$value != NONE AND string::len(\$value) > 0;
 
-DEFINE FIELD author ON TABLE thread TYPE record<user>;
+DEFINE FIELD author ON TABLE thread TYPE record<user>; -- @parent
 
 DEFINE FIELD created_at ON TABLE thread TYPE datetime
     VALUE time::now();
 
+DEFINE FIELD active ON TABLE thread TYPE bool VALUE \$value OR false;
 
 -- ##################################################################
 -- COMMENT TABLE
 -- ##################################################################
 
 DEFINE TABLE comment SCHEMAFULL
-  PERMISSIONS
-    FOR select WHERE true
-    FOR update, delete, create WHERE \$access = \"account\" AND author.id = \$auth.id
+PERMISSIONS FOR select, create, update, delete WHERE true
 ;
 
-DEFINE FIELD thread_id ON TABLE comment TYPE record<thread>;
+DEFINE FIELD thread ON TABLE comment TYPE record<thread>; -- @parent
 
 DEFINE FIELD content ON TABLE comment TYPE string
     ASSERT \$value != NONE AND string::len(\$value) > 0;
@@ -227,4 +223,133 @@ DEFINE FIELD author ON TABLE comment TYPE record<user>;
 DEFINE FIELD created_at ON TABLE comment TYPE datetime
     VALUE time::now();
 
+-- ##################################################################
+-- RELATION TABLES
+-- ##################################################################
+
+DEFINE TABLE commented_on SCHEMAFULL TYPE RELATION
+  FROM comment TO thread
+PERMISSIONS FOR select, create, update, delete WHERE true;
+
+DEFINE EVENT comment_created ON TABLE comment WHEN \$event = \"CREATE\" THEN
+  RELATE (\$after.id)->commented_on->(\$after.thread)
+;
+-- ==================================================
+-- SPOOKY INCANTATION
+-- The Registry of active Live Queries (Incantations).
+-- ==================================================
+
+DEFINE TABLE _spooky_incantation SCHEMALESS
+PERMISSIONS FOR select, create, update, delete WHERE true;
+
+-- The raw query string (for re-hydration/debugging)
+-- The raw query string (for re-hydration/debugging)
+DEFINE FIELD surrealQL ON TABLE _spooky_incantation TYPE option<string>
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- The raw query string (for re-hydration/debugging)
+DEFINE FIELD clientId ON TABLE _spooky_incantation TYPE option<string>
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- The current XOR sum of all results in this query
+DEFINE FIELD hash ON TABLE _spooky_incantation TYPE option<string>
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- The Radix Tree of Result IDs for efficient sync
+DEFINE FIELD tree ON TABLE _spooky_incantation TYPE any
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- For garbage collection (Heartbeat)
+DEFINE FIELD lastActiveAt ON TABLE _spooky_incantation TYPE datetime DEFAULT time::now()
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- How long this Incantation stays alive without activity
+DEFINE FIELD ttl ON TABLE _spooky_incantation TYPE duration
+PERMISSIONS FOR select, create, update WHERE true;
+
+
+-- ==================================================
+-- SPOOKY SCHEMA
+-- The provisioned schema state for the database. Currently only used in local cache.
+-- Used in local-migrator.ts
+-- ==================================================
+
+DEFINE TABLE IF NOT EXISTS _spooky_schema SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS id ON _spooky_schema TYPE string;
+DEFINE FIELD IF NOT EXISTS hash ON _spooky_schema TYPE string;
+DEFINE FIELD IF NOT EXISTS created_at ON _spooky_schema TYPE datetime VALUE time::now();
+DEFINE INDEX IF NOT EXISTS unique_hash ON _spooky_schema FIELDS hash UNIQUE;
+
+-- ==================================================
+-- SPOOKY DATA HASH (Client)
+-- Removed: Replaced by DBSP Module Internal Hashing
+-- ==================================================
+
+-- ==================================================
+-- SPOOKY EVENTS
+-- Stores create, update, and delete events
+-- ==================================================
+
+DEFINE TABLE _spooky_pending_mutations SCHEMAFULL
+PERMISSIONS FOR select, create, update, delete WHERE true;
+
+DEFINE FIELD IF NOT EXISTS id ON _spooky_pending_mutations TYPE string;
+
+DEFINE FIELD IF NOT EXISTS mutationType ON _spooky_pending_mutations TYPE string
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- The target record ID (for update/delete) - maps to 'id' in the event object
+DEFINE FIELD IF NOT EXISTS recordId ON _spooky_pending_mutations TYPE option<record>
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- The data payload (for create/update)
+DEFINE FIELD IF NOT EXISTS data ON _spooky_pending_mutations TYPE option<object> FLEXIBLE
+PERMISSIONS FOR select, create, update WHERE true;
+
+
+-- ==================================================
+-- AUTO-GENERATED SPOOKY EVENTS
+-- ==================================================
+
+-- Table: comment Client Mutation
+DEFINE EVENT OVERWRITE _spooky_comment_client_mutation ON TABLE comment
+WHEN \$before != \$after AND \$event != \"DELETE\"
+THEN {
+    -- No-op for now. Client mutation sync logic moved to DBSP.
+};
+
+-- Table: comment Client Deletion
+DEFINE EVENT OVERWRITE _spooky_comment_client_delete ON TABLE comment
+WHEN \$event = \"DELETE\"
+THEN {
+    -- No-op for now.
+};
+
+-- Table: thread Client Mutation
+DEFINE EVENT OVERWRITE _spooky_thread_client_mutation ON TABLE thread
+WHEN \$before != \$after AND \$event != \"DELETE\"
+THEN {
+    -- No-op for now. Client mutation sync logic moved to DBSP.
+};
+
+-- Table: thread Client Deletion
+DEFINE EVENT OVERWRITE _spooky_thread_client_delete ON TABLE thread
+WHEN \$event = \"DELETE\"
+THEN {
+    -- No-op for now.
+};
+
+-- Table: user Client Mutation
+DEFINE EVENT OVERWRITE _spooky_user_client_mutation ON TABLE user
+WHEN \$before != \$after AND \$event != \"DELETE\"
+THEN {
+    -- No-op for now. Client mutation sync logic moved to DBSP.
+};
+
+-- Table: user Client Deletion
+DEFINE EVENT OVERWRITE _spooky_user_client_delete ON TABLE user
+WHEN \$event = \"DELETE\"
+THEN {
+    -- No-op for now.
+};
 """;
