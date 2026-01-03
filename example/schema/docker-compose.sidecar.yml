@@ -1,6 +1,6 @@
 services:
   surrealdb:
-    image: surrealdb/surrealdb:v2.1.2
+    image: surrealdb/surrealdb:v3.0.0-beta.1
     ports:
       - '8666:8000'
     environment:

@@ -260,15 +260,12 @@ class SpookyController extends ChangeNotifier {
 
   // --- Proxy Methods for SpookyClient ---
 
-  Future<Map<String, dynamic>?> create(
-    String id,
-    Map<String, dynamic> data,
-  ) async {
+  Future<MutationResponse> create(String id, Map<String, dynamic> data) async {
     if (client == null) throw Exception("Client not initialized");
     return client!.create(id, data);
   }
 
-  Future<Map<String, dynamic>?> update(
+  Future<MutationResponse> update(
     String table,
     String id,
     Map<String, dynamic> data,

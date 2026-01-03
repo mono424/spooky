@@ -6,6 +6,7 @@ class DashboardView extends StatelessWidget {
   final VoidCallback onSelectSchema;
   final VoidCallback onOpenLiveQuery;
   final VoidCallback onOpenChat;
+  final VoidCallback onOpenUpsyncTest;
 
   const DashboardView({
     super.key,
@@ -13,6 +14,7 @@ class DashboardView extends StatelessWidget {
     required this.onSelectSchema,
     required this.onOpenLiveQuery,
     required this.onOpenChat,
+    required this.onOpenUpsyncTest,
   });
 
   @override
@@ -47,6 +49,11 @@ class DashboardView extends StatelessWidget {
               title: "Spooky Chat",
               icon: Icons.chat_bubble_outline,
               onTap: onOpenChat,
+            ),
+            ActionCard(
+              title: "Upsync Test",
+              icon: Icons.sync,
+              onTap: onOpenUpsyncTest,
             ),
           ],
         ),
