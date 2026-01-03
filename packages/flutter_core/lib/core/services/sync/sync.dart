@@ -99,19 +99,25 @@ class SpookySync {
   }
 
   Future<void> _processUpEvent(UpEvent event) async {
+    dynamic res;
     if (event is CreateEvent) {
-      // TS: await this.remote.query(`CREATE $id CONTENT $data`, ...)
-      await remote.query(
-        r'CREATE $id CONTENT $data',
+      res = await remote.query(
+        r'CREATE type::record($id) CONTENT $data',
         vars: {'id': event.recordId, 'data': event.data},
       );
     } else if (event is UpdateEvent) {
-      await remote.query(
-        r'UPDATE $id MERGE $data',
+      res = await remote.query(
+        r'UPDATE type::record($id) MERGE $data',
         vars: {'id': event.recordId, 'data': event.data},
       );
     } else if (event is DeleteEvent) {
-      await remote.query(r'DELETE $id', vars: {'id': event.recordId});
+      res = await remote.query(
+        r'DELETE type::record($id)',
+        vars: {'id': event.recordId},
+      );
+    }
+    if (res.toString().contains("ERR") || res.toString().contains("error")) {
+      throw Exception("Remote sync failed: $res");
     }
   }
 
