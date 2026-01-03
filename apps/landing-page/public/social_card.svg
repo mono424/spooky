@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@700&amp;display=swap');
+      .terminal-text {
+        font-family: 'JetBrains Mono', monospace, Courier, 'Courier New';
+        fill: #FFFFFF;
+        text-transform: uppercase;
+      }
+    </style>
+
+    <radialGradient id="purpleGlow" cx="50%" cy="50%" r="70%" fx="50%" fy="50%">
+      <stop offset="0%" style="stop-color:#000000;stop-opacity:1" />
+      <stop offset="60%" style="stop-color:#12001f;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#2a0047;stop-opacity:1" />
+    </radialGradient>
+
+    <pattern id="scanlines" x="0" y="0" width="1" height="4" patternUnits="userSpaceOnUse">
+      <rect x="0" y="2" width="1" height="2" fill="#000000" opacity="0.3"/>
+    </pattern>
+
+    <filter id="terminalGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+      <feMerge>
+          <feMergeNode in="coloredBlur"/>
+          <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#purpleGlow)"/>
+  
+  <g filter="url(#terminalGlow)">
+      <g transform="translate(50, 165) scale(10)">
+         <path fill="#FFFFFF" d="M6 10V28L10 24L14 28L18 24L22 28L26 24V10C26 4.47715 21.5228 0 16 0C10.4772 0 6 4.47715 6 10Z"/>
+         <rect x="10" y="8" width="4" height="4" fill="#2a0047"/>
+         <rect x="18" y="8" width="4" height="4" fill="#2a0047"/>
+      </g>
+
+      <text x="380" y="320" class="terminal-text" font-size="60" letter-spacing="4">[ SPOOKY_SYNC ]</text>
+      <text x="380" y="380" class="terminal-text" font-size="24" opacity="0.8">&gt; The SurrealDB native Sync Engine</text>
+  </g>
+
+  <rect width="1200" height="630" fill="url(#scanlines)" pointer-events="none"/>
+  
+  <rect x="10" y="10" width="1180" height="610" fill="none" stroke="#FFFFFF" stroke-width="4" opacity="0.5" stroke-dasharray="20,10"/>
+</svg>
