@@ -50,7 +50,7 @@ const ThreadList = () => {
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/svg+xml" href="spooky/public/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="generator" content={Astro.generator} />
     <meta name="description" content="Spooky Sync - A SurrealDB native Sync Engine" />
@@ -58,13 +58,13 @@ const ThreadList = () => {
     <meta property="og:url" content={Astro.url} />
     <meta property="og:title" content="SPOOKY SYNC" />
     <meta property="og:description" content="Spooky Sync - A SurrealDB native Sync Engine" />
-    <meta property="og:image" content="/logo.svg" />
+    <meta property="og:image" content="spooky/public/social_card.svg" />
 
     <meta property="twitter:card" content="summary_large_image" />
     <meta property="twitter:url" content={Astro.url} />
     <meta property="twitter:title" content="SPOOKY SYNC" />
     <meta property="twitter:description" content="Spooky Sync - A SurrealDB native Sync Engine" />
-    <meta property="twitter:image" content="/logo.svg" />
+    <meta property="twitter:image" content="spooky/public/social_card.svg" />
     <title>SPOOKY SYNC</title>
   </head>
   <body class="min-h-screen flex flex-col">
@@ -768,14 +768,9 @@ const ThreadList = () => {
 
     <footer class="py-12 border-t-4 border-white border-double">
       <div class="max-w-7xl mx-auto px-4 flex flex-col md:flex-row justify-between items-center">
-        <div class="mb-4 md:mb-0 font-bold flex items-center relative">
-          <pre class="text-[6px] leading-none mr-2">
-  .-.
- (o o)
- | O \
-  \   \
-   `~'</pre>
-          © 2025 Spooky
+        <div class="mb-4 md:mb-0 text-xs font-mono flex items-center relative">
+          <img src="public/logo_transparent.svg" alt="Spooky Logo" class="w-4 h-4 mr-2" />
+          © 2025 SPOOKY
         </div>
         <div class="space-x-6 text-sm font-mono uppercase">
           <a href="#" class="hover:underline px-1 transition-none">[ PRIVACY ]</a>
