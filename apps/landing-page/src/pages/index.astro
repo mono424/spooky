@@ -147,54 +147,171 @@ const ThreadList = () => {
     <section id="features" class="py-20">
       <div class="max-w-7xl mx-auto px-4">
         <div class="mb-16 border-b border-dashed border-white pb-4">
-          <h2 class="text-3xl font-bold uppercase">// SYSTEM_MODULES</h2>
+          <h2 class="text-3xl font-bold uppercase">// SYNC_ENGINE</h2>
         </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <!-- Card 1: Offline Compatibility -->
           <div
-            class="border-2 border-white p-6 hover:bg-white hover:text-black transition-none group relative"
+            class="group relative bg-[#050505] border border-[#222] p-8 hover:bg-[#0a0a0a] transition-colors duration-500 overflow-hidden"
           >
-            <span class="absolute top-1 left-2 text-xs">+</span>
-            <span class="absolute top-1 right-2 text-xs">+</span>
-            <span class="absolute bottom-1 left-2 text-xs">+</span>
-            <span class="absolute bottom-1 right-2 text-xs">+</span>
+            <div
+              class="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-white/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-700"
+            >
+            </div>
 
-            <div class="text-xl mb-4 font-bold group-hover:underline">Please Wait...</div>
-            <p class="text-sm font-mono">
-              &gt; Latency: &lt; 100ms.<br />
-              &gt; Status: INSTANT.<br />
-              &gt; Powers collaborative workflows via WebSockets.
-            </p>
+            <div class="relative z-10 flex flex-col h-full">
+              <div class="flex items-start justify-between mb-6">
+                <div
+                  class="text-[10px] font-mono text-gray-600 uppercase tracking-widest border border-[#333] px-2 py-1 rounded"
+                >
+                  01_LOCAL
+                </div>
+                <svg
+                  class="w-5 h-5 text-gray-600 group-hover:text-white transition-colors"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="1.5"
+                    d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"
+                  ></path>
+                </svg>
+              </div>
+
+              <h3
+                class="text-lg font-bold uppercase tracking-wider text-gray-200 mb-3 group-hover:text-white transition-colors"
+              >
+                Offline Compatibility
+              </h3>
+
+              <p
+                class="font-mono text-xs text-gray-500 leading-relaxed mb-8 group-hover:text-gray-400"
+              >
+                Full read/write capability without network access. Changes are queued locally and
+                synchronized automatically when connectivity returns.
+              </p>
+
+              <div
+                class="mt-auto pt-4 border-t border-[#1a1a1a] flex items-center gap-2 text-[10px] font-mono text-gray-600"
+              >
+                <span
+                  class="w-1.5 h-1.5 rounded-full bg-gray-600 group-hover:bg-green-500 transition-colors"
+                ></span>
+                <span>STATE: PERSISTED</span>
+              </div>
+            </div>
           </div>
 
+          <!-- Card 2: Live Updates -->
           <div
-            class="border-2 border-white p-6 hover:bg-white hover:text-black transition-none group relative"
+            class="group relative bg-[#050505] border border-[#222] p-8 hover:bg-[#0a0a0a] transition-colors duration-500 overflow-hidden"
           >
-            <span class="absolute top-1 left-2 text-xs">+</span>
-            <span class="absolute top-1 right-2 text-xs">+</span>
-            <span class="absolute bottom-1 left-2 text-xs">+</span>
-            <span class="absolute bottom-1 right-2 text-xs">+</span>
-            <div class="text-xl mb-4 font-bold group-hover:underline">Offline-First Arch</div>
-            <p class="text-sm font-mono">
-              &gt; Network: OPTIONAL.<br />
-              &gt; Conflict_Res: AUTOMATIC.<br />
-              &gt; Local-first architecture stores data in IndexedDB.
-            </p>
+            <div
+              class="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-purple-500/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-700"
+            >
+            </div>
+
+            <div class="relative z-10 flex flex-col h-full">
+              <div class="flex items-start justify-between mb-6">
+                <div
+                  class="text-[10px] font-mono text-gray-600 uppercase tracking-widest border border-[#333] px-2 py-1 rounded"
+                >
+                  02_SYNC
+                </div>
+                <svg
+                  class="w-5 h-5 text-gray-600 group-hover:text-purple-400 transition-colors"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="1.5"
+                    d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                </svg>
+              </div>
+
+              <h3
+                class="text-lg font-bold uppercase tracking-wider text-gray-200 mb-3 group-hover:text-white transition-colors"
+              >
+                Live Updates
+              </h3>
+
+              <p
+                class="font-mono text-xs text-gray-500 leading-relaxed mb-8 group-hover:text-gray-400"
+              >
+                Sub-millisecond latency. Data changes propagate instantly to all connected clients
+                via incremental view maintenance.
+              </p>
+
+              <div
+                class="mt-auto pt-4 border-t border-[#1a1a1a] flex items-center gap-2 text-[10px] font-mono text-gray-600"
+              >
+                <span
+                  class="w-1.5 h-1.5 rounded-full bg-gray-600 group-hover:bg-purple-500 transition-colors animate-pulse"
+                ></span>
+                <span>SOCKET: CONNECTED</span>
+              </div>
+            </div>
           </div>
 
+          <!-- Card 3: Developer Experience -->
           <div
-            class="border-2 border-white p-6 hover:bg-white hover:text-black transition-none group relative"
+            class="group relative bg-[#050505] border border-[#222] p-8 hover:bg-[#0a0a0a] transition-colors duration-500 overflow-hidden"
           >
-            <span class="absolute top-1 left-2 text-xs">+</span>
-            <span class="absolute top-1 right-2 text-xs">+</span>
-            <span class="absolute bottom-1 left-2 text-xs">+</span>
-            <span class="absolute bottom-1 right-2 text-xs">+</span>
-            <div class="text-xl mb-4 font-bold group-hover:underline">Type-Safe & Secure</div>
-            <p class="text-sm font-mono">
-              &gt; Lang: TYPESCRIPT/DART.<br />
-              &gt; Schema: STRICT.<br />
-              &gt; End-to-end type safety generated from schema.
-            </p>
+            <div
+              class="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-blue-500/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-700"
+            >
+            </div>
+
+            <div class="relative z-10 flex flex-col h-full">
+              <div class="flex items-start justify-between mb-6">
+                <div
+                  class="text-[10px] font-mono text-gray-600 uppercase tracking-widest border border-[#333] px-2 py-1 rounded"
+                >
+                  03_DX
+                </div>
+                <svg
+                  class="w-5 h-5 text-gray-600 group-hover:text-blue-400 transition-colors"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="1.5"
+                    d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"></path>
+                </svg>
+              </div>
+
+              <h3
+                class="text-lg font-bold uppercase tracking-wider text-gray-200 mb-3 group-hover:text-white transition-colors"
+              >
+                Developer Experience
+              </h3>
+
+              <p
+                class="font-mono text-xs text-gray-500 leading-relaxed mb-8 group-hover:text-gray-400"
+              >
+                Schema-first design with end-to-end type safety. Generated TypeScript definitions
+                ensure your code is always correct.
+              </p>
+
+              <div
+                class="mt-auto pt-4 border-t border-[#1a1a1a] flex items-center gap-2 text-[10px] font-mono text-gray-600"
+              >
+                <span
+                  class="w-1.5 h-1.5 rounded-full bg-gray-600 group-hover:bg-blue-500 transition-colors"
+                ></span>
+                <span>TYPES: STRICT</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -328,7 +445,7 @@ const ThreadList = () => {
         >
           <div>
             <h2 class="text-3xl font-bold uppercase tracking-widest text-white mb-2">
-              // DEVELOPER_EXPERIENCE
+              // DEV_EXPERIENCE
             </h2>
             <p class="font-mono text-gray-500 text-sm max-w-md">
               Spooky is built by developers for developers with framework-native queries with full
@@ -447,9 +564,7 @@ const ThreadList = () => {
     <section class="py-24 border-b border-white/10 bg-black">
       <div class="max-w-7xl mx-auto px-4">
         <div class="mb-16 text-center">
-          <h2 class="text-3xl font-bold uppercase tracking-widest text-white mb-4">
-            // ARCHITECTURE_MODES
-          </h2>
+          <h2 class="text-3xl font-bold uppercase tracking-widest text-white mb-4">// RUN_MODES</h2>
           <p class="font-mono text-gray-500 max-w-3xl mx-auto text-sm md:text-base leading-relaxed">
             Spooky uses <span class="text-white">Icremental View Maintanence</span> to track client query
             hashes, known as <span class="text-purple-400 font-bold">Incantations</span>. These are

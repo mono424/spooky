@@ -11,7 +11,8 @@ import {
   QueryEventTypes,
 } from './events.js';
 import { Event } from '../../events/index.js';
-import { decodeFromSpooky } from '../utils.js';
+import { decodeFromSpooky, parseRecordIdString } from '../utils.js';
+import { flattenIdTree } from '../sync/utils.js';
 import { SchemaStructure, TableModel } from '@spooky/query-builder';
 
 export class QueryManager<S extends SchemaStructure> {
@@ -63,8 +64,12 @@ export class QueryManager<S extends SchemaStructure> {
       return;
     }
 
-    const outRecords = records.map((r) =>
-      decodeFromSpooky(
+    const remoteIds = new Set(flattenIdTree(remoteTree).map((node) => node.id));
+    const validRecords: any[] = [];
+    const orphanedRecords: any[] = [];
+
+    for (const r of records) {
+      const decoded = decodeFromSpooky(
         this.schema,
         incantation.tableName,
         r as unknown as TableModel<
@@ -75,23 +80,73 @@ export class QueryManager<S extends SchemaStructure> {
             }
           >
         >
-      )
-    );
+      );
+
+      const id = (decoded as any).id;
+      const idStr = id instanceof RecordId ? id.toString() : id;
+
+      if (idStr && remoteIds.has(idStr)) {
+        validRecords.push(decoded);
+      } else {
+        orphanedRecords.push(decoded);
+      }
+    }
 
     this.logger.debug(
       {
         incantationId: incantationId.toString(),
         queryHash: incantationId.id.toString(),
-        recordCount: records.length,
+        totalRecords: records.length,
+        validRecords: validRecords.length,
+        orphanedRecords: orphanedRecords.length,
       },
       'Handling incoming remote update'
     );
 
-    incantation.updateLocalState(outRecords, remoteHash, remoteTree);
+    incantation.updateLocalState(validRecords, remoteHash, remoteTree);
     this.events.emit(QueryEventTypes.IncantationUpdated, {
       incantationId,
-      records: outRecords,
+      records: validRecords,
     });
+
+    void this.verifyAndPurgeOrphans(orphanedRecords);
+  }
+
+  private async verifyAndPurgeOrphans(orphanedRecords: any[]) {
+    if (orphanedRecords.length === 0) return;
+
+    const idsToCheck = orphanedRecords
+      .map((r) => r.id)
+      .filter((id) => !!id)
+      .map((id) => (id instanceof RecordId ? id : parseRecordIdString(id.toString())));
+
+    if (idsToCheck.length === 0) return;
+
+    this.logger.debug({ count: idsToCheck.length }, 'Verifying orphaned records against remote');
+
+    try {
+      const [existing] = await this.remote.query<[{ id: RecordId }[]]>('SELECT id FROM $ids', {
+        ids: idsToCheck,
+      });
+
+      const existingIdsSet = new Set(existing.map((r) => r.id.toString()));
+      const toDelete = idsToCheck.filter((id) => !existingIdsSet.has(id.toString()));
+
+      if (toDelete.length > 0) {
+        this.logger.info(
+          { count: toDelete.length, ids: toDelete.map((id) => id.toString()) },
+          'Purging confirmed orphaned records'
+        );
+        await this.local.query('DELETE $ids', { ids: toDelete });
+      } else {
+        this.logger.debug(
+          { count: idsToCheck.length },
+          'All orphaned records still exist remotely (ghost records)'
+        );
+      }
+    } catch (err) {
+      this.logger.error({ err }, 'Failed to verify/purge orphans');
+    }
   }
 
   private async register(
