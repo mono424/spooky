@@ -6,7 +6,7 @@ import '../../types.dart';
 
 /// Basisklasse für alle Query Events.
 abstract class QueryEvent extends BaseEvent<dynamic> {
-  QueryEvent(String type, dynamic payload) : super(type, payload);
+  QueryEvent(super.type, super.payload);
 }
 
 // --- 1. IncantationInitialized ---

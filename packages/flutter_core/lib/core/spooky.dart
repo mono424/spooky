@@ -8,7 +8,7 @@ import 'services/database/local_migration.dart';
 import 'services/mutation/main.dart'; // MutationManager
 import 'services/query/query.dart'; // QueryManager
 import 'services/sync/sync.dart'; // SpookySync
-import 'services/mutation/mutation_querys.dart'; // MutationResponse
+// MutationResponse
 
 export 'types.dart';
 export 'services/database/local.dart';

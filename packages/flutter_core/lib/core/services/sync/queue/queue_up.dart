@@ -15,17 +15,17 @@ abstract class UpEvent {
 }
 
 class CreateEvent extends UpEvent {
-  CreateEvent(String mutationId, String recordId, Map<String, dynamic> data)
-    : super(mutationId, recordId, data: data);
+  CreateEvent(super.mutationId, super.recordId, Map<String, dynamic> data)
+    : super(data: data);
 }
 
 class UpdateEvent extends UpEvent {
-  UpdateEvent(String mutationId, String recordId, Map<String, dynamic> data)
-    : super(mutationId, recordId, data: data);
+  UpdateEvent(super.mutationId, super.recordId, Map<String, dynamic> data)
+    : super(data: data);
 }
 
 class DeleteEvent extends UpEvent {
-  DeleteEvent(String mutationId, String recordId) : super(mutationId, recordId);
+  DeleteEvent(super.mutationId, super.recordId);
 }
 
 class UpQueue {

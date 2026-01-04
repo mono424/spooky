@@ -15,7 +15,7 @@ class SyncQueueEventTypes {
 
 // Base class for Sync Events
 abstract class SyncQueueEvent extends BaseEvent<dynamic> {
-  SyncQueueEvent(String type, dynamic payload) : super(type, payload);
+  SyncQueueEvent(super.type, super.payload);
 }
 
 // --- 1. MutationEnqueued ---
