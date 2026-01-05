@@ -4,19 +4,23 @@ import { SpookyConfig } from '../../types.js';
 import { Logger } from '../logger.js';
 import { AbstractDatabaseService } from './database.js';
 
-const printDiagnostic = ({ key, type, phase, ...other }: Diagnostic) => {
-  if (phase === 'progress' || phase === 'after') {
-    console.log(`[SurrealDB:LOCAL] [${key}] ${type}:${phase}\n${JSON.stringify(other, null, 2)}`);
-  }
-};
-
 export class LocalDatabaseService extends AbstractDatabaseService {
   private config: SpookyConfig<any>['database'];
 
   constructor(config: SpookyConfig<any>['database'], logger: Logger) {
     super(
       new Surreal({
-        engines: applyDiagnostics(createWasmEngines(), printDiagnostic),
+        engines: applyDiagnostics(
+          createWasmEngines(),
+          ({ key, type, phase, ...other }: Diagnostic) => {
+            if (phase === 'progress' || phase === 'after') {
+              logger.info(
+                { ...other, key, type, phase, service: 'surrealdb:local' },
+                `[SurrealDB:LOCAL] [${key}] ${type}:${phase}`
+              );
+            }
+          }
+        ),
       }),
       logger
     );
