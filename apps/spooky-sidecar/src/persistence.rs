@@ -1,14 +1,14 @@
 use anyhow::Context;
-use spooky_stream_processor::Circuit;
+use spooky_stream_processor::StandardCircuit;
 use std::fs;
 use std::path::Path;
 use tracing::{error, info};
 
-pub fn load_circuit(path: &Path) -> Circuit {
+pub fn load_circuit(path: &Path) -> StandardCircuit {
     if path.exists() {
         info!("Loading persistence file from {:?}", path);
         match fs::read_to_string(path) {
-            Ok(content) => match serde_json::from_str::<Circuit>(&content) {
+            Ok(content) => match serde_json::from_str::<StandardCircuit>(&content) {
                 Ok(circuit) => {
                     info!("Successfully loaded circuit state");
                     return circuit;
@@ -20,10 +20,10 @@ pub fn load_circuit(path: &Path) -> Circuit {
     } else {
         info!("No persistence file found at {:?}, starting fresh", path);
     }
-    Circuit::new()
+    StandardCircuit::new()
 }
 
-pub fn save_circuit(path: &Path, circuit: &Circuit) -> anyhow::Result<()> {
+pub fn save_circuit(path: &Path, circuit: &StandardCircuit) -> anyhow::Result<()> {
     // Ensure parent directory exists
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).context("Failed to create persistence directory")?;

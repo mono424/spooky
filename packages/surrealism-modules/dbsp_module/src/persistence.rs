@@ -1,15 +1,84 @@
 use serde_json::Value;
-use spooky_stream_processor::engine::Circuit;
+use spooky_stream_processor::engine::store::Store;
+use spooky_stream_processor::LazyCircuit;
+
+#[cfg(not(test))]
 use surrealism::imports::sql;
 
-pub fn load() -> Circuit {
+#[cfg(test)]
+fn sql<I, O>(_input: I) -> Result<O, String> {
+    Err("SQL not available in native tests".to_string())
+}
+
+pub struct SurrealStore;
+
+impl SurrealStore {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Store for SurrealStore {
+    fn get(&self, table: &str, id: &str) -> Option<Value> {
+        // Query: SELECT * FROM type::table($table):$id
+        // NOTE: id might already be scoped?
+        // In Spooky, ids are usually just strings.
+        // If id contains ':', it is fully qualified.
+        // Let's assume input id is fully qualified OR we try to construct it.
+        // But `store.rs` definition: `get(table, id)`.
+
+        let query = format!("SELECT * FROM type::table(\"{}\"):\"{}\"", table, id);
+        match sql::<String, Vec<Value>>(query) {
+            Ok(mut results) => {
+                if let Some(val) = results.pop() {
+                    // Check if it is not null/empty
+                    if val.is_null() {
+                        None
+                    } else {
+                        Some(val)
+                    }
+                } else {
+                    None
+                }
+            }
+            Err(e) => {
+                eprintln!("DEBUG: SurrealStore::get failed: {:?}", e);
+                None
+            }
+        }
+    }
+
+    fn get_by_field(&self, table: &str, field: &str, value: &Value) -> Vec<Value> {
+        // Query: SELECT * FROM type::table($table) WHERE field = value
+        // Need to escape/format value correctly.
+        // Best way: Use JSON representation of value.
+        let val_str = serde_json::to_string(value).unwrap_or("null".to_string());
+        // Simple sanitization or use parameter binding if available (surrealism macro might support it, but direct sql here).
+        // For now, simple textual substitution (assuming internal trusted usage).
+
+        let query = format!(
+            "SELECT * FROM type::table(\"{}\") WHERE {} = {}",
+            table, field, val_str
+        );
+
+        match sql::<String, Vec<Value>>(query) {
+            Ok(results) => results,
+            Err(e) => {
+                eprintln!("DEBUG: SurrealStore::get_by_field failed: {:?}", e);
+                Vec::new()
+            }
+        }
+    }
+}
+
+pub fn load() -> LazyCircuit {
     eprintln!("DEBUG: load_state: Loading from DB...");
     // SELECT content FROM _spooky_module_state WHERE id = 'dbsp'
     match sql::<&str, Vec<Value>>("SELECT content FROM _spooky_module_state:dbsp") {
         Ok(results) => {
             if let Some(first) = results.first() {
                 if let Some(content_str) = first.get("content").and_then(|v| v.as_str()) {
-                    match serde_json::from_str::<Circuit>(content_str) {
+                    match serde_json::from_str::<LazyCircuit>(content_str) {
                         Ok(state) => return state,
                         Err(e) => eprintln!("DEBUG: load_state: Deserialization failed: {}", e),
                     }
@@ -18,10 +87,10 @@ pub fn load() -> Circuit {
         }
         Err(e) => eprintln!("DEBUG: load_state: SQL Error: {:?}", e),
     }
-    Circuit::new()
+    LazyCircuit::new()
 }
 
-pub fn save(circuit: &Circuit) {
+pub fn save(circuit: &LazyCircuit) {
     if let Ok(content) = serde_json::to_string(circuit) {
         // Escape backslashes first, then single quotes
         let escaped_content = content.replace("\\", "\\\\").replace("'", "\\'");
