@@ -44,6 +44,10 @@ export class QueryManager<S extends SchemaStructure> {
     return [...this.activeQueries.values().filter((q) => q.invlovesTable(tableName))];
   }
 
+  public getActiveQueries() {
+    return Array.from(this.activeQueries.values());
+  }
+
   private async setClientId() {
     await this.remote.getClient().set('_spooky_client_id', this.clientId);
     this.logger.debug({ clientId: this.clientId }, 'ClientId set');

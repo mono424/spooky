@@ -3,12 +3,12 @@ import {
   AuthEventTypes,
   GlobalQueryEventTypes,
   MutationEventTypes,
-} from "./spooky-event-system.js";
-import { Logger } from "./logger.js";
-import { DatabaseService } from "./database.js";
-import { SchemaStructure } from "@spooky/query-builder";
-import { QueryManagerService } from "./query-manager.js";
-import { RecordId } from "surrealdb";
+} from './spooky-event-system.js';
+import { Logger } from './logger.js';
+import { DatabaseService } from './database.js';
+import { SchemaStructure } from '@spooky/query-builder';
+import { QueryManagerService } from './query-manager.js';
+import { RecordId } from 'surrealdb';
 
 /**
  * Event entry in the history
@@ -25,7 +25,7 @@ export interface DevToolsEvent {
  */
 export interface ActiveQuery {
   queryHash: number;
-  status: "initializing" | "active" | "updating" | "destroyed";
+  status: 'initializing' | 'active' | 'updating' | 'destroyed';
   createdAt: number;
   lastUpdate: number;
   updateCount: number;
@@ -100,9 +100,9 @@ export class DevToolsService {
   ) {
     this.maxEvents = config.maxEvents ?? 100;
     this.enabled = config.enabled ?? true;
-    this.version = config.version ?? "unknown";
+    this.version = config.version ?? 'unknown';
 
-    console.log("[DevTools] Service constructor called", {
+    console.log('[DevTools] Service constructor called', {
       enabled: this.enabled,
       version: this.version,
     });
@@ -110,10 +110,8 @@ export class DevToolsService {
     if (this.enabled) {
       this.setupEventSubscriptions();
       this.exposeToWindow();
-      this.logger.debug("[DevTools] Service initialized");
-      console.log(
-        "[DevTools] Service fully initialized, window.__SPOOKY__ exposed"
-      );
+      this.logger.debug('[DevTools] Service initialized');
+      console.log('[DevTools] Service fully initialized, window.__SPOOKY__ exposed');
     }
   }
 
@@ -146,7 +144,7 @@ export class DevToolsService {
       const queryHash = event.payload.queryHash;
       const activeQuery: ActiveQuery = {
         queryHash,
-        status: "initializing",
+        status: 'initializing',
         createdAt: Date.now(),
         lastUpdate: Date.now(),
         updateCount: 0,
@@ -168,12 +166,20 @@ export class DevToolsService {
       const queryHash = event.payload.queryHash;
       const query = this.activeQueries.get(queryHash);
       if (query) {
-        query.status = "active";
+        // Log update for debugging
+        console.log(`[DevTools] Query Updated ${queryHash}`, {
+          dataLength: event.payload.data?.length,
+          dataSample: event.payload.data?.slice(0, 1),
+        });
+
+        query.status = 'active';
         query.lastUpdate = Date.now();
         query.updateCount++;
         query.dataSize = event.payload.data?.length ?? 0;
         query.dataHash = event.payload.dataHash;
         query.data = this.sanitizeData(event.payload.data);
+
+        console.log(`[DevTools] Query Data set:`, query.data);
       }
       this.addEvent(GlobalQueryEventTypes.Updated, {
         queryHash: event.payload.queryHash,
@@ -187,7 +193,7 @@ export class DevToolsService {
       const queryHash = event.payload.queryHash;
       const query = this.activeQueries.get(queryHash);
       if (query) {
-        query.status = "updating";
+        query.status = 'updating';
         query.lastUpdate = Date.now();
         query.updateCount++;
         query.dataSize = event.payload.data?.length ?? 0;
@@ -200,27 +206,24 @@ export class DevToolsService {
       this.notifyDevTools();
     });
 
-    this.eventSystem.subscribe(
-      GlobalQueryEventTypes.RemoteLiveUpdate,
-      (event) => {
-        const queryHash = event.payload.queryHash;
-        const query = this.activeQueries.get(queryHash);
-        if (query) {
-          query.lastUpdate = Date.now();
-        }
-        this.addEvent(GlobalQueryEventTypes.RemoteLiveUpdate, {
-          queryHash: event.payload.queryHash,
-          action: event.payload.action,
-        });
-        this.notifyDevTools();
+    this.eventSystem.subscribe(GlobalQueryEventTypes.RemoteLiveUpdate, (event) => {
+      const queryHash = event.payload.queryHash;
+      const query = this.activeQueries.get(queryHash);
+      if (query) {
+        query.lastUpdate = Date.now();
       }
-    );
+      this.addEvent(GlobalQueryEventTypes.RemoteLiveUpdate, {
+        queryHash: event.payload.queryHash,
+        action: event.payload.action,
+      });
+      this.notifyDevTools();
+    });
 
     this.eventSystem.subscribe(GlobalQueryEventTypes.Destroyed, (event) => {
       const queryHash = event.payload.queryHash;
       const query = this.activeQueries.get(queryHash);
       if (query) {
-        query.status = "destroyed";
+        query.status = 'destroyed';
         query.lastUpdate = Date.now();
       }
       this.addEvent(GlobalQueryEventTypes.Destroyed, event.payload);
@@ -231,13 +234,10 @@ export class DevToolsService {
       this.notifyDevTools();
     });
 
-    this.eventSystem.subscribe(
-      GlobalQueryEventTypes.SubqueryUpdated,
-      (event) => {
-        this.addEvent(GlobalQueryEventTypes.SubqueryUpdated, event.payload);
-        this.notifyDevTools();
-      }
-    );
+    this.eventSystem.subscribe(GlobalQueryEventTypes.SubqueryUpdated, (event) => {
+      this.addEvent(GlobalQueryEventTypes.SubqueryUpdated, event.payload);
+      this.notifyDevTools();
+    });
 
     this.eventSystem.subscribe(MutationEventTypes.RequestExecution, (event) => {
       // Sanitize payload to avoid DataCloneError with InnerQuery objects
@@ -246,16 +246,10 @@ export class DevToolsService {
       this.notifyDevTools();
     });
 
-    this.eventSystem.subscribe(
-      GlobalQueryEventTypes.RequestTableQueryRefresh,
-      (event) => {
-        this.addEvent(
-          GlobalQueryEventTypes.RequestTableQueryRefresh,
-          event.payload
-        );
-        this.notifyDevTools();
-      }
-    );
+    this.eventSystem.subscribe(GlobalQueryEventTypes.RequestTableQueryRefresh, (event) => {
+      this.addEvent(GlobalQueryEventTypes.RequestTableQueryRefresh, event.payload);
+      this.notifyDevTools();
+    });
   }
 
   /**
@@ -292,9 +286,9 @@ export class DevToolsService {
 
       // Check if selector is an InnerQuery (has selectQuery property)
       if (
-        typeof mutation.selector === "object" &&
+        typeof mutation.selector === 'object' &&
         mutation.selector !== null &&
-        "selectQuery" in mutation.selector
+        'selectQuery' in mutation.selector
       ) {
         // Convert InnerQuery to a serializable object
         mutation.selector = {
@@ -334,7 +328,18 @@ export class DevToolsService {
       return data.toString();
     }
 
-    if (typeof data === "object" && data !== null) {
+    // Handle RecordId-like objects (e.g. from different surrealdb versions)
+    if (
+      typeof data === 'object' &&
+      data !== null &&
+      'tb' in data &&
+      'id' in data &&
+      Object.keys(data).length === 2
+    ) {
+      return `${data.tb}:${data.id}`;
+    }
+
+    if (typeof data === 'object' && data !== null) {
       // Handle Date objects
       if (data instanceof Date) {
         return data.toISOString();
@@ -360,20 +365,13 @@ export class DevToolsService {
   /**
    * Get table data from local database
    */
-  private async getTableData(
-    tableName: string
-  ): Promise<Record<string, unknown>[]> {
+  private async getTableData(tableName: string): Promise<Record<string, unknown>[]> {
     try {
       const query = `SELECT * FROM ${tableName}`;
-      const result = await this.databaseService.queryLocal<
-        Record<string, unknown>[]
-      >(query);
+      const result = await this.databaseService.queryLocal<Record<string, unknown>[]>(query);
       return result || [];
     } catch (error) {
-      this.logger.error(
-        `[DevTools] Failed to fetch table data for ${tableName}`,
-        error
-      );
+      this.logger.error(`[DevTools] Failed to fetch table data for ${tableName}`, error);
       return [];
     }
   }
@@ -390,18 +388,11 @@ export class DevToolsService {
       // Build the UPDATE query with MERGE to update specific fields
       const query = `UPDATE ${recordId} MERGE $updates`;
       await this.databaseService.queryLocal(query, { updates });
-      this.logger.debug(
-        `[DevTools] Updated row ${recordId} in ${tableName}`,
-        updates
-      );
+      this.logger.debug(`[DevTools] Updated row ${recordId} in ${tableName}`, updates);
       return { success: true };
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-      this.logger.error(
-        `[DevTools] Failed to update row ${recordId} in ${tableName}`,
-        error
-      );
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`[DevTools] Failed to update row ${recordId} in ${tableName}`, error);
       return { success: false, error: errorMessage };
     }
   }
@@ -419,12 +410,8 @@ export class DevToolsService {
       this.logger.debug(`[DevTools] Deleted row ${recordId} from ${tableName}`);
       return { success: true };
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-      this.logger.error(
-        `[DevTools] Failed to delete row ${recordId} from ${tableName}`,
-        error
-      );
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`[DevTools] Failed to delete row ${recordId} from ${tableName}`, error);
       return { success: false, error: errorMessage };
     }
   }
@@ -443,8 +430,7 @@ export class DevToolsService {
 
     // Update listener counts and connected queries for each active query
     for (const [queryHash, query] of this.activeQueries.entries()) {
-      const subscribers =
-        this.subscriptionMap.get(queryHash) || new Set<number>();
+      const subscribers = this.subscriptionMap.get(queryHash) || new Set<number>();
       query.listenerCount = subscribers.size;
       query.connectedQueries = Array.from(subscribers);
     }
@@ -500,14 +486,14 @@ export class DevToolsService {
    * Notify DevTools of state changes via window.postMessage
    */
   private notifyDevTools(): void {
-    if (typeof window !== "undefined") {
+    if (typeof window !== 'undefined') {
       window.postMessage(
         {
-          type: "SPOOKY_STATE_CHANGED",
-          source: "spooky-devtools-page",
+          type: 'SPOOKY_STATE_CHANGED',
+          source: 'spooky-devtools-page',
           state: this.getState(),
         },
-        "*"
+        '*'
       );
     }
   }
@@ -516,7 +502,7 @@ export class DevToolsService {
    * Expose DevTools API to window object
    */
   private exposeToWindow(): void {
-    if (typeof window !== "undefined") {
+    if (typeof window !== 'undefined') {
       (window as any).__SPOOKY__ = {
         version: this.version,
         getState: () => this.getState(),
@@ -539,19 +525,19 @@ export class DevToolsService {
         },
       };
 
-      this.logger.debug("[DevTools] Exposed window.__SPOOKY__ API");
+      this.logger.debug('[DevTools] Exposed window.__SPOOKY__ API');
 
       // Notify that Spooky is initialized
       window.postMessage(
         {
-          type: "SPOOKY_DETECTED",
-          source: "spooky-devtools-page",
+          type: 'SPOOKY_DETECTED',
+          source: 'spooky-devtools-page',
           data: {
             version: this.version,
             detected: true,
           },
         },
-        "*"
+        '*'
       );
     }
   }
@@ -562,7 +548,7 @@ export class DevToolsService {
   public destroy(): void {
     this.eventsHistory = [];
     this.activeQueries.clear();
-    if (typeof window !== "undefined") {
+    if (typeof window !== 'undefined') {
       delete (window as any).__SPOOKY__;
     }
   }
@@ -579,12 +565,5 @@ export function createDevToolsService(
   queryManager?: QueryManagerService<SchemaStructure>,
   config?: DevToolsServiceConfig
 ): DevToolsService {
-  return new DevToolsService(
-    eventSystem,
-    logger,
-    databaseService,
-    schema,
-    queryManager,
-    config
-  );
+  return new DevToolsService(eventSystem, logger, databaseService, schema, queryManager, config);
 }

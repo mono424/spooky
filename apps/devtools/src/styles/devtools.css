@@ -49,26 +49,25 @@
   --sys-color-text-disabled: #5a5a5a;
 
   /* Typography */
-  --sys-typescale-body-font: "Segoe UI", system-ui, -apple-system,
-    "SF Pro Display", "Roboto", sans-serif;
+  --sys-typescale-body-font:
+    'Segoe UI', system-ui, -apple-system, 'SF Pro Display', 'Roboto', sans-serif;
   --sys-typescale-body-size: 12px;
   --sys-typescale-body-weight: 400;
   --sys-typescale-body-line-height: 18px;
 
-  --sys-typescale-label-font: "Segoe UI", system-ui, -apple-system,
-    "SF Pro Display", "Roboto", sans-serif;
+  --sys-typescale-label-font:
+    'Segoe UI', system-ui, -apple-system, 'SF Pro Display', 'Roboto', sans-serif;
   --sys-typescale-label-size: 11px;
   --sys-typescale-label-weight: 500;
   --sys-typescale-label-line-height: 16px;
 
-  --sys-typescale-title-font: "Segoe UI", system-ui, -apple-system,
-    "SF Pro Display", "Roboto", sans-serif;
+  --sys-typescale-title-font:
+    'Segoe UI', system-ui, -apple-system, 'SF Pro Display', 'Roboto', sans-serif;
   --sys-typescale-title-size: 13px;
   --sys-typescale-title-weight: 500;
   --sys-typescale-title-line-height: 20px;
 
-  --sys-typescale-monospace-font: "Consolas", "Monaco", "Courier New",
-    monospace;
+  --sys-typescale-monospace-font: 'Consolas', 'Monaco', 'Courier New', monospace;
   --sys-typescale-monospace-size: 11px;
   --sys-typescale-monospace-line-height: 16px;
 
@@ -98,7 +97,7 @@
 }
 
 /* Light theme overrides */
-[data-theme="light"] {
+[data-theme='light'] {
   /* Base colors - Light theme */
   --sys-color-cdt-base-container: #ffffff;
   --sys-color-cdt-base-container-high: #f5f5f5;
@@ -295,7 +294,8 @@ body {
   font-size: var(--sys-typescale-label-size);
   font-weight: var(--sys-typescale-label-weight);
   line-height: var(--sys-typescale-label-line-height);
-  transition: color var(--sys-transition-fast),
+  transition:
+    color var(--sys-transition-fast),
     background-color var(--sys-transition-fast);
   user-select: none;
 }
@@ -375,7 +375,8 @@ body {
   padding: 6px 8px;
   margin-bottom: 4px;
   border-left: 2px solid var(--sys-color-divider);
-  transition: background-color var(--sys-transition-fast),
+  transition:
+    background-color var(--sys-transition-fast),
     border-color var(--sys-transition-fast);
 }
 
@@ -479,17 +480,11 @@ body {
 }
 
 .query-item.selected {
-  background: var(
-    --sys-color-tonal-container,
-    rgba(79, 195, 247, 0.2)
-  ) !important;
+  background: var(--sys-color-tonal-container, rgba(79, 195, 247, 0.2)) !important;
 }
 
 .query-item.selected:hover {
-  background: var(
-    --sys-color-tonal-container,
-    rgba(79, 195, 247, 0.2)
-  ) !important;
+  background: var(--sys-color-tonal-container, rgba(79, 195, 247, 0.2)) !important;
 }
 
 .query-item:focus {
@@ -588,7 +583,7 @@ body {
 }
 
 .query-detail:empty::before {
-  content: "Select a query to view details";
+  content: 'Select a query to view details';
   color: var(--sys-color-on-surface-subtle);
   font-size: var(--sys-typescale-label-size);
 }
@@ -758,7 +753,7 @@ body {
 }
 
 .graph-node-incoming::after {
-  content: "";
+  content: '';
   position: absolute;
   right: -20px;
   top: 50%;
@@ -772,7 +767,7 @@ body {
 }
 
 .graph-node-outgoing::before {
-  content: "";
+  content: '';
   position: absolute;
   left: -20px;
   top: 50%;
@@ -873,17 +868,11 @@ body {
 }
 
 .table-item.selected {
-  background: var(
-    --sys-color-tonal-container,
-    rgba(79, 195, 247, 0.2)
-  ) !important;
+  background: var(--sys-color-tonal-container, rgba(79, 195, 247, 0.2)) !important;
 }
 
 .table-item.selected:hover {
-  background: var(
-    --sys-color-tonal-container,
-    rgba(79, 195, 247, 0.2)
-  ) !important;
+  background: var(--sys-color-tonal-container, rgba(79, 195, 247, 0.2)) !important;
 }
 
 .table-item:focus {
@@ -911,13 +900,36 @@ body {
   font-family: var(--sys-typescale-monospace-font);
   font-size: var(--sys-typescale-monospace-size);
   line-height: var(--sys-typescale-monospace-line-height);
-  table-layout: auto;
+  table-layout: fixed; /* Fixed layout helps with overflow */
+  display: table !important;
+  border-collapse: collapse !important;
+  width: 100% !important;
 }
 
 .data-table thead {
+  display: table-header-group !important;
+  width: 100% !important;
   position: sticky;
   top: 0;
   z-index: 10;
+}
+
+.data-table tbody {
+  display: table-row-group !important;
+  width: 100% !important;
+}
+
+.data-table tr {
+  display: table-row !important;
+  width: 100% !important;
+  border-bottom: 1px solid var(--sys-color-divider);
+}
+
+.data-table td,
+.data-table th {
+  display: table-cell !important;
+  /* Remove flex properties just in case */
+  flex: none !important;
 }
 
 .data-table th {
@@ -1038,7 +1050,8 @@ body {
   line-height: 1;
   cursor: pointer;
   border-radius: var(--sys-radius-xs);
-  transition: background-color var(--sys-transition-fast),
+  transition:
+    background-color var(--sys-transition-fast),
     color var(--sys-transition-fast);
   opacity: 0.6;
 }

@@ -124,6 +124,15 @@ function QueryDetail() {
               </div>
             </Show>
 
+            <Show when={query().data}>
+              <div class="detail-section">
+                <div class="detail-label">Result Data</div>
+                <pre class="query-code">
+                  {JSON.stringify(query().data, null, 2)}
+                </pre>
+              </div>
+            </Show>
+
             <QueryGraph query={query()} allQueries={state.activeQueries} />
           </>
         )}

@@ -67,7 +67,8 @@ export class SpookyClient<S extends SchemaStructure> {
       this.queryManager.eventsSystem,
       this.local,
       logger,
-      this.config.schema
+      this.config.schema,
+      this.queryManager
     );
   }
 
