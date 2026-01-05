@@ -1,13 +1,28 @@
-import { Surreal, SurrealTransaction } from 'surrealdb';
+import {
+  applyDiagnostics,
+  createRemoteEngines,
+  Diagnostic,
+  Surreal,
+  SurrealTransaction,
+} from 'surrealdb';
 import { SpookyConfig } from '../../types.js';
 import { Logger } from '../logger.js';
 import { AbstractDatabaseService } from './database.js';
+
+const printDiagnostic = ({ key, type, phase, ...other }: Diagnostic) => {
+  if (phase === 'progress' || phase === 'after') {
+    console.log(`[SurrealDB:REMOTE] [${key}] ${type}:${phase}\n${JSON.stringify(other, null, 2)}`);
+  }
+};
 
 export class RemoteDatabaseService extends AbstractDatabaseService {
   private config: SpookyConfig<any>['database'];
 
   constructor(config: SpookyConfig<any>['database'], logger: Logger) {
-    super(new Surreal(), logger);
+    super(
+      new Surreal({ engines: applyDiagnostics(createRemoteEngines(), printDiagnostic) }),
+      logger
+    );
     this.config = config;
   }
 
