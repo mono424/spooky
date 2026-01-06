@@ -20,14 +20,10 @@ impl SurrealStore {
 
 impl Store for SurrealStore {
     fn get(&self, table: &str, id: &str) -> Option<Value> {
-        // Query: SELECT * FROM type::table($table):$id
-        // NOTE: id might already be scoped?
-        // In Spooky, ids are usually just strings.
-        // If id contains ':', it is fully qualified.
-        // Let's assume input id is fully qualified OR we try to construct it.
-        // But `store.rs` definition: `get(table, id)`.
-
-        let query = format!("SELECT * FROM type::table(\"{}\"):\"{}\"", table, id);
+        // Query: SELECT * FROM [<record>"table:id"]
+        // Uses SurrealDB 3.0 <record> cast and manual string construction inside array wrapper
+        // Preserves exact table:id concatenation semantics of original code
+        let query = format!("SELECT * FROM [<record>\"{}:{}\"]", table, id);
         match sql::<String, Vec<Value>>(query) {
             Ok(mut results) => {
                 if let Some(val) = results.pop() {
