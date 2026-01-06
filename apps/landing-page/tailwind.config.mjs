@@ -49,6 +49,14 @@ export default {
           dark: "#050810",
         },
         paper: "#eeeeee", // Off-white for terminals/sections
+        // Docs Theme
+        background: '#09090b', // Almost black
+        surface: '#18181b',    // Slightly lighter for hover/borders
+        text: {
+          main: '#f4f4f5',     // High contrast text
+          muted: '#a1a1aa',    // Secondary text
+        },
+        border: '#27272a',     // Subtle borders
       },
       fontFamily: {
         sans: ["Inter", "system-ui", "sans-serif"],
@@ -72,7 +80,33 @@ export default {
           "50%": { transform: "translateY(-10px)" },
         },
       },
+      typography: (theme) => ({
+        DEFAULT: {
+          css: {
+            color: theme('colors.text.muted'),
+            maxWidth: 'none',
+            h1: { color: theme('colors.text.main'), fontWeight: '600' },
+            h2: { color: theme('colors.text.main'), fontWeight: '500', marginTop: '2em' },
+            h3: { color: theme('colors.text.main'), fontWeight: '500' },
+            strong: { color: theme('colors.text.main') },
+            code: {
+              color: theme('colors.text.main'),
+              backgroundColor: theme('colors.surface'),
+              padding: '0.2em 0.4em',
+              borderRadius: '0.25rem',
+              fontWeight: '400',
+            },
+            'code::before': { content: '""' },
+            'code::after': { content: '""' },
+            pre: {
+              backgroundColor: '#121212', // Darker code block bg
+              border: `1px solid ${theme('colors.border')}`,
+              borderRadius: '0.5rem',
+            },
+          },
+        },
+      }),
     },
   },
-  plugins: [],
+  plugins: [require('@tailwindcss/typography')],
 };
