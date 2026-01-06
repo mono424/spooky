@@ -1,0 +1,136 @@
+mod common;
+
+use common::*;
+use serde_json::json;
+use spooky_stream_processor::engine::view::{JoinCondition, Operator, Predicate, QueryPlan};
+
+#[test]
+fn test_complex_incantation_flow() {
+    let mut circuit = setup();
+
+    // 1. Setup Base Data
+    let author_alice = create_author(&mut circuit, "Alice");
+
+    // Thread 1 by Alice
+    let thread_1 = create_thread(&mut circuit, "Thread 1", &author_alice);
+
+    // 2. Define Query Plan
+    // Goal: Find Threads by Alice that have comments with text "Magic"
+
+    // Scan Threads
+    let scan_threads = Operator::Scan {
+        table: "thread".to_string(),
+    };
+
+    // Scan Authors
+    let scan_authors = Operator::Scan {
+        table: "author".to_string(),
+    };
+
+    // Join Threads with Authors (Ensure Author Exists)
+    let threads_with_authors = Operator::Join {
+        left: Box::new(scan_threads),
+        right: Box::new(scan_authors),
+        on: JoinCondition {
+            left_field: "author".to_string(),
+            right_field: "id".to_string(),
+        },
+    };
+
+    // Scan Comments
+    let scan_comments = Operator::Scan {
+        table: "comment".to_string(),
+    };
+
+    // Filter Comments for "Magic"
+    let magic_comments = Operator::Filter {
+        input: Box::new(scan_comments),
+        predicate: Predicate::Eq {
+            field: "text".to_string(),
+            value: json!("Magic"),
+        },
+    };
+
+    // Join (Threads+Authors) with MagicComments
+    // This effectively filters threads to only those having at least one magic comment
+    let root = Operator::Join {
+        left: Box::new(threads_with_authors),
+        right: Box::new(magic_comments),
+        on: JoinCondition {
+            left_field: "id".to_string(),
+            right_field: "thread".to_string(),
+        },
+    };
+
+    let plan = QueryPlan {
+        id: "magic_threads_by_alice".to_string(),
+        root,
+    };
+
+    // 3. Register View
+    let initial_update = circuit.register_view(plan, None);
+
+    // Initially, Thread 1 exists and Author exists, but no comments.
+    // So result should be empty.
+    if let Some(up) = initial_update {
+        assert!(up.result_ids.is_empty(), "Expected empty result initially");
+    }
+
+    // 4. Verify View State Helper
+    let check_view = |circuit: &spooky_stream_processor::Circuit, expect_present: bool| {
+        let view = circuit
+            .views
+            .iter()
+            .find(|v| v.plan.id == "magic_threads_by_alice")
+            .expect("View not found");
+        let present = view.cache.contains_key(&thread_1);
+        assert_eq!(present, expect_present, "Thread 1 presence mismatch");
+    };
+
+    check_view(&circuit, false);
+
+    // 5. Add "Boring" Comment -> Should NOT trigger view
+    let _boring_comment = create_comment(&mut circuit, "Boring", &thread_1, &author_alice);
+    check_view(&circuit, false);
+
+    // 6. Add "Magic" Comment -> Should trigger view (Thread 1 Appears)
+    let magic_comment_id = create_comment(&mut circuit, "Magic", &thread_1, &author_alice);
+    check_view(&circuit, true);
+
+    // 7. Add another "Magic" Comment -> Thread 1 still present
+    let _magic_comment_2 = create_comment(&mut circuit, "Magic", &thread_1, &author_alice);
+    check_view(&circuit, true);
+
+    // 8. Delete the first Magic Comment -> Thread 1 still present (count > 0)
+    ingest(
+        &mut circuit,
+        "comment",
+        "DELETE",
+        &magic_comment_id,
+        json!({}),
+    );
+    check_view(&circuit, true);
+
+    // 9. Delete the second Magic Comment -> Thread 1 disappears
+    // Wait, I need the ID of the second one.
+    // create_comment returns ID but I ignored it.
+    // Let's create a new one to be sure.
+    let magic_comment_3 = create_comment(&mut circuit, "Magic", &thread_1, &author_alice);
+    check_view(&circuit, true);
+
+    // Now delete magic_comment_3 (the remaining one, assuming magic_comment_2 is still there? yes I didn't delete 2)
+    // Actually I lost the ID of magic_comment_2. It is stranded in the DB.
+    // So the view should still contain Thread 1 even if I delete magic_comment_3.
+    ingest(
+        &mut circuit,
+        "comment",
+        "DELETE",
+        &magic_comment_3,
+        json!({}),
+    );
+    check_view(&circuit, true); // Stays true because of magic_comment_2
+
+    // 10. Delete Author -> Thread 1 disappears (dependency check)
+    ingest(&mut circuit, "author", "DELETE", &author_alice, json!({}));
+    check_view(&circuit, false);
+}

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "pnpm -r --parallel dev",
     "dev:example": "pnpm -r --parallel dev:example",
+    "dev:landingpage": "pnpm --filter landing-page dev:landingpage",
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "lint": "pnpm -r lint",
