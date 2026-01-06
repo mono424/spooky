@@ -7,25 +7,27 @@ title: Vanilla JS / TS
 
 You can use Spooky with plain JavaScript or TypeScript without any framework.
 
+import CodeBlock from '../../../components/ui/CodeBlock.astro';
+
 ## Installation
 
-```bash
-npm install @spooky/core
-```
+<CodeBlock code={`npm install @spooky/core`} lang="bash" />
 
 ## Basic Usage
 
-```typescript
-import { SpookyClient } from '@spooky/core';
+<CodeBlock
+  fileName="src/main.ts"
+  lang="typescript"
+  code={`import { SpookyClient } from '@spooky/core';
 
 const client = new SpookyClient({
-  endpoint: 'ws://localhost:8000',
+endpoint: 'ws://localhost:8000',
 });
 
 await client.connect();
 
 // Subscribe to live query
-const sub = client.liveQuery('SELECT * FROM users').subscribe((data) => {
-  console.log('Updated users:', data);
-});
-```
+const sub = client.liveQuery('SELECT \* FROM users').subscribe((data) => {
+console.log('Updated users:', data);
+});`}
+/>
