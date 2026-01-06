@@ -5,13 +5,18 @@ pub mod service;
 
 use serde_json::Value;
 
-pub use engine::circuit::Circuit;
+pub use engine::lazy_circuit::LazyCircuit;
+pub use engine::standard_circuit::StandardCircuit;
+// pub use engine::circuit::Circuit; // Deprecated/Alias
 pub use engine::view::MaterializedViewUpdate;
 pub use engine::view::QueryPlan;
 
-pub trait StreamProcessor: Send + Sync {
+use crate::engine::store::Store;
+
+pub trait StreamProcessor {
     fn ingest_record(
         &mut self,
+        store: &dyn Store,
         table: String,
         op: String,
         id: String,
@@ -21,6 +26,7 @@ pub trait StreamProcessor: Send + Sync {
 
     fn register_view(
         &mut self,
+        store: &dyn Store,
         plan: QueryPlan,
         params: Option<Value>,
     ) -> Option<MaterializedViewUpdate>;

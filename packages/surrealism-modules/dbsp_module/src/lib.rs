@@ -5,23 +5,28 @@ use surrealism::surrealism;
 // 1. Declare Modules
 mod persistence;
 
-use spooky_stream_processor::{Circuit, MaterializedViewUpdate};
+use spooky_stream_processor::{LazyCircuit, MaterializedViewUpdate};
 
 // 2. Global State Wrapper
 lazy_static::lazy_static! {
-    static ref CIRCUIT: Mutex<Option<Circuit>> = Mutex::new(None);
+    static ref CIRCUIT: Mutex<Option<LazyCircuit>> = Mutex::new(None);
 }
 
 // Helper to get circuit access
-fn with_circuit<F, R>(f: F) -> Result<R, &'static str>
+pub fn with_circuit<F, R>(f: F) -> Result<R, String>
 where
-    F: FnOnce(&mut Circuit) -> R,
+    F: FnOnce(&mut LazyCircuit) -> R,
 {
-    let mut lock = CIRCUIT.lock().map_err(|_| "Failed to lock")?;
-    if lock.is_none() {
-        *lock = Some(persistence::load());
-    }
-    Ok(f(lock.as_mut().unwrap()))
+    // A. Load State (From local variable or DB)
+    // NOTE: In SurrealKV Native mode, we don't load "Data", just Views.
+    let mut circuit = persistence::load(); // This loads LazyCircuit
+
+    let res = f(&mut circuit);
+
+    // B. Save State (Only if views changed? Standard "save" handles logic)
+    persistence::save(&circuit);
+
+    Ok(res)
 }
 
 // 3. Clean Macros
@@ -38,7 +43,8 @@ fn ingest(
 
     // B. Run Engine
     let _ = with_circuit(|circuit| {
-        let updates = circuit.ingest_record(table, operation, id, clean_record, hash);
+        let store = persistence::SurrealStore::new();
+        let updates = circuit.ingest_record(&store, table, operation, id, clean_record, hash);
 
         // C. Apply Updates Directly (Side Effects)
         for update in updates {
@@ -52,6 +58,10 @@ fn ingest(
         // D. Save State
         persistence::save(circuit);
         Vec::<MaterializedViewUpdate>::new()
+    })
+    .map_err(|e| {
+        eprintln!("DEBUG: ingest failed: {}", e);
+        "Ingest Error"
     })?;
 
     // Return success but no updates payload (managed internally now)
@@ -72,9 +82,10 @@ fn register_view(config: Value) -> Result<Value, &'static str> {
             "Invalid Configuration"
         })?;
 
-    let result = with_circuit(|circuit| {
+    let _result = with_circuit(|circuit| {
+        let store = persistence::SurrealStore::new();
         let plan = data.plan;
-        let initial_res = circuit.register_view(plan.clone(), data.safe_params);
+        let initial_res = circuit.register_view(&store, plan.clone(), data.safe_params);
 
         // Standard default result handling
         let res = initial_res
@@ -105,6 +116,10 @@ fn register_view(config: Value) -> Result<Value, &'static str> {
 
         // Return nothing, just updating internal state
         Value::Null
+    })
+    .map_err(|e| {
+        eprintln!("DEBUG: register_view failed: {}", e);
+        "Register View Error"
     })?;
 
     Ok(Value::Null)
@@ -115,6 +130,10 @@ fn unregister_view(id: String) -> Result<Value, &'static str> {
     let _ = with_circuit(|circuit| {
         circuit.unregister_view(&id);
         persistence::save(circuit);
+    })
+    .map_err(|e| {
+        eprintln!("DEBUG: unregister_view failed: {}", e);
+        "Unregister View Error"
     })?;
     Ok(Value::Null)
 }
@@ -122,7 +141,7 @@ fn unregister_view(id: String) -> Result<Value, &'static str> {
 #[surrealism]
 fn reset(_val: Value) -> Result<Value, &'static str> {
     let mut lock = CIRCUIT.lock().map_err(|_| "Failed to lock")?;
-    *lock = Some(Circuit::new());
+    *lock = Some(LazyCircuit::new());
     persistence::clear();
     Ok(Value::Null)
 }
@@ -131,6 +150,10 @@ fn reset(_val: Value) -> Result<Value, &'static str> {
 fn save_state(_val: Value) -> Result<Value, &'static str> {
     let _ = with_circuit(|circuit| {
         persistence::save(circuit);
+    })
+    .map_err(|e| {
+        eprintln!("DEBUG: save_state failed: {}", e);
+        "Save Error"
     })?;
     Ok(Value::Null)
 }

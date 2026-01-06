@@ -11,7 +11,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use spooky_stream_processor::{Circuit, MaterializedViewUpdate};
+use spooky_stream_processor::{StandardCircuit, MaterializedViewUpdate};
 use surrealdb::engine::remote::ws::{Client, Ws};
 use surrealdb::opt::auth::Root;
 use surrealdb::Surreal;
@@ -26,7 +26,7 @@ use background_saver::BackgroundSaver;
 #[derive(Clone)]
 struct AppState {
     db: Surreal<Client>,
-    processor: Arc<Mutex<Box<Circuit>>>,
+    processor: Arc<Mutex<Box<StandardCircuit>>>,
     persistence_path: PathBuf,
     saver: Arc<BackgroundSaver>,
 }
@@ -290,7 +290,7 @@ async fn reset_handler(State(state): State<AppState>) -> impl IntoResponse {
     info!("Resetting circuit state");
     {
         let mut circuit = state.processor.lock().unwrap();
-        *circuit = Box::new(Circuit::new());
+        *circuit = Box::new(StandardCircuit::new());
         if state.persistence_path.exists() {
              let _ = std::fs::remove_file(&state.persistence_path);
         }

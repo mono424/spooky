@@ -4,19 +4,19 @@ use std::time::Duration;
 use tokio::sync::Notify;
 use tokio::time::sleep;
 use tracing::{info, error, debug};
-use spooky_stream_processor::Circuit;
+use spooky_stream_processor::StandardCircuit;
 use crate::persistence;
 
 pub struct BackgroundSaver {
     path: PathBuf,
-    circuit: Arc<Mutex<Box<Circuit>>>,
+    circuit: Arc<Mutex<Box<StandardCircuit>>>,
     notify: Arc<Notify>,
     shutdown: Arc<Notify>,
     debounce_duration: Duration,
 }
 
 impl BackgroundSaver {
-    pub fn new(path: PathBuf, circuit: Arc<Mutex<Box<Circuit>>>, debounce_ms: u64) -> Self {
+    pub fn new(path: PathBuf, circuit: Arc<Mutex<Box<StandardCircuit>>>, debounce_ms: u64) -> Self {
         Self {
             path,
             circuit,
