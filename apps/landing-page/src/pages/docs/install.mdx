@@ -1,0 +1,46 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: Installation
+---
+
+> **Note**: This guide is currently under construction. 🚧
+
+Getting started with Spooky involves setting up the CLI tool and configuring your project.
+
+## Prerequisites
+
+- **Node.js** (v18 or higher)
+- **SurrealDB** (v2.0 or higher)
+- **Rust** (for compiling modules)
+
+## Step 1: Install Syncgen
+
+`syncgen` is the core CLI tool.
+
+```bash
+cargo install syncgen --git https://github.com/mono424/spooky
+```
+
+## Step 2: Initialize Project
+
+Create a new Spooky project structure.
+
+```bash
+mkdir my-spooky-app
+cd my-spooky-app
+syncgen init
+```
+
+This will create the necessary `spooky.json` config and directory structure:
+
+- `modules/`: Your Rust/DBSP modules.
+- `schema/`: Your `.surql` schema files.
+- `apps/`: Your client applications.
+
+## Step 3: Start Development
+
+Run the development server to watch for changes and recompile modules.
+
+```bash
+syncgen dev
+```

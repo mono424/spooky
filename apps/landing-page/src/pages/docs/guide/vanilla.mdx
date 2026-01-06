@@ -1,0 +1,31 @@
+---
+layout: ../../../layouts/DocsLayout.astro
+title: Vanilla JS / TS
+---
+
+> **Note**: This guide is currently under construction. 🚧
+
+You can use Spooky with plain JavaScript or TypeScript without any framework.
+
+## Installation
+
+```bash
+npm install @spooky/core
+```
+
+## Basic Usage
+
+```typescript
+import { SpookyClient } from '@spooky/core';
+
+const client = new SpookyClient({
+  endpoint: 'ws://localhost:8000',
+});
+
+await client.connect();
+
+// Subscribe to live query
+const sub = client.liveQuery('SELECT * FROM users').subscribe((data) => {
+  console.log('Updated users:', data);
+});
+```

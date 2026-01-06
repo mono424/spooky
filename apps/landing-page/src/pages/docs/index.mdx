@@ -1,0 +1,37 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: Introduction
+---
+
+> **Note**: This guide is currently under construction. 🚧
+
+**Spooky** is a reactive, local-first application framework built on top of **SurrealDB**. It bridges the gap between the database and the client, allowing for "Incantations" (LIVE queries) that update incrementally and efficiently.
+
+## Supported Frameworks
+
+Spooky is designed to be framework-agnostic, with bindings and examples for popular platforms:
+
+- **TypeScript / JavaScript** (Vanilla, React, SolidJS)
+- **Flutter** (Mobile/Desktop)
+- **Rust** (WASM Modules)
+
+## Core Concepts
+
+### 1. Syncgen 🛠️
+
+The build-time orchestrator that parses your schema and compiles your reactive modules. It ensures type safety and injects intelligent triggers for data synchronization.
+
+### 2. Modules (DBSP) 🧠
+
+Reactive engines running directly inside SurrealDB. They perform Incremental View Maintenance (IVM) to keep your queries updated efficiently without re-fetching entire datasets.
+
+### 3. Incantations 🔮
+
+The registry of active "Live Queries". Instead of subscribing to raw tables, clients subscribe to _Incantations_, which provide delta updates and integrity verification via Merkle Trees.
+
+## Getting Started
+
+Check out the [Installation](/spooky/docs/install) guide to set up your environment, or jump straight into a framework guide:
+
+- [SolidJS / React](/spooky/docs/guide/solid)
+- [Flutter](/spooky/docs/guide/flutter)

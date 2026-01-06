@@ -1,0 +1,29 @@
+---
+const { props } = Astro.props;
+// Expects props = [{ name: 'variant', type: 'string', default: '"default"', desc: '...' }]
+---
+
+<div class="overflow-x-auto my-8 border border-border rounded-lg">
+  <table class="w-full text-left text-sm">
+    <thead class="bg-surface text-text-main border-b border-border">
+      <tr>
+        <th class="p-3 font-medium">Prop</th>
+        <th class="p-3 font-medium">Type</th>
+        <th class="p-3 font-medium">Default</th>
+        <th class="p-3 font-medium">Description</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-border">
+      {
+        props.map((prop) => (
+          <tr class="text-text-muted">
+            <td class="p-3 font-mono text-primary">{prop.name}</td>
+            <td class="p-3 font-mono text-xs">{prop.type}</td>
+            <td class="p-3 font-mono text-xs opacity-70">{prop.default}</td>
+            <td class="p-3">{prop.desc}</td>
+          </tr>
+        ))
+      }
+    </tbody>
+  </table>
+</div>
