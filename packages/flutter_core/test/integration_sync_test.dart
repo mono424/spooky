@@ -48,66 +48,10 @@ void main() {
 
 
     // ==============================================================================
-    // PHASE 1: REMOTE DIRECT VALIDATION
+    // PHASE 1: SKIPPED (No Root Access)
     // ==============================================================================
-    print('\n=== PHASE 1: DIRECT REMOTE VALIDATION ===');
-    
-    final rootClient = await SurrealDb.connect(mode: StorageMode.remote(url: 'ws://localhost:8666'));
-    await rootClient.signin(creds: '{"user":"root","pass":"root"}');
-    
-    // Cleanup & Provision
-    try {
-        await rootClient.useDb(ns: 'main', db: 'main');
-        await rootClient.query(sql: 'REMOVE DATABASE main;');
-    } catch (_) {}
-    await rootClient.query(sql: 'DEFINE NAMESPACE main; DEFINE DATABASE main;');
-    await rootClient.useDb(ns: 'main', db: 'main');
-
-    // Apply STRICT remote schema (no relaxing!)
-    print('Applying STRICT remote schema...');
-    // Relax permissions for test purposes but keep TYPES strict
-    final strictTypesRelaxedPerms = remoteSchemaContent.replaceAll(
-        RegExp(r'WHERE \$access = "account" AND author\.id = \$auth\.id'), 
-        'WHERE true'
-    );
-    
-    await rootClient.query(sql: strictTypesRelaxedPerms);
-
-    // Create User 'test'
-    await rootClient.query(sql: "CREATE user:test SET username = 'test', password = crypto::argon2::generate('123');");
-    
-    // 1.1 Try Create Thread with STRING ID for Author
-    print('1.1 Testing creation with String ID "user:test"...');
-    try {
-        // Direct Query passing string - Encoded vars
-        final res = await rootClient.query(
-            sql: r"CREATE thread:direct1 SET title='Direct', content='C', author=$auth",
-            vars: jsonEncode({'auth': 'user:test'}) 
-        );
-        print('Direct Create Result (String ID): $res');
-        
-    } catch (e) {
-        print('PHASE 1 EXCEPTION: $e');
-    }
-    
-    // 1.3 Verify EVENT Logic
-    // Try to trigger EVENT manually
-    try {
-        final cRes = await rootClient.query(
-             sql: r"CREATE comment:direct1 SET content='C', thread='thread:direct1', author=$auth",
-             vars: jsonEncode({'auth': 'user:test'})
-        );
-        print('Direct Comment Create Result: $cRes');
-        if (cRes.contains("ERR")) {
-             print('PHASE 1 FAIL: Direct event trigger failed. Reason: $cRes');
-        } else {
-             print('PHASE 1 PASS: Direct event trigger success.');
-        }
-    } catch(e) {
-        print('PHASE 1 COMMENT EXCEPTION: $e');
-    }
-
-    await rootClient.close();
+    print('\n=== PHASE 1: SKIPPED (No Root Access) ===');
+    // Using existing environment 'main' / 'main' with pre-provisioned schema.
 
 
     // ==============================================================================
@@ -135,7 +79,8 @@ void main() {
 
     final threadId = 'thread:sync_${DateTime.now().millisecondsSinceEpoch}';
     final commentId = 'comment:sync_${DateTime.now().millisecondsSinceEpoch}';
-    final userId = 'user:test';
+    // Use the ID provided by the user to verify their specific case
+    final userId = 'user:rvkme6hk9ckgji6dlcvx';
 
     print('Creating thread: $threadId');
     await client.create(RecordId.fromString(threadId), {

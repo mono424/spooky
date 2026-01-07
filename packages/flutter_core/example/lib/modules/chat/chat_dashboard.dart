@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_core/flutter_core.dart';
+import 'package:flutter_surrealdb_engine/flutter_surrealdb_engine.dart';
 import '../../controllers/spooky_controller.dart';
 import 'thread_view.dart'; // Will create next
 
@@ -122,12 +123,11 @@ class _ChatDashboardState extends State<ChatDashboard> {
                   // 1. Thread creation (Remote + Local)
                   // 2. Pending Mutation creation (Sync)
                   // 3. Record ID coercion (via recordFields)
-                  await widget.controller.create(id, {
+                  await widget.controller.create(RecordId.fromString(id), {
                     'title': titleController.text,
                     'content': contentController.text,
                     'active': true,
-                    'author': {'tb': 'user', 'id': 'yvr0aici6qn0f1ohf55v'},
-                    'created_at': DateTime.now().toIso8601String(),
+                    'author': RecordId.fromString(widget.controller.userId ?? 'user:rvkme6hk9ckgji6dlcvx'),
                   });
 
                   widget.controller.log("Thread created");

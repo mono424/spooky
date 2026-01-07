@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_core/flutter_core.dart';
+import 'package:flutter_surrealdb_engine/flutter_surrealdb_engine.dart'; // Import for RecordId
 import '../schema/src/models.dart';
 
 class SpookyController extends ChangeNotifier {
@@ -100,19 +101,10 @@ class SpookyController extends ChangeNotifier {
       final newClient = await SpookyClient.init(config);
       client = newClient;
 
-      // PROVISION REMOTE (Dev Mode)
-      if (useDevSidecar || endpointController.text.isNotEmpty) {
-        log("Provisioning Remote DB (Root auth)...");
-        try {
-          // 1. Sign in as Root to apply schema
-          await client!.remote.getClient.signin(
-            creds: jsonEncode({"user": "root", "pass": "root"}),
-          );
-        } catch (e) {
-          log("Warning: Remote provisioning failed: $e");
-          // Proceed anyway, maybe it was already set up or different creds
-        }
-      }
+      // PROVISION REMOTE (Dev Mode) - Removed root access as requested
+      // if (useDevSidecar || endpointController.text.isNotEmpty) {
+      //   log("Provisioning skipped (Root access removed).");
+      // }
 
       log("SpookyClient initialized successfully!");
     } catch (e, stack) {
@@ -260,22 +252,21 @@ class SpookyController extends ChangeNotifier {
 
   // --- Proxy Methods for SpookyClient ---
 
-  Future<MutationResponse> create(String id, Map<String, dynamic> data) async {
+  Future<MutationResponse> create(RecordId id, Map<String, dynamic> data) async {
     if (client == null) throw Exception("Client not initialized");
     return client!.create(id, data);
   }
 
   Future<MutationResponse> update(
-    String table,
-    String id,
+    RecordId id,
     Map<String, dynamic> data,
   ) async {
     if (client == null) throw Exception("Client not initialized");
-    return client!.update(table, id, data);
+    return client!.update(id, data);
   }
 
-  Future<void> delete(String table, String id) async {
+  Future<void> delete(RecordId id) async {
     if (client == null) throw Exception("Client not initialized");
-    return client!.delete(table, id);
+    return client!.delete(id);
   }
 }

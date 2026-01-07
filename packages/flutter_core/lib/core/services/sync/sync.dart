@@ -166,6 +166,15 @@ class SpookySync {
       }
       // Recursive for other maps
       return input.map((k, v) => MapEntry(k, _restoreStrictTypes(v)));
+    } else if (input is String) {
+      // HEAL: Attempt to parse strings that look like Record IDs for known tables
+      // This fixes stuck mutations where IDs were stored as strings
+      if (input.startsWith('user:') || input.startsWith('thread:') || input.startsWith('comment:')) {
+         try {
+           return RecordId.fromString(input);
+         } catch (_) {}
+      }
+      return input;
     } else if (input is List) {
       return input.map((e) => _restoreStrictTypes(e)).toList();
     }

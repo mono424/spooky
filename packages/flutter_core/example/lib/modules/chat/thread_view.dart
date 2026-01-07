@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_core/flutter_core.dart';
+import 'package:flutter_surrealdb_engine/flutter_surrealdb_engine.dart';
 import '../../controllers/spooky_controller.dart';
 
 class ThreadView extends StatefulWidget {
@@ -99,10 +100,10 @@ class _ThreadViewState extends State<ThreadView> {
     try {
       final id = 'comment:${DateTime.now().millisecondsSinceEpoch}';
 
-      await widget.controller.create(id, {
+      await widget.controller.create(RecordId.fromString(id), {
         'content': text,
         'thread': widget.threadId,
-        'author': "type::record('user:yvr0aici6qn0f1ohf55v')",
+        'author': RecordId.fromString(widget.controller.userId ?? 'user:rvkme6hk9ckgji6dlcvx'),
         // 'author': ... see ChatDashboard note.
       });
     } catch (e) {

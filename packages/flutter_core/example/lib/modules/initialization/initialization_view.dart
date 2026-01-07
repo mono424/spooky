@@ -109,8 +109,9 @@ class InitializationView extends StatelessWidget {
                   style: const TextStyle(color: SpookyColors.white),
                 ),
                 const SizedBox(height: 12),
+                const SizedBox(height: 12),
                 Text(
-                  "Credentials: root / root",
+                  "Provisioning via Root disabled.",
                   style: GoogleFonts.inter(
                     fontStyle: FontStyle.italic,
                     color: SpookyColors.white60,
