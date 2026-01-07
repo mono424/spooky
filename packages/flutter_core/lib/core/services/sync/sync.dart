@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter_surrealdb_engine/flutter_surrealdb_engine.dart'; // Import RecordId
 import '../database/local.dart';
 import '../database/remote.dart';
 import '../query/event.dart'; // QueryEvent and types
@@ -41,8 +42,18 @@ class SpookySync {
     if (_isInit) throw Exception('SpookySync is already initialized');
     _isInit = true;
 
-    await _initUpQueue();
-    await _initDownQueue();
+    // Suppress initialization errors to allow runtime sync to proceed even if persistence loading fails
+    try {
+      await _initUpQueue();
+    } catch (e) {
+      print('[SpookySync] Warning: Failed to init UpQueue: $e');
+    }
+
+    try {
+      await _initDownQueue();
+    } catch (e) {
+      print('[SpookySync] Warning: Failed to init DownQueue: $e');
+    }
 
     // Fire and forget
     unawaited(_syncUp());
@@ -70,13 +81,21 @@ class SpookySync {
   }
 
   Future<void> _syncUp() async {
-    if (_isSyncingUp) return;
+    print('[SpookySync] _syncUp triggered. Queue size: ${upQueue.size}');
+    if (_isSyncingUp) {
+      print('[SpookySync] Already syncing up. Skipping.');
+      return;
+    }
     _isSyncingUp = true;
     try {
       while (upQueue.size > 0) {
+        print('[SpookySync] Processing next item in UpQueue...');
         await upQueue.next(_processUpEvent);
       }
+    } catch (e) {
+      print('[SpookySync] _syncUp loop error: $e');
     } finally {
+      print('[SpookySync] _syncUp finished.');
       _isSyncingUp = false;
       unawaited(_syncDown());
     }
@@ -99,26 +118,58 @@ class SpookySync {
   }
 
   Future<void> _processUpEvent(UpEvent event) async {
+    print(
+      '[SpookySync] _processUpEvent: ${event.mutationId} (${event.runtimeType})',
+    );
+    
+    // Restore RecordId objects from Map/JSON if needed to satisfy strict typed remote queries
+    final processedData = event.data != null ? _restoreStrictTypes(event.data!) : null;
+
     dynamic res;
     if (event is CreateEvent) {
-      res = await remote.query(
+      print('[SpookySync] Sending CREATE to remote for ${event.recordId}...');
+      // Use queryTyped ensuring serialized vars can be cast correctly by Rust engine
+      res = await remote.queryTyped(
         r'CREATE type::record($id) CONTENT $data',
-        vars: {'id': event.recordId, 'data': event.data},
+        vars: {'id': event.recordId, 'data': processedData},
       );
     } else if (event is UpdateEvent) {
-      res = await remote.query(
+      print('[SpookySync] Sending UPDATE to remote...');
+      res = await remote.queryTyped(
         r'UPDATE type::record($id) MERGE $data',
-        vars: {'id': event.recordId, 'data': event.data},
+        vars: {'id': event.recordId, 'data': processedData},
       );
     } else if (event is DeleteEvent) {
-      res = await remote.query(
+      print('[SpookySync] Sending DELETE to remote...');
+      res = await remote.queryTyped(
         r'DELETE type::record($id)',
         vars: {'id': event.recordId},
       );
     }
+    print('[SpookySync] Remote Sync Result: $res');
     if (res.toString().contains("ERR") || res.toString().contains("error")) {
       throw Exception("Remote sync failed: $res");
     }
+  }
+
+  // Recursively traverses the map and converts {key, table} maps to RecordId objects
+  // which the Engine knows how to serialize/cast correctly.
+  dynamic _restoreStrictTypes(dynamic input) {
+    if (input is Map) {
+      // Check if it matches RecordId structure
+      if (input.containsKey('key') && input.containsKey('table') && input.length == 2) {
+         try {
+           return RecordId(key: input['key'], table: input['table']);
+         } catch (e) {
+           print('[SpookySync] Failed to restore RecordId: $e');
+         }
+      }
+      // Recursive for other maps
+      return input.map((k, v) => MapEntry(k, _restoreStrictTypes(v)));
+    } else if (input is List) {
+      return input.map((e) => _restoreStrictTypes(e)).toList();
+    }
+    return input;
   }
 
   Future<void> _processDownEvent(DownEvent event) async {

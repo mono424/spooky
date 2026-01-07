@@ -14,7 +14,7 @@ dynamic extractResult(String jsonString) {
   if (firstQuery is Map<String, dynamic>) {
     if (firstQuery['status'] != 'OK') {
       throw Exception(
-        'SurrealDB Query Error: ${firstQuery['detail'] ?? "Unknown"}',
+        'SurrealDB Query Error: ${firstQuery['detail'] ?? jsonEncode(firstQuery)}',
       );
     }
     final rawResult = firstQuery['result'];

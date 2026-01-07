@@ -26,6 +26,7 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^6.0.0
   test: ^1.26.3
+  flutter_rust_bridge: ^2.11.1
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

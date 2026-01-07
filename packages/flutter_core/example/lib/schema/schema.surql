@@ -4,7 +4,7 @@
 DEFINE ACCESS account ON DATABASE TYPE RECORD
 	SIGNUP {
 		IF string::len($username) <= 3 { THROW "Username must be longer than 3 characters" };
-		IF !string::is::alphanum($username) { THROW "Username must be alphanumeric" };
+		IF !string::is_alphanum($username) { THROW "Username must be alphanumeric" };
 		IF string::len($password) == 0 { THROW "Password cannot be empty" };
 
 		LET $existing = (SELECT value id FROM user WHERE username = $username LIMIT 1)[0];
@@ -26,7 +26,7 @@ PERMISSIONS
   FOR create, select WHERE true;
 
 DEFINE FIELD username ON TABLE user TYPE string
-ASSERT $value != NONE AND string::is::alphanum($value) AND string::len($value) > 3
+ASSERT $value != NONE AND string::is_alphanum($value) AND string::len($value) > 3
 PERMISSIONS
     FOR select WHERE true
     FOR create WHERE true

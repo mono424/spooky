@@ -44,11 +44,13 @@ class MutationManager {
     RecordId id,
     Map<String, dynamic> data,
   ) async {
+    print('[MutationManager] create called for $id');
     final response = await _withRetry<MutationResponse?>(() async {
       final res = await db.queryTyped<String>(
         mutationCreateQuery,
         vars: {'id': id, 'data': data},
       );
+      print('[MutationManager] DB raw response: $res');
 
       final [response, ...] =
           SurrealDecoder.decodeNative(res, removeNulls: true) as List;
@@ -57,11 +59,17 @@ class MutationManager {
         throw Exception('Mutation Error: ${response['error']}');
       }
 
-      if (response == null) return null;
+      if (response == null) {
+        print('[MutationManager] Response is null');
+        return null;
+      }
 
       return MutationResponse.fromJson(response);
     });
 
+    print(
+      '[MutationManager] Emitting MutationEvent for ${response?.mutationID}',
+    );
     events.addEvent(
       MutationEvent([
         MutationPayload(
@@ -73,7 +81,7 @@ class MutationManager {
       ]),
     );
 
-    return response;
+    return response!;
   }
 
   Future<MutationResponse> update(
@@ -109,7 +117,7 @@ class MutationManager {
       ]),
     );
 
-    return response;
+    return response!;
   }
 
   Future<void> delete(RecordId id) async {

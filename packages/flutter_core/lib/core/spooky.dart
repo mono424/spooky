@@ -40,7 +40,13 @@ class SpookyClient {
 
   static Future<SpookyClient> init(SpookyConfig config) async {
     if (!_rustInitialized) {
-      await RustLib.init();
+      try {
+        await RustLib.init();
+      } catch (e) {
+        print(
+          'Warning: RustLib.init failed (safely ignored if already initialized): $e',
+        );
+      }
       _rustInitialized = true;
     }
 
@@ -127,31 +133,19 @@ class SpookyClient {
   }
 
   // Wrappers for Mutation Manager
-  Future<MutationResponse> create(String id, Map<String, dynamic> data) {
-    RecordId recordId;
-    if (id.contains(':')) {
-      recordId = RecordId.fromString(id);
-    } else {
-      // Only partial support if we don't know the table?
-      // Ideally we need table and id.
-      // Fallback: try parsing or assume user is sending ID format string
-      throw Exception(
-        "Create requires a full RecordId string (table:id) or use a method that supplies table.",
-      );
-    }
-    return mutation.create(recordId, data);
+  Future<MutationResponse> create(RecordId id, Map<String, dynamic> data) {
+    return mutation.create(id, data);
   }
 
   Future<MutationResponse> update(
-    String table,
-    String id,
+    RecordId id,
     Map<String, dynamic> data,
   ) {
-    return mutation.update(RecordId(table: table, key: id), data);
+    return mutation.update(id, data);
   }
 
-  Future<void> delete(String table, String id) {
-    return mutation.delete(RecordId(table: table, key: id));
+  Future<void> delete(RecordId id) {
+    return mutation.delete(id);
   }
 
   // Auth delegates

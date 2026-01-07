@@ -39,6 +39,7 @@ class UpQueue {
   int get size => queue.length;
 
   void push(UpEvent event) {
+    print('[UpQueue] Pushing event: ${event.mutationId}');
     queue.add(event);
     events.addEvent(
       MutationEnqueued(MutationEnqueuedPayload(queueSize: queue.length)),
@@ -80,8 +81,13 @@ class UpQueue {
   }
 
   void _handleMutationPayload(MutationPayload mutation) {
+    print('[UpQueue] Handling mutation payload: ${mutation.mutation_id}');
     final event = _payloadToUpEvent(mutation);
-    if (event != null) push(event);
+    if (event != null) {
+      push(event);
+    } else {
+      print('[UpQueue] Warning: payload conversion returned null');
+    }
   }
 
   void _addToQueueInternal(MutationPayload mutation) {
