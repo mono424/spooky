@@ -347,20 +347,19 @@ export const LiveCodeEditor: React.FC<LiveCodeEditorProps> = ({ initialCode, fil
       </div>
 
       {/* Body */}
-      <div className="relative flex-1 flex min-h-0">
-            {/* Gutter */}
-            <div className="bg-[#0a0a0a] border-r border-[#222] text-[#444] text-right py-4 pr-3 pl-2 select-none w-12 shrink-0 font-mono leading-relaxed">
-            {Array.from({ length: lineCount }).map((_, i) => (
-                <div key={i}>{i + 1}</div>
-            ))}
+      <div className="relative flex-1 bg-[#050505] overflow-visible min-h-0 font-mono text-sm leading-relaxed">
+        {code.split('\n').map((line, i) => (
+            <div key={i} className={`flex ${i === 0 ? 'pt-4' : ''} ${i === (code.split('\n').length - 1) ? 'pb-4' : ''}`}>
+                {/* Gutter */}
+                <div className="bg-[#0a0a0a] border-r border-[#222] text-[#444] text-right pr-3 pl-2 select-none w-12 shrink-0">
+                    {i + 1}
+                </div>
+                {/* Code Line */}
+                <div className="flex-1 px-4 whitespace-pre-wrap break-words text-gray-300">
+                    {line.length === 0 ? <br /> : renderCode(line)}
+                </div>
             </div>
-
-            {/* Code */}
-            <div className="relative flex-1 py-4 px-4 overflow-visible cursor-text">
-                <pre className="m-0 p-0 whitespace-pre font-mono leading-relaxed text-gray-300">
-                    {renderCode(code)}
-                </pre>
-            </div>
+        ))}
       </div>
       
       {/* Footer */}

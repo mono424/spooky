@@ -1,4 +1,4 @@
-import { For } from "solid-js";
+import { For, createSignal } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { db } from "../db";
 import { useQuery } from "@spooky/client-solid";
@@ -6,15 +6,22 @@ import { useQuery } from "@spooky/client-solid";
 export function ThreadList() {
   const navigate = useNavigate();
 
-  const threadsResult = useQuery(db, () =>
-    db
-      .query("thread")
-      .related("author")
-      .orderBy("created_at", "desc")
-      .orderBy("id", "asc")
-      .limit(10)
-      .build()
-  );
+  /* const [filter, setFilter] = createSignal(""); */
+  const [sort, setSort] = createSignal("desc"); // 'desc' | 'asc'
+
+  const threadsResult = useQuery(db, () => {
+    let q = db.query("thread").related("author");
+
+    /* 
+    if (filter()) {
+       // ... 
+    }
+    */
+
+    q = q.orderBy("created_at", sort() as "asc" | "desc");
+    
+    return q.limit(10).build();
+  });
   
   const threads = () => threadsResult.data() || [];
 
@@ -28,15 +35,27 @@ export function ThreadList() {
         Minimalist style to blend with the main Layout header. 
         Removed the heavy bottom border and large H1.
       */}
-      <div class="flex justify-between items-center mb-8 pt-2">
-        <div class="text-xs sm:text-sm text-gray-500 font-mono uppercase tracking-wider">
-           <span class="text-green-500 font-bold mr-2">root@spooky:~/threads$</span>
-           <span class="animate-pulse">_</span>
+      <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 pt-2 gap-4">
+        <div class="text-xs sm:text-sm text-gray-500 font-mono uppercase tracking-wider flex items-center gap-4 w-full sm:w-auto">
+           <div>
+             <span class="text-green-500 font-bold mr-2">root@spooky:~/threads$</span>
+             <span class="animate-pulse">_</span>
+           </div>
+           
+           {/* Sort Toggle */}
+           <select
+             value={sort()}
+             onInput={(e) => setSort(e.currentTarget.value)}
+             class="bg-black text-gray-400 border border-gray-800 text-[10px] px-2 py-1 outline-none focus:border-green-500 uppercase cursor-pointer"
+           >
+             <option value="desc">Newest</option>
+             <option value="asc">Oldest</option>
+           </select>
         </div>
         
         <button
           onClick={() => navigate("/create-thread")}
-          class="bg-white text-black border-2 border-white px-4 py-2 uppercase font-bold text-xs hover:bg-black hover:text-white transition-none"
+          class="bg-white text-black border-2 border-white px-4 py-2 uppercase font-bold text-xs hover:bg-black hover:text-white transition-none whitespace-nowrap self-end sm:self-auto"
         >
           [ + WRITE_NEW ]
         </button>

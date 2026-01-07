@@ -186,6 +186,10 @@ export const DevToolsProvider: ParentComponent = (props) => {
    */
   function refresh() {
     checkSpooky();
+    const currentTable = selectedTable();
+    if (currentTable) {
+      fetchTableData(currentTable);
+    }
   }
 
   /**

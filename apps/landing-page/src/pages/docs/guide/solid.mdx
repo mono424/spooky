@@ -1,0 +1,92 @@
+---
+layout: ../../../layouts/DocsLayout.astro
+title: SolidJS Guide
+---
+
+> **Note**: This guide is currently under construction. 🚧
+
+This guide walks you through building a reactive app with SolidJS and Spooky.
+
+import CodeBlock from '../../../components/ui/CodeBlock.astro';
+
+## 1. Setup
+
+Install the Spooky client SDK and SolidJS dependencies.
+
+<CodeBlock code={`npm install @spooky/core solid-js @solidjs/router`} lang="bash" />
+
+## 2. Initialize Database
+
+Create a `db.ts` file to handle the connection.
+
+<CodeBlock
+  fileName="src/db.ts"
+  lang="typescript"
+  code={`import { SpookyClient } from '@spooky/core';
+
+export const db = new SpookyClient({
+  endpoint: 'ws://localhost:8000/rpc',
+  namespace: 'test',
+  database: 'test',
+});
+
+export const initDatabase = async () => {
+  await db.connect();
+  console.log('Connected to Spooky 👻');
+};`}
+/>
+
+## 3. App Entry Point
+
+Initialize the database in your root component.
+
+<CodeBlock
+  fileName="src/App.tsx"
+  lang="tsx"
+  code={`import { createSignal, onMount, Show } from "solid-js";
+import { initDatabase } from "./db";
+
+export default function App() {
+  const [ready, setReady] = createSignal(false);
+
+onMount(async () => {
+await initDatabase();
+setReady(true);
+});
+
+return (
+<Show when={ready()} fallback={<div>Booting System...</div>}>
+<MainApp />
+</Show>
+);
+}
+`}
+/>
+
+## 4. Live Queries (Incantations)
+
+Use `createResource` or Spooky's hooks to bind data to your views.
+
+<CodeBlock
+  fileName="src/components/ThreadList.tsx"
+  lang="tsx"
+  code={`import { createResource } from "solid-js";
+import { db } from "../db";
+
+const fetchThreads = async () => {
+// This registers a live query (Incantation)
+return await db.liveQuery("SELECT \* FROM thread ORDER BY created_at DESC");
+};
+
+export const ThreadList = () => {
+  const [threads] = createResource(fetchThreads);
+
+return (
+<ul>
+<For each={threads()}>
+{(thread) => <li>{thread.title}</li>}
+</For>
+</ul>
+);
+};`}
+/>

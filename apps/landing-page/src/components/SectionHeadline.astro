@@ -1,0 +1,26 @@
+---
+interface Props {
+  title: string;
+  description?: string;
+  align?: 'left' | 'center';
+}
+
+const { title, description } = Astro.props;
+---
+
+<div class="mb-16 text-center border-y border-white/10 pt-6">
+  <h2 class="text-3xl font-bold uppercase tracking-widest text-white mb-4">
+    {title}
+  </h2>
+  {
+    description ? (
+      <p class="font-mono text-gray-500 max-w-3xl mx-auto text-sm md:text-base leading-relaxed mb-6">
+        <Fragment set:html={description} />
+      </p>
+    ) : (
+      <div class="font-mono text-gray-500 max-w-3xl mx-auto text-sm md:text-base leading-relaxed mb-6">
+        <slot />
+      </div>
+    )
+  }
+</div>

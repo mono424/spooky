@@ -1,0 +1,52 @@
+---
+import Sidebar from '../components/Sidebar.astro';
+import OnThisPage from '../components/OnThisPage.astro';
+import Header from '../components/Header.astro';
+import '../styles/docs.css';
+
+const { frontmatter, headings } = Astro.props;
+const title = frontmatter?.title || Astro.props.title;
+---
+
+<html lang="en" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>{title} | ZeroIndex</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body class="bg-background text-text-main font-sans antialiased selection:bg-primary/20">
+    <Header />
+
+    <div class="max-w-[1600px] mx-auto flex w-full min-h-screen">
+      <aside
+        class="hidden lg:block w-[280px] shrink-0 border-r border-border h-[calc(100vh-64px)] sticky top-16 overflow-y-auto py-8 pl-6 pr-4"
+      >
+        <Sidebar />
+      </aside>
+
+      <main class="flex-1 min-w-0 py-8 px-6 lg:px-12">
+        <div class="prose prose-invert max-w-3xl w-full">
+          <p class="text-sm text-text-muted mb-2">Docs &gt; Components &gt; {title}</p>
+          <h1 class="text-4xl tracking-tight mb-4">{title}</h1>
+          <p class="text-lg text-text-muted leading-relaxed mb-8">
+            <slot name="description" />
+          </p>
+
+          <slot />
+        </div>
+      </main>
+
+      <aside
+        class="hidden xl:block w-[240px] shrink-0 h-[calc(100vh-64px)] sticky top-16 py-8 pr-6 pl-4"
+      >
+        <OnThisPage headings={headings} />
+      </aside>
+    </div>
+  </body>
+</html>

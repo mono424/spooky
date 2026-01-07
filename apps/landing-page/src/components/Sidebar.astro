@@ -1,0 +1,46 @@
+---
+const nav = [
+  {
+    title: 'Getting Started',
+    links: [
+      { text: 'Introduction', href: '/spooky/docs' },
+      { text: 'Installation', href: '/spooky/docs/install' },
+    ],
+  },
+  {
+    title: 'Framework Guides',
+    links: [
+      { text: 'SolidJS', href: '/spooky/docs/guide/solid' },
+      { text: 'Flutter', href: '/spooky/docs/guide/flutter' },
+      { text: 'Vanilla JS / TS', href: '/spooky/docs/guide/vanilla' },
+    ],
+  },
+];
+---
+
+<nav class="space-y-8">
+  {
+    nav.map((group) => (
+      <div>
+        <h3 class="font-medium text-sm text-text-main mb-3 px-2">{group.title}</h3>
+        <ul class="space-y-1">
+          {group.links.map((link) => (
+            <li>
+              <a
+                href={link.href}
+                class:list={[
+                  'block px-2 py-1.5 text-sm rounded-md transition-colors border-l-2',
+                  link.active
+                    ? 'border-primary text-primary bg-primary/5 font-medium'
+                    : 'border-transparent text-text-muted hover:text-text-main hover:bg-surface',
+                ]}
+              >
+                {link.text}
+              </a>
+            </li>
+          ))}
+        </ul>
+      </div>
+    ))
+  }
+</nav>

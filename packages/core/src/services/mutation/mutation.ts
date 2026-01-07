@@ -1,7 +1,7 @@
 import { RecordId } from 'surrealdb';
 import { LocalDatabaseService } from '../database/index.js';
 import { createMutationEventSystem, MutationEventSystem, MutationEventTypes } from './events.js';
-import { parseRecordIdString } from '../utils.js';
+import { parseRecordIdString, encodeToSpooky } from '../utils.js';
 import { SchemaStructure } from '@spooky/query-builder';
 import { createLogger, Logger } from '../logger.js';
 
@@ -73,11 +73,15 @@ export class MutationManager<S extends SchemaStructure> {
           COMMIT TRANSACTION;
       `;
 
+    const rid = parseRecordIdString(id);
+    const tableName = rid.table.toString();
+    const encodedData = encodeToSpooky(this.schema, tableName as any, data as any);
+
     const [response] = await this.withRetry(() =>
       this.db.query<[{ target: T; mutation_id: RecordId }]>(query, {
-        id: parseRecordIdString(id),
+        id: rid,
         mid: parseRecordIdString(mutationId),
-        data,
+        data: encodedData,
       })
     );
 
@@ -96,7 +100,7 @@ export class MutationManager<S extends SchemaStructure> {
           type: 'create',
           mutation_id: result.mutation_id,
           record_id: result.target.id as RecordId,
-          data,
+          data: encodedData,
         },
       ],
     });
@@ -128,11 +132,13 @@ export class MutationManager<S extends SchemaStructure> {
           COMMIT TRANSACTION;
       `;
 
+    const encodedData = encodeToSpooky(this.schema, table as any, data as any);
+
     // The return type is an array containing our custom object
     const [response] = await this.withRetry(() =>
       this.db.query<[{ target: T; mutation_id: RecordId }]>(query, {
         id: rid,
-        data,
+        data: encodedData,
       })
     );
 
@@ -148,7 +154,7 @@ export class MutationManager<S extends SchemaStructure> {
         {
           type: 'update',
           record_id: rid,
-          data,
+          data: encodedData,
           mutation_id: result.mutation_id,
         },
       ],

@@ -4,44 +4,67 @@ import { escapeHtml } from "../../utils/html";
 import { Cell, type EditingCell } from "./Cell";
 
 function getRecordId(row: Record<string, unknown>): string | null {
-  if (row.id && typeof row.id === "string") {
-    return row.id;
-  }
-  return null;
+  if (!row.id) return null;
+  if (typeof row.id === "string") return row.id;
+  if (typeof row.id === "object" && row.id !== null) return row.id.toString();
+  return String(row.id);
 }
 
 export function TableView() {
-  const { state, selectedTable, fetchTableData, updateTableRow, deleteTableRow } = useDevTools();
+  const { state, selectedTable, setSelectedTable, fetchTableData, updateTableRow, deleteTableRow } = useDevTools();
+  const [filter, setFilter] = createSignal("");
+  // Track editing by Record ID and Column instead of Index
   const [editingCell, setEditingCell] = createSignal<EditingCell | null>(null);
 
   // Fetch table data when a table is selected
   createEffect(() => {
     const table = selectedTable();
     if (table) {
-      fetchTableData(table);
+      if (typeof fetchTableData === 'function') {
+         fetchTableData(table);
+      }
+      setFilter(""); // Reset filter when changing tables
     }
   });
 
   const tableData = createMemo(() => {
     const table = selectedTable();
     if (!table) return null;
-    return state.database.tableData[table] || [];
+    let data = state.database.tableData[table] || [];
+    
+    const filterText = filter().toLowerCase();
+    if (filterText) {
+      data = data.filter(row => {
+        // Search in all values
+        return Object.values(row).some(val => 
+          String(val).toLowerCase().includes(filterText)
+        );
+      });
+    }
+    
+    return data;
   });
 
   const columns = createMemo(() => {
-    const data = tableData();
-    if (!data || data.length === 0) return [];
+    // Use original data for column discovery to ensure we see all potential columns even if filtered out
+    const fullData = selectedTable() ? state.database.tableData[selectedTable()!] : [];
+    
+    if (!fullData || fullData.length === 0) return [];
 
-    // Get all unique keys from all rows
     const keys = new Set<string>();
-    data.forEach((row) => {
+    fullData.forEach((row) => {
       Object.keys(row).forEach((key) => keys.add(key));
     });
-    return Array.from(keys);
+    
+    return Array.from(keys).sort((a, b) => {
+      if (a.toLowerCase() === 'id') return -1;
+      if (b.toLowerCase() === 'id') return 1;
+      return a.localeCompare(b);
+    });
   });
 
-  const handleStartEdit = (rowIndex: number, column: string) => {
-    setEditingCell({ rowIndex, column });
+  const handleStartEdit = (recordId: string, column: string) => {
+    setEditingCell({ recordId, column });
   };
 
   const handleCellUpdate = (row: Record<string, unknown>, column: string, newValue: unknown) => {
@@ -90,21 +113,40 @@ export function TableView() {
 
   const handleDeleteRow = (row: Record<string, unknown>) => {
     const recordId = getRecordId(row);
-    if (!recordId) {
-      console.error("Cannot delete row: no id found");
-      return;
-    }
-
+    if (!recordId) return;
     const tableName = selectedTable();
     if (!tableName) return;
-
     if (confirm(`Delete record ${recordId}?`)) {
       deleteTableRow(tableName, recordId);
     }
   };
 
+  // Explicitly expose setFilter for external use if needed, but here we just bind
   return (
     <div class="database-data">
+      <div class="table-controls" style={{ padding: "4px 8px", "border-bottom": "1px solid var(--sys-color-divider)", display: "flex", "align-items": "center" }}>
+        <input
+          type="text"
+          placeholder="Filter..."
+          value={filter()}
+          onInput={(e) => setFilter(e.currentTarget.value)}
+          style={{
+            "width": "100%", /* Full width */
+            "padding": "2px 12px", /* More horizontal padding for rounded pill */
+            "height": "24px", 
+            "background": "var(--sys-color-surface-container-highest, #3d3d3d)",
+            "border": "1px solid var(--sys-color-outline-variant, #555)",
+            "color": "var(--sys-color-on-surface, #fff)",
+            "border-radius": "12px", /* Fully rounded (half of height) */
+            "font-family": "var(--sys-typescale-body-font, '.SFNSDisplay-Regular', 'Helvetica Neue', 'Lucida Grande', sans-serif)",
+            "font-size": "12px",
+            "line-height": "16px",
+            "outline": "none"
+          }}
+          onFocus={(e) => e.currentTarget.style.border = "1px solid var(--sys-color-primary, #1a73e8)"}
+          onBlur={(e) => e.currentTarget.style.border = "1px solid var(--sys-color-outline-variant, #555)"}
+        />
+      </div>
       <div class="table-data">
         <Show
           when={selectedTable()}
@@ -113,7 +155,7 @@ export function TableView() {
           }
         >
           <Show
-            when={tableData() && tableData()!.length > 0}
+            when={tableData() && tableData()!.length >= 0} 
             fallback={
               <div class="empty-state">
                 No data in table "{selectedTable()}"
@@ -131,11 +173,14 @@ export function TableView() {
               </thead>
               <tbody>
                 <For each={tableData()}>
-                  {(row, rowIndex) => {
+                  {(row) => {
+                    const recordId = getRecordId(row);
                     const editing = editingCell();
+                    
                     const isEditingCell = (column: string) =>
                       editing !== null &&
-                      editing.rowIndex === rowIndex() &&
+                      recordId !== null &&
+                      editing.recordId === recordId &&
                       editing.column === column;
 
                     return (
@@ -145,11 +190,22 @@ export function TableView() {
                             <Cell
                               value={row[column]}
                               column={column}
-                              rowIndex={rowIndex()}
+                              recordId={recordId || ""}
                               isEditing={isEditingCell(column)}
-                              onStartEdit={handleStartEdit}
+                              onStartEdit={(col) => recordId && handleStartEdit(recordId, col)}
                               onUpdate={(newValue) => handleCellUpdate(row, column, newValue)}
                               onCancel={() => setEditingCell(null)}
+                              onIdClick={(id) => {
+                                // Expected format: "tableName:recordId"
+                                const parts = id.split(':');
+                                const table = parts[0];
+                                if (table && table !== selectedTable()) {
+                                  setSelectedTable(table);
+                                  setFilter(id);
+                                } else {
+                                   setFilter(id);
+                                }
+                              }}
                             />
                           )}
                         </For>

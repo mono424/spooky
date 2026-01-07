@@ -22,6 +22,8 @@ pub type ZSet = HashMap<RowKey, Weight>;
 pub struct LeafItem {
     pub id: String,
     pub hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub children: Option<HashMap<String, IdTree>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -49,11 +51,22 @@ impl IdTree {
         const THRESHOLD: usize = 100; // Max items per leaf node
 
         if items.len() <= THRESHOLD {
-            // Hash the leaf items (id + hash)
+            // Hash the leaf items (id + hash + children)
             let mut hasher = blake3::Hasher::new();
             for item in &items {
                 hasher.update(item.id.as_bytes());
                 hasher.update(item.hash.as_bytes());
+                // Include children in hash
+                if let Some(children) = &item.children {
+                    // Sort keys for deterministic hash
+                    let mut keys: Vec<&String> = children.keys().collect();
+                    keys.sort();
+                    for k in keys {
+                        hasher.update(k.as_bytes());
+                        let child = children.get(k).unwrap();
+                        hasher.update(child.hash.as_bytes());
+                    }
+                }
                 hasher.update(&[0]);
             }
             let hash = hasher.finalize().to_hex().to_string();
@@ -222,7 +235,12 @@ impl View {
         }
 
         if view_delta.is_empty() {
-            return None;
+            // Even if the SET of IDs didn't change, the CONTENT of rows or DEPENDENCIES might have changed.
+            // We must check the materialized hash.
+            // We continue to Step 3, but maybe optimize?
+            // Actually, if view_delta is empty, it means IDs are same.
+            // But we need to re-verify hashes.
+            // Let's proceed.
         }
 
         // 3. Update Cache & Emit
@@ -240,19 +258,10 @@ impl View {
         // For now, default ID sort is stable.
         result_ids.sort();
 
-        // Build Leaf Items
+        // Recursively build tree nodes (LeafItem with children)
         let items: Vec<LeafItem> = result_ids
             .iter()
-            .map(|id| {
-                // Get Hash from DB Cache
-                let hash = self
-                    .get_row_hash(id, db)
-                    .unwrap_or_else(|| "0000".to_string());
-                LeafItem {
-                    id: id.clone(),
-                    hash,
-                }
-            })
+            .map(|id| self.expand_item(id, &self.plan.root, db))
             .collect();
 
         // Compute root hash from items
@@ -279,6 +288,92 @@ impl View {
         }
 
         None
+    }
+
+    /// Recursively expand an item ID into a LeafItem with dependency/children hashes
+    fn expand_item(&self, id: &str, op: &Operator, db: &Database) -> LeafItem {
+        // 1. Get Base Hash (Intrinsic)
+        let mut final_hash = self
+            .get_row_hash(id, db)
+            .unwrap_or_else(|| "0000".to_string());
+
+        // 2. Find Projections (Dependencies)
+        let mut children_map = HashMap::new();
+        let projections = self.find_projections(op);
+
+        if !projections.is_empty() {
+            let mut dependency_hashes = Vec::new();
+
+            for proj in projections {
+                if let Projection::Subquery {
+                    alias,
+                    plan: sub_op,
+                } = proj
+                {
+                    // Execute Subquery
+                    // Context includes "parent" = id
+                    let mut context = self.params.clone().unwrap_or(json!({}));
+                    if let Some(obj) = context.as_object_mut() {
+                        obj.insert("parent".to_string(), json!(id)); // Simple context
+                                                                     // Also support direct access?
+                    } else {
+                        context = json!({"parent": id});
+                    }
+
+                    // Eval Subquery to get IDs
+                    let sub_zset = self.eval_snapshot(sub_op, db, Some(&context));
+                    let mut sub_ids: Vec<String> = sub_zset.keys().cloned().collect();
+                    sub_ids.sort();
+
+                    // Recursive Expansion
+                    let sub_items: Vec<LeafItem> = sub_ids
+                        .iter()
+                        .map(|sub_id| self.expand_item(sub_id, sub_op, db))
+                        .collect();
+
+                    // Build Sub-Tree
+                    let sub_tree = IdTree::build(sub_items);
+
+                    dependency_hashes.push(sub_tree.hash.clone());
+                    children_map.insert(alias.clone(), sub_tree);
+                }
+            }
+
+            // 3. Mix in dependency hashes
+            if !dependency_hashes.is_empty() {
+                let mut hasher = blake3::Hasher::new();
+                hasher.update(final_hash.as_bytes());
+                for h in dependency_hashes {
+                    hasher.update(h.as_bytes());
+                }
+                final_hash = hasher.finalize().to_hex().to_string();
+            }
+        }
+
+        LeafItem {
+            id: id.to_string(),
+            hash: final_hash,
+            children: if children_map.is_empty() {
+                None
+            } else {
+                Some(children_map)
+            },
+        }
+    }
+
+    fn find_projections<'a>(&self, op: &'a Operator) -> Vec<&'a Projection> {
+        match op {
+            Operator::Project {
+                input: _,
+                projections,
+            } => projections.iter().collect(),
+            // Traverse down for Limit/Sort
+            Operator::Limit { input, .. } => self.find_projections(input),
+            // Stop at other operators?
+            // Usually Project is near/at top. If we hit Filter/Scan/Join, we assume no projections *above* them relevant for this context?
+            // Yes, standard query structure puts Projection at top.
+            _ => vec![],
+        }
     }
 
     fn eval_snapshot(&self, op: &Operator, db: &Database, context: Option<&Value>) -> ZSet {
@@ -444,7 +539,10 @@ impl View {
                     if let Some(param_path) = obj.get("$param") {
                         // Resolve param from context
                         if let Some(ctx) = context {
-                            if let Some(ctx_val) = ctx.get(param_path.as_str().unwrap_or("")) {
+                            let path = param_path.as_str().unwrap_or("");
+                            // Handle simple "parent" vs dot access if needed
+                            // For now assume top level
+                            if let Some(ctx_val) = ctx.get(path) {
                                 // println!("DEBUG: Resolved param {}: {:?}", param_path, ctx_val);
                                 ctx_val
                             } else {

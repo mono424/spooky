@@ -1,6 +1,12 @@
-import { Surreal } from "surrealdb";
-import { createWasmEngines } from "@surrealdb/wasm";
-import type { CacheStrategy } from "../types";
+import { Diagnostic, Surreal, applyDiagnostics } from 'surrealdb';
+import { createWasmEngines } from '@surrealdb/wasm';
+import type { CacheStrategy } from '../types';
+
+const printDiagnostic = ({ key, type, phase, ...other }: Diagnostic) => {
+  if (phase === 'progress' || phase === 'after') {
+    console.log(`[SurrealDB_WASM] [${key}] ${type}:${phase}\n${JSON.stringify(other, null, 2)}`);
+  }
+};
 
 /**
  * SurrealDB WASM client factory for different storage strategies
@@ -17,18 +23,17 @@ export class SurrealDBWasmFactory {
   ): Promise<Surreal> {
     // Create Surreal instance with WASM engines
     const surreal = new Surreal({
-      engines: createWasmEngines(),
+      engines: applyDiagnostics(createWasmEngines(), printDiagnostic),
     });
 
     // Connect to the appropriate storage backend
-    const connectionUrl =
-      strategy === "indexeddb" ? `indxdb://${dbName}` : "mem://";
+    const connectionUrl = strategy === 'indexeddb' ? `indxdb://${dbName}` : 'mem://';
 
     await surreal.connect(connectionUrl);
 
     // Set namespace and database
     await surreal.use({
-      namespace: namespace || "main",
+      namespace: namespace || 'main',
       database: database || dbName,
     });
 
@@ -43,7 +48,7 @@ export class SurrealDBWasmFactory {
     namespace?: string,
     database?: string
   ): Promise<Surreal> {
-    return this.create(dbName, "memory", namespace, database);
+    return this.create(dbName, 'memory', namespace, database);
   }
 
   /**
@@ -54,6 +59,6 @@ export class SurrealDBWasmFactory {
     namespace?: string,
     database?: string
   ): Promise<Surreal> {
-    return this.create(dbName, "indexeddb", namespace, database);
+    return this.create(dbName, 'indexeddb', namespace, database);
   }
 }

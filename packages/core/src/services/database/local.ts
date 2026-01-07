@@ -1,4 +1,4 @@
-import { Surreal } from 'surrealdb';
+import { applyDiagnostics, Diagnostic, Surreal } from 'surrealdb';
 import { createWasmEngines } from '@surrealdb/wasm';
 import { SpookyConfig } from '../../types.js';
 import { Logger } from '../logger.js';
@@ -10,7 +10,17 @@ export class LocalDatabaseService extends AbstractDatabaseService {
   constructor(config: SpookyConfig<any>['database'], logger: Logger) {
     super(
       new Surreal({
-        engines: createWasmEngines(),
+        engines: applyDiagnostics(
+          createWasmEngines(),
+          ({ key, type, phase, ...other }: Diagnostic) => {
+            if (phase === 'progress' || phase === 'after') {
+              logger.info(
+                { ...other, key, type, phase, service: 'surrealdb:local' },
+                `[SurrealDB:LOCAL] [${key}] ${type}:${phase}`
+              );
+            }
+          }
+        ),
       }),
       logger
     );

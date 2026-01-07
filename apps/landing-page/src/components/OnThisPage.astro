@@ -1,0 +1,21 @@
+---
+const { headings = [] } = Astro.props;
+---
+
+<div class="text-sm">
+  <h4 class="font-medium text-text-main mb-4">On this page</h4>
+  <ul class="space-y-2 border-l border-border pl-4">
+    {
+      headings.map((h) => (
+        <li>
+          <a
+            href={`#${h.slug}`}
+            class="block text-text-muted hover:text-primary transition-colors line-clamp-1"
+          >
+            {h.text}
+          </a>
+        </li>
+      ))
+    }
+  </ul>
+</div>

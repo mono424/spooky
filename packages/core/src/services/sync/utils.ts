@@ -25,7 +25,7 @@ function diffIdTreeInt(
   }
 
   // 3. Structure Mismatch (Leaf, Null, or Mixed) -> Flatten & Diff
-  return diffLists(flatten(local), flatten(remote));
+  return diffLists(flattenIdTree(local), flattenIdTree(remote));
 }
 
 function diffInternalNodes(
@@ -50,7 +50,7 @@ function diffInternalNodes(
   return { added, removed, updated };
 }
 
-function flatten(node: IdTree | null): { id: string; hash: string }[] {
+export function flattenIdTree(node: IdTree | null): { id: string; hash: string }[] {
   if (!node) return [];
   const leaves: { id: string; hash: string }[] = [];
   collectLeaves(node, leaves);

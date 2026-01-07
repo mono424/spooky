@@ -13,30 +13,71 @@ export interface DevToolsEvent {
   payload: any;
 }
 
+import { QueryManager } from './query/query.js';
+
 export class DevToolsService {
   private eventsHistory: DevToolsEvent[] = [];
   private eventIdCounter = 0;
   private version = '1.0.0'; // TODO: Get from package.json
+  private activeQueries = new Map<number, any>();
 
   constructor(
     private mutationEvents: MutationEventSystem,
     private queryEvents: QueryEventSystem,
     private databaseService: LocalDatabaseService,
     private logger: Logger,
-    private schema: SchemaStructure
+    private schema: SchemaStructure,
+    private queryManager?: QueryManager<any>
   ) {
     this.setupEventSubscriptions();
     this.exposeToWindow();
+    this.syncInitialState();
     this.logger.debug('[DevTools] Service initialized');
+  }
+
+  private syncInitialState() {
+    if (this.queryManager) {
+      const queries = this.queryManager.getActiveQueries();
+      queries.forEach((q) => {
+        const queryHash = this.hashString(q.id.toString());
+        this.activeQueries.set(queryHash, {
+          queryHash,
+          status: 'active',
+          createdAt:
+            q.lastActiveAt instanceof Date
+              ? q.lastActiveAt.getTime()
+              : new Date(q.lastActiveAt || Date.now()).getTime(),
+          lastUpdate: Date.now(),
+          updateCount: 0,
+          query: q.surrealql,
+          variables: q.params || {},
+          dataSize: q.records?.length || 0,
+        });
+      });
+    }
   }
 
   private setupEventSubscriptions() {
     // Query Events
     this.queryEvents.subscribe(QueryEventTypes.IncantationInitialized, (event) => {
+      console.log('[DevTools] IncantationInitialized', event.payload);
       // Map incantationId hash to number if possible, or use string hash
       // Devtools expects number queryHash. If existing is string, we might need to hash it or change devtools.
       // For now, let's try to parse integer if it's numeric, or hash the string.
       const queryHash = this.hashString(event.payload.incantationId.toString());
+
+      const queryState = {
+        queryHash,
+        status: 'active',
+        createdAt: Date.now(),
+        lastUpdate: Date.now(),
+        updateCount: 0,
+        query: event.payload.surrealql,
+        variables: {}, // Core doesn't seem to expose vars in this event yet
+        dataSize: 0,
+      };
+
+      this.activeQueries.set(queryHash, queryState);
 
       this.addEvent('QUERY_REQUEST_INIT', {
         queryHash,
@@ -47,7 +88,21 @@ export class DevToolsService {
     });
 
     this.queryEvents.subscribe(QueryEventTypes.IncantationUpdated, (event) => {
+      console.log('[DevTools] IncantationUpdated', event.payload);
       const queryHash = this.hashString(event.payload.incantationId.toString());
+
+      const queryState = this.activeQueries.get(queryHash);
+      if (queryState) {
+        queryState.updateCount++;
+        queryState.lastUpdate = Date.now();
+        queryState.dataSize = Array.isArray(event.payload.records)
+          ? event.payload.records.length
+          : 0;
+        this.activeQueries.set(queryHash, queryState);
+      } else {
+        console.warn('[DevTools] Received update for unknown query', queryHash);
+      }
+
       this.addEvent('QUERY_UPDATED', {
         queryHash,
         data: event.payload.records,
@@ -97,7 +152,7 @@ export class DevToolsService {
   private getState() {
     return {
       eventsHistory: [...this.eventsHistory],
-      activeQueries: {}, // TODO: Track active queries if needed
+      activeQueries: Object.fromEntries(this.activeQueries),
       auth: { authenticated: false }, // TODO: Hook up auth
       version: this.version,
       database: {
@@ -120,6 +175,36 @@ export class DevToolsService {
     }
   }
 
+  private serializeForDevTools(data: any): any {
+    if (data === null || data === undefined) {
+      return data;
+    }
+
+    if (data instanceof RecordId) {
+      return data.toString();
+    }
+
+    if (data instanceof Date) {
+      return data.toISOString();
+    }
+
+    if (Array.isArray(data)) {
+      return data.map((item) => this.serializeForDevTools(item));
+    }
+
+    if (typeof data === 'object') {
+      const result: Record<string, any> = {};
+      for (const key in data) {
+        if (Object.prototype.hasOwnProperty.call(data, key)) {
+          result[key] = this.serializeForDevTools(data[key]);
+        }
+      }
+      return result;
+    }
+
+    return data;
+  }
+
   private exposeToWindow() {
     if (typeof window !== 'undefined') {
       (window as any).__SPOOKY__ = {
@@ -131,11 +216,22 @@ export class DevToolsService {
         },
         getTableData: async (tableName: string) => {
           try {
-            // Returns the first statement result as T
+            // Returns the first statement result as T.
+            // SurrealDB query returns [Result1, Result2...].
+            // We want the records from the first result.
             const result = await this.databaseService.query<Record<string, unknown>[]>(
               `SELECT * FROM ${tableName}`
             );
-            return result || [];
+
+            let records = result;
+            // Check if result is double-wrapped (SurrealJS behavior: [[records]])
+            if (Array.isArray(result) && Array.isArray(result[0])) {
+              records = result[0] as any;
+            } else if (!Array.isArray(result)) {
+              records = [] as any;
+            }
+
+            return this.serializeForDevTools(records) || [];
           } catch (e) {
             this.logger.error({ err: e }, 'Failed to get table data');
             return [];
