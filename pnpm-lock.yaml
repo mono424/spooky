@@ -12,8 +12,8 @@ importers:
         specifier: ^3.7.4
         version: 3.7.4
       surrealdb:
-        specifier: ^2.0.0-alpha.14
-        version: 2.0.0-alpha.14(tslib@2.8.1)(typescript@5.9.3)
+        specifier: 2.0.0-alpha.15
+        version: 2.0.0-alpha.15(tslib@2.8.1)(typescript@5.9.3)
 
   apps/devtools:
     dependencies:
@@ -172,10 +172,10 @@ importers:
         version: link:../query-builder
       '@surrealdb/wasm':
         specifier: ^2.4.0
-        version: 2.4.0(surrealdb@2.0.0-alpha.14(tslib@2.8.1)(typescript@5.9.3))
+        version: 2.4.0(surrealdb@2.0.0-alpha.15(tslib@2.8.1)(typescript@5.9.3))
       surrealdb:
-        specifier: ^2.0.0-alpha.14
-        version: 2.0.0-alpha.14(tslib@2.8.1)(typescript@5.9.3)
+        specifier: 2.0.0-alpha.15
+        version: 2.0.0-alpha.15(tslib@2.8.1)(typescript@5.9.3)
       valtio:
         specifier: ^2.1.8
         version: 2.1.8(@types/react@19.2.7)(react@19.2.0)
@@ -206,7 +206,7 @@ importers:
         version: link:../query-builder
       '@surrealdb/wasm':
         specifier: ^2.4.0
-        version: 2.4.0(surrealdb@2.0.0-alpha.14(tslib@2.8.1)(typescript@5.9.3))
+        version: 2.4.0(surrealdb@2.0.0-alpha.15(tslib@2.8.1)(typescript@5.9.3))
       fast-json-patch:
         specifier: ^3.1.1
         version: 3.1.1
@@ -214,8 +214,8 @@ importers:
         specifier: ^10.1.0
         version: 10.1.0
       surrealdb:
-        specifier: 2.0.0-alpha.14
-        version: 2.0.0-alpha.14(tslib@2.8.1)(typescript@5.9.3)
+        specifier: 2.0.0-alpha.15
+        version: 2.0.0-alpha.15(tslib@2.8.1)(typescript@5.9.3)
     devDependencies:
       '@types/node':
         specifier: ^22.5.2
@@ -230,8 +230,8 @@ importers:
   packages/query-builder:
     dependencies:
       surrealdb:
-        specifier: ^2.0.0-alpha.14
-        version: 2.0.0-alpha.14(tslib@2.8.1)(typescript@5.9.3)
+        specifier: 2.0.0-alpha.15
+        version: 2.0.0-alpha.15(tslib@2.8.1)(typescript@5.9.3)
     devDependencies:
       '@types/node':
         specifier: ^20.0.0
@@ -256,17 +256,17 @@ importers:
         version: link:../query-builder
       '@surrealdb/wasm':
         specifier: ^2.4.0
-        version: 2.4.0(surrealdb@2.0.0-alpha.14(tslib@2.8.1)(typescript@5.9.3))
+        version: 2.4.0(surrealdb@2.0.0-alpha.15(tslib@2.8.1)(typescript@5.9.3))
       fast-json-patch:
         specifier: ^3.1.1
         version: 3.1.1
       surrealdb:
-        specifier: ^2.0.0-alpha.14
-        version: 2.0.0-alpha.14(tslib@2.8.1)(typescript@5.9.3)
+        specifier: 2.0.0-alpha.15
+        version: 2.0.0-alpha.15(tslib@2.8.1)(typescript@5.9.3)
     devDependencies:
       '@surrealdb/node':
         specifier: ^2.4.0
-        version: 2.4.0(surrealdb@2.0.0-alpha.14(tslib@2.8.1)(typescript@5.9.3))
+        version: 2.4.0(surrealdb@2.0.0-alpha.15(tslib@2.8.1)(typescript@5.9.3))
       '@types/node':
         specifier: ^22.5.2
         version: 22.18.13
@@ -292,8 +292,8 @@ importers:
         specifier: ^29.7.0
         version: 29.7.0(@types/node@20.19.22)(node-notifier@10.0.1)
       surrealdb:
-        specifier: ^2.0.0-alpha.14
-        version: 2.0.0-alpha.14(tslib@2.8.1)(typescript@5.9.3)
+        specifier: 2.0.0-alpha.15
+        version: 2.0.0-alpha.15(tslib@2.8.1)(typescript@5.9.3)
       syncgen:
         specifier: workspace:*
         version: link:../apps/syncgen
@@ -4565,8 +4565,8 @@ packages:
     resolution: {integrity: sha512-ot0WnXS9fgdkgIcePe6RHNk1WA8+muPa6cSjeR3V8K27q9BB1rTE3R1p7Hv0z1ZyAc8s6Vvv8DIyWf681MAt0w==}
     engines: {node: '>= 0.4'}
 
-  surrealdb@2.0.0-alpha.14:
-    resolution: {integrity: sha512-9j9LDCv8r6WLzH8M2K8i1NshnnTi9GkuEq9PoqlRbNx+yR8B4pjEX4/sjiP/5LkaDvzncdo6SYYAw9sAKCiUsQ==}
+  surrealdb@2.0.0-alpha.15:
+    resolution: {integrity: sha512-QuOBnBJtl7dy9iSwfYwZe0ksW3JY73iuyfnGKRSoSJMV/Gn8gPd/J4zdBm56EZF4CVdSyRp3p+tqs1ATPRLPDw==}
     peerDependencies:
       tslib: ^2.6.3
       typescript: ^5.0.0
@@ -6541,13 +6541,13 @@ snapshots:
 
   '@surrealdb/cbor@2.0.0-alpha.4': {}
 
-  '@surrealdb/node@2.4.0(surrealdb@2.0.0-alpha.14(tslib@2.8.1)(typescript@5.9.3))':
+  '@surrealdb/node@2.4.0(surrealdb@2.0.0-alpha.15(tslib@2.8.1)(typescript@5.9.3))':
     dependencies:
-      surrealdb: 2.0.0-alpha.14(tslib@2.8.1)(typescript@5.9.3)
+      surrealdb: 2.0.0-alpha.15(tslib@2.8.1)(typescript@5.9.3)
 
-  '@surrealdb/wasm@2.4.0(surrealdb@2.0.0-alpha.14(tslib@2.8.1)(typescript@5.9.3))':
+  '@surrealdb/wasm@2.4.0(surrealdb@2.0.0-alpha.15(tslib@2.8.1)(typescript@5.9.3))':
     dependencies:
-      surrealdb: 2.0.0-alpha.14(tslib@2.8.1)(typescript@5.9.3)
+      surrealdb: 2.0.0-alpha.15(tslib@2.8.1)(typescript@5.9.3)
 
   '@swc/helpers@0.5.17':
     dependencies:
@@ -10484,7 +10484,7 @@ snapshots:
 
   supports-preserve-symlinks-flag@1.0.0: {}
 
-  surrealdb@2.0.0-alpha.14(tslib@2.8.1)(typescript@5.9.3):
+  surrealdb@2.0.0-alpha.15(tslib@2.8.1)(typescript@5.9.3):
     dependencies:
       '@surrealdb/cbor': 2.0.0-alpha.4
       tslib: 2.8.1

@@ -41,7 +41,7 @@ export class QueryManager<S extends SchemaStructure> {
   }
 
   public getQueriesThatInvolveTable(tableName: string) {
-    return [...this.activeQueries.values().filter((q) => q.invlovesTable(tableName))];
+    return [...this.activeQueries.values()].filter((q) => q.invlovesTable(tableName));
   }
 
   public getActiveQueries() {

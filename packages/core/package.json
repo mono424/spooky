@@ -21,7 +21,7 @@
     "@surrealdb/wasm": "^2.4.0",
     "fast-json-patch": "^3.1.1",
     "pino": "^10.1.0",
-    "surrealdb": "2.0.0-alpha.14"
+    "surrealdb": "2.0.0-alpha.15"
   },
   "devDependencies": {
     "@types/node": "^22.5.2",

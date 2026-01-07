@@ -30,7 +30,7 @@
   "license": "MIT",
   "packageManager": "pnpm@9.0.0",
   "dependencies": {
-    "surrealdb": "^2.0.0-alpha.14"
+    "surrealdb": "2.0.0-alpha.15"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
