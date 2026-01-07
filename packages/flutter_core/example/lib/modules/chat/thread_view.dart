@@ -131,28 +131,83 @@ class _ThreadViewState extends State<ThreadView> {
                     itemBuilder: (context, index) {
                       final comment = _comments[index];
                       final content = comment['content'] ?? '';
-                      final author = comment['author'] ?? 'Anon';
+                      // Author handling
+                      String author = 'Anon';
+                      if (comment['author'] != null) {
+                         author = comment['author'].toString(); 
+                      }
+                      
+                      final createdAt = comment['created_at'] ?? '';
+                      
+                      final isMe = widget.controller.userId != null && 
+                                   author.contains(widget.controller.userId!);
 
-                      return Card(
-                        margin: const EdgeInsets.only(bottom: 12),
-                        child: Padding(
-                          padding: const EdgeInsets.all(12),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
+                      return Align(
+                        alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                        child: Container(
+                          width: MediaQuery.of(context).size.width * 0.8,
+                          child: Card(
+                            margin: const EdgeInsets.only(bottom: 12),
+                            color: isMe ? Theme.of(context).primaryColor.withValues(alpha: 0.1) : Theme.of(context).cardColor,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.only(
+                                topLeft: const Radius.circular(12),
+                                topRight: const Radius.circular(12),
+                                bottomLeft: isMe ? const Radius.circular(12) : Radius.zero,
+                                bottomRight: isMe ? Radius.zero : const Radius.circular(12),
+                              ),
+                            ),
+                            child: ListTile(
+                              title: Text(
                                 content,
                                 style: GoogleFonts.outfit(fontSize: 16),
                               ),
-                              const SizedBox(height: 4),
-                              Text(
-                                "by $author",
-                                style: GoogleFonts.outfit(
-                                  fontSize: 12,
-                                  color: Colors.grey,
-                                ),
+                              subtitle: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const SizedBox(height: 4),
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Text(
+                                        "by $author",
+                                        style: GoogleFonts.outfit(
+                                          fontSize: 12,
+                                          color: Colors.grey,
+                                          fontWeight: isMe ? FontWeight.bold : FontWeight.normal,
+                                        ),
+                                      ),
+                                      Text(
+                                        _formatDate(createdAt),
+                                        style: GoogleFonts.outfit(fontSize: 10, color: Colors.grey),
+                                      ),
+                                    ],
+                                  ),
+                                ],
                               ),
-                            ],
+                              trailing: isMe ? PopupMenuButton<String>(
+                                icon: const Icon(Icons.more_vert, size: 16),
+                                onSelected: (value) {
+                                  if (value == 'edit') {
+                                    _editComment(comment['id'], content);
+                                  } else if (value == 'delete') {
+                                    _deleteComment(comment['id']);
+                                  }
+                                },
+                                itemBuilder: (context) => [
+                                  const PopupMenuItem(
+                                    value: 'edit',
+                                    child: Text('Edit'),
+                                    height: 32,
+                                  ),
+                                  const PopupMenuItem(
+                                    value: 'delete',
+                                    child: Text('Delete', style: TextStyle(color: Colors.red)),
+                                    height: 32,
+                                  ),
+                                ],
+                              ) : null,
+                            ),
                           ),
                         ),
                       );
@@ -186,5 +241,60 @@ class _ThreadViewState extends State<ThreadView> {
         ],
       ),
     );
+  }
+
+  Future<void> _deleteComment(String id) async {
+    try {
+      await widget.controller.delete(RecordId.fromString(id));
+      widget.controller.log("Deleted comment: $id");
+    } catch (e) {
+      widget.controller.log("Delete Error: $e");
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Failed to delete: $e")));
+    }
+  }
+
+  void _editComment(String id, String currentContent) {
+    final contentController = TextEditingController(text: currentContent);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Edit Comment'),
+        content: TextField(
+          controller: contentController,
+          decoration: const InputDecoration(labelText: 'Content'),
+          maxLines: 3,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.pop(ctx);
+              try {
+                await widget.controller.update(RecordId.fromString(id), {
+                  'content': contentController.text,
+                });
+                widget.controller.log("Updated comment: $id");
+              } catch (e) {
+                widget.controller.log("Update Error: $e");
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Failed to update: $e")));
+              }
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+  String _formatDate(String iso) {
+    if (iso.isEmpty) return '';
+    try {
+      final dt = DateTime.parse(iso).toLocal();
+      return "${dt.hour.toString().padLeft(2,'0')}:${dt.minute.toString().padLeft(2,'0')} ${dt.day}/${dt.month}";
+    } catch (_) {
+      return iso;
+    }
   }
 }

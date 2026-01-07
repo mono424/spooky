@@ -188,41 +188,7 @@ class SpookyController extends ChangeNotifier {
     }
   }
 
-  Future<void> queryRemoteInfo() async {
-    if (client == null) return;
-    try {
-      log("Querying Remote DB Info...");
-      if (client!.remote.client == null) {
-        log("Remote connection unavailable.");
-        return;
-      }
-      final result = await client!.remote.getClient.query(
-        sql: "INFO FOR DB;",
-        vars: "{}",
-      );
-      log("Result: $result");
-    } catch (e) {
-      log("Error querying Remote: $e");
-    }
-  }
 
-  Future<void> selectSchema() async {
-    if (client == null) return;
-    try {
-      log("Selecting from user...");
-      if (client!.remote.client == null) {
-        log("Remote connection unavailable.");
-        return;
-      }
-      final result = await client!.remote.getClient.query(
-        sql: "SELECT * FROM user",
-        vars: "{}",
-      );
-      log("Result: $result");
-    } catch (e) {
-      log("Error selecting schema: $e");
-    }
-  }
 
   Future<void> disconnect() async {
     log("Flushing & Closing DB...");
