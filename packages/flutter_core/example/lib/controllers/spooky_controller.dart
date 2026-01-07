@@ -82,9 +82,16 @@ class SpookyController extends ChangeNotifier {
       final dbPath = '${Directory.current.path}/db';
       await Directory(dbPath).create(recursive: true);
 
+      final schemaJson = jsonEncode({
+        'relationships': [
+          {'from': 'thread', 'field': 'author', 'to': 'user'},
+        ],
+      });
+
       final config = SpookyConfig(
         schemaSurql: SURQL_SCHEMA,
-        schema: 'test_schema',
+        schema: schemaJson,
+        enableLiveQuery: true, // Enable full sync capabilities
         database: DatabaseConfig(
           namespace: namespaceController.text,
           database: databaseController.text,
@@ -188,8 +195,6 @@ class SpookyController extends ChangeNotifier {
     }
   }
 
-
-
   Future<void> disconnect() async {
     log("Flushing & Closing DB...");
     try {
@@ -218,7 +223,10 @@ class SpookyController extends ChangeNotifier {
 
   // --- Proxy Methods for SpookyClient ---
 
-  Future<MutationResponse> create(RecordId id, Map<String, dynamic> data) async {
+  Future<MutationResponse> create(
+    RecordId id,
+    Map<String, dynamic> data,
+  ) async {
     if (client == null) throw Exception("Client not initialized");
     return client!.create(id, data);
   }

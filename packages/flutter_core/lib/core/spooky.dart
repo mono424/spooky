@@ -71,6 +71,8 @@ class SpookyClient {
       remote: remote,
       clientId:
           "client_${DateTime.now().millisecondsSinceEpoch}", // Simple unique ID
+      enableLiveQuery: config.enableLiveQuery,
+      mutationEvents: mutation.getEvents,
     );
     await queryManager.init();
 
@@ -84,6 +86,7 @@ class SpookyClient {
       remote: remote,
       mutationEvents: mutation.getEvents,
       queryEvents: queryManager.events,
+      schemaJson: config.schema,
     );
     await sync.init();
 
@@ -105,6 +108,13 @@ class SpookyClient {
   }
 
   // --- Public API Delegates ---
+
+  SurrealDb get localClient => local.getClient;
+  SurrealDb get remoteClient => remote.getClient;
+
+  Future<T> useRemote<T>(Future<T> Function(SurrealDb client) fn) async {
+    return fn(remoteClient);
+  }
 
   /// Execute a tracked Live Query (Incantation).
   /// [surrealql] should conform to Spooky Query Builder output.
@@ -137,10 +147,7 @@ class SpookyClient {
     return mutation.create(id, data);
   }
 
-  Future<MutationResponse> update(
-    RecordId id,
-    Map<String, dynamic> data,
-  ) {
+  Future<MutationResponse> update(RecordId id, Map<String, dynamic> data) {
     return mutation.update(id, data);
   }
 

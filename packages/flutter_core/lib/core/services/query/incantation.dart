@@ -29,6 +29,7 @@ class Incantation<T> {
 
   // Getters
   List<T>? get records => _results;
+  set records(List<T>? value) => _results = value;
   String get tableName => meta.tableName;
 
   Incantation({

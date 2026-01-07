@@ -106,11 +106,13 @@ class SpookyConfig {
   final String schemaSurql;
   final String schema;
   final DatabaseConfig database;
+  final bool enableLiveQuery;
 
   SpookyConfig({
     required this.schemaSurql,
     required this.schema,
     required this.database,
+    this.enableLiveQuery = true,
   });
 }
 

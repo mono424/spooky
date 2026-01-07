@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter_surrealdb_engine/flutter_surrealdb_engine.dart';
 import '../database/surreal_decoder.dart';
 
 /// Hilft beim Extrahieren des tatsächlichen Ergebnisses aus dem Engine-JSON-String.
@@ -25,4 +26,15 @@ dynamic extractResult(String jsonString) {
     // Treat as direct result (e.g. RETURN "foo" -> ["foo"])
     return firstQuery;
   }
+}
+
+/// Helper to parse "table:id" strings into RecordId objects (or at least a structure structure we can use).
+/// Note: flutter_surrealdb_engine currently uses Strings for IDs in many places,
+/// but we might need this for strict typing or logic.
+dynamic parseRecordIdString(String id) {
+  final parts = id.split(':');
+  if (parts.length >= 2) {
+    return RecordId(table: parts[0], key: parts.sublist(1).join(':'));
+  }
+  return id;
 }

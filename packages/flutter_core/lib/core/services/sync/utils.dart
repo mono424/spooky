@@ -1,3 +1,4 @@
+import 'package:flutter_surrealdb_engine/flutter_surrealdb_engine.dart';
 import '../../types.dart';
 
 // --- Public API ---
@@ -10,6 +11,8 @@ IdTreeDiff diffIdTree(IdTree? local, IdTree? remote) {
     updated: result.updated,
   );
 }
+
+List<LeafNode> flattenIdTree(IdTree? node) => _flatten(node);
 
 // --- Internal Implementation ---
 
@@ -106,4 +109,73 @@ _Tags _diffLists(List<LeafNode> localLeaves, List<LeafNode> remoteLeaves) {
   }
 
   return _Tags(added: added, removed: removed, updated: updated);
+}
+
+/// Recursively flattens nested records.
+/// [results]: List of records to flatten.
+/// [relationshipMap]: Mapping of table -> fields to traverse.
+List<Map<String, dynamic>> flattenRecords(
+  List<Map<String, dynamic>> results,
+  Map<String, Set<String>> relationshipMap, [
+  Set<String>? visited,
+  List<Map<String, dynamic>>? flattened,
+]) {
+  visited ??= {};
+  flattened ??= [];
+
+  for (final record in results) {
+    // 1. Identify the Record by ID
+    String? recordIdStr;
+    String? tableName;
+
+    dynamic idField = record['id'];
+    if (idField is String) {
+      recordIdStr = idField;
+      final parts = idField.split(':');
+      if (parts.length > 1) tableName = parts[0];
+    } else if (idField is RecordId) {
+      recordIdStr = idField.toString();
+      tableName = idField.table;
+    }
+
+    if (recordIdStr != null) {
+      if (visited.contains(recordIdStr)) continue;
+      visited.add(recordIdStr);
+    }
+
+    // 2. Clone to avoid mutation
+    final processedRecord = Map<String, dynamic>.from(record);
+
+    // 3. Handle Relationships
+    if (tableName != null && relationshipMap.containsKey(tableName)) {
+      final validFields = relationshipMap[tableName]!;
+
+      for (final key in validFields) {
+        if (!processedRecord.containsKey(key)) continue;
+
+        final value = processedRecord[key];
+
+        if (value is List) {
+          // List of records?
+          final nestedList = value.whereType<Map<String, dynamic>>().toList();
+          if (nestedList.isNotEmpty) {
+            flattenRecords(nestedList, relationshipMap, visited, flattened);
+            // Replace with IDs
+            processedRecord[key] = nestedList.map((r) => r['id']).toList();
+          }
+        } else if (value is Map<String, dynamic>) {
+          // Single nested record
+          final nestedId = value['id'];
+          if (nestedId != null) {
+            flattenRecords([value], relationshipMap, visited, flattened);
+            processedRecord[key] = nestedId;
+          }
+        }
+      }
+    }
+
+    flattened.add(processedRecord);
+  }
+
+  return flattened;
 }

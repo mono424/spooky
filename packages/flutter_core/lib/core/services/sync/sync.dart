@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter_surrealdb_engine/flutter_surrealdb_engine.dart'; // Import RecordId
 import '../database/local.dart';
 import '../database/remote.dart';
@@ -27,14 +28,37 @@ class SpookySync {
 
   bool get isSyncing => _isSyncingUp || _isSyncingDown;
 
+  final Map<String, Set<String>> _relationshipMap = {};
+
   SpookySync({
     required this.local,
     required this.remote,
     required this.mutationEvents,
     required this.queryEvents,
+    String? schemaJson,
   }) {
     upQueue = UpQueue(local);
     downQueue = DownQueue(local);
+    if (schemaJson != null && schemaJson.isNotEmpty) {
+      _buildRelationshipMap(schemaJson);
+    }
+  }
+
+  void _buildRelationshipMap(String jsonStr) {
+    try {
+      final json = jsonDecode(jsonStr);
+      if (json is Map && json['relationships'] is List) {
+        for (final rel in json['relationships']) {
+          final from = rel['from'] as String?;
+          final field = rel['field'] as String?;
+          if (from != null && field != null) {
+            _relationshipMap.putIfAbsent(from, () => {}).add(field);
+          }
+        }
+      }
+    } catch (e) {
+      print('[SpookySync] Failed to parse schema for relationships: $e');
+    }
   }
 
   Future<void> init() async {
@@ -121,9 +145,11 @@ class SpookySync {
     print(
       '[SpookySync] _processUpEvent: ${event.mutationId} (${event.runtimeType})',
     );
-    
+
     // Restore RecordId objects from Map/JSON if needed to satisfy strict typed remote queries
-    final processedData = event.data != null ? _restoreStrictTypes(event.data!) : null;
+    final processedData = event.data != null
+        ? _restoreStrictTypes(event.data!)
+        : null;
 
     dynamic res;
     if (event is CreateEvent) {
@@ -157,22 +183,26 @@ class SpookySync {
   dynamic _restoreStrictTypes(dynamic input) {
     if (input is Map) {
       // Check if it matches RecordId structure
-      if (input.containsKey('key') && input.containsKey('table') && input.length == 2) {
-         try {
-           return RecordId(key: input['key'], table: input['table']);
-         } catch (e) {
-           print('[SpookySync] Failed to restore RecordId: $e');
-         }
+      if (input.containsKey('key') &&
+          input.containsKey('table') &&
+          input.length == 2) {
+        try {
+          return RecordId(key: input['key'], table: input['table']);
+        } catch (e) {
+          print('[SpookySync] Failed to restore RecordId: $e');
+        }
       }
       // Recursive for other maps
       return input.map((k, v) => MapEntry(k, _restoreStrictTypes(v)));
     } else if (input is String) {
       // HEAL: Attempt to parse strings that look like Record IDs for known tables
       // This fixes stuck mutations where IDs were stored as strings
-      if (input.startsWith('user:') || input.startsWith('thread:') || input.startsWith('comment:')) {
-         try {
-           return RecordId.fromString(input);
-         } catch (_) {}
+      if (input.startsWith('user:') ||
+          input.startsWith('thread:') ||
+          input.startsWith('comment:')) {
+        try {
+          return RecordId.fromString(input);
+        } catch (_) {}
       }
       return input;
     } else if (input is List) {
@@ -275,7 +305,7 @@ class SpookySync {
 
       // Note: using direct client if possible or parsing result string.
       // RemoteDatabaseService currently returns Future<String>.
-      final resStr = await remote.query(surrealql);
+      final resStr = await remote.query<String>(surrealql);
       // Parse resStr -> List<Map>
       // Assuming extractResult or direct decode
       final dynamic raw = extractResult(resStr);
@@ -298,7 +328,7 @@ class SpookySync {
 
     // Fetch missing
     // TS: SELECT * FROM $ids
-    final resStr = await remote.query(
+    final resStr = await remote.query<String>(
       r'SELECT * FROM $ids',
       vars: {'ids': idsToFetch},
     );
@@ -323,7 +353,7 @@ class SpookySync {
 
     try {
       // Query local to get fresh data for UI
-      final resStr = await local.query(surrealql, vars: params);
+      final resStr = await local.query<String>(surrealql, vars: params);
       final dynamic raw = extractResult(resStr);
       List<Map<String, dynamic>> cachedResults = [];
       if (raw is List) {
@@ -362,6 +392,9 @@ class SpookySync {
   Future<void> _cacheResults(List<Map<String, dynamic>> results) async {
     if (results.isEmpty) return;
 
+    // Use flattening logic to extract nested records
+    final flatResults = flattenRecords(results, _relationshipMap);
+
     // TS uses transaction. Dart engine might not expose tx helper yet?
     // We can just loop upserts or batch.
     // BEGIN TRANSACTION;
@@ -385,7 +418,7 @@ class SpookySync {
       COMMIT TRANSACTION;
     ''';
 
-    await local.query(query, vars: {'records': results});
+    await local.query(query, vars: {'records': flatResults});
   }
 
   Future<void> _heartbeatIncantation(HeartbeatEvent event) async {
