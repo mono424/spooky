@@ -23,45 +23,76 @@ const EYES_CLOSED = " ████▀▀████▀▀████ "; // Rep
 // Right (1)   : "  trimmed"
 function shiftLine(line: string, dir: number): string {
     const trimmed = line.trim();
-    // Use higher threshold (0.7) so it stays centered more often = "less strong" wiggle
-    if (dir < -0.7) return trimmed + "  "; // Left
-    if (dir > 0.7) return "  " + trimmed; // Right
+    // Reduce horizontal sway by increasing threshold (now 0.85)
+    if (dir < -0.85) return trimmed + "  "; // Left
+    if (dir > 0.85) return "  " + trimmed; // Right
     return " " + trimmed + " "; // Center
 }
 
 export const AsciiGhost = () => {
     const [phase, setPhase] = useState(0);
     const [blink, setBlink] = useState(false);
+    
+    // Separate state for smooth float to avoid re-rendering text 60fps
+    const [floatY, setFloatY] = useState(0);
 
     useEffect(() => {
-        const interval = setInterval(() => {
-            // Increment phase for the wave
-            setPhase(p => p + 0.5); 
-            
-            // Random blink
-            if (Math.random() > 0.95) {
+        let startTime = Date.now();
+        let animationFrameId: number;
+
+        const animate = () => {
+            const now = Date.now();
+            const elapsed = now - startTime;
+
+            // Flutter: 3s up, 3s down = 6s period (approx)
+            // sin(2 * PI * t / Period)
+            // Period = 6000ms
+            const p = (elapsed / 6000) * 2 * Math.PI;
+            setFloatY(Math.sin(p) * 10); // 10px amplitude matches Flutter
+
+            animationFrameId = requestAnimationFrame(animate);
+        };
+        
+        // Flutter: 100ms interval
+        const textInterval = setInterval(() => {
+            setPhase(p => p + 0.5); // Flutter: +0.5 increment
+            if (Math.random() > 0.95) { // Flutter: > 0.95
                 setBlink(true);
                 setTimeout(() => setBlink(false), 200);
             }
-        }, 100); // 10Hz update for smooth animation
-        return () => clearInterval(interval);
+        }, 100); 
+
+        animate();
+
+        return () => {
+            cancelAnimationFrame(animationFrameId);
+            clearInterval(textInterval);
+        };
     }, []);
 
     const renderedRows = RAW_GHOST.map((row, index) => {
-        // Calculate sine wave offset based on row index and time phase
-        // Frequency = 0.5 (how tight the wave is)
-        // Phase = time offset
-        const waveValue = Math.sin(index * 0.6 + phase);
-        
-        // Use the eyes-closed row if blinking and on index 3
+        const waveValue = Math.sin(index * 0.4 + phase);
         const content = (blink && index === 3) ? EYES_CLOSED : row;
-        
         return shiftLine(content, waveValue);
     });
 
     return (
-        <pre className="text-[8px] sm:text-[10px] md:text-xs leading-none font-bold mb-10 whitespace-pre overflow-x-hidden text-center mx-auto text-white tracking-tighter select-none cursor-default overflow-y-hidden">
-            {renderedRows.join('\n')}
-        </pre>
+        <div className="relative inline-block">
+             {/* Background Glow */}
+            <div 
+                className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-32 h-32 bg-white/20 blur-[50px] rounded-full pointer-events-none"
+                style={{ transform: `translate(-50%, calc(-50% + ${floatY}px))` }}
+            />
+            
+            <pre 
+                className="relative z-10 text-[6px] sm:text-[8px] md:text-[10px] leading-none font-bold mb-10 whitespace-pre overflow-x-hidden text-center text-white tracking-tighter select-none cursor-default overflow-y-hidden will-change-transform"
+                style={{
+                    transform: `translateY(${floatY}px)`,
+                    textShadow: "0 0 10px rgba(255, 255, 255, 0.5)"
+                }}
+            >
+                {renderedRows.join('\n')}
+            </pre>
+        </div>
     );
 };

@@ -51,7 +51,7 @@
     },
     {
       "name": "ffi",
-      "rootUri": "file:///Users/timohty/.pub-cache/hosted/pub.dev/ffi-2.1.4",
+      "rootUri": "file:///Users/timohty/.pub-cache/hosted/pub.dev/ffi-2.1.5",
       "packageUri": "lib/",
       "languageVersion": "3.7"
     },
@@ -71,7 +71,7 @@
       "name": "flutter",
       "rootUri": "file:///Users/timohty/development/flutter/packages/flutter",
       "packageUri": "lib/",
-      "languageVersion": "3.8"
+      "languageVersion": "3.9"
     },
     {
       "name": "flutter_lints",
@@ -83,7 +83,7 @@
       "name": "flutter_test",
       "rootUri": "file:///Users/timohty/development/flutter/packages/flutter_test",
       "packageUri": "lib/",
-      "languageVersion": "3.8"
+      "languageVersion": "3.9"
     },
     {
       "name": "glob",
@@ -123,15 +123,15 @@
     },
     {
       "name": "matcher",
-      "rootUri": "file:///Users/timohty/.pub-cache/hosted/pub.dev/matcher-0.12.17",
+      "rootUri": "file:///Users/timohty/.pub-cache/hosted/pub.dev/matcher-0.12.18",
       "packageUri": "lib/",
-      "languageVersion": "3.4"
+      "languageVersion": "3.7"
     },
     {
       "name": "material_color_utilities",
-      "rootUri": "file:///Users/timohty/.pub-cache/hosted/pub.dev/material_color_utilities-0.11.1",
+      "rootUri": "file:///Users/timohty/.pub-cache/hosted/pub.dev/material_color_utilities-0.13.0",
       "packageUri": "lib/",
-      "languageVersion": "2.17"
+      "languageVersion": "3.5"
     },
     {
       "name": "meta",
@@ -167,7 +167,7 @@
       "name": "sky_engine",
       "rootUri": "file:///Users/timohty/development/flutter/bin/cache/pkg/sky_engine",
       "packageUri": "lib/",
-      "languageVersion": "3.8"
+      "languageVersion": "3.9"
     },
     {
       "name": "source_span",
@@ -201,9 +201,9 @@
     },
     {
       "name": "test_api",
-      "rootUri": "file:///Users/timohty/.pub-cache/hosted/pub.dev/test_api-0.7.7",
+      "rootUri": "file:///Users/timohty/.pub-cache/hosted/pub.dev/test_api-0.7.8",
       "packageUri": "lib/",
-      "languageVersion": "3.5"
+      "languageVersion": "3.7"
     },
     {
       "name": "vector_math",
@@ -237,8 +237,8 @@
     }
   ],
   "generator": "pub",
-  "generatorVersion": "3.10.0-162.1.beta",
+  "generatorVersion": "3.11.0-200.1.beta",
   "flutterRoot": "file:///Users/timohty/development/flutter",
-  "flutterVersion": "3.37.0-0.1.pre",
+  "flutterVersion": "3.40.0-0.2.pre",
   "pubCache": "file:///Users/timohty/.pub-cache"
 }
