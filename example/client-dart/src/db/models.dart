@@ -311,7 +311,7 @@ DEFINE FUNCTION fn::polyfill::createAccount(\$username: string, \$password: stri
   LET \$existing = (SELECT value id FROM user WHERE username = \$username LIMIT 1)[0];
   IF \$existing != NONE { THROW \"Username '\" + <string>\$username + \"' is already taken\" };
 
-  LET \$u = CREATE user SET username = \$username, password = crypto::argon2::generate(\$password);
+  LET \$u = (CREATE user SET username = \$username, password = crypto::argon2::generate(\$password))[0];
   RETURN \$u;
 };
 

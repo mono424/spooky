@@ -4,9 +4,33 @@
 export const schema = {
   tables: [
     {
+      name: 'thread' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
+        author: { type: 'string' as const, recordId: true, optional: false },
+        active: { type: 'boolean' as const, optional: true },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
+        title: { type: 'string' as const, optional: false },
+        content: { type: 'string' as const, optional: false },
+        comments: { type: 'string' as const, optional: true },
+      },
+      primaryKey: ['id'] as const
+    },
+    {
       name: 'commented_on' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
+      },
+      primaryKey: ['id'] as const
+    },
+    {
+      name: 'comment' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
+        content: { type: 'string' as const, optional: false },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
+        thread: { type: 'string' as const, recordId: true, optional: false },
+        author: { type: 'string' as const, recordId: true, optional: false },
       },
       primaryKey: ['id'] as const
     },
@@ -15,45 +39,15 @@ export const schema = {
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
         username: { type: 'string' as const, optional: false },
+        comments: { type: 'string' as const, optional: true },
         threads: { type: 'string' as const, optional: true },
-        comments: { type: 'string' as const, optional: true },
-      },
-      primaryKey: ['id'] as const
-    },
-    {
-      name: 'thread' as const,
-      columns: {
-        id: { type: 'string' as const, recordId: true, optional: false },
-        title: { type: 'string' as const, optional: false },
-        author: { type: 'string' as const, recordId: true, optional: false },
-        content: { type: 'string' as const, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
-        active: { type: 'boolean' as const, optional: true },
-        comments: { type: 'string' as const, optional: true },
-      },
-      primaryKey: ['id'] as const
-    },
-    {
-      name: 'comment' as const,
-      columns: {
-        id: { type: 'string' as const, recordId: true, optional: false },
-        author: { type: 'string' as const, recordId: true, optional: false },
-        content: { type: 'string' as const, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
-        thread: { type: 'string' as const, recordId: true, optional: false },
       },
       primaryKey: ['id'] as const
     },
   ],
   relationships: [
     {
-      from: 'thread' as const,
-      field: 'author' as const,
-      to: 'user' as const,
-      cardinality: 'one' as const
-    },
-    {
-      from: 'thread' as const,
+      from: 'user' as const,
       field: 'comments' as const,
       to: 'comment' as const,
       cardinality: 'many' as const
@@ -65,10 +59,10 @@ export const schema = {
       cardinality: 'many' as const
     },
     {
-      from: 'user' as const,
-      field: 'comments' as const,
-      to: 'comment' as const,
-      cardinality: 'many' as const
+      from: 'comment' as const,
+      field: 'thread' as const,
+      to: 'thread' as const,
+      cardinality: 'one' as const
     },
     {
       from: 'comment' as const,
@@ -77,10 +71,16 @@ export const schema = {
       cardinality: 'one' as const
     },
     {
-      from: 'comment' as const,
-      field: 'thread' as const,
-      to: 'thread' as const,
+      from: 'thread' as const,
+      field: 'author' as const,
+      to: 'user' as const,
       cardinality: 'one' as const
+    },
+    {
+      from: 'thread' as const,
+      field: 'comments' as const,
+      to: 'comment' as const,
+      cardinality: 'many' as const
     },
   ],
   access: {
@@ -106,7 +106,7 @@ DEFINE FUNCTION fn::polyfill::createAccount($username: string, $password: string
   LET $existing = (SELECT value id FROM user WHERE username = $username LIMIT 1)[0];
   IF $existing != NONE { THROW "Username '" + <string>$username + "' is already taken" };
 
-  LET $u = CREATE user SET username = $username, password = crypto::argon2::generate($password);
+  LET $u = (CREATE user SET username = $username, password = crypto::argon2::generate($password))[0];
   RETURN $u;
 };
 

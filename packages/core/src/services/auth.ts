@@ -177,10 +177,14 @@ export class AuthService<S extends SchemaStructure> {
       );
     }
 
+    this.logger.info({ accessName, runtimeParams }, '[AuthService] Attempting signup');
+
     const token = (await this.remote.getClient().signup({
       access: accessName,
       variables: runtimeParams,
     })) as unknown as string;
+
+    this.logger.info('[AuthService] Signup successful, token received');
 
     // After signup, we usually get a token.
     // We should also fetch the user or trust the token works.
