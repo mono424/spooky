@@ -28,14 +28,17 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType>();
 
 export function AuthProvider(props: { children: JSX.Element }) {
-  const spooky = db.getSpooky();
   const [userId, setUserId] = createSignal<string | null>(null);
-  const [remoteUser, setRemoteUser] = createSignal<User | null>(null);
   const [isLoading, setIsLoading] = createSignal(true);
-  const [isInitialized, setIsInitialized] = createSignal(false);
-
-  // Remove subIds and onCleanup for events
   
+  // Subscribe to auth state
+  const unsubscribe = db.auth.subscribe((uid) => {
+    setUserId(uid);
+    setIsLoading(false);
+  });
+  
+  onCleanup(() => unsubscribe());
+
   // Only run query after auth is initialized and userId is available
   const userQuery = useQuery(
     db,
@@ -47,118 +50,22 @@ export function AuthProvider(props: { children: JSX.Element }) {
       return db.query("user").where({ id: currentUserId }).one().build();
     },
     {
-      enabled: () => isInitialized() && userId() !== null,
+      enabled: () => userId() !== null,
     }
   );
 
-  const user = () => userQuery.data() || remoteUser() || null;
-
-  // Check for existing session on mount
-  const checkAuth = async (access?: string) => {
-    const token = access || localStorage.getItem("token");
-    console.log("[AuthProvider] Checking auth with token:", !!token);
-    if (!token) {
-      setIsLoading(false);
-      setIsInitialized(true);
-      return;
-    }
-    setIsLoading(true);
-    try {
-      await db.authenticate(token);
-      // Fetch current user ID
-      // We use useRemote to execute a raw query to get the authenticated user
-      // Changed from ONLY to normal select to handle case where user doesn't exist without throwing
-      // Must use .collect() to get the results array from the PendingQuery
-      const result = await db.remote.query('SELECT * FROM user WHERE id = $auth.id LIMIT 1').collect();
-      console.log("[AuthProvider] Raw query result:", result);
-      
-      // Handle potential return types (Array of results vs Single result)
-      // With .collect(), result should be Response[] or Record[]
-      // For SELECT *, it usually returns [[record]] (array of query results, each being array of records)
-      const userResult = Array.isArray(result) ? result[0] : result;
-      // In SurrealDB 2.x JS, result[0] is the result of first query statement, which is generic array of records?
-      // Let's assume result[0] is the array of users found.
-      const users = userResult; 
-      const user = Array.isArray(users) ? users[0] : users;
-      console.log("[AuthProvider] Auth check complete, user:", user);
-
-      if (user && user.id) {
-        setUserId(user.id.toString());
-        setRemoteUser(user);
-        localStorage.setItem("token", token);
-      } else {
-         // Token invalid or user not found
-         await signOut(); // Cleanup
-      }
-
-    } catch (error) {
-       console.error("Auth check failed", error);
-       await signOut();
-    }
-    setIsLoading(false);
-    setIsInitialized(true);
-  };
-
-  // Initialize auth check
-  checkAuth();
+  const user = () => userQuery.data() || null;
 
   const signIn = async (username: string, password: string) => {
-    try {
-      console.log("[AuthProvider] Sign in attempt for:", username);
-      const { access } = await db.remote.signin({
-          access: "account", // namespace 'main' / database 'main' / access 'account'
-          variables: {
-            username,
-            password,
-          },
-        });
-      console.log("[AuthProvider] Sign in result:", access);
-      console.log("[AuthProvider] Sign in successful, token received");
-      await checkAuth(access);
-      console.log("[AuthProvider] Auth check complete after sign in");
-    } catch (error) {
-      console.error("[AuthProvider] Sign in failed:", error);
-      if (error instanceof Error && "cause" in error) {
-        console.error("Caused by:", (error as any).cause);
-      }
-      throw error;
-    }
+    await db.auth.signIn("account", { username, password });
   };
 
   const signUp = async (username: string, password: string) => {
-    try {
-      console.log("[AuthProvider] Sign up attempt for:", username);
-      const res = await db.remote.query("fn::polyfill::createAccount($username, $password)", {
-          username,
-          password,
-        });
-
-      console.log("[AuthProvider] Sign up successful, attempting sign in...");
-      // Auto-login after signup
-      await signIn(username, password);
-      console.log("[AuthProvider] Auth check complete after sign up");
-    } catch (error) {
-      console.error("[AuthProvider] Sign up failed:", error);
-      if (error instanceof Error && "cause" in error) {
-        console.error("Caused by:", (error as any).cause);
-      }
-      throw error;
-    }
+    await db.auth.signUp("account", { username, password });
   };
 
   const signOut = async () => {
-    try {
-      localStorage.removeItem("token");
-      setUserId(null);
-      setRemoteUser(null);
-      await db.deauthenticate();
-    } catch (error) {
-      console.error("Sign out failed:", error);
-      if (error instanceof Error && "cause" in error) {
-        console.error("Caused by:", (error as any).cause);
-      }
-      throw error;
-    }
+    await db.auth.signOut();
   };
 
   const authValue: AuthContextType = {

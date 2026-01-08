@@ -1,17 +1,13 @@
-import { QueryManager } from "./services/query/query.js";
-import { MutationManager } from "./services/mutation/mutation.js";
-import {
-  SpookyConfig,
-  QueryTimeToLive,
-  SpookyQueryResultPromise,
-} from "./types.js";
+import { QueryManager } from './services/query/query.js';
+import { MutationManager } from './services/mutation/mutation.js';
+import { SpookyConfig, QueryTimeToLive, SpookyQueryResultPromise } from './types.js';
 import {
   LocalDatabaseService,
   LocalMigrator,
   RemoteDatabaseService,
-} from "./services/database/index.js";
-import { Surreal } from "surrealdb";
-import { SpookySync } from "./services/sync/index.js";
+} from './services/database/index.js';
+import { Surreal } from 'surrealdb';
+import { SpookySync } from './services/sync/index.js';
 import {
   GetTable,
   QueryBuilder,
@@ -19,10 +15,11 @@ import {
   SchemaStructure,
   TableModel,
   TableNames,
-} from "@spooky/query-builder";
+} from '@spooky/query-builder';
 
-import { DevToolsService } from "./services/devtools-service.js";
-import { createLogger } from "./services/logger.js";
+import { DevToolsService } from './services/devtools-service.js';
+import { createLogger } from './services/logger.js';
+import { AuthService } from './services/auth.js';
 
 export class SpookyClient<S extends SchemaStructure> {
   private local: LocalDatabaseService;
@@ -32,6 +29,7 @@ export class SpookyClient<S extends SchemaStructure> {
   private mutationManager: MutationManager<S>;
   private sync: SpookySync<S>;
   private devTools: DevToolsService;
+  public auth: AuthService<S>;
 
   get remoteClient() {
     return this.remote.getClient();
@@ -42,19 +40,15 @@ export class SpookyClient<S extends SchemaStructure> {
   }
 
   constructor(private config: SpookyConfig<S>) {
-    console.log("[Spooky] Constructor called", config);
+    console.log('[Spooky] Constructor called', config);
     const clientId = this.config.clientId ?? this.loadOrGenerateClientId();
     this.persistClientId(clientId);
 
-    const logger = createLogger(config.logLevel ?? "info");
+    const logger = createLogger(config.logLevel ?? 'info');
     this.local = new LocalDatabaseService(this.config.database, logger);
     this.remote = new RemoteDatabaseService(this.config.database, logger);
     this.migrator = new LocalMigrator(this.local, logger);
-    this.mutationManager = new MutationManager(
-      this.config.schema,
-      this.local,
-      logger
-    );
+    this.mutationManager = new MutationManager(this.config.schema, this.local, logger);
     this.queryManager = new QueryManager(
       this.config.schema,
       this.local,
@@ -79,32 +73,33 @@ export class SpookyClient<S extends SchemaStructure> {
       this.config.schema,
       this.queryManager
     );
+    this.auth = new AuthService(this.config.schema, this.remote, logger);
   }
 
   async init() {
-    console.log("[Spooky] Init started");
+    console.log('[Spooky] Init started');
     try {
-      console.log("[Spooky] Connecting to local DB...");
+      console.log('[Spooky] Connecting to local DB...');
       await this.local.connect();
-      console.log("[Spooky] Local connected");
+      console.log('[Spooky] Local connected');
 
-      console.log("[Spooky] Connecting to remote DB...");
+      console.log('[Spooky] Connecting to remote DB...');
       await this.remote.connect();
-      console.log("[Spooky] Remote connected");
+      console.log('[Spooky] Remote connected');
 
-      console.log("[Spooky] Initializing QueryManager...");
+      console.log('[Spooky] Initializing QueryManager...');
       await this.queryManager.init();
-      console.log("[Spooky] QueryManager initialized");
+      console.log('[Spooky] QueryManager initialized');
 
-      console.log("[Spooky] Provisioning schema...");
+      console.log('[Spooky] Provisioning schema...');
       await this.migrator.provision(this.config.schemaSurql);
-      console.log("[Spooky] Migrator provisioned");
+      console.log('[Spooky] Migrator provisioned');
 
-      console.log("[Spooky] Initializing Sync...");
+      console.log('[Spooky] Initializing Sync...');
       await this.sync.init();
-      console.log("[Spooky] Sync initialized");
+      console.log('[Spooky] Sync initialized');
     } catch (e) {
-      console.error("[Spooky] Init failed", e);
+      console.error('[Spooky] Init failed', e);
       throw e;
     }
   }
@@ -125,7 +120,7 @@ export class SpookyClient<S extends SchemaStructure> {
   query<Table extends TableNames<S>>(
     table: Table,
     options: QueryOptions<TableModel<GetTable<S, Table>>, false>,
-    ttl: QueryTimeToLive = "10m"
+    ttl: QueryTimeToLive = '10m'
   ): QueryBuilder<S, Table, SpookyQueryResultPromise> {
     return new QueryBuilder<S, Table, SpookyQueryResultPromise>(
       this.config.schema,
@@ -142,12 +137,8 @@ export class SpookyClient<S extends SchemaStructure> {
     );
   }
 
-  async queryRaw(
-    sql: string,
-    params: Record<string, any>,
-    ttl: QueryTimeToLive
-  ) {
-    const tableName = sql.split("FROM ")[1].split(" ")[0];
+  async queryRaw(sql: string, params: Record<string, any>, ttl: QueryTimeToLive) {
+    const tableName = sql.split('FROM ')[1].split(' ')[0];
     return this.queryManager.query(tableName, sql, params, ttl);
   }
 
@@ -177,22 +168,22 @@ export class SpookyClient<S extends SchemaStructure> {
 
   private persistClientId(id: string) {
     try {
-      if (typeof localStorage !== "undefined") {
-        localStorage.setItem("spooky_client_id", id);
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('spooky_client_id', id);
       }
     } catch (e) {
-      console.warn("[SpookyClient] Failed to persist client ID", e);
+      console.warn('[SpookyClient] Failed to persist client ID', e);
     }
   }
 
   private loadOrGenerateClientId(): string {
     try {
-      if (typeof localStorage !== "undefined") {
-        const stored = localStorage.getItem("spooky_client_id");
+      if (typeof localStorage !== 'undefined') {
+        const stored = localStorage.getItem('spooky_client_id');
         if (stored) return stored;
       }
     } catch (e) {
-      console.warn("[SpookyClient] Failed to load client ID", e);
+      console.warn('[SpookyClient] Failed to load client ID', e);
     }
 
     const newId = crypto.randomUUID();

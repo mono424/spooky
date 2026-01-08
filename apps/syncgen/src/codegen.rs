@@ -288,7 +288,7 @@ impl CodeGenerator {
             if let serde_json::Value::Object(defs_obj) = definitions {
                 // Process each table (skip Relationships and RelationTables)
                 for (table_name, table_def) in defs_obj {
-                    if table_name == "Relationships" || table_name == "RelationTables" || table_name.starts_with("_spooky_") {
+                    if table_name == "Relationships" || table_name == "RelationTables" || table_name == "Access" || table_name.starts_with("_spooky_") {
                         continue;
                     }
 
@@ -360,7 +360,26 @@ impl CodeGenerator {
             }
         }
 
-        tables_lines.push("  ]".to_string());
+        tables_lines.push("  ],".to_string());
+
+        // Build access array
+        tables_lines.push("  access: {".to_string());
+        
+        if let Some(definitions) = schema.get("definitions") {
+            if let Some(access) = definitions.get("Access") {
+                if let Some(const_val) = access.get("const") {
+                    if let serde_json::Value::Object(map) = const_val {
+                        for (name, access_val) in map {
+                            if let Ok(val_str) = serde_json::to_string(access_val) {
+                                tables_lines.push(format!("    {}: {},", name, val_str));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        tables_lines.push("  }".to_string());
         tables_lines.push("} as const;".to_string());
         tables_lines.push("".to_string());
 
@@ -374,6 +393,7 @@ impl CodeGenerator {
             Ok(format!("{}\n\n{}", content, tables_lines.join("\n")))
         }
     }
+
 
     fn map_json_schema_type_to_value_type(&self, field_def: &serde_json::Value) -> &str {
         if let Some(field_type) = field_def.get("type") {

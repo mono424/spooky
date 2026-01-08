@@ -1,7 +1,7 @@
 /**
  * Supported value types in the schema
  */
-export type ValueType = "string" | "number" | "boolean" | "null" | "json";
+export type ValueType = 'string' | 'number' | 'boolean' | 'null' | 'json';
 
 /**
  * Column metadata defining the type and optionality of a field
@@ -27,7 +27,7 @@ export interface TableSchemaMetadata {
 /**
  * Cardinality of a relationship: one-to-one or one-to-many
  */
-export type Cardinality = "one" | "many";
+export type Cardinality = 'one' | 'many';
 
 /**
  * Relationship metadata defining how tables relate to each other
@@ -70,34 +70,47 @@ export type TypeNameToTypeMap = {
 export type ColumnToTSType<T extends ColumnSchema> = T extends {
   optional: true;
 }
-  ? TypeNameToTypeMap[T["type"]] | null
-  : TypeNameToTypeMap[T["type"]];
+  ? TypeNameToTypeMap[T['type']] | null
+  : TypeNameToTypeMap[T['type']];
 
 /**
  * Helper to extract relationship field names for a table
  */
 export type RelationshipFieldNames<
   Metadata extends SchemaMetadataStructure,
-  TableName extends keyof Metadata["relationships"] & string
-> = keyof Metadata["relationships"][TableName] & string;
+  TableName extends keyof Metadata['relationships'] & string,
+> = keyof Metadata['relationships'][TableName] & string;
 
 /**
  * Helper to get cardinality for a specific relationship
  */
 export type GetRelationshipCardinality<
   Metadata extends SchemaMetadataStructure,
-  TableName extends keyof Metadata["relationships"] & string,
-  FieldName extends keyof Metadata["relationships"][TableName] & string
-> = Metadata["relationships"][TableName][FieldName]["cardinality"];
+  TableName extends keyof Metadata['relationships'] & string,
+  FieldName extends keyof Metadata['relationships'][TableName] & string,
+> = Metadata['relationships'][TableName][FieldName]['cardinality'];
 
 /**
  * Helper to get related table name for a relationship
  */
 export type GetRelatedTable<
   Metadata extends SchemaMetadataStructure,
-  TableName extends keyof Metadata["relationships"] & string,
-  FieldName extends keyof Metadata["relationships"][TableName] & string
-> = Metadata["relationships"][TableName][FieldName]["table"];
+  TableName extends keyof Metadata['relationships'] & string,
+  FieldName extends keyof Metadata['relationships'][TableName] & string,
+> = Metadata['relationships'][TableName][FieldName]['table'];
+
+// ============================================================================
+// ACCESS SCHEMA HELPERS
+// ============================================================================
+
+export interface AccessDefinition {
+  readonly signIn: {
+    readonly params: Record<string, ColumnSchema>;
+  };
+  readonly signup: {
+    readonly params: Record<string, ColumnSchema>;
+  };
+}
 
 // ============================================================================
 // ARRAY-BASED SCHEMA TYPE HELPERS
@@ -118,50 +131,50 @@ export interface SchemaStructure {
     readonly to: string;
     readonly cardinality: Cardinality;
   }[];
+  readonly access?: Record<string, AccessDefinition>;
 }
 
 /**
  * Extract a specific table by name from the schema tables array
  */
-export type GetTable<
-  S extends SchemaStructure,
-  Name extends TableNames<S>
-> = Extract<S["tables"][number], { name: Name }>;
+export type GetTable<S extends SchemaStructure, Name extends TableNames<S>> = Extract<
+  S['tables'][number],
+  { name: Name }
+>;
 
 /**
  * Extract all table names from the schema
  */
-export type TableNames<S extends SchemaStructure> = S["tables"][number]["name"];
+export type TableNames<S extends SchemaStructure> = S['tables'][number]['name'];
 
 /**
  * Extract all field names from a type
  */
-export type TableFieldNames<
-  T extends { columns: Record<string, ColumnSchema> }
-> = keyof T["columns"] & string;
+export type TableFieldNames<T extends { columns: Record<string, ColumnSchema> }> =
+  keyof T['columns'] & string;
 
 /**
  * Convert table schema columns to a TypeScript model type
  */
 export type TableModel<T extends { columns: Record<string, ColumnSchema> }> = {
-  [K in keyof T["columns"]]: ColumnToTSType<T["columns"][K]>;
+  [K in keyof T['columns']]: ColumnToTSType<T['columns'][K]>;
 };
 
 /**
  * Extract all relationships for a specific table from relationships array
  */
-export type TableRelationships<
-  S extends SchemaStructure,
-  TableName extends string
-> = Extract<S["relationships"][number], { from: TableName }>;
+export type TableRelationships<S extends SchemaStructure, TableName extends string> = Extract<
+  S['relationships'][number],
+  { from: TableName }
+>;
 
 /**
  * Get relationship field names for a table
  */
 export type RelationshipFields<
   S extends SchemaStructure,
-  TableName extends string
-> = TableRelationships<S, TableName>["field"];
+  TableName extends string,
+> = TableRelationships<S, TableName>['field'];
 
 /**
  * Get specific relationship by table and field
@@ -169,26 +182,20 @@ export type RelationshipFields<
 export type GetRelationship<
   S extends SchemaStructure,
   TableName extends string,
-  Field extends string
-> = Extract<
-  Extract<S["relationships"][number], { from: TableName }>,
-  { field: Field }
->;
+  Field extends string,
+> = Extract<Extract<S['relationships'][number], { from: TableName }>, { field: Field }>;
 
 /**
  * Convert array-based schema to indexed format (for internal compatibility)
  */
 export type SchemaToIndexed<S extends SchemaStructure> = {
   tables: {
-    [K in S["tables"][number]["name"]]: Extract<
-      S["tables"][number],
-      { name: K }
-    >;
+    [K in S['tables'][number]['name']]: Extract<S['tables'][number], { name: K }>;
   };
   relationships: {
-    [K in S["tables"][number]["name"]]: {
-      [R in Extract<S["relationships"][number], { from: K }>["field"]]: Extract<
-        Extract<S["relationships"][number], { from: K }>,
+    [K in S['tables'][number]['name']]: {
+      [R in Extract<S['relationships'][number], { from: K }>['field']]: Extract<
+        Extract<S['relationships'][number], { from: K }>,
         { field: R }
       >;
     };
