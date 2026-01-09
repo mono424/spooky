@@ -3,7 +3,6 @@ layout: ../../../layouts/DocsLayout.astro
 title: MutationManager
 ---
 
-# MutationManager
 
 The `MutationManager` is responsible for all **Write Operations** (Create, Update, Delete) in the application. It acts as a transactional wrapper around the Local Database, ensuring that every data change is accompanied by a mutation log entry that can be synced to the cloud.
 

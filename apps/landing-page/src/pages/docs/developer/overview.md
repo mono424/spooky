@@ -3,7 +3,6 @@ layout: ../../../layouts/DocsLayout.astro
 title: System Overview
 ---
 
-# System Architecture Overview
 
 Spooky's Core module is built on a **Strict "Black Box" Service Architecture**, designed to ensure modularity, predictable data flow, and clearly defined boundaries between local and remote operations.
 

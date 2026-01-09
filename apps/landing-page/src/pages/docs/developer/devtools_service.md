@@ -3,7 +3,6 @@ layout: ../../../layouts/DocsLayout.astro
 title: DevToolsService
 ---
 
-# DevToolsService
 
 The `DevToolsService` is a specialized service designed to expose the internal state of the Spooky framework to external debugging tools, specifically the **Spooky Chrome Extension**. It acts as a passive observer, receiving copies of events via the Router and broadcasting them to the browser's window object or extension port.
 

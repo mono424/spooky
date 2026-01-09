@@ -3,7 +3,6 @@ layout: ../../../layouts/DocsLayout.astro
 title: StreamProcessorService
 ---
 
-# StreamProcessorService
 
 The `StreamProcessorService` is the engine responsible for maintaining **Materialized Views** of your data on the client. Unlike `QueryManager`, which manages the lifecycle of a query (subscriptions, heartbeats), the Stream Processor manages the _data_ itself.
 

@@ -3,7 +3,6 @@ layout: ../../../layouts/DocsLayout.astro
 title: SpookySync Service
 ---
 
-# SpookySync
 
 `SpookySync` is the synchronization engine of the application. It acts as the bridge between the **Local Database** (in-browser) and the **Remote Database** (cloud). It is the only service permitted to read or write to the remote backend, ensuring a single point of control for data consistency.
 

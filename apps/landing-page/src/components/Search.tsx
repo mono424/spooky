@@ -152,8 +152,16 @@ export const Search = () => {
                     key={result.url}
                     value={result.url}
                     onSelect={() => {
-                      const url = result.url.replace('.html', ''); // Clean URL if needed
-                      window.location.href = url;
+                      // Pagefind returns URLs relative to the indexed directory (dist).
+                      // We need to prepend the site base URL if it's not already there.
+                      const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, "");
+                      const resultUrl = result.url.startsWith("/") ? result.url : `/${result.url}`;
+                      const fullUrl = resultUrl.startsWith(baseUrl) 
+                          ? resultUrl 
+                          : `${baseUrl}${resultUrl}`;
+                      
+                      const finalUrl = fullUrl.replace('.html', '');
+                      window.location.href = finalUrl;
                       setOpen(false);
                     }}
                     className="relative flex select-none items-center rounded-sm px-3 py-3 text-sm outline-none aria-selected:bg-zinc-900 aria-selected:text-white data-[disabled]:pointer-events-none data-[disabled]:opacity-50 text-zinc-400 group transition-colors cursor-pointer"

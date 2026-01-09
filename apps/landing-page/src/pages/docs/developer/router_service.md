@@ -3,7 +3,6 @@ layout: ../../../layouts/DocsLayout.astro
 title: RouterService
 ---
 
-# RouterService
 
 The `RouterService` is the **Central Nervous System** of the Spooky Core. In a strictly decoupled architecture, services do not speak to each other directly. Instead, they emit events to the Router, which forwards them to the appropriate destination based on a deterministic routing table.
 

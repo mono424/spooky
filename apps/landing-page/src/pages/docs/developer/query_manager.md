@@ -3,7 +3,6 @@ layout: ../../../layouts/DocsLayout.astro
 title: QueryManager
 ---
 
-# QueryManager
 
 The `QueryManager` provides the read-layer interface for the application. It manages **Incantations** (live queries), handles caching, and allows UI components to subscribe to data updates. Importantly, it is strictly **Local-First**: it reads only from the Local Database and never communicates directly with the Remote Database.
 

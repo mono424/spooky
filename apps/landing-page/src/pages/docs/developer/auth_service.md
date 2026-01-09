@@ -3,8 +3,6 @@ layout: ../../../layouts/DocsLayout.astro
 title: Auth Service
 ---
 
-# AuthService
-
 The `AuthService` is the gatekeeper of the Spooky Core module. It manages user sessions, persists authentication tokens, and ensures the `RemoteDatabaseService` is correctly authenticated.
 
 ## 📦 Responsibility
