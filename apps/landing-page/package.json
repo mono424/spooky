@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "astro dev",
     "dev:landingpage": "astro dev",
-    "build": "astro build",
+    "build": "astro build && pagefind --site dist",
     "preview": "astro preview",
     "astro": "astro"
   },
@@ -19,6 +19,7 @@
     "astro": "^5.14.5",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "cmdk": "^1.1.1",
     "lucide-react": "^0.545.0",
     "mermaid": "^11.12.2",
     "react": "^19.2.0",
@@ -28,6 +29,7 @@
   },
   "devDependencies": {
     "@types/react": "^19.2.7",
-    "@types/react-dom": "^19.2.3"
+    "@types/react-dom": "^19.2.3",
+    "pagefind": "^1.4.0"
   }
 }

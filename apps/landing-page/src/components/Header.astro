@@ -1,8 +1,9 @@
 ---
 import GitHubStars from './GitHubStars';
+import { Search } from './Search';
 ---
 
-<header class="h-16 border-b border-border bg-background/80 backdrop-blur sticky top-0 z-50">
+<header class="h-16 border-b border-border bg-background/80 backdrop-blur">
   <div class="max-w-[1600px] mx-auto h-full flex items-center justify-between px-6">
     <div class="flex items-center gap-4">
       <button
@@ -10,18 +11,12 @@ import GitHubStars from './GitHubStars';
         class="lg:hidden p-2 -ml-2 text-text-muted hover:text-text-main hover:bg-surface rounded-md transition-colors"
         aria-label="Toggle menu"
       >
-        <svg
-          class="w-5 h-5"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path
             stroke-linecap="round"
             stroke-linejoin="round"
             stroke-width="2"
-            d="M4 6h16M4 12h16M4 18h16"
-          ></path>
+            d="M4 6h16M4 12h16M4 18h16"></path>
         </svg>
       </button>
       <a href="/spooky" class="flex items-center gap-2 hover:opacity-80 transition-opacity">
@@ -30,18 +25,8 @@ import GitHubStars from './GitHubStars';
       </a>
     </div>
 
-    <div
-      class="hidden md:flex items-center bg-surface border border-border rounded-md px-3 py-1.5 text-sm text-text-muted w-64"
-    >
-      <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"
-        ><path
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          stroke-width="2"
-          d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg
-      >
-      <span>Search docs...</span>
-      <span class="ml-auto text-xs border border-border rounded px-1">⌘K</span>
+    <div>
+      <Search client:idle />
     </div>
 
     <div class="flex items-center gap-4 text-sm text-text-muted">

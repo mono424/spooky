@@ -83,17 +83,11 @@ const ThreadList = () => {
     <div class="border-b border-white border-dashed p-4 uppercase sticky top-0 bg-black z-50">
       <nav class="max-w-7xl mx-auto flex justify-between items-center">
         <span class="font-bold tracking-widest">[ SPOOKY_SYNC ]</span>
-        <div class="space-x-4 hidden md:block font-mono text-sm">
-          <a href="#home" class="hover:bg-white hover:text-black px-2 transition-none">[ HOME ]</a>
-          <a href="#features" class="hover:bg-white hover:text-black px-2 transition-none"
-            >[ FEATURES ]</a
-          >
-          <a href="#about" class="hover:bg-white hover:text-black px-2 transition-none">[ DOCS ]</a>
+        <div class="hidden md:block font-mono text-sm">
           <GitHubStars client:visible />
         </div>
       </nav>
     </div>
-
     <section
       id="home"
       class="min-h-screen flex items-center justify-center relative border-b border-white/10 py-24"
