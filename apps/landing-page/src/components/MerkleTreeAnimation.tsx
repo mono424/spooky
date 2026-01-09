@@ -125,7 +125,7 @@ export const MerkleDashboard = () => {
             <div className="flex flex-col justify-between">
                 <div className="flex justify-between items-start mb-4">
                     <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest whitespace-nowrap">Active Incantation</span>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 px-4">
                          <div className="w-1.5 h-1.5 rounded-full bg-green-500/50 animate-pulse"></div>
                     </div>
                 </div>
