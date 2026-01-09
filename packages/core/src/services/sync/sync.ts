@@ -1,5 +1,5 @@
 import { LocalDatabaseService, RemoteDatabaseService } from '../database/index.js';
-import { MutationEventSystem, MutationEventTypes } from '../mutation/index.js';
+import { MutationEventTypes } from '../mutation/index.js';
 import { IdTreeDiff } from '../../types.js';
 import { QueryEventTypes } from '../query/events.js';
 import { SyncQueueEventTypes, createSyncEventSystem, SyncEventTypes } from './events.js';
@@ -38,8 +38,6 @@ export class SpookySync<S extends SchemaStructure> {
     private schema: S,
     private local: LocalDatabaseService,
     private remote: RemoteDatabaseService,
-    // private query: QueryManager<S>, // REMOVED
-    private mutationEvents: MutationEventSystem,
     private clientId: string,
     logger: Logger
   ) {
@@ -142,8 +140,6 @@ export class SpookySync<S extends SchemaStructure> {
     //     this.refreshFromLocalCache(element.record_id.table.toString());
     //   }
     // });
-
-    this.upQueue.listenForMutations(this.mutationEvents);
   }
 
   private async initDownQueue() {
@@ -252,6 +248,12 @@ export class SpookySync<S extends SchemaStructure> {
           updateRecord: false,
         }
       );
+    }
+  }
+
+  public async enqueueMutation(mutations: any[]) {
+    for (const mutation of mutations) {
+      this.upQueue.push(mutation);
     }
   }
 

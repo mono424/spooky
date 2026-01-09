@@ -55,14 +55,8 @@ export class SpookyClient<S extends SchemaStructure> {
     this.migrator = new LocalMigrator(this.local, logger);
     this.mutationManager = new MutationManager(this.config.schema, this.local, logger);
     this.queryManager = new QueryManager(this.config.schema, this.local, clientId, logger);
-    this.sync = new SpookySync(
-      this.config.schema,
-      this.local,
-      this.remote,
-      this.mutationManager.events,
-      clientId,
-      logger
-    );
+    this.auth = new AuthService(this.config.schema, this.remote, logger);
+    this.sync = new SpookySync(this.config.schema, this.local, this.remote, clientId, logger);
     this.devTools = new DevToolsService(this.local, logger, this.config.schema, this.queryManager);
     this.streamProcessor = new StreamProcessorService(
       new EventSystem(['stream_update']),
@@ -76,9 +70,9 @@ export class SpookyClient<S extends SchemaStructure> {
       this.queryManager,
       this.streamProcessor,
       this.devTools,
+      this.auth,
       logger
     );
-    this.auth = new AuthService(this.config.schema, this.remote, logger);
   }
 
   async init() {

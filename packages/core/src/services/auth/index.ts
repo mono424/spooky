@@ -6,6 +6,7 @@ import {
   TypeNameToTypeMap,
 } from '@spooky/query-builder';
 import { Logger } from '../logger/index.js';
+export * from './events.js';
 import { AuthEventTypes, createAuthEventSystem } from './events.js';
 
 // Helper to pretty print types
@@ -41,6 +42,10 @@ export class AuthService<S extends SchemaStructure> {
   public isLoading: boolean = true;
 
   private events = createAuthEventSystem();
+
+  public get eventSystem() {
+    return this.events;
+  }
 
   constructor(
     private schema: S,

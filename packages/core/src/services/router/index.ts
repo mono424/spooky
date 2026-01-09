@@ -5,6 +5,7 @@ import { SpookySync, SyncEventTypes } from '../sync/index.js';
 import { QueryManager } from '../query/query.js';
 import { StreamProcessorService } from '../stream-processor/index.js';
 import { DevToolsService } from '../devtools-service/index.js';
+import { AuthService, AuthEventTypes } from '../auth/index.js';
 import { SchemaStructure } from '@spooky/query-builder';
 
 interface RouteDefinition {
@@ -22,6 +23,7 @@ export class RouterService<S extends SchemaStructure> {
     private queryManager: QueryManager<S>,
     private streamProcessor: StreamProcessorService,
     private devTools: DevToolsService,
+    private auth: AuthService<S>,
     private logger: Logger
   ) {
     this.logger = logger.child({ service: 'RouterService' });
@@ -52,6 +54,15 @@ export class RouterService<S extends SchemaStructure> {
       description: 'Notify DevTools about new mutation',
       handler: (payload) => {
         this.devTools.onMutation(payload);
+      },
+    });
+
+    routes.push({
+      source: 'Mutation',
+      event: MutationEventTypes.MutationCreated,
+      description: 'Enqueue Mutation in Sync Service',
+      handler: (payload) => {
+        this.sync.enqueueMutation(payload);
       },
     });
 
@@ -166,6 +177,11 @@ export class RouterService<S extends SchemaStructure> {
     this.sync.events.subscribe(SyncEventTypes.IncantationUpdated, (e: any) =>
       this.executeRoutes(routes, 'Sync', SyncEventTypes.IncantationUpdated, e.payload)
     );
+
+    // Auth
+    this.auth.eventSystem.subscribe(AuthEventTypes.AuthStateChanged, (e) => {
+      this.executeRoutes(routes, 'Auth', AuthEventTypes.AuthStateChanged, e.payload);
+    });
   }
 
   private executeRoutes(allRoutes: RouteDefinition[], source: string, event: string, payload: any) {

@@ -33,6 +33,12 @@ As a "Black Box" service, `AuthService` has strict boundaries:
 | `invalidate()`        | **Input** | Logs the user out and clears the session.                       |
 | `isAuthenticated()`   | **Query** | Returns the current authentication status (boolean).            |
 
+### Events (Emitted)
+
+| Event              | Payload           | Description                                               |
+| :----------------- | :---------------- | :-------------------------------------------------------- |
+| `AuthStateChanged` | `userId` (string) | Fired when the user logs in, logs out, or checks session. |
+
 ## 🔑 Key Workflows
 
 ### Authentication Flow

@@ -29,6 +29,7 @@ The following table defines the "Constitution" of the Spooky Core application.
 | :----------- | :---------------------------- | :---------------- | :--------------------- | :------------------------------------------------------ |
 | **Mutation** | `MutationCreated`             | `DevTools`        | `onMutation`           | Log the user's action for debugging.                    |
 | **Mutation** | `MutationCreated`             | `Sync`            | `refreshIncantations`  | Local data changed; we must re-evaluate active queries. |
+| **Mutation** | `MutationCreated`             | `Sync`            | `enqueueMutation`      | Queue local mutation for upstream sync.                 |
 | **Query**    | `IncantationInitialized`      | `DevTools`        | `onQueryInit`          | Log that a new query started.                           |
 | **Query**    | `IncantationInitialized`      | `Sync`            | `enqueueDownEvent`     | Tell remote to register this client's interest.         |
 | **Query**    | `IncantationInitialized`      | `StreamProcessor` | `registerIncantation`  | Register query for local stream processing.             |

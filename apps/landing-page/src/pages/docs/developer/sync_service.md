@@ -32,6 +32,7 @@ title: SpookySync Service
 | :----------------------------- | :----------------------------------------------------------------------- |
 | `init()`                       | Initializes the Up/Down queues and starts the Live Query listener.       |
 | `enqueueDownEvent(event)`      | Receives commands (Register, Sync, Heartbeat) from the Router.           |
+| `enqueueMutation(mutations)`   | Receives local mutations from the Router to queue for Up Sync.           |
 | `refreshIncantations(queries)` | Forces a re-fetch for specific queries (usually after a local mutation). |
 
 ### Events (Emitted)
