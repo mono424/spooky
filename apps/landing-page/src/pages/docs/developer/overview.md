@@ -57,6 +57,9 @@ graph TD
     Router -->|Notify| QM
     QM -->|Update UI| UI
 
+    Router -->|Register| StreamProc[StreamProcessor]
+    StreamProc -->|Read/Write| LocalDB
+
     Auth -->|Authenticate| RemoteDB
 
     style Router fill:#f9f,stroke:#333,stroke-width:2px
@@ -91,6 +94,10 @@ The write layer. It handles all Create, Update, and Delete operations. It writes
 
 Manages authentication state and sessions with the Remote Database.
 
-### 6. [DevToolsService](/spooky/docs/developer/devtools_service) 🛠️
+### 6. [StreamProcessorService](/spooky/docs/developer/stream_processor_service) 🌊
+
+Stateful processor for converting `Incantation` definitions into continuously updating materialized views. It manages local persistence of query state and handles incremental updates.
+
+### 7. [DevToolsService](/spooky/docs/developer/devtools_service) 🛠️
 
 A passive observer that exposes internal state to the Spooky Chrome Extension for debugging.

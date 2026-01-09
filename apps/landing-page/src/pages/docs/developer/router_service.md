@@ -25,17 +25,18 @@ The Router sits in the middle of the Core module:
 
 The following table defines the "Constitution" of the Spooky Core application.
 
-| Source       | Event                         | Target     | Action                 | Reason                                                  |
-| :----------- | :---------------------------- | :--------- | :--------------------- | :------------------------------------------------------ |
-| **Mutation** | `MutationCreated`             | `DevTools` | `onMutation`           | Log the user's action for debugging.                    |
-| **Mutation** | `MutationCreated`             | `Sync`     | `refreshIncantations`  | Local data changed; we must re-evaluate active queries. |
-| **Query**    | `IncantationInitialized`      | `DevTools` | `onQueryInit`          | Log that a new query started.                           |
-| **Query**    | `IncantationInitialized`      | `Sync`     | `enqueueDownEvent`     | Tell remote to register this client's interest.         |
-| **Query**    | `IncantationRemoteHashUpdate` | `Sync`     | `enqueueDownEvent`     | Local tree differs from remote; trigger a sync.         |
-| **Query**    | `IncantationTTLHeartbeat`     | `Sync`     | `enqueueDownEvent`     | Keep the query alive on the server.                     |
-| **Query**    | `IncantationCleanup`          | `Sync`     | `enqueueDownEvent`     | Unsubscribe/cleanup on the server.                      |
-| **Query**    | `IncantationUpdated`          | `DevTools` | `onQueryUpdated`       | Log that the UI received new data.                      |
-| **Sync**     | `IncantationUpdated`          | `Query`    | `handleIncomingUpdate` | Sync fetched new data; push it to the UI layer.         |
+| Source       | Event                         | Target            | Action                 | Reason                                                  |
+| :----------- | :---------------------------- | :---------------- | :--------------------- | :------------------------------------------------------ |
+| **Mutation** | `MutationCreated`             | `DevTools`        | `onMutation`           | Log the user's action for debugging.                    |
+| **Mutation** | `MutationCreated`             | `Sync`            | `refreshIncantations`  | Local data changed; we must re-evaluate active queries. |
+| **Query**    | `IncantationInitialized`      | `DevTools`        | `onQueryInit`          | Log that a new query started.                           |
+| **Query**    | `IncantationInitialized`      | `Sync`            | `enqueueDownEvent`     | Tell remote to register this client's interest.         |
+| **Query**    | `IncantationInitialized`      | `StreamProcessor` | `registerIncantation`  | Register query for local stream processing.             |
+| **Query**    | `IncantationRemoteHashUpdate` | `Sync`            | `enqueueDownEvent`     | Local tree differs from remote; trigger a sync.         |
+| **Query**    | `IncantationTTLHeartbeat`     | `Sync`            | `enqueueDownEvent`     | Keep the query alive on the server.                     |
+| **Query**    | `IncantationCleanup`          | `Sync`            | `enqueueDownEvent`     | Unsubscribe/cleanup on the server.                      |
+| **Query**    | `IncantationUpdated`          | `DevTools`        | `onQueryUpdated`       | Log that the UI received new data.                      |
+| **Sync**     | `IncantationUpdated`          | `Query`           | `handleIncomingUpdate` | Sync fetched new data; push it to the UI layer.         |
 
 ## 🔑 Key Workflows
 
