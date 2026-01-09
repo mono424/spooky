@@ -51,8 +51,10 @@ export class AuthService<S extends SchemaStructure> {
     private schema: S,
     private remote: RemoteDatabaseService,
     private logger: Logger
-  ) {
-    this.check();
+  ) {}
+
+  async init() {
+    await this.check();
   }
 
   getAccessDefinition<Name extends keyof S['access']>(name: Name): AccessDefinition | undefined {
@@ -94,34 +96,53 @@ export class AuthService<S extends SchemaStructure> {
         (typeof window !== 'undefined' ? localStorage.getItem('spooky_auth_token') : null);
 
       if (!token) {
+        this.logger.debug('[AuthService] No token found in storage or arguments');
         this.isLoading = false;
         this.isAuthenticated = false;
         this.notifyListeners();
         return;
       }
 
-      this.logger.info('[AuthService] Checking auth with token');
-
       // Authenticate with the token
       await this.remote.getClient().authenticate(token);
 
-      // Fetch current user
-      const result = await this.remote.query('SELECT * FROM user WHERE id = $auth.id LIMIT 1');
+      // Verify the session by querying $auth directly.
+      const result = await this.remote.query('SELECT * FROM $auth');
 
-      // Handle potential return types (SurrealDB results can be nested arrays)
-      // Assuming generic query returns items array
       const items = Array.isArray(result) && Array.isArray(result[0]) ? result[0] : result;
       const user = Array.isArray(items) ? items[0] : items;
 
       if (user && user.id) {
-        this.logger.info({ user }, '[AuthService] Auth check complete');
+        this.logger.info({ user }, '[AuthService] Auth check complete (via $auth)');
         this.setSession(token, user);
       } else {
-        this.logger.warn('[AuthService] Token valid but user not found');
-        await this.signOut();
+        this.logger.warn('[AuthService] $auth empty, attempting manual user fetch');
+
+        const manualResult = await this.remote.query(
+          'SELECT * FROM user WHERE id = $auth.id LIMIT 1'
+        );
+        const manualItems =
+          Array.isArray(manualResult) && Array.isArray(manualResult[0])
+            ? manualResult[0]
+            : manualResult;
+        const manualUser = Array.isArray(manualItems) ? manualItems[0] : manualItems;
+
+        if (manualUser && manualUser.id) {
+          this.logger.info(
+            { user: manualUser },
+            '[AuthService] Auth check complete (via manual fetch)'
+          );
+          this.setSession(token, manualUser);
+        } else {
+          this.logger.warn('[AuthService] Token valid but user not found via fallback');
+          await this.signOut();
+        }
       }
     } catch (error) {
-      this.logger.error({ error }, '[AuthService] Auth check failed');
+      this.logger.error(
+        { error, stack: (error as Error).stack },
+        '[AuthService] Auth check failed'
+      );
       await this.signOut();
     } finally {
       this.isLoading = false;
@@ -184,19 +205,17 @@ export class AuthService<S extends SchemaStructure> {
 
     this.logger.info({ accessName, runtimeParams }, '[AuthService] Attempting signup');
 
-    const token = (await this.remote.getClient().signup({
+    const { access } = await this.remote.getClient().signup({
       access: accessName,
       variables: runtimeParams,
-    })) as unknown as string;
+    });
 
     this.logger.info('[AuthService] Signup successful, token received');
 
     // After signup, we usually get a token.
     // We should also fetch the user or trust the token works.
     // For now, let's just trigger a check() to fully hydrate state
-    await this.check(token);
-
-    return token;
+    await this.check(access);
   }
 
   async signIn<Name extends keyof S['access'] & string>(
@@ -219,13 +238,11 @@ export class AuthService<S extends SchemaStructure> {
       );
     }
 
-    const token = (await this.remote.getClient().signin({
+    const { access } = await this.remote.getClient().signin({
       access: accessName,
       variables: runtimeParams,
-    })) as unknown as string;
+    });
 
-    await this.check(token);
-
-    return token;
+    await this.check(access);
   }
 }

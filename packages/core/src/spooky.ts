@@ -57,7 +57,13 @@ export class SpookyClient<S extends SchemaStructure> {
     this.queryManager = new QueryManager(this.config.schema, this.local, clientId, logger);
     this.auth = new AuthService(this.config.schema, this.remote, logger);
     this.sync = new SpookySync(this.config.schema, this.local, this.remote, clientId, logger);
-    this.devTools = new DevToolsService(this.local, logger, this.config.schema, this.queryManager);
+    this.devTools = new DevToolsService(
+      this.local,
+      logger,
+      this.config.schema,
+      this.auth,
+      this.queryManager
+    );
     this.streamProcessor = new StreamProcessorService(
       new EventSystem(['stream_update']),
       this.local,
@@ -85,6 +91,10 @@ export class SpookyClient<S extends SchemaStructure> {
       console.log('[Spooky] Connecting to remote DB...');
       await this.remote.connect();
       console.log('[Spooky] Remote connected');
+
+      console.log('[Spooky] Initializing Auth...');
+      await this.auth.init();
+      console.log('[Spooky] Auth initialized');
 
       console.log('[Spooky] Initializing QueryManager...');
       await this.queryManager.init();

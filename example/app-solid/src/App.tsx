@@ -10,19 +10,13 @@ import ThreadPage from "./routes/thread/[id]";
 import CreateThreadPage from "./routes/create-thread";
 
 // Defined outside component to preserve whitespace exactly
-const GHOST_ASCII = `
-   ▄▄████████▄▄
- ▄██████████████▄
- ████████████████
- ████  ████  ████
- ████████████████
- ██████▀▄▄▀██████
- ██████    ██████
- ██████▄▀▀▄██████
- ████████████████
- ████████████████
- ██▄ ▀█▄▀ █▀ ▄█▄█
-  ▀   ▀      ▀ ▀
+const THREADS_ASCII = `
+████████╗██╗  ██╗██████╗ ███████╗ █████╗ ██████╗ ███████╗
+╚══██╔══╝██║  ██║██╔══██╗██╔════╝██╔══██╗██╔══██╗██╔════╝
+   ██║   ███████║██████╔╝█████╗  ███████║██║  ██║███████╗
+   ██║   ██╔══██║██╔══██╗██╔══╝  ██╔══██║██║  ██║╚════██║
+   ██║   ██║  ██║██║  ██║███████╗██║  ██║██████╔╝███████║
+   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═════╝ ╚══════╝
 `;
 
 function Layout(props: any) {
@@ -101,10 +95,10 @@ function Layout(props: any) {
             <div class="max-w-4xl mx-auto p-4 h-full flex items-center justify-center min-h-[80vh]">
               <div class="text-center w-full">
                 
-                {/* ASCII GHOST EYECATCHER */}
+                {/* ASCII BOOK LOGO */}
                 <div class="flex justify-center mb-10">
-                    <pre class="text-[10px] sm:text-xs md:text-sm leading-none font-bold whitespace-pre text-white tracking-tighter text-left">
-                        {GHOST_ASCII}
+                    <pre class="text-[8px] sm:text-[10px] md:text-xs leading-none font-bold whitespace-pre text-white tracking-tight text-center">
+                        {THREADS_ASCII}
                     </pre>
                 </div>
 

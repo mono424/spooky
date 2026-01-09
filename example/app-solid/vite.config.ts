@@ -1,23 +1,23 @@
-import { defineConfig } from "vite";
-import solid from "vite-plugin-solid";
+import { defineConfig } from 'vite';
+import solid from 'vite-plugin-solid';
 
 export default defineConfig({
   plugins: [solid()],
   server: {
-    port: 3000,
+    port: 3006,
   },
   build: {
-    target: "esnext",
+    target: 'esnext',
   },
   optimizeDeps: {
-    exclude: ["@surrealdb/wasm"],
+    exclude: ['@surrealdb/wasm'],
     esbuildOptions: {
-      target: "esnext",
+      target: 'esnext',
     },
   },
   esbuild: {
     supported: {
-      "top-level-await": true,
+      'top-level-await': true,
     },
   },
 });

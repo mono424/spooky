@@ -14,6 +14,8 @@ export interface DevToolsEvent {
 }
 
 import { QueryManager } from '../query/query.js';
+import { AuthService } from '../auth/index.js';
+import { AuthEventTypes } from '../auth/events.js';
 
 export class DevToolsService {
   private eventsHistory: DevToolsEvent[] = [];
@@ -27,11 +29,18 @@ export class DevToolsService {
     private databaseService: LocalDatabaseService,
     private logger: Logger,
     private schema: SchemaStructure,
+    private authService: AuthService<SchemaStructure>,
     private queryManager?: QueryManager<any>
   ) {
     // this.setupEventSubscriptions(); // REMOVED
     this.exposeToWindow();
     this.syncInitialState();
+
+    // Subscribe to auth events
+    this.authService.eventSystem.subscribe(AuthEventTypes.AuthStateChanged, () => {
+      this.notifyDevTools();
+    });
+
     this.logger.debug('[DevTools] Service initialized');
   }
 
@@ -143,7 +152,10 @@ export class DevToolsService {
     return {
       eventsHistory: [...this.eventsHistory],
       activeQueries: Object.fromEntries(this.activeQueries),
-      auth: { authenticated: false }, // TODO: Hook up auth
+      auth: {
+        authenticated: this.authService.isAuthenticated,
+        userId: this.authService.currentUser?.id,
+      },
       version: this.version,
       database: {
         tables: this.schema.tables.map((t) => t.name),
