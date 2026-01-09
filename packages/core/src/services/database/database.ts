@@ -1,5 +1,5 @@
 import { Surreal, SurrealTransaction } from 'surrealdb';
-import { createLogger, Logger } from '../logger.js';
+import { createLogger, Logger } from '../logger/index.js';
 
 export abstract class AbstractDatabaseService {
   protected client: Surreal;

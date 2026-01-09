@@ -4,7 +4,7 @@ import {
   SyncQueueEventSystem,
   SyncQueueEventTypes,
 } from '../events.js';
-import { QueryEventSystem, QueryEventTypeMap, QueryEventTypes } from '../../query/events.js';
+import { QueryEventTypeMap } from '../../query/events.js';
 import { EventPayload } from '../../../events/index.js';
 
 export type RegisterEvent = {
@@ -70,32 +70,5 @@ export class DownQueue {
         throw error;
       }
     }
-  }
-
-  listenForQueries(queryEvents: QueryEventSystem) {
-    queryEvents.subscribe(QueryEventTypes.IncantationInitialized, (event) => {
-      this.push({
-        type: 'register',
-        payload: event.payload,
-      });
-    });
-    queryEvents.subscribe(QueryEventTypes.IncantationRemoteHashUpdate, (event) => {
-      this.push({
-        type: 'sync',
-        payload: event.payload,
-      });
-    });
-    queryEvents.subscribe(QueryEventTypes.IncantationTTLHeartbeat, (event) => {
-      this.push({
-        type: 'heartbeat',
-        payload: event.payload,
-      });
-    });
-    queryEvents.subscribe(QueryEventTypes.IncantationCleanup, (event) => {
-      this.push({
-        type: 'cleanup',
-        payload: event.payload,
-      });
-    });
   }
 }

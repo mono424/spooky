@@ -1,3 +1,3 @@
 export * from './types.js';
 export * from './spooky.js';
-export * from './services/auth.js';
+export * from './services/auth/index.js';

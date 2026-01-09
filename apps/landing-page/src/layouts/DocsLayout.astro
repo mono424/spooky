@@ -19,6 +19,58 @@ const title = frontmatter?.title || Astro.props.title;
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap"
       rel="stylesheet"
     />
+    <script>
+      import mermaid from 'mermaid';
+      mermaid.initialize({ startOnLoad: false, theme: 'dark' });
+
+      async function renderMermaid() {
+        // Query ALL code blocks to be safe
+        const graphs = document.querySelectorAll('pre > code');
+
+        for (const graph of graphs) {
+          const content = graph.textContent;
+          if (!content) continue;
+
+          let isMermaid = false;
+
+          // 1. Explicit class check
+          if (graph.classList.contains('language-mermaid')) {
+            isMermaid = true;
+          }
+          // 2. Content Heuristic (if no explicit class or generic text class)
+          else {
+            const trimmed = content.trim();
+            if (
+              trimmed.startsWith('graph') ||
+              trimmed.startsWith('sequenceDiagram') ||
+              trimmed.startsWith('classDiagram') ||
+              trimmed.startsWith('erDiagram') ||
+              trimmed.startsWith('stateDiagram') ||
+              trimmed.startsWith('pie') ||
+              trimmed.startsWith('%%{init:')
+            ) {
+              isMermaid = true;
+            }
+          }
+
+          if (!isMermaid) continue;
+
+          const pre = graph.parentElement;
+          if (!pre) continue;
+
+          const div = document.createElement('div');
+          div.className = 'mermaid';
+          div.textContent = content;
+
+          pre.replaceWith(div);
+        }
+        await mermaid.run();
+      }
+
+      document.addEventListener('astro:page-load', renderMermaid);
+      // Also run on initial load if view transitions aren't active or for first render
+      renderMermaid();
+    </script>
   </head>
   <body class="bg-background text-text-main font-sans antialiased selection:bg-primary/20">
     <Header />

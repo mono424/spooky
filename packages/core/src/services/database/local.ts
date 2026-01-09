@@ -1,7 +1,7 @@
 import { applyDiagnostics, Diagnostic, Surreal } from 'surrealdb';
 import { createWasmWorkerEngines } from '@surrealdb/wasm';
 import { SpookyConfig } from '../../types.js';
-import { Logger } from '../logger.js';
+import { Logger } from '../logger/index.js';
 import { AbstractDatabaseService } from './database.js';
 
 export class LocalDatabaseService extends AbstractDatabaseService {

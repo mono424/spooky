@@ -1,9 +1,9 @@
 import { QueryHash, Incantation as IncantationData, QueryTimeToLive } from '../../types.js';
 import { Table, RecordId, Duration, Uuid } from 'surrealdb';
-import { RemoteDatabaseService } from '../database/remote.js';
+// import { RemoteDatabaseService } from '../database/remote.js'; // REMOVED
 import { LocalDatabaseService } from '../database/local.js';
 import { Incantation } from './incantation.js';
-import { createLogger, Logger } from '../logger.js';
+import { createLogger, Logger } from '../logger/index.js';
 import {
   createQueryEventSystem,
   QueryEventSystem,
@@ -11,7 +11,7 @@ import {
   QueryEventTypes,
 } from './events.js';
 import { Event } from '../../events/index.js';
-import { decodeFromSpooky, parseRecordIdString } from '../utils.js';
+import { decodeFromSpooky, parseRecordIdString } from '../utils/index.js';
 import { flattenIdTree } from '../sync/utils.js';
 import { SchemaStructure, TableModel } from '@spooky/query-builder';
 
@@ -28,7 +28,6 @@ export class QueryManager<S extends SchemaStructure> {
   constructor(
     private schema: S,
     private local: LocalDatabaseService,
-    private remote: RemoteDatabaseService,
     private clientId: string | undefined, // undefined is valid for optional clientId, but argument position is fixed
     logger: Logger
   ) {
@@ -36,7 +35,7 @@ export class QueryManager<S extends SchemaStructure> {
     this.events = createQueryEventSystem();
     this.events.subscribe(
       QueryEventTypes.IncantationIncomingRemoteUpdate,
-      this.handleIncomingRemoteUpdate.bind(this)
+      this.handleIncomingUpdate.bind(this)
     );
   }
 
@@ -48,21 +47,16 @@ export class QueryManager<S extends SchemaStructure> {
     return Array.from(this.activeQueries.values());
   }
 
-  private async setClientId() {
-    await this.remote.getClient().set('_spooky_client_id', this.clientId);
-    this.logger.debug({ clientId: this.clientId }, 'ClientId set');
-    // .query('LET $_spooky_client_id = $clientId', { clientId: this.clientId });
-  }
-
   public async init() {
-    await this.setClientId();
-    await this.startLiveQuery();
+    // ClientId setup moved to SpookySync/Auth
   }
 
-  private handleIncomingRemoteUpdate(
-    event: Event<QueryEventTypeMap, 'QUERY_INCANTATION_INCOMING_REMOTE_UPDATE'>
+  public handleIncomingUpdate(
+    eventOrPayload: Event<QueryEventTypeMap, 'QUERY_INCANTATION_INCOMING_REMOTE_UPDATE'> | any
   ) {
-    const { incantationId, records, remoteHash, remoteTree } = event.payload;
+    const payload =
+      eventOrPayload && 'payload' in eventOrPayload ? eventOrPayload.payload : eventOrPayload;
+    const { incantationId, records, remoteHash, remoteTree } = payload;
     const incantation = this.activeQueries.get(incantationId.id.toString());
     if (!incantation) {
       return;
@@ -113,44 +107,7 @@ export class QueryManager<S extends SchemaStructure> {
       records: validRecords,
     });
 
-    void this.verifyAndPurgeOrphans(orphanedRecords);
-  }
-
-  private async verifyAndPurgeOrphans(orphanedRecords: any[]) {
-    if (orphanedRecords.length === 0) return;
-
-    const idsToCheck = orphanedRecords
-      .map((r) => r.id)
-      .filter((id) => !!id)
-      .map((id) => (id instanceof RecordId ? id : parseRecordIdString(id.toString())));
-
-    if (idsToCheck.length === 0) return;
-
-    this.logger.debug({ count: idsToCheck.length }, 'Verifying orphaned records against remote');
-
-    try {
-      const [existing] = await this.remote.query<[{ id: RecordId }[]]>('SELECT id FROM $ids', {
-        ids: idsToCheck,
-      });
-
-      const existingIdsSet = new Set(existing.map((r) => r.id.toString()));
-      const toDelete = idsToCheck.filter((id) => !existingIdsSet.has(id.toString()));
-
-      if (toDelete.length > 0) {
-        this.logger.info(
-          { count: toDelete.length, ids: toDelete.map((id) => id.toString()) },
-          'Purging confirmed orphaned records'
-        );
-        await this.local.query('DELETE $ids', { ids: toDelete });
-      } else {
-        this.logger.debug(
-          { count: idsToCheck.length },
-          'All orphaned records still exist remotely (ghost records)'
-        );
-      }
-    } catch (err) {
-      this.logger.error({ err }, 'Failed to verify/purge orphans');
-    }
+    // Verification and purging of orphans is now handled by SpookySync
   }
 
   private async register(
@@ -311,42 +268,6 @@ export class QueryManager<S extends SchemaStructure> {
     return () => {
       this.events.unsubscribe(id);
     };
-  }
-
-  private async startLiveQuery() {
-    this.logger.debug({ clientId: this.clientId }, 'Starting live query');
-    const [queryUuid] = await this.remote.query<[Uuid]>(
-      'LIVE SELECT * FROM _spooky_incantation WHERE clientId = $clientId',
-      {
-        clientId: this.clientId,
-      }
-    );
-
-    (await this.remote.getClient().liveOf(queryUuid)).subscribe((message) => {
-      this.logger.debug({ message }, 'Live update received');
-      if (message.action === 'UPDATE' || message.action === 'CREATE') {
-        const { id, hash, tree } = message.value;
-        if (!(id instanceof RecordId) || !hash || !tree) {
-          return;
-        }
-
-        const incantation = this.activeQueries.get(id.id.toString());
-        if (!incantation) {
-          this.logger.warn({ id: id.toString() }, 'Live update for unknown incantation');
-          return;
-        }
-
-        this.events.emit(QueryEventTypes.IncantationRemoteHashUpdate, {
-          incantationId: id as RecordId<string>,
-          surrealql: incantation.surrealql,
-          params: incantation.params ?? {},
-          localHash: incantation.hash,
-          localTree: incantation.tree,
-          remoteHash: hash as string,
-          remoteTree: tree as any,
-        });
-      }
-    });
   }
 
   private async calculateHash(data: any): Promise<string> {

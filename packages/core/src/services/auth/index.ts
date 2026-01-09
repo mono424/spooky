@@ -1,12 +1,12 @@
-import { RemoteDatabaseService } from './database/remote.js';
+import { RemoteDatabaseService } from '../database/remote.js';
 import {
   SchemaStructure,
   AccessDefinition,
   ColumnSchema,
   TypeNameToTypeMap,
 } from '@spooky/query-builder';
-import { Logger } from './logger.js';
-import { AuthEventTypes, createAuthEventSystem } from './auth/events.js';
+import { Logger } from '../logger/index.js';
+import { AuthEventTypes, createAuthEventSystem } from './events.js';
 
 // Helper to pretty print types
 type Prettify<T> = {

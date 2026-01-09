@@ -1,9 +1,9 @@
 import { RecordId } from 'surrealdb';
 import { LocalDatabaseService } from '../database/index.js';
 import { createMutationEventSystem, MutationEventSystem, MutationEventTypes } from './events.js';
-import { parseRecordIdString, encodeToSpooky } from '../utils.js';
+import { parseRecordIdString, encodeToSpooky } from '../utils/index.js';
 import { SchemaStructure } from '@spooky/query-builder';
-import { createLogger, Logger } from '../logger.js';
+import { createLogger, Logger } from '../logger/index.js';
 
 export class MutationManager<S extends SchemaStructure> {
   private _events: MutationEventSystem;

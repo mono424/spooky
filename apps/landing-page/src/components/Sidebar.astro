@@ -15,7 +15,21 @@ const nav = [
       { text: 'Vanilla JS / TS', href: '/spooky/docs/guide/vanilla' },
     ],
   },
+  {
+    title: 'Developer Documentation',
+    links: [
+      { text: 'System Overview', href: '/spooky/docs/developer/overview' },
+      { text: 'Auth Service', href: '/spooky/docs/developer/auth_service' },
+      { text: 'Sync Service', href: '/spooky/docs/developer/sync_service' },
+      { text: 'Query Manager', href: '/spooky/docs/developer/query_manager' },
+      { text: 'Mutation Manager', href: '/spooky/docs/developer/mutation_manager' },
+      { text: 'Router Service', href: '/spooky/docs/developer/router_service' },
+      { text: 'DevTools Service', href: '/spooky/docs/developer/devtools_service' },
+    ],
+  },
 ];
+
+const currentPath = Astro.url.pathname;
 ---
 
 <nav class="space-y-8">
@@ -24,21 +38,26 @@ const nav = [
       <div>
         <h3 class="font-medium text-sm text-text-main mb-3 px-2">{group.title}</h3>
         <ul class="space-y-1">
-          {group.links.map((link) => (
-            <li>
-              <a
-                href={link.href}
-                class:list={[
-                  'block px-2 py-1.5 text-sm rounded-md transition-colors border-l-2',
-                  link.active
-                    ? 'border-primary text-primary bg-primary/5 font-medium'
-                    : 'border-transparent text-text-muted hover:text-text-main hover:bg-surface',
-                ]}
-              >
-                {link.text}
-              </a>
-            </li>
-          ))}
+          {group.links.map((link) => {
+            const isActive =
+              currentPath === link.href ||
+              (link.href !== '/spooky/docs' && currentPath.startsWith(link.href));
+            return (
+              <li>
+                <a
+                  href={link.href}
+                  class:list={[
+                    'block px-2 py-1.5 text-sm rounded-md transition-colors border-l-2',
+                    isActive
+                      ? 'border-primary text-primary bg-primary/5 font-medium'
+                      : 'border-transparent text-text-muted hover:text-text-main hover:bg-surface',
+                  ]}
+                >
+                  {link.text}
+                </a>
+              </li>
+            );
+          })}
         </ul>
       </div>
     ))

@@ -1,5 +1,5 @@
 import { IdTree, IdTreeDiff } from '../../types.js';
-import { parseRecordIdString } from '../utils.js';
+import { parseRecordIdString } from '../utils/index.js';
 
 export function diffIdTree(local: IdTree | null, remote: IdTree | null): IdTreeDiff {
   const { added, removed, updated } = diffIdTreeInt(local, remote);
