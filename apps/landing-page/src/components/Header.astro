@@ -4,10 +4,31 @@ import GitHubStars from './GitHubStars';
 
 <header class="h-16 border-b border-border bg-background/80 backdrop-blur sticky top-0 z-50">
   <div class="max-w-[1600px] mx-auto h-full flex items-center justify-between px-6">
-    <a href="/spooky" class="flex items-center gap-2 hover:opacity-80 transition-opacity">
-      <img src="/spooky/logo_transparent.svg" alt="Spooky Logo" class="w-5 h-5" />
-      <span class="font-semibold text-text-main font-mono tracking-wide">SPOOKY_SYNC</span>
-    </a>
+    <div class="flex items-center gap-4">
+      <button
+        id="mobile-menu-trigger"
+        class="lg:hidden p-2 -ml-2 text-text-muted hover:text-text-main hover:bg-surface rounded-md transition-colors"
+        aria-label="Toggle menu"
+      >
+        <svg
+          class="w-5 h-5"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M4 6h16M4 12h16M4 18h16"
+          ></path>
+        </svg>
+      </button>
+      <a href="/spooky" class="flex items-center gap-2 hover:opacity-80 transition-opacity">
+        <img src="/spooky/logo_transparent.svg" alt="Spooky Logo" class="w-5 h-5" />
+        <span class="font-semibold text-text-main font-mono tracking-wide">SPOOKY_SYNC</span>
+      </a>
+    </div>
 
     <div
       class="hidden md:flex items-center bg-surface border border-border rounded-md px-3 py-1.5 text-sm text-text-muted w-64"
