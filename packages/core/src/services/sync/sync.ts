@@ -473,7 +473,7 @@ export class SpookySync<S extends SchemaStructure> {
         incantationId,
         remoteHash: hash,
         remoteTree: tree,
-        records: cachedResults,
+        records: cachedResults || [],
       });
     } catch (e) {
       this.logger.error(

@@ -30,6 +30,7 @@ export function useQuery<
 ) {
   const [data, setData] = createSignal<TData | undefined>(undefined);
   const [error, setError] = createSignal<Error | undefined>(undefined);
+  const [isFetched, setIsFetched] = createSignal(false);
   const [unsubscribe, setUnsubscribe] = createSignal<(() => void) | undefined>(undefined);
   let prevQueryString: string | undefined;
 
@@ -46,6 +47,7 @@ export function useQuery<
       (e) => {
         const data = (query.isOne ? e[0] : e) as TData;
         setData(() => data);
+        setIsFetched(true);
       },
       { immediate: true }
     );
@@ -75,6 +77,8 @@ export function useQuery<
     }
     prevQueryString = queryString;
 
+    // Reset fetched state when query changes
+    setIsFetched(false);
     initQuery(query);
 
     // Cleanup
@@ -84,7 +88,7 @@ export function useQuery<
   });
 
   const isLoading = () => {
-    return data() === undefined && error() === undefined;
+    return !isFetched() && error() === undefined;
   };
 
   return {

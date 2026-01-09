@@ -1,4 +1,6 @@
 import { RemoteDatabaseService } from '../database/remote.js';
+import { LocalDatabaseService } from '../database/local.js';
+import { MutationManager } from '../mutation/mutation.js';
 import {
   SchemaStructure,
   AccessDefinition,
@@ -50,6 +52,8 @@ export class AuthService<S extends SchemaStructure> {
   constructor(
     private schema: S,
     private remote: RemoteDatabaseService,
+    private local: LocalDatabaseService,
+    private mutation: MutationManager<S>,
     private logger: Logger
   ) {}
 
@@ -178,6 +182,27 @@ export class AuthService<S extends SchemaStructure> {
     if (typeof window !== 'undefined') {
       localStorage.setItem('spooky_auth_token', token);
     }
+
+    // Hydrate local database with user record using MutationManager to trigger reactivity
+    const hydrateUser = async () => {
+      try {
+        const userId = user.id.toString();
+        // Check if user exists locally
+        const [existing] = await this.local.query<any[]>(`SELECT * FROM ONLY ${userId}`);
+
+        if (existing) {
+          this.logger.debug({ userId }, '[AuthService] Hydration: updating existing user');
+          const table = userId.split(':')[0];
+          await this.mutation.update(table, userId, user);
+        } else {
+          this.logger.debug({ userId }, '[AuthService] Hydration: creating new user');
+          await this.mutation.create(userId, user);
+        }
+      } catch (err) {
+        this.logger.error({ error: err }, '[AuthService] Failed to hydrate local user');
+      }
+    };
+    hydrateUser();
 
     this.notifyListeners();
   }

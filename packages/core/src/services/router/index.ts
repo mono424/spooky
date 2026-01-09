@@ -193,8 +193,18 @@ export class RouterService<S extends SchemaStructure> {
         if (result instanceof Promise) {
           result.catch((err) => this.logger.error({ err, source, event }, 'Route handler failed'));
         }
-      } catch (err) {
-        this.logger.error({ err, source, event }, 'Route handler failed synchronously');
+      } catch (err: any) {
+        this.logger.error(
+          {
+            error: err,
+            message: err?.message,
+            stack: err?.stack,
+            source,
+            event,
+            payloadPreview: JSON.stringify(payload).substring(0, 200),
+          },
+          'Route handler failed synchronously'
+        );
       }
     }
   }

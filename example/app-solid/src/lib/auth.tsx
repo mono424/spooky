@@ -29,12 +29,12 @@ const AuthContext = createContext<AuthContextType>();
 
 export function AuthProvider(props: { children: JSX.Element }) {
   const [userId, setUserId] = createSignal<string | null>(null);
-  const [isLoading, setIsLoading] = createSignal(true);
+  const [isInitializing, setIsInitializing] = createSignal(true);
   
   // Subscribe to auth state
   const unsubscribe = db.auth.subscribe((uid) => {
     setUserId(uid);
-    setIsLoading(false);
+    setIsInitializing(false);
   });
   
   onCleanup(() => unsubscribe());
@@ -54,7 +54,10 @@ export function AuthProvider(props: { children: JSX.Element }) {
     }
   );
 
-  const user = () => userQuery.data() || null;
+  const user = () => {
+    const data = userQuery.data();
+    return data || null;
+  };
 
   const signIn = async (username: string, password: string) => {
     await db.auth.signIn("account", { username, password });
@@ -71,7 +74,7 @@ export function AuthProvider(props: { children: JSX.Element }) {
   const authValue: AuthContextType = {
     userId,
     user,
-    isLoading,
+    isLoading: () => isInitializing() || (!!userId() && userQuery.isLoading()),
     signIn,
     signUp,
     signOut,
@@ -80,7 +83,7 @@ export function AuthProvider(props: { children: JSX.Element }) {
   return (
     <AuthContext.Provider value={authValue}>
       <Show
-        when={!isLoading()}
+        when={!authValue.isLoading()}
         fallback={
           <div class="min-h-screen flex items-center justify-center">
             <div class="text-lg">Loading...</div>

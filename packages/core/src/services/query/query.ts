@@ -56,9 +56,19 @@ export class QueryManager<S extends SchemaStructure> {
   ) {
     const payload =
       eventOrPayload && 'payload' in eventOrPayload ? eventOrPayload.payload : eventOrPayload;
-    const { incantationId, records, remoteHash, remoteTree } = payload;
+    const { incantationId, records = [], remoteHash, remoteTree } = payload;
+
+    if (!incantationId || !incantationId.id) {
+      this.logger.error({ payload }, '[QueryManager] Invalid payload: missing incantationId');
+      return;
+    }
+
     const incantation = this.activeQueries.get(incantationId.id.toString());
     if (!incantation) {
+      this.logger.warn(
+        { incantationId: incantationId.toString() },
+        '[QueryManager] Incantation not found for update'
+      );
       return;
     }
 
