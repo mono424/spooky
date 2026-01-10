@@ -1,0 +1,42 @@
+---
+layout: ../../../layouts/DocsLayout.astro
+title: Spooky Stream Processor
+---
+
+> **Note**: This section focuses on the performance and operational characteristics of the Spooky Stream Processor.
+
+The Spooky Stream Processor is the core engine responsible for maintaining real-time consistency and reactivity in the Spooky ecosystem. It is designed to be highly versatile and can be deployed in multiple configurations to suit different architectural needs.
+
+## Running Modes
+
+The processor is capable of running in three distinct modes:
+
+1.  **Surrealism Module**: Integrated directly as a module within the SurrealDB environment.
+2.  **WASM Module**: compiled to WebAssembly for edge deployments or browser-based execution.
+3.  **Sidecar**: Deployed as a standalone sidecar process alongside your primary application or database.
+
+## Core Responsibilities
+
+The processor's primary function relies on **DBSP (Database Stream Processor)** principles to handle **Incremental View Maintenance (IVM)**. This ensures that views are updated efficiently as data changes, without the need for full re-computations.
+
+Key responsibilities include:
+
+- **Incremental View Maintenance**: keeping materialized views in sync with the underlying data changes in real-time.
+- **Merkle Tree Generation**: Constructing Merkle trees for queries, which enables efficient data verification and synchronization.
+
+## Implementation Details
+
+> [!NOTE]
+> We are currently using a custom implementation for our DBSP logic.
+
+While there is an official Rust library for DBSP, Spooky currently utilizes its own tailored implementation to optimize for specific use cases and integration points within the Spooky ecosystem. We are actively considering migrating to or integrating with the official library in future iterations to leverage broader community advancements.
+
+## Performance Benchmarks
+
+_Coming Soon_
+
+Future updates to this page will include detailed charts and metrics regarding:
+
+- Registered view performance.
+- Update times for varying amounts of records.
+- Throughput analysis under load.
