@@ -1,6 +1,6 @@
 packages:
   - 'apps/*'
   - 'packages/*'
-  - 'packages/spooky-stream-processor-wasm/pkg'
+
   - 'example/*'
   - 'tests'
