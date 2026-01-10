@@ -16,3 +16,6 @@ anyhow = "1.0"
 blake3 = { version = "1.5", default-features = false, features = ["std"] }
 regex = "1.12.2"
 lazy_static = "1.4"
+rustc-hash = "2.1.1"
+smol_str = { version = "0.2", features = ["serde"] }
+mimalloc = { version = "0.1", default-features = false }

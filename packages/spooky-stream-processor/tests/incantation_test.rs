@@ -83,7 +83,7 @@ fn test_complex_incantation_flow() {
             .iter()
             .find(|v| v.plan.id == "magic_threads_by_alice")
             .expect("View not found");
-        let present = view.cache.contains_key(&thread_1);
+        let present = view.cache.contains_key(thread_1.as_str());
         assert_eq!(present, expect_present, "Thread 1 presence mismatch");
     };
 
