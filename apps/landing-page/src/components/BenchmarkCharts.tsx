@@ -139,7 +139,10 @@ const Chart = ({ data, title }: ChartProps) => (
             }}
             itemStyle={{ color: '#e4e4e7' }}
             labelStyle={{ color: '#a1a1aa' }}
-            formatter={(value: number) => [`${value.toFixed(4)} ms`, 'Latency']}
+            formatter={(value: number | undefined) => [
+              `${(value ?? 0).toFixed(4)} ms`,
+              'Latency',
+            ]}
           />
           <Line
             type="monotone"
