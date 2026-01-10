@@ -6,3 +6,4 @@ dist/
 # Surrealism modules - ignore generated files
 # *.surli
 **/target/
+schema.gen.ts

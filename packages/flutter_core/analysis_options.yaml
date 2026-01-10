@@ -1,0 +1,23 @@
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  exclude:
+    - example/**
+    - test/**
+    - integration_test/**
+    - android/**
+    - ios/**
+    - macos/**
+    - linux/**
+    - windows/**
+    - build/**
+    - "**/*.g.dart"
+    - "**/*.freezed.dart"
+    - "**/*.g.dart"
+    - "**/*.freezed.dart"
+    - "build/**"
+    - ".dart_tool/**"
+
+
+# Additional information about this file can be found at
+# https://dart.dev/guides/language/analysis-options
