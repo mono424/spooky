@@ -2,6 +2,7 @@ use super::view::{MaterializedViewUpdate, QueryPlan, RowKey, View, ZSet};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 // --- Table & Database ---
 
@@ -9,8 +10,8 @@ use std::collections::HashMap;
 #[allow(dead_code)]
 pub struct Table {
     pub name: String,
-    pub zset: ZSet,
-    pub rows: HashMap<RowKey, Value>,
+    pub zset: ZSet,                   // Das ist die schnelle FxHashMap
+    pub rows: HashMap<RowKey, Value>, // Das darf die normale HashMap bleiben
     pub hashes: HashMap<RowKey, String>,
 }
 
@@ -18,14 +19,14 @@ impl Table {
     pub fn new(name: String) -> Self {
         Self {
             name,
-            zset: HashMap::new(),
+            // FIX: Hier muss FxHashMap::default() stehen, nicht HashMap::new()
+            zset: FxHashMap::default(),
             rows: HashMap::new(),
             hashes: HashMap::new(),
         }
     }
 
     pub fn update_row(&mut self, key: String, data: Value, hash: String) {
-        // println!("DEBUG: Table {} update_row key={}", self.name, key);
         self.rows.insert(key.clone(), data);
         self.hashes.insert(key, hash);
     }
@@ -35,7 +36,6 @@ impl Table {
         self.hashes.remove(key);
     }
 
-    /// Apply a delta to this table's state.
     pub fn apply_delta(&mut self, delta: &ZSet) {
         for (key, weight) in delta {
             let entry = self.zset.entry(key.clone()).or_insert(0);
@@ -82,7 +82,6 @@ impl Circuit {
         }
     }
 
-    // THE NEW BLACK BOX METHOD
     pub fn ingest_record(
         &mut self,
         table: String,
@@ -92,8 +91,6 @@ impl Circuit {
         hash: String,
     ) -> Vec<MaterializedViewUpdate> {
         let key = id;
-
-        // 1. Calculate Delta internally
         let weight: i64 = match op.as_str() {
             "CREATE" | "UPDATE" => 1,
             "DELETE" => -1,
@@ -104,10 +101,11 @@ impl Circuit {
             return vec![];
         }
 
-        let mut delta = std::collections::HashMap::new();
+        // FIX: Auch das Delta muss jetzt eine schnelle FxHashMap sein
+        let mut delta: ZSet = FxHashMap::default();
         delta.insert(key.clone(), weight);
 
-        // 2. Update Storage
+        // Update Storage
         {
             let tb = self.db.ensure_table(&table);
             if weight > 0 {
@@ -115,9 +113,8 @@ impl Circuit {
             } else {
                 tb.delete_row(&key);
             }
-        } // End borrow of self.db
+        }
 
-        // 3. Propagate
         self.step(table, delta)
     }
 
@@ -126,14 +123,14 @@ impl Circuit {
         plan: QueryPlan,
         params: Option<Value>,
     ) -> Option<MaterializedViewUpdate> {
-        // If view exists, remove it first (to support updates/param changes)
         if let Some(pos) = self.views.iter().position(|v| v.plan.id == plan.id) {
             self.views.remove(pos);
         }
         let mut view = View::new(plan, params);
 
-        // Initial Hydration: Process with empty delta to force snapshot eval against current DB
-        let initial_update = view.process("", &HashMap::new(), &self.db);
+        // FIX: Leeres Delta auch FxHashMap
+        let empty_delta: ZSet = FxHashMap::default();
+        let initial_update = view.process("", &empty_delta, &self.db);
 
         self.views.push(view);
         initial_update
@@ -145,13 +142,11 @@ impl Circuit {
     }
 
     pub fn step(&mut self, table: String, delta: ZSet) -> Vec<MaterializedViewUpdate> {
-        // 1. Update DB State (Z-Set)
         {
             let tb = self.db.ensure_table(&table);
             tb.apply_delta(&delta);
         }
 
-        // 2. Propagate Delta to Views
         let mut updates = Vec::new();
         for i in 0..self.views.len() {
             if let Some(update) = self.views[i].process(&table, &delta, &self.db) {

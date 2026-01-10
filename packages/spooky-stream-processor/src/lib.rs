@@ -1,10 +1,12 @@
+// src/lib.rs
+
 pub mod converter;
-pub mod engine;
+pub mod engine;      // <--- Das ist wichtig für den Test
 pub mod sanitizer;
 pub mod service;
 
+// Falls du noch StreamProcessor Traits hast, müssen die auch hier sein:
 use serde_json::Value;
-
 pub use engine::circuit::Circuit;
 pub use engine::view::MaterializedViewUpdate;
 pub use engine::view::QueryPlan;
