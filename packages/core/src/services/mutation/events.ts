@@ -1,13 +1,8 @@
-import { RecordId } from "surrealdb";
-import {
-  createEventSystem,
-  EventDefinition,
-  EventSystem,
-} from "../../events/index.js";
-import { UpEvent } from "../sync/index.js";
+import { createEventSystem, EventDefinition, EventSystem } from '../../events/index.js';
+import { UpEvent } from '../sync/index.js';
 
 export const MutationEventTypes = {
-  MutationCreated: "MUTATION_CREATED",
+  MutationCreated: 'MUTATION_CREATED',
 } as const;
 
 export type MutationEventTypeMap = {
@@ -20,7 +15,5 @@ export type MutationEventTypeMap = {
 export type MutationEventSystem = EventSystem<MutationEventTypeMap>;
 
 export function createMutationEventSystem(): MutationEventSystem {
-  return createEventSystem([
-    MutationEventTypes.MutationCreated,
-  ]);
+  return createEventSystem([MutationEventTypes.MutationCreated]);
 }

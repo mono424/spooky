@@ -120,6 +120,66 @@ export class QueryManager<S extends SchemaStructure> {
     // Verification and purging of orphans is now handled by SpookySync
   }
 
+  public async handleStreamUpdate(update: any) {
+    const { query_id, result_hash, result_ids, tree } = update;
+
+    // query_id from StreamProcessor is a string (e.g. "_spooky_incantation:...")
+    // We need to convert it to a RecordId for the event payload
+    let incantationRecordId: RecordId;
+    try {
+      incantationRecordId = parseRecordIdString(query_id);
+    } catch (e) {
+      // Fallback for bare IDs or testing
+      incantationRecordId = new RecordId('_spooky_incantation', query_id);
+    }
+
+    this.logger.debug(
+      { incantationId: query_id, count: result_ids?.length },
+      'Handling stream update'
+    );
+
+    if (!result_ids || result_ids.length === 0) {
+      this.events.emit(QueryEventTypes.IncantationUpdated, {
+        incantationId: incantationRecordId,
+        records: [],
+      });
+      return;
+    }
+
+    try {
+      // StreamProcessor might return IDs as strings, ensure we can fetch them
+      // We might need to ensure they are formatted as RecordIDs if the DB requires it,
+      // but usually SELECT * FROM ["table:id"] works or we might need to parse them.
+      // parseRecordIdString handles 'table:id'.
+
+      const idsToFetch = result_ids.map((id: string) =>
+        id.includes(':') ? parseRecordIdString(id) : id
+      );
+
+      const [records] = await this.local.query<[Record<string, any>[]]>('SELECT * FROM $ids', {
+        ids: idsToFetch,
+      });
+
+      // We should technically update the local state/incantation here too
+      const incantation = this.activeQueries.get(query_id);
+      if (incantation) {
+        // Update the local state with these records (and the new tree/hash)
+        // Note: result_hash from processor is the "local" hash now.
+        incantation.updateLocalState(records || [], result_hash, tree);
+      }
+
+      this.events.emit(QueryEventTypes.IncantationUpdated, {
+        incantationId: incantationRecordId,
+        records: records || [],
+      });
+    } catch (err) {
+      this.logger.error(
+        { err, incantationId: query_id },
+        'Failed to fetch records for stream update'
+      );
+    }
+  }
+
   private async register(
     tableName: string,
     surrealql: string,

@@ -107,8 +107,17 @@ export class DevToolsService {
 
     this.addEvent('QUERY_UPDATED', {
       queryHash,
+      query: queryState?.query,
       data: payload.records,
       dataHash: 0,
+    });
+    this.notifyDevTools();
+  }
+
+  public onStreamUpdate(payload: any) {
+    console.log('[DevTools] StreamUpdate', payload);
+    this.addEvent('STREAM_UPDATE', {
+      updates: payload,
     });
     this.notifyDevTools();
   }
@@ -138,12 +147,17 @@ export class DevToolsService {
     return hash;
   }
 
+  public logEvent(eventType: string, payload: any) {
+    this.addEvent(eventType, payload);
+    this.notifyDevTools();
+  }
+
   private addEvent(eventType: string, payload: any) {
     this.eventsHistory.push({
       id: this.eventIdCounter++,
       timestamp: Date.now(),
       eventType,
-      payload,
+      payload: this.serializeForDevTools(payload),
     });
     if (this.eventsHistory.length > 100) this.eventsHistory.shift();
   }

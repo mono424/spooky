@@ -113,7 +113,8 @@ export class SpookySync<S extends SchemaStructure> {
       return;
     }
 
-    const { surrealql, params, hash: localHash, tree: localTree } = existing;
+    const surrealql = existing.surrealql || existing.surrealQL;
+    const { params, hash: localHash, tree: localTree } = existing;
 
     await this.syncIncantation({
       incantationId,

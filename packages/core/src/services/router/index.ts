@@ -1,7 +1,7 @@
 import { Logger } from '../logger/index.js';
 import { MutationEventSystem, MutationEventTypes } from '../mutation/events.js';
 import { QueryEventSystem, QueryEventTypes } from '../query/events.js';
-import { SpookySync, SyncEventTypes } from '../sync/index.js';
+import { SpookySync, SyncEventTypes, UpEvent } from '../sync/index.js';
 import { QueryManager } from '../query/query.js';
 import { StreamProcessorService } from '../stream-processor/index.js';
 import { DevToolsService } from '../devtools-service/index.js';
@@ -69,18 +69,17 @@ export class RouterService<S extends SchemaStructure> {
     routes.push({
       source: 'Mutation',
       event: MutationEventTypes.MutationCreated,
-      description: 'Trigger Refetching of affected active queries',
-      handler: (payload) => {
+      description: 'Ingest Mutation into StreamProcessor',
+      handler: (payload: UpEvent[]) => {
         for (const element of payload) {
           const tableName = element.record_id.table.toString();
-          const queries = this.queryManager.getQueriesThatInvolveTable(tableName);
-          if (queries.length > 0) {
-            this.logger.debug(
-              { tableName, count: queries.length },
-              'Routing Mutation -> Sync.refresh'
-            );
-            this.sync.refreshIncantations(queries);
-          }
+          this.streamProcessor.ingest(
+            tableName,
+            element.type,
+            element.record_id.toString(),
+            element.type === 'delete' ? undefined : element.data,
+            element.mutation_id?.toString() || ''
+          );
         }
       },
     });
@@ -103,6 +102,7 @@ export class RouterService<S extends SchemaStructure> {
       event: QueryEventTypes.IncantationRemoteHashUpdate,
       description: 'Notify Sync about remote hash update (from Live Query)',
       handler: (payload) => {
+        this.devTools.logEvent('QUERY_REMOTE_HASH_UPDATE', payload);
         this.sync.enqueueDownEvent({ type: 'sync', payload });
       },
     });
@@ -112,6 +112,7 @@ export class RouterService<S extends SchemaStructure> {
       event: QueryEventTypes.IncantationTTLHeartbeat,
       description: 'Send Heartbeat to Sync',
       handler: (payload) => {
+        this.devTools.logEvent('QUERY_TTL_HEARTBEAT', payload);
         this.sync.enqueueDownEvent({ type: 'heartbeat', payload });
       },
     });
@@ -121,6 +122,7 @@ export class RouterService<S extends SchemaStructure> {
       event: QueryEventTypes.IncantationCleanup,
       description: 'Cleanup in Sync',
       handler: (payload) => {
+        this.devTools.logEvent('QUERY_CLEANUP', payload);
         this.sync.enqueueDownEvent({ type: 'cleanup', payload });
       },
     });
@@ -141,7 +143,25 @@ export class RouterService<S extends SchemaStructure> {
       event: SyncEventTypes.IncantationUpdated,
       description: 'Notify QueryManager about new data from remote (via Sync)',
       handler: (payload) => {
+        this.devTools.logEvent('SYNC_INCANTATION_UPDATED', payload);
         this.queryManager.handleIncomingUpdate(payload);
+      },
+    });
+
+    // --- StreamProcessor Events ---
+
+    routes.push({
+      source: 'StreamProcessor',
+      event: 'stream_update',
+      description: 'Notify DevTools about stream processor updates',
+      handler: (payload) => {
+        this.devTools.onStreamUpdate(payload);
+        // Payload is StreamUpdate[]
+        if (Array.isArray(payload)) {
+          for (const update of payload) {
+            this.queryManager.handleStreamUpdate(update);
+          }
+        }
       },
     });
 
@@ -176,6 +196,11 @@ export class RouterService<S extends SchemaStructure> {
     // Sync
     this.sync.events.subscribe(SyncEventTypes.IncantationUpdated, (e: any) =>
       this.executeRoutes(routes, 'Sync', SyncEventTypes.IncantationUpdated, e.payload)
+    );
+
+    // StreamProcessor
+    this.streamProcessor.events.subscribe('stream_update', (e: any) =>
+      this.executeRoutes(routes, 'StreamProcessor', 'stream_update', e.payload)
     );
 
     // Auth
