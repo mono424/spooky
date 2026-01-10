@@ -1,9 +1,10 @@
-use super::view::{MaterializedViewUpdate, Operator, QueryPlan, RowKey, View, ZSet};
+use super::view::{MaterializedViewUpdate, Operator, QueryPlan, RowKey, View, ZSet, FastMap}; // Import FastMap from view
+use hashbrown::HashMap;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use std::collections::HashMap;
-use rustc_hash::FxHashMap;
+use simd_json::OwnedValue as Value; 
 use smol_str::SmolStr;
+use std::collections::HashSet;
 
 // --- Table & Database ---
 
@@ -11,22 +12,23 @@ use smol_str::SmolStr;
 #[allow(dead_code)]
 pub struct Table {
     pub name: String,
-    pub zset: ZSet,                   // This is the fast FxHashMap
-    pub rows: HashMap<RowKey, Value>, // Use standard HashMap for storage or upgrade to FxHashMap
-    pub hashes: HashMap<RowKey, String>,
+    pub zset: ZSet,                   // FastMap (hashbrown)
+    pub rows: FastMap<RowKey, Value>, // Uniform Usage of FastMap
+    pub hashes: FastMap<RowKey, String>,
 }
 
 impl Table {
     pub fn new(name: String) -> Self {
         Self {
             name,
-            zset: FxHashMap::default(),
-            rows: HashMap::new(),
-            hashes: HashMap::new(),
+            zset: FastMap::default(),
+            rows: FastMap::default(),
+            hashes: FastMap::default(),
         }
     }
 
     pub fn update_row(&mut self, key: SmolStr, data: Value, hash: String) {
+        // Raw Entry API optimization: avoid double hashing
         self.rows.insert(key.clone(), data);
         self.hashes.insert(key, hash);
     }
@@ -38,11 +40,11 @@ impl Table {
 
     pub fn apply_delta(&mut self, delta: &ZSet) {
         for (key, weight) in delta {
-            let entry = self.zset.entry(key.clone()).or_insert(0);
-            *entry += weight;
-            if *entry == 0 {
-                self.zset.remove(key);
-            }
+             let entry = self.zset.entry(key.clone()).or_insert(0);
+             *entry += weight;
+             if *entry == 0 {
+                 self.zset.remove(key);
+             }
         }
     }
 }
@@ -74,7 +76,7 @@ pub struct Circuit {
     pub views: Vec<View>,
     // Optimisation: Mapping Table -> List of View-Indices
     #[serde(skip, default)]
-    pub dependencies: FxHashMap<String, Vec<usize>>,
+    pub dependencies: FastMap<String, Vec<usize>>,
 }
 
 impl Circuit {
@@ -82,7 +84,7 @@ impl Circuit {
         Self {
             db: Database::new(),
             views: Vec::new(),
-            dependencies: FxHashMap::default(),
+            dependencies: FastMap::default(),
         }
     }
 
@@ -116,7 +118,7 @@ impl Circuit {
             return vec![];
         }
 
-        let mut delta: ZSet = FxHashMap::default();
+        let mut delta: ZSet = FastMap::default();
         delta.insert(key.clone(), weight);
 
         // Update Storage
@@ -139,34 +141,25 @@ impl Circuit {
     ) -> Option<MaterializedViewUpdate> {
         if let Some(pos) = self.views.iter().position(|v| v.plan.id == plan.id) {
             self.views.remove(pos);
-            // Rebuild dependencies entirely to be safe (simple but slower)
             self.rebuild_dependencies();
         }
-        
+
         let mut view = View::new(plan, params);
 
-        let empty_delta: ZSet = FxHashMap::default();
+        let empty_delta: ZSet = FastMap::default();
         let initial_update = view.process("", &empty_delta, &self.db);
 
         let view_idx = self.views.len();
         self.views.push(view);
 
-        // Update Dependencies for the new view
-        // Note: We use self.views.last() to inspect the plan we just pushed
         if let Some(v) = self.views.last() {
-             let tables = extract_tables(&v.plan.root);
-             for t in tables {
-                 self.dependencies.entry(t).or_default().push(view_idx);
-             }
+            let tables = extract_tables(&v.plan.root);
+            for t in tables {
+                self.dependencies.entry(t).or_default().push(view_idx);
+            }
         }
 
         initial_update
-    }
-
-    #[allow(dead_code)]
-    pub fn unregister_view(&mut self, id: &str) {
-        self.views.retain(|v| v.plan.id != id);
-        self.rebuild_dependencies(); 
     }
 
     pub fn step(&mut self, table: String, delta: ZSet) -> Vec<MaterializedViewUpdate> {
@@ -175,28 +168,34 @@ impl Circuit {
             tb.apply_delta(&delta);
         }
 
-        let mut updates = Vec::new();
-        
-        // Optimization: iterate only relevant views
-        // If dependencies map is empty (e.g. after fresh deserialization), we should rebuild it?
-        // Or we assume the user calls rebuild_dependencies()? 
-        // For safety, let's check if empty and views not empty
+        // Optimization: Lazy Rebuild
         if self.dependencies.is_empty() && !self.views.is_empty() {
-             self.rebuild_dependencies();
+            self.rebuild_dependencies();
         }
 
-        if let Some(indices) = self.dependencies.get(&table) {
-             // We need to clone indices to avoid borrowing self.dependencies while mutably borrowing self.views
-             let indices = indices.clone();
-             for i in indices {
-                 if i < self.views.len() {
-                      if let Some(update) = self.views[i].process(&table, &delta, &self.db) {
-                        updates.push(update);
-                    }
-                 }
-             }
+        // Task 1: PARALLELISM (Rayon)
+        // Identify active views
+        let indices = self.dependencies.get(&table).cloned().unwrap_or_default();
+        
+        if indices.is_empty() {
+            return Vec::new();
         }
 
+        // Create a fast lookup set
+        let active_set: HashSet<usize> = indices.iter().copied().collect();
+        
+        // We need to borrow db immutably and views mutably.
+        // Struct disjoint borrow works if we split them.
+        let db = &self.db;
+        let views = &mut self.views;
+
+        // Use Rayon
+        let updates: Vec<MaterializedViewUpdate> = views.par_iter_mut()
+            .enumerate()
+            .filter(|(i, _)| active_set.contains(i))
+            .filter_map(|(_, view)| view.process(&table, &delta, db))
+            .collect();
+            
         updates
     }
 }
@@ -214,39 +213,12 @@ fn extract_tables(op: &Operator) -> Vec<String> {
                 }
             }
             tbls
-        },
+        }
         Operator::Limit { input, .. } => extract_tables(input),
         Operator::Join { left, right, .. } => {
             let mut tbls = extract_tables(left);
             tbls.extend(extract_tables(right));
             tbls
         }
-    }
-}
-
-use crate::StreamProcessor;
-
-impl StreamProcessor for Circuit {
-    fn ingest_record(
-        &mut self,
-        table: String,
-        op: String,
-        id: String,
-        record: Value,
-        hash: String,
-    ) -> Vec<MaterializedViewUpdate> {
-        self.ingest_record(table, op, id, record, hash)
-    }
-
-    fn register_view(
-        &mut self,
-        plan: QueryPlan,
-        params: Option<Value>,
-    ) -> Option<MaterializedViewUpdate> {
-        self.register_view(plan, params)
-    }
-
-    fn unregister_view(&mut self, id: &str) {
-        self.unregister_view(id)
     }
 }

@@ -8,12 +8,19 @@ use nom::{
     sequence::{delimited, pair, preceded, tuple},
     IResult,
 };
-use serde_json::{json, Value};
+use serde_json::{json, Value as SerdeValue};
+use simd_json::OwnedValue;
 
-pub fn convert_surql_to_dbsp(sql: &str) -> Result<Value> {
+// We stick to SerdeValue internally for ease of parsing logic (json! macro),
+// then convert to OwnedValue at the boundary.
+pub fn convert_surql_to_dbsp(sql: &str) -> Result<OwnedValue> {
     let clean_sql = sql.trim().trim_end_matches(';');
     match parse_full_query(clean_sql) {
-        Ok((_, plan)) => Ok(plan),
+        Ok((_, plan)) => {
+            // Convert SerdeValue -> OwnedValue via deserialization
+            // OwnedValue implements Deserialize.
+            serde_json::from_value(plan).map_err(|e| anyhow!("Conversion Error: {}", e))
+        },
         Err(e) => Err(anyhow!("SQL Parsing Error: {}", e)),
     }
 }
@@ -42,7 +49,7 @@ fn parse_identifier(input: &str) -> IResult<&str, String> {
 
 #[derive(Debug, Clone)]
 enum ParsedValue {
-    Json(Value),
+    Json(SerdeValue),
     Identifier(String),
     Prefix(String),
 }
@@ -82,7 +89,7 @@ fn parse_value_entry(input: &str) -> IResult<&str, ParsedValue> {
 
 // --- LOGIC ---
 
-fn parse_leaf_predicate(input: &str) -> IResult<&str, Value> {
+fn parse_leaf_predicate(input: &str) -> IResult<&str, SerdeValue> {
     let (input, (left, op, right)) = tuple((
         ws(parse_identifier),
         ws(alt((
@@ -127,14 +134,14 @@ fn parse_leaf_predicate(input: &str) -> IResult<&str, Value> {
 // Recursive Expression Parser
 // Logic: Or -> And -> Term (Leaf or Parens)
 
-fn parse_term(input: &str) -> IResult<&str, Value> {
+fn parse_term(input: &str) -> IResult<&str, SerdeValue> {
     alt((
         delimited(ws(char('(')), parse_or_expression, ws(char(')'))),
         parse_leaf_predicate
     ))(input)
 }
 
-fn parse_and_expression(input: &str) -> IResult<&str, Value> {
+fn parse_and_expression(input: &str) -> IResult<&str, SerdeValue> {
     let (input, terms) = separated_list1(ws(tag_no_case("AND")), parse_term)(input)?;
     if terms.len() == 1 {
         Ok((input, terms[0].clone()))
@@ -143,7 +150,7 @@ fn parse_and_expression(input: &str) -> IResult<&str, Value> {
     }
 }
 
-fn parse_or_expression(input: &str) -> IResult<&str, Value> {
+fn parse_or_expression(input: &str) -> IResult<&str, SerdeValue> {
     let (input, terms) = separated_list1(ws(tag_no_case("OR")), parse_and_expression)(input)?;
     if terms.len() == 1 {
         Ok((input, terms[0].clone()))
@@ -152,7 +159,7 @@ fn parse_or_expression(input: &str) -> IResult<&str, Value> {
     }
 }
 
-fn parse_where_logic(input: &str) -> IResult<&str, Value> {
+fn parse_where_logic(input: &str) -> IResult<&str, SerdeValue> {
     preceded(
         tag_no_case("WHERE"),
         cut(parse_or_expression),
@@ -168,7 +175,7 @@ fn parse_limit_clause(input: &str) -> IResult<&str, usize> {
     )(input)
 }
 
-fn parse_order_clause(input: &str) -> IResult<&str, Vec<Value>> {
+fn parse_order_clause(input: &str) -> IResult<&str, Vec<SerdeValue>> {
     let single_order = map(
         tuple((
             ws(parse_identifier),
@@ -182,7 +189,7 @@ fn parse_order_clause(input: &str) -> IResult<&str, Vec<Value>> {
     )(input)
 }
 
-fn parse_full_query(input: &str) -> IResult<&str, Value> {
+fn parse_full_query(input: &str) -> IResult<&str, SerdeValue> {
     let (input, _) = tag_no_case("SELECT")(input)?;
     let (input, _) = multispace1(input)?;
 
@@ -210,7 +217,7 @@ fn parse_full_query(input: &str) -> IResult<&str, Value> {
     }
 
     if fields.len() > 1 || fields[0] != "*" {
-        let projections: Vec<Value> = fields
+        let projections: Vec<SerdeValue> = fields
             .iter()
             .map(|f| json!({ "type": "field", "name": f }))
             .collect();
@@ -231,12 +238,7 @@ fn parse_full_query(input: &str) -> IResult<&str, Value> {
     Ok((input, current_op))
 }
 
-fn wrap_conditions(input_op: Value, predicate: Value) -> Value {
-    // Check if we can extract a Join
-    // TODO: This logic is very simple and only works if the top-level is a Join Candidate or strictly nested ANDs?
-    // With simplified recursion, we might find JoinCandidate inside nested structures.
-    // For now, let's keep it simple: Top Level or straightforward AND.
-    
+fn wrap_conditions(input_op: SerdeValue, predicate: SerdeValue) -> SerdeValue {
     if let Some(obj) = predicate.as_object() {
         if let Some(t) = obj.get("type").and_then(|s| s.as_str()) {
             if t == "__JOIN_CANDIDATE__" {
@@ -258,12 +260,7 @@ fn wrap_conditions(input_op: Value, predicate: Value) -> Value {
                     "on": { "left_field": left_field, "right_field": r_col }
                 });
             } else if t == "and" {
-                // If AND, we wrap normally, View logic handles AND.
-                // But optimization: if AND contains JoinCandidate, we might want to hoist it?
-                // For this refactor, we stick to Filter-based evaluation unless it is explicitly a JOIN op in circuit.
-                // JoinCandidate transformation usually happens here.
-                // If multiple predicates, we just return filter for now. 
-                // Real Query Optimizer would pull out joins.
+                // ...
             }
         }
     }

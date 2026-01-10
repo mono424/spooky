@@ -1,5 +1,5 @@
 use spooky_stream_processor::converter::convert_surql_to_dbsp;
-use serde_json::json;
+use simd_json::json;
 
 #[test]
 fn test_simple_select_conversion() {
