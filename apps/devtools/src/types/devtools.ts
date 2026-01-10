@@ -37,7 +37,7 @@ export interface SpookyEvent {
 
 export interface ActiveQuery {
   queryHash: number;
-  status: "initializing" | "active" | "updating" | "destroyed";
+  status: 'initializing' | 'active' | 'updating' | 'destroyed';
   createdAt: number;
   lastUpdate: number;
   updateCount: number;
@@ -48,6 +48,10 @@ export interface ActiveQuery {
   connectedQueries?: number[];
   dataHash?: number;
   data?: any;
+  localHash?: string;
+  localTree?: any;
+  remoteHash?: string;
+  remoteTree?: any;
 }
 
 export interface AuthState {
@@ -74,21 +78,21 @@ export interface ChromeMessage {
 }
 
 export interface SpookyTableDataResponse {
-  type: "SPOOKY_TABLE_DATA_RESPONSE";
-  source: "spooky-devtools-page";
+  type: 'SPOOKY_TABLE_DATA_RESPONSE';
+  source: 'spooky-devtools-page';
   tableName: string;
   data: Record<string, unknown>[];
 }
 
 // UI State Types
 
-export type TabType = "events" | "queries" | "database" | "auth";
+export type TabType = 'events' | 'queries' | 'database' | 'auth';
 
 export interface UIState {
   activeTab: TabType;
   selectedQueryHash: number | null;
   selectedTable: string | null;
-  theme: "light" | "dark" | "auto";
+  theme: 'light' | 'dark' | 'auto';
 }
 
 // Utility Types

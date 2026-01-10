@@ -77,8 +77,7 @@ export class RouterService<S extends SchemaStructure> {
             tableName,
             element.type,
             element.record_id.toString(),
-            element.type === 'delete' ? undefined : element.data,
-            element.mutation_id?.toString() || ''
+            element.type === 'delete' ? undefined : element.data
           );
         }
       },
@@ -93,7 +92,11 @@ export class RouterService<S extends SchemaStructure> {
       handler: (payload) => {
         this.devTools.onQueryInitialized(payload);
         this.sync.enqueueDownEvent({ type: 'register', payload });
-        this.streamProcessor.registerIncantation(payload.surrealql, payload.params);
+        this.streamProcessor.registerIncantation(
+          payload.surrealql,
+          payload.params,
+          payload.incantationId.toString()
+        );
       },
     });
 
@@ -196,6 +199,9 @@ export class RouterService<S extends SchemaStructure> {
     // Sync
     this.sync.events.subscribe(SyncEventTypes.IncantationUpdated, (e: any) =>
       this.executeRoutes(routes, 'Sync', SyncEventTypes.IncantationUpdated, e.payload)
+    );
+    this.sync.events.subscribe(SyncEventTypes.RemoteDataIngested, (e: any) =>
+      this.executeRoutes(routes, 'Sync', SyncEventTypes.RemoteDataIngested, e.payload)
     );
 
     // StreamProcessor

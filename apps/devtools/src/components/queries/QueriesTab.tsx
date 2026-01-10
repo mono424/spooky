@@ -5,7 +5,7 @@ import {
   formatRelativeTime,
   formatBytes,
 } from "../../utils/formatters";
-import { QueryGraph } from "./QueryGraph";
+
 
 function QueryList() {
   const { state, selectedQueryHash, setSelectedQueryHash } = useDevTools();
@@ -124,6 +124,38 @@ function QueryDetail() {
               </div>
             </Show>
 
+            <Show when={query().localHash}>
+              <div class="detail-section">
+                <div class="detail-label">Local Hash</div>
+                <div class="detail-value mono">{query().localHash}</div>
+              </div>
+            </Show>
+
+            <Show when={query().localTree}>
+              <div class="detail-section">
+                <div class="detail-label">Local Tree</div>
+                <pre class="query-code">
+                  {JSON.stringify(query().localTree, null, 2)}
+                </pre>
+              </div>
+            </Show>
+
+            <Show when={query().remoteHash}>
+              <div class="detail-section">
+                <div class="detail-label">Remote Hash</div>
+                <div class="detail-value mono">{query().remoteHash}</div>
+              </div>
+            </Show>
+
+            <Show when={query().remoteTree}>
+              <div class="detail-section">
+                <div class="detail-label">Remote Tree</div>
+                <pre class="query-code">
+                  {JSON.stringify(query().remoteTree, null, 2)}
+                </pre>
+              </div>
+            </Show>
+            
             <Show when={query().data}>
               <div class="detail-section">
                 <div class="detail-label">Result Data</div>
@@ -133,7 +165,7 @@ function QueryDetail() {
               </div>
             </Show>
 
-            <QueryGraph query={query()} allQueries={state.activeQueries} />
+            {/* QueryGraph removed as we display data directly above */}
           </>
         )}
       </Show>

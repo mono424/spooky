@@ -110,18 +110,32 @@ export class QueryManager<S extends SchemaStructure> {
       },
       'Handling incoming remote update'
     );
+    console.log('[QueryManager] handleIncomingUpdate payload:', {
+      incantationId: incantationId?.toString(),
+      remoteHash,
+      remoteTree: remoteTree ? 'PRESENT' : 'MISSING',
+      localHashInPayload: (payload as any).localHash,
+      localTreeInPayload: (payload as any).localTree ? 'PRESENT' : 'MISSING',
+    });
 
-    incantation.updateLocalState(validRecords, remoteHash, remoteTree);
+    incantation.updateLocalState(validRecords, incantation.localHash, incantation.localTree);
+    // Explicitly update remote state
+    incantation.remoteHash = remoteHash;
+    incantation.remoteTree = remoteTree;
     this.events.emit(QueryEventTypes.IncantationUpdated, {
       incantationId,
       records: validRecords,
+      localHash: incantation.localHash,
+      localTree: incantation.localTree,
+      remoteHash: remoteHash,
+      remoteTree: remoteTree,
     });
 
     // Verification and purging of orphans is now handled by SpookySync
   }
 
   public async handleStreamUpdate(update: any) {
-    const { query_id, result_hash, result_ids, tree } = update;
+    const { query_id, localHash, result_ids, localTree } = update;
 
     // query_id from StreamProcessor is a string (e.g. "_spooky_incantation:...")
     // We need to convert it to a RecordId for the event payload
@@ -164,13 +178,14 @@ export class QueryManager<S extends SchemaStructure> {
       const incantation = this.activeQueries.get(query_id);
       if (incantation) {
         // Update the local state with these records (and the new tree/hash)
-        // Note: result_hash from processor is the "local" hash now.
-        incantation.updateLocalState(records || [], result_hash, tree);
+        incantation.updateLocalState(records || [], localHash, localTree);
       }
 
       this.events.emit(QueryEventTypes.IncantationUpdated, {
         incantationId: incantationRecordId,
         records: records || [],
+        localHash,
+        localTree,
       });
     } catch (err) {
       this.logger.error(
@@ -246,8 +261,10 @@ export class QueryManager<S extends SchemaStructure> {
             surrealQL: surrealql,
             params: params,
             clientId: this.clientId,
-            hash: id,
-            tree: null,
+            localHash: id, // Initial local hash is the query hash (empty state?) or just id? Probably empty.
+            localTree: null,
+            remoteHash: '',
+            remoteTree: null,
             lastActiveAt: new Date(),
             ttl: new Duration(ttl),
             meta: {
@@ -267,10 +284,12 @@ export class QueryManager<S extends SchemaStructure> {
         id: recordId,
         surrealql,
         params,
-        hash: existing.hash,
+        localHash: existing.localHash,
+        localTree: existing.localTree,
+        remoteHash: existing.remoteHash,
+        remoteTree: existing.remoteTree,
         lastActiveAt: existing.lastActiveAt,
         ttl: existing.ttl,
-        tree: existing.tree,
         meta: {
           tableName,
           involvedTables,
@@ -299,6 +318,10 @@ export class QueryManager<S extends SchemaStructure> {
       surrealql: incantation.surrealql,
       params: incantation.params ?? {},
       ttl: incantation.ttl,
+      localHash: incantation.localHash,
+      localTree: incantation.localTree,
+      remoteHash: incantation.remoteHash,
+      remoteTree: incantation.remoteTree,
     });
 
     await incantation.startTTLHeartbeat(() => {

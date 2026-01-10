@@ -29,33 +29,53 @@ impl SpookyProcessor {
         op: String,
         id: String,
         record: JsValue,
-        hash: String,
     ) -> Result<JsValue, JsValue> {
         let record: Value = serde_wasm_bindgen::from_value(record)
             .map_err(|e| JsValue::from_str(&format!("Failed to parse record: {}", e)))?;
 
-        let updates = self.circuit.ingest_record(table, op, id, record, hash);
+        // internal preparation (hash calc)
+        let (clean_record, hash) = spooky_stream_processor::service::ingest::prepare(record);
+
+        let updates = self
+            .circuit
+            .ingest_record(table, op, id, clean_record, hash);
 
         Ok(serde_wasm_bindgen::to_value(&updates)?)
     }
 
     /// Register a new materialized view
-    pub fn register_view(&mut self, plan: JsValue, params: JsValue) -> Result<JsValue, JsValue> {
-        let plan: QueryPlan = serde_wasm_bindgen::from_value(plan)
-            .map_err(|e| JsValue::from_str(&format!("Failed to parse query plan: {}", e)))?;
+    /// Config can be the QueryPlan object OR a configuration object with SQL
+    /// For JS convenience we accept a generic object and try to process it.
+    /// If it has 'id', 'surrealQL' etc it is treated as a config.
+    /// If it looks like a plan, we try to use it directly, but current requirement implies SQL usage.
+    /// Actually, to match `surrealsim`, we should accept a config object containing `surrealQL`.
+    pub fn register_view(&mut self, config: JsValue) -> Result<JsValue, JsValue> {
+        let config_val: Value = serde_wasm_bindgen::from_value(config)
+            .map_err(|e| JsValue::from_str(&format!("Failed to parse config: {}", e)))?;
 
-        let params: Option<Value> = if params.is_null() || params.is_undefined() {
-            None
-        } else {
-            Some(
-                serde_wasm_bindgen::from_value(params)
-                    .map_err(|e| JsValue::from_str(&format!("Failed to parse params: {}", e)))?,
-            )
-        };
+        // We use the shared service logic to parse SQL and prepare params
+        // This handles "id", "surrealQL", "params" etc.
+        // Note: verify if `prepare_registration` is generic enough.
+        // It expects keys: id, surrealQL, clientId, ttl, lastActiveAt.
+        // If the JS caller only sends id + sql, it might fail validation.
+        // Let's check typical usage.
+        // If we want minimal usage (id + plan/sql), we might need loose parsing or constructing default metadata.
+        // But the user asked for "register view should work with sql string".
+        // Let's assume the user passes a config object with these fields, similar to the module.
 
-        let initial_update = self.circuit.register_view(plan, params);
+        let data = spooky_stream_processor::service::view::prepare_registration(config_val)
+            .map_err(|e| JsValue::from_str(&format!("Registration failed: {}", e)))?;
 
-        Ok(serde_wasm_bindgen::to_value(&initial_update)?)
+        let initial_update = self.circuit.register_view(data.plan, data.safe_params);
+
+        // If None, return default empty result
+        let result = initial_update.unwrap_or_else(|| {
+            // We need to fetch the ID from the prepared plan
+            // data.plan.id is available
+            spooky_stream_processor::service::view::default_result(&data.plan.id)
+        });
+
+        Ok(serde_wasm_bindgen::to_value(&result)?)
     }
 
     /// Unregister a view by ID

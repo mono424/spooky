@@ -114,7 +114,7 @@ export class SpookySync<S extends SchemaStructure> {
     }
 
     const surrealql = existing.surrealql || existing.surrealQL;
-    const { params, hash: localHash, tree: localTree } = existing;
+    const { params, localHash, localTree } = existing;
 
     await this.syncIncantation({
       incantationId,
@@ -242,8 +242,10 @@ export class SpookySync<S extends SchemaStructure> {
         {
           surrealql: query.surrealql,
           params: query.params,
-          hash: '',
-          tree: null,
+          localHash: '',
+          localTree: null,
+          remoteHash: '',
+          remoteTree: null,
         },
         {
           updateRecord: false,
@@ -268,16 +270,16 @@ export class SpookySync<S extends SchemaStructure> {
       let existing = await this.findIncatationRecord(incantationId);
       this.logger.debug({ existing }, 'Register Incantation state');
 
-      const localHash = existing?.hash ?? '';
-      const localTree = existing?.tree ?? null;
+      const localHash = existing?.localHash ?? '';
+      const localTree = existing?.localTree ?? null;
 
       await this.updateLocalIncantation(
         incantationId,
         {
           surrealql,
           params,
-          hash: localHash,
-          tree: localTree,
+          localHash,
+          localTree,
         },
         {
           updateRecord: existing ? false : true,
@@ -379,8 +381,8 @@ export class SpookySync<S extends SchemaStructure> {
       {
         surrealql,
         params,
-        hash: remoteHash,
-        tree: remoteTree,
+        remoteHash,
+        remoteTree,
       },
       {
         updateRecord: true,
@@ -424,13 +426,17 @@ export class SpookySync<S extends SchemaStructure> {
     {
       surrealql,
       params,
-      hash,
-      tree,
+      localHash,
+      localTree,
+      remoteHash,
+      remoteTree,
     }: {
       surrealql: string;
       params?: Record<string, any>;
-      hash: string;
-      tree: any;
+      localHash?: string;
+      localTree?: any;
+      remoteHash?: string;
+      remoteTree?: any;
     },
     {
       updateRecord = true,
@@ -439,10 +445,13 @@ export class SpookySync<S extends SchemaStructure> {
     }
   ) {
     if (updateRecord) {
-      await this.updateIncantationRecord(incantationId, {
-        hash,
-        tree,
-      });
+      const content: any = {};
+      if (localHash !== undefined) content.localHash = localHash;
+      if (localTree !== undefined) content.localTree = localTree;
+      if (remoteHash !== undefined) content.remoteHash = remoteHash;
+      if (remoteTree !== undefined) content.remoteTree = remoteTree;
+
+      await this.updateIncantationRecord(incantationId, content);
     }
 
     try {
@@ -458,8 +467,8 @@ export class SpookySync<S extends SchemaStructure> {
       const [cachedResults] = await this.local.query<[Record<string, any>[]]>(surrealql, params);
 
       // Verify Orphans if we have a remote tree to check against
-      if (tree) {
-        void this.verifyAndPurgeOrphans(cachedResults, tree);
+      if (remoteTree) {
+        void this.verifyAndPurgeOrphans(cachedResults, remoteTree);
       }
 
       this.logger.debug(
@@ -472,8 +481,10 @@ export class SpookySync<S extends SchemaStructure> {
 
       this.events.emit(SyncEventTypes.IncantationUpdated, {
         incantationId,
-        remoteHash: hash,
-        remoteTree: tree,
+        localHash,
+        localTree,
+        remoteHash,
+        remoteTree,
         records: cachedResults || [],
       });
     } catch (e) {
@@ -557,22 +568,16 @@ export class SpookySync<S extends SchemaStructure> {
 
   private async updateIncantationRecord(
     incantationId: RecordId<string>,
-    {
-      hash,
-      tree,
-    }: {
-      hash: string;
-      tree: any;
-    }
+    content: Record<string, any>
   ) {
     try {
       this.logger.debug(
-        { incantationId: incantationId.toString(), hash, tree },
+        { incantationId: incantationId.toString(), content },
         'Updating local incantation'
       );
       await this.local.query(`UPDATE $id MERGE $content`, {
         id: incantationId,
-        content: { hash, tree },
+        content,
       });
     } catch (e) {
       this.logger.error({ err: e }, 'Failed to update local incantation record');
@@ -591,6 +596,10 @@ export class SpookySync<S extends SchemaStructure> {
         await this.local.getClient().upsert(record.id).content(record);
       }
     }
+
+    this.events.emit(SyncEventTypes.RemoteDataIngested, {
+      records: flatResults,
+    });
   }
 
   /**

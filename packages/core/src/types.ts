@@ -56,10 +56,12 @@ export interface Incantation {
   id: RecordId<QueryHash>;
   surrealql: string;
   params?: Record<string, any>;
-  hash: string;
+  localHash: string;
+  localTree: any;
+  remoteHash: string;
+  remoteTree: any;
   lastActiveAt: number | Date | string;
   ttl: QueryTimeToLive | Duration;
-  tree: any;
   meta: {
     tableName: string;
     involvedTables?: string[];

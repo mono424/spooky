@@ -98,6 +98,10 @@ export class SpookyClient<S extends SchemaStructure> {
       await this.remote.connect();
       console.log('[Spooky] Remote connected');
 
+      console.log('[Spooky] Initializing StreamProcessor...');
+      await this.streamProcessor.init();
+      console.log('[Spooky] StreamProcessor initialized');
+
       console.log('[Spooky] Initializing Auth...');
       await this.auth.init();
       console.log('[Spooky] Auth initialized');
@@ -113,10 +117,6 @@ export class SpookyClient<S extends SchemaStructure> {
       console.log('[Spooky] Initializing Sync...');
       await this.sync.init();
       console.log('[Spooky] Sync initialized');
-
-      console.log('[Spooky] Initializing StreamProcessor...');
-      await this.streamProcessor.init();
-      console.log('[Spooky] StreamProcessor initialized');
     } catch (e) {
       console.error('[Spooky] Init failed', e);
       throw e;

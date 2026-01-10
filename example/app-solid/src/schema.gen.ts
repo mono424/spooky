@@ -4,6 +4,17 @@
 export const schema = {
   tables: [
     {
+      name: 'comment' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
+        content: { type: 'string' as const, optional: false },
+        author: { type: 'string' as const, recordId: true, optional: false },
+        thread: { type: 'string' as const, recordId: true, optional: false },
+      },
+      primaryKey: ['id'] as const
+    },
+    {
       name: 'user' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
@@ -14,33 +25,22 @@ export const schema = {
       primaryKey: ['id'] as const
     },
     {
-      name: 'commented_on' as const,
-      columns: {
-        id: { type: 'string' as const, recordId: true, optional: false },
-      },
-      primaryKey: ['id'] as const
-    },
-    {
-      name: 'comment' as const,
-      columns: {
-        id: { type: 'string' as const, recordId: true, optional: false },
-        thread: { type: 'string' as const, recordId: true, optional: false },
-        content: { type: 'string' as const, optional: false },
-        author: { type: 'string' as const, recordId: true, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
-      },
-      primaryKey: ['id'] as const
-    },
-    {
       name: 'thread' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
-        author: { type: 'string' as const, recordId: true, optional: false },
-        title: { type: 'string' as const, optional: false },
         content: { type: 'string' as const, optional: false },
-        active: { type: 'boolean' as const, optional: true },
         created_at: { type: 'string' as const, dateTime: true, optional: true },
+        active: { type: 'boolean' as const, optional: true },
+        title: { type: 'string' as const, optional: false },
+        author: { type: 'string' as const, recordId: true, optional: false },
         comments: { type: 'string' as const, optional: true },
+      },
+      primaryKey: ['id'] as const
+    },
+    {
+      name: 'commented_on' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
       },
       primaryKey: ['id'] as const
     },
@@ -59,6 +59,18 @@ export const schema = {
       cardinality: 'many' as const
     },
     {
+      from: 'comment' as const,
+      field: 'author' as const,
+      to: 'user' as const,
+      cardinality: 'one' as const
+    },
+    {
+      from: 'comment' as const,
+      field: 'thread' as const,
+      to: 'thread' as const,
+      cardinality: 'one' as const
+    },
+    {
       from: 'thread' as const,
       field: 'author' as const,
       to: 'user' as const,
@@ -70,21 +82,9 @@ export const schema = {
       to: 'comment' as const,
       cardinality: 'many' as const
     },
-    {
-      from: 'comment' as const,
-      field: 'thread' as const,
-      to: 'thread' as const,
-      cardinality: 'one' as const
-    },
-    {
-      from: 'comment' as const,
-      field: 'author' as const,
-      to: 'user' as const,
-      cardinality: 'one' as const
-    },
   ],
   access: {
-    account: {"signIn":{"params":{"username":{"type":"string","optional":false},"password":{"type":"string","optional":false}}},"signup":{"params":{"username":{"type":"string","optional":false},"password":{"type":"string","optional":false}}}},
+    account: {"signIn":{"params":{"password":{"type":"string","optional":false},"username":{"type":"string","optional":false}}},"signup":{"params":{"username":{"type":"string","optional":false},"password":{"type":"string","optional":false}}}},
   }
 } as const;
 
@@ -193,13 +193,7 @@ PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD clientId ON TABLE _spooky_incantation TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
--- The current XOR sum of all results in this query
-DEFINE FIELD hash ON TABLE _spooky_incantation TYPE option<string>
-PERMISSIONS FOR select, create, update WHERE true;
 
--- The Radix Tree of Result IDs for efficient sync
-DEFINE FIELD tree ON TABLE _spooky_incantation TYPE any
-PERMISSIONS FOR select, create, update WHERE true;
 
 -- For garbage collection (Heartbeat)
 DEFINE FIELD lastActiveAt ON TABLE _spooky_incantation TYPE datetime DEFAULT time::now()
@@ -208,7 +202,6 @@ PERMISSIONS FOR select, create, update WHERE true;
 -- How long this Incantation stays alive without activity
 DEFINE FIELD ttl ON TABLE _spooky_incantation TYPE duration
 PERMISSIONS FOR select, create, update WHERE true;
-
 
 -- ==================================================
 -- SPOOKY SCHEMA
@@ -235,9 +228,44 @@ DEFINE FIELD IF NOT EXISTS state ON _spooky_stream_processor_state TYPE string;
 DEFINE FIELD IF NOT EXISTS updated_at ON _spooky_stream_processor_state TYPE datetime VALUE time::now();
 
 -- ==================================================
--- SPOOKY DATA HASH (Client)
--- Removed: Replaced by DBSP Module Internal Hashing
+-- SPOOKY INCANTATION
+-- The Registry of active Live Queries (Incantations).
 -- ==================================================
+
+DEFINE TABLE _spooky_incantation SCHEMALESS
+PERMISSIONS FOR select, create, update, delete WHERE true;
+
+-- The raw query string (for re-hydration/debugging)
+DEFINE FIELD surrealQL ON TABLE _spooky_incantation TYPE option<string>
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- The raw query string (for re-hydration/debugging)
+DEFINE FIELD clientId ON TABLE _spooky_incantation TYPE option<string>
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- The current XOR sum of all results in this query
+DEFINE FIELD localHash ON TABLE _spooky_incantation TYPE option<string>
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- The Radix Tree of Result IDs for efficient sync
+DEFINE FIELD localTree ON TABLE _spooky_incantation TYPE any
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- The current XOR sum of all results in this query
+DEFINE FIELD remoteHash ON TABLE _spooky_incantation TYPE option<string>
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- The Radix Tree of Result IDs for efficient sync
+DEFINE FIELD remoteTree ON TABLE _spooky_incantation TYPE any
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- For garbage collection (Heartbeat)
+DEFINE FIELD lastActiveAt ON TABLE _spooky_incantation TYPE datetime DEFAULT time::now()
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- How long this Incantation stays alive without activity
+DEFINE FIELD ttl ON TABLE _spooky_incantation TYPE duration
+PERMISSIONS FOR select, create, update WHERE true;
 
 -- ==================================================
 -- SPOOKY EVENTS
