@@ -12,7 +12,6 @@ import {
   data100,
   data1000,
   data5000,
-  data10000,
 } from './benchmarkData';
 
 interface ChartProps {
@@ -74,12 +73,11 @@ const Chart = ({ data, title }: ChartProps) => (
 
 export default function BenchmarkCharts() {
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-6 not-prose">
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6 not-prose">
       <Chart data={data10} title="10 Registered Views" />
       <Chart data={data100} title="100 Registered Views" />
       <Chart data={data1000} title="1,000 Registered Views" />
       <Chart data={data5000} title="5,000 Registered Views" />
-      <Chart data={data10000} title="10,000 Registered Views" />
     </div>
   );
 }
