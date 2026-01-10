@@ -1,5 +1,6 @@
 import { createSignal, Show, createEffect } from "solid-js";
 import { useAuth } from "../lib/auth";
+import { db } from "../db";
 
 interface AuthDialogProps {
   isOpen: boolean;
@@ -31,7 +32,14 @@ export function AuthDialog(props: AuthDialogProps) {
 
     try {
       if (isSignUp()) {
-        await auth.signUp(username(), password());
+        // TODO: REMOVE. POLYFLL BECAUSE IT JUST DOES NOT WORK OTHERWISE
+        await db.remote.query("fn::polyfill::createAccount($username,$password)", {
+          "username": username(),
+          "password": password(),
+        });
+        await auth.signIn(username(), password());
+        // TODO: REMOVE. POLYFLL BECAUSE IT JUST DOES NOT WORK OTHERWISE
+        // await auth.signUp(username(), password());
       } else {
         await auth.signIn(username(), password());
       }

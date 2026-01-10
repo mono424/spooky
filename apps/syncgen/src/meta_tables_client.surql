@@ -11,6 +11,18 @@ DEFINE FIELD IF NOT EXISTS created_at ON _spooky_schema TYPE datetime VALUE time
 DEFINE INDEX IF NOT EXISTS unique_hash ON _spooky_schema FIELDS hash UNIQUE;
 
 -- ==================================================
+-- SPOOKY STREAM PROCESSOR STATE
+-- Stores the local state of the stream processor (DBSP)
+-- ==================================================
+
+DEFINE TABLE IF NOT EXISTS _spooky_stream_processor_state SCHEMALESS
+    PERMISSIONS FOR select, create, update, delete WHERE true;
+
+DEFINE FIELD IF NOT EXISTS id ON _spooky_stream_processor_state TYPE string;
+DEFINE FIELD IF NOT EXISTS state ON _spooky_stream_processor_state TYPE string;
+DEFINE FIELD IF NOT EXISTS updated_at ON _spooky_stream_processor_state TYPE datetime VALUE time::now();
+
+-- ==================================================
 -- SPOOKY DATA HASH (Client)
 -- Removed: Replaced by DBSP Module Internal Hashing
 -- ==================================================

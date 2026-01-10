@@ -2,10 +2,19 @@
 import Sidebar from '../components/Sidebar.astro';
 import OnThisPage from '../components/OnThisPage.astro';
 import Header from '../components/Header.astro';
+import { docsNav as nav } from '../config/nav';
 import '../styles/docs.css';
 
 const { frontmatter, headings } = Astro.props;
 const title = frontmatter?.title || Astro.props.title;
+
+const currentPath = Astro.url.pathname.replace(/\/$/, '');
+const activeGroup = nav.find((g: any) =>
+  g.links.some((l: any) => {
+    const cleanLink = l.href.replace(/\/$/, '');
+    return currentPath === cleanLink || currentPath.startsWith(cleanLink + '/');
+  })
+);
 ---
 
 <html lang="en" class="dark">
@@ -19,6 +28,58 @@ const title = frontmatter?.title || Astro.props.title;
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap"
       rel="stylesheet"
     />
+    <script>
+      import mermaid from 'mermaid';
+      mermaid.initialize({ startOnLoad: false, theme: 'dark' });
+
+      async function renderMermaid() {
+        // Query ALL code blocks to be safe
+        const graphs = document.querySelectorAll('pre > code');
+
+        for (const graph of graphs) {
+          const content = graph.textContent;
+          if (!content) continue;
+
+          let isMermaid = false;
+
+          // 1. Explicit class check
+          if (graph.classList.contains('language-mermaid')) {
+            isMermaid = true;
+          }
+          // 2. Content Heuristic (if no explicit class or generic text class)
+          else {
+            const trimmed = content.trim();
+            if (
+              trimmed.startsWith('graph') ||
+              trimmed.startsWith('sequenceDiagram') ||
+              trimmed.startsWith('classDiagram') ||
+              trimmed.startsWith('erDiagram') ||
+              trimmed.startsWith('stateDiagram') ||
+              trimmed.startsWith('pie') ||
+              trimmed.startsWith('%%{init:')
+            ) {
+              isMermaid = true;
+            }
+          }
+
+          if (!isMermaid) continue;
+
+          const pre = graph.parentElement;
+          if (!pre) continue;
+
+          const div = document.createElement('div');
+          div.className = 'mermaid';
+          div.textContent = content;
+
+          pre.replaceWith(div);
+        }
+        await mermaid.run();
+      }
+
+      document.addEventListener('astro:page-load', renderMermaid);
+      // Also run on initial load if view transitions aren't active or for first render
+      renderMermaid();
+    </script>
   </head>
   <body class="bg-background text-text-main font-sans antialiased selection:bg-primary/20">
     <Header />
@@ -32,7 +93,21 @@ const title = frontmatter?.title || Astro.props.title;
 
       <main class="flex-1 min-w-0 py-8 px-6 lg:px-12">
         <div class="prose prose-invert max-w-3xl w-full">
-          <p class="text-sm text-text-muted mb-2">Docs &gt; Components &gt; {title}</p>
+          {/* Breadcrumbs */}
+          <nav
+            class="flex items-center text-sm text-text-muted mb-6 overflow-x-auto whitespace-nowrap"
+          >
+            <a href="/spooky/docs" class="hover:text-primary transition-colors">Docs</a>
+            {
+              activeGroup && (
+                <>
+                  <span class="mx-2 text-zinc-600">/</span>
+                  <span class="text-text-main font-medium">{activeGroup.title}</span>
+                </>
+              )
+            }
+          </nav>
+
           <h1 class="text-4xl tracking-tight mb-4">{title}</h1>
           <p class="text-lg text-text-muted leading-relaxed mb-8">
             <slot name="description" />
@@ -47,6 +122,60 @@ const title = frontmatter?.title || Astro.props.title;
       >
         <OnThisPage headings={headings} />
       </aside>
+
+      <!-- Mobile Menu Overlay -->
+      <div
+        id="mobile-menu"
+        class="fixed inset-0 z-40 bg-background/95 backdrop-blur-sm lg:hidden hidden transition-opacity"
+      >
+        <div class="p-6 h-full overflow-y-auto">
+          <div class="flex justify-end mb-4">
+            <button
+              id="mobile-menu-close"
+              class="p-2 text-text-muted hover:text-text-main rounded-md"
+            >
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M6 18L18 6M6 6l12 12"></path>
+              </svg>
+            </button>
+          </div>
+          <Sidebar />
+
+          <script>
+            const btn = document.getElementById('mobile-menu-trigger');
+            const closeBtn = document.getElementById('mobile-menu-close');
+            const menu = document.getElementById('mobile-menu');
+
+            function toggleMenu() {
+              if (menu) {
+                menu.classList.toggle('hidden');
+                if (!menu.classList.contains('hidden')) {
+                  document.body.style.overflow = 'hidden';
+                } else {
+                  document.body.style.overflow = '';
+                }
+              }
+            }
+
+            if (btn) btn.addEventListener('click', toggleMenu);
+            if (closeBtn) closeBtn.addEventListener('click', toggleMenu);
+
+            // Close on navigation
+            if (menu) {
+              menu.querySelectorAll('a').forEach((link) => {
+                link.addEventListener('click', () => {
+                  menu.classList.add('hidden');
+                  document.body.style.overflow = '';
+                });
+              });
+            }
+          </script>
+        </div>
+      </div>
     </div>
   </body>
 </html>

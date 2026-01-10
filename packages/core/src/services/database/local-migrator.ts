@@ -1,5 +1,5 @@
 import type { Surreal } from 'surrealdb';
-import { Logger, createLogger } from '../logger.js';
+import { Logger, createLogger } from '../logger/index.js';
 import { LocalDatabaseService } from './local.js';
 
 export interface SchemaRecord {

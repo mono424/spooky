@@ -1,9 +1,9 @@
 import { LocalDatabaseService, RemoteDatabaseService } from '../database/index.js';
-import { MutationEventSystem, MutationEventTypes } from '../mutation/index.js';
+import { MutationEventTypes } from '../mutation/index.js';
 import { IdTreeDiff } from '../../types.js';
 import { QueryEventTypes } from '../query/events.js';
-import { SyncQueueEventTypes } from './events.js';
-import { createLogger, Logger } from '../logger.js';
+import { SyncQueueEventTypes, createSyncEventSystem, SyncEventTypes } from './events.js';
+import { createLogger, Logger } from '../logger/index.js';
 import {
   CleanupEvent,
   DownEvent,
@@ -13,10 +13,12 @@ import {
   UpEvent,
   UpQueue,
 } from './queue/index.js';
-import { RecordId, Duration } from 'surrealdb';
-import { diffIdTree } from './utils.js';
+import { RecordId, Duration, Uuid } from 'surrealdb';
+import { diffIdTree, flattenIdTree } from './utils.js';
+import { parseRecordIdString, decodeFromSpooky } from '../utils/index.js';
+import { TableModel } from '@spooky/query-builder';
 import { SchemaStructure } from '@spooky/query-builder';
-import { QueryManager } from '../query/index.js';
+// import { QueryManager } from '../query/index.js'; // REMOVED
 
 export class SpookySync<S extends SchemaStructure> {
   private upQueue: UpQueue;
@@ -26,6 +28,7 @@ export class SpookySync<S extends SchemaStructure> {
   private isSyncingDown: boolean = false;
   private relationshipMap: Map<string, Set<string>> = new Map();
   private logger: Logger;
+  public events = createSyncEventSystem();
 
   get isSyncing() {
     return this.isSyncingUp || this.isSyncingDown;
@@ -35,8 +38,6 @@ export class SpookySync<S extends SchemaStructure> {
     private schema: S,
     private local: LocalDatabaseService,
     private remote: RemoteDatabaseService,
-    private query: QueryManager<S>,
-    private mutationEvents: MutationEventSystem,
     private clientId: string,
     logger: Logger
   ) {
@@ -62,7 +63,67 @@ export class SpookySync<S extends SchemaStructure> {
     await this.initUpQueue();
     await this.initDownQueue();
     void this.syncUp();
+    void this.syncUp();
     void this.syncDown();
+    void this.startLiveQuery();
+  }
+
+  private async startLiveQuery() {
+    this.logger.debug({ clientId: this.clientId }, 'Starting live query');
+    // Ensure clientId is set in remote if needed, but SpookySync usually assumes auth is handled.
+    // If we need to set the variable for the session:
+    // await this.remote.getClient().query('LET $clientId = $id', { id: this.clientId });
+    // Actually QueryManager did: await this.remote.getClient().set('_spooky_client_id', this.clientId);
+    await this.remote.getClient().set('_spooky_client_id', this.clientId);
+
+    const [queryUuid] = await this.remote.query<[Uuid]>(
+      'LIVE SELECT * FROM _spooky_incantation WHERE clientId = $clientId',
+      {
+        clientId: this.clientId,
+      }
+    );
+
+    (await this.remote.getClient().liveOf(queryUuid)).subscribe((message) => {
+      this.logger.debug({ message }, 'Live update received');
+      if (message.action === 'UPDATE' || message.action === 'CREATE') {
+        const { id, hash, tree } = message.value;
+        if (!(id instanceof RecordId) || !hash || !tree) {
+          return;
+        }
+
+        this.handleRemoteIncantationChange(id, hash as string, tree).catch((err) => {
+          this.logger.error({ err }, 'Error handling remote incantation change');
+        });
+      }
+    });
+  }
+
+  private async handleRemoteIncantationChange(
+    incantationId: RecordId,
+    remoteHash: string,
+    remoteTree: any
+  ) {
+    // Fetch local state to get necessary params
+    const existing = await this.findIncatationRecord(incantationId);
+    if (!existing) {
+      this.logger.warn(
+        { incantationId: incantationId.toString() },
+        'Received remote update for unknown local incantation'
+      );
+      return;
+    }
+
+    const { surrealql, params, hash: localHash, tree: localTree } = existing;
+
+    await this.syncIncantation({
+      incantationId,
+      surrealql,
+      localTree,
+      localHash,
+      remoteHash,
+      remoteTree,
+      params,
+    });
   }
 
   private async initUpQueue() {
@@ -72,14 +133,13 @@ export class SpookySync<S extends SchemaStructure> {
     /// TODO: In the future we can think about using DBSP or something smarter
     /// to update only the queries that are really affected by the change not every
     /// query that just involves this table.
-    this.mutationEvents.subscribe(MutationEventTypes.MutationCreated, (event) => {
-      const { payload } = event;
-      for (const element of payload) {
-        this.refreshFromLocalCache(element.record_id.table.toString());
-      }
-    });
-
-    this.upQueue.listenForMutations(this.mutationEvents);
+    // Moved to RouterService
+    // this.mutationEvents.subscribe(MutationEventTypes.MutationCreated, (event) => {
+    //   const { payload } = event;
+    //   for (const element of payload) {
+    //     this.refreshFromLocalCache(element.record_id.table.toString());
+    //   }
+    // });
   }
 
   private async initDownQueue() {
@@ -87,7 +147,6 @@ export class SpookySync<S extends SchemaStructure> {
       SyncQueueEventTypes.QueryItemEnqueued,
       this.syncDown.bind(this)
     );
-    this.downQueue.listenForQueries(this.query.eventsSystem);
   }
 
   private async syncUp() {
@@ -116,6 +175,10 @@ export class SpookySync<S extends SchemaStructure> {
     } finally {
       this.isSyncingDown = false;
     }
+  }
+
+  public enqueueDownEvent(event: DownEvent) {
+    this.downQueue.push(event);
   }
 
   private async processUpEvent(event: UpEvent) {
@@ -168,9 +231,10 @@ export class SpookySync<S extends SchemaStructure> {
     }
   }
 
-  private async refreshFromLocalCache(table: string) {
-    const queries = this.query.getQueriesThatInvolveTable(table);
-    this.logger.debug({ table, queries: [...queries] }, 'refreshFromLocalCache');
+  public async refreshIncantations(
+    queries: { id: RecordId; surrealql: string; params?: Record<string, any> }[]
+  ) {
+    this.logger.debug({ count: queries.length }, 'refreshIncantations');
     for (const query of queries) {
       await this.updateLocalIncantation(
         query.id,
@@ -186,6 +250,15 @@ export class SpookySync<S extends SchemaStructure> {
       );
     }
   }
+
+  public async enqueueMutation(mutations: any[]) {
+    for (const mutation of mutations) {
+      this.upQueue.push(mutation);
+    }
+  }
+
+  // Deprecated/Removed: effectively replaced by refreshIncantations + Router
+  // public async refreshFromLocalCache(table: string) { ... }
 
   private async registerIncantation(event: RegisterEvent) {
     const { incantationId, surrealql, params, ttl } = event.payload;
@@ -383,6 +456,11 @@ export class SpookySync<S extends SchemaStructure> {
 
       const [cachedResults] = await this.local.query<[Record<string, any>[]]>(surrealql, params);
 
+      // Verify Orphans if we have a remote tree to check against
+      if (tree) {
+        void this.verifyAndPurgeOrphans(cachedResults, tree);
+      }
+
       this.logger.debug(
         {
           incantationId: incantationId.toString(),
@@ -391,11 +469,11 @@ export class SpookySync<S extends SchemaStructure> {
         'updateLocalIncantation Loading cached results done'
       );
 
-      this.query.eventsSystem.emit(QueryEventTypes.IncantationIncomingRemoteUpdate, {
+      this.events.emit(SyncEventTypes.IncantationUpdated, {
         incantationId,
         remoteHash: hash,
         remoteTree: tree,
-        records: cachedResults,
+        records: cachedResults || [],
       });
     } catch (e) {
       this.logger.error(
@@ -416,6 +494,63 @@ export class SpookySync<S extends SchemaStructure> {
       return cachedResults;
     } catch (e) {
       return null;
+    }
+  }
+
+  private async verifyAndPurgeOrphans(cachedResults: any[], remoteTree: any) {
+    if (!cachedResults || cachedResults.length === 0 || !remoteTree) return;
+
+    const remoteIds = new Set(flattenIdTree(remoteTree).map((node: any) => node.id));
+    const orphans: any[] = [];
+
+    for (const r of cachedResults) {
+      // We need to decode? cachedResults are from local DB, they are structured.
+      // BUT they might need to be flattened or handled if the query returns nested stuff?
+      // For now assume top level IDs.
+      // QueryManager did decodeFromSpooky. Let's assume local DB returns raw results that match
+      // what RecordId.toString() expects?
+      // Wait, QueryManager used `r.id`.
+      const id = r.id;
+      const idStr = id instanceof RecordId ? id.toString() : id;
+
+      if (idStr && !remoteIds.has(idStr)) {
+        orphans.push(r);
+      }
+    }
+
+    if (orphans.length === 0) return;
+
+    const idsToCheck = orphans
+      .map((r) => r.id)
+      .filter((id) => !!id)
+      .map((id) => (id instanceof RecordId ? id : parseRecordIdString(id.toString())));
+
+    if (idsToCheck.length === 0) return;
+
+    this.logger.debug({ count: idsToCheck.length }, 'Verifying orphaned records against remote');
+
+    try {
+      const [existing] = await this.remote.query<[{ id: RecordId }[]]>('SELECT id FROM $ids', {
+        ids: idsToCheck,
+      });
+
+      const existingIdsSet = new Set(existing.map((r) => r.id.toString()));
+      const toDelete = idsToCheck.filter((id) => !existingIdsSet.has(id.toString()));
+
+      if (toDelete.length > 0) {
+        this.logger.info(
+          { count: toDelete.length, ids: toDelete.map((id) => id.toString()) },
+          'Purging confirmed orphaned records'
+        );
+        await this.local.query('DELETE $ids', { ids: toDelete });
+      } else {
+        this.logger.debug(
+          { count: idsToCheck.length },
+          'All orphaned records still exist remotely (ghost records checking)'
+        );
+      }
+    } catch (err) {
+      this.logger.error({ err }, 'Failed to verify/purge orphans');
     }
   }
 

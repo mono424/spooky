@@ -17,8 +17,12 @@ import {
   TableNames,
 } from '@spooky/query-builder';
 
-import { DevToolsService } from './services/devtools-service.js';
-import { createLogger } from './services/logger.js';
+import { DevToolsService } from './services/devtools-service/index.js';
+import { createLogger } from './services/logger/index.js';
+import { AuthService } from './services/auth/index.js';
+import { RouterService } from './services/router/index.js';
+import { StreamProcessorService } from './services/stream-processor/index.js';
+import { EventSystem } from './events/index.js';
 
 export class SpookyClient<S extends SchemaStructure> {
   private local: LocalDatabaseService;
@@ -28,6 +32,9 @@ export class SpookyClient<S extends SchemaStructure> {
   private mutationManager: MutationManager<S>;
   private sync: SpookySync<S>;
   private devTools: DevToolsService;
+  private router: RouterService<S>;
+  public auth: AuthService<S>;
+  public streamProcessor: StreamProcessorService;
 
   get remoteClient() {
     return this.remote.getClient();
@@ -38,6 +45,7 @@ export class SpookyClient<S extends SchemaStructure> {
   }
 
   constructor(private config: SpookyConfig<S>) {
+    console.log('[Spooky] Constructor called', config);
     const clientId = this.config.clientId ?? this.loadOrGenerateClientId();
     this.persistClientId(clientId);
 
@@ -46,38 +54,73 @@ export class SpookyClient<S extends SchemaStructure> {
     this.remote = new RemoteDatabaseService(this.config.database, logger);
     this.migrator = new LocalMigrator(this.local, logger);
     this.mutationManager = new MutationManager(this.config.schema, this.local, logger);
-    this.queryManager = new QueryManager(
+    this.queryManager = new QueryManager(this.config.schema, this.local, clientId, logger);
+    this.auth = new AuthService(
       this.config.schema,
-      this.local,
       this.remote,
-      clientId,
+      this.local,
+      this.mutationManager,
       logger
     );
-    this.sync = new SpookySync(
-      this.config.schema,
-      this.local,
-      this.remote,
-      this.queryManager,
-      this.mutationManager.events,
-      clientId,
-      logger
-    );
+    this.sync = new SpookySync(this.config.schema, this.local, this.remote, clientId, logger);
     this.devTools = new DevToolsService(
-      this.mutationManager.events,
-      this.queryManager.eventsSystem,
       this.local,
       logger,
       this.config.schema,
+      this.auth,
       this.queryManager
+    );
+    this.streamProcessor = new StreamProcessorService(
+      new EventSystem(['stream_update']),
+      this.local,
+      logger
+    );
+    this.router = new RouterService(
+      this.mutationManager.events,
+      this.queryManager.eventsSystem,
+      this.sync,
+      this.queryManager,
+      this.streamProcessor,
+      this.devTools,
+      this.auth,
+      logger
     );
   }
 
   async init() {
-    await this.local.connect();
-    await this.remote.connect();
-    await this.queryManager.init();
-    await this.migrator.provision(this.config.schemaSurql);
-    await this.sync.init();
+    console.log('[Spooky] Init started');
+    try {
+      console.log('[Spooky] Connecting to local DB...');
+      await this.local.connect();
+      console.log('[Spooky] Local connected');
+
+      console.log('[Spooky] Connecting to remote DB...');
+      await this.remote.connect();
+      console.log('[Spooky] Remote connected');
+
+      console.log('[Spooky] Initializing Auth...');
+      await this.auth.init();
+      console.log('[Spooky] Auth initialized');
+
+      console.log('[Spooky] Initializing QueryManager...');
+      await this.queryManager.init();
+      console.log('[Spooky] QueryManager initialized');
+
+      console.log('[Spooky] Provisioning schema...');
+      await this.migrator.provision(this.config.schemaSurql);
+      console.log('[Spooky] Migrator provisioned');
+
+      console.log('[Spooky] Initializing Sync...');
+      await this.sync.init();
+      console.log('[Spooky] Sync initialized');
+
+      console.log('[Spooky] Initializing StreamProcessor...');
+      await this.streamProcessor.init();
+      console.log('[Spooky] StreamProcessor initialized');
+    } catch (e) {
+      console.error('[Spooky] Init failed', e);
+      throw e;
+    }
   }
 
   async close() {

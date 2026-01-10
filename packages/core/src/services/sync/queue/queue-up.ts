@@ -77,14 +77,6 @@ export class UpQueue {
     return this.local.query(`DELETE $mutation_id`, { mutation_id });
   }
 
-  listenForMutations(mutationEvents: MutationEventSystem) {
-    mutationEvents.subscribe(MutationEventTypes.MutationCreated, (event) => {
-      for (const mutation of event.payload) {
-        this.push(mutation);
-      }
-    });
-  }
-
   async loadFromDatabase() {
     try {
       const rawResult = await this.local.query<any>(

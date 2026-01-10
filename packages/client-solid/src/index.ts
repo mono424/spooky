@@ -1,5 +1,5 @@
 import type { SyncedDbConfig } from './types';
-import { SpookyClient, type SpookyQueryResultPromise } from '@spooky/core';
+import { SpookyClient, AuthService, type SpookyQueryResultPromise } from '@spooky/core';
 
 import {
   GetTable,
@@ -163,9 +163,18 @@ export class SyncedDb<S extends SchemaStructure> {
 
   /**
    * Deauthenticate from the database
+   * @deprecated Use signOut() instead
    */
   public async deauthenticate(): Promise<void> {
-    await this.spooky?.deauthenticate();
+    await this.signOut();
+  }
+
+  /**
+   * Sign out, clear session and local storage
+   */
+  public async signOut(): Promise<void> {
+    if (!this.spooky) throw new Error('SyncedDb not initialized');
+    await this.spooky.auth.signOut();
   }
 
   /**
@@ -189,6 +198,14 @@ export class SyncedDb<S extends SchemaStructure> {
   get local(): SpookyClient<S>['localClient'] {
     if (!this.spooky) throw new Error('SyncedDb not initialized');
     return this.spooky.localClient;
+  }
+
+  /**
+   * Access the auth service
+   */
+  get auth(): AuthService<S> {
+    if (!this.spooky) throw new Error('SyncedDb not initialized');
+    return this.spooky.auth;
   }
 }
 

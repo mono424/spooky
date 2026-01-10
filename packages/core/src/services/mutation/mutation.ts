@@ -1,9 +1,9 @@
 import { RecordId } from 'surrealdb';
 import { LocalDatabaseService } from '../database/index.js';
 import { createMutationEventSystem, MutationEventSystem, MutationEventTypes } from './events.js';
-import { parseRecordIdString, encodeToSpooky } from '../utils.js';
+import { parseRecordIdString, encodeToSpooky } from '../utils/index.js';
 import { SchemaStructure } from '@spooky/query-builder';
-import { createLogger, Logger } from '../logger.js';
+import { createLogger, Logger } from '../logger/index.js';
 
 export class MutationManager<S extends SchemaStructure> {
   private _events: MutationEventSystem;
@@ -77,17 +77,30 @@ export class MutationManager<S extends SchemaStructure> {
     const tableName = rid.table.toString();
     const encodedData = encodeToSpooky(this.schema, tableName as any, data as any);
 
-    const [response] = await this.withRetry(() =>
-      this.db.query<[{ target: T; mutation_id: RecordId }]>(query, {
+    // In SurrealDB 2.0, query returns an array of results for each statement.
+    // We expect 5 statements (BEGIN, LET, LET, RETURN, COMMIT).
+    // We need to find the one that contains our return object.
+    const results = await this.withRetry(() =>
+      this.db.query<any[]>(query, {
         id: rid,
         mid: parseRecordIdString(mutationId),
         data: encodedData,
       })
     );
 
-    this.logger.debug({ response }, 'Create mutation response');
+    this.logger.debug({ results }, 'Create mutation response');
 
-    const result = response;
+    // Find the result that has 'target' and 'mutation_id'
+    // It might be wrapped in an array if the statement returns multiple items (SURREAL 2.0 logic?)
+    // But RETURN {...} usually returns a single object or array of 1 object?
+    // If query returns [r1, r2, ...], we scan them.
+    const response = results.find(
+      (r: any) => r && (r.target || (Array.isArray(r) && r[0]?.target))
+    );
+    let result = response;
+    if (Array.isArray(response)) {
+      result = response[0];
+    }
 
     if (!result || !result.target) {
       throw new Error('Failed to create record or mutation log.');
@@ -135,14 +148,20 @@ export class MutationManager<S extends SchemaStructure> {
     const encodedData = encodeToSpooky(this.schema, table as any, data as any);
 
     // The return type is an array containing our custom object
-    const [response] = await this.withRetry(() =>
-      this.db.query<[{ target: T; mutation_id: RecordId }]>(query, {
+    const results = await this.withRetry(() =>
+      this.db.query<any[]>(query, {
         id: rid,
         data: encodedData,
       })
     );
 
-    const result = response;
+    const response = results.find(
+      (r: any) => r && (r.target || (Array.isArray(r) && r[0]?.target))
+    );
+    let result = response;
+    if (Array.isArray(response)) {
+      result = response[0];
+    }
 
     if (!result || !result.target || (Array.isArray(result.target) && result.target.length === 0)) {
       throw new Error(`Failed to update record: ${id} not found.`);
@@ -180,11 +199,15 @@ export class MutationManager<S extends SchemaStructure> {
         COMMIT TRANSACTION;
     `;
 
-    const [response] = await this.withRetry(() =>
-      this.db.query<[{ mutation_id: RecordId }]>(query, { id: rid })
-    );
+    const results = await this.withRetry(() => this.db.query<any[]>(query, { id: rid }));
 
-    const result = response;
+    const response = results.find(
+      (r: any) => r && (r.mutation_id || (Array.isArray(r) && r[0]?.mutation_id))
+    );
+    let result = response;
+    if (Array.isArray(response)) {
+      result = response[0];
+    }
 
     if (!result) {
       throw new Error('Failed to perform delete or create mutation log.');

@@ -1,5 +1,8 @@
 use anyhow::{Context, Result};
-use std::collections::HashMap;
+
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use surrealdb_core::dbs::capabilities::ExperimentalTarget;
 use surrealdb_core::dbs::Capabilities;
 use surrealdb_core::sql::statements::DefineStatement;
@@ -24,7 +27,14 @@ pub struct Relationship {
     pub related_table: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccessDefinition {
+    pub name: String,
+    pub signin_params: HashMap<String, FieldDefinition>,
+    pub signup_params: HashMap<String, FieldDefinition>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FieldDefinition {
     #[allow(dead_code)]
     pub name: String,
@@ -37,7 +47,7 @@ pub struct FieldDefinition {
     pub should_strip: bool, // True if field should be excluded from client
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FieldType {
     String,
     Int,
@@ -53,12 +63,14 @@ pub enum FieldType {
 
 pub struct SchemaParser {
     pub tables: HashMap<String, TableSchema>,
+    pub access: HashMap<String, AccessDefinition>,
 }
 
 impl SchemaParser {
     pub fn new() -> Self {
         Self {
             tables: HashMap::new(),
+            access: HashMap::new(),
         }
     }
 
@@ -222,7 +234,8 @@ impl SchemaParser {
                 let is_record_id = Self::is_field_record_id(&field_type);
 
                 // Extract select permission and determine if field should be stripped
-                let (select_permission, should_strip) = Self::parse_permissions(&field_def.permissions);
+                let (select_permission, should_strip) =
+                    Self::parse_permissions(&field_def.permissions);
 
                 let field = FieldDefinition {
                     name: field_name.clone(),
@@ -253,6 +266,45 @@ impl SchemaParser {
                     }
                     table.fields.insert(field_name, field);
                 }
+            }
+            DefineStatement::Access(access_def) => {
+                let name = access_def.name.to_string();
+
+                let (signin_params, signup_params) =
+                    if let surrealdb_core::sql::AccessType::Record(ref record_access) =
+                        access_def.kind
+                    {
+                        let signin = if let Some(ref si) = record_access.signin {
+                            Self::extract_params(&format!("{}", si))
+                        } else if let Some(ref auth) = access_def.authenticate {
+                            Self::extract_params(&format!("{}", auth))
+                        } else {
+                            HashMap::new()
+                        };
+
+                        let signup = if let Some(ref su) = record_access.signup {
+                            Self::extract_params(&format!("{}", su))
+                        } else {
+                            HashMap::new()
+                        };
+                        (signin, signup)
+                    } else {
+                        let signin = if let Some(ref auth) = access_def.authenticate {
+                            Self::extract_params(&format!("{}", auth))
+                        } else {
+                            HashMap::new()
+                        };
+                        (signin, HashMap::new())
+                    };
+
+                self.access.insert(
+                    name.clone(),
+                    AccessDefinition {
+                        name,
+                        signin_params,
+                        signup_params,
+                    },
+                );
             }
             _ => {
                 // Skip other define types (indexes, scopes, etc.)
@@ -333,9 +385,57 @@ impl SchemaParser {
             || (perm_str.contains("SELECT") && perm_str.contains("false"));
 
         if should_strip {
-            println!("  → Field has 'FOR select WHERE false' - will be stripped from client schema");
+            println!(
+                "  → Field has 'FOR select WHERE false' - will be stripped from client schema"
+            );
         }
 
         (Some(perm_str), should_strip)
+    }
+
+    fn extract_params(content: &str) -> HashMap<String, FieldDefinition> {
+        let mut params = HashMap::new();
+        let mut excluded_vars = HashSet::new();
+
+        // Regex to find LET definitions: LET $var = ...
+        let let_re = Regex::new(r"LET\s+\$(\w+)\s*=").unwrap();
+        for cap in let_re.captures_iter(content) {
+            excluded_vars.insert(cap[1].to_string());
+        }
+
+        // Regex to find all variable usages: $var
+        let re = Regex::new(r"\$(\w+)").unwrap();
+
+        for cap in re.captures_iter(content) {
+            let name = cap[1].to_string();
+            // Skip global variables (simplified check matching previous pattern)
+            if name == "auth"
+                || name == "access"
+                || name == "value"
+                || name == "this"
+                || name == "before"
+                || name == "after"
+                || name == "event"
+                || excluded_vars.contains(&name)
+            {
+                continue;
+            }
+
+            // Default params to String, required (non-optional)
+            params.insert(
+                name.clone(),
+                FieldDefinition {
+                    name: name.clone(),
+                    field_type: FieldType::String,
+                    optional: false,
+                    assert: None,
+                    value: None,
+                    is_record_id: false,
+                    select_permission: None,
+                    should_strip: false,
+                },
+            );
+        }
+        params
     }
 }

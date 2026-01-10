@@ -1,7 +1,7 @@
-import { LocalDatabaseService } from './database/index.js';
-import { Logger } from './logger.js';
-import { MutationEventSystem, MutationEventTypes } from './mutation/events.js';
-import { QueryEventSystem, QueryEventTypes } from './query/events.js';
+import { LocalDatabaseService } from '../database/index.js';
+import { Logger } from '../logger/index.js';
+import { MutationEventSystem, MutationEventTypes } from '../mutation/events.js';
+import { QueryEventSystem, QueryEventTypes } from '../query/events.js';
 import { SchemaStructure } from '@spooky/query-builder';
 import { RecordId } from 'surrealdb';
 
@@ -13,7 +13,9 @@ export interface DevToolsEvent {
   payload: any;
 }
 
-import { QueryManager } from './query/query.js';
+import { QueryManager } from '../query/query.js';
+import { AuthService } from '../auth/index.js';
+import { AuthEventTypes } from '../auth/events.js';
 
 export class DevToolsService {
   private eventsHistory: DevToolsEvent[] = [];
@@ -22,16 +24,23 @@ export class DevToolsService {
   private activeQueries = new Map<number, any>();
 
   constructor(
-    private mutationEvents: MutationEventSystem,
-    private queryEvents: QueryEventSystem,
+    // private mutationEvents: MutationEventSystem, // REMOVED
+    // private queryEvents: QueryEventSystem, // REMOVED
     private databaseService: LocalDatabaseService,
     private logger: Logger,
     private schema: SchemaStructure,
+    private authService: AuthService<SchemaStructure>,
     private queryManager?: QueryManager<any>
   ) {
-    this.setupEventSubscriptions();
+    // this.setupEventSubscriptions(); // REMOVED
     this.exposeToWindow();
     this.syncInitialState();
+
+    // Subscribe to auth events
+    this.authService.eventSystem.subscribe(AuthEventTypes.AuthStateChanged, () => {
+      this.notifyDevTools();
+    });
+
     this.logger.debug('[DevTools] Service initialized');
   }
 
@@ -57,75 +66,65 @@ export class DevToolsService {
     }
   }
 
-  private setupEventSubscriptions() {
-    // Query Events
-    this.queryEvents.subscribe(QueryEventTypes.IncantationInitialized, (event) => {
-      console.log('[DevTools] IncantationInitialized', event.payload);
-      // Map incantationId hash to number if possible, or use string hash
-      // Devtools expects number queryHash. If existing is string, we might need to hash it or change devtools.
-      // For now, let's try to parse integer if it's numeric, or hash the string.
-      const queryHash = this.hashString(event.payload.incantationId.toString());
+  public onQueryInitialized(payload: any) {
+    console.log('[DevTools] IncantationInitialized', payload);
+    const queryHash = this.hashString(payload.incantationId.toString());
 
-      const queryState = {
-        queryHash,
-        status: 'active',
-        createdAt: Date.now(),
-        lastUpdate: Date.now(),
-        updateCount: 0,
-        query: event.payload.surrealql,
-        variables: {}, // Core doesn't seem to expose vars in this event yet
-        dataSize: 0,
-      };
+    const queryState = {
+      queryHash,
+      status: 'active',
+      createdAt: Date.now(),
+      lastUpdate: Date.now(),
+      updateCount: 0,
+      query: payload.surrealql,
+      variables: {},
+      dataSize: 0,
+    };
 
+    this.activeQueries.set(queryHash, queryState);
+
+    this.addEvent('QUERY_REQUEST_INIT', {
+      queryHash,
+      query: payload.surrealql,
+      variables: {},
+    });
+    this.notifyDevTools();
+  }
+
+  public onQueryUpdated(payload: any) {
+    console.log('[DevTools] IncantationUpdated', payload);
+    const queryHash = this.hashString(payload.incantationId.toString());
+
+    const queryState = this.activeQueries.get(queryHash);
+    if (queryState) {
+      queryState.updateCount++;
+      queryState.lastUpdate = Date.now();
+      queryState.dataSize = Array.isArray(payload.records) ? payload.records.length : 0;
       this.activeQueries.set(queryHash, queryState);
+    } else {
+      console.warn('[DevTools] Received update for unknown query', queryHash);
+    }
 
-      this.addEvent('QUERY_REQUEST_INIT', {
-        queryHash,
-        query: event.payload.surrealql,
-        variables: {}, // Core doesn't seem to expose vars in this event yet
-      });
-      this.notifyDevTools();
+    this.addEvent('QUERY_UPDATED', {
+      queryHash,
+      data: payload.records,
+      dataHash: 0,
     });
+    this.notifyDevTools();
+  }
 
-    this.queryEvents.subscribe(QueryEventTypes.IncantationUpdated, (event) => {
-      console.log('[DevTools] IncantationUpdated', event.payload);
-      const queryHash = this.hashString(event.payload.incantationId.toString());
-
-      const queryState = this.activeQueries.get(queryHash);
-      if (queryState) {
-        queryState.updateCount++;
-        queryState.lastUpdate = Date.now();
-        queryState.dataSize = Array.isArray(event.payload.records)
-          ? event.payload.records.length
-          : 0;
-        this.activeQueries.set(queryHash, queryState);
-      } else {
-        console.warn('[DevTools] Received update for unknown query', queryHash);
-      }
-
-      this.addEvent('QUERY_UPDATED', {
-        queryHash,
-        data: event.payload.records,
-        dataHash: 0, // Placeholder
+  public onMutation(payload: any[]) {
+    const payloads = payload;
+    payloads.forEach((p) => {
+      this.addEvent('MUTATION_REQUEST_EXECUTION', {
+        mutation: {
+          type: 'create', // simplifying
+          data: 'data' in p ? p.data : undefined,
+          selector: p.record_id.toString(),
+        },
       });
-      this.notifyDevTools();
     });
-
-    // Mutation Events
-    this.mutationEvents.subscribe(MutationEventTypes.MutationCreated, (event) => {
-      // Flatten inputs
-      const payloads = event.payload;
-      payloads.forEach((p) => {
-        this.addEvent('MUTATION_REQUEST_EXECUTION', {
-          mutation: {
-            type: 'create', // simplifying
-            data: 'data' in p ? p.data : undefined,
-            selector: p.record_id.toString(),
-          },
-        });
-      });
-      this.notifyDevTools();
-    });
+    this.notifyDevTools();
   }
 
   private hashString(str: string): number {
@@ -153,7 +152,10 @@ export class DevToolsService {
     return {
       eventsHistory: [...this.eventsHistory],
       activeQueries: Object.fromEntries(this.activeQueries),
-      auth: { authenticated: false }, // TODO: Hook up auth
+      auth: {
+        authenticated: this.authService.isAuthenticated,
+        userId: this.authService.currentUser?.id,
+      },
       version: this.version,
       database: {
         tables: this.schema.tables.map((t) => t.name),

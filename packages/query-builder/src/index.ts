@@ -13,7 +13,7 @@ export {
   type ExtractFieldNames,
   type RelatedFieldMapEntry,
   cyrb53,
-} from "./query-builder";
+} from './query-builder';
 
 // Type exports
 export type {
@@ -42,7 +42,7 @@ export type {
   Cardinality,
   RelationshipMetadata,
   SchemaMetadataStructure,
-} from "./types";
+} from './types';
 
 // New array-based schema type helpers
 export type {
@@ -54,7 +54,9 @@ export type {
   RelationshipFields as RelationshipFieldsFromSchema,
   GetRelationship,
   SchemaToIndexed,
-} from "./table-schema";
+  AccessDefinition,
+  TypeNameToTypeMap,
+} from './table-schema';
 
 // Re-export RecordId from surrealdb for convenience
-export { RecordId } from "surrealdb";
+export { RecordId } from 'surrealdb';

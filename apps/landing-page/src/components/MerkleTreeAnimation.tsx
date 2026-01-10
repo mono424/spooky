@@ -119,13 +119,13 @@ export const MerkleDashboard = () => {
   return (
     <div className="w-full font-mono select-none h-auto">
         {/* Merged Dashboard Card - Subtler Style */}
-        <div className="border-l border-white/10 bg-white/[0.02] pl-6 py-4 relative flex flex-col gap-8 min-w-0">
+        <div className="border border-white/10 bg-white/[0.02] pl-6 py-4 relative flex flex-col gap-8 min-w-0">
             
             {/* SECTION 1: ACTIVE INCANTATION */}
             <div className="flex flex-col justify-between">
                 <div className="flex justify-between items-start mb-4">
                     <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest whitespace-nowrap">Active Incantation</span>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 px-4">
                          <div className="w-1.5 h-1.5 rounded-full bg-green-500/50 animate-pulse"></div>
                     </div>
                 </div>

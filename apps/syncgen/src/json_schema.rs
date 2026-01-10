@@ -33,7 +33,8 @@ impl JsonSchemaGenerator {
         let mut relationships: HashMap<String, Vec<Value>> = HashMap::new();
         for (table_name, table_schema) in &parser.tables {
             if !table_schema.relationships.is_empty() {
-                let relationship_objects: Vec<Value> = table_schema.relationships
+                let relationship_objects: Vec<Value> = table_schema
+                    .relationships
                     .iter()
                     .map(|rel| {
                         json!({
@@ -51,17 +52,19 @@ impl JsonSchemaGenerator {
         for (from_table, table_schema) in &parser.tables {
             for rel in &table_schema.relationships {
                 let to_table = &rel.related_table;
-                
+
                 // Skip if the target table doesn't exist (shouldn't happen, but be safe)
                 if !parser.tables.contains_key(to_table) {
                     continue;
                 }
-                
+
                 // Generate reverse field name (pluralize the source table name)
                 let reverse_field_name = Self::pluralize_table_name(from_table);
-                
+
                 // Check if this reverse relationship already exists (avoid duplicates)
-                let reverse_rels = relationships.entry(to_table.clone()).or_insert_with(Vec::new);
+                let reverse_rels = relationships
+                    .entry(to_table.clone())
+                    .or_insert_with(Vec::new);
                 let already_exists = reverse_rels.iter().any(|r| {
                     if let Some(field) = r.get("field").and_then(|f| f.as_str()) {
                         field == reverse_field_name
@@ -69,7 +72,7 @@ impl JsonSchemaGenerator {
                         false
                     }
                 });
-                
+
                 if !already_exists {
                     reverse_rels.push(json!({
                         "field": reverse_field_name,
@@ -114,7 +117,7 @@ impl JsonSchemaGenerator {
                         },
                         "required": ["field", "table"]
                     }
-                })
+                }),
             );
         }
 
@@ -124,7 +127,7 @@ impl JsonSchemaGenerator {
                 json!({
                     "type": "object",
                     "properties": relationship_properties
-                })
+                }),
             );
         }
 
@@ -153,23 +156,100 @@ impl JsonSchemaGenerator {
                         "required": ["name"]
                     },
                     "const": relation_tables
-                })
+                }),
+            );
+        }
+
+        // Add Access definitions
+        let mut access_map = serde_json::Map::new();
+        for (name, access_def) in &parser.access {
+            let mut signin_params = serde_json::Map::new();
+            for (param_name, field_def) in &access_def.signin_params {
+                let mut field_schema = self.generate_field_schema(&field_def.field_type);
+                if let Value::Object(ref mut obj) = field_schema {
+                    obj.insert("optional".to_string(), Value::Bool(field_def.optional));
+                    if field_def.is_record_id {
+                        obj.insert("x-is-record-id".to_string(), Value::Bool(true));
+                    }
+                }
+                signin_params.insert(param_name.clone(), field_schema);
+            }
+
+            let mut signup_params = serde_json::Map::new();
+            for (param_name, field_def) in &access_def.signup_params {
+                let mut field_schema = self.generate_field_schema(&field_def.field_type);
+                if let Value::Object(ref mut obj) = field_schema {
+                    obj.insert("optional".to_string(), Value::Bool(field_def.optional));
+                    if field_def.is_record_id {
+                        obj.insert("x-is-record-id".to_string(), Value::Bool(true));
+                    }
+                }
+                signup_params.insert(param_name.clone(), field_schema);
+            }
+
+            access_map.insert(
+                name.clone(),
+                json!({
+                    "signIn": {
+                        "params": Value::Object(signin_params)
+                    },
+                    "signup": {
+                        "params": Value::Object(signup_params)
+                    }
+                }),
+            );
+        }
+
+        if !access_map.is_empty() {
+            definitions.insert(
+                "Access".to_string(),
+                json!({
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                            "signIn": {
+                                "type": "object",
+                                "properties": {
+                                    "params": {
+                                        "type": "object",
+                                        "additionalProperties": { "type": "object" }
+                                    }
+                                }
+                            },
+                            "signup": {
+                                "type": "object",
+                                "properties": {
+                                    "params": {
+                                        "type": "object",
+                                        "additionalProperties": { "type": "object" }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "const": Value::Object(access_map)
+                }),
             );
         }
 
         for (table_name, table_schema) in &parser.tables {
             // Get reverse relationships for this table
-            let reverse_rels = relationships.get(table_name)
-                .and_then(|rels| {
-                    let reverse: Vec<&Value> = rels.iter()
-                        .filter(|r| r.get("is_reverse").and_then(|v| v.as_bool()).unwrap_or(false))
-                        .collect();
-                    if reverse.is_empty() {
-                        None
-                    } else {
-                        Some(reverse)
-                    }
-                });
+            let reverse_rels = relationships.get(table_name).and_then(|rels| {
+                let reverse: Vec<&Value> = rels
+                    .iter()
+                    .filter(|r| {
+                        r.get("is_reverse")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false)
+                    })
+                    .collect();
+                if reverse.is_empty() {
+                    None
+                } else {
+                    Some(reverse)
+                }
+            });
 
             let definition = self.generate_table_definition(table_schema, reverse_rels);
             definitions.insert(table_name.clone(), definition);
@@ -179,7 +259,7 @@ impl JsonSchemaGenerator {
                 table_name.clone(),
                 json!({
                     "$ref": format!("#/definitions/{}", table_name)
-                })
+                }),
             );
 
             // Mark all table properties as required
@@ -195,7 +275,11 @@ impl JsonSchemaGenerator {
         }
     }
 
-    fn generate_table_definition(&self, table: &TableSchema, reverse_rels: Option<Vec<&Value>>) -> Value {
+    fn generate_table_definition(
+        &self,
+        table: &TableSchema,
+        reverse_rels: Option<Vec<&Value>>,
+    ) -> Value {
         let mut properties = serde_json::Map::new();
         let mut required_fields = Vec::new();
 
@@ -234,18 +318,14 @@ impl JsonSchemaGenerator {
 
             // Add is_record_id flag to metadata
             if field_def.is_record_id {
-                field_obj.insert(
-                    "x-is-record-id".to_string(),
-                    Value::Bool(true),
-                );
+                field_obj.insert("x-is-record-id".to_string(), Value::Bool(true));
             }
 
             // Add is_datetime flag to metadata
-            if matches!(field_def.field_type, FieldType::Datetime) || Self::is_field_datetime(&field_def.field_type) {
-                field_obj.insert(
-                    "x-is-datetime".to_string(),
-                    Value::Bool(true),
-                );
+            if matches!(field_def.field_type, FieldType::Datetime)
+                || Self::is_field_datetime(&field_def.field_type)
+            {
+                field_obj.insert("x-is-datetime".to_string(), Value::Bool(true));
             }
 
             properties.insert(field_name.clone(), Value::Object(field_obj));
@@ -291,20 +371,12 @@ impl JsonSchemaGenerator {
         if !required_fields.is_empty() {
             definition.insert(
                 "required".to_string(),
-                Value::Array(
-                    required_fields
-                        .into_iter()
-                        .map(Value::String)
-                        .collect(),
-                ),
+                Value::Array(required_fields.into_iter().map(Value::String).collect()),
             );
         }
 
         if table.schemafull {
-            definition.insert(
-                "additionalProperties".to_string(),
-                Value::Bool(false),
-            );
+            definition.insert("additionalProperties".to_string(), Value::Bool(false));
         }
 
         Value::Object(definition)
@@ -358,16 +430,10 @@ impl JsonSchemaGenerator {
                 if let Value::Object(ref mut obj) = schema {
                     // Make the field nullable
                     if let Some(Value::String(type_str)) = obj.get("type") {
-                        obj.insert(
-                            "type".to_string(),
-                            json!([type_str.clone(), "null"]),
-                        );
+                        obj.insert("type".to_string(), json!([type_str.clone(), "null"]));
                     } else {
                         // If type is already an array or missing, add null
-                        obj.insert(
-                            "type".to_string(),
-                            json!(["string", "null"]),
-                        );
+                        obj.insert("type".to_string(), json!(["string", "null"]));
                     }
                 }
                 schema
@@ -399,9 +465,12 @@ impl JsonSchemaGenerator {
             "mouse" => "mice".to_string(),
             _ => {
                 // Simple pluralization rules
-                if table_name.ends_with('s') || table_name.ends_with("sh") || 
-                   table_name.ends_with("ch") || table_name.ends_with('x') || 
-                   table_name.ends_with('z') {
+                if table_name.ends_with('s')
+                    || table_name.ends_with("sh")
+                    || table_name.ends_with("ch")
+                    || table_name.ends_with('x')
+                    || table_name.ends_with('z')
+                {
                     format!("{}es", table_name)
                 } else if table_name.ends_with('y') && table_name.len() > 1 {
                     // Check if the letter before 'y' is a consonant

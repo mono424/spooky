@@ -6,7 +6,7 @@ export const parseRecordIdString = (id: string): RecordId<string> => {
   return new RecordId(table, idParts.join(':'));
 };
 
-import { createLogger } from './logger.js';
+import { createLogger } from '../logger/index.js';
 
 const logger = createLogger('info').child({ module: 'utils' });
 

@@ -18,4 +18,5 @@ regex = "1.12.2"
 tar = "0.4"
 zstd = "0.13"
 tempfile = "3.10"
+inquire = "0.7"
 

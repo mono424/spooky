@@ -1,5 +1,5 @@
 import { Surreal, SurrealTransaction } from 'surrealdb';
-import { createLogger, Logger } from '../logger.js';
+import { createLogger, Logger } from '../logger/index.js';
 
 export abstract class AbstractDatabaseService {
   protected client: Surreal;
@@ -32,13 +32,10 @@ export abstract class AbstractDatabaseService {
           try {
             this.logger.debug({ query, vars }, 'Executing query');
             const pending = this.client.query(query, vars);
-            let result;
-            if (pending && typeof pending.collect === 'function') {
-              result = await pending.collect<T>();
-            } else {
-              result = await pending;
-            }
-            resolve(result as T);
+            // In SurrealDB 2.0, .query() collects results by default.
+            // We cast to T directly as proper typing depends on the caller knowing the return structure.
+            const result = (await pending) as unknown as T;
+            resolve(result);
             this.logger.trace({ query, result }, 'Query executed successfully');
           } catch (err) {
             this.logger.error({ query, vars, err }, 'Query execution failed');
