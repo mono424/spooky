@@ -4,13 +4,33 @@
 export const schema = {
   tables: [
     {
+      name: 'thread' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
+        title: { type: 'string' as const, optional: false },
+        author: { type: 'string' as const, recordId: true, optional: false },
+        active: { type: 'boolean' as const, optional: true },
+        content: { type: 'string' as const, optional: false },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
+        comments: { type: 'string' as const, optional: true },
+      },
+      primaryKey: ['id'] as const
+    },
+    {
+      name: 'commented_on' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
+      },
+      primaryKey: ['id'] as const
+    },
+    {
       name: 'comment' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
-        content: { type: 'string' as const, optional: false },
         author: { type: 'string' as const, recordId: true, optional: false },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
         thread: { type: 'string' as const, recordId: true, optional: false },
+        content: { type: 'string' as const, optional: false },
       },
       primaryKey: ['id'] as const
     },
@@ -24,36 +44,16 @@ export const schema = {
       },
       primaryKey: ['id'] as const
     },
-    {
-      name: 'thread' as const,
-      columns: {
-        id: { type: 'string' as const, recordId: true, optional: false },
-        content: { type: 'string' as const, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
-        active: { type: 'boolean' as const, optional: true },
-        title: { type: 'string' as const, optional: false },
-        author: { type: 'string' as const, recordId: true, optional: false },
-        comments: { type: 'string' as const, optional: true },
-      },
-      primaryKey: ['id'] as const
-    },
-    {
-      name: 'commented_on' as const,
-      columns: {
-        id: { type: 'string' as const, recordId: true, optional: false },
-      },
-      primaryKey: ['id'] as const
-    },
   ],
   relationships: [
     {
-      from: 'user' as const,
-      field: 'threads' as const,
-      to: 'thread' as const,
-      cardinality: 'many' as const
+      from: 'thread' as const,
+      field: 'author' as const,
+      to: 'user' as const,
+      cardinality: 'one' as const
     },
     {
-      from: 'user' as const,
+      from: 'thread' as const,
       field: 'comments' as const,
       to: 'comment' as const,
       cardinality: 'many' as const
@@ -71,20 +71,20 @@ export const schema = {
       cardinality: 'one' as const
     },
     {
-      from: 'thread' as const,
-      field: 'author' as const,
-      to: 'user' as const,
-      cardinality: 'one' as const
+      from: 'user' as const,
+      field: 'threads' as const,
+      to: 'thread' as const,
+      cardinality: 'many' as const
     },
     {
-      from: 'thread' as const,
+      from: 'user' as const,
       field: 'comments' as const,
       to: 'comment' as const,
       cardinality: 'many' as const
     },
   ],
   access: {
-    account: {"signIn":{"params":{"password":{"type":"string","optional":false},"username":{"type":"string","optional":false}}},"signup":{"params":{"username":{"type":"string","optional":false},"password":{"type":"string","optional":false}}}},
+    account: {"signIn":{"params":{"password":{"type":"string","optional":false},"username":{"type":"string","optional":false}}},"signup":{"params":{"password":{"type":"string","optional":false},"username":{"type":"string","optional":false}}}},
   }
 } as const;
 
@@ -179,29 +179,8 @@ DEFINE EVENT comment_created ON TABLE comment WHEN $event = "CREATE" THEN
 -- ==================================================
 -- SPOOKY INCANTATION
 -- The Registry of active Live Queries (Incantations).
+-- Moved to meta_tables_client.surql and meta_tables_remote.surql
 -- ==================================================
-
-DEFINE TABLE _spooky_incantation SCHEMALESS
-PERMISSIONS FOR select, create, update, delete WHERE true;
-
--- The raw query string (for re-hydration/debugging)
--- The raw query string (for re-hydration/debugging)
-DEFINE FIELD surrealQL ON TABLE _spooky_incantation TYPE option<string>
-PERMISSIONS FOR select, create, update WHERE true;
-
--- The raw query string (for re-hydration/debugging)
-DEFINE FIELD clientId ON TABLE _spooky_incantation TYPE option<string>
-PERMISSIONS FOR select, create, update WHERE true;
-
-
-
--- For garbage collection (Heartbeat)
-DEFINE FIELD lastActiveAt ON TABLE _spooky_incantation TYPE datetime DEFAULT time::now()
-PERMISSIONS FOR select, create, update WHERE true;
-
--- How long this Incantation stays alive without activity
-DEFINE FIELD ttl ON TABLE _spooky_incantation TYPE duration
-PERMISSIONS FOR select, create, update WHERE true;
 
 -- ==================================================
 -- SPOOKY SCHEMA

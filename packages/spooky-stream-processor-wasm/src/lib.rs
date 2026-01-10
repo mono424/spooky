@@ -66,13 +66,13 @@ impl SpookyProcessor {
         let data = spooky_stream_processor::service::view::prepare_registration(config_val)
             .map_err(|e| JsValue::from_str(&format!("Registration failed: {}", e)))?;
 
+        // Extract plan ID before moving the plan
+        let plan_id = data.plan.id.clone();
         let initial_update = self.circuit.register_view(data.plan, data.safe_params);
 
         // If None, return default empty result
         let result = initial_update.unwrap_or_else(|| {
-            // We need to fetch the ID from the prepared plan
-            // data.plan.id is available
-            spooky_stream_processor::service::view::default_result(&data.plan.id)
+            spooky_stream_processor::service::view::default_result(&plan_id)
         });
 
         Ok(serde_wasm_bindgen::to_value(&result)?)
