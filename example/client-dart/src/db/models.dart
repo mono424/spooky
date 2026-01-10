@@ -15,6 +15,7 @@ class Schema {
     SpookyIncantation spookyIncantation;
     SpookyPendingMutations spookyPendingMutations;
     SpookySchema spookySchema;
+    SpookyStreamProcessorState spookyStreamProcessorState;
     Comment comment;
     CommentedOn commentedOn;
     Thread thread;
@@ -24,6 +25,7 @@ class Schema {
         required this.spookyIncantation,
         required this.spookyPendingMutations,
         required this.spookySchema,
+        required this.spookyStreamProcessorState,
         required this.comment,
         required this.commentedOn,
         required this.thread,
@@ -34,6 +36,7 @@ class Schema {
         spookyIncantation: SpookyIncantation.fromJson(json["_spooky_incantation"]),
         spookyPendingMutations: SpookyPendingMutations.fromJson(json["_spooky_pending_mutations"]),
         spookySchema: SpookySchema.fromJson(json["_spooky_schema"]),
+        spookyStreamProcessorState: SpookyStreamProcessorState.fromJson(json["_spooky_stream_processor_state"]),
         comment: Comment.fromJson(json["comment"]),
         commentedOn: CommentedOn.fromJson(json["commented_on"]),
         thread: Thread.fromJson(json["thread"]),
@@ -44,6 +47,7 @@ class Schema {
         "_spooky_incantation": spookyIncantation.toJson(),
         "_spooky_pending_mutations": spookyPendingMutations.toJson(),
         "_spooky_schema": spookySchema.toJson(),
+        "_spooky_stream_processor_state": spookyStreamProcessorState.toJson(),
         "comment": comment.toJson(),
         "commented_on": commentedOn.toJson(),
         "thread": thread.toJson(),
@@ -208,6 +212,30 @@ class SpookySchema {
         "created_at": createdAt?.toIso8601String(),
         "hash": hash,
         "id": id,
+    };
+}
+
+class SpookyStreamProcessorState {
+    String id;
+    String state;
+    DateTime? updatedAt;
+
+    SpookyStreamProcessorState({
+        required this.id,
+        required this.state,
+        this.updatedAt,
+    });
+
+    factory SpookyStreamProcessorState.fromJson(Map<String, dynamic> json) => SpookyStreamProcessorState(
+        id: json["id"],
+        state: json["state"],
+        updatedAt: json["updated_at"] == null ? null : DateTime.parse(json["updated_at"]),
+    );
+
+    Map<String, dynamic> toJson() => {
+        "id": id,
+        "state": state,
+        "updated_at": updatedAt?.toIso8601String(),
     };
 }
 
@@ -426,6 +454,18 @@ DEFINE FIELD IF NOT EXISTS id ON _spooky_schema TYPE string;
 DEFINE FIELD IF NOT EXISTS hash ON _spooky_schema TYPE string;
 DEFINE FIELD IF NOT EXISTS created_at ON _spooky_schema TYPE datetime VALUE time::now();
 DEFINE INDEX IF NOT EXISTS unique_hash ON _spooky_schema FIELDS hash UNIQUE;
+
+-- ==================================================
+-- SPOOKY STREAM PROCESSOR STATE
+-- Stores the local state of the stream processor (DBSP)
+-- ==================================================
+
+DEFINE TABLE IF NOT EXISTS _spooky_stream_processor_state SCHEMALESS
+PERMISSIONS FOR select, create, update, delete WHERE true;
+
+DEFINE FIELD IF NOT EXISTS id ON _spooky_stream_processor_state TYPE string;
+DEFINE FIELD IF NOT EXISTS state ON _spooky_stream_processor_state TYPE string;
+DEFINE FIELD IF NOT EXISTS updated_at ON _spooky_stream_processor_state TYPE datetime VALUE time::now();
 
 -- ==================================================
 -- SPOOKY DATA HASH (Client)
