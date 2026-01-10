@@ -7,10 +7,20 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from 'recharts';
-import { data10, data100, data1000, data10000 } from './benchmarkData';
+import {
+  data10,
+  data100,
+  data1000,
+  data5000,
+  data10000,
+} from './benchmarkData';
 
 interface ChartProps {
-  data: { record_count: number; latency_ms: number; is_extrapolated: number }[];
+  data: {
+    record_count: number;
+    latency_per_record_ms: number;
+    is_extrapolated: number;
+  }[];
   title: string;
 }
 
@@ -45,12 +55,12 @@ const Chart = ({ data, title }: ChartProps) => (
             labelStyle={{ color: '#a1a1aa' }}
             formatter={(value: number | undefined) => [
               `${(value ?? 0).toFixed(4)} ms`,
-              'Latency',
+              'Latency per record',
             ]}
           />
           <Line
             type="monotone"
-            dataKey="latency_ms"
+            dataKey="latency_per_record_ms"
             stroke="#a855f7"
             strokeWidth={2}
             dot={false}
@@ -64,10 +74,11 @@ const Chart = ({ data, title }: ChartProps) => (
 
 export default function BenchmarkCharts() {
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6 not-prose">
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-6 not-prose">
       <Chart data={data10} title="10 Registered Views" />
       <Chart data={data100} title="100 Registered Views" />
       <Chart data={data1000} title="1,000 Registered Views" />
+      <Chart data={data5000} title="5,000 Registered Views" />
       <Chart data={data10000} title="10,000 Registered Views" />
     </div>
   );

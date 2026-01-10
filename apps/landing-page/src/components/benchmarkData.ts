@@ -1,2028 +1,4029 @@
 export const data10 =  [
   {
     "record_count": 0,
-    "latency_ms": 0.0548,
+    "latency_per_record_ms": 0.025087,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 500,
+    "latency_per_record_ms": 0.02221,
     "is_extrapolated": 0
   },
   {
     "record_count": 1000,
-    "latency_ms": 0.735,
+    "latency_per_record_ms": 0.022525,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 1500,
+    "latency_per_record_ms": 0.023849,
     "is_extrapolated": 0
   },
   {
     "record_count": 2000,
-    "latency_ms": 1.3431,
+    "latency_per_record_ms": 0.023006,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 2500,
+    "latency_per_record_ms": 0.023589,
     "is_extrapolated": 0
   },
   {
     "record_count": 3000,
-    "latency_ms": 2.1035,
+    "latency_per_record_ms": 0.022997,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 3500,
+    "latency_per_record_ms": 0.022763,
     "is_extrapolated": 0
   },
   {
     "record_count": 4000,
-    "latency_ms": 2.6794,
+    "latency_per_record_ms": 0.023352,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 4500,
+    "latency_per_record_ms": 0.023097,
     "is_extrapolated": 0
   },
   {
     "record_count": 5000,
-    "latency_ms": 3.4881,
+    "latency_per_record_ms": 0.021401,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 5500,
+    "latency_per_record_ms": 0.021049,
     "is_extrapolated": 0
   },
   {
     "record_count": 6000,
-    "latency_ms": 3.9139,
+    "latency_per_record_ms": 0.02005,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 6500,
+    "latency_per_record_ms": 0.020962,
     "is_extrapolated": 0
   },
   {
     "record_count": 7000,
-    "latency_ms": 4.5875,
+    "latency_per_record_ms": 0.02116,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 7500,
+    "latency_per_record_ms": 0.023134,
     "is_extrapolated": 0
   },
   {
     "record_count": 8000,
-    "latency_ms": 5.3355,
+    "latency_per_record_ms": 0.021602,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 8500,
+    "latency_per_record_ms": 0.022542,
     "is_extrapolated": 0
   },
   {
     "record_count": 9000,
-    "latency_ms": 6.0778,
+    "latency_per_record_ms": 0.023662,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 9500,
+    "latency_per_record_ms": 0.023566,
     "is_extrapolated": 0
   },
   {
     "record_count": 10000,
-    "latency_ms": 7.0831,
+    "latency_per_record_ms": 0.023238,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 10500,
+    "latency_per_record_ms": 0.023269,
     "is_extrapolated": 0
   },
   {
     "record_count": 11000,
-    "latency_ms": 7.1363,
+    "latency_per_record_ms": 0.023241,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 11500,
+    "latency_per_record_ms": 0.023506,
     "is_extrapolated": 0
   },
   {
     "record_count": 12000,
-    "latency_ms": 7.3568,
+    "latency_per_record_ms": 0.021779,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 12500,
+    "latency_per_record_ms": 0.022704,
     "is_extrapolated": 0
   },
   {
     "record_count": 13000,
-    "latency_ms": 8.073,
+    "latency_per_record_ms": 0.023649,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 13500,
+    "latency_per_record_ms": 0.023222,
     "is_extrapolated": 0
   },
   {
     "record_count": 14000,
-    "latency_ms": 9.1863,
+    "latency_per_record_ms": 0.023279,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 14500,
+    "latency_per_record_ms": 0.023071,
     "is_extrapolated": 0
   },
   {
     "record_count": 15000,
-    "latency_ms": 10.0861,
+    "latency_per_record_ms": 0.023479,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 15500,
+    "latency_per_record_ms": 0.023602,
     "is_extrapolated": 0
   },
   {
     "record_count": 16000,
-    "latency_ms": 10.4904,
+    "latency_per_record_ms": 0.023702,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 16500,
+    "latency_per_record_ms": 0.023469,
     "is_extrapolated": 0
   },
   {
     "record_count": 17000,
-    "latency_ms": 11.2008,
+    "latency_per_record_ms": 0.023805,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 17500,
+    "latency_per_record_ms": 0.023763,
     "is_extrapolated": 0
   },
   {
     "record_count": 18000,
-    "latency_ms": 11.695,
+    "latency_per_record_ms": 0.023205,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 18500,
+    "latency_per_record_ms": 0.023996,
     "is_extrapolated": 0
   },
   {
     "record_count": 19000,
-    "latency_ms": 12.4292,
+    "latency_per_record_ms": 0.02333,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 19500,
+    "latency_per_record_ms": 0.023764,
     "is_extrapolated": 0
   },
   {
     "record_count": 20000,
-    "latency_ms": 13.3172,
+    "latency_per_record_ms": 0.024583,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 20500,
+    "latency_per_record_ms": 0.022194,
     "is_extrapolated": 0
   },
   {
     "record_count": 21000,
-    "latency_ms": 13.7445,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.021249,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 21500,
+    "latency_per_record_ms": 0.022513,
+    "is_extrapolated": 0
   },
   {
     "record_count": 22000,
-    "latency_ms": 14.395,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023475,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 22500,
+    "latency_per_record_ms": 0.02323,
+    "is_extrapolated": 0
   },
   {
     "record_count": 23000,
-    "latency_ms": 15.0454,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023921,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 23500,
+    "latency_per_record_ms": 0.02313,
+    "is_extrapolated": 0
   },
   {
     "record_count": 24000,
-    "latency_ms": 15.6959,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023735,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 24500,
+    "latency_per_record_ms": 0.023431,
+    "is_extrapolated": 0
   },
   {
     "record_count": 25000,
-    "latency_ms": 16.3464,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023861,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 25500,
+    "latency_per_record_ms": 0.022973,
+    "is_extrapolated": 0
   },
   {
     "record_count": 26000,
-    "latency_ms": 16.9969,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023719,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 26500,
+    "latency_per_record_ms": 0.023564,
+    "is_extrapolated": 0
   },
   {
     "record_count": 27000,
-    "latency_ms": 17.6474,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023529,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 27500,
+    "latency_per_record_ms": 0.023696,
+    "is_extrapolated": 0
   },
   {
     "record_count": 28000,
-    "latency_ms": 18.2979,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023609,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 28500,
+    "latency_per_record_ms": 0.023348,
+    "is_extrapolated": 0
   },
   {
     "record_count": 29000,
-    "latency_ms": 18.9483,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023567,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 29500,
+    "latency_per_record_ms": 0.023686,
+    "is_extrapolated": 0
   },
   {
     "record_count": 30000,
-    "latency_ms": 19.5988,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.022863,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 30500,
+    "latency_per_record_ms": 0.023051,
+    "is_extrapolated": 0
   },
   {
     "record_count": 31000,
-    "latency_ms": 20.2493,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.022818,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 31500,
+    "latency_per_record_ms": 0.022989,
+    "is_extrapolated": 0
   },
   {
     "record_count": 32000,
-    "latency_ms": 20.8998,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023089,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 32500,
+    "latency_per_record_ms": 0.022821,
+    "is_extrapolated": 0
   },
   {
     "record_count": 33000,
-    "latency_ms": 21.5503,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023984,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 33500,
+    "latency_per_record_ms": 0.024553,
+    "is_extrapolated": 0
   },
   {
     "record_count": 34000,
-    "latency_ms": 22.2007,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.02342,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 34500,
+    "latency_per_record_ms": 0.023289,
+    "is_extrapolated": 0
   },
   {
     "record_count": 35000,
-    "latency_ms": 22.8512,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023848,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 35500,
+    "latency_per_record_ms": 0.022783,
+    "is_extrapolated": 0
   },
   {
     "record_count": 36000,
-    "latency_ms": 23.5017,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023838,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 36500,
+    "latency_per_record_ms": 0.024164,
+    "is_extrapolated": 0
   },
   {
     "record_count": 37000,
-    "latency_ms": 24.1522,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.024155,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 37500,
+    "latency_per_record_ms": 0.023165,
+    "is_extrapolated": 0
   },
   {
     "record_count": 38000,
-    "latency_ms": 24.8027,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023092,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 38500,
+    "latency_per_record_ms": 0.023617,
+    "is_extrapolated": 0
   },
   {
     "record_count": 39000,
-    "latency_ms": 25.4532,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023526,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 39500,
+    "latency_per_record_ms": 0.024245,
+    "is_extrapolated": 0
   },
   {
     "record_count": 40000,
-    "latency_ms": 26.1036,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023898,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 40500,
+    "latency_per_record_ms": 0.023173,
+    "is_extrapolated": 0
   },
   {
     "record_count": 41000,
-    "latency_ms": 26.7541,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.024032,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 41500,
+    "latency_per_record_ms": 0.024228,
+    "is_extrapolated": 0
   },
   {
     "record_count": 42000,
-    "latency_ms": 27.4046,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023952,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 42500,
+    "latency_per_record_ms": 0.023936,
+    "is_extrapolated": 0
   },
   {
     "record_count": 43000,
-    "latency_ms": 28.0551,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.024201,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 43500,
+    "latency_per_record_ms": 0.023636,
+    "is_extrapolated": 0
   },
   {
     "record_count": 44000,
-    "latency_ms": 28.7056,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.022906,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 44500,
+    "latency_per_record_ms": 0.023736,
+    "is_extrapolated": 0
   },
   {
     "record_count": 45000,
-    "latency_ms": 29.356,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023123,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 45500,
+    "latency_per_record_ms": 0.023779,
+    "is_extrapolated": 0
   },
   {
     "record_count": 46000,
-    "latency_ms": 30.0065,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.024477,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 46500,
+    "latency_per_record_ms": 0.023632,
+    "is_extrapolated": 0
   },
   {
     "record_count": 47000,
-    "latency_ms": 30.657,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023948,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 47500,
+    "latency_per_record_ms": 0.023162,
+    "is_extrapolated": 0
   },
   {
     "record_count": 48000,
-    "latency_ms": 31.3075,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.0247,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 48500,
+    "latency_per_record_ms": 0.023941,
+    "is_extrapolated": 0
   },
   {
     "record_count": 49000,
-    "latency_ms": 31.958,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023293,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 49500,
+    "latency_per_record_ms": 0.024474,
+    "is_extrapolated": 0
   },
   {
     "record_count": 50000,
-    "latency_ms": 32.6085,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.024269,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 50500,
+    "latency_per_record_ms": 0.022434,
+    "is_extrapolated": 0
   },
   {
     "record_count": 51000,
-    "latency_ms": 33.2589,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023483,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 51500,
+    "latency_per_record_ms": 0.022852,
+    "is_extrapolated": 0
   },
   {
     "record_count": 52000,
-    "latency_ms": 33.9094,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.024174,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 52500,
+    "latency_per_record_ms": 0.024186,
+    "is_extrapolated": 0
   },
   {
     "record_count": 53000,
-    "latency_ms": 34.5599,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023821,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 53500,
+    "latency_per_record_ms": 0.023253,
+    "is_extrapolated": 0
   },
   {
     "record_count": 54000,
-    "latency_ms": 35.2104,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.024422,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 54500,
+    "latency_per_record_ms": 0.024028,
+    "is_extrapolated": 0
   },
   {
     "record_count": 55000,
-    "latency_ms": 35.8609,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023375,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 55500,
+    "latency_per_record_ms": 0.023225,
+    "is_extrapolated": 0
   },
   {
     "record_count": 56000,
-    "latency_ms": 36.5114,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023586,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 56500,
+    "latency_per_record_ms": 0.024601,
+    "is_extrapolated": 0
   },
   {
     "record_count": 57000,
-    "latency_ms": 37.1618,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023726,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 57500,
+    "latency_per_record_ms": 0.023945,
+    "is_extrapolated": 0
   },
   {
     "record_count": 58000,
-    "latency_ms": 37.8123,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.021503,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 58500,
+    "latency_per_record_ms": 0.024005,
+    "is_extrapolated": 0
   },
   {
     "record_count": 59000,
-    "latency_ms": 38.4628,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023506,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 59500,
+    "latency_per_record_ms": 0.023141,
+    "is_extrapolated": 0
   },
   {
     "record_count": 60000,
-    "latency_ms": 39.1133,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.024588,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 60500,
+    "latency_per_record_ms": 0.023144,
+    "is_extrapolated": 0
   },
   {
     "record_count": 61000,
-    "latency_ms": 39.7638,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.02358,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 61500,
+    "latency_per_record_ms": 0.023958,
+    "is_extrapolated": 0
   },
   {
     "record_count": 62000,
-    "latency_ms": 40.4142,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.024464,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 62500,
+    "latency_per_record_ms": 0.023675,
+    "is_extrapolated": 0
   },
   {
     "record_count": 63000,
-    "latency_ms": 41.0647,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.022908,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 63500,
+    "latency_per_record_ms": 0.023979,
+    "is_extrapolated": 0
   },
   {
     "record_count": 64000,
-    "latency_ms": 41.7152,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023419,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 64500,
+    "latency_per_record_ms": 0.023457,
+    "is_extrapolated": 0
   },
   {
     "record_count": 65000,
-    "latency_ms": 42.3657,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.02312,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 65500,
+    "latency_per_record_ms": 0.023215,
+    "is_extrapolated": 0
   },
   {
     "record_count": 66000,
-    "latency_ms": 43.0162,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.022792,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 66500,
+    "latency_per_record_ms": 0.023566,
+    "is_extrapolated": 0
   },
   {
     "record_count": 67000,
-    "latency_ms": 43.6667,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023157,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 67500,
+    "latency_per_record_ms": 0.02166,
+    "is_extrapolated": 0
   },
   {
     "record_count": 68000,
-    "latency_ms": 44.3171,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.024087,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 68500,
+    "latency_per_record_ms": 0.023169,
+    "is_extrapolated": 0
   },
   {
     "record_count": 69000,
-    "latency_ms": 44.9676,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023651,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 69500,
+    "latency_per_record_ms": 0.023454,
+    "is_extrapolated": 0
   },
   {
     "record_count": 70000,
-    "latency_ms": 45.6181,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023163,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 70500,
+    "latency_per_record_ms": 0.02317,
+    "is_extrapolated": 0
   },
   {
     "record_count": 71000,
-    "latency_ms": 46.2686,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023157,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 71500,
+    "latency_per_record_ms": 0.023689,
+    "is_extrapolated": 0
   },
   {
     "record_count": 72000,
-    "latency_ms": 46.9191,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023392,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 72500,
+    "latency_per_record_ms": 0.023533,
+    "is_extrapolated": 0
   },
   {
     "record_count": 73000,
-    "latency_ms": 47.5695,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.024211,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 73500,
+    "latency_per_record_ms": 0.016842,
+    "is_extrapolated": 0
   },
   {
     "record_count": 74000,
-    "latency_ms": 48.22,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.012064,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 74500,
+    "latency_per_record_ms": 0.022202,
+    "is_extrapolated": 0
   },
   {
     "record_count": 75000,
-    "latency_ms": 48.8705,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.02356,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 75500,
+    "latency_per_record_ms": 0.023368,
+    "is_extrapolated": 0
   },
   {
     "record_count": 76000,
-    "latency_ms": 49.521,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.022816,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 76500,
+    "latency_per_record_ms": 0.023623,
+    "is_extrapolated": 0
   },
   {
     "record_count": 77000,
-    "latency_ms": 50.1715,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.024332,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 77500,
+    "latency_per_record_ms": 0.023225,
+    "is_extrapolated": 0
   },
   {
     "record_count": 78000,
-    "latency_ms": 50.822,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.021934,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 78500,
+    "latency_per_record_ms": 0.023447,
+    "is_extrapolated": 0
   },
   {
     "record_count": 79000,
-    "latency_ms": 51.4724,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.020198,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 79500,
+    "latency_per_record_ms": 0.022131,
+    "is_extrapolated": 0
   },
   {
     "record_count": 80000,
-    "latency_ms": 52.1229,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.024834,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 80500,
+    "latency_per_record_ms": 0.023807,
+    "is_extrapolated": 0
   },
   {
     "record_count": 81000,
-    "latency_ms": 52.7734,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.022418,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 81500,
+    "latency_per_record_ms": 0.022676,
+    "is_extrapolated": 0
   },
   {
     "record_count": 82000,
-    "latency_ms": 53.4239,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.024503,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 82500,
+    "latency_per_record_ms": 0.023706,
+    "is_extrapolated": 0
   },
   {
     "record_count": 83000,
-    "latency_ms": 54.0744,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.024033,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 83500,
+    "latency_per_record_ms": 0.023899,
+    "is_extrapolated": 0
   },
   {
     "record_count": 84000,
-    "latency_ms": 54.7249,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023917,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 84500,
+    "latency_per_record_ms": 0.023635,
+    "is_extrapolated": 0
   },
   {
     "record_count": 85000,
-    "latency_ms": 55.3753,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023605,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 85500,
+    "latency_per_record_ms": 0.024021,
+    "is_extrapolated": 0
   },
   {
     "record_count": 86000,
-    "latency_ms": 56.0258,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.022461,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 86500,
+    "latency_per_record_ms": 0.024084,
+    "is_extrapolated": 0
   },
   {
     "record_count": 87000,
-    "latency_ms": 56.6763,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023593,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 87500,
+    "latency_per_record_ms": 0.023747,
+    "is_extrapolated": 0
   },
   {
     "record_count": 88000,
-    "latency_ms": 57.3268,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023816,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 88500,
+    "latency_per_record_ms": 0.023372,
+    "is_extrapolated": 0
   },
   {
     "record_count": 89000,
-    "latency_ms": 57.9773,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.022579,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 89500,
+    "latency_per_record_ms": 0.022587,
+    "is_extrapolated": 0
   },
   {
     "record_count": 90000,
-    "latency_ms": 58.6277,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023686,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 90500,
+    "latency_per_record_ms": 0.023886,
+    "is_extrapolated": 0
   },
   {
     "record_count": 91000,
-    "latency_ms": 59.2782,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023852,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 91500,
+    "latency_per_record_ms": 0.023664,
+    "is_extrapolated": 0
   },
   {
     "record_count": 92000,
-    "latency_ms": 59.9287,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.024378,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 92500,
+    "latency_per_record_ms": 0.023773,
+    "is_extrapolated": 0
   },
   {
     "record_count": 93000,
-    "latency_ms": 60.5792,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023719,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 93500,
+    "latency_per_record_ms": 0.02469,
+    "is_extrapolated": 0
   },
   {
     "record_count": 94000,
-    "latency_ms": 61.2297,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023761,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 94500,
+    "latency_per_record_ms": 0.022973,
+    "is_extrapolated": 0
   },
   {
     "record_count": 95000,
-    "latency_ms": 61.8802,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.02322,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 95500,
+    "latency_per_record_ms": 0.022954,
+    "is_extrapolated": 0
   },
   {
     "record_count": 96000,
-    "latency_ms": 62.5306,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023841,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 96500,
+    "latency_per_record_ms": 0.024354,
+    "is_extrapolated": 0
   },
   {
     "record_count": 97000,
-    "latency_ms": 63.1811,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023079,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 97500,
+    "latency_per_record_ms": 0.023168,
+    "is_extrapolated": 0
   },
   {
     "record_count": 98000,
-    "latency_ms": 63.8316,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.023656,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 98500,
+    "latency_per_record_ms": 0.023292,
+    "is_extrapolated": 0
   },
   {
     "record_count": 99000,
-    "latency_ms": 64.4821,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.022957,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 99500,
+    "latency_per_record_ms": 0.022664,
+    "is_extrapolated": 0
   },
   {
     "record_count": 100000,
-    "latency_ms": 65.1326,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.022647,
+    "is_extrapolated": 0
   }
 ] ;
 export const data100 =  [
   {
     "record_count": 0,
-    "latency_ms": 0.2402,
+    "latency_per_record_ms": 0.039927,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 500,
+    "latency_per_record_ms": 0.039816,
     "is_extrapolated": 0
   },
   {
     "record_count": 1000,
-    "latency_ms": 4.3266,
+    "latency_per_record_ms": 0.038669,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 1500,
+    "latency_per_record_ms": 0.038814,
     "is_extrapolated": 0
   },
   {
     "record_count": 2000,
-    "latency_ms": 9.335,
+    "latency_per_record_ms": 0.039083,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 2500,
+    "latency_per_record_ms": 0.038062,
     "is_extrapolated": 0
   },
   {
     "record_count": 3000,
-    "latency_ms": 14.1008,
+    "latency_per_record_ms": 0.038563,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 3500,
+    "latency_per_record_ms": 0.0376,
     "is_extrapolated": 0
   },
   {
     "record_count": 4000,
-    "latency_ms": 18.8702,
+    "latency_per_record_ms": 0.038582,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 4500,
+    "latency_per_record_ms": 0.038853,
     "is_extrapolated": 0
   },
   {
     "record_count": 5000,
-    "latency_ms": 23.4694,
+    "latency_per_record_ms": 0.039302,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 5500,
+    "latency_per_record_ms": 0.038415,
     "is_extrapolated": 0
   },
   {
     "record_count": 6000,
-    "latency_ms": 28.1779,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.045296,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 6500,
+    "latency_per_record_ms": 0.037264,
+    "is_extrapolated": 0
   },
   {
     "record_count": 7000,
-    "latency_ms": 32.8792,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.036025,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 7500,
+    "latency_per_record_ms": 0.035586,
+    "is_extrapolated": 0
   },
   {
     "record_count": 8000,
-    "latency_ms": 37.5804,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.037071,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 8500,
+    "latency_per_record_ms": 0.038048,
+    "is_extrapolated": 0
   },
   {
     "record_count": 9000,
-    "latency_ms": 42.2816,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.039148,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 9500,
+    "latency_per_record_ms": 0.050399,
+    "is_extrapolated": 0
   },
   {
     "record_count": 10000,
-    "latency_ms": 46.9828,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.03989,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 10500,
+    "latency_per_record_ms": 0.039382,
+    "is_extrapolated": 0
   },
   {
     "record_count": 11000,
-    "latency_ms": 51.684,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.036453,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 11500,
+    "latency_per_record_ms": 0.03574,
+    "is_extrapolated": 0
   },
   {
     "record_count": 12000,
-    "latency_ms": 56.3852,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.037956,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 12500,
+    "latency_per_record_ms": 0.041257,
+    "is_extrapolated": 0
   },
   {
     "record_count": 13000,
-    "latency_ms": 61.0864,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.038579,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 13500,
+    "latency_per_record_ms": 0.038722,
+    "is_extrapolated": 0
   },
   {
     "record_count": 14000,
-    "latency_ms": 65.7876,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.038549,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 14500,
+    "latency_per_record_ms": 0.038025,
+    "is_extrapolated": 0
   },
   {
     "record_count": 15000,
-    "latency_ms": 70.4889,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.037616,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 15500,
+    "latency_per_record_ms": 0.038722,
+    "is_extrapolated": 0
   },
   {
     "record_count": 16000,
-    "latency_ms": 75.1901,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.038462,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 16500,
+    "latency_per_record_ms": 0.038488,
+    "is_extrapolated": 0
   },
   {
     "record_count": 17000,
-    "latency_ms": 79.8913,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.038662,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 17500,
+    "latency_per_record_ms": 0.039697,
+    "is_extrapolated": 0
   },
   {
     "record_count": 18000,
-    "latency_ms": 84.5925,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.037792,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 18500,
+    "latency_per_record_ms": 0.039465,
+    "is_extrapolated": 0
   },
   {
     "record_count": 19000,
-    "latency_ms": 89.2937,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.038212,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 19500,
+    "latency_per_record_ms": 0.037392,
+    "is_extrapolated": 0
   },
   {
     "record_count": 20000,
-    "latency_ms": 93.9949,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.03902,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 20500,
+    "latency_per_record_ms": 0.039254,
+    "is_extrapolated": 0
   },
   {
     "record_count": 21000,
-    "latency_ms": 98.6961,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.037521,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 21500,
+    "latency_per_record_ms": 0.039437,
+    "is_extrapolated": 0
   },
   {
     "record_count": 22000,
-    "latency_ms": 103.3973,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.038465,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 22500,
+    "latency_per_record_ms": 0.038025,
+    "is_extrapolated": 0
   },
   {
     "record_count": 23000,
-    "latency_ms": 108.0986,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.04037,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 23500,
+    "latency_per_record_ms": 0.039371,
+    "is_extrapolated": 0
   },
   {
     "record_count": 24000,
-    "latency_ms": 112.7998,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.038756,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 24500,
+    "latency_per_record_ms": 0.038313,
+    "is_extrapolated": 0
   },
   {
     "record_count": 25000,
-    "latency_ms": 117.501,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.038229,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 25500,
+    "latency_per_record_ms": 0.037211,
+    "is_extrapolated": 0
   },
   {
     "record_count": 26000,
-    "latency_ms": 122.2022,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.038381,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 26500,
+    "latency_per_record_ms": 0.039338,
+    "is_extrapolated": 0
   },
   {
     "record_count": 27000,
-    "latency_ms": 126.9034,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.040145,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 27500,
+    "latency_per_record_ms": 0.037357,
+    "is_extrapolated": 0
   },
   {
     "record_count": 28000,
-    "latency_ms": 131.6046,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.038878,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 28500,
+    "latency_per_record_ms": 0.038755,
+    "is_extrapolated": 0
   },
   {
     "record_count": 29000,
-    "latency_ms": 136.3058,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.038527,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 29500,
+    "latency_per_record_ms": 0.039354,
+    "is_extrapolated": 0
   },
   {
     "record_count": 30000,
-    "latency_ms": 141.007,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.039943,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 30500,
+    "latency_per_record_ms": 0.040338,
+    "is_extrapolated": 0
   },
   {
     "record_count": 31000,
-    "latency_ms": 145.7082,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.038849,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 31500,
+    "latency_per_record_ms": 0.039456,
+    "is_extrapolated": 0
   },
   {
     "record_count": 32000,
-    "latency_ms": 150.4095,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.04048,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 32500,
+    "latency_per_record_ms": 0.037766,
+    "is_extrapolated": 0
   },
   {
     "record_count": 33000,
-    "latency_ms": 155.1107,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.038773,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 33500,
+    "latency_per_record_ms": 0.037991,
+    "is_extrapolated": 0
   },
   {
     "record_count": 34000,
-    "latency_ms": 159.8119,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.038601,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 34500,
+    "latency_per_record_ms": 0.038756,
+    "is_extrapolated": 0
   },
   {
     "record_count": 35000,
-    "latency_ms": 164.5131,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.039033,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 35500,
+    "latency_per_record_ms": 0.039292,
+    "is_extrapolated": 0
   },
   {
     "record_count": 36000,
-    "latency_ms": 169.2143,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.039525,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 36500,
+    "latency_per_record_ms": 0.038459,
+    "is_extrapolated": 0
   },
   {
     "record_count": 37000,
-    "latency_ms": 173.9155,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.039201,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 37500,
+    "latency_per_record_ms": 0.038094,
+    "is_extrapolated": 0
   },
   {
     "record_count": 38000,
-    "latency_ms": 178.6167,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.037878,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 38500,
+    "latency_per_record_ms": 0.039275,
+    "is_extrapolated": 0
   },
   {
     "record_count": 39000,
-    "latency_ms": 183.3179,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.037901,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 39500,
+    "latency_per_record_ms": 0.037483,
+    "is_extrapolated": 0
   },
   {
     "record_count": 40000,
-    "latency_ms": 188.0192,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.037567,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 40500,
+    "latency_per_record_ms": 0.038738,
+    "is_extrapolated": 0
   },
   {
     "record_count": 41000,
-    "latency_ms": 192.7204,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.039605,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 41500,
+    "latency_per_record_ms": 0.038609,
+    "is_extrapolated": 0
   },
   {
     "record_count": 42000,
-    "latency_ms": 197.4216,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.039215,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 42500,
+    "latency_per_record_ms": 0.038866,
+    "is_extrapolated": 0
   },
   {
     "record_count": 43000,
-    "latency_ms": 202.1228,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.037745,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 43500,
+    "latency_per_record_ms": 0.039364,
+    "is_extrapolated": 0
   },
   {
     "record_count": 44000,
-    "latency_ms": 206.824,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.039133,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 44500,
+    "latency_per_record_ms": 0.038624,
+    "is_extrapolated": 0
   },
   {
     "record_count": 45000,
-    "latency_ms": 211.5252,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.038427,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 45500,
+    "latency_per_record_ms": 0.040036,
+    "is_extrapolated": 0
   },
   {
     "record_count": 46000,
-    "latency_ms": 216.2264,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.039041,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 46500,
+    "latency_per_record_ms": 0.039022,
+    "is_extrapolated": 0
   },
   {
     "record_count": 47000,
-    "latency_ms": 220.9276,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.038711,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 47500,
+    "latency_per_record_ms": 0.03884,
+    "is_extrapolated": 0
   },
   {
     "record_count": 48000,
-    "latency_ms": 225.6289,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.038532,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 48500,
+    "latency_per_record_ms": 0.040867,
+    "is_extrapolated": 0
   },
   {
     "record_count": 49000,
-    "latency_ms": 230.3301,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.038367,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 49500,
+    "latency_per_record_ms": 0.038939,
+    "is_extrapolated": 0
   },
   {
     "record_count": 50000,
-    "latency_ms": 235.0313,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.039366,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 50500,
+    "latency_per_record_ms": 0.03952,
+    "is_extrapolated": 0
   },
   {
     "record_count": 51000,
-    "latency_ms": 239.7325,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.039548,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 51500,
+    "latency_per_record_ms": 0.038546,
+    "is_extrapolated": 0
   },
   {
     "record_count": 52000,
-    "latency_ms": 244.4337,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.039292,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 52500,
+    "latency_per_record_ms": 0.039612,
+    "is_extrapolated": 0
   },
   {
     "record_count": 53000,
-    "latency_ms": 249.1349,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.039205,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 53500,
+    "latency_per_record_ms": 0.039263,
+    "is_extrapolated": 0
   },
   {
     "record_count": 54000,
-    "latency_ms": 253.8361,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.038428,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 54500,
+    "latency_per_record_ms": 0.039238,
+    "is_extrapolated": 0
   },
   {
     "record_count": 55000,
-    "latency_ms": 258.5373,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.038235,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 55500,
+    "latency_per_record_ms": 0.041237,
+    "is_extrapolated": 0
   },
   {
     "record_count": 56000,
-    "latency_ms": 263.2386,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.038179,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 56500,
+    "latency_per_record_ms": 0.03772,
+    "is_extrapolated": 0
   },
   {
     "record_count": 57000,
-    "latency_ms": 267.9398,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.04046,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 57500,
+    "latency_per_record_ms": 0.040134,
+    "is_extrapolated": 0
   },
   {
     "record_count": 58000,
-    "latency_ms": 272.641,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.039684,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 58500,
+    "latency_per_record_ms": 0.039008,
+    "is_extrapolated": 0
   },
   {
     "record_count": 59000,
-    "latency_ms": 277.3422,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.037822,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 59500,
+    "latency_per_record_ms": 0.039702,
+    "is_extrapolated": 0
   },
   {
     "record_count": 60000,
-    "latency_ms": 282.0434,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.03929,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 60500,
+    "latency_per_record_ms": 0.039262,
+    "is_extrapolated": 0
   },
   {
     "record_count": 61000,
-    "latency_ms": 286.7446,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.03891,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 61500,
+    "latency_per_record_ms": 0.039099,
+    "is_extrapolated": 0
   },
   {
     "record_count": 62000,
-    "latency_ms": 291.4458,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.039045,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 62500,
+    "latency_per_record_ms": 0.038592,
+    "is_extrapolated": 0
   },
   {
     "record_count": 63000,
-    "latency_ms": 296.147,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.03952,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 63500,
+    "latency_per_record_ms": 0.03943,
+    "is_extrapolated": 0
   },
   {
     "record_count": 64000,
-    "latency_ms": 300.8483,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.038198,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 64500,
+    "latency_per_record_ms": 0.038023,
+    "is_extrapolated": 0
   },
   {
     "record_count": 65000,
-    "latency_ms": 305.5495,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.037474,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 65500,
+    "latency_per_record_ms": 0.037598,
+    "is_extrapolated": 0
   },
   {
     "record_count": 66000,
-    "latency_ms": 310.2507,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.039409,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 66500,
+    "latency_per_record_ms": 0.039416,
+    "is_extrapolated": 0
   },
   {
     "record_count": 67000,
-    "latency_ms": 314.9519,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.03951,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 67500,
+    "latency_per_record_ms": 0.039102,
+    "is_extrapolated": 0
   },
   {
     "record_count": 68000,
-    "latency_ms": 319.6531,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.038848,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 68500,
+    "latency_per_record_ms": 0.037882,
+    "is_extrapolated": 0
   },
   {
     "record_count": 69000,
-    "latency_ms": 324.3543,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.038744,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 69500,
+    "latency_per_record_ms": 0.039717,
+    "is_extrapolated": 0
   },
   {
     "record_count": 70000,
-    "latency_ms": 329.0555,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.039216,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 70500,
+    "latency_per_record_ms": 0.038034,
+    "is_extrapolated": 0
   },
   {
     "record_count": 71000,
-    "latency_ms": 333.7567,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.040514,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 71500,
+    "latency_per_record_ms": 0.039496,
+    "is_extrapolated": 0
   },
   {
     "record_count": 72000,
-    "latency_ms": 338.458,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.039123,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 72500,
+    "latency_per_record_ms": 0.038854,
+    "is_extrapolated": 0
   },
   {
     "record_count": 73000,
-    "latency_ms": 343.1592,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.039165,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 73500,
+    "latency_per_record_ms": 0.038201,
+    "is_extrapolated": 0
   },
   {
     "record_count": 74000,
-    "latency_ms": 347.8604,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.038584,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 74500,
+    "latency_per_record_ms": 0.03931,
+    "is_extrapolated": 0
   },
   {
     "record_count": 75000,
-    "latency_ms": 352.5616,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.037879,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 75500,
+    "latency_per_record_ms": 0.038165,
+    "is_extrapolated": 0
   },
   {
     "record_count": 76000,
-    "latency_ms": 357.2628,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.043666,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 76500,
+    "latency_per_record_ms": 0.038439,
+    "is_extrapolated": 0
   },
   {
     "record_count": 77000,
-    "latency_ms": 361.964,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.039109,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 77500,
+    "latency_per_record_ms": 0.037575,
+    "is_extrapolated": 0
   },
   {
     "record_count": 78000,
-    "latency_ms": 366.6652,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.035745,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 78500,
+    "latency_per_record_ms": 0.039812,
+    "is_extrapolated": 0
   },
   {
     "record_count": 79000,
-    "latency_ms": 371.3664,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.038862,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 79500,
+    "latency_per_record_ms": 0.037282,
+    "is_extrapolated": 0
   },
   {
     "record_count": 80000,
-    "latency_ms": 376.0677,
+    "latency_per_record_ms": 0.040015,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 80500,
+    "latency_per_record_ms": 0.03895,
     "is_extrapolated": 1
   },
   {
     "record_count": 81000,
-    "latency_ms": 380.7689,
+    "latency_per_record_ms": 0.038951,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 81500,
+    "latency_per_record_ms": 0.038952,
     "is_extrapolated": 1
   },
   {
     "record_count": 82000,
-    "latency_ms": 385.4701,
+    "latency_per_record_ms": 0.038952,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 82500,
+    "latency_per_record_ms": 0.038953,
     "is_extrapolated": 1
   },
   {
     "record_count": 83000,
-    "latency_ms": 390.1713,
+    "latency_per_record_ms": 0.038954,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 83500,
+    "latency_per_record_ms": 0.038954,
     "is_extrapolated": 1
   },
   {
     "record_count": 84000,
-    "latency_ms": 394.8725,
+    "latency_per_record_ms": 0.038955,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 84500,
+    "latency_per_record_ms": 0.038956,
     "is_extrapolated": 1
   },
   {
     "record_count": 85000,
-    "latency_ms": 399.5737,
+    "latency_per_record_ms": 0.038957,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 85500,
+    "latency_per_record_ms": 0.038957,
     "is_extrapolated": 1
   },
   {
     "record_count": 86000,
-    "latency_ms": 404.2749,
+    "latency_per_record_ms": 0.038958,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 86500,
+    "latency_per_record_ms": 0.038959,
     "is_extrapolated": 1
   },
   {
     "record_count": 87000,
-    "latency_ms": 408.9761,
+    "latency_per_record_ms": 0.038959,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 87500,
+    "latency_per_record_ms": 0.03896,
     "is_extrapolated": 1
   },
   {
     "record_count": 88000,
-    "latency_ms": 413.6774,
+    "latency_per_record_ms": 0.038961,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 88500,
+    "latency_per_record_ms": 0.038961,
     "is_extrapolated": 1
   },
   {
     "record_count": 89000,
-    "latency_ms": 418.3786,
+    "latency_per_record_ms": 0.038962,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 89500,
+    "latency_per_record_ms": 0.038963,
     "is_extrapolated": 1
   },
   {
     "record_count": 90000,
-    "latency_ms": 423.0798,
+    "latency_per_record_ms": 0.038963,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 90500,
+    "latency_per_record_ms": 0.038964,
     "is_extrapolated": 1
   },
   {
     "record_count": 91000,
-    "latency_ms": 427.781,
+    "latency_per_record_ms": 0.038965,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 91500,
+    "latency_per_record_ms": 0.038966,
     "is_extrapolated": 1
   },
   {
     "record_count": 92000,
-    "latency_ms": 432.4822,
+    "latency_per_record_ms": 0.038966,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 92500,
+    "latency_per_record_ms": 0.038967,
     "is_extrapolated": 1
   },
   {
     "record_count": 93000,
-    "latency_ms": 437.1834,
+    "latency_per_record_ms": 0.038968,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 93500,
+    "latency_per_record_ms": 0.038968,
     "is_extrapolated": 1
   },
   {
     "record_count": 94000,
-    "latency_ms": 441.8846,
+    "latency_per_record_ms": 0.038969,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 94500,
+    "latency_per_record_ms": 0.03897,
     "is_extrapolated": 1
   },
   {
     "record_count": 95000,
-    "latency_ms": 446.5858,
+    "latency_per_record_ms": 0.03897,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 95500,
+    "latency_per_record_ms": 0.038971,
     "is_extrapolated": 1
   },
   {
     "record_count": 96000,
-    "latency_ms": 451.2871,
+    "latency_per_record_ms": 0.038972,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 96500,
+    "latency_per_record_ms": 0.038972,
     "is_extrapolated": 1
   },
   {
     "record_count": 97000,
-    "latency_ms": 455.9883,
+    "latency_per_record_ms": 0.038973,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 97500,
+    "latency_per_record_ms": 0.038974,
     "is_extrapolated": 1
   },
   {
     "record_count": 98000,
-    "latency_ms": 460.6895,
+    "latency_per_record_ms": 0.038975,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 98500,
+    "latency_per_record_ms": 0.038975,
     "is_extrapolated": 1
   },
   {
     "record_count": 99000,
-    "latency_ms": 465.3907,
+    "latency_per_record_ms": 0.038976,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 99500,
+    "latency_per_record_ms": 0.038977,
     "is_extrapolated": 1
   },
   {
     "record_count": 100000,
-    "latency_ms": 470.0919,
+    "latency_per_record_ms": 0.038977,
     "is_extrapolated": 1
   }
 ] ;
 export const data1000 =  [
   {
     "record_count": 0,
-    "latency_ms": 1.2545,
+    "latency_per_record_ms": 0.101716,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 500,
+    "latency_per_record_ms": 0.100002,
     "is_extrapolated": 0
   },
   {
     "record_count": 1000,
-    "latency_ms": 41.4964,
+    "latency_per_record_ms": 0.100787,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 1500,
+    "latency_per_record_ms": 0.101303,
     "is_extrapolated": 0
   },
   {
     "record_count": 2000,
-    "latency_ms": 87.8441,
+    "latency_per_record_ms": 0.099945,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 2500,
+    "latency_per_record_ms": 0.098948,
     "is_extrapolated": 0
   },
   {
     "record_count": 3000,
-    "latency_ms": 130.1213,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.098324,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 3500,
+    "latency_per_record_ms": 0.097747,
+    "is_extrapolated": 0
   },
   {
     "record_count": 4000,
-    "latency_ms": 173.416,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.095554,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 4500,
+    "latency_per_record_ms": 0.096702,
+    "is_extrapolated": 0
   },
   {
     "record_count": 5000,
-    "latency_ms": 216.7108,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.091682,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 5500,
+    "latency_per_record_ms": 0.096909,
+    "is_extrapolated": 0
   },
   {
     "record_count": 6000,
-    "latency_ms": 260.0056,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.09769,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 6500,
+    "latency_per_record_ms": 0.099518,
+    "is_extrapolated": 0
   },
   {
     "record_count": 7000,
-    "latency_ms": 303.3004,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.098623,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 7500,
+    "latency_per_record_ms": 0.093599,
+    "is_extrapolated": 0
   },
   {
     "record_count": 8000,
-    "latency_ms": 346.5952,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.098069,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 8500,
+    "latency_per_record_ms": 0.098853,
+    "is_extrapolated": 0
   },
   {
     "record_count": 9000,
-    "latency_ms": 389.89,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.096595,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 9500,
+    "latency_per_record_ms": 0.092648,
+    "is_extrapolated": 0
   },
   {
     "record_count": 10000,
-    "latency_ms": 433.1848,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.08856,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 10500,
+    "latency_per_record_ms": 0.098893,
+    "is_extrapolated": 0
   },
   {
     "record_count": 11000,
-    "latency_ms": 476.4796,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.098055,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 11500,
+    "latency_per_record_ms": 0.096532,
+    "is_extrapolated": 0
   },
   {
     "record_count": 12000,
-    "latency_ms": 519.7744,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.096423,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 12500,
+    "latency_per_record_ms": 0.093178,
+    "is_extrapolated": 0
   },
   {
     "record_count": 13000,
-    "latency_ms": 563.0692,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.09658,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 13500,
+    "latency_per_record_ms": 0.099163,
+    "is_extrapolated": 0
   },
   {
     "record_count": 14000,
-    "latency_ms": 606.364,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.091318,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 14500,
+    "latency_per_record_ms": 0.100397,
+    "is_extrapolated": 0
   },
   {
     "record_count": 15000,
-    "latency_ms": 649.6588,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.099329,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 15500,
+    "latency_per_record_ms": 0.10149,
+    "is_extrapolated": 0
   },
   {
     "record_count": 16000,
-    "latency_ms": 692.9536,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.098175,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 16500,
+    "latency_per_record_ms": 0.090472,
+    "is_extrapolated": 0
   },
   {
     "record_count": 17000,
-    "latency_ms": 736.2484,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.100301,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 17500,
+    "latency_per_record_ms": 0.096963,
+    "is_extrapolated": 0
   },
   {
     "record_count": 18000,
-    "latency_ms": 779.5432,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.099715,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 18500,
+    "latency_per_record_ms": 0.101092,
+    "is_extrapolated": 0
   },
   {
     "record_count": 19000,
-    "latency_ms": 822.838,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.087672,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 19500,
+    "latency_per_record_ms": 0.098075,
+    "is_extrapolated": 0
   },
   {
     "record_count": 20000,
-    "latency_ms": 866.1328,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.092928,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 20500,
+    "latency_per_record_ms": 0.100415,
+    "is_extrapolated": 0
   },
   {
     "record_count": 21000,
-    "latency_ms": 909.4276,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.099759,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 21500,
+    "latency_per_record_ms": 0.100047,
+    "is_extrapolated": 0
   },
   {
     "record_count": 22000,
-    "latency_ms": 952.7224,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.101557,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 22500,
+    "latency_per_record_ms": 0.100998,
+    "is_extrapolated": 0
   },
   {
     "record_count": 23000,
-    "latency_ms": 996.0172,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.09609,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 23500,
+    "latency_per_record_ms": 0.099603,
+    "is_extrapolated": 0
   },
   {
     "record_count": 24000,
-    "latency_ms": 1039.312,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.098327,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 24500,
+    "latency_per_record_ms": 0.102299,
+    "is_extrapolated": 0
   },
   {
     "record_count": 25000,
-    "latency_ms": 1082.6068,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.097789,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 25500,
+    "latency_per_record_ms": 0.095759,
+    "is_extrapolated": 0
   },
   {
     "record_count": 26000,
-    "latency_ms": 1125.9015,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.100737,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 26500,
+    "latency_per_record_ms": 0.100412,
+    "is_extrapolated": 0
   },
   {
     "record_count": 27000,
-    "latency_ms": 1169.1963,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.096723,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 27500,
+    "latency_per_record_ms": 0.096098,
+    "is_extrapolated": 0
   },
   {
     "record_count": 28000,
-    "latency_ms": 1212.4911,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.098954,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 28500,
+    "latency_per_record_ms": 0.100943,
+    "is_extrapolated": 0
   },
   {
     "record_count": 29000,
-    "latency_ms": 1255.7859,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.097738,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 29500,
+    "latency_per_record_ms": 0.099782,
+    "is_extrapolated": 0
   },
   {
     "record_count": 30000,
-    "latency_ms": 1299.0807,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.09903,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 30500,
+    "latency_per_record_ms": 0.090552,
+    "is_extrapolated": 0
   },
   {
     "record_count": 31000,
-    "latency_ms": 1342.3755,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.09725,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 31500,
+    "latency_per_record_ms": 0.091076,
+    "is_extrapolated": 0
   },
   {
     "record_count": 32000,
-    "latency_ms": 1385.6703,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.09872,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 32500,
+    "latency_per_record_ms": 0.097675,
+    "is_extrapolated": 0
   },
   {
     "record_count": 33000,
-    "latency_ms": 1428.9651,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.091528,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 33500,
+    "latency_per_record_ms": 0.100806,
+    "is_extrapolated": 0
   },
   {
     "record_count": 34000,
-    "latency_ms": 1472.2599,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.099686,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 34500,
+    "latency_per_record_ms": 0.101518,
+    "is_extrapolated": 0
   },
   {
     "record_count": 35000,
-    "latency_ms": 1515.5547,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.099306,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 35500,
+    "latency_per_record_ms": 0.099642,
+    "is_extrapolated": 0
   },
   {
     "record_count": 36000,
-    "latency_ms": 1558.8495,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.096648,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 36500,
+    "latency_per_record_ms": 0.101247,
+    "is_extrapolated": 0
   },
   {
     "record_count": 37000,
-    "latency_ms": 1602.1443,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.101176,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 37500,
+    "latency_per_record_ms": 0.100265,
+    "is_extrapolated": 0
   },
   {
     "record_count": 38000,
-    "latency_ms": 1645.4391,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.097754,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 38500,
+    "latency_per_record_ms": 0.102408,
+    "is_extrapolated": 0
   },
   {
     "record_count": 39000,
-    "latency_ms": 1688.7339,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.087794,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 39500,
+    "latency_per_record_ms": 0.096162,
+    "is_extrapolated": 0
   },
   {
     "record_count": 40000,
-    "latency_ms": 1732.0287,
+    "latency_per_record_ms": 0.100159,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 40500,
+    "latency_per_record_ms": 0.09805,
     "is_extrapolated": 1
   },
   {
     "record_count": 41000,
-    "latency_ms": 1775.3235,
+    "latency_per_record_ms": 0.098058,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 41500,
+    "latency_per_record_ms": 0.098066,
     "is_extrapolated": 1
   },
   {
     "record_count": 42000,
-    "latency_ms": 1818.6183,
+    "latency_per_record_ms": 0.098075,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 42500,
+    "latency_per_record_ms": 0.098083,
     "is_extrapolated": 1
   },
   {
     "record_count": 43000,
-    "latency_ms": 1861.9131,
+    "latency_per_record_ms": 0.098091,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 43500,
+    "latency_per_record_ms": 0.098099,
     "is_extrapolated": 1
   },
   {
     "record_count": 44000,
-    "latency_ms": 1905.2079,
+    "latency_per_record_ms": 0.098107,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 44500,
+    "latency_per_record_ms": 0.098115,
     "is_extrapolated": 1
   },
   {
     "record_count": 45000,
-    "latency_ms": 1948.5027,
+    "latency_per_record_ms": 0.098123,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 45500,
+    "latency_per_record_ms": 0.098132,
     "is_extrapolated": 1
   },
   {
     "record_count": 46000,
-    "latency_ms": 1991.7975,
+    "latency_per_record_ms": 0.09814,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 46500,
+    "latency_per_record_ms": 0.098148,
     "is_extrapolated": 1
   },
   {
     "record_count": 47000,
-    "latency_ms": 2035.0923,
+    "latency_per_record_ms": 0.098156,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 47500,
+    "latency_per_record_ms": 0.098164,
     "is_extrapolated": 1
   },
   {
     "record_count": 48000,
-    "latency_ms": 2078.387,
+    "latency_per_record_ms": 0.098172,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 48500,
+    "latency_per_record_ms": 0.098181,
     "is_extrapolated": 1
   },
   {
     "record_count": 49000,
-    "latency_ms": 2121.6818,
+    "latency_per_record_ms": 0.098189,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 49500,
+    "latency_per_record_ms": 0.098197,
     "is_extrapolated": 1
   },
   {
     "record_count": 50000,
-    "latency_ms": 2164.9766,
+    "latency_per_record_ms": 0.098205,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 50500,
+    "latency_per_record_ms": 0.098213,
     "is_extrapolated": 1
   },
   {
     "record_count": 51000,
-    "latency_ms": 2208.2714,
+    "latency_per_record_ms": 0.098221,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 51500,
+    "latency_per_record_ms": 0.09823,
     "is_extrapolated": 1
   },
   {
     "record_count": 52000,
-    "latency_ms": 2251.5662,
+    "latency_per_record_ms": 0.098238,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 52500,
+    "latency_per_record_ms": 0.098246,
     "is_extrapolated": 1
   },
   {
     "record_count": 53000,
-    "latency_ms": 2294.861,
+    "latency_per_record_ms": 0.098254,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 53500,
+    "latency_per_record_ms": 0.098262,
     "is_extrapolated": 1
   },
   {
     "record_count": 54000,
-    "latency_ms": 2338.1558,
+    "latency_per_record_ms": 0.09827,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 54500,
+    "latency_per_record_ms": 0.098279,
     "is_extrapolated": 1
   },
   {
     "record_count": 55000,
-    "latency_ms": 2381.4506,
+    "latency_per_record_ms": 0.098287,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 55500,
+    "latency_per_record_ms": 0.098295,
     "is_extrapolated": 1
   },
   {
     "record_count": 56000,
-    "latency_ms": 2424.7454,
+    "latency_per_record_ms": 0.098303,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 56500,
+    "latency_per_record_ms": 0.098311,
     "is_extrapolated": 1
   },
   {
     "record_count": 57000,
-    "latency_ms": 2468.0402,
+    "latency_per_record_ms": 0.098319,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 57500,
+    "latency_per_record_ms": 0.098327,
     "is_extrapolated": 1
   },
   {
     "record_count": 58000,
-    "latency_ms": 2511.335,
+    "latency_per_record_ms": 0.098336,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 58500,
+    "latency_per_record_ms": 0.098344,
     "is_extrapolated": 1
   },
   {
     "record_count": 59000,
-    "latency_ms": 2554.6298,
+    "latency_per_record_ms": 0.098352,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 59500,
+    "latency_per_record_ms": 0.09836,
     "is_extrapolated": 1
   },
   {
     "record_count": 60000,
-    "latency_ms": 2597.9246,
+    "latency_per_record_ms": 0.098368,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 60500,
+    "latency_per_record_ms": 0.098376,
     "is_extrapolated": 1
   },
   {
     "record_count": 61000,
-    "latency_ms": 2641.2194,
+    "latency_per_record_ms": 0.098385,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 61500,
+    "latency_per_record_ms": 0.098393,
     "is_extrapolated": 1
   },
   {
     "record_count": 62000,
-    "latency_ms": 2684.5142,
+    "latency_per_record_ms": 0.098401,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 62500,
+    "latency_per_record_ms": 0.098409,
     "is_extrapolated": 1
   },
   {
     "record_count": 63000,
-    "latency_ms": 2727.809,
+    "latency_per_record_ms": 0.098417,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 63500,
+    "latency_per_record_ms": 0.098425,
     "is_extrapolated": 1
   },
   {
     "record_count": 64000,
-    "latency_ms": 2771.1038,
+    "latency_per_record_ms": 0.098434,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 64500,
+    "latency_per_record_ms": 0.098442,
     "is_extrapolated": 1
   },
   {
     "record_count": 65000,
-    "latency_ms": 2814.3986,
+    "latency_per_record_ms": 0.09845,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 65500,
+    "latency_per_record_ms": 0.098458,
     "is_extrapolated": 1
   },
   {
     "record_count": 66000,
-    "latency_ms": 2857.6934,
+    "latency_per_record_ms": 0.098466,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 66500,
+    "latency_per_record_ms": 0.098474,
     "is_extrapolated": 1
   },
   {
     "record_count": 67000,
-    "latency_ms": 2900.9882,
+    "latency_per_record_ms": 0.098483,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 67500,
+    "latency_per_record_ms": 0.098491,
     "is_extrapolated": 1
   },
   {
     "record_count": 68000,
-    "latency_ms": 2944.283,
+    "latency_per_record_ms": 0.098499,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 68500,
+    "latency_per_record_ms": 0.098507,
     "is_extrapolated": 1
   },
   {
     "record_count": 69000,
-    "latency_ms": 2987.5778,
+    "latency_per_record_ms": 0.098515,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 69500,
+    "latency_per_record_ms": 0.098523,
     "is_extrapolated": 1
   },
   {
     "record_count": 70000,
-    "latency_ms": 3030.8725,
+    "latency_per_record_ms": 0.098531,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 70500,
+    "latency_per_record_ms": 0.09854,
     "is_extrapolated": 1
   },
   {
     "record_count": 71000,
-    "latency_ms": 3074.1673,
+    "latency_per_record_ms": 0.098548,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 71500,
+    "latency_per_record_ms": 0.098556,
     "is_extrapolated": 1
   },
   {
     "record_count": 72000,
-    "latency_ms": 3117.4621,
+    "latency_per_record_ms": 0.098564,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 72500,
+    "latency_per_record_ms": 0.098572,
     "is_extrapolated": 1
   },
   {
     "record_count": 73000,
-    "latency_ms": 3160.7569,
+    "latency_per_record_ms": 0.09858,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 73500,
+    "latency_per_record_ms": 0.098589,
     "is_extrapolated": 1
   },
   {
     "record_count": 74000,
-    "latency_ms": 3204.0517,
+    "latency_per_record_ms": 0.098597,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 74500,
+    "latency_per_record_ms": 0.098605,
     "is_extrapolated": 1
   },
   {
     "record_count": 75000,
-    "latency_ms": 3247.3465,
+    "latency_per_record_ms": 0.098613,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 75500,
+    "latency_per_record_ms": 0.098621,
     "is_extrapolated": 1
   },
   {
     "record_count": 76000,
-    "latency_ms": 3290.6413,
+    "latency_per_record_ms": 0.098629,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 76500,
+    "latency_per_record_ms": 0.098638,
     "is_extrapolated": 1
   },
   {
     "record_count": 77000,
-    "latency_ms": 3333.9361,
+    "latency_per_record_ms": 0.098646,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 77500,
+    "latency_per_record_ms": 0.098654,
     "is_extrapolated": 1
   },
   {
     "record_count": 78000,
-    "latency_ms": 3377.2309,
+    "latency_per_record_ms": 0.098662,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 78500,
+    "latency_per_record_ms": 0.09867,
     "is_extrapolated": 1
   },
   {
     "record_count": 79000,
-    "latency_ms": 3420.5257,
+    "latency_per_record_ms": 0.098678,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 79500,
+    "latency_per_record_ms": 0.098686,
     "is_extrapolated": 1
   },
   {
     "record_count": 80000,
-    "latency_ms": 3463.8205,
+    "latency_per_record_ms": 0.098695,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 80500,
+    "latency_per_record_ms": 0.098703,
     "is_extrapolated": 1
   },
   {
     "record_count": 81000,
-    "latency_ms": 3507.1153,
+    "latency_per_record_ms": 0.098711,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 81500,
+    "latency_per_record_ms": 0.098719,
     "is_extrapolated": 1
   },
   {
     "record_count": 82000,
-    "latency_ms": 3550.4101,
+    "latency_per_record_ms": 0.098727,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 82500,
+    "latency_per_record_ms": 0.098735,
     "is_extrapolated": 1
   },
   {
     "record_count": 83000,
-    "latency_ms": 3593.7049,
+    "latency_per_record_ms": 0.098744,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 83500,
+    "latency_per_record_ms": 0.098752,
     "is_extrapolated": 1
   },
   {
     "record_count": 84000,
-    "latency_ms": 3636.9997,
+    "latency_per_record_ms": 0.09876,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 84500,
+    "latency_per_record_ms": 0.098768,
     "is_extrapolated": 1
   },
   {
     "record_count": 85000,
-    "latency_ms": 3680.2945,
+    "latency_per_record_ms": 0.098776,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 85500,
+    "latency_per_record_ms": 0.098784,
     "is_extrapolated": 1
   },
   {
     "record_count": 86000,
-    "latency_ms": 3723.5893,
+    "latency_per_record_ms": 0.098793,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 86500,
+    "latency_per_record_ms": 0.098801,
     "is_extrapolated": 1
   },
   {
     "record_count": 87000,
-    "latency_ms": 3766.8841,
+    "latency_per_record_ms": 0.098809,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 87500,
+    "latency_per_record_ms": 0.098817,
     "is_extrapolated": 1
   },
   {
     "record_count": 88000,
-    "latency_ms": 3810.1789,
+    "latency_per_record_ms": 0.098825,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 88500,
+    "latency_per_record_ms": 0.098833,
     "is_extrapolated": 1
   },
   {
     "record_count": 89000,
-    "latency_ms": 3853.4737,
+    "latency_per_record_ms": 0.098842,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 89500,
+    "latency_per_record_ms": 0.09885,
     "is_extrapolated": 1
   },
   {
     "record_count": 90000,
-    "latency_ms": 3896.7685,
+    "latency_per_record_ms": 0.098858,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 90500,
+    "latency_per_record_ms": 0.098866,
     "is_extrapolated": 1
   },
   {
     "record_count": 91000,
-    "latency_ms": 3940.0633,
+    "latency_per_record_ms": 0.098874,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 91500,
+    "latency_per_record_ms": 0.098882,
     "is_extrapolated": 1
   },
   {
     "record_count": 92000,
-    "latency_ms": 3983.358,
+    "latency_per_record_ms": 0.09889,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 92500,
+    "latency_per_record_ms": 0.098899,
     "is_extrapolated": 1
   },
   {
     "record_count": 93000,
-    "latency_ms": 4026.6528,
+    "latency_per_record_ms": 0.098907,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 93500,
+    "latency_per_record_ms": 0.098915,
     "is_extrapolated": 1
   },
   {
     "record_count": 94000,
-    "latency_ms": 4069.9476,
+    "latency_per_record_ms": 0.098923,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 94500,
+    "latency_per_record_ms": 0.098931,
     "is_extrapolated": 1
   },
   {
     "record_count": 95000,
-    "latency_ms": 4113.2424,
+    "latency_per_record_ms": 0.098939,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 95500,
+    "latency_per_record_ms": 0.098948,
     "is_extrapolated": 1
   },
   {
     "record_count": 96000,
-    "latency_ms": 4156.5372,
+    "latency_per_record_ms": 0.098956,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 96500,
+    "latency_per_record_ms": 0.098964,
     "is_extrapolated": 1
   },
   {
     "record_count": 97000,
-    "latency_ms": 4199.832,
+    "latency_per_record_ms": 0.098972,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 97500,
+    "latency_per_record_ms": 0.09898,
     "is_extrapolated": 1
   },
   {
     "record_count": 98000,
-    "latency_ms": 4243.1268,
+    "latency_per_record_ms": 0.098988,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 98500,
+    "latency_per_record_ms": 0.098997,
     "is_extrapolated": 1
   },
   {
     "record_count": 99000,
-    "latency_ms": 4286.4216,
+    "latency_per_record_ms": 0.099005,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 99500,
+    "latency_per_record_ms": 0.099013,
     "is_extrapolated": 1
   },
   {
     "record_count": 100000,
-    "latency_ms": 4329.7164,
+    "latency_per_record_ms": 0.099021,
     "is_extrapolated": 1
   }
 ] ;
-export const data10000 =  [
+export const data5000 =  [
   {
     "record_count": 0,
-    "latency_ms": 10.4424,
+    "latency_per_record_ms": 0.254356,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 500,
+    "latency_per_record_ms": 0.253072,
     "is_extrapolated": 0
   },
   {
     "record_count": 1000,
-    "latency_ms": 412.4518,
+    "latency_per_record_ms": 0.25412,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 1500,
+    "latency_per_record_ms": 0.253575,
     "is_extrapolated": 0
   },
   {
     "record_count": 2000,
-    "latency_ms": 814.4611,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.261726,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 2500,
+    "latency_per_record_ms": 0.26774,
+    "is_extrapolated": 0
   },
   {
     "record_count": 3000,
-    "latency_ms": 1216.4705,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.25377,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 3500,
+    "latency_per_record_ms": 0.26489,
+    "is_extrapolated": 0
   },
   {
     "record_count": 4000,
-    "latency_ms": 1618.4798,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.259929,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 4500,
+    "latency_per_record_ms": 0.260417,
+    "is_extrapolated": 0
   },
   {
     "record_count": 5000,
-    "latency_ms": 2020.4892,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.253317,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 5500,
+    "latency_per_record_ms": 0.277053,
+    "is_extrapolated": 0
   },
   {
     "record_count": 6000,
-    "latency_ms": 2422.4985,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.255442,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 6500,
+    "latency_per_record_ms": 0.257975,
+    "is_extrapolated": 0
   },
   {
     "record_count": 7000,
-    "latency_ms": 2824.5079,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.262806,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 7500,
+    "latency_per_record_ms": 0.263131,
+    "is_extrapolated": 0
   },
   {
     "record_count": 8000,
-    "latency_ms": 3226.5172,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.259869,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 8500,
+    "latency_per_record_ms": 0.253125,
+    "is_extrapolated": 0
   },
   {
     "record_count": 9000,
-    "latency_ms": 3628.5266,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.252466,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 9500,
+    "latency_per_record_ms": 0.252071,
+    "is_extrapolated": 0
   },
   {
     "record_count": 10000,
-    "latency_ms": 4030.5359,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.252241,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 10500,
+    "latency_per_record_ms": 0.253535,
+    "is_extrapolated": 0
   },
   {
     "record_count": 11000,
-    "latency_ms": 4432.5453,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.256397,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 11500,
+    "latency_per_record_ms": 0.254055,
+    "is_extrapolated": 0
   },
   {
     "record_count": 12000,
-    "latency_ms": 4834.5546,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.253846,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 12500,
+    "latency_per_record_ms": 0.251343,
+    "is_extrapolated": 0
   },
   {
     "record_count": 13000,
-    "latency_ms": 5236.564,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.252886,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 13500,
+    "latency_per_record_ms": 0.252284,
+    "is_extrapolated": 0
   },
   {
     "record_count": 14000,
-    "latency_ms": 5638.5733,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.251731,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 14500,
+    "latency_per_record_ms": 0.255494,
+    "is_extrapolated": 0
   },
   {
     "record_count": 15000,
-    "latency_ms": 6040.5827,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.256001,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 15500,
+    "latency_per_record_ms": 0.255452,
+    "is_extrapolated": 0
   },
   {
     "record_count": 16000,
-    "latency_ms": 6442.5921,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.255355,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 16500,
+    "latency_per_record_ms": 0.251877,
+    "is_extrapolated": 0
   },
   {
     "record_count": 17000,
-    "latency_ms": 6844.6014,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.2765,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 17500,
+    "latency_per_record_ms": 0.269394,
+    "is_extrapolated": 0
   },
   {
     "record_count": 18000,
-    "latency_ms": 7246.6108,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.262086,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 18500,
+    "latency_per_record_ms": 0.25889,
+    "is_extrapolated": 0
   },
   {
     "record_count": 19000,
-    "latency_ms": 7648.6201,
-    "is_extrapolated": 1
+    "latency_per_record_ms": 0.254277,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 19500,
+    "latency_per_record_ms": 0.253035,
+    "is_extrapolated": 0
   },
   {
     "record_count": 20000,
-    "latency_ms": 8050.6295,
+    "latency_per_record_ms": 0.252027,
+    "is_extrapolated": 0
+  },
+  {
+    "record_count": 20500,
+    "latency_per_record_ms": 0.256387,
     "is_extrapolated": 1
   },
   {
     "record_count": 21000,
-    "latency_ms": 8452.6388,
+    "latency_per_record_ms": 0.256344,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 21500,
+    "latency_per_record_ms": 0.2563,
     "is_extrapolated": 1
   },
   {
     "record_count": 22000,
-    "latency_ms": 8854.6482,
+    "latency_per_record_ms": 0.256256,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 22500,
+    "latency_per_record_ms": 0.256212,
     "is_extrapolated": 1
   },
   {
     "record_count": 23000,
-    "latency_ms": 9256.6575,
+    "latency_per_record_ms": 0.256169,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 23500,
+    "latency_per_record_ms": 0.256125,
     "is_extrapolated": 1
   },
   {
     "record_count": 24000,
-    "latency_ms": 9658.6669,
+    "latency_per_record_ms": 0.256081,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 24500,
+    "latency_per_record_ms": 0.256037,
     "is_extrapolated": 1
   },
   {
     "record_count": 25000,
-    "latency_ms": 10060.6762,
+    "latency_per_record_ms": 0.255994,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 25500,
+    "latency_per_record_ms": 0.25595,
     "is_extrapolated": 1
   },
   {
     "record_count": 26000,
-    "latency_ms": 10462.6856,
+    "latency_per_record_ms": 0.255906,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 26500,
+    "latency_per_record_ms": 0.255862,
     "is_extrapolated": 1
   },
   {
     "record_count": 27000,
-    "latency_ms": 10864.6949,
+    "latency_per_record_ms": 0.255819,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 27500,
+    "latency_per_record_ms": 0.255775,
     "is_extrapolated": 1
   },
   {
     "record_count": 28000,
-    "latency_ms": 11266.7043,
+    "latency_per_record_ms": 0.255731,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 28500,
+    "latency_per_record_ms": 0.255687,
     "is_extrapolated": 1
   },
   {
     "record_count": 29000,
-    "latency_ms": 11668.7136,
+    "latency_per_record_ms": 0.255644,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 29500,
+    "latency_per_record_ms": 0.2556,
     "is_extrapolated": 1
   },
   {
     "record_count": 30000,
-    "latency_ms": 12070.723,
+    "latency_per_record_ms": 0.255556,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 30500,
+    "latency_per_record_ms": 0.255512,
     "is_extrapolated": 1
   },
   {
     "record_count": 31000,
-    "latency_ms": 12472.7324,
+    "latency_per_record_ms": 0.255469,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 31500,
+    "latency_per_record_ms": 0.255425,
     "is_extrapolated": 1
   },
   {
     "record_count": 32000,
-    "latency_ms": 12874.7417,
+    "latency_per_record_ms": 0.255381,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 32500,
+    "latency_per_record_ms": 0.255337,
     "is_extrapolated": 1
   },
   {
     "record_count": 33000,
-    "latency_ms": 13276.7511,
+    "latency_per_record_ms": 0.255294,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 33500,
+    "latency_per_record_ms": 0.25525,
     "is_extrapolated": 1
   },
   {
     "record_count": 34000,
-    "latency_ms": 13678.7604,
+    "latency_per_record_ms": 0.255206,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 34500,
+    "latency_per_record_ms": 0.255162,
     "is_extrapolated": 1
   },
   {
     "record_count": 35000,
-    "latency_ms": 14080.7698,
+    "latency_per_record_ms": 0.255119,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 35500,
+    "latency_per_record_ms": 0.255075,
     "is_extrapolated": 1
   },
   {
     "record_count": 36000,
-    "latency_ms": 14482.7791,
+    "latency_per_record_ms": 0.255031,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 36500,
+    "latency_per_record_ms": 0.254987,
     "is_extrapolated": 1
   },
   {
     "record_count": 37000,
-    "latency_ms": 14884.7885,
+    "latency_per_record_ms": 0.254944,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 37500,
+    "latency_per_record_ms": 0.2549,
     "is_extrapolated": 1
   },
   {
     "record_count": 38000,
-    "latency_ms": 15286.7978,
+    "latency_per_record_ms": 0.254856,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 38500,
+    "latency_per_record_ms": 0.254812,
     "is_extrapolated": 1
   },
   {
     "record_count": 39000,
-    "latency_ms": 15688.8072,
+    "latency_per_record_ms": 0.254769,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 39500,
+    "latency_per_record_ms": 0.254725,
     "is_extrapolated": 1
   },
   {
     "record_count": 40000,
-    "latency_ms": 16090.8165,
+    "latency_per_record_ms": 0.254681,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 40500,
+    "latency_per_record_ms": 0.254637,
     "is_extrapolated": 1
   },
   {
     "record_count": 41000,
-    "latency_ms": 16492.8259,
+    "latency_per_record_ms": 0.254594,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 41500,
+    "latency_per_record_ms": 0.25455,
     "is_extrapolated": 1
   },
   {
     "record_count": 42000,
-    "latency_ms": 16894.8352,
+    "latency_per_record_ms": 0.254506,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 42500,
+    "latency_per_record_ms": 0.254462,
     "is_extrapolated": 1
   },
   {
     "record_count": 43000,
-    "latency_ms": 17296.8446,
+    "latency_per_record_ms": 0.254419,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 43500,
+    "latency_per_record_ms": 0.254375,
     "is_extrapolated": 1
   },
   {
     "record_count": 44000,
-    "latency_ms": 17698.8539,
+    "latency_per_record_ms": 0.254331,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 44500,
+    "latency_per_record_ms": 0.254287,
     "is_extrapolated": 1
   },
   {
     "record_count": 45000,
-    "latency_ms": 18100.8633,
+    "latency_per_record_ms": 0.254244,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 45500,
+    "latency_per_record_ms": 0.2542,
     "is_extrapolated": 1
   },
   {
     "record_count": 46000,
-    "latency_ms": 18502.8727,
+    "latency_per_record_ms": 0.254156,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 46500,
+    "latency_per_record_ms": 0.254112,
     "is_extrapolated": 1
   },
   {
     "record_count": 47000,
-    "latency_ms": 18904.882,
+    "latency_per_record_ms": 0.254068,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 47500,
+    "latency_per_record_ms": 0.254025,
     "is_extrapolated": 1
   },
   {
     "record_count": 48000,
-    "latency_ms": 19306.8914,
+    "latency_per_record_ms": 0.253981,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 48500,
+    "latency_per_record_ms": 0.253937,
     "is_extrapolated": 1
   },
   {
     "record_count": 49000,
-    "latency_ms": 19708.9007,
+    "latency_per_record_ms": 0.253893,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 49500,
+    "latency_per_record_ms": 0.25385,
     "is_extrapolated": 1
   },
   {
     "record_count": 50000,
-    "latency_ms": 20110.9101,
+    "latency_per_record_ms": 0.253806,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 50500,
+    "latency_per_record_ms": 0.253762,
     "is_extrapolated": 1
   },
   {
     "record_count": 51000,
-    "latency_ms": 20512.9194,
+    "latency_per_record_ms": 0.253718,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 51500,
+    "latency_per_record_ms": 0.253675,
     "is_extrapolated": 1
   },
   {
     "record_count": 52000,
-    "latency_ms": 20914.9288,
+    "latency_per_record_ms": 0.253631,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 52500,
+    "latency_per_record_ms": 0.253587,
     "is_extrapolated": 1
   },
   {
     "record_count": 53000,
-    "latency_ms": 21316.9381,
+    "latency_per_record_ms": 0.253543,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 53500,
+    "latency_per_record_ms": 0.2535,
     "is_extrapolated": 1
   },
   {
     "record_count": 54000,
-    "latency_ms": 21718.9475,
+    "latency_per_record_ms": 0.253456,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 54500,
+    "latency_per_record_ms": 0.253412,
     "is_extrapolated": 1
   },
   {
     "record_count": 55000,
-    "latency_ms": 22120.9568,
+    "latency_per_record_ms": 0.253368,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 55500,
+    "latency_per_record_ms": 0.253325,
     "is_extrapolated": 1
   },
   {
     "record_count": 56000,
-    "latency_ms": 22522.9662,
+    "latency_per_record_ms": 0.253281,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 56500,
+    "latency_per_record_ms": 0.253237,
     "is_extrapolated": 1
   },
   {
     "record_count": 57000,
-    "latency_ms": 22924.9755,
+    "latency_per_record_ms": 0.253193,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 57500,
+    "latency_per_record_ms": 0.25315,
     "is_extrapolated": 1
   },
   {
     "record_count": 58000,
-    "latency_ms": 23326.9849,
+    "latency_per_record_ms": 0.253106,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 58500,
+    "latency_per_record_ms": 0.253062,
     "is_extrapolated": 1
   },
   {
     "record_count": 59000,
-    "latency_ms": 23728.9942,
+    "latency_per_record_ms": 0.253018,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 59500,
+    "latency_per_record_ms": 0.252975,
     "is_extrapolated": 1
   },
   {
     "record_count": 60000,
-    "latency_ms": 24131.0036,
+    "latency_per_record_ms": 0.252931,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 60500,
+    "latency_per_record_ms": 0.252887,
     "is_extrapolated": 1
   },
   {
     "record_count": 61000,
-    "latency_ms": 24533.013,
+    "latency_per_record_ms": 0.252843,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 61500,
+    "latency_per_record_ms": 0.2528,
     "is_extrapolated": 1
   },
   {
     "record_count": 62000,
-    "latency_ms": 24935.0223,
+    "latency_per_record_ms": 0.252756,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 62500,
+    "latency_per_record_ms": 0.252712,
     "is_extrapolated": 1
   },
   {
     "record_count": 63000,
-    "latency_ms": 25337.0317,
+    "latency_per_record_ms": 0.252668,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 63500,
+    "latency_per_record_ms": 0.252625,
     "is_extrapolated": 1
   },
   {
     "record_count": 64000,
-    "latency_ms": 25739.041,
+    "latency_per_record_ms": 0.252581,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 64500,
+    "latency_per_record_ms": 0.252537,
     "is_extrapolated": 1
   },
   {
     "record_count": 65000,
-    "latency_ms": 26141.0504,
+    "latency_per_record_ms": 0.252493,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 65500,
+    "latency_per_record_ms": 0.25245,
     "is_extrapolated": 1
   },
   {
     "record_count": 66000,
-    "latency_ms": 26543.0597,
+    "latency_per_record_ms": 0.252406,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 66500,
+    "latency_per_record_ms": 0.252362,
     "is_extrapolated": 1
   },
   {
     "record_count": 67000,
-    "latency_ms": 26945.0691,
+    "latency_per_record_ms": 0.252318,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 67500,
+    "latency_per_record_ms": 0.252275,
     "is_extrapolated": 1
   },
   {
     "record_count": 68000,
-    "latency_ms": 27347.0784,
+    "latency_per_record_ms": 0.252231,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 68500,
+    "latency_per_record_ms": 0.252187,
     "is_extrapolated": 1
   },
   {
     "record_count": 69000,
-    "latency_ms": 27749.0878,
+    "latency_per_record_ms": 0.252143,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 69500,
+    "latency_per_record_ms": 0.2521,
     "is_extrapolated": 1
   },
   {
     "record_count": 70000,
-    "latency_ms": 28151.0971,
+    "latency_per_record_ms": 0.252056,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 70500,
+    "latency_per_record_ms": 0.252012,
     "is_extrapolated": 1
   },
   {
     "record_count": 71000,
-    "latency_ms": 28553.1065,
+    "latency_per_record_ms": 0.251968,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 71500,
+    "latency_per_record_ms": 0.251925,
     "is_extrapolated": 1
   },
   {
     "record_count": 72000,
-    "latency_ms": 28955.1158,
+    "latency_per_record_ms": 0.251881,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 72500,
+    "latency_per_record_ms": 0.251837,
     "is_extrapolated": 1
   },
   {
     "record_count": 73000,
-    "latency_ms": 29357.1252,
+    "latency_per_record_ms": 0.251793,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 73500,
+    "latency_per_record_ms": 0.25175,
     "is_extrapolated": 1
   },
   {
     "record_count": 74000,
-    "latency_ms": 29759.1345,
+    "latency_per_record_ms": 0.251706,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 74500,
+    "latency_per_record_ms": 0.251662,
     "is_extrapolated": 1
   },
   {
     "record_count": 75000,
-    "latency_ms": 30161.1439,
+    "latency_per_record_ms": 0.251618,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 75500,
+    "latency_per_record_ms": 0.251575,
     "is_extrapolated": 1
   },
   {
     "record_count": 76000,
-    "latency_ms": 30563.1533,
+    "latency_per_record_ms": 0.251531,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 76500,
+    "latency_per_record_ms": 0.251487,
     "is_extrapolated": 1
   },
   {
     "record_count": 77000,
-    "latency_ms": 30965.1626,
+    "latency_per_record_ms": 0.251443,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 77500,
+    "latency_per_record_ms": 0.2514,
     "is_extrapolated": 1
   },
   {
     "record_count": 78000,
-    "latency_ms": 31367.172,
+    "latency_per_record_ms": 0.251356,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 78500,
+    "latency_per_record_ms": 0.251312,
     "is_extrapolated": 1
   },
   {
     "record_count": 79000,
-    "latency_ms": 31769.1813,
+    "latency_per_record_ms": 0.251268,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 79500,
+    "latency_per_record_ms": 0.251225,
     "is_extrapolated": 1
   },
   {
     "record_count": 80000,
-    "latency_ms": 32171.1907,
+    "latency_per_record_ms": 0.251181,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 80500,
+    "latency_per_record_ms": 0.251137,
     "is_extrapolated": 1
   },
   {
     "record_count": 81000,
-    "latency_ms": 32573.2,
+    "latency_per_record_ms": 0.251093,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 81500,
+    "latency_per_record_ms": 0.25105,
     "is_extrapolated": 1
   },
   {
     "record_count": 82000,
-    "latency_ms": 32975.2094,
+    "latency_per_record_ms": 0.251006,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 82500,
+    "latency_per_record_ms": 0.250962,
     "is_extrapolated": 1
   },
   {
     "record_count": 83000,
-    "latency_ms": 33377.2187,
+    "latency_per_record_ms": 0.250918,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 83500,
+    "latency_per_record_ms": 0.250875,
     "is_extrapolated": 1
   },
   {
     "record_count": 84000,
-    "latency_ms": 33779.2281,
+    "latency_per_record_ms": 0.250831,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 84500,
+    "latency_per_record_ms": 0.250787,
     "is_extrapolated": 1
   },
   {
     "record_count": 85000,
-    "latency_ms": 34181.2374,
+    "latency_per_record_ms": 0.250743,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 85500,
+    "latency_per_record_ms": 0.2507,
     "is_extrapolated": 1
   },
   {
     "record_count": 86000,
-    "latency_ms": 34583.2468,
+    "latency_per_record_ms": 0.250656,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 86500,
+    "latency_per_record_ms": 0.250612,
     "is_extrapolated": 1
   },
   {
     "record_count": 87000,
-    "latency_ms": 34985.2561,
+    "latency_per_record_ms": 0.250568,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 87500,
+    "latency_per_record_ms": 0.250525,
     "is_extrapolated": 1
   },
   {
     "record_count": 88000,
-    "latency_ms": 35387.2655,
+    "latency_per_record_ms": 0.250481,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 88500,
+    "latency_per_record_ms": 0.250437,
     "is_extrapolated": 1
   },
   {
     "record_count": 89000,
-    "latency_ms": 35789.2748,
+    "latency_per_record_ms": 0.250393,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 89500,
+    "latency_per_record_ms": 0.25035,
     "is_extrapolated": 1
   },
   {
     "record_count": 90000,
-    "latency_ms": 36191.2842,
+    "latency_per_record_ms": 0.250306,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 90500,
+    "latency_per_record_ms": 0.250262,
     "is_extrapolated": 1
   },
   {
     "record_count": 91000,
-    "latency_ms": 36593.2936,
+    "latency_per_record_ms": 0.250218,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 91500,
+    "latency_per_record_ms": 0.250174,
     "is_extrapolated": 1
   },
   {
     "record_count": 92000,
-    "latency_ms": 36995.3029,
+    "latency_per_record_ms": 0.250131,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 92500,
+    "latency_per_record_ms": 0.250087,
     "is_extrapolated": 1
   },
   {
     "record_count": 93000,
-    "latency_ms": 37397.3123,
+    "latency_per_record_ms": 0.250043,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 93500,
+    "latency_per_record_ms": 0.249999,
     "is_extrapolated": 1
   },
   {
     "record_count": 94000,
-    "latency_ms": 37799.3216,
+    "latency_per_record_ms": 0.249956,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 94500,
+    "latency_per_record_ms": 0.249912,
     "is_extrapolated": 1
   },
   {
     "record_count": 95000,
-    "latency_ms": 38201.331,
+    "latency_per_record_ms": 0.249868,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 95500,
+    "latency_per_record_ms": 0.249824,
     "is_extrapolated": 1
   },
   {
     "record_count": 96000,
-    "latency_ms": 38603.3403,
+    "latency_per_record_ms": 0.249781,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 96500,
+    "latency_per_record_ms": 0.249737,
     "is_extrapolated": 1
   },
   {
     "record_count": 97000,
-    "latency_ms": 39005.3497,
+    "latency_per_record_ms": 0.249693,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 97500,
+    "latency_per_record_ms": 0.249649,
     "is_extrapolated": 1
   },
   {
     "record_count": 98000,
-    "latency_ms": 39407.359,
+    "latency_per_record_ms": 0.249606,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 98500,
+    "latency_per_record_ms": 0.249562,
     "is_extrapolated": 1
   },
   {
     "record_count": 99000,
-    "latency_ms": 39809.3684,
+    "latency_per_record_ms": 0.249518,
+    "is_extrapolated": 1
+  },
+  {
+    "record_count": 99500,
+    "latency_per_record_ms": 0.249474,
     "is_extrapolated": 1
   },
   {
     "record_count": 100000,
-    "latency_ms": 40211.3777,
+    "latency_per_record_ms": 0.249431,
     "is_extrapolated": 1
   }
 ] ;
+export const data10000 =  [] ;
