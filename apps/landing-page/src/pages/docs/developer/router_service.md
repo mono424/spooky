@@ -3,16 +3,17 @@ layout: ../../../layouts/DocsLayout.astro
 title: RouterService
 ---
 
-
 The `RouterService` is the **Central Nervous System** of the Spooky Core. In a strictly decoupled architecture, services do not speak to each other directly. Instead, they emit events to the Router, which forwards them to the appropriate destination based on a deterministic routing table.
 
-## 📦 Responsibility
+import Icon from '../../../components/ui/Icon.astro';
+
+## <Icon name="box" /> Responsibility
 
 - **Event Orchestration**: Listens to everything, routes everything.
 - **Decoupling**: Ensures `MutationManager` doesn't need to import `SpookySync`.
 - **Traffic Control**: Provides a single place to see how data flows through the system.
 
-## 🏗️ Architecture & Boundaries
+## <Icon name="building" /> Architecture & Boundaries
 
 The Router sits in the middle of the Core module:
 
@@ -20,7 +21,7 @@ The Router sits in the middle of the Core module:
 - **Outputs**: Method calls to ALL other services.
 - **State**: Stateless.
 
-## 🛣️ Routing Table
+## <Icon name="route" /> Routing Table
 
 The following table defines the "Constitution" of the Spooky Core application.
 
@@ -38,7 +39,7 @@ The following table defines the "Constitution" of the Spooky Core application.
 | **Query**    | `IncantationUpdated`          | `DevTools`        | `onQueryUpdated`       | Log that the UI received new data.                      |
 | **Sync**     | `IncantationUpdated`          | `Query`           | `handleIncomingUpdate` | Sync fetched new data; push it to the UI layer.         |
 
-## 🔑 Key Workflows
+## <Icon name="key" /> Key Workflows
 
 ### The "Reactive Loop"
 

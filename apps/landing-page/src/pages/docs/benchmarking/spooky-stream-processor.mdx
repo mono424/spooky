@@ -26,8 +26,9 @@ Key responsibilities include:
 
 ## Implementation Details
 
-> [!NOTE]
-> We are currently using a custom implementation for our DBSP logic.
+import Note from '../../../components/ui/Note.astro';
+
+<Note>We are currently using a custom implementation for our DBSP logic.</Note>
 
 While there is an official Rust library for DBSP, Spooky currently utilizes its own tailored implementation to optimize for specific use cases and integration points within the Spooky ecosystem. We are actively considering migrating to or integrating with the official library in future iterations to leverage broader community advancements.
 
@@ -35,9 +36,15 @@ import BenchmarkCharts from '../../../components/BenchmarkCharts';
 
 ## Performance Benchmarks
 
-> [!NOTE]
-> These benchmarks were run on the stream processing unit in isolation, without any persistence/saving logic.
-> **Hardware**: MacBook Pro (M1 Pro).
+<Note>
+  These benchmarks should be treated with caution as they were run on the stream processing unit in
+  isolation, that means without any persistence/saving logic. But they show that the bottleneck is
+  not the records but rather the registered views, which makes the processor excelent to scale
+  horizontally.
+  <p>
+    <strong>Hardware</strong>: MacBook Pro (M1 Pro).
+  </p>
+</Note>
 
 The following charts demonstrate the latency performance of the Spooky Stream Processor, showing how update latency scales with record count across different tiers of registered views (10, 100, 1,000, and 10,000).
 
