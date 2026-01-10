@@ -1,0 +1,10 @@
+{
+    "name": "spooky-stream-processor-wasm",
+    "version": "0.1.0",
+    "private": true,
+    "main": "pkg/spooky_stream_processor_wasm.js",
+    "types": "pkg/spooky_stream_processor_wasm.d.ts",
+    "files": [
+        "pkg"
+    ]
+}
