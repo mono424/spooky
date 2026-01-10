@@ -5,15 +5,13 @@ title: RouterService
 
 The `RouterService` is the **Central Nervous System** of the Spooky Core. In a strictly decoupled architecture, services do not speak to each other directly. Instead, they emit events to the Router, which forwards them to the appropriate destination based on a deterministic routing table.
 
-import Icon from '../../../components/ui/Icon.astro';
-
-## <Icon name="box" /> Responsibility
+## Responsibility
 
 - **Event Orchestration**: Listens to everything, routes everything.
 - **Decoupling**: Ensures `MutationManager` doesn't need to import `SpookySync`.
 - **Traffic Control**: Provides a single place to see how data flows through the system.
 
-## <Icon name="building" /> Architecture & Boundaries
+## Architecture & Boundaries
 
 The Router sits in the middle of the Core module:
 
@@ -21,7 +19,7 @@ The Router sits in the middle of the Core module:
 - **Outputs**: Method calls to ALL other services.
 - **State**: Stateless.
 
-## <Icon name="route" /> Routing Table
+## Input/Output Reference
 
 The following table defines the "Constitution" of the Spooky Core application.
 
@@ -39,7 +37,10 @@ The following table defines the "Constitution" of the Spooky Core application.
 | **Query**    | `IncantationUpdated`          | `DevTools`        | `onQueryUpdated`       | Log that the UI received new data.                      |
 | **Sync**     | `IncantationUpdated`          | `Query`           | `handleIncomingUpdate` | Sync fetched new data; push it to the UI layer.         |
 
-## <Icon name="key" /> Key Workflows
+<h2 class="flex items-center gap-3 text-2xl font-bold mt-12 mb-6">
+  <Icon name="key" class="w-8 h-8 text-zinc-400" />
+  <span>Key Workflows</span>
+</h2>
 
 ### The "Reactive Loop"
 

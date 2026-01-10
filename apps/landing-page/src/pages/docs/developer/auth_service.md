@@ -5,13 +5,13 @@ title: Auth Service
 
 The `AuthService` is the gatekeeper of the Spooky Core module. It manages user sessions, persists authentication tokens, and ensures the `RemoteDatabaseService` is correctly authenticated.
 
-## 📦 Responsibility
+## Responsibility
 
 - **Session Management**: Tracks whether a user is logged in or out.
 - **Token Persistence**: Saves and retrieves auth tokens from secure storage (e.g., `localStorage`).
 - **Remote Authentication**: Configures the `surrealdb.js` client with the user's credentials.
 
-## 🏗️ Architecture & Boundaries
+## Architecture & Boundaries
 
 As a "Black Box" service, `AuthService` has strict boundaries:
 
@@ -23,7 +23,7 @@ As a "Black Box" service, `AuthService` has strict boundaries:
 - **Dependencies**:
   - `RemoteDatabaseService`: The only service `AuthService` interacts with directly.
 
-## 🔄 Input/Output Reference
+## Input/Output Reference
 
 | Method                | Type      | Description                                                     |
 | :-------------------- | :-------- | :-------------------------------------------------------------- |
@@ -37,7 +37,7 @@ As a "Black Box" service, `AuthService` has strict boundaries:
 | :----------------- | :---------------- | :-------------------------------------------------------- |
 | `AuthStateChanged` | `userId` (string) | Fired when the user logs in, logs out, or checks session. |
 
-## 🔑 Key Workflows
+## Key Workflows
 
 ### Authentication Flow
 
@@ -54,7 +54,7 @@ As a "Black Box" service, `AuthService` has strict boundaries:
 3. The token is removed from `localStorage`.
 4. `RemoteDatabaseService` reverts to a guest/anonymous state.
 
-## ⚠️ Internal Logic
+## Internal Logic
 
 - **Persistence**: The service automatically attempts to restore the session from `localStorage` on initialization.
 - **Error Handling**: If authentication fails (e.g., expired token), the service will automatically clear the invalid session to prevent loop states.
