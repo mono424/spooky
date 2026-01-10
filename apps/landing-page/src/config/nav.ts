@@ -27,4 +27,13 @@ export const docsNav = [
       { text: 'StreamProcessorService', href: '/spooky/docs/developer/stream_processor_service' },
     ],
   },
+  {
+    title: 'Benchmarking',
+    links: [
+      {
+        text: 'Spooky Stream Processor',
+        href: '/spooky/docs/benchmarking/spooky-stream-processor',
+      },
+    ],
+  },
 ];
