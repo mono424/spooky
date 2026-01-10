@@ -1,8 +1,8 @@
 mod common;
 
 use common::*;
-use serde_json::json;
-use spooky_stream_processor::engine::view::{JoinCondition, Operator, Predicate, QueryPlan};
+use simd_json::json;
+use spooky_stream_processor::engine::view::{JoinCondition, Operator, Predicate, QueryPlan, Path};
 
 #[test]
 fn test_complex_incantation_flow() {
@@ -32,8 +32,8 @@ fn test_complex_incantation_flow() {
         left: Box::new(scan_threads),
         right: Box::new(scan_authors),
         on: JoinCondition {
-            left_field: "author".to_string(),
-            right_field: "id".to_string(),
+            left_field: Path::new("author"),
+            right_field: Path::new("id"),
         },
     };
 
@@ -46,7 +46,7 @@ fn test_complex_incantation_flow() {
     let magic_comments = Operator::Filter {
         input: Box::new(scan_comments),
         predicate: Predicate::Eq {
-            field: "text".to_string(),
+            field: Path::new("text"),
             value: json!("Magic"),
         },
     };
@@ -57,8 +57,8 @@ fn test_complex_incantation_flow() {
         left: Box::new(threads_with_authors),
         right: Box::new(magic_comments),
         on: JoinCondition {
-            left_field: "id".to_string(),
-            right_field: "thread".to_string(),
+            left_field: Path::new("id"),
+            right_field: Path::new("thread"),
         },
     };
 

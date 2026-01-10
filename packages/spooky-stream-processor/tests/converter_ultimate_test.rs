@@ -1,5 +1,6 @@
 use spooky_stream_processor::converter::convert_surql_to_dbsp;
-use serde_json::{json, Value};
+use simd_json::prelude::*;
+use simd_json::OwnedValue as Value;
 
 fn parse_ok(sql: &str) -> Value {
     convert_surql_to_dbsp(sql).expect(&format!("Failed to parse: {}", sql))
