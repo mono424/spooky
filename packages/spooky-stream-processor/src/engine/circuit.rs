@@ -1,9 +1,8 @@
-use super::view::{MaterializedViewUpdate, Operator, QueryPlan, RowKey, View, ZSet};
-use rustc_hash::FxHashMap;
+use super::view::{MaterializedViewUpdate, Operator, QueryPlan, RowKey, View, ZSet, FastMap, Projection};
+// use rustc_hash::{FxHashMap, FxHasher}; // Unused in this file (used via FastMap)
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use smol_str::SmolStr;
-use std::collections::HashMap;
 
 // --- Table & Database ---
 
@@ -12,20 +11,21 @@ use std::collections::HashMap;
 pub struct Table {
     pub name: String,
     pub zset: ZSet,                   // This is the fast FxHashMap
-    pub rows: HashMap<RowKey, Value>, // Use standard HashMap for storage or upgrade to FxHashMap
-    pub hashes: HashMap<RowKey, String>,
+    pub rows: FastMap<RowKey, Value>, // Using FastMap as requested
+    pub hashes: FastMap<RowKey, String>,
 }
 
 impl Table {
     pub fn new(name: String) -> Self {
         Self {
             name,
-            zset: FxHashMap::default(),
-            rows: HashMap::new(),
-            hashes: HashMap::new(),
+            zset: FastMap::default(),
+            rows: FastMap::default(),
+            hashes: FastMap::default(),
         }
     }
 
+    // Changing signature to use SmolStr is implied by RowKey definition change
     pub fn update_row(&mut self, key: SmolStr, data: Value, hash: String) {
         self.rows.insert(key.clone(), data);
         self.hashes.insert(key, hash);
@@ -47,15 +47,26 @@ impl Table {
     }
 }
 
+// Redefining Table to use FastMap everywhere
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct TableOptimized {
+    pub name: String,
+    pub zset: ZSet,
+    pub rows: FastMap<RowKey, Value>,
+    pub hashes: FastMap<RowKey, String>,
+}
+// I will just use 'Table' name but with new types.
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Database {
-    pub tables: HashMap<String, Table>,
+    pub tables: FastMap<String, Table>,
 }
 
 impl Database {
     pub fn new() -> Self {
         Self {
-            tables: HashMap::new(),
+            tables: FastMap::default(),
         }
     }
 
@@ -74,7 +85,7 @@ pub struct Circuit {
     pub views: Vec<View>,
     // Optimisation: Mapping Table -> List of View-Indices
     #[serde(skip, default)]
-    pub dependencies: FxHashMap<String, Vec<usize>>,
+    pub dependency_graph: FastMap<String, Vec<usize>>,
 }
 
 impl Circuit {
@@ -82,17 +93,17 @@ impl Circuit {
         Self {
             db: Database::new(),
             views: Vec::new(),
-            dependencies: FxHashMap::default(),
+            dependency_graph: FastMap::default(),
         }
     }
 
     // Must be called after Deserialization to rebuild the Cache!
-    pub fn rebuild_dependencies(&mut self) {
-        self.dependencies.clear();
+    pub fn rebuild_dependency_graph(&mut self) {
+        self.dependency_graph.clear();
         for (i, view) in self.views.iter().enumerate() {
             let tables = extract_tables(&view.plan.root);
             for t in tables {
-                self.dependencies.entry(t).or_default().push(i);
+                self.dependency_graph.entry(t).or_default().push(i);
             }
         }
     }
@@ -105,31 +116,74 @@ impl Circuit {
         record: Value,
         hash: String,
     ) -> Vec<MaterializedViewUpdate> {
-        let key = SmolStr::new(id);
-        let weight: i64 = match op.as_str() {
-            "CREATE" | "UPDATE" => 1,
-            "DELETE" => -1,
-            _ => 0,
-        };
+        self.ingest_batch(vec![(table, op, id, record, hash)])
+    }
 
-        if weight == 0 {
-            return vec![];
+    pub fn ingest_batch(
+        &mut self,
+        batch: Vec<(String, String, String, Value, String)>,
+    ) -> Vec<MaterializedViewUpdate> {
+        let mut table_deltas: FastMap<String, ZSet> = FastMap::default();
+
+        // 1. Storage Phase: Update Storage & Accumulate Deltas
+        for (table, op, id, record, hash) in batch {
+            let key = SmolStr::new(id);
+            let weight: i64 = match op.as_str() {
+                "CREATE" | "UPDATE" => 1,
+                "DELETE" => -1,
+                _ => 0,
+            };
+
+            if weight == 0 {
+                continue;
+            }
+
+            {
+                let tb = self.db.ensure_table(&table);
+                if weight > 0 {
+                    tb.update_row(key.clone(), record, hash);
+                } else {
+                    tb.delete_row(&key);
+                }
+            }
+
+            let delta_map = table_deltas.entry(table).or_default();
+            *delta_map.entry(key).or_insert(0) += weight;
         }
 
-        let mut delta: ZSet = FxHashMap::default();
-        delta.insert(key.clone(), weight);
+        // 2. Propagation Phase: Process Deltas with Dependency Graph
+        let mut all_updates = Vec::new();
+        
+        // Optimized Lazy Rebuild Check (once per batch)
+        if self.dependency_graph.is_empty() && !self.views.is_empty() {
+            self.rebuild_dependency_graph();
+        }
 
-        // Update Storage
-        {
-            let tb = self.db.ensure_table(&table);
-            if weight > 0 {
-                tb.update_row(key.clone(), record, hash);
-            } else {
-                tb.delete_row(&key);
+        for (table, mut delta) in table_deltas {
+            delta.retain(|_, w| *w != 0);
+            if !delta.is_empty() {
+                 
+                {
+                    // Apply delta to DB ZSet (Storage part 2)
+                    let tb = self.db.ensure_table(&table);
+                    tb.apply_delta(&delta);
+                }
+
+                // Notify Views
+                if let Some(indices) = self.dependency_graph.get(&table) {
+                    // Clone indices to avoid borrow conflicts
+                    let indices = indices.clone(); 
+                    for i in indices {
+                        if i < self.views.len() {
+                            if let Some(update) = self.views[i].process(&table, &delta, &self.db) {
+                                all_updates.push(update);
+                            }
+                        }
+                    }
+                }
             }
         }
-
-        self.step(table, delta)
+        all_updates
     }
 
     pub fn register_view(
@@ -140,12 +194,12 @@ impl Circuit {
         if let Some(pos) = self.views.iter().position(|v| v.plan.id == plan.id) {
             self.views.remove(pos);
             // Rebuild dependencies entirely to be safe (simple but slower)
-            self.rebuild_dependencies();
+            self.rebuild_dependency_graph();
         }
 
         let mut view = View::new(plan, params);
 
-        let empty_delta: ZSet = FxHashMap::default();
+        let empty_delta: ZSet = FastMap::default();
         let initial_update = view.process("", &empty_delta, &self.db);
 
         let view_idx = self.views.len();
@@ -156,7 +210,7 @@ impl Circuit {
         if let Some(v) = self.views.last() {
             let tables = extract_tables(&v.plan.root);
             for t in tables {
-                self.dependencies.entry(t).or_default().push(view_idx);
+                self.dependency_graph.entry(t).or_default().push(view_idx);
             }
         }
 
@@ -166,7 +220,7 @@ impl Circuit {
     #[allow(dead_code)]
     pub fn unregister_view(&mut self, id: &str) {
         self.views.retain(|v| v.plan.id != id);
-        self.rebuild_dependencies();
+        self.rebuild_dependency_graph();
     }
 
     pub fn step(&mut self, table: String, delta: ZSet) -> Vec<MaterializedViewUpdate> {
@@ -177,16 +231,13 @@ impl Circuit {
 
         let mut updates = Vec::new();
 
-        // Optimization: iterate only relevant views
-        // If dependencies map is empty (e.g. after fresh deserialization), we should rebuild it?
-        // Or we assume the user calls rebuild_dependencies()?
-        // For safety, let's check if empty and views not empty
-        if self.dependencies.is_empty() && !self.views.is_empty() {
-            self.rebuild_dependencies();
+        // Optimized Lazy Rebuild
+        if self.dependency_graph.is_empty() && !self.views.is_empty() {
+            self.rebuild_dependency_graph();
         }
 
-        if let Some(indices) = self.dependencies.get(&table) {
-            // We need to clone indices to avoid borrowing self.dependencies while mutably borrowing self.views
+        if let Some(indices) = self.dependency_graph.get(&table) {
+            // We need to clone indices to avoid borrowing self.dependency_graph while mutably borrowing self.views
             let indices = indices.clone();
             for i in indices {
                 if i < self.views.len() {
@@ -209,7 +260,7 @@ fn extract_tables(op: &Operator) -> Vec<String> {
         Operator::Project { input, projections } => {
             let mut tbls = extract_tables(input);
             for p in projections {
-                if let super::view::Projection::Subquery { plan, .. } = p {
+                if let Projection::Subquery { plan, .. } = p {
                     tbls.extend(extract_tables(plan));
                 }
             }
