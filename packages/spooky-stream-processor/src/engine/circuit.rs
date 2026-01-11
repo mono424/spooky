@@ -85,7 +85,7 @@ pub struct Circuit {
     pub views: Vec<View>,
     // Optimisation: Mapping Table -> List of View-Indices
     #[serde(skip, default)]
-    pub dependencies: FastMap<String, Vec<usize>>,
+    pub dependency_graph: FastMap<String, Vec<usize>>,
 }
 
 impl Circuit {
@@ -93,17 +93,17 @@ impl Circuit {
         Self {
             db: Database::new(),
             views: Vec::new(),
-            dependencies: FastMap::default(),
+            dependency_graph: FastMap::default(),
         }
     }
 
     // Must be called after Deserialization to rebuild the Cache!
-    pub fn rebuild_dependencies(&mut self) {
-        self.dependencies.clear();
+    pub fn rebuild_dependency_graph(&mut self) {
+        self.dependency_graph.clear();
         for (i, view) in self.views.iter().enumerate() {
             let tables = extract_tables(&view.plan.root);
             for t in tables {
-                self.dependencies.entry(t).or_default().push(i);
+                self.dependency_graph.entry(t).or_default().push(i);
             }
         }
     }
@@ -125,7 +125,7 @@ impl Circuit {
     ) -> Vec<MaterializedViewUpdate> {
         let mut table_deltas: FastMap<String, ZSet> = FastMap::default();
 
-        // 1. Update Storage & Accumulate Deltas
+        // 1. Storage Phase: Update Storage & Accumulate Deltas
         for (table, op, id, record, hash) in batch {
             let key = SmolStr::new(id);
             let weight: i64 = match op.as_str() {
@@ -151,12 +151,36 @@ impl Circuit {
             *delta_map.entry(key).or_insert(0) += weight;
         }
 
-        // 2. Process Deltas
+        // 2. Propagation Phase: Process Deltas with Dependency Graph
         let mut all_updates = Vec::new();
+        
+        // Optimized Lazy Rebuild Check (once per batch)
+        if self.dependency_graph.is_empty() && !self.views.is_empty() {
+            self.rebuild_dependency_graph();
+        }
+
         for (table, mut delta) in table_deltas {
             delta.retain(|_, w| *w != 0);
             if !delta.is_empty() {
-                all_updates.extend(self.step(table, delta));
+                 
+                {
+                    // Apply delta to DB ZSet (Storage part 2)
+                    let tb = self.db.ensure_table(&table);
+                    tb.apply_delta(&delta);
+                }
+
+                // Notify Views
+                if let Some(indices) = self.dependency_graph.get(&table) {
+                    // Clone indices to avoid borrow conflicts
+                    let indices = indices.clone(); 
+                    for i in indices {
+                        if i < self.views.len() {
+                            if let Some(update) = self.views[i].process(&table, &delta, &self.db) {
+                                all_updates.push(update);
+                            }
+                        }
+                    }
+                }
             }
         }
         all_updates
@@ -170,7 +194,7 @@ impl Circuit {
         if let Some(pos) = self.views.iter().position(|v| v.plan.id == plan.id) {
             self.views.remove(pos);
             // Rebuild dependencies entirely to be safe (simple but slower)
-            self.rebuild_dependencies();
+            self.rebuild_dependency_graph();
         }
 
         let mut view = View::new(plan, params);
@@ -186,7 +210,7 @@ impl Circuit {
         if let Some(v) = self.views.last() {
             let tables = extract_tables(&v.plan.root);
             for t in tables {
-                self.dependencies.entry(t).or_default().push(view_idx);
+                self.dependency_graph.entry(t).or_default().push(view_idx);
             }
         }
 
@@ -196,7 +220,7 @@ impl Circuit {
     #[allow(dead_code)]
     pub fn unregister_view(&mut self, id: &str) {
         self.views.retain(|v| v.plan.id != id);
-        self.rebuild_dependencies();
+        self.rebuild_dependency_graph();
     }
 
     pub fn step(&mut self, table: String, delta: ZSet) -> Vec<MaterializedViewUpdate> {
@@ -208,12 +232,12 @@ impl Circuit {
         let mut updates = Vec::new();
 
         // Optimized Lazy Rebuild
-        if self.dependencies.is_empty() && !self.views.is_empty() {
-            self.rebuild_dependencies();
+        if self.dependency_graph.is_empty() && !self.views.is_empty() {
+            self.rebuild_dependency_graph();
         }
 
-        if let Some(indices) = self.dependencies.get(&table) {
-            // We need to clone indices to avoid borrowing self.dependencies while mutably borrowing self.views
+        if let Some(indices) = self.dependency_graph.get(&table) {
+            // We need to clone indices to avoid borrowing self.dependency_graph while mutably borrowing self.views
             let indices = indices.clone();
             for i in indices {
                 if i < self.views.len() {

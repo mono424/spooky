@@ -4,26 +4,38 @@ use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 
 
-fn hash_value_recursive(v: &Value, hasher: &mut blake3::Hasher) {
+
+fn hash_value_recursive_blake3(v: &Value, hasher: &mut blake3::Hasher) {
     match v {
         Value::Null => { hasher.update(&[0]); },
         Value::Bool(b) => { hasher.update(&[1]); hasher.update(&[*b as u8]); },
         Value::Number(n) => { 
             hasher.update(&[2]); 
-            hasher.update(n.to_string().as_bytes());
+            if let Some(f) = n.as_f64() {
+                hasher.update(&f.to_be_bytes());
+            } else {
+                // strict fallback if it somehow isn't an f64 compatible number, though in JS/JSON it mostly is
+                hasher.update(n.to_string().as_bytes());
+            }
         },
         Value::String(s) => { hasher.update(&[3]); hasher.update(s.as_bytes()); },
         Value::Array(arr) => {
             hasher.update(&[4]);
             for item in arr {
-                hash_value_recursive(item, hasher);
+                hash_value_recursive_blake3(item, hasher);
             }
         },
         Value::Object(obj) => {
              hasher.update(&[5]);
+             // Deterministic hashing by sorting keys? 
+             // To match current recursive approach in view.rs which iterates straight:
+             // We stick to simple iteration unless strict determinism across reloads is needed.
+             // Given the previous code didn't sort, we won't sort here to maintain behavior relative to previous logic,
+             // BUT `service.rs` uses `hash_value_recursive` which previously used `to_string` on numbers.
+             // The prompt asks for optimization.
              for (k, v) in obj {
                  hasher.update(k.as_bytes());
-                 hash_value_recursive(v, hasher);
+                 hash_value_recursive_blake3(v, hasher);
              }
         }
     }
@@ -36,7 +48,7 @@ pub mod ingest {
     pub fn prepare(record: Value) -> (Value, String) {
         let clean_record = sanitizer::normalize_record(record);
         let mut hasher = blake3::Hasher::new();
-        hash_value_recursive(&clean_record, &mut hasher);
+        hash_value_recursive_blake3(&clean_record, &mut hasher);
         let hash = hasher.finalize().to_hex().to_string();
         (clean_record, hash)
     }
@@ -44,7 +56,7 @@ pub mod ingest {
     /// Fast preparation: Skips normalization/sanitization for high throughput.
     pub fn prepare_fast(record: Value) -> (Value, String) {
         let mut hasher = blake3::Hasher::new();
-        hash_value_recursive(&record, &mut hasher);
+        hash_value_recursive_blake3(&record, &mut hasher);
         let hash = hasher.finalize().to_hex().to_string();
         (record, hash)
     }
