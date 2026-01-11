@@ -3,6 +3,8 @@ import { Level } from 'pino';
 
 export type { Level } from 'pino';
 
+export type StoreType = 'memory' | 'indexdb';
+
 export type QueryTimeToLive =
   | '1m'
   | '5m'
@@ -40,6 +42,7 @@ export interface SpookyConfig<S extends SchemaStructure> {
     endpoint?: string;
     namespace: string;
     database: string;
+    store?: StoreType;
     token?: string;
   };
   clientId?: string;
