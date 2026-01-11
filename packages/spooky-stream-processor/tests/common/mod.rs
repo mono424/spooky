@@ -1,5 +1,6 @@
 use serde_json::{json, Value};
 use spooky_stream_processor::{Circuit, MaterializedViewUpdate};
+// use uuid::Uuid; // Removed uuid
 use ulid::Ulid;
 
 pub fn setup() -> Circuit {
@@ -8,6 +9,7 @@ pub fn setup() -> Circuit {
 
 pub fn generate_id() -> String {
     Ulid::new().to_string()
+    // Using ulid because uuid was removed
 }
 
 pub fn generate_hash(record: &Value) -> String {
@@ -24,6 +26,7 @@ pub fn ingest(
     record: Value,
 ) -> Vec<MaterializedViewUpdate> {
     let hash = generate_hash(&record);
+    println!("[Ingest] {} -> {}: {:#}", op, table, record);
     circuit.ingest_record(
         table.to_string(),
         op.to_string(),

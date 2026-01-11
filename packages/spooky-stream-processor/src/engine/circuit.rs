@@ -1,9 +1,8 @@
-use super::view::{MaterializedViewUpdate, Operator, QueryPlan, RowKey, View, ZSet};
-use rustc_hash::FxHashMap;
+use super::view::{MaterializedViewUpdate, Operator, QueryPlan, RowKey, View, ZSet, FastMap, Projection};
+// use rustc_hash::{FxHashMap, FxHasher}; // Unused in this file (used via FastMap)
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use smol_str::SmolStr;
-use std::collections::HashMap;
 
 // --- Table & Database ---
 
@@ -12,20 +11,21 @@ use std::collections::HashMap;
 pub struct Table {
     pub name: String,
     pub zset: ZSet,                   // This is the fast FxHashMap
-    pub rows: HashMap<RowKey, Value>, // Use standard HashMap for storage or upgrade to FxHashMap
-    pub hashes: HashMap<RowKey, String>,
+    pub rows: FastMap<RowKey, Value>, // Using FastMap as requested
+    pub hashes: FastMap<RowKey, String>,
 }
 
 impl Table {
     pub fn new(name: String) -> Self {
         Self {
             name,
-            zset: FxHashMap::default(),
-            rows: HashMap::new(),
-            hashes: HashMap::new(),
+            zset: FastMap::default(),
+            rows: FastMap::default(),
+            hashes: FastMap::default(),
         }
     }
 
+    // Changing signature to use SmolStr is implied by RowKey definition change
     pub fn update_row(&mut self, key: SmolStr, data: Value, hash: String) {
         self.rows.insert(key.clone(), data);
         self.hashes.insert(key, hash);
@@ -47,15 +47,26 @@ impl Table {
     }
 }
 
+// Redefining Table to use FastMap everywhere
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct TableOptimized {
+    pub name: String,
+    pub zset: ZSet,
+    pub rows: FastMap<RowKey, Value>,
+    pub hashes: FastMap<RowKey, String>,
+}
+// I will just use 'Table' name but with new types.
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Database {
-    pub tables: HashMap<String, Table>,
+    pub tables: FastMap<String, Table>,
 }
 
 impl Database {
     pub fn new() -> Self {
         Self {
-            tables: HashMap::new(),
+            tables: FastMap::default(),
         }
     }
 
@@ -74,7 +85,7 @@ pub struct Circuit {
     pub views: Vec<View>,
     // Optimisation: Mapping Table -> List of View-Indices
     #[serde(skip, default)]
-    pub dependencies: FxHashMap<String, Vec<usize>>,
+    pub dependencies: FastMap<String, Vec<usize>>,
 }
 
 impl Circuit {
@@ -82,7 +93,7 @@ impl Circuit {
         Self {
             db: Database::new(),
             views: Vec::new(),
-            dependencies: FxHashMap::default(),
+            dependencies: FastMap::default(),
         }
     }
 
@@ -105,31 +116,50 @@ impl Circuit {
         record: Value,
         hash: String,
     ) -> Vec<MaterializedViewUpdate> {
-        let key = SmolStr::new(id);
-        let weight: i64 = match op.as_str() {
-            "CREATE" | "UPDATE" => 1,
-            "DELETE" => -1,
-            _ => 0,
-        };
+        self.ingest_batch(vec![(table, op, id, record, hash)])
+    }
 
-        if weight == 0 {
-            return vec![];
+    pub fn ingest_batch(
+        &mut self,
+        batch: Vec<(String, String, String, Value, String)>,
+    ) -> Vec<MaterializedViewUpdate> {
+        let mut table_deltas: FastMap<String, ZSet> = FastMap::default();
+
+        // 1. Update Storage & Accumulate Deltas
+        for (table, op, id, record, hash) in batch {
+            let key = SmolStr::new(id);
+            let weight: i64 = match op.as_str() {
+                "CREATE" | "UPDATE" => 1,
+                "DELETE" => -1,
+                _ => 0,
+            };
+
+            if weight == 0 {
+                continue;
+            }
+
+            {
+                let tb = self.db.ensure_table(&table);
+                if weight > 0 {
+                    tb.update_row(key.clone(), record, hash);
+                } else {
+                    tb.delete_row(&key);
+                }
+            }
+
+            let delta_map = table_deltas.entry(table).or_default();
+            *delta_map.entry(key).or_insert(0) += weight;
         }
 
-        let mut delta: ZSet = FxHashMap::default();
-        delta.insert(key.clone(), weight);
-
-        // Update Storage
-        {
-            let tb = self.db.ensure_table(&table);
-            if weight > 0 {
-                tb.update_row(key.clone(), record, hash);
-            } else {
-                tb.delete_row(&key);
+        // 2. Process Deltas
+        let mut all_updates = Vec::new();
+        for (table, mut delta) in table_deltas {
+            delta.retain(|_, w| *w != 0);
+            if !delta.is_empty() {
+                all_updates.extend(self.step(table, delta));
             }
         }
-
-        self.step(table, delta)
+        all_updates
     }
 
     pub fn register_view(
@@ -145,7 +175,7 @@ impl Circuit {
 
         let mut view = View::new(plan, params);
 
-        let empty_delta: ZSet = FxHashMap::default();
+        let empty_delta: ZSet = FastMap::default();
         let initial_update = view.process("", &empty_delta, &self.db);
 
         let view_idx = self.views.len();
@@ -177,10 +207,7 @@ impl Circuit {
 
         let mut updates = Vec::new();
 
-        // Optimization: iterate only relevant views
-        // If dependencies map is empty (e.g. after fresh deserialization), we should rebuild it?
-        // Or we assume the user calls rebuild_dependencies()?
-        // For safety, let's check if empty and views not empty
+        // Optimized Lazy Rebuild
         if self.dependencies.is_empty() && !self.views.is_empty() {
             self.rebuild_dependencies();
         }
@@ -209,7 +236,7 @@ fn extract_tables(op: &Operator) -> Vec<String> {
         Operator::Project { input, projections } => {
             let mut tbls = extract_tables(input);
             for p in projections {
-                if let super::view::Projection::Subquery { plan, .. } = p {
+                if let Projection::Subquery { plan, .. } = p {
                     tbls.extend(extract_tables(plan));
                 }
             }
