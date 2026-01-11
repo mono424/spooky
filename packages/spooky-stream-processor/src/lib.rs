@@ -25,6 +25,11 @@ pub trait StreamProcessor: Send + Sync {
         hash: String,
     ) -> Vec<MaterializedViewUpdate>;
 
+    fn ingest_batch(
+        &mut self,
+        batch: Vec<(String, String, String, Value, String)>,
+    ) -> Vec<MaterializedViewUpdate>;
+
     fn register_view(
         &mut self,
         plan: QueryPlan,

@@ -3,7 +3,6 @@ use super::view::{MaterializedViewUpdate, Operator, QueryPlan, RowKey, View, ZSe
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use smol_str::SmolStr;
-use std::collections::HashMap;
 
 // --- Table & Database ---
 
@@ -12,9 +11,7 @@ use std::collections::HashMap;
 pub struct Table {
     pub name: String,
     pub zset: ZSet,                   // This is the fast FxHashMap
-    pub rows: HashMap<RowKey, Value>, // Keep HashMap for storage as per request? Or upgrade? User said "Ensure Table... use FastMap".
-                                      // User said: "Ensure Table, Database, ZSet, and View caches use FastMap."
-                                      // So I should replace HashMap with FastMap.
+    pub rows: FastMap<RowKey, Value>, // Using FastMap as requested
     pub hashes: FastMap<RowKey, String>,
 }
 
@@ -23,28 +20,13 @@ impl Table {
         Self {
             name,
             zset: FastMap::default(),
-            rows: HashMap::new(), // Keeping storage separate? "rows" uses RowKey (SmolStr).
-                                  // Wait, if I use FastMap for "rows", I need to make sure build hasher matches.
-                                  // FastMap is BuildHasherDefault<FxHasher>.
-                                  // Let's use FastMap for consistency if requested.
-                                  // "Ensure Table... use FastMap" implies all maps?
-                                  // "REPLACE all HashMap usage with FastMap" -> Okay.
+            rows: FastMap::default(),
             hashes: FastMap::default(),
         }
     }
 
     // Changing signature to use SmolStr is implied by RowKey definition change
     pub fn update_row(&mut self, key: SmolStr, data: Value, hash: String) {
-        // We need to use insert on FastMap.
-        // FastMap uses K=RowKey=SmolStr.
-        // self.rows is HashMap<RowKey, Value> currently? No, I need to change it to FastMap.
-        // But wait, "rows" is storing Data.
-        // Let's change definition above.
-        
-        // However, if I change 'rows' type, I need to match the impl.
-        // Update:
-        // self.rows.insert(key.clone(), data);
-        // But 'rows' was defined as HashMap in the struct literal above. I will fix the struct def.
         self.rows.insert(key.clone(), data);
         self.hashes.insert(key, hash);
     }
@@ -134,31 +116,50 @@ impl Circuit {
         record: Value,
         hash: String,
     ) -> Vec<MaterializedViewUpdate> {
-        let key = SmolStr::new(id);
-        let weight: i64 = match op.as_str() {
-            "CREATE" | "UPDATE" => 1,
-            "DELETE" => -1,
-            _ => 0,
-        };
+        self.ingest_batch(vec![(table, op, id, record, hash)])
+    }
 
-        if weight == 0 {
-            return vec![];
+    pub fn ingest_batch(
+        &mut self,
+        batch: Vec<(String, String, String, Value, String)>,
+    ) -> Vec<MaterializedViewUpdate> {
+        let mut table_deltas: FastMap<String, ZSet> = FastMap::default();
+
+        // 1. Update Storage & Accumulate Deltas
+        for (table, op, id, record, hash) in batch {
+            let key = SmolStr::new(id);
+            let weight: i64 = match op.as_str() {
+                "CREATE" | "UPDATE" => 1,
+                "DELETE" => -1,
+                _ => 0,
+            };
+
+            if weight == 0 {
+                continue;
+            }
+
+            {
+                let tb = self.db.ensure_table(&table);
+                if weight > 0 {
+                    tb.update_row(key.clone(), record, hash);
+                } else {
+                    tb.delete_row(&key);
+                }
+            }
+
+            let delta_map = table_deltas.entry(table).or_default();
+            *delta_map.entry(key).or_insert(0) += weight;
         }
 
-        let mut delta: ZSet = FastMap::default();
-        delta.insert(key.clone(), weight);
-
-        // Update Storage
-        {
-            let tb = self.db.ensure_table(&table);
-            if weight > 0 {
-                tb.update_row(key.clone(), record, hash);
-            } else {
-                tb.delete_row(&key);
+        // 2. Process Deltas
+        let mut all_updates = Vec::new();
+        for (table, mut delta) in table_deltas {
+            delta.retain(|_, w| *w != 0);
+            if !delta.is_empty() {
+                all_updates.extend(self.step(table, delta));
             }
         }
-
-        self.step(table, delta)
+        all_updates
     }
 
     pub fn register_view(

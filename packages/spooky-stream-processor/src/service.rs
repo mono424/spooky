@@ -3,16 +3,50 @@ use crate::{converter, sanitizer, MaterializedViewUpdate, QueryPlan};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 
+
+fn hash_value_recursive(v: &Value, hasher: &mut blake3::Hasher) {
+    match v {
+        Value::Null => { hasher.update(&[0]); },
+        Value::Bool(b) => { hasher.update(&[1]); hasher.update(&[*b as u8]); },
+        Value::Number(n) => { 
+            hasher.update(&[2]); 
+            hasher.update(n.to_string().as_bytes());
+        },
+        Value::String(s) => { hasher.update(&[3]); hasher.update(s.as_bytes()); },
+        Value::Array(arr) => {
+            hasher.update(&[4]);
+            for item in arr {
+                hash_value_recursive(item, hasher);
+            }
+        },
+        Value::Object(obj) => {
+             hasher.update(&[5]);
+             for (k, v) in obj {
+                 hasher.update(k.as_bytes());
+                 hash_value_recursive(v, hasher);
+             }
+        }
+    }
+}
+
 pub mod ingest {
     use super::*;
 
     /// Prepares a record for ingestion by normalizing and hashing it.
     pub fn prepare(record: Value) -> (Value, String) {
         let clean_record = sanitizer::normalize_record(record);
-        let hash = blake3::hash(clean_record.to_string().as_bytes())
-            .to_hex()
-            .to_string();
+        let mut hasher = blake3::Hasher::new();
+        hash_value_recursive(&clean_record, &mut hasher);
+        let hash = hasher.finalize().to_hex().to_string();
         (clean_record, hash)
+    }
+
+    /// Fast preparation: Skips normalization/sanitization for high throughput.
+    pub fn prepare_fast(record: Value) -> (Value, String) {
+        let mut hasher = blake3::Hasher::new();
+        hash_value_recursive(&record, &mut hasher);
+        let hash = hasher.finalize().to_hex().to_string();
+        (record, hash)
     }
 }
 

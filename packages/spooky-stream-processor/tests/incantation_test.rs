@@ -98,7 +98,7 @@ fn test_complex_incantation_flow() {
     check_view(&circuit, true);
 
     // 7. Add another "Magic" Comment -> Thread 1 still present
-    let _magic_comment_2 = create_comment(&mut circuit, "Magic", &thread_1, &author_alice);
+    let magic_comment_2 = create_comment(&mut circuit, "Magic", &thread_1, &author_alice);
     check_view(&circuit, true);
 
     // 8. Delete the first Magic Comment -> Thread 1 still present (count > 0)
@@ -112,25 +112,20 @@ fn test_complex_incantation_flow() {
     check_view(&circuit, true);
 
     // 9. Delete the second Magic Comment -> Thread 1 disappears
-    // Wait, I need the ID of the second one.
-    // create_comment returns ID but I ignored it.
-    // Let's create a new one to be sure.
-    let magic_comment_3 = create_comment(&mut circuit, "Magic", &thread_1, &author_alice);
-    check_view(&circuit, true);
-
-    // Now delete magic_comment_3 (the remaining one, assuming magic_comment_2 is still there? yes I didn't delete 2)
-    // Actually I lost the ID of magic_comment_2. It is stranded in the DB.
-    // So the view should still contain Thread 1 even if I delete magic_comment_3.
     ingest(
         &mut circuit,
         "comment",
         "DELETE",
-        &magic_comment_3,
+        &magic_comment_2,
         json!({}),
     );
-    check_view(&circuit, true); // Stays true because of magic_comment_2
+    check_view(&circuit, false);
 
-    // 10. Delete Author -> Thread 1 disappears (dependency check)
+    // 10. Delete Author -> Thread 1 disappears (dependency check currently empty but good to test)
+    // Note: It's already gone, but let's re-add a magic comment to verify dependency deletion works
+    let _magic_comment_3 = create_comment(&mut circuit, "Magic", &thread_1, &author_alice);
+    check_view(&circuit, true);
+    
     ingest(&mut circuit, "author", "DELETE", &author_alice, json!({}));
     check_view(&circuit, false);
 }

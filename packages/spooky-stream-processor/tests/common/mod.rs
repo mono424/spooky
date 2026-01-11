@@ -26,6 +26,7 @@ pub fn ingest(
     record: Value,
 ) -> Vec<MaterializedViewUpdate> {
     let hash = generate_hash(&record);
+    println!("[Ingest] {} -> {}: {:#}", op, table, record);
     circuit.ingest_record(
         table.to_string(),
         op.to_string(),
