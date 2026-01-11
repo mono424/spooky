@@ -1,0 +1,46 @@
+---
+/**
+ * Icon.astro - A wrapper for Lucide icons.
+ * Mapping the existing "semantic" names to specific Lucide icons.
+ */
+import {
+  Wrench, // tool
+  BrainCircuit, // brain
+  Sparkles, // magic
+  Building2, // building
+  KeyRound, // key
+  Route, // route
+  RefreshCw, // sync
+  BookOpen, // book
+  PenLine, // pen
+  Lock, // lock
+  Box, // box
+  Zap, // wave
+  TriangleAlert, // warning
+  Save, // save
+} from 'lucide-react';
+
+const { name, class: className } = Astro.props;
+
+// Map our custom names to Lucide components
+const iconMap = {
+  tool: Wrench,
+  brain: BrainCircuit,
+  magic: Sparkles,
+  building: Building2,
+  key: KeyRound,
+  route: Route,
+  sync: RefreshCw,
+  book: BookOpen,
+  pen: PenLine,
+  lock: Lock,
+  box: Box,
+  wave: Zap,
+  warning: TriangleAlert,
+  save: Save,
+};
+
+const LucideIcon = iconMap[name] || Wrench;
+---
+
+<LucideIcon className={className} strokeWidth={1} />

@@ -27,6 +27,7 @@ export function createSyncQueueEventSystem(): SyncQueueEventSystem {
 
 export const SyncEventTypes = {
   IncantationUpdated: 'SYNC_INCANTATION_UPDATED',
+  RemoteDataIngested: 'SYNC_REMOTE_DATA_INGESTED',
 } as const;
 
 export type SyncEventTypeMap = {
@@ -34,8 +35,16 @@ export type SyncEventTypeMap = {
     typeof SyncEventTypes.IncantationUpdated,
     {
       incantationId: any; // RecordId<string> but imported
-      remoteHash: string;
-      remoteTree: any;
+      localHash?: string;
+      localTree?: any;
+      remoteHash?: string;
+      remoteTree?: any;
+      records: Record<string, any>[];
+    }
+  >;
+  [SyncEventTypes.RemoteDataIngested]: EventDefinition<
+    typeof SyncEventTypes.RemoteDataIngested,
+    {
       records: Record<string, any>[];
     }
   >;
@@ -44,5 +53,5 @@ export type SyncEventTypeMap = {
 export type SyncEventSystem = EventSystem<SyncEventTypeMap>;
 
 export function createSyncEventSystem(): SyncEventSystem {
-  return createEventSystem([SyncEventTypes.IncantationUpdated]);
+  return createEventSystem([SyncEventTypes.IncantationUpdated, SyncEventTypes.RemoteDataIngested]);
 }

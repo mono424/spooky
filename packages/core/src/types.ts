@@ -3,6 +3,8 @@ import { Level } from 'pino';
 
 export type { Level } from 'pino';
 
+export type StoreType = 'memory' | 'indexdb';
+
 export type QueryTimeToLive =
   | '1m'
   | '5m'
@@ -40,6 +42,7 @@ export interface SpookyConfig<S extends SchemaStructure> {
     endpoint?: string;
     namespace: string;
     database: string;
+    store?: StoreType;
     token?: string;
   };
   clientId?: string;
@@ -56,10 +59,12 @@ export interface Incantation {
   id: RecordId<QueryHash>;
   surrealql: string;
   params?: Record<string, any>;
-  hash: string;
+  localHash: string;
+  localTree: any;
+  remoteHash: string;
+  remoteTree: any;
   lastActiveAt: number | Date | string;
   ttl: QueryTimeToLive | Duration;
-  tree: any;
   meta: {
     tableName: string;
     involvedTables?: string[];

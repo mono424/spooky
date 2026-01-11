@@ -35,9 +35,13 @@ export class LocalDatabaseService extends AbstractDatabaseService {
     const { namespace, database } = this.getConfig();
     this.logger.info({ namespace, database }, 'Connecting to local database');
     try {
-      console.log('[LocalDatabaseService] Calling client.connect(indxdb://spooky)...');
-      await this.client.connect('indxdb://spooky', {});
-      console.log('[LocalDatabaseService] client.connect returned. Calling client.use...');
+      const store = this.getConfig().store ?? 'memory';
+      const storeUrl = store === 'memory' ? 'mem://' : 'indxdb://spooky';
+      console.log(`[LocalDatabaseService] Calling client.connect(${storeUrl}, {})...`);
+      await this.client.connect(storeUrl, {});
+      console.log(
+        `[LocalDatabaseService] client.connect returned. Calling client.use(${namespace}, ${database})...`
+      );
 
       await this.client.use({
         namespace,

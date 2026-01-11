@@ -66,6 +66,7 @@ export type QueryEventTypeMap = {
     {
       incantationId: RecordId<string>;
       records: Record<string, any>[];
+      tree?: any;
     }
   >;
 };

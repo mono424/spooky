@@ -42,9 +42,11 @@ export class Incantation<T> {
   public id: RecordId<string>;
   public surrealql: string;
   public params?: Record<string, any>;
-  public hash: string;
+  public localHash: string;
+  public localTree: any;
+  public remoteHash: string;
+  public remoteTree: any;
   public ttl: QueryTimeToLive | Duration;
-  public tree: any;
   public lastActiveAt: Date | number | string;
   private ttlTimer: NodeJS.Timeout | null = null;
   private ttlDurationMs: number;
@@ -63,8 +65,10 @@ export class Incantation<T> {
     this.id = data.id;
     this.surrealql = data.surrealql;
     this.params = data.params;
-    this.hash = data.hash;
-    this.tree = data.tree;
+    this.localHash = data.localHash;
+    this.localTree = data.localTree;
+    this.remoteHash = data.remoteHash;
+    this.remoteTree = data.remoteTree;
     this.lastActiveAt = new Date(data.lastActiveAt);
     this.ttl = data.ttl;
     this.ttlDurationMs = parseDuration(data.ttl);
@@ -76,10 +80,10 @@ export class Incantation<T> {
     return this.meta.involvedTables?.includes(tableName) ?? false;
   }
 
-  public updateLocalState(records: T[], hash: string, tree: any) {
+  public updateLocalState(records: T[], localHash: string, localTree: any) {
     this.results = records;
-    this.hash = hash;
-    this.tree = tree;
+    this.localHash = localHash;
+    this.localTree = localTree;
   }
 
   public destroy() {

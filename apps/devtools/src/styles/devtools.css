@@ -423,6 +423,62 @@ body {
   color: var(--sys-color-on-surface-subtle);
 }
 
+/* Event Filter */
+.events-filter-bar {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--sys-color-divider);
+  display: flex;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  gap: 6px;
+  background: var(--sys-color-surface);
+  min-height: 36px;
+  /* Hide scrollbar for cleaner look but keep functionality */
+  scrollbar-width: thin;
+}
+
+.events-filter-bar::-webkit-scrollbar {
+  height: 4px;
+}
+
+.events-filter-bar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.events-filter-bar::-webkit-scrollbar-thumb {
+  background-color: var(--sys-color-outline);
+  border-radius: 4px;
+}
+
+.filter-chip {
+  flex-shrink: 0; /* Prevent chips from shrinking */
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: var(--sys-color-cdt-base-container);
+  border: 1px solid var(--sys-color-divider);
+  font-family: var(--sys-typescale-label-font);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--sys-color-on-surface-subtle);
+  cursor: pointer;
+  user-select: none;
+  transition: all var(--sys-transition-fast);
+}
+
+.filter-chip:hover {
+  background: var(--sys-color-state-hover);
+  border-color: var(--sys-color-outline);
+  color: var(--sys-color-on-surface);
+}
+
+.filter-chip.active {
+  background: var(--sys-color-primary-container);
+  border-color: var(--sys-color-primary);
+  color: var(--sys-color-primary);
+}
+
 /* Queries tab */
 .queries-container {
   display: grid;

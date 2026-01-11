@@ -110,14 +110,89 @@ export class QueryManager<S extends SchemaStructure> {
       },
       'Handling incoming remote update'
     );
+    console.log('[QueryManager] handleIncomingUpdate payload:', {
+      incantationId: incantationId?.toString(),
+      remoteHash,
+      remoteTree: remoteTree ? 'PRESENT' : 'MISSING',
+      localHashInPayload: (payload as any).localHash,
+      localTreeInPayload: (payload as any).localTree ? 'PRESENT' : 'MISSING',
+    });
 
-    incantation.updateLocalState(validRecords, remoteHash, remoteTree);
+    incantation.updateLocalState(validRecords, incantation.localHash, incantation.localTree);
+    // Explicitly update remote state
+    incantation.remoteHash = remoteHash;
+    incantation.remoteTree = remoteTree;
     this.events.emit(QueryEventTypes.IncantationUpdated, {
       incantationId,
       records: validRecords,
+      localHash: incantation.localHash,
+      localTree: incantation.localTree,
+      remoteHash: remoteHash,
+      remoteTree: remoteTree,
     });
 
     // Verification and purging of orphans is now handled by SpookySync
+  }
+
+  public async handleStreamUpdate(update: any) {
+    const { query_id, localHash, result_ids, localTree } = update;
+
+    // query_id from StreamProcessor is a string (e.g. "_spooky_incantation:...")
+    // We need to convert it to a RecordId for the event payload
+    let incantationRecordId: RecordId;
+    try {
+      incantationRecordId = parseRecordIdString(query_id);
+    } catch (e) {
+      // Fallback for bare IDs or testing
+      incantationRecordId = new RecordId('_spooky_incantation', query_id);
+    }
+
+    this.logger.debug(
+      { incantationId: query_id, count: result_ids?.length },
+      'Handling stream update'
+    );
+
+    if (!result_ids || result_ids.length === 0) {
+      this.events.emit(QueryEventTypes.IncantationUpdated, {
+        incantationId: incantationRecordId,
+        records: [],
+      });
+      return;
+    }
+
+    try {
+      // StreamProcessor might return IDs as strings, ensure we can fetch them
+      // We might need to ensure they are formatted as RecordIDs if the DB requires it,
+      // but usually SELECT * FROM ["table:id"] works or we might need to parse them.
+      // parseRecordIdString handles 'table:id'.
+
+      const idsToFetch = result_ids.map((id: string) =>
+        id.includes(':') ? parseRecordIdString(id) : id
+      );
+
+      const [records] = await this.local.query<[Record<string, any>[]]>('SELECT * FROM $ids', {
+        ids: idsToFetch,
+      });
+
+      // We should technically update the local state/incantation here too
+      const incantation = this.activeQueries.get(query_id);
+      if (incantation) {
+        // Update the local state with these records (and the new tree/hash)
+        incantation.updateLocalState(records || [], localHash, localTree);
+      }
+
+      this.events.emit(QueryEventTypes.IncantationUpdated, {
+        incantationId: incantationRecordId,
+        records: records || [],
+        localHash,
+        localTree,
+      });
+    } catch (err) {
+      this.logger.error(
+        { err, incantationId: query_id },
+        'Failed to fetch records for stream update'
+      );
+    }
   }
 
   private async register(
@@ -186,8 +261,10 @@ export class QueryManager<S extends SchemaStructure> {
             surrealQL: surrealql,
             params: params,
             clientId: this.clientId,
-            hash: id,
-            tree: null,
+            localHash: id, // Initial local hash is the query hash (empty state?) or just id? Probably empty.
+            localTree: null,
+            remoteHash: '',
+            remoteTree: null,
             lastActiveAt: new Date(),
             ttl: new Duration(ttl),
             meta: {
@@ -207,10 +284,12 @@ export class QueryManager<S extends SchemaStructure> {
         id: recordId,
         surrealql,
         params,
-        hash: existing.hash,
+        localHash: existing.localHash,
+        localTree: existing.localTree,
+        remoteHash: existing.remoteHash,
+        remoteTree: existing.remoteTree,
         lastActiveAt: existing.lastActiveAt,
         ttl: existing.ttl,
-        tree: existing.tree,
         meta: {
           tableName,
           involvedTables,
@@ -239,6 +318,10 @@ export class QueryManager<S extends SchemaStructure> {
       surrealql: incantation.surrealql,
       params: incantation.params ?? {},
       ttl: incantation.ttl,
+      localHash: incantation.localHash,
+      localTree: incantation.localTree,
+      remoteHash: incantation.remoteHash,
+      remoteTree: incantation.remoteTree,
     });
 
     await incantation.startTTLHeartbeat(() => {

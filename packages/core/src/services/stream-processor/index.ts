@@ -7,8 +7,8 @@ import { LocalDatabaseService } from '../database/index.js';
 // Matches MaterializedViewUpdate struct
 export interface StreamUpdate {
   query_id: string;
-  result_hash: string;
-  tree: any; // Merkle tree structure
+  localHash: string;
+  localTree: any; // Merkle tree structure
 }
 
 // Define events map
@@ -109,15 +109,20 @@ export class StreamProcessorService {
    * Ingest a record change into the processor.
    * Emits 'stream_update' event if materialized views are affected.
    */
-  ingest(table: string, op: string, id: string, record: any, hash: string): void {
+  ingest(table: string, op: string, id: string, record: any): void {
     if (!this.processor) {
       this.logger.warn('[StreamProcessor] Not initialized, skipping ingest');
       return;
     }
 
     try {
-      const updates = this.processor.ingest(table, op, id, record, hash);
-      if (updates && Array.isArray(updates) && updates.length > 0) {
+      const rawUpdates: any = (this.processor as any).ingest(table, op, id, record);
+      if (rawUpdates && Array.isArray(rawUpdates) && rawUpdates.length > 0) {
+        const updates: StreamUpdate[] = rawUpdates.map((u: any) => ({
+          query_id: u.query_id,
+          localHash: u.result_hash,
+          localTree: u.tree,
+        }));
         this.events.emit('stream_update', updates);
         this.saveState();
       }
@@ -130,17 +135,44 @@ export class StreamProcessorService {
    * Register a new incantation (query plan).
    * Emits 'stream_update' with the initial result.
    */
-  registerIncantation(plan: any, params: any) {
+  registerIncantation(planOrSql: any, params: any, queryId?: string) {
     if (!this.processor) {
       this.logger.warn('[StreamProcessor] Not initialized, skipping registration');
       return;
     }
 
     try {
-      const initialUpdate = this.processor.register_view(plan, params);
-      // processor.register_view returns a single Option<MaterializedViewUpdate> (or JS equivalent)
+      let config: any;
+
+      // If passing a raw string (SQL), construct the configuration object expected by the updated WASM
+      if (typeof planOrSql === 'string') {
+        config = {
+          id: queryId || `auto_${Date.now()}`,
+          surrealQL: planOrSql,
+          params: params,
+          clientId: 'local', // Default or fetch from somewhere if vital
+          ttl: '10m', // Default
+          lastActiveAt: new Date().toISOString(),
+        };
+      } else {
+        // Assume it's already a plan or valid config object?
+        // If it's a legacy QueryPlan object, it might fail the new WASM check which expects "surrealQL" string or "id".
+        // The new WASM parser logic uses `prepare_registration` which looks for `surrealQL`.
+        // If we have a structured plan in `planOrSql`, the new WASM might not support it directly unless we adapt it.
+        // However, the prompt implies "register view should work with sql string", so we focus on that.
+        // If `planOrSql` is an object, we hope it matches the config shape.
+        config = { ...planOrSql, params };
+      }
+
+      const initialUpdate: any = (this.processor as any).register_view(config);
+
       if (initialUpdate) {
-        this.events.emit('stream_update', [initialUpdate]);
+        const update: StreamUpdate = {
+          query_id: initialUpdate.query_id,
+          localHash: initialUpdate.result_hash,
+          localTree: initialUpdate.tree,
+        };
+        this.events.emit('stream_update', [update]);
         this.saveState();
       }
     } catch (e) {

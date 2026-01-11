@@ -3,16 +3,15 @@ layout: ../../../layouts/DocsLayout.astro
 title: SpookySync Service
 ---
 
-
 `SpookySync` is the synchronization engine of the application. It acts as the bridge between the **Local Database** (in-browser) and the **Remote Database** (cloud). It is the only service permitted to read or write to the remote backend, ensuring a single point of control for data consistency.
 
-## 📦 Responsibility
+## Responsibility
 
 - **Two-Way Sync**: Pushes local changes Up (`syncUp`) and pulls remote changes Down (`syncDown`).
 - **Live Queries**: Maintains active listeners on the remote database for real-time updates.
 - **Orphan Management**: Verifies and purges "ghost records" that exist locally but have been deleted remotely.
 
-## 🏗️ Architecture & Boundaries
+## Architecture & Boundaries
 
 `SpookySync` is a "privileged" service in the Black Box model:
 
@@ -23,7 +22,7 @@ title: SpookySync Service
   - `IncantationUpdated` events (routed to `QueryManager`) when new data arrives.
 - **Remote Access**: **YES**. This is the exclusive owner of the remote connection for data operations.
 
-## 🔄 Input/Output Reference
+## Input/Output Reference
 
 ### Methods
 
@@ -40,7 +39,7 @@ title: SpookySync Service
 | :------------------- | :--------------------------- | :------------------------------------------------------------- |
 | `IncantationUpdated` | `{ incantationId, records }` | Fired when new data is successfully synced and cached locally. |
 
-## 🔑 Key Workflows
+## Key Workflows
 
 ### 1. Live Query Flow (The "Incantation" Loop)
 
@@ -59,6 +58,6 @@ Occasionally, a record might be deleted remotely but missed by a delta update.
 2. If a local ID is **not** present in the remote tree, it is flagged as a potential orphan.
 3. The service verifies the deletion against the remote DB and purges the ghost record if confirmed.
 
-## 🧠 Internal Logic: Merkle Trees
+## Internal Logic: Merkle Trees
 
 Spooky uses **Merkle Trees** (or Hash Trees) to efficiently verify data integrity. Instead of comparing every record, we compare hashes of the data. If the root hashes match, the data is identical. If they differ, we traverse the tree to find exactly which leaf nodes (records) changed, minimizing network bandwidth.

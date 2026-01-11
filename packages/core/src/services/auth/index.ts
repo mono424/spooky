@@ -110,17 +110,17 @@ export class AuthService<S extends SchemaStructure> {
       // Authenticate with the token
       await this.remote.getClient().authenticate(token);
 
-      // Verify the session by querying $auth directly.
-      const result = await this.remote.query('SELECT * FROM $auth');
+      // Verify the session by fetching the full user record using $auth.id
+      const result = await this.remote.query('SELECT * FROM ONLY $auth.id');
 
       const items = Array.isArray(result) && Array.isArray(result[0]) ? result[0] : result;
       const user = Array.isArray(items) ? items[0] : items;
 
       if (user && user.id) {
-        this.logger.info({ user }, '[AuthService] Auth check complete (via $auth)');
+        this.logger.info({ user }, '[AuthService] Auth check complete (via $auth.id)');
         this.setSession(token, user);
       } else {
-        this.logger.warn('[AuthService] $auth empty, attempting manual user fetch');
+        this.logger.warn('[AuthService] $auth.id empty, attempting manual user fetch');
 
         const manualResult = await this.remote.query(
           'SELECT * FROM user WHERE id = $auth.id LIMIT 1'

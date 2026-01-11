@@ -3,22 +3,21 @@ layout: ../../../layouts/DocsLayout.astro
 title: DevToolsService
 ---
 
-
 The `DevToolsService` is a specialized service designed to expose the internal state of the Spooky framework to external debugging tools, specifically the **Spooky Chrome Extension**. It acts as a passive observer, receiving copies of events via the Router and broadcasting them to the browser's window object or extension port.
 
-## 📦 Responsibility
+## Responsibility
 
 - **State Exposure**: Makes the internal logs, query states, and mutation history visible.
 - **Bridge**: Acts as the bridge between the Core module (in-memory) and the DevTools UI (extension).
 
-## 🏗️ Architecture & Boundaries
+## Architecture & Boundaries
 
 - **Service Level**: Tooling / Instrumentation
 - **Inputs**: Method calls triggered by the `RouterService` (e.g., `onMutation`, `onQueryUpdated`).
 - **Outputs**: `window.postMessage` or specific custom events for the extension.
 - **Dependencies**: `LocalDatabaseService` (read-only access to inspect tables).
 
-## 🔄 Input/Output Reference
+## Input/Output Reference
 
 ### Methods (Called by Router)
 
@@ -28,7 +27,7 @@ The `DevToolsService` is a specialized service designed to expose the internal s
 | `onQueryUpdated(payload)`     | Reports data updates (including record counts and latency). |
 | `onMutation(payload)`         | Reports a write operation.                                  |
 
-## 🔑 Key Workflows
+## Key Workflows
 
 ### Debugging a Query
 
@@ -40,7 +39,7 @@ The `DevToolsService` is a specialized service designed to expose the internal s
 6. When data arrives, `RouterService` calls `DevTools.onQueryUpdated`.
 7. The extension highlights the query and updates the record count.
 
-## ⚠️ Internal Logic
+## Internal Logic
 
 - **Performance**: The service is designed to be lightweight. It does minimal processing.
 - **Safety**: In production builds, this service can be disabled or stubbed out to prevent state leakage.

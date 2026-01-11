@@ -15,6 +15,7 @@ class Schema {
     SpookyIncantation spookyIncantation;
     SpookyPendingMutations spookyPendingMutations;
     SpookySchema spookySchema;
+    SpookyStreamProcessorState spookyStreamProcessorState;
     Comment comment;
     CommentedOn commentedOn;
     Thread thread;
@@ -24,6 +25,7 @@ class Schema {
         required this.spookyIncantation,
         required this.spookyPendingMutations,
         required this.spookySchema,
+        required this.spookyStreamProcessorState,
         required this.comment,
         required this.commentedOn,
         required this.thread,
@@ -34,6 +36,7 @@ class Schema {
         spookyIncantation: SpookyIncantation.fromJson(json["_spooky_incantation"]),
         spookyPendingMutations: SpookyPendingMutations.fromJson(json["_spooky_pending_mutations"]),
         spookySchema: SpookySchema.fromJson(json["_spooky_schema"]),
+        spookyStreamProcessorState: SpookyStreamProcessorState.fromJson(json["_spooky_stream_processor_state"]),
         comment: Comment.fromJson(json["comment"]),
         commentedOn: CommentedOn.fromJson(json["commented_on"]),
         thread: Thread.fromJson(json["thread"]),
@@ -44,6 +47,7 @@ class Schema {
         "_spooky_incantation": spookyIncantation.toJson(),
         "_spooky_pending_mutations": spookyPendingMutations.toJson(),
         "_spooky_schema": spookySchema.toJson(),
+        "_spooky_stream_processor_state": spookyStreamProcessorState.toJson(),
         "comment": comment.toJson(),
         "commented_on": commentedOn.toJson(),
         "thread": thread.toJson(),
@@ -111,46 +115,56 @@ class CommentedOn {
 
 class SpookyIncantation {
     String? clientId;
-    String? hash;
     
     ///Record ID
     String id;
     DateTime lastActiveAt;
-    String? surrealQl;
+    String? localHash;
     
     ///Any type
-    dynamic tree;
+    dynamic localTree;
+    String? remoteHash;
+    
+    ///Any type
+    dynamic remoteTree;
+    String? surrealQl;
     
     ///ISO 8601 duration
     String ttl;
 
     SpookyIncantation({
         this.clientId,
-        this.hash,
         required this.id,
         required this.lastActiveAt,
+        this.localHash,
+        required this.localTree,
+        this.remoteHash,
+        required this.remoteTree,
         this.surrealQl,
-        required this.tree,
         required this.ttl,
     });
 
     factory SpookyIncantation.fromJson(Map<String, dynamic> json) => SpookyIncantation(
         clientId: json["clientId"],
-        hash: json["hash"],
         id: json["id"],
         lastActiveAt: DateTime.parse(json["lastActiveAt"]),
+        localHash: json["localHash"],
+        localTree: json["localTree"],
+        remoteHash: json["remoteHash"],
+        remoteTree: json["remoteTree"],
         surrealQl: json["surrealQL"],
-        tree: json["tree"],
         ttl: json["ttl"],
     );
 
     Map<String, dynamic> toJson() => {
         "clientId": clientId,
-        "hash": hash,
         "id": id,
         "lastActiveAt": lastActiveAt.toIso8601String(),
+        "localHash": localHash,
+        "localTree": localTree,
+        "remoteHash": remoteHash,
+        "remoteTree": remoteTree,
         "surrealQL": surrealQl,
-        "tree": tree,
         "ttl": ttl,
     };
 }
@@ -208,6 +222,30 @@ class SpookySchema {
         "created_at": createdAt?.toIso8601String(),
         "hash": hash,
         "id": id,
+    };
+}
+
+class SpookyStreamProcessorState {
+    String id;
+    String state;
+    DateTime? updatedAt;
+
+    SpookyStreamProcessorState({
+        required this.id,
+        required this.state,
+        this.updatedAt,
+    });
+
+    factory SpookyStreamProcessorState.fromJson(Map<String, dynamic> json) => SpookyStreamProcessorState(
+        id: json["id"],
+        state: json["state"],
+        updatedAt: json["updated_at"] == null ? null : DateTime.parse(json["updated_at"]),
+    );
+
+    Map<String, dynamic> toJson() => {
+        "id": id,
+        "state": state,
+        "updated_at": updatedAt?.toIso8601String(),
     };
 }
 
@@ -398,13 +436,7 @@ PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD clientId ON TABLE _spooky_incantation TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
--- The current XOR sum of all results in this query
-DEFINE FIELD hash ON TABLE _spooky_incantation TYPE option<string>
-PERMISSIONS FOR select, create, update WHERE true;
 
--- The Radix Tree of Result IDs for efficient sync
-DEFINE FIELD tree ON TABLE _spooky_incantation TYPE any
-PERMISSIONS FOR select, create, update WHERE true;
 
 -- For garbage collection (Heartbeat)
 DEFINE FIELD lastActiveAt ON TABLE _spooky_incantation TYPE datetime DEFAULT time::now()
@@ -413,7 +445,6 @@ PERMISSIONS FOR select, create, update WHERE true;
 -- How long this Incantation stays alive without activity
 DEFINE FIELD ttl ON TABLE _spooky_incantation TYPE duration
 PERMISSIONS FOR select, create, update WHERE true;
-
 
 -- ==================================================
 -- SPOOKY SCHEMA
@@ -428,9 +459,56 @@ DEFINE FIELD IF NOT EXISTS created_at ON _spooky_schema TYPE datetime VALUE time
 DEFINE INDEX IF NOT EXISTS unique_hash ON _spooky_schema FIELDS hash UNIQUE;
 
 -- ==================================================
--- SPOOKY DATA HASH (Client)
--- Removed: Replaced by DBSP Module Internal Hashing
+-- SPOOKY STREAM PROCESSOR STATE
+-- Stores the local state of the stream processor (DBSP)
 -- ==================================================
+
+DEFINE TABLE IF NOT EXISTS _spooky_stream_processor_state SCHEMALESS
+PERMISSIONS FOR select, create, update, delete WHERE true;
+
+DEFINE FIELD IF NOT EXISTS id ON _spooky_stream_processor_state TYPE string;
+DEFINE FIELD IF NOT EXISTS state ON _spooky_stream_processor_state TYPE string;
+DEFINE FIELD IF NOT EXISTS updated_at ON _spooky_stream_processor_state TYPE datetime VALUE time::now();
+
+-- ==================================================
+-- SPOOKY INCANTATION
+-- The Registry of active Live Queries (Incantations).
+-- ==================================================
+
+DEFINE TABLE _spooky_incantation SCHEMALESS
+PERMISSIONS FOR select, create, update, delete WHERE true;
+
+-- The raw query string (for re-hydration/debugging)
+DEFINE FIELD surrealQL ON TABLE _spooky_incantation TYPE option<string>
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- The raw query string (for re-hydration/debugging)
+DEFINE FIELD clientId ON TABLE _spooky_incantation TYPE option<string>
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- The current XOR sum of all results in this query
+DEFINE FIELD localHash ON TABLE _spooky_incantation TYPE option<string>
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- The Radix Tree of Result IDs for efficient sync
+DEFINE FIELD localTree ON TABLE _spooky_incantation TYPE any
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- The current XOR sum of all results in this query
+DEFINE FIELD remoteHash ON TABLE _spooky_incantation TYPE option<string>
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- The Radix Tree of Result IDs for efficient sync
+DEFINE FIELD remoteTree ON TABLE _spooky_incantation TYPE any
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- For garbage collection (Heartbeat)
+DEFINE FIELD lastActiveAt ON TABLE _spooky_incantation TYPE datetime DEFAULT time::now()
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- How long this Incantation stays alive without activity
+DEFINE FIELD ttl ON TABLE _spooky_incantation TYPE duration
+PERMISSIONS FOR select, create, update WHERE true;
 
 -- ==================================================
 -- SPOOKY EVENTS

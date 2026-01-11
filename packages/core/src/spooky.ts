@@ -52,6 +52,11 @@ export class SpookyClient<S extends SchemaStructure> {
     const logger = createLogger(config.logLevel ?? 'info');
     this.local = new LocalDatabaseService(this.config.database, logger);
     this.remote = new RemoteDatabaseService(this.config.database, logger);
+    this.streamProcessor = new StreamProcessorService(
+      new EventSystem(['stream_update']),
+      this.local,
+      logger
+    );
     this.migrator = new LocalMigrator(this.local, logger);
     this.mutationManager = new MutationManager(this.config.schema, this.local, logger);
     this.queryManager = new QueryManager(this.config.schema, this.local, clientId, logger);
@@ -69,11 +74,6 @@ export class SpookyClient<S extends SchemaStructure> {
       this.config.schema,
       this.auth,
       this.queryManager
-    );
-    this.streamProcessor = new StreamProcessorService(
-      new EventSystem(['stream_update']),
-      this.local,
-      logger
     );
     this.router = new RouterService(
       this.mutationManager.events,
@@ -98,6 +98,10 @@ export class SpookyClient<S extends SchemaStructure> {
       await this.remote.connect();
       console.log('[Spooky] Remote connected');
 
+      console.log('[Spooky] Initializing StreamProcessor...');
+      await this.streamProcessor.init();
+      console.log('[Spooky] StreamProcessor initialized');
+
       console.log('[Spooky] Initializing Auth...');
       await this.auth.init();
       console.log('[Spooky] Auth initialized');
@@ -113,10 +117,6 @@ export class SpookyClient<S extends SchemaStructure> {
       console.log('[Spooky] Initializing Sync...');
       await this.sync.init();
       console.log('[Spooky] Sync initialized');
-
-      console.log('[Spooky] Initializing StreamProcessor...');
-      await this.streamProcessor.init();
-      console.log('[Spooky] StreamProcessor initialized');
     } catch (e) {
       console.error('[Spooky] Init failed', e);
       throw e;

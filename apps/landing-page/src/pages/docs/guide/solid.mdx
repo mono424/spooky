@@ -3,7 +3,9 @@ layout: ../../../layouts/DocsLayout.astro
 title: SolidJS Guide
 ---
 
-> **Note**: This guide is currently under construction. 🚧
+import Warning from '../../../components/ui/Warning.astro';
+
+<Warning>This guide is currently under construction. 🚧</Warning>
 
 This guide walks you through building a reactive app with SolidJS and Spooky.
 
@@ -55,6 +57,7 @@ setReady(true);
 });
 
 return (
+
 <Show when={ready()} fallback={<div>Booting System...</div>}>
 <MainApp />
 </Show>
@@ -82,6 +85,7 @@ export const ThreadList = () => {
   const [threads] = createResource(fetchThreads);
 
 return (
+
 <ul>
 <For each={threads()}>
 {(thread) => <li>{thread.title}</li>}

@@ -10,6 +10,7 @@ export const dbConfig = {
     namespace: 'main',
     database: 'main',
     endpoint: 'ws://localhost:8666/rpc',
+    store: 'memory',
     // auth: { ... } // If needed later
   },
 } satisfies SyncedDbConfig<typeof schema>;
