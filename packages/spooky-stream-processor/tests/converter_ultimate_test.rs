@@ -1,6 +1,5 @@
 use spooky_stream_processor::converter::convert_surql_to_dbsp;
-use simd_json::prelude::*;
-use simd_json::OwnedValue as Value;
+use serde_json::Value;
 
 fn parse_ok(sql: &str) -> Value {
     convert_surql_to_dbsp(sql).expect(&format!("Failed to parse: {}", sql))
@@ -108,7 +107,7 @@ fn test_ultimate_valid_join() {
     // 3. Wrap Filter -> Filter(Join(...))
     // This is valid.
     
-    let op_type = plan["op"].as_str().unwrap();
+    let _op_type = plan["op"].as_str().unwrap();
     // It might be filter or join depending on order.
     // With `AND`, `parse_and_clause` returns list.
     // `wrap_conditions` iterates list.
@@ -134,7 +133,7 @@ fn test_ultimate_prefix_parameter() {
     // Filter 1: $searchkey
     // Filter 2: prefix 'important'
     
-    let op = plan["op"].as_str().unwrap();
+    let _op = plan["op"].as_str().unwrap();
     // wrapped recursively.
 }
 

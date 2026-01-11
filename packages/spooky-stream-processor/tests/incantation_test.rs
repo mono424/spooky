@@ -1,7 +1,7 @@
 mod common;
 
 use common::*;
-use simd_json::json;
+use serde_json::json;
 use spooky_stream_processor::engine::view::{JoinCondition, Operator, Predicate, QueryPlan, Path};
 
 #[test]

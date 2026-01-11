@@ -1,14 +1,15 @@
-use simd_json::{json, OwnedValue as Value};
+use serde_json::{json, Value};
 use spooky_stream_processor::{Circuit, MaterializedViewUpdate};
-use uuid::Uuid;
+// use uuid::Uuid; // Removed uuid
+use ulid::Ulid;
 
 pub fn setup() -> Circuit {
     Circuit::new()
 }
 
 pub fn generate_id() -> String {
-    Uuid::new_v4().to_string()
-    // Using uuid because ulid was removed
+    Ulid::new().to_string()
+    // Using ulid because uuid was removed
 }
 
 pub fn generate_hash(record: &Value) -> String {

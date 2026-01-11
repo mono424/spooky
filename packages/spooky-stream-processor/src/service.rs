@@ -1,8 +1,7 @@
 use crate::engine::view::{IdTree, Operator};
 use crate::{converter, sanitizer, MaterializedViewUpdate, QueryPlan};
 use anyhow::{anyhow, Result};
-use simd_json::{json, OwnedValue as Value};
-use simd_json::prelude::*; // for .into_trait_impls and value traits
+use serde_json::{json, Value};
 
 pub mod ingest {
     use super::*;
@@ -65,22 +64,16 @@ pub mod view {
         let params = config.get("params").cloned().unwrap_or(json!({}));
 
         // Parse Query Plan
-        // 1. Convert SURQL to generic Value (now OwnedValue)
+        // 1. Convert SURQL to generic Value
         let root_op_val = converter::convert_surql_to_dbsp(&surreal_ql)
              .or_else(|_| {
-                 // Fallback: Parse directly from string using simd-json
-                 // We need bytes for simd-json
-                 let mut bytes = surreal_ql.clone().into_bytes();
-                 simd_json::to_owned_value(&mut bytes).map_err(anyhow::Error::from)
+                 // Fallback: Parse directly from string using serde_json
+                 serde_json::from_str::<Value>(&surreal_ql).map_err(anyhow::Error::from)
              })
              .map_err(|_| anyhow!("Invalid Query Plan"))?;
 
         // 2. Deserialize Value into Operator Struct
-        // Operator uses OwnedValue fields.
-        // We can use simd_json::serde::from_owned_value or standard serde if OwnedValue implements deserializer.
-        // simd_json 0.13 usually requires explicit conversion for struct deserialization if not using from_slice directly.
-        // But since Operator derives Deserialize, and OwnedValue implements Deserializer...
-        let root_op: Operator = simd_json::serde::from_owned_value(root_op_val)
+        let root_op: Operator = serde_json::from_value(root_op_val)
             .map_err(|e| anyhow!("Invalid Operator JSON: {}", e))?;
 
         let safe_params = sanitizer::parse_params(params.clone());
