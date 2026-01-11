@@ -27,8 +27,6 @@ pub mod view {
     }
 
     /// Prepares a view registration request.
-    /// Returns the QueryPlan, sanitized params, and a JSON object containing the metadata
-    /// needed for the `_spooky_incantation` table.
     pub fn prepare_registration(config: Value) -> Result<RegistrationData> {
         let id = config
             .get("id")
@@ -36,9 +34,6 @@ pub mod view {
             .ok_or_else(|| anyhow!("Missing or invalid 'id'"))?
             .to_string();
 
-        // Handle potential case differences in keys if coming from different sources,
-        // but generally we expect camelCase from JSON payloads or standard keys.
-        // Sidecar uses "surrealQL" (or "surreal_ql" mapped), module uses "surrealQL".
         let surreal_ql = config
             .get("surrealQL")
             .or_else(|| config.get("surreal_ql"))
@@ -69,12 +64,17 @@ pub mod view {
         let params = config.get("params").cloned().unwrap_or(json!({}));
 
         // Parse Query Plan
+        // 1. Convert SURQL to generic Value
         let root_op_val = converter::convert_surql_to_dbsp(&surreal_ql)
-            .or_else(|_| serde_json::from_str(&surreal_ql).map_err(anyhow::Error::from))
-            .map_err(|_| anyhow!("Invalid Query Plan"))?;
+             .or_else(|_| {
+                 // Fallback: Parse directly from string using serde_json
+                 serde_json::from_str::<Value>(&surreal_ql).map_err(anyhow::Error::from)
+             })
+             .map_err(|_| anyhow!("Invalid Query Plan"))?;
 
-        let root_op: Operator =
-            serde_json::from_value(root_op_val).map_err(|_| anyhow!("Invalid Operator JSON"))?;
+        // 2. Deserialize Value into Operator Struct
+        let root_op: Operator = serde_json::from_value(root_op_val)
+            .map_err(|e| anyhow!("Invalid Operator JSON: {}", e))?;
 
         let safe_params = sanitizer::parse_params(params.clone());
         let safe_params_val = safe_params.clone().unwrap_or(json!({}));
@@ -88,11 +88,7 @@ pub mod view {
             "id": id,
             "clientId": client_id,
             "surrealQL": surreal_ql,
-            "params": params, // Store original params or safe params? Module stored original. Sidecar stored safe. Let's store safe for consistency? Or original?
-                              // Module: params from config. Sidecar: safe_params.
-                              // Let's stick to safe_params for consistency if reasonable.
-                              // Actually module stored `params` (raw).
-                              // Use safe_params to be cleaner.
+            "params": params,
             "safe_params": safe_params_val,
             "ttl": ttl,
             "lastActiveAt": last_active_at

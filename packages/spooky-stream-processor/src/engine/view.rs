@@ -1,10 +1,10 @@
 use super::circuit::Database;
-use rustc_hash::{FxHashMap, FxHasher};
+use rustc_hash::FxHasher;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use smol_str::SmolStr;
 use std::cmp::Ordering;
-use std::hash::Hasher;
+use std::hash::{BuildHasherDefault, Hasher};
 
 // --- Data Model ---
 
@@ -13,7 +13,7 @@ pub type RowKey = SmolStr;
 
 // We use FxHashMap instead of standard HashMap for internal calculations.
 // It is extremely fast for integers and strings.
-type FastMap<K, V> = FxHashMap<K, V>;
+pub type FastMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<FxHasher>>;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Row {
@@ -115,6 +115,48 @@ impl IdTree {
     }
 }
 
+// --- Path Optimization ---
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Path(pub Vec<SmolStr>);
+
+impl Path {
+    pub fn new(s: &str) -> Self {
+        if s.is_empty() {
+            Path(vec![])
+        } else {
+            Path(s.split('.').map(SmolStr::new).collect())
+        }
+    }
+    
+    pub fn as_str(&self) -> String {
+       self.0.join(".")
+    }
+}
+
+impl serde::Serialize for Path {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        if self.0.is_empty() {
+            serializer.serialize_str("")
+        } else {
+            serializer.serialize_str(&self.0.join("."))
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Path {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s: String = serde::Deserialize::deserialize(deserializer)?;
+        Ok(Path::new(&s))
+    }
+}
+
 // --- View / Circuit Model ---
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -146,7 +188,7 @@ pub enum Operator {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct OrderSpec {
-    pub field: String,
+    pub field: Path,
     pub direction: String,
 }
 
@@ -154,26 +196,26 @@ pub struct OrderSpec {
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Projection {
     All,
-    Field { name: String },
+    Field { name: Path },
     Subquery { alias: String, plan: Box<Operator> },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct JoinCondition {
-    pub left_field: String,
-    pub right_field: String,
+    pub left_field: Path,
+    pub right_field: Path,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Predicate {
-    Prefix { field: String, prefix: String },
-    Eq { field: String, value: Value },
-    Neq { field: String, value: Value },
-    Gt { field: String, value: Value },
-    Gte { field: String, value: Value },
-    Lt { field: String, value: Value },
-    Lte { field: String, value: Value },
+    Prefix { field: Path, prefix: String },
+    Eq { field: Path, value: Value },
+    Neq { field: Path, value: Value },
+    Gt { field: Path, value: Value },
+    Gte { field: Path, value: Value },
+    Lt { field: Path, value: Value },
+    Lte { field: Path, value: Value },
     And { predicates: Vec<Predicate> },
     Or { predicates: Vec<Predicate> },
 }
@@ -538,13 +580,16 @@ impl View {
         context: Option<&Value>,
     ) -> bool {
         // Helper to get actual json value for comparison
-        let resolve_val = |_field: &str, value: &Value| -> Option<Value> {
+        let resolve_val = |_field: &Path, value: &Value| -> Option<Value> {
              if let Some(obj) = value.as_object() {
                 if let Some(param_path) = obj.get("$param") {
                      if let Some(ctx) = context {
-                        let path = param_path.as_str().unwrap_or("");
+                        // $param is usually a simple string path like "user.id"
+                        // We need to parse it as a Path to resolve it, OR since $param is dynamic we treat it as string
+                        let path_str = param_path.as_str().unwrap_or("");
+                        let path = Path::new(path_str);
                         // resolve nested param path
-                        resolve_nested_value(Some(ctx), path).cloned()
+                        resolve_nested_value(Some(ctx), &path).cloned()
                     } else {
                         None
                     }
@@ -565,7 +610,7 @@ impl View {
                 .any(|p| self.check_predicate(p, key, db, context)),
              Predicate::Prefix { field, prefix } => {
                  // Check if field value starts with prefix
-                 if field == "id" {
+                 if field.0.len() == 1 && field.0[0] == "id" {
                      return key.starts_with(prefix);
                  }
                   if let Some(row_val) = self.get_row_value(key, db) {
@@ -587,7 +632,7 @@ impl View {
                 if target_val.is_none() { return false; }
                 let target_val = target_val.unwrap();
 
-                let actual_val_opt = if field == "id" {
+                let actual_val_opt = if field.0.len() == 1 && field.0[0] == "id" {
                      Some(json!(key))
                 } else {
                     self.get_row_value(key, db).and_then(|r| resolve_nested_value(Some(r), field).cloned())
@@ -616,46 +661,35 @@ impl View {
 
 // Avoids Allocations (.to_string) completely for primitive types.
 fn compare_json_values(a: Option<&Value>, b: Option<&Value>) -> Ordering {
+    use std::cmp::Ordering;
+    use serde_json::Value;
     match (a, b) {
         (None, None) => Ordering::Equal,
         (None, Some(_)) => Ordering::Less,
         (Some(_), None) => Ordering::Greater,
-        (Some(va), Some(vb)) => {
-            match (va, vb) {
-                (Value::Null, Value::Null) => Ordering::Equal,
-                (Value::Bool(ba), Value::Bool(bb)) => ba.cmp(bb),
-                (Value::Number(na), Value::Number(nb)) => {
-                    if let (Some(fa), Some(fb)) = (na.as_f64(), nb.as_f64()) {
-                        fa.partial_cmp(&fb).unwrap_or(Ordering::Equal)
-                    } else {
-                        // Fallback for complex numbers
-                        na.to_string().cmp(&nb.to_string())
-                    }
+        (Some(va), Some(vb)) => match (va, vb) {
+            (Value::Null, Value::Null) => Ordering::Equal,
+            (Value::Bool(ba), Value::Bool(bb)) => ba.cmp(bb),
+            (Value::Number(na), Value::Number(nb)) => {
+                if let (Some(fa), Some(fb)) = (na.as_f64(), nb.as_f64()) {
+                    fa.partial_cmp(&fb).unwrap_or(Ordering::Equal)
+                } else {
+                    // Fallback only if strictly necessary
+                    na.to_string().cmp(&nb.to_string())
                 }
-                (Value::String(sa), Value::String(sb)) => sa.cmp(sb),
-                (Value::Array(aa), Value::Array(ab)) => {
-                    let len_cmp = aa.len().cmp(&ab.len());
-                    if len_cmp != Ordering::Equal {
-                        return len_cmp;
-                    }
-                    for (ia, ib) in aa.iter().zip(ab.iter()) {
-                        let cmp = compare_json_values(Some(ia), Some(ib));
-                        if cmp != Ordering::Equal {
-                            return cmp;
-                        }
-                    }
-                    Ordering::Equal
+            },
+            (Value::String(sa), Value::String(sb)) => sa.cmp(sb),
+            (Value::Array(aa), Value::Array(ab)) => {
+                let len_cmp = aa.len().cmp(&ab.len());
+                if len_cmp != Ordering::Equal { return len_cmp; }
+                for (ia, ib) in aa.iter().zip(ab.iter()) {
+                    let cmp = compare_json_values(Some(ia), Some(ib));
+                    if cmp != Ordering::Equal { return cmp; }
                 }
-                (Value::Object(oa), Value::Object(ob)) => {
-                    let len_cmp = oa.len().cmp(&ob.len());
-                    if len_cmp != Ordering::Equal {
-                        return len_cmp;
-                    }
-                    // Performance Note: Deep Object compare is expensive.
-                    Ordering::Equal
-                }
-                (ta, tb) => type_rank(ta).cmp(&type_rank(tb)),
+                Ordering::Equal
             }
+            (Value::Object(oa), Value::Object(ob)) => oa.len().cmp(&ob.len()), // Deep compare skipped for perf
+            _ => type_rank(va).cmp(&type_rank(vb)),
         }
     }
 }
@@ -672,13 +706,12 @@ fn type_rank(v: &Value) -> u8 {
 }
 
 // Dot notation access: "address.city" -> traverses json
-fn resolve_nested_value<'a>(root: Option<&'a Value>, path: &str) -> Option<&'a Value> {
+// Optimized specifically for Path
+fn resolve_nested_value<'a>(root: Option<&'a serde_json::Value>, path: &Path) -> Option<&'a serde_json::Value> {
     let mut current = root;
-    for part in path.split('.') {
+    for part in &path.0 {
         match current {
-            Some(Value::Object(map)) => {
-                current = map.get(part);
-            }
+            Some(serde_json::Value::Object(map)) => { current = map.get(part.as_str()); }
             _ => return None,
         }
     }
