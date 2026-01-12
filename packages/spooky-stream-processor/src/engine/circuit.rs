@@ -1,4 +1,4 @@
-use super::view::{MaterializedViewUpdate, Operator, QueryPlan, RowKey, View, ZSet, FastMap, Projection, SpookyValue};
+use super::view::{MaterializedViewUpdate, Operator, QueryPlan, View, ZSet, FastMap, Projection, SpookyValue};
 // use rustc_hash::{FxHashMap, FxHasher}; // Unused in this file (used via FastMap)
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -6,46 +6,10 @@ use smol_str::SmolStr;
 
 // --- Table & Database ---
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[allow(dead_code)]
-pub struct Table {
-    pub name: String,
-    pub zset: ZSet,                   // This is the fast FxHashMap
-    pub rows: FastMap<RowKey, SpookyValue>, // Using SpookyValue
-    pub hashes: FastMap<RowKey, String>,
-}
-
-impl Table {
-    pub fn new(name: String) -> Self {
-        Self {
-            name,
-            zset: FastMap::default(),
-            rows: FastMap::default(),
-            hashes: FastMap::default(),
-        }
-    }
-
-    // Changing signature to use SmolStr is implied by RowKey definition change
-    pub fn update_row(&mut self, key: SmolStr, data: SpookyValue, hash: String) {
-        self.rows.insert(key.clone(), data);
-        self.hashes.insert(key, hash);
-    }
-
-    pub fn delete_row(&mut self, key: &SmolStr) {
-        self.rows.remove(key);
-        self.hashes.remove(key);
-    }
-
-    pub fn apply_delta(&mut self, delta: &ZSet) {
-        for (key, weight) in delta {
-            let entry = self.zset.entry(key.clone()).or_insert(0);
-            *entry += weight;
-            if *entry == 0 {
-                self.zset.remove(key);
-            }
-        }
-    }
-}
+// Table moved to storage.rs
+use super::storage::{Table, Column};
+use super::interner::SymbolTable;
+use std::sync::Arc;
 
 
 // I will just use 'Table' name but with new types.
@@ -53,12 +17,14 @@ impl Table {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Database {
     pub tables: FastMap<String, Table>,
+    pub interner: Arc<SymbolTable>,
 }
 
 impl Database {
     pub fn new() -> Self {
         Self {
             tables: FastMap::default(),
+            interner: Arc::new(SymbolTable::new()),
         }
     }
 
@@ -129,43 +95,117 @@ impl Circuit {
         batch: Vec<(String, String, String, SpookyValue, String)>,
     ) -> Vec<MaterializedViewUpdate> {
         let mut table_deltas: FastMap<String, ZSet> = FastMap::default();
+        let interner = self.db.interner.clone(); // Arc clone for borrow checker
 
         // 1. Storage Phase: Update Storage & Accumulate Deltas
         for (table, op, id, record_spooky, hash) in batch {
-            let key = SmolStr::new(id);
-            let weight: i64 = match op.as_str() {
-                "CREATE" | "UPDATE" => 1,
-                "DELETE" => -1,
-                _ => 0,
-            };
-
-            if weight == 0 {
-                continue;
-            }
-
-            {
-                let tb = self.db.ensure_table(&table);
-                if weight > 0 {
-                    tb.update_row(key.clone(), record_spooky, hash);
-                } else {
-                    tb.delete_row(&key);
-                }
-            }
-
-            let delta_map = table_deltas.entry(table).or_default();
-            *delta_map.entry(key).or_insert(0) += weight;
-        }
-
-        // Apply Deltas to DB ZSets
-        let mut changed_tables = Vec::new();
-        for (table, delta) in &mut table_deltas {
-             delta.retain(|_, w| *w != 0);
-             if !delta.is_empty() {
-                 let tb = self.db.ensure_table(table);
-                 tb.apply_delta(delta);
-                 changed_tables.push(table.clone());
+             let key = SmolStr::new(id);
+             let weight: i64 = match op.as_str() {
+                 "CREATE" | "UPDATE" => 1,
+                 "DELETE" => -1,
+                 _ => 0,
+             };
+ 
+             if weight == 0 {
+                 continue;
              }
-        }
+ 
+             {
+                 let tb = self.db.ensure_table(&table);
+                 if weight > 0 {
+                     // COLUMNAR UPDATE
+                     // 1. Check if row exists, if so, we might need to overwrite (complex in columnar)
+                     // For simplicity in this Task, assume strict append for new IDs, or update in place if ID exists.
+                     
+                     let row_idx = if let Some(&idx) = tb.pk_map.get(&key) {
+                         idx
+                     } else {
+                         let idx = tb.num_rows;
+                         tb.pk_map.insert(key.clone(), idx);
+                         tb.index_to_pk.push(key.clone());
+                         tb.num_rows += 1;
+                         
+                         // Backfill new row with defaults in all existing columns
+                         for col in tb.columns.values_mut() {
+                             match col {
+                                 Column::Int(v) => v.push(0),
+                                 Column::Float(v) => v.push(0.0),
+                                 Column::Bool(v) => v.push(false),
+                                 Column::Text(v) => v.push(0), // 0 = empty/null symbol ideally
+                             }
+                         }
+                         idx
+                     };
+                     
+                     tb.hashes.insert(key.clone(), hash);
+
+                     // 2. Parse SpookyValue and update Columns
+                     if let SpookyValue::Object(map) = record_spooky {
+                         for (col_name, val) in map {
+                             let col_str = col_name.to_string();
+                             
+                             // Ensure column exists
+                             if !tb.columns.contains_key(&col_str) {
+                                 // Infer type from first value saw? default to Text?
+                                 // Or sniff type.
+                                 let new_col = match &val {
+                                     SpookyValue::Number(_) => Column::Float(vec![0.0; tb.num_rows]),
+                                     SpookyValue::Bool(_) => Column::Bool(vec![false; tb.num_rows]),
+                                     _ => Column::Text(vec![0; tb.num_rows]),
+                                 };
+                                 tb.columns.insert(col_str.clone(), new_col);
+                             }
+                             
+                             let col = tb.columns.get_mut(&col_str).unwrap();
+                             match (col, val) {
+                                 (Column::Float(v), SpookyValue::Number(n)) => v[row_idx] = n,
+                                 (Column::Int(v), SpookyValue::Number(n)) => v[row_idx] = n as i64, 
+                                 (Column::Bool(v), SpookyValue::Bool(b)) => v[row_idx] = b,
+                                 (Column::Text(v), SpookyValue::Str(s)) => {
+                                     let sym = interner.get_or_intern(&s);
+                                     v[row_idx] = sym;
+                                 }
+                                  // Type coercions or skips
+                                 (Column::Float(v), SpookyValue::Null) => v[row_idx] = 0.0,
+                                 _ => {} // Ignore mismatches for now
+                             }
+                         }
+                     }
+
+                 } else {
+                     // DELETE
+                     // Logic used to be tb.delete_row(&key);
+                     // In columnar, real delete is hard (O(N) shift).
+                     // We just remove from ZSet and Hashes so it's "invisible" to Views,
+                     // but data remains in columns (Tombstone style).
+                     // Or we swap-remove? Swap-remove breaks index mapping.
+                     // Let's just remove from metadata `hashes` and `pk_map`?
+                     // If we remove from `pk_map`, we orphan the row index. It becomes junk.
+                     // This is fine for an "Analytics Engine" (append only mostly).
+                     // Ideally we have a validity bitmap.
+                     
+                     // Minimal "delete" from visible set:
+                     tb.hashes.remove(&key);
+                     // We KEEP it in pk_map so if it's re-inserted we reuse the slot?
+                     // Or we assume DELETE means "tombstone".
+                     // For correct counting in ZSet, we just pass the negative weight.
+                 }
+             }
+ 
+             let delta_map = table_deltas.entry(table).or_default();
+             *delta_map.entry(key).or_insert(0) += weight;
+         }
+ 
+         // Apply Deltas to DB ZSets
+         let mut changed_tables = Vec::new();
+         for (table, delta) in &mut table_deltas {
+              delta.retain(|_, w| *w != 0);
+              if !delta.is_empty() {
+                  let tb = self.db.ensure_table(table);
+                  tb.apply_delta(delta);
+                  changed_tables.push(table.clone());
+              }
+         }
 
         // 2. Propagation Phase: Process Deltas with Dependency Graph
         
@@ -237,6 +277,8 @@ impl Circuit {
         plan: QueryPlan,
         params: Option<Value>,
     ) -> Option<MaterializedViewUpdate> {
+        let plan = super::optimizer::optimize(plan);
+
         if let Some(pos) = self.views.iter().position(|v| v.plan.id == plan.id) {
             self.views.remove(pos);
             // Rebuild dependencies entirely to be safe (simple but slower)
@@ -321,7 +363,7 @@ fn extract_tables(op: &Operator) -> Vec<String> {
     }
 }
 
-/*
+// Trait Implementation
 use crate::StreamProcessor;
 
 impl StreamProcessor for Circuit {
@@ -336,6 +378,13 @@ impl StreamProcessor for Circuit {
         self.ingest_record(table, op, id, record, hash)
     }
 
+    fn ingest_batch(
+        &mut self,
+        batch: Vec<(String, String, String, Value, String)>,
+    ) -> Vec<MaterializedViewUpdate> {
+        self.ingest_batch(batch)
+    }
+
     fn register_view(
         &mut self,
         plan: QueryPlan,
@@ -348,4 +397,3 @@ impl StreamProcessor for Circuit {
         self.unregister_view(id)
     }
 }
-*/

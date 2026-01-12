@@ -7,7 +7,9 @@ use std::io::{self, Write, BufWriter};
 use std::fs::File;
 use rayon::prelude::*;
 
-
+use spooky_stream_processor::engine::packet::{IngestBatch, IngestPacket};
+use rkyv::to_bytes;
+use spooky_stream_processor::StreamProcessor;
 /*
 // Optional: Mimalloc für Speed (nur wenn nicht WASM)
 #[cfg(not(target_arch = "wasm32"))]
@@ -124,15 +126,31 @@ fn benchmark_latency_mixed_stream() {
         for chunk in prepared_stream.chunks(BATCH_SIZE) {
             
             // Daten für Batch vorbereiten (nicht messen)
-            let batch_data: Vec<(String, String, String, serde_json::Value, String)> = chunk.iter().map(|item| {
-                (item.table.clone(), item.op.clone(), item.id.clone(), item.record.clone(), item.hash.clone())
+            let batch_len = chunk.len(); // use chunk len directly
+
+            // Convert to IngestPacket for Zero-Copy
+            let packets: Vec<IngestPacket> = chunk.iter().map(|item| {
+                IngestPacket {
+                    table: item.table.clone(),
+                    op: item.op.clone(),
+                    id: item.id.clone(),
+                    record_json: item.record.to_string(), // In real world client does this
+                    hash: item.hash.clone(),
+                }
             }).collect();
 
-            let batch_len = batch_data.len();
+            let batch = IngestBatch { packets };
+            
+            // Serialize (simulate client side work - NOT measured in ingest time usually, 
+            // but if we measure end-to-end latency we might include it. 
+            // The prompt says "Replace serde_json bottleneck".
+            // So we assume we receive bytes.
+            let bytes = to_bytes::<_, 4096>(&batch).expect("Serialization failed");
 
             // --- MESSUNG START ---
             let start = Instant::now();
-            circuit.ingest_batch(batch_data); // Ruft jetzt die optimierte Batch-Methode auf
+            // circuit.ingest_batch(batch_data); // Old way
+            circuit.ingest_bytes(&bytes);      // New Zero-Copy way
             let duration = start.elapsed();
             // --- MESSUNG ENDE ---
 

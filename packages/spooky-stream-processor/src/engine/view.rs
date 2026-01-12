@@ -541,8 +541,8 @@ impl View {
                         let row_b = self.get_row_value(&b.0, db);
 
                         for ord in orders {
-                            let val_a = resolve_nested_value(row_a, &ord.field);
-                            let val_b = resolve_nested_value(row_b, &ord.field);
+                            let val_a = resolve_nested_value(row_a.as_ref(), &ord.field);
+                            let val_b = resolve_nested_value(row_b.as_ref(), &ord.field);
 
                             let cmp = compare_spooky_values(val_a, val_b);
                             if cmp != Ordering::Equal {
@@ -580,7 +580,7 @@ impl View {
 
                 for (r_key, r_weight) in &s_right {
                     if let Some(r_val) = self.get_row_value(r_key.as_str(), db) {
-                        if let Some(r_field) = resolve_nested_value(Some(r_val), &on.right_field) {
+                        if let Some(r_field) = resolve_nested_value(Some(&r_val), &on.right_field) {
                             let hash = hash_spooky_value(r_field);
                             right_index.entry(hash).or_default().push((r_key, r_weight));
                         }
@@ -590,7 +590,7 @@ impl View {
                 // 2. PROBE PHASE: Iterate Left and lookup Right (O(1))
                 for (l_key, l_weight) in &s_left {
                     if let Some(l_val) = self.get_row_value(l_key.as_str(), db) {
-                        if let Some(l_field) = resolve_nested_value(Some(l_val), &on.left_field) {
+                        if let Some(l_field) = resolve_nested_value(Some(&l_val), &on.left_field) {
                             let hash = hash_spooky_value(l_field);
 
                             // Hash Lookup instead of Loop!
@@ -684,12 +684,13 @@ impl View {
         }
     }
 
-    fn get_row_value<'a>(&self, key: &str, db: &'a Database) -> Option<&'a SpookyValue> {
+    fn get_row_value(&self, key: &str, db: &Database) -> Option<SpookyValue> {
         // Optimization: Avoid allocation for split if possible or use SmolStr if we change internal map keys
         // For now, key is &str, db uses SmolStr keys.
         // We assume valid format "table:id"
         let (table_name, _id) = key.split_once(':')?;
-        db.tables.get(table_name)?.rows.get(key)
+        let table = db.tables.get(table_name)?;
+        table.get_row_spooky(&SmolStr::new(key), &db.interner)
     }
 
     fn get_row_hash(&self, key: &str, db: &Database) -> Option<String> {
@@ -739,7 +740,7 @@ impl View {
                      return key.starts_with(prefix);
                  }
                   if let Some(row_val) = self.get_row_value(key, db) {
-                     if let Some(val) = resolve_nested_value(Some(row_val), field) {
+                     if let Some(val) = resolve_nested_value(Some(&row_val), field) {
                          if let SpookyValue::Str(s) = val {
                              return s.starts_with(prefix);
                          }
@@ -760,7 +761,7 @@ impl View {
                 let actual_val_opt = if field.0.len() == 1 && field.0[0] == "id" {
                      Some(SpookyValue::Str(SmolStr::new(key)))
                 } else {
-                    self.get_row_value(key, db).and_then(|r| resolve_nested_value(Some(r), field).cloned())
+                    self.get_row_value(key, db).and_then(|r| resolve_nested_value(Some(&r), field).cloned())
                 };
                 
                 if let Some(actual_val) = actual_val_opt {
@@ -873,13 +874,13 @@ fn extract_number_column(
 
     for (key, weight) in zset {
         let val_opt = if let Some((table, _)) = key.split_once(':') {
-             db.tables.get(table).and_then(|t| t.rows.get(key))
+             db.tables.get(table).and_then(|t| t.get_row_spooky(&SmolStr::new(key), &db.interner))
         } else {
             None
         };
 
         let num_val = if let Some(row_val) = val_opt {
-             if let Some(SpookyValue::Number(n)) = resolve_nested_value(Some(row_val), path) {
+             if let Some(SpookyValue::Number(n)) = resolve_nested_value(Some(&row_val), path) {
                  *n
              } else {
                  f64::NAN
@@ -988,3 +989,5 @@ fn hash_value_recursive(v: &SpookyValue, hasher: &mut FxHasher) {
         }
     }
 }
+// use crate::engine::circuit::Circuit;
+
