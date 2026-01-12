@@ -1,4 +1,4 @@
-use crate::engine::view::{IdTree, Operator};
+use crate::engine::view::{IdTree, Operator, SpookyValue};
 use crate::{converter, sanitizer, MaterializedViewUpdate, QueryPlan};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
@@ -45,16 +45,16 @@ pub mod ingest {
     use super::*;
 
     /// Prepares a record for ingestion by normalizing and hashing it.
-    pub fn prepare(record: Value) -> (Value, String) {
+    pub fn prepare(record: Value) -> (SpookyValue, String) {
         let clean_record = sanitizer::normalize_record(record);
         let mut hasher = blake3::Hasher::new();
         hash_value_recursive_blake3(&clean_record, &mut hasher);
         let hash = hasher.finalize().to_hex().to_string();
-        (clean_record, hash)
+        (SpookyValue::from(clean_record), hash)
     }
 
     /// Prepares a batch of records, optionally in parallel.
-    pub fn prepare_batch(records: Vec<Value>) -> Vec<(Value, String)> {
+    pub fn prepare_batch(records: Vec<Value>) -> Vec<(SpookyValue, String)> {
         #[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
         {
             use rayon::prelude::*;
@@ -68,11 +68,11 @@ pub mod ingest {
     }
 
     /// Fast preparation: Skips normalization/sanitization for high throughput.
-    pub fn prepare_fast(record: Value) -> (Value, String) {
+    pub fn prepare_fast(record: Value) -> (SpookyValue, String) {
         let mut hasher = blake3::Hasher::new();
         hash_value_recursive_blake3(&record, &mut hasher);
         let hash = hasher.finalize().to_hex().to_string();
-        (record, hash)
+        (SpookyValue::from(record), hash)
     }
 }
 

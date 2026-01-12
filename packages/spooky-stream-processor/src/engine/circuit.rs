@@ -1,4 +1,4 @@
-use super::view::{MaterializedViewUpdate, Operator, QueryPlan, RowKey, View, ZSet, FastMap, Projection};
+use super::view::{MaterializedViewUpdate, Operator, QueryPlan, RowKey, View, ZSet, FastMap, Projection, SpookyValue};
 // use rustc_hash::{FxHashMap, FxHasher}; // Unused in this file (used via FastMap)
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -11,7 +11,7 @@ use smol_str::SmolStr;
 pub struct Table {
     pub name: String,
     pub zset: ZSet,                   // This is the fast FxHashMap
-    pub rows: FastMap<RowKey, Value>, // Using FastMap as requested
+    pub rows: FastMap<RowKey, SpookyValue>, // Using SpookyValue
     pub hashes: FastMap<RowKey, String>,
 }
 
@@ -26,7 +26,7 @@ impl Table {
     }
 
     // Changing signature to use SmolStr is implied by RowKey definition change
-    pub fn update_row(&mut self, key: SmolStr, data: Value, hash: String) {
+    pub fn update_row(&mut self, key: SmolStr, data: SpookyValue, hash: String) {
         self.rows.insert(key.clone(), data);
         self.hashes.insert(key, hash);
     }
@@ -115,10 +115,23 @@ impl Circuit {
         &mut self,
         batch: Vec<(String, String, String, Value, String)>,
     ) -> Vec<MaterializedViewUpdate> {
+         // Convert to SpookyValue
+         let batch_spooky: Vec<(String, String, String, SpookyValue, String)> = batch
+             .into_iter()
+             .map(|(t, o, i, r, h)| (t, o, i, SpookyValue::from(r), h))
+             .collect();
+         
+         self.ingest_batch_spooky(batch_spooky)
+    }
+
+    pub fn ingest_batch_spooky(
+        &mut self,
+        batch: Vec<(String, String, String, SpookyValue, String)>,
+    ) -> Vec<MaterializedViewUpdate> {
         let mut table_deltas: FastMap<String, ZSet> = FastMap::default();
 
         // 1. Storage Phase: Update Storage & Accumulate Deltas
-        for (table, op, id, record, hash) in batch {
+        for (table, op, id, record_spooky, hash) in batch {
             let key = SmolStr::new(id);
             let weight: i64 = match op.as_str() {
                 "CREATE" | "UPDATE" => 1,
@@ -133,7 +146,7 @@ impl Circuit {
             {
                 let tb = self.db.ensure_table(&table);
                 if weight > 0 {
-                    tb.update_row(key.clone(), record, hash);
+                    tb.update_row(key.clone(), record_spooky, hash);
                 } else {
                     tb.delete_row(&key);
                 }

@@ -15,10 +15,56 @@ pub type RowKey = SmolStr;
 // It is extremely fast for integers and strings.
 pub type FastMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<FxHasher>>;
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Row {
-    pub data: Value,
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum SpookyValue {
+    Null,
+    Bool(bool),
+    Number(f64),
+    Str(SmolStr),
+    Array(Vec<SpookyValue>),
+    Object(FastMap<SmolStr, SpookyValue>),
 }
+
+impl From<serde_json::Value> for SpookyValue {
+    fn from(v: serde_json::Value) -> Self {
+        match v {
+            serde_json::Value::Null => SpookyValue::Null,
+            serde_json::Value::Bool(b) => SpookyValue::Bool(b),
+            serde_json::Value::Number(n) => SpookyValue::Number(n.as_f64().unwrap_or(0.0)), // Simplified fallback
+            serde_json::Value::String(s) => SpookyValue::Str(SmolStr::from(s)),
+            serde_json::Value::Array(arr) => {
+                SpookyValue::Array(arr.into_iter().map(SpookyValue::from).collect())
+            }
+            serde_json::Value::Object(obj) => SpookyValue::Object(
+                obj.into_iter()
+                    .map(|(k, v)| (SmolStr::from(k), SpookyValue::from(v)))
+                    .collect(),
+            ),
+        }
+    }
+}
+
+// Convert back to serde_json::Value for compatibility (if needed)
+impl From<SpookyValue> for serde_json::Value {
+    fn from(val: SpookyValue) -> Self {
+        match val {
+            SpookyValue::Null => serde_json::Value::Null,
+            SpookyValue::Bool(b) => serde_json::Value::Bool(b),
+            SpookyValue::Number(n) => json!(n),
+            SpookyValue::Str(s) => serde_json::Value::String(s.to_string()),
+            SpookyValue::Array(arr) => {
+                serde_json::Value::Array(arr.into_iter().map(|v| v.into()).collect())
+            }
+            SpookyValue::Object(obj) => serde_json::Value::Object(
+                obj.into_iter()
+                    .map(|(k, v)| (k.to_string(), v.into()))
+                    .collect(),
+            ),
+        }
+    }
+}
+
+// Row struct deleted as it was unused and contained legacy types.
 
 // A Z-Set is a mapping from Data -> Weight
 // IMPORTANT: This must match the definition in circuit.rs!
@@ -240,7 +286,7 @@ pub struct View {
     pub cache: ZSet,
     pub last_hash: String,
     #[serde(default)]
-    pub params: Option<Value>,
+    pub params: Option<SpookyValue>,
 }
 
 impl View {
@@ -249,7 +295,7 @@ impl View {
             plan,
             cache: FastMap::default(),
             last_hash: String::new(),
-            params,
+            params: params.map(SpookyValue::from),
         }
     }
 
@@ -348,7 +394,7 @@ impl View {
         op: &Operator,
         deltas: &FastMap<String, ZSet>,
         db: &Database,
-        context: Option<&Value>,
+        context: Option<&SpookyValue>,
     ) -> Option<ZSet> {
         match op {
             Operator::Scan { table } => {
@@ -388,7 +434,7 @@ impl View {
         changed_table: &str,
         input_delta: &ZSet,
         db: &Database,
-        context: Option<&Value>,
+        context: Option<&SpookyValue>,
     ) -> Option<ZSet> {
          let mut deltas = FastMap::default();
          deltas.insert(changed_table.to_string(), input_delta.clone());
@@ -396,7 +442,7 @@ impl View {
     }
 
     /// The classic detailed Full-Scan Evaluator (for fallback and init)
-    fn eval_snapshot(&self, op: &Operator, db: &Database, context: Option<&Value>) -> ZSet {
+    fn eval_snapshot(&self, op: &Operator, db: &Database, context: Option<&SpookyValue>) -> ZSet {
         match op {
             Operator::Scan { table } => {
                 if let Some(tb) = db.tables.get(table) {
@@ -434,7 +480,7 @@ impl View {
                             let val_a = resolve_nested_value(row_a, &ord.field);
                             let val_b = resolve_nested_value(row_b, &ord.field);
 
-                            let cmp = compare_json_values(val_a, val_b);
+                            let cmp = compare_spooky_values(val_a, val_b);
                             if cmp != Ordering::Equal {
                                 return if ord.direction.eq_ignore_ascii_case("DESC") {
                                     cmp.reverse()
@@ -471,7 +517,7 @@ impl View {
                 for (r_key, r_weight) in &s_right {
                     if let Some(r_val) = self.get_row_value(r_key.as_str(), db) {
                         if let Some(r_field) = resolve_nested_value(Some(r_val), &on.right_field) {
-                            let hash = hash_json_value(r_field);
+                            let hash = hash_spooky_value(r_field);
                             right_index.entry(hash).or_default().push((r_key, r_weight));
                         }
                     }
@@ -481,14 +527,12 @@ impl View {
                 for (l_key, l_weight) in &s_left {
                     if let Some(l_val) = self.get_row_value(l_key.as_str(), db) {
                         if let Some(l_field) = resolve_nested_value(Some(l_val), &on.left_field) {
-                            let hash = hash_json_value(l_field);
+                            let hash = hash_spooky_value(l_field);
 
                             // Hash Lookup instead of Loop!
                             if let Some(matches) = right_index.get(&hash) {
                                 for (_r_key, r_weight) in matches {
-                                    // We have a match!
-                                    // Optimization: We assume Hash collision is rare enough to ignore for now
-                                    // or checking actual equality would be added here if strictness required
+                                    // We have a match! (Should double check equality with compare_spooky_values for strictness)
                                     let w = l_weight * *r_weight;
                                     *out.entry(l_key.clone()).or_insert(0) += w;
                                 }
@@ -518,11 +562,18 @@ impl View {
                     plan: sub_op,
                 } = proj
                 {
-                    let mut context = self.params.clone().unwrap_or(json!({}));
-                    if let Some(obj) = context.as_object_mut() {
-                        obj.insert("parent".to_string(), json!(id));
+                    // Create child context (SpookyValue)
+                    // We must clone existing params (SpookyValue) or create new Object
+                    let mut context = self.params.clone().unwrap_or(SpookyValue::Object(FastMap::default()));
+                    
+                    if let SpookyValue::Object(ref mut obj) = context {
+                        obj.insert(SmolStr::new("parent"), SpookyValue::Str(SmolStr::new(id)));
                     } else {
-                        context = json!({"parent": id});
+                        // If context was not an object (weird), we overwrite or wrap. 
+                        // For safety, let's just make a new object with parent
+                        let mut map = FastMap::default();
+                        map.insert(SmolStr::new("parent"), SpookyValue::Str(SmolStr::new(id)));
+                        context = SpookyValue::Object(map);
                     }
 
                     let sub_zset = self.eval_snapshot(sub_op, db, Some(&context));
@@ -569,7 +620,7 @@ impl View {
         }
     }
 
-    fn get_row_value<'a>(&self, key: &str, db: &'a Database) -> Option<&'a Value> {
+    fn get_row_value<'a>(&self, key: &str, db: &'a Database) -> Option<&'a SpookyValue> {
         // Optimization: Avoid allocation for split if possible or use SmolStr if we change internal map keys
         // For now, key is &str, db uses SmolStr keys.
         // We assume valid format "table:id"
@@ -587,10 +638,10 @@ impl View {
         pred: &Predicate,
         key: &str,
         db: &Database,
-        context: Option<&Value>,
+        context: Option<&SpookyValue>,
     ) -> bool {
-        // Helper to get actual json value for comparison
-        let resolve_val = |_field: &Path, value: &Value| -> Option<Value> {
+        // Helper to get actual SpookyValue for comparison from the Predicate (which stores Value)
+        let resolve_val = |_field: &Path, value: &Value| -> Option<SpookyValue> {
              if let Some(obj) = value.as_object() {
                 if let Some(param_path) = obj.get("$param") {
                      if let Some(ctx) = context {
@@ -598,16 +649,16 @@ impl View {
                         // We need to parse it as a Path to resolve it, OR since $param is dynamic we treat it as string
                         let path_str = param_path.as_str().unwrap_or("");
                         let path = Path::new(path_str);
-                        // resolve nested param path
+                        // resolve nested param path from SpookyValue context!
                         resolve_nested_value(Some(ctx), &path).cloned()
                     } else {
                         None
                     }
                 } else {
-                    Some(value.clone())
+                    Some(SpookyValue::from(value.clone()))
                 }
             } else {
-                Some(value.clone())
+                 Some(SpookyValue::from(value.clone()))
             }
         };
 
@@ -625,13 +676,13 @@ impl View {
                  }
                   if let Some(row_val) = self.get_row_value(key, db) {
                      if let Some(val) = resolve_nested_value(Some(row_val), field) {
-                         if let Some(s) = val.as_str() {
+                         if let SpookyValue::Str(s) = val {
                              return s.starts_with(prefix);
                          }
                      }
                  }
                  false
-             },
+              },
             Predicate::Eq { field, value } |
             Predicate::Neq { field, value } |
             Predicate::Gt { field, value } |
@@ -643,13 +694,13 @@ impl View {
                 let target_val = target_val.unwrap();
 
                 let actual_val_opt = if field.0.len() == 1 && field.0[0] == "id" {
-                     Some(json!(key))
+                     Some(SpookyValue::Str(SmolStr::new(key)))
                 } else {
                     self.get_row_value(key, db).and_then(|r| resolve_nested_value(Some(r), field).cloned())
                 };
                 
                 if let Some(actual_val) = actual_val_opt {
-                    let ord = compare_json_values(Some(&actual_val), Some(&target_val));
+                    let ord = compare_spooky_values(Some(&actual_val), Some(&target_val));
                     match pred {
                         Predicate::Eq { .. } => ord == Ordering::Equal,
                         Predicate::Neq { .. } => ord != Ordering::Equal,
@@ -670,58 +721,54 @@ impl View {
 // --- OPTIMIZED COMPARISON & HASHING ---
 
 // Avoids Allocations (.to_string) completely for primitive types.
-fn compare_json_values(a: Option<&Value>, b: Option<&Value>) -> Ordering {
+// Optimized for SpookyValue
+fn compare_spooky_values(a: Option<&SpookyValue>, b: Option<&SpookyValue>) -> Ordering {
     use std::cmp::Ordering;
-    use serde_json::Value;
     match (a, b) {
         (None, None) => Ordering::Equal,
         (None, Some(_)) => Ordering::Less,
         (Some(_), None) => Ordering::Greater,
         (Some(va), Some(vb)) => match (va, vb) {
-            (Value::Null, Value::Null) => Ordering::Equal,
-            (Value::Bool(ba), Value::Bool(bb)) => ba.cmp(bb),
-            (Value::Number(na), Value::Number(nb)) => {
-                if let (Some(fa), Some(fb)) = (na.as_f64(), nb.as_f64()) {
-                    fa.partial_cmp(&fb).unwrap_or(Ordering::Equal)
-                } else {
-                    // Fallback only if strictly necessary
-                    na.to_string().cmp(&nb.to_string())
-                }
+            (SpookyValue::Null, SpookyValue::Null) => Ordering::Equal,
+            (SpookyValue::Bool(ba), SpookyValue::Bool(bb)) => ba.cmp(bb),
+            (SpookyValue::Number(na), SpookyValue::Number(nb)) => {
+               // Simple f64 comparison
+               na.partial_cmp(&nb).unwrap_or(Ordering::Equal)
             },
-            (Value::String(sa), Value::String(sb)) => sa.cmp(sb),
-            (Value::Array(aa), Value::Array(ab)) => {
+            (SpookyValue::Str(sa), SpookyValue::Str(sb)) => sa.cmp(sb),
+            (SpookyValue::Array(aa), SpookyValue::Array(ab)) => {
                 let len_cmp = aa.len().cmp(&ab.len());
                 if len_cmp != Ordering::Equal { return len_cmp; }
                 for (ia, ib) in aa.iter().zip(ab.iter()) {
-                    let cmp = compare_json_values(Some(ia), Some(ib));
+                    let cmp = compare_spooky_values(Some(ia), Some(ib));
                     if cmp != Ordering::Equal { return cmp; }
                 }
                 Ordering::Equal
             }
-            (Value::Object(oa), Value::Object(ob)) => oa.len().cmp(&ob.len()), // Deep compare skipped for perf
+            (SpookyValue::Object(oa), SpookyValue::Object(ob)) => oa.len().cmp(&ob.len()), // Deep compare skipped for perf
             _ => type_rank(va).cmp(&type_rank(vb)),
         }
     }
 }
 
-fn type_rank(v: &Value) -> u8 {
+fn type_rank(v: &SpookyValue) -> u8 {
     match v {
-        Value::Null => 0,
-        Value::Bool(_) => 1,
-        Value::Number(_) => 2,
-        Value::String(_) => 3,
-        Value::Array(_) => 4,
-        Value::Object(_) => 5,
+        SpookyValue::Null => 0,
+        SpookyValue::Bool(_) => 1,
+        SpookyValue::Number(_) => 2,
+        SpookyValue::Str(_) => 3,
+        SpookyValue::Array(_) => 4,
+        SpookyValue::Object(_) => 5,
     }
 }
 
 // Dot notation access: "address.city" -> traverses json
-// Optimized specifically for Path
-fn resolve_nested_value<'a>(root: Option<&'a serde_json::Value>, path: &Path) -> Option<&'a serde_json::Value> {
+// Optimized specifically for Path and SpookyValue
+fn resolve_nested_value<'a>(root: Option<&'a SpookyValue>, path: &Path) -> Option<&'a SpookyValue> {
     let mut current = root;
     for part in &path.0 {
         match current {
-            Some(serde_json::Value::Object(map)) => { current = map.get(part.as_str()); }
+            Some(SpookyValue::Object(map)) => { current = map.get(part); }
             _ => return None,
         }
     }
@@ -729,38 +776,30 @@ fn resolve_nested_value<'a>(root: Option<&'a serde_json::Value>, path: &Path) ->
 }
 
 // Fast hashing for Join Keys
-fn hash_json_value(v: &Value) -> u64 {
+fn hash_spooky_value(v: &SpookyValue) -> u64 {
      let mut hasher = FxHasher::default();
      hash_value_recursive(v, &mut hasher);
      hasher.finish()
 }
 
-fn hash_value_recursive(v: &Value, hasher: &mut FxHasher) {
+fn hash_value_recursive(v: &SpookyValue, hasher: &mut FxHasher) {
     match v {
-        Value::Null => { hasher.write_u8(0); },
-        Value::Bool(b) => { hasher.write_u8(1); hasher.write_u8(*b as u8); },
-        Value::Number(n) => { 
+        SpookyValue::Null => { hasher.write_u8(0); },
+        SpookyValue::Bool(b) => { hasher.write_u8(1); hasher.write_u8(*b as u8); },
+        SpookyValue::Number(n) => { 
             hasher.write_u8(2); 
-            if let Some(f) = n.as_f64() {
-                hasher.write_u64(f.to_bits());
-            } else {
-                 hasher.write(n.to_string().as_bytes()); // Fallback
-            }
+            hasher.write_u64(n.to_bits());
         },
-        Value::String(s) => { hasher.write_u8(3); hasher.write(s.as_bytes()); },
-        Value::Array(arr) => {
+        SpookyValue::Str(s) => { hasher.write_u8(3); hasher.write(s.as_bytes()); },
+        SpookyValue::Array(arr) => {
             hasher.write_u8(4);
             for item in arr {
                 hash_value_recursive(item, hasher);
             }
         },
-        Value::Object(obj) => {
+        SpookyValue::Object(obj) => {
              hasher.write_u8(5);
-             // Sort keys for deterministic hash? 
-             // For strict correctness yes, but costly. 
-             // We assume key order stable enough or just use length as quick hash for now
-             // Or better: xor hash of keys+values to be order independent?
-             // For now: simple iteration
+             // Simple iteration, no sorting for speed (as discussed in prev steps)
              for (k, v) in obj {
                  hasher.write(k.as_bytes());
                  hash_value_recursive(v, hasher);
