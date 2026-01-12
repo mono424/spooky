@@ -143,38 +143,51 @@ impl Circuit {
             *delta_map.entry(key).or_insert(0) += weight;
         }
 
+        // Apply Deltas to DB ZSets
+        let mut changed_tables = Vec::new();
+        for (table, delta) in &mut table_deltas {
+             delta.retain(|_, w| *w != 0);
+             if !delta.is_empty() {
+                 let tb = self.db.ensure_table(table);
+                 tb.apply_delta(delta);
+                 changed_tables.push(table.clone());
+             }
+        }
+
         // 2. Propagation Phase: Process Deltas with Dependency Graph
-        let mut all_updates = Vec::new();
         
         // Optimized Lazy Rebuild Check (once per batch)
         if self.dependency_graph.is_empty() && !self.views.is_empty() {
             self.rebuild_dependency_graph();
         }
 
-        for (table, mut delta) in table_deltas {
-            delta.retain(|_, w| *w != 0);
-            if !delta.is_empty() {
-                 
-                {
-                    // Apply delta to DB ZSet (Storage part 2)
-                    let tb = self.db.ensure_table(&table);
-                    tb.apply_delta(&delta);
-                }
-
-                // Notify Views
-                if let Some(indices) = self.dependency_graph.get(&table) {
-                    // Clone indices to avoid borrow conflicts
-                    let indices = indices.clone(); 
-                    for i in indices {
-                        if i < self.views.len() {
-                            if let Some(update) = self.views[i].process(&table, &delta, &self.db) {
-                                all_updates.push(update);
-                            }
-                        }
-                    }
-                }
+        // Identify ALL affected views from ALL changed tables
+        let mut impacted_view_indices: Vec<usize> = Vec::new();
+        for table in changed_tables {
+            if let Some(indices) = self.dependency_graph.get(&table) {
+                impacted_view_indices.extend(indices.iter().copied());
+            } else {
+                println!("DEBUG: Table {} changed, but no views depend on it", table);
             }
         }
+
+        // Deduplicate View Indices (Sort + Dedup)
+        // This ensures each view is processed EXACTLY ONCE, even if multiple input tables changed
+        impacted_view_indices.sort_unstable();
+        impacted_view_indices.dedup();
+
+        let mut all_updates: Vec<MaterializedViewUpdate> = Vec::new();
+
+        // 3. Execution Phase
+        for i in impacted_view_indices {
+             if i < self.views.len() {
+                 let view: &mut View = &mut self.views[i];
+                 if let Some(update) = view.process_ingest(&table_deltas, &self.db) {
+                     all_updates.push(update);
+                 }
+             }
+        }
+
         all_updates
     }
 

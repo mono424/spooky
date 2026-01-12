@@ -261,41 +261,41 @@ impl View {
         input_delta: &ZSet,
         db: &Database,
     ) -> Option<MaterializedViewUpdate> {
+        let mut deltas = FastMap::default();
+        if !changed_table.is_empty() {
+             deltas.insert(changed_table.to_string(), input_delta.clone());
+        }
+        self.process_ingest(&deltas, db)
+    }
+
+    /// Optimized 2-Phase Processing: Handles multiple table updates at once.
+    pub fn process_ingest(
+        &mut self,
+        deltas: &FastMap<String, ZSet>,
+        db: &Database,
+    ) -> Option<MaterializedViewUpdate> {
         // FIX: FIRST RUN CHECK
-        // If last_hash is empty, this is the very first run.
-        // We MUST verify a full scan (eval_snapshot) to initially populate the cache.
-        // A pure delta would not be enough here, because the cache is still empty.
         let is_first_run = self.last_hash.is_empty();
 
         let maybe_delta = if is_first_run {
-            None // Forces fallback to snapshot
+            None
         } else {
-            // Try the fast delta path
-            self.eval_delta(
-                &self.plan.root,
-                changed_table,
-                input_delta,
-                db,
-                self.params.as_ref(),
-            )
+             self.eval_delta_batch(&self.plan.root, deltas, db, self.params.as_ref())
         };
 
         let view_delta = if let Some(d) = maybe_delta {
-            // TURBO MODE: We calculated the delta directly!
             d
         } else {
-            // FALLBACK MODE: Full Scan & Diff (slow but safe)
+            // FALLBACK MODE: Full Scan & Diff
             let target_set = self.eval_snapshot(&self.plan.root, db, self.params.as_ref());
             let mut diff = FastMap::default();
 
-            // Check new set
             for (key, &new_w) in &target_set {
                 let old_w = self.cache.get(key).copied().unwrap_or(0);
                 if new_w != old_w {
                     diff.insert(key.clone(), new_w - old_w);
                 }
             }
-            // Check old entries (deleted)
             for (key, &old_w) in &self.cache {
                 if !target_set.contains_key(key) {
                     diff.insert(key.clone(), 0 - old_w);
@@ -304,7 +304,6 @@ impl View {
             diff
         };
 
-        // If nothing happened and it is not the first run -> Abort
         if view_delta.is_empty() && !is_first_run {
             return None;
         }
@@ -343,31 +342,28 @@ impl View {
         None
     }
 
-    /// Attempts to calculate the delta purely incrementally.
-    fn eval_delta(
+    /// Attempts to calculate the delta purely incrementally for a BATCH of changes.
+    fn eval_delta_batch(
         &self,
         op: &Operator,
-        changed_table: &str,
-        input_delta: &ZSet,
+        deltas: &FastMap<String, ZSet>,
         db: &Database,
         context: Option<&Value>,
     ) -> Option<ZSet> {
         match op {
             Operator::Scan { table } => {
-                if table == changed_table {
-                    // If this is the changed table: Pass delta through!
-                    Some(input_delta.clone())
+                // Return the delta for this table if it exists, otherwise empty
+                if let Some(d) = deltas.get(table) {
+                     Some(d.clone())
                 } else {
-                    // Other table changed: No impact on this scan
-                    Some(FastMap::default())
+                     Some(FastMap::default())
                 }
             }
             Operator::Filter { input, predicate } => {
                 let upstream_delta =
-                    self.eval_delta(input, changed_table, input_delta, db, context)?;
+                    self.eval_delta_batch(input, deltas, db, context)?;
                 let mut out_delta = FastMap::default();
 
-                // We only filter the changes!
                 for (key, weight) in upstream_delta {
                     if self.check_predicate(predicate, &key, db, context) {
                         out_delta.insert(key, weight);
@@ -376,13 +372,27 @@ impl View {
                 Some(out_delta)
             }
             Operator::Project { input, .. } => {
-                // Identity Projection for IDs -> Pass delta through
-                self.eval_delta(input, changed_table, input_delta, db, context)
+                self.eval_delta_batch(input, deltas, db, context)
             }
 
             // Complex operators (Joins, Limits) fall back to snapshot
             Operator::Join { .. } | Operator::Limit { .. } => None,
         }
+    }
+
+    /// Deprecated: Helper wrapper for single-table delta (retained for compatibility if needed internally)
+    #[allow(dead_code)]
+    fn eval_delta(
+        &self,
+        op: &Operator,
+        changed_table: &str,
+        input_delta: &ZSet,
+        db: &Database,
+        context: Option<&Value>,
+    ) -> Option<ZSet> {
+         let mut deltas = FastMap::default();
+         deltas.insert(changed_table.to_string(), input_delta.clone());
+         self.eval_delta_batch(op, &deltas, db, context)
     }
 
     /// The classic detailed Full-Scan Evaluator (for fallback and init)
