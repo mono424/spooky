@@ -259,36 +259,67 @@ fn parse_full_query(input: &str) -> IResult<&str, Value> {
 }
 
 fn wrap_conditions(input_op: Value, predicate: Value) -> Value {
-    // Check if we can extract a Join
-    // Simple logic: If top-level is JoinCandidate, convert to JOIN op.
-    
-    if let Some(obj) = predicate.as_object() {
-        if let Some(t) = obj.get("type").and_then(|s| s.as_str()) {
-            if t == "__JOIN_CANDIDATE__" {
-                let left_field = obj.get("left").and_then(|v| v.as_str()).unwrap_or("id");
-                let right_full = obj
-                    .get("right")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
-                
-                // Assume right_full is "table.field"
-                let parts: Vec<&str> = right_full.split('.').collect();
-                let (r_table, r_col) = if parts.len() > 1 {
-                    (parts[0], parts[1])
-                } else {
-                    (right_full, "id")
-                };
+    let mut joins = Vec::new();
+    let mut filters = Vec::new();
 
-                return json!({
-                    "op": "join",
-                    "left": input_op,
-                    "right": { "op": "scan", "table": r_table },
-                    "on": { "left_field": left_field, "right_field": r_col }
-                });
+    // 1. Normalize & Partition
+    if let Some(obj) = predicate.as_object() {
+        if obj.get("type").and_then(|s| s.as_str()) == Some("and") {
+            if let Some(list) = obj.get("predicates").and_then(|v| v.as_array()) {
+                for p in list {
+                    if p.get("type").and_then(|s| s.as_str()) == Some("__JOIN_CANDIDATE__") {
+                        joins.push(p.clone());
+                    } else {
+                        filters.push(p.clone());
+                    }
+                }
             }
+        } else if obj.get("type").and_then(|s| s.as_str()) == Some("__JOIN_CANDIDATE__") {
+             joins.push(predicate.clone());
+        } else {
+             filters.push(predicate.clone());
         }
+    } else {
+        filters.push(predicate.clone());
     }
-    
-    // Default: Filter
-    json!({ "op": "filter", "predicate": predicate, "input": input_op })
+
+    let mut current_op = input_op;
+
+    // 2. Apply Joins (Bottom-Up)
+    for join_pred in joins {
+        let left_field = join_pred.get("left").and_then(|v| v.as_str()).unwrap_or("id");
+        let right_full = join_pred.get("right").and_then(|v| v.as_str()).unwrap_or("unknown");
+        
+        // Assume right_full is "table.field"
+        let parts: Vec<&str> = right_full.split('.').collect();
+        let (r_table, r_col) = if parts.len() > 1 {
+            (parts[0], parts[1])
+        } else {
+            (right_full, "id")
+        };
+
+        current_op = json!({
+            "op": "join",
+            "left": current_op,
+            "right": { "op": "scan", "table": r_table },
+            "on": { "left_field": left_field, "right_field": r_col }
+        });
+    }
+
+    // 3. Apply Filters
+    if !filters.is_empty() {
+        let final_pred = if filters.len() == 1 {
+            filters[0].clone()
+        } else {
+            json!({ "type": "and", "predicates": filters })
+        };
+        
+        current_op = json!({
+            "op": "filter",
+            "predicate": final_pred,
+            "input": current_op
+        });
+    }
+
+    current_op
 }
