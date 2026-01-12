@@ -53,6 +53,20 @@ pub mod ingest {
         (clean_record, hash)
     }
 
+    /// Prepares a batch of records, optionally in parallel.
+    pub fn prepare_batch(records: Vec<Value>) -> Vec<(Value, String)> {
+        #[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
+        {
+            use rayon::prelude::*;
+            records.into_par_iter().map(prepare).collect()
+        }
+
+        #[cfg(any(target_arch = "wasm32", not(feature = "parallel")))]
+        {
+            records.into_iter().map(prepare).collect()
+        }
+    }
+
     /// Fast preparation: Skips normalization/sanitization for high throughput.
     pub fn prepare_fast(record: Value) -> (Value, String) {
         let mut hasher = blake3::Hasher::new();

@@ -179,15 +179,43 @@ impl Circuit {
         let mut all_updates: Vec<MaterializedViewUpdate> = Vec::new();
 
         // 3. Execution Phase
-        for i in impacted_view_indices {
-             if i < self.views.len() {
-                 let view: &mut View = &mut self.views[i];
-                 if let Some(update) = view.process_ingest(&table_deltas, &self.db) {
-                     all_updates.push(update);
-                 }
-             }
-        }
+        // 3. Execution Phase
+        let db_ref = &self.db;
+        let deltas_ref = &table_deltas;
 
+        #[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
+        let updates: Vec<MaterializedViewUpdate> = {
+            use rayon::prelude::*;
+            self.views
+                .par_iter_mut()
+                .enumerate()
+                .filter_map(|(i, view)| {
+                    // Check if this view needs update. 
+                    // impacted_view_indices is sorted, so binary_search is efficient.
+                    if impacted_view_indices.binary_search(&i).is_ok() {
+                        view.process_ingest(deltas_ref, db_ref)
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+
+        #[cfg(any(target_arch = "wasm32", not(feature = "parallel")))]
+        let updates: Vec<MaterializedViewUpdate> = {
+            let mut ups = Vec::new();
+            for i in impacted_view_indices {
+                 if i < self.views.len() {
+                     let view: &mut View = &mut self.views[i];
+                     if let Some(update) = view.process_ingest(deltas_ref, db_ref) {
+                         ups.push(update);
+                     }
+                 }
+            }
+            ups
+        };
+
+        all_updates.extend(updates);
         all_updates
     }
 

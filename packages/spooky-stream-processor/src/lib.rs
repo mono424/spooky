@@ -9,6 +9,9 @@ pub mod engine; // <--- Das ist wichtig für den Test
 pub mod sanitizer;
 pub mod service;
 
+#[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
+pub use rayon::prelude::*;
+
 // Falls du noch StreamProcessor Traits hast, müssen die auch hier sein:
 pub use engine::circuit::Circuit;
 pub use engine::view::MaterializedViewUpdate;
