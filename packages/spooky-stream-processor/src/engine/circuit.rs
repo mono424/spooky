@@ -47,15 +47,7 @@ impl Table {
     }
 }
 
-// Redefining Table to use FastMap everywhere
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[allow(dead_code)]
-pub struct TableOptimized {
-    pub name: String,
-    pub zset: ZSet,
-    pub rows: FastMap<RowKey, Value>,
-    pub hashes: FastMap<RowKey, String>,
-}
+
 // I will just use 'Table' name but with new types.
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
