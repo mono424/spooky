@@ -1,11 +1,11 @@
 use nom::{
-    IResult,
     branch::alt,
     bytes::complete::{is_not, tag, take_while1},
     character::complete::{char, digit1, multispace1, none_of},
     combinator::{map, opt, recognize, value, verify},
     multi::many0,
     sequence::{delimited, pair, preceded, tuple},
+    IResult,
 };
 use serde_json::Value;
 
@@ -122,8 +122,6 @@ fn parse_safe_query(input: &str) -> IResult<&str, Vec<Token>> {
     Ok((remainder, tokens))
 }
 
-// In src/sanitizer.rs
-
 fn rebuild_query(tokens: Vec<Token>) -> String {
     let mut out = String::new();
     let mut needs_space = false;
@@ -181,7 +179,11 @@ fn rebuild_query(tokens: Vec<Token>) -> String {
                          
                          if needs_space { out.push(' '); }
                          out.push('"');
-                         out.push_str(s); // "thread:"
+                         out.push_str(text); // "thread:" (without colon? No, we need prefix)
+                         // Wait, text was striped of colon above.
+                         // Current logic: text = "thread"
+                         // We want "thread:foo"
+                         out.push(':'); 
                          out.push_str(inner); // "foo"
                          out.push('"');
                          needs_space = true;
