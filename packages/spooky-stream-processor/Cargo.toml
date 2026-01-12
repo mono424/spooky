@@ -26,6 +26,13 @@ rayon = { version = "1.8", optional = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 mimalloc = "0.1.48"
 
-[dev-dependencies]
-rayon = "1.11.0"
-ulid = "=1.1.0"
+# --- PERFORMANCE PROFILE ---
+# Das hier ist der Turbo für deinen Benchmark.
+# Es optimiert über alle Crate-Grenzen hinweg (LTO).
+
+[profile.release]
+opt-level = 3           # Maximale Optimierung
+lto = "fat"             # Link Time Optimization (extrem wichtig für kleine Funktionen)
+codegen-units = 1       # Erlaubt bessere Optimierung (kostet etwas Compile-Zeit)
+panic = "abort"         # Spart Stack-Unwinding Code (schneller & kleiner)
+strip = true            # Entfernt Debug-Symbole aus der Binary

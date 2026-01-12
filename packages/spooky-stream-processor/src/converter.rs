@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use nom::{
     branch::alt,
     bytes::complete::{is_not, tag, tag_no_case, take_while},
-    character::complete::{alpha1, char, digit1, multispace0, multispace1},
+    character::complete::{alpha1, char, digit1, multispace0},
     combinator::{cut, map, map_res, opt, recognize, value}, 
     multi::separated_list1,
     sequence::{delimited, pair, preceded, tuple},
@@ -182,20 +182,45 @@ fn parse_order_clause(input: &str) -> IResult<&str, Vec<Value>> {
     )(input)
 }
 
+// --- SELECT PROJECTION ---
+
+fn parse_subquery_projection(input: &str) -> IResult<&str, Value> {
+    // (SELECT ... ) AS alias
+    let (input, sub_plan) = delimited(
+        ws(char('(')),
+        parse_full_query,
+        ws(char(')')),
+    )(input)?;
+
+    let (input, _) = ws(tag_no_case("AS"))(input)?;
+    let (input, alias) = ws(parse_identifier)(input)?;
+
+    Ok((input, json!({ "type": "subquery", "alias": alias, "plan": sub_plan })))
+}
+
+fn parse_field_projection(input: &str) -> IResult<&str, Value> {
+     // field OR field AS alias (though we usually just use field name)
+     // keeping it simple: just identifier for now, or *
+    alt((
+        map(tag("*"), |_| json!({ "type": "all" })),
+        map(parse_identifier, |f| json!({ "type": "field", "name": f }))
+    ))(input)
+}
+
+fn parse_projection_item(input: &str) -> IResult<&str, Value> {
+    alt((
+        parse_subquery_projection,
+        parse_field_projection
+    ))(input)
+}
+
 fn parse_full_query(input: &str) -> IResult<&str, Value> {
-    let (input, _) = tag_no_case("SELECT")(input)?;
-    let (input, _) = multispace1(input)?;
+    let (input, _) = ws(tag_no_case("SELECT"))(input)?;
+    
+    let (input, fields) = separated_list1(ws(char(',')), parse_projection_item)(input)?;
 
-    let (input, fields) = alt((
-        map(tag("*"), |_| vec!["*".to_string()]),
-        separated_list1(ws(char(',')), parse_identifier),
-    ))(input)?;
-
-    let (input, _) = multispace1(input)?;
-    let (input, _) = tag_no_case("FROM")(input)?;
-    let (input, _) = multispace1(input)?;
-
-    let (input, table) = parse_identifier(input)?;
+    let (input, _) = ws(tag_no_case("FROM"))(input)?;
+    let (input, table) = ws(parse_identifier)(input)?;
 
     let (input, where_logic) = opt(ws(parse_where_logic))(input)?;
 
@@ -209,12 +234,14 @@ fn parse_full_query(input: &str) -> IResult<&str, Value> {
         current_op = wrap_conditions(current_op, logic);
     }
 
-    if fields.len() > 1 || fields[0] != "*" {
-        let projections: Vec<Value> = fields
-            .iter()
-            .map(|f| json!({ "type": "field", "name": f }))
-            .collect();
-        current_op = json!({ "op": "project", "projections": projections, "input": current_op });
+    // Projections
+    // If we have just one "type": "all", and nothing else, we skip projection technically
+    // But let's be explicit if desired. 
+    // If fields contains any subquery or if fields is not just "*", we project.
+    let needs_projection = fields.len() > 1 || fields[0].get("type").and_then(|t| t.as_str()) != Some("all");
+
+    if needs_projection {
+        current_op = json!({ "op": "project", "projections": fields, "input": current_op });
     }
 
     if let Some(l) = limit {
@@ -233,9 +260,7 @@ fn parse_full_query(input: &str) -> IResult<&str, Value> {
 
 fn wrap_conditions(input_op: Value, predicate: Value) -> Value {
     // Check if we can extract a Join
-    // TODO: This logic is very simple and only works if the top-level is a Join Candidate or strictly nested ANDs?
-    // With simplified recursion, we might find JoinCandidate inside nested structures.
-    // For now, let's keep it simple: Top Level or straightforward AND.
+    // Simple logic: If top-level is JoinCandidate, convert to JOIN op.
     
     if let Some(obj) = predicate.as_object() {
         if let Some(t) = obj.get("type").and_then(|s| s.as_str()) {
@@ -245,27 +270,25 @@ fn wrap_conditions(input_op: Value, predicate: Value) -> Value {
                     .get("right")
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown");
+                
+                // Assume right_full is "table.field"
                 let parts: Vec<&str> = right_full.split('.').collect();
                 let (r_table, r_col) = if parts.len() > 1 {
                     (parts[0], parts[1])
                 } else {
                     (right_full, "id")
                 };
+
                 return json!({
                     "op": "join",
                     "left": input_op,
                     "right": { "op": "scan", "table": r_table },
                     "on": { "left_field": left_field, "right_field": r_col }
                 });
-            } else if t == "and" {
-                // If AND, we wrap normally, View logic handles AND.
-                // But optimization: if AND contains JoinCandidate, we might want to hoist it?
-                // For this refactor, we stick to Filter-based evaluation unless it is explicitly a JOIN op in circuit.
-                // JoinCandidate transformation usually happens here.
-                // If multiple predicates, we just return filter for now. 
-                // Real Query Optimizer would pull out joins.
             }
         }
     }
+    
+    // Default: Filter
     json!({ "op": "filter", "predicate": predicate, "input": input_op })
 }
