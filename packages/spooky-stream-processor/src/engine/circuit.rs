@@ -1,4 +1,7 @@
-use super::view::{MaterializedViewUpdate, Operator, QueryPlan, RowKey, View, ZSet, FastMap, Projection, SpookyValue};
+use super::view::{
+    FastMap, MaterializedViewUpdate, Operator, Projection, QueryPlan, RowKey, SpookyValue, View,
+    ZSet,
+};
 // use rustc_hash::{FxHashMap, FxHasher}; // Unused in this file (used via FastMap)
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -10,7 +13,7 @@ use smol_str::SmolStr;
 #[allow(dead_code)]
 pub struct Table {
     pub name: String,
-    pub zset: ZSet,                   // This is the fast FxHashMap
+    pub zset: ZSet,                         // This is the fast FxHashMap
     pub rows: FastMap<RowKey, SpookyValue>, // Using SpookyValue
     pub hashes: FastMap<RowKey, String>,
 }
@@ -46,7 +49,6 @@ impl Table {
         }
     }
 }
-
 
 // I will just use 'Table' name but with new types.
 
@@ -102,37 +104,51 @@ impl Circuit {
 
     pub fn ingest_record(
         &mut self,
-        table: String,
-        op: String,
-        id: String,
+        table: &str,
+        op: &str,
+        id: &str,
         record: Value,
-        hash: String,
+        hash: &str,
     ) -> Vec<MaterializedViewUpdate> {
-        self.ingest_batch(vec![(table, op, id, record, hash)])
+        self.ingest_batch_spooky(vec![(
+            SmolStr::from(table),
+            SmolStr::from(op),
+            SmolStr::from(id),
+            SpookyValue::from(record),
+            hash.to_string(),
+        )])
     }
 
     pub fn ingest_batch(
         &mut self,
         batch: Vec<(String, String, String, Value, String)>,
     ) -> Vec<MaterializedViewUpdate> {
-         // Convert to SpookyValue
-         let batch_spooky: Vec<(String, String, String, SpookyValue, String)> = batch
-             .into_iter()
-             .map(|(t, o, i, r, h)| (t, o, i, SpookyValue::from(r), h))
-             .collect();
-         
-         self.ingest_batch_spooky(batch_spooky)
+        // Convert to SpookyValue
+        let batch_spooky: Vec<(SmolStr, SmolStr, SmolStr, SpookyValue, String)> = batch
+            .into_iter()
+            .map(|(t, o, i, r, h)| {
+                (
+                    SmolStr::from(t),
+                    SmolStr::from(o),
+                    SmolStr::from(i),
+                    SpookyValue::from(r),
+                    h,
+                )
+            })
+            .collect();
+
+        self.ingest_batch_spooky(batch_spooky)
     }
 
     pub fn ingest_batch_spooky(
         &mut self,
-        batch: Vec<(String, String, String, SpookyValue, String)>,
+        batch: Vec<(SmolStr, SmolStr, SmolStr, SpookyValue, String)>,
     ) -> Vec<MaterializedViewUpdate> {
         let mut table_deltas: FastMap<String, ZSet> = FastMap::default();
 
         // 1. Storage Phase: Update Storage & Accumulate Deltas
         for (table, op, id, record_spooky, hash) in batch {
-            let key = SmolStr::new(id);
+            let key = id; // Already SmolStr
             let weight: i64 = match op.as_str() {
                 "CREATE" | "UPDATE" => 1,
                 "DELETE" => -1,
@@ -144,7 +160,7 @@ impl Circuit {
             }
 
             {
-                let tb = self.db.ensure_table(&table);
+                let tb = self.db.ensure_table(table.as_str());
                 if weight > 0 {
                     tb.update_row(key.clone(), record_spooky, hash);
                 } else {
@@ -152,23 +168,23 @@ impl Circuit {
                 }
             }
 
-            let delta_map = table_deltas.entry(table).or_default();
+            let delta_map = table_deltas.entry(table.to_string()).or_default();
             *delta_map.entry(key).or_insert(0) += weight;
         }
 
         // Apply Deltas to DB ZSets
         let mut changed_tables = Vec::new();
         for (table, delta) in &mut table_deltas {
-             delta.retain(|_, w| *w != 0);
-             if !delta.is_empty() {
-                 let tb = self.db.ensure_table(table);
-                 tb.apply_delta(delta);
-                 changed_tables.push(table.clone());
-             }
+            delta.retain(|_, w| *w != 0);
+            if !delta.is_empty() {
+                let tb = self.db.ensure_table(table.as_str());
+                tb.apply_delta(delta);
+                changed_tables.push(table.to_string());
+            }
         }
 
         // 2. Propagation Phase: Process Deltas with Dependency Graph
-        
+
         // Optimized Lazy Rebuild Check (once per batch)
         if self.dependency_graph.is_empty() && !self.views.is_empty() {
             self.rebuild_dependency_graph();
@@ -203,7 +219,7 @@ impl Circuit {
                 .par_iter_mut()
                 .enumerate()
                 .filter_map(|(i, view)| {
-                    // Check if this view needs update. 
+                    // Check if this view needs update.
                     // impacted_view_indices is sorted, so binary_search is efficient.
                     if impacted_view_indices.binary_search(&i).is_ok() {
                         view.process_ingest(deltas_ref, db_ref)
@@ -218,12 +234,12 @@ impl Circuit {
         let updates: Vec<MaterializedViewUpdate> = {
             let mut ups = Vec::new();
             for i in impacted_view_indices {
-                 if i < self.views.len() {
-                     let view: &mut View = &mut self.views[i];
-                     if let Some(update) = view.process_ingest(deltas_ref, db_ref) {
-                         ups.push(update);
-                     }
-                 }
+                if i < self.views.len() {
+                    let view: &mut View = &mut self.views[i];
+                    if let Some(update) = view.process_ingest(deltas_ref, db_ref) {
+                        ups.push(update);
+                    }
+                }
             }
             ups
         };
@@ -320,32 +336,3 @@ fn extract_tables(op: &Operator) -> Vec<String> {
         }
     }
 }
-
-/*
-use crate::StreamProcessor;
-
-impl StreamProcessor for Circuit {
-    fn ingest_record(
-        &mut self,
-        table: String,
-        op: String,
-        id: String,
-        record: Value,
-        hash: String,
-    ) -> Vec<MaterializedViewUpdate> {
-        self.ingest_record(table, op, id, record, hash)
-    }
-
-    fn register_view(
-        &mut self,
-        plan: QueryPlan,
-        params: Option<Value>,
-    ) -> Option<MaterializedViewUpdate> {
-        self.register_view(plan, params)
-    }
-
-    fn unregister_view(&mut self, id: &str) {
-        self.unregister_view(id)
-    }
-}
-*/

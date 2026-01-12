@@ -21,11 +21,11 @@ use serde_json::Value;
 pub trait StreamProcessor: Send + Sync {
     fn ingest_record(
         &mut self,
-        table: String,
-        op: String,
-        id: String,
+        table: &str,
+        op: &str,
+        id: &str,
         record: Value,
-        hash: String,
+        hash: &str,
     ) -> Vec<MaterializedViewUpdate>;
 
     fn ingest_batch(

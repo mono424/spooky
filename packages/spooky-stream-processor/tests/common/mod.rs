@@ -28,11 +28,11 @@ pub fn ingest(
     let hash = generate_hash(&record);
     println!("[Ingest] {} -> {}: {:#}", op, table, record);
     circuit.ingest_record(
-        table.to_string(),
-        op.to_string(),
-        id.to_string(),
+        table,
+        op,
+        id,
         record,
-        hash,
+        &hash,
     )
 }
 
