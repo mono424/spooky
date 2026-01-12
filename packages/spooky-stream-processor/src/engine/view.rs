@@ -828,6 +828,7 @@ fn type_rank(v: &SpookyValue) -> u8 {
 
 // Dot notation access: "address.city" -> traverses json
 // Optimized specifically for Path and SpookyValue
+#[inline(always)]
 fn resolve_nested_value<'a>(root: Option<&'a SpookyValue>, path: &Path) -> Option<&'a SpookyValue> {
     let mut current = root;
     for part in &path.0 {
@@ -840,6 +841,7 @@ fn resolve_nested_value<'a>(root: Option<&'a SpookyValue>, path: &Path) -> Optio
 }
 
 // Fast hashing for Join Keys
+#[inline(always)]
 fn hash_spooky_value(v: &SpookyValue) -> u64 {
      let mut hasher = FxHasher::default();
      hash_value_recursive(v, &mut hasher);
@@ -858,6 +860,7 @@ enum NumericOp {
    Returns: (Ids, Weights, Numbers) aligned by index.
    If a value is missing or not a number, it defaults to f64::NAN which fails most comparisons safely.
 */
+#[inline(always)]
 fn extract_number_column(
     zset: &ZSet,
     path: &Path,
@@ -941,6 +944,7 @@ fn filter_f64_batch(values: &[f64], target: f64, op: NumericOp) -> Vec<usize> {
 
 // Portable SIMD Sum (Chunked)
 #[allow(dead_code)] // Will be used in future aggregations
+#[inline(always)]
 pub fn sum_f64_simd(values: &[f64]) -> f64 {
     let mut sums = [0.0; 8];
     let chunks = values.chunks_exact(8);
