@@ -6,7 +6,7 @@ use std::time::{Instant, Duration};
 use std::io::{self, Write, BufWriter};
 use std::fs::File;
 use rayon::prelude::*;
-use ulid::Ulid;
+
 
 /*
 // Optional: Mimalloc für Speed (nur wenn nicht WASM)
@@ -61,31 +61,46 @@ fn benchmark_latency_mixed_stream() {
         let mut prepared_stream: Vec<PreparedRecord> = (0..sets_needed)
             .into_par_iter()
             .map(|_| {
-                let author_id = Ulid::new().to_string();
-                let thread_id = Ulid::new().to_string();
-                let comment_id = Ulid::new().to_string();
-
                 let mut batch = Vec::with_capacity(3);
 
                 // 1. Author
-                let rec_auth = json!({"id": format!("author:{}", author_id), "name": "BenchUser", "type": "author"});
+                let (auth_id, rec_auth) = make_author_record("BenchUser");
                 batch.push(PreparedRecord {
                     table: "author".to_string(), op: "CREATE".to_string(), 
-                    id: format!("author:{}", author_id), hash: generate_hash(&rec_auth), record: rec_auth
+                    id: auth_id.clone(), hash: generate_hash(&rec_auth), record: rec_auth
                 });
 
                 // 2. Thread
-                let rec_thread = json!({"id": format!("thread:{}", thread_id), "title": "BenchThread", "author": format!("author:{}", author_id), "type": "thread"});
+                // For benchmark, we need specific linkage, so we generate IDs first?
+                // Wait, make_* helpers generate random IDs internally.
+                // We need to link them. The current helpers in common/mod.rs GENERATE new IDs.
+                // We need to refactor common/mod.rs again to allow passing IDs or return them.
+                // Actually, make_* returns (id, record). So we can use that!
+                
+                // DATA FLOW:
+                // Author -> (author_id, author_rec)
+                // Thread -> needs author_id. returns (thread_id, thread_rec)
+                // Comment -> needs thread_id, author_id. returns (comment_id, comment_rec)
+                
+                // 1. Author
+                let (author_id, rec_auth) = make_author_record("BenchUser");
+                batch.push(PreparedRecord {
+                    table: "author".to_string(), op: "CREATE".to_string(), 
+                    id: author_id.clone(), hash: generate_hash(&rec_auth), record: rec_auth
+                });
+
+                // 2. Thread
+                let (thread_id, rec_thread) = make_thread_record("BenchThread", &author_id);
                 batch.push(PreparedRecord {
                     table: "thread".to_string(), op: "CREATE".to_string(), 
-                    id: format!("thread:{}", thread_id), hash: generate_hash(&rec_thread), record: rec_thread
+                    id: thread_id.clone(), hash: generate_hash(&rec_thread), record: rec_thread
                 });
 
                 // 3. Comment
-                let rec_comment = json!({"id": format!("comment:{}", comment_id), "text": "Magic", "thread": format!("thread:{}", thread_id), "author": format!("author:{}", author_id), "type": "comment"});
+                let (comment_id, rec_comment) = make_comment_record("Magic", &thread_id, &author_id);
                 batch.push(PreparedRecord {
                     table: "comment".to_string(), op: "CREATE".to_string(), 
-                    id: format!("comment:{}", comment_id), hash: generate_hash(&rec_comment), record: rec_comment
+                    id: comment_id.clone(), hash: generate_hash(&rec_comment), record: rec_comment
                 });
 
                 batch
@@ -94,7 +109,7 @@ fn benchmark_latency_mixed_stream() {
             .collect();
 
         // Exakt auf gewünschte Länge schneiden
-        prepared_stream.truncate(TOTAL_RECORDS);
+        prepared_stream.truncate(TOTAL_RECORDS); // Should be enough as we map sets of 3
 
         // Referenz für Verifizierung (letzter Thread mit Comment)
         let last_valid_thread_id = prepared_stream.iter().rev()

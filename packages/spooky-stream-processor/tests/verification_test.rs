@@ -40,7 +40,7 @@ fn test_dependency_graph_optimization() {
     // 4. Ingest Batch affecting ONLY "users"
     // The "products" view should NOT be processed.
     let batch = vec![
-        ("users".to_string(), "CREATE".to_string(), "user:1".to_string(), json!({"id": "user:1", "age": 105}), "hash1".to_string()),
+        ("users".to_string(), "CREATE".to_string(), "users:1".to_string(), json!({"id": "users:1", "age": 105}), "hash1".to_string()),
     ];
 
     let updates = circuit.ingest_batch(batch);

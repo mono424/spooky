@@ -408,14 +408,45 @@ impl View {
             Operator::Filter { input, predicate } => {
                 let upstream_delta =
                     self.eval_delta_batch(input, deltas, db, context)?;
-                let mut out_delta = FastMap::default();
+                
+                // SIMD Optimization Check (Copy of eval_snapshot logic)
+                let simd_target_op = match predicate {
+                    Predicate::Gt { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Gt)),
+                    Predicate::Gte { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Gte)),
+                    Predicate::Lt { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Lt)),
+                    Predicate::Lte { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Lte)),
+                    Predicate::Eq { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Eq)),
+                    Predicate::Neq { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Neq)),
+                    _ => None,
+                };
 
-                for (key, weight) in upstream_delta {
-                    if self.check_predicate(predicate, &key, db, context) {
-                        out_delta.insert(key, weight);
+                let field_path = match predicate {
+                     Predicate::Gt { field, .. } | Predicate::Gte { field, .. } |
+                     Predicate::Lt { field, .. } | Predicate::Lte { field, .. } |
+                     Predicate::Eq { field, .. } | Predicate::Neq { field, .. } => Some(field),
+                     _ => None
+                };
+
+                if let (Some((target, op)), Some(path)) = (simd_target_op, field_path) {
+                     // SIMD PATH
+                     let (keys, weights, numbers) = extract_number_column(&upstream_delta, path, db);
+                     let passing_indices = filter_f64_batch(&numbers, target, op);
+                     
+                     let mut out_delta = FastMap::default();
+                     for idx in passing_indices {
+                         out_delta.insert(keys[idx].clone(), weights[idx]);
+                     }
+                     Some(out_delta)
+                } else {
+                    // Slow Path
+                    let mut out_delta = FastMap::default();
+                    for (key, weight) in upstream_delta {
+                        if self.check_predicate(predicate, &key, db, context) {
+                            out_delta.insert(key, weight);
+                        }
                     }
+                    Some(out_delta)
                 }
-                Some(out_delta)
             }
             Operator::Project { input, .. } => {
                 self.eval_delta_batch(input, deltas, db, context)
@@ -454,13 +485,46 @@ impl View {
             }
             Operator::Filter { input, predicate } => {
                 let upstream = self.eval_snapshot(input, db, context);
-                let mut out = FastMap::default();
-                for (key, weight) in upstream {
-                    if self.check_predicate(predicate, &key, db, context) {
-                        out.insert(key, weight);
+                
+                // SIMD Optimization Check
+                let simd_target_op = match predicate {
+                    Predicate::Gt { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Gt)),
+                    Predicate::Gte { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Gte)),
+                    Predicate::Lt { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Lt)),
+                    Predicate::Lte { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Lte)),
+                    Predicate::Eq { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Eq)),
+                    Predicate::Neq { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Neq)),
+                    _ => None,
+                };
+
+                let field_path = match predicate {
+                     Predicate::Gt { field, .. } | Predicate::Gte { field, .. } |
+                     Predicate::Lt { field, .. } | Predicate::Lte { field, .. } |
+                     Predicate::Eq { field, .. } | Predicate::Neq { field, .. } => Some(field),
+                     _ => None
+                };
+
+                if let (Some((target, op)), Some(path)) = (simd_target_op, field_path) {
+                     // SIMD PATH
+                     let (keys, weights, numbers) = extract_number_column(&upstream, path, db);
+                     let passing_indices = filter_f64_batch(&numbers, target, op);
+                     
+                     let mut out = FastMap::default();
+                     for idx in passing_indices {
+                         // Safety: indices returned by filter_batch are valid for keys/weights
+                         out.insert(keys[idx].clone(), weights[idx]);
+                     }
+                     out
+                } else {
+                    // Slow Path (Loop)
+                    let mut out = FastMap::default();
+                    for (key, weight) in upstream {
+                        if self.check_predicate(predicate, &key, db, context) {
+                            out.insert(key, weight);
+                        }
                     }
+                    out
                 }
-                out
             }
             Operator::Project { input, .. } => self.eval_snapshot(input, db, context),
             Operator::Limit {
@@ -780,6 +844,119 @@ fn hash_spooky_value(v: &SpookyValue) -> u64 {
      let mut hasher = FxHasher::default();
      hash_value_recursive(v, &mut hasher);
      hasher.finish()
+}
+
+// --- 3. SIMD / COLUMNAR OPTIMIZATIONS ---
+
+// Helper Enum for numeric predicates
+enum NumericOp {
+    Gt, Gte, Lt, Lte, Eq, Neq
+}
+
+/* 
+   Attempts to extract a "Column" of f64 values from the ZSet + Database.
+   Returns: (Ids, Weights, Numbers) aligned by index.
+   If a value is missing or not a number, it defaults to f64::NAN which fails most comparisons safely.
+*/
+fn extract_number_column(
+    zset: &ZSet,
+    path: &Path,
+    db: &Database,
+    // Optional context if needed for resolving params locally (not used for column extraction usually)
+) -> (Vec<SmolStr>, Vec<i64>, Vec<f64>) {
+    let mut ids = Vec::with_capacity(zset.len());
+    let mut weights = Vec::with_capacity(zset.len());
+    let mut numbers = Vec::with_capacity(zset.len());
+
+    for (key, weight) in zset {
+        let val_opt = if let Some((table, _)) = key.split_once(':') {
+             db.tables.get(table).and_then(|t| t.rows.get(key))
+        } else {
+            None
+        };
+
+        let num_val = if let Some(row_val) = val_opt {
+             if let Some(SpookyValue::Number(n)) = resolve_nested_value(Some(row_val), path) {
+                 *n
+             } else {
+                 f64::NAN
+             }
+        } else {
+            f64::NAN
+        };
+
+        ids.push(key.clone());
+        weights.push(*weight);
+        numbers.push(num_val);
+    }
+
+    (ids, weights, numbers)
+}
+
+// Auto-vectorizable batch filter
+// Returns indices of passing elements
+fn filter_f64_batch(values: &[f64], target: f64, op: NumericOp) -> Vec<usize> {
+    let mut indices = Vec::with_capacity(values.len());
+    
+    // Explicit chunking to encourage SIMD opt by the compiler
+    let chunks = values.chunks_exact(8);
+    let remainder = chunks.remainder();
+    
+    let mut i = 0;
+    for chunk in chunks {
+        // Inner loop fixed size 8 - easier for LLVM to vectorize
+        for val in chunk {
+            let pass = match op {
+                NumericOp::Gt => *val > target,
+                NumericOp::Gte => *val >= target,
+                NumericOp::Lt => *val < target,
+                NumericOp::Lte => *val <= target,
+                NumericOp::Eq => (*val - target).abs() < f64::EPSILON, // Float approx eq
+                NumericOp::Neq => (*val - target).abs() > f64::EPSILON,
+            };
+            if pass {
+                indices.push(i);
+            }
+            i += 1;
+        }
+    }
+
+    for val in remainder {
+        let pass = match op {
+            NumericOp::Gt => *val > target,
+            NumericOp::Gte => *val >= target,
+            NumericOp::Lt => *val < target,
+            NumericOp::Lte => *val <= target,
+            NumericOp::Eq => (*val - target).abs() < f64::EPSILON,
+            NumericOp::Neq => (*val - target).abs() > f64::EPSILON,
+        };
+        if pass {
+            indices.push(i);
+        }
+        i += 1;
+    }
+    
+    indices
+}
+
+// Portable SIMD Sum (Chunked)
+#[allow(dead_code)] // Will be used in future aggregations
+pub fn sum_f64_simd(values: &[f64]) -> f64 {
+    let mut sums = [0.0; 8];
+    let chunks = values.chunks_exact(8);
+    let remainder = chunks.remainder();
+
+    for chunk in chunks {
+        for i in 0..8 {
+            sums[i] += chunk[i];
+        }
+    }
+    
+    let mut total: f64 = sums.iter().sum();
+    for v in remainder {
+        total += v;
+    }
+    total
 }
 
 fn hash_value_recursive(v: &SpookyValue, hasher: &mut FxHasher) {
