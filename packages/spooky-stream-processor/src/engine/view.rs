@@ -952,71 +952,31 @@ fn extract_number_column(
     (ids, weights, numbers)
 }
 
-// Auto-vectorizable batch filter
+// Auto-vectorizable batch filter (LLVM handles SIMD optimization)
 // Returns indices of passing elements
 fn filter_f64_batch(values: &[f64], target: f64, op: NumericOp) -> Vec<usize> {
-    let mut indices = Vec::with_capacity(values.len());
-    
-    // Explicit chunking to encourage SIMD opt by the compiler
-    let chunks = values.chunks_exact(8);
-    let remainder = chunks.remainder();
-    
-    let mut i = 0;
-    for chunk in chunks {
-        // Inner loop fixed size 8 - easier for LLVM to vectorize
-        for val in chunk {
+    values
+        .iter()
+        .enumerate()
+        .filter_map(|(i, val)| {
             let pass = match op {
                 NumericOp::Gt => *val > target,
                 NumericOp::Gte => *val >= target,
                 NumericOp::Lt => *val < target,
                 NumericOp::Lte => *val <= target,
-                NumericOp::Eq => (*val - target).abs() < f64::EPSILON, // Float approx eq
+                NumericOp::Eq => (*val - target).abs() < f64::EPSILON,
                 NumericOp::Neq => (*val - target).abs() > f64::EPSILON,
             };
-            if pass {
-                indices.push(i);
-            }
-            i += 1;
-        }
-    }
-
-    for val in remainder {
-        let pass = match op {
-            NumericOp::Gt => *val > target,
-            NumericOp::Gte => *val >= target,
-            NumericOp::Lt => *val < target,
-            NumericOp::Lte => *val <= target,
-            NumericOp::Eq => (*val - target).abs() < f64::EPSILON,
-            NumericOp::Neq => (*val - target).abs() > f64::EPSILON,
-        };
-        if pass {
-            indices.push(i);
-        }
-        i += 1;
-    }
-    
-    indices
+            if pass { Some(i) } else { None }
+        })
+        .collect()
 }
 
-// Portable SIMD Sum (Chunked)
+// Standard library sum (highly optimized, uses SIMD internally where appropriate)
 #[allow(dead_code)] // Will be used in future aggregations
 #[inline(always)]
 pub fn sum_f64_simd(values: &[f64]) -> f64 {
-    let mut sums = [0.0; 8];
-    let chunks = values.chunks_exact(8);
-    let remainder = chunks.remainder();
-
-    for chunk in chunks {
-        for i in 0..8 {
-            sums[i] += chunk[i];
-        }
-    }
-    
-    let mut total: f64 = sums.iter().sum();
-    for v in remainder {
-        total += v;
-    }
-    total
+    values.iter().sum()
 }
 
 fn hash_value_recursive(v: &SpookyValue, hasher: &mut FxHasher) {
