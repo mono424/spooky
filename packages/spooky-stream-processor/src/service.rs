@@ -1,4 +1,4 @@
-use crate::engine::view::{IdTree, Operator, SpookyValue};
+use crate::engine::view::{IdTree, Operator, SpookyValue, NULL_HASH, bytes_to_hex};
 use crate::{converter, sanitizer, MaterializedViewUpdate, QueryPlan};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
@@ -162,13 +162,13 @@ pub mod view {
     }
 
     pub fn default_result(id: &str) -> MaterializedViewUpdate {
-        let empty_hash = blake3::hash(&[]).to_hex().to_string();
+        let empty_hash = bytes_to_hex(&NULL_HASH);
         MaterializedViewUpdate {
             query_id: id.to_string(),
-            result_hash: empty_hash.clone(),
+            result_hash: empty_hash,
             result_ids: vec![],
             tree: IdTree {
-                hash: empty_hash,
+                hash: NULL_HASH,
                 children: None,
                 leaves: Some(vec![]),
             },

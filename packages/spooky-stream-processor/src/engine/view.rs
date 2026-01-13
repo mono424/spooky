@@ -70,19 +70,80 @@ impl From<SpookyValue> for serde_json::Value {
 // IMPORTANT: This must match the definition in circuit.rs!
 pub type ZSet = FastMap<RowKey, Weight>;
 
+// --- HASHING ---
+
+pub type XorHash = [u8; 32];
+pub const NULL_HASH: XorHash = [0; 32];
+
+/// Fast XOR of two 32-byte arrays using u64 chunks
+#[inline(always)]
+pub fn xor_checksum(a: &XorHash, b: &XorHash) -> XorHash {
+    // Explicit u64 chunking for clarity and assured speed logic akin to request
+    let a_u64 = unsafe { std::mem::transmute::<[u8; 32], [u64; 4]>(*a) };
+    let b_u64 = unsafe { std::mem::transmute::<[u8; 32], [u64; 4]>(*b) };
+    let mut out_u64 = [0u64; 4];
+
+    for i in 0..4 {
+        out_u64[i] = a_u64[i] ^ b_u64[i];
+    }
+    
+    unsafe { std::mem::transmute::<[u64; 4], [u8; 32]>(out_u64) }
+}
+
+#[inline(always)]
+pub fn hex_to_bytes(s: &str) -> XorHash {
+    let mut out = [0u8; 32];
+    if s.len() == 64 {
+        for i in 0..32 {
+            if let Ok(b) = u8::from_str_radix(&s[2 * i..2 * i + 2], 16) {
+                out[i] = b;
+            }
+        }
+    }
+    out
+}
+
+#[inline(always)]
+pub fn bytes_to_hex(b: &XorHash) -> String {
+    hex::encode(b)
+}
+
 // --- ID Tree Implementation ---
+
+// Custom Serializer for XorHash -> Hex String
+mod xor_hash_serde {
+    use super::*;
+    use serde::{Deserializer, Serializer};
+
+    pub fn serialize<S>(bytes: &XorHash, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&hex::encode(bytes))
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<XorHash, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s: String = Deserialize::deserialize(deserializer)?;
+        Ok(hex_to_bytes(&s))
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct LeafItem {
     pub id: SmolStr,
-    pub hash: String,
+    #[serde(with = "xor_hash_serde")]
+    pub hash: XorHash,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub children: Option<FastMap<String, IdTree>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct IdTree {
-    pub hash: String,
+    #[serde(with = "xor_hash_serde")]
+    pub hash: XorHash,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub children: Option<FastMap<String, IdTree>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -90,12 +151,12 @@ pub struct IdTree {
 }
 
 pub fn compute_hash(items: &[String]) -> String {
-    let mut hasher = blake3::Hasher::new();
+    let mut acc = NULL_HASH;
     for item in items {
-        hasher.update(item.as_bytes());
-        hasher.update(&[0]); // Delimiter
+        let h = blake3::hash(item.as_bytes());
+        acc = xor_checksum(&acc, h.as_bytes());
     }
-    hasher.finalize().to_hex().to_string()
+    bytes_to_hex(&acc)
 }
 
 impl IdTree {
@@ -104,57 +165,49 @@ impl IdTree {
 
         // Base case: If few items, hash directly (Leaf node)
         if items.len() <= THRESHOLD {
-            let mut hasher = blake3::Hasher::new();
+            let mut acc = NULL_HASH;
             for item in &items {
-                hasher.update(item.id.as_bytes());
-                hasher.update(item.hash.as_bytes());
+                // Leaf Hash = Hash(ID) XOR ItemHash
+                let id_hash = blake3::hash(item.id.as_bytes());
+                let mut leaf_mix = xor_checksum(id_hash.as_bytes(), &item.hash);
+                
                 if let Some(children) = &item.children {
-                    // Sorting is important for deterministic hashing
-                    let mut keys: Vec<&String> = children.keys().collect();
-                    keys.sort_unstable();
-                    for k in keys {
-                        hasher.update(k.as_bytes());
-                        let child = children.get(k).unwrap();
-                        hasher.update(child.hash.as_bytes());
+                    // Child hashes are already XOR'd in their specific IdTrees (recursive)
+                    // But here we must XOR the IdTree hashes into the LeafMix?
+                    // "Compute the XOR sum of all child hashes within a LeafItem"
+                    for child in children.values() {
+                        leaf_mix = xor_checksum(&leaf_mix, &child.hash);
                     }
                 }
-                hasher.update(&[0]);
+                
+                // Add to Node Accumulator (Order Independent!)
+                acc = xor_checksum(&acc, &leaf_mix);
             }
-            let hash = hasher.finalize().to_hex().to_string();
 
             return IdTree {
-                hash,
+                hash: acc,
                 children: None,
                 leaves: Some(items),
             };
         }
 
         // Recursive case: Chunking
-        // We split the list into fixed blocks to prevent stack overflow.
         let mut children = FastMap::default();
-        let mut child_hashes = Vec::with_capacity(items.len() / THRESHOLD + 1);
+        let mut acc = NULL_HASH;
 
         for (i, chunk) in items.chunks(THRESHOLD).enumerate() {
             let child_node = IdTree::build(chunk.to_vec());
 
-            // Key is index as string
-            let key = i.to_string();
+            // Accumulate Child Node Hash
+            acc = xor_checksum(&acc, &child_node.hash);
 
-            child_hashes.push(format!("{}:{}", key, child_node.hash));
+            // Key is index as string - used only for tree navigation/debugging, not hashing
+            let key = i.to_string();
             children.insert(key, child_node);
         }
 
-        child_hashes.sort_unstable();
-
-        let mut hasher = blake3::Hasher::new();
-        for item in child_hashes {
-            hasher.update(item.as_bytes());
-            hasher.update(&[0]);
-        }
-        let hash = hasher.finalize().to_hex().to_string();
-
         IdTree {
-            hash,
+            hash: acc,
             children: Some(children),
             leaves: None,
         }
@@ -364,8 +417,8 @@ impl View {
         }
 
         // Build result
-        let mut result_ids: Vec<String> = self.cache.keys().map(|k| k.to_string()).collect();
-        result_ids.sort_unstable();
+        // NO SORTING HERE!
+        let result_ids: Vec<String> = self.cache.keys().map(|k| k.to_string()).collect();
 
         let items: Vec<LeafItem> = result_ids
             .iter()
@@ -373,7 +426,7 @@ impl View {
             .collect();
 
         let tree = IdTree::build(items);
-        let hash = tree.hash.clone();
+        let hash = bytes_to_hex(&tree.hash); // Convert to Hex String for compatibility
 
         if hash != self.last_hash {
             self.last_hash = hash.clone();
@@ -610,15 +663,22 @@ impl View {
     }
 
     fn expand_item(&self, id: &str, op: &Operator, db: &Database) -> LeafItem {
-        let mut final_hash = self
+        let final_hash = self
             .get_row_hash(id, db)
-            .unwrap_or_else(|| "0000".to_string());
+            .unwrap_or(NULL_HASH);
 
         let mut children_map = FastMap::default();
         let projections = self.find_projections(op);
 
         if !projections.is_empty() {
-            let mut dependency_hashes = Vec::with_capacity(projections.len());
+             // Dependency hashes are also XOR'd now? 
+             // "Compute the XOR sum of all child hashes within a LeafItem"
+             // Wait, the LeafItem hash currently is logic...
+             // Let's look at `LeafItem` struct: it has `hash: XorHash`.
+             // In `IdTree::build`, we do `hash_bytes(id) ^ item.hash`.
+             // Here in `expand_item`, `item.hash` should include the child hashes!
+             
+            let mut xor_acc = final_hash; // Start with row hash
 
             for proj in projections {
                 if let Projection::Subquery {
@@ -641,8 +701,8 @@ impl View {
                     }
 
                     let sub_zset = self.eval_snapshot(sub_op, db, Some(&context));
-                    let mut sub_ids: Vec<String> = sub_zset.keys().map(|k| k.to_string()).collect();
-                    sub_ids.sort_unstable();
+                    // NO SORTING!
+                    let sub_ids: Vec<String> = sub_zset.keys().map(|k| k.to_string()).collect();
 
                     let sub_items: Vec<LeafItem> = sub_ids
                         .iter()
@@ -650,29 +710,30 @@ impl View {
                         .collect();
 
                     let sub_tree = IdTree::build(sub_items);
-                    dependency_hashes.push(sub_tree.hash.clone());
+                    
+                    // XOR this child tree's hash into our accumulator
+                    xor_acc = xor_checksum(&xor_acc, &sub_tree.hash);
+                    
                     children_map.insert(alias.clone(), sub_tree);
                 }
             }
-
-            if !dependency_hashes.is_empty() {
-                let mut hasher = blake3::Hasher::new();
-                hasher.update(final_hash.as_bytes());
-                for h in dependency_hashes {
-                    hasher.update(h.as_bytes());
-                }
-                final_hash = hasher.finalize().to_hex().to_string();
+            
+            // The LeafItem hash is now RowHash ^ ChildTreeHash1 ^ ChildTreeHash2...
+            LeafItem {
+                id: SmolStr::new(id),
+                hash: xor_acc,
+                children: if children_map.is_empty() {
+                    None
+                } else {
+                    Some(children_map)
+                },
             }
-        }
-
-        LeafItem {
-            id: SmolStr::new(id),
-            hash: final_hash,
-            children: if children_map.is_empty() {
-                None
-            } else {
-                Some(children_map)
-            },
+        } else {
+            LeafItem {
+                id: SmolStr::new(id),
+                hash: final_hash,
+                children: None,
+            }
         }
     }
 
@@ -692,7 +753,7 @@ impl View {
         db.tables.get(table_name)?.rows.get(key)
     }
 
-    fn get_row_hash(&self, key: &str, db: &Database) -> Option<String> {
+    fn get_row_hash(&self, key: &str, db: &Database) -> Option<XorHash> {
         let (table_name, _id) = key.split_once(':')?;
         db.tables.get(table_name)?.hashes.get(key).cloned()
     }

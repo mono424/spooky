@@ -1,6 +1,6 @@
 use super::view::{
     FastMap, MaterializedViewUpdate, Operator, Projection, QueryPlan, RowKey, SpookyValue, View,
-    ZSet,
+    ZSet, XorHash, hex_to_bytes,
 };
 // use rustc_hash::{FxHashMap, FxHasher}; // Unused in this file (used via FastMap)
 use serde::{Deserialize, Serialize};
@@ -15,7 +15,8 @@ pub struct Table {
     pub name: String,
     pub zset: ZSet,                         // This is the fast FxHashMap
     pub rows: FastMap<RowKey, SpookyValue>, // Using SpookyValue
-    pub hashes: FastMap<RowKey, String>,
+    #[serde(skip)] // Skip serialization of internal byte hashes to avoid serde complexity
+    pub hashes: FastMap<RowKey, XorHash>,
 }
 
 impl Table {
@@ -29,7 +30,7 @@ impl Table {
     }
 
     // Changing signature to use SmolStr is implied by RowKey definition change
-    pub fn update_row(&mut self, key: SmolStr, data: SpookyValue, hash: String) {
+    pub fn update_row(&mut self, key: SmolStr, data: SpookyValue, hash: XorHash) {
         self.rows.insert(key.clone(), data);
         self.hashes.insert(key, hash);
     }
@@ -147,7 +148,7 @@ impl Circuit {
         let mut table_deltas: FastMap<String, ZSet> = FastMap::default();
 
         // 1. Storage Phase: Update Storage & Accumulate Deltas
-        for (table, op, id, record_spooky, hash) in batch {
+        for (table, op, id, record_spooky, hash_str) in batch {
             let key = id; // Already SmolStr
             let weight: i64 = match op.as_str() {
                 "CREATE" | "UPDATE" => 1,
@@ -162,7 +163,8 @@ impl Circuit {
             {
                 let tb = self.db.ensure_table(table.as_str());
                 if weight > 0 {
-                    tb.update_row(key.clone(), record_spooky, hash);
+                    let hash_bytes = hex_to_bytes(&hash_str);
+                    tb.update_row(key.clone(), record_spooky, hash_bytes);
                 } else {
                     tb.delete_row(&key);
                 }
@@ -196,7 +198,7 @@ impl Circuit {
             if let Some(indices) = self.dependency_graph.get(&table) {
                 impacted_view_indices.extend(indices.iter().copied());
             } else {
-                println!("DEBUG: Table {} changed, but no views depend on it", table);
+                // println!("DEBUG: Table {} changed, but no views depend on it", table);
             }
         }
 
@@ -207,7 +209,6 @@ impl Circuit {
 
         let mut all_updates: Vec<MaterializedViewUpdate> = Vec::new();
 
-        // 3. Execution Phase
         // 3. Execution Phase
         let db_ref = &self.db;
         let deltas_ref = &table_deltas;
