@@ -100,4 +100,22 @@ impl SpookyProcessor {
     pub fn unregister_view(&mut self, id: String) {
         self.circuit.unregister_view(&id);
     }
+
+    /// Save the current circuit state as a JSON string
+    pub fn save_state(&self) -> Result<String, JsValue> {
+        serde_json::to_string(&self.circuit)
+            .map_err(|e| JsValue::from_str(&format!("Failed to serialize state: {}", e)))
+    }
+
+    /// Load circuit state from a JSON string
+    pub fn load_state(&mut self, state: String) -> Result<(), JsValue> {
+        let circuit: Circuit = serde_json::from_str(&state)
+            .map_err(|e| JsValue::from_str(&format!("Failed to deserialize state: {}", e)))?;
+
+        // The circuit needs to rebuild dependency graph after deserialization
+        self.circuit = circuit;
+        self.circuit.rebuild_dependency_graph();
+
+        Ok(())
+    }
 }

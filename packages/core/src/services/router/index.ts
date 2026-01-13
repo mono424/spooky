@@ -61,8 +61,11 @@ export class RouterService<S extends SchemaStructure> {
       source: 'Mutation',
       event: MutationEventTypes.MutationCreated,
       description: 'Enqueue Mutation in Sync Service',
-      handler: (payload) => {
-        this.sync.enqueueMutation(payload);
+      handler: (payload: UpEvent[]) => {
+        const mutationsToSync = payload.filter((e) => !e.localOnly);
+        if (mutationsToSync.length > 0) {
+          this.sync.enqueueMutation(mutationsToSync);
+        }
       },
     });
 

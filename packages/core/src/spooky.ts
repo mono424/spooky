@@ -100,6 +100,10 @@ export class SpookyClient<S extends SchemaStructure> {
       await this.local.connect();
       console.log('[Spooky] Local connected');
 
+      console.log('[Spooky] Provisioning schema...');
+      await this.migrator.provision(this.config.schemaSurql);
+      console.log('[Spooky] Migrator provisioned');
+
       console.log('[Spooky] Connecting to remote DB...');
       await this.remote.connect();
       console.log('[Spooky] Remote connected');
@@ -115,10 +119,6 @@ export class SpookyClient<S extends SchemaStructure> {
       console.log('[Spooky] Initializing QueryManager...');
       await this.queryManager.init();
       console.log('[Spooky] QueryManager initialized');
-
-      console.log('[Spooky] Provisioning schema...');
-      await this.migrator.provision(this.config.schemaSurql);
-      console.log('[Spooky] Migrator provisioned');
 
       console.log('[Spooky] Initializing Sync...');
       await this.sync.init();

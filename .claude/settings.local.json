@@ -25,7 +25,8 @@
       "Bash(cargo test:*)",
       "Bash(command -v cargo:*)",
       "Bash(cargo install:*)",
-      "Bash(~/.cargo/bin/wasm-pack build:*)"
+      "Bash(~/.cargo/bin/wasm-pack build:*)",
+      "Bash(ls:*)"
     ],
     "deny": [],
     "ask": []

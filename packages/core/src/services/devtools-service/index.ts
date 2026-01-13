@@ -276,16 +276,30 @@ export class DevToolsService {
             // Returns the first statement result as T.
             // SurrealDB query returns [Result1, Result2...].
             // We want the records from the first result.
-            const result = await this.databaseService.query<Record<string, unknown>[]>(
-              `SELECT * FROM ${tableName}`
-            );
+            const result = await this.databaseService.query<any>(`SELECT * FROM ${tableName}`);
 
-            let records = result;
-            // Check if result is double-wrapped (SurrealJS behavior: [[records]])
-            if (Array.isArray(result) && Array.isArray(result[0])) {
-              records = result[0] as any;
-            } else if (!Array.isArray(result)) {
-              records = [] as any;
+            let records: any[] = [];
+
+            if (Array.isArray(result) && result.length > 0) {
+              const first = result[0];
+              if (Array.isArray(first)) {
+                // Legacy or flattened format: [[records]]
+                records = first;
+              } else if (
+                first &&
+                typeof first === 'object' &&
+                'result' in first &&
+                'status' in first
+              ) {
+                // SurrealDB 2.0 format: [{ result: [...records], status: 'OK', ... }]
+                records = Array.isArray(first.result) ? first.result : [];
+              } else {
+                // Fallback: assume result is the array of records itself
+                records = result;
+              }
+            } else if (Array.isArray(result)) {
+              // Empty array
+              records = [];
             }
 
             return this.serializeForDevTools(records) || [];

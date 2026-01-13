@@ -12,6 +12,7 @@ export type CreateEvent = {
   mutation_id: RecordId;
   record_id: RecordId;
   data: Record<string, unknown>;
+  localOnly?: boolean;
 };
 
 export type UpdateEvent = {
@@ -19,12 +20,14 @@ export type UpdateEvent = {
   mutation_id: RecordId;
   record_id: RecordId;
   data: Record<string, unknown>;
+  localOnly?: boolean;
 };
 
 export type DeleteEvent = {
   type: 'delete';
   mutation_id: RecordId;
   record_id: RecordId;
+  localOnly?: boolean;
 };
 
 export type UpEvent = CreateEvent | UpdateEvent | DeleteEvent;

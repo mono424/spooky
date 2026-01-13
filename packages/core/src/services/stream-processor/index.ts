@@ -113,6 +113,7 @@ export class StreamProcessorService {
    * Emits 'stream_update' event if materialized views are affected.
    */
   ingest(table: string, op: string, id: string, record: any): void {
+    this.logger.debug({ table, op, id }, '[StreamProcessor] Ingesting record');
     if (!this.processor) {
       this.logger.warn('[StreamProcessor] Not initialized, skipping ingest');
       return;
@@ -127,8 +128,8 @@ export class StreamProcessorService {
           localTree: u.tree,
         }));
         this.events.emit('stream_update', updates);
-        this.saveState();
       }
+      this.saveState();
     } catch (e) {
       this.logger.error(e, '[StreamProcessor] Error during ingestion');
     }

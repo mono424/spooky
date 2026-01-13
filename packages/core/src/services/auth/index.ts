@@ -193,10 +193,10 @@ export class AuthService<S extends SchemaStructure> {
         if (existing) {
           this.logger.debug({ userId }, '[AuthService] Hydration: updating existing user');
           const table = userId.split(':')[0];
-          await this.mutation.update(table, userId, user);
+          await this.mutation.update(table, userId, user, { localOnly: true });
         } else {
           this.logger.debug({ userId }, '[AuthService] Hydration: creating new user');
-          await this.mutation.create(userId, user);
+          await this.mutation.create(userId, user, { localOnly: true });
         }
       } catch (err) {
         this.logger.error({ error: err }, '[AuthService] Failed to hydrate local user');

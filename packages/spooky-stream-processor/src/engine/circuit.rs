@@ -150,8 +150,8 @@ impl Circuit {
         for (table, op, id, record_spooky, hash) in batch {
             let key = id; // Already SmolStr
             let weight: i64 = match op.as_str() {
-                "CREATE" | "UPDATE" => 1,
-                "DELETE" => -1,
+                "CREATE" | "UPDATE" | "create" | "update" => 1,
+                "DELETE" | "delete" => -1,
                 _ => 0,
             };
 
@@ -261,8 +261,9 @@ impl Circuit {
 
         let mut view = View::new(plan, params);
 
-        let empty_delta: ZSet = FastMap::default();
-        let initial_update = view.process("", &empty_delta, &self.db);
+        // Trigger initial full scan by passing None to process_ingest
+        let empty_deltas: FastMap<String, ZSet> = FastMap::default();
+        let initial_update = view.process_ingest(&empty_deltas, &self.db);
 
         let view_idx = self.views.len();
         self.views.push(view);

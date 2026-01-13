@@ -195,11 +195,11 @@ async fn ingest_handler(
     let updates = {
         let mut circuit = state.processor.lock().unwrap();
         let ups = circuit.ingest_record(
-            payload.table,
-            payload.op,
-            payload.id,
-            clean_record,
-            hash
+            &payload.table,
+            &payload.op,
+            &payload.id,
+            clean_record.into(),
+            &hash
         );
         // Trigger async save instead of blocking
         state.saver.trigger_save();

@@ -39,7 +39,15 @@ export class LocalMigrator {
 
     await this.recreateDatabase(database);
 
-    const statements = this.splitStatements(schemaSurql);
+    const systemSchema = `
+      DEFINE TABLE IF NOT EXISTS _spooky_stream_processor_state SCHEMALESS PERMISSIONS FOR select, create, update, delete WHERE true;
+      DEFINE TABLE IF NOT EXISTS _spooky_incantation SCHEMALESS PERMISSIONS FOR select, create, update, delete WHERE true;
+      DEFINE TABLE IF NOT EXISTS _spooky_schema SCHEMALESS PERMISSIONS FOR select, create, update, delete WHERE true;
+      DEFINE TABLE IF NOT EXISTS _spooky_pending_mutations SCHEMALESS PERMISSIONS FOR select, create, update, delete WHERE true;
+    `;
+    const fullSchema = schemaSurql + '\n' + systemSchema;
+
+    const statements = this.splitStatements(fullSchema);
 
     for (let i = 0; i < statements.length; i++) {
       const statement = statements[i];

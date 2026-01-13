@@ -53,9 +53,25 @@ export class MutationManager<S extends SchemaStructure> {
     throw lastError;
   }
 
-  async create<T extends Record<string, unknown>>(id: string, data: T): Promise<T> {
+  async create<T extends Record<string, unknown>>(
+    id: string,
+    data: T,
+    options?: { localOnly?: boolean }
+  ): Promise<T> {
     const mutationId = `_spooky_pending_mutations:${Date.now()}`;
-    const query = `
+    const isLocalOnly = options?.localOnly ?? false;
+
+    let query: string;
+
+    if (isLocalOnly) {
+      query = `
+        LET $created = CREATE ONLY $id CONTENT $data;
+        RETURN {
+            target: $created
+        };
+      `;
+    } else {
+      query = `
           BEGIN TRANSACTION;
           
           LET $created = CREATE ONLY $id CONTENT $data;
@@ -72,28 +88,25 @@ export class MutationManager<S extends SchemaStructure> {
           
           COMMIT TRANSACTION;
       `;
+    }
 
     const rid = parseRecordIdString(id);
     const tableName = rid.table.toString();
     const encodedData = encodeToSpooky(this.schema, tableName as any, data as any);
 
-    // In SurrealDB 2.0, query returns an array of results for each statement.
-    // We expect 5 statements (BEGIN, LET, LET, RETURN, COMMIT).
-    // We need to find the one that contains our return object.
-    const results = await this.withRetry(() =>
-      this.db.query<any[]>(query, {
-        id: rid,
-        mid: parseRecordIdString(mutationId),
-        data: encodedData,
-      })
-    );
+    const queryParams: any = {
+      id: rid,
+      data: encodedData,
+    };
+
+    if (!isLocalOnly) {
+      queryParams.mid = parseRecordIdString(mutationId);
+    }
+
+    const results = await this.withRetry(() => this.db.query<any[]>(query, queryParams));
 
     this.logger.debug({ results }, 'Create mutation response');
 
-    // Find the result that has 'target' and 'mutation_id'
-    // It might be wrapped in an array if the statement returns multiple items (SURREAL 2.0 logic?)
-    // But RETURN {...} usually returns a single object or array of 1 object?
-    // If query returns [r1, r2, ...], we scan them.
     const response = results.find(
       (r: any) => r && (r.target || (Array.isArray(r) && r[0]?.target))
     );
@@ -106,14 +119,19 @@ export class MutationManager<S extends SchemaStructure> {
       throw new Error('Failed to create record or mutation log.');
     }
 
+    const resultMutationId = isLocalOnly
+      ? new RecordId('_spooky_pending_mutations', 'local_only')
+      : result.mutation_id;
+
     this._events.addEvent({
       type: MutationEventTypes.MutationCreated,
       payload: [
         {
           type: 'create',
-          mutation_id: result.mutation_id,
+          mutation_id: resultMutationId,
           record_id: result.target.id as RecordId,
           data: encodedData,
+          localOnly: isLocalOnly,
         },
       ],
     });
@@ -124,11 +142,23 @@ export class MutationManager<S extends SchemaStructure> {
   async update<T extends Record<string, unknown>>(
     table: string,
     id: string,
-    data: Partial<T>
+    data: Partial<T>,
+    options?: { localOnly?: boolean }
   ): Promise<T> {
     const rid = id.includes(':') ? parseRecordIdString(id) : new RecordId(table, id);
+    const isLocalOnly = options?.localOnly ?? false;
 
-    const query = `
+    let query: string;
+
+    if (isLocalOnly) {
+      query = `
+        LET $updated = UPDATE $id MERGE $data;
+        RETURN {
+            target: $updated
+        };
+      `;
+    } else {
+      query = `
           BEGIN TRANSACTION;
 
           LET $updated = UPDATE $id MERGE $data;
@@ -144,10 +174,10 @@ export class MutationManager<S extends SchemaStructure> {
           
           COMMIT TRANSACTION;
       `;
+    }
 
     const encodedData = encodeToSpooky(this.schema, table as any, data as any);
 
-    // The return type is an array containing our custom object
     const results = await this.withRetry(() =>
       this.db.query<any[]>(query, {
         id: rid,
@@ -167,6 +197,10 @@ export class MutationManager<S extends SchemaStructure> {
       throw new Error(`Failed to update record: ${id} not found.`);
     }
 
+    const resultMutationId = isLocalOnly
+      ? new RecordId('_spooky_pending_mutations', 'local_only')
+      : result.mutation_id;
+
     this._events.addEvent({
       type: MutationEventTypes.MutationCreated,
       payload: [
@@ -174,7 +208,8 @@ export class MutationManager<S extends SchemaStructure> {
           type: 'update',
           record_id: rid,
           data: encodedData,
-          mutation_id: result.mutation_id,
+          mutation_id: resultMutationId,
+          localOnly: isLocalOnly,
         },
       ],
     });
@@ -182,10 +217,19 @@ export class MutationManager<S extends SchemaStructure> {
     return result.target;
   }
 
-  async delete(table: string, id: string): Promise<void> {
+  async delete(table: string, id: string, options?: { localOnly?: boolean }): Promise<void> {
     const rid = id.includes(':') ? parseRecordIdString(id) : new RecordId(table, id);
+    const isLocalOnly = options?.localOnly ?? false;
 
-    const query = `
+    let query: string;
+
+    if (isLocalOnly) {
+      query = `
+        DELETE $id;
+        RETURN { success: true }; 
+      `;
+    } else {
+      query = `
         BEGIN TRANSACTION;
         
         DELETE $id;
@@ -198,19 +242,31 @@ export class MutationManager<S extends SchemaStructure> {
         
         COMMIT TRANSACTION;
     `;
+    }
 
     const results = await this.withRetry(() => this.db.query<any[]>(query, { id: rid }));
 
-    const response = results.find(
-      (r: any) => r && (r.mutation_id || (Array.isArray(r) && r[0]?.mutation_id))
-    );
-    let result = response;
-    if (Array.isArray(response)) {
-      result = response[0];
-    }
+    // For delete, we just need to confirm it worked.
+    // In normal mode, we look for mutation_id.
+    // In localOnly mode, we just need to know the query executed.
 
-    if (!result) {
-      throw new Error('Failed to perform delete or create mutation log.');
+    let resultMutationId: RecordId;
+
+    if (isLocalOnly) {
+      resultMutationId = new RecordId('_spooky_pending_mutations', 'local_only');
+    } else {
+      const response = results.find(
+        (r: any) => r && (r.mutation_id || (Array.isArray(r) && r[0]?.mutation_id))
+      );
+      let result = response;
+      if (Array.isArray(response)) {
+        result = response[0];
+      }
+
+      if (!result) {
+        throw new Error('Failed to perform delete or create mutation log.');
+      }
+      resultMutationId = result.mutation_id;
     }
 
     this._events.addEvent({
@@ -219,7 +275,8 @@ export class MutationManager<S extends SchemaStructure> {
         {
           type: 'delete',
           record_id: rid,
-          mutation_id: result.mutation_id,
+          mutation_id: resultMutationId,
+          localOnly: isLocalOnly,
         },
       ],
     });
