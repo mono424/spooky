@@ -75,19 +75,14 @@ pub type ZSet = FastMap<RowKey, Weight>;
 pub type XorHash = [u8; 32];
 pub const NULL_HASH: XorHash = [0; 32];
 
-/// Fast XOR of two 32-byte arrays using u64 chunks
+/// Fast XOR of two 32-byte arrays (LLVM auto-vectorizes this)
 #[inline(always)]
 pub fn xor_checksum(a: &XorHash, b: &XorHash) -> XorHash {
-    // Explicit u64 chunking for clarity and assured speed logic akin to request
-    let a_u64 = unsafe { std::mem::transmute::<[u8; 32], [u64; 4]>(*a) };
-    let b_u64 = unsafe { std::mem::transmute::<[u8; 32], [u64; 4]>(*b) };
-    let mut out_u64 = [0u64; 4];
-
-    for i in 0..4 {
-        out_u64[i] = a_u64[i] ^ b_u64[i];
+    let mut out = [0u8; 32];
+    for i in 0..32 {
+        out[i] = a[i] ^ b[i];
     }
-    
-    unsafe { std::mem::transmute::<[u64; 4], [u8; 32]>(out_u64) }
+    out
 }
 
 #[inline(always)]
