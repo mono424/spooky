@@ -259,7 +259,6 @@ export class QueryManager<S extends SchemaStructure> {
       surrealql,
       params,
       ttl,
-      id,
       tableName,
       involvedTables,
     });
@@ -291,7 +290,6 @@ export class QueryManager<S extends SchemaStructure> {
     surrealql,
     params,
     ttl,
-    id,
     tableName,
     involvedTables,
   }: {
@@ -299,7 +297,6 @@ export class QueryManager<S extends SchemaStructure> {
     surrealql: string;
     params: Record<string, any>;
     ttl: QueryTimeToLive;
-    id: string;
     tableName: string;
     involvedTables: string[];
   }) {
@@ -319,7 +316,7 @@ export class QueryManager<S extends SchemaStructure> {
             surrealQL: surrealql,
             params: params,
             clientId: this.clientId,
-            localHash: id, // Initial local hash is the query hash (empty state?) or just id? Probably empty.
+            localHash: '',
             localTree: null,
             remoteHash: '',
             remoteTree: null,
@@ -350,7 +347,12 @@ export class QueryManager<S extends SchemaStructure> {
   }
 
   private async initLifecycle(incantation: Incantation<any>) {
-    this.streamProcessor.registerIncantation(incantation);
+    const update = this.streamProcessor.registerIncantation(incantation);
+    if (!update) {
+      throw new Error('Failed to register incantation');
+    }
+
+    incantation.updateLocalState([], update.localHash, update.localTree);
 
     this.events.emit(QueryEventTypes.IncantationInitialized, {
       incantationId: incantation.id,

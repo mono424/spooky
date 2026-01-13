@@ -4,13 +4,25 @@
 export const schema = {
   tables: [
     {
-      name: 'comment' as const,
+      name: 'user' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
-        thread: { type: 'string' as const, recordId: true, optional: false },
-        content: { type: 'string' as const, optional: false },
+        username: { type: 'string' as const, optional: false },
+        threads: { type: 'string' as const, optional: true },
+        comments: { type: 'string' as const, optional: true },
+      },
+      primaryKey: ['id'] as const
+    },
+    {
+      name: 'thread' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
+        title: { type: 'string' as const, optional: false },
         author: { type: 'string' as const, recordId: true, optional: false },
+        content: { type: 'string' as const, optional: false },
+        active: { type: 'boolean' as const, optional: true },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
+        comments: { type: 'string' as const, optional: true },
       },
       primaryKey: ['id'] as const
     },
@@ -22,30 +34,36 @@ export const schema = {
       primaryKey: ['id'] as const
     },
     {
-      name: 'user' as const,
+      name: 'comment' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
-        username: { type: 'string' as const, optional: false },
-        comments: { type: 'string' as const, optional: true },
-        threads: { type: 'string' as const, optional: true },
-      },
-      primaryKey: ['id'] as const
-    },
-    {
-      name: 'thread' as const,
-      columns: {
-        id: { type: 'string' as const, recordId: true, optional: false },
-        author: { type: 'string' as const, recordId: true, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
-        active: { type: 'boolean' as const, optional: true },
         content: { type: 'string' as const, optional: false },
-        title: { type: 'string' as const, optional: false },
-        comments: { type: 'string' as const, optional: true },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
+        author: { type: 'string' as const, recordId: true, optional: false },
+        thread: { type: 'string' as const, recordId: true, optional: false },
       },
       primaryKey: ['id'] as const
     },
   ],
   relationships: [
+    {
+      from: 'thread' as const,
+      field: 'author' as const,
+      to: 'user' as const,
+      cardinality: 'one' as const
+    },
+    {
+      from: 'thread' as const,
+      field: 'comments' as const,
+      to: 'comment' as const,
+      cardinality: 'many' as const
+    },
+    {
+      from: 'comment' as const,
+      field: 'author' as const,
+      to: 'user' as const,
+      cardinality: 'one' as const
+    },
     {
       from: 'comment' as const,
       field: 'thread' as const,
@@ -53,38 +71,20 @@ export const schema = {
       cardinality: 'one' as const
     },
     {
-      from: 'comment' as const,
-      field: 'author' as const,
-      to: 'user' as const,
-      cardinality: 'one' as const
-    },
-    {
-      from: 'thread' as const,
-      field: 'author' as const,
-      to: 'user' as const,
-      cardinality: 'one' as const
-    },
-    {
-      from: 'thread' as const,
-      field: 'comments' as const,
-      to: 'comment' as const,
-      cardinality: 'many' as const
-    },
-    {
-      from: 'user' as const,
-      field: 'comments' as const,
-      to: 'comment' as const,
-      cardinality: 'many' as const
-    },
-    {
       from: 'user' as const,
       field: 'threads' as const,
       to: 'thread' as const,
       cardinality: 'many' as const
     },
+    {
+      from: 'user' as const,
+      field: 'comments' as const,
+      to: 'comment' as const,
+      cardinality: 'many' as const
+    },
   ],
   access: {
-    account: {"signIn":{"params":{"username":{"type":"string","optional":false},"password":{"type":"string","optional":false}}},"signup":{"params":{"username":{"type":"string","optional":false},"password":{"type":"string","optional":false}}}},
+    account: {"signIn":{"params":{"password":{"type":"string","optional":false},"username":{"type":"string","optional":false}}},"signup":{"params":{"username":{"type":"string","optional":false},"password":{"type":"string","optional":false}}}},
   }
 } as const;
 
@@ -117,7 +117,7 @@ DEFINE FUNCTION fn::polyfill::createAccount($username: string, $password: string
 DEFINE TABLE user SCHEMAFULL
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
-DEFINE FIELD username ON TABLE user TYPE string
+DEFINE FIELD username ON TABLE user TYPE option<string>
 ASSERT $value != NONE AND string::len($value) > 3
 PERMISSIONS FOR select, create, update WHERE true;
     
@@ -134,18 +134,18 @@ PERMISSIONS FOR select, create, update, delete WHERE true
 ;
 
 
-DEFINE FIELD title ON TABLE thread TYPE string
+DEFINE FIELD title ON TABLE thread TYPE option<string>
     ASSERT $value != NONE AND string::len($value) > 0 AND string::len($value) <= 200;
 
-DEFINE FIELD content ON TABLE thread TYPE string
+DEFINE FIELD content ON TABLE thread TYPE option<string>
     ASSERT $value != NONE AND string::len($value) > 0;
 
-DEFINE FIELD author ON TABLE thread TYPE record<user>; -- @parent
+DEFINE FIELD author ON TABLE thread TYPE option<record<user>>; -- @parent
 
-DEFINE FIELD created_at ON TABLE thread TYPE datetime
+DEFINE FIELD created_at ON TABLE thread TYPE option<datetime>
     VALUE time::now();
 
-DEFINE FIELD active ON TABLE thread TYPE bool VALUE $value OR false;
+DEFINE FIELD active ON TABLE thread TYPE option<bool> VALUE $value OR false;
 
 -- ##################################################################
 -- COMMENT TABLE
@@ -155,14 +155,14 @@ DEFINE TABLE comment SCHEMAFULL
 PERMISSIONS FOR select, create, update, delete WHERE true
 ;
 
-DEFINE FIELD thread ON TABLE comment TYPE record<thread>; -- @parent
+DEFINE FIELD thread ON TABLE comment TYPE option<record<thread>>; -- @parent
 
-DEFINE FIELD content ON TABLE comment TYPE string
+DEFINE FIELD content ON TABLE comment TYPE option<string>
     ASSERT $value != NONE AND string::len($value) > 0;
 
-DEFINE FIELD author ON TABLE comment TYPE record<user>;
+DEFINE FIELD author ON TABLE comment TYPE option<record<user>>;
 
-DEFINE FIELD created_at ON TABLE comment TYPE datetime
+DEFINE FIELD created_at ON TABLE comment TYPE option<datetime>
     VALUE time::now();
 
 -- ##################################################################
@@ -239,11 +239,11 @@ DEFINE FIELD remoteTree ON TABLE _spooky_incantation TYPE any
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- For garbage collection (Heartbeat)
-DEFINE FIELD lastActiveAt ON TABLE _spooky_incantation TYPE datetime DEFAULT time::now()
+DEFINE FIELD lastActiveAt ON TABLE _spooky_incantation TYPE option<datetime> DEFAULT time::now()
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- How long this Incantation stays alive without activity
-DEFINE FIELD ttl ON TABLE _spooky_incantation TYPE duration
+DEFINE FIELD ttl ON TABLE _spooky_incantation TYPE option<duration>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- ==================================================

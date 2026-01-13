@@ -210,6 +210,8 @@ export class SpookySync<S extends SchemaStructure> {
   private async processDownEvent(event: DownEvent) {
     this.logger.debug({ event }, 'Processing down event');
     switch (event.type) {
+      case 'register':
+        return this.registerIncantation(event);
       case 'sync':
         const { incantationId, surrealql, params, localTree, localHash, remoteHash, remoteTree } =
           event.payload;
@@ -229,28 +231,6 @@ export class SpookySync<S extends SchemaStructure> {
     }
   }
 
-  public async refreshIncantations(
-    queries: { id: RecordId; surrealql: string; params?: Record<string, any> }[]
-  ) {
-    this.logger.debug({ count: queries.length }, 'refreshIncantations');
-    for (const query of queries) {
-      await this.updateLocalIncantation(
-        query.id,
-        {
-          surrealql: query.surrealql,
-          params: query.params,
-          localHash: '',
-          localTree: null,
-          remoteHash: '',
-          remoteTree: null,
-        },
-        {
-          updateRecord: false,
-        }
-      );
-    }
-  }
-
   public async enqueueMutation(mutations: any[]) {
     for (const mutation of mutations) {
       this.upQueue.push(mutation);
@@ -260,82 +240,82 @@ export class SpookySync<S extends SchemaStructure> {
   // Deprecated/Removed: effectively replaced by refreshIncantations + Router
   // public async refreshFromLocalCache(table: string) { ... }
 
-  // private async registerIncantation(event: RegisterEvent) {
-  //   const { incantationId, surrealql, params, ttl } = event.payload;
-  //   const effectiveTtl = ttl || '10m';
-  //   try {
-  //     let existing = await this.findIncatationRecord(incantationId);
-  //     this.logger.debug({ existing }, 'Register Incantation state');
+  private async registerIncantation(event: RegisterEvent) {
+    const { incantationId, surrealql, params, ttl } = event.payload;
+    const effectiveTtl = ttl || '10m';
+    try {
+      let existing = await this.findIncatationRecord(incantationId);
+      this.logger.debug({ existing }, 'Register Incantation state');
 
-  //     const localHash = existing?.localHash ?? '';
-  //     const localTree = existing?.localTree ?? null;
+      const localHash = existing?.localHash ?? '';
+      const localTree = existing?.localTree ?? null;
 
-  //     await this.updateLocalIncantation(
-  //       incantationId,
-  //       {
-  //         surrealql,
-  //         params,
-  //         localHash,
-  //         localTree,
-  //       },
-  //       {
-  //         updateRecord: existing ? false : true,
-  //       }
-  //     );
+      await this.updateLocalIncantation(
+        incantationId,
+        {
+          surrealql,
+          params,
+          localHash,
+          localTree,
+        },
+        {
+          updateRecord: existing ? false : true,
+        }
+      );
 
-  //     const { hash: remoteHash, tree: remoteTree } = await this.createRemoteIncantation(
-  //       incantationId,
-  //       surrealql,
-  //       params,
-  //       effectiveTtl
-  //     );
+      const { hash: remoteHash, tree: remoteTree } = await this.createRemoteIncantation(
+        incantationId,
+        surrealql,
+        params,
+        effectiveTtl
+      );
 
-  //     await this.syncIncantation({
-  //       incantationId,
-  //       surrealql,
-  //       localTree,
-  //       localHash,
-  //       remoteHash,
-  //       remoteTree,
-  //       params,
-  //     });
-  //   } catch (e) {
-  //     this.logger.error({ err: e }, 'registerIncantation error');
-  //     throw e;
-  //   }
-  // }
+      await this.syncIncantation({
+        incantationId,
+        surrealql,
+        localTree,
+        localHash,
+        remoteHash,
+        remoteTree,
+        params,
+      });
+    } catch (e) {
+      this.logger.error({ err: e }, 'registerIncantation error');
+      throw e;
+    }
+  }
 
-  // private async createRemoteIncantation(
-  //   incantationId: RecordId<string>,
-  //   surrealql: string,
-  //   params: any,
-  //   ttl: string | Duration
-  // ) {
-  //   const config = {
-  //     id: incantationId.id,
-  //     surrealQL: surrealql,
-  //     params,
-  //     ttl: typeof ttl === 'string' ? new Duration(ttl) : ttl,
-  //     lastActiveAt: new Date(),
-  //     clientId: this.clientId,
-  //   };
+  private async createRemoteIncantation(
+    incantationId: RecordId<string>,
+    surrealql: string,
+    params: any,
+    ttl: string | Duration
+  ) {
+    const config = {
+      id: incantationId.id,
+      surrealQL: surrealql,
+      params,
+      ttl: typeof ttl === 'string' ? new Duration(ttl) : ttl,
+      lastActiveAt: new Date(),
+      clientId: this.clientId,
+    };
 
-  //   const { ttl: _, ...safeConfig } = config;
+    const { ttl: _, ...safeConfig } = config;
 
-  //   // Delegate to remote function which handles DBSP registration & persistence
-  //   const [{ hash, tree }] = await this.remote.query<[{ hash: string; tree: any }]>(
-  //     'fn::incantation::register($config)',
-  //     {
-  //       config: safeConfig,
-  //     }
-  //   );
+    // Delegate to remote function which handles DBSP registration & persistence
+    const [{ hash, tree }] = await this.remote.query<[{ hash: string; tree: any }]>(
+      'fn::incantation::register($config)',
+      {
+        config: safeConfig,
+      }
+    );
 
-  //   this.logger.debug(
-  //     { incantationId: incantationId.toString(), hash, tree },
-  //     'createdRemoteIncantation'
-  //   );
-  //   return { hash, tree };
-  // }
+    this.logger.debug(
+      { incantationId: incantationId.toString(), hash, tree },
+      'createdRemoteIncantation'
+    );
+    return { hash, tree };
+  }
 
   private async syncIncantation({
     incantationId,

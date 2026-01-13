@@ -75,9 +75,11 @@ enum Commands {
 }
 
 /// Filter schema content to remove field definitions with FOR select WHERE false
+/// and make all fields (except 'id') nullable by wrapping their types in option<>
 fn filter_schema_for_client(content: &str, parser: &SchemaParser) -> Result<String> {
     let lines: Vec<&str> = content.lines().collect();
     let mut result = Vec::new();
+    let mut modified_lines: Vec<String> = Vec::new(); // Store owned strings
     let mut i = 0;
 
     while i < lines.len() {
@@ -102,7 +104,7 @@ fn filter_schema_for_client(content: &str, parser: &SchemaParser) -> Result<Stri
                                     // Check if there is content after the semicolon
                                     let after_semicolon = &lines[i][idx + 1..];
                                     if !after_semicolon.trim().is_empty() {
-                                        result.push(after_semicolon);
+                                        result.push(after_semicolon.to_string());
                                     }
                                     i += 1;
                                     break;
@@ -114,13 +116,63 @@ fn filter_schema_for_client(content: &str, parser: &SchemaParser) -> Result<Stri
                     }
                 }
             }
+
+            // Make all fields (except 'id') nullable by wrapping TYPE in option<>
+            if let Some((_table_name, field_name)) = extract_table_and_field_name(trimmed) {
+                if field_name != "id" {
+                    let modified_line = make_field_nullable(line);
+                    modified_lines.push(modified_line.clone());
+                    result.push(modified_line);
+                    i += 1;
+                    continue;
+                }
+            }
         }
 
-        result.push(line);
+        result.push(line.to_string());
         i += 1;
     }
 
     Ok(result.join("\n"))
+}
+
+/// Make a DEFINE FIELD line nullable by wrapping its TYPE in option<>
+/// Example: "DEFINE FIELD username ON TABLE user TYPE string"
+///       -> "DEFINE FIELD username ON TABLE user TYPE option<string>"
+fn make_field_nullable(line: &str) -> String {
+    // Find "TYPE " in the line
+    if let Some(type_pos) = line.find("TYPE ") {
+        let before_type = &line[..type_pos + 5]; // Include "TYPE "
+        let after_type = &line[type_pos + 5..];
+
+        // Extract the type (everything until the next keyword or end of line)
+        // Common keywords after TYPE: ASSERT, VALUE, PERMISSIONS, DEFAULT, READONLY
+        let type_end = after_type
+            .find(" ASSERT ")
+            .or_else(|| after_type.find(" VALUE "))
+            .or_else(|| after_type.find(" PERMISSIONS "))
+            .or_else(|| after_type.find(" DEFAULT "))
+            .or_else(|| after_type.find(" READONLY "))
+            .or_else(|| after_type.find(';'))
+            .unwrap_or(after_type.len());
+
+        let type_str = after_type[..type_end].trim();
+        let rest = &after_type[type_end..];
+
+        // Check if already wrapped in option<> or if type is 'any' (can't be wrapped)
+        if type_str.starts_with("option<")
+            || type_str.starts_with("OPTION<")
+            || type_str.eq_ignore_ascii_case("any") {
+            // Already nullable or is 'any' type, return as-is
+            line.to_string()
+        } else {
+            // Wrap the type in option<>
+            format!("{}option<{}>{}",  before_type, type_str, rest)
+        }
+    } else {
+        // No TYPE found, return as-is
+        line.to_string()
+    }
 }
 
 /// Extract table and field name from a DEFINE FIELD line

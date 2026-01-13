@@ -163,15 +163,15 @@ export class StreamProcessorService {
         lastActiveAt: new Date().toISOString(),
       });
 
-      if (initialUpdate) {
-        const update: StreamUpdate = {
-          query_id: initialUpdate.query_id,
-          localHash: initialUpdate.result_hash,
-          localTree: initialUpdate.tree,
-        };
-        this.events.emit('stream_update', [update]);
-        this.saveState();
+      if (!initialUpdate) {
+        throw new Error('Failed to register incantation');
       }
+      const update: StreamUpdate = {
+        query_id: initialUpdate.query_id,
+        localHash: initialUpdate.result_hash,
+        localTree: initialUpdate.tree,
+      };
+      this.saveState();
       this.logger.debug(
         {
           incantationId: incantation.id,
@@ -180,8 +180,10 @@ export class StreamProcessorService {
         },
         '[StreamProcessor] Registered incantation'
       );
+      return update;
     } catch (e) {
       this.logger.error(e, '[StreamProcessor] Error registering incantation');
+      throw e;
     }
   }
 
