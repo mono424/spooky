@@ -88,15 +88,10 @@ export class RouterService<S extends SchemaStructure> {
     routes.push({
       source: 'Query',
       event: QueryEventTypes.IncantationInitialized,
-      description: 'Notify DevTools and Register in Sync',
+      description: 'Notify DevTools',
       handler: (payload) => {
         this.devTools.onQueryInitialized(payload);
         this.sync.enqueueDownEvent({ type: 'register', payload });
-        this.streamProcessor.registerIncantation(
-          payload.surrealql,
-          payload.params,
-          payload.incantationId.toString()
-        );
       },
     });
 

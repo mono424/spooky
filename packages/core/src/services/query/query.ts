@@ -14,6 +14,39 @@ import { Event } from '../../events/index.js';
 import { decodeFromSpooky, parseRecordIdString } from '../utils/index.js';
 import { flattenIdTree } from '../sync/utils.js';
 import { SchemaStructure, TableModel } from '@spooky/query-builder';
+import { StreamProcessorService } from '../stream-processor/index.js';
+
+const withRetry =
+  (logger: Logger) =>
+  async <T>(operation: () => Promise<T>, retries = 3, delayMs = 100): Promise<T> => {
+    let lastError;
+    for (let i = 0; i < retries; i++) {
+      try {
+        return await operation();
+      } catch (err: any) {
+        lastError = err;
+        // Check for transaction error or generic connection issues
+        if (
+          err?.message?.includes('Can not open transaction') ||
+          err?.message?.includes('transaction')
+        ) {
+          logger.warn(
+            {
+              attempt: i + 1,
+              retries,
+              error: err.message,
+            },
+            'Retrying DB operation due to transaction error'
+          );
+
+          await new Promise((res) => setTimeout(res, delayMs * (i + 1))); // Linear backoff
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw lastError;
+  };
 
 export class QueryManager<S extends SchemaStructure> {
   private activeQueries: Map<QueryHash, Incantation<any>> = new Map();
@@ -28,6 +61,7 @@ export class QueryManager<S extends SchemaStructure> {
   constructor(
     private schema: S,
     private local: LocalDatabaseService,
+    private streamProcessor: StreamProcessorService,
     private clientId: string | undefined, // undefined is valid for optional clientId, but argument position is fixed
     logger: Logger
   ) {
@@ -202,6 +236,16 @@ export class QueryManager<S extends SchemaStructure> {
     ttl: QueryTimeToLive,
     involvedTables: string[] = []
   ): Promise<QueryHash> {
+    this.logger.debug(
+      {
+        clientId: this.clientId,
+        surrealql,
+        params,
+        ttl,
+        involvedTables,
+      },
+      '[QueryManager] Registering incantation'
+    );
     const id = await this.calculateHash({
       clientId: this.clientId,
       surrealql,
@@ -210,49 +254,63 @@ export class QueryManager<S extends SchemaStructure> {
 
     const recordId = new RecordId('_spooky_incantation', id);
 
-    // Helper for retrying DB operations (e.g. "Can not open transaction")
-    const withRetry = async <T>(
-      operation: () => Promise<T>,
-      retries = 3,
-      delayMs = 100
-    ): Promise<T> => {
-      let lastError;
-      for (let i = 0; i < retries; i++) {
-        try {
-          return await operation();
-        } catch (err: any) {
-          lastError = err;
-          // Check for transaction error or generic connection issues
-          if (
-            err?.message?.includes('Can not open transaction') ||
-            err?.message?.includes('transaction')
-          ) {
-            this.logger.warn(
-              {
-                attempt: i + 1,
-                retries,
-                error: err.message,
-              },
-              'Retrying DB operation due to transaction error'
-            );
+    const existing = await this.registerStoreIncantation({
+      recordId,
+      surrealql,
+      params,
+      ttl,
+      id,
+      tableName,
+      involvedTables,
+    });
 
-            await new Promise((res) => setTimeout(res, delayMs * (i + 1))); // Linear backoff
-            continue;
-          }
-          throw err;
-        }
-      }
-      throw lastError;
-    };
+    if (!this.activeQueries.has(id)) {
+      const incantation = new Incantation({
+        id: recordId,
+        surrealql,
+        params,
+        localHash: existing.localHash,
+        localTree: existing.localTree,
+        remoteHash: existing.remoteHash,
+        remoteTree: existing.remoteTree,
+        lastActiveAt: existing.lastActiveAt,
+        ttl: existing.ttl,
+        meta: {
+          tableName,
+          involvedTables,
+        },
+      });
+      this.activeQueries.set(id, incantation);
+      await this.initLifecycle(incantation);
+    }
+    return id;
+  }
 
-    let [existing] = await withRetry(() =>
+  async registerStoreIncantation({
+    recordId,
+    surrealql,
+    params,
+    ttl,
+    id,
+    tableName,
+    involvedTables,
+  }: {
+    recordId: RecordId;
+    surrealql: string;
+    params: Record<string, any>;
+    ttl: QueryTimeToLive;
+    id: string;
+    tableName: string;
+    involvedTables: string[];
+  }) {
+    let [existing] = await withRetry(this.logger)(() =>
       this.local.query<[IncantationData]>('SELECT * FROM ONLY $id', {
         id: recordId,
       })
     );
 
     if (!existing) {
-      existing = await withRetry(() =>
+      existing = await withRetry(this.logger)(() =>
         this.local
           .getClient()
           .create<IncantationData>(recordId)
@@ -278,28 +336,7 @@ export class QueryManager<S extends SchemaStructure> {
     if (!existing) {
       throw new Error('Failed to create or retrieve incantation');
     }
-
-    if (!this.activeQueries.has(id)) {
-      const incantation = new Incantation({
-        id: recordId,
-        surrealql,
-        params,
-        localHash: existing.localHash,
-        localTree: existing.localTree,
-        remoteHash: existing.remoteHash,
-        remoteTree: existing.remoteTree,
-        lastActiveAt: existing.lastActiveAt,
-        ttl: existing.ttl,
-        meta: {
-          tableName,
-          involvedTables,
-        },
-      });
-      this.activeQueries.set(id, incantation);
-      await this.initLifecycle(incantation);
-    }
-
-    return id;
+    return existing;
   }
 
   async query(
@@ -313,6 +350,8 @@ export class QueryManager<S extends SchemaStructure> {
   }
 
   private async initLifecycle(incantation: Incantation<any>) {
+    this.streamProcessor.registerIncantation(incantation);
+
     this.events.emit(QueryEventTypes.IncantationInitialized, {
       incantationId: incantation.id,
       surrealql: incantation.surrealql,

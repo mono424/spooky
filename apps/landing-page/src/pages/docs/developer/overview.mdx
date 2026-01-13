@@ -5,6 +5,39 @@ title: System Overview
 
 import Icon from '../../../components/ui/Icon.astro';
 
+<style>{`
+  /* Mermaid Edge Label Overrides */
+  .edgeLabel {
+    background-color: transparent !important;
+  }
+  .edgeLabel div,
+  .edgeLabel p {
+    background-color: transparent !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+  .edgeLabel span {
+    background-color: #18181b !important;
+    background: #18181b !important;
+    color: #e4e4e7 !important;
+    padding: 4px 8px !important;
+    border-radius: 9999px !important;
+    border: 1px solid #3f3f46 !important;
+    font-size: 0.8rem !important;
+    display: inline-block !important;
+  }
+  .edgeLabel rect {
+    opacity: 0 !important;
+    fill: transparent !important;
+    stroke: none !important;
+  }
+  
+  /* Fix Cluster Label Overlap */
+  g.cluster text {
+    transform: translateY(-25px);
+  }
+`}</style>
+
 Spooky's Core module is built on a **Strict "Black Box" Service Architecture**, designed to ensure modularity, predictable data flow, and clearly defined boundaries between local and remote operations.
 
 ## The Design Philosophy
@@ -27,7 +60,8 @@ graph TD
     classDef default fill:#18181b,stroke:#3f3f46,stroke-width:1px,color:#f4f4f5;
     classDef highlight fill:#27272a,stroke:#a1a1aa,stroke-width:2px,color:#fff,shadow:shadow-md;
     classDef db fill:#09090b,stroke:#3f3f46,stroke-width:1px,color:#e4e4e7;
-    classDef container fill:#18181b,stroke:#52525b,stroke-dasharray: 5 5,color:#a1a1aa;
+    classDef container fill:transparent,stroke:#52525b,stroke-dasharray: 5 5,color:#a1a1aa,rx:10,ry:10;
+    classDef core fill:#18181b,stroke:#3f3f46,stroke-width:1px,color:#f4f4f5,rx:10,ry:10;
 
     %% --- SUBGRAPHS ---
     subgraph Client ["Client Application"]
@@ -76,6 +110,10 @@ graph TD
 
     %% --- STYLING APPLICATION ---
     class Client,Server container
+    class Core core
+
+    %% --- LINK STYLING ---
+    %% Removing stepped interpolation to fix arrow rendering issues
 ```
 
 ## Data Flow

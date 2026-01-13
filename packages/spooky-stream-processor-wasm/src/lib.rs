@@ -13,6 +13,25 @@ pub struct SpookyProcessor {
     circuit: Circuit,
 }
 
+#[wasm_bindgen(typescript_custom_section)]
+const TS_APPEND_CONTENT: &'static str = r#"
+export interface WasmStreamUpdate {
+  query_id: string;
+  result_hash: string;
+  result_ids: string[];
+  tree: any;
+}
+
+export interface WasmIncantationConfig {
+  id: string;
+  surrealQL: string;
+  params?: Record<string, any>;
+  clientId: string;
+  ttl: string;
+  lastActiveAt: string;
+}
+"#;
+
 #[wasm_bindgen]
 impl SpookyProcessor {
     #[wasm_bindgen(constructor)]
@@ -71,9 +90,8 @@ impl SpookyProcessor {
         let initial_update = self.circuit.register_view(data.plan, data.safe_params);
 
         // If None, return default empty result
-        let result = initial_update.unwrap_or_else(|| {
-            spooky_stream_processor::service::view::default_result(&plan_id)
-        });
+        let result = initial_update
+            .unwrap_or_else(|| spooky_stream_processor::service::view::default_result(&plan_id));
 
         Ok(serde_wasm_bindgen::to_value(&result)?)
     }

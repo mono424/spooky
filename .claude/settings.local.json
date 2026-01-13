@@ -21,7 +21,11 @@
       "Read(//tmp/**)",
       "Bash(target/release/syncgen:*)",
       "Bash(apps/syncgen/target/release/syncgen -i example/schema/schema.surql -o example/app-solid/src/schema.gen.ts)",
-      "Bash(1)"
+      "Bash(1)",
+      "Bash(cargo test:*)",
+      "Bash(command -v cargo:*)",
+      "Bash(cargo install:*)",
+      "Bash(~/.cargo/bin/wasm-pack build:*)"
     ],
     "deny": [],
     "ask": []

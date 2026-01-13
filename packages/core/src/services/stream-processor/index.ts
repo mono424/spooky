@@ -2,6 +2,8 @@ import init, { SpookyProcessor } from 'spooky-stream-processor-wasm';
 import { EventDefinition, EventSystem } from '../../events/index.js';
 import { Logger } from 'pino';
 import { LocalDatabaseService } from '../database/index.js';
+import { Incantation } from '../query/incantation.js';
+import { WasmProcessor, WasmStreamUpdate } from './wasm-types.js';
 
 // Define the shape of an update from the Wasm module
 // Matches MaterializedViewUpdate struct
@@ -17,7 +19,7 @@ export type StreamProcessorEvents = {
 };
 
 export class StreamProcessorService {
-  private processor: SpookyProcessor | undefined;
+  private processor: WasmProcessor | undefined;
   private isInitialized = false;
 
   constructor(
@@ -36,7 +38,8 @@ export class StreamProcessorService {
     this.logger.info('[StreamProcessor] Initializing WASM...');
     try {
       await init(); // Initialize the WASM module
-      this.processor = new SpookyProcessor();
+      // We cast the generated SpookyProcessor to our interface which is safer
+      this.processor = new SpookyProcessor() as unknown as WasmProcessor;
 
       // Try to load state
       await this.loadState();
@@ -116,9 +119,9 @@ export class StreamProcessorService {
     }
 
     try {
-      const rawUpdates: any = (this.processor as any).ingest(table, op, id, record);
+      const rawUpdates = this.processor.ingest(table, op, id, record);
       if (rawUpdates && Array.isArray(rawUpdates) && rawUpdates.length > 0) {
-        const updates: StreamUpdate[] = rawUpdates.map((u: any) => ({
+        const updates: StreamUpdate[] = rawUpdates.map((u: WasmStreamUpdate) => ({
           query_id: u.query_id,
           localHash: u.result_hash,
           localTree: u.tree,
@@ -135,36 +138,30 @@ export class StreamProcessorService {
    * Register a new incantation (query plan).
    * Emits 'stream_update' with the initial result.
    */
-  registerIncantation(planOrSql: any, params: any, queryId?: string) {
+  registerIncantation(incantation: Incantation<unknown>) {
     if (!this.processor) {
       this.logger.warn('[StreamProcessor] Not initialized, skipping registration');
       return;
     }
 
+    this.logger.debug(
+      {
+        incantationId: incantation.id,
+        surrealQL: incantation.surrealql,
+        params: incantation.params,
+      },
+      '[StreamProcessor] Registering incantation'
+    );
+
     try {
-      let config: any;
-
-      // If passing a raw string (SQL), construct the configuration object expected by the updated WASM
-      if (typeof planOrSql === 'string') {
-        config = {
-          id: queryId || `auto_${Date.now()}`,
-          surrealQL: planOrSql,
-          params: params,
-          clientId: 'local', // Default or fetch from somewhere if vital
-          ttl: '10m', // Default
-          lastActiveAt: new Date().toISOString(),
-        };
-      } else {
-        // Assume it's already a plan or valid config object?
-        // If it's a legacy QueryPlan object, it might fail the new WASM check which expects "surrealQL" string or "id".
-        // The new WASM parser logic uses `prepare_registration` which looks for `surrealQL`.
-        // If we have a structured plan in `planOrSql`, the new WASM might not support it directly unless we adapt it.
-        // However, the prompt implies "register view should work with sql string", so we focus on that.
-        // If `planOrSql` is an object, we hope it matches the config shape.
-        config = { ...planOrSql, params };
-      }
-
-      const initialUpdate: any = (this.processor as any).register_view(config);
+      const initialUpdate = this.processor.register_view({
+        id: incantation.id.toString(),
+        surrealQL: incantation.surrealql,
+        params: incantation.params,
+        clientId: 'local',
+        ttl: incantation.ttl.toString(),
+        lastActiveAt: new Date().toISOString(),
+      });
 
       if (initialUpdate) {
         const update: StreamUpdate = {
@@ -175,6 +172,14 @@ export class StreamProcessorService {
         this.events.emit('stream_update', [update]);
         this.saveState();
       }
+      this.logger.debug(
+        {
+          incantationId: incantation.id,
+          surrealQL: incantation.surrealql,
+          params: incantation.params,
+        },
+        '[StreamProcessor] Registered incantation'
+      );
     } catch (e) {
       this.logger.error(e, '[StreamProcessor] Error registering incantation');
     }
