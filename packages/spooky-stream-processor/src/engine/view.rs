@@ -1,10 +1,10 @@
 use super::circuit::Database;
-use rustc_hash::{FxHashMap, FxHasher};
+use rustc_hash::FxHasher;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use smol_str::SmolStr;
 use std::cmp::Ordering;
-use std::hash::Hasher;
+use std::hash::{BuildHasherDefault, Hasher};
 
 // --- Data Model ---
 
@@ -13,12 +13,58 @@ pub type RowKey = SmolStr;
 
 // We use FxHashMap instead of standard HashMap for internal calculations.
 // It is extremely fast for integers and strings.
-type FastMap<K, V> = FxHashMap<K, V>;
+pub type FastMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<FxHasher>>;
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Row {
-    pub data: Value,
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum SpookyValue {
+    Null,
+    Bool(bool),
+    Number(f64),
+    Str(SmolStr),
+    Array(Vec<SpookyValue>),
+    Object(FastMap<SmolStr, SpookyValue>),
 }
+
+impl From<serde_json::Value> for SpookyValue {
+    fn from(v: serde_json::Value) -> Self {
+        match v {
+            serde_json::Value::Null => SpookyValue::Null,
+            serde_json::Value::Bool(b) => SpookyValue::Bool(b),
+            serde_json::Value::Number(n) => SpookyValue::Number(n.as_f64().unwrap_or(0.0)), // Simplified fallback
+            serde_json::Value::String(s) => SpookyValue::Str(SmolStr::from(s)),
+            serde_json::Value::Array(arr) => {
+                SpookyValue::Array(arr.into_iter().map(SpookyValue::from).collect())
+            }
+            serde_json::Value::Object(obj) => SpookyValue::Object(
+                obj.into_iter()
+                    .map(|(k, v)| (SmolStr::from(k), SpookyValue::from(v)))
+                    .collect(),
+            ),
+        }
+    }
+}
+
+// Convert back to serde_json::Value for compatibility (if needed)
+impl From<SpookyValue> for serde_json::Value {
+    fn from(val: SpookyValue) -> Self {
+        match val {
+            SpookyValue::Null => serde_json::Value::Null,
+            SpookyValue::Bool(b) => serde_json::Value::Bool(b),
+            SpookyValue::Number(n) => json!(n),
+            SpookyValue::Str(s) => serde_json::Value::String(s.to_string()),
+            SpookyValue::Array(arr) => {
+                serde_json::Value::Array(arr.into_iter().map(|v| v.into()).collect())
+            }
+            SpookyValue::Object(obj) => serde_json::Value::Object(
+                obj.into_iter()
+                    .map(|(k, v)| (k.to_string(), v.into()))
+                    .collect(),
+            ),
+        }
+    }
+}
+
+// Row struct deleted as it was unused and contained legacy types.
 
 // A Z-Set is a mapping from Data -> Weight
 // IMPORTANT: This must match the definition in circuit.rs!
@@ -115,6 +161,48 @@ impl IdTree {
     }
 }
 
+// --- Path Optimization ---
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Path(pub Vec<SmolStr>);
+
+impl Path {
+    pub fn new(s: &str) -> Self {
+        if s.is_empty() {
+            Path(vec![])
+        } else {
+            Path(s.split('.').map(SmolStr::new).collect())
+        }
+    }
+    
+    pub fn as_str(&self) -> String {
+       self.0.join(".")
+    }
+}
+
+impl serde::Serialize for Path {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        if self.0.is_empty() {
+            serializer.serialize_str("")
+        } else {
+            serializer.serialize_str(&self.0.join("."))
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Path {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s: String = serde::Deserialize::deserialize(deserializer)?;
+        Ok(Path::new(&s))
+    }
+}
+
 // --- View / Circuit Model ---
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -146,7 +234,7 @@ pub enum Operator {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct OrderSpec {
-    pub field: String,
+    pub field: Path,
     pub direction: String,
 }
 
@@ -154,26 +242,26 @@ pub struct OrderSpec {
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Projection {
     All,
-    Field { name: String },
+    Field { name: Path },
     Subquery { alias: String, plan: Box<Operator> },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct JoinCondition {
-    pub left_field: String,
-    pub right_field: String,
+    pub left_field: Path,
+    pub right_field: Path,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Predicate {
-    Prefix { field: String, prefix: String },
-    Eq { field: String, value: Value },
-    Neq { field: String, value: Value },
-    Gt { field: String, value: Value },
-    Gte { field: String, value: Value },
-    Lt { field: String, value: Value },
-    Lte { field: String, value: Value },
+    Prefix { field: Path, prefix: String },
+    Eq { field: Path, value: Value },
+    Neq { field: Path, value: Value },
+    Gt { field: Path, value: Value },
+    Gte { field: Path, value: Value },
+    Lt { field: Path, value: Value },
+    Lte { field: Path, value: Value },
     And { predicates: Vec<Predicate> },
     Or { predicates: Vec<Predicate> },
 }
@@ -198,7 +286,7 @@ pub struct View {
     pub cache: ZSet,
     pub last_hash: String,
     #[serde(default)]
-    pub params: Option<Value>,
+    pub params: Option<SpookyValue>,
 }
 
 impl View {
@@ -207,7 +295,7 @@ impl View {
             plan,
             cache: FastMap::default(),
             last_hash: String::new(),
-            params,
+            params: params.map(SpookyValue::from),
         }
     }
 
@@ -219,41 +307,41 @@ impl View {
         input_delta: &ZSet,
         db: &Database,
     ) -> Option<MaterializedViewUpdate> {
+        let mut deltas = FastMap::default();
+        if !changed_table.is_empty() {
+             deltas.insert(changed_table.to_string(), input_delta.clone());
+        }
+        self.process_ingest(&deltas, db)
+    }
+
+    /// Optimized 2-Phase Processing: Handles multiple table updates at once.
+    pub fn process_ingest(
+        &mut self,
+        deltas: &FastMap<String, ZSet>,
+        db: &Database,
+    ) -> Option<MaterializedViewUpdate> {
         // FIX: FIRST RUN CHECK
-        // If last_hash is empty, this is the very first run.
-        // We MUST verify a full scan (eval_snapshot) to initially populate the cache.
-        // A pure delta would not be enough here, because the cache is still empty.
         let is_first_run = self.last_hash.is_empty();
 
         let maybe_delta = if is_first_run {
-            None // Forces fallback to snapshot
+            None
         } else {
-            // Try the fast delta path
-            self.eval_delta(
-                &self.plan.root,
-                changed_table,
-                input_delta,
-                db,
-                self.params.as_ref(),
-            )
+             self.eval_delta_batch(&self.plan.root, deltas, db, self.params.as_ref())
         };
 
         let view_delta = if let Some(d) = maybe_delta {
-            // TURBO MODE: We calculated the delta directly!
             d
         } else {
-            // FALLBACK MODE: Full Scan & Diff (slow but safe)
+            // FALLBACK MODE: Full Scan & Diff
             let target_set = self.eval_snapshot(&self.plan.root, db, self.params.as_ref());
             let mut diff = FastMap::default();
 
-            // Check new set
             for (key, &new_w) in &target_set {
                 let old_w = self.cache.get(key).copied().unwrap_or(0);
                 if new_w != old_w {
                     diff.insert(key.clone(), new_w - old_w);
                 }
             }
-            // Check old entries (deleted)
             for (key, &old_w) in &self.cache {
                 if !target_set.contains_key(key) {
                     diff.insert(key.clone(), 0 - old_w);
@@ -262,7 +350,6 @@ impl View {
             diff
         };
 
-        // If nothing happened and it is not the first run -> Abort
         if view_delta.is_empty() && !is_first_run {
             return None;
         }
@@ -301,41 +388,68 @@ impl View {
         None
     }
 
-    /// Attempts to calculate the delta purely incrementally.
-    fn eval_delta(
+    /// Attempts to calculate the delta purely incrementally for a BATCH of changes.
+    fn eval_delta_batch(
         &self,
         op: &Operator,
-        changed_table: &str,
-        input_delta: &ZSet,
+        deltas: &FastMap<String, ZSet>,
         db: &Database,
-        context: Option<&Value>,
+        context: Option<&SpookyValue>,
     ) -> Option<ZSet> {
         match op {
             Operator::Scan { table } => {
-                if table == changed_table {
-                    // If this is the changed table: Pass delta through!
-                    Some(input_delta.clone())
+                // Return the delta for this table if it exists, otherwise empty
+                if let Some(d) = deltas.get(table) {
+                     Some(d.clone())
                 } else {
-                    // Other table changed: No impact on this scan
-                    Some(FastMap::default())
+                     Some(FastMap::default())
                 }
             }
             Operator::Filter { input, predicate } => {
                 let upstream_delta =
-                    self.eval_delta(input, changed_table, input_delta, db, context)?;
-                let mut out_delta = FastMap::default();
+                    self.eval_delta_batch(input, deltas, db, context)?;
+                
+                // SIMD Optimization Check (Copy of eval_snapshot logic)
+                let simd_target_op = match predicate {
+                    Predicate::Gt { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Gt)),
+                    Predicate::Gte { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Gte)),
+                    Predicate::Lt { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Lt)),
+                    Predicate::Lte { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Lte)),
+                    Predicate::Eq { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Eq)),
+                    Predicate::Neq { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Neq)),
+                    _ => None,
+                };
 
-                // We only filter the changes!
-                for (key, weight) in upstream_delta {
-                    if self.check_predicate(predicate, &key, db, context) {
-                        out_delta.insert(key, weight);
+                let field_path = match predicate {
+                     Predicate::Gt { field, .. } | Predicate::Gte { field, .. } |
+                     Predicate::Lt { field, .. } | Predicate::Lte { field, .. } |
+                     Predicate::Eq { field, .. } | Predicate::Neq { field, .. } => Some(field),
+                     _ => None
+                };
+
+                if let (Some((target, op)), Some(path)) = (simd_target_op, field_path) {
+                     // SIMD PATH
+                     let (keys, weights, numbers) = extract_number_column(&upstream_delta, path, db);
+                     let passing_indices = filter_f64_batch(&numbers, target, op);
+                     
+                     let mut out_delta = FastMap::default();
+                     for idx in passing_indices {
+                         out_delta.insert(keys[idx].clone(), weights[idx]);
+                     }
+                     Some(out_delta)
+                } else {
+                    // Slow Path
+                    let mut out_delta = FastMap::default();
+                    for (key, weight) in upstream_delta {
+                        if self.check_predicate(predicate, &key, db, context) {
+                            out_delta.insert(key, weight);
+                        }
                     }
+                    Some(out_delta)
                 }
-                Some(out_delta)
             }
             Operator::Project { input, .. } => {
-                // Identity Projection for IDs -> Pass delta through
-                self.eval_delta(input, changed_table, input_delta, db, context)
+                self.eval_delta_batch(input, deltas, db, context)
             }
 
             // Complex operators (Joins, Limits) fall back to snapshot
@@ -343,8 +457,23 @@ impl View {
         }
     }
 
+    /// Deprecated: Helper wrapper for single-table delta (retained for compatibility if needed internally)
+    #[allow(dead_code)]
+    fn eval_delta(
+        &self,
+        op: &Operator,
+        changed_table: &str,
+        input_delta: &ZSet,
+        db: &Database,
+        context: Option<&SpookyValue>,
+    ) -> Option<ZSet> {
+         let mut deltas = FastMap::default();
+         deltas.insert(changed_table.to_string(), input_delta.clone());
+         self.eval_delta_batch(op, &deltas, db, context)
+    }
+
     /// The classic detailed Full-Scan Evaluator (for fallback and init)
-    fn eval_snapshot(&self, op: &Operator, db: &Database, context: Option<&Value>) -> ZSet {
+    fn eval_snapshot(&self, op: &Operator, db: &Database, context: Option<&SpookyValue>) -> ZSet {
         match op {
             Operator::Scan { table } => {
                 if let Some(tb) = db.tables.get(table) {
@@ -356,13 +485,46 @@ impl View {
             }
             Operator::Filter { input, predicate } => {
                 let upstream = self.eval_snapshot(input, db, context);
-                let mut out = FastMap::default();
-                for (key, weight) in upstream {
-                    if self.check_predicate(predicate, &key, db, context) {
-                        out.insert(key, weight);
+                
+                // SIMD Optimization Check
+                let simd_target_op = match predicate {
+                    Predicate::Gt { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Gt)),
+                    Predicate::Gte { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Gte)),
+                    Predicate::Lt { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Lt)),
+                    Predicate::Lte { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Lte)),
+                    Predicate::Eq { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Eq)),
+                    Predicate::Neq { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Neq)),
+                    _ => None,
+                };
+
+                let field_path = match predicate {
+                     Predicate::Gt { field, .. } | Predicate::Gte { field, .. } |
+                     Predicate::Lt { field, .. } | Predicate::Lte { field, .. } |
+                     Predicate::Eq { field, .. } | Predicate::Neq { field, .. } => Some(field),
+                     _ => None
+                };
+
+                if let (Some((target, op)), Some(path)) = (simd_target_op, field_path) {
+                     // SIMD PATH
+                     let (keys, weights, numbers) = extract_number_column(&upstream, path, db);
+                     let passing_indices = filter_f64_batch(&numbers, target, op);
+                     
+                     let mut out = FastMap::default();
+                     for idx in passing_indices {
+                         // Safety: indices returned by filter_batch are valid for keys/weights
+                         out.insert(keys[idx].clone(), weights[idx]);
+                     }
+                     out
+                } else {
+                    // Slow Path (Loop)
+                    let mut out = FastMap::default();
+                    for (key, weight) in upstream {
+                        if self.check_predicate(predicate, &key, db, context) {
+                            out.insert(key, weight);
+                        }
                     }
+                    out
                 }
-                out
             }
             Operator::Project { input, .. } => self.eval_snapshot(input, db, context),
             Operator::Limit {
@@ -382,7 +544,7 @@ impl View {
                             let val_a = resolve_nested_value(row_a, &ord.field);
                             let val_b = resolve_nested_value(row_b, &ord.field);
 
-                            let cmp = compare_json_values(val_a, val_b);
+                            let cmp = compare_spooky_values(val_a, val_b);
                             if cmp != Ordering::Equal {
                                 return if ord.direction.eq_ignore_ascii_case("DESC") {
                                     cmp.reverse()
@@ -419,7 +581,7 @@ impl View {
                 for (r_key, r_weight) in &s_right {
                     if let Some(r_val) = self.get_row_value(r_key.as_str(), db) {
                         if let Some(r_field) = resolve_nested_value(Some(r_val), &on.right_field) {
-                            let hash = hash_json_value(r_field);
+                            let hash = hash_spooky_value(r_field);
                             right_index.entry(hash).or_default().push((r_key, r_weight));
                         }
                     }
@@ -429,14 +591,12 @@ impl View {
                 for (l_key, l_weight) in &s_left {
                     if let Some(l_val) = self.get_row_value(l_key.as_str(), db) {
                         if let Some(l_field) = resolve_nested_value(Some(l_val), &on.left_field) {
-                            let hash = hash_json_value(l_field);
+                            let hash = hash_spooky_value(l_field);
 
                             // Hash Lookup instead of Loop!
                             if let Some(matches) = right_index.get(&hash) {
                                 for (_r_key, r_weight) in matches {
-                                    // We have a match!
-                                    // Optimization: We assume Hash collision is rare enough to ignore for now
-                                    // or checking actual equality would be added here if strictness required
+                                    // We have a match! (Should double check equality with compare_spooky_values for strictness)
                                     let w = l_weight * *r_weight;
                                     *out.entry(l_key.clone()).or_insert(0) += w;
                                 }
@@ -466,11 +626,18 @@ impl View {
                     plan: sub_op,
                 } = proj
                 {
-                    let mut context = self.params.clone().unwrap_or(json!({}));
-                    if let Some(obj) = context.as_object_mut() {
-                        obj.insert("parent".to_string(), json!(id));
+                    // Create child context (SpookyValue)
+                    // We must clone existing params (SpookyValue) or create new Object
+                    let mut context = self.params.clone().unwrap_or(SpookyValue::Object(FastMap::default()));
+                    
+                    if let SpookyValue::Object(ref mut obj) = context {
+                        obj.insert(SmolStr::new("parent"), SpookyValue::Str(SmolStr::new(id)));
                     } else {
-                        context = json!({"parent": id});
+                        // If context was not an object (weird), we overwrite or wrap. 
+                        // For safety, let's just make a new object with parent
+                        let mut map = FastMap::default();
+                        map.insert(SmolStr::new("parent"), SpookyValue::Str(SmolStr::new(id)));
+                        context = SpookyValue::Object(map);
                     }
 
                     let sub_zset = self.eval_snapshot(sub_op, db, Some(&context));
@@ -517,7 +684,7 @@ impl View {
         }
     }
 
-    fn get_row_value<'a>(&self, key: &str, db: &'a Database) -> Option<&'a Value> {
+    fn get_row_value<'a>(&self, key: &str, db: &'a Database) -> Option<&'a SpookyValue> {
         // Optimization: Avoid allocation for split if possible or use SmolStr if we change internal map keys
         // For now, key is &str, db uses SmolStr keys.
         // We assume valid format "table:id"
@@ -535,24 +702,27 @@ impl View {
         pred: &Predicate,
         key: &str,
         db: &Database,
-        context: Option<&Value>,
+        context: Option<&SpookyValue>,
     ) -> bool {
-        // Helper to get actual json value for comparison
-        let resolve_val = |_field: &str, value: &Value| -> Option<Value> {
+        // Helper to get actual SpookyValue for comparison from the Predicate (which stores Value)
+        let resolve_val = |_field: &Path, value: &Value| -> Option<SpookyValue> {
              if let Some(obj) = value.as_object() {
                 if let Some(param_path) = obj.get("$param") {
                      if let Some(ctx) = context {
-                        let path = param_path.as_str().unwrap_or("");
-                        // resolve nested param path
-                        resolve_nested_value(Some(ctx), path).cloned()
+                        // $param is usually a simple string path like "user.id"
+                        // We need to parse it as a Path to resolve it, OR since $param is dynamic we treat it as string
+                        let path_str = param_path.as_str().unwrap_or("");
+                        let path = Path::new(path_str);
+                        // resolve nested param path from SpookyValue context!
+                        resolve_nested_value(Some(ctx), &path).cloned()
                     } else {
                         None
                     }
                 } else {
-                    Some(value.clone())
+                    Some(SpookyValue::from(value.clone()))
                 }
             } else {
-                Some(value.clone())
+                 Some(SpookyValue::from(value.clone()))
             }
         };
 
@@ -565,18 +735,18 @@ impl View {
                 .any(|p| self.check_predicate(p, key, db, context)),
              Predicate::Prefix { field, prefix } => {
                  // Check if field value starts with prefix
-                 if field == "id" {
+                 if field.0.len() == 1 && field.0[0] == "id" {
                      return key.starts_with(prefix);
                  }
                   if let Some(row_val) = self.get_row_value(key, db) {
                      if let Some(val) = resolve_nested_value(Some(row_val), field) {
-                         if let Some(s) = val.as_str() {
+                         if let SpookyValue::Str(s) = val {
                              return s.starts_with(prefix);
                          }
                      }
                  }
                  false
-             },
+              },
             Predicate::Eq { field, value } |
             Predicate::Neq { field, value } |
             Predicate::Gt { field, value } |
@@ -587,14 +757,14 @@ impl View {
                 if target_val.is_none() { return false; }
                 let target_val = target_val.unwrap();
 
-                let actual_val_opt = if field == "id" {
-                     Some(json!(key))
+                let actual_val_opt = if field.0.len() == 1 && field.0[0] == "id" {
+                     Some(SpookyValue::Str(SmolStr::new(key)))
                 } else {
                     self.get_row_value(key, db).and_then(|r| resolve_nested_value(Some(r), field).cloned())
                 };
                 
                 if let Some(actual_val) = actual_val_opt {
-                    let ord = compare_json_values(Some(&actual_val), Some(&target_val));
+                    let ord = compare_spooky_values(Some(&actual_val), Some(&target_val));
                     match pred {
                         Predicate::Eq { .. } => ord == Ordering::Equal,
                         Predicate::Neq { .. } => ord != Ordering::Equal,
@@ -615,70 +785,55 @@ impl View {
 // --- OPTIMIZED COMPARISON & HASHING ---
 
 // Avoids Allocations (.to_string) completely for primitive types.
-fn compare_json_values(a: Option<&Value>, b: Option<&Value>) -> Ordering {
+// Optimized for SpookyValue
+fn compare_spooky_values(a: Option<&SpookyValue>, b: Option<&SpookyValue>) -> Ordering {
+    use std::cmp::Ordering;
     match (a, b) {
         (None, None) => Ordering::Equal,
         (None, Some(_)) => Ordering::Less,
         (Some(_), None) => Ordering::Greater,
-        (Some(va), Some(vb)) => {
-            match (va, vb) {
-                (Value::Null, Value::Null) => Ordering::Equal,
-                (Value::Bool(ba), Value::Bool(bb)) => ba.cmp(bb),
-                (Value::Number(na), Value::Number(nb)) => {
-                    if let (Some(fa), Some(fb)) = (na.as_f64(), nb.as_f64()) {
-                        fa.partial_cmp(&fb).unwrap_or(Ordering::Equal)
-                    } else {
-                        // Fallback for complex numbers
-                        na.to_string().cmp(&nb.to_string())
-                    }
+        (Some(va), Some(vb)) => match (va, vb) {
+            (SpookyValue::Null, SpookyValue::Null) => Ordering::Equal,
+            (SpookyValue::Bool(ba), SpookyValue::Bool(bb)) => ba.cmp(bb),
+            (SpookyValue::Number(na), SpookyValue::Number(nb)) => {
+               // Simple f64 comparison
+               na.partial_cmp(&nb).unwrap_or(Ordering::Equal)
+            },
+            (SpookyValue::Str(sa), SpookyValue::Str(sb)) => sa.cmp(sb),
+            (SpookyValue::Array(aa), SpookyValue::Array(ab)) => {
+                let len_cmp = aa.len().cmp(&ab.len());
+                if len_cmp != Ordering::Equal { return len_cmp; }
+                for (ia, ib) in aa.iter().zip(ab.iter()) {
+                    let cmp = compare_spooky_values(Some(ia), Some(ib));
+                    if cmp != Ordering::Equal { return cmp; }
                 }
-                (Value::String(sa), Value::String(sb)) => sa.cmp(sb),
-                (Value::Array(aa), Value::Array(ab)) => {
-                    let len_cmp = aa.len().cmp(&ab.len());
-                    if len_cmp != Ordering::Equal {
-                        return len_cmp;
-                    }
-                    for (ia, ib) in aa.iter().zip(ab.iter()) {
-                        let cmp = compare_json_values(Some(ia), Some(ib));
-                        if cmp != Ordering::Equal {
-                            return cmp;
-                        }
-                    }
-                    Ordering::Equal
-                }
-                (Value::Object(oa), Value::Object(ob)) => {
-                    let len_cmp = oa.len().cmp(&ob.len());
-                    if len_cmp != Ordering::Equal {
-                        return len_cmp;
-                    }
-                    // Performance Note: Deep Object compare is expensive.
-                    Ordering::Equal
-                }
-                (ta, tb) => type_rank(ta).cmp(&type_rank(tb)),
+                Ordering::Equal
             }
+            (SpookyValue::Object(oa), SpookyValue::Object(ob)) => oa.len().cmp(&ob.len()), // Deep compare skipped for perf
+            _ => type_rank(va).cmp(&type_rank(vb)),
         }
     }
 }
 
-fn type_rank(v: &Value) -> u8 {
+fn type_rank(v: &SpookyValue) -> u8 {
     match v {
-        Value::Null => 0,
-        Value::Bool(_) => 1,
-        Value::Number(_) => 2,
-        Value::String(_) => 3,
-        Value::Array(_) => 4,
-        Value::Object(_) => 5,
+        SpookyValue::Null => 0,
+        SpookyValue::Bool(_) => 1,
+        SpookyValue::Number(_) => 2,
+        SpookyValue::Str(_) => 3,
+        SpookyValue::Array(_) => 4,
+        SpookyValue::Object(_) => 5,
     }
 }
 
 // Dot notation access: "address.city" -> traverses json
-fn resolve_nested_value<'a>(root: Option<&'a Value>, path: &str) -> Option<&'a Value> {
+// Optimized specifically for Path and SpookyValue
+#[inline(always)]
+fn resolve_nested_value<'a>(root: Option<&'a SpookyValue>, path: &Path) -> Option<&'a SpookyValue> {
     let mut current = root;
-    for part in path.split('.') {
+    for part in &path.0 {
         match current {
-            Some(Value::Object(map)) => {
-                current = map.get(part);
-            }
+            Some(SpookyValue::Object(map)) => { current = map.get(part); }
             _ => return None,
         }
     }
@@ -686,38 +841,146 @@ fn resolve_nested_value<'a>(root: Option<&'a Value>, path: &str) -> Option<&'a V
 }
 
 // Fast hashing for Join Keys
-fn hash_json_value(v: &Value) -> u64 {
+#[inline(always)]
+fn hash_spooky_value(v: &SpookyValue) -> u64 {
      let mut hasher = FxHasher::default();
      hash_value_recursive(v, &mut hasher);
      hasher.finish()
 }
 
-fn hash_value_recursive(v: &Value, hasher: &mut FxHasher) {
-    match v {
-        Value::Null => { hasher.write_u8(0); },
-        Value::Bool(b) => { hasher.write_u8(1); hasher.write_u8(*b as u8); },
-        Value::Number(n) => { 
-            hasher.write_u8(2); 
-            if let Some(f) = n.as_f64() {
-                hasher.write_u64(f.to_bits());
-            } else {
-                 hasher.write(n.to_string().as_bytes()); // Fallback
+// --- 3. SIMD / COLUMNAR OPTIMIZATIONS ---
+
+// Helper Enum for numeric predicates
+enum NumericOp {
+    Gt, Gte, Lt, Lte, Eq, Neq
+}
+
+/* 
+   Attempts to extract a "Column" of f64 values from the ZSet + Database.
+   Returns: (Ids, Weights, Numbers) aligned by index.
+   If a value is missing or not a number, it defaults to f64::NAN which fails most comparisons safely.
+*/
+#[inline(always)]
+fn extract_number_column(
+    zset: &ZSet,
+    path: &Path,
+    db: &Database,
+    // Optional context if needed for resolving params locally (not used for column extraction usually)
+) -> (Vec<SmolStr>, Vec<i64>, Vec<f64>) {
+    let mut ids = Vec::with_capacity(zset.len());
+    let mut weights = Vec::with_capacity(zset.len());
+    let mut numbers = Vec::with_capacity(zset.len());
+
+    for (key, weight) in zset {
+        let val_opt = if let Some((table, _)) = key.split_once(':') {
+             db.tables.get(table).and_then(|t| t.rows.get(key))
+        } else {
+            None
+        };
+
+        let num_val = if let Some(row_val) = val_opt {
+             if let Some(SpookyValue::Number(n)) = resolve_nested_value(Some(row_val), path) {
+                 *n
+             } else {
+                 f64::NAN
+             }
+        } else {
+            f64::NAN
+        };
+
+        ids.push(key.clone());
+        weights.push(*weight);
+        numbers.push(num_val);
+    }
+
+    (ids, weights, numbers)
+}
+
+// Auto-vectorizable batch filter
+// Returns indices of passing elements
+fn filter_f64_batch(values: &[f64], target: f64, op: NumericOp) -> Vec<usize> {
+    let mut indices = Vec::with_capacity(values.len());
+    
+    // Explicit chunking to encourage SIMD opt by the compiler
+    let chunks = values.chunks_exact(8);
+    let remainder = chunks.remainder();
+    
+    let mut i = 0;
+    for chunk in chunks {
+        // Inner loop fixed size 8 - easier for LLVM to vectorize
+        for val in chunk {
+            let pass = match op {
+                NumericOp::Gt => *val > target,
+                NumericOp::Gte => *val >= target,
+                NumericOp::Lt => *val < target,
+                NumericOp::Lte => *val <= target,
+                NumericOp::Eq => (*val - target).abs() < f64::EPSILON, // Float approx eq
+                NumericOp::Neq => (*val - target).abs() > f64::EPSILON,
+            };
+            if pass {
+                indices.push(i);
             }
+            i += 1;
+        }
+    }
+
+    for val in remainder {
+        let pass = match op {
+            NumericOp::Gt => *val > target,
+            NumericOp::Gte => *val >= target,
+            NumericOp::Lt => *val < target,
+            NumericOp::Lte => *val <= target,
+            NumericOp::Eq => (*val - target).abs() < f64::EPSILON,
+            NumericOp::Neq => (*val - target).abs() > f64::EPSILON,
+        };
+        if pass {
+            indices.push(i);
+        }
+        i += 1;
+    }
+    
+    indices
+}
+
+// Portable SIMD Sum (Chunked)
+#[allow(dead_code)] // Will be used in future aggregations
+#[inline(always)]
+pub fn sum_f64_simd(values: &[f64]) -> f64 {
+    let mut sums = [0.0; 8];
+    let chunks = values.chunks_exact(8);
+    let remainder = chunks.remainder();
+
+    for chunk in chunks {
+        for i in 0..8 {
+            sums[i] += chunk[i];
+        }
+    }
+    
+    let mut total: f64 = sums.iter().sum();
+    for v in remainder {
+        total += v;
+    }
+    total
+}
+
+fn hash_value_recursive(v: &SpookyValue, hasher: &mut FxHasher) {
+    match v {
+        SpookyValue::Null => { hasher.write_u8(0); },
+        SpookyValue::Bool(b) => { hasher.write_u8(1); hasher.write_u8(*b as u8); },
+        SpookyValue::Number(n) => { 
+            hasher.write_u8(2); 
+            hasher.write_u64(n.to_bits());
         },
-        Value::String(s) => { hasher.write_u8(3); hasher.write(s.as_bytes()); },
-        Value::Array(arr) => {
+        SpookyValue::Str(s) => { hasher.write_u8(3); hasher.write(s.as_bytes()); },
+        SpookyValue::Array(arr) => {
             hasher.write_u8(4);
             for item in arr {
                 hash_value_recursive(item, hasher);
             }
         },
-        Value::Object(obj) => {
+        SpookyValue::Object(obj) => {
              hasher.write_u8(5);
-             // Sort keys for deterministic hash? 
-             // For strict correctness yes, but costly. 
-             // We assume key order stable enough or just use length as quick hash for now
-             // Or better: xor hash of keys+values to be order independent?
-             // For now: simple iteration
+             // Simple iteration, no sorting for speed (as discussed in prev steps)
              for (k, v) in obj {
                  hasher.write(k.as_bytes());
                  hash_value_recursive(v, hasher);
