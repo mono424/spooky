@@ -9,6 +9,9 @@ pub mod engine; // <--- Das ist wichtig für den Test
 pub mod sanitizer;
 pub mod service;
 
+#[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
+pub use rayon::prelude::*;
+
 // Falls du noch StreamProcessor Traits hast, müssen die auch hier sein:
 pub use engine::circuit::Circuit;
 pub use engine::view::MaterializedViewUpdate;
@@ -18,11 +21,16 @@ use serde_json::Value;
 pub trait StreamProcessor: Send + Sync {
     fn ingest_record(
         &mut self,
-        table: String,
-        op: String,
-        id: String,
+        table: &str,
+        op: &str,
+        id: &str,
         record: Value,
-        hash: String,
+        hash: &str,
+    ) -> Vec<MaterializedViewUpdate>;
+
+    fn ingest_batch(
+        &mut self,
+        batch: Vec<(String, String, String, Value, String)>,
     ) -> Vec<MaterializedViewUpdate>;
 
     fn register_view(

@@ -2,7 +2,7 @@ mod common;
 
 use common::*;
 use serde_json::json;
-use spooky_stream_processor::engine::view::{JoinCondition, Operator, Predicate, QueryPlan};
+use spooky_stream_processor::engine::view::{JoinCondition, Operator, Predicate, QueryPlan, Path};
 
 #[test]
 fn test_complex_incantation_flow() {
@@ -32,8 +32,8 @@ fn test_complex_incantation_flow() {
         left: Box::new(scan_threads),
         right: Box::new(scan_authors),
         on: JoinCondition {
-            left_field: "author".to_string(),
-            right_field: "id".to_string(),
+            left_field: Path::new("author"),
+            right_field: Path::new("id"),
         },
     };
 
@@ -46,7 +46,7 @@ fn test_complex_incantation_flow() {
     let magic_comments = Operator::Filter {
         input: Box::new(scan_comments),
         predicate: Predicate::Eq {
-            field: "text".to_string(),
+            field: Path::new("text"),
             value: json!("Magic"),
         },
     };
@@ -57,8 +57,8 @@ fn test_complex_incantation_flow() {
         left: Box::new(threads_with_authors),
         right: Box::new(magic_comments),
         on: JoinCondition {
-            left_field: "id".to_string(),
-            right_field: "thread".to_string(),
+            left_field: Path::new("id"),
+            right_field: Path::new("thread"),
         },
     };
 
@@ -83,7 +83,7 @@ fn test_complex_incantation_flow() {
             .iter()
             .find(|v| v.plan.id == "magic_threads_by_alice")
             .expect("View not found");
-        let present = view.cache.contains_key(&thread_1);
+        let present = view.cache.contains_key(thread_1.as_str());
         assert_eq!(present, expect_present, "Thread 1 presence mismatch");
     };
 
@@ -98,7 +98,7 @@ fn test_complex_incantation_flow() {
     check_view(&circuit, true);
 
     // 7. Add another "Magic" Comment -> Thread 1 still present
-    let _magic_comment_2 = create_comment(&mut circuit, "Magic", &thread_1, &author_alice);
+    let magic_comment_2 = create_comment(&mut circuit, "Magic", &thread_1, &author_alice);
     check_view(&circuit, true);
 
     // 8. Delete the first Magic Comment -> Thread 1 still present (count > 0)
@@ -112,25 +112,20 @@ fn test_complex_incantation_flow() {
     check_view(&circuit, true);
 
     // 9. Delete the second Magic Comment -> Thread 1 disappears
-    // Wait, I need the ID of the second one.
-    // create_comment returns ID but I ignored it.
-    // Let's create a new one to be sure.
-    let magic_comment_3 = create_comment(&mut circuit, "Magic", &thread_1, &author_alice);
-    check_view(&circuit, true);
-
-    // Now delete magic_comment_3 (the remaining one, assuming magic_comment_2 is still there? yes I didn't delete 2)
-    // Actually I lost the ID of magic_comment_2. It is stranded in the DB.
-    // So the view should still contain Thread 1 even if I delete magic_comment_3.
     ingest(
         &mut circuit,
         "comment",
         "DELETE",
-        &magic_comment_3,
+        &magic_comment_2,
         json!({}),
     );
-    check_view(&circuit, true); // Stays true because of magic_comment_2
+    check_view(&circuit, false);
 
-    // 10. Delete Author -> Thread 1 disappears (dependency check)
+    // 10. Delete Author -> Thread 1 disappears (dependency check currently empty but good to test)
+    // Note: It's already gone, but let's re-add a magic comment to verify dependency deletion works
+    let _magic_comment_3 = create_comment(&mut circuit, "Magic", &thread_1, &author_alice);
+    check_view(&circuit, true);
+    
     ingest(&mut circuit, "author", "DELETE", &author_alice, json!({}));
     check_view(&circuit, false);
 }

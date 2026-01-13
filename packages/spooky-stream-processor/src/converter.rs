@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use nom::{
     branch::alt,
     bytes::complete::{is_not, tag, tag_no_case, take_while},
-    character::complete::{alpha1, char, digit1, multispace0, multispace1},
+    character::complete::{alpha1, char, digit1, multispace0},
     combinator::{cut, map, map_res, opt, recognize, value},
     multi::separated_list1,
     sequence::{delimited, pair, preceded, tuple},
@@ -45,17 +45,6 @@ enum ParsedValue {
     Json(Value),
     Identifier(String),
     Prefix(String),
-}
-
-#[derive(Debug, Clone)]
-enum SelectField {
-    Wildcard,
-    Field(String),
-    Subquery {
-        query: String,
-        index: Option<usize>,
-        alias: String,
-    },
 }
 
 fn parse_string_literal(input: &str) -> IResult<&str, ParsedValue> {
@@ -176,73 +165,6 @@ fn parse_limit_clause(input: &str) -> IResult<&str, usize> {
     )(input)
 }
 
-// Parse a subquery field like: (SELECT ...) [0] AS alias
-fn parse_subquery_field(input: &str) -> IResult<&str, SelectField> {
-    let (input, _) = ws(char('('))(input)?;
-
-    // Find the matching closing parenthesis
-    // This is a simplified approach - we'll capture everything until we find )
-    let mut depth = 1;
-    let mut end_pos = 0;
-    for (i, c) in input.chars().enumerate() {
-        if c == '(' {
-            depth += 1;
-        } else if c == ')' {
-            depth -= 1;
-            if depth == 0 {
-                end_pos = i;
-                break;
-            }
-        }
-    }
-
-    if depth != 0 {
-        return Err(nom::Err::Error(nom::error::Error::new(
-            input,
-            nom::error::ErrorKind::Tag,
-        )));
-    }
-
-    let query = &input[..end_pos];
-    let input = &input[end_pos..];
-
-    let (input, _) = char(')')(input)?;
-
-    // Parse optional array index like [0]
-    let (input, index) = opt(ws(delimited(
-        char('['),
-        map_res(digit1, |s: &str| s.parse::<usize>()),
-        char(']'),
-    )))(input)?;
-
-    // Parse AS alias
-    let (input, _) = ws(tag_no_case("AS"))(input)?;
-    let (input, alias) = ws(parse_identifier)(input)?;
-
-    Ok((
-        input,
-        SelectField::Subquery {
-            query: query.to_string(),
-            index,
-            alias,
-        },
-    ))
-}
-
-// Parse a single select field (wildcard, identifier, or subquery)
-fn parse_select_field(input: &str) -> IResult<&str, SelectField> {
-    alt((
-        map(char('*'), |_| SelectField::Wildcard),
-        parse_subquery_field,
-        map(parse_identifier, SelectField::Field),
-    ))(input)
-}
-
-// Parse all select fields
-fn parse_select_fields(input: &str) -> IResult<&str, Vec<SelectField>> {
-    separated_list1(ws(char(',')), parse_select_field)(input)
-}
-
 fn parse_order_clause(input: &str) -> IResult<&str, Vec<Value>> {
     let single_order = map(
         tuple((
@@ -257,16 +179,52 @@ fn parse_order_clause(input: &str) -> IResult<&str, Vec<Value>> {
     )(input)
 }
 
-fn parse_full_query(input: &str) -> IResult<&str, Value> {
-    let (input, _) = tag_no_case("SELECT")(input)?;
-    let (input, _) = multispace1(input)?;
+// --- SELECT PROJECTION ---
 
-    let (input, fields) = parse_select_fields(input)?;
+fn parse_subquery_projection(input: &str) -> IResult<&str, Value> {
+    // (SELECT ... ) [optional_index] AS alias
+    let (input, sub_plan) = delimited(
+        ws(char('(')),
+        parse_full_query,
+        ws(char(')')),
+    )(input)?;
+
+    // Parse optional array index like [0]
+    let (input, _index) = opt(ws(delimited(
+        char('['),
+        map_res(digit1, |s: &str| s.parse::<usize>()),
+        char(']'),
+    )))(input)?;
+
+    let (input, _) = ws(tag_no_case("AS"))(input)?;
+    let (input, alias) = ws(parse_identifier)(input)?;
+
+    Ok((input, json!({ "type": "subquery", "alias": alias, "plan": sub_plan })))
+}
+
+fn parse_field_projection(input: &str) -> IResult<&str, Value> {
+     // field OR field AS alias (though we usually just use field name)
+     // keeping it simple: just identifier for now, or *
+    alt((
+        map(tag("*"), |_| json!({ "type": "all" })),
+        map(parse_identifier, |f| json!({ "type": "field", "name": f }))
+    ))(input)
+}
+
+fn parse_projection_item(input: &str) -> IResult<&str, Value> {
+    alt((
+        parse_subquery_projection,
+        parse_field_projection
+    ))(input)
+}
+
+fn parse_full_query(input: &str) -> IResult<&str, Value> {
+    let (input, _) = ws(tag_no_case("SELECT"))(input)?;
+
+    let (input, fields) = separated_list1(ws(char(',')), parse_projection_item)(input)?;
 
     let (input, _) = ws(tag_no_case("FROM"))(input)?;
-    let (input, _) = multispace0(input)?;
-
-    let (input, table) = parse_identifier(input)?;
+    let (input, table) = ws(parse_identifier)(input)?;
 
     let (input, where_logic) = opt(ws(parse_where_logic))(input)?;
 
@@ -280,48 +238,14 @@ fn parse_full_query(input: &str) -> IResult<&str, Value> {
         current_op = wrap_conditions(current_op, logic);
     }
 
-    // Check if we have any non-wildcard fields or subqueries
-    let has_wildcard = fields.iter().any(|f| matches!(f, SelectField::Wildcard));
-    let non_wildcard_fields: Vec<&SelectField> = fields
-        .iter()
-        .filter(|f| !matches!(f, SelectField::Wildcard))
-        .collect();
+    // Projections
+    // If we have just one "type": "all", and nothing else, we skip projection technically
+    // But let's be explicit if desired.
+    // If fields contains any subquery or if fields is not just "*", we project.
+    let needs_projection = fields.len() > 1 || fields[0].get("type").and_then(|t| t.as_str()) != Some("all");
 
-    if !non_wildcard_fields.is_empty() || (fields.len() == 1 && !has_wildcard) {
-        let mut projections: Vec<Value> = Vec::new();
-
-        for field in &fields {
-            match field {
-                SelectField::Wildcard => {
-                    // Wildcard doesn't add a specific projection
-                }
-                SelectField::Field(name) => {
-                    projections.push(json!({ "type": "field", "name": name }));
-                }
-                SelectField::Subquery { query, index: _, alias } => {
-                    // Parse the subquery recursively
-                    // Note: index is ignored for now as it's typically [0] for one-to-one relationships
-                    // which is already handled by the Subquery projection variant
-                    match parse_full_query(query) {
-                        Ok((_, subquery_plan)) => {
-                            projections.push(json!({
-                                "type": "subquery",
-                                "alias": alias,
-                                "plan": subquery_plan
-                            }));
-                        }
-                        Err(_) => {
-                            // If subquery parsing fails, skip this projection
-                            // This allows graceful degradation for unsupported subquery syntax
-                        }
-                    }
-                }
-            }
-        }
-
-        if !projections.is_empty() {
-            current_op = json!({ "op": "project", "projections": projections, "input": current_op });
-        }
+    if needs_projection {
+        current_op = json!({ "op": "project", "projections": fields, "input": current_op });
     }
 
     if let Some(l) = limit {
@@ -339,42 +263,69 @@ fn parse_full_query(input: &str) -> IResult<&str, Value> {
 }
 
 fn wrap_conditions(input_op: Value, predicate: Value) -> Value {
-    // Check if we can extract a Join
-    // TODO: This logic is very simple and only works if the top-level is a Join Candidate or strictly nested ANDs?
-    // With simplified recursion, we might find JoinCandidate inside nested structures.
-    // For now, let's keep it simple: Top Level or straightforward AND.
+    let mut joins = Vec::new();
+    let mut filters = Vec::new();
 
+    // 1. Normalize & Partition
     if let Some(obj) = predicate.as_object() {
-        if let Some(t) = obj.get("type").and_then(|s| s.as_str()) {
-            if t == "__JOIN_CANDIDATE__" {
-                let left_field = obj.get("left").and_then(|v| v.as_str()).unwrap_or("id");
-                let right_full = obj
-                    .get("right")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
-                let parts: Vec<&str> = right_full.split('.').collect();
-                let (r_table, r_col) = if parts.len() > 1 {
-                    (parts[0], parts[1])
-                } else {
-                    (right_full, "id")
-                };
-                return json!({
-                    "op": "join",
-                    "left": input_op,
-                    "right": { "op": "scan", "table": r_table },
-                    "on": { "left_field": left_field, "right_field": r_col }
-                });
-            } else if t == "and" {
-                // If AND, we wrap normally, View logic handles AND.
-                // But optimization: if AND contains JoinCandidate, we might want to hoist it?
-                // For this refactor, we stick to Filter-based evaluation unless it is explicitly a JOIN op in circuit.
-                // JoinCandidate transformation usually happens here.
-                // If multiple predicates, we just return filter for now.
-                // Real Query Optimizer would pull out joins.
+        if obj.get("type").and_then(|s| s.as_str()) == Some("and") {
+            if let Some(list) = obj.get("predicates").and_then(|v| v.as_array()) {
+                for p in list {
+                    if p.get("type").and_then(|s| s.as_str()) == Some("__JOIN_CANDIDATE__") {
+                        joins.push(p.clone());
+                    } else {
+                        filters.push(p.clone());
+                    }
+                }
             }
+        } else if obj.get("type").and_then(|s| s.as_str()) == Some("__JOIN_CANDIDATE__") {
+             joins.push(predicate.clone());
+        } else {
+             filters.push(predicate.clone());
         }
+    } else {
+        filters.push(predicate.clone());
     }
-    json!({ "op": "filter", "predicate": predicate, "input": input_op })
+
+    let mut current_op = input_op;
+
+    // 2. Apply Joins (Bottom-Up)
+    for join_pred in joins {
+        let left_field = join_pred.get("left").and_then(|v| v.as_str()).unwrap_or("id");
+        let right_full = join_pred.get("right").and_then(|v| v.as_str()).unwrap_or("unknown");
+
+        // Assume right_full is "table.field"
+        let parts: Vec<&str> = right_full.split('.').collect();
+        let (r_table, r_col) = if parts.len() > 1 {
+            (parts[0], parts[1])
+        } else {
+            (right_full, "id")
+        };
+
+        current_op = json!({
+            "op": "join",
+            "left": current_op,
+            "right": { "op": "scan", "table": r_table },
+            "on": { "left_field": left_field, "right_field": r_col }
+        });
+    }
+
+    // 3. Apply Filters
+    if !filters.is_empty() {
+        let final_pred = if filters.len() == 1 {
+            filters[0].clone()
+        } else {
+            json!({ "type": "and", "predicates": filters })
+        };
+
+        current_op = json!({
+            "op": "filter",
+            "predicate": final_pred,
+            "input": current_op
+        });
+    }
+
+    current_op
 }
 
 #[cfg(test)]
