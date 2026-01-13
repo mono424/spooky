@@ -17,9 +17,9 @@ static GLOBAL: MiMalloc = MiMalloc;
 */
 
 // --- KONFIGURATION ---
-const TOTAL_RECORDS: usize = 10_000;
+const TOTAL_RECORDS: usize = 10;
 const VIEW_COUNTS: [usize; 4] = [10, 100, 500, 1000];
-const BATCH_SIZE: usize = 100; // Wir messen exakt jeden 50er Block
+const BATCH_SIZE: usize = 10; // Wir messen exakt jeden 50er Block
 
 struct PreparedRecord {
     table: String,
@@ -168,7 +168,8 @@ fn benchmark_latency_mixed_stream() {
 
             // --- MESSUNG START ---
             let start = Instant::now();
-            circuit.ingest_batch(batch_data); // Ruft jetzt die optimierte Batch-Methode auf
+            let muvs = circuit.ingest_batch(batch_data); // Ruft jetzt die optimierte Batch-Methode auf
+                                                         //println!("{:#?}", muvs);
             let duration = start.elapsed();
             // --- MESSUNG ENDE ---
 
@@ -213,7 +214,7 @@ fn benchmark_latency_mixed_stream() {
                 last_valid_thread_id
             );
         }
-        println!(); // Neue Zeile nach jedem Durchlauf
+        println!("{:#?}", circuit.clone());
     }
     println!("Benchmark abgeschlossen. Ergebnisse in 'benchmark_results.csv'.");
 }
