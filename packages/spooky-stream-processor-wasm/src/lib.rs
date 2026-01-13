@@ -57,7 +57,7 @@ impl SpookyProcessor {
 
         let updates = self
             .circuit
-            .ingest_record(table, op, id, clean_record, hash);
+            .ingest_record(&table, &op, &id, clean_record.into(), &hash);
 
         Ok(serde_wasm_bindgen::to_value(&updates)?)
     }
