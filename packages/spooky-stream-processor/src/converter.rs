@@ -183,11 +183,7 @@ fn parse_order_clause(input: &str) -> IResult<&str, Vec<Value>> {
 
 fn parse_subquery_projection(input: &str) -> IResult<&str, Value> {
     // (SELECT ... ) [optional_index] AS alias
-    let (input, sub_plan) = delimited(
-        ws(char('(')),
-        parse_full_query,
-        ws(char(')')),
-    )(input)?;
+    let (input, sub_plan) = delimited(ws(char('(')), parse_full_query, ws(char(')')))(input)?;
 
     // Parse optional array index like [0]
     let (input, _index) = opt(ws(delimited(
@@ -199,23 +195,23 @@ fn parse_subquery_projection(input: &str) -> IResult<&str, Value> {
     let (input, _) = ws(tag_no_case("AS"))(input)?;
     let (input, alias) = ws(parse_identifier)(input)?;
 
-    Ok((input, json!({ "type": "subquery", "alias": alias, "plan": sub_plan })))
+    Ok((
+        input,
+        json!({ "type": "subquery", "alias": alias, "plan": sub_plan }),
+    ))
 }
 
 fn parse_field_projection(input: &str) -> IResult<&str, Value> {
-     // field OR field AS alias (though we usually just use field name)
-     // keeping it simple: just identifier for now, or *
+    // field OR field AS alias (though we usually just use field name)
+    // keeping it simple: just identifier for now, or *
     alt((
         map(tag("*"), |_| json!({ "type": "all" })),
-        map(parse_identifier, |f| json!({ "type": "field", "name": f }))
+        map(parse_identifier, |f| json!({ "type": "field", "name": f })),
     ))(input)
 }
 
 fn parse_projection_item(input: &str) -> IResult<&str, Value> {
-    alt((
-        parse_subquery_projection,
-        parse_field_projection
-    ))(input)
+    alt((parse_subquery_projection, parse_field_projection))(input)
 }
 
 fn parse_full_query(input: &str) -> IResult<&str, Value> {
@@ -242,7 +238,8 @@ fn parse_full_query(input: &str) -> IResult<&str, Value> {
     // If we have just one "type": "all", and nothing else, we skip projection technically
     // But let's be explicit if desired.
     // If fields contains any subquery or if fields is not just "*", we project.
-    let needs_projection = fields.len() > 1 || fields[0].get("type").and_then(|t| t.as_str()) != Some("all");
+    let needs_projection =
+        fields.len() > 1 || fields[0].get("type").and_then(|t| t.as_str()) != Some("all");
 
     if needs_projection {
         current_op = json!({ "op": "project", "projections": fields, "input": current_op });
@@ -279,9 +276,9 @@ fn wrap_conditions(input_op: Value, predicate: Value) -> Value {
                 }
             }
         } else if obj.get("type").and_then(|s| s.as_str()) == Some("__JOIN_CANDIDATE__") {
-             joins.push(predicate.clone());
+            joins.push(predicate.clone());
         } else {
-             filters.push(predicate.clone());
+            filters.push(predicate.clone());
         }
     } else {
         filters.push(predicate.clone());
@@ -291,8 +288,14 @@ fn wrap_conditions(input_op: Value, predicate: Value) -> Value {
 
     // 2. Apply Joins (Bottom-Up)
     for join_pred in joins {
-        let left_field = join_pred.get("left").and_then(|v| v.as_str()).unwrap_or("id");
-        let right_full = join_pred.get("right").and_then(|v| v.as_str()).unwrap_or("unknown");
+        let left_field = join_pred
+            .get("left")
+            .and_then(|v| v.as_str())
+            .unwrap_or("id");
+        let right_full = join_pred
+            .get("right")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
 
         // Assume right_full is "table.field"
         let parts: Vec<&str> = right_full.split('.').collect();
@@ -365,11 +368,12 @@ mod tests {
                     Operator::Project { projections, .. } => {
                         assert!(projections.len() > 0, "Expected projections");
                         // Check that we have a subquery projection
-                        let has_subquery = projections.iter().any(|p| {
-                            matches!(p, crate::engine::view::Projection::Subquery { .. })
-                        });
+                        let has_subquery = projections
+                            .iter()
+                            .any(|p| matches!(p, crate::engine::view::Projection::Subquery { .. }));
                         assert!(has_subquery, "Expected at least one subquery projection");
                     }
+
                     _ => panic!("Expected Project operator inside Limit"),
                 }
             }

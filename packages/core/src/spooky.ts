@@ -73,7 +73,14 @@ export class SpookyClient<S extends SchemaStructure> {
       this.mutationManager,
       logger
     );
-    this.sync = new SpookySync(this.config.schema, this.local, this.remote, clientId, logger);
+    this.sync = new SpookySync(
+      this.config.schema,
+      this.local,
+      this.remote,
+      this.streamProcessor,
+      clientId,
+      logger
+    );
     this.devTools = new DevToolsService(
       this.local,
       logger,

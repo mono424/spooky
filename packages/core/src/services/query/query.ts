@@ -12,7 +12,6 @@ import {
 } from './events.js';
 import { Event } from '../../events/index.js';
 import { decodeFromSpooky, parseRecordIdString } from '../utils/index.js';
-import { flattenIdTree } from '../sync/utils.js';
 import { SchemaStructure, TableModel } from '@spooky/query-builder';
 import { StreamProcessorService } from '../stream-processor/index.js';
 
@@ -106,9 +105,7 @@ export class QueryManager<S extends SchemaStructure> {
       return;
     }
 
-    const remoteIds = new Set(flattenIdTree(remoteTree).map((node) => node.id));
     const validRecords: any[] = [];
-    const orphanedRecords: any[] = [];
 
     for (const r of records) {
       const decoded = decodeFromSpooky(
@@ -123,15 +120,7 @@ export class QueryManager<S extends SchemaStructure> {
           >
         >
       );
-
-      const id = (decoded as any).id;
-      const idStr = id instanceof RecordId ? id.toString() : id;
-
-      if (idStr && remoteIds.has(idStr)) {
-        validRecords.push(decoded);
-      } else {
-        orphanedRecords.push(decoded);
-      }
+      validRecords.push(decoded);
     }
 
     this.logger.debug(
@@ -140,7 +129,6 @@ export class QueryManager<S extends SchemaStructure> {
         queryHash: incantationId.id.toString(),
         totalRecords: records.length,
         validRecords: validRecords.length,
-        orphanedRecords: orphanedRecords.length,
       },
       'Handling incoming remote update'
     );
@@ -159,8 +147,8 @@ export class QueryManager<S extends SchemaStructure> {
     this.events.emit(QueryEventTypes.IncantationUpdated, {
       incantationId,
       records: validRecords,
-      localHash: incantation.localHash,
-      localTree: incantation.localTree,
+      // localHash: incantation.localHash, // REMOVED: Don't overwrite local state from remote update
+      // localTree: incantation.localTree, // REMOVED: Don't overwrite local state from remote update
       remoteHash: remoteHash,
       remoteTree: remoteTree,
     });
@@ -195,25 +183,16 @@ export class QueryManager<S extends SchemaStructure> {
     }
 
     try {
-      // StreamProcessor might return IDs as strings, ensure we can fetch them
-      // We might need to ensure they are formatted as RecordIDs if the DB requires it,
-      // but usually SELECT * FROM ["table:id"] works or we might need to parse them.
-      // parseRecordIdString handles 'table:id'.
-
-      const idsToFetch = result_ids.map((id: string) =>
-        id.includes(':') ? parseRecordIdString(id) : id
-      );
-
-      const [records] = await this.local.query<[Record<string, any>[]]>('SELECT * FROM $ids', {
-        ids: idsToFetch,
-      });
-
-      // We should technically update the local state/incantation here too
       const incantation = this.activeQueries.get(query_id);
-      if (incantation) {
-        // Update the local state with these records (and the new tree/hash)
-        incantation.updateLocalState(records || [], localHash, localTree);
+      if (!incantation) {
+        throw new Error('Incantation not found');
       }
+
+      const [records] = await this.local.query<[Record<string, any>[]]>(
+        incantation.surrealql,
+        incantation.params
+      );
+      incantation.updateLocalState(records || [], localHash, localTree);
 
       this.events.emit(QueryEventTypes.IncantationUpdated, {
         incantationId: incantationRecordId,

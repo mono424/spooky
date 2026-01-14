@@ -174,9 +174,9 @@ impl Path {
             Path(s.split('.').map(SmolStr::new).collect())
         }
     }
-    
+
     pub fn as_str(&self) -> String {
-       self.0.join(".")
+        self.0.join(".")
     }
 }
 
@@ -309,7 +309,7 @@ impl View {
     ) -> Option<MaterializedViewUpdate> {
         let mut deltas = FastMap::default();
         if !changed_table.is_empty() {
-             deltas.insert(changed_table.to_string(), input_delta.clone());
+            deltas.insert(changed_table.to_string(), input_delta.clone());
         }
         self.process_ingest(&deltas, db)
     }
@@ -326,7 +326,7 @@ impl View {
         let maybe_delta = if is_first_run {
             None
         } else {
-             self.eval_delta_batch(&self.plan.root, deltas, db, self.params.as_ref())
+            self.eval_delta_batch(&self.plan.root, deltas, db, self.params.as_ref())
         };
 
         let view_delta = if let Some(d) = maybe_delta {
@@ -400,43 +400,63 @@ impl View {
             Operator::Scan { table } => {
                 // Return the delta for this table if it exists, otherwise empty
                 if let Some(d) = deltas.get(table) {
-                     Some(d.clone())
+                    Some(d.clone())
                 } else {
-                     Some(FastMap::default())
+                    Some(FastMap::default())
                 }
             }
             Operator::Filter { input, predicate } => {
-                let upstream_delta =
-                    self.eval_delta_batch(input, deltas, db, context)?;
-                
+                let upstream_delta = self.eval_delta_batch(input, deltas, db, context)?;
+
                 // SIMD Optimization Check (Copy of eval_snapshot logic)
                 let simd_target_op = match predicate {
-                    Predicate::Gt { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Gt)),
-                    Predicate::Gte { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Gte)),
-                    Predicate::Lt { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Lt)),
-                    Predicate::Lte { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Lte)),
-                    Predicate::Eq { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Eq)),
-                    Predicate::Neq { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Neq)),
+                    Predicate::Gt {
+                        value: Value::Number(n),
+                        ..
+                    } => n.as_f64().map(|f| (f, NumericOp::Gt)),
+                    Predicate::Gte {
+                        value: Value::Number(n),
+                        ..
+                    } => n.as_f64().map(|f| (f, NumericOp::Gte)),
+                    Predicate::Lt {
+                        value: Value::Number(n),
+                        ..
+                    } => n.as_f64().map(|f| (f, NumericOp::Lt)),
+                    Predicate::Lte {
+                        value: Value::Number(n),
+                        ..
+                    } => n.as_f64().map(|f| (f, NumericOp::Lte)),
+                    Predicate::Eq {
+                        value: Value::Number(n),
+                        ..
+                    } => n.as_f64().map(|f| (f, NumericOp::Eq)),
+                    Predicate::Neq {
+                        value: Value::Number(n),
+                        ..
+                    } => n.as_f64().map(|f| (f, NumericOp::Neq)),
                     _ => None,
                 };
 
                 let field_path = match predicate {
-                     Predicate::Gt { field, .. } | Predicate::Gte { field, .. } |
-                     Predicate::Lt { field, .. } | Predicate::Lte { field, .. } |
-                     Predicate::Eq { field, .. } | Predicate::Neq { field, .. } => Some(field),
-                     _ => None
+                    Predicate::Gt { field, .. }
+                    | Predicate::Gte { field, .. }
+                    | Predicate::Lt { field, .. }
+                    | Predicate::Lte { field, .. }
+                    | Predicate::Eq { field, .. }
+                    | Predicate::Neq { field, .. } => Some(field),
+                    _ => None,
                 };
 
                 if let (Some((target, op)), Some(path)) = (simd_target_op, field_path) {
-                     // SIMD PATH
-                     let (keys, weights, numbers) = extract_number_column(&upstream_delta, path, db);
-                     let passing_indices = filter_f64_batch(&numbers, target, op);
-                     
-                     let mut out_delta = FastMap::default();
-                     for idx in passing_indices {
-                         out_delta.insert(keys[idx].clone(), weights[idx]);
-                     }
-                     Some(out_delta)
+                    // SIMD PATH
+                    let (keys, weights, numbers) = extract_number_column(&upstream_delta, path, db);
+                    let passing_indices = filter_f64_batch(&numbers, target, op);
+
+                    let mut out_delta = FastMap::default();
+                    for idx in passing_indices {
+                        out_delta.insert(keys[idx].clone(), weights[idx]);
+                    }
+                    Some(out_delta)
                 } else {
                     // Slow Path
                     let mut out_delta = FastMap::default();
@@ -448,9 +468,7 @@ impl View {
                     Some(out_delta)
                 }
             }
-            Operator::Project { input, .. } => {
-                self.eval_delta_batch(input, deltas, db, context)
-            }
+            Operator::Project { input, .. } => self.eval_delta_batch(input, deltas, db, context),
 
             // Complex operators (Joins, Limits) fall back to snapshot
             Operator::Join { .. } | Operator::Limit { .. } => None,
@@ -467,9 +485,9 @@ impl View {
         db: &Database,
         context: Option<&SpookyValue>,
     ) -> Option<ZSet> {
-         let mut deltas = FastMap::default();
-         deltas.insert(changed_table.to_string(), input_delta.clone());
-         self.eval_delta_batch(op, &deltas, db, context)
+        let mut deltas = FastMap::default();
+        deltas.insert(changed_table.to_string(), input_delta.clone());
+        self.eval_delta_batch(op, &deltas, db, context)
     }
 
     /// The classic detailed Full-Scan Evaluator (for fallback and init)
@@ -485,36 +503,57 @@ impl View {
             }
             Operator::Filter { input, predicate } => {
                 let upstream = self.eval_snapshot(input, db, context);
-                
+
                 // SIMD Optimization Check
                 let simd_target_op = match predicate {
-                    Predicate::Gt { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Gt)),
-                    Predicate::Gte { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Gte)),
-                    Predicate::Lt { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Lt)),
-                    Predicate::Lte { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Lte)),
-                    Predicate::Eq { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Eq)),
-                    Predicate::Neq { value: Value::Number(n), .. } => n.as_f64().map(|f| (f, NumericOp::Neq)),
+                    Predicate::Gt {
+                        value: Value::Number(n),
+                        ..
+                    } => n.as_f64().map(|f| (f, NumericOp::Gt)),
+                    Predicate::Gte {
+                        value: Value::Number(n),
+                        ..
+                    } => n.as_f64().map(|f| (f, NumericOp::Gte)),
+                    Predicate::Lt {
+                        value: Value::Number(n),
+                        ..
+                    } => n.as_f64().map(|f| (f, NumericOp::Lt)),
+                    Predicate::Lte {
+                        value: Value::Number(n),
+                        ..
+                    } => n.as_f64().map(|f| (f, NumericOp::Lte)),
+                    Predicate::Eq {
+                        value: Value::Number(n),
+                        ..
+                    } => n.as_f64().map(|f| (f, NumericOp::Eq)),
+                    Predicate::Neq {
+                        value: Value::Number(n),
+                        ..
+                    } => n.as_f64().map(|f| (f, NumericOp::Neq)),
                     _ => None,
                 };
 
                 let field_path = match predicate {
-                     Predicate::Gt { field, .. } | Predicate::Gte { field, .. } |
-                     Predicate::Lt { field, .. } | Predicate::Lte { field, .. } |
-                     Predicate::Eq { field, .. } | Predicate::Neq { field, .. } => Some(field),
-                     _ => None
+                    Predicate::Gt { field, .. }
+                    | Predicate::Gte { field, .. }
+                    | Predicate::Lt { field, .. }
+                    | Predicate::Lte { field, .. }
+                    | Predicate::Eq { field, .. }
+                    | Predicate::Neq { field, .. } => Some(field),
+                    _ => None,
                 };
 
                 if let (Some((target, op)), Some(path)) = (simd_target_op, field_path) {
-                     // SIMD PATH
-                     let (keys, weights, numbers) = extract_number_column(&upstream, path, db);
-                     let passing_indices = filter_f64_batch(&numbers, target, op);
-                     
-                     let mut out = FastMap::default();
-                     for idx in passing_indices {
-                         // Safety: indices returned by filter_batch are valid for keys/weights
-                         out.insert(keys[idx].clone(), weights[idx]);
-                     }
-                     out
+                    // SIMD PATH
+                    let (keys, weights, numbers) = extract_number_column(&upstream, path, db);
+                    let passing_indices = filter_f64_batch(&numbers, target, op);
+
+                    let mut out = FastMap::default();
+                    for idx in passing_indices {
+                        // Safety: indices returned by filter_batch are valid for keys/weights
+                        out.insert(keys[idx].clone(), weights[idx]);
+                    }
+                    out
                 } else {
                     // Slow Path (Loop)
                     let mut out = FastMap::default();
@@ -628,15 +667,29 @@ impl View {
                 {
                     // Create child context (SpookyValue)
                     // We must clone existing params (SpookyValue) or create new Object
-                    let mut context = self.params.clone().unwrap_or(SpookyValue::Object(FastMap::default()));
-                    
+                    let mut context = self
+                        .params
+                        .clone()
+                        .unwrap_or(SpookyValue::Object(FastMap::default()));
+
                     if let SpookyValue::Object(ref mut obj) = context {
-                        obj.insert(SmolStr::new("parent"), SpookyValue::Str(SmolStr::new(id)));
+                        // FIX: Populate $parent with the actual row content if available,
+                        // otherwise fallback to just ID (though strict resolving will likely fail for ID)
+                        // We fetch the row from DB.
+                        let row_val = self
+                            .get_row_value(id, db)
+                            .cloned()
+                            .unwrap_or(SpookyValue::Str(SmolStr::new(id)));
+                        obj.insert(SmolStr::new("parent"), row_val);
                     } else {
-                        // If context was not an object (weird), we overwrite or wrap. 
+                        // If context was not an object (weird), we overwrite or wrap.
                         // For safety, let's just make a new object with parent
                         let mut map = FastMap::default();
-                        map.insert(SmolStr::new("parent"), SpookyValue::Str(SmolStr::new(id)));
+                        let row_val = self
+                            .get_row_value(id, db)
+                            .cloned()
+                            .unwrap_or(SpookyValue::Str(SmolStr::new(id)));
+                        map.insert(SmolStr::new("parent"), row_val);
                         context = SpookyValue::Object(map);
                     }
 
@@ -651,7 +704,20 @@ impl View {
 
                     let sub_tree = IdTree::build(sub_items);
                     dependency_hashes.push(sub_tree.hash.clone());
-                    children_map.insert(alias.clone(), sub_tree);
+
+                    // Defensive fix: Ensure alias is clean (e.g. handle "[0] AS author" -> "author")
+                    let clean_alias = if alias.contains(" AS ") {
+                        alias
+                            .split(" AS ")
+                            .last()
+                            .unwrap_or(alias)
+                            .trim()
+                            .to_string()
+                    } else {
+                        alias.clone()
+                    };
+
+                    children_map.insert(clean_alias, sub_tree);
                 }
             }
 
@@ -706,15 +772,18 @@ impl View {
     ) -> bool {
         // Helper to get actual SpookyValue for comparison from the Predicate (which stores Value)
         let resolve_val = |_field: &Path, value: &Value| -> Option<SpookyValue> {
-             if let Some(obj) = value.as_object() {
+            if let Some(obj) = value.as_object() {
                 if let Some(param_path) = obj.get("$param") {
-                     if let Some(ctx) = context {
+                    if let Some(ctx) = context {
                         // $param is usually a simple string path like "user.id"
                         // We need to parse it as a Path to resolve it, OR since $param is dynamic we treat it as string
                         let path_str = param_path.as_str().unwrap_or("");
                         let path = Path::new(path_str);
                         // resolve nested param path from SpookyValue context!
-                        resolve_nested_value(Some(ctx), &path).cloned()
+                        // IMPORTANT: Normalize RecordId-like objects to strings for proper comparison
+                        resolve_nested_value(Some(ctx), &path)
+                            .cloned()
+                            .map(normalize_record_id)
                     } else {
                         None
                     }
@@ -722,7 +791,7 @@ impl View {
                     Some(SpookyValue::from(value.clone()))
                 }
             } else {
-                 Some(SpookyValue::from(value.clone()))
+                Some(SpookyValue::from(value.clone()))
             }
         };
 
@@ -733,36 +802,39 @@ impl View {
             Predicate::Or { predicates } => predicates
                 .iter()
                 .any(|p| self.check_predicate(p, key, db, context)),
-             Predicate::Prefix { field, prefix } => {
-                 // Check if field value starts with prefix
-                 if field.0.len() == 1 && field.0[0] == "id" {
-                     return key.starts_with(prefix);
-                 }
-                  if let Some(row_val) = self.get_row_value(key, db) {
-                     if let Some(val) = resolve_nested_value(Some(row_val), field) {
-                         if let SpookyValue::Str(s) = val {
-                             return s.starts_with(prefix);
-                         }
-                     }
-                 }
-                 false
-              },
-            Predicate::Eq { field, value } |
-            Predicate::Neq { field, value } |
-            Predicate::Gt { field, value } |
-            Predicate::Gte { field, value } |
-            Predicate::Lt { field, value } |
-            Predicate::Lte { field, value } => {
+            Predicate::Prefix { field, prefix } => {
+                // Check if field value starts with prefix
+                if field.0.len() == 1 && field.0[0] == "id" {
+                    return key.starts_with(prefix);
+                }
+                if let Some(row_val) = self.get_row_value(key, db) {
+                    if let Some(val) = resolve_nested_value(Some(row_val), field) {
+                        if let SpookyValue::Str(s) = val {
+                            return s.starts_with(prefix);
+                        }
+                    }
+                }
+                false
+            }
+            Predicate::Eq { field, value }
+            | Predicate::Neq { field, value }
+            | Predicate::Gt { field, value }
+            | Predicate::Gte { field, value }
+            | Predicate::Lt { field, value }
+            | Predicate::Lte { field, value } => {
                 let target_val = resolve_val(field, value);
-                if target_val.is_none() { return false; }
+                if target_val.is_none() {
+                    return false;
+                }
                 let target_val = target_val.unwrap();
 
                 let actual_val_opt = if field.0.len() == 1 && field.0[0] == "id" {
-                     Some(SpookyValue::Str(SmolStr::new(key)))
+                    Some(SpookyValue::Str(SmolStr::new(key)))
                 } else {
-                    self.get_row_value(key, db).and_then(|r| resolve_nested_value(Some(r), field).cloned())
+                    self.get_row_value(key, db)
+                        .and_then(|r| resolve_nested_value(Some(r), field).cloned())
                 };
-                
+
                 if let Some(actual_val) = actual_val_opt {
                     let ord = compare_spooky_values(Some(&actual_val), Some(&target_val));
                     match pred {
@@ -772,7 +844,7 @@ impl View {
                         Predicate::Gte { .. } => ord == Ordering::Greater || ord == Ordering::Equal,
                         Predicate::Lt { .. } => ord == Ordering::Less,
                         Predicate::Lte { .. } => ord == Ordering::Less || ord == Ordering::Equal,
-                        _ => false
+                        _ => false,
                     }
                 } else {
                     false
@@ -796,22 +868,26 @@ fn compare_spooky_values(a: Option<&SpookyValue>, b: Option<&SpookyValue>) -> Or
             (SpookyValue::Null, SpookyValue::Null) => Ordering::Equal,
             (SpookyValue::Bool(ba), SpookyValue::Bool(bb)) => ba.cmp(bb),
             (SpookyValue::Number(na), SpookyValue::Number(nb)) => {
-               // Simple f64 comparison
-               na.partial_cmp(&nb).unwrap_or(Ordering::Equal)
-            },
+                // Simple f64 comparison
+                na.partial_cmp(&nb).unwrap_or(Ordering::Equal)
+            }
             (SpookyValue::Str(sa), SpookyValue::Str(sb)) => sa.cmp(sb),
             (SpookyValue::Array(aa), SpookyValue::Array(ab)) => {
                 let len_cmp = aa.len().cmp(&ab.len());
-                if len_cmp != Ordering::Equal { return len_cmp; }
+                if len_cmp != Ordering::Equal {
+                    return len_cmp;
+                }
                 for (ia, ib) in aa.iter().zip(ab.iter()) {
                     let cmp = compare_spooky_values(Some(ia), Some(ib));
-                    if cmp != Ordering::Equal { return cmp; }
+                    if cmp != Ordering::Equal {
+                        return cmp;
+                    }
                 }
                 Ordering::Equal
             }
             (SpookyValue::Object(oa), SpookyValue::Object(ob)) => oa.len().cmp(&ob.len()), // Deep compare skipped for perf
             _ => type_rank(va).cmp(&type_rank(vb)),
-        }
+        },
     }
 }
 
@@ -826,6 +902,29 @@ fn type_rank(v: &SpookyValue) -> u8 {
     }
 }
 
+/// Normalize RecordId-like objects to string format.
+/// Converts { tb: "table", id: "id" } or { table: "table", id: "id" } to "table:id"
+fn normalize_record_id(val: SpookyValue) -> SpookyValue {
+    if let SpookyValue::Object(ref map) = val {
+        // Check for SurrealDB RecordId patterns: { tb, id } or { table, id }
+        let table = map
+            .get(&SmolStr::new("tb"))
+            .or_else(|| map.get(&SmolStr::new("table")));
+        let id = map.get(&SmolStr::new("id"));
+
+        if let (Some(SpookyValue::Str(table_str)), Some(id_val)) = (table, id) {
+            // Convert id to string - might be string or another type
+            let id_str = match id_val {
+                SpookyValue::Str(s) => s.to_string(),
+                SpookyValue::Number(n) => n.to_string(),
+                _ => return val, // Can't normalize, return as-is
+            };
+            return SpookyValue::Str(SmolStr::new(format!("{}:{}", table_str, id_str)));
+        }
+    }
+    val
+}
+
 // Dot notation access: "address.city" -> traverses json
 // Optimized specifically for Path and SpookyValue
 #[inline(always)]
@@ -833,7 +932,9 @@ fn resolve_nested_value<'a>(root: Option<&'a SpookyValue>, path: &Path) -> Optio
     let mut current = root;
     for part in &path.0 {
         match current {
-            Some(SpookyValue::Object(map)) => { current = map.get(part); }
+            Some(SpookyValue::Object(map)) => {
+                current = map.get(part);
+            }
             _ => return None,
         }
     }
@@ -843,19 +944,24 @@ fn resolve_nested_value<'a>(root: Option<&'a SpookyValue>, path: &Path) -> Optio
 // Fast hashing for Join Keys
 #[inline(always)]
 fn hash_spooky_value(v: &SpookyValue) -> u64 {
-     let mut hasher = FxHasher::default();
-     hash_value_recursive(v, &mut hasher);
-     hasher.finish()
+    let mut hasher = FxHasher::default();
+    hash_value_recursive(v, &mut hasher);
+    hasher.finish()
 }
 
 // --- 3. SIMD / COLUMNAR OPTIMIZATIONS ---
 
 // Helper Enum for numeric predicates
 enum NumericOp {
-    Gt, Gte, Lt, Lte, Eq, Neq
+    Gt,
+    Gte,
+    Lt,
+    Lte,
+    Eq,
+    Neq,
 }
 
-/* 
+/*
    Attempts to extract a "Column" of f64 values from the ZSet + Database.
    Returns: (Ids, Weights, Numbers) aligned by index.
    If a value is missing or not a number, it defaults to f64::NAN which fails most comparisons safely.
@@ -873,17 +979,17 @@ fn extract_number_column(
 
     for (key, weight) in zset {
         let val_opt = if let Some((table, _)) = key.split_once(':') {
-             db.tables.get(table).and_then(|t| t.rows.get(key))
+            db.tables.get(table).and_then(|t| t.rows.get(key))
         } else {
             None
         };
 
         let num_val = if let Some(row_val) = val_opt {
-             if let Some(SpookyValue::Number(n)) = resolve_nested_value(Some(row_val), path) {
-                 *n
-             } else {
-                 f64::NAN
-             }
+            if let Some(SpookyValue::Number(n)) = resolve_nested_value(Some(row_val), path) {
+                *n
+            } else {
+                f64::NAN
+            }
         } else {
             f64::NAN
         };
@@ -900,11 +1006,11 @@ fn extract_number_column(
 // Returns indices of passing elements
 fn filter_f64_batch(values: &[f64], target: f64, op: NumericOp) -> Vec<usize> {
     let mut indices = Vec::with_capacity(values.len());
-    
+
     // Explicit chunking to encourage SIMD opt by the compiler
     let chunks = values.chunks_exact(8);
     let remainder = chunks.remainder();
-    
+
     let mut i = 0;
     for chunk in chunks {
         // Inner loop fixed size 8 - easier for LLVM to vectorize
@@ -938,7 +1044,7 @@ fn filter_f64_batch(values: &[f64], target: f64, op: NumericOp) -> Vec<usize> {
         }
         i += 1;
     }
-    
+
     indices
 }
 
@@ -955,7 +1061,7 @@ pub fn sum_f64_simd(values: &[f64]) -> f64 {
             sums[i] += chunk[i];
         }
     }
-    
+
     let mut total: f64 = sums.iter().sum();
     for v in remainder {
         total += v;
@@ -965,26 +1071,34 @@ pub fn sum_f64_simd(values: &[f64]) -> f64 {
 
 fn hash_value_recursive(v: &SpookyValue, hasher: &mut FxHasher) {
     match v {
-        SpookyValue::Null => { hasher.write_u8(0); },
-        SpookyValue::Bool(b) => { hasher.write_u8(1); hasher.write_u8(*b as u8); },
-        SpookyValue::Number(n) => { 
-            hasher.write_u8(2); 
+        SpookyValue::Null => {
+            hasher.write_u8(0);
+        }
+        SpookyValue::Bool(b) => {
+            hasher.write_u8(1);
+            hasher.write_u8(*b as u8);
+        }
+        SpookyValue::Number(n) => {
+            hasher.write_u8(2);
             hasher.write_u64(n.to_bits());
-        },
-        SpookyValue::Str(s) => { hasher.write_u8(3); hasher.write(s.as_bytes()); },
+        }
+        SpookyValue::Str(s) => {
+            hasher.write_u8(3);
+            hasher.write(s.as_bytes());
+        }
         SpookyValue::Array(arr) => {
             hasher.write_u8(4);
             for item in arr {
                 hash_value_recursive(item, hasher);
             }
-        },
+        }
         SpookyValue::Object(obj) => {
-             hasher.write_u8(5);
-             // Simple iteration, no sorting for speed (as discussed in prev steps)
-             for (k, v) in obj {
-                 hasher.write(k.as_bytes());
-                 hash_value_recursive(v, hasher);
-             }
+            hasher.write_u8(5);
+            // Simple iteration, no sorting for speed (as discussed in prev steps)
+            for (k, v) in obj {
+                hasher.write(k.as_bytes());
+                hash_value_recursive(v, hasher);
+            }
         }
     }
 }

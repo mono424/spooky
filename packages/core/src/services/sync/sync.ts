@@ -1,6 +1,6 @@
 import { LocalDatabaseService, RemoteDatabaseService } from '../database/index.js';
 import { MutationEventTypes } from '../mutation/index.js';
-import { IdTreeDiff } from '../../types.js';
+import { IdTree, IdTreeDiff } from '../../types.js';
 import { QueryEventTypes } from '../query/events.js';
 import { SyncQueueEventTypes, createSyncEventSystem, SyncEventTypes } from './events.js';
 import { createLogger, Logger } from '../logger/index.js';
@@ -14,10 +14,11 @@ import {
   UpQueue,
 } from './queue/index.js';
 import { RecordId, Duration, Uuid } from 'surrealdb';
-import { diffIdTree, flattenIdTree } from './utils.js';
+import { diffIdTree, TreeSyncer } from './utils.js';
 import { parseRecordIdString, decodeFromSpooky } from '../utils/index.js';
 import { TableModel } from '@spooky/query-builder';
 import { SchemaStructure } from '@spooky/query-builder';
+import { StreamProcessorService } from '../stream-processor/index.js';
 // import { QueryManager } from '../query/index.js'; // REMOVED
 
 export class SpookySync<S extends SchemaStructure> {
@@ -38,6 +39,7 @@ export class SpookySync<S extends SchemaStructure> {
     private schema: S,
     private local: LocalDatabaseService,
     private remote: RemoteDatabaseService,
+    private streamProcessor: StreamProcessorService,
     private clientId: string,
     logger: Logger
   ) {
@@ -351,7 +353,26 @@ export class SpookySync<S extends SchemaStructure> {
       return;
     }
 
-    await this.cacheMissingRecords(localTree, remoteTree, surrealql);
+    const treeSyncer = new TreeSyncer(localTree, remoteTree);
+    let maxIter = 10;
+    while (maxIter > 0) {
+      const { added, updated } = await this.cacheMissingRecords(
+        treeSyncer,
+        incantationId,
+        remoteTree
+      );
+      if (added.length === 0 && updated.length === 0) {
+        break;
+      }
+      console.log('iter 2', added, updated);
+      maxIter--;
+      if (maxIter <= 0) {
+        this.logger.warn(
+          { incantationId: incantationId.toString() },
+          'syncIncantation maxIter reached'
+        );
+      }
+    }
 
     await this.updateLocalIncantation(
       incantationId,
@@ -368,19 +389,13 @@ export class SpookySync<S extends SchemaStructure> {
   }
 
   private async cacheMissingRecords(
-    localTree: any,
-    remoteTree: any,
-    surrealql: string
+    treeSyncer: TreeSyncer,
+    incantationId: RecordId<string>,
+    remoteTree: IdTree
   ): Promise<IdTreeDiff> {
-    if (!localTree) {
-      const [remoteResults] = await this.remote.query<[Record<string, any>[]]>(surrealql);
-      // TODO: flatten the records array, to not have nested dependencies but a flat list of records
-      // for this it should use the schema to find relationships
-      await this.cacheResults(remoteResults);
-      return { added: remoteResults.map((r) => r.id), updated: [], removed: [] };
-    }
+    const diff = treeSyncer.nextSet();
 
-    const diff = diffIdTree(localTree, remoteTree);
+    // TODO: remove deleted records if deleted in remote
     const { added, updated } = diff;
     const idsToFetch = [...added, ...updated];
 
@@ -395,7 +410,50 @@ export class SpookySync<S extends SchemaStructure> {
     });
 
     await this.cacheResults(remoteResults);
-    return { added: remoteResults.map((r) => r.id), updated: [], removed: [] };
+
+    const addedRecords = remoteResults.filter((r) =>
+      added.some((id) => id.toString() === r.id.toString())
+    );
+    const updatedRecords = remoteResults.filter((r) =>
+      updated.some((id) => id.toString() === r.id.toString())
+    );
+
+    for (const record of addedRecords) {
+      const table = record.id.table.toString();
+      // Use full ID format (table:id) for WASM compatibility
+      const fullId = record.id.toString();
+      const result = await this.streamProcessor.ingest(table, 'CREATE', fullId, record);
+      console.log('iter 3', result);
+      console.log('iter 3.1 comparing', {
+        incantationIdStr: incantationId.toString(),
+        updateQueryIds: result.map((u: any) => u.query_id),
+      });
+      for (const update of result) {
+        // Compare full incantation ID (table:id format)
+        if (update.query_id === incantationId.toString()) {
+          console.log('iter 3.2 match! updating tree', update.tree);
+          treeSyncer.update(update.tree);
+        }
+      }
+    }
+    for (const record of updatedRecords) {
+      const table = record.id.table.toString();
+      // Use full ID format (table:id) for WASM compatibility
+      const fullId = record.id.toString();
+      const result = await this.streamProcessor.ingest(table, 'UPDATE', fullId, record);
+      for (const update of result) {
+        // Compare full incantation ID (table:id format)
+        if (update.query_id === incantationId.toString()) {
+          treeSyncer.update(update.tree);
+        }
+      }
+    }
+
+    // Note: Removed forced convergence with treeSyncer.update(remoteTree).
+    // This was causing premature convergence for complex queries with subqueries,
+    // preventing nested records (comments, author) from being properly synced.
+
+    return { added, updated, removed: [] };
   }
 
   private async updateLocalIncantation(
@@ -444,9 +502,9 @@ export class SpookySync<S extends SchemaStructure> {
       const [cachedResults] = await this.local.query<[Record<string, any>[]]>(surrealql, params);
 
       // Verify Orphans if we have a remote tree to check against
-      if (remoteTree) {
-        void this.verifyAndPurgeOrphans(cachedResults, remoteTree);
-      }
+      // if (remoteTree) {
+      //   void this.verifyAndPurgeOrphans(cachedResults, remoteTree);
+      // }
 
       this.logger.debug(
         {
@@ -486,62 +544,62 @@ export class SpookySync<S extends SchemaStructure> {
     }
   }
 
-  private async verifyAndPurgeOrphans(cachedResults: any[], remoteTree: any) {
-    if (!cachedResults || cachedResults.length === 0 || !remoteTree) return;
+  // private async verifyAndPurgeOrphans(cachedResults: any[], remoteTree: any) {
+  //   if (!cachedResults || cachedResults.length === 0 || !remoteTree) return;
 
-    const remoteIds = new Set(flattenIdTree(remoteTree).map((node: any) => node.id));
-    const orphans: any[] = [];
+  //   const remoteIds = new Set(flattenIdTree(remoteTree).map((node: any) => node.id));
+  //   const orphans: any[] = [];
 
-    for (const r of cachedResults) {
-      // We need to decode? cachedResults are from local DB, they are structured.
-      // BUT they might need to be flattened or handled if the query returns nested stuff?
-      // For now assume top level IDs.
-      // QueryManager did decodeFromSpooky. Let's assume local DB returns raw results that match
-      // what RecordId.toString() expects?
-      // Wait, QueryManager used `r.id`.
-      const id = r.id;
-      const idStr = id instanceof RecordId ? id.toString() : id;
+  //   for (const r of cachedResults) {
+  //     // We need to decode? cachedResults are from local DB, they are structured.
+  //     // BUT they might need to be flattened or handled if the query returns nested stuff?
+  //     // For now assume top level IDs.
+  //     // QueryManager did decodeFromSpooky. Let's assume local DB returns raw results that match
+  //     // what RecordId.toString() expects?
+  //     // Wait, QueryManager used `r.id`.
+  //     const id = r.id;
+  //     const idStr = id instanceof RecordId ? id.toString() : id;
 
-      if (idStr && !remoteIds.has(idStr)) {
-        orphans.push(r);
-      }
-    }
+  //     if (idStr && !remoteIds.has(idStr)) {
+  //       orphans.push(r);
+  //     }
+  //   }
 
-    if (orphans.length === 0) return;
+  //   if (orphans.length === 0) return;
 
-    const idsToCheck = orphans
-      .map((r) => r.id)
-      .filter((id) => !!id)
-      .map((id) => (id instanceof RecordId ? id : parseRecordIdString(id.toString())));
+  //   const idsToCheck = orphans
+  //     .map((r) => r.id)
+  //     .filter((id) => !!id)
+  //     .map((id) => (id instanceof RecordId ? id : parseRecordIdString(id.toString())));
 
-    if (idsToCheck.length === 0) return;
+  //   if (idsToCheck.length === 0) return;
 
-    this.logger.debug({ count: idsToCheck.length }, 'Verifying orphaned records against remote');
+  //   this.logger.debug({ count: idsToCheck.length }, 'Verifying orphaned records against remote');
 
-    try {
-      const [existing] = await this.remote.query<[{ id: RecordId }[]]>('SELECT id FROM $ids', {
-        ids: idsToCheck,
-      });
+  //   try {
+  //     const [existing] = await this.remote.query<[{ id: RecordId }[]]>('SELECT id FROM $ids', {
+  //       ids: idsToCheck,
+  //     });
 
-      const existingIdsSet = new Set(existing.map((r) => r.id.toString()));
-      const toDelete = idsToCheck.filter((id) => !existingIdsSet.has(id.toString()));
+  //     const existingIdsSet = new Set(existing.map((r) => r.id.toString()));
+  //     const toDelete = idsToCheck.filter((id) => !existingIdsSet.has(id.toString()));
 
-      if (toDelete.length > 0) {
-        this.logger.info(
-          { count: toDelete.length, ids: toDelete.map((id) => id.toString()) },
-          'Purging confirmed orphaned records'
-        );
-        await this.local.query('DELETE $ids', { ids: toDelete });
-      } else {
-        this.logger.debug(
-          { count: idsToCheck.length },
-          'All orphaned records still exist remotely (ghost records checking)'
-        );
-      }
-    } catch (err) {
-      this.logger.error({ err }, 'Failed to verify/purge orphans');
-    }
-  }
+  //     if (toDelete.length > 0) {
+  //       this.logger.info(
+  //         { count: toDelete.length, ids: toDelete.map((id) => id.toString()) },
+  //         'Purging confirmed orphaned records'
+  //       );
+  //       await this.local.query('DELETE $ids', { ids: toDelete });
+  //     } else {
+  //       this.logger.debug(
+  //         { count: idsToCheck.length },
+  //         'All orphaned records still exist remotely (ghost records checking)'
+  //       );
+  //     }
+  //   } catch (err) {
+  //     this.logger.error({ err }, 'Failed to verify/purge orphans');
+  //   }
+  // }
 
   private async updateIncantationRecord(
     incantationId: RecordId<string>,

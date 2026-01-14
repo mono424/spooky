@@ -112,15 +112,31 @@ export class StreamProcessorService {
    * Ingest a record change into the processor.
    * Emits 'stream_update' event if materialized views are affected.
    */
-  ingest(table: string, op: string, id: string, record: any): void {
+  ingest(table: string, op: string, id: string, record: any): WasmStreamUpdate[] {
     this.logger.debug({ table, op, id }, '[StreamProcessor] Ingesting record');
+    // DEEP LOGGING
+    console.log('[StreamProcessor] ingest called', {
+      table,
+      op,
+      id,
+      record: JSON.stringify(record, (key, value) =>
+        typeof value === 'bigint' ? value.toString() : value
+      ),
+    });
+
     if (!this.processor) {
       this.logger.warn('[StreamProcessor] Not initialized, skipping ingest');
-      return;
+      return [];
     }
 
     try {
-      const rawUpdates = this.processor.ingest(table, op, id, record);
+      const normalizedRecord = this.normalizeValue(record);
+      // DEEP LOGGING (Normalized)
+      console.log('[StreamProcessor] ingest normalized record', JSON.stringify(normalizedRecord));
+
+      const rawUpdates = this.processor.ingest(table, op, id, normalizedRecord);
+      console.log('[StreamProcessor] ingest result', rawUpdates);
+
       if (rawUpdates && Array.isArray(rawUpdates) && rawUpdates.length > 0) {
         const updates: StreamUpdate[] = rawUpdates.map((u: WasmStreamUpdate) => ({
           query_id: u.query_id,
@@ -130,9 +146,12 @@ export class StreamProcessorService {
         this.events.emit('stream_update', updates);
       }
       this.saveState();
+      return rawUpdates;
     } catch (e) {
       this.logger.error(e, '[StreamProcessor] Error during ingestion');
+      console.error('[StreamProcessor] Erroring during ingestion', e);
     }
+    return [];
   }
 
   /**
@@ -153,16 +172,28 @@ export class StreamProcessorService {
       },
       '[StreamProcessor] Registering incantation'
     );
+    // DEEP LOGGING
+    console.log('[StreamProcessor] registerIncantation called', {
+      id: incantation.id.toString(),
+      sql: incantation.surrealql,
+      params: incantation.params,
+    });
 
     try {
+      const normalizedParams = this.normalizeValue(incantation.params);
+      console.log('[StreamProcessor] registerIncantation normalized params', normalizedParams);
+
       const initialUpdate = this.processor.register_view({
         id: incantation.id.toString(),
         surrealQL: incantation.surrealql,
-        params: incantation.params,
+        params: normalizedParams,
         clientId: 'local',
         ttl: incantation.ttl.toString(),
         lastActiveAt: new Date().toISOString(),
       });
+
+      console.log('[StreamProcessor] register_view result', initialUpdate);
+      console.log('[StreamProcessor] normalizedParams used:', JSON.stringify(normalizedParams));
 
       if (!initialUpdate) {
         throw new Error('Failed to register incantation');
@@ -184,6 +215,7 @@ export class StreamProcessorService {
       return update;
     } catch (e) {
       this.logger.error(e, '[StreamProcessor] Error registering incantation');
+      console.error('[StreamProcessor] Error registering incantation', e);
       throw e;
     }
   }
@@ -199,5 +231,45 @@ export class StreamProcessorService {
     } catch (e) {
       this.logger.error(e, '[StreamProcessor] Error unregistering incantation');
     }
+  }
+
+  private normalizeValue(value: any): any {
+    if (value === null || value === undefined) return value;
+
+    if (typeof value === 'object') {
+      // RecordId detection using duck typing (constructor.name may be minified)
+      // SurrealDB's RecordId has: table (getter returning Table), id, and toString()
+      // Check for table getter that has its own toString AND id property
+      const hasTable = 'table' in value && typeof value.table?.toString === 'function';
+      const hasId = 'id' in value;
+      const hasToString = typeof value.toString === 'function';
+      const isNotPlainObject = value.constructor !== Object;
+
+      if (hasTable && hasId && hasToString && isNotPlainObject) {
+        const result = value.toString();
+        console.log('[normalizeValue] RecordId detected, converted to:', result);
+        return result;
+      }
+
+      // Fallback: old check for objects with tb and id (some internal representations)
+      if ('tb' in value && 'id' in value && !('table' in value)) {
+        return `${value.tb}:${value.id}`;
+      }
+
+      // Handle arrays recursively
+      if (Array.isArray(value)) {
+        return value.map((v) => this.normalizeValue(v));
+      }
+
+      // Handle plain objects recursively
+      if (value.constructor === Object) {
+        const out: any = {};
+        for (const k in value) {
+          out[k] = this.normalizeValue(value[k]);
+        }
+        return out;
+      }
+    }
+    return value;
   }
 }

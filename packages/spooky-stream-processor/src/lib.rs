@@ -6,6 +6,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 pub mod converter;
 pub mod engine; // <--- Das ist wichtig für den Test
+pub mod repro_test;
 pub mod sanitizer;
 pub mod service;
 
