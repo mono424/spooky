@@ -6,6 +6,7 @@ use smol_str::SmolStr;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::hash::{BuildHasherDefault, Hasher};
+use std::sync::Arc;
 
 // --- Data Model ---
 
@@ -433,7 +434,7 @@ pub struct MaterializedViewUpdate {
     pub query_id: SmolStr,
     #[serde(with = "serde_bytes")]
     pub result_hash: XorHash,
-    pub result_ids: Vec<SmolStr>,
+    pub result_ids: Arc<Vec<SmolStr>>,
     // NO TREE - compute on-demand via View::build_tree() if needed
 }
 
@@ -452,7 +453,7 @@ pub struct View {
     #[serde(skip, default)]
     tree_hash: XorHash,                       // XOR aggregate of all leaf hashes
     #[serde(skip, default)]
-    cached_ids: Vec<SmolStr>,                 // Sorted IDs (maintained incrementally)
+    cached_ids: Arc<Vec<SmolStr>>,            // Sorted IDs (maintained incrementally)
 }
 
 impl View {
@@ -464,7 +465,7 @@ impl View {
             params: params.map(SpookyValue::from),
             leaf_hashes: FastMap::default(),
             tree_hash: [0u8; 32],
-            cached_ids: Vec::new(),
+            cached_ids: Arc::new(Vec::new()),
         }
     }
 
@@ -538,8 +539,9 @@ impl View {
                 self.leaf_hashes.insert(key.clone(), leaf_hash);
                 
                 // O(log N) sorted insert
-                let pos = self.cached_ids.binary_search(key).unwrap_or_else(|p| p);
-                self.cached_ids.insert(pos, key.clone());
+                let ids = Arc::make_mut(&mut self.cached_ids);
+                let pos = ids.binary_search(key).unwrap_or_else(|p| p);
+                ids.insert(pos, key.clone());
             } else if net_weight == 0 {
                 // KEY DELETED
                 self.cache.remove(key);
@@ -548,8 +550,9 @@ impl View {
                     self.tree_hash = xor_checksum(&self.tree_hash, &old_hash);
                 }
                 // O(log N) sorted remove
-                if let Ok(pos) = self.cached_ids.binary_search(key) {
-                    self.cached_ids.remove(pos);
+                let ids = Arc::make_mut(&mut self.cached_ids);
+                if let Ok(pos) = ids.binary_search(key) {
+                    ids.remove(pos);
                 }
             } else {
                 // KEY UPDATED (weight changed but still present)
@@ -573,7 +576,8 @@ impl View {
             self.last_hash = Some(hash);
             
             // NO TREE BUILD - just clone the already-sorted IDs (SmolStr)
-            let result_ids: Vec<SmolStr> = self.cached_ids.clone();
+            // O(1) Arc clone!
+            let result_ids = Arc::clone(&self.cached_ids);
             
             return Some(MaterializedViewUpdate {
                 query_id: SmolStr::from(self.plan.id.as_str()),

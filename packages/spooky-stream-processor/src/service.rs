@@ -167,7 +167,7 @@ pub mod view {
         MaterializedViewUpdate {
             query_id: SmolStr::from(id),
             result_hash: empty_hash_bytes,
-            result_ids: vec![],
+            result_ids: std::sync::Arc::new(vec![]),
         }
     }
 }
