@@ -162,12 +162,13 @@ pub mod view {
     }
 
     pub fn default_result(id: &str) -> MaterializedViewUpdate {
-        use smol_str::SmolStr;
-        let empty_hash_bytes = *blake3::hash(&[]).as_bytes();
+
+        let empty_hash = "0000000000000000000000000000000000000000000000000000000000000000".to_string();
         MaterializedViewUpdate {
-            query_id: SmolStr::from(id),
-            result_hash: empty_hash_bytes,
-            result_ids: std::sync::Arc::new(vec![]),
+            query_id: id.to_string(),
+            result_hash: empty_hash,
+            result_ids: vec![],
+            tree: crate::engine::view::IdTree::empty(),
         }
     }
 }

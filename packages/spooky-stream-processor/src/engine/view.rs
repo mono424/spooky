@@ -6,7 +6,6 @@ use smol_str::SmolStr;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::hash::{BuildHasherDefault, Hasher};
-use std::sync::Arc;
 
 // --- Data Model ---
 
@@ -78,18 +77,32 @@ pub type ZSet = FastMap<RowKey, Weight>;
 
 // --- ID Tree Implementation ---
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LeafItem {
     pub id: SmolStr,
-    pub hash: XorHash,
-    pub children: Option<FastMap<String, IdTree>>,
+    pub hash: String, // String for legacy compatibility
+    pub children: Option<FastMap<SmolStr, IdTree>>,
 }
 
-#[derive(Clone, Debug)]
+// The legacy IdTree struct (must be present in the output)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IdTree {
-    pub hash: XorHash,
-    pub children: Option<FastMap<String, IdTree>>,
+    pub hash: String, // Hex string for compatibility
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub children: Option<FastMap<SmolStr, IdTree>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub leaves: Option<Vec<LeafItem>>,
+}
+
+impl IdTree {
+    // Helper to create an empty tree (legacy support)
+    pub fn empty() -> Self {
+        Self {
+            hash: "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+            children: None,
+            leaves: None,
+        }
+    }
 }
 
 // Custom serialization: Convert [u8; 32] to hex ONLY at JSON boundary
@@ -101,7 +114,7 @@ impl serde::Serialize for LeafItem {
         use serde::ser::SerializeStruct;
         let mut state = serializer.serialize_struct("LeafItem", 3)?;
         state.serialize_field("id", &self.id)?;
-        state.serialize_field("hash", &xor_hash_to_hex(&self.hash))?;
+        state.serialize_field("hash", &self.hash)?; // Already a String
         state.serialize_field("children", &self.children)?;
         state.end()
     }
@@ -117,51 +130,14 @@ impl<'de> serde::Deserialize<'de> for LeafItem {
             id: SmolStr,
             hash: String,
             #[serde(default)]
-            children: Option<FastMap<String, IdTree>>,
+            children: Option<FastMap<SmolStr, IdTree>>,
         }
         
         let helper = LeafItemHelper::deserialize(deserializer)?;
         Ok(LeafItem {
             id: helper.id,
-            hash: hex_to_xor_hash(&helper.hash).map_err(serde::de::Error::custom)?,
+            hash: helper.hash, // Correctly use String
             children: helper.children,
-        })
-    }
-}
-
-impl serde::Serialize for IdTree {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("IdTree", 3)?;
-        state.serialize_field("hash", &xor_hash_to_hex(&self.hash))?;
-        state.serialize_field("children", &self.children)?;
-        state.serialize_field("leaves", &self.leaves)?;
-        state.end()
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for IdTree {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct IdTreeHelper {
-            hash: String,
-            #[serde(default)]
-            children: Option<FastMap<String, IdTree>>,
-            #[serde(default)]
-            leaves: Option<Vec<LeafItem>>,
-        }
-        
-        let helper = IdTreeHelper::deserialize(deserializer)?;
-        Ok(IdTree {
-            hash: hex_to_xor_hash(&helper.hash).map_err(serde::de::Error::custom)?,
-            children: helper.children,
-            leaves: helper.leaves,
         })
     }
 }
@@ -271,15 +247,20 @@ impl IdTree {
             let mut hasher = blake3::Hasher::new();
             for item in &items {
                 hasher.update(item.id.as_bytes());
-                hasher.update(&item.hash); // Direct byte access, NO string conversion
+                // Convert hex string back to bytes for calculation
+                let h = hex_to_xor_hash(&item.hash).unwrap_or([0u8; 32]);
+                hasher.update(&h); 
                 if let Some(children) = &item.children {
                     // Sorting is important for deterministic hashing
-                    let mut keys: Vec<&String> = children.keys().collect();
+                    // Fix: Generic key type is SmolStr
+                    let mut keys: Vec<&SmolStr> = children.keys().collect();
                     keys.sort_unstable();
                     for k in keys {
                         hasher.update(k.as_bytes());
                         let child = children.get(k).unwrap();
-                        hasher.update(&child.hash); // Direct byte access
+                        // Child hash is also String
+                        let ch = hex_to_xor_hash(&child.hash).unwrap_or([0u8; 32]);
+                        hasher.update(&ch);
                     }
                 }
                 hasher.update(&[0]);
@@ -288,7 +269,7 @@ impl IdTree {
             let hash = *hasher.finalize().as_bytes();
 
             return IdTree {
-                hash,
+                hash: xor_hash_to_hex(&hash), // Only change is here: bytes -> hex string
                 children: None,
                 leaves: Some(items),
             };
@@ -302,14 +283,15 @@ impl IdTree {
         for (i, chunk) in items.chunks(threshold).enumerate() {
             let child_node = IdTree::build_with_threshold(chunk.to_vec(), threshold);
             
-            // DIRECT XOR on raw bytes - NO parsing, NO allocation
-            aggregated_checksum = xor_checksum(&aggregated_checksum, &child_node.hash);
+            // DIRECT XOR on raw bytes - converting from child hex strings
+            let child_hash = hex_to_xor_hash(&child_node.hash).unwrap_or([0u8; 32]);
+            aggregated_checksum = xor_checksum(&aggregated_checksum, &child_hash);
             
-            children.insert(i.to_string(), child_node);
+            children.insert(SmolStr::from(i.to_string()), child_node);
         }
 
         IdTree {
-            hash: aggregated_checksum,
+            hash: xor_hash_to_hex(&aggregated_checksum), // Only change: convert to string
             children: Some(children),
             leaves: None,
         }
@@ -429,13 +411,13 @@ pub struct QueryPlan {
     pub root: Operator,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+// The legacy Output Struct
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterializedViewUpdate {
-    pub query_id: SmolStr,
-    #[serde(with = "serde_bytes")]
-    pub result_hash: XorHash,
-    pub result_ids: Arc<Vec<SmolStr>>,
-    // NO TREE - compute on-demand via View::build_tree() if needed
+    pub query_id: String,
+    pub result_hash: String,
+    pub result_ids: Vec<String>, // Legacy expects explicit list of IDs
+    pub tree: IdTree,            // Legacy expects the tree struct
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -453,7 +435,7 @@ pub struct View {
     #[serde(skip, default)]
     tree_hash: XorHash,                       // XOR aggregate of all leaf hashes
     #[serde(skip, default)]
-    cached_ids: Arc<Vec<SmolStr>>,            // Sorted IDs (maintained incrementally)
+    cached_ids: Vec<SmolStr>,                 // Sorted IDs (maintained incrementally)
 }
 
 impl View {
@@ -465,7 +447,7 @@ impl View {
             params: params.map(SpookyValue::from),
             leaf_hashes: FastMap::default(),
             tree_hash: [0u8; 32],
-            cached_ids: Arc::new(Vec::new()),
+            cached_ids: Vec::new(),
         }
     }
 
@@ -539,9 +521,8 @@ impl View {
                 self.leaf_hashes.insert(key.clone(), leaf_hash);
                 
                 // O(log N) sorted insert
-                let ids = Arc::make_mut(&mut self.cached_ids);
-                let pos = ids.binary_search(key).unwrap_or_else(|p| p);
-                ids.insert(pos, key.clone());
+                let pos = self.cached_ids.binary_search(key).unwrap_or_else(|p| p);
+                self.cached_ids.insert(pos, key.clone());
             } else if net_weight == 0 {
                 // KEY DELETED
                 self.cache.remove(key);
@@ -550,9 +531,8 @@ impl View {
                     self.tree_hash = xor_checksum(&self.tree_hash, &old_hash);
                 }
                 // O(log N) sorted remove
-                let ids = Arc::make_mut(&mut self.cached_ids);
-                if let Ok(pos) = ids.binary_search(key) {
-                    ids.remove(pos);
+                if let Ok(pos) = self.cached_ids.binary_search(key) {
+                    self.cached_ids.remove(pos);
                 }
             } else {
                 // KEY UPDATED (weight changed but still present)
@@ -576,13 +556,23 @@ impl View {
             self.last_hash = Some(hash);
             
             // NO TREE BUILD - just clone the already-sorted IDs (SmolStr)
-            // O(1) Arc clone!
-            let result_ids = Arc::clone(&self.cached_ids);
             
+            // CONVERT TO LEGACY FORMAT (String) - O(N) penalty unavoidable for legacy compat
+            let result_ids: Vec<String> = self.cached_ids.iter().map(|s| s.to_string()).collect();
+            let result_hash_str = xor_hash_to_hex(&hash);
+
+            // Shallow Tree for API Compliance
+            let shallow_tree = IdTree {
+                 hash: result_hash_str.clone(),
+                 children: None,
+                 leaves: None
+            };
+
             return Some(MaterializedViewUpdate {
-                query_id: SmolStr::from(self.plan.id.as_str()),
-                result_hash: hash,
+                query_id: self.plan.id.to_string(),
+                result_hash: result_hash_str,
                 result_ids,
+                tree: shallow_tree,
             });
         }
 
@@ -862,7 +852,7 @@ impl View {
                     }
 
                     let sub_zset = self.eval_snapshot(sub_op, db, Some(&context));
-                    let mut sub_ids: Vec<String> = sub_zset.keys().map(|k| k.to_string()).collect();
+                    let mut sub_ids: Vec<String> = sub_zset.keys().map(|k| k.to_string()).collect(); // Legacy uses String keys? Or SmolStr? ZSet uses SmolStr.
                     sub_ids.sort_unstable();
 
                     let sub_items: Vec<LeafItem> = sub_ids
@@ -871,8 +861,10 @@ impl View {
                         .collect();
 
                     let sub_tree = IdTree::build(sub_items);
-                    dependency_hashes.push(sub_tree.hash);
-                    children_map.insert(alias.clone(), sub_tree);
+                    // Parse hash back to bytes for dependency hash
+                    let sub_hash = hex_to_xor_hash(&sub_tree.hash).unwrap_or([0u8; 32]);
+                    dependency_hashes.push(sub_hash);
+                    children_map.insert(SmolStr::from(alias), sub_tree);  // alias is String, FastMap key is SmolStr
                 }
             }
 
@@ -888,7 +880,7 @@ impl View {
 
         LeafItem {
             id: SmolStr::new(id),
-            hash: final_hash,
+            hash: xor_hash_to_hex(&final_hash), // Convert to Hex String for Legacy LeafItem
             children: if children_map.is_empty() {
                 None
             } else {
