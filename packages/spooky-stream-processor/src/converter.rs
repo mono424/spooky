@@ -3,7 +3,7 @@ use nom::{
     branch::alt,
     bytes::complete::{is_not, tag, tag_no_case, take_while},
     character::complete::{alpha1, char, digit1, multispace0},
-    combinator::{cut, map, map_res, opt, recognize, value},
+    combinator::{cut, map, map_res, opt, recognize, value}, 
     multi::separated_list1,
     sequence::{delimited, pair, preceded, tuple},
     IResult,
@@ -102,9 +102,9 @@ fn parse_leaf_predicate(input: &str) -> IResult<&str, Value> {
         "=" => "eq",
         ">" => "gt",
         "<" => "lt",
-        ">=" => "gte",
-        "<=" => "lte",
-        "!=" => "neq",
+        ">=" => "gte", 
+        "<=" => "lte", 
+        "!=" => "neq", 
         _ => "eq",
     };
 
@@ -130,7 +130,7 @@ fn parse_leaf_predicate(input: &str) -> IResult<&str, Value> {
 fn parse_term(input: &str) -> IResult<&str, Value> {
     alt((
         delimited(ws(char('(')), parse_or_expression, ws(char(')'))),
-        parse_leaf_predicate,
+        parse_leaf_predicate
     ))(input)
 }
 
@@ -139,7 +139,7 @@ fn parse_and_expression(input: &str) -> IResult<&str, Value> {
     if terms.len() == 1 {
         Ok((input, terms[0].clone()))
     } else {
-        Ok((input, json!({ "type": "and", "predicates": terms })))
+         Ok((input, json!({ "type": "and", "predicates": terms })))
     }
 }
 
@@ -148,12 +148,15 @@ fn parse_or_expression(input: &str) -> IResult<&str, Value> {
     if terms.len() == 1 {
         Ok((input, terms[0].clone()))
     } else {
-        Ok((input, json!({ "type": "or", "predicates": terms })))
+         Ok((input, json!({ "type": "or", "predicates": terms })))
     }
 }
 
 fn parse_where_logic(input: &str) -> IResult<&str, Value> {
-    preceded(tag_no_case("WHERE"), cut(parse_or_expression))(input)
+    preceded(
+        tag_no_case("WHERE"),
+        cut(parse_or_expression),
+    )(input)
 }
 
 // --- MAIN QUERY ---
@@ -182,19 +185,12 @@ fn parse_order_clause(input: &str) -> IResult<&str, Vec<Value>> {
 // --- SELECT PROJECTION ---
 
 fn parse_subquery_projection(input: &str) -> IResult<&str, Value> {
-    // (SELECT ... ) [optional_index] AS alias
+    // (SELECT ... ) AS alias
     let (input, sub_plan) = delimited(
         ws(char('(')),
         parse_full_query,
         ws(char(')')),
     )(input)?;
-
-    // Parse optional array index like [0]
-    let (input, _index) = opt(ws(delimited(
-        char('['),
-        map_res(digit1, |s: &str| s.parse::<usize>()),
-        char(']'),
-    )))(input)?;
 
     let (input, _) = ws(tag_no_case("AS"))(input)?;
     let (input, alias) = ws(parse_identifier)(input)?;
@@ -220,7 +216,7 @@ fn parse_projection_item(input: &str) -> IResult<&str, Value> {
 
 fn parse_full_query(input: &str) -> IResult<&str, Value> {
     let (input, _) = ws(tag_no_case("SELECT"))(input)?;
-
+    
     let (input, fields) = separated_list1(ws(char(',')), parse_projection_item)(input)?;
 
     let (input, _) = ws(tag_no_case("FROM"))(input)?;
@@ -240,7 +236,7 @@ fn parse_full_query(input: &str) -> IResult<&str, Value> {
 
     // Projections
     // If we have just one "type": "all", and nothing else, we skip projection technically
-    // But let's be explicit if desired.
+    // But let's be explicit if desired. 
     // If fields contains any subquery or if fields is not just "*", we project.
     let needs_projection = fields.len() > 1 || fields[0].get("type").and_then(|t| t.as_str()) != Some("all");
 
@@ -293,7 +289,7 @@ fn wrap_conditions(input_op: Value, predicate: Value) -> Value {
     for join_pred in joins {
         let left_field = join_pred.get("left").and_then(|v| v.as_str()).unwrap_or("id");
         let right_full = join_pred.get("right").and_then(|v| v.as_str()).unwrap_or("unknown");
-
+        
         // Assume right_full is "table.field"
         let parts: Vec<&str> = right_full.split('.').collect();
         let (r_table, r_col) = if parts.len() > 1 {
@@ -317,7 +313,7 @@ fn wrap_conditions(input_op: Value, predicate: Value) -> Value {
         } else {
             json!({ "type": "and", "predicates": filters })
         };
-
+        
         current_op = json!({
             "op": "filter",
             "predicate": final_pred,
@@ -326,54 +322,4 @@ fn wrap_conditions(input_op: Value, predicate: Value) -> Value {
     }
 
     current_op
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::engine::view::Operator;
-
-    #[test]
-    fn test_parse_failing_subquery() {
-        let sql = "SELECT *, (SELECT * FROM user WHERE id=$parent.author LIMIT 1)[0] AS author FROM thread ORDER BY created_at desc LIMIT 10;";
-        let result = convert_surql_to_dbsp(sql);
-        assert!(
-            result.is_ok(),
-            "Failed to parse subquery: {:?}",
-            result.err()
-        );
-    }
-
-    #[test]
-    fn test_subquery_deserializes_to_operator() {
-        let sql = "SELECT *, (SELECT * FROM user WHERE id=$parent.author LIMIT 1)[0] AS author FROM thread ORDER BY created_at desc LIMIT 10;";
-        let result = convert_surql_to_dbsp(sql).expect("Failed to parse SQL");
-
-        // Try to deserialize the result into an Operator
-        let operator: Result<Operator, _> = serde_json::from_value(result);
-        assert!(
-            operator.is_ok(),
-            "Failed to deserialize to Operator: {:?}",
-            operator.err()
-        );
-
-        // Verify the structure
-        let op = operator.unwrap();
-        match op {
-            Operator::Limit { input, .. } => {
-                match *input {
-                    Operator::Project { projections, .. } => {
-                        assert!(projections.len() > 0, "Expected projections");
-                        // Check that we have a subquery projection
-                        let has_subquery = projections.iter().any(|p| {
-                            matches!(p, crate::engine::view::Projection::Subquery { .. })
-                        });
-                        assert!(has_subquery, "Expected at least one subquery projection");
-                    }
-                    _ => panic!("Expected Project operator inside Limit"),
-                }
-            }
-            _ => panic!("Expected Limit operator at top level"),
-        }
-    }
 }
