@@ -168,7 +168,7 @@ fn benchmark_latency_mixed_stream() {
 
             // --- MESSUNG START ---
             let start = Instant::now();
-            let muvs = circuit.ingest_batch(batch_data); // Ruft jetzt die optimierte Batch-Methode auf
+            circuit.ingest_batch(batch_data); // Ruft jetzt die optimierte Batch-Methode auf
                                                          //println!("{:#?}", muvs);
             let duration = start.elapsed();
             // --- MESSUNG ENDE ---
