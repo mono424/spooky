@@ -10,6 +10,7 @@ use std::hash::{BuildHasherDefault, Hasher};
 
 pub type Weight = i64;
 pub type RowKey = SmolStr;
+pub type XorHash = [u8; 32];
 
 // We use FxHashMap instead of standard HashMap for internal calculations.
 // It is extremely fast for integers and strings.
@@ -287,6 +288,8 @@ pub struct View {
     pub last_hash: String,
     #[serde(default)]
     pub params: Option<SpookyValue>,
+    #[serde(skip)]
+    pub global_xor_hash: XorHash,
 }
 
 impl View {
@@ -296,6 +299,7 @@ impl View {
             cache: FastMap::default(),
             last_hash: String::new(),
             params: params.map(SpookyValue::from),
+            global_xor_hash: [0u8; 32],
         }
     }
 
@@ -354,29 +358,45 @@ impl View {
             return None;
         }
 
-        // Update cache (Incremental)
+        // Update cache (Incremental) and XOR hash
         for (key, weight) in &view_delta {
-            let entry = self.cache.entry(key.clone()).or_insert(0);
-            *entry += weight;
-            if *entry == 0 {
+            let old_weight = self.cache.get(key).copied().unwrap_or(0);
+            let new_weight = old_weight + weight;
+            
+            // XOR when row presence changes
+            let was_present = old_weight != 0;
+            let is_present = new_weight != 0;
+            
+            if was_present != is_present {
+                let row_hash = self.compute_row_hash(key, db);
+                xor_checksum(&mut self.global_xor_hash, &row_hash);
+            }
+            
+            // Update cache
+            if new_weight == 0 {
                 self.cache.remove(key);
+            } else {
+                self.cache.insert(key.clone(), new_weight);
             }
         }
 
-        // Build result
-        let mut result_ids: Vec<String> = self.cache.keys().map(|k| k.to_string()).collect();
-        result_ids.sort_unstable();
-
-        let items: Vec<LeafItem> = result_ids
-            .iter()
-            .map(|id| self.expand_item(id, &self.plan.root, db))
-            .collect();
-
-        let tree = IdTree::build(items);
-        let hash = tree.hash.clone();
+        // Convert XOR hash to hex string
+        let hash = hex::encode(self.global_xor_hash);
 
         if hash != self.last_hash {
             self.last_hash = hash.clone();
+            
+            // Build result IDs (sorted for determinism)
+            let mut result_ids: Vec<String> = self.cache.keys().map(|k| k.to_string()).collect();
+            result_ids.sort_unstable();
+            
+            // Build minimal tree (only if needed for compatibility)
+            let items: Vec<LeafItem> = result_ids
+                .iter()
+                .map(|id| self.expand_item(id, &self.plan.root, db))
+                .collect();
+            let tree = IdTree::build(items);
+            
             return Some(MaterializedViewUpdate {
                 query_id: self.plan.id.clone(),
                 result_hash: hash,
@@ -676,6 +696,22 @@ impl View {
         }
     }
 
+    /// Computes the Blake3 hash of a single row (key + value) for XOR checksumming.
+    fn compute_row_hash(&self, key: &str, db: &Database) -> XorHash {
+        let mut hasher = blake3::Hasher::new();
+        
+        // Hash the key
+        hasher.update(key.as_bytes());
+        
+        // Hash the value if it exists
+        if let Some(value) = self.get_row_value(key, db) {
+            hash_spooky_value_blake3(value, &mut hasher);
+        }
+        
+        let hash = hasher.finalize();
+        *hash.as_bytes()
+    }
+
     fn find_projections<'a>(&self, op: &'a Operator) -> Vec<&'a Projection> {
         match op {
             Operator::Project { projections, .. } => projections.iter().collect(),
@@ -790,6 +826,47 @@ impl View {
 }
 
 // --- OPTIMIZED COMPARISON & HASHING ---
+
+// --- OPTIMIZED COMPARISON & HASHING ---
+
+/// XOR two 32-byte hashes in place. Auto-vectorizable by LLVM.
+#[inline(always)]
+pub fn xor_checksum(accum: &mut XorHash, item: &XorHash) {
+    for i in 0..32 {
+        accum[i] ^= item[i];
+    }
+}
+
+/// Hash a SpookyValue using Blake3 for XOR checksumming
+fn hash_spooky_value_blake3(v: &SpookyValue, hasher: &mut blake3::Hasher) {
+    match v {
+        SpookyValue::Null => { hasher.update(&[0]); },
+        SpookyValue::Bool(b) => { hasher.update(&[1]); hasher.update(&[*b as u8]); },
+        SpookyValue::Number(n) => { 
+            hasher.update(&[2]); 
+            hasher.update(&n.to_bits().to_be_bytes());
+        },
+        SpookyValue::Str(s) => { hasher.update(&[3]); hasher.update(s.as_bytes()); },
+        SpookyValue::Array(arr) => {
+            hasher.update(&[4]);
+            for item in arr {
+                hash_spooky_value_blake3(item, hasher);
+            }
+        },
+        SpookyValue::Object(obj) => {
+             hasher.update(&[5]);
+             // Sort keys for deterministic hashing
+             let mut keys: Vec<&SmolStr> = obj.keys().collect();
+             keys.sort_unstable();
+             for k in keys {
+                 hasher.update(k.as_bytes());
+                 if let Some(v) = obj.get(k) {
+                     hash_spooky_value_blake3(v, hasher);
+                 }
+             }
+        }
+    }
+}
 
 // Avoids Allocations (.to_string) completely for primitive types.
 // Optimized for SpookyValue
