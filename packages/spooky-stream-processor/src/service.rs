@@ -6,15 +6,18 @@ use serde_json::{json, Value};
 
 
 fn hash_value_recursive_blake3(v: &Value, hasher: &mut blake3::Hasher) {
+    // Optimization: Buffer small writes
+    let mut buffer = [0u8; 8]; 
     match v {
         Value::Null => { hasher.update(&[0]); },
         Value::Bool(b) => { hasher.update(&[1]); hasher.update(&[*b as u8]); },
         Value::Number(n) => { 
             hasher.update(&[2]); 
             if let Some(f) = n.as_f64() {
-                hasher.update(&f.to_be_bytes());
+                buffer.copy_from_slice(&f.to_be_bytes());
+                hasher.update(&buffer);
             } else {
-                // strict fallback if it somehow isn't an f64 compatible number, though in JS/JSON it mostly is
+                // strict fallback
                 hasher.update(n.to_string().as_bytes());
             }
         },
@@ -27,12 +30,6 @@ fn hash_value_recursive_blake3(v: &Value, hasher: &mut blake3::Hasher) {
         },
         Value::Object(obj) => {
              hasher.update(&[5]);
-             // Deterministic hashing by sorting keys? 
-             // To match current recursive approach in view.rs which iterates straight:
-             // We stick to simple iteration unless strict determinism across reloads is needed.
-             // Given the previous code didn't sort, we won't sort here to maintain behavior relative to previous logic,
-             // BUT `service.rs` uses `hash_value_recursive` which previously used `to_string` on numbers.
-             // The prompt asks for optimization.
              for (k, v) in obj {
                  hasher.update(k.as_bytes());
                  hash_value_recursive_blake3(v, hasher);

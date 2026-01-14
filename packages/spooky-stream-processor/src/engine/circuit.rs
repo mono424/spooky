@@ -123,7 +123,7 @@ impl Circuit {
         &mut self,
         batch: Vec<(String, String, String, Value, String)>,
     ) -> Vec<MaterializedViewUpdate> {
-        // Convert to SpookyValue
+        // Legacy wrapper for backward compatibility, converts to SpookyValue
         let batch_spooky: Vec<(SmolStr, SmolStr, SmolStr, SpookyValue, String)> = batch
             .into_iter()
             .map(|(t, o, i, r, h)| {
@@ -140,10 +140,15 @@ impl Circuit {
         self.ingest_batch_spooky(batch_spooky)
     }
 
-    pub fn ingest_batch_spooky(
+    /// Optimized zero-copy friendly ingestion that accepts any iterator yielding the correct tuple type.
+    /// This allows passing slices or other iterables without forcing a Vec allocation.
+    pub fn ingest_batch_spooky<I>(
         &mut self,
-        batch: Vec<(SmolStr, SmolStr, SmolStr, SpookyValue, String)>,
-    ) -> Vec<MaterializedViewUpdate> {
+        batch: I,
+    ) -> Vec<MaterializedViewUpdate>
+    where
+        I: IntoIterator<Item = (SmolStr, SmolStr, SmolStr, SpookyValue, String)>,
+    {
         let mut table_deltas: FastMap<String, ZSet> = FastMap::default();
 
         // 1. Storage Phase: Update Storage & Accumulate Deltas
@@ -196,7 +201,7 @@ impl Circuit {
             if let Some(indices) = self.dependency_graph.get(&table) {
                 impacted_view_indices.extend(indices.iter().copied());
             } else {
-                println!("DEBUG: Table {} changed, but no views depend on it", table);
+                // println!("DEBUG: Table {} changed, but no views depend on it", table);
             }
         }
 
@@ -208,19 +213,20 @@ impl Circuit {
         let mut all_updates: Vec<MaterializedViewUpdate> = Vec::new();
 
         // 3. Execution Phase
-        // 3. Execution Phase
         let db_ref = &self.db;
         let deltas_ref = &table_deltas;
 
+        // Heuristic: Only use parallel execution if we have enough views to justify the overhead.
+        const PARALLEL_THRESHOLD: usize = 4;
+        let use_parallel = impacted_view_indices.len() > PARALLEL_THRESHOLD;
+
         #[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
-        let updates: Vec<MaterializedViewUpdate> = {
-            use rayon::prelude::*;
-            self.views
+        let updates: Vec<MaterializedViewUpdate> = if use_parallel {
+             use rayon::prelude::*;
+             self.views
                 .par_iter_mut()
                 .enumerate()
                 .filter_map(|(i, view)| {
-                    // Check if this view needs update.
-                    // impacted_view_indices is sorted, so binary_search is efficient.
                     if impacted_view_indices.binary_search(&i).is_ok() {
                         view.process_ingest(deltas_ref, db_ref)
                     } else {
@@ -228,6 +234,18 @@ impl Circuit {
                     }
                 })
                 .collect()
+        } else {
+            // Fallback to sequential if below threshold (even in parallel builds)
+             let mut ups = Vec::new();
+             for i in impacted_view_indices {
+                 if i < self.views.len() {
+                     let view: &mut View = &mut self.views[i];
+                     if let Some(update) = view.process_ingest(deltas_ref, db_ref) {
+                         ups.push(update);
+                     }
+                 }
+             }
+             ups
         };
 
         #[cfg(any(target_arch = "wasm32", not(feature = "parallel")))]

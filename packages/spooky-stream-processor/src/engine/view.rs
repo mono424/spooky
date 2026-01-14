@@ -685,16 +685,23 @@ impl View {
     }
 
     fn get_row_value<'a>(&self, key: &str, db: &'a Database) -> Option<&'a SpookyValue> {
-        // Optimization: Avoid allocation for split if possible or use SmolStr if we change internal map keys
-        // For now, key is &str, db uses SmolStr keys.
-        // We assume valid format "table:id"
-        let (table_name, _id) = key.split_once(':')?;
-        db.tables.get(table_name)?.rows.get(key)
+        // Optimization: direct split without validation overhead for known patterns
+        if let Some(idx) = key.find(':') {
+            let table_name = &key[..idx];
+            // let _id = &key[idx+1..]; 
+            db.tables.get(table_name)?.rows.get(key)
+        } else {
+            None
+        }
     }
 
     fn get_row_hash(&self, key: &str, db: &Database) -> Option<String> {
-        let (table_name, _id) = key.split_once(':')?;
-        db.tables.get(table_name)?.hashes.get(key).cloned()
+        if let Some(idx) = key.find(':') {
+            let table_name = &key[..idx];
+            db.tables.get(table_name)?.hashes.get(key).cloned()
+        } else {
+            None
+        }
     }
 
     fn check_predicate(
@@ -898,6 +905,71 @@ fn extract_number_column(
 
 // Auto-vectorizable batch filter
 // Returns indices of passing elements
+// -----------------------------------------------------------------------------
+// Wasm32 SIMD Implementation (128-bit)
+// -----------------------------------------------------------------------------
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+fn filter_f64_batch(values: &[f64], target: f64, op: NumericOp) -> Vec<usize> {
+    use core::arch::wasm32::*;
+
+    let mut indices = Vec::with_capacity(values.len());
+    let target_vec = unsafe { wasm_f64x2_splat(target) };
+    
+    // Process 2 f64s at a time (128-bit)
+    let chunks = values.chunks_exact(2);
+    let remainder = chunks.remainder();
+    
+    let mut i = 0;
+    for chunk in chunks {
+        let val_vec = unsafe { wasm_v128_load(chunk.as_ptr() as *const v128) };
+        
+        let mask = unsafe {
+            match op {
+                NumericOp::Gt => wasm_f64x2_gt(val_vec, target_vec),
+                NumericOp::Gte => wasm_f64x2_ge(val_vec, target_vec),
+                NumericOp::Lt => wasm_f64x2_lt(val_vec, target_vec),
+                NumericOp::Lte => wasm_f64x2_le(val_vec, target_vec),
+                NumericOp::Eq => wasm_f64x2_eq(val_vec, target_vec),
+                NumericOp::Neq => wasm_f64x2_ne(val_vec, target_vec),
+            }
+        };
+
+        // Extract mask bits: bit 0 for lane 0, bit 1 for lane 1
+        let mask_bits = unsafe { wasm_i8x16_bitmask(mask) };
+        
+        // f64x2 mask usually sets high bits of each 64-bit lane.
+        // wasm_i8x16_bitmask returns 16 bits. 
+        // Lower f64 is bytes 0-7, Upper f64 is bytes 8-15.
+        // If low lane matches, low byte bits of mask are set.
+        
+        // Simplified check: extracting generic boolean
+        // lane 0
+        if unsafe { wasm_f64x2_extract_lane::<0>(mask) } != 0.0 {
+            indices.push(i);
+        }
+        // lane 1
+        if unsafe { wasm_f64x2_extract_lane::<1>(mask) } != 0.0 {
+            indices.push(i + 1);
+        }
+
+        i += 2;
+    }
+
+    // Handle remainder (scalar)
+    for val in remainder {
+        if check_scalar(*val, target, &op) {
+            indices.push(i);
+        }
+        i += 1;
+    }
+    
+    indices
+}
+
+// -----------------------------------------------------------------------------
+// Native / Scalar Fallback Implementation
+// -----------------------------------------------------------------------------
+#[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
 fn filter_f64_batch(values: &[f64], target: f64, op: NumericOp) -> Vec<usize> {
     let mut indices = Vec::with_capacity(values.len());
     
@@ -909,15 +981,7 @@ fn filter_f64_batch(values: &[f64], target: f64, op: NumericOp) -> Vec<usize> {
     for chunk in chunks {
         // Inner loop fixed size 8 - easier for LLVM to vectorize
         for val in chunk {
-            let pass = match op {
-                NumericOp::Gt => *val > target,
-                NumericOp::Gte => *val >= target,
-                NumericOp::Lt => *val < target,
-                NumericOp::Lte => *val <= target,
-                NumericOp::Eq => (*val - target).abs() < f64::EPSILON, // Float approx eq
-                NumericOp::Neq => (*val - target).abs() > f64::EPSILON,
-            };
-            if pass {
+            if check_scalar(*val, target, &op) {
                 indices.push(i);
             }
             i += 1;
@@ -925,21 +989,25 @@ fn filter_f64_batch(values: &[f64], target: f64, op: NumericOp) -> Vec<usize> {
     }
 
     for val in remainder {
-        let pass = match op {
-            NumericOp::Gt => *val > target,
-            NumericOp::Gte => *val >= target,
-            NumericOp::Lt => *val < target,
-            NumericOp::Lte => *val <= target,
-            NumericOp::Eq => (*val - target).abs() < f64::EPSILON,
-            NumericOp::Neq => (*val - target).abs() > f64::EPSILON,
-        };
-        if pass {
+        if check_scalar(*val, target, &op) {
             indices.push(i);
         }
         i += 1;
     }
     
     indices
+}
+
+#[inline(always)]
+fn check_scalar(val: f64, target: f64, op: &NumericOp) -> bool {
+    match op {
+        NumericOp::Gt => val > target,
+        NumericOp::Gte => val >= target,
+        NumericOp::Lt => val < target,
+        NumericOp::Lte => val <= target,
+        NumericOp::Eq => (val - target).abs() < f64::EPSILON,
+        NumericOp::Neq => (val - target).abs() > f64::EPSILON,
+    }
 }
 
 // Portable SIMD Sum (Chunked)
