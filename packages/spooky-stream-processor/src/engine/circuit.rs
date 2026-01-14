@@ -1,6 +1,6 @@
 use super::view::{
     FastMap, MaterializedViewUpdate, Operator, Projection, QueryPlan, RowKey, SpookyValue, View,
-    ZSet,
+    XorHash, ZSet,
 };
 // use rustc_hash::{FxHashMap, FxHasher}; // Unused in this file (used via FastMap)
 use serde::{Deserialize, Serialize};
@@ -9,13 +9,69 @@ use smol_str::SmolStr;
 
 // --- Table & Database ---
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub struct Table {
     pub name: String,
     pub zset: ZSet,                         // This is the fast FxHashMap
     pub rows: FastMap<RowKey, SpookyValue>, // Using SpookyValue
-    pub hashes: FastMap<RowKey, String>,
+    pub hashes: FastMap<RowKey, XorHash>,   // Raw bytes, converted at JSON boundary
+}
+
+// Custom serde for Table to handle hash conversion
+impl serde::Serialize for Table {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("Table", 4)?;
+        state.serialize_field("name", &self.name)?;
+        state.serialize_field("zset", &self.zset)?;
+        state.serialize_field("rows", &self.rows)?;
+        
+        // Convert hashes to hex for serialization
+        let hex_hashes: FastMap<RowKey, String> = self.hashes
+            .iter()
+            .map(|(k, v)| (k.clone(), super::view::xor_hash_to_hex(v)))
+            .collect();
+        state.serialize_field("hashes", &hex_hashes)?;
+        state.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Table {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct TableHelper {
+            name: String,
+            zset: ZSet,
+            rows: FastMap<RowKey, SpookyValue>,
+            hashes: FastMap<RowKey, String>,
+        }
+        
+        let helper = TableHelper::deserialize(deserializer)?;
+        
+        // Convert hashes from hex to bytes
+        let byte_hashes: Result<FastMap<RowKey, XorHash>, _> = helper.hashes
+            .into_iter()
+            .map(|(k, v)| {
+                super::view::hex_to_xor_hash(&v)
+                    .map(|hash| (k, hash))
+                    .map_err(serde::de::Error::custom)
+            })
+            .collect();
+        
+        Ok(Table {
+            name: helper.name,
+            zset: helper.zset,
+            rows: helper.rows,
+            hashes: byte_hashes?,
+        })
+    }
 }
 
 impl Table {
@@ -28,8 +84,8 @@ impl Table {
         }
     }
 
-    // Changing signature to use SmolStr is implied by RowKey definition change
-    pub fn update_row(&mut self, key: SmolStr, data: SpookyValue, hash: String) {
+    // Changing signature to use XorHash
+    pub fn update_row(&mut self, key: SmolStr, data: SpookyValue, hash: XorHash) {
         self.rows.insert(key.clone(), data);
         self.hashes.insert(key, hash);
     }
@@ -54,7 +110,7 @@ impl Table {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Database {
-    pub tables: FastMap<String, Table>,
+    pub tables: FastMap<SmolStr, Table>,  // Changed from String to SmolStr
 }
 
 impl Database {
@@ -65,8 +121,9 @@ impl Database {
     }
 
     pub fn ensure_table(&mut self, name: &str) -> &mut Table {
+        let key = SmolStr::from(name);
         self.tables
-            .entry(name.to_string())
+            .entry(key)
             .or_insert_with(|| Table::new(name.to_string()))
     }
 }
@@ -79,7 +136,7 @@ pub struct Circuit {
     pub views: Vec<View>,
     // Optimisation: Mapping Table -> List of View-Indices
     #[serde(skip, default)]
-    pub dependency_graph: FastMap<String, Vec<usize>>,
+    pub dependency_graph: FastMap<SmolStr, Vec<usize>>,  // Changed from String
 }
 
 impl Circuit {
@@ -110,12 +167,14 @@ impl Circuit {
         record: Value,
         hash: &str,
     ) -> Vec<MaterializedViewUpdate> {
+        // Parse hex string at API boundary
+        let hash_bytes = super::view::hex_to_xor_hash(hash).unwrap_or([0u8; 32]);
         self.ingest_batch_spooky(vec![(
             SmolStr::from(table),
             SmolStr::from(op),
             SmolStr::from(id),
             SpookyValue::from(record),
-            hash.to_string(),
+            hash_bytes,
         )])
     }
 
@@ -123,16 +182,17 @@ impl Circuit {
         &mut self,
         batch: Vec<(String, String, String, Value, String)>,
     ) -> Vec<MaterializedViewUpdate> {
-        // Convert to SpookyValue
-        let batch_spooky: Vec<(SmolStr, SmolStr, SmolStr, SpookyValue, String)> = batch
+        // Convert to SpookyValue and parse hashes at API boundary
+        let batch_spooky: Vec<(SmolStr, SmolStr, SmolStr, SpookyValue, XorHash)> = batch
             .into_iter()
             .map(|(t, o, i, r, h)| {
+                let hash_bytes = super::view::hex_to_xor_hash(&h).unwrap_or([0u8; 32]);
                 (
                     SmolStr::from(t),
                     SmolStr::from(o),
                     SmolStr::from(i),
                     SpookyValue::from(r),
-                    h,
+                    hash_bytes,
                 )
             })
             .collect();
@@ -142,9 +202,9 @@ impl Circuit {
 
     pub fn ingest_batch_spooky(
         &mut self,
-        batch: Vec<(SmolStr, SmolStr, SmolStr, SpookyValue, String)>,
+        batch: Vec<(SmolStr, SmolStr, SmolStr, SpookyValue, XorHash)>,
     ) -> Vec<MaterializedViewUpdate> {
-        let mut table_deltas: FastMap<String, ZSet> = FastMap::default();
+        let mut table_deltas: FastMap<SmolStr, ZSet> = FastMap::default();  // Changed from String
 
         // 1. Storage Phase: Update Storage & Accumulate Deltas
         for (table, op, id, record_spooky, hash) in batch {
@@ -168,18 +228,18 @@ impl Circuit {
                 }
             }
 
-            let delta_map = table_deltas.entry(table.to_string()).or_default();
+            let delta_map = table_deltas.entry(SmolStr::from(table.as_str())).or_default();
             *delta_map.entry(key).or_insert(0) += weight;
         }
 
         // Apply Deltas to DB ZSets
-        let mut changed_tables = Vec::new();
+        let mut changed_tables = Vec::with_capacity(table_deltas.len());
         for (table, delta) in &mut table_deltas {
             delta.retain(|_, w| *w != 0);
             if !delta.is_empty() {
                 let tb = self.db.ensure_table(table.as_str());
                 tb.apply_delta(delta);
-                changed_tables.push(table.to_string());
+                changed_tables.push(table.clone());
             }
         }
 
@@ -191,12 +251,10 @@ impl Circuit {
         }
 
         // Identify ALL affected views from ALL changed tables
-        let mut impacted_view_indices: Vec<usize> = Vec::new();
+        let mut impacted_view_indices: Vec<usize> = Vec::with_capacity(self.views.len());
         for table in changed_tables {
             if let Some(indices) = self.dependency_graph.get(&table) {
                 impacted_view_indices.extend(indices.iter().copied());
-            } else {
-                println!("DEBUG: Table {} changed, but no views depend on it", table);
             }
         }
 
@@ -261,8 +319,8 @@ impl Circuit {
 
         let mut view = View::new(plan, params);
 
-        // Trigger initial full scan by passing None to process_ingest
-        let empty_deltas: FastMap<String, ZSet> = FastMap::default();
+        // Trigger initial full scan by passing empty to process_ingest
+        let empty_deltas: FastMap<SmolStr, ZSet> = FastMap::default();  // Fix: use SmolStr
         let initial_update = view.process_ingest(&empty_deltas, &self.db);
 
         let view_idx = self.views.len();
@@ -299,7 +357,8 @@ impl Circuit {
             self.rebuild_dependency_graph();
         }
 
-        if let Some(indices) = self.dependency_graph.get(&table) {
+        let table_key = SmolStr::from(table.as_str());
+        if let Some(indices) = self.dependency_graph.get(&table_key) {
             // We need to clone indices to avoid borrowing self.dependency_graph while mutably borrowing self.views
             let indices = indices.clone();
             for i in indices {
@@ -316,9 +375,9 @@ impl Circuit {
 }
 
 // Helper to find source tables in a plan
-fn extract_tables(op: &Operator) -> Vec<String> {
+fn extract_tables(op: &Operator) -> Vec<SmolStr> {
     match op {
-        Operator::Scan { table } => vec![table.clone()],
+        Operator::Scan { table } => vec![SmolStr::from(table.as_str())],
         Operator::Filter { input, .. } => extract_tables(input),
         Operator::Project { input, projections } => {
             let mut tbls = extract_tables(input);

@@ -162,13 +162,13 @@ pub mod view {
     }
 
     pub fn default_result(id: &str) -> MaterializedViewUpdate {
-        let empty_hash = blake3::hash(&[]).to_hex().to_string();
+        let empty_hash_bytes = *blake3::hash(&[]).as_bytes();  // XorHash
         MaterializedViewUpdate {
             query_id: id.to_string(),
-            result_hash: empty_hash.clone(),
+            result_hash: blake3::hash(&[]).to_hex().to_string(),
             result_ids: vec![],
             tree: IdTree {
-                hash: empty_hash,
+                hash: empty_hash_bytes,  // Use raw bytes
                 children: None,
                 leaves: Some(vec![]),
             },
