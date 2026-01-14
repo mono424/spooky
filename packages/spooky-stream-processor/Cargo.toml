@@ -23,6 +23,7 @@ rustc-hash = "2.1.1"
 smol_str = { version = "0.3.1", features = ["serde"] }
 rayon = { version = "1.8", optional = true }
 serde_bytes = "0.11.19"
+bumpalo = { version = "3.16", features = ["collections"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 mimalloc = "0.1.48"

@@ -311,13 +311,36 @@ impl Circuit {
         plan: QueryPlan,
         params: Option<Value>,
     ) -> Option<MaterializedViewUpdate> {
+        self.register_view_internal(plan, params, false)
+    }
+    
+    /// Register a view with lazy tree construction enabled.
+    /// Tree building is deferred to get_full_tree() - significant performance improvement.
+    pub fn register_view_lazy(
+        &mut self,
+        plan: QueryPlan,
+        params: Option<Value>,
+    ) -> Option<MaterializedViewUpdate> {
+        self.register_view_internal(plan, params, true)
+    }
+    
+    fn register_view_internal(
+        &mut self,
+        plan: QueryPlan,
+        params: Option<Value>,
+        lazy_tree: bool,
+    ) -> Option<MaterializedViewUpdate> {
         if let Some(pos) = self.views.iter().position(|v| v.plan.id == plan.id) {
             self.views.remove(pos);
             // Rebuild dependencies entirely to be safe (simple but slower)
             self.rebuild_dependency_graph();
         }
 
-        let mut view = View::new(plan, params);
+        let mut view = if lazy_tree {
+            View::new_lazy(plan, params)
+        } else {
+            View::new(plan, params)
+        };
 
         // Trigger initial full scan by passing empty to process_ingest
         let empty_deltas: FastMap<SmolStr, ZSet> = FastMap::default();  // Fix: use SmolStr

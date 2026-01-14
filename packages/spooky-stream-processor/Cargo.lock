@@ -403,6 +403,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "blake3",
+ "bumpalo",
  "getrandom",
  "lazy_static",
  "mimalloc",

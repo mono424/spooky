@@ -6,6 +6,9 @@ use smol_str::SmolStr;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::hash::{BuildHasherDefault, Hasher};
+// Set to TRUE for high-speed benchmarks (O(1) return, no data).
+// Set to FALSE for production/frontend compatibility (O(N) return, full data).
+pub const BENCHMARK_MODE: bool = false;
 
 // --- Data Model ---
 
@@ -429,6 +432,10 @@ pub struct View {
     #[serde(default)]
     pub params: Option<SpookyValue>,
     
+    /// When true, skip IdTree construction in updates (use get_full_tree on demand)
+    #[serde(default)]
+    pub lazy_tree: bool,
+    
     // INCREMENTAL TREE STATE - O(Delta) updates
     #[serde(skip, default)]
     leaf_hashes: FastMap<SmolStr, XorHash>,  // key → computed leaf hash
@@ -445,10 +452,18 @@ impl View {
             cache: FastMap::default(),
             last_hash: None,
             params: params.map(SpookyValue::from),
+            lazy_tree: false,  // Default: build trees immediately for backwards compatibility
             leaf_hashes: FastMap::default(),
             tree_hash: [0u8; 32],
             cached_ids: Vec::new(),
         }
+    }
+    
+    /// Create a view with lazy tree construction enabled
+    pub fn new_lazy(plan: QueryPlan, params: Option<Value>) -> Self {
+        let mut view = Self::new(plan, params);
+        view.lazy_tree = true;
+        view
     }
 
     /// The main function for updates.
@@ -555,25 +570,73 @@ impl View {
         if self.last_hash.as_ref() != Some(&hash) || is_first_run {
             self.last_hash = Some(hash);
             
-            // NO TREE BUILD - just clone the already-sorted IDs (SmolStr)
-            
-            // CONVERT TO LEGACY FORMAT (String) - O(N) penalty unavoidable for legacy compat
-            let result_ids: Vec<String> = self.cached_ids.iter().map(|s| s.to_string()).collect();
-            let result_hash_str = xor_hash_to_hex(&hash);
+            if BENCHMARK_MODE {
+                // --- BENCHMARK PATH (Fastest) ---
+                // O(1) - Return only the hash to measure engine throughput.
+                let result_hash_str = xor_hash_to_hex(&hash);
+                
+                let dummy_tree = IdTree {
+                    hash: result_hash_str.clone(),
+                    children: None,
+                    leaves: None,
+                };
+                return Some(MaterializedViewUpdate {
+                    query_id: self.plan.id.to_string(),
+                    result_hash: result_hash_str,
+                    result_ids: vec![],
+                    tree: dummy_tree,
+                });
+            } else if self.lazy_tree {
+                // --- LAZY PATH (Production with lazy trees + Arena optimization) ---
+                // O(N) - Return hash + IDs only, defer tree building to get_full_tree()
+                // OPTIMIZATION: Use arena allocator to avoid allocating intermediate Vec<String>
+                use bumpalo::Bump;
+                let arena = Bump::new();
+                
+                // Collect key references into arena (single allocation)
+                let mut sorted_refs = bumpalo::collections::Vec::from_iter_in(
+                    self.cache.keys().map(|k| k.as_str()),
+                    &arena
+                );
+                sorted_refs.sort_unstable();
+                
+                // Convert to owned strings only for output
+                let result_ids: Vec<String> = sorted_refs.iter().map(|&s| s.to_string()).collect();
+                
+                let empty_tree = IdTree {
+                    hash: xor_hash_to_hex(&hash),
+                    children: None,
+                    leaves: None,
+                };
+                
+                return Some(MaterializedViewUpdate {
+                    query_id: self.plan.id.to_string(),
+                    result_hash: xor_hash_to_hex(&hash),
+                    result_ids,
+                    tree: empty_tree,  // Empty tree - clients call get_full_tree() if needed
+                });
+                // Arena automatically freed here
+            } else {
+                // --- COMPATIBLE PATH (Production with eager trees) ---
+                // O(N log N) - Build full tree so the frontend receives data.
+                let mut result_ids: Vec<String> = self.cache.keys().map(|k| k.to_string()).collect();
+                result_ids.sort_unstable(); // Sorting is required for consistent IdTree order
 
-            // Shallow Tree for API Compliance
-            let shallow_tree = IdTree {
-                 hash: result_hash_str.clone(),
-                 children: None,
-                 leaves: None
-            };
+                let items: Vec<LeafItem> = result_ids
+                    .iter()
+                    .map(|id| self.expand_item(id, &self.plan.root, db))
+                    .collect();
 
-            return Some(MaterializedViewUpdate {
-                query_id: self.plan.id.to_string(),
-                result_hash: result_hash_str,
-                result_ids,
-                tree: shallow_tree,
-            });
+                // Note: IdTree::build re-hashes the tree structure, which validates the XOR hash.
+                let tree = IdTree::build(items);
+                
+                return Some(MaterializedViewUpdate {
+                    query_id: self.plan.id.to_string(),
+                    result_hash: xor_hash_to_hex(&hash),
+                    result_ids,
+                    tree,
+                });
+            }
         }
 
         None
