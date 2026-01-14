@@ -147,12 +147,24 @@ impl<'de> serde::Deserialize<'de> for LeafItem {
 
 /// XOR-based checksum for fast node aggregation (commutative/associative)
 /// This is a single CPU instruction per byte and allows for extremely fast tree recalculations
+/// OPTIMIZATION: Process 8 bytes at a time using u64 for better performance
 #[inline(always)]
 fn xor_checksum(a: &XorHash, b: &XorHash) -> XorHash {
     let mut result = [0u8; 32];
-    for i in 0..32 {
-        result[i] = a[i] ^ b[i];
+    
+    // Process 8 bytes at a time (4 x u64 = 32 bytes)
+    unsafe {
+        let a_ptr = a.as_ptr() as *const u64;
+        let b_ptr = b.as_ptr() as *const u64;
+        let r_ptr = result.as_mut_ptr() as *mut u64;
+        
+        // Unrolled loop for 4 x u64 XOR operations
+        *r_ptr = *a_ptr ^ *b_ptr;
+        *r_ptr.add(1) = *a_ptr.add(1) ^ *b_ptr.add(1);
+        *r_ptr.add(2) = *a_ptr.add(2) ^ *b_ptr.add(2);
+        *r_ptr.add(3) = *a_ptr.add(3) ^ *b_ptr.add(3);
     }
+    
     result
 }
 
@@ -522,6 +534,13 @@ impl View {
         }
 
         // === PHASE 1: Update cache & tree INCREMENTALLY - O(Delta) ===
+        // OPTIMIZATION: Batch operations for better parallelization and cache locality
+        
+        // Step 1a: Collect operations by type
+        let mut inserts = Vec::new();
+        let mut updates = Vec::new();
+        let mut deletes = Vec::new();
+        
         for (key, &weight) in &view_delta {
             let net_weight = {
                 let entry = self.cache.entry(key.clone()).or_insert(0);
@@ -531,35 +550,62 @@ impl View {
 
             if weight > 0 && net_weight == weight {
                 // NEW KEY INSERTED
-                let leaf_hash = self.compute_leaf_hash(key, db);
-                self.tree_hash = xor_checksum(&self.tree_hash, &leaf_hash);
-                self.leaf_hashes.insert(key.clone(), leaf_hash);
-                
-                // O(log N) sorted insert
-                let pos = self.cached_ids.binary_search(key).unwrap_or_else(|p| p);
-                self.cached_ids.insert(pos, key.clone());
+                inserts.push(key);
             } else if net_weight == 0 {
                 // KEY DELETED
-                self.cache.remove(key);
-                if let Some(old_hash) = self.leaf_hashes.remove(key) {
-                    // XOR out the old hash (A ⊕ A = 0)
-                    self.tree_hash = xor_checksum(&self.tree_hash, &old_hash);
-                }
-                // O(log N) sorted remove
-                if let Ok(pos) = self.cached_ids.binary_search(key) {
-                    self.cached_ids.remove(pos);
-                }
+                deletes.push(key);
             } else {
                 // KEY UPDATED (weight changed but still present)
-                // Re-hash the leaf since row data may have changed
-                if let Some(old_hash) = self.leaf_hashes.get(key).copied() {
-                    let new_hash = self.compute_leaf_hash(key, db);
-                    if old_hash != new_hash {
-                        // XOR out old, XOR in new
-                        self.tree_hash = xor_checksum(&self.tree_hash, &old_hash);
-                        self.tree_hash = xor_checksum(&self.tree_hash, &new_hash);
-                        self.leaf_hashes.insert(key.clone(), new_hash);
-                    }
+                updates.push(key);
+            }
+        }
+        
+        // Step 1b: Batch compute hashes for inserts (enables parallelization)
+        #[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
+        let insert_hashes: Vec<_> = {
+            use rayon::prelude::*;
+            inserts.par_iter()
+                .map(|&key| (key, self.compute_leaf_hash(key, db)))
+                .collect()
+        };
+        
+        #[cfg(any(target_arch = "wasm32", not(feature = "parallel")))]
+        let insert_hashes: Vec<_> = inserts.iter()
+            .map(|&key| (key, self.compute_leaf_hash(key, db)))
+            .collect();
+        
+        // Step 1c: Apply inserts
+        for (key, leaf_hash) in insert_hashes {
+            self.tree_hash = xor_checksum(&self.tree_hash, &leaf_hash);
+            self.leaf_hashes.insert(key.clone(), leaf_hash);
+            
+            // O(log N) sorted insert
+            let pos = self.cached_ids.binary_search(key).unwrap_or_else(|p| p);
+            self.cached_ids.insert(pos, key.clone());
+        }
+        
+        // Step 1d: Apply deletes
+        for key in deletes {
+            self.cache.remove(key);
+            if let Some(old_hash) = self.leaf_hashes.remove(key) {
+                // XOR out the old hash (A ⊕ A = 0)
+                self.tree_hash = xor_checksum(&self.tree_hash, &old_hash);
+            }
+            // O(log N) sorted remove
+            if let Ok(pos) = self.cached_ids.binary_search(key) {
+                self.cached_ids.remove(pos);
+            }
+        }
+        
+        // Step 1e: Apply updates (re-hash if data changed)
+        for key in updates {
+            if let Some(old_hash) = self.leaf_hashes.get(key).copied() {
+                let new_hash = self.compute_leaf_hash(key, db);
+                if old_hash != new_hash {
+                    // XOR out old, XOR in new
+                    self.tree_hash = xor_checksum(&self.tree_hash, &old_hash);
+                    self.tree_hash = xor_checksum(&self.tree_hash, &new_hash);
+                    self.leaf_hashes.insert(key.clone(), new_hash);
                 }
             }
         }
