@@ -8,7 +8,7 @@ use std::cmp::Ordering;
 use std::hash::{BuildHasherDefault, Hasher};
 // Set to TRUE for high-speed benchmarks (O(1) return, no data).
 // Set to FALSE for production/frontend compatibility (O(N) return, full data).
-pub const BENCHMARK_MODE: bool = true;
+pub const BENCHMARK_MODE: bool = false;
 
 // --- Data Model ---
 
