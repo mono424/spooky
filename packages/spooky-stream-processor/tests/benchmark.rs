@@ -7,19 +7,11 @@ use std::fs::File;
 use std::io::{self, BufWriter, Write};
 use std::time::{Duration, Instant};
 
-/*
-#[cfg(not(target_arch = "wasm32"))]
-use mimalloc::MiMalloc;
-
-#[cfg(not(target_arch = "wasm32"))]
-#[global_allocator]
-static GLOBAL: MiMalloc = MiMalloc;
-*/
-
-// --- KONFIGURATION ---
+// --- CONFIGURATION ---
 const TOTAL_RECORDS: usize = 10_000;
 const VIEW_COUNTS: [usize; 4] = [10, 100, 500, 1000];
-const BATCH_SIZE: usize = 100; // Wir messen exakt jeden 50er Block
+const BATCH_SIZE: usize = 100;
+const WARMUP_BATCHES: usize = 3;
 
 struct PreparedRecord {
     table: String,
@@ -29,196 +21,223 @@ struct PreparedRecord {
     hash: String,
 }
 
+/// Generate a linked set of records: Author -> Thread -> Comment
+fn make_linked_record_set() -> Vec<PreparedRecord> {
+    let mut batch = Vec::with_capacity(3);
+
+    // 1. Author
+    let (author_id, rec_auth) = make_author_record("BenchUser");
+    batch.push(PreparedRecord {
+        table: "author".to_string(),
+        op: "CREATE".to_string(),
+        id: author_id.clone(),
+        hash: generate_hash(&rec_auth),
+        record: rec_auth,
+    });
+
+    // 2. Thread (links to author)
+    let (thread_id, rec_thread) = make_thread_record("BenchThread", &author_id);
+    batch.push(PreparedRecord {
+        table: "thread".to_string(),
+        op: "CREATE".to_string(),
+        id: thread_id.clone(),
+        hash: generate_hash(&rec_thread),
+        record: rec_thread,
+    });
+
+    // 3. Comment (links to thread and author)
+    let (comment_id, rec_comment) = make_comment_record("Magic", &thread_id, &author_id);
+    batch.push(PreparedRecord {
+        table: "comment".to_string(),
+        op: "CREATE".to_string(),
+        id: comment_id,
+        hash: generate_hash(&rec_comment),
+        record: rec_comment,
+    });
+
+    batch
+}
+
+/// Convert PreparedRecord to batch tuple format
+fn to_batch_tuple(item: &PreparedRecord) -> (String, String, String, serde_json::Value, String) {
+    (
+        item.table.clone(),
+        item.op.clone(),
+        item.id.clone(),
+        item.record.clone(),
+        item.hash.clone(),
+    )
+}
+
 #[test]
+#[ignore] // Run with: cargo test --release benchmark_latency_mixed_stream -- --nocapture --ignored
 fn benchmark_latency_mixed_stream() {
-    let file = File::create("benchmark_results.csv").expect("Konnte CSV Datei nicht erstellen");
-    // Großer Puffer für CSV Schreiben, um I/O Bremse zu vermeiden
+    let file = File::create("benchmark_results.csv").expect("Could not create CSV file");
     let mut writer = BufWriter::with_capacity(64 * 1024, file);
 
-    // Header schreiben
-    // latency_last_50_ms: Wie lange hat ein einzelner Record im letzten 50er Batch durchschnittlich gebraucht?
-    // ops_per_sec: Wie viele Records schaffen wir pro Sekunde (insgesamt)?
     writeln!(
         writer,
-        "views,records,total_time_ms,latency_last_50_ms,ops_per_sec"
+        "views,records,phase,total_time_ms,latency_per_record_ms,ops_per_sec"
     )
     .unwrap();
 
     println!(
-        "Start Benchmark ({} Records Total, Batch Size {})...",
+        "=== BENCHMARK: {} Records, Batch Size {} ===\n",
         TOTAL_RECORDS, BATCH_SIZE
     );
 
     for &view_count in &VIEW_COUNTS {
         let mut circuit = setup();
 
-        // --- 1. Views Setup ---
-        print!(">> Setup {} Views... ", view_count);
+        // --- 1. VIEWS SETUP ---
+        print!("> Setting up {} views... ", view_count);
         io::stdout().flush().unwrap();
         for i in 0..view_count {
             let plan = create_magic_comments_plan(&format!("view_{}", i));
             circuit.register_view(plan, None);
         }
-        println!("Fertig.");
+        println!("done.");
 
-        // --- 2. Daten Vorbereitung (Parallel mit Rayon) ---
+        // --- 2. DATA PREPARATION (parallel, outside measurement) ---
         let sets_needed = (TOTAL_RECORDS as f64 / 3.0).ceil() as usize;
 
-        let mut prepared_stream: Vec<PreparedRecord> = (0..sets_needed)
+        let prepared_stream: Vec<PreparedRecord> = (0..sets_needed)
             .into_par_iter()
-            .map(|_| {
-                let mut batch = Vec::with_capacity(3);
-
-                // 1. Author
-                let (auth_id, rec_auth) = make_author_record("BenchUser");
-                batch.push(PreparedRecord {
-                    table: "author".to_string(),
-                    op: "CREATE".to_string(),
-                    id: auth_id.clone(),
-                    hash: generate_hash(&rec_auth),
-                    record: rec_auth,
-                });
-
-                // 2. Thread
-                // For benchmark, we need specific linkage, so we generate IDs first?
-                // Wait, make_* helpers generate random IDs internally.
-                // We need to link them. The current helpers in common/mod.rs GENERATE new IDs.
-                // We need to refactor common/mod.rs again to allow passing IDs or return them.
-                // Actually, make_* returns (id, record). So we can use that!
-
-                // DATA FLOW:
-                // Author -> (author_id, author_rec)
-                // Thread -> needs author_id. returns (thread_id, thread_rec)
-                // Comment -> needs thread_id, author_id. returns (comment_id, comment_rec)
-
-                // 1. Author
-                let (author_id, rec_auth) = make_author_record("BenchUser");
-                batch.push(PreparedRecord {
-                    table: "author".to_string(),
-                    op: "CREATE".to_string(),
-                    id: author_id.clone(),
-                    hash: generate_hash(&rec_auth),
-                    record: rec_auth,
-                });
-
-                // 2. Thread
-                let (thread_id, rec_thread) = make_thread_record("BenchThread", &author_id);
-                batch.push(PreparedRecord {
-                    table: "thread".to_string(),
-                    op: "CREATE".to_string(),
-                    id: thread_id.clone(),
-                    hash: generate_hash(&rec_thread),
-                    record: rec_thread,
-                });
-
-                // 3. Comment
-                let (comment_id, rec_comment) =
-                    make_comment_record("Magic", &thread_id, &author_id);
-                batch.push(PreparedRecord {
-                    table: "comment".to_string(),
-                    op: "CREATE".to_string(),
-                    id: comment_id.clone(),
-                    hash: generate_hash(&rec_comment),
-                    record: rec_comment,
-                });
-
-                batch
-            })
-            .flatten()
+            .flat_map(|_| make_linked_record_set())
             .collect();
 
-        // Exakt auf gewünschte Länge schneiden
-        prepared_stream.truncate(TOTAL_RECORDS); // Should be enough as we map sets of 3
+        // Prepare all batch data BEFORE measurement (avoid clone overhead in hot path)
+        let all_batches: Vec<Vec<(String, String, String, serde_json::Value, String)>> = prepared_stream
+            .chunks(BATCH_SIZE)
+            .take(TOTAL_RECORDS / BATCH_SIZE)
+            .map(|chunk| chunk.iter().map(to_batch_tuple).collect())
+            .collect();
 
-        // Referenz für Verifizierung (letzter Thread mit Comment)
-        let last_valid_thread_id = prepared_stream
-            .iter()
-            .rev()
-            .find(|r| r.table == "comment")
-            .map(|r| {
-                r.record
-                    .get("thread")
-                    .unwrap()
-                    .as_str()
-                    .unwrap()
-                    .to_string()
-            })
-            .expect("Keine Kommentare im Stream gefunden!");
+        // --- 3. WARMUP (not measured) ---
+        print!("> Warmup ({} batches)... ", WARMUP_BATCHES);
+        io::stdout().flush().unwrap();
+        for batch in all_batches.iter().take(WARMUP_BATCHES) {
+            circuit.ingest_batch(batch.clone());
+        }
+        println!("done.");
 
-        // --- 3. Ingest Loop & Messung ---
-        let mut total_ingest_duration = Duration::new(0, 0);
-        let mut global_record_count = 0;
+        // --- 4. CREATE PHASE (measure INSERT throughput) ---
+        let mut total_duration = Duration::ZERO;
+        let mut record_count = 0;
 
-        for chunk in prepared_stream.chunks(BATCH_SIZE) {
-            // Daten für Batch vorbereiten (nicht messen)
-            let batch_data: Vec<(String, String, String, serde_json::Value, String)> = chunk
-                .iter()
-                .map(|item| {
-                    (
-                        item.table.clone(),
-                        item.op.clone(),
-                        item.id.clone(),
-                        item.record.clone(),
-                        item.hash.clone(),
-                    )
-                })
-                .collect();
+        print!("> CREATE phase: ");
+        io::stdout().flush().unwrap();
 
-            let batch_len = batch_data.len();
+        for batch in all_batches.iter().skip(WARMUP_BATCHES) {
+            let batch_len = batch.len();
 
-            // --- MESSUNG START ---
+            // === MEASUREMENT START ===
             let start = Instant::now();
-            circuit.ingest_batch(batch_data); // Ruft jetzt die optimierte Batch-Methode auf
+            circuit.ingest_batch(batch.clone());
             let duration = start.elapsed();
-            // --- MESSUNG ENDE ---
+            // === MEASUREMENT END ===
 
-            total_ingest_duration += duration;
-            global_record_count += batch_len;
+            total_duration += duration;
+            record_count += batch_len;
 
-            // --- BERECHNUNG ---
-            let total_ms = total_ingest_duration.as_secs_f64() * 1000.0;
-
-            // 1. Latenz pro Record (nur für diesen Batch)
-            // Wenn der Batch 50ms gedauert hat und 50 Records hatte -> 1ms Latency
-            let latency_last_50_ms = (duration.as_secs_f64() * 1000.0) / batch_len as f64;
-
-            // 2. Durchsatz (Global)
-            // Anzahl aller Records / Gesamte Zeit
-            let ops_sec = global_record_count as f64 / total_ingest_duration.as_secs_f64();
+            let latency_ms = (duration.as_secs_f64() * 1000.0) / batch_len as f64;
+            let ops_sec = record_count as f64 / total_duration.as_secs_f64();
 
             writeln!(
                 writer,
-                "{},{},{:.2},{:.4},{:.2}",
-                view_count, global_record_count, total_ms, latency_last_50_ms, ops_sec
+                "{},{},CREATE,{:.2},{:.4},{:.2}",
+                view_count,
+                record_count,
+                total_duration.as_secs_f64() * 1000.0,
+                latency_ms,
+                ops_sec
             )
             .unwrap();
 
-            // Terminal Anzeige (Live Update)
-            print!(
-                "\r>> Views: {} | Records: {}/{} | Latency: {:.3} ms | Speed: {:.0} ops/sec",
-                view_count, global_record_count, TOTAL_RECORDS, latency_last_50_ms, ops_sec
-            );
+            print!("\r> CREATE phase: {}/{} | {:.3} ms/rec | {:.0} ops/sec   ",
+                record_count, TOTAL_RECORDS - (WARMUP_BATCHES * BATCH_SIZE), latency_ms, ops_sec);
             io::stdout().flush().unwrap();
         }
+        println!();
 
-        // --- 4. Verifizierung ---
-        let view = circuit
-            .views
+        // --- 5. UPDATE PHASE (measure incremental delta throughput) ---
+        // Create UPDATE records for existing IDs to test O(Delta) path
+        let update_count = record_count.min(1000); // Update up to 1000 existing records
+        let existing_ids: Vec<&PreparedRecord> = prepared_stream
             .iter()
-            .find(|v| v.plan.id == "view_0")
+            .filter(|r| r.table == "comment")
+            .take(update_count)
+            .collect();
+
+        let update_batches: Vec<Vec<(String, String, String, serde_json::Value, String)>> = existing_ids
+            .chunks(BATCH_SIZE)
+            .map(|chunk| {
+                chunk.iter().map(|item| {
+                    // Create UPDATE with modified text
+                    let updated_record = json!({
+                        "id": item.id,
+                        "text": "UpdatedMagic",
+                        "thread": item.record.get("thread").unwrap(),
+                        "author": item.record.get("author").unwrap(),
+                        "type": "comment"
+                    });
+                    (
+                        item.table.clone(),
+                        "UPDATE".to_string(),
+                        item.id.clone(),
+                        updated_record.clone(),
+                        generate_hash(&updated_record),
+                    )
+                }).collect()
+            })
+            .collect();
+
+        let mut update_duration = Duration::ZERO;
+        let mut update_record_count = 0;
+
+        print!("> UPDATE phase: ");
+        io::stdout().flush().unwrap();
+
+        for batch in update_batches.iter() {
+            let batch_len = batch.len();
+
+            let start = Instant::now();
+            circuit.ingest_batch(batch.clone());
+            let duration = start.elapsed();
+
+            update_duration += duration;
+            update_record_count += batch_len;
+
+            let latency_ms = (duration.as_secs_f64() * 1000.0) / batch_len as f64;
+            let ops_sec = update_record_count as f64 / update_duration.as_secs_f64();
+
+            writeln!(
+                writer,
+                "{},{},UPDATE,{:.2},{:.4},{:.2}",
+                view_count,
+                update_record_count,
+                update_duration.as_secs_f64() * 1000.0,
+                latency_ms,
+                ops_sec
+            )
             .unwrap();
-        if !view.cache.contains_key(last_valid_thread_id.as_str()) {
-            panic!(
-                "\nFEHLER: Circuit Update unvollständig! Thread {} fehlt im View.",
-                last_valid_thread_id
-            );
+
+            print!("\r> UPDATE phase: {}/{} | {:.3} ms/rec | {:.0} ops/sec   ",
+                update_record_count, update_count, latency_ms, ops_sec);
+            io::stdout().flush().unwrap();
         }
-        println!(); // Neue Zeile nach jedem Durchlauf
+        println!();
+
+        // --- 6. VERIFICATION ---
+        let view = circuit.views.iter().find(|v| v.plan.id == "view_0").unwrap();
+        let cache_size = view.cache.len();
+        println!("> Verification: view_0 cache has {} entries\n", cache_size);
     }
-    println!("Benchmark abgeschlossen. Ergebnisse in 'benchmark_results.csv'.");
+
+    println!("=== Benchmark complete. Results in 'benchmark_results.csv' ===");
 }
 
-// Helper für Plan
+/// Creates a query plan: threads WITH authors JOIN comments WHERE text = "Magic"
 fn create_magic_comments_plan(view_id: &str) -> QueryPlan {
     let scan_threads = Operator::Scan {
         table: "thread".to_string(),

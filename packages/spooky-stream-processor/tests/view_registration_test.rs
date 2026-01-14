@@ -42,16 +42,9 @@ fn test_view_registration_after_ingestion() {
 
     let update = initial_update.unwrap();
     println!("[TEST] Initial update result_ids: {:?}", update.result_ids);
-    println!("[TEST] Initial update tree leaves: {:?}", update.tree.leaves);
 
     assert_eq!(update.result_ids.len(), 1, "Should find 1 user");
-    assert_eq!(update.result_ids[0], user_id, "Should find the correct user");
-
-    // Verify the tree has leaves
-    assert!(update.tree.leaves.is_some(), "Tree should have leaves");
-    let leaves = update.tree.leaves.as_ref().unwrap();
-    assert_eq!(leaves.len(), 1, "Tree should have 1 leaf");
-    assert_eq!(leaves[0].id, user_id, "Leaf should have correct user ID");
+    assert_eq!(update.result_ids[0].as_str(), user_id, "Should find the correct user");
 
     println!("[TEST] ✓ View correctly found pre-existing record!");
 }
@@ -106,13 +99,7 @@ fn test_view_registration_after_ingestion_with_filter() {
     println!("[TEST] Filtered update result_ids: {:?}", update.result_ids);
 
     assert_eq!(update.result_ids.len(), 1, "Should find 1 active user");
-    assert_eq!(update.result_ids[0], user1_id, "Should find alice (active user)");
-
-    // Verify the tree
-    assert!(update.tree.leaves.is_some(), "Tree should have leaves");
-    let leaves = update.tree.leaves.as_ref().unwrap();
-    assert_eq!(leaves.len(), 1, "Tree should have 1 leaf");
-    assert_eq!(leaves[0].id, user1_id, "Leaf should have correct user ID");
+    assert_eq!(update.result_ids[0].as_str(), user1_id, "Should find alice (active user)");
 
     println!("[TEST] ✓ Filtered view correctly found pre-existing active record!");
 }

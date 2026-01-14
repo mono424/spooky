@@ -1,4 +1,4 @@
-use crate::engine::view::{IdTree, Operator, SpookyValue};
+use crate::engine::view::{Operator, SpookyValue};
 use crate::{converter, sanitizer, MaterializedViewUpdate, QueryPlan};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
@@ -162,16 +162,12 @@ pub mod view {
     }
 
     pub fn default_result(id: &str) -> MaterializedViewUpdate {
-        let empty_hash_bytes = *blake3::hash(&[]).as_bytes();  // XorHash
+        use smol_str::SmolStr;
+        let empty_hash_bytes = *blake3::hash(&[]).as_bytes();
         MaterializedViewUpdate {
-            query_id: id.to_string(),
-            result_hash: blake3::hash(&[]).to_hex().to_string(),
+            query_id: SmolStr::from(id),
+            result_hash: empty_hash_bytes,
             result_ids: vec![],
-            tree: IdTree {
-                hash: empty_hash_bytes,  // Use raw bytes
-                children: None,
-                leaves: Some(vec![]),
-            },
         }
     }
 }

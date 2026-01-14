@@ -1,5 +1,5 @@
 use super::view::{
-    FastMap, MaterializedViewUpdate, Operator, Projection, QueryPlan, RowKey, SpookyValue, View,
+    FastMap, IdTree, MaterializedViewUpdate, Operator, Projection, QueryPlan, RowKey, SpookyValue, View,
     XorHash, ZSet,
 };
 // use rustc_hash::{FxHashMap, FxHasher}; // Unused in this file (used via FastMap)
@@ -342,6 +342,15 @@ impl Circuit {
     pub fn unregister_view(&mut self, id: &str) {
         self.views.retain(|v| v.plan.id != id);
         self.rebuild_dependency_graph();
+    }
+    
+    /// RECONCILIATION API: Get full Merkle tree for a view on-demand.
+    /// Use this when client detects hash mismatch and needs to reconcile.
+    pub fn get_full_tree(&self, view_id: &str) -> Option<IdTree> {
+        self.views
+            .iter()
+            .find(|v| v.plan.id == view_id)
+            .map(|view| view.build_tree(&self.db))
     }
 
     pub fn step(&mut self, table: String, delta: ZSet) -> Vec<MaterializedViewUpdate> {

@@ -14,6 +14,7 @@ pub use rayon::prelude::*;
 
 // Falls du noch StreamProcessor Traits hast, müssen die auch hier sein:
 pub use engine::circuit::Circuit;
+pub use engine::view::IdTree;  // Re-export for Reconciliation API
 pub use engine::view::MaterializedViewUpdate;
 pub use engine::view::QueryPlan;
 use serde_json::Value;
@@ -40,4 +41,8 @@ pub trait StreamProcessor: Send + Sync {
     ) -> Option<MaterializedViewUpdate>;
 
     fn unregister_view(&mut self, id: &str);
+    
+    /// RECONCILIATION API: Get full Merkle tree for a view on-demand.
+    /// Use this when client detects hash mismatch and needs to reconcile.
+    fn get_full_tree(&self, view_id: &str) -> Option<IdTree>;
 }
