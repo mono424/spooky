@@ -705,17 +705,22 @@ impl View {
                     let sub_tree = IdTree::build(sub_items);
                     dependency_hashes.push(sub_tree.hash.clone());
 
-                    // Defensive fix: Ensure alias is clean (e.g. handle "[0] AS author" -> "author")
-                    let clean_alias = if alias.contains(" AS ") {
-                        alias
-                            .split(" AS ")
-                            .last()
-                            .unwrap_or(alias)
-                            .trim()
-                            .to_string()
-                    } else {
-                        alias.clone()
-                    };
+                    // Defensive fix: Clean alias to handle edge cases
+                    // 1. Remove "[0] AS " prefix if present: "[0] AS author" -> "author"
+                    // 2. Remove " AS " prefix if present: "AS author" -> "author"
+                    // 3. Trim whitespace
+                    let clean_alias = alias
+                        .trim()
+                        // Remove array index prefix like "[0] AS "
+                        .trim_start_matches(|c: char| {
+                            c == '[' || c.is_numeric() || c == ']' || c.is_whitespace()
+                        })
+                        // Remove "AS " prefix (case insensitive)
+                        .split_whitespace()
+                        .last()
+                        .unwrap_or(alias)
+                        .trim()
+                        .to_string();
 
                     children_map.insert(clean_alias, sub_tree);
                 }
