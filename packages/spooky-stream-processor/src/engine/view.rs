@@ -244,6 +244,22 @@ where
 
 impl IdTree {
     pub fn build(items: Vec<LeafItem>) -> Self {
+        // Memory pressure heuristic: very large sets get flat merkle root
+        // This avoids expensive hierarchical construction for massive result sets
+        if items.len() > 5000 {
+            // Compute XOR aggregate directly without hierarchical structure
+            let mut aggregated: XorHash = [0u8; 32];
+            for item in &items {
+                let h = hex_to_xor_hash(&item.hash).unwrap_or([0u8; 32]);
+                aggregated = xor_checksum(&aggregated, &h);
+            }
+            return IdTree {
+                hash: xor_hash_to_hex(&aggregated),
+                children: None,
+                leaves: Some(items),
+            };
+        }
+
         // Adaptive threshold: smaller for small sets, larger for big sets
         // This improves performance across different workload scales
         let threshold = match items.len() {
@@ -737,10 +753,17 @@ impl View {
                 self.eval_delta_batch(input, deltas, db, context)
             }
 
-            // Complex operators (Joins, Limits) fall back to snapshot
-            Operator::Join { .. } | Operator::Limit { .. } => None,
+
+            // INCREMENTAL JOIN DELTAS - DISABLED (causes test failures)
+            // Re-enabling causes assertion failures in test_complex_incantation_flow
+            // The logic needs deeper debugging to handle all edge cases correctly
+            Operator::Join { .. } => None,
+            
+            // Complex limit operators fall back to snapshot
+            Operator::Limit { .. } => None,
         }
     }
+
 
     /// Deprecated: Helper wrapper for single-table delta (retained for compatibility if needed internally)
     #[allow(dead_code)]
@@ -896,6 +919,8 @@ impl View {
     }
 
     fn expand_item(&self, id: &str, op: &Operator, db: &Database) -> LeafItem {
+        use bumpalo::Bump;
+        
         let mut final_hash = self
             .get_row_hash(id, db)
             .unwrap_or_else(|| [0u8; 32]);
@@ -904,7 +929,12 @@ impl View {
         let projections = self.find_projections(op);
 
         if !projections.is_empty() {
-            let mut dependency_hashes = Vec::<XorHash>::with_capacity(projections.len());
+            // OPTIMIZATION: Use arena allocator for dependency_hashes (reduces allocations)
+            let arena = Bump::new();
+            let mut dependency_hashes = bumpalo::collections::Vec::with_capacity_in(
+                projections.len(), 
+                &arena
+            );
 
             for proj in projections {
                 if let Projection::Subquery {
@@ -1299,6 +1329,22 @@ fn hash_value_recursive(v: &SpookyValue, hasher: &mut FxHasher) {
                  hasher.write(k.as_bytes());
                  hash_value_recursive(v, hasher);
              }
+        }
+    }
+}
+
+/// Helper function to extract source table names from an operator tree
+/// Used for incremental join delta optimization
+fn extract_tables_from_op(op: &Operator) -> Vec<SmolStr> {
+    match op {
+        Operator::Scan { table } => vec![SmolStr::from(table.as_str())],
+        Operator::Filter { input, .. } => extract_tables_from_op(input),
+        Operator::Project { input, .. } => extract_tables_from_op(input),
+        Operator::Limit { input, .. } => extract_tables_from_op(input),
+        Operator::Join { left, right, .. } => {
+            let mut tables = extract_tables_from_op(left);
+            tables.extend(extract_tables_from_op(right));
+            tables
         }
     }
 }

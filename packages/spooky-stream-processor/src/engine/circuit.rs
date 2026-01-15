@@ -7,6 +7,17 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use smol_str::SmolStr;
 
+// Branch prediction hint for cold paths
+#[inline(always)]
+fn unlikely(b: bool) -> bool {
+    #[cold]
+    fn cold_path() {}
+    if b {
+        cold_path();
+    }
+    b
+}
+
 // --- Table & Database ---
 
 #[derive(Clone, Debug)]
@@ -246,7 +257,8 @@ impl Circuit {
         // 2. Propagation Phase: Process Deltas with Dependency Graph
 
         // Optimized Lazy Rebuild Check (once per batch)
-        if self.dependency_graph.is_empty() && !self.views.is_empty() {
+        // Mark as cold path - dependency graph is rarely empty after initialization
+        if unlikely(self.dependency_graph.is_empty() && !self.views.is_empty()) {
             self.rebuild_dependency_graph();
         }
 
@@ -263,7 +275,8 @@ impl Circuit {
         impacted_view_indices.sort_unstable();
         impacted_view_indices.dedup();
 
-        let mut all_updates: Vec<MaterializedViewUpdate> = Vec::new();
+        // Pre-allocate with exact capacity needed (optimization: reduces allocations)
+        let mut all_updates: Vec<MaterializedViewUpdate> = Vec::with_capacity(impacted_view_indices.len());
 
         // 3. Execution Phase
         // 3. Execution Phase
