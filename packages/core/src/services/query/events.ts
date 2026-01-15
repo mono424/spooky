@@ -23,6 +23,9 @@ export type QueryEventTypeMap = {
       surrealql: string;
       params: Record<string, any>;
       ttl: QueryTimeToLive | Duration;
+      localHash?: string;
+      localArray?: RecordVersionArray;
+      records?: Record<string, any>[];
     }
   >;
   [QueryEventTypes.IncantationRemoteHashUpdate]: EventDefinition<

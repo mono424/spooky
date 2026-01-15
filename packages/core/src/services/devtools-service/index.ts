@@ -72,7 +72,7 @@ export class DevToolsService {
   }
 
   public onQueryInitialized(payload: any) {
-    console.log('[DevTools] IncantationInitialized', payload);
+    this.logger.debug({ payload }, '[DevToolsService] IncantationInitialized');
     const queryHash = this.hashString(payload.incantationId.toString());
 
     const queryState = {
@@ -101,13 +101,16 @@ export class DevToolsService {
   }
 
   public onQueryUpdated(payload: any) {
-    console.log('[DevTools] IncantationUpdated', {
-      id: payload.incantationId?.toString(),
-      localHash: payload.localHash,
-      remoteHash: payload.remoteHash,
-      localArray: payload.localArray ? 'PRESENT' : 'MISSING',
-      remoteArray: payload.remoteArray ? 'PRESENT' : 'MISSING',
-    });
+    this.logger.debug(
+      {
+        id: payload.incantationId?.toString(),
+        localHash: payload.localHash,
+        remoteHash: payload.remoteHash,
+        localArray: payload.localArray ? 'PRESENT' : 'MISSING',
+        remoteArray: payload.remoteArray ? 'PRESENT' : 'MISSING',
+      },
+      '[DevToolsService] IncantationUpdated'
+    );
     const queryHash = this.hashString(payload.incantationId.toString());
 
     const queryState = this.activeQueries.get(queryHash);
@@ -131,14 +134,17 @@ export class DevToolsService {
       if (payload.remoteArray) queryState.remoteArray = payload.remoteArray;
 
       this.activeQueries.set(queryHash, queryState);
-      console.log('[DevTools] Updated QueryState:', {
-        localHash: queryState.localHash,
-        remoteHash: queryState.remoteHash,
-        localArraySize: queryState.localArray?.length ?? 'MISSING',
-        remoteArraySize: queryState.remoteArray?.length ?? 'MISSING',
-      });
+      this.logger.debug(
+        {
+          localHash: queryState.localHash,
+          remoteHash: queryState.remoteHash,
+          localArraySize: queryState.localArray?.length ?? 'MISSING',
+          remoteArraySize: queryState.remoteArray?.length ?? 'MISSING',
+        },
+        '[DevToolsService] Updated QueryState'
+      );
     } else {
-      console.warn('[DevTools] Received update for unknown query', queryHash);
+      this.logger.warn({ queryHash }, '[DevToolsService] Received update for unknown query');
     }
 
     this.addEvent('QUERY_UPDATED', {
@@ -151,7 +157,7 @@ export class DevToolsService {
   }
 
   public onStreamUpdate(payload: any) {
-    console.log('[DevTools] StreamUpdate', payload);
+    this.logger.debug({ payload }, '[DevToolsService] StreamUpdate');
     this.addEvent('STREAM_UPDATE', {
       updates: payload,
     });
@@ -199,7 +205,7 @@ export class DevToolsService {
   }
 
   private getState() {
-    return {
+    return this.serializeForDevTools({
       eventsHistory: [...this.eventsHistory],
       activeQueries: Object.fromEntries(this.activeQueries),
       auth: {
@@ -211,7 +217,7 @@ export class DevToolsService {
         tables: this.schema.tables.map((t) => t.name),
         tableData: {},
       },
-    };
+    });
   }
 
   private notifyDevTools() {

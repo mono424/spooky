@@ -237,7 +237,7 @@ async fn register_view_handler(
     let result_update = update.unwrap_or_else(|| spooky_stream_processor::service::view::default_result(&data.plan.id));
 
     let m = &data.metadata;
-    let query = "UPSERT <record>$id SET hash = <string>$hash, tree = $tree, clientId = <string>$clientId, surrealQL = <string>$surrealQL, params = $params, ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt";
+    let query = "UPSERT <record>$id SET hash = <string>$hash, array = $array, clientId = <string>$clientId, surrealQL = <string>$surrealQL, params = $params, ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt";
     
     let raw_id = m["id"].as_str().unwrap();
     // For <record> cast we need the full ID "table:id"
@@ -256,7 +256,7 @@ async fn register_view_handler(
     let db_res = state.db.query(query)
         .bind(("id", id_str))
         .bind(("hash", result_update.result_hash.clone()))
-        .bind(("tree", json!(result_update.tree)))
+        .bind(("array", json!(result_update.result_data)))
         .bind(("clientId", client_id_str))
         .bind(("surrealQL", surql_str))
         .bind(("params", params_val))
@@ -315,7 +315,7 @@ async fn version_handler() -> impl IntoResponse {
 
 
 async fn update_incantation_in_db(db: &Surreal<Client>, update: &MaterializedViewUpdate) {
-    let query = "UPDATE <record>$id SET hash = <string>$hash, tree = $tree RETURN AFTER";
+    let query = "UPDATE <record>$id SET hash = <string>$hash, array = $array RETURN AFTER";
     let raw_id = &update.query_id;
     // For <record> cast we need the full ID "table:id"
     let id_str = if raw_id.starts_with("_spooky_incantation:") {
@@ -329,7 +329,7 @@ async fn update_incantation_in_db(db: &Surreal<Client>, update: &MaterializedVie
     match db.query(query)
         .bind(("id", id_str.clone()))
         .bind(("hash", update.result_hash.clone()))
-        .bind(("tree", json!(update.tree)))
+        .bind(("array", json!(update.result_data)))
         .await 
     {
         Ok(mut response) => {

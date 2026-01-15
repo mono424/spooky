@@ -257,14 +257,27 @@ export class SpookySync<S extends SchemaStructure> {
   // public async refreshFromLocalCache(table: string) { ... }
 
   private async registerIncantation(event: RegisterEvent) {
-    const { incantationId, surrealql, params, ttl } = event.payload;
+    const {
+      incantationId,
+      surrealql,
+      params,
+      ttl,
+      localHash: pLocalHash,
+      localArray: pLocalArray,
+    } = event.payload;
+
     const effectiveTtl = ttl || '10m';
     try {
       let existing = await this.findIncatationRecord(incantationId);
       this.logger.debug({ existing }, 'Register Incantation state');
 
-      const localHash = existing?.localHash ?? '';
-      const localArray = existing?.localArray ?? [];
+      // Use payload values as fallback if existing record doesn't have them
+      // This is critical for preventing the "empty start" loop if the incantation was just initialized
+      // with known state from the stream processor or previous context.
+      // NOTE: We use || and length checks because ?? doesn't work with empty strings/arrays
+      // (they are not null/undefined, so ?? returns them instead of the fallback)
+      const localHash = existing?.localHash || pLocalHash || '';
+      const localArray = existing?.localArray?.length ? existing.localArray : (pLocalArray ?? []);
 
       await this.updateLocalIncantation(
         incantationId,
@@ -377,7 +390,7 @@ export class SpookySync<S extends SchemaStructure> {
       if (added.length === 0 && updated.length === 0) {
         break;
       }
-      console.log('iter 2', added, updated);
+      this.logger.debug({ added, updated }, '[SpookySync] syncIncantation iteration');
       maxIter--;
       if (maxIter <= 0) {
         this.logger.warn(
@@ -436,15 +449,21 @@ export class SpookySync<S extends SchemaStructure> {
       // Use full ID format (table:id) for WASM compatibility
       const fullId = record.id.toString();
       const result = await this.streamProcessor.ingest(table, 'CREATE', fullId, record);
-      console.log('iter 3', result);
-      console.log('iter 3.1 comparing', {
-        incantationIdStr: incantationId.toString(),
-        updateQueryIds: result.map((u: any) => u.query_id),
-      });
+      this.logger.debug({ result }, '[SpookySync] cacheMissingRecords ingested CREATE result');
+      this.logger.debug(
+        {
+          incantationIdStr: incantationId.toString(),
+          updateQueryIds: result.map((u: any) => u.query_id),
+        },
+        '[SpookySync] cacheMissingRecords comparing query IDs'
+      );
       for (const update of result) {
         // Compare full incantation ID (table:id format)
         if (update.query_id === incantationId.toString()) {
-          console.log('iter 3.2 match! updating array', update.result_data);
+          this.logger.debug(
+            { result_data: update.result_data },
+            '[SpookySync] cacheMissingRecords match! updating array'
+          );
           arraySyncer.update(update.result_data);
         }
       }

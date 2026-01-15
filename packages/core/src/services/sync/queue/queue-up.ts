@@ -6,12 +6,14 @@ import {
   SyncQueueEventSystem,
   SyncQueueEventTypes,
 } from '../events.js';
+import { parseRecordIdString } from '../../utils/index.js';
 
 export type CreateEvent = {
   type: 'create';
   mutation_id: RecordId;
   record_id: RecordId;
   data: Record<string, unknown>;
+  record?: Record<string, unknown>;
   localOnly?: boolean;
 };
 
@@ -20,6 +22,7 @@ export type UpdateEvent = {
   mutation_id: RecordId;
   record_id: RecordId;
   data: Record<string, unknown>;
+  record?: Record<string, unknown>;
   localOnly?: boolean;
 };
 
@@ -82,34 +85,39 @@ export class UpQueue {
 
   async loadFromDatabase() {
     try {
-      const rawResult = await this.local.query<any>(
+      const [records] = await this.local.query<any>(
         `SELECT * FROM _spooky_pending_mutations ORDER BY created_at ASC`
       );
 
-      let records: any[] = [];
-
-      // Handle potentially wrapped SurrealDB response
-      if (Array.isArray(rawResult)) {
-        records = rawResult;
-      } else if (rawResult && typeof rawResult === 'object' && Array.isArray(rawResult.result)) {
-        records = rawResult.result;
-      }
-
       this.queue = records
-        .map((r: any) => {
+        .map((r: any): UpEvent | null => {
           switch (r.mutationType) {
             case 'create':
-              return { type: 'create', mutation_id: r.id, record_id: r.recordId, data: r.data };
+              return {
+                type: 'create',
+                mutation_id: parseRecordIdString(r.id),
+                record_id: parseRecordIdString(r.recordId),
+                data: r.data,
+              };
             case 'update':
-              return { type: 'update', mutation_id: r.id, record_id: r.recordId, data: r.data };
+              return {
+                type: 'update',
+                mutation_id: parseRecordIdString(r.id),
+                record_id: parseRecordIdString(r.recordId),
+                data: r.data,
+              };
             case 'delete':
-              return { type: 'delete', mutation_id: r.id, record_id: r.recordId };
+              return {
+                type: 'delete',
+                mutation_id: parseRecordIdString(r.id),
+                record_id: parseRecordIdString(r.recordId),
+              };
             default:
               console.warn(`Unknown mutation type: ${r.mutationType}`, r);
               return null;
           }
         })
-        .filter((e): e is UpEvent => e !== null);
+        .filter((e: UpEvent | null): e is UpEvent => e !== null);
     } catch (error) {
       console.error('Failed to load pending mutations from database:', error);
       // TODO: clarify if we want to throw or not

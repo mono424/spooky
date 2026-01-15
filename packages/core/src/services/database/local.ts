@@ -1,4 +1,4 @@
-import { applyDiagnostics, Diagnostic, Surreal } from 'surrealdb';
+import { applyDiagnostics, Diagnostic, RecordId, Surreal } from 'surrealdb';
 import { createWasmWorkerEngines } from '@surrealdb/wasm';
 import { SpookyConfig } from '../../types.js';
 import { Logger } from '../logger/index.js';
@@ -10,6 +10,15 @@ export class LocalDatabaseService extends AbstractDatabaseService {
   constructor(config: SpookyConfig<any>['database'], logger: Logger) {
     super(
       new Surreal({
+        codecOptions: {
+          valueDecodeVisitor(value) {
+            if (value instanceof RecordId) {
+              return `${value.table.toString()}:${value.id.toString()}`;
+            }
+
+            return value;
+          },
+        },
         engines: applyDiagnostics(
           createWasmWorkerEngines(),
           ({ key, type, phase, ...other }: Diagnostic) => {
@@ -37,21 +46,22 @@ export class LocalDatabaseService extends AbstractDatabaseService {
     try {
       const store = this.getConfig().store ?? 'memory';
       const storeUrl = store === 'memory' ? 'mem://' : 'indxdb://spooky';
-      console.log(`[LocalDatabaseService] Calling client.connect(${storeUrl}, {})...`);
+      this.logger.debug({ storeUrl }, '[LocalDatabaseService] Calling client.connect');
       await this.client.connect(storeUrl, {});
-      console.log(
-        `[LocalDatabaseService] client.connect returned. Calling client.use(${namespace}, ${database})...`
+      this.logger.debug(
+        { namespace, database },
+        '[LocalDatabaseService] client.connect returned. Calling client.use'
       );
 
       await this.client.use({
         namespace,
         database,
       });
-      console.log('[LocalDatabaseService] client.use returned.');
+      this.logger.debug('[LocalDatabaseService] client.use returned');
 
       this.logger.info('Connected to local database');
     } catch (err) {
-      console.error('[LocalDatabaseService] Error during connect:', err);
+      this.logger.error({ err }, '[LocalDatabaseService] Error during connect');
       this.logger.error({ err }, 'Failed to connect to local database');
       throw err;
     }

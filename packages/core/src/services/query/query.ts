@@ -132,13 +132,16 @@ export class QueryManager<S extends SchemaStructure> {
       },
       'Handling incoming remote update'
     );
-    console.log('[QueryManager] handleIncomingUpdate payload:', {
-      incantationId: incantationId?.toString(),
-      remoteHash,
-      remoteArray: remoteArray ? 'PRESENT' : 'MISSING',
-      localHashInPayload: (payload as any).localHash,
-      localArrayInPayload: (payload as any).localArray ? 'PRESENT' : 'MISSING',
-    });
+    this.logger.debug(
+      {
+        incantationId: incantationId?.toString(),
+        remoteHash,
+        remoteArray: remoteArray ? 'PRESENT' : 'MISSING',
+        localHashInPayload: (payload as any).localHash,
+        localArrayInPayload: (payload as any).localArray ? 'PRESENT' : 'MISSING',
+      },
+      '[QueryManager] handleIncomingUpdate payload'
+    );
 
     incantation.updateLocalState(validRecords, incantation.localHash, incantation.localArray);
     // Explicitly update remote state
@@ -147,8 +150,8 @@ export class QueryManager<S extends SchemaStructure> {
     this.events.emit(QueryEventTypes.IncantationUpdated, {
       incantationId,
       records: validRecords,
-      // localHash: incantation.localHash, // REMOVED: Don't overwrite local state from remote update
-      // localArray: incantation.localArray, // REMOVED: Don't overwrite local state from remote update
+      localHash: incantation.localHash,
+      localArray: incantation.localArray,
       remoteHash: remoteHash,
       remoteArray: remoteArray,
     });
@@ -331,7 +334,19 @@ export class QueryManager<S extends SchemaStructure> {
       throw new Error('Failed to register incantation');
     }
 
-    incantation.updateLocalState([], update.localHash, update.localArray);
+    // Load cached records immediately to avoid UI flicker
+    let records: Record<string, any>[] = [];
+    try {
+      const [result] = await this.local.query<[Record<string, any>[]]>(
+        incantation.surrealql,
+        incantation.params
+      );
+      records = result || [];
+    } catch (err) {
+      this.logger.warn({ err }, 'Failed to load initial cached records');
+    }
+
+    incantation.updateLocalState(records, update.localHash, update.localArray);
 
     this.events.emit(QueryEventTypes.IncantationInitialized, {
       incantationId: incantation.id,
@@ -340,8 +355,7 @@ export class QueryManager<S extends SchemaStructure> {
       ttl: incantation.ttl,
       localHash: incantation.localHash,
       localArray: incantation.localArray,
-      remoteHash: incantation.remoteHash,
-      remoteArray: incantation.remoteArray,
+      records,
     });
 
     await incantation.startTTLHeartbeat(() => {

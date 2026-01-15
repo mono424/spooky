@@ -992,5 +992,68 @@ const ThreadList = () => {
         </div>
       </footer>
     </section>
+
+    <script>
+      // 1. Define the Ghost SVG (Static version, we animate the position manually)
+      const ghostSVG = `
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+      <style>
+        .bg { fill: #FFFFFF; }
+        .ghost { fill: #000000; }
+        .eyes { fill: #FFFFFF; }
+        @media (prefers-color-scheme: dark) {
+          .bg { fill: #000000; }
+          .ghost { fill: #FFFFFF; }
+          .eyes { fill: #000000; }
+        }
+      </style>
+      <path class="ghost" d="M6 10V28L10 24L14 28L18 24L22 28L26 24V10C26 4.47715 21.5228 0 16 0C10.4772 0 6 4.47715 6 10Z"/>
+      <rect class="eyes" x="10" y="8" width="4" height="4"/>
+      <rect class="eyes" x="18" y="8" width="4" height="4"/>
+    </svg>`;
+
+      // 2. Setup the Canvas and Image
+      const canvas = document.createElement('canvas');
+      canvas.width = 32;
+      canvas.height = 32;
+      const ctx = canvas.getContext('2d');
+
+      const img = new Image();
+      // Encode SVG so it can be used as an image source
+      img.src = 'data:image/svg+xml;base64,' + btoa(ghostSVG);
+
+      // 3. Find (or create) the favicon link tag
+      let link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
+      if (!link) {
+        link = document.createElement('link');
+        link.rel = 'icon';
+        document.head.appendChild(link);
+      }
+
+      // 4. The Animation Loop
+      img.onload = function () {
+        let start = performance.now();
+
+        function step(timestamp: number) {
+          // Calculate the "float" (Sine wave)
+          const elapsed = timestamp - start;
+          // Speed: 3000ms (3s) for full loop
+          // Movement: Moves between 0px and 3px down
+          const yOffset = (1 - Math.cos((elapsed / 3000) * 2 * Math.PI)) * 1.5;
+
+          // Clear and Draw
+          ctx?.clearRect(0, 0, 32, 32);
+          // Draw image at the new Y position
+          ctx?.drawImage(img, 0, yOffset, 32, 32);
+
+          // Update the browser favicon
+          link.href = canvas.toDataURL('image/png');
+
+          // Repeat
+          requestAnimationFrame(step);
+        }
+        requestAnimationFrame(step);
+      };
+    </script>
   </body>
 </html>

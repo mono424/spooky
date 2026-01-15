@@ -94,12 +94,29 @@ impl Circuit {
     // Must be called after Deserialization to rebuild the Cache!
     pub fn rebuild_dependency_graph(&mut self) {
         self.dependency_graph.clear();
+        web_sys::console::log_1(
+            &format!(
+                "DEBUG: Rebuilding dependency graph for {} views",
+                self.views.len()
+            )
+            .into(),
+        );
         for (i, view) in self.views.iter().enumerate() {
             let tables = extract_tables(&view.plan.root);
+            web_sys::console::log_1(
+                &format!(
+                    "DEBUG: View {} (id: {}) depends on tables: {:?}",
+                    i, view.plan.id, tables
+                )
+                .into(),
+            );
             for t in tables {
                 self.dependency_graph.entry(t).or_default().push(i);
             }
         }
+        web_sys::console::log_1(
+            &format!("DEBUG: Final dependency graph: {:?}", self.dependency_graph).into(),
+        );
     }
 
     pub fn ingest_record(
@@ -192,13 +209,26 @@ impl Circuit {
 
         // Identify ALL affected views from ALL changed tables
         let mut impacted_view_indices: Vec<usize> = Vec::new();
+        web_sys::console::log_1(&format!("DEBUG: Changed tables: {:?}", changed_tables).into());
         for table in changed_tables {
             if let Some(indices) = self.dependency_graph.get(&table) {
+                web_sys::console::log_1(
+                    &format!("DEBUG: Table {} impacts views: {:?}", table, indices).into(),
+                );
                 impacted_view_indices.extend(indices.iter().copied());
             } else {
-                println!("DEBUG: Table {} changed, but no views depend on it", table);
+                web_sys::console::log_1(
+                    &format!("DEBUG: Table {} changed, but no views depend on it", table).into(),
+                );
             }
         }
+        web_sys::console::log_1(
+            &format!(
+                "DEBUG: Total impacted view indices (before dedup): {:?}",
+                impacted_view_indices
+            )
+            .into(),
+        );
 
         // Deduplicate View Indices (Sort + Dedup)
         // This ensures each view is processed EXACTLY ONCE, even if multiple input tables changed

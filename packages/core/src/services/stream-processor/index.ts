@@ -114,15 +114,17 @@ export class StreamProcessorService {
    */
   ingest(table: string, op: string, id: string, record: any): WasmStreamUpdate[] {
     this.logger.debug({ table, op, id }, '[StreamProcessor] Ingesting record');
-    // DEEP LOGGING
-    console.log('[StreamProcessor] ingest called', {
-      table,
-      op,
-      id,
-      record: JSON.stringify(record, (key, value) =>
-        typeof value === 'bigint' ? value.toString() : value
-      ),
-    });
+    this.logger.debug(
+      {
+        table,
+        op,
+        id,
+        record: JSON.stringify(record, (key, value) =>
+          typeof value === 'bigint' ? value.toString() : value
+        ),
+      },
+      '[StreamProcessor] ingest called'
+    );
 
     if (!this.processor) {
       this.logger.warn('[StreamProcessor] Not initialized, skipping ingest');
@@ -131,11 +133,13 @@ export class StreamProcessorService {
 
     try {
       const normalizedRecord = this.normalizeValue(record);
-      // DEEP LOGGING (Normalized)
-      console.log('[StreamProcessor] ingest normalized record', JSON.stringify(normalizedRecord));
+      this.logger.debug(
+        { normalizedRecord: JSON.stringify(normalizedRecord) },
+        '[StreamProcessor] ingest normalized record'
+      );
 
       const rawUpdates = this.processor.ingest(table, op, id, normalizedRecord);
-      console.log('[StreamProcessor] ingest result', rawUpdates);
+      this.logger.debug({ rawUpdates }, '[StreamProcessor] ingest result');
 
       if (rawUpdates && Array.isArray(rawUpdates) && rawUpdates.length > 0) {
         const updates: StreamUpdate[] = rawUpdates.map((u: WasmStreamUpdate) => ({
@@ -149,7 +153,7 @@ export class StreamProcessorService {
       return rawUpdates;
     } catch (e) {
       this.logger.error(e, '[StreamProcessor] Error during ingestion');
-      console.error('[StreamProcessor] Erroring during ingestion', e);
+      this.logger.error({ error: e }, '[StreamProcessor] Erroring during ingestion');
     }
     return [];
   }
@@ -172,16 +176,21 @@ export class StreamProcessorService {
       },
       '[StreamProcessor] Registering incantation'
     );
-    // DEEP LOGGING
-    console.log('[StreamProcessor] registerIncantation called', {
-      id: incantation.id.toString(),
-      sql: incantation.surrealql,
-      params: incantation.params,
-    });
+    this.logger.debug(
+      {
+        id: incantation.id.toString(),
+        sql: incantation.surrealql,
+        params: incantation.params,
+      },
+      '[StreamProcessor] registerIncantation called'
+    );
 
     try {
       const normalizedParams = this.normalizeValue(incantation.params);
-      console.log('[StreamProcessor] registerIncantation normalized params', normalizedParams);
+      this.logger.debug(
+        { normalizedParams },
+        '[StreamProcessor] registerIncantation normalized params'
+      );
 
       const initialUpdate = this.processor.register_view({
         id: incantation.id.toString(),
@@ -192,8 +201,11 @@ export class StreamProcessorService {
         lastActiveAt: new Date().toISOString(),
       });
 
-      console.log('[StreamProcessor] register_view result', initialUpdate);
-      console.log('[StreamProcessor] normalizedParams used:', JSON.stringify(normalizedParams));
+      this.logger.debug({ initialUpdate }, '[StreamProcessor] register_view result');
+      this.logger.debug(
+        { normalizedParams: JSON.stringify(normalizedParams) },
+        '[StreamProcessor] normalizedParams used'
+      );
 
       if (!initialUpdate) {
         throw new Error('Failed to register incantation');
@@ -215,7 +227,7 @@ export class StreamProcessorService {
       return update;
     } catch (e) {
       this.logger.error(e, '[StreamProcessor] Error registering incantation');
-      console.error('[StreamProcessor] Error registering incantation', e);
+      this.logger.error({ error: e }, '[StreamProcessor] Error registering incantation');
       throw e;
     }
   }
@@ -247,7 +259,7 @@ export class StreamProcessorService {
 
       if (hasTable && hasId && hasToString && isNotPlainObject) {
         const result = value.toString();
-        console.log('[normalizeValue] RecordId detected, converted to:', result);
+        this.logger.trace({ result }, '[StreamProcessor] normalizeValue RecordId detected');
         return result;
       }
 

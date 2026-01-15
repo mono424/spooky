@@ -248,7 +248,13 @@ impl View {
         // FIX: FIRST RUN CHECK
         let is_first_run = self.last_hash.is_empty();
 
-        let maybe_delta = if is_first_run {
+        // NEW: Check if any delta contains CREATE operations for tables used in subqueries
+        let has_new_records = !is_first_run && self.has_new_records_for_subqueries(deltas, db);
+
+        let maybe_delta = if is_first_run || has_new_records {
+            // Force full scan if:
+            // 1. First run (no cache yet)
+            // 2. New records were created that might match subquery predicates
             None
         } else {
             self.eval_delta_batch(&self.plan.root, deltas, db, self.params.as_ref())
@@ -384,6 +390,95 @@ impl View {
                 self.collect_subquery_projections(right, out);
             }
             Operator::Scan { .. } => {}
+        }
+    }
+
+    /// Check if deltas contain new records (positive weight) for tables used in subqueries
+    /// This is needed because new records won't be in version_map yet, so we need full scan
+    fn has_new_records_for_subqueries(
+        &self,
+        deltas: &FastMap<String, ZSet>,
+        db: &Database,
+    ) -> bool {
+        // Get all tables used in subqueries
+        let subquery_tables = self.extract_subquery_tables(&self.plan.root);
+
+        if subquery_tables.is_empty() {
+            return false;
+        }
+
+        // Check if any delta for a subquery table contains new records (weight > 0)
+        for table in subquery_tables {
+            if let Some(delta) = deltas.get(&table) {
+                // Check if any record in this delta is new (not in version_map)
+                for (key, weight) in delta {
+                    if *weight > 0 && !self.version_map.contains_key(key.as_str()) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
+    /// Extract all table names used in subquery projections
+    fn extract_subquery_tables(&self, op: &Operator) -> Vec<String> {
+        let mut tables = Vec::new();
+        self.collect_subquery_tables(op, &mut tables);
+        tables.sort_unstable();
+        tables.dedup();
+        tables
+    }
+
+    fn collect_subquery_tables(&self, op: &Operator, out: &mut Vec<String>) {
+        match op {
+            Operator::Project { input, projections } => {
+                for proj in projections {
+                    if let Projection::Subquery { plan, .. } = proj {
+                        // Extract tables from the subquery plan
+                        self.collect_tables_from_operator(plan, out);
+                    }
+                }
+                self.collect_subquery_tables(input, out);
+            }
+            Operator::Filter { input, .. } => {
+                self.collect_subquery_tables(input, out);
+            }
+            Operator::Limit { input, .. } => {
+                self.collect_subquery_tables(input, out);
+            }
+            Operator::Join { left, right, .. } => {
+                self.collect_subquery_tables(left, out);
+                self.collect_subquery_tables(right, out);
+            }
+            Operator::Scan { .. } => {}
+        }
+    }
+
+    fn collect_tables_from_operator(&self, op: &Operator, out: &mut Vec<String>) {
+        match op {
+            Operator::Scan { table } => {
+                out.push(table.clone());
+            }
+            Operator::Filter { input, .. } => {
+                self.collect_tables_from_operator(input, out);
+            }
+            Operator::Project { input, projections } => {
+                self.collect_tables_from_operator(input, out);
+                for proj in projections {
+                    if let Projection::Subquery { plan, .. } = proj {
+                        self.collect_tables_from_operator(plan, out);
+                    }
+                }
+            }
+            Operator::Limit { input, .. } => {
+                self.collect_tables_from_operator(input, out);
+            }
+            Operator::Join { left, right, .. } => {
+                self.collect_tables_from_operator(left, out);
+                self.collect_tables_from_operator(right, out);
+            }
         }
     }
 

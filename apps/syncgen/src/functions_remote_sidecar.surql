@@ -21,12 +21,12 @@ DEFINE FUNCTION fn::incantation::register($config: object) {
     LET $existing = SELECT * FROM $inc_id;
 
     IF array::len($existing) > 0 THEN {
-        RETURN { hash: $existing[0].hash, tree: $existing[0].tree };
+        RETURN { hash: $existing[0].hash, array: $existing[0].array };
     } END;
 
     -- Call Sidecar via HTTP
     http::post('{{SIDECAR_ENDPOINT}}/view/register', $module_config, { "Authorization": "Bearer {{SIDECAR_SECRET}}" });
     
     -- Return empty placeholders
-    RETURN { hash: "", tree: NONE };
+    RETURN { hash: "", array: [] };
 };

@@ -22,12 +22,12 @@ DEFINE FUNCTION fn::incantation::register($config: object) {
     LET $existing = SELECT * FROM $inc_id;
 
     IF array::len($existing) > 0 THEN {
-        RETURN { hash: $existing[0].hash, tree: $existing[0].tree };
+        RETURN { hash: $existing[0].hash, array: $existing[0].array };
     } END;
 
     -- Call DBSP module directly
     mod::dbsp::register_view($module_config);
 
     -- Return empty placeholders
-    RETURN { hash: "", tree: NONE };
+    RETURN { hash: "", array: [] };
 };
