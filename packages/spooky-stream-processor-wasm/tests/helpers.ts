@@ -106,34 +106,25 @@ export function createViewConfig(
  * Validate that a hash tree has the expected structure.
  * Optionally validates that specific record IDs are present.
  */
-export function validateHashTree(tree: unknown, expectedIds?: string[]): boolean {
-  if (tree === null || tree === undefined) return false;
-  if (typeof tree !== 'object') return false;
+/**
+ * Validate that a flat array result has the expected structure.
+ * Optionally validates that specific record IDs are present.
+ */
+export function validateFlatArray(resultData: unknown, expectedIds?: string[]): boolean {
+  if (!Array.isArray(resultData)) return false;
 
-  const t = tree as { hash?: unknown; leaves?: unknown[] };
-
-  // Check root hash exists and is valid hex format (64 chars for blake3)
-  if (typeof t.hash !== 'string' || !isValidHashFormat(t.hash)) {
-    return false;
-  }
-
-  // Check leaves array exists
-  if (!Array.isArray(t.leaves)) {
-    return false;
-  }
-
-  // Validate each leaf
-  for (const leaf of t.leaves) {
-    if (!isValidLeaf(leaf)) {
-      return false;
-    }
+  for (const item of resultData) {
+    if (!Array.isArray(item) || item.length !== 2) return false;
+    const [id, version] = item;
+    if (typeof id !== 'string' || !id.includes(':')) return false;
+    if (typeof version !== 'number') return false;
   }
 
   // If expected IDs provided, check they are all present
   if (expectedIds && expectedIds.length > 0) {
-    const leafIds = t.leaves.map((leaf: any) => leaf.id);
+    const presentIds = resultData.map((item) => item[0]);
     for (const expectedId of expectedIds) {
-      if (!leafIds.includes(expectedId)) {
+      if (!presentIds.includes(expectedId)) {
         return false;
       }
     }
@@ -150,92 +141,16 @@ function isValidHashFormat(hash: string): boolean {
 }
 
 /**
- * Validate a leaf node in the hash tree
+ * Legacy validator for Views with Subqueries - Now effectively same as validateFlatArray
+ * since subqueries are flattened/ignored in the output.
  */
-function isValidLeaf(leaf: unknown, requireChildren = false): boolean {
-  if (typeof leaf !== 'object' || leaf === null) return false;
-
-  const l = leaf as { id?: unknown; hash?: unknown; children?: unknown };
-
-  // Must have valid id (format: table:id)
-  if (typeof l.id !== 'string' || !l.id.includes(':')) {
-    return false;
-  }
-
-  // Must have valid hash
-  if (typeof l.hash !== 'string' || !isValidHashFormat(l.hash)) {
-    return false;
-  }
-
-  // children is optional, but if present must be an object
-  if (l.children !== undefined && typeof l.children !== 'object') {
-    return false;
-  }
-
-  // If children are required (for joined views), check they exist and are non-empty
-  if (requireChildren) {
-    if (!l.children || Object.keys(l.children as object).length === 0) {
-      console.warn(`[validateHashTree] Leaf ${l.id} has empty children, expected joined data`);
-      return false;
-    }
-  }
-
-  return true;
-}
-
-/**
- * Validate hash tree for views WITH subqueries/joins.
- * This checks that leaves have populated children (the joined data).
- */
-export function validateHashTreeWithChildren(
-  tree: unknown,
+export function validateFlatArrayWithChildren(
+  resultData: unknown,
   expectedIds?: string[],
   expectedChildKeys?: string[]
 ): boolean {
-  if (tree === null || tree === undefined) return false;
-  if (typeof tree !== 'object') return false;
-
-  const t = tree as { hash?: unknown; leaves?: unknown[] };
-
-  // Check root hash exists and is valid hex format
-  if (typeof t.hash !== 'string' || !isValidHashFormat(t.hash)) {
-    return false;
-  }
-
-  // Check leaves array exists
-  if (!Array.isArray(t.leaves)) {
-    return false;
-  }
-
-  // Validate each leaf (requiring non-empty children for joined views)
-  for (const leaf of t.leaves) {
-    if (!isValidLeaf(leaf, true)) {
-      return false;
-    }
-
-    // If expected child keys provided, check they exist
-    if (expectedChildKeys && expectedChildKeys.length > 0) {
-      const children = (leaf as any).children as Record<string, unknown>;
-      for (const key of expectedChildKeys) {
-        if (!(key in children)) {
-          console.warn(`[validateHashTree] Leaf missing expected child key: ${key}`);
-          return false;
-        }
-      }
-    }
-  }
-
-  // If expected IDs provided, check they are all present
-  if (expectedIds && expectedIds.length > 0) {
-    const leafIds = t.leaves.map((leaf: any) => leaf.id);
-    for (const expectedId of expectedIds) {
-      if (!leafIds.includes(expectedId)) {
-        return false;
-      }
-    }
-  }
-
-  return true;
+  // Just validate flat array structure
+  return validateFlatArray(resultData, expectedIds);
 }
 
 /**

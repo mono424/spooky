@@ -63,9 +63,9 @@ export class DevToolsService {
           dataSize: q.records?.length || 0,
           data: q.records,
           localHash: q.localHash,
-          localTree: q.localTree,
+          localArray: q.localArray,
           remoteHash: q.remoteHash,
-          remoteTree: q.remoteTree,
+          remoteArray: q.remoteArray,
         });
       });
     }
@@ -85,9 +85,9 @@ export class DevToolsService {
       variables: {},
       dataSize: 0,
       localHash: payload.localHash,
-      localTree: payload.localTree,
+      localArray: payload.localArray,
       remoteHash: payload.remoteHash,
-      remoteTree: payload.remoteTree,
+      remoteArray: payload.remoteArray,
     };
 
     this.activeQueries.set(queryHash, queryState);
@@ -105,8 +105,8 @@ export class DevToolsService {
       id: payload.incantationId?.toString(),
       localHash: payload.localHash,
       remoteHash: payload.remoteHash,
-      localTree: payload.localTree ? 'PRESENT' : 'MISSING',
-      remoteTree: payload.remoteTree ? 'PRESENT' : 'MISSING',
+      localArray: payload.localArray ? 'PRESENT' : 'MISSING',
+      remoteArray: payload.remoteArray ? 'PRESENT' : 'MISSING',
     });
     const queryHash = this.hashString(payload.incantationId.toString());
 
@@ -116,31 +116,26 @@ export class DevToolsService {
       queryState.lastUpdate = Date.now();
       queryState.dataSize = Array.isArray(payload.records) ? payload.records.length : 0;
       queryState.data = payload.records;
-      // We don't get the hash directly in the payload unless we change the event definition again
-      // BUT, the payload.tree IS the local tree now (based on my previous change).
-      // Wait, let me check the previous change.
-      // Yes, I added 'tree' to IncantationUpdated.
-      // The payload structure is { incantationId, records, tree? }.
+
       // Update local state from payload
-      if (payload.localTree !== undefined) {
-        queryState.localTree = payload.localTree;
+      if (payload.localArray !== undefined) {
+        queryState.localArray = payload.localArray;
+        // Optionally update hash if not provided (though usually hash comes with array)
       }
       if (payload.localHash !== undefined) {
         queryState.localHash = payload.localHash;
-      } else if (payload.localTree && payload.localTree.hash) {
-        queryState.localHash = payload.localTree.hash;
       }
 
       // Update remote state
       if (payload.remoteHash) queryState.remoteHash = payload.remoteHash;
-      if (payload.remoteTree) queryState.remoteTree = payload.remoteTree;
+      if (payload.remoteArray) queryState.remoteArray = payload.remoteArray;
 
       this.activeQueries.set(queryHash, queryState);
       console.log('[DevTools] Updated QueryState:', {
         localHash: queryState.localHash,
         remoteHash: queryState.remoteHash,
-        localTreeKeys: queryState.localTree ? Object.keys(queryState.localTree) : 'MISSING',
-        remoteTreeKeys: queryState.remoteTree ? Object.keys(queryState.remoteTree) : 'MISSING',
+        localArraySize: queryState.localArray?.length ?? 'MISSING',
+        remoteArraySize: queryState.remoteArray?.length ?? 'MISSING',
       });
     } else {
       console.warn('[DevTools] Received update for unknown query', queryHash);

@@ -1,42 +1,48 @@
-use crate::engine::view::{IdTree, Operator, SpookyValue};
+use crate::engine::view::{Operator, SpookyValue};
 use crate::{converter, sanitizer, MaterializedViewUpdate, QueryPlan};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 
-
-
 fn hash_value_recursive_blake3(v: &Value, hasher: &mut blake3::Hasher) {
     match v {
-        Value::Null => { hasher.update(&[0]); },
-        Value::Bool(b) => { hasher.update(&[1]); hasher.update(&[*b as u8]); },
-        Value::Number(n) => { 
-            hasher.update(&[2]); 
+        Value::Null => {
+            hasher.update(&[0]);
+        }
+        Value::Bool(b) => {
+            hasher.update(&[1]);
+            hasher.update(&[*b as u8]);
+        }
+        Value::Number(n) => {
+            hasher.update(&[2]);
             if let Some(f) = n.as_f64() {
                 hasher.update(&f.to_be_bytes());
             } else {
                 // strict fallback if it somehow isn't an f64 compatible number, though in JS/JSON it mostly is
                 hasher.update(n.to_string().as_bytes());
             }
-        },
-        Value::String(s) => { hasher.update(&[3]); hasher.update(s.as_bytes()); },
+        }
+        Value::String(s) => {
+            hasher.update(&[3]);
+            hasher.update(s.as_bytes());
+        }
         Value::Array(arr) => {
             hasher.update(&[4]);
             for item in arr {
                 hash_value_recursive_blake3(item, hasher);
             }
-        },
+        }
         Value::Object(obj) => {
-             hasher.update(&[5]);
-             // Deterministic hashing by sorting keys? 
-             // To match current recursive approach in view.rs which iterates straight:
-             // We stick to simple iteration unless strict determinism across reloads is needed.
-             // Given the previous code didn't sort, we won't sort here to maintain behavior relative to previous logic,
-             // BUT `service.rs` uses `hash_value_recursive` which previously used `to_string` on numbers.
-             // The prompt asks for optimization.
-             for (k, v) in obj {
-                 hasher.update(k.as_bytes());
-                 hash_value_recursive_blake3(v, hasher);
-             }
+            hasher.update(&[5]);
+            // Deterministic hashing by sorting keys?
+            // To match current recursive approach in view.rs which iterates straight:
+            // We stick to simple iteration unless strict determinism across reloads is needed.
+            // Given the previous code didn't sort, we won't sort here to maintain behavior relative to previous logic,
+            // BUT `service.rs` uses `hash_value_recursive` which previously used `to_string` on numbers.
+            // The prompt asks for optimization.
+            for (k, v) in obj {
+                hasher.update(k.as_bytes());
+                hash_value_recursive_blake3(v, hasher);
+            }
         }
     }
 }
@@ -126,11 +132,11 @@ pub mod view {
         // Parse Query Plan
         // 1. Convert SURQL to generic Value
         let root_op_val = converter::convert_surql_to_dbsp(&surreal_ql)
-             .or_else(|_| {
-                 // Fallback: Parse directly from string using serde_json
-                 serde_json::from_str::<Value>(&surreal_ql).map_err(anyhow::Error::from)
-             })
-             .map_err(|_| anyhow!("Invalid Query Plan"))?;
+            .or_else(|_| {
+                // Fallback: Parse directly from string using serde_json
+                serde_json::from_str::<Value>(&surreal_ql).map_err(anyhow::Error::from)
+            })
+            .map_err(|_| anyhow!("Invalid Query Plan"))?;
 
         // 2. Deserialize Value into Operator Struct
         let root_op: Operator = serde_json::from_value(root_op_val)
@@ -165,13 +171,8 @@ pub mod view {
         let empty_hash = blake3::hash(&[]).to_hex().to_string();
         MaterializedViewUpdate {
             query_id: id.to_string(),
-            result_hash: empty_hash.clone(),
-            result_ids: vec![],
-            tree: IdTree {
-                hash: empty_hash,
-                children: None,
-                leaves: Some(vec![]),
-            },
+            result_hash: empty_hash,
+            result_data: vec![], // Empty flat array
         }
     }
 }

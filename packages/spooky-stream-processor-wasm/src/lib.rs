@@ -19,8 +19,7 @@ const TS_APPEND_CONTENT: &'static str = r#"
 export interface WasmStreamUpdate {
   query_id: string;
   result_hash: string;
-  result_ids: string[];
-  tree: any;
+  result_data: [string, number][];
 }
 
 export interface WasmIncantationConfig {

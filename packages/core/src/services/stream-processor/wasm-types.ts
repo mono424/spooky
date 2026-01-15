@@ -1,8 +1,9 @@
+import { RecordVersionArray } from '../../types.js';
+
 export interface WasmStreamUpdate {
   query_id: string;
   result_hash: string;
-  result_ids: string[];
-  tree: any; // Wasm tree structure
+  result_data: RecordVersionArray; // Match Rust 'result_data' field
 }
 
 export interface WasmIncantationConfig {

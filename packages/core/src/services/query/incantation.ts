@@ -1,4 +1,8 @@
-import { Incantation as IncantationData, QueryTimeToLive } from '../../types.js';
+import {
+  Incantation as IncantationData,
+  QueryTimeToLive,
+  RecordVersionArray,
+} from '../../types.js';
 import { RecordId, Duration } from 'surrealdb';
 
 // Helper to parse duration string like "10m" to ms
@@ -43,9 +47,9 @@ export class Incantation<T> {
   public surrealql: string;
   public params?: Record<string, any>;
   public localHash: string;
-  public localTree: any;
+  public localArray: RecordVersionArray;
   public remoteHash: string;
-  public remoteTree: any;
+  public remoteArray: RecordVersionArray;
   public ttl: QueryTimeToLive | Duration;
   public lastActiveAt: Date | number | string;
   private ttlTimer: NodeJS.Timeout | null = null;
@@ -66,9 +70,9 @@ export class Incantation<T> {
     this.surrealql = data.surrealql;
     this.params = data.params;
     this.localHash = data.localHash;
-    this.localTree = data.localTree;
+    this.localArray = data.localArray;
     this.remoteHash = data.remoteHash;
-    this.remoteTree = data.remoteTree;
+    this.remoteArray = data.remoteArray;
     this.lastActiveAt = new Date(data.lastActiveAt);
     this.ttl = data.ttl;
     this.ttlDurationMs = parseDuration(data.ttl);
@@ -80,10 +84,10 @@ export class Incantation<T> {
     return this.meta.involvedTables?.includes(tableName) ?? false;
   }
 
-  public updateLocalState(records: T[], localHash: string, localTree: any) {
+  public updateLocalState(records: T[], localHash: string, localArray: RecordVersionArray) {
     this.results = records;
     this.localHash = localHash;
-    this.localTree = localTree;
+    this.localArray = localArray;
   }
 
   public destroy() {

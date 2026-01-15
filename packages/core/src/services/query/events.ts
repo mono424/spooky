@@ -1,6 +1,6 @@
 import { RecordId, Duration } from 'surrealdb';
 import { createEventSystem, EventDefinition, EventSystem } from '../../events/index.js';
-import { QueryTimeToLive } from '../../types.js';
+import { QueryTimeToLive, RecordVersionArray } from '../../types.js';
 
 export const QueryEventTypes = {
   IncantationInitialized: 'QUERY_INCANTATION_INITIALIZED',
@@ -32,9 +32,9 @@ export type QueryEventTypeMap = {
       surrealql: string;
       params: Record<string, any>;
       localHash: string;
-      localTree: any;
+      localArray: RecordVersionArray;
       remoteHash: string;
-      remoteTree: any;
+      remoteArray: RecordVersionArray;
     }
   >;
   [QueryEventTypes.IncantationTTLHeartbeat]: EventDefinition<
@@ -56,7 +56,7 @@ export type QueryEventTypeMap = {
     {
       incantationId: RecordId<string>;
       remoteHash: string;
-      remoteTree: any;
+      remoteArray: RecordVersionArray;
       records: Record<string, any>[];
     }
   >;
@@ -66,7 +66,7 @@ export type QueryEventTypeMap = {
     {
       incantationId: RecordId<string>;
       records: Record<string, any>[];
-      tree?: any;
+      array?: RecordVersionArray;
     }
   >;
 };

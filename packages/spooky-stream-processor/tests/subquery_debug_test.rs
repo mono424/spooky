@@ -61,41 +61,36 @@ fn test_subquery_projection_children() {
     let view_update = update.unwrap();
     println!("=== View Update ===");
     println!("query_id: {}", view_update.query_id);
-    println!("result_ids: {:?}", view_update.result_ids);
+    println!("result_data: {:?}", view_update.result_data);
     println!("result_hash: {}", view_update.result_hash);
-    println!(
-        "tree: {}",
-        serde_json::to_string_pretty(&view_update.tree).unwrap()
-    );
 
-    // 4. Verify result contains the thread
+    // 4. Verify result contains BOTH the thread AND the author (from subquery)
+    assert!(!view_update.result_data.is_empty(), "Expected results");
+
+    // Extract IDs from result_data
+    let result_ids: Vec<&str> = view_update
+        .result_data
+        .iter()
+        .map(|(id, _)| id.as_str())
+        .collect();
+
     assert!(
-        view_update.result_ids.contains(&thread_id),
-        "Expected thread in result_ids"
+        result_ids.contains(&thread_id.as_str()),
+        "Expected thread ID in result"
+    );
+    assert!(
+        result_ids.contains(&author_id.as_str()),
+        "Expected author ID from subquery in result"
     );
 
-    // 5. Check that tree has leaves with children
-    if let Some(leaves) = &view_update.tree.leaves {
-        assert!(!leaves.is_empty(), "Expected leaves");
-        let leaf = &leaves[0];
-        println!("Leaf: {:?}", leaf);
+    // 5. Verify we have both IDs (thread + author = 2 records)
+    assert_eq!(
+        view_update.result_data.len(),
+        2,
+        "Expected 2 records (thread + author from subquery)"
+    );
 
-        // THE KEY CHECK: children should contain author_data
-        assert!(leaf.children.is_some(), "Expected children to be populated");
-        if let Some(children) = &leaf.children {
-            assert!(
-                children.contains_key("author_data"),
-                "Expected 'author_data' in children"
-            );
-            let author_tree = &children["author_data"];
-            println!(
-                "author_data tree: {}",
-                serde_json::to_string_pretty(author_tree).unwrap()
-            );
-        }
-    } else {
-        panic!("Expected leaves in tree");
-    }
+    println!("[TEST] ✓ Subquery test passed - includes joined children!");
 }
 
 /// Helper to create author record (similar to common but returns Value)

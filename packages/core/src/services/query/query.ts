@@ -89,7 +89,7 @@ export class QueryManager<S extends SchemaStructure> {
   ) {
     const payload =
       eventOrPayload && 'payload' in eventOrPayload ? eventOrPayload.payload : eventOrPayload;
-    const { incantationId, records = [], remoteHash, remoteTree } = payload;
+    const { incantationId, records = [], remoteHash, remoteArray } = payload;
 
     if (!incantationId || !incantationId.id) {
       this.logger.error({ payload }, '[QueryManager] Invalid payload: missing incantationId');
@@ -135,29 +135,29 @@ export class QueryManager<S extends SchemaStructure> {
     console.log('[QueryManager] handleIncomingUpdate payload:', {
       incantationId: incantationId?.toString(),
       remoteHash,
-      remoteTree: remoteTree ? 'PRESENT' : 'MISSING',
+      remoteArray: remoteArray ? 'PRESENT' : 'MISSING',
       localHashInPayload: (payload as any).localHash,
-      localTreeInPayload: (payload as any).localTree ? 'PRESENT' : 'MISSING',
+      localArrayInPayload: (payload as any).localArray ? 'PRESENT' : 'MISSING',
     });
 
-    incantation.updateLocalState(validRecords, incantation.localHash, incantation.localTree);
+    incantation.updateLocalState(validRecords, incantation.localHash, incantation.localArray);
     // Explicitly update remote state
     incantation.remoteHash = remoteHash;
-    incantation.remoteTree = remoteTree;
+    incantation.remoteArray = remoteArray;
     this.events.emit(QueryEventTypes.IncantationUpdated, {
       incantationId,
       records: validRecords,
       // localHash: incantation.localHash, // REMOVED: Don't overwrite local state from remote update
-      // localTree: incantation.localTree, // REMOVED: Don't overwrite local state from remote update
+      // localArray: incantation.localArray, // REMOVED: Don't overwrite local state from remote update
       remoteHash: remoteHash,
-      remoteTree: remoteTree,
+      remoteArray: remoteArray,
     });
 
     // Verification and purging of orphans is now handled by SpookySync
   }
 
   public async handleStreamUpdate(update: any) {
-    const { query_id, localHash, result_ids, localTree } = update;
+    const { query_id, localHash, result_ids, localArray } = update;
 
     // query_id from StreamProcessor is a string (e.g. "_spooky_incantation:...")
     // We need to convert it to a RecordId for the event payload
@@ -192,13 +192,13 @@ export class QueryManager<S extends SchemaStructure> {
         incantation.surrealql,
         incantation.params
       );
-      incantation.updateLocalState(records || [], localHash, localTree);
+      incantation.updateLocalState(records || [], localHash, localArray);
 
       this.events.emit(QueryEventTypes.IncantationUpdated, {
         incantationId: incantationRecordId,
         records: records || [],
         localHash,
-        localTree,
+        localArray,
       });
     } catch (err) {
       this.logger.error(
@@ -248,9 +248,9 @@ export class QueryManager<S extends SchemaStructure> {
         surrealql,
         params,
         localHash: existing.localHash,
-        localTree: existing.localTree,
+        localArray: existing.localArray,
         remoteHash: existing.remoteHash,
-        remoteTree: existing.remoteTree,
+        remoteArray: existing.remoteArray,
         lastActiveAt: existing.lastActiveAt,
         ttl: existing.ttl,
         meta: {
@@ -296,9 +296,9 @@ export class QueryManager<S extends SchemaStructure> {
             params: params,
             clientId: this.clientId,
             localHash: '',
-            localTree: null,
+            localArray: [],
             remoteHash: '',
-            remoteTree: null,
+            remoteArray: [],
             lastActiveAt: new Date(),
             ttl: new Duration(ttl),
             meta: {
@@ -331,7 +331,7 @@ export class QueryManager<S extends SchemaStructure> {
       throw new Error('Failed to register incantation');
     }
 
-    incantation.updateLocalState([], update.localHash, update.localTree);
+    incantation.updateLocalState([], update.localHash, update.localArray);
 
     this.events.emit(QueryEventTypes.IncantationInitialized, {
       incantationId: incantation.id,
@@ -339,9 +339,9 @@ export class QueryManager<S extends SchemaStructure> {
       params: incantation.params ?? {},
       ttl: incantation.ttl,
       localHash: incantation.localHash,
-      localTree: incantation.localTree,
+      localArray: incantation.localArray,
       remoteHash: incantation.remoteHash,
-      remoteTree: incantation.remoteTree,
+      remoteArray: incantation.remoteArray,
     });
 
     await incantation.startTTLHeartbeat(() => {

@@ -60,9 +60,9 @@ export interface Incantation {
   surrealql: string;
   params?: Record<string, any>;
   localHash: string;
-  localTree: any;
+  localArray: RecordVersionArray;
   remoteHash: string;
-  remoteTree: any;
+  remoteArray: RecordVersionArray;
   lastActiveAt: number | Date | string;
   ttl: QueryTimeToLive | Duration;
   meta: {
@@ -71,6 +71,16 @@ export interface Incantation {
   };
 }
 
+// Flat array format: [[record-id, version], [record-id, version], ...]
+export type RecordVersionArray = Array<[string, number]>;
+
+export interface RecordVersionDiff {
+  added: RecordId<string>[];
+  updated: RecordId<string>[];
+  removed: RecordId<string>[];
+}
+
+// Legacy types - deprecated, kept for backward compatibility during migration
 export interface IdTree {
   hash: string;
   children?: Record<string, IdTree>;

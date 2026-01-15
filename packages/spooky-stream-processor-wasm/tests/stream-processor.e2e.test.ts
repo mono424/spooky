@@ -17,8 +17,8 @@ import {
   makeThreadRecord,
   makeCommentRecord,
   createViewConfig,
-  validateHashTree,
-  validateHashTreeWithChildren,
+  validateFlatArray,
+  validateFlatArrayWithChildren,
 } from './helpers';
 
 // Get directory path for ESM
@@ -57,9 +57,10 @@ describe('Simple View (Single Table Scan)', () => {
       expect(initialResult.result_hash).toBeDefined();
       expect(typeof initialResult.result_hash).toBe('string');
       expect(initialResult.result_hash.length).toBeGreaterThan(0);
-      expect(validateHashTree(initialResult.tree)).toBe(true);
-      expect(initialResult.result_ids).toContain(user1.id);
-      expect(initialResult.result_ids).toContain(user2.id);
+      expect(validateFlatArray(initialResult.result_data)).toBe(true);
+      const ids = initialResult.result_data.map((i) => i[0]);
+      expect(ids).toContain(user1.id);
+      expect(ids).toContain(user2.id);
     });
   });
 
@@ -92,9 +93,9 @@ describe('Simple View (Single Table Scan)', () => {
       const viewUpdate = updates.find((u) => u.query_id === VIEW_ID);
       expect(viewUpdate).toBeDefined();
       expect(viewUpdate!.result_hash).not.toBe(initialHash);
-      expect(viewUpdate!.result_ids).toContain(user1.id);
-      expect(viewUpdate!.result_ids).toContain(user2.id);
-      expect(validateHashTree(viewUpdate!.tree)).toBe(true);
+      expect(viewUpdate!.result_data.map((i) => i[0])).toContain(user1.id);
+      expect(viewUpdate!.result_data.map((i) => i[0])).toContain(user2.id);
+      expect(validateFlatArray(viewUpdate!.result_data)).toBe(true);
     });
   });
 
@@ -106,7 +107,7 @@ describe('Simple View (Single Table Scan)', () => {
       const config = createViewConfig(VIEW_ID, SIMPLE_VIEW_SQL);
       const initialResult = processor.register_view(config) as WasmStreamUpdate;
 
-      expect(initialResult.result_ids).toHaveLength(0);
+      expect(initialResult.result_data).toHaveLength(0);
       const emptyHash = initialResult.result_hash;
 
       // 2. Ingest first record
@@ -123,8 +124,8 @@ describe('Simple View (Single Table Scan)', () => {
       const viewUpdate = updates.find((u) => u.query_id === VIEW_ID);
       expect(viewUpdate).toBeDefined();
       expect(viewUpdate!.result_hash).not.toBe(emptyHash);
-      expect(viewUpdate!.result_ids).toContain(user1.id);
-      expect(validateHashTree(viewUpdate!.tree)).toBe(true);
+      expect(viewUpdate!.result_data.map((i) => i[0])).toContain(user1.id);
+      expect(validateFlatArray(viewUpdate!.result_data)).toBe(true);
     });
   });
 });
@@ -151,17 +152,21 @@ describe('One Nested Join (Thread with Author Subquery)', () => {
       const config = createViewConfig(VIEW_ID, JOIN_VIEW_SQL);
       const result = processor.register_view(config) as WasmStreamUpdate;
 
-      // 4. Verify - joined view should have children with 'author_data'
+      // 4. Verify - flat array now includes BOTH main record AND subquery children
       expect(result.query_id).toBe(VIEW_ID);
       expect(result.result_hash).toBeDefined();
-      expect(result.result_ids).toContain(thread.id);
 
-      // Debug: print tree structure
-      console.log('=== Tree Structure ===');
-      console.log(JSON.stringify(result.tree, null, 2));
+      const resultIds = result.result_data.map((i) => i[0]);
+      expect(resultIds).toContain(thread.id);
+      expect(resultIds).toContain(author.id); // Subquery author is now included!
 
-      // Strict check: children should contain 'author_data' from subquery
-      expect(validateHashTreeWithChildren(result.tree, [thread.id], ['author_data'])).toBe(true);
+      // Debug: print flat array structure
+      console.log('=== Flat Array Structure ===');
+      console.log(JSON.stringify(result.result_data, null, 2));
+
+      // Should have 2 records: thread + author from subquery
+      expect(result.result_data.length).toBe(2);
+      expect(validateFlatArray(result.result_data)).toBe(true);
     });
   });
 
@@ -195,8 +200,8 @@ describe('One Nested Join (Thread with Author Subquery)', () => {
       const viewUpdate = updates.find((u) => u.query_id === VIEW_ID);
       expect(viewUpdate).toBeDefined();
       expect(viewUpdate!.result_hash).not.toBe(initialHash);
-      expect(viewUpdate!.result_ids).toContain(thread1.id);
-      expect(viewUpdate!.result_ids).toContain(thread2.id);
+      expect(viewUpdate!.result_data.map((i) => i[0])).toContain(thread1.id);
+      expect(viewUpdate!.result_data.map((i) => i[0])).toContain(thread2.id);
     });
   });
 
@@ -207,7 +212,7 @@ describe('One Nested Join (Thread with Author Subquery)', () => {
       // 1. Register view with no data
       const config = createViewConfig(VIEW_ID, JOIN_VIEW_SQL);
       const initialResult = processor.register_view(config) as WasmStreamUpdate;
-      expect(initialResult.result_ids).toHaveLength(0);
+      expect(initialResult.result_data).toHaveLength(0);
 
       // 2. Add author (join dependency)
       const author = makeAuthorRecord('Alice');
@@ -234,8 +239,8 @@ describe('One Nested Join (Thread with Author Subquery)', () => {
       // 4. Verify
       const viewUpdate = threadUpdates.find((u) => u.query_id === VIEW_ID);
       expect(viewUpdate).toBeDefined();
-      expect(viewUpdate!.result_ids).toContain(thread.id);
-      expect(validateHashTree(viewUpdate!.tree)).toBe(true);
+      expect(viewUpdate!.result_data.map((i) => i[0])).toContain(thread.id);
+      expect(validateFlatArray(viewUpdate!.result_data)).toBe(true);
     });
   });
 });
@@ -267,19 +272,20 @@ describe('Two Nested Subqueries (Thread with Author and Comments)', () => {
       const config = createViewConfig(VIEW_ID, NESTED_SUBQUERY_SQL);
       const result = processor.register_view(config) as WasmStreamUpdate;
 
-      // 5. Verify - the main query is on threads, so result_ids contains thread IDs
+      // 5. Verify - flat array includes ALL records: thread, author, comment (and commentauthor)
       expect(result.query_id).toBe(VIEW_ID);
       expect(result.result_hash).toBeDefined();
-      expect(result.result_ids).toContain(thread.id);
-      // Strict check: children should contain both 'author_data' and 'comments' from nested subqueries
 
-      // Debug: print tree structure
-      console.log('=== Tree Structure ===');
-      console.log(JSON.stringify(result.tree, null, 2));
+      const resultIds = result.result_data.map((i) => i[0]);
+      expect(resultIds).toContain(thread.id);
+      expect(resultIds).toContain(author.id); // From author_data subquery
+      expect(resultIds).toContain(comment.id); // From comments subquery
 
-      expect(
-        validateHashTreeWithChildren(result.tree, [thread.id], ['author_data', 'comments'])
-      ).toBe(true);
+      // Debug: Should have thread + author + comment = 3 records minimum
+      // (comment's author is same as thread's author, so deduped)
+      console.log('Result IDs:', resultIds);
+      expect(result.result_data.length).toBeGreaterThanOrEqual(3);
+      expect(validateFlatArray(result.result_data)).toBe(true);
     });
   });
 
@@ -317,7 +323,7 @@ describe('Two Nested Subqueries (Thread with Author and Comments)', () => {
       const viewUpdate = updates.find((u) => u.query_id === VIEW_ID);
       if (viewUpdate) {
         // If update is emitted, verify thread is still in results
-        expect(viewUpdate.result_ids).toContain(thread.id);
+        expect(viewUpdate.result_data.map((i) => i[0])).toContain(thread.id);
         // Hash should change since nested comments changed
         expect(viewUpdate.result_hash).not.toBe(initialHash);
       } else {
@@ -334,7 +340,7 @@ describe('Two Nested Subqueries (Thread with Author and Comments)', () => {
       // 1. Register view with no data
       const config = createViewConfig(VIEW_ID, NESTED_SUBQUERY_SQL);
       const initialResult = processor.register_view(config) as WasmStreamUpdate;
-      expect(initialResult.result_ids).toHaveLength(0);
+      expect(initialResult.result_data).toHaveLength(0);
 
       // 2. Build hierarchy step by step
       const author = makeAuthorRecord('Alice');
@@ -364,8 +370,8 @@ describe('Two Nested Subqueries (Thread with Author and Comments)', () => {
       // Since comment add may not trigger view update, verify via thread add
       const threadViewUpdate = threadUpdates.find((u) => u.query_id === VIEW_ID);
       if (threadViewUpdate) {
-        expect(threadViewUpdate.result_ids).toContain(thread.id);
-        expect(validateHashTree(threadViewUpdate.tree)).toBe(true);
+        expect(threadViewUpdate.result_data.map((i) => i[0])).toContain(thread.id);
+        expect(validateFlatArray(threadViewUpdate.result_data)).toBe(true);
       }
     });
   });
@@ -387,7 +393,7 @@ describe('Two Nested Subqueries (Thread with Author and Comments)', () => {
       // 2. Register view
       const config = createViewConfig(VIEW_ID, NESTED_SUBQUERY_SQL);
       const initialResult = processor.register_view(config) as WasmStreamUpdate;
-      expect(initialResult.result_ids).toContain(thread.id);
+      expect(initialResult.result_data.map((i) => i[0])).toContain(thread.id);
 
       // 3. Delete the thread (removes it from view)
       const deleteUpdates = processor.ingest(
@@ -400,7 +406,7 @@ describe('Two Nested Subqueries (Thread with Author and Comments)', () => {
       // 4. Verify thread is removed from view
       const viewUpdate = deleteUpdates.find((u) => u.query_id === VIEW_ID);
       expect(viewUpdate).toBeDefined();
-      expect(viewUpdate!.result_ids).not.toContain(thread.id);
+      expect(viewUpdate!.result_data.map((i) => i[0])).not.toContain(thread.id);
     });
   });
 });

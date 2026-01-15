@@ -131,11 +131,11 @@ function QueryDetail() {
               </div>
             </Show>
 
-            <Show when={query().localTree}>
+            <Show when={query().localArray}>
               <div class="detail-section">
-                <div class="detail-label">Local Tree</div>
+                <div class="detail-label">Local Array</div>
                 <pre class="query-code">
-                  {JSON.stringify(query().localTree, null, 2)}
+                  {JSON.stringify(query().localArray, null, 2)}
                 </pre>
               </div>
             </Show>
@@ -147,11 +147,11 @@ function QueryDetail() {
               </div>
             </Show>
 
-            <Show when={query().remoteTree}>
+            <Show when={query().remoteArray}>
               <div class="detail-section">
-                <div class="detail-label">Remote Tree</div>
+                <div class="detail-label">Remote Array</div>
                 <pre class="query-code">
-                  {JSON.stringify(query().remoteTree, null, 2)}
+                  {JSON.stringify(query().remoteArray, null, 2)}
                 </pre>
               </div>
             </Show>

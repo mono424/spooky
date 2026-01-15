@@ -1,6 +1,6 @@
 import { LocalDatabaseService, RemoteDatabaseService } from '../database/index.js';
 import { MutationEventTypes } from '../mutation/index.js';
-import { IdTree, IdTreeDiff } from '../../types.js';
+import { RecordVersionArray, RecordVersionDiff } from '../../types.js';
 import { QueryEventTypes } from '../query/events.js';
 import { SyncQueueEventTypes, createSyncEventSystem, SyncEventTypes } from './events.js';
 import { createLogger, Logger } from '../logger/index.js';
@@ -14,7 +14,7 @@ import {
   UpQueue,
 } from './queue/index.js';
 import { RecordId, Duration, Uuid } from 'surrealdb';
-import { diffIdTree, TreeSyncer } from './utils.js';
+import { diffRecordVersionArray, ArraySyncer } from './utils.js';
 import { parseRecordIdString, decodeFromSpooky } from '../utils/index.js';
 import { TableModel } from '@spooky/query-builder';
 import { SchemaStructure } from '@spooky/query-builder';
@@ -88,12 +88,26 @@ export class SpookySync<S extends SchemaStructure> {
     (await this.remote.getClient().liveOf(queryUuid)).subscribe((message) => {
       this.logger.debug({ message }, 'Live update received');
       if (message.action === 'UPDATE' || message.action === 'CREATE') {
-        const { id, hash, tree } = message.value;
-        if (!(id instanceof RecordId) || !hash || !tree) {
+        // Look for array, fallback to tree for backward compatibility if needed, or null
+        const { id, hash, array, tree } = message.value;
+        // Use array if present, otherwise ignore (assuming complete switch)
+        // Or should we support both during migration?
+        // User request: "switch ... to a flat array of records"
+        // Let's expect 'array' field.
+
+        // Note: The backend might still send 'tree' if not updated, but we are asked to update frontend.
+        // We will prefer 'array'.
+        const remoteArray = array || tree; // Temporary fallback? Or just array?
+
+        if (!(id instanceof RecordId) || !hash || !remoteArray) {
           return;
         }
 
-        this.handleRemoteIncantationChange(id, hash as string, tree).catch((err) => {
+        this.handleRemoteIncantationChange(
+          id,
+          hash as string,
+          (remoteArray || []) as RecordVersionArray
+        ).catch((err) => {
           this.logger.error({ err }, 'Error handling remote incantation change');
         });
       }
@@ -103,7 +117,7 @@ export class SpookySync<S extends SchemaStructure> {
   private async handleRemoteIncantationChange(
     incantationId: RecordId,
     remoteHash: string,
-    remoteTree: any
+    remoteArray: RecordVersionArray
   ) {
     // Fetch local state to get necessary params
     const existing = await this.findIncatationRecord(incantationId);
@@ -116,15 +130,15 @@ export class SpookySync<S extends SchemaStructure> {
     }
 
     const surrealql = existing.surrealql || existing.surrealQL;
-    const { params, localHash, localTree } = existing;
+    const { params, localHash, localArray } = existing;
 
     await this.syncIncantation({
       incantationId,
       surrealql,
-      localTree,
+      localArray,
       localHash,
       remoteHash,
-      remoteTree,
+      remoteArray,
       params,
     });
   }
@@ -215,15 +229,15 @@ export class SpookySync<S extends SchemaStructure> {
       case 'register':
         return this.registerIncantation(event);
       case 'sync':
-        const { incantationId, surrealql, params, localTree, localHash, remoteHash, remoteTree } =
+        const { incantationId, surrealql, params, localArray, localHash, remoteHash, remoteArray } =
           event.payload;
         return this.syncIncantation({
           incantationId,
           surrealql,
-          localTree,
+          localArray,
           localHash,
           remoteHash,
-          remoteTree,
+          remoteArray,
           params,
         });
       case 'heartbeat':
@@ -250,7 +264,7 @@ export class SpookySync<S extends SchemaStructure> {
       this.logger.debug({ existing }, 'Register Incantation state');
 
       const localHash = existing?.localHash ?? '';
-      const localTree = existing?.localTree ?? null;
+      const localArray = existing?.localArray ?? [];
 
       await this.updateLocalIncantation(
         incantationId,
@@ -258,14 +272,14 @@ export class SpookySync<S extends SchemaStructure> {
           surrealql,
           params,
           localHash,
-          localTree,
+          localArray,
         },
         {
           updateRecord: existing ? false : true,
         }
       );
 
-      const { hash: remoteHash, tree: remoteTree } = await this.createRemoteIncantation(
+      const { hash: remoteHash, array: remoteArray } = await this.createRemoteIncantation(
         incantationId,
         surrealql,
         params,
@@ -275,10 +289,10 @@ export class SpookySync<S extends SchemaStructure> {
       await this.syncIncantation({
         incantationId,
         surrealql,
-        localTree,
+        localArray,
         localHash,
         remoteHash,
-        remoteTree,
+        remoteArray,
         params,
       });
     } catch (e) {
@@ -305,35 +319,34 @@ export class SpookySync<S extends SchemaStructure> {
     const { ttl: _, ...safeConfig } = config;
 
     // Delegate to remote function which handles DBSP registration & persistence
-    const [{ hash, tree }] = await this.remote.query<[{ hash: string; tree: any }]>(
-      'fn::incantation::register($config)',
-      {
-        config: safeConfig,
-      }
-    );
+    const [{ hash, array }] = await this.remote.query<
+      [{ hash: string; array: RecordVersionArray }]
+    >('fn::incantation::register($config)', {
+      config: safeConfig,
+    });
 
     this.logger.debug(
-      { incantationId: incantationId.toString(), hash, tree },
+      { incantationId: incantationId.toString(), hash, array },
       'createdRemoteIncantation'
     );
-    return { hash, tree };
+    return { hash, array };
   }
 
   private async syncIncantation({
     incantationId,
     surrealql,
-    localTree,
+    localArray,
     localHash,
     remoteHash,
-    remoteTree,
+    remoteArray,
     params,
   }: {
     incantationId: RecordId<string>;
     surrealql: string;
-    localTree: any;
+    localArray: RecordVersionArray;
     localHash: string;
     remoteHash: string;
-    remoteTree: any;
+    remoteArray: RecordVersionArray;
     params: Record<string, any>;
   }) {
     this.logger.debug(
@@ -341,8 +354,8 @@ export class SpookySync<S extends SchemaStructure> {
         incantationId: incantationId.toString(),
         localHash,
         remoteHash,
-        localTree,
-        remoteTree,
+        localArray,
+        remoteArray,
         params,
       },
       'syncIncantation'
@@ -353,13 +366,13 @@ export class SpookySync<S extends SchemaStructure> {
       return;
     }
 
-    const treeSyncer = new TreeSyncer(localTree, remoteTree);
+    const arraySyncer = new ArraySyncer(localArray, remoteArray);
     let maxIter = 10;
     while (maxIter > 0) {
       const { added, updated } = await this.cacheMissingRecords(
-        treeSyncer,
+        arraySyncer,
         incantationId,
-        remoteTree
+        remoteArray
       );
       if (added.length === 0 && updated.length === 0) {
         break;
@@ -380,7 +393,7 @@ export class SpookySync<S extends SchemaStructure> {
         surrealql,
         params,
         remoteHash,
-        remoteTree,
+        remoteArray,
       },
       {
         updateRecord: true,
@@ -389,11 +402,11 @@ export class SpookySync<S extends SchemaStructure> {
   }
 
   private async cacheMissingRecords(
-    treeSyncer: TreeSyncer,
+    arraySyncer: ArraySyncer,
     incantationId: RecordId<string>,
-    remoteTree: IdTree
-  ): Promise<IdTreeDiff> {
-    const diff = treeSyncer.nextSet();
+    remoteArray: RecordVersionArray
+  ): Promise<RecordVersionDiff> {
+    const diff = arraySyncer.nextSet();
 
     // TODO: remove deleted records if deleted in remote
     const { added, updated } = diff;
@@ -431,8 +444,8 @@ export class SpookySync<S extends SchemaStructure> {
       for (const update of result) {
         // Compare full incantation ID (table:id format)
         if (update.query_id === incantationId.toString()) {
-          console.log('iter 3.2 match! updating tree', update.tree);
-          treeSyncer.update(update.tree);
+          console.log('iter 3.2 match! updating array', update.result_data);
+          arraySyncer.update(update.result_data);
         }
       }
     }
@@ -444,12 +457,12 @@ export class SpookySync<S extends SchemaStructure> {
       for (const update of result) {
         // Compare full incantation ID (table:id format)
         if (update.query_id === incantationId.toString()) {
-          treeSyncer.update(update.tree);
+          arraySyncer.update(update.result_data);
         }
       }
     }
 
-    // Note: Removed forced convergence with treeSyncer.update(remoteTree).
+    // Note: Removed forced convergence with arraySyncer.update(remoteArray).
     // This was causing premature convergence for complex queries with subqueries,
     // preventing nested records (comments, author) from being properly synced.
 
@@ -462,16 +475,16 @@ export class SpookySync<S extends SchemaStructure> {
       surrealql,
       params,
       localHash,
-      localTree,
+      localArray,
       remoteHash,
-      remoteTree,
+      remoteArray,
     }: {
       surrealql: string;
       params?: Record<string, any>;
       localHash?: string;
-      localTree?: any;
+      localArray?: RecordVersionArray;
       remoteHash?: string;
-      remoteTree?: any;
+      remoteArray?: RecordVersionArray;
     },
     {
       updateRecord = true,
@@ -482,9 +495,9 @@ export class SpookySync<S extends SchemaStructure> {
     if (updateRecord) {
       const content: any = {};
       if (localHash !== undefined) content.localHash = localHash;
-      if (localTree !== undefined) content.localTree = localTree;
+      if (localArray !== undefined) content.localArray = localArray;
       if (remoteHash !== undefined) content.remoteHash = remoteHash;
-      if (remoteTree !== undefined) content.remoteTree = remoteTree;
+      if (remoteArray !== undefined) content.remoteArray = remoteArray;
 
       await this.updateIncantationRecord(incantationId, content);
     }
@@ -517,9 +530,9 @@ export class SpookySync<S extends SchemaStructure> {
       this.events.emit(SyncEventTypes.IncantationUpdated, {
         incantationId,
         localHash,
-        localTree,
+        localArray,
         remoteHash,
-        remoteTree,
+        remoteArray,
         records: cachedResults || [],
       });
     } catch (e) {

@@ -10,7 +10,7 @@ import { WasmProcessor, WasmStreamUpdate } from './wasm-types.js';
 export interface StreamUpdate {
   query_id: string;
   localHash: string;
-  localTree: any; // Merkle tree structure
+  localArray: any; // Flat array structure [[id, version], ...]
 }
 
 // Define events map
@@ -141,7 +141,7 @@ export class StreamProcessorService {
         const updates: StreamUpdate[] = rawUpdates.map((u: WasmStreamUpdate) => ({
           query_id: u.query_id,
           localHash: u.result_hash,
-          localTree: u.tree,
+          localArray: u.result_data,
         }));
         this.events.emit('stream_update', updates);
       }
@@ -201,7 +201,7 @@ export class StreamProcessorService {
       const update: StreamUpdate = {
         query_id: initialUpdate.query_id,
         localHash: initialUpdate.result_hash,
-        localTree: initialUpdate.tree,
+        localArray: initialUpdate.result_data,
       };
       this.saveState();
       this.logger.debug(

@@ -1,4 +1,5 @@
 import { createEventSystem, EventDefinition, EventSystem } from '../../events/index.js';
+import { RecordVersionArray } from '../../types.js';
 
 export const SyncQueueEventTypes = {
   MutationEnqueued: 'MUTATION_ENQUEUED',
@@ -36,9 +37,9 @@ export type SyncEventTypeMap = {
     {
       incantationId: any; // RecordId<string> but imported
       localHash?: string;
-      localTree?: any;
+      localArray?: RecordVersionArray;
       remoteHash?: string;
-      remoteTree?: any;
+      remoteArray?: RecordVersionArray;
       records: Record<string, any>[];
     }
   >;
