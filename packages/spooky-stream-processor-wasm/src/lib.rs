@@ -1,3 +1,4 @@
+use serde::Serialize;
 use serde_json::Value;
 use spooky_stream_processor::{Circuit, MaterializedViewUpdate, QueryPlan, StreamProcessor};
 use wasm_bindgen::prelude::*;
@@ -59,7 +60,10 @@ impl SpookyProcessor {
             .circuit
             .ingest_record(&table, &op, &id, clean_record.into(), &hash);
 
-        Ok(serde_wasm_bindgen::to_value(&updates)?)
+        // Use Serializer with serialize_maps_as_objects(true) to output plain JS objects
+        // instead of JS Map objects (which stringify as {} for HashMap)
+        let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
+        Ok(updates.serialize(&serializer)?)
     }
 
     /// Register a new materialized view
@@ -93,7 +97,9 @@ impl SpookyProcessor {
         let result = initial_update
             .unwrap_or_else(|| spooky_stream_processor::service::view::default_result(&plan_id));
 
-        Ok(serde_wasm_bindgen::to_value(&result)?)
+        // Use Serializer with serialize_maps_as_objects(true) to output plain JS objects
+        let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
+        Ok(result.serialize(&serializer)?)
     }
 
     /// Unregister a view by ID
