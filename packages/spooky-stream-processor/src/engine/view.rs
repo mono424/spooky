@@ -367,13 +367,13 @@ impl View {
                     *version = 1;
                 } else if is_optimistic && updated_record_ids.contains(id) {
                     // Optimistic update: increment version to trigger hash change
-                    let old_ver = *version;
+                    let _old_ver = *version;
                     *version += 1;
                     #[cfg(target_arch = "wasm32")]
                     web_sys::console::log_1(
                         &format!(
                             "DEBUG VIEW: Incrementing version for id={} old={} new={}",
-                            id, old_ver, *version
+                            id, _old_ver, *version
                         )
                         .into(),
                     );

@@ -199,7 +199,8 @@ async fn ingest_handler(
             &payload.op,
             &payload.id,
             clean_record.into(),
-            &hash
+            &hash,
+            true, // is_optimistic: Sidecar ingestion is authoritative/optimistic in that it should increment versions
         );
         // Trigger async save instead of blocking
         state.saver.trigger_save();
