@@ -73,16 +73,7 @@ pub type ZSet = FastMap<RowKey, Weight>;
 // Version map: record_id -> version number
 pub type VersionMap = FastMap<String, u64>;
 
-/// Compute hash from a flat array of [record-id, version] pairs
-pub fn compute_flat_hash(data: &[(String, u64)]) -> String {
-    let mut hasher = blake3::Hasher::new();
-    for (id, version) in data {
-        hasher.update(id.as_bytes());
-        hasher.update(&version.to_le_bytes());
-        hasher.update(&[0]); // Delimiter
-    }
-    hasher.finalize().to_hex().to_string()
-}
+// compute_flat_hash moved to update.rs (Strategy Pattern)
 
 // --- Path Optimization ---
 
@@ -195,12 +186,8 @@ pub struct QueryPlan {
     pub root: Operator,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct MaterializedViewUpdate {
-    pub query_id: String,
-    pub result_hash: String,
-    pub result_data: Vec<(String, u64)>, // [[record-id, version], ...]
-}
+// MaterializedViewUpdate moved to update.rs (Strategy Pattern)
+pub use super::update::{MaterializedViewUpdate, ViewResultFormat, ViewUpdate};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct View {
@@ -211,16 +198,19 @@ pub struct View {
     pub params: Option<SpookyValue>,
     #[serde(default)]
     pub version_map: VersionMap, // Track versions for each record
+    #[serde(default)]
+    pub format: ViewResultFormat, // Output format strategy
 }
 
 impl View {
-    pub fn new(plan: QueryPlan, params: Option<Value>) -> Self {
+    pub fn new(plan: QueryPlan, params: Option<Value>, format: Option<ViewResultFormat>) -> Self {
         Self {
             plan,
             cache: FastMap::default(),
             last_hash: String::new(),
             params: params.map(SpookyValue::from),
             version_map: FastMap::default(),
+            format: format.unwrap_or_default(),
         }
     }
 
@@ -232,7 +222,7 @@ impl View {
         input_delta: &ZSet,
         db: &Database,
         is_optimistic: bool,
-    ) -> Option<MaterializedViewUpdate> {
+    ) -> Option<ViewUpdate> {
         let mut deltas = FastMap::default();
         if !changed_table.is_empty() {
             deltas.insert(changed_table.to_string(), input_delta.clone());
@@ -247,7 +237,7 @@ impl View {
         deltas: &FastMap<String, ZSet>,
         db: &Database,
         is_optimistic: bool,
-    ) -> Option<MaterializedViewUpdate> {
+    ) -> Option<ViewUpdate> {
         // FIX: FIRST RUN CHECK
         let is_first_run = self.last_hash.is_empty();
 
@@ -381,7 +371,7 @@ impl View {
             }
         }
 
-        // Build flat array: [[record-id, version], ...]
+        // Build raw result data (format-agnostic)
         let result_data: Vec<(String, u64)> = all_ids
             .iter()
             .map(|id| {
@@ -390,16 +380,26 @@ impl View {
             })
             .collect();
 
-        // Hash the flat array
-        let hash = compute_flat_hash(&result_data);
+        // Delegate formatting to update module (Strategy Pattern)
+        use super::update::{build_update, compute_flat_hash, RawViewResult};
+
+        let raw_result = RawViewResult {
+            query_id: self.plan.id.clone(),
+            records: result_data.clone(),
+        };
+
+        // Build update using the configured format
+        let update = build_update(raw_result, self.format.clone());
+
+        // Extract hash for comparison (depends on format)
+        let hash = match &update {
+            ViewUpdate::Flat(flat) | ViewUpdate::Tree(flat) => flat.result_hash.clone(),
+            ViewUpdate::Streaming(_) => compute_flat_hash(&result_data),
+        };
 
         if hash != self.last_hash {
-            self.last_hash = hash.clone();
-            return Some(MaterializedViewUpdate {
-                query_id: self.plan.id.clone(),
-                result_hash: hash,
-                result_data,
-            });
+            self.last_hash = hash;
+            return Some(update);
         }
 
         None
@@ -569,7 +569,7 @@ impl View {
         record_id: &str,
         version: u64,
         db: &Database,
-    ) -> Option<MaterializedViewUpdate> {
+    ) -> Option<ViewUpdate> {
         let current_version = self.version_map.get(record_id).copied().unwrap_or(0);
 
         if current_version != version {
