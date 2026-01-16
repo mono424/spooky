@@ -11,7 +11,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use spooky_stream_processor::{Circuit, MaterializedViewUpdate};
+use spooky_stream_processor::{Circuit, MaterializedViewUpdate, ViewUpdate};
 use surrealdb::engine::remote::ws::{Client, Ws};
 use surrealdb::opt::auth::Root;
 use surrealdb::Surreal;
@@ -199,7 +199,8 @@ async fn ingest_handler(
             &payload.op,
             &payload.id,
             clean_record.into(),
-            &hash
+            &hash,
+            true, // is_optimistic: Sidecar ingestion is authoritative/optimistic in that it should increment versions
         );
         // Trigger async save instead of blocking
         state.saver.trigger_save();
@@ -208,7 +209,12 @@ async fn ingest_handler(
 
     // Update SurrealDB incantations
     for update in &updates {
-        update_incantation_in_db(&state.db, update).await;
+        // Extract MaterializedViewUpdate from the ViewUpdate enum
+        let materialized = match update {
+            ViewUpdate::Flat(m) | ViewUpdate::Tree(m) => m,
+            ViewUpdate::Streaming(_) => continue, // Skip streaming updates
+        };
+        update_incantation_in_db(&state.db, materialized).await;
     }
 
     StatusCode::OK
@@ -229,15 +235,15 @@ async fn register_view_handler(
 
     let update = {
         let mut circuit = state.processor.lock().unwrap();
-        let res = circuit.register_view(data.plan.clone(), data.safe_params);
+        let res = circuit.register_view(data.plan.clone(), data.safe_params, None);
         state.saver.trigger_save();
         res
     };
 
-    let result_update = update.unwrap_or_else(|| spooky_stream_processor::service::view::default_result(&data.plan.id));
+    let result_update = update.unwrap_or_else(|| ViewUpdate::Flat(spooky_stream_processor::service::view::default_result(&data.plan.id)));
 
     let m = &data.metadata;
-    let query = "UPSERT <record>$id SET hash = <string>$hash, tree = $tree, clientId = <string>$clientId, surrealQL = <string>$surrealQL, params = $params, ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt";
+    let query = "UPSERT <record>$id SET hash = <string>$hash, array = $array, clientId = <string>$clientId, surrealQL = <string>$surrealQL, params = $params, ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt";
     
     let raw_id = m["id"].as_str().unwrap();
     // For <record> cast we need the full ID "table:id"
@@ -253,10 +259,16 @@ async fn register_view_handler(
     let last_active_str = m["lastActiveAt"].as_str().unwrap().to_string();
     let params_val = m["safe_params"].clone();
 
+    // Extract the inner MaterializedViewUpdate from the ViewUpdate enum
+    let (result_hash, result_data) = match &result_update {
+        ViewUpdate::Flat(m) | ViewUpdate::Tree(m) => (m.result_hash.clone(), m.result_data.clone()),
+        ViewUpdate::Streaming(_) => (String::new(), Vec::new()), // Fallback for streaming
+    };
+
     let db_res = state.db.query(query)
         .bind(("id", id_str))
-        .bind(("hash", result_update.result_hash.clone()))
-        .bind(("tree", json!(result_update.tree)))
+        .bind(("hash", result_hash))
+        .bind(("array", json!(result_data)))
         .bind(("clientId", client_id_str))
         .bind(("surrealQL", surql_str))
         .bind(("params", params_val))
@@ -315,7 +327,7 @@ async fn version_handler() -> impl IntoResponse {
 
 
 async fn update_incantation_in_db(db: &Surreal<Client>, update: &MaterializedViewUpdate) {
-    let query = "UPDATE <record>$id SET hash = <string>$hash, tree = $tree RETURN AFTER";
+    let query = "UPDATE <record>$id SET hash = <string>$hash, array = $array RETURN AFTER";
     let raw_id = &update.query_id;
     // For <record> cast we need the full ID "table:id"
     let id_str = if raw_id.starts_with("_spooky_incantation:") {
@@ -329,7 +341,7 @@ async fn update_incantation_in_db(db: &Surreal<Client>, update: &MaterializedVie
     match db.query(query)
         .bind(("id", id_str.clone()))
         .bind(("hash", update.result_hash.clone()))
-        .bind(("tree", json!(update.tree)))
+        .bind(("array", json!(update.result_data)))
         .await 
     {
         Ok(mut response) => {

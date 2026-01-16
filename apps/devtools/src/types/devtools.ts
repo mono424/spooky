@@ -49,9 +49,9 @@ export interface ActiveQuery {
   dataHash?: number;
   data?: any;
   localHash?: string;
-  localTree?: any;
+  localArray?: any;
   remoteHash?: string;
-  remoteTree?: any;
+  remoteArray?: any;
 }
 
 export interface AuthState {

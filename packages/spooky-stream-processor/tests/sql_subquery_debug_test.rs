@@ -100,30 +100,27 @@ fn test_subquery_via_sql_full_flow() {
     let view_update = update.unwrap();
     println!("\n=== View Update ===");
     println!("query_id: {}", view_update.query_id);
-    println!("result_ids: {:?}", view_update.result_ids);
-    println!(
-        "tree: {}",
-        serde_json::to_string_pretty(&view_update.tree).unwrap()
-    );
+    println!("result_data: {:?}", view_update.result_data);
 
-    // Check the tree has children
-    if let Some(leaves) = &view_update.tree.leaves {
-        let leaf = &leaves[0];
-        assert!(
-            leaf.children.is_some(),
-            "Expected children in leaf, got None"
-        );
-        if let Some(children) = &leaf.children {
-            println!("\n=== Children Keys ===");
-            for key in children.keys() {
-                println!("  - {}", key);
-            }
-            assert!(
-                children.contains_key("author_data"),
-                "Expected 'author_data' key in children"
-            );
-        }
-    }
+    // Flat array includes both thread AND author (from subquery)
+    let result_ids: Vec<&str> = view_update
+        .result_data
+        .iter()
+        .map(|(id, _)| id.as_str())
+        .collect();
+    assert!(
+        result_ids.contains(&thread_id.as_str()),
+        "Should contain thread ID"
+    );
+    assert!(
+        result_ids.contains(&author_id.as_str()),
+        "Should contain author ID from subquery"
+    );
+    assert_eq!(
+        view_update.result_data.len(),
+        2,
+        "Should have 2 records (thread + author)"
+    );
 }
 
 /// Helper to create author record

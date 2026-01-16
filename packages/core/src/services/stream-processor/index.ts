@@ -10,7 +10,7 @@ import { WasmProcessor, WasmStreamUpdate } from './wasm-types.js';
 export interface StreamUpdate {
   query_id: string;
   localHash: string;
-  localTree: any; // Merkle tree structure
+  localArray: any; // Flat array structure [[id, version], ...]
 }
 
 // Define events map
@@ -37,7 +37,7 @@ export class StreamProcessorService {
 
     this.logger.info('[StreamProcessor] Initializing WASM...');
     try {
-      await init(); // Initialize the WASM module
+      await init(); // Initialize the WASM module (web target)
       // We cast the generated SpookyProcessor to our interface which is safer
       this.processor = new SpookyProcessor() as unknown as WasmProcessor;
 
@@ -111,18 +111,27 @@ export class StreamProcessorService {
   /**
    * Ingest a record change into the processor.
    * Emits 'stream_update' event if materialized views are affected.
+   * @param isOptimistic true = local mutation (increment versions), false = remote sync (keep versions)
    */
-  ingest(table: string, op: string, id: string, record: any): WasmStreamUpdate[] {
-    this.logger.debug({ table, op, id }, '[StreamProcessor] Ingesting record');
-    // DEEP LOGGING
-    console.log('[StreamProcessor] ingest called', {
-      table,
-      op,
-      id,
-      record: JSON.stringify(record, (key, value) =>
-        typeof value === 'bigint' ? value.toString() : value
-      ),
-    });
+  ingest(
+    table: string,
+    op: string,
+    id: string,
+    record: any,
+    isOptimistic: boolean = true
+  ): WasmStreamUpdate[] {
+    this.logger.debug({ table, op, id, isOptimistic }, '[StreamProcessor] Ingesting record');
+    this.logger.debug(
+      {
+        table,
+        op,
+        id,
+        record: JSON.stringify(record, (key, value) =>
+          typeof value === 'bigint' ? value.toString() : value
+        ),
+      },
+      '[StreamProcessor] ingest called'
+    );
 
     if (!this.processor) {
       this.logger.warn('[StreamProcessor] Not initialized, skipping ingest');
@@ -131,17 +140,19 @@ export class StreamProcessorService {
 
     try {
       const normalizedRecord = this.normalizeValue(record);
-      // DEEP LOGGING (Normalized)
-      console.log('[StreamProcessor] ingest normalized record', JSON.stringify(normalizedRecord));
+      this.logger.debug(
+        { normalizedRecord: JSON.stringify(normalizedRecord) },
+        '[StreamProcessor] ingest normalized record'
+      );
 
-      const rawUpdates = this.processor.ingest(table, op, id, normalizedRecord);
-      console.log('[StreamProcessor] ingest result', rawUpdates);
+      const rawUpdates = this.processor.ingest(table, op, id, normalizedRecord, isOptimistic);
+      this.logger.debug({ rawUpdates }, '[StreamProcessor] ingest result');
 
       if (rawUpdates && Array.isArray(rawUpdates) && rawUpdates.length > 0) {
         const updates: StreamUpdate[] = rawUpdates.map((u: WasmStreamUpdate) => ({
           query_id: u.query_id,
           localHash: u.result_hash,
-          localTree: u.tree,
+          localArray: u.result_data,
         }));
         this.events.emit('stream_update', updates);
       }
@@ -149,9 +160,38 @@ export class StreamProcessorService {
       return rawUpdates;
     } catch (e) {
       this.logger.error(e, '[StreamProcessor] Error during ingestion');
-      console.error('[StreamProcessor] Erroring during ingestion', e);
+      this.logger.error({ error: e }, '[StreamProcessor] Erroring during ingestion');
     }
     return [];
+  }
+
+  /**
+   * Explicitly set the version of a record in a specific view.
+   * This is used during remote sync to ensure local state matches remote versioning.
+   */
+  setRecordVersion(incantationId: string, recordId: string, version: number) {
+    if (!this.processor) return;
+
+    this.logger.debug({ incantationId, recordId, version }, '[StreamProcessor] setRecordVersion');
+
+    try {
+      // Note: recordId must be fully qualified table:id string
+      const update = this.processor.set_record_version(incantationId, recordId, version);
+
+      if (update) {
+        const updates: StreamUpdate[] = [
+          {
+            query_id: update.query_id,
+            localHash: update.result_hash,
+            localArray: update.result_data,
+          },
+        ];
+        this.events.emit('stream_update', updates);
+        this.saveState();
+      }
+    } catch (e) {
+      this.logger.error(e, '[StreamProcessor] Error setting record version');
+    }
   }
 
   /**
@@ -172,16 +212,21 @@ export class StreamProcessorService {
       },
       '[StreamProcessor] Registering incantation'
     );
-    // DEEP LOGGING
-    console.log('[StreamProcessor] registerIncantation called', {
-      id: incantation.id.toString(),
-      sql: incantation.surrealql,
-      params: incantation.params,
-    });
+    this.logger.debug(
+      {
+        id: incantation.id.toString(),
+        sql: incantation.surrealql,
+        params: incantation.params,
+      },
+      '[StreamProcessor] registerIncantation called'
+    );
 
     try {
       const normalizedParams = this.normalizeValue(incantation.params);
-      console.log('[StreamProcessor] registerIncantation normalized params', normalizedParams);
+      this.logger.debug(
+        { normalizedParams },
+        '[StreamProcessor] registerIncantation normalized params'
+      );
 
       const initialUpdate = this.processor.register_view({
         id: incantation.id.toString(),
@@ -192,8 +237,11 @@ export class StreamProcessorService {
         lastActiveAt: new Date().toISOString(),
       });
 
-      console.log('[StreamProcessor] register_view result', initialUpdate);
-      console.log('[StreamProcessor] normalizedParams used:', JSON.stringify(normalizedParams));
+      this.logger.debug({ initialUpdate }, '[StreamProcessor] register_view result');
+      this.logger.debug(
+        { normalizedParams: JSON.stringify(normalizedParams) },
+        '[StreamProcessor] normalizedParams used'
+      );
 
       if (!initialUpdate) {
         throw new Error('Failed to register incantation');
@@ -201,7 +249,7 @@ export class StreamProcessorService {
       const update: StreamUpdate = {
         query_id: initialUpdate.query_id,
         localHash: initialUpdate.result_hash,
-        localTree: initialUpdate.tree,
+        localArray: initialUpdate.result_data,
       };
       this.saveState();
       this.logger.debug(
@@ -215,7 +263,7 @@ export class StreamProcessorService {
       return update;
     } catch (e) {
       this.logger.error(e, '[StreamProcessor] Error registering incantation');
-      console.error('[StreamProcessor] Error registering incantation', e);
+      this.logger.error({ error: e }, '[StreamProcessor] Error registering incantation');
       throw e;
     }
   }
@@ -247,7 +295,7 @@ export class StreamProcessorService {
 
       if (hasTable && hasId && hasToString && isNotPlainObject) {
         const result = value.toString();
-        console.log('[normalizeValue] RecordId detected, converted to:', result);
+        this.logger.trace({ result }, '[StreamProcessor] normalizeValue RecordId detected');
         return result;
       }
 

@@ -16,14 +16,32 @@ fn test_view_registration_after_ingestion() {
         "username": "testuser",
     });
 
-    println!("[TEST] Ingesting user before view registration: {}", user_id);
-    ingest(&mut circuit, "user", "CREATE", &user_id, user_record.clone());
+    println!(
+        "[TEST] Ingesting user before view registration: {}",
+        user_id
+    );
+    ingest(
+        &mut circuit,
+        "user",
+        "CREATE",
+        &user_id,
+        user_record.clone(),
+    );
 
     // 2. Verify the record is in the database
-    assert!(circuit.db.tables.contains_key("user"), "User table should exist");
+    assert!(
+        circuit.db.tables.contains_key("user"),
+        "User table should exist"
+    );
     let user_table = &circuit.db.tables["user"];
-    assert!(user_table.zset.contains_key(user_id.as_str()), "User should be in zset");
-    assert!(user_table.rows.contains_key(user_id.as_str()), "User should be in rows");
+    assert!(
+        user_table.zset.contains_key(user_id.as_str()),
+        "User should be in zset"
+    );
+    assert!(
+        user_table.rows.contains_key(user_id.as_str()),
+        "User should be in rows"
+    );
     println!("[TEST] User found in database zset and rows");
 
     // 3. NOW register a view that queries the user table
@@ -38,20 +56,23 @@ fn test_view_registration_after_ingestion() {
     let initial_update = circuit.register_view(plan, None);
 
     // 4. The initial update should contain the user that was already in the database
-    assert!(initial_update.is_some(), "Initial update should not be None");
+    assert!(
+        initial_update.is_some(),
+        "Initial update should not be None"
+    );
 
     let update = initial_update.unwrap();
-    println!("[TEST] Initial update result_ids: {:?}", update.result_ids);
-    println!("[TEST] Initial update tree leaves: {:?}", update.tree.leaves);
+    println!(
+        "[TEST] Initial update result_data: {:?}",
+        update.result_data
+    );
 
-    assert_eq!(update.result_ids.len(), 1, "Should find 1 user");
-    assert_eq!(update.result_ids[0], user_id, "Should find the correct user");
-
-    // Verify the tree has leaves
-    assert!(update.tree.leaves.is_some(), "Tree should have leaves");
-    let leaves = update.tree.leaves.as_ref().unwrap();
-    assert_eq!(leaves.len(), 1, "Tree should have 1 leaf");
-    assert_eq!(leaves[0].id, user_id, "Leaf should have correct user ID");
+    assert_eq!(update.result_data.len(), 1, "Should find 1 user");
+    assert_eq!(
+        update.result_data[0].0, user_id,
+        "Should find the correct user"
+    );
+    assert!(update.result_data[0].1 > 0, "Version should be positive");
 
     println!("[TEST] ✓ View correctly found pre-existing record!");
 }
@@ -77,11 +98,23 @@ fn test_view_registration_after_ingestion_with_filter() {
     });
 
     println!("[TEST] Ingesting users before view registration");
-    ingest(&mut circuit, "user", "CREATE", &user1_id, user1_record.clone());
-    ingest(&mut circuit, "user", "CREATE", &user2_id, user2_record.clone());
+    ingest(
+        &mut circuit,
+        "user",
+        "CREATE",
+        &user1_id,
+        user1_record.clone(),
+    );
+    ingest(
+        &mut circuit,
+        "user",
+        "CREATE",
+        &user2_id,
+        user2_record.clone(),
+    );
 
     // 2. Register a view that filters for active users only
-    use spooky_stream_processor::engine::view::{Predicate, Path};
+    use spooky_stream_processor::engine::view::{Path, Predicate};
 
     let plan = QueryPlan {
         id: "active_users".to_string(),
@@ -100,19 +133,22 @@ fn test_view_registration_after_ingestion_with_filter() {
     let initial_update = circuit.register_view(plan, None);
 
     // 3. Should only find the active user
-    assert!(initial_update.is_some(), "Initial update should not be None");
+    assert!(
+        initial_update.is_some(),
+        "Initial update should not be None"
+    );
 
     let update = initial_update.unwrap();
-    println!("[TEST] Filtered update result_ids: {:?}", update.result_ids);
+    println!(
+        "[TEST] Filtered update result_data: {:?}",
+        update.result_data
+    );
 
-    assert_eq!(update.result_ids.len(), 1, "Should find 1 active user");
-    assert_eq!(update.result_ids[0], user1_id, "Should find alice (active user)");
-
-    // Verify the tree
-    assert!(update.tree.leaves.is_some(), "Tree should have leaves");
-    let leaves = update.tree.leaves.as_ref().unwrap();
-    assert_eq!(leaves.len(), 1, "Tree should have 1 leaf");
-    assert_eq!(leaves[0].id, user1_id, "Leaf should have correct user ID");
+    assert_eq!(update.result_data.len(), 1, "Should find 1 active user");
+    assert_eq!(
+        update.result_data[0].0, user1_id,
+        "Should find alice (active user)"
+    );
 
     println!("[TEST] ✓ Filtered view correctly found pre-existing active record!");
 }

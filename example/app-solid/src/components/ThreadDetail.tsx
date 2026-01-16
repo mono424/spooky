@@ -5,6 +5,7 @@ import { CommentForm } from "./CommentForm";
 import { useQuery } from "@spooky/client-solid";
 import { useAuth } from "../lib/auth";
 import { CommentBox } from "./CommentBox";
+import { ThreadSidebar } from "./ThreadSidebar";
 
 const createQuery = ({
   threadId,
@@ -48,7 +49,7 @@ export function ThreadDetail() {
   const thread = () => threadResult.data() || null;
   
   createEffect(() => {
-    console.log("thread", thread());
+    console.log("thread___", thread());
   });
 
   const handleBack = () => {
@@ -70,137 +71,143 @@ export function ThreadDetail() {
   };
 
   return (
-    <div class="max-w-4xl mx-auto p-4 font-mono w-full">
-      {/* Navigation Bar */}
-      <div class="flex justify-between items-center mb-6 border-b border-gray-800 pb-2">
-        <button
-          onClick={handleBack}
-          class="text-xs uppercase font-bold text-gray-400 hover:text-white hover:underline decoration-white underline-offset-4 flex items-center gap-2 transition-none"
-        >
-          <span>&lt;&lt;</span> RETURN_TO_ROOT
-        </button>
-        <div class="text-[10px] uppercase text-gray-600">
-            MODE: READ_WRITE
+    <div class="flex h-full">
+      {/* Thread Sidebar */}
+      <ThreadSidebar activeThreadId={params.id} />
+
+      {/* Main Content */}
+      <div class="flex-1 max-w-4xl mx-auto p-4 font-mono w-full">
+        {/* Navigation Bar */}
+        <div class="flex justify-between items-center mb-6 border-b border-gray-800 pb-2">
+          <button
+            onClick={handleBack}
+            class="text-xs uppercase font-bold text-gray-400 hover:text-white hover:underline decoration-white underline-offset-4 flex items-center gap-2 transition-none"
+          >
+            <span>&lt;&lt;</span> RETURN_TO_ROOT
+          </button>
+          <div class="text-[10px] uppercase text-gray-600">
+              MODE: READ_WRITE
+          </div>
         </div>
-      </div>
 
-      <Show
-        when={thread()}
-        fallback={
-          <div class="border-2 border-dashed border-red-900/50 p-12 text-center">
-             <div class="text-red-500 font-bold uppercase tracking-widest mb-2">
-                ! ERROR_404: FILE_NOT_FOUND
-             </div>
-             <div class="text-xs text-gray-500">
-                The requested thread ID does not exist in the database.
-             </div>
-          </div>
-        }
-      >
-        {(threadData) => (
-          <div class="space-y-8">
-            {/* Thread Content Wrapper */}
-            <div class="border-2 border-white p-6 relative bg-black">
-              {/* Decorative Header */}
-              <div class="absolute -top-3 left-4 bg-black px-2 text-xs font-bold uppercase border-x border-white">
-                 FILE_VIEWER
-              </div>
-
-              {/* Editable Title */}
-              <div class="mb-6 group">
-                <label class="block text-[10px] text-gray-500 uppercase font-bold mb-1 group-focus-within:text-white">
-                    &gt; SUBJECT_LINE
-                </label>
-                <input
-                  type="text"
-                  value={threadData().title}
-                  onInput={(e) => handleTitleChange(e.currentTarget.value)}
-                  class="text-2xl font-bold w-full bg-black border-b-2 border-transparent focus:border-white outline-none text-white placeholder-gray-700 uppercase tracking-wide transition-none rounded-none"
-                  placeholder="UNTITLED_THREAD"
-                />
-              </div>
-
-              {/* Editable Content */}
-              <div class="mb-6 group">
-                 <label class="block text-[10px] text-gray-500 uppercase font-bold mb-1 group-focus-within:text-white">
-                    &gt; DATA_CONTENT
-                </label>
-                <textarea
-                    value={threadData().content}
-                    onInput={(e) => handleContentChange(e.currentTarget.value)}
-                    class="w-full bg-black text-gray-300 focus:text-white whitespace-pre-wrap border-l-2 border-gray-800 focus:border-white outline-none pl-4 resize-none min-h-[150px] leading-relaxed transition-none rounded-none"
-                    placeholder="No content data..."
-                />
-              </div>
-
-              {/* Metadata Footer */}
-              <div class="flex justify-between items-center text-[10px] uppercase text-gray-500 border-t border-dashed border-gray-700 pt-3 font-bold tracking-wider">
-                <div class="flex gap-4">
-                    <span>AUTHOR: <span class="text-white">{threadData().author?.username || "UNKNOWN"}</span></span>
-                    <span>ID: {threadData().id?.slice(0, 8)}</span>
+        <Show
+          when={thread()}
+          fallback={
+            <div class="border-2 border-dashed border-red-900/50 p-12 text-center">
+               <div class="text-red-500 font-bold uppercase tracking-widest mb-2">
+                  ! ERROR_404: FILE_NOT_FOUND
+               </div>
+               <div class="text-xs text-gray-500">
+                  The requested thread ID does not exist in the database.
+               </div>
+            </div>
+          }
+        >
+          {(threadData) => (
+            <div class="space-y-8">
+              {/* Thread Content Wrapper */}
+              <div class="border-2 border-white p-6 relative bg-black">
+                {/* Decorative Header */}
+                <div class="absolute -top-3 left-4 bg-black px-2 text-xs font-bold uppercase border-x border-white">
+                   FILE_VIEWER
                 </div>
-                <span>
-                  DATE: {new Date(threadData().created_at ?? 0).toLocaleDateString()}
-                </span>
-              </div>
-            </div>
 
-            {/* Comments Section */}
-            <div class="space-y-6">
-              <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b-2 border-white pb-2">
-                <h2 class="text-xl font-bold uppercase tracking-widest flex items-center gap-2">
-                  <span>//</span> ATTACHED_LOGS <span class="text-xs align-top">({threadData().comments?.length || 0})</span>
-                </h2>
-                
-                <Show when={auth.user()}>
-                  <div class="flex text-xs font-bold">
-                    <button
-                      onClick={() => setCommentFilter("all")}
-                      class={`px-3 py-1 border-2 border-r-0 border-white uppercase transition-none ${
-                        commentFilter() === "all"
-                          ? "bg-white text-black"
-                          : "bg-black text-white hover:bg-gray-900"
-                      }`}
-                    >
-                      [ ALL_LOGS ]
-                    </button>
-                    <button
-                      onClick={() => setCommentFilter("mine")}
-                      class={`px-3 py-1 border-2 border-white uppercase transition-none ${
-                        commentFilter() === "mine"
-                          ? "bg-white text-black"
-                          : "bg-black text-white hover:bg-gray-900"
-                      }`}
-                    >
-                      [ MY_LOGS ]
-                    </button>
+                {/* Editable Title */}
+                <div class="mb-6 group">
+                  <label class="block text-[10px] text-gray-500 uppercase font-bold mb-1 group-focus-within:text-white">
+                      &gt; SUBJECT_LINE
+                  </label>
+                  <input
+                    type="text"
+                    value={threadData().title}
+                    onInput={(e) => handleTitleChange(e.currentTarget.value)}
+                    class="text-2xl font-bold w-full bg-black border-b-2 border-transparent focus:border-white outline-none text-white placeholder-gray-700 uppercase tracking-wide transition-none rounded-none"
+                    placeholder="UNTITLED_THREAD"
+                  />
+                </div>
+
+                {/* Editable Content */}
+                <div class="mb-6 group">
+                   <label class="block text-[10px] text-gray-500 uppercase font-bold mb-1 group-focus-within:text-white">
+                      &gt; DATA_CONTENT
+                  </label>
+                  <textarea
+                      value={threadData().content}
+                      onInput={(e) => handleContentChange(e.currentTarget.value)}
+                      class="w-full bg-black text-gray-300 focus:text-white whitespace-pre-wrap border-l-2 border-gray-800 focus:border-white outline-none pl-4 resize-none min-h-[150px] leading-relaxed transition-none rounded-none"
+                      placeholder="No content data..."
+                  />
+                </div>
+
+                {/* Metadata Footer */}
+                <div class="flex justify-between items-center text-[10px] uppercase text-gray-500 border-t border-dashed border-gray-700 pt-3 font-bold tracking-wider">
+                  <div class="flex gap-4">
+                      <span>AUTHOR: <span class="text-white">{threadData().author?.username || "UNKNOWN"}</span></span>
+                      <span>ID: {threadData().id?.slice(0, 8)}</span>
                   </div>
-                </Show>
+                  <span>
+                    DATE: {new Date(threadData().created_at ?? 0).toLocaleDateString()}
+                  </span>
+                </div>
               </div>
 
-              {/* Comment Form */}
-              <div class="bg-black border border-gray-800 p-4 hover:border-white transition-colors">
-                <div class="text-[10px] uppercase text-gray-500 mb-2 font-bold">&gt; APPEND_NEW_ENTRY</div>
-                <CommentForm thread={threadData} />
-              </div>
-
-              {/* Comments List */}
-              <div class="space-y-4 pl-4 border-l border-dashed border-gray-800">
-                <For
-                  each={threadData().comments ?? []}
-                  fallback={
-                    <div class="text-left py-4 text-gray-600 text-xs font-mono uppercase">
-                      &gt; NULL_DATA: No logs found. Be the first to append.
+              {/* Comments Section */}
+              <div class="space-y-6">
+                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b-2 border-white pb-2">
+                  <h2 class="text-xl font-bold uppercase tracking-widest flex items-center gap-2">
+                    <span>//</span> ATTACHED_LOGS <span class="text-xs align-top">({threadData().comments?.length || 0})</span>
+                  </h2>
+                  
+                  <Show when={auth.user()}>
+                    <div class="flex text-xs font-bold">
+                      <button
+                        onClick={() => setCommentFilter("all")}
+                        class={`px-3 py-1 border-2 border-r-0 border-white uppercase transition-none ${
+                          commentFilter() === "all"
+                            ? "bg-white text-black"
+                            : "bg-black text-white hover:bg-gray-900"
+                        }`}
+                      >
+                        [ ALL_LOGS ]
+                      </button>
+                      <button
+                        onClick={() => setCommentFilter("mine")}
+                        class={`px-3 py-1 border-2 border-white uppercase transition-none ${
+                          commentFilter() === "mine"
+                            ? "bg-white text-black"
+                            : "bg-black text-white hover:bg-gray-900"
+                        }`}
+                      >
+                        [ MY_LOGS ]
+                      </button>
                     </div>
-                  }
-                >
-                  {(comment) => <CommentBox comment={comment} />}
-                </For>
+                  </Show>
+                </div>
+
+                {/* Comment Form */}
+                <div class="bg-black border border-gray-800 p-4 hover:border-white transition-colors">
+                  <div class="text-[10px] uppercase text-gray-500 mb-2 font-bold">&gt; APPEND_NEW_ENTRY</div>
+                  <CommentForm thread={threadData} />
+                </div>
+
+                {/* Comments List */}
+                <div class="space-y-4 pl-4 border-l border-dashed border-gray-800">
+                  <For
+                    each={threadData().comments ?? []}
+                    fallback={
+                      <div class="text-left py-4 text-gray-600 text-xs font-mono uppercase">
+                        &gt; NULL_DATA: No logs found. Be the first to append.
+                      </div>
+                    }
+                  >
+                    {(comment) => <CommentBox comment={comment} />}
+                  </For>
+                </div>
               </div>
             </div>
-          </div>
-        )}
-      </Show>
+          )}
+        </Show>
+      </div>
     </div>
   );
 }

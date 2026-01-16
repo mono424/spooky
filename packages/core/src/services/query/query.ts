@@ -89,7 +89,7 @@ export class QueryManager<S extends SchemaStructure> {
   ) {
     const payload =
       eventOrPayload && 'payload' in eventOrPayload ? eventOrPayload.payload : eventOrPayload;
-    const { incantationId, records = [], remoteHash, remoteTree } = payload;
+    const { incantationId, records = [], remoteHash, remoteArray } = payload;
 
     if (!incantationId || !incantationId.id) {
       this.logger.error({ payload }, '[QueryManager] Invalid payload: missing incantationId');
@@ -132,32 +132,52 @@ export class QueryManager<S extends SchemaStructure> {
       },
       'Handling incoming remote update'
     );
-    console.log('[QueryManager] handleIncomingUpdate payload:', {
-      incantationId: incantationId?.toString(),
-      remoteHash,
-      remoteTree: remoteTree ? 'PRESENT' : 'MISSING',
-      localHashInPayload: (payload as any).localHash,
-      localTreeInPayload: (payload as any).localTree ? 'PRESENT' : 'MISSING',
-    });
+    this.logger.debug(
+      {
+        incantationId: incantationId?.toString(),
+        remoteHash,
+        remoteArray: remoteArray ? 'PRESENT' : 'MISSING',
+        localHashInPayload: (payload as any).localHash,
+        localArrayInPayload: (payload as any).localArray ? 'PRESENT' : 'MISSING',
+      },
+      '[QueryManager] handleIncomingUpdate payload'
+    );
 
-    incantation.updateLocalState(validRecords, incantation.localHash, incantation.localTree);
+    // Defensive check: Don't emit an update with empty records if incantation already has data
+    // This prevents sync failures from wiping valid cached data
+    const existingRecords = incantation.records ?? [];
+    if (validRecords.length === 0 && existingRecords.length > 0) {
+      this.logger.warn(
+        {
+          incantationId: incantationId.toString(),
+          existingRecordCount: existingRecords.length,
+        },
+        '[QueryManager] Skipping empty update - incantation already has records'
+      );
+      // Still update remote state for sync purposes
+      incantation.remoteHash = remoteHash;
+      incantation.remoteArray = remoteArray;
+      return;
+    }
+
+    incantation.updateLocalState(validRecords, incantation.localHash, incantation.localArray);
     // Explicitly update remote state
     incantation.remoteHash = remoteHash;
-    incantation.remoteTree = remoteTree;
+    incantation.remoteArray = remoteArray;
     this.events.emit(QueryEventTypes.IncantationUpdated, {
       incantationId,
       records: validRecords,
-      // localHash: incantation.localHash, // REMOVED: Don't overwrite local state from remote update
-      // localTree: incantation.localTree, // REMOVED: Don't overwrite local state from remote update
+      localHash: incantation.localHash,
+      localArray: incantation.localArray,
       remoteHash: remoteHash,
-      remoteTree: remoteTree,
+      remoteArray: remoteArray,
     });
 
     // Verification and purging of orphans is now handled by SpookySync
   }
 
   public async handleStreamUpdate(update: any) {
-    const { query_id, localHash, result_ids, localTree } = update;
+    const { query_id, localHash, localArray } = update;
 
     // query_id from StreamProcessor is a string (e.g. "_spooky_incantation:...")
     // We need to convert it to a RecordId for the event payload
@@ -170,11 +190,11 @@ export class QueryManager<S extends SchemaStructure> {
     }
 
     this.logger.debug(
-      { incantationId: query_id, count: result_ids?.length },
+      { incantationId: query_id, count: localArray?.length },
       'Handling stream update'
     );
 
-    if (!result_ids || result_ids.length === 0) {
+    if (!localArray || localArray.length === 0) {
       this.events.emit(QueryEventTypes.IncantationUpdated, {
         incantationId: incantationRecordId,
         records: [],
@@ -183,8 +203,15 @@ export class QueryManager<S extends SchemaStructure> {
     }
 
     try {
-      const incantation = this.activeQueries.get(query_id);
+      // query_id from StreamProcessor is the full record ID (e.g. "_spooky_incantation:hash")
+      // but activeQueries uses just the hash part as the key
+      const queryHash = query_id.includes(':') ? query_id.split(':').slice(1).join(':') : query_id;
+      const incantation = this.activeQueries.get(queryHash);
       if (!incantation) {
+        this.logger.warn(
+          { query_id, queryHash, activeKeys: [...this.activeQueries.keys()] },
+          'Incantation not found for stream update'
+        );
         throw new Error('Incantation not found');
       }
 
@@ -192,13 +219,13 @@ export class QueryManager<S extends SchemaStructure> {
         incantation.surrealql,
         incantation.params
       );
-      incantation.updateLocalState(records || [], localHash, localTree);
+      incantation.updateLocalState(records || [], localHash, localArray);
 
       this.events.emit(QueryEventTypes.IncantationUpdated, {
         incantationId: incantationRecordId,
         records: records || [],
         localHash,
-        localTree,
+        localArray,
       });
     } catch (err) {
       this.logger.error(
@@ -248,9 +275,9 @@ export class QueryManager<S extends SchemaStructure> {
         surrealql,
         params,
         localHash: existing.localHash,
-        localTree: existing.localTree,
+        localArray: existing.localArray,
         remoteHash: existing.remoteHash,
-        remoteTree: existing.remoteTree,
+        remoteArray: existing.remoteArray,
         lastActiveAt: existing.lastActiveAt,
         ttl: existing.ttl,
         meta: {
@@ -296,9 +323,9 @@ export class QueryManager<S extends SchemaStructure> {
             params: params,
             clientId: this.clientId,
             localHash: '',
-            localTree: null,
+            localArray: [],
             remoteHash: '',
-            remoteTree: null,
+            remoteArray: [],
             lastActiveAt: new Date(),
             ttl: new Duration(ttl),
             meta: {
@@ -331,7 +358,19 @@ export class QueryManager<S extends SchemaStructure> {
       throw new Error('Failed to register incantation');
     }
 
-    incantation.updateLocalState([], update.localHash, update.localTree);
+    // Load cached records immediately to avoid UI flicker
+    let records: Record<string, any>[] = [];
+    try {
+      const [result] = await this.local.query<[Record<string, any>[]]>(
+        incantation.surrealql,
+        incantation.params
+      );
+      records = result || [];
+    } catch (err) {
+      this.logger.warn({ err }, 'Failed to load initial cached records');
+    }
+
+    incantation.updateLocalState(records, update.localHash, update.localArray);
 
     this.events.emit(QueryEventTypes.IncantationInitialized, {
       incantationId: incantation.id,
@@ -339,9 +378,8 @@ export class QueryManager<S extends SchemaStructure> {
       params: incantation.params ?? {},
       ttl: incantation.ttl,
       localHash: incantation.localHash,
-      localTree: incantation.localTree,
-      remoteHash: incantation.remoteHash,
-      remoteTree: incantation.remoteTree,
+      localArray: incantation.localArray,
+      records,
     });
 
     await incantation.startTTLHeartbeat(() => {

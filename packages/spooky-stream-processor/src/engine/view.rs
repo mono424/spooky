@@ -64,102 +64,16 @@ impl From<SpookyValue> for serde_json::Value {
     }
 }
 
-// Row struct deleted as it was unused and contained legacy types.
-
 // A Z-Set is a mapping from Data -> Weight
 // IMPORTANT: This must match the definition in circuit.rs!
 pub type ZSet = FastMap<RowKey, Weight>;
 
-// --- ID Tree Implementation ---
+// --- Version Tracking Implementation ---
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct LeafItem {
-    pub id: SmolStr,
-    pub hash: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub children: Option<FastMap<String, IdTree>>,
-}
+// Version map: record_id -> version number
+pub type VersionMap = FastMap<String, u64>;
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct IdTree {
-    pub hash: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub children: Option<FastMap<String, IdTree>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub leaves: Option<Vec<LeafItem>>,
-}
-
-pub fn compute_hash(items: &[String]) -> String {
-    let mut hasher = blake3::Hasher::new();
-    for item in items {
-        hasher.update(item.as_bytes());
-        hasher.update(&[0]); // Delimiter
-    }
-    hasher.finalize().to_hex().to_string()
-}
-
-impl IdTree {
-    pub fn build(items: Vec<LeafItem>) -> Self {
-        const THRESHOLD: usize = 100;
-
-        // Base case: If few items, hash directly (Leaf node)
-        if items.len() <= THRESHOLD {
-            let mut hasher = blake3::Hasher::new();
-            for item in &items {
-                hasher.update(item.id.as_bytes());
-                hasher.update(item.hash.as_bytes());
-                if let Some(children) = &item.children {
-                    // Sorting is important for deterministic hashing
-                    let mut keys: Vec<&String> = children.keys().collect();
-                    keys.sort_unstable();
-                    for k in keys {
-                        hasher.update(k.as_bytes());
-                        let child = children.get(k).unwrap();
-                        hasher.update(child.hash.as_bytes());
-                    }
-                }
-                hasher.update(&[0]);
-            }
-            let hash = hasher.finalize().to_hex().to_string();
-
-            return IdTree {
-                hash,
-                children: None,
-                leaves: Some(items),
-            };
-        }
-
-        // Recursive case: Chunking
-        // We split the list into fixed blocks to prevent stack overflow.
-        let mut children = FastMap::default();
-        let mut child_hashes = Vec::with_capacity(items.len() / THRESHOLD + 1);
-
-        for (i, chunk) in items.chunks(THRESHOLD).enumerate() {
-            let child_node = IdTree::build(chunk.to_vec());
-
-            // Key is index as string
-            let key = i.to_string();
-
-            child_hashes.push(format!("{}:{}", key, child_node.hash));
-            children.insert(key, child_node);
-        }
-
-        child_hashes.sort_unstable();
-
-        let mut hasher = blake3::Hasher::new();
-        for item in child_hashes {
-            hasher.update(item.as_bytes());
-            hasher.update(&[0]);
-        }
-        let hash = hasher.finalize().to_hex().to_string();
-
-        IdTree {
-            hash,
-            children: Some(children),
-            leaves: None,
-        }
-    }
-}
+// compute_flat_hash moved to update.rs (Strategy Pattern)
 
 // --- Path Optimization ---
 
@@ -272,13 +186,8 @@ pub struct QueryPlan {
     pub root: Operator,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct MaterializedViewUpdate {
-    pub query_id: String,
-    pub result_hash: String,
-    pub result_ids: Vec<String>,
-    pub tree: IdTree,
-}
+// MaterializedViewUpdate moved to update.rs (Strategy Pattern)
+pub use super::update::{MaterializedViewUpdate, ViewResultFormat, ViewUpdate};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct View {
@@ -287,15 +196,21 @@ pub struct View {
     pub last_hash: String,
     #[serde(default)]
     pub params: Option<SpookyValue>,
+    #[serde(default)]
+    pub version_map: VersionMap, // Track versions for each record
+    #[serde(default)]
+    pub format: ViewResultFormat, // Output format strategy
 }
 
 impl View {
-    pub fn new(plan: QueryPlan, params: Option<Value>) -> Self {
+    pub fn new(plan: QueryPlan, params: Option<Value>, format: Option<ViewResultFormat>) -> Self {
         Self {
             plan,
             cache: FastMap::default(),
             last_hash: String::new(),
             params: params.map(SpookyValue::from),
+            version_map: FastMap::default(),
+            format: format.unwrap_or_default(),
         }
     }
 
@@ -306,24 +221,42 @@ impl View {
         changed_table: &str,
         input_delta: &ZSet,
         db: &Database,
-    ) -> Option<MaterializedViewUpdate> {
+        is_optimistic: bool,
+    ) -> Option<ViewUpdate> {
         let mut deltas = FastMap::default();
         if !changed_table.is_empty() {
             deltas.insert(changed_table.to_string(), input_delta.clone());
         }
-        self.process_ingest(&deltas, db)
+        self.process_ingest(&deltas, db, is_optimistic)
     }
 
     /// Optimized 2-Phase Processing: Handles multiple table updates at once.
+    /// is_optimistic: true = increment versions (local mutations), false = keep versions (remote sync)
     pub fn process_ingest(
         &mut self,
         deltas: &FastMap<String, ZSet>,
         db: &Database,
-    ) -> Option<MaterializedViewUpdate> {
+        is_optimistic: bool,
+    ) -> Option<ViewUpdate> {
         // FIX: FIRST RUN CHECK
         let is_first_run = self.last_hash.is_empty();
 
-        let maybe_delta = if is_first_run {
+        // Check if any delta contains CREATE or DELETE operations for tables used in subqueries
+        let has_subquery_changes = !is_first_run && self.has_changes_for_subqueries(deltas, db);
+
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::log_1(
+            &format!(
+                "DEBUG VIEW: id={} is_first_run={} has_subquery_changes={}",
+                self.plan.id, is_first_run, has_subquery_changes
+            )
+            .into(),
+        );
+
+        let maybe_delta = if is_first_run || has_subquery_changes {
+            // Force full scan if:
+            // 1. First run (no cache yet)
+            // 2. Records were created/deleted that might affect subquery results
             None
         } else {
             self.eval_delta_batch(&self.plan.root, deltas, db, self.params.as_ref())
@@ -350,7 +283,26 @@ impl View {
             diff
         };
 
-        if view_delta.is_empty() && !is_first_run {
+        // Check if any record in the cache has been updated in the deltas
+        // This handles UPDATE operations where the ID doesn't change but content does
+        // Returns the list of updated record IDs so we can increment their versions
+        let updated_record_ids = self.get_updated_cached_records(deltas);
+        let has_cached_updates = !updated_record_ids.is_empty();
+
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::log_1(
+            &format!(
+                "DEBUG VIEW: id={} view_delta_empty={} has_cached_updates={} is_optimistic={} updated_ids_len={}",
+                self.plan.id,
+                view_delta.is_empty(),
+                has_cached_updates,
+                is_optimistic,
+                updated_record_ids.len()
+            )
+            .into(),
+        );
+
+        if view_delta.is_empty() && !is_first_run && !has_subquery_changes && !has_cached_updates {
             return None;
         }
 
@@ -363,29 +315,342 @@ impl View {
             }
         }
 
-        // Build result
+        // Build result with version tracking
         let mut result_ids: Vec<String> = self.cache.keys().map(|k| k.to_string()).collect();
         result_ids.sort_unstable();
 
-        let items: Vec<LeafItem> = result_ids
+        // Collect ALL IDs including subquery children
+        let mut all_ids: Vec<String> = Vec::new();
+
+        // Find subquery projections in the plan
+        let subquery_projections = self.find_subquery_projections(&self.plan.root);
+
+        for id in &result_ids {
+            // Add main record ID
+            all_ids.push(id.clone());
+
+            // For each subquery projection, evaluate and collect matched IDs
+            if !subquery_projections.is_empty() {
+                if let Some(parent_row) = self.get_row_value(id, db) {
+                    for subquery_op in &subquery_projections {
+                        let subquery_results =
+                            self.eval_snapshot(subquery_op, db, Some(parent_row));
+                        for (sub_id, _weight) in subquery_results {
+                            all_ids.push(sub_id.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Deduplicate and sort
+        all_ids.sort_unstable();
+        all_ids.dedup();
+
+        // Update version map for all IDs
+        // For updated records, only increment version for optimistic updates (local mutations)
+        // Remote syncs should use their own version numbers
+        for id in &all_ids {
+            if let Some(_current_hash) = self.get_row_hash(id, db) {
+                let version = self.version_map.entry(id.clone()).or_insert(0);
+                if *version == 0 {
+                    *version = 1;
+                } else if is_optimistic && updated_record_ids.contains(id) {
+                    // Optimistic update: increment version to trigger hash change
+                    let _old_ver = *version;
+                    *version += 1;
+                    #[cfg(target_arch = "wasm32")]
+                    web_sys::console::log_1(
+                        &format!(
+                            "DEBUG VIEW: Incrementing version for id={} old={} new={}",
+                            id, _old_ver, *version
+                        )
+                        .into(),
+                    );
+                }
+            }
+        }
+
+        // Build raw result data (format-agnostic)
+        let result_data: Vec<(String, u64)> = all_ids
             .iter()
-            .map(|id| self.expand_item(id, &self.plan.root, db))
+            .map(|id| {
+                let version = self.version_map.get(id).copied().unwrap_or(1);
+                (id.clone(), version)
+            })
             .collect();
 
-        let tree = IdTree::build(items);
-        let hash = tree.hash.clone();
+        // Delegate formatting to update module (Strategy Pattern)
+        use super::update::{build_update, compute_flat_hash, RawViewResult};
+
+        let raw_result = RawViewResult {
+            query_id: self.plan.id.clone(),
+            records: result_data.clone(),
+        };
+
+        // Build update using the configured format
+        let update = build_update(raw_result, self.format.clone());
+
+        // Extract hash for comparison (depends on format)
+        let hash = match &update {
+            ViewUpdate::Flat(flat) | ViewUpdate::Tree(flat) => flat.result_hash.clone(),
+            ViewUpdate::Streaming(_) => compute_flat_hash(&result_data),
+        };
 
         if hash != self.last_hash {
-            self.last_hash = hash.clone();
-            return Some(MaterializedViewUpdate {
-                query_id: self.plan.id.clone(),
-                result_hash: hash,
-                result_ids,
-                tree,
-            });
+            self.last_hash = hash;
+            return Some(update);
         }
 
         None
+    }
+
+    /// Find all Subquery projections in the operator tree
+    fn find_subquery_projections(&self, op: &Operator) -> Vec<Operator> {
+        let mut subqueries = Vec::new();
+        self.collect_subquery_projections(op, &mut subqueries);
+        subqueries
+    }
+
+    fn collect_subquery_projections(&self, op: &Operator, out: &mut Vec<Operator>) {
+        match op {
+            Operator::Project { input, projections } => {
+                for proj in projections {
+                    if let Projection::Subquery { plan, .. } = proj {
+                        out.push((**plan).clone());
+                        // Recursively check nested subqueries
+                        self.collect_subquery_projections(plan, out);
+                    }
+                }
+                self.collect_subquery_projections(input, out);
+            }
+            Operator::Filter { input, .. } => {
+                self.collect_subquery_projections(input, out);
+            }
+            Operator::Limit { input, .. } => {
+                self.collect_subquery_projections(input, out);
+            }
+            Operator::Join { left, right, .. } => {
+                self.collect_subquery_projections(left, out);
+                self.collect_subquery_projections(right, out);
+            }
+            Operator::Scan { .. } => {}
+        }
+    }
+
+    /// Check if deltas contain changes (CREATE or DELETE) for tables used in subqueries
+    /// This is needed because new/deleted records need full scan to update subquery results
+    fn has_changes_for_subqueries(&self, deltas: &FastMap<String, ZSet>, _db: &Database) -> bool {
+        // Get all tables used in subqueries
+        let subquery_tables = self.extract_subquery_tables(&self.plan.root);
+
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::log_1(
+            &format!(
+                "DEBUG has_changes: view={} subquery_tables={:?} delta_tables={:?}",
+                self.plan.id,
+                subquery_tables,
+                deltas.keys().collect::<Vec<_>>()
+            )
+            .into(),
+        );
+
+        if subquery_tables.is_empty() {
+            #[cfg(target_arch = "wasm32")]
+            web_sys::console::log_1(
+                &format!(
+                    "DEBUG has_changes: view={} NO SUBQUERY TABLES",
+                    self.plan.id
+                )
+                .into(),
+            );
+            return false;
+        }
+
+        // Check if any delta for a subquery table contains changes (weight != 0)
+        for table in subquery_tables {
+            if let Some(delta) = deltas.get(&table) {
+                #[cfg(target_arch = "wasm32")]
+                web_sys::console::log_1(
+                    &format!(
+                        "DEBUG has_changes: view={} table={} delta_keys={:?}",
+                        self.plan.id,
+                        table,
+                        delta.keys().collect::<Vec<_>>()
+                    )
+                    .into(),
+                );
+                // Check if any record in this delta is a CREATE (weight > 0 and not in version_map)
+                // or a DELETE (weight < 0 and in version_map)
+                for (key, weight) in delta {
+                    let in_version_map = self.version_map.contains_key(key.as_str());
+                    #[cfg(target_arch = "wasm32")]
+                    web_sys::console::log_1(
+                        &format!(
+                            "DEBUG has_changes: view={} key={} weight={} in_version_map={}",
+                            self.plan.id, key, weight, in_version_map
+                        )
+                        .into(),
+                    );
+                    // CREATE: positive weight, not in version_map
+                    // DELETE: negative weight, in version_map
+                    if (*weight > 0 && !in_version_map) || (*weight < 0 && in_version_map) {
+                        #[cfg(target_arch = "wasm32")]
+                        web_sys::console::log_1(
+                            &format!(
+                                "DEBUG has_changes: view={} FOUND CHANGE key={} weight={}",
+                                self.plan.id, key, weight
+                            )
+                            .into(),
+                        );
+                        return true;
+                    }
+                }
+            }
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::log_1(
+            &format!("DEBUG has_changes: view={} NO CHANGES FOUND", self.plan.id).into(),
+        );
+        false
+    }
+
+    /// Get all record IDs currently in the view's cache/version_map that have been updated in the deltas
+    /// This handles UPDATE operations where the ID set doesn't change but content does
+    fn get_updated_cached_records(&self, deltas: &FastMap<String, ZSet>) -> Vec<String> {
+        let mut updated_ids = Vec::new();
+
+        // For each table in the deltas, check if any updated record is in our cache
+        for (_table, delta) in deltas {
+            for (record_id, weight) in delta {
+                // Only check records with positive weight (existing/updated records)
+                // Negative weight means deletion which is handled elsewhere
+                if *weight > 0 && self.cache.contains_key(record_id.as_str()) {
+                    #[cfg(target_arch = "wasm32")]
+                    web_sys::console::log_1(
+                        &format!(
+                            "DEBUG get_updated_cached_records: view={} table={} found cached record={}",
+                            self.plan.id, _table, record_id
+                        )
+                        .into(),
+                    );
+                    updated_ids.push(record_id.to_string());
+                }
+            }
+        }
+
+        // Also check version_map for subquery records that might be affected
+        for (_table, delta) in deltas {
+            for (record_id, weight) in delta {
+                if *weight > 0
+                    && self.version_map.contains_key(record_id.as_str())
+                    && !updated_ids.contains(&record_id.to_string())
+                {
+                    #[cfg(target_arch = "wasm32")]
+                    web_sys::console::log_1(
+                        &format!(
+                            "DEBUG get_updated_cached_records: view={} table={} found versioned record={}",
+                            self.plan.id, _table, record_id
+                        )
+                        .into(),
+                    );
+                    updated_ids.push(record_id.to_string());
+                }
+            }
+        }
+
+        updated_ids
+    }
+
+    /// Explicitly set the version of a record in the view
+    pub fn set_record_version(
+        &mut self,
+        record_id: &str,
+        version: u64,
+        db: &Database,
+    ) -> Option<ViewUpdate> {
+        let current_version = self.version_map.get(record_id).copied().unwrap_or(0);
+
+        if current_version != version {
+            #[cfg(target_arch = "wasm32")]
+            web_sys::console::log_1(
+                &format!(
+                    "DEBUG VIEW: set_record_version id={} record={} old={} new={}",
+                    self.plan.id, record_id, current_version, version
+                )
+                .into(),
+            );
+            self.version_map.insert(record_id.to_string(), version);
+
+            // Trigger re-hashing by processing empty deltas
+            let empty_deltas = FastMap::default();
+            // We pass is_optimistic=false because we've already manually manipulated the version map
+            // and we just want to recompute the hash and return the update.
+            self.process_ingest(&empty_deltas, db, false)
+        } else {
+            None
+        }
+    }
+
+    /// Extract all table names used in subquery projections
+    fn extract_subquery_tables(&self, op: &Operator) -> Vec<String> {
+        let mut tables = Vec::new();
+        self.collect_subquery_tables(op, &mut tables);
+        tables.sort_unstable();
+        tables.dedup();
+        tables
+    }
+
+    fn collect_subquery_tables(&self, op: &Operator, out: &mut Vec<String>) {
+        match op {
+            Operator::Project { input, projections } => {
+                for proj in projections {
+                    if let Projection::Subquery { plan, .. } = proj {
+                        // Extract tables from the subquery plan
+                        self.collect_tables_from_operator(plan, out);
+                    }
+                }
+                self.collect_subquery_tables(input, out);
+            }
+            Operator::Filter { input, .. } => {
+                self.collect_subquery_tables(input, out);
+            }
+            Operator::Limit { input, .. } => {
+                self.collect_subquery_tables(input, out);
+            }
+            Operator::Join { left, right, .. } => {
+                self.collect_subquery_tables(left, out);
+                self.collect_subquery_tables(right, out);
+            }
+            Operator::Scan { .. } => {}
+        }
+    }
+
+    fn collect_tables_from_operator(&self, op: &Operator, out: &mut Vec<String>) {
+        match op {
+            Operator::Scan { table } => {
+                out.push(table.clone());
+            }
+            Operator::Filter { input, .. } => {
+                self.collect_tables_from_operator(input, out);
+            }
+            Operator::Project { input, projections } => {
+                self.collect_tables_from_operator(input, out);
+                for proj in projections {
+                    if let Projection::Subquery { plan, .. } = proj {
+                        self.collect_tables_from_operator(plan, out);
+                    }
+                }
+            }
+            Operator::Limit { input, .. } => {
+                self.collect_tables_from_operator(input, out);
+            }
+            Operator::Join { left, right, .. } => {
+                self.collect_tables_from_operator(left, out);
+                self.collect_tables_from_operator(right, out);
+            }
+        }
     }
 
     /// Attempts to calculate the delta purely incrementally for a BATCH of changes.
@@ -648,113 +913,6 @@ impl View {
         }
     }
 
-    fn expand_item(&self, id: &str, op: &Operator, db: &Database) -> LeafItem {
-        let mut final_hash = self
-            .get_row_hash(id, db)
-            .unwrap_or_else(|| "0000".to_string());
-
-        let mut children_map = FastMap::default();
-        let projections = self.find_projections(op);
-
-        if !projections.is_empty() {
-            let mut dependency_hashes = Vec::with_capacity(projections.len());
-
-            for proj in projections {
-                if let Projection::Subquery {
-                    alias,
-                    plan: sub_op,
-                } = proj
-                {
-                    // Create child context (SpookyValue)
-                    // We must clone existing params (SpookyValue) or create new Object
-                    let mut context = self
-                        .params
-                        .clone()
-                        .unwrap_or(SpookyValue::Object(FastMap::default()));
-
-                    if let SpookyValue::Object(ref mut obj) = context {
-                        // FIX: Populate $parent with the actual row content if available,
-                        // otherwise fallback to just ID (though strict resolving will likely fail for ID)
-                        // We fetch the row from DB.
-                        let row_val = self
-                            .get_row_value(id, db)
-                            .cloned()
-                            .unwrap_or(SpookyValue::Str(SmolStr::new(id)));
-                        obj.insert(SmolStr::new("parent"), row_val);
-                    } else {
-                        // If context was not an object (weird), we overwrite or wrap.
-                        // For safety, let's just make a new object with parent
-                        let mut map = FastMap::default();
-                        let row_val = self
-                            .get_row_value(id, db)
-                            .cloned()
-                            .unwrap_or(SpookyValue::Str(SmolStr::new(id)));
-                        map.insert(SmolStr::new("parent"), row_val);
-                        context = SpookyValue::Object(map);
-                    }
-
-                    let sub_zset = self.eval_snapshot(sub_op, db, Some(&context));
-                    let mut sub_ids: Vec<String> = sub_zset.keys().map(|k| k.to_string()).collect();
-                    sub_ids.sort_unstable();
-
-                    let sub_items: Vec<LeafItem> = sub_ids
-                        .iter()
-                        .map(|sub_id| self.expand_item(sub_id, sub_op, db))
-                        .collect();
-
-                    let sub_tree = IdTree::build(sub_items);
-                    dependency_hashes.push(sub_tree.hash.clone());
-
-                    // Defensive fix: Clean alias to handle edge cases
-                    // 1. Remove "[0] AS " prefix if present: "[0] AS author" -> "author"
-                    // 2. Remove " AS " prefix if present: "AS author" -> "author"
-                    // 3. Trim whitespace
-                    let clean_alias = alias
-                        .trim()
-                        // Remove array index prefix like "[0] AS "
-                        .trim_start_matches(|c: char| {
-                            c == '[' || c.is_numeric() || c == ']' || c.is_whitespace()
-                        })
-                        // Remove "AS " prefix (case insensitive)
-                        .split_whitespace()
-                        .last()
-                        .unwrap_or(alias)
-                        .trim()
-                        .to_string();
-
-                    children_map.insert(clean_alias, sub_tree);
-                }
-            }
-
-            if !dependency_hashes.is_empty() {
-                let mut hasher = blake3::Hasher::new();
-                hasher.update(final_hash.as_bytes());
-                for h in dependency_hashes {
-                    hasher.update(h.as_bytes());
-                }
-                final_hash = hasher.finalize().to_hex().to_string();
-            }
-        }
-
-        LeafItem {
-            id: SmolStr::new(id),
-            hash: final_hash,
-            children: if children_map.is_empty() {
-                None
-            } else {
-                Some(children_map)
-            },
-        }
-    }
-
-    fn find_projections<'a>(&self, op: &'a Operator) -> Vec<&'a Projection> {
-        match op {
-            Operator::Project { projections, .. } => projections.iter().collect(),
-            Operator::Limit { input, .. } => self.find_projections(input),
-            _ => vec![],
-        }
-    }
-
     fn get_row_value<'a>(&self, key: &str, db: &'a Database) -> Option<&'a SpookyValue> {
         // Optimization: Avoid allocation for split if possible or use SmolStr if we change internal map keys
         // For now, key is &str, db uses SmolStr keys.
@@ -780,10 +938,15 @@ impl View {
             if let Some(obj) = value.as_object() {
                 if let Some(param_path) = obj.get("$param") {
                     if let Some(ctx) = context {
-                        // $param is usually a simple string path like "user.id"
-                        // We need to parse it as a Path to resolve it, OR since $param is dynamic we treat it as string
+                        // $param is usually a path like "parent.author" or just "author"
+                        // Strip "parent." prefix since context IS the parent row
                         let path_str = param_path.as_str().unwrap_or("");
-                        let path = Path::new(path_str);
+                        let effective_path = if path_str.starts_with("parent.") {
+                            &path_str[7..] // Strip "parent." (7 chars)
+                        } else {
+                            path_str
+                        };
+                        let path = Path::new(effective_path);
                         // resolve nested param path from SpookyValue context!
                         // IMPORTANT: Normalize RecordId-like objects to strings for proper comparison
                         resolve_nested_value(Some(ctx), &path)

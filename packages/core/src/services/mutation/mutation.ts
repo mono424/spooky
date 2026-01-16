@@ -4,6 +4,7 @@ import { createMutationEventSystem, MutationEventSystem, MutationEventTypes } fr
 import { parseRecordIdString, encodeToSpooky } from '../utils/index.js';
 import { SchemaStructure } from '@spooky/query-builder';
 import { createLogger, Logger } from '../logger/index.js';
+import { StreamProcessorService } from '../stream-processor/index.js';
 
 export class MutationManager<S extends SchemaStructure> {
   private _events: MutationEventSystem;
@@ -16,6 +17,7 @@ export class MutationManager<S extends SchemaStructure> {
   constructor(
     private schema: S,
     private db: LocalDatabaseService,
+    private streamProcessor: StreamProcessorService,
     logger: Logger
   ) {
     this.logger = logger.child({ service: 'MutationManager' });
@@ -53,91 +55,131 @@ export class MutationManager<S extends SchemaStructure> {
     throw lastError;
   }
 
+  // ==================== CREATE ====================
+
   async create<T extends Record<string, unknown>>(
     id: string,
     data: T,
     options?: { localOnly?: boolean }
   ): Promise<T> {
-    const mutationId = `_spooky_pending_mutations:${Date.now()}`;
     const isLocalOnly = options?.localOnly ?? false;
+    return isLocalOnly ? this.createLocalOnly<T>(id, data) : this.createLocalAndRemote<T>(id, data);
+  }
 
-    let query: string;
-
-    if (isLocalOnly) {
-      query = `
-        LET $created = CREATE ONLY $id CONTENT $data;
-        RETURN {
-            target: $created
-        };
-      `;
-    } else {
-      query = `
-          BEGIN TRANSACTION;
-          
-          LET $created = CREATE ONLY $id CONTENT $data;
-          LET $mutation = CREATE ONLY $mid CONTENT {
-              mutationType: 'create',
-              recordId: $created.id,
-              data: $data
-          };
-
-          RETURN {
-              target: $created,
-              mutation_id: $mutation.id
-          };
-          
-          COMMIT TRANSACTION;
-      `;
-    }
+  private async createLocalOnly<T extends Record<string, unknown>>(
+    id: string,
+    data: T
+  ): Promise<T> {
+    const query = `
+      LET $created = CREATE ONLY $id CONTENT $data;
+      RETURN {
+          target: $created
+      };
+    `;
 
     const rid = parseRecordIdString(id);
     const tableName = rid.table.toString();
     const encodedData = encodeToSpooky(this.schema, tableName as any, data as any);
 
-    const queryParams: any = {
-      id: rid,
-      data: encodedData,
-    };
-
-    if (!isLocalOnly) {
-      queryParams.mid = parseRecordIdString(mutationId);
-    }
-
-    const results = await this.withRetry(() => this.db.query<any[]>(query, queryParams));
-
-    this.logger.debug({ results }, 'Create mutation response');
-
-    const response = results.find(
-      (r: any) => r && (r.target || (Array.isArray(r) && r[0]?.target))
+    const [_, result] = await this.withRetry(() =>
+      this.db.query<[undefined, { target: T[] }]>(query, {
+        id: rid,
+        data: encodedData,
+      })
     );
-    let result = response;
-    if (Array.isArray(response)) {
-      result = response[0];
-    }
 
-    if (!result || !result.target) {
-      throw new Error('Failed to create record or mutation log.');
-    }
+    this.logger.debug({ result, isLocalOnly: true }, 'Create mutation response');
 
-    const resultMutationId = isLocalOnly
-      ? new RecordId('_spooky_pending_mutations', 'local_only')
-      : result.mutation_id;
+    const target = result?.target?.[0];
+    if (!result || !target) {
+      throw new Error('Failed to create record.');
+    }
 
     this._events.addEvent({
       type: MutationEventTypes.MutationCreated,
       payload: [
         {
           type: 'create',
-          mutation_id: resultMutationId,
-          record_id: result.target.id as RecordId,
+          mutation_id: new RecordId('_spooky_pending_mutations', 'local_only'),
+          record_id: parseRecordIdString(target.id as string),
           data: encodedData,
-          localOnly: isLocalOnly,
+          record: target,
+          localOnly: true,
         },
       ],
     });
 
-    return result.target;
+    // Optimistic update: ingest record into DBSP
+    this.streamProcessor.ingest(tableName, 'CREATE', id, target);
+
+    return target;
   }
+
+  private async createLocalAndRemote<T extends Record<string, unknown>>(
+    id: string,
+    data: T
+  ): Promise<T> {
+    const mutationId = `_spooky_pending_mutations:${Date.now()}`;
+    const query = `
+      BEGIN TRANSACTION;
+      
+      LET $created = CREATE ONLY $id CONTENT $data;
+      LET $mutation = CREATE ONLY $mid CONTENT {
+          mutationType: 'create',
+          recordId: $created.id,
+          data: $data
+      };
+
+      RETURN {
+          target: $created,
+          mutation_id: $mutation.id
+      };
+      
+      COMMIT TRANSACTION;
+    `;
+
+    const rid = parseRecordIdString(id);
+    const tableName = rid.table.toString();
+    const encodedData = encodeToSpooky(this.schema, tableName as any, data as any);
+
+    const [result] = await this.withRetry(() =>
+      this.db.query<[{ target: T; mutation_id: string }]>(query, {
+        id: rid,
+        data: encodedData,
+        mid: parseRecordIdString(mutationId),
+      })
+    );
+
+    this.logger.debug({ result, isLocalOnly: false }, 'Create mutation response');
+
+    const target = result?.target;
+    const createdMutationId = result?.mutation_id;
+
+    if (!result || !target || !createdMutationId) {
+      throw new Error('Failed to create record or mutation log.');
+    }
+
+    this._events.addEvent({
+      type: MutationEventTypes.MutationCreated,
+      payload: [
+        {
+          type: 'create',
+          mutation_id: parseRecordIdString(createdMutationId),
+          record_id: parseRecordIdString(target.id as string),
+          data: encodedData,
+          record: target,
+          localOnly: false,
+        },
+      ],
+    });
+
+    // Optimistic update: ingest record into DBSP
+    this.streamProcessor.ingest(tableName, 'CREATE', id, target);
+
+    return target;
+  }
+
+  // ==================== UPDATE ====================
 
   async update<T extends Record<string, unknown>>(
     table: string,
@@ -145,61 +187,38 @@ export class MutationManager<S extends SchemaStructure> {
     data: Partial<T>,
     options?: { localOnly?: boolean }
   ): Promise<T> {
-    const rid = id.includes(':') ? parseRecordIdString(id) : new RecordId(table, id);
     const isLocalOnly = options?.localOnly ?? false;
+    return isLocalOnly
+      ? this.updateLocalOnly<T>(table, id, data)
+      : this.updateLocalAndRemote<T>(table, id, data);
+  }
 
-    let query: string;
-
-    if (isLocalOnly) {
-      query = `
-        LET $updated = UPDATE $id MERGE $data;
-        RETURN {
-            target: $updated
-        };
-      `;
-    } else {
-      query = `
-          BEGIN TRANSACTION;
-
-          LET $updated = UPDATE $id MERGE $data;
-          LET $mutation = CREATE _spooky_pending_mutations SET 
-              mutationType = 'update',
-              recordId = $id,
-              data = $data; 
-
-          RETURN {
-              target: $updated,
-              mutation_id: $mutation.id
-          };
-          
-          COMMIT TRANSACTION;
-      `;
-    }
+  private async updateLocalOnly<T extends Record<string, unknown>>(
+    table: string,
+    id: string,
+    data: Partial<T>
+  ): Promise<T> {
+    const rid = id.includes(':') ? parseRecordIdString(id) : new RecordId(table, id);
+    const query = `
+      LET $updated = UPDATE ONLY $id MERGE $data;
+      RETURN {
+          target: $updated
+      };
+    `;
 
     const encodedData = encodeToSpooky(this.schema, table as any, data as any);
 
-    const results = await this.withRetry(() =>
-      this.db.query<any[]>(query, {
+    const [result] = await this.withRetry(() =>
+      this.db.query<[{ target: T[] }]>(query, {
         id: rid,
         data: encodedData,
       })
     );
 
-    const response = results.find(
-      (r: any) => r && (r.target || (Array.isArray(r) && r[0]?.target))
-    );
-    let result = response;
-    if (Array.isArray(response)) {
-      result = response[0];
-    }
-
-    if (!result || !result.target || (Array.isArray(result.target) && result.target.length === 0)) {
+    const target = result?.target?.[0];
+    if (!result || !target) {
       throw new Error(`Failed to update record: ${id} not found.`);
     }
-
-    const resultMutationId = isLocalOnly
-      ? new RecordId('_spooky_pending_mutations', 'local_only')
-      : result.mutation_id;
 
     this._events.addEvent({
       type: MutationEventTypes.MutationCreated,
@@ -208,66 +227,135 @@ export class MutationManager<S extends SchemaStructure> {
           type: 'update',
           record_id: rid,
           data: encodedData,
-          mutation_id: resultMutationId,
-          localOnly: isLocalOnly,
+          record: target,
+          mutation_id: new RecordId('_spooky_pending_mutations', 'local_only'),
+          localOnly: true,
         },
       ],
     });
 
-    return result.target;
+    // Optimistic update: ingest record into DBSP
+    this.streamProcessor.ingest(table, 'update', id, target);
+
+    return target;
   }
 
-  async delete(table: string, id: string, options?: { localOnly?: boolean }): Promise<void> {
+  private async updateLocalAndRemote<T extends Record<string, unknown>>(
+    table: string,
+    id: string,
+    data: Partial<T>
+  ): Promise<T> {
     const rid = id.includes(':') ? parseRecordIdString(id) : new RecordId(table, id);
-    const isLocalOnly = options?.localOnly ?? false;
+    const query = `
+      BEGIN TRANSACTION;
 
-    let query: string;
+      LET $updated = UPDATE ONLY $id MERGE $data;
+      LET $mutation = CREATE ONLY _spooky_pending_mutations SET 
+          mutationType = 'update',
+          recordId = $id,
+          data = $data; 
 
-    if (isLocalOnly) {
-      query = `
-        DELETE $id;
-        RETURN { success: true }; 
-      `;
-    } else {
-      query = `
-        BEGIN TRANSACTION;
-        
-        DELETE $id;
-        LET $mutation = CREATE _spooky_pending_mutations SET 
-            mutationType = 'delete',
-            recordId = $id;
-        RETURN {
-            mutation_id: $mutation.id
-        };
-        
-        COMMIT TRANSACTION;
+      RETURN {
+          target: $updated,
+          mutation_id: $mutation.id
+      };
+      
+      COMMIT TRANSACTION;
     `;
+
+    const encodedData = encodeToSpooky(this.schema, table as any, data as any);
+
+    const [result] = await this.withRetry(() =>
+      this.db.query<[{ target: T; mutation_id: string }]>(query, {
+        id: rid,
+        data: encodedData,
+      })
+    );
+
+    const target = result?.target;
+    const createdMutationId = result?.mutation_id;
+
+    if (!result || !target || !createdMutationId) {
+      throw new Error(`Failed to update record: ${id} or create mutation log.`);
     }
 
-    const results = await this.withRetry(() => this.db.query<any[]>(query, { id: rid }));
+    this._events.addEvent({
+      type: MutationEventTypes.MutationCreated,
+      payload: [
+        {
+          type: 'update',
+          record_id: rid,
+          data: encodedData,
+          record: target,
+          mutation_id: parseRecordIdString(createdMutationId),
+          localOnly: false,
+        },
+      ],
+    });
 
-    // For delete, we just need to confirm it worked.
-    // In normal mode, we look for mutation_id.
-    // In localOnly mode, we just need to know the query executed.
+    // Optimistic update: ingest record into DBSP
+    this.streamProcessor.ingest(table, 'update', id, target);
 
-    let resultMutationId: RecordId;
+    return target;
+  }
 
-    if (isLocalOnly) {
-      resultMutationId = new RecordId('_spooky_pending_mutations', 'local_only');
-    } else {
-      const response = results.find(
-        (r: any) => r && (r.mutation_id || (Array.isArray(r) && r[0]?.mutation_id))
-      );
-      let result = response;
-      if (Array.isArray(response)) {
-        result = response[0];
-      }
+  // ==================== DELETE ====================
 
-      if (!result) {
-        throw new Error('Failed to perform delete or create mutation log.');
-      }
-      resultMutationId = result.mutation_id;
+  async delete(table: string, id: string, options?: { localOnly?: boolean }): Promise<void> {
+    const isLocalOnly = options?.localOnly ?? false;
+    return isLocalOnly ? this.deleteLocalOnly(table, id) : this.deleteLocalAndRemote(table, id);
+  }
+
+  private async deleteLocalOnly(table: string, id: string): Promise<void> {
+    const rid = id.includes(':') ? parseRecordIdString(id) : new RecordId(table, id);
+    const query = `
+      DELETE $id;
+      RETURN { success: true }; 
+    `;
+
+    await this.withRetry(() => this.db.query<any[]>(query, { id: rid }));
+
+    this._events.addEvent({
+      type: MutationEventTypes.MutationCreated,
+      payload: [
+        {
+          type: 'delete',
+          record_id: rid,
+          mutation_id: new RecordId('_spooky_pending_mutations', 'local_only'),
+          localOnly: true,
+        },
+      ],
+    });
+
+    // Optimistic update: ingest delete into DBSP
+    this.streamProcessor.ingest(table, 'DELETE', id, {});
+  }
+
+  private async deleteLocalAndRemote(table: string, id: string): Promise<void> {
+    const rid = id.includes(':') ? parseRecordIdString(id) : new RecordId(table, id);
+    const query = `
+      BEGIN TRANSACTION;
+      
+      DELETE $id;
+      LET $mutation = CREATE ONLY _spooky_pending_mutations SET 
+          mutationType = 'delete',
+          recordId = $id;
+      RETURN {
+          mutation_id: $mutation.id
+      };
+      
+      COMMIT TRANSACTION;
+    `;
+
+    const [result] = await this.withRetry(() =>
+      this.db.query<{ mutation_id: string }[]>(query, { id: rid })
+    );
+
+    if (!result) {
+      throw new Error('Failed to perform delete or create mutation log.');
     }
+
+    const resultMutationId = parseRecordIdString(result.mutation_id);
 
     this._events.addEvent({
       type: MutationEventTypes.MutationCreated,
@@ -276,9 +364,12 @@ export class MutationManager<S extends SchemaStructure> {
           type: 'delete',
           record_id: rid,
           mutation_id: resultMutationId,
-          localOnly: isLocalOnly,
+          localOnly: false,
         },
       ],
     });
+
+    // Optimistic update: ingest delete into DBSP
+    this.streamProcessor.ingest(table, 'DELETE', id, {});
   }
 }

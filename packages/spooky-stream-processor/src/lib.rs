@@ -15,7 +15,7 @@ pub use rayon::prelude::*;
 
 // Falls du noch StreamProcessor Traits hast, müssen die auch hier sein:
 pub use engine::circuit::Circuit;
-pub use engine::view::MaterializedViewUpdate;
+pub use engine::update::{MaterializedViewUpdate, ViewResultFormat, ViewUpdate};
 pub use engine::view::QueryPlan;
 use serde_json::Value;
 
@@ -27,18 +27,21 @@ pub trait StreamProcessor: Send + Sync {
         id: &str,
         record: Value,
         hash: &str,
-    ) -> Vec<MaterializedViewUpdate>;
+        is_optimistic: bool,
+    ) -> Vec<ViewUpdate>;
 
     fn ingest_batch(
         &mut self,
         batch: Vec<(String, String, String, Value, String)>,
-    ) -> Vec<MaterializedViewUpdate>;
+        is_optimistic: bool,
+    ) -> Vec<ViewUpdate>;
 
     fn register_view(
         &mut self,
         plan: QueryPlan,
         params: Option<Value>,
-    ) -> Option<MaterializedViewUpdate>;
+        format: Option<ViewResultFormat>,
+    ) -> Option<ViewUpdate>;
 
     fn unregister_view(&mut self, id: &str);
 }

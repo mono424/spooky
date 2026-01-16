@@ -33,6 +33,7 @@ export class SpookyClient<S extends SchemaStructure> {
   private sync: SpookySync<S>;
   private devTools: DevToolsService;
   private router: RouterService<S>;
+  private logger: ReturnType<typeof createLogger>;
   public auth: AuthService<S>;
   public streamProcessor: StreamProcessorService;
 
@@ -45,11 +46,16 @@ export class SpookyClient<S extends SchemaStructure> {
   }
 
   constructor(private config: SpookyConfig<S>) {
-    console.log('[Spooky] Constructor called', config);
+    const logger = createLogger(config.logLevel ?? 'info');
+    this.logger = logger.child({ service: 'SpookyClient' });
+
     const clientId = this.config.clientId ?? this.loadOrGenerateClientId();
     this.persistClientId(clientId);
 
-    const logger = createLogger(config.logLevel ?? 'info');
+    this.logger.info(
+      { config: { ...config, schema: '[SchemaStructure]' } },
+      '[SpookyClient] Constructor called'
+    );
     this.local = new LocalDatabaseService(this.config.database, logger);
     this.remote = new RemoteDatabaseService(this.config.database, logger);
     this.streamProcessor = new StreamProcessorService(
@@ -58,7 +64,12 @@ export class SpookyClient<S extends SchemaStructure> {
       logger
     );
     this.migrator = new LocalMigrator(this.local, logger);
-    this.mutationManager = new MutationManager(this.config.schema, this.local, logger);
+    this.mutationManager = new MutationManager(
+      this.config.schema,
+      this.local,
+      this.streamProcessor,
+      logger
+    );
     this.queryManager = new QueryManager(
       this.config.schema,
       this.local,
@@ -101,37 +112,37 @@ export class SpookyClient<S extends SchemaStructure> {
   }
 
   async init() {
-    console.log('[Spooky] Init started');
+    this.logger.info('[SpookyClient] Init started');
     try {
-      console.log('[Spooky] Connecting to local DB...');
+      this.logger.debug('[SpookyClient] Connecting to local DB...');
       await this.local.connect();
-      console.log('[Spooky] Local connected');
+      this.logger.debug('[SpookyClient] Local connected');
 
-      console.log('[Spooky] Provisioning schema...');
+      this.logger.debug('[SpookyClient] Provisioning schema...');
       await this.migrator.provision(this.config.schemaSurql);
-      console.log('[Spooky] Migrator provisioned');
+      this.logger.debug('[SpookyClient] Migrator provisioned');
 
-      console.log('[Spooky] Connecting to remote DB...');
+      this.logger.debug('[SpookyClient] Connecting to remote DB...');
       await this.remote.connect();
-      console.log('[Spooky] Remote connected');
+      this.logger.debug('[SpookyClient] Remote connected');
 
-      console.log('[Spooky] Initializing StreamProcessor...');
+      this.logger.debug('[SpookyClient] Initializing StreamProcessor...');
       await this.streamProcessor.init();
-      console.log('[Spooky] StreamProcessor initialized');
+      this.logger.debug('[SpookyClient] StreamProcessor initialized');
 
-      console.log('[Spooky] Initializing Auth...');
+      this.logger.debug('[SpookyClient] Initializing Auth...');
       await this.auth.init();
-      console.log('[Spooky] Auth initialized');
+      this.logger.debug('[SpookyClient] Auth initialized');
 
-      console.log('[Spooky] Initializing QueryManager...');
+      this.logger.debug('[SpookyClient] Initializing QueryManager...');
       await this.queryManager.init();
-      console.log('[Spooky] QueryManager initialized');
+      this.logger.debug('[SpookyClient] QueryManager initialized');
 
-      console.log('[Spooky] Initializing Sync...');
+      this.logger.debug('[SpookyClient] Initializing Sync...');
       await this.sync.init();
-      console.log('[Spooky] Sync initialized');
+      this.logger.debug('[SpookyClient] Sync initialized');
     } catch (e) {
-      console.error('[Spooky] Init failed', e);
+      this.logger.error({ error: e }, '[SpookyClient] Init failed');
       throw e;
     }
   }
@@ -204,7 +215,7 @@ export class SpookyClient<S extends SchemaStructure> {
         localStorage.setItem('spooky_client_id', id);
       }
     } catch (e) {
-      console.warn('[SpookyClient] Failed to persist client ID', e);
+      this.logger.warn({ error: e }, '[SpookyClient] Failed to persist client ID');
     }
   }
 
@@ -215,7 +226,7 @@ export class SpookyClient<S extends SchemaStructure> {
         if (stored) return stored;
       }
     } catch (e) {
-      console.warn('[SpookyClient] Failed to load client ID', e);
+      this.logger.warn({ error: e }, '[SpookyClient] Failed to load client ID');
     }
 
     const newId = crypto.randomUUID();

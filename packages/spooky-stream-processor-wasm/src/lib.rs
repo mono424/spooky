@@ -19,8 +19,7 @@ const TS_APPEND_CONTENT: &'static str = r#"
 export interface WasmStreamUpdate {
   query_id: string;
   result_hash: string;
-  result_ids: string[];
-  tree: any;
+  result_data: [string, number][];
 }
 
 export interface WasmIncantationConfig {
@@ -43,12 +42,14 @@ impl SpookyProcessor {
     }
 
     /// Ingest a record into the stream processor
+    /// is_optimistic: true = local mutation (increment versions), false = remote sync (keep versions)
     pub fn ingest(
         &mut self,
         table: String,
         op: String,
         id: String,
         record: JsValue,
+        is_optimistic: bool,
     ) -> Result<JsValue, JsValue> {
         let record: Value = serde_wasm_bindgen::from_value(record)
             .map_err(|e| JsValue::from_str(&format!("Failed to parse record: {}", e)))?;
@@ -56,9 +57,9 @@ impl SpookyProcessor {
         // internal preparation (hash calc)
         let (clean_record, hash) = spooky_stream_processor::service::ingest::prepare(record);
 
-        let updates = self
-            .circuit
-            .ingest_record(&table, &op, &id, clean_record.into(), &hash);
+        let updates =
+            self.circuit
+                .ingest_record(&table, &op, &id, clean_record.into(), &hash, is_optimistic);
 
         // Use Serializer with serialize_maps_as_objects(true) to output plain JS objects
         // instead of JS Map objects (which stringify as {} for HashMap)
@@ -105,6 +106,26 @@ impl SpookyProcessor {
     /// Unregister a view by ID
     pub fn unregister_view(&mut self, id: String) {
         self.circuit.unregister_view(&id);
+    }
+
+    /// Explicitly set the version of a record for a specific view
+    pub fn set_record_version(
+        &mut self,
+        incantation_id: String,
+        record_id: String,
+        version: f64, // JS numbers are f64, cast to u64
+    ) -> Result<JsValue, JsValue> {
+        let ver_u64 = version as u64;
+        let update = self
+            .circuit
+            .set_record_version(&incantation_id, &record_id, ver_u64);
+
+        if let Some(up) = update {
+            let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
+            Ok(up.serialize(&serializer)?)
+        } else {
+            Ok(JsValue::NULL)
+        }
     }
 
     /// Save the current circuit state as a JSON string

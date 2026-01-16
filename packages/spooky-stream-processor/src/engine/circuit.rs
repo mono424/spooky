@@ -1,7 +1,7 @@
 use super::view::{
-    FastMap, MaterializedViewUpdate, Operator, Projection, QueryPlan, RowKey, SpookyValue, View,
-    ZSet,
+    FastMap, Operator, Projection, QueryPlan, RowKey, SpookyValue, View, ViewUpdate, ZSet,
 };
+use super::update::ViewResultFormat;
 // use rustc_hash::{FxHashMap, FxHasher}; // Unused in this file (used via FastMap)
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -94,12 +94,32 @@ impl Circuit {
     // Must be called after Deserialization to rebuild the Cache!
     pub fn rebuild_dependency_graph(&mut self) {
         self.dependency_graph.clear();
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::log_1(
+            &format!(
+                "DEBUG: Rebuilding dependency graph for {} views",
+                self.views.len()
+            )
+            .into(),
+        );
         for (i, view) in self.views.iter().enumerate() {
             let tables = extract_tables(&view.plan.root);
+            #[cfg(target_arch = "wasm32")]
+            web_sys::console::log_1(
+                &format!(
+                    "DEBUG: View {} (id: {}) depends on tables: {:?}",
+                    i, view.plan.id, tables
+                )
+                .into(),
+            );
             for t in tables {
                 self.dependency_graph.entry(t).or_default().push(i);
             }
         }
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::log_1(
+            &format!("DEBUG: Final dependency graph: {:?}", self.dependency_graph).into(),
+        );
     }
 
     pub fn ingest_record(
@@ -109,20 +129,25 @@ impl Circuit {
         id: &str,
         record: Value,
         hash: &str,
-    ) -> Vec<MaterializedViewUpdate> {
-        self.ingest_batch_spooky(vec![(
-            SmolStr::from(table),
-            SmolStr::from(op),
-            SmolStr::from(id),
-            SpookyValue::from(record),
-            hash.to_string(),
-        )])
+        is_optimistic: bool,
+    ) -> Vec<ViewUpdate> {
+        self.ingest_batch_spooky(
+            vec![(
+                SmolStr::from(table),
+                SmolStr::from(op),
+                SmolStr::from(id),
+                SpookyValue::from(record),
+                hash.to_string(),
+            )],
+            is_optimistic,
+        )
     }
 
     pub fn ingest_batch(
         &mut self,
         batch: Vec<(String, String, String, Value, String)>,
-    ) -> Vec<MaterializedViewUpdate> {
+        is_optimistic: bool,
+    ) -> Vec<ViewUpdate> {
         // Convert to SpookyValue
         let batch_spooky: Vec<(SmolStr, SmolStr, SmolStr, SpookyValue, String)> = batch
             .into_iter()
@@ -137,13 +162,14 @@ impl Circuit {
             })
             .collect();
 
-        self.ingest_batch_spooky(batch_spooky)
+        self.ingest_batch_spooky(batch_spooky, is_optimistic)
     }
 
     pub fn ingest_batch_spooky(
         &mut self,
         batch: Vec<(SmolStr, SmolStr, SmolStr, SpookyValue, String)>,
-    ) -> Vec<MaterializedViewUpdate> {
+        is_optimistic: bool,
+    ) -> Vec<ViewUpdate> {
         let mut table_deltas: FastMap<String, ZSet> = FastMap::default();
 
         // 1. Storage Phase: Update Storage & Accumulate Deltas
@@ -192,20 +218,37 @@ impl Circuit {
 
         // Identify ALL affected views from ALL changed tables
         let mut impacted_view_indices: Vec<usize> = Vec::new();
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::log_1(&format!("DEBUG: Changed tables: {:?}", changed_tables).into());
         for table in changed_tables {
             if let Some(indices) = self.dependency_graph.get(&table) {
+                #[cfg(target_arch = "wasm32")]
+                web_sys::console::log_1(
+                    &format!("DEBUG: Table {} impacts views: {:?}", table, indices).into(),
+                );
                 impacted_view_indices.extend(indices.iter().copied());
             } else {
-                println!("DEBUG: Table {} changed, but no views depend on it", table);
+                #[cfg(target_arch = "wasm32")]
+                web_sys::console::log_1(
+                    &format!("DEBUG: Table {} changed, but no views depend on it", table).into(),
+                );
             }
         }
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::log_1(
+            &format!(
+                "DEBUG: Total impacted view indices (before dedup): {:?}",
+                impacted_view_indices
+            )
+            .into(),
+        );
 
         // Deduplicate View Indices (Sort + Dedup)
         // This ensures each view is processed EXACTLY ONCE, even if multiple input tables changed
         impacted_view_indices.sort_unstable();
         impacted_view_indices.dedup();
 
-        let mut all_updates: Vec<MaterializedViewUpdate> = Vec::new();
+        let mut all_updates: Vec<ViewUpdate> = Vec::new();
 
         // 3. Execution Phase
         // 3. Execution Phase
@@ -213,7 +256,7 @@ impl Circuit {
         let deltas_ref = &table_deltas;
 
         #[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
-        let updates: Vec<MaterializedViewUpdate> = {
+        let updates: Vec<ViewUpdate> = {
             use rayon::prelude::*;
             self.views
                 .par_iter_mut()
@@ -222,7 +265,7 @@ impl Circuit {
                     // Check if this view needs update.
                     // impacted_view_indices is sorted, so binary_search is efficient.
                     if impacted_view_indices.binary_search(&i).is_ok() {
-                        view.process_ingest(deltas_ref, db_ref)
+                        view.process_ingest(deltas_ref, db_ref, is_optimistic)
                     } else {
                         None
                     }
@@ -231,12 +274,12 @@ impl Circuit {
         };
 
         #[cfg(any(target_arch = "wasm32", not(feature = "parallel")))]
-        let updates: Vec<MaterializedViewUpdate> = {
+        let updates: Vec<ViewUpdate> = {
             let mut ups = Vec::new();
             for i in impacted_view_indices {
                 if i < self.views.len() {
                     let view: &mut View = &mut self.views[i];
-                    if let Some(update) = view.process_ingest(deltas_ref, db_ref) {
+                    if let Some(update) = view.process_ingest(deltas_ref, db_ref, is_optimistic) {
                         ups.push(update);
                     }
                 }
@@ -252,18 +295,20 @@ impl Circuit {
         &mut self,
         plan: QueryPlan,
         params: Option<Value>,
-    ) -> Option<MaterializedViewUpdate> {
+        format: Option<ViewResultFormat>,
+    ) -> Option<ViewUpdate> {
         if let Some(pos) = self.views.iter().position(|v| v.plan.id == plan.id) {
             self.views.remove(pos);
             // Rebuild dependencies entirely to be safe (simple but slower)
             self.rebuild_dependency_graph();
         }
 
-        let mut view = View::new(plan, params);
+        let mut view = View::new(plan, params, format);
 
         // Trigger initial full scan by passing None to process_ingest
+        // Use is_optimistic=true for initial registration
         let empty_deltas: FastMap<String, ZSet> = FastMap::default();
-        let initial_update = view.process_ingest(&empty_deltas, &self.db);
+        let initial_update = view.process_ingest(&empty_deltas, &self.db, true);
 
         let view_idx = self.views.len();
         self.views.push(view);
@@ -286,7 +331,7 @@ impl Circuit {
         self.rebuild_dependency_graph();
     }
 
-    pub fn step(&mut self, table: String, delta: ZSet) -> Vec<MaterializedViewUpdate> {
+    pub fn step(&mut self, table: String, delta: ZSet, is_optimistic: bool) -> Vec<ViewUpdate> {
         {
             let tb = self.db.ensure_table(&table);
             tb.apply_delta(&delta);
@@ -304,7 +349,9 @@ impl Circuit {
             let indices = indices.clone();
             for i in indices {
                 if i < self.views.len() {
-                    if let Some(update) = self.views[i].process(&table, &delta, &self.db) {
+                    if let Some(update) =
+                        self.views[i].process(&table, &delta, &self.db, is_optimistic)
+                    {
                         updates.push(update);
                     }
                 }
@@ -312,6 +359,17 @@ impl Circuit {
         }
 
         updates
+    }
+    pub fn set_record_version(
+        &mut self,
+        incantation_id: &str,
+        record_id: &str,
+        version: u64,
+    ) -> Option<ViewUpdate> {
+        if let Some(pos) = self.views.iter().position(|v| v.plan.id == incantation_id) {
+            return self.views[pos].set_record_version(record_id, version, &self.db);
+        }
+        None
     }
 }
 

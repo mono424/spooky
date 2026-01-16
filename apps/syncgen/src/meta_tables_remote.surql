@@ -19,8 +19,12 @@ DEFINE FIELD clientId ON TABLE _spooky_incantation TYPE option<string>
 DEFINE FIELD hash ON TABLE _spooky_incantation TYPE option<string>
     PERMISSIONS FOR select, create, update WHERE true;
 
--- The Radix Tree of Result IDs for efficient sync
+-- The Radix Tree of Result IDs for efficient sync (deprecated, kept for backward compat)
 DEFINE FIELD tree ON TABLE _spooky_incantation TYPE any
+    PERMISSIONS FOR select, create, update WHERE true;
+
+-- The flat array of Result IDs for efficient sync
+DEFINE FIELD array ON TABLE _spooky_incantation TYPE any
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- For garbage collection (Heartbeat)

@@ -11,15 +11,7 @@ export function ThreadList() {
 
   const threadsResult = useQuery(db, () => {
     let q = db.query("thread").related("author");
-
-    /* 
-    if (filter()) {
-       // ... 
-    }
-    */
-
-    q = q.orderBy("created_at", sort() as "asc" | "desc");
-    
+    q = q.orderBy("title", sort() as "asc" | "desc");
     return q.limit(10).build();
   });
   

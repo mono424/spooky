@@ -2,7 +2,7 @@ mod common;
 
 use common::*;
 use serde_json::json;
-use spooky_stream_processor::engine::view::{JoinCondition, Operator, Predicate, QueryPlan, Path};
+use spooky_stream_processor::engine::view::{JoinCondition, Operator, Path, Predicate, QueryPlan};
 
 #[test]
 fn test_complex_incantation_flow() {
@@ -73,7 +73,7 @@ fn test_complex_incantation_flow() {
     // Initially, Thread 1 exists and Author exists, but no comments.
     // So result should be empty.
     if let Some(up) = initial_update {
-        assert!(up.result_ids.is_empty(), "Expected empty result initially");
+        assert!(up.result_data.is_empty(), "Expected empty result initially");
     }
 
     // 4. Verify View State Helper
@@ -125,7 +125,7 @@ fn test_complex_incantation_flow() {
     // Note: It's already gone, but let's re-add a magic comment to verify dependency deletion works
     let _magic_comment_3 = create_comment(&mut circuit, "Magic", &thread_1, &author_alice);
     check_view(&circuit, true);
-    
+
     ingest(&mut circuit, "author", "DELETE", &author_alice, json!({}));
     check_view(&circuit, false);
 }

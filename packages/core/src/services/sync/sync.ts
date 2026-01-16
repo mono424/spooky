@@ -1,6 +1,6 @@
 import { LocalDatabaseService, RemoteDatabaseService } from '../database/index.js';
 import { MutationEventTypes } from '../mutation/index.js';
-import { IdTree, IdTreeDiff } from '../../types.js';
+import { RecordVersionArray, RecordVersionDiff } from '../../types.js';
 import { QueryEventTypes } from '../query/events.js';
 import { SyncQueueEventTypes, createSyncEventSystem, SyncEventTypes } from './events.js';
 import { createLogger, Logger } from '../logger/index.js';
@@ -14,7 +14,7 @@ import {
   UpQueue,
 } from './queue/index.js';
 import { RecordId, Duration, Uuid } from 'surrealdb';
-import { diffIdTree, TreeSyncer } from './utils.js';
+import { diffRecordVersionArray, ArraySyncer } from './utils.js';
 import { parseRecordIdString, decodeFromSpooky } from '../utils/index.js';
 import { TableModel } from '@spooky/query-builder';
 import { SchemaStructure } from '@spooky/query-builder';
@@ -88,12 +88,26 @@ export class SpookySync<S extends SchemaStructure> {
     (await this.remote.getClient().liveOf(queryUuid)).subscribe((message) => {
       this.logger.debug({ message }, 'Live update received');
       if (message.action === 'UPDATE' || message.action === 'CREATE') {
-        const { id, hash, tree } = message.value;
-        if (!(id instanceof RecordId) || !hash || !tree) {
+        // Look for array, fallback to tree for backward compatibility if needed, or null
+        const { id, hash, array, tree } = message.value;
+        // Use array if present, otherwise ignore (assuming complete switch)
+        // Or should we support both during migration?
+        // User request: "switch ... to a flat array of records"
+        // Let's expect 'array' field.
+
+        // Note: The backend might still send 'tree' if not updated, but we are asked to update frontend.
+        // We will prefer 'array'.
+        const remoteArray = array || tree; // Temporary fallback? Or just array?
+
+        if (!(id instanceof RecordId) || !hash || !remoteArray) {
           return;
         }
 
-        this.handleRemoteIncantationChange(id, hash as string, tree).catch((err) => {
+        this.handleRemoteIncantationChange(
+          id,
+          hash as string,
+          (remoteArray || []) as RecordVersionArray
+        ).catch((err) => {
           this.logger.error({ err }, 'Error handling remote incantation change');
         });
       }
@@ -103,7 +117,7 @@ export class SpookySync<S extends SchemaStructure> {
   private async handleRemoteIncantationChange(
     incantationId: RecordId,
     remoteHash: string,
-    remoteTree: any
+    remoteArray: RecordVersionArray
   ) {
     // Fetch local state to get necessary params
     const existing = await this.findIncatationRecord(incantationId);
@@ -116,15 +130,15 @@ export class SpookySync<S extends SchemaStructure> {
     }
 
     const surrealql = existing.surrealql || existing.surrealQL;
-    const { params, localHash, localTree } = existing;
+    const { params, localHash, localArray } = existing;
 
     await this.syncIncantation({
       incantationId,
       surrealql,
-      localTree,
+      localArray,
       localHash,
       remoteHash,
-      remoteTree,
+      remoteArray,
       params,
     });
   }
@@ -215,15 +229,15 @@ export class SpookySync<S extends SchemaStructure> {
       case 'register':
         return this.registerIncantation(event);
       case 'sync':
-        const { incantationId, surrealql, params, localTree, localHash, remoteHash, remoteTree } =
+        const { incantationId, surrealql, params, localArray, localHash, remoteHash, remoteArray } =
           event.payload;
         return this.syncIncantation({
           incantationId,
           surrealql,
-          localTree,
+          localArray,
           localHash,
           remoteHash,
-          remoteTree,
+          remoteArray,
           params,
         });
       case 'heartbeat':
@@ -243,14 +257,27 @@ export class SpookySync<S extends SchemaStructure> {
   // public async refreshFromLocalCache(table: string) { ... }
 
   private async registerIncantation(event: RegisterEvent) {
-    const { incantationId, surrealql, params, ttl } = event.payload;
+    const {
+      incantationId,
+      surrealql,
+      params,
+      ttl,
+      localHash: pLocalHash,
+      localArray: pLocalArray,
+    } = event.payload;
+
     const effectiveTtl = ttl || '10m';
     try {
       let existing = await this.findIncatationRecord(incantationId);
       this.logger.debug({ existing }, 'Register Incantation state');
 
-      const localHash = existing?.localHash ?? '';
-      const localTree = existing?.localTree ?? null;
+      // Use payload values as fallback if existing record doesn't have them
+      // This is critical for preventing the "empty start" loop if the incantation was just initialized
+      // with known state from the stream processor or previous context.
+      // NOTE: We use || and length checks because ?? doesn't work with empty strings/arrays
+      // (they are not null/undefined, so ?? returns them instead of the fallback)
+      const localHash = existing?.localHash || pLocalHash || '';
+      const localArray = existing?.localArray?.length ? existing.localArray : (pLocalArray ?? []);
 
       await this.updateLocalIncantation(
         incantationId,
@@ -258,14 +285,14 @@ export class SpookySync<S extends SchemaStructure> {
           surrealql,
           params,
           localHash,
-          localTree,
+          localArray,
         },
         {
           updateRecord: existing ? false : true,
         }
       );
 
-      const { hash: remoteHash, tree: remoteTree } = await this.createRemoteIncantation(
+      const { hash: remoteHash, array: remoteArray } = await this.createRemoteIncantation(
         incantationId,
         surrealql,
         params,
@@ -275,10 +302,10 @@ export class SpookySync<S extends SchemaStructure> {
       await this.syncIncantation({
         incantationId,
         surrealql,
-        localTree,
+        localArray,
         localHash,
         remoteHash,
-        remoteTree,
+        remoteArray,
         params,
       });
     } catch (e) {
@@ -305,35 +332,34 @@ export class SpookySync<S extends SchemaStructure> {
     const { ttl: _, ...safeConfig } = config;
 
     // Delegate to remote function which handles DBSP registration & persistence
-    const [{ hash, tree }] = await this.remote.query<[{ hash: string; tree: any }]>(
-      'fn::incantation::register($config)',
-      {
-        config: safeConfig,
-      }
-    );
+    const [{ hash, array }] = await this.remote.query<
+      [{ hash: string; array: RecordVersionArray }]
+    >('fn::incantation::register($config)', {
+      config: safeConfig,
+    });
 
     this.logger.debug(
-      { incantationId: incantationId.toString(), hash, tree },
+      { incantationId: incantationId.toString(), hash, array },
       'createdRemoteIncantation'
     );
-    return { hash, tree };
+    return { hash, array };
   }
 
   private async syncIncantation({
     incantationId,
     surrealql,
-    localTree,
+    localArray,
     localHash,
     remoteHash,
-    remoteTree,
+    remoteArray,
     params,
   }: {
     incantationId: RecordId<string>;
     surrealql: string;
-    localTree: any;
+    localArray: RecordVersionArray;
     localHash: string;
     remoteHash: string;
-    remoteTree: any;
+    remoteArray: RecordVersionArray;
     params: Record<string, any>;
   }) {
     this.logger.debug(
@@ -341,8 +367,8 @@ export class SpookySync<S extends SchemaStructure> {
         incantationId: incantationId.toString(),
         localHash,
         remoteHash,
-        localTree,
-        remoteTree,
+        localArray,
+        remoteArray,
         params,
       },
       'syncIncantation'
@@ -353,18 +379,18 @@ export class SpookySync<S extends SchemaStructure> {
       return;
     }
 
-    const treeSyncer = new TreeSyncer(localTree, remoteTree);
+    const arraySyncer = new ArraySyncer(localArray, remoteArray);
     let maxIter = 10;
     while (maxIter > 0) {
-      const { added, updated } = await this.cacheMissingRecords(
-        treeSyncer,
+      const { added, updated, removed } = await this.cacheMissingRecords(
+        arraySyncer,
         incantationId,
-        remoteTree
+        remoteArray
       );
-      if (added.length === 0 && updated.length === 0) {
+      if (added.length === 0 && updated.length === 0 && removed.length === 0) {
         break;
       }
-      console.log('iter 2', added, updated);
+      this.logger.debug({ added, updated, removed }, '[SpookySync] syncIncantation iteration');
       maxIter--;
       if (maxIter <= 0) {
         this.logger.warn(
@@ -379,8 +405,10 @@ export class SpookySync<S extends SchemaStructure> {
       {
         surrealql,
         params,
+        localHash: remoteHash, // After sync, local should match remote
+        localArray: remoteArray, // After sync, local should match remote
         remoteHash,
-        remoteTree,
+        remoteArray,
       },
       {
         updateRecord: true,
@@ -388,72 +416,163 @@ export class SpookySync<S extends SchemaStructure> {
     );
   }
 
-  private async cacheMissingRecords(
-    treeSyncer: TreeSyncer,
+  /**
+   * CRUD helper: Create a record in local cache and ingest into DBSP
+   */
+  private async createCacheEntry(
+    record: Record<string, any>,
     incantationId: RecordId<string>,
-    remoteTree: IdTree
-  ): Promise<IdTreeDiff> {
-    const diff = treeSyncer.nextSet();
+    remoteVersion: number | undefined,
+    arraySyncer: ArraySyncer
+  ): Promise<void> {
+    const table = record.id.table.toString();
+    const fullId = record.id.toString();
 
-    // TODO: remove deleted records if deleted in remote
-    const { added, updated } = diff;
+    // 1. Cache in local DB
+    await this.local.getClient().upsert(record.id).content(record);
+
+    // 2. Ingest into DBSP
+    const result = await this.streamProcessor.ingest(table, 'CREATE', fullId, record, true);
+
+    // 3. Set version if provided
+    if (remoteVersion !== undefined) {
+      this.streamProcessor.setRecordVersion(incantationId.toString(), fullId, remoteVersion);
+      arraySyncer.update([[fullId, remoteVersion]] as RecordVersionArray);
+    } else {
+      for (const update of result) {
+        if (update.query_id === incantationId.toString()) {
+          arraySyncer.update(update.result_data);
+        }
+      }
+    }
+  }
+
+  /**
+   * CRUD helper: Update a record in local cache and ingest into DBSP
+   */
+  private async updateCacheEntry(
+    record: Record<string, any>,
+    incantationId: RecordId<string>,
+    remoteVersion: number | undefined,
+    arraySyncer: ArraySyncer
+  ): Promise<void> {
+    const table = record.id.table.toString();
+    const fullId = record.id.toString();
+
+    // 1. Cache in local DB
+    await this.local.getClient().upsert(record.id).content(record);
+
+    // 2. Ingest into DBSP (isOptimistic=false to not auto-increment version)
+    const result = await this.streamProcessor.ingest(table, 'UPDATE', fullId, record, false);
+
+    // 3. Set version if provided
+    if (remoteVersion !== undefined) {
+      this.streamProcessor.setRecordVersion(incantationId.toString(), fullId, remoteVersion);
+      arraySyncer.update([[fullId, remoteVersion]] as RecordVersionArray);
+    } else {
+      for (const update of result) {
+        if (update.query_id === incantationId.toString()) {
+          arraySyncer.update(update.result_data);
+        }
+      }
+    }
+  }
+
+  /**
+   * CRUD helper: Delete a record from local cache and ingest deletion into DBSP
+   */
+  private async deleteCacheEntry(
+    recordId: RecordId,
+    incantationId: RecordId<string>,
+    arraySyncer: ArraySyncer
+  ): Promise<void> {
+    const table = recordId.table.toString();
+    const fullId = recordId.toString();
+
+    // 1. Delete from local DB
+    await this.local.query('DELETE $id', { id: recordId });
+
+    // 2. Ingest deletion into DBSP
+    const result = await this.streamProcessor.ingest(table, 'DELETE', fullId, {}, false);
+
+    for (const update of result) {
+      if (update.query_id === incantationId.toString()) {
+        arraySyncer.update(update.result_data);
+      }
+    }
+  }
+
+  /**
+   * Sync missing/updated/removed records between local and remote.
+   * Handles CREATE, UPDATE, and DELETE operations.
+   */
+  private async cacheMissingRecords(
+    arraySyncer: ArraySyncer,
+    incantationId: RecordId<string>,
+    remoteArray: RecordVersionArray
+  ): Promise<RecordVersionDiff> {
+    const diff = arraySyncer.nextSet();
+    const { added, updated, removed } = diff;
     const idsToFetch = [...added, ...updated];
 
-    this.logger.debug({ added, updated, idsToFetch }, 'cacheMissingRecords diff');
+    this.logger.debug({ added, updated, removed, idsToFetch }, 'cacheMissingRecords diff');
 
+    // Build remote version map for quick lookup
+    const remoteVersionMap = new Map<string, number>();
+    for (const [id, ver] of remoteArray) {
+      remoteVersionMap.set(id.toString(), ver);
+    }
+
+    // Handle removed records: verify they don't exist remotely before deleting locally
+    // This prevents deleting records that might still exist due to stale remoteArray
+    if (removed.length > 0) {
+      this.logger.debug({ removed: removed.map((r) => r.toString()) }, 'Checking removed records');
+
+      const [existingRemote] = await this.remote.query<[{ id: RecordId }[]]>(
+        'SELECT id FROM $ids',
+        { ids: removed }
+      );
+      const existingRemoteIds = new Set(existingRemote.map((r) => r.id.toString()));
+
+      for (const recordId of removed) {
+        if (!existingRemoteIds.has(recordId.toString())) {
+          this.logger.debug({ recordId: recordId.toString() }, 'Deleting confirmed removed record');
+          await this.deleteCacheEntry(recordId, incantationId, arraySyncer);
+        }
+      }
+    }
+
+    // Fetch added/updated records from remote
     if (idsToFetch.length === 0) {
-      return { added: [], updated: [], removed: [] };
+      return { added: [], updated: [], removed };
     }
 
     const [remoteResults] = await this.remote.query<[Record<string, any>[]]>('SELECT * FROM $ids', {
       ids: idsToFetch,
     });
 
-    await this.cacheResults(remoteResults);
+    // Flatten and prepare results
+    const flatResults = this.flattenResults(remoteResults);
 
-    const addedRecords = remoteResults.filter((r) =>
-      added.some((id) => id.toString() === r.id.toString())
-    );
-    const updatedRecords = remoteResults.filter((r) =>
-      updated.some((id) => id.toString() === r.id.toString())
-    );
+    // Handle added records
+    for (const record of flatResults) {
+      const fullId = record.id.toString();
+      const isAdded = added.some((id) => id.toString() === fullId);
+      const isUpdated = updated.some((id) => id.toString() === fullId);
+      const remoteVer = remoteVersionMap.get(fullId);
 
-    for (const record of addedRecords) {
-      const table = record.id.table.toString();
-      // Use full ID format (table:id) for WASM compatibility
-      const fullId = record.id.toString();
-      const result = await this.streamProcessor.ingest(table, 'CREATE', fullId, record);
-      console.log('iter 3', result);
-      console.log('iter 3.1 comparing', {
-        incantationIdStr: incantationId.toString(),
-        updateQueryIds: result.map((u: any) => u.query_id),
-      });
-      for (const update of result) {
-        // Compare full incantation ID (table:id format)
-        if (update.query_id === incantationId.toString()) {
-          console.log('iter 3.2 match! updating tree', update.tree);
-          treeSyncer.update(update.tree);
-        }
-      }
-    }
-    for (const record of updatedRecords) {
-      const table = record.id.table.toString();
-      // Use full ID format (table:id) for WASM compatibility
-      const fullId = record.id.toString();
-      const result = await this.streamProcessor.ingest(table, 'UPDATE', fullId, record);
-      for (const update of result) {
-        // Compare full incantation ID (table:id format)
-        if (update.query_id === incantationId.toString()) {
-          treeSyncer.update(update.tree);
-        }
+      if (isAdded) {
+        await this.createCacheEntry(record, incantationId, remoteVer, arraySyncer);
+      } else if (isUpdated) {
+        await this.updateCacheEntry(record, incantationId, remoteVer, arraySyncer);
       }
     }
 
-    // Note: Removed forced convergence with treeSyncer.update(remoteTree).
-    // This was causing premature convergence for complex queries with subqueries,
-    // preventing nested records (comments, author) from being properly synced.
+    this.events.emit(SyncEventTypes.RemoteDataIngested, {
+      records: flatResults,
+    });
 
-    return { added, updated, removed: [] };
+    return { added, updated, removed };
   }
 
   private async updateLocalIncantation(
@@ -462,16 +581,16 @@ export class SpookySync<S extends SchemaStructure> {
       surrealql,
       params,
       localHash,
-      localTree,
+      localArray,
       remoteHash,
-      remoteTree,
+      remoteArray,
     }: {
       surrealql: string;
       params?: Record<string, any>;
       localHash?: string;
-      localTree?: any;
+      localArray?: RecordVersionArray;
       remoteHash?: string;
-      remoteTree?: any;
+      remoteArray?: RecordVersionArray;
     },
     {
       updateRecord = true,
@@ -482,9 +601,9 @@ export class SpookySync<S extends SchemaStructure> {
     if (updateRecord) {
       const content: any = {};
       if (localHash !== undefined) content.localHash = localHash;
-      if (localTree !== undefined) content.localTree = localTree;
+      if (localArray !== undefined) content.localArray = localArray;
       if (remoteHash !== undefined) content.remoteHash = remoteHash;
-      if (remoteTree !== undefined) content.remoteTree = remoteTree;
+      if (remoteArray !== undefined) content.remoteArray = remoteArray;
 
       await this.updateIncantationRecord(incantationId, content);
     }
@@ -517,9 +636,9 @@ export class SpookySync<S extends SchemaStructure> {
       this.events.emit(SyncEventTypes.IncantationUpdated, {
         incantationId,
         localHash,
-        localTree,
+        localArray,
         remoteHash,
-        remoteTree,
+        remoteArray,
         records: cachedResults || [],
       });
     } catch (e) {
@@ -544,63 +663,6 @@ export class SpookySync<S extends SchemaStructure> {
     }
   }
 
-  // private async verifyAndPurgeOrphans(cachedResults: any[], remoteTree: any) {
-  //   if (!cachedResults || cachedResults.length === 0 || !remoteTree) return;
-
-  //   const remoteIds = new Set(flattenIdTree(remoteTree).map((node: any) => node.id));
-  //   const orphans: any[] = [];
-
-  //   for (const r of cachedResults) {
-  //     // We need to decode? cachedResults are from local DB, they are structured.
-  //     // BUT they might need to be flattened or handled if the query returns nested stuff?
-  //     // For now assume top level IDs.
-  //     // QueryManager did decodeFromSpooky. Let's assume local DB returns raw results that match
-  //     // what RecordId.toString() expects?
-  //     // Wait, QueryManager used `r.id`.
-  //     const id = r.id;
-  //     const idStr = id instanceof RecordId ? id.toString() : id;
-
-  //     if (idStr && !remoteIds.has(idStr)) {
-  //       orphans.push(r);
-  //     }
-  //   }
-
-  //   if (orphans.length === 0) return;
-
-  //   const idsToCheck = orphans
-  //     .map((r) => r.id)
-  //     .filter((id) => !!id)
-  //     .map((id) => (id instanceof RecordId ? id : parseRecordIdString(id.toString())));
-
-  //   if (idsToCheck.length === 0) return;
-
-  //   this.logger.debug({ count: idsToCheck.length }, 'Verifying orphaned records against remote');
-
-  //   try {
-  //     const [existing] = await this.remote.query<[{ id: RecordId }[]]>('SELECT id FROM $ids', {
-  //       ids: idsToCheck,
-  //     });
-
-  //     const existingIdsSet = new Set(existing.map((r) => r.id.toString()));
-  //     const toDelete = idsToCheck.filter((id) => !existingIdsSet.has(id.toString()));
-
-  //     if (toDelete.length > 0) {
-  //       this.logger.info(
-  //         { count: toDelete.length, ids: toDelete.map((id) => id.toString()) },
-  //         'Purging confirmed orphaned records'
-  //       );
-  //       await this.local.query('DELETE $ids', { ids: toDelete });
-  //     } else {
-  //       this.logger.debug(
-  //         { count: idsToCheck.length },
-  //         'All orphaned records still exist remotely (ghost records checking)'
-  //       );
-  //     }
-  //   } catch (err) {
-  //     this.logger.error({ err }, 'Failed to verify/purge orphans');
-  //   }
-  // }
-
   private async updateIncantationRecord(
     incantationId: RecordId<string>,
     content: Record<string, any>
@@ -620,29 +682,13 @@ export class SpookySync<S extends SchemaStructure> {
     }
   }
 
-  private async cacheResults(results: Record<string, any>[]) {
-    if (!results || results.length === 0) return;
-    this.logger.trace({ results }, 'cacheResults raw');
-    const flatResults = this.flattenResults(results);
-    this.logger.trace({ flatResults }, 'cacheResults flattened');
-
-    for (const record of flatResults) {
-      if (record.id) {
-        await this.local.getClient().upsert(record.id).content(record);
-      }
-    }
-
-    this.events.emit(SyncEventTypes.RemoteDataIngested, {
-      records: flatResults,
-    });
-  }
-
   /**
    * Recursively flattens a list of records, extracting nested objects that look like records (have an 'id')
    * into the top-level list, and replacing them with their ID in the parent.
    *
    * schema-aware: Only flattens fields that are defined as relationships in the schema for the specific table.
    */
+  // TODO: Move this to utils
   private flattenResults(
     results: Record<string, any>[],
     visited: Set<string> = new Set(),

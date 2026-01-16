@@ -28,6 +28,7 @@ mimalloc = "0.1.48"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
+web-sys = { version = "0.3", features = ["console"] }
 
 # --- PERFORMANCE PROFILE ---
 # Das hier ist der Turbo für deinen Benchmark.

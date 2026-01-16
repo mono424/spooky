@@ -76,11 +76,14 @@ export class RouterService<S extends SchemaStructure> {
       handler: (payload: UpEvent[]) => {
         for (const element of payload) {
           const tableName = element.record_id.table.toString();
+          // Use full record for create/update, fall back to data if record not available
+          const recordData =
+            element.type === 'delete' ? undefined : ((element as any).record ?? element.data);
           this.streamProcessor.ingest(
             tableName,
             element.type,
             element.record_id.toString(),
-            element.type === 'delete' ? undefined : element.data
+            recordData
           );
         }
       },
