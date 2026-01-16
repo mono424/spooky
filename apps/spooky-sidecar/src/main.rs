@@ -11,7 +11,10 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use spooky_stream_processor::{Circuit, MaterializedViewUpdate};
+use spooky_stream_processor::{
+    Circuit, MaterializedViewUpdate, ViewUpdate,
+    engine::update::{StreamingUpdate, DeltaEvent},
+};
 use surrealdb::engine::remote::ws::{Client, Ws};
 use surrealdb::opt::auth::Root;
 use surrealdb::Surreal;
@@ -207,9 +210,16 @@ async fn ingest_handler(
         ups
     };
 
-    // Update SurrealDB incantations
+    // Update SurrealDB incantations based on format
     for update in &updates {
-        update_incantation_in_db(&state.db, update).await;
+        match update {
+            ViewUpdate::Flat(flat) | ViewUpdate::Tree(flat) => {
+                update_incantation_in_db(&state.db, flat).await;
+            }
+            ViewUpdate::Streaming(stream) => {
+                update_incantation_graph(&state.db, stream).await;
+            }
+        }
     }
 
     StatusCode::OK
@@ -230,12 +240,20 @@ async fn register_view_handler(
 
     let update = {
         let mut circuit = state.processor.lock().unwrap();
-        let res = circuit.register_view(data.plan.clone(), data.safe_params);
+        let res = circuit.register_view(data.plan.clone(), data.safe_params, None);
         state.saver.trigger_save();
         res
     };
 
-    let result_update = update.unwrap_or_else(|| spooky_stream_processor::service::view::default_result(&data.plan.id));
+    // Extract MaterializedViewUpdate from ViewUpdate enum (registration always returns Flat)
+    let result_update = match update {
+        Some(ViewUpdate::Flat(flat)) | Some(ViewUpdate::Tree(flat)) => flat,
+        Some(ViewUpdate::Streaming(_)) => {
+            // For streaming, we don't store array - graph edges are created separately
+            return StatusCode::OK.into_response();
+        }
+        None => spooky_stream_processor::service::view::default_result(&data.plan.id),
+    };
 
     let m = &data.metadata;
     let query = "UPSERT <record>$id SET hash = <string>$hash, array = $array, clientId = <string>$clientId, surrealQL = <string>$surrealQL, params = $params, ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt";
@@ -348,5 +366,64 @@ async fn update_incantation_in_db(db: &Surreal<Client>, update: &MaterializedVie
             }
         },
         Err(e) => error!("Failed to update incantation result in DB: {}", e),
+    }
+}
+
+/// Format incantation ID as a full SurrealDB record ID
+fn format_incantation_id(raw_id: &str) -> String {
+    if raw_id.starts_with("_spooky_incantation:") {
+        raw_id.to_string()
+    } else {
+        format!("_spooky_incantation:{}", raw_id)
+    }
+}
+
+/// Graph-based persistence for StreamingUpdate.
+/// Maps DeltaEvent to specific SurrealQL graph operations (blind writes).
+async fn update_incantation_graph(db: &Surreal<Client>, update: &StreamingUpdate) {
+    let incantation_id = format_incantation_id(&update.view_id);
+    
+    debug!(
+        "Processing graph update for {} with {} records",
+        incantation_id,
+        update.records.len()
+    );
+    
+    for record in &update.records {
+        let result = match record.event {
+            DeltaEvent::Created => {
+                // RELATE creates an edge from incantation → record with version
+                debug!("RELATE {}->included_in->{} version={}", incantation_id, record.id, record.version);
+                db.query("RELATE $from->included_in->$to SET version = $version")
+                    .bind(("from", incantation_id.clone()))
+                    .bind(("to", record.id.clone()))
+                    .bind(("version", record.version))
+                    .await
+            }
+            DeltaEvent::Deleted => {
+                // DELETE removes the specific edge
+                debug!("DELETE {}->included_in WHERE out = {}", incantation_id, record.id);
+                db.query("DELETE $from->included_in WHERE out = $to")
+                    .bind(("from", incantation_id.clone()))
+                    .bind(("to", record.id.clone()))
+                    .await
+            }
+            DeltaEvent::Updated => {
+                // UPDATE modifies version on existing edge
+                debug!("UPDATE {}->included_in SET version={} WHERE out = {}", incantation_id, record.version, record.id);
+                db.query("UPDATE $from->included_in SET version = $version WHERE out = $to")
+                    .bind(("from", incantation_id.clone()))
+                    .bind(("to", record.id.clone()))
+                    .bind(("version", record.version))
+                    .await
+            }
+        };
+        
+        if let Err(e) = result {
+            error!(
+                "Graph operation {:?} failed for {} -> {}: {}",
+                record.event, incantation_id, record.id, e
+            );
+        }
     }
 }
