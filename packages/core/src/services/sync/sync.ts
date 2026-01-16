@@ -382,15 +382,15 @@ export class SpookySync<S extends SchemaStructure> {
     const arraySyncer = new ArraySyncer(localArray, remoteArray);
     let maxIter = 10;
     while (maxIter > 0) {
-      const { added, updated } = await this.cacheMissingRecords(
+      const { added, updated, removed } = await this.cacheMissingRecords(
         arraySyncer,
         incantationId,
         remoteArray
       );
-      if (added.length === 0 && updated.length === 0) {
+      if (added.length === 0 && updated.length === 0 && removed.length === 0) {
         break;
       }
-      this.logger.debug({ added, updated }, '[SpookySync] syncIncantation iteration');
+      this.logger.debug({ added, updated, removed }, '[SpookySync] syncIncantation iteration');
       maxIter--;
       if (maxIter <= 0) {
         this.logger.warn(
@@ -405,6 +405,8 @@ export class SpookySync<S extends SchemaStructure> {
       {
         surrealql,
         params,
+        localHash: remoteHash, // After sync, local should match remote
+        localArray: remoteArray, // After sync, local should match remote
         remoteHash,
         remoteArray,
       },
@@ -414,133 +416,163 @@ export class SpookySync<S extends SchemaStructure> {
     );
   }
 
-  private async cacheMissingRecords(
-    arraySyncer: ArraySyncer,
+  /**
+   * CRUD helper: Create a record in local cache and ingest into DBSP
+   */
+  private async createCacheEntry(
+    record: Record<string, any>,
     incantationId: RecordId<string>,
-    remoteArray: RecordVersionArray
-  ): Promise<RecordVersionDiff> {
-    const diff = arraySyncer.nextSet();
+    remoteVersion: number | undefined,
+    arraySyncer: ArraySyncer
+  ): Promise<void> {
+    const table = record.id.table.toString();
+    const fullId = record.id.toString();
 
-    // TODO: remove deleted records if deleted in remote
-    const { added, updated } = diff;
-    const idsToFetch = [...added, ...updated];
+    // 1. Cache in local DB
+    await this.local.getClient().upsert(record.id).content(record);
 
-    this.logger.debug({ added, updated, idsToFetch }, 'cacheMissingRecords diff');
+    // 2. Ingest into DBSP
+    const result = await this.streamProcessor.ingest(table, 'CREATE', fullId, record, true);
 
-    if (idsToFetch.length === 0) {
-      return { added: [], updated: [], removed: [] };
-    }
-
-    const [remoteResults] = await this.remote.query<[Record<string, any>[]]>('SELECT * FROM $ids', {
-      ids: idsToFetch,
-    });
-
-    await this.cacheResults(remoteResults);
-
-    const addedRecords = remoteResults.filter((r) =>
-      added.some((id) => id.toString() === r.id.toString())
-    );
-    const updatedRecords = remoteResults.filter((r) =>
-      updated.some((id) => id.toString() === r.id.toString())
-    );
-
-    // Create a map of remote versions for quick lookup
-    const remoteVersionMap = new Map<string, number>();
-    for (const [id, ver] of remoteArray) {
-      remoteVersionMap.set(id.toString(), ver);
-    }
-
-    for (const record of addedRecords) {
-      const table = record.id.table.toString();
-      const fullId = record.id.toString();
-      // For added records, just ingest.
-      // Should we set version? Yes, if we want to match remote.
-      const remoteVer = remoteVersionMap.get(fullId);
-
-      const result = await this.streamProcessor.ingest(table, 'CREATE', fullId, record, true);
-
-      // If we have a remote version, enforce it
-      if (remoteVer !== undefined) {
-        this.streamProcessor.setRecordVersion(incantationId.toString(), fullId, remoteVer);
-      }
-
+    // 3. Set version if provided
+    if (remoteVersion !== undefined) {
+      this.streamProcessor.setRecordVersion(incantationId.toString(), fullId, remoteVersion);
+      arraySyncer.update([[fullId, remoteVersion]] as RecordVersionArray);
+    } else {
       for (const update of result) {
         if (update.query_id === incantationId.toString()) {
           arraySyncer.update(update.result_data);
         }
       }
     }
+  }
 
-    for (const record of updatedRecords) {
-      const table = record.id.table.toString();
-      const fullId = record.id.toString();
-      const remoteVer = remoteVersionMap.get(fullId);
+  /**
+   * CRUD helper: Update a record in local cache and ingest into DBSP
+   */
+  private async updateCacheEntry(
+    record: Record<string, any>,
+    incantationId: RecordId<string>,
+    remoteVersion: number | undefined,
+    arraySyncer: ArraySyncer
+  ): Promise<void> {
+    const table = record.id.table.toString();
+    const fullId = record.id.toString();
 
-      // IMPORTANT: Local version check should happen, but arraySyncer handles the diff logic.
-      // If we are here, arraySyncer SAID it's updated.
-      // arraySyncer check: localVer != remoteVer (or missing)
+    // 1. Cache in local DB
+    await this.local.getClient().upsert(record.id).content(record);
 
-      // User requested: "checked if the number is > to the local hash number ... and only if bigger"
-      // arraySyncer already tells us if they are different.
-      // We should check the direction.
+    // 2. Ingest into DBSP (isOptimistic=false to not auto-increment version)
+    const result = await this.streamProcessor.ingest(table, 'UPDATE', fullId, record, false);
 
-      // We need local version from localArray.
-      // arraySyncer tracks local state.
-      // But let's look at what arraySyncer thinks is the current local version.
-      // We can't easily peek into arraySyncer's internal state for this ID without iterating.
-      // But we know 'updated' contains IDs where versions differ.
-
-      // We will blindly trust that if it's in 'updated', we should try to sync it,
-      // BUT we will verify the direction if possible.
-      // Actually, since we don't have easy access to the exact local version here without re-scanning localArray,
-      // and we want to "Adopt Remote State" (which is usually authoritative in this sync direction),
-      // we will perform the ingestion.
-
-      // isOptimistic = false -> "Keep same number" (don't auto increment)
-      // setRecordVersion -> "Set to remote number"
-
-      const result = await this.streamProcessor.ingest(table, 'UPDATE', fullId, record, false);
-
-      if (remoteVer !== undefined) {
-        this.streamProcessor.setRecordVersion(incantationId.toString(), fullId, remoteVer);
+    // 3. Set version if provided
+    if (remoteVersion !== undefined) {
+      this.streamProcessor.setRecordVersion(incantationId.toString(), fullId, remoteVersion);
+      arraySyncer.update([[fullId, remoteVersion]] as RecordVersionArray);
+    } else {
+      for (const update of result) {
+        if (update.query_id === incantationId.toString()) {
+          arraySyncer.update(update.result_data);
+        }
       }
+    }
+  }
 
-      // Note: We don't need to manually update arraySyncer here because
-      // setRecordVersion triggers a stream_update event which will eventually feed back?
-      // No, setRecordVersion emits 'stream_update'.
-      // Does 'stream_update' update arraySyncer?
-      // No, stream_update events are handled by... QueryManager?
-      // SpookySync doesn't listen to stream_update events generally?
-      // Wait, SpookySync relies on `result` from ingest to update `arraySyncer` loop.
+  /**
+   * CRUD helper: Delete a record from local cache and ingest deletion into DBSP
+   */
+  private async deleteCacheEntry(
+    recordId: RecordId,
+    incantationId: RecordId<string>,
+    arraySyncer: ArraySyncer
+  ): Promise<void> {
+    const table = recordId.table.toString();
+    const fullId = recordId.toString();
 
-      // result from ingest(..., false) might be empty if hash didn't change (because version didn't change).
-      // But setRecordVersion DOES return updates.
-      // But we don't capture setRecordVersion updates here easily.
-      // Wait, I updated streamProcessor.setRecordVersion to emit 'stream_update' event,
-      // NOT return the value to the caller.
+    // 1. Delete from local DB
+    await this.local.query('DELETE $id', { id: recordId });
 
-      // So `arraySyncer` won't be updated by `result` loop below if `result` is empty.
-      // We should arguably manually update `arraySyncer` here if we forced the version!
+    // 2. Ingest deletion into DBSP
+    const result = await this.streamProcessor.ingest(table, 'DELETE', fullId, {}, false);
 
-      if (remoteVer !== undefined) {
-        // Create a synthetic update tuple
-        const syntheticResultData = [[fullId, remoteVer]] as RecordVersionArray;
-        arraySyncer.update(syntheticResultData);
-      } else {
-        // Fallback if no remote version (shouldn't happen for valid sync)
-        for (const update of result) {
-          if (update.query_id === incantationId.toString()) {
-            arraySyncer.update(update.result_data);
-          }
+    for (const update of result) {
+      if (update.query_id === incantationId.toString()) {
+        arraySyncer.update(update.result_data);
+      }
+    }
+  }
+
+  /**
+   * Sync missing/updated/removed records between local and remote.
+   * Handles CREATE, UPDATE, and DELETE operations.
+   */
+  private async cacheMissingRecords(
+    arraySyncer: ArraySyncer,
+    incantationId: RecordId<string>,
+    remoteArray: RecordVersionArray
+  ): Promise<RecordVersionDiff> {
+    const diff = arraySyncer.nextSet();
+    const { added, updated, removed } = diff;
+    const idsToFetch = [...added, ...updated];
+
+    this.logger.debug({ added, updated, removed, idsToFetch }, 'cacheMissingRecords diff');
+
+    // Build remote version map for quick lookup
+    const remoteVersionMap = new Map<string, number>();
+    for (const [id, ver] of remoteArray) {
+      remoteVersionMap.set(id.toString(), ver);
+    }
+
+    // Handle removed records: verify they don't exist remotely before deleting locally
+    // This prevents deleting records that might still exist due to stale remoteArray
+    if (removed.length > 0) {
+      this.logger.debug({ removed: removed.map((r) => r.toString()) }, 'Checking removed records');
+
+      const [existingRemote] = await this.remote.query<[{ id: RecordId }[]]>(
+        'SELECT id FROM $ids',
+        { ids: removed }
+      );
+      const existingRemoteIds = new Set(existingRemote.map((r) => r.id.toString()));
+
+      for (const recordId of removed) {
+        if (!existingRemoteIds.has(recordId.toString())) {
+          this.logger.debug({ recordId: recordId.toString() }, 'Deleting confirmed removed record');
+          await this.deleteCacheEntry(recordId, incantationId, arraySyncer);
         }
       }
     }
 
-    // Note: Removed forced convergence with arraySyncer.update(remoteArray).
-    // This was causing premature convergence for complex queries with subqueries,
-    // preventing nested records (comments, author) from being properly synced.
+    // Fetch added/updated records from remote
+    if (idsToFetch.length === 0) {
+      return { added: [], updated: [], removed };
+    }
 
-    return { added, updated, removed: [] };
+    const [remoteResults] = await this.remote.query<[Record<string, any>[]]>('SELECT * FROM $ids', {
+      ids: idsToFetch,
+    });
+
+    // Flatten and prepare results
+    const flatResults = this.flattenResults(remoteResults);
+
+    // Handle added records
+    for (const record of flatResults) {
+      const fullId = record.id.toString();
+      const isAdded = added.some((id) => id.toString() === fullId);
+      const isUpdated = updated.some((id) => id.toString() === fullId);
+      const remoteVer = remoteVersionMap.get(fullId);
+
+      if (isAdded) {
+        await this.createCacheEntry(record, incantationId, remoteVer, arraySyncer);
+      } else if (isUpdated) {
+        await this.updateCacheEntry(record, incantationId, remoteVer, arraySyncer);
+      }
+    }
+
+    this.events.emit(SyncEventTypes.RemoteDataIngested, {
+      records: flatResults,
+    });
+
+    return { added, updated, removed };
   }
 
   private async updateLocalIncantation(
@@ -631,63 +663,6 @@ export class SpookySync<S extends SchemaStructure> {
     }
   }
 
-  // private async verifyAndPurgeOrphans(cachedResults: any[], remoteTree: any) {
-  //   if (!cachedResults || cachedResults.length === 0 || !remoteTree) return;
-
-  //   const remoteIds = new Set(flattenIdTree(remoteTree).map((node: any) => node.id));
-  //   const orphans: any[] = [];
-
-  //   for (const r of cachedResults) {
-  //     // We need to decode? cachedResults are from local DB, they are structured.
-  //     // BUT they might need to be flattened or handled if the query returns nested stuff?
-  //     // For now assume top level IDs.
-  //     // QueryManager did decodeFromSpooky. Let's assume local DB returns raw results that match
-  //     // what RecordId.toString() expects?
-  //     // Wait, QueryManager used `r.id`.
-  //     const id = r.id;
-  //     const idStr = id instanceof RecordId ? id.toString() : id;
-
-  //     if (idStr && !remoteIds.has(idStr)) {
-  //       orphans.push(r);
-  //     }
-  //   }
-
-  //   if (orphans.length === 0) return;
-
-  //   const idsToCheck = orphans
-  //     .map((r) => r.id)
-  //     .filter((id) => !!id)
-  //     .map((id) => (id instanceof RecordId ? id : parseRecordIdString(id.toString())));
-
-  //   if (idsToCheck.length === 0) return;
-
-  //   this.logger.debug({ count: idsToCheck.length }, 'Verifying orphaned records against remote');
-
-  //   try {
-  //     const [existing] = await this.remote.query<[{ id: RecordId }[]]>('SELECT id FROM $ids', {
-  //       ids: idsToCheck,
-  //     });
-
-  //     const existingIdsSet = new Set(existing.map((r) => r.id.toString()));
-  //     const toDelete = idsToCheck.filter((id) => !existingIdsSet.has(id.toString()));
-
-  //     if (toDelete.length > 0) {
-  //       this.logger.info(
-  //         { count: toDelete.length, ids: toDelete.map((id) => id.toString()) },
-  //         'Purging confirmed orphaned records'
-  //       );
-  //       await this.local.query('DELETE $ids', { ids: toDelete });
-  //     } else {
-  //       this.logger.debug(
-  //         { count: idsToCheck.length },
-  //         'All orphaned records still exist remotely (ghost records checking)'
-  //       );
-  //     }
-  //   } catch (err) {
-  //     this.logger.error({ err }, 'Failed to verify/purge orphans');
-  //   }
-  // }
-
   private async updateIncantationRecord(
     incantationId: RecordId<string>,
     content: Record<string, any>
@@ -705,23 +680,6 @@ export class SpookySync<S extends SchemaStructure> {
       this.logger.error({ err: e }, 'Failed to update local incantation record');
       throw e;
     }
-  }
-
-  private async cacheResults(results: Record<string, any>[]) {
-    if (!results || results.length === 0) return;
-    this.logger.trace({ results }, 'cacheResults raw');
-    const flatResults = this.flattenResults(results);
-    this.logger.trace({ flatResults }, 'cacheResults flattened');
-
-    for (const record of flatResults) {
-      if (record.id) {
-        await this.local.getClient().upsert(record.id).content(record);
-      }
-    }
-
-    this.events.emit(SyncEventTypes.RemoteDataIngested, {
-      records: flatResults,
-    });
   }
 
   /**

@@ -49,7 +49,7 @@ export function ThreadDetail() {
   const thread = () => threadResult.data() || null;
   
   createEffect(() => {
-    console.log("thread", thread());
+    console.log("thread___", thread());
   });
 
   const handleBack = () => {
