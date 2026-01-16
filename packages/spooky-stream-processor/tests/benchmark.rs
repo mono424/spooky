@@ -57,7 +57,7 @@ fn benchmark_latency_mixed_stream() {
         io::stdout().flush().unwrap();
         for i in 0..view_count {
             let plan = create_magic_comments_plan(&format!("view_{}", i));
-            circuit.register_view(plan, None);
+            circuit.register_view(plan, None, None);
         }
         println!("Fertig.");
 
@@ -168,7 +168,7 @@ fn benchmark_latency_mixed_stream() {
 
             // --- MESSUNG START ---
             let start = Instant::now();
-            circuit.ingest_batch(batch_data); // Ruft jetzt die optimierte Batch-Methode auf
+            circuit.ingest_batch(batch_data, true); // Ruft jetzt die optimierte Batch-Methode auf
             let duration = start.elapsed();
             // --- MESSUNG ENDE ---
 

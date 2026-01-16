@@ -1,3 +1,4 @@
+use common::ViewUpdateExt;
 mod common;
 
 use common::*;
@@ -94,19 +95,19 @@ fn test_subquery_via_sql_full_flow() {
     println!("{:#?}", data.plan.root);
 
     // 3. Register the view
-    let update = circuit.register_view(data.plan, data.safe_params);
+    let update = circuit.register_view(data.plan, data.safe_params, None);
     assert!(update.is_some(), "Expected view update");
 
     let view_update = update.unwrap();
     println!("\n=== View Update ===");
-    println!("query_id: {}", view_update.query_id);
-    println!("result_data: {:?}", view_update.result_data);
+    println!("query_id: {}", view_update.query_id());
+    println!("result_data: {:?}", view_update.result_data());
 
     // Flat array includes both thread AND author (from subquery)
     let result_ids: Vec<&str> = view_update
         .result_data
         .iter()
-        .map(|(id, _)| id.as_str())
+        .map(|(id, _): (&String, &u64)| id.as_str())
         .collect();
     assert!(
         result_ids.contains(&thread_id.as_str()),
@@ -117,7 +118,7 @@ fn test_subquery_via_sql_full_flow() {
         "Should contain author ID from subquery"
     );
     assert_eq!(
-        view_update.result_data.len(),
+        view_update.result_data().len(),
         2,
         "Should have 2 records (thread + author)"
     );

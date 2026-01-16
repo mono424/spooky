@@ -1,6 +1,6 @@
 mod common;
 
-use common::*;
+use common::{*, ViewUpdateExt};
 use serde_json::json;
 
 /// Test to reproduce the bug where creating a comment did not trigger an update
@@ -35,7 +35,7 @@ fn test_comment_creation_updates_thread_view() {
 
     // Initial Register
     let update = circuit
-        .register_view(data.plan, data.safe_params)
+        .register_view(data.plan, data.safe_params, None)
         .expect("Initial view update failed");
 
     // Verify initial state (0 comments)

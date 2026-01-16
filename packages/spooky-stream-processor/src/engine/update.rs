@@ -18,11 +18,23 @@ pub enum ViewResultFormat {
     Streaming,
 }
 
+/// Captured delta information from view processing
+#[derive(Debug, Clone, Default)]
+pub struct ViewDelta {
+    /// Records added to the view (weight > 0)
+    pub additions: Vec<(String, u64)>, // (id, version)
+    /// Records removed from the view (weight < 0)
+    pub removals: Vec<String>, // just ids
+    /// Records updated in place (content changed, still in view)
+    pub updates: Vec<(String, u64)>, // (id, new_version)
+}
+
 /// Raw view result (format-agnostic data from View)
 #[derive(Debug, Clone)]
 pub struct RawViewResult {
     pub query_id: String,
-    pub records: Vec<(String, u64)>, // (id, version)
+    pub records: Vec<(String, u64)>, // (id, version) - full snapshot for Flat/Tree
+    pub delta: Option<ViewDelta>,    // delta info for Streaming
 }
 
 /// Flat list output (current version-approach format)
@@ -99,20 +111,49 @@ pub fn build_update(raw: RawViewResult, format: ViewResultFormat) -> ViewUpdate 
             })
         }
         ViewResultFormat::Streaming => {
-            // Streaming format: all records are "Created" on registration
-            let records = raw
-                .records
-                .into_iter()
-                .map(|(id, version)| DeltaRecord {
-                    id,
-                    event: DeltaEvent::Created,
-                    version,
-                })
-                .collect();
+            let mut delta_records = Vec::new();
+
+            if let Some(delta) = raw.delta {
+                // Map additions → Created
+                for (id, version) in delta.additions {
+                    delta_records.push(DeltaRecord {
+                        id,
+                        event: DeltaEvent::Created,
+                        version,
+                    });
+                }
+
+                // Map removals → Deleted
+                for id in delta.removals {
+                    delta_records.push(DeltaRecord {
+                        id,
+                        event: DeltaEvent::Deleted,
+                        version: 0,
+                    });
+                }
+
+                // Map updates → Updated
+                for (id, version) in delta.updates {
+                    delta_records.push(DeltaRecord {
+                        id,
+                        event: DeltaEvent::Updated,
+                        version,
+                    });
+                }
+            } else {
+                // Fallback: treat all as Created (first run case)
+                for (id, version) in raw.records {
+                    delta_records.push(DeltaRecord {
+                        id,
+                        event: DeltaEvent::Created,
+                        version,
+                    });
+                }
+            }
 
             ViewUpdate::Streaming(StreamingUpdate {
                 view_id: raw.query_id,
-                records,
+                records: delta_records,
             })
         }
     }

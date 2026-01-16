@@ -315,6 +315,31 @@ impl View {
             }
         }
 
+        // CAPTURE DELTA SETS FOR STREAMING
+        // Additions: records with positive weight
+        let mut additions: Vec<(String, u64)> = Vec::new();
+        // Removals: records with negative weight
+        let mut removals: Vec<String> = Vec::new();
+
+        for (key, weight) in &view_delta {
+            if *weight > 0 {
+                // Addition: will get version after version_map update
+                additions.push((key.to_string(), 0)); // version TBD
+            } else if *weight < 0 {
+                // Removal
+                removals.push(key.to_string());
+            }
+        }
+
+        // Updates: records in updated_record_ids that are NOT new additions
+        let addition_ids: std::collections::HashSet<&str> =
+            additions.iter().map(|(id, _)| id.as_str()).collect();
+        let updates: Vec<String> = updated_record_ids
+            .iter()
+            .filter(|id| !addition_ids.contains(id.as_str()))
+            .cloned()
+            .collect();
+
         // Build result with version tracking
         let mut result_ids: Vec<String> = self.cache.keys().map(|k| k.to_string()).collect();
         result_ids.sort_unstable();
@@ -371,6 +396,23 @@ impl View {
             }
         }
 
+        // Finalize delta sets with versions
+        let additions_with_versions: Vec<(String, u64)> = additions
+            .iter()
+            .map(|(id, _)| {
+                let version = self.version_map.get(id).copied().unwrap_or(1);
+                (id.clone(), version)
+            })
+            .collect();
+
+        let updates_with_versions: Vec<(String, u64)> = updates
+            .iter()
+            .map(|id| {
+                let version = self.version_map.get(id).copied().unwrap_or(1);
+                (id.clone(), version)
+            })
+            .collect();
+
         // Build raw result data (format-agnostic)
         let result_data: Vec<(String, u64)> = all_ids
             .iter()
@@ -381,11 +423,22 @@ impl View {
             .collect();
 
         // Delegate formatting to update module (Strategy Pattern)
-        use super::update::{build_update, compute_flat_hash, RawViewResult};
+        use super::update::{build_update, compute_flat_hash, RawViewResult, ViewDelta};
+
+        let view_delta_struct = if is_first_run {
+            None // First run = treat as full snapshot
+        } else {
+            Some(ViewDelta {
+                additions: additions_with_versions,
+                removals,
+                updates: updates_with_versions,
+            })
+        };
 
         let raw_result = RawViewResult {
             query_id: self.plan.id.clone(),
             records: result_data.clone(),
+            delta: view_delta_struct,
         };
 
         // Build update using the configured format

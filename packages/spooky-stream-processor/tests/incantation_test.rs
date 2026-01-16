@@ -1,3 +1,4 @@
+use common::ViewUpdateExt;
 mod common;
 
 use common::*;
@@ -68,12 +69,12 @@ fn test_complex_incantation_flow() {
     };
 
     // 3. Register View
-    let initial_update = circuit.register_view(plan, None);
+    let initial_update = circuit.register_view(plan, None, None);
 
     // Initially, Thread 1 exists and Author exists, but no comments.
     // So result should be empty.
     if let Some(up) = initial_update {
-        assert!(up.result_data.is_empty(), "Expected empty result initially");
+        assert!(up.result_data().is_empty(), "Expected empty result initially");
     }
 
     // 4. Verify View State Helper

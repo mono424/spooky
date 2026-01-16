@@ -1,3 +1,4 @@
+use common::ViewUpdateExt;
 mod common;
 
 use common::*;
@@ -53,7 +54,7 @@ fn test_view_registration_after_ingestion() {
     };
 
     println!("[TEST] Registering view after ingestion");
-    let initial_update = circuit.register_view(plan, None);
+    let initial_update = circuit.register_view(plan, None, None);
 
     // 4. The initial update should contain the user that was already in the database
     assert!(
@@ -64,15 +65,15 @@ fn test_view_registration_after_ingestion() {
     let update = initial_update.unwrap();
     println!(
         "[TEST] Initial update result_data: {:?}",
-        update.result_data
+        update.result_data()
     );
 
-    assert_eq!(update.result_data.len(), 1, "Should find 1 user");
+    assert_eq!(update.result_data().len(), 1, "Should find 1 user");
     assert_eq!(
-        update.result_data[0].0, user_id,
+        update.result_data()[0].0, user_id,
         "Should find the correct user"
     );
-    assert!(update.result_data[0].1 > 0, "Version should be positive");
+    assert!(update.result_data()[0].1 > 0, "Version should be positive");
 
     println!("[TEST] ✓ View correctly found pre-existing record!");
 }
@@ -130,7 +131,7 @@ fn test_view_registration_after_ingestion_with_filter() {
     };
 
     println!("[TEST] Registering filtered view after ingestion");
-    let initial_update = circuit.register_view(plan, None);
+    let initial_update = circuit.register_view(plan, None, None);
 
     // 3. Should only find the active user
     assert!(
@@ -141,12 +142,12 @@ fn test_view_registration_after_ingestion_with_filter() {
     let update = initial_update.unwrap();
     println!(
         "[TEST] Filtered update result_data: {:?}",
-        update.result_data
+        update.result_data()
     );
 
-    assert_eq!(update.result_data.len(), 1, "Should find 1 active user");
+    assert_eq!(update.result_data().len(), 1, "Should find 1 active user");
     assert_eq!(
-        update.result_data[0].0, user1_id,
+        update.result_data()[0].0, user1_id,
         "Should find alice (active user)"
     );
 

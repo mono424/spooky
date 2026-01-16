@@ -1,3 +1,4 @@
+use common::ViewUpdateExt;
 mod common;
 
 use common::*;
@@ -55,23 +56,23 @@ fn test_subquery_projection_children() {
     };
 
     // 3. Register view
-    let update = circuit.register_view(plan, None);
+    let update = circuit.register_view(plan, None, None);
     assert!(update.is_some(), "Expected view update");
 
     let view_update = update.unwrap();
     println!("=== View Update ===");
-    println!("query_id: {}", view_update.query_id);
-    println!("result_data: {:?}", view_update.result_data);
-    println!("result_hash: {}", view_update.result_hash);
+    println!("query_id: {}", view_update.query_id());
+    println!("result_data: {:?}", view_update.result_data());
+    println!("result_hash: {}", match &view_update { spooky_stream_processor::ViewUpdate::Flat(f) | spooky_stream_processor::ViewUpdate::Tree(f) => &f.result_hash, _ => panic!("Expected Flat update") });
 
     // 4. Verify result contains BOTH the thread AND the author (from subquery)
-    assert!(!view_update.result_data.is_empty(), "Expected results");
+    assert!(!view_update.result_data().is_empty(), "Expected results");
 
     // Extract IDs from result_data
     let result_ids: Vec<&str> = view_update
-        .result_data
+        .result_data()
         .iter()
-        .map(|(id, _)| id.as_str())
+        .map(|(id, _): (&String, &u64)| id.as_str())
         .collect();
 
     assert!(
@@ -85,7 +86,7 @@ fn test_subquery_projection_children() {
 
     // 5. Verify we have both IDs (thread + author = 2 records)
     assert_eq!(
-        view_update.result_data.len(),
+        view_update.result_data().len(),
         2,
         "Expected 2 records (thread + author from subquery)"
     );

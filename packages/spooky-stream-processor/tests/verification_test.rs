@@ -1,6 +1,9 @@
-use spooky_stream_processor::{Circuit, QueryPlan, MaterializedViewUpdate};
-use spooky_stream_processor::engine::view::{Operator, Predicate, JoinCondition, Path};
-use serde_json::{json, Value};
+mod common;
+
+use common::ViewUpdateExt;
+use spooky_stream_processor::{Circuit, QueryPlan};
+use spooky_stream_processor::engine::view::{Operator, Predicate, Path};
+use serde_json::json;
 
 #[test]
 fn test_dependency_graph_optimization() {
@@ -17,7 +20,7 @@ fn test_dependency_graph_optimization() {
             }
         }
     };
-    circuit.register_view(plan, None);
+    circuit.register_view(plan, None, None);
 
     // 2. Create another view dependent on "products"
     let plan2 = QueryPlan {
@@ -30,7 +33,7 @@ fn test_dependency_graph_optimization() {
             }
         }
     };
-    circuit.register_view(plan2, None);
+    circuit.register_view(plan2, None, None);
 
     // 3. Verify Dependency Graph
     // "users" -> [0], "products" -> [1]
@@ -43,11 +46,11 @@ fn test_dependency_graph_optimization() {
         ("users".to_string(), "CREATE".to_string(), "users:1".to_string(), json!({"id": "users:1", "age": 105}), "hash1".to_string()),
     ];
 
-    let updates = circuit.ingest_batch(batch);
+    let updates = circuit.ingest_batch(batch, true);
 
     // Should have update for "view_user_100"
     assert_eq!(updates.len(), 1);
-    assert_eq!(updates[0].query_id, "view_user_100");
+    assert_eq!(updates[0].query_id(), "view_user_100");
 
     println!("2-Phase Batching Verification Passed!");
 }

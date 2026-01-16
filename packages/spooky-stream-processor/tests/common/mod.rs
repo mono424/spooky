@@ -1,5 +1,7 @@
 use serde_json::{json, Value};
-use spooky_stream_processor::{Circuit, MaterializedViewUpdate};
+use spooky_stream_processor::{
+    Circuit, MaterializedViewUpdate, ViewUpdate,
+};
 // use uuid::Uuid; // Removed uuid
 use ulid::Ulid;
 
@@ -27,14 +29,48 @@ pub fn ingest(
 ) -> Vec<MaterializedViewUpdate> {
     let hash = generate_hash(&record);
     println!("[Ingest] {} -> {}: {:#}", op, table, record);
-    circuit.ingest_record(
+    let updates = circuit.ingest_record(
         table,
         op,
         id,
         record,
         &hash,
-    )
+        true, // is_optimistic = true for tests
+    );
+    // Convert ViewUpdate to MaterializedViewUpdate
+    updates.into_iter().filter_map(unwrap_flat_update).collect()
 }
+
+/// Helper to extract MaterializedViewUpdate from ViewUpdate enum
+pub fn unwrap_flat_update(update: ViewUpdate) -> Option<MaterializedViewUpdate> {
+    match update {
+        ViewUpdate::Flat(flat) | ViewUpdate::Tree(flat) => Some(flat),
+        ViewUpdate::Streaming(_) => None, // Tests expect Flat format
+    }
+}
+
+/// Helper trait to access common fields from ViewUpdate enum variants
+pub trait ViewUpdateExt {
+    fn query_id(&self) -> &str;
+    fn result_data(&self) -> &[(String, u64)];
+}
+
+impl ViewUpdateExt for ViewUpdate {
+    fn query_id(&self) -> &str {
+        match self {
+            ViewUpdate::Flat(flat) | ViewUpdate::Tree(flat) => &flat.query_id,
+            ViewUpdate::Streaming(stream) => &stream.view_id,
+        }
+    }
+    
+    fn result_data(&self) -> &[(String, u64)] {
+        match self {
+            ViewUpdate::Flat(flat) | ViewUpdate::Tree(flat) => &flat.result_data,
+            ViewUpdate::Streaming(_) => &[], // Streaming has delta events, not full snapshot
+        }
+    }
+}
+
 
 pub fn make_author_record(name: &str) -> (String, Value) {
     let id_raw = generate_id();
