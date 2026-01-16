@@ -64,7 +64,12 @@ export class SpookyClient<S extends SchemaStructure> {
       logger
     );
     this.migrator = new LocalMigrator(this.local, logger);
-    this.mutationManager = new MutationManager(this.config.schema, this.local, logger);
+    this.mutationManager = new MutationManager(
+      this.config.schema,
+      this.local,
+      this.streamProcessor,
+      logger
+    );
     this.queryManager = new QueryManager(
       this.config.schema,
       this.local,

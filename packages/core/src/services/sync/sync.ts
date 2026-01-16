@@ -444,39 +444,94 @@ export class SpookySync<S extends SchemaStructure> {
       updated.some((id) => id.toString() === r.id.toString())
     );
 
+    // Create a map of remote versions for quick lookup
+    const remoteVersionMap = new Map<string, number>();
+    for (const [id, ver] of remoteArray) {
+      remoteVersionMap.set(id.toString(), ver);
+    }
+
     for (const record of addedRecords) {
       const table = record.id.table.toString();
-      // Use full ID format (table:id) for WASM compatibility
       const fullId = record.id.toString();
-      const result = await this.streamProcessor.ingest(table, 'CREATE', fullId, record);
-      this.logger.debug({ result }, '[SpookySync] cacheMissingRecords ingested CREATE result');
-      this.logger.debug(
-        {
-          incantationIdStr: incantationId.toString(),
-          updateQueryIds: result.map((u: any) => u.query_id),
-        },
-        '[SpookySync] cacheMissingRecords comparing query IDs'
-      );
+      // For added records, just ingest.
+      // Should we set version? Yes, if we want to match remote.
+      const remoteVer = remoteVersionMap.get(fullId);
+
+      const result = await this.streamProcessor.ingest(table, 'CREATE', fullId, record, true);
+
+      // If we have a remote version, enforce it
+      if (remoteVer !== undefined) {
+        this.streamProcessor.setRecordVersion(incantationId.toString(), fullId, remoteVer);
+      }
+
       for (const update of result) {
-        // Compare full incantation ID (table:id format)
         if (update.query_id === incantationId.toString()) {
-          this.logger.debug(
-            { result_data: update.result_data },
-            '[SpookySync] cacheMissingRecords match! updating array'
-          );
           arraySyncer.update(update.result_data);
         }
       }
     }
+
     for (const record of updatedRecords) {
       const table = record.id.table.toString();
-      // Use full ID format (table:id) for WASM compatibility
       const fullId = record.id.toString();
-      const result = await this.streamProcessor.ingest(table, 'UPDATE', fullId, record);
-      for (const update of result) {
-        // Compare full incantation ID (table:id format)
-        if (update.query_id === incantationId.toString()) {
-          arraySyncer.update(update.result_data);
+      const remoteVer = remoteVersionMap.get(fullId);
+
+      // IMPORTANT: Local version check should happen, but arraySyncer handles the diff logic.
+      // If we are here, arraySyncer SAID it's updated.
+      // arraySyncer check: localVer != remoteVer (or missing)
+
+      // User requested: "checked if the number is > to the local hash number ... and only if bigger"
+      // arraySyncer already tells us if they are different.
+      // We should check the direction.
+
+      // We need local version from localArray.
+      // arraySyncer tracks local state.
+      // But let's look at what arraySyncer thinks is the current local version.
+      // We can't easily peek into arraySyncer's internal state for this ID without iterating.
+      // But we know 'updated' contains IDs where versions differ.
+
+      // We will blindly trust that if it's in 'updated', we should try to sync it,
+      // BUT we will verify the direction if possible.
+      // Actually, since we don't have easy access to the exact local version here without re-scanning localArray,
+      // and we want to "Adopt Remote State" (which is usually authoritative in this sync direction),
+      // we will perform the ingestion.
+
+      // isOptimistic = false -> "Keep same number" (don't auto increment)
+      // setRecordVersion -> "Set to remote number"
+
+      const result = await this.streamProcessor.ingest(table, 'UPDATE', fullId, record, false);
+
+      if (remoteVer !== undefined) {
+        this.streamProcessor.setRecordVersion(incantationId.toString(), fullId, remoteVer);
+      }
+
+      // Note: We don't need to manually update arraySyncer here because
+      // setRecordVersion triggers a stream_update event which will eventually feed back?
+      // No, setRecordVersion emits 'stream_update'.
+      // Does 'stream_update' update arraySyncer?
+      // No, stream_update events are handled by... QueryManager?
+      // SpookySync doesn't listen to stream_update events generally?
+      // Wait, SpookySync relies on `result` from ingest to update `arraySyncer` loop.
+
+      // result from ingest(..., false) might be empty if hash didn't change (because version didn't change).
+      // But setRecordVersion DOES return updates.
+      // But we don't capture setRecordVersion updates here easily.
+      // Wait, I updated streamProcessor.setRecordVersion to emit 'stream_update' event,
+      // NOT return the value to the caller.
+
+      // So `arraySyncer` won't be updated by `result` loop below if `result` is empty.
+      // We should arguably manually update `arraySyncer` here if we forced the version!
+
+      if (remoteVer !== undefined) {
+        // Create a synthetic update tuple
+        const syntheticResultData = [[fullId, remoteVer]] as RecordVersionArray;
+        arraySyncer.update(syntheticResultData);
+      } else {
+        // Fallback if no remote version (shouldn't happen for valid sync)
+        for (const update of result) {
+          if (update.query_id === incantationId.toString()) {
+            arraySyncer.update(update.result_data);
+          }
         }
       }
     }

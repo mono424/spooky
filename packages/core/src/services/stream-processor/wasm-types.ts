@@ -17,7 +17,18 @@ export interface WasmIncantationConfig {
 
 // Interface matching the SpookyProcessor class from WASM
 export interface WasmProcessor {
-  ingest(table: string, op: string, id: string, record: any): WasmStreamUpdate[];
+  ingest(
+    table: string,
+    op: string,
+    id: string,
+    record: any,
+    isOptimistic: boolean
+  ): WasmStreamUpdate[];
+  set_record_version(
+    incantation_id: string,
+    record_id: string,
+    version: number
+  ): WasmStreamUpdate | undefined;
   register_view(config: WasmIncantationConfig): WasmStreamUpdate | undefined;
   unregister_view(id: string): void;
   // Add other methods if needed

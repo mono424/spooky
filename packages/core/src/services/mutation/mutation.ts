@@ -4,6 +4,7 @@ import { createMutationEventSystem, MutationEventSystem, MutationEventTypes } fr
 import { parseRecordIdString, encodeToSpooky } from '../utils/index.js';
 import { SchemaStructure } from '@spooky/query-builder';
 import { createLogger, Logger } from '../logger/index.js';
+import { StreamProcessorService } from '../stream-processor/index.js';
 
 export class MutationManager<S extends SchemaStructure> {
   private _events: MutationEventSystem;
@@ -16,6 +17,7 @@ export class MutationManager<S extends SchemaStructure> {
   constructor(
     private schema: S,
     private db: LocalDatabaseService,
+    private streamProcessor: StreamProcessorService,
     logger: Logger
   ) {
     this.logger = logger.child({ service: 'MutationManager' });
@@ -107,6 +109,9 @@ export class MutationManager<S extends SchemaStructure> {
       ],
     });
 
+    // Optimistic update: ingest record into DBSP
+    this.streamProcessor.ingest(tableName, 'CREATE', id, target);
+
     return target;
   }
 
@@ -168,6 +173,9 @@ export class MutationManager<S extends SchemaStructure> {
       ],
     });
 
+    // Optimistic update: ingest record into DBSP
+    this.streamProcessor.ingest(tableName, 'CREATE', id, target);
+
     return target;
   }
 
@@ -226,6 +234,9 @@ export class MutationManager<S extends SchemaStructure> {
       ],
     });
 
+    // Optimistic update: ingest record into DBSP
+    this.streamProcessor.ingest(table, 'update', id, target);
+
     return target;
   }
 
@@ -282,6 +293,9 @@ export class MutationManager<S extends SchemaStructure> {
       ],
     });
 
+    // Optimistic update: ingest record into DBSP
+    this.streamProcessor.ingest(table, 'update', id, target);
+
     return target;
   }
 
@@ -312,6 +326,9 @@ export class MutationManager<S extends SchemaStructure> {
         },
       ],
     });
+
+    // Optimistic update: ingest delete into DBSP
+    this.streamProcessor.ingest(table, 'DELETE', id, {});
   }
 
   private async deleteLocalAndRemote(table: string, id: string): Promise<void> {
@@ -351,5 +368,8 @@ export class MutationManager<S extends SchemaStructure> {
         },
       ],
     });
+
+    // Optimistic update: ingest delete into DBSP
+    this.streamProcessor.ingest(table, 'DELETE', id, {});
   }
 }

@@ -143,6 +143,23 @@ export class QueryManager<S extends SchemaStructure> {
       '[QueryManager] handleIncomingUpdate payload'
     );
 
+    // Defensive check: Don't emit an update with empty records if incantation already has data
+    // This prevents sync failures from wiping valid cached data
+    const existingRecords = incantation.records ?? [];
+    if (validRecords.length === 0 && existingRecords.length > 0) {
+      this.logger.warn(
+        {
+          incantationId: incantationId.toString(),
+          existingRecordCount: existingRecords.length,
+        },
+        '[QueryManager] Skipping empty update - incantation already has records'
+      );
+      // Still update remote state for sync purposes
+      incantation.remoteHash = remoteHash;
+      incantation.remoteArray = remoteArray;
+      return;
+    }
+
     incantation.updateLocalState(validRecords, incantation.localHash, incantation.localArray);
     // Explicitly update remote state
     incantation.remoteHash = remoteHash;
@@ -160,7 +177,7 @@ export class QueryManager<S extends SchemaStructure> {
   }
 
   public async handleStreamUpdate(update: any) {
-    const { query_id, localHash, result_ids, localArray } = update;
+    const { query_id, localHash, localArray } = update;
 
     // query_id from StreamProcessor is a string (e.g. "_spooky_incantation:...")
     // We need to convert it to a RecordId for the event payload
@@ -173,11 +190,11 @@ export class QueryManager<S extends SchemaStructure> {
     }
 
     this.logger.debug(
-      { incantationId: query_id, count: result_ids?.length },
+      { incantationId: query_id, count: localArray?.length },
       'Handling stream update'
     );
 
-    if (!result_ids || result_ids.length === 0) {
+    if (!localArray || localArray.length === 0) {
       this.events.emit(QueryEventTypes.IncantationUpdated, {
         incantationId: incantationRecordId,
         records: [],
@@ -186,8 +203,15 @@ export class QueryManager<S extends SchemaStructure> {
     }
 
     try {
-      const incantation = this.activeQueries.get(query_id);
+      // query_id from StreamProcessor is the full record ID (e.g. "_spooky_incantation:hash")
+      // but activeQueries uses just the hash part as the key
+      const queryHash = query_id.includes(':') ? query_id.split(':').slice(1).join(':') : query_id;
+      const incantation = this.activeQueries.get(queryHash);
       if (!incantation) {
+        this.logger.warn(
+          { query_id, queryHash, activeKeys: [...this.activeQueries.keys()] },
+          'Incantation not found for stream update'
+        );
         throw new Error('Incantation not found');
       }
 

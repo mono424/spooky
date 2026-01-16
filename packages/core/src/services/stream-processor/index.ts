@@ -37,7 +37,7 @@ export class StreamProcessorService {
 
     this.logger.info('[StreamProcessor] Initializing WASM...');
     try {
-      await init(); // Initialize the WASM module
+      await init(); // Initialize the WASM module (web target)
       // We cast the generated SpookyProcessor to our interface which is safer
       this.processor = new SpookyProcessor() as unknown as WasmProcessor;
 
@@ -111,9 +111,16 @@ export class StreamProcessorService {
   /**
    * Ingest a record change into the processor.
    * Emits 'stream_update' event if materialized views are affected.
+   * @param isOptimistic true = local mutation (increment versions), false = remote sync (keep versions)
    */
-  ingest(table: string, op: string, id: string, record: any): WasmStreamUpdate[] {
-    this.logger.debug({ table, op, id }, '[StreamProcessor] Ingesting record');
+  ingest(
+    table: string,
+    op: string,
+    id: string,
+    record: any,
+    isOptimistic: boolean = true
+  ): WasmStreamUpdate[] {
+    this.logger.debug({ table, op, id, isOptimistic }, '[StreamProcessor] Ingesting record');
     this.logger.debug(
       {
         table,
@@ -138,7 +145,7 @@ export class StreamProcessorService {
         '[StreamProcessor] ingest normalized record'
       );
 
-      const rawUpdates = this.processor.ingest(table, op, id, normalizedRecord);
+      const rawUpdates = this.processor.ingest(table, op, id, normalizedRecord, isOptimistic);
       this.logger.debug({ rawUpdates }, '[StreamProcessor] ingest result');
 
       if (rawUpdates && Array.isArray(rawUpdates) && rawUpdates.length > 0) {
@@ -156,6 +163,35 @@ export class StreamProcessorService {
       this.logger.error({ error: e }, '[StreamProcessor] Erroring during ingestion');
     }
     return [];
+  }
+
+  /**
+   * Explicitly set the version of a record in a specific view.
+   * This is used during remote sync to ensure local state matches remote versioning.
+   */
+  setRecordVersion(incantationId: string, recordId: string, version: number) {
+    if (!this.processor) return;
+
+    this.logger.debug({ incantationId, recordId, version }, '[StreamProcessor] setRecordVersion');
+
+    try {
+      // Note: recordId must be fully qualified table:id string
+      const update = this.processor.set_record_version(incantationId, recordId, version);
+
+      if (update) {
+        const updates: StreamUpdate[] = [
+          {
+            query_id: update.query_id,
+            localHash: update.result_hash,
+            localArray: update.result_data,
+          },
+        ];
+        this.events.emit('stream_update', updates);
+        this.saveState();
+      }
+    } catch (e) {
+      this.logger.error(e, '[StreamProcessor] Error setting record version');
+    }
   }
 
   /**

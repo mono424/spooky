@@ -231,30 +231,42 @@ impl View {
         changed_table: &str,
         input_delta: &ZSet,
         db: &Database,
+        is_optimistic: bool,
     ) -> Option<MaterializedViewUpdate> {
         let mut deltas = FastMap::default();
         if !changed_table.is_empty() {
             deltas.insert(changed_table.to_string(), input_delta.clone());
         }
-        self.process_ingest(&deltas, db)
+        self.process_ingest(&deltas, db, is_optimistic)
     }
 
     /// Optimized 2-Phase Processing: Handles multiple table updates at once.
+    /// is_optimistic: true = increment versions (local mutations), false = keep versions (remote sync)
     pub fn process_ingest(
         &mut self,
         deltas: &FastMap<String, ZSet>,
         db: &Database,
+        is_optimistic: bool,
     ) -> Option<MaterializedViewUpdate> {
         // FIX: FIRST RUN CHECK
         let is_first_run = self.last_hash.is_empty();
 
-        // NEW: Check if any delta contains CREATE operations for tables used in subqueries
-        let has_new_records = !is_first_run && self.has_new_records_for_subqueries(deltas, db);
+        // Check if any delta contains CREATE or DELETE operations for tables used in subqueries
+        let has_subquery_changes = !is_first_run && self.has_changes_for_subqueries(deltas, db);
 
-        let maybe_delta = if is_first_run || has_new_records {
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::log_1(
+            &format!(
+                "DEBUG VIEW: id={} is_first_run={} has_subquery_changes={}",
+                self.plan.id, is_first_run, has_subquery_changes
+            )
+            .into(),
+        );
+
+        let maybe_delta = if is_first_run || has_subquery_changes {
             // Force full scan if:
             // 1. First run (no cache yet)
-            // 2. New records were created that might match subquery predicates
+            // 2. Records were created/deleted that might affect subquery results
             None
         } else {
             self.eval_delta_batch(&self.plan.root, deltas, db, self.params.as_ref())
@@ -281,7 +293,26 @@ impl View {
             diff
         };
 
-        if view_delta.is_empty() && !is_first_run {
+        // Check if any record in the cache has been updated in the deltas
+        // This handles UPDATE operations where the ID doesn't change but content does
+        // Returns the list of updated record IDs so we can increment their versions
+        let updated_record_ids = self.get_updated_cached_records(deltas);
+        let has_cached_updates = !updated_record_ids.is_empty();
+
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::log_1(
+            &format!(
+                "DEBUG VIEW: id={} view_delta_empty={} has_cached_updates={} is_optimistic={} updated_ids_len={}",
+                self.plan.id,
+                view_delta.is_empty(),
+                has_cached_updates,
+                is_optimistic,
+                updated_record_ids.len()
+            )
+            .into(),
+        );
+
+        if view_delta.is_empty() && !is_first_run && !has_subquery_changes && !has_cached_updates {
             return None;
         }
 
@@ -327,11 +358,25 @@ impl View {
         all_ids.dedup();
 
         // Update version map for all IDs
+        // For updated records, only increment version for optimistic updates (local mutations)
+        // Remote syncs should use their own version numbers
         for id in &all_ids {
             if let Some(_current_hash) = self.get_row_hash(id, db) {
                 let version = self.version_map.entry(id.clone()).or_insert(0);
                 if *version == 0 {
                     *version = 1;
+                } else if is_optimistic && updated_record_ids.contains(id) {
+                    // Optimistic update: increment version to trigger hash change
+                    let old_ver = *version;
+                    *version += 1;
+                    #[cfg(target_arch = "wasm32")]
+                    web_sys::console::log_1(
+                        &format!(
+                            "DEBUG VIEW: Incrementing version for id={} old={} new={}",
+                            id, old_ver, *version
+                        )
+                        .into(),
+                    );
                 }
             }
         }
@@ -393,33 +438,159 @@ impl View {
         }
     }
 
-    /// Check if deltas contain new records (positive weight) for tables used in subqueries
-    /// This is needed because new records won't be in version_map yet, so we need full scan
-    fn has_new_records_for_subqueries(
-        &self,
-        deltas: &FastMap<String, ZSet>,
-        db: &Database,
-    ) -> bool {
+    /// Check if deltas contain changes (CREATE or DELETE) for tables used in subqueries
+    /// This is needed because new/deleted records need full scan to update subquery results
+    fn has_changes_for_subqueries(&self, deltas: &FastMap<String, ZSet>, _db: &Database) -> bool {
         // Get all tables used in subqueries
         let subquery_tables = self.extract_subquery_tables(&self.plan.root);
 
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::log_1(
+            &format!(
+                "DEBUG has_changes: view={} subquery_tables={:?} delta_tables={:?}",
+                self.plan.id,
+                subquery_tables,
+                deltas.keys().collect::<Vec<_>>()
+            )
+            .into(),
+        );
+
         if subquery_tables.is_empty() {
+            #[cfg(target_arch = "wasm32")]
+            web_sys::console::log_1(
+                &format!(
+                    "DEBUG has_changes: view={} NO SUBQUERY TABLES",
+                    self.plan.id
+                )
+                .into(),
+            );
             return false;
         }
 
-        // Check if any delta for a subquery table contains new records (weight > 0)
+        // Check if any delta for a subquery table contains changes (weight != 0)
         for table in subquery_tables {
             if let Some(delta) = deltas.get(&table) {
-                // Check if any record in this delta is new (not in version_map)
+                #[cfg(target_arch = "wasm32")]
+                web_sys::console::log_1(
+                    &format!(
+                        "DEBUG has_changes: view={} table={} delta_keys={:?}",
+                        self.plan.id,
+                        table,
+                        delta.keys().collect::<Vec<_>>()
+                    )
+                    .into(),
+                );
+                // Check if any record in this delta is a CREATE (weight > 0 and not in version_map)
+                // or a DELETE (weight < 0 and in version_map)
                 for (key, weight) in delta {
-                    if *weight > 0 && !self.version_map.contains_key(key.as_str()) {
+                    let in_version_map = self.version_map.contains_key(key.as_str());
+                    #[cfg(target_arch = "wasm32")]
+                    web_sys::console::log_1(
+                        &format!(
+                            "DEBUG has_changes: view={} key={} weight={} in_version_map={}",
+                            self.plan.id, key, weight, in_version_map
+                        )
+                        .into(),
+                    );
+                    // CREATE: positive weight, not in version_map
+                    // DELETE: negative weight, in version_map
+                    if (*weight > 0 && !in_version_map) || (*weight < 0 && in_version_map) {
+                        #[cfg(target_arch = "wasm32")]
+                        web_sys::console::log_1(
+                            &format!(
+                                "DEBUG has_changes: view={} FOUND CHANGE key={} weight={}",
+                                self.plan.id, key, weight
+                            )
+                            .into(),
+                        );
                         return true;
                     }
                 }
             }
         }
 
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::log_1(
+            &format!("DEBUG has_changes: view={} NO CHANGES FOUND", self.plan.id).into(),
+        );
         false
+    }
+
+    /// Get all record IDs currently in the view's cache/version_map that have been updated in the deltas
+    /// This handles UPDATE operations where the ID set doesn't change but content does
+    fn get_updated_cached_records(&self, deltas: &FastMap<String, ZSet>) -> Vec<String> {
+        let mut updated_ids = Vec::new();
+
+        // For each table in the deltas, check if any updated record is in our cache
+        for (_table, delta) in deltas {
+            for (record_id, weight) in delta {
+                // Only check records with positive weight (existing/updated records)
+                // Negative weight means deletion which is handled elsewhere
+                if *weight > 0 && self.cache.contains_key(record_id.as_str()) {
+                    #[cfg(target_arch = "wasm32")]
+                    web_sys::console::log_1(
+                        &format!(
+                            "DEBUG get_updated_cached_records: view={} table={} found cached record={}",
+                            self.plan.id, _table, record_id
+                        )
+                        .into(),
+                    );
+                    updated_ids.push(record_id.to_string());
+                }
+            }
+        }
+
+        // Also check version_map for subquery records that might be affected
+        for (_table, delta) in deltas {
+            for (record_id, weight) in delta {
+                if *weight > 0
+                    && self.version_map.contains_key(record_id.as_str())
+                    && !updated_ids.contains(&record_id.to_string())
+                {
+                    #[cfg(target_arch = "wasm32")]
+                    web_sys::console::log_1(
+                        &format!(
+                            "DEBUG get_updated_cached_records: view={} table={} found versioned record={}",
+                            self.plan.id, _table, record_id
+                        )
+                        .into(),
+                    );
+                    updated_ids.push(record_id.to_string());
+                }
+            }
+        }
+
+        updated_ids
+    }
+
+    /// Explicitly set the version of a record in the view
+    pub fn set_record_version(
+        &mut self,
+        record_id: &str,
+        version: u64,
+        db: &Database,
+    ) -> Option<MaterializedViewUpdate> {
+        let current_version = self.version_map.get(record_id).copied().unwrap_or(0);
+
+        if current_version != version {
+            #[cfg(target_arch = "wasm32")]
+            web_sys::console::log_1(
+                &format!(
+                    "DEBUG VIEW: set_record_version id={} record={} old={} new={}",
+                    self.plan.id, record_id, current_version, version
+                )
+                .into(),
+            );
+            self.version_map.insert(record_id.to_string(), version);
+
+            // Trigger re-hashing by processing empty deltas
+            let empty_deltas = FastMap::default();
+            // We pass is_optimistic=false because we've already manually manipulated the version map
+            // and we just want to recompute the hash and return the update.
+            self.process_ingest(&empty_deltas, db, false)
+        } else {
+            None
+        }
     }
 
     /// Extract all table names used in subquery projections
