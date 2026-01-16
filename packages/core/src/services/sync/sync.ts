@@ -730,6 +730,7 @@ export class SpookySync<S extends SchemaStructure> {
    *
    * schema-aware: Only flattens fields that are defined as relationships in the schema for the specific table.
    */
+  // TODO: Move this to utils
   private flattenResults(
     results: Record<string, any>[],
     visited: Set<string> = new Set(),
