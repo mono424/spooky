@@ -89,7 +89,7 @@ export function CreateThreadDialog(props: CreateThreadDialogProps) {
                NEW_THREAD_BUFFER
             </div>
             <button
-              onClick={handleClose}
+              onMouseDown={handleClose}
               class="px-5 hover:bg-white hover:text-black border-l-2 border-white font-bold transition-none text-lg flex items-center justify-center"
               aria-label="Close"
             >
@@ -156,7 +156,7 @@ export function CreateThreadDialog(props: CreateThreadDialogProps) {
               <div class="flex flex-col-reverse sm:flex-row justify-end gap-4 pt-2">
                 <button
                   type="button"
-                  onClick={handleClose}
+                  onMouseDown={handleClose}
                   class="px-6 py-3 border-2 border-transparent text-gray-500 hover:text-white uppercase font-bold text-xs tracking-wider hover:underline decoration-white underline-offset-4 transition-none"
                 >
                   [ ABORT ]

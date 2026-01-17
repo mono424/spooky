@@ -273,37 +273,6 @@ importers:
         specifier: ^3.0.0
         version: 3.2.4(@types/debug@4.1.12)(@types/node@22.18.13)(lightningcss@1.30.1)
 
-  packages/spooky-ts:
-    dependencies:
-      '@spooky/query-builder':
-        specifier: workspace:*
-        version: link:../query-builder
-      '@surrealdb/wasm':
-        specifier: ^2.4.0
-        version: 2.4.0(surrealdb@2.0.0-alpha.15(tslib@2.8.1)(typescript@5.9.3))
-      fast-json-patch:
-        specifier: ^3.1.1
-        version: 3.1.1
-      surrealdb:
-        specifier: 2.0.0-alpha.15
-        version: 2.0.0-alpha.15(tslib@2.8.1)(typescript@5.9.3)
-    devDependencies:
-      '@surrealdb/node':
-        specifier: ^2.4.0
-        version: 2.4.0(surrealdb@2.0.0-alpha.15(tslib@2.8.1)(typescript@5.9.3))
-      '@types/node':
-        specifier: ^22.5.2
-        version: 22.18.13
-      tsx:
-        specifier: ^4.17.0
-        version: 4.20.6
-      typescript:
-        specifier: ^5.6.2
-        version: 5.9.3
-      vitest:
-        specifier: ^3.2.0
-        version: 3.2.4(@types/debug@4.1.12)(@types/node@22.18.13)(lightningcss@1.30.1)
-
   tests:
     devDependencies:
       '@types/jest':
@@ -1725,11 +1694,6 @@ packages:
   '@surrealdb/cbor@2.0.0-alpha.4':
     resolution: {integrity: sha512-l/hNZ3ZCOJq8rzwx1y5ZV/8b2bYCWdhGqRVY33Pu50NAHyAW5qLsMn3ZBkZow77mAKwNCsbDsRGnyYEuU95mjw==}
     engines: {node: '>=18.0.0'}
-
-  '@surrealdb/node@2.4.0':
-    resolution: {integrity: sha512-or/ezuVe5AtD6mMYEeDyjvmw2QD3gK5Rumq+2EVnLKfg23TP1tFOMU0pYBP2Cihr+SG6apxmtNO8vxk717Ab8w==}
-    peerDependencies:
-      surrealdb: ^2.0.0-0
 
   '@surrealdb/wasm@2.4.0':
     resolution: {integrity: sha512-qqyZx95YdEQ9G8ZCYL8EOJPKsiCOm0H0r1UgQtLghsTEE2CnztNqRXpo7+DdOSqRXW6vysGdSoSw3nEDfAtPsw==}
@@ -7541,10 +7505,6 @@ snapshots:
 
   '@surrealdb/cbor@2.0.0-alpha.4': {}
 
-  '@surrealdb/node@2.4.0(surrealdb@2.0.0-alpha.15(tslib@2.8.1)(typescript@5.9.3))':
-    dependencies:
-      surrealdb: 2.0.0-alpha.15(tslib@2.8.1)(typescript@5.9.3)
-
   '@surrealdb/wasm@2.4.0(surrealdb@2.0.0-alpha.15(tslib@2.8.1)(typescript@5.9.3))':
     dependencies:
       surrealdb: 2.0.0-alpha.15(tslib@2.8.1)(typescript@5.9.3)
@@ -9444,6 +9404,7 @@ snapshots:
   get-tsconfig@4.13.0:
     dependencies:
       resolve-pkg-maps: 1.0.0
+    optional: true
 
   github-slugger@2.0.0: {}
 
@@ -11604,7 +11565,8 @@ snapshots:
 
   resolve-from@5.0.0: {}
 
-  resolve-pkg-maps@1.0.0: {}
+  resolve-pkg-maps@1.0.0:
+    optional: true
 
   resolve.exports@2.0.3: {}
 
@@ -12214,6 +12176,7 @@ snapshots:
       get-tsconfig: 4.13.0
     optionalDependencies:
       fsevents: 2.3.3
+    optional: true
 
   tweetnacl@0.14.5: {}
 

@@ -2,7 +2,7 @@ import init, { SpookyProcessor } from 'spooky-stream-processor-wasm';
 import { EventDefinition, EventSystem } from '../../events/index.js';
 import { Logger } from 'pino';
 import { LocalDatabaseService } from '../database/index.js';
-import { Incantation } from '../query/incantation.js';
+import { Incantation } from '../../modules/data/incantation.js';
 import { WasmProcessor, WasmStreamUpdate } from './wasm-types.js';
 
 // Define the shape of an update from the Wasm module

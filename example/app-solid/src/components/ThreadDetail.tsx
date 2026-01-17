@@ -6,6 +6,7 @@ import { useQuery } from "@spooky/client-solid";
 import { useAuth } from "../lib/auth";
 import { CommentBox } from "./CommentBox";
 import { ThreadSidebar } from "./ThreadSidebar";
+import { isInputActive, useKeyboard } from "../lib/keyboard";
 
 const createQuery = ({
   threadId,
@@ -56,17 +57,41 @@ export function ThreadDetail() {
     navigate("/");
   };
 
+  useKeyboard({
+    "r": (e) => {
+        e.preventDefault();
+        const textarea = document.querySelector("#comment-textarea") as HTMLTextAreaElement;
+        textarea?.focus();
+    },
+    // We can use Escape here because we want it to work even if nothing is focused to go back
+    "Escape": () => {
+        if (isInputActive()) {
+            (document.activeElement as HTMLElement).blur();
+        } else {
+            handleBack();
+        }
+    }
+  });
+
+  // Check if current user is the author
+  const isAuthor = () => {
+    const threadData = thread();
+    const currentUser = auth.user();
+    if (!threadData?.author?.id || !currentUser?.id) return false;
+    return threadData.author.id === currentUser.id;
+  };
+
   // Auto-save title changes
   const handleTitleChange = async (newTitle: string) => {
     const threadData = thread();
-    if (!threadData || !threadData.id) return;
+    if (!threadData || !threadData.id || !isAuthor()) return;
     await db.update("thread", threadData.id, { title: newTitle });
   };
 
   // Auto-save content changes
   const handleContentChange = async (newContent: string) => {
     const threadData = thread();
-    if (!threadData || !threadData.id) return;
+    if (!threadData || !threadData.id || !isAuthor()) return;
     await db.update("thread", threadData.id, { content: newContent });
   };
 
@@ -80,13 +105,13 @@ export function ThreadDetail() {
         {/* Navigation Bar */}
         <div class="flex justify-between items-center mb-6 border-b border-gray-800 pb-2">
           <button
-            onClick={handleBack}
+            onMouseDown={handleBack}
             class="text-xs uppercase font-bold text-gray-400 hover:text-white hover:underline decoration-white underline-offset-4 flex items-center gap-2 transition-none"
           >
             <span>&lt;&lt;</span> RETURN_TO_ROOT
           </button>
           <div class="text-[10px] uppercase text-gray-600">
-              MODE: READ_WRITE
+              MODE: {isAuthor() ? "READ_WRITE" : "READ_ONLY"}
           </div>
         </div>
 
@@ -106,38 +131,65 @@ export function ThreadDetail() {
           {(threadData) => (
             <div class="space-y-8">
               {/* Thread Content Wrapper */}
-              <div class="border-2 border-white p-6 relative bg-black">
+              <div class={`border-2 p-6 relative bg-black ${isAuthor() ? "border-white" : "border-gray-700"}`}>
                 {/* Decorative Header */}
-                <div class="absolute -top-3 left-4 bg-black px-2 text-xs font-bold uppercase border-x border-white">
-                   FILE_VIEWER
+                <div class={`absolute -top-3 left-4 bg-black px-2 text-xs font-bold uppercase border-x ${isAuthor() ? "border-white" : "border-gray-700"}`}>
+                   {isAuthor() ? "FILE_EDITOR" : "FILE_VIEWER"}
                 </div>
 
-                {/* Editable Title */}
-                <div class="mb-6 group">
-                  <label class="block text-[10px] text-gray-500 uppercase font-bold mb-1 group-focus-within:text-white">
-                      &gt; SUBJECT_LINE
-                  </label>
-                  <input
-                    type="text"
-                    value={threadData().title}
-                    onInput={(e) => handleTitleChange(e.currentTarget.value)}
-                    class="text-2xl font-bold w-full bg-black border-b-2 border-transparent focus:border-white outline-none text-white placeholder-gray-700 uppercase tracking-wide transition-none rounded-none"
-                    placeholder="UNTITLED_THREAD"
-                  />
-                </div>
+                <Show
+                  when={isAuthor()}
+                  fallback={
+                    <>
+                      {/* Read-Only Title */}
+                      <div class="mb-6">
+                        <label class="block text-[10px] text-gray-600 uppercase font-bold mb-1">
+                            &gt; SUBJECT_LINE
+                        </label>
+                        <h1 class="text-2xl font-bold w-full text-gray-400 uppercase tracking-wide">
+                          {threadData().title || "UNTITLED_THREAD"}
+                        </h1>
+                      </div>
 
-                {/* Editable Content */}
-                <div class="mb-6 group">
-                   <label class="block text-[10px] text-gray-500 uppercase font-bold mb-1 group-focus-within:text-white">
-                      &gt; DATA_CONTENT
-                  </label>
-                  <textarea
-                      value={threadData().content}
-                      onInput={(e) => handleContentChange(e.currentTarget.value)}
-                      class="w-full bg-black text-gray-300 focus:text-white whitespace-pre-wrap border-l-2 border-gray-800 focus:border-white outline-none pl-4 resize-none min-h-[150px] leading-relaxed transition-none rounded-none"
-                      placeholder="No content data..."
-                  />
-                </div>
+                      {/* Read-Only Content */}
+                      <div class="mb-6">
+                         <label class="block text-[10px] text-gray-600 uppercase font-bold mb-1">
+                            &gt; DATA_CONTENT
+                        </label>
+                        <div class="w-full text-gray-400 whitespace-pre-wrap border-l-2 border-gray-700 pl-4 min-h-[150px] leading-relaxed">
+                          {threadData().content || "No content data..."}
+                        </div>
+                      </div>
+                    </>
+                  }
+                >
+                  {/* Editable Title */}
+                  <div class="mb-6 group">
+                    <label class="block text-[10px] text-gray-500 uppercase font-bold mb-1 group-focus-within:text-white">
+                        &gt; SUBJECT_LINE
+                    </label>
+                    <input
+                      type="text"
+                      value={threadData().title}
+                      onInput={(e) => handleTitleChange(e.currentTarget.value)}
+                      class="text-2xl font-bold w-full bg-black border-b-2 border-transparent focus:border-white outline-none text-white placeholder-gray-700 uppercase tracking-wide transition-none rounded-none"
+                      placeholder="UNTITLED_THREAD"
+                    />
+                  </div>
+
+                  {/* Editable Content */}
+                  <div class="mb-6 group">
+                     <label class="block text-[10px] text-gray-500 uppercase font-bold mb-1 group-focus-within:text-white">
+                        &gt; DATA_CONTENT
+                    </label>
+                    <textarea
+                        value={threadData().content}
+                        onInput={(e) => handleContentChange(e.currentTarget.value)}
+                        class="w-full bg-black text-gray-300 focus:text-white whitespace-pre-wrap border-l-2 border-gray-800 focus:border-white outline-none pl-4 resize-none min-h-[150px] leading-relaxed transition-none rounded-none"
+                        placeholder="No content data..."
+                    />
+                  </div>
+                </Show>
 
                 {/* Metadata Footer */}
                 <div class="flex justify-between items-center text-[10px] uppercase text-gray-500 border-t border-dashed border-gray-700 pt-3 font-bold tracking-wider">
@@ -161,7 +213,7 @@ export function ThreadDetail() {
                   <Show when={auth.user()}>
                     <div class="flex text-xs font-bold">
                       <button
-                        onClick={() => setCommentFilter("all")}
+                        onMouseDown={() => setCommentFilter("all")}
                         class={`px-3 py-1 border-2 border-r-0 border-white uppercase transition-none ${
                           commentFilter() === "all"
                             ? "bg-white text-black"
@@ -171,7 +223,7 @@ export function ThreadDetail() {
                         [ ALL_LOGS ]
                       </button>
                       <button
-                        onClick={() => setCommentFilter("mine")}
+                        onMouseDown={() => setCommentFilter("mine")}
                         class={`px-3 py-1 border-2 border-white uppercase transition-none ${
                           commentFilter() === "mine"
                             ? "bg-white text-black"

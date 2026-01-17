@@ -51,7 +51,7 @@ export function ThreadSidebar(props: ThreadSidebarProps) {
         >
           {(thread) => (
             <button
-              onClick={() => handleThreadClick(thread.id)}
+              onMouseDown={() => handleThreadClick(thread.id)}
               class={`w-full text-left px-4 py-2 text-xs uppercase font-mono transition-none border-l-2 ${
                 isActive(thread.id)
                   ? "border-white text-white bg-white/5"
