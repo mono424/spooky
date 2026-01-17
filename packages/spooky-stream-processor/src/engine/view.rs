@@ -1,7 +1,7 @@
 use super::circuit::Database;
 use super::eval::{
-    compare_spooky_values, extract_number_column, filter_f64_batch, hash_spooky_value,
-    normalize_record_id, resolve_nested_value, NumericOp,
+    apply_numeric_filter, compare_spooky_values, hash_spooky_value, NumericFilterConfig,
+    normalize_record_id, resolve_nested_value,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -553,60 +553,14 @@ impl View {
                     Some(FastMap::default())
                 }
             }
-            Operator::Filter { input, predicate } => {
+                        Operator::Filter { input, predicate } => {
                 let upstream_delta = self.eval_delta_batch(input, deltas, db, context)?;
 
-                // SIMD Optimization Check (Copy of eval_snapshot logic)
-                let simd_target_op = match predicate {
-                    Predicate::Gt {
-                        value: Value::Number(n),
-                        ..
-                    } => n.as_f64().map(|f| (f, NumericOp::Gt)),
-                    Predicate::Gte {
-                        value: Value::Number(n),
-                        ..
-                    } => n.as_f64().map(|f| (f, NumericOp::Gte)),
-                    Predicate::Lt {
-                        value: Value::Number(n),
-                        ..
-                    } => n.as_f64().map(|f| (f, NumericOp::Lt)),
-                    Predicate::Lte {
-                        value: Value::Number(n),
-                        ..
-                    } => n.as_f64().map(|f| (f, NumericOp::Lte)),
-                    Predicate::Eq {
-                        value: Value::Number(n),
-                        ..
-                    } => n.as_f64().map(|f| (f, NumericOp::Eq)),
-                    Predicate::Neq {
-                        value: Value::Number(n),
-                        ..
-                    } => n.as_f64().map(|f| (f, NumericOp::Neq)),
-                    _ => None,
-                };
-
-                let field_path = match predicate {
-                    Predicate::Gt { field, .. }
-                    | Predicate::Gte { field, .. }
-                    | Predicate::Lt { field, .. }
-                    | Predicate::Lte { field, .. }
-                    | Predicate::Eq { field, .. }
-                    | Predicate::Neq { field, .. } => Some(field),
-                    _ => None,
-                };
-
-                if let (Some((target, op)), Some(path)) = (simd_target_op, field_path) {
-                    // SIMD PATH
-                    let (keys, weights, numbers) = extract_number_column(&upstream_delta, path, db);
-                    let passing_indices = filter_f64_batch(&numbers, target, op);
-
-                    let mut out_delta = FastMap::default();
-                    for idx in passing_indices {
-                        out_delta.insert(keys[idx].clone(), weights[idx]);
-                    }
-                    Some(out_delta)
+                // Try SIMD fast path using NumericFilterConfig
+                if let Some(config) = NumericFilterConfig::from_predicate(predicate) {
+                    Some(apply_numeric_filter(&upstream_delta, &config, db))
                 } else {
-                    // Slow Path
+                    // Slow Path (non-numeric predicates)
                     let mut out_delta = FastMap::default();
                     for (key, weight) in upstream_delta {
                         if self.check_predicate(predicate, &key, db, context) {
@@ -649,61 +603,14 @@ impl View {
                     FastMap::default()
                 }
             }
-            Operator::Filter { input, predicate } => {
+                        Operator::Filter { input, predicate } => {
                 let upstream = self.eval_snapshot(input, db, context);
 
-                // SIMD Optimization Check
-                let simd_target_op = match predicate {
-                    Predicate::Gt {
-                        value: Value::Number(n),
-                        ..
-                    } => n.as_f64().map(|f| (f, NumericOp::Gt)),
-                    Predicate::Gte {
-                        value: Value::Number(n),
-                        ..
-                    } => n.as_f64().map(|f| (f, NumericOp::Gte)),
-                    Predicate::Lt {
-                        value: Value::Number(n),
-                        ..
-                    } => n.as_f64().map(|f| (f, NumericOp::Lt)),
-                    Predicate::Lte {
-                        value: Value::Number(n),
-                        ..
-                    } => n.as_f64().map(|f| (f, NumericOp::Lte)),
-                    Predicate::Eq {
-                        value: Value::Number(n),
-                        ..
-                    } => n.as_f64().map(|f| (f, NumericOp::Eq)),
-                    Predicate::Neq {
-                        value: Value::Number(n),
-                        ..
-                    } => n.as_f64().map(|f| (f, NumericOp::Neq)),
-                    _ => None,
-                };
-
-                let field_path = match predicate {
-                    Predicate::Gt { field, .. }
-                    | Predicate::Gte { field, .. }
-                    | Predicate::Lt { field, .. }
-                    | Predicate::Lte { field, .. }
-                    | Predicate::Eq { field, .. }
-                    | Predicate::Neq { field, .. } => Some(field),
-                    _ => None,
-                };
-
-                if let (Some((target, op)), Some(path)) = (simd_target_op, field_path) {
-                    // SIMD PATH
-                    let (keys, weights, numbers) = extract_number_column(&upstream, path, db);
-                    let passing_indices = filter_f64_batch(&numbers, target, op);
-
-                    let mut out = FastMap::default();
-                    for idx in passing_indices {
-                        // Safety: indices returned by filter_batch are valid for keys/weights
-                        out.insert(keys[idx].clone(), weights[idx]);
-                    }
-                    out
+                // Try SIMD fast path using NumericFilterConfig
+                if let Some(config) = NumericFilterConfig::from_predicate(predicate) {
+                    apply_numeric_filter(&upstream, &config, db)
                 } else {
-                    // Slow Path (Loop)
+                    // Slow Path (non-numeric predicates)
                     let mut out = FastMap::default();
                     for (key, weight) in upstream {
                         if self.check_predicate(predicate, &key, db, context) {

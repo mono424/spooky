@@ -238,3 +238,64 @@ pub fn normalize_record_id(val: SpookyValue) -> SpookyValue {
     }
     val
 }
+
+// --- SIMD FILTER CONSOLIDATION ---
+
+use crate::engine::operators::Predicate;
+use serde_json::Value;
+
+/// Configuration for SIMD-friendly numeric filtering.
+/// Holds the extracted field path, target value, and comparison operation.
+pub struct NumericFilterConfig<'a> {
+    pub path: &'a Path,
+    pub target: f64,
+    pub op: NumericOp,
+}
+
+impl<'a> NumericFilterConfig<'a> {
+    /// Try to extract numeric filter config from a predicate.
+    /// Returns None if the predicate is not a simple numeric comparison.
+    pub fn from_predicate(pred: &'a Predicate) -> Option<Self> {
+        // Extract target value and operation
+        let (target, op) = match pred {
+            Predicate::Gt { value: Value::Number(n), .. } => (n.as_f64()?, NumericOp::Gt),
+            Predicate::Gte { value: Value::Number(n), .. } => (n.as_f64()?, NumericOp::Gte),
+            Predicate::Lt { value: Value::Number(n), .. } => (n.as_f64()?, NumericOp::Lt),
+            Predicate::Lte { value: Value::Number(n), .. } => (n.as_f64()?, NumericOp::Lte),
+            Predicate::Eq { value: Value::Number(n), .. } => (n.as_f64()?, NumericOp::Eq),
+            Predicate::Neq { value: Value::Number(n), .. } => (n.as_f64()?, NumericOp::Neq),
+            _ => return None,
+        };
+
+        // Extract field path
+        let path = match pred {
+            Predicate::Gt { field, .. }
+            | Predicate::Gte { field, .. }
+            | Predicate::Lt { field, .. }
+            | Predicate::Lte { field, .. }
+            | Predicate::Eq { field, .. }
+            | Predicate::Neq { field, .. } => field,
+            _ => return None,
+        };
+
+        Some(Self { path, target, op })
+    }
+}
+
+/// Apply SIMD-optimized numeric filter to a ZSet.
+/// Uses extract_number_column and filter_f64_batch for vectorized filtering.
+#[inline]
+pub fn apply_numeric_filter(
+    upstream: &ZSet,
+    config: &NumericFilterConfig,
+    db: &Database,
+) -> ZSet {
+    let (keys, weights, numbers) = extract_number_column(upstream, config.path, db);
+    let passing_indices = filter_f64_batch(&numbers, config.target, config.op);
+
+    let mut out = FastMap::default();
+    for idx in passing_indices {
+        out.insert(keys[idx].clone(), weights[idx]);
+    }
+    out
+}
