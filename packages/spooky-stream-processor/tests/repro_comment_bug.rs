@@ -39,7 +39,7 @@ fn test_comment_creation_updates_thread_view() {
         .expect("Initial view update failed");
 
     // Verify initial state (0 comments)
-    let initial_result = &update.result_data;
+    let initial_result = &update.result_data();
     println!("Initial Result: {:?}", initial_result);
     // Should have 1 result (the thread)
     // Actually result_data is Vec<(id, hash)>

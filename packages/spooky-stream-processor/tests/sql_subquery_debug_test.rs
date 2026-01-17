@@ -105,9 +105,9 @@ fn test_subquery_via_sql_full_flow() {
 
     // Flat array includes both thread AND author (from subquery)
     let result_ids: Vec<&str> = view_update
-        .result_data
+        .result_data()
         .iter()
-        .map(|(id, _): (&String, &u64)| id.as_str())
+        .map(|(id, _)| id.as_str())
         .collect();
     assert!(
         result_ids.contains(&thread_id.as_str()),

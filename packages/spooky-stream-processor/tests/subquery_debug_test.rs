@@ -72,7 +72,7 @@ fn test_subquery_projection_children() {
     let result_ids: Vec<&str> = view_update
         .result_data()
         .iter()
-        .map(|(id, _): (&String, &u64)| id.as_str())
+        .map(|(id, _)| id.as_str())
         .collect();
 
     assert!(
