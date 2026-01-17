@@ -13,7 +13,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use spooky_stream_processor::{
     Circuit, MaterializedViewUpdate, ViewUpdate,
-    engine::update::{StreamingUpdate, DeltaEvent},
 };
 use surrealdb::engine::remote::ws::{Client, Ws};
 use surrealdb::opt::auth::Root;
@@ -362,64 +361,5 @@ async fn update_incantation_in_db(db: &Surreal<Client>, update: &MaterializedVie
             }
         },
         Err(e) => error!("Failed to update incantation result in DB: {}", e),
-    }
-}
-
-/// Format incantation ID as a full SurrealDB record ID
-fn format_incantation_id(raw_id: &str) -> String {
-    if raw_id.starts_with("_spooky_incantation:") {
-        raw_id.to_string()
-    } else {
-        format!("_spooky_incantation:{}", raw_id)
-    }
-}
-
-/// Graph-based persistence for StreamingUpdate.
-/// Maps DeltaEvent to specific SurrealQL graph operations (blind writes).
-async fn update_incantation_graph(db: &Surreal<Client>, update: &StreamingUpdate) {
-    let incantation_id = format_incantation_id(&update.view_id);
-    
-    debug!(
-        "Processing graph update for {} with {} records",
-        incantation_id,
-        update.records.len()
-    );
-    
-    for record in &update.records {
-        let result = match record.event {
-            DeltaEvent::Created => {
-                // RELATE creates an edge from incantation → record with version
-                debug!("RELATE {}->_spooky_list_ref->{} version={}", incantation_id, record.id, record.version);
-                db.query("RELATE $from->_spooky_list_ref->$to SET version = $version")
-                    .bind(("from", incantation_id.clone()))
-                    .bind(("to", record.id.clone()))
-                    .bind(("version", record.version))
-                    .await
-            }
-            DeltaEvent::Deleted => {
-                // DELETE removes the specific edge
-                debug!("DELETE {}->_spooky_list_ref WHERE out = {}", incantation_id, record.id);
-                db.query("DELETE $from->_spooky_list_ref WHERE out = $to")
-                    .bind(("from", incantation_id.clone()))
-                    .bind(("to", record.id.clone()))
-                    .await
-            }
-            DeltaEvent::Updated => {
-                // UPDATE modifies version on existing edge
-                debug!("UPDATE {}->_spooky_list_ref SET version={} WHERE out = {}", incantation_id, record.version, record.id);
-                db.query("UPDATE $from->_spooky_list_ref SET version = $version WHERE out = $to")
-                    .bind(("from", incantation_id.clone()))
-                    .bind(("to", record.id.clone()))
-                    .bind(("version", record.version))
-                    .await
-            }
-        };
-        
-        if let Err(e) = result {
-            error!(
-                "Graph operation {:?} failed for {} -> {}: {}",
-                record.event, incantation_id, record.id, e
-            );
-        }
     }
 }

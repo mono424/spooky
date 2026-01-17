@@ -1,6 +1,6 @@
 use crate::debug_log;
 use super::view::{
-    FastMap, Operator, Projection, QueryPlan, RowKey, SpookyValue, View, ViewUpdate, ZSet,
+    FastMap, QueryPlan, RowKey, SpookyValue, View, ViewUpdate, ZSet,
 };
 use super::update::ViewResultFormat;
 // use rustc_hash::{FxHashMap, FxHasher}; // Unused in this file (used via FastMap)

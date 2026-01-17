@@ -1,11 +1,11 @@
-use crate::debug_log;
 use super::circuit::Database;
 use super::eval::{
-    apply_numeric_filter, compare_spooky_values, hash_spooky_value, NumericFilterConfig,
-    normalize_record_id, resolve_nested_value,
+    apply_numeric_filter, compare_spooky_values, hash_spooky_value, normalize_record_id,
+    resolve_nested_value, NumericFilterConfig,
 };
+use crate::debug_log;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use smol_str::SmolStr;
 use std::cmp::Ordering;
 
@@ -75,7 +75,12 @@ impl View {
         // Check if any delta contains CREATE or DELETE operations for tables used in subqueries
         let has_subquery_changes = !is_first_run && self.has_changes_for_subqueries(deltas, db);
 
-        debug_log!("DEBUG VIEW: id={} is_first_run={} has_subquery_changes={}", self.plan.id, is_first_run, has_subquery_changes);
+        debug_log!(
+            "DEBUG VIEW: id={} is_first_run={} has_subquery_changes={}",
+            self.plan.id,
+            is_first_run,
+            has_subquery_changes
+        );
 
         let maybe_delta = if is_first_run || has_subquery_changes {
             // Force full scan if:
@@ -90,7 +95,9 @@ impl View {
             d
         } else {
             // FALLBACK MODE: Full Scan & Diff
-            let target_set = self.eval_snapshot(&self.plan.root, db, self.params.as_ref()).into_owned();
+            let target_set = self
+                .eval_snapshot(&self.plan.root, db, self.params.as_ref())
+                .into_owned();
             let mut diff = FastMap::default();
 
             for (key, &new_w) in &target_set {
@@ -127,7 +134,6 @@ impl View {
                 self.cache.remove(key);
             }
         }
-
 
         // CAPTURE DELTA SETS (needed for all formats)
         // Pre-allocate based on view_delta size for efficiency
@@ -172,7 +178,12 @@ impl View {
                     } else if is_optimistic && updated_record_ids.contains(&id.to_string()) {
                         let _old_ver = *version;
                         *version += 1;
-                        debug_log!("DEBUG VIEW: Incrementing version for id={} old={} new={}", id, _old_ver, *version);
+                        debug_log!(
+                            "DEBUG VIEW: Incrementing version for id={} old={} new={}",
+                            id,
+                            _old_ver,
+                            *version
+                        );
                     }
                 }
             }
@@ -269,8 +280,9 @@ impl View {
             if !subquery_projections.is_empty() {
                 if let Some(parent_row) = self.get_row_value(id, db) {
                     for subquery_op in &subquery_projections {
-                        let subquery_results =
-                            self.eval_snapshot(subquery_op, db, Some(parent_row)).into_owned();
+                        let subquery_results = self
+                            .eval_snapshot(subquery_op, db, Some(parent_row))
+                            .into_owned();
                         for (sub_id, _weight) in subquery_results {
                             all_ids.push(sub_id.to_string());
                         }
@@ -296,7 +308,12 @@ impl View {
                     // Optimistic update: increment version to trigger hash change
                     let _old_ver = *version;
                     *version += 1;
-                    debug_log!("DEBUG VIEW: Incrementing version for id={} old={} new={}", id, _old_ver, *version);
+                    debug_log!(
+                        "DEBUG VIEW: Incrementing version for id={} old={} new={}",
+                        id,
+                        _old_ver,
+                        *version
+                    );
                 }
             }
         }
@@ -402,26 +419,50 @@ impl View {
         // Get all tables used in subqueries
         let subquery_tables = self.extract_subquery_tables(&self.plan.root);
 
-        debug_log!("DEBUG has_changes: view={} subquery_tables={:?} delta_tables={:?}", self.plan.id, subquery_tables, deltas.keys().collect::<Vec<_>>());
+        debug_log!(
+            "DEBUG has_changes: view={} subquery_tables={:?} delta_tables={:?}",
+            self.plan.id,
+            subquery_tables,
+            deltas.keys().collect::<Vec<_>>()
+        );
 
         if subquery_tables.is_empty() {
-            debug_log!("DEBUG has_changes: view={} NO SUBQUERY TABLES", self.plan.id);
+            debug_log!(
+                "DEBUG has_changes: view={} NO SUBQUERY TABLES",
+                self.plan.id
+            );
             return false;
         }
 
         // Check if any delta for a subquery table contains changes (weight != 0)
         for table in subquery_tables {
             if let Some(delta) = deltas.get(&table) {
-                debug_log!("DEBUG has_changes: view={} table={} delta_keys={:?}", self.plan.id, table, delta.keys().collect::<Vec<_>>());
+                debug_log!(
+                    "DEBUG has_changes: view={} table={} delta_keys={:?}",
+                    self.plan.id,
+                    table,
+                    delta.keys().collect::<Vec<_>>()
+                );
                 // Check if any record in this delta is a CREATE (weight > 0 and not in version_map)
                 // or a DELETE (weight < 0 and in version_map)
                 for (key, weight) in delta {
                     let in_version_map = self.version_map.contains_key(key.as_str());
-                    debug_log!("DEBUG has_changes: view={} key={} weight={} in_version_map={}", self.plan.id, key, weight, in_version_map);
+                    debug_log!(
+                        "DEBUG has_changes: view={} key={} weight={} in_version_map={}",
+                        self.plan.id,
+                        key,
+                        weight,
+                        in_version_map
+                    );
                     // CREATE: positive weight, not in version_map
                     // DELETE: negative weight, in version_map
                     if (*weight > 0 && !in_version_map) || (*weight < 0 && in_version_map) {
-                        debug_log!("DEBUG has_changes: view={} FOUND CHANGE key={} weight={}", self.plan.id, key, weight);
+                        debug_log!(
+                            "DEBUG has_changes: view={} FOUND CHANGE key={} weight={}",
+                            self.plan.id,
+                            key,
+                            weight
+                        );
                         return true;
                     }
                 }
@@ -443,7 +484,12 @@ impl View {
                 // Only check records with positive weight (existing/updated records)
                 // Negative weight means deletion which is handled elsewhere
                 if *weight > 0 && self.cache.contains_key(record_id.as_str()) {
-                    debug_log!("DEBUG get_updated_cached_records: view={} table={} found cached record={}", self.plan.id, _table, record_id);
+                    debug_log!(
+                        "DEBUG get_updated_cached_records: view={} table={} found cached record={}",
+                        self.plan.id,
+                        _table,
+                        record_id
+                    );
                     updated_ids.push(record_id.to_string());
                 }
             }
@@ -475,7 +521,13 @@ impl View {
         let current_version = self.version_map.get(record_id).copied().unwrap_or(0);
 
         if current_version != version {
-            debug_log!("DEBUG VIEW: set_record_version id={} record={} old={} new={}", self.plan.id, record_id, current_version, version);
+            debug_log!(
+                "DEBUG VIEW: set_record_version id={} record={} old={} new={}",
+                self.plan.id,
+                record_id,
+                current_version,
+                version
+            );
             self.version_map.insert(SmolStr::new(record_id), version);
 
             // Trigger re-hashing by processing empty deltas
@@ -565,7 +617,7 @@ impl View {
                     Some(FastMap::default())
                 }
             }
-                        Operator::Filter { input, predicate } => {
+            Operator::Filter { input, predicate } => {
                 let upstream_delta = self.eval_delta_batch(input, deltas, db, context)?;
 
                 // Try SIMD fast path using NumericFilterConfig
@@ -606,9 +658,14 @@ impl View {
 
     /// The classic detailed Full-Scan Evaluator (for fallback and init)
     /// Returns Cow to avoid cloning ZSets when possible
-    fn eval_snapshot<'a>(&self, op: &Operator, db: &'a Database, context: Option<&SpookyValue>) -> std::borrow::Cow<'a, ZSet> {
+    fn eval_snapshot<'a>(
+        &self,
+        op: &Operator,
+        db: &'a Database,
+        context: Option<&SpookyValue>,
+    ) -> std::borrow::Cow<'a, ZSet> {
         use std::borrow::Cow;
-        
+
         match op {
             Operator::Scan { table } => {
                 if let Some(tb) = db.tables.get(table) {

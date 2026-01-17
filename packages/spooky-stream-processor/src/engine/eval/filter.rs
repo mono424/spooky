@@ -1,5 +1,5 @@
 use crate::engine::circuit::Database;
-use crate::engine::types::{FastMap, Path, RowKey, SpookyValue, ZSet};
+use crate::engine::types::{FastMap, Path, SpookyValue, ZSet};
 use rustc_hash::FxHasher;
 use smol_str::SmolStr;
 use std::cmp::Ordering;
@@ -18,7 +18,10 @@ pub enum NumericOp {
 
 /// Resolve nested value using dot notation path
 #[inline(always)]
-pub fn resolve_nested_value<'a>(root: Option<&'a SpookyValue>, path: &Path) -> Option<&'a SpookyValue> {
+pub fn resolve_nested_value<'a>(
+    root: Option<&'a SpookyValue>,
+    path: &Path,
+) -> Option<&'a SpookyValue> {
     let mut current = root;
     for part in &path.0 {
         match current {
@@ -258,12 +261,30 @@ impl<'a> NumericFilterConfig<'a> {
     pub fn from_predicate(pred: &'a Predicate) -> Option<Self> {
         // Extract target value and operation
         let (target, op) = match pred {
-            Predicate::Gt { value: Value::Number(n), .. } => (n.as_f64()?, NumericOp::Gt),
-            Predicate::Gte { value: Value::Number(n), .. } => (n.as_f64()?, NumericOp::Gte),
-            Predicate::Lt { value: Value::Number(n), .. } => (n.as_f64()?, NumericOp::Lt),
-            Predicate::Lte { value: Value::Number(n), .. } => (n.as_f64()?, NumericOp::Lte),
-            Predicate::Eq { value: Value::Number(n), .. } => (n.as_f64()?, NumericOp::Eq),
-            Predicate::Neq { value: Value::Number(n), .. } => (n.as_f64()?, NumericOp::Neq),
+            Predicate::Gt {
+                value: Value::Number(n),
+                ..
+            } => (n.as_f64()?, NumericOp::Gt),
+            Predicate::Gte {
+                value: Value::Number(n),
+                ..
+            } => (n.as_f64()?, NumericOp::Gte),
+            Predicate::Lt {
+                value: Value::Number(n),
+                ..
+            } => (n.as_f64()?, NumericOp::Lt),
+            Predicate::Lte {
+                value: Value::Number(n),
+                ..
+            } => (n.as_f64()?, NumericOp::Lte),
+            Predicate::Eq {
+                value: Value::Number(n),
+                ..
+            } => (n.as_f64()?, NumericOp::Eq),
+            Predicate::Neq {
+                value: Value::Number(n),
+                ..
+            } => (n.as_f64()?, NumericOp::Neq),
             _ => return None,
         };
 
@@ -285,11 +306,7 @@ impl<'a> NumericFilterConfig<'a> {
 /// Apply SIMD-optimized numeric filter to a ZSet.
 /// Uses extract_number_column and filter_f64_batch for vectorized filtering.
 #[inline]
-pub fn apply_numeric_filter(
-    upstream: &ZSet,
-    config: &NumericFilterConfig,
-    db: &Database,
-) -> ZSet {
+pub fn apply_numeric_filter(upstream: &ZSet, config: &NumericFilterConfig, db: &Database) -> ZSet {
     let (keys, weights, numbers) = extract_number_column(upstream, config.path, db);
     let passing_indices = filter_f64_batch(&numbers, config.target, config.op);
 
