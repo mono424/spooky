@@ -388,7 +388,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "spooky-stream-processor"
+name = "ssp"
 version = "0.1.0"
 dependencies = [
  "anyhow",

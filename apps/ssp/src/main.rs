@@ -11,7 +11,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use spooky_stream_processor::{
+use ssp::{
     Circuit, MaterializedViewUpdate, ViewUpdate,
 };
 use surrealdb::engine::remote::ws::{Client, Ws};
@@ -54,11 +54,11 @@ async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
 
     // Setup logging
-    let file_appender = tracing_appender::rolling::daily("logs", "spooky-sidecar.log");
+    let file_appender = tracing_appender::rolling::daily("logs", "ssp.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "spooky_sidecar=debug,axum=info".into());
+        .unwrap_or_else(|_| "ssp=debug,axum=info".into());
 
     let stdout_layer = tracing_subscriber::fmt::layer().with_ansi(true).pretty();
     let file_layer = tracing_subscriber::fmt::layer().with_writer(non_blocking).json();
@@ -69,7 +69,7 @@ async fn main() -> anyhow::Result<()> {
         .with(file_layer)
         .init();
 
-    info!("Starting spooky-sidecar...");
+    info!("Starting ssp...");
 
     // Persistence Config
     let persistence_file = std::env::var("SPOOKY_PERSISTENCE_FILE").unwrap_or_else(|_| "data/spooky_state.json".to_string());
@@ -192,7 +192,7 @@ async fn ingest_handler(
 ) -> impl IntoResponse {
     debug!("Received ingest request");
 
-    let (clean_record, hash) = spooky_stream_processor::service::ingest::prepare(payload.record);
+    let (clean_record, hash) = ssp::service::ingest::prepare(payload.record);
 
     let updates = {
         let mut circuit = state.processor.lock().unwrap();
@@ -227,7 +227,7 @@ async fn register_view_handler(
     State(state): State<AppState>,
     Json(payload): Json<Value>, 
 ) ->  impl IntoResponse {
-    let result = spooky_stream_processor::service::view::prepare_registration(payload);
+    let result = ssp::service::view::prepare_registration(payload);
     let data = match result {
         Ok(d) => d,
         Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
@@ -242,7 +242,7 @@ async fn register_view_handler(
         res
     };
 
-    let result_update = update.unwrap_or_else(|| ViewUpdate::Flat(spooky_stream_processor::service::view::default_result(&data.plan.id)));
+    let result_update = update.unwrap_or_else(|| ViewUpdate::Flat(ssp::service::view::default_result(&data.plan.id)));
 
     let m = &data.metadata;
     let query = "UPSERT <record>$id SET hash = <string>$hash, array = $array, clientId = <string>$clientId, surrealQL = <string>$surrealQL, params = $params, ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt";

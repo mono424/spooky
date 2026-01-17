@@ -1,4 +1,4 @@
-# syncgen
+# Spooky CLI
 
 Generate TypeScript and Dart types from SurrealDB schema files.
 
@@ -18,33 +18,33 @@ This package wraps a Rust-based code generator that parses SurrealDB `.surql` sc
 
 ```bash
 # Generate TypeScript types
-syncgen --input schema.surql --output types.ts
+spooky --input schema.surql --output types.ts
 
 # Generate Dart types
-syncgen --input schema.surql --output types.dart
+spooky --input schema.surql --output types.dart
 
 # Generate JSON Schema
-syncgen --input schema.surql --output schema.json
+spooky --input schema.surql --output schema.json
 
 # Generate all formats at once
-syncgen --input schema.surql --output output --all
+spooky --input schema.surql --output output --all
 
 # Specify format explicitly
-syncgen --input schema.surql --output output.ts --format typescript
+spooky --input schema.surql --output output.ts --format typescript
 ```
 
 ### Programmatic API
 
 ```typescript
-import { runSyncgen } from '@whitepawn/syncgen';
+import { runSpooky } from 'spooky-cli';
 
 // Generate types
-const output = await runSyncgen({
+const output = await runSpooky({
   input: 'path/to/schema.surql',
   output: 'path/to/output.ts',
   format: 'typescript', // or 'dart', 'json'
   pretty: true,
-  all: false
+  all: false,
 });
 
 console.log(output);
@@ -79,7 +79,7 @@ npm run build:vite
 ### Project Structure
 
 ```
-syncgen/
+cli/
 ├── src/
 │   ├── main.rs          # Rust CLI entry point
 │   ├── parser.rs        # SurrealDB schema parser
@@ -95,7 +95,7 @@ syncgen/
 
 ## How It Works
 
-1. The Rust binary (`syncgen`) parses SurrealDB schema files and generates JSON Schema
+1. The Rust binary (`spooky`) parses SurrealDB schema files and generates JSON Schema
 2. For TypeScript/Dart output, it uses `quicktype` to convert JSON Schema to the target language
 3. The TypeScript wrapper (`src/index.ts`) spawns the Rust binary as a child process
 4. Vite bundles the TypeScript wrapper for distribution

@@ -3124,25 +3124,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "spooky-sidecar"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "blake3",
- "dotenvy",
- "serde",
- "serde_json",
- "spooky-stream-processor",
- "surrealdb",
- "tokio",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "spooky-stream-processor"
+name = "ssp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -3159,6 +3141,24 @@ dependencies = [
  "smol_str",
  "ulid",
  "web-sys",
+]
+
+[[package]]
+name = "ssp-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "blake3",
+ "dotenvy",
+ "serde",
+ "serde_json",
+ "ssp",
+ "surrealdb",
+ "tokio",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
 ]
 
 [[package]]

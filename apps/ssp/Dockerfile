@@ -8,13 +8,13 @@ WORKDIR /usr/src/app
 
 # Copy the necessary local packages source
 # We need to preserve the directory structure as specified in Cargo.toml dependencies (../../packages/...)
-COPY packages/spooky-stream-processor packages/spooky-stream-processor
+COPY packages/ssp packages/ssp
 
 # Copy the application source
-COPY apps/spooky-sidecar apps/spooky-sidecar
+COPY apps/ssp apps/ssp
 
 # Build the application
-WORKDIR /usr/src/app/apps/spooky-sidecar
+WORKDIR /usr/src/app/apps/ssp
 RUN cargo build --release
 
 # Runtime Stage
@@ -27,7 +27,7 @@ RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/
 RUN mkdir -p /data
 
 # Copy the binary from builder
-COPY --from=builder /usr/src/app/apps/spooky-sidecar/target/release/spooky-sidecar /usr/local/bin/
+COPY --from=builder /usr/src/app/apps/ssp/target/release/ssp-server /usr/local/bin/
 
 # Set defaults
 ENV RUST_LOG=info
@@ -37,4 +37,4 @@ ENV SPOOKY_PERSISTENCE_FILE=/data/spooky_state.json
 EXPOSE 8667
 
 # Command to run
-CMD ["spooky-sidecar"]
+CMD ["ssp-server"]

@@ -1,4 +1,4 @@
-import init, { SpookyProcessor } from 'spooky-stream-processor-wasm';
+import init, { SpookyProcessor } from '@spooky/ssp-wasm';
 import { EventDefinition, EventSystem } from '../../events/index.js';
 import { Logger } from 'pino';
 import { LocalDatabaseService } from '../database/index.js';

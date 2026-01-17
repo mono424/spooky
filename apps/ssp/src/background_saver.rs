@@ -4,7 +4,7 @@ use std::time::Duration;
 use tokio::sync::Notify;
 use tokio::time::sleep;
 use tracing::{info, error, debug};
-use spooky_stream_processor::Circuit;
+use ssp::Circuit;
 use crate::persistence;
 
 pub struct BackgroundSaver {

@@ -1,5 +1,5 @@
 use anyhow::Context;
-use spooky_stream_processor::Circuit;
+use ssp::Circuit;
 use std::fs;
 use std::path::Path;
 use tracing::{error, info};

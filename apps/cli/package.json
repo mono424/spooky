@@ -1,5 +1,5 @@
 {
-  "name": "syncgen",
+  "name": "spooky-cli",
   "version": "0.1.0",
   "description": "Generate TypeScript/Dart types from SurrealDB schema files",
   "type": "module",
@@ -7,7 +7,7 @@
   "module": "./dist/syncgen.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "syncgen": "./dist/cli.js"
+    "spooky": "./dist/cli.js"
   },
   "exports": {
     ".": {
@@ -18,7 +18,7 @@
   },
   "files": [
     "dist",
-    "target/release/syncgen"
+    "target/release/spooky"
   ],
   "scripts": {
     "dev": "vite",

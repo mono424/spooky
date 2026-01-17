@@ -290,7 +290,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "spooky-stream-processor",
+ "ssp",
  "surrealism",
  "ulid",
 ]
@@ -1307,7 +1307,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "spooky-stream-processor"
+name = "ssp"
 version = "0.1.0"
 dependencies = [
  "anyhow",

@@ -15,6 +15,28 @@ importers:
         specifier: 2.0.0-alpha.15
         version: 2.0.0-alpha.15(tslib@2.8.1)(typescript@5.9.3)
 
+  apps/cli:
+    dependencies:
+      commander:
+        specifier: ^12.0.0
+        version: 12.1.0
+    devDependencies:
+      '@types/node':
+        specifier: ^20.0.0
+        version: 20.19.22
+      typescript:
+        specifier: ^5.3.0
+        version: 5.9.3
+      vite:
+        specifier: ^5.0.0
+        version: 5.4.20(@types/node@20.19.22)(lightningcss@1.30.1)
+      vite-plugin-dts:
+        specifier: ^3.7.0
+        version: 3.9.1(@types/node@20.19.22)(rollup@4.52.4)(typescript@5.9.3)(vite@5.4.20(@types/node@20.19.22)(lightningcss@1.30.1))
+      vitest:
+        specifier: ^1.0.0
+        version: 1.6.1(@types/node@20.19.22)(lightningcss@1.30.1)
+
   apps/devtools:
     dependencies:
       solid-js:
@@ -104,29 +126,7 @@ importers:
         specifier: ^1.4.0
         version: 1.4.0
 
-  apps/spooky-sidecar: {}
-
-  apps/syncgen:
-    dependencies:
-      commander:
-        specifier: ^12.0.0
-        version: 12.1.0
-    devDependencies:
-      '@types/node':
-        specifier: ^20.0.0
-        version: 20.19.22
-      typescript:
-        specifier: ^5.3.0
-        version: 5.9.3
-      vite:
-        specifier: ^5.0.0
-        version: 5.4.20(@types/node@20.19.22)(lightningcss@1.30.1)
-      vite-plugin-dts:
-        specifier: ^3.7.0
-        version: 3.9.1(@types/node@20.19.22)(rollup@4.52.4)(typescript@5.9.3)(vite@5.4.20(@types/node@20.19.22)(lightningcss@1.30.1))
-      vitest:
-        specifier: ^1.0.0
-        version: 1.6.1(@types/node@20.19.22)(lightningcss@1.30.1)
+  apps/ssp: {}
 
   example/app-solid:
     dependencies:
@@ -170,9 +170,9 @@ importers:
 
   example/schema:
     devDependencies:
-      syncgen:
+      spooky-cli:
         specifier: workspace:*
-        version: link:../../apps/syncgen
+        version: link:../../apps/cli
 
   packages/client-solid:
     dependencies:
@@ -216,6 +216,9 @@ importers:
       '@spooky/query-builder':
         specifier: workspace:*
         version: link:../query-builder
+      '@spooky/ssp-wasm':
+        specifier: workspace:*
+        version: link:../ssp-wasm
       '@surrealdb/wasm':
         specifier: ^2.4.0
         version: 2.4.0(surrealdb@2.0.0-alpha.15(tslib@2.8.1)(typescript@5.9.3))
@@ -225,9 +228,6 @@ importers:
       pino:
         specifier: ^10.1.0
         version: 10.1.0
-      spooky-stream-processor-wasm:
-        specifier: workspace:*
-        version: link:../spooky-stream-processor-wasm
       surrealdb:
         specifier: 2.0.0-alpha.15
         version: 2.0.0-alpha.15(tslib@2.8.1)(typescript@5.9.3)
@@ -264,7 +264,7 @@ importers:
         specifier: ^1.0.0
         version: 1.6.1(@types/node@20.19.22)(lightningcss@1.30.1)
 
-  packages/spooky-stream-processor-wasm:
+  packages/ssp-wasm:
     devDependencies:
       typescript:
         specifier: ^5.0.0
@@ -284,12 +284,12 @@ importers:
       jest:
         specifier: ^29.7.0
         version: 29.7.0(@types/node@20.19.22)(node-notifier@10.0.1)
+      spooky-cli:
+        specifier: workspace:*
+        version: link:../apps/cli
       surrealdb:
         specifier: 2.0.0-alpha.15
         version: 2.0.0-alpha.15(tslib@2.8.1)(typescript@5.9.3)
-      syncgen:
-        specifier: workspace:*
-        version: link:../apps/syncgen
       testcontainers:
         specifier: ^11.10.0
         version: 11.10.0
@@ -12058,7 +12058,7 @@ snapshots:
     dependencies:
       '@istanbuljs/schema': 0.1.3
       glob: 7.2.3
-      minimatch: 3.0.8
+      minimatch: 3.1.2
 
   testcontainers@11.10.0:
     dependencies:

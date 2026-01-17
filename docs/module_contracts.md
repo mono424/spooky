@@ -2,7 +2,7 @@
 
 This document defines the interface and call contracts for the different modules interacting with the Spooky Stream Processor core logic.
 
-## 1. Core Logic (`spooky-stream-processor` Rust Crate)
+## 1. Core Logic (`ssp` Rust Crate)
 
 The shared business logic used by all other modules.
 

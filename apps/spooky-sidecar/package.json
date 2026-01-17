@@ -1,8 +1,0 @@
-{
-    "name": "spooky-sidecar",
-    "version": "0.1.0",
-    "private": true,
-    "scripts": {
-        "build": "docker build -f Dockerfile -t spooky-sidecar ../.."
-    }
-}

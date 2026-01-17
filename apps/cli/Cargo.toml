@@ -1,10 +1,10 @@
 [package]
-name = "syncgen"
+name = "spooky-cli"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "syncgen"
+name = "spooky"
 path = "src/main.rs"
 
 [dependencies]

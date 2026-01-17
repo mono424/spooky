@@ -1,5 +1,5 @@
 {
-    "name": "spooky-stream-processor-wasm",
+    "name": "@spooky/ssp-wasm",
     "version": "0.1.0",
     "private": true,
     "main": "pkg/spooky_stream_processor_wasm.js",
