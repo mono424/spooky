@@ -1,5 +1,6 @@
 import { createSignal, Show, createEffect } from "solid-js";
 import { useAuth } from "../lib/auth";
+import { useKeyboard } from "../lib/keyboard";
 import { db } from "../db";
 
 interface AuthDialogProps {
@@ -22,6 +23,16 @@ export function AuthDialog(props: AuthDialogProps) {
       setError("");
       setUsername("");
       setPassword("");
+    }
+  });
+
+
+
+  useKeyboard({
+    "Escape": () => {
+        if (props.isOpen) {
+            props.onClose();
+        }
     }
   });
 
@@ -97,7 +108,7 @@ export function AuthDialog(props: AuthDialogProps) {
                {isSignUp() ? "INIT_REGISTRATION" : "AUTH_SEQUENCE"}
             </div>
             <button
-              onClick={handleClose}
+              onMouseDown={handleClose}
               class="px-5 hover:bg-white hover:text-black border-l-2 border-white font-bold transition-none text-lg flex items-center justify-center"
               aria-label="Close"
             >
@@ -169,7 +180,7 @@ export function AuthDialog(props: AuthDialogProps) {
             <div class="mt-8 text-center flex items-center justify-center gap-2 text-xs uppercase text-gray-400">
                <span>&gt;</span>
               <button
-                onClick={() => setIsSignUp(!isSignUp())}
+                onMouseDown={() => setIsSignUp(!isSignUp())}
                 class="hover:text-white hover:underline decoration-white underline-offset-4 transition-none"
               >
                 {isSignUp()

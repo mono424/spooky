@@ -3,6 +3,9 @@ import { createSignal, Show, onMount, createEffect } from "solid-js";
 import { AuthProvider, useAuth } from "./lib/auth";
 import { initDatabase } from "./db";
 import { AuthDialog } from "./components/AuthDialog";
+import { useKeyboard, useShortcutsHelp } from "./lib/keyboard";
+import { ShortcutsHelp } from "./components/ShortcutsHelp";
+import { useNavigate } from "@solidjs/router";
 
 // Import routes
 import Home from "./routes/index";
@@ -56,14 +59,14 @@ function Layout(props: any) {
                 <div class="flex space-x-4">
                    {/* Header Login Button */}
                   <button
-                    onClick={() => openAuth("signin")}
+                    onMouseDown={() => openAuth("signin")}
                     class="hidden sm:block text-sm uppercase font-bold hover:underline decoration-white underline-offset-4"
                   >
                     Login
                   </button>
                    {/* Header Register Button */}
                   <button
-                    onClick={() => openAuth("signup")}
+                    onMouseDown={() => openAuth("signup")}
                     class="border-2 border-white px-4 py-1 uppercase font-bold text-sm hover:bg-white hover:text-black transition-none"
                   >
                     [ REGISTER ]
@@ -76,7 +79,7 @@ function Layout(props: any) {
                   USER: <span class="text-white">{auth.user()?.username ?? "GUEST"}</span>
                 </span>
                 <button
-                  onClick={auth.signOut}
+                  onMouseDown={auth.signOut}
                   class="hover:underline decoration-white underline-offset-4 uppercase"
                 >
                   &lt;&lt; LOGOUT
@@ -120,7 +123,7 @@ function Layout(props: any) {
                   <div class="flex flex-col gap-4">
                     {/* Hero Login Button */}
                     <button
-                        onClick={() => openAuth("signin")}
+                        onMouseDown={() => openAuth("signin")}
                         class="w-full border-2 border-white bg-white text-black px-6 py-4 uppercase font-bold hover:bg-black hover:text-white hover:border-white transition-none"
                     >
                         [ INITIALIZE_SESSION ]

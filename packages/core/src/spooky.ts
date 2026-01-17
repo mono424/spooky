@@ -1,5 +1,4 @@
-import { QueryManager } from './services/query/query.js';
-import { MutationManager } from './services/mutation/mutation.js';
+import { DataManager } from './modules/data/index.js';
 import { SpookyConfig, QueryTimeToLive, SpookyQueryResultPromise } from './types.js';
 import {
   LocalDatabaseService,
@@ -7,7 +6,7 @@ import {
   RemoteDatabaseService,
 } from './services/database/index.js';
 import { Surreal } from 'surrealdb';
-import { SpookySync } from './services/sync/index.js';
+import { SpookySync } from './modules/sync/index.js';
 import {
   GetTable,
   QueryBuilder,
@@ -17,22 +16,24 @@ import {
   TableNames,
 } from '@spooky/query-builder';
 
-import { DevToolsService } from './services/devtools-service/index.js';
+import { DevToolsService } from './modules/devtools/index.js';
 import { createLogger } from './services/logger/index.js';
-import { AuthService } from './services/auth/index.js';
-import { RouterService } from './services/router/index.js';
+import { AuthService } from './modules/auth/index.js';
+import { AuthEventTypes } from './modules/auth/index.js';
+import { MutationEventTypes } from './modules/data/events/mutation.js';
+import { QueryEventTypes } from './modules/data/events/query.js';
 import { StreamProcessorService } from './services/stream-processor/index.js';
+import { SyncEventTypes, UpEvent } from './modules/sync/index.js';
 import { EventSystem } from './events/index.js';
 
 export class SpookyClient<S extends SchemaStructure> {
   private local: LocalDatabaseService;
   private remote: RemoteDatabaseService;
   private migrator: LocalMigrator;
-  private queryManager: QueryManager<S>;
-  private mutationManager: MutationManager<S>;
+  private dataManager: DataManager<S>;
   private sync: SpookySync<S>;
   private devTools: DevToolsService;
-  private router: RouterService<S>;
+
   private logger: ReturnType<typeof createLogger>;
   public auth: AuthService<S>;
   public streamProcessor: StreamProcessorService;
@@ -64,13 +65,7 @@ export class SpookyClient<S extends SchemaStructure> {
       logger
     );
     this.migrator = new LocalMigrator(this.local, logger);
-    this.mutationManager = new MutationManager(
-      this.config.schema,
-      this.local,
-      this.streamProcessor,
-      logger
-    );
-    this.queryManager = new QueryManager(
+    this.dataManager = new DataManager(
       this.config.schema,
       this.local,
       this.streamProcessor,
@@ -81,7 +76,7 @@ export class SpookyClient<S extends SchemaStructure> {
       this.config.schema,
       this.remote,
       this.local,
-      this.mutationManager,
+      this.dataManager,
       logger
     );
     this.sync = new SpookySync(
@@ -97,17 +92,7 @@ export class SpookyClient<S extends SchemaStructure> {
       logger,
       this.config.schema,
       this.auth,
-      this.queryManager
-    );
-    this.router = new RouterService(
-      this.mutationManager.events,
-      this.queryManager.eventsSystem,
-      this.sync,
-      this.queryManager,
-      this.streamProcessor,
-      this.devTools,
-      this.auth,
-      logger
+      this.dataManager
     );
   }
 
@@ -134,13 +119,98 @@ export class SpookyClient<S extends SchemaStructure> {
       await this.auth.init();
       this.logger.debug('[SpookyClient] Auth initialized');
 
-      this.logger.debug('[SpookyClient] Initializing QueryManager...');
-      await this.queryManager.init();
-      this.logger.debug('[SpookyClient] QueryManager initialized');
+      this.logger.debug('[SpookyClient] Initializing DataManager...');
+      await this.dataManager.init();
+      this.logger.debug('[SpookyClient] DataManager initialized');
 
       this.logger.debug('[SpookyClient] Initializing Sync...');
       await this.sync.init();
       this.logger.debug('[SpookyClient] Sync initialized');
+
+      // -------------------------------------------------------------------------
+      // EVENT ROUTING
+      // -------------------------------------------------------------------------
+
+      // --- Mutation Events ---
+      this.dataManager.mutationEvents.subscribe(MutationEventTypes.MutationCreated, (event) => {
+        const payload = event.payload;
+        // 1. Notify DevTools
+        this.devTools.onMutation(payload);
+
+        // 2. Enqueue in Sync (filter out localOnly)
+        const mutationsToSync = payload.filter((e: UpEvent) => !e.localOnly);
+        if (mutationsToSync.length > 0) {
+          this.sync.enqueueMutation(mutationsToSync);
+        }
+
+        // 3. Ingest into StreamProcessor
+        for (const element of payload) {
+          const tableName = element.record_id.table.toString();
+          // Use full record for create/update, fall back to data if record not available
+          const recordData =
+            element.type === 'delete' ? undefined : ((element as any).record ?? element.data);
+          this.streamProcessor.ingest(
+            tableName,
+            element.type,
+            element.record_id.toString(),
+            recordData
+          );
+        }
+      });
+
+      // --- Query Events ---
+      this.dataManager.queryEvents.subscribe(QueryEventTypes.IncantationInitialized, (event) => {
+        this.devTools.onQueryInitialized(event.payload);
+        this.sync.enqueueDownEvent({ type: 'register', payload: event.payload });
+      });
+
+      this.dataManager.queryEvents.subscribe(
+        QueryEventTypes.IncantationRemoteHashUpdate,
+        (event) => {
+          this.devTools.logEvent('QUERY_REMOTE_HASH_UPDATE', event.payload);
+          this.sync.enqueueDownEvent({ type: 'sync', payload: event.payload });
+        }
+      );
+
+      this.dataManager.queryEvents.subscribe(QueryEventTypes.IncantationTTLHeartbeat, (event) => {
+        this.devTools.logEvent('QUERY_TTL_HEARTBEAT', event.payload);
+        this.sync.enqueueDownEvent({ type: 'heartbeat', payload: event.payload });
+      });
+
+      this.dataManager.queryEvents.subscribe(QueryEventTypes.IncantationCleanup, (event) => {
+        this.devTools.logEvent('QUERY_CLEANUP', event.payload);
+        this.sync.enqueueDownEvent({ type: 'cleanup', payload: event.payload });
+      });
+
+      this.dataManager.queryEvents.subscribe(QueryEventTypes.IncantationUpdated, (event) => {
+        this.devTools.onQueryUpdated(event.payload);
+      });
+
+      // --- Sync Events ---
+      this.sync.events.subscribe(SyncEventTypes.IncantationUpdated, (event: any) => {
+        this.devTools.logEvent('SYNC_INCANTATION_UPDATED', event.payload);
+        this.dataManager.handleIncomingUpdate(event.payload);
+      });
+
+      this.sync.events.subscribe(SyncEventTypes.RemoteDataIngested, (event: any) => {
+        // Just logging or devtools update if needed
+      });
+
+      // --- StreamProcessor Events ---
+      this.streamProcessor.events.subscribe('stream_update', (event: any) => {
+        const payload = event.payload;
+        this.devTools.onStreamUpdate(payload);
+        if (Array.isArray(payload)) {
+          for (const update of payload) {
+            this.dataManager.handleStreamUpdate(update);
+          }
+        }
+      });
+
+      // --- Auth Events ---
+      this.auth.eventSystem.subscribe(AuthEventTypes.AuthStateChanged, (event) => {
+        // Handle auth state changes if needed (e.g. re-subscribe, clear cache)
+      });
     } catch (e) {
       this.logger.error({ error: e }, '[SpookyClient] Init failed');
       throw e;
@@ -169,7 +239,7 @@ export class SpookyClient<S extends SchemaStructure> {
       this.config.schema,
       table,
       async (q) => ({
-        hash: await this.queryManager.query(
+        hash: await this.dataManager.query(
           table,
           q.selectQuery.query,
           q.selectQuery.vars ?? {},
@@ -182,7 +252,7 @@ export class SpookyClient<S extends SchemaStructure> {
 
   async queryRaw(sql: string, params: Record<string, any>, ttl: QueryTimeToLive) {
     const tableName = sql.split('FROM ')[1].split(' ')[0];
-    return this.queryManager.query(tableName, sql, params, ttl);
+    return this.dataManager.query(tableName, sql, params, ttl);
   }
 
   async subscribe(
@@ -190,19 +260,19 @@ export class SpookyClient<S extends SchemaStructure> {
     callback: (records: Record<string, any>[]) => void,
     options?: { immediate?: boolean }
   ): Promise<() => void> {
-    return this.queryManager.subscribe(queryHash, callback, options);
+    return this.dataManager.subscribe(queryHash, callback, options);
   }
 
   create(id: string, data: Record<string, unknown>) {
-    return this.mutationManager.create(id, data);
+    return this.dataManager.create(id, data);
   }
 
   update(table: string, id: string, data: Record<string, unknown>) {
-    return this.mutationManager.update(table, id, data);
+    return this.dataManager.update(table, id, data);
   }
 
   delete(table: string, id: string) {
-    return this.mutationManager.delete(table, id);
+    return this.dataManager.delete(table, id);
   }
 
   async useRemote<T>(fn: (client: Surreal) => Promise<T> | T): Promise<T> {

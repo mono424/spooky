@@ -46,7 +46,7 @@ export function ThreadList() {
         </div>
         
         <button
-          onClick={() => navigate("/create-thread")}
+          onMouseDown={() => navigate("/create-thread")}
           class="bg-white text-black border-2 border-white px-4 py-2 uppercase font-bold text-xs hover:bg-black hover:text-white transition-none whitespace-nowrap self-end sm:self-auto"
         >
           [ + WRITE_NEW ]
@@ -80,7 +80,7 @@ export function ThreadList() {
         >
           {(thread) => (
             <div
-              onClick={() => handleThreadClick(thread.id.split(":")[1])}
+              onMouseDown={() => handleThreadClick(thread.id.split(":")[1])}
               class="border border-white/40 p-5 cursor-pointer hover:border-white hover:bg-white/5 transition-none group relative block"
             >
               {/* ASCII Corner markers that appear on hover */}

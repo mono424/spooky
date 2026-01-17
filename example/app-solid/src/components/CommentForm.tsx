@@ -53,6 +53,7 @@ export function CommentForm(props: CommentFormProps) {
         </div>
 
         <textarea
+          id="comment-textarea"
           value={content()}
           onInput={(e) => setContent(e.currentTarget.value)}
           placeholder="INPUT_COMMENT_DATA..."
