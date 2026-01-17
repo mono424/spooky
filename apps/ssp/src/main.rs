@@ -368,6 +368,13 @@ async fn update_incantation_in_db(db: &Surreal<Client>, update: &MaterializedVie
     }
 }
 
+use surrealdb::types::RecordId;
+
+/// Parse a string like "table:key" into a SurrealDB RecordId
+fn parse_record_id(id: &str) -> Option<RecordId> {
+    RecordId::parse_simple(id).ok()
+}
+
 /// Helper to format incantation ID with table prefix
 fn format_incantation_id(id: &str) -> String {
     if id.starts_with("_spooky_incantation:") {
@@ -380,39 +387,49 @@ fn format_incantation_id(id: &str) -> String {
 /// Graph-based persistence for StreamingUpdate.
 /// Maps DeltaEvent to specific SurrealQL graph operations (blind writes).
 async fn update_incantation_edges(db: &Surreal<Client>, update: &StreamingUpdate) {
-    let incantation_id = format_incantation_id(&update.view_id);
+    let incantation_id_str = format_incantation_id(&update.view_id);
+    
+    let Some(from_id) = parse_record_id(&incantation_id_str) else {
+        error!("Invalid incantation ID format: {}", incantation_id_str);
+        return;
+    };
     
     debug!(
         "Processing graph update for {} with {} records",
-        incantation_id,
+        incantation_id_str,
         update.records.len()
     );
     
     for record in &update.records {
+        let Some(to_id) = parse_record_id(&record.id) else {
+            error!("Invalid record ID format: {}", record.id);
+            continue;
+        };
+        
         let result = match record.event {
             DeltaEvent::Created => {
                 // RELATE creates an edge from incantation → record with version
-                debug!("RELATE {}->_spooky_list_ref->{} version={}", incantation_id, record.id, record.version);
-                db.query("RELATE <record>$from->_spooky_list_ref-><record>$to SET version = $version, clientId = (SELECT clientId FROM ONLY <record>$from).clientId")
-                    .bind(("from", incantation_id.clone()))
-                    .bind(("to", record.id.clone()))
+                debug!("RELATE {}->_spooky_list_ref->{} version={}", incantation_id_str, record.id, record.version);
+                db.query("RELATE $from->_spooky_list_ref->$to SET version = $version, clientId = (SELECT clientId FROM ONLY $from).clientId")
+                    .bind(("from", from_id.clone()))
+                    .bind(("to", to_id.clone()))
                     .bind(("version", record.version))
                     .await
             }
             DeltaEvent::Deleted => {
                 // DELETE removes the specific edge
-                debug!("DELETE {}->_spooky_list_ref WHERE out = {}", incantation_id, record.id);
-                db.query("DELETE <record>$from->_spooky_list_ref WHERE out = <record>$to")
-                    .bind(("from", incantation_id.clone()))
-                    .bind(("to", record.id.clone()))
+                debug!("DELETE {}->_spooky_list_ref WHERE out = {}", incantation_id_str, record.id);
+                db.query("DELETE $from->_spooky_list_ref WHERE out = $to")
+                    .bind(("from", from_id.clone()))
+                    .bind(("to", to_id.clone()))
                     .await
             }
             DeltaEvent::Updated => {
                 // UPDATE modifies version on existing edge
-                debug!("UPDATE {}->_spooky_list_ref SET version={} WHERE out = {}", incantation_id, record.version, record.id);
-                db.query("UPDATE <record>$from->_spooky_list_ref SET version = $version WHERE out = <record>$to")
-                    .bind(("from", incantation_id.clone()))
-                    .bind(("to", record.id.clone()))
+                debug!("UPDATE {}->_spooky_list_ref SET version={} WHERE out = {}", incantation_id_str, record.version, record.id);
+                db.query("UPDATE $from->_spooky_list_ref SET version = $version WHERE out = $to")
+                    .bind(("from", from_id.clone()))
+                    .bind(("to", to_id.clone()))
                     .bind(("version", record.version))
                     .await
             }
@@ -421,7 +438,7 @@ async fn update_incantation_edges(db: &Surreal<Client>, update: &StreamingUpdate
         if let Err(e) = result {
             error!(
                 "Graph operation {:?} failed for {} -> {}: {}",
-                record.event, incantation_id, record.id, e
+                record.event, incantation_id_str, record.id, e
             );
         }
     }
