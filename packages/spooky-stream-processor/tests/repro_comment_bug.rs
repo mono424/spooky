@@ -57,6 +57,7 @@ fn test_comment_creation_updates_thread_view() {
         "CREATE",
         &comment_id,
         comment_record,
+        true,
     );
 
     println!("Updates received: {:?}", updates);
@@ -70,7 +71,7 @@ fn test_comment_creation_updates_thread_view() {
     );
 
     let view_update = &updates[0];
-    assert_eq!(view_update.query_id, "view_thread_detail");
+    assert_eq!(view_update.query_id(), "view_thread_detail");
 
     // The result_data should ideally contain the thread ID (and its new hash).
     // The exact content of result_data depends on how subquery results are flattened or hashed.

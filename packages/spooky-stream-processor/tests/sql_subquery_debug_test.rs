@@ -64,10 +64,10 @@ fn test_subquery_via_sql_full_flow() {
 
     // 1. Create author and thread
     let (author_id, author_record) = make_author_record("Alice");
-    ingest(&mut circuit, "author", "CREATE", &author_id, author_record);
+    ingest(&mut circuit, "author", "CREATE", &author_id, author_record, true);
 
     let (thread_id, thread_record) = make_thread_record("Hello World", &author_id);
-    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record);
+    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record, true);
 
     // 2. Register view via SQL (using the service layer like WASM does)
     let sql = "SELECT *, (SELECT * FROM author WHERE id = $parent.author)[0] as author_data FROM thread LIMIT 100";
