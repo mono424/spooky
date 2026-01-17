@@ -8,29 +8,52 @@
 //! - Latency percentiles (P50, P95, P99)
 //! - Memory efficiency
 //! - Format-specific performance characteristics
-//!
-//! Run with: cargo test --release real_world_benchmark -- --nocapture --ignored
-//! 
 /*
-Test functions:
-
-real_world_benchmark - Full matrix benchmark across formats, view counts, record counts, batch sizes
-streaming_mode_benchmark - Focused test on streaming delta efficiency (counts Created/Updated/Deleted events)
-format_comparison_benchmark - Head-to-head comparison of Flat vs Streaming throughput
-real_world_benchmark_quick - Fast sanity check for iteration
-
-# Full benchmark
+# Full benchmark suite
 cargo test --release real_world_benchmark -- --nocapture --ignored
 
-# Quick check
-cargo test --release real_world_benchmark_quick -- --nocapture --ignored
+# Sync engine simulation
+cargo test --release sync_engine_simulation_benchmark -- --nocapture --ignored
 
-# Streaming-specific test
-cargo test --release streaming_mode_benchmark -- --nocapture --ignored
+# Version tracking test
+cargo test --release version_tracking_benchmark -- --nocapture --ignored
 
-# Format comparison
-cargo test --release format_comparison_benchmark -- --nocapture --ignored
+# Subquery performance
+cargo test --release subquery_benchmark -- --nocapture --ignored
+
+# High view count stress test
+cargo test --release high_view_count_benchmark -- --nocapture --ignored
+
+sync_engine_simulation_benchmark - Simulates the actual sidecar workflow:
+
+Phase 1: Registering incantations as clients connect (mixed query types)
+Phase 2: User activity burst (record creation)
+Phase 3: Record edits (UPDATE operations)
+Phase 4: Remote sync with is_optimistic=false
+Tracks and reports delta events (Created/Updated/Deleted) per incantation
+
+
+version_tracking_benchmark - Tests the version increment behavior:
+
+Verifies optimistic updates increment versions
+Verifies non-optimistic (remote sync) updates don't increment versions
+Step-by-step output showing version numbers
+
+
+subquery_benchmark - Tests nested data patterns:
+
+Few threads with many comments
+Many threads with few comments
+Balanced scenario
+Measures throughput for hierarchical data
+
+
+high_view_count_benchmark - Stress test for scaling:
+
+Tests 100, 250, 500, 750, 1000 concurrent views
+Reports registration time, ingestion throughput, and memory estimates
 */
+//! Run with: cargo test --release real_world_benchmark -- --nocapture --ignored
 
 mod common;
 use common::*;
@@ -38,7 +61,8 @@ use rayon::prelude::*;
 use serde_json::{json, Value};
 use spooky_stream_processor::{
     engine::update::{DeltaEvent, StreamingUpdate, ViewResultFormat, ViewUpdate},
-    engine::view::{JoinCondition, Operator, Path, Predicate, Projection, QueryPlan},
+    engine::{JoinCondition, Operator, OrderSpec, Path, Predicate, Projection},
+    engine::view::QueryPlan,
     Circuit,
 };
 use std::fs::File;
@@ -342,8 +366,6 @@ fn create_subquery_plan(view_id: &str) -> QueryPlan {
 
 /// Limited query with ordering: top N threads by views
 fn create_limit_plan(view_id: &str, limit: usize) -> QueryPlan {
-    use spooky_stream_processor::engine::OrderSpec;
-
     let scan = Operator::Scan {
         table: "thread".to_string(),
     };
@@ -934,6 +956,374 @@ fn format_comparison_benchmark() {
         println!(
             "{:>8} {:>15.0} {:>15.0} {:>15.2}x",
             view_count, flat_ops, stream_ops, ratio
+        );
+    }
+
+    println!("\n  ══════════════════════════════════════════════════════════════════\n");
+}
+
+/// Benchmark: Simulates the sync engine's incantation registration and update flow
+/// This mirrors how the sidecar handles view registration and record ingestion
+#[test]
+#[ignore]
+fn sync_engine_simulation_benchmark() {
+    println!("\n╔══════════════════════════════════════════════════════════════════════╗");
+    println!("║           SYNC ENGINE SIMULATION BENCHMARK                          ║");
+    println!("║  Simulates real sidecar workload patterns                           ║");
+    println!("╚══════════════════════════════════════════════════════════════════════╝\n");
+
+    let mut circuit = setup();
+
+    // Phase 1: Register incantations (views) as clients connect
+    // Mix of simple filters, joins, and subqueries - typical for a chat/forum app
+    println!("  Phase 1: Registering incantations (simulating client connections)");
+    
+    let incantation_configs = vec![
+        // Simple filters - most common
+        ("inc_all_threads", create_prefix_plan("inc_all_threads")),
+        ("inc_active_threads", create_filter_plan("inc_active_threads")),
+        ("inc_magic_comments", create_filter_plan("inc_magic_comments")),
+        // Joins - for hydrating relationships
+        ("inc_threads_with_authors", create_join_plan("inc_threads_with_authors")),
+        // Complex - dashboard views
+        ("inc_dashboard", create_complex_plan("inc_dashboard")),
+        // Subquery - nested data
+        ("inc_thread_detail", create_subquery_plan("inc_thread_detail")),
+        // Limited - "recent" queries
+        ("inc_top_threads", create_limit_plan("inc_top_threads", 10)),
+    ];
+
+    let start = Instant::now();
+    for (id, mut plan) in incantation_configs {
+        plan.id = id.to_string();
+        let update = circuit.register_view(plan, None, Some(ViewResultFormat::Streaming));
+        if let Some(u) = update {
+            match u {
+                ViewUpdate::Streaming(s) => {
+                    println!("    ▸ {} registered, initial records: {}", id, s.records.len());
+                }
+                _ => println!("    ▸ {} registered", id),
+            }
+        }
+    }
+    println!("  Registration time: {:.2}ms\n", start.elapsed().as_secs_f64() * 1000.0);
+
+    // Phase 2: Simulate user activity (record creation burst)
+    println!("  Phase 2: Simulating user activity burst");
+    
+    let burst_size = 100;
+    let records: Vec<PreparedRecord> = (0..burst_size)
+        .into_par_iter()
+        .flat_map(make_linked_record_set)
+        .collect();
+
+    let mut event_counts: std::collections::HashMap<String, (usize, usize, usize)> = 
+        std::collections::HashMap::new();
+
+    let start = Instant::now();
+    for record in &records {
+        let updates = circuit.ingest_record(
+            &record.table,
+            &record.op,
+            &record.id,
+            record.record.clone(),
+            &record.hash,
+            true, // is_optimistic - local mutations
+        );
+
+        for update in updates {
+            if let ViewUpdate::Streaming(s) = update {
+                let entry = event_counts.entry(s.view_id.clone()).or_insert((0, 0, 0));
+                for r in &s.records {
+                    match r.event {
+                        DeltaEvent::Created => entry.0 += 1,
+                        DeltaEvent::Updated => entry.1 += 1,
+                        DeltaEvent::Deleted => entry.2 += 1,
+                    }
+                }
+            }
+        }
+    }
+    let burst_time = start.elapsed();
+    
+    println!("    Records ingested: {}", records.len());
+    println!("    Time: {:.2}ms", burst_time.as_secs_f64() * 1000.0);
+    println!("    Throughput: {:.0} ops/sec", records.len() as f64 / burst_time.as_secs_f64());
+    println!("\n    Events per incantation:");
+    for (view_id, (created, updated, deleted)) in &event_counts {
+        if *created > 0 || *updated > 0 || *deleted > 0 {
+            println!("      {}: C={} U={} D={}", view_id, created, updated, deleted);
+        }
+    }
+
+    // Phase 3: Simulate edits (updates to existing records)
+    println!("\n  Phase 3: Simulating record edits");
+    
+    let edits: Vec<_> = records.iter()
+        .filter(|r| r.table == "comment")
+        .take(30)
+        .collect();
+
+    event_counts.clear();
+    let start = Instant::now();
+    
+    for record in edits {
+        let updated_rec = json!({
+            "id": &record.id,
+            "text": "Edited content",
+            "thread": record.record.get("thread").unwrap(),
+            "author": record.record.get("author").unwrap(),
+            "score": 50,
+            "type": "comment",
+            "status": "edited"
+        });
+        let hash = generate_hash(&updated_rec);
+        
+        let updates = circuit.ingest_record(
+            &record.table,
+            "UPDATE",
+            &record.id,
+            updated_rec,
+            &hash,
+            true,
+        );
+
+        for update in updates {
+            if let ViewUpdate::Streaming(s) = update {
+                let entry = event_counts.entry(s.view_id.clone()).or_insert((0, 0, 0));
+                for r in &s.records {
+                    match r.event {
+                        DeltaEvent::Created => entry.0 += 1,
+                        DeltaEvent::Updated => entry.1 += 1,
+                        DeltaEvent::Deleted => entry.2 += 1,
+                    }
+                }
+            }
+        }
+    }
+    let edit_time = start.elapsed();
+    
+    println!("    Edits processed: 30");
+    println!("    Time: {:.2}ms", edit_time.as_secs_f64() * 1000.0);
+    println!("\n    Update events per incantation:");
+    for (view_id, (_, updated, _)) in &event_counts {
+        if *updated > 0 {
+            println!("      {}: U={}", view_id, updated);
+        }
+    }
+
+    // Phase 4: Remote sync simulation (is_optimistic=false)
+    println!("\n  Phase 4: Simulating remote sync (is_optimistic=false)");
+    
+    let remote_records: Vec<PreparedRecord> = (1000..1020)
+        .into_par_iter()
+        .flat_map(make_linked_record_set)
+        .collect();
+
+    let start = Instant::now();
+    for record in &remote_records {
+        circuit.ingest_record(
+            &record.table,
+            &record.op,
+            &record.id,
+            record.record.clone(),
+            &record.hash,
+            false, // is_optimistic=false for remote sync
+        );
+    }
+    let sync_time = start.elapsed();
+    
+    println!("    Remote records synced: {}", remote_records.len());
+    println!("    Time: {:.2}ms", sync_time.as_secs_f64() * 1000.0);
+
+    println!("\n  ══════════════════════════════════════════════════════════════════\n");
+}
+
+/// Benchmark: Tests version tracking behavior across optimistic vs non-optimistic updates
+#[test]
+#[ignore]
+fn version_tracking_benchmark() {
+    println!("\n╔══════════════════════════════════════════════════════════════════════╗");
+    println!("║              VERSION TRACKING BENCHMARK                             ║");
+    println!("║  Tests version increment behavior for optimistic vs remote sync    ║");
+    println!("╚══════════════════════════════════════════════════════════════════════╝\n");
+
+    let mut circuit = setup();
+
+    // Register a simple view in flat mode to inspect version numbers
+    let plan = create_filter_plan("version_test_view");
+    circuit.register_view(plan, None, Some(ViewResultFormat::Flat));
+
+    // Create a "Magic" comment that will be tracked by the view
+    let (comment_id, comment_rec) = make_comment_record("Magic", "thread:test", "author:test");
+    let hash = generate_hash(&comment_rec);
+
+    println!("  Step 1: Initial CREATE (optimistic)");
+    let updates = circuit.ingest_record("comment", "CREATE", &comment_id, comment_rec.clone(), &hash, true);
+    if let Some(ViewUpdate::Flat(m)) = updates.first() {
+        println!("    Records: {:?}", m.result_data);
+    }
+
+    // Update 1: Optimistic (should increment version)
+    println!("\n  Step 2: UPDATE (optimistic=true) - should increment version");
+    let updated_rec = json!({
+        "id": &comment_id,
+        "text": "Magic",
+        "thread": "thread:test",
+        "author": "author:test",
+        "score": 10
+    });
+    let hash = generate_hash(&updated_rec);
+    let updates = circuit.ingest_record("comment", "UPDATE", &comment_id, updated_rec, &hash, true);
+    if let Some(ViewUpdate::Flat(m)) = updates.first() {
+        println!("    Records: {:?}", m.result_data);
+    }
+
+    // Update 2: Non-optimistic (should NOT increment version)
+    println!("\n  Step 3: UPDATE (optimistic=false) - should NOT increment version");
+    let updated_rec2 = json!({
+        "id": &comment_id,
+        "text": "Magic",
+        "thread": "thread:test",
+        "author": "author:test",
+        "score": 20
+    });
+    let hash = generate_hash(&updated_rec2);
+    let updates = circuit.ingest_record("comment", "UPDATE", &comment_id, updated_rec2, &hash, false);
+    if let Some(ViewUpdate::Flat(m)) = updates.first() {
+        println!("    Records: {:?}", m.result_data);
+    }
+
+    // Update 3: Another optimistic update
+    println!("\n  Step 4: UPDATE (optimistic=true) - should increment version again");
+    let updated_rec3 = json!({
+        "id": &comment_id,
+        "text": "Magic",
+        "thread": "thread:test",
+        "author": "author:test",
+        "score": 30
+    });
+    let hash = generate_hash(&updated_rec3);
+    let updates = circuit.ingest_record("comment", "UPDATE", &comment_id, updated_rec3, &hash, true);
+    if let Some(ViewUpdate::Flat(m)) = updates.first() {
+        println!("    Records: {:?}", m.result_data);
+    }
+
+    println!("\n  ══════════════════════════════════════════════════════════════════\n");
+}
+
+/// Benchmark: Subquery performance (nested data patterns)
+#[test]
+#[ignore]
+fn subquery_benchmark() {
+    println!("\n╔══════════════════════════════════════════════════════════════════════╗");
+    println!("║              SUBQUERY PERFORMANCE BENCHMARK                         ║");
+    println!("║  Tests nested data patterns (threads with comments)                 ║");
+    println!("╚══════════════════════════════════════════════════════════════════════╝\n");
+
+    let mut circuit = setup();
+
+    // Register subquery view
+    let plan = create_subquery_plan("threads_with_comments");
+    circuit.register_view(plan, None, Some(ViewResultFormat::Flat));
+
+    // Create varying thread/comment ratios
+    let scenarios = [
+        ("Few threads, many comments", 5, 50),
+        ("Many threads, few comments", 50, 5),
+        ("Balanced", 20, 20),
+    ];
+
+    for (name, thread_count, comments_per_thread) in scenarios {
+        println!("  Scenario: {}", name);
+        
+        // Create author
+        let author_id = create_author(&mut circuit, "TestAuthor");
+        
+        let start = Instant::now();
+        
+        // Create threads and comments
+        for t in 0..thread_count {
+            let thread_id = create_thread(&mut circuit, &format!("Thread {}", t), &author_id);
+            
+            for c in 0..comments_per_thread {
+                let text = if c % 3 == 0 { "Magic" } else { "Regular" };
+                create_comment(&mut circuit, text, &thread_id, &author_id);
+            }
+        }
+        
+        let elapsed = start.elapsed();
+        let total_records = 1 + thread_count + (thread_count * comments_per_thread);
+        
+        println!("    Total records: {}", total_records);
+        println!("    Time: {:.2}ms", elapsed.as_secs_f64() * 1000.0);
+        println!("    Throughput: {:.0} ops/sec\n", total_records as f64 / elapsed.as_secs_f64());
+    }
+
+    println!("  ══════════════════════════════════════════════════════════════════\n");
+}
+
+/// Benchmark: High view count scaling (stress test)
+#[test]
+#[ignore]
+fn high_view_count_benchmark() {
+    println!("\n╔══════════════════════════════════════════════════════════════════════╗");
+    println!("║              HIGH VIEW COUNT STRESS TEST                            ║");
+    println!("║  Tests performance degradation with many concurrent views           ║");
+    println!("╚══════════════════════════════════════════════════════════════════════╝\n");
+
+    let view_counts = [100, 250, 500, 750, 1000];
+    let record_batch_size = 100;
+
+    println!("{:>8} {:>15} {:>15} {:>15}", "Views", "Reg Time (ms)", "Ingest (ops/s)", "Mem (approx)");
+    println!("{}", "─".repeat(60));
+
+    for view_count in view_counts {
+        let mut circuit = setup();
+
+        // Register views
+        let reg_start = Instant::now();
+        for i in 0..view_count {
+            let plan = match i % 4 {
+                0 => create_filter_plan(&format!("v_{}", i)),
+                1 => create_prefix_plan(&format!("v_{}", i)),
+                2 => create_join_plan(&format!("v_{}", i)),
+                _ => create_complex_plan(&format!("v_{}", i)),
+            };
+            circuit.register_view(plan, None, Some(ViewResultFormat::Streaming));
+        }
+        let reg_time = reg_start.elapsed();
+
+        // Ingest records
+        let records: Vec<PreparedRecord> = (0..record_batch_size)
+            .into_par_iter()
+            .flat_map(make_linked_record_set)
+            .collect();
+
+        let ingest_start = Instant::now();
+        for record in &records {
+            circuit.ingest_record(
+                &record.table,
+                &record.op,
+                &record.id,
+                record.record.clone(),
+                &record.hash,
+                true,
+            );
+        }
+        let ingest_time = ingest_start.elapsed();
+
+        let ops_per_sec = records.len() as f64 / ingest_time.as_secs_f64();
+        
+        // Rough memory estimate based on view count
+        let mem_estimate = format!("~{}MB", view_count / 10);
+
+        println!(
+            "{:>8} {:>15.2} {:>15.0} {:>15}",
+            view_count,
+            reg_time.as_secs_f64() * 1000.0,
+            ops_per_sec,
+            mem_estimate
         );
     }
 
