@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use ssp::{
     Circuit, MaterializedViewUpdate, ViewUpdate,
+    engine::update::{StreamingUpdate, DeltaEvent},
 };
 use surrealdb::engine::remote::ws::{Client, Ws};
 use surrealdb::opt::auth::Root;
@@ -211,12 +212,14 @@ async fn ingest_handler(
 
     // Update SurrealDB incantations based on format
     for update in &updates {
-        // Extract MaterializedViewUpdate from the ViewUpdate enum
-        let materialized = match update {
-            ViewUpdate::Flat(m) | ViewUpdate::Tree(m) => m,
-            ViewUpdate::Streaming(_) => continue, // Skip streaming updates
-        };
-        update_incantation_in_db(&state.db, materialized).await;
+        match update {
+            ViewUpdate::Flat(m) | ViewUpdate::Tree(m) => {
+                update_incantation_in_db(&state.db, m).await;
+            }
+            ViewUpdate::Streaming(s) => {
+                update_incantation_edges(&state.db, s).await;
+            }
+        }
     }
 
     StatusCode::OK
@@ -237,7 +240,8 @@ async fn register_view_handler(
 
     let update = {
         let mut circuit = state.processor.lock().unwrap();
-        let res = circuit.register_view(data.plan.clone(), data.safe_params, None);
+        // Use the format parsed from the registration payload
+        let res = circuit.register_view(data.plan.clone(), data.safe_params, data.format);
         state.saver.trigger_save();
         res
     };
@@ -364,9 +368,18 @@ async fn update_incantation_in_db(db: &Surreal<Client>, update: &MaterializedVie
     }
 }
 
+/// Helper to format incantation ID with table prefix
+fn format_incantation_id(id: &str) -> String {
+    if id.starts_with("_spooky_incantation:") {
+        id.to_string()
+    } else {
+        format!("_spooky_incantation:{}", id)
+    }
+}
+
 /// Graph-based persistence for StreamingUpdate.
 /// Maps DeltaEvent to specific SurrealQL graph operations (blind writes).
-async fn update_incantation_graph(db: &Surreal<Client>, update: &StreamingUpdate) {
+async fn update_incantation_edges(db: &Surreal<Client>, update: &StreamingUpdate) {
     let incantation_id = format_incantation_id(&update.view_id);
     
     debug!(
@@ -380,7 +393,7 @@ async fn update_incantation_graph(db: &Surreal<Client>, update: &StreamingUpdate
             DeltaEvent::Created => {
                 // RELATE creates an edge from incantation → record with version
                 debug!("RELATE {}->_spooky_list_ref->{} version={}", incantation_id, record.id, record.version);
-                db.query("RELATE $from->_spooky_list_ref->$to SET version = $version")
+                db.query("RELATE <record>$from->_spooky_list_ref-><record>$to SET version = $version, clientId = (SELECT clientId FROM ONLY <record>$from).clientId")
                     .bind(("from", incantation_id.clone()))
                     .bind(("to", record.id.clone()))
                     .bind(("version", record.version))
@@ -389,7 +402,7 @@ async fn update_incantation_graph(db: &Surreal<Client>, update: &StreamingUpdate
             DeltaEvent::Deleted => {
                 // DELETE removes the specific edge
                 debug!("DELETE {}->_spooky_list_ref WHERE out = {}", incantation_id, record.id);
-                db.query("DELETE $from->_spooky_list_ref WHERE out = $to")
+                db.query("DELETE <record>$from->_spooky_list_ref WHERE out = <record>$to")
                     .bind(("from", incantation_id.clone()))
                     .bind(("to", record.id.clone()))
                     .await
@@ -397,7 +410,7 @@ async fn update_incantation_graph(db: &Surreal<Client>, update: &StreamingUpdate
             DeltaEvent::Updated => {
                 // UPDATE modifies version on existing edge
                 debug!("UPDATE {}->_spooky_list_ref SET version={} WHERE out = {}", incantation_id, record.version, record.id);
-                db.query("UPDATE $from->_spooky_list_ref SET version = $version WHERE out = $to")
+                db.query("UPDATE <record>$from->_spooky_list_ref SET version = $version WHERE out = <record>$to")
                     .bind(("from", incantation_id.clone()))
                     .bind(("to", record.id.clone()))
                     .bind(("version", record.version))

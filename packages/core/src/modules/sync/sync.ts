@@ -342,6 +342,7 @@ export class SpookySync<S extends SchemaStructure> {
       ttl: typeof ttl === 'string' ? new Duration(ttl) : ttl,
       lastActiveAt: new Date(),
       clientId: this.clientId,
+      format: 'streaming',
     };
 
     const { ttl: _, ...safeConfig } = config;

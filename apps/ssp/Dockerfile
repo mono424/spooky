@@ -1,19 +1,35 @@
-# Build Stage
-FROM rust:1.83-bookworm as builder
-
-# Switch to nightly to support edition 2024 dependencies
+# Base stage with cargo-chef
+FROM rust:1.83-bookworm as chef
 RUN rustup default nightly
-
+RUN cargo install cargo-chef
 WORKDIR /usr/src/app
 
-# Copy the necessary local packages source
-# We need to preserve the directory structure as specified in Cargo.toml dependencies (../../packages/...)
+# Planner stage
+FROM chef as planner
 COPY packages/ssp packages/ssp
-
-# Copy the application source
 COPY apps/ssp apps/ssp
+# Note: cargo chef prepare needs to see the Cargo.tomls in relation to each other
+# We need to compute the recipe for the specific workspace member
+WORKDIR /usr/src/app/apps/ssp
+RUN cargo chef prepare --recipe-path recipe.json
 
-# Build the application
+# Cacher stage
+FROM chef as cacher
+WORKDIR /usr/src/app
+COPY --from=planner /usr/src/app/apps/ssp/recipe.json apps/ssp/recipe.json
+# We need the dependency source manifests available for cook to work
+COPY packages/ssp packages/ssp
+WORKDIR /usr/src/app/apps/ssp
+# Cook dependencies - this layer receives the cache
+RUN cargo chef cook --release --recipe-path recipe.json
+
+# Builder stage
+FROM chef as builder
+COPY packages/ssp packages/ssp
+COPY apps/ssp apps/ssp
+# Copy compiled dependencies from cacher
+COPY --from=cacher /usr/src/app/apps/ssp/target apps/ssp/target
+COPY --from=cacher /usr/local/cargo /usr/local/cargo
 WORKDIR /usr/src/app/apps/ssp
 RUN cargo build --release
 

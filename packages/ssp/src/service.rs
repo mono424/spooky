@@ -1,3 +1,4 @@
+use crate::engine::update::ViewResultFormat;
 use crate::engine::view::{Operator, SpookyValue};
 use crate::{converter, sanitizer, MaterializedViewUpdate, QueryPlan};
 use anyhow::{anyhow, Result};
@@ -90,6 +91,7 @@ pub mod view {
         pub plan: QueryPlan,
         pub safe_params: Option<Value>,
         pub metadata: Value,
+        pub format: Option<ViewResultFormat>,
     }
 
     /// Prepares a view registration request.
@@ -129,6 +131,18 @@ pub mod view {
 
         let params = config.get("params").cloned().unwrap_or(json!({}));
 
+        // Parse optional format field (defaults to Flat if not specified)
+        let format = config
+            .get("format")
+            .or_else(|| config.get("resultFormat"))
+            .and_then(|v| v.as_str())
+            .and_then(|s| match s.to_lowercase().as_str() {
+                "streaming" => Some(ViewResultFormat::Streaming),
+                "tree" => Some(ViewResultFormat::Tree),
+                "flat" => Some(ViewResultFormat::Flat),
+                _ => None,
+            });
+
         // Parse Query Plan
         // 1. Convert SURQL to generic Value
         let root_op_val = converter::convert_surql_to_dbsp(&surreal_ql)
@@ -164,6 +178,7 @@ pub mod view {
             plan,
             safe_params,
             metadata,
+            format,
         })
     }
 

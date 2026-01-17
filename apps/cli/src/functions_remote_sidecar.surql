@@ -13,7 +13,8 @@ DEFINE FUNCTION fn::incantation::register($config: object) {
         params: <string>($config.params OR {}),
         clientId: <string>$config.clientId,
         ttl: <string>($config.ttl OR '1h'),
-        lastActiveAt: <string>time::now()
+        lastActiveAt: <string>time::now(),
+        format: <string>($config.format OR 'flat')
     };
 
     -- Check if Incantation already exists

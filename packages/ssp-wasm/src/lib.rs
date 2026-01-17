@@ -92,7 +92,9 @@ impl SpookyProcessor {
 
         // Extract plan ID before moving the plan
         let plan_id = data.plan.id.clone();
-        let initial_update = self.circuit.register_view(data.plan, data.safe_params);
+        let initial_update = self
+            .circuit
+            .register_view(data.plan, data.safe_params, data.format);
 
         // If None, return default empty result
         let result = initial_update
