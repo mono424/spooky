@@ -212,14 +212,12 @@ async fn ingest_handler(
 
     // Update SurrealDB incantations based on format
     for update in &updates {
-        match update {
-            ViewUpdate::Flat(flat) | ViewUpdate::Tree(flat) => {
-                update_incantation_in_db(&state.db, flat).await;
-            }
-            ViewUpdate::Streaming(stream) => {
-                update_incantation_graph(&state.db, stream).await;
-            }
-        }
+        // Extract MaterializedViewUpdate from the ViewUpdate enum
+        let materialized = match update {
+            ViewUpdate::Flat(m) | ViewUpdate::Tree(m) => m,
+            ViewUpdate::Streaming(_) => continue, // Skip streaming updates
+        };
+        update_incantation_in_db(&state.db, materialized).await;
     }
 
     StatusCode::OK
@@ -245,15 +243,7 @@ async fn register_view_handler(
         res
     };
 
-    // Extract MaterializedViewUpdate from ViewUpdate enum (registration always returns Flat)
-    let result_update = match update {
-        Some(ViewUpdate::Flat(flat)) | Some(ViewUpdate::Tree(flat)) => flat,
-        Some(ViewUpdate::Streaming(_)) => {
-            // For streaming, we don't store array - graph edges are created separately
-            return StatusCode::OK.into_response();
-        }
-        None => spooky_stream_processor::service::view::default_result(&data.plan.id),
-    };
+    let result_update = update.unwrap_or_else(|| ViewUpdate::Flat(spooky_stream_processor::service::view::default_result(&data.plan.id)));
 
     let m = &data.metadata;
     let query = "UPSERT <record>$id SET hash = <string>$hash, array = $array, clientId = <string>$clientId, surrealQL = <string>$surrealQL, params = $params, ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt";
@@ -272,10 +262,16 @@ async fn register_view_handler(
     let last_active_str = m["lastActiveAt"].as_str().unwrap().to_string();
     let params_val = m["safe_params"].clone();
 
+    // Extract the inner MaterializedViewUpdate from the ViewUpdate enum
+    let (result_hash, result_data) = match &result_update {
+        ViewUpdate::Flat(m) | ViewUpdate::Tree(m) => (m.result_hash.clone(), m.result_data.clone()),
+        ViewUpdate::Streaming(_) => (String::new(), Vec::new()), // Fallback for streaming
+    };
+
     let db_res = state.db.query(query)
         .bind(("id", id_str))
-        .bind(("hash", result_update.result_hash.clone()))
-        .bind(("array", json!(result_update.result_data)))
+        .bind(("hash", result_hash))
+        .bind(("array", json!(result_data)))
         .bind(("clientId", client_id_str))
         .bind(("surrealQL", surql_str))
         .bind(("params", params_val))

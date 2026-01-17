@@ -13,7 +13,7 @@ export function ThreadSidebar(props: ThreadSidebarProps) {
   const threadsResult = useQuery(db, () => {
     return db
       .query("thread")
-      .orderBy("created_at", "desc")
+      .orderBy("title", "asc")
       .limit(20)
       .build();
   });
