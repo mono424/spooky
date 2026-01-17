@@ -166,6 +166,61 @@ export class StreamProcessorService {
   }
 
   /**
+   * Ingest multiple record changes in a single batch.
+   * More efficient than calling ingest() multiple times as it:
+   * 1. Processes all records together in WASM
+   * 2. Emits a SINGLE stream_update event with all results
+   * 3. Saves state only once at the end
+   * @param isOptimistic true = local mutation (increment versions), false = remote sync (keep versions)
+   */
+  ingestBatch(
+    batch: Array<{ table: string; op: string; id: string; record: any }>,
+    isOptimistic: boolean = true
+  ): WasmStreamUpdate[] {
+    if (batch.length === 0) return [];
+
+    this.logger.debug(
+      { batchSize: batch.length, isOptimistic },
+      '[StreamProcessor] Ingesting batch'
+    );
+
+    if (!this.processor) {
+      this.logger.warn('[StreamProcessor] Not initialized, skipping batch ingest');
+      return [];
+    }
+
+    try {
+      // Normalize all records in the batch
+      const normalizedBatch = batch.map((item) => ({
+        table: item.table,
+        op: item.op,
+        id: item.id,
+        record: this.normalizeValue(item.record),
+      }));
+
+      const rawUpdates = this.processor.ingest_batch(normalizedBatch, isOptimistic);
+      this.logger.debug(
+        { updateCount: rawUpdates?.length },
+        '[StreamProcessor] batch ingest result'
+      );
+
+      if (rawUpdates && Array.isArray(rawUpdates) && rawUpdates.length > 0) {
+        const updates: StreamUpdate[] = rawUpdates.map((u: WasmStreamUpdate) => ({
+          query_id: u.query_id,
+          localHash: u.result_hash,
+          localArray: u.result_data,
+        }));
+        this.events.emit('stream_update', updates);
+      }
+      this.saveState();
+      return rawUpdates;
+    } catch (e) {
+      this.logger.error(e, '[StreamProcessor] Error during batch ingestion');
+    }
+    return [];
+  }
+
+  /**
    * Explicitly set the version of a record in a specific view.
    * This is used during remote sync to ensure local state matches remote versioning.
    */

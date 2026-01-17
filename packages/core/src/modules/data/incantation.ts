@@ -56,6 +56,11 @@ export class Incantation<T> {
   private ttlDurationMs: number;
   private results: T[] | null = null;
   private meta: IncantationData['meta'];
+  private updateCounter = 0;
+
+  get updateCount() {
+    return this.updateCounter;
+  }
 
   get records() {
     return this.results;
@@ -85,9 +90,16 @@ export class Incantation<T> {
   }
 
   public updateLocalState(records: T[], localHash: string, localArray: RecordVersionArray) {
+    if (localHash === this.localHash) {
+      console.log('-- HELL NAH 1 --', localHash, this.localHash);
+      return;
+    }
+    console.log('-- HELL NAH 2 --', localHash, this.localHash);
+
     this.results = records;
     this.localHash = localHash;
     this.localArray = localArray;
+    this.updateCounter++;
   }
 
   public destroy() {

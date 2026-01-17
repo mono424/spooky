@@ -409,7 +409,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "spooky-stream-processor"
+name = "ssp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -429,7 +429,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "spooky-stream-processor-wasm"
+name = "ssp-wasm"
 version = "0.1.0"
 dependencies = [
  "getrandom",
@@ -437,7 +437,7 @@ dependencies = [
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
- "spooky-stream-processor",
+ "ssp",
  "wasm-bindgen",
  "web-sys",
 ]

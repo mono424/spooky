@@ -26,6 +26,7 @@ export class SyncEngine {
   /**
    * Sync missing/updated/removed records between local and remote.
    * Main entry point for sync operations.
+   * Uses batch processing to minimize events emitted.
    */
   async syncRecords(
     arraySyncer: ArraySyncer,
@@ -61,18 +62,51 @@ export class SyncEngine {
     // Flatten and prepare results
     const flatResults = this.flattenResults(remoteResults);
 
-    // Handle added/updated records
+    // BATCH PROCESSING: Cache all records locally first
+    const cachePromises = flatResults.map(async (record) => {
+      await this.local.getClient().upsert(record.id).content(record);
+    });
+    await Promise.all(cachePromises);
+
+    // Prepare batch for ingestion
+    const ingestBatch: Array<{ table: string; op: string; id: string; record: any }> = [];
+    const versionUpdates: Array<{ fullId: string; version: number }> = [];
+
     for (const record of flatResults) {
       const fullId = record.id.toString();
+      const table = record.id.table.toString();
       const isAdded = added.some((id) => id.toString() === fullId);
-      const isUpdated = updated.some((id) => id.toString() === fullId);
       const remoteVer = remoteVersionMap.get(fullId);
 
-      if (isAdded) {
-        await this.createCacheEntry(record, incantationId, remoteVer, arraySyncer);
-      } else if (isUpdated) {
-        await this.updateCacheEntry(record, incantationId, remoteVer, arraySyncer);
+      ingestBatch.push({
+        table,
+        op: isAdded ? 'CREATE' : 'UPDATE',
+        id: fullId,
+        record,
+      });
+
+      if (remoteVer !== undefined) {
+        versionUpdates.push({ fullId, version: remoteVer });
       }
+    }
+
+    // Single batch ingest call (isOptimistic=false for remote sync)
+    if (ingestBatch.length > 0) {
+      this.streamProcessor.ingestBatch(ingestBatch, false);
+    }
+
+    // Set versions for all records
+    for (const { fullId, version } of versionUpdates) {
+      this.streamProcessor.setRecordVersion(incantationId.toString(), fullId, version);
+    }
+
+    // Update arraySyncer with final state
+    const finalVersionArray: RecordVersionArray = versionUpdates.map(({ fullId, version }) => [
+      fullId,
+      version,
+    ]);
+    if (finalVersionArray.length > 0) {
+      arraySyncer.update(finalVersionArray);
     }
 
     this.events.emit(SyncEventTypes.RemoteDataIngested, {

@@ -55,7 +55,7 @@ export class DevToolsService {
             ? q.lastActiveAt.getTime()
             : new Date(q.lastActiveAt || Date.now()).getTime(),
         lastUpdate: Date.now(),
-        updateCount: 0,
+        updateCount: q.updateCount,
         query: q.surrealql,
         variables: q.params || {},
         dataSize: q.records?.length || 0,

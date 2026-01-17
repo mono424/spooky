@@ -1,6 +1,6 @@
 use serde::Serialize;
 use serde_json::Value;
-use spooky_stream_processor::{Circuit, MaterializedViewUpdate, QueryPlan, StreamProcessor};
+use ssp::{Circuit, ViewUpdate};
 use wasm_bindgen::prelude::*;
 
 // When the `wee_alloc` feature is enabled, use `wee_alloc` as the global
@@ -30,6 +30,13 @@ export interface WasmIncantationConfig {
   ttl: string;
   lastActiveAt: string;
 }
+
+export interface WasmIngestItem {
+  table: string;
+  op: string;
+  id: string;
+  record: any;
+}
 "#;
 
 #[wasm_bindgen]
@@ -55,7 +62,7 @@ impl SpookyProcessor {
             .map_err(|e| JsValue::from_str(&format!("Failed to parse record: {}", e)))?;
 
         // internal preparation (hash calc)
-        let (clean_record, hash) = spooky_stream_processor::service::ingest::prepare(record);
+        let (clean_record, hash) = ssp::service::ingest::prepare(record);
 
         let updates =
             self.circuit
@@ -63,6 +70,50 @@ impl SpookyProcessor {
 
         // Use Serializer with serialize_maps_as_objects(true) to output plain JS objects
         // instead of JS Map objects (which stringify as {} for HashMap)
+        let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
+        Ok(updates.serialize(&serializer)?)
+    }
+
+    /// Ingest multiple records into the stream processor in a single batch.
+    /// This is more efficient than calling ingest() multiple times as it:
+    /// 1. Processes all records together
+    /// 2. Emits a single set of view updates
+    /// is_optimistic: true = local mutation (increment versions), false = remote sync (keep versions)
+    pub fn ingest_batch(
+        &mut self,
+        batch: JsValue, // Array of { table, op, id, record }
+        is_optimistic: bool,
+    ) -> Result<JsValue, JsValue> {
+        let batch_array: Vec<Value> = serde_wasm_bindgen::from_value(batch)
+            .map_err(|e| JsValue::from_str(&format!("Failed to parse batch: {}", e)))?;
+
+        let mut prepared_batch: Vec<(String, String, String, Value, String)> =
+            Vec::with_capacity(batch_array.len());
+
+        for item in batch_array {
+            let table = item
+                .get("table")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| JsValue::from_str("Missing 'table' field"))?
+                .to_string();
+            let op = item
+                .get("op")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| JsValue::from_str("Missing 'op' field"))?
+                .to_string();
+            let id = item
+                .get("id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| JsValue::from_str("Missing 'id' field"))?
+                .to_string();
+            let record = item.get("record").cloned().unwrap_or(Value::Null);
+
+            let (clean_record, hash) = ssp::service::ingest::prepare(record);
+            prepared_batch.push((table, op, id, clean_record.into(), hash));
+        }
+
+        let updates = self.circuit.ingest_batch(prepared_batch, is_optimistic);
+
         let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
         Ok(updates.serialize(&serializer)?)
     }
@@ -87,7 +138,7 @@ impl SpookyProcessor {
         // But the user asked for "register view should work with sql string".
         // Let's assume the user passes a config object with these fields, similar to the module.
 
-        let data = spooky_stream_processor::service::view::prepare_registration(config_val)
+        let data = ssp::service::view::prepare_registration(config_val)
             .map_err(|e| JsValue::from_str(&format!("Registration failed: {}", e)))?;
 
         // Extract plan ID before moving the plan
@@ -98,7 +149,7 @@ impl SpookyProcessor {
 
         // If None, return default empty result
         let result = initial_update
-            .unwrap_or_else(|| spooky_stream_processor::service::view::default_result(&plan_id));
+            .unwrap_or_else(|| ViewUpdate::Flat(ssp::service::view::default_result(&plan_id)));
 
         // Use Serializer with serialize_maps_as_objects(true) to output plain JS objects
         let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
