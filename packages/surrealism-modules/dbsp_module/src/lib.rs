@@ -34,19 +34,32 @@ fn ingest(
     record: Value,
 ) -> Result<Value, &'static str> {
     // A. Prepare (Normalize & Hash) using centralized logic
+    // Use ssp alias correctly
     let (clean_record, hash) = spooky_stream_processor::service::ingest::prepare(record);
 
     // B. Run Engine
     let _ = with_circuit(|circuit| {
-        let updates = circuit.ingest_record(table, operation, id, clean_record, hash);
+        // Pass borrowed strings and add is_optimistic=true
+        let updates =
+            circuit.ingest_record(&table, &operation, &id, clean_record.into(), &hash, true);
 
         // C. Apply Updates Directly (Side Effects)
         for update in updates {
-            persistence::apply_incantation_update(
-                &update.query_id,
-                &update.result_hash,
-                &update.tree,
-            );
+            // Unpack ViewUpdate enum
+            match update {
+                spooky_stream_processor::ViewUpdate::Flat(flat)
+                | spooky_stream_processor::ViewUpdate::Tree(flat) => {
+                    persistence::apply_incantation_update(
+                        &flat.query_id,
+                        &flat.result_hash,
+                        &flat.result_data,
+                    );
+                }
+                spooky_stream_processor::ViewUpdate::Streaming(_) => {
+                    // Streaming not supported for persistence yet
+                    eprintln!("DEBUG: Streaming update ignored for persistence");
+                }
+            }
         }
 
         // D. Save State
@@ -74,15 +87,32 @@ fn register_view(config: Value) -> Result<Value, &'static str> {
 
     let result = with_circuit(|circuit| {
         let plan = data.plan;
-        let initial_res = circuit.register_view(plan.clone(), data.safe_params);
+        // Pass None for format (defaults to Flat)
+        let initial_res = circuit.register_view(plan.clone(), data.safe_params, None);
 
-        // Standard default result handling
-        let res = initial_res
-            .unwrap_or_else(|| spooky_stream_processor::service::view::default_result(&plan.id));
+        // Standard default result handling. Default result is now typically Flat.
+        // We manually construct a Flat enum wrapper for the default.
+        // Need to import ViewUpdate to construct it? Or just use helper.
+        // Let's assume we can use the unwrapped value if present.
 
-        // Extract result data
-        let hash = res.result_hash.clone();
-        let tree = res.tree.clone();
+        // Helper to extract data from ViewUpdate
+        let extract =
+            |u: spooky_stream_processor::ViewUpdate| -> (String, String, Vec<(String, u64)>) {
+                match u {
+                    spooky_stream_processor::ViewUpdate::Flat(f)
+                    | spooky_stream_processor::ViewUpdate::Tree(f) => {
+                        (f.query_id, f.result_hash, f.result_data)
+                    }
+                    _ => (String::new(), String::new(), Vec::new()),
+                }
+            };
+
+        let (query_id, hash, result_data) = if let Some(u) = initial_res {
+            extract(u)
+        } else {
+            let def = spooky_stream_processor::service::view::default_result(&plan.id);
+            (def.query_id, def.result_hash, def.result_data)
+        };
 
         // Persist to SurrealDB directly using prepared metadata
         // Note: We need to extract fields from metadata map for the specific persistence signature or update persistence to take map.
@@ -93,7 +123,7 @@ fn register_view(config: Value) -> Result<Value, &'static str> {
         persistence::upsert_incantation(
             m["id"].as_str().unwrap(),
             &hash,
-            &tree,
+            &result_data,
             m["clientId"].as_str().unwrap(),
             m["surrealQL"].as_str().unwrap(),
             &m["safe_params"], // Use the safe params we stored

@@ -18,12 +18,12 @@ ulid = "=1.1.0"
 # Revert uuid constraint (removed) to fix surrealism build
 
 # Dual getrandom config is required due to transitive deps
-getrandom = { version = "0.3" }
+getrandom = { version = "0.3", features = ["wasm_js"] }
 getrandom_old = { package = "getrandom", version = "0.2" }
 # surrealdb-core = { version = "2.3", default-features = false }
 # surrealdb-types = { version = "3.0.0-beta.1", features = [] }
 anyhow = "1.0"
 blake3 = { version = "1.5", default-features = false, features = ["std"] }
 regex = "1.12.2"
-ssp = { path = "../../ssp" }
+spooky_stream_processor = { path = "../../ssp", package = "ssp" }
 
