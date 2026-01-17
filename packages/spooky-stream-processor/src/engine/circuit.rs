@@ -1,3 +1,4 @@
+use crate::debug_log;
 use super::view::{
     FastMap, Operator, Projection, QueryPlan, RowKey, SpookyValue, View, ViewUpdate, ZSet,
 };
@@ -218,8 +219,7 @@ impl Circuit {
 
         // Identify ALL affected views from ALL changed tables
         let mut impacted_view_indices: Vec<usize> = Vec::new();
-        #[cfg(target_arch = "wasm32")]
-        web_sys::console::log_1(&format!("DEBUG: Changed tables: {:?}", changed_tables).into());
+        debug_log!("DEBUG: Changed tables: {:?}", changed_tables);
         for table in changed_tables {
             if let Some(indices) = self.dependency_graph.get(&table) {
                 #[cfg(target_arch = "wasm32")]

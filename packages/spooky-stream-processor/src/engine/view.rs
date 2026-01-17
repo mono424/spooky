@@ -1,3 +1,4 @@
+use crate::debug_log;
 use super::circuit::Database;
 use super::eval::{
     apply_numeric_filter, compare_spooky_values, hash_spooky_value, NumericFilterConfig,
@@ -74,14 +75,7 @@ impl View {
         // Check if any delta contains CREATE or DELETE operations for tables used in subqueries
         let has_subquery_changes = !is_first_run && self.has_changes_for_subqueries(deltas, db);
 
-        #[cfg(target_arch = "wasm32")]
-        web_sys::console::log_1(
-            &format!(
-                "DEBUG VIEW: id={} is_first_run={} has_subquery_changes={}",
-                self.plan.id, is_first_run, has_subquery_changes
-            )
-            .into(),
-        );
+        debug_log!("DEBUG VIEW: id={} is_first_run={} has_subquery_changes={}", self.plan.id, is_first_run, has_subquery_changes);
 
         let maybe_delta = if is_first_run || has_subquery_changes {
             // Force full scan if:
@@ -119,18 +113,7 @@ impl View {
         let updated_record_ids = self.get_updated_cached_records(deltas);
         let has_cached_updates = !updated_record_ids.is_empty();
 
-        #[cfg(target_arch = "wasm32")]
-        web_sys::console::log_1(
-            &format!(
-                "DEBUG VIEW: id={} view_delta_empty={} has_cached_updates={} is_optimistic={} updated_ids_len={}",
-                self.plan.id,
-                view_delta.is_empty(),
-                has_cached_updates,
-                is_optimistic,
-                updated_record_ids.len()
-            )
-            .into(),
-        );
+        debug_log!("DEBUG VIEW: id={} view_delta_empty={} has_cached_updates={} is_optimistic={} updated_ids_len={}", self.plan.id, view_delta.is_empty(), has_cached_updates, is_optimistic, updated_record_ids.len());
 
         if view_delta.is_empty() && !is_first_run && !has_subquery_changes && !has_cached_updates {
             return None;
@@ -214,14 +197,7 @@ impl View {
                     // Optimistic update: increment version to trigger hash change
                     let _old_ver = *version;
                     *version += 1;
-                    #[cfg(target_arch = "wasm32")]
-                    web_sys::console::log_1(
-                        &format!(
-                            "DEBUG VIEW: Incrementing version for id={} old={} new={}",
-                            id, _old_ver, *version
-                        )
-                        .into(),
-                    );
+                    debug_log!("DEBUG VIEW: Incrementing version for id={} old={} new={}", id, _old_ver, *version);
                 }
             }
         }
@@ -327,75 +303,33 @@ impl View {
         // Get all tables used in subqueries
         let subquery_tables = self.extract_subquery_tables(&self.plan.root);
 
-        #[cfg(target_arch = "wasm32")]
-        web_sys::console::log_1(
-            &format!(
-                "DEBUG has_changes: view={} subquery_tables={:?} delta_tables={:?}",
-                self.plan.id,
-                subquery_tables,
-                deltas.keys().collect::<Vec<_>>()
-            )
-            .into(),
-        );
+        debug_log!("DEBUG has_changes: view={} subquery_tables={:?} delta_tables={:?}", self.plan.id, subquery_tables, deltas.keys().collect::<Vec<_>>());
 
         if subquery_tables.is_empty() {
-            #[cfg(target_arch = "wasm32")]
-            web_sys::console::log_1(
-                &format!(
-                    "DEBUG has_changes: view={} NO SUBQUERY TABLES",
-                    self.plan.id
-                )
-                .into(),
-            );
+            debug_log!("DEBUG has_changes: view={} NO SUBQUERY TABLES", self.plan.id);
             return false;
         }
 
         // Check if any delta for a subquery table contains changes (weight != 0)
         for table in subquery_tables {
             if let Some(delta) = deltas.get(&table) {
-                #[cfg(target_arch = "wasm32")]
-                web_sys::console::log_1(
-                    &format!(
-                        "DEBUG has_changes: view={} table={} delta_keys={:?}",
-                        self.plan.id,
-                        table,
-                        delta.keys().collect::<Vec<_>>()
-                    )
-                    .into(),
-                );
+                debug_log!("DEBUG has_changes: view={} table={} delta_keys={:?}", self.plan.id, table, delta.keys().collect::<Vec<_>>());
                 // Check if any record in this delta is a CREATE (weight > 0 and not in version_map)
                 // or a DELETE (weight < 0 and in version_map)
                 for (key, weight) in delta {
                     let in_version_map = self.version_map.contains_key(key.as_str());
-                    #[cfg(target_arch = "wasm32")]
-                    web_sys::console::log_1(
-                        &format!(
-                            "DEBUG has_changes: view={} key={} weight={} in_version_map={}",
-                            self.plan.id, key, weight, in_version_map
-                        )
-                        .into(),
-                    );
+                    debug_log!("DEBUG has_changes: view={} key={} weight={} in_version_map={}", self.plan.id, key, weight, in_version_map);
                     // CREATE: positive weight, not in version_map
                     // DELETE: negative weight, in version_map
                     if (*weight > 0 && !in_version_map) || (*weight < 0 && in_version_map) {
-                        #[cfg(target_arch = "wasm32")]
-                        web_sys::console::log_1(
-                            &format!(
-                                "DEBUG has_changes: view={} FOUND CHANGE key={} weight={}",
-                                self.plan.id, key, weight
-                            )
-                            .into(),
-                        );
+                        debug_log!("DEBUG has_changes: view={} FOUND CHANGE key={} weight={}", self.plan.id, key, weight);
                         return true;
                     }
                 }
             }
         }
 
-        #[cfg(target_arch = "wasm32")]
-        web_sys::console::log_1(
-            &format!("DEBUG has_changes: view={} NO CHANGES FOUND", self.plan.id).into(),
-        );
+        debug_log!("DEBUG has_changes: view={} NO CHANGES FOUND", self.plan.id);
         false
     }
 
@@ -410,14 +344,7 @@ impl View {
                 // Only check records with positive weight (existing/updated records)
                 // Negative weight means deletion which is handled elsewhere
                 if *weight > 0 && self.cache.contains_key(record_id.as_str()) {
-                    #[cfg(target_arch = "wasm32")]
-                    web_sys::console::log_1(
-                        &format!(
-                            "DEBUG get_updated_cached_records: view={} table={} found cached record={}",
-                            self.plan.id, _table, record_id
-                        )
-                        .into(),
-                    );
+                    debug_log!("DEBUG get_updated_cached_records: view={} table={} found cached record={}", self.plan.id, _table, record_id);
                     updated_ids.push(record_id.to_string());
                 }
             }
@@ -430,14 +357,7 @@ impl View {
                     && self.version_map.contains_key(record_id.as_str())
                     && !updated_ids.contains(&record_id.to_string())
                 {
-                    #[cfg(target_arch = "wasm32")]
-                    web_sys::console::log_1(
-                        &format!(
-                            "DEBUG get_updated_cached_records: view={} table={} found versioned record={}",
-                            self.plan.id, _table, record_id
-                        )
-                        .into(),
-                    );
+                    debug_log!("DEBUG get_updated_cached_records: view={} table={} found versioned record={}", self.plan.id, _table, record_id);
                     updated_ids.push(record_id.to_string());
                 }
             }
@@ -456,14 +376,7 @@ impl View {
         let current_version = self.version_map.get(record_id).copied().unwrap_or(0);
 
         if current_version != version {
-            #[cfg(target_arch = "wasm32")]
-            web_sys::console::log_1(
-                &format!(
-                    "DEBUG VIEW: set_record_version id={} record={} old={} new={}",
-                    self.plan.id, record_id, current_version, version
-                )
-                .into(),
-            );
+            debug_log!("DEBUG VIEW: set_record_version id={} record={} old={} new={}", self.plan.id, record_id, current_version, version);
             self.version_map.insert(record_id.to_string(), version);
 
             // Trigger re-hashing by processing empty deltas
