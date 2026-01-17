@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use ssp::{
     Circuit, MaterializedViewUpdate, ViewUpdate,
-    engine::update::{StreamingUpdate, DeltaEvent},
+    engine::update::{StreamingUpdate, DeltaEvent, compute_flat_hash},
 };
 use surrealdb::engine::remote::ws::{Client, Ws};
 use surrealdb::opt::auth::Root;
@@ -266,9 +266,21 @@ async fn register_view_handler(
     let params_val = m["safe_params"].clone();
 
     // Extract the inner MaterializedViewUpdate from the ViewUpdate enum
-    let (result_hash, result_data) = match &result_update {
-        ViewUpdate::Flat(m) | ViewUpdate::Tree(m) => (m.result_hash.clone(), m.result_data.clone()),
-        ViewUpdate::Streaming(_) => (String::new(), Vec::new()), // Fallback for streaming
+    let (result_hash, result_data, is_streaming) = match &result_update {
+        ViewUpdate::Flat(m) | ViewUpdate::Tree(m) => {
+            (m.result_hash.clone(), m.result_data.clone(), false)
+        }
+        ViewUpdate::Streaming(s) => {
+            // Convert Created events to array format for initial state
+            let initial_data: Vec<(String, u64)> = s.records
+                .iter()
+                .filter(|r| r.event == DeltaEvent::Created)
+                .map(|r| (r.id.clone(), r.version))
+                .collect();
+            
+            let hash = compute_flat_hash(&initial_data);
+            (hash, initial_data, true)
+        }
     };
 
     let db_res = state.db.query(query)
@@ -287,6 +299,13 @@ async fn register_view_handler(
         return (StatusCode::INTERNAL_SERVER_ERROR, "DB Error").into_response();
     }
 
+    // Create initial edges for streaming mode
+    if is_streaming {
+        if let ViewUpdate::Streaming(s) = &result_update {
+            update_incantation_edges(&state.db, s).await;
+        }
+    }
+
     StatusCode::OK.into_response()
 }
 
@@ -301,6 +320,23 @@ async fn unregister_view_handler(
         circuit.unregister_view(&payload.id);
         state.saver.trigger_save();
     }
+    
+    // Delete all edges for this incantation
+    let id_str = format_incantation_id(&payload.id);
+    if let Some(from_id) = parse_record_id(&id_str) {
+        if let Err(e) = state.db
+            .query("DELETE $from->_spooky_list_ref")
+            .bind(("from", from_id))
+            .await
+        {
+            error!("Failed to delete edges for unregistered view {}: {}", id_str, e);
+        } else {
+            debug!("Successfully deleted all edges for view {}", id_str);
+        }
+    } else {
+        error!("Invalid incantation ID format: {}", id_str);
+    }
+    
     StatusCode::OK
 }
 
@@ -315,6 +351,14 @@ async fn reset_handler(State(state): State<AppState>) -> impl IntoResponse {
         // For reset, we might want immediate save to confirm empty state
         state.saver.trigger_save();
     }
+    
+    // Clean up ALL edges
+    if let Err(e) = state.db.query("DELETE _spooky_list_ref").await {
+        error!("Failed to delete all edges on reset: {}", e);
+    } else {
+        debug!("Successfully deleted all edges on reset");
+    }
+    
     StatusCode::OK
 }
 
