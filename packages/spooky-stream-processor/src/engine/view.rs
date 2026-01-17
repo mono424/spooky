@@ -90,7 +90,7 @@ impl View {
             d
         } else {
             // FALLBACK MODE: Full Scan & Diff
-            let target_set = self.eval_snapshot(&self.plan.root, db, self.params.as_ref());
+            let target_set = self.eval_snapshot(&self.plan.root, db, self.params.as_ref()).into_owned();
             let mut diff = FastMap::default();
 
             for (key, &new_w) in &target_set {
@@ -128,7 +128,8 @@ impl View {
             }
         }
 
-        // CAPTURE DELTA SETS FOR STREAMING
+
+        // CAPTURE DELTA SETS (needed for all formats)
         // Additions: records with positive weight
         let mut additions: Vec<(String, u64)> = Vec::new();
         // Removals: records with negative weight
@@ -153,6 +154,95 @@ impl View {
             .cloned()
             .collect();
 
+        // OPTIMIZATION: For Streaming mode, skip expensive full snapshot operations
+        // We only need to track versions for records in the delta
+        if matches!(self.format, ViewResultFormat::Streaming) {
+            // Only update versions for records that changed
+            for (id, _) in &view_delta {
+                if let Some(_current_hash) = self.get_row_hash(id.as_str(), db) {
+                    let id_key = SmolStr::new(id.as_str());
+                    let version = self.version_map.entry(id_key).or_insert(0);
+                    if *version == 0 {
+                        *version = 1;
+                    } else if is_optimistic && updated_record_ids.contains(&id.to_string()) {
+                        let _old_ver = *version;
+                        *version += 1;
+                        debug_log!("DEBUG VIEW: Incrementing version for id={} old={} new={}", id, _old_ver, *version);
+                    }
+                }
+            }
+
+            // Finalize delta sets with versions
+            let additions_with_versions: Vec<(String, u64)> = additions
+                .iter()
+                .map(|(id, _)| {
+                    let version = self.version_map.get(id.as_str()).copied().unwrap_or(1);
+                    (id.clone(), version)
+                })
+                .collect();
+
+            let updates_with_versions: Vec<(String, u64)> = updates
+                .iter()
+                .map(|id| {
+                    let version = self.version_map.get(id.as_str()).copied().unwrap_or(1);
+                    (id.clone(), version)
+                })
+                .collect();
+
+            // Build streaming update directly, no need for result_data or hash
+            use super::update::{DeltaEvent, DeltaRecord, StreamingUpdate, ViewUpdate};
+
+            let mut delta_records = Vec::new();
+
+            if is_first_run {
+                // First run: treat all cache entries as Created
+                for (id, _) in &self.cache {
+                    let version = self.version_map.get(id.as_str()).copied().unwrap_or(1);
+                    delta_records.push(DeltaRecord {
+                        id: id.to_string(),
+                        event: DeltaEvent::Created,
+                        version,
+                    });
+                }
+            } else {
+                // Map additions → Created
+                for (id, version) in additions_with_versions {
+                    delta_records.push(DeltaRecord {
+                        id,
+                        event: DeltaEvent::Created,
+                        version,
+                    });
+                }
+
+                // Map removals → Deleted
+                for id in removals {
+                    delta_records.push(DeltaRecord {
+                        id,
+                        event: DeltaEvent::Deleted,
+                        version: 0,
+                    });
+                }
+
+                // Map updates → Updated
+                for (id, version) in updates_with_versions {
+                    delta_records.push(DeltaRecord {
+                        id,
+                        event: DeltaEvent::Updated,
+                        version,
+                    });
+                }
+            }
+
+            // No hash computation needed for streaming—track by version numbers
+            self.last_hash = "streaming".to_string();
+
+            return Some(ViewUpdate::Streaming(StreamingUpdate {
+                view_id: self.plan.id.clone(),
+                records: delta_records,
+            }));
+        }
+
+        // FALLBACK: For Flat/Tree modes, build full snapshot
         // Build result with version tracking
         let mut result_ids: Vec<String> = self.cache.keys().map(|k| k.to_string()).collect();
         result_ids.sort_unstable();
@@ -172,7 +262,7 @@ impl View {
                 if let Some(parent_row) = self.get_row_value(id, db) {
                     for subquery_op in &subquery_projections {
                         let subquery_results =
-                            self.eval_snapshot(subquery_op, db, Some(parent_row));
+                            self.eval_snapshot(subquery_op, db, Some(parent_row)).into_owned();
                         for (sub_id, _weight) in subquery_results {
                             all_ids.push(sub_id.to_string());
                         }
@@ -190,7 +280,8 @@ impl View {
         // Remote syncs should use their own version numbers
         for id in &all_ids {
             if let Some(_current_hash) = self.get_row_hash(id, db) {
-                let version = self.version_map.entry(id.clone()).or_insert(0);
+                let id_key = SmolStr::new(id);
+                let version = self.version_map.entry(id_key).or_insert(0);
                 if *version == 0 {
                     *version = 1;
                 } else if is_optimistic && updated_record_ids.contains(id) {
@@ -206,7 +297,7 @@ impl View {
         let additions_with_versions: Vec<(String, u64)> = additions
             .iter()
             .map(|(id, _)| {
-                let version = self.version_map.get(id).copied().unwrap_or(1);
+                let version = self.version_map.get(id.as_str()).copied().unwrap_or(1);
                 (id.clone(), version)
             })
             .collect();
@@ -214,7 +305,7 @@ impl View {
         let updates_with_versions: Vec<(String, u64)> = updates
             .iter()
             .map(|id| {
-                let version = self.version_map.get(id).copied().unwrap_or(1);
+                let version = self.version_map.get(id.as_str()).copied().unwrap_or(1);
                 (id.clone(), version)
             })
             .collect();
@@ -223,7 +314,7 @@ impl View {
         let result_data: Vec<(String, u64)> = all_ids
             .iter()
             .map(|id| {
-                let version = self.version_map.get(id).copied().unwrap_or(1);
+                let version = self.version_map.get(id.as_str()).copied().unwrap_or(1);
                 (id.clone(), version)
             })
             .collect();
@@ -377,7 +468,7 @@ impl View {
 
         if current_version != version {
             debug_log!("DEBUG VIEW: set_record_version id={} record={} old={} new={}", self.plan.id, record_id, current_version, version);
-            self.version_map.insert(record_id.to_string(), version);
+            self.version_map.insert(SmolStr::new(record_id), version);
 
             // Trigger re-hashing by processing empty deltas
             let empty_deltas = FastMap::default();
@@ -506,31 +597,35 @@ impl View {
     }
 
     /// The classic detailed Full-Scan Evaluator (for fallback and init)
-    fn eval_snapshot(&self, op: &Operator, db: &Database, context: Option<&SpookyValue>) -> ZSet {
+    /// Returns Cow to avoid cloning ZSets when possible
+    fn eval_snapshot<'a>(&self, op: &Operator, db: &'a Database, context: Option<&SpookyValue>) -> std::borrow::Cow<'a, ZSet> {
+        use std::borrow::Cow;
+        
         match op {
             Operator::Scan { table } => {
                 if let Some(tb) = db.tables.get(table) {
-                    // DB uses FxHashMap, we too -> clone() is efficient
-                    tb.zset.clone()
+                    // Zero-copy borrow for scan operations
+                    Cow::Borrowed(&tb.zset)
                 } else {
-                    FastMap::default()
+                    Cow::Owned(FastMap::default())
                 }
             }
-                        Operator::Filter { input, predicate } => {
+            Operator::Filter { input, predicate } => {
                 let upstream = self.eval_snapshot(input, db, context);
 
                 // Try SIMD fast path using NumericFilterConfig
                 if let Some(config) = NumericFilterConfig::from_predicate(predicate) {
-                    apply_numeric_filter(&upstream, &config, db)
+                    // apply_numeric_filter takes &ZSet, so we can pass borrowed ref
+                    Cow::Owned(apply_numeric_filter(upstream.as_ref(), &config, db))
                 } else {
                     // Slow Path (non-numeric predicates)
                     let mut out = FastMap::default();
-                    for (key, weight) in upstream {
-                        if self.check_predicate(predicate, &key, db, context) {
-                            out.insert(key, weight);
+                    for (key, weight) in upstream.as_ref() {
+                        if self.check_predicate(predicate, key, db, context) {
+                            out.insert(key.clone(), *weight);
                         }
                     }
-                    out
+                    Cow::Owned(out)
                 }
             }
             Operator::Project { input, .. } => self.eval_snapshot(input, db, context),
@@ -540,12 +635,12 @@ impl View {
                 order_by,
             } => {
                 let upstream = self.eval_snapshot(input, db, context);
-                let mut items: Vec<_> = upstream.into_iter().collect();
+                let mut items: Vec<_> = upstream.iter().map(|(k, v)| (k, v)).collect();
 
                 if let Some(orders) = order_by {
                     items.sort_by(|a, b| {
-                        let row_a = self.get_row_value(&a.0, db);
-                        let row_b = self.get_row_value(&b.0, db);
+                        let row_a = self.get_row_value(a.0.as_str(), db);
+                        let row_b = self.get_row_value(b.0.as_str(), db);
 
                         for ord in orders {
                             let val_a = resolve_nested_value(row_a, &ord.field);
@@ -560,21 +655,21 @@ impl View {
                                 };
                             }
                         }
-                        a.0.cmp(&b.0)
+                        a.0.cmp(b.0)
                     });
                 } else {
-                    items.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+                    items.sort_unstable_by(|a, b| a.0.cmp(b.0));
                 }
 
                 let mut out = FastMap::default();
                 for (i, (key, weight)) in items.into_iter().enumerate() {
                     if i < *limit {
-                        out.insert(key, weight);
+                        out.insert(key.clone(), *weight);
                     } else {
                         break;
                     }
                 }
-                out
+                Cow::Owned(out)
             }
             Operator::Join { left, right, on } => {
                 let s_left = self.eval_snapshot(left, db, context);
@@ -585,7 +680,7 @@ impl View {
                 // Map: Hash of Join-Field -> List of (Key, Weight)
                 let mut right_index: FastMap<u64, Vec<(&SmolStr, &i64)>> = FastMap::default();
 
-                for (r_key, r_weight) in &s_right {
+                for (r_key, r_weight) in s_right.as_ref() {
                     if let Some(r_val) = self.get_row_value(r_key.as_str(), db) {
                         if let Some(r_field) = resolve_nested_value(Some(r_val), &on.right_field) {
                             let hash = hash_spooky_value(r_field);
@@ -595,7 +690,7 @@ impl View {
                 }
 
                 // 2. PROBE PHASE: Iterate Left and lookup Right (O(1))
-                for (l_key, l_weight) in &s_left {
+                for (l_key, l_weight) in s_left.as_ref() {
                     if let Some(l_val) = self.get_row_value(l_key.as_str(), db) {
                         if let Some(l_field) = resolve_nested_value(Some(l_val), &on.left_field) {
                             let hash = hash_spooky_value(l_field);
@@ -611,7 +706,7 @@ impl View {
                         }
                     }
                 }
-                out
+                Cow::Owned(out)
             }
         }
     }
