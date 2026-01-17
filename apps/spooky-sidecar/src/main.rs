@@ -389,8 +389,8 @@ async fn update_incantation_graph(db: &Surreal<Client>, update: &StreamingUpdate
         let result = match record.event {
             DeltaEvent::Created => {
                 // RELATE creates an edge from incantation → record with version
-                debug!("RELATE {}->included_in->{} version={}", incantation_id, record.id, record.version);
-                db.query("RELATE $from->included_in->$to SET version = $version")
+                debug!("RELATE {}->_spooky_list_ref->{} version={}", incantation_id, record.id, record.version);
+                db.query("RELATE $from->_spooky_list_ref->$to SET version = $version")
                     .bind(("from", incantation_id.clone()))
                     .bind(("to", record.id.clone()))
                     .bind(("version", record.version))
@@ -398,16 +398,16 @@ async fn update_incantation_graph(db: &Surreal<Client>, update: &StreamingUpdate
             }
             DeltaEvent::Deleted => {
                 // DELETE removes the specific edge
-                debug!("DELETE {}->included_in WHERE out = {}", incantation_id, record.id);
-                db.query("DELETE $from->included_in WHERE out = $to")
+                debug!("DELETE {}->_spooky_list_ref WHERE out = {}", incantation_id, record.id);
+                db.query("DELETE $from->_spooky_list_ref WHERE out = $to")
                     .bind(("from", incantation_id.clone()))
                     .bind(("to", record.id.clone()))
                     .await
             }
             DeltaEvent::Updated => {
                 // UPDATE modifies version on existing edge
-                debug!("UPDATE {}->included_in SET version={} WHERE out = {}", incantation_id, record.version, record.id);
-                db.query("UPDATE $from->included_in SET version = $version WHERE out = $to")
+                debug!("UPDATE {}->_spooky_list_ref SET version={} WHERE out = {}", incantation_id, record.version, record.id);
+                db.query("UPDATE $from->_spooky_list_ref SET version = $version WHERE out = $to")
                     .bind(("from", incantation_id.clone()))
                     .bind(("to", record.id.clone()))
                     .bind(("version", record.version))
