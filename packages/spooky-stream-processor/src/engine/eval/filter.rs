@@ -1,5 +1,5 @@
 use crate::engine::circuit::Database;
-use crate::engine::view::{FastMap, Path, RowKey, SpookyValue, ZSet};
+use crate::engine::types::{FastMap, Path, RowKey, SpookyValue, ZSet};
 use rustc_hash::FxHasher;
 use smol_str::SmolStr;
 use std::cmp::Ordering;

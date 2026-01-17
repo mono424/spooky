@@ -103,7 +103,7 @@ impl Circuit {
             .into(),
         );
         for (i, view) in self.views.iter().enumerate() {
-            let tables = extract_tables(&view.plan.root);
+            let tables = view.plan.root.referenced_tables();
             #[cfg(target_arch = "wasm32")]
             web_sys::console::log_1(
                 &format!(
@@ -316,7 +316,7 @@ impl Circuit {
         // Update Dependencies for the new view
         // Note: We use self.views.last() to inspect the plan we just pushed
         if let Some(v) = self.views.last() {
-            let tables = extract_tables(&v.plan.root);
+            let tables = v.plan.root.referenced_tables();
             for t in tables {
                 self.dependency_graph.entry(t).or_default().push(view_idx);
             }
@@ -370,28 +370,5 @@ impl Circuit {
             return self.views[pos].set_record_version(record_id, version, &self.db);
         }
         None
-    }
-}
-
-// Helper to find source tables in a plan
-fn extract_tables(op: &Operator) -> Vec<String> {
-    match op {
-        Operator::Scan { table } => vec![table.clone()],
-        Operator::Filter { input, .. } => extract_tables(input),
-        Operator::Project { input, projections } => {
-            let mut tbls = extract_tables(input);
-            for p in projections {
-                if let Projection::Subquery { plan, .. } = p {
-                    tbls.extend(extract_tables(plan));
-                }
-            }
-            tbls
-        }
-        Operator::Limit { input, .. } => extract_tables(input),
-        Operator::Join { left, right, .. } => {
-            let mut tbls = extract_tables(left);
-            tbls.extend(extract_tables(right));
-            tbls
-        }
     }
 }

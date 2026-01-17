@@ -6,3 +6,5 @@ dist/
 # Surrealism modules - ignore generated files
 # *.surli
 **/target/
+**.zip
+.gitignore

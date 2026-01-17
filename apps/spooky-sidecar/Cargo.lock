@@ -3158,6 +3158,7 @@ dependencies = [
  "serde_json",
  "smol_str",
  "ulid",
+ "web-sys",
 ]
 
 [[package]]
