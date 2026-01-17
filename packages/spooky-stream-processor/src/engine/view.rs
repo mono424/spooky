@@ -130,10 +130,10 @@ impl View {
 
 
         // CAPTURE DELTA SETS (needed for all formats)
-        // Additions: records with positive weight
-        let mut additions: Vec<(String, u64)> = Vec::new();
-        // Removals: records with negative weight
-        let mut removals: Vec<String> = Vec::new();
+        // Pre-allocate based on view_delta size for efficiency
+        let delta_size = view_delta.len();
+        let mut additions: Vec<(String, u64)> = Vec::with_capacity(delta_size);
+        let mut removals: Vec<String> = Vec::with_capacity(delta_size);
 
         for (key, weight) in &view_delta {
             if *weight > 0 {
@@ -157,6 +157,11 @@ impl View {
         // OPTIMIZATION: For Streaming mode, skip expensive full snapshot operations
         // We only need to track versions for records in the delta
         if matches!(self.format, ViewResultFormat::Streaming) {
+            // Clean up version_map for deleted records to prevent unbounded growth
+            for id in &removals {
+                self.version_map.remove(id.as_str());
+            }
+
             // Only update versions for records that changed
             for (id, _) in &view_delta {
                 if let Some(_current_hash) = self.get_row_hash(id.as_str(), db) {
@@ -233,7 +238,10 @@ impl View {
                 }
             }
 
-            // No hash computation needed for streaming—track by version numbers
+            // No hash computation needed for streaming—track by version numbers instead.
+            // Sentinel value "streaming" indicates streaming mode was used (not a real hash).
+            // Note: If view switches from Streaming to Flat mode, the first Flat update will
+            // always trigger due to hash mismatch, which is acceptable for rare mode switches.
             self.last_hash = "streaming".to_string();
 
             return Some(ViewUpdate::Streaming(StreamingUpdate {
