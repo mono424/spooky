@@ -20,9 +20,17 @@ pub struct QueryPlan {
     pub root: Operator,
 }
 
+/// Helper function for serde to skip serializing empty caches
+fn is_cache_empty_or_streaming(cache: &ZSet) -> bool {
+    cache.is_empty()
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct View {
     pub plan: QueryPlan,
+    /// Cache is only used for Flat/Tree modes. For Streaming mode, version_map is the source of truth.
+    /// Skip serializing if empty (streaming mode keeps it empty).
+    #[serde(default, skip_serializing_if = "is_cache_empty_or_streaming")]
     pub cache: ZSet,
     pub last_hash: String,
     #[serde(default)]
@@ -71,15 +79,17 @@ impl View {
     ) -> Option<ViewUpdate> {
         // FIX: FIRST RUN CHECK
         let is_first_run = self.last_hash.is_empty();
+        let is_streaming = matches!(self.format, ViewResultFormat::Streaming);
 
         // Check if any delta contains CREATE or DELETE operations for tables used in subqueries
         let has_subquery_changes = !is_first_run && self.has_changes_for_subqueries(deltas, db);
 
         debug_log!(
-            "DEBUG VIEW: id={} is_first_run={} has_subquery_changes={}",
+            "DEBUG VIEW: id={} is_first_run={} has_subquery_changes={} is_streaming={}",
             self.plan.id,
             is_first_run,
-            has_subquery_changes
+            has_subquery_changes,
+            is_streaming
         );
 
         let maybe_delta = if is_first_run || has_subquery_changes {
@@ -91,6 +101,8 @@ impl View {
             self.eval_delta_batch(&self.plan.root, deltas, db, self.params.as_ref())
         };
 
+        // For streaming mode, use version_map as the source of truth instead of cache
+        // This avoids maintaining redundant data structures
         let view_delta = if let Some(d) = maybe_delta {
             d
         } else {
@@ -100,24 +112,44 @@ impl View {
                 .into_owned();
             let mut diff = FastMap::default();
 
-            for (key, &new_w) in &target_set {
-                let old_w = self.cache.get(key).copied().unwrap_or(0);
-                if new_w != old_w {
-                    diff.insert(key.clone(), new_w - old_w);
+            if is_streaming {
+                // Streaming mode: compare against version_map (lighter weight)
+                for (key, &new_w) in &target_set {
+                    if new_w > 0 && !self.version_map.contains_key(key.as_str()) {
+                        // New record entering the view
+                        diff.insert(key.clone(), 1);
+                    }
                 }
-            }
-            for (key, &old_w) in &self.cache {
-                if !target_set.contains_key(key) {
-                    diff.insert(key.clone(), 0 - old_w);
+                for key in self.version_map.keys() {
+                    if !target_set.contains_key(key.as_str()) {
+                        // Record leaving the view
+                        diff.insert(SmolStr::new(key), -1);
+                    }
+                }
+            } else {
+                // Flat/Tree mode: use cache for ZSet diff
+                for (key, &new_w) in &target_set {
+                    let old_w = self.cache.get(key).copied().unwrap_or(0);
+                    if new_w != old_w {
+                        diff.insert(key.clone(), new_w - old_w);
+                    }
+                }
+                for (key, &old_w) in &self.cache {
+                    if !target_set.contains_key(key) {
+                        diff.insert(key.clone(), 0 - old_w);
+                    }
                 }
             }
             diff
         };
 
-        // Check if any record in the cache has been updated in the deltas
-        // This handles UPDATE operations where the ID doesn't change but content does
-        // Returns the list of updated record IDs so we can increment their versions
-        let updated_record_ids = self.get_updated_cached_records(deltas);
+        // Check if any record in the view has been updated in the deltas
+        // For streaming mode, use version_map; for other modes, use cache
+        let updated_record_ids = if is_streaming {
+            self.get_updated_records_streaming(deltas)
+        } else {
+            self.get_updated_cached_records(deltas)
+        };
         let has_cached_updates = !updated_record_ids.is_empty();
 
         debug_log!("DEBUG VIEW: id={} view_delta_empty={} has_cached_updates={} is_optimistic={} updated_ids_len={}", self.plan.id, view_delta.is_empty(), has_cached_updates, is_optimistic, updated_record_ids.len());
@@ -126,12 +158,15 @@ impl View {
             return None;
         }
 
-        // Update cache (Incremental)
-        for (key, weight) in &view_delta {
-            let entry = self.cache.entry(key.clone()).or_insert(0);
-            *entry += weight;
-            if *entry == 0 {
-                self.cache.remove(key);
+        // Update cache only for non-streaming modes
+        // Streaming mode uses version_map as the source of truth
+        if !is_streaming {
+            for (key, weight) in &view_delta {
+                let entry = self.cache.entry(key.clone()).or_insert(0);
+                *entry += weight;
+                if *entry == 0 {
+                    self.cache.remove(key);
+                }
             }
         }
 
@@ -234,14 +269,20 @@ impl View {
             let mut delta_records = Vec::new();
 
             if is_first_run {
-                // First run: treat all cache entries as Created
-                for (id, _) in &self.cache {
-                    let version = self.version_map.get(id.as_str()).copied().unwrap_or(1);
-                    delta_records.push(DeltaRecord {
-                        id: id.to_string(),
-                        event: DeltaEvent::Created,
-                        version,
-                    });
+                // First run: all records in view_delta with weight > 0 are new
+                // We use view_delta here instead of cache because streaming mode doesn't maintain cache
+                for (id, weight) in &view_delta {
+                    if *weight > 0 {
+                        // Add to version_map
+                        let id_key = SmolStr::new(id.as_str());
+                        self.version_map.insert(id_key, 1);
+                        
+                        delta_records.push(DeltaRecord {
+                            id: id.to_string(),
+                            event: DeltaEvent::Created,
+                            version: 1,
+                        });
+                    }
                 }
             } else {
                 // Map additions → Created
@@ -526,6 +567,30 @@ impl View {
                     && !updated_ids.contains(&record_id.to_string())
                 {
                     debug_log!("DEBUG get_updated_cached_records: view={} table={} found versioned record={}", self.plan.id, _table, record_id);
+                    updated_ids.push(record_id.to_string());
+                }
+            }
+        }
+
+        updated_ids
+    }
+
+    /// Get all record IDs in the view (via version_map) that have been updated in the deltas.
+    /// This is the streaming-mode variant that uses version_map instead of cache.
+    fn get_updated_records_streaming(&self, deltas: &FastMap<String, ZSet>) -> Vec<String> {
+        let mut updated_ids = Vec::new();
+
+        for (_table, delta) in deltas {
+            for (record_id, weight) in delta {
+                // Only check records with positive weight (existing/updated records)
+                // and that are already in the view (tracked in version_map)
+                if *weight > 0 && self.version_map.contains_key(record_id.as_str()) {
+                    debug_log!(
+                        "DEBUG get_updated_records_streaming: view={} table={} found versioned record={}",
+                        self.plan.id,
+                        _table,
+                        record_id
+                    );
                     updated_ids.push(record_id.to_string());
                 }
             }
