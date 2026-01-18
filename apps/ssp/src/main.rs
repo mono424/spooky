@@ -428,7 +428,7 @@ fn format_incantation_id(id: &str) -> String {
 }
 
 /// Graph-based persistence for StreamingUpdate.
-/// Maps DeltaEvent to specific SurrealQL graph operations (blind writes).
+/// Maps DeltaEvent to specific SurrealQL graph operations.
 async fn update_incantation_edges(db: &Surreal<Client>, update: &StreamingUpdate) {
     let incantation_id_str = format_incantation_id(&update.view_id);
     
@@ -451,9 +451,18 @@ async fn update_incantation_edges(db: &Surreal<Client>, update: &StreamingUpdate
         
         let result = match record.event {
             DeltaEvent::Created => {
-                // RELATE creates an edge from incantation → record with version
+                // RELATE creates a new edge from incantation → record with version
                 debug!("RELATE {}->_spooky_list_ref->{} version={}", incantation_id_str, record.id, record.version);
                 db.query("RELATE $from->_spooky_list_ref->$to SET version = $version, clientId = (SELECT clientId FROM ONLY $from).clientId")
+                    .bind(("from", from_id.clone()))
+                    .bind(("to", to_id.clone()))
+                    .bind(("version", record.version))
+                    .await
+            }
+            DeltaEvent::Updated => {
+                // UPDATE modifies version on existing edge
+                debug!("UPDATE {}->_spooky_list_ref SET version={} WHERE out = {}", incantation_id_str, record.version, record.id);
+                db.query("UPDATE $from->_spooky_list_ref SET version = $version WHERE out = $to")
                     .bind(("from", from_id.clone()))
                     .bind(("to", to_id.clone()))
                     .bind(("version", record.version))
@@ -465,15 +474,6 @@ async fn update_incantation_edges(db: &Surreal<Client>, update: &StreamingUpdate
                 db.query("DELETE $from->_spooky_list_ref WHERE out = $to")
                     .bind(("from", from_id.clone()))
                     .bind(("to", to_id.clone()))
-                    .await
-            }
-            DeltaEvent::Updated => {
-                // UPDATE modifies version on existing edge
-                debug!("UPDATE {}->_spooky_list_ref SET version={} WHERE out = {}", incantation_id_str, record.version, record.id);
-                db.query("UPDATE $from->_spooky_list_ref SET version = $version WHERE out = $to")
-                    .bind(("from", from_id.clone()))
-                    .bind(("to", to_id.clone()))
-                    .bind(("version", record.version))
                     .await
             }
         };

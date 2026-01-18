@@ -141,22 +141,36 @@ impl View {
         let mut additions: Vec<(String, u64)> = Vec::with_capacity(delta_size);
         let mut removals: Vec<String> = Vec::with_capacity(delta_size);
 
+        // Convert updated_record_ids to a HashSet for O(1) lookup
+        let updated_ids_set: std::collections::HashSet<&str> = 
+            updated_record_ids.iter().map(|s| s.as_str()).collect();
+
         for (key, weight) in &view_delta {
             if *weight > 0 {
-                // Addition: will get version after version_map update
-                additions.push((key.to_string(), 0)); // version TBD
+                // Check if this record was already in the view (i.e., it's an update, not a new addition)
+                // A record is an UPDATE if it was already tracked (in updated_record_ids)
+                // A record is a CREATE if it's genuinely new to the view
+                if !updated_ids_set.contains(key.as_str()) {
+                    // Genuinely new record entering the view
+                    additions.push((key.to_string(), 0)); // version TBD
+                }
+                // If it IS in updated_ids_set, it will be handled as an update below
             } else if *weight < 0 {
                 // Removal
                 removals.push(key.to_string());
             }
         }
 
-        // Updates: records in updated_record_ids that are NOT new additions
-        let addition_ids: std::collections::HashSet<&str> =
-            additions.iter().map(|(id, _)| id.as_str()).collect();
+        // Build a set of removed IDs for quick lookup
+        let removal_ids_set: std::collections::HashSet<&str> = 
+            removals.iter().map(|s| s.as_str()).collect();
+
+        // Updates: records in updated_record_ids that are NOT being removed
+        // (A record can be in updated_record_ids if it was modified, but if the modification
+        // caused it to no longer match the view's filter, it should be a removal, not an update)
         let updates: Vec<String> = updated_record_ids
             .iter()
-            .filter(|id| !addition_ids.contains(id.as_str()))
+            .filter(|id| !removal_ids_set.contains(id.as_str()))
             .cloned()
             .collect();
 
@@ -168,14 +182,23 @@ impl View {
                 self.version_map.remove(id.as_str());
             }
 
-            // Only update versions for records that changed
-            for (id, _) in &view_delta {
+            // Update versions for new additions (records entering the view)
+            for (id, _) in &additions {
                 if let Some(_current_hash) = self.get_row_hash(id.as_str(), db) {
                     let id_key = SmolStr::new(id.as_str());
                     let version = self.version_map.entry(id_key).or_insert(0);
                     if *version == 0 {
                         *version = 1;
-                    } else if is_optimistic && updated_record_ids.contains(&id.to_string()) {
+                    }
+                }
+            }
+
+            // Update versions for updated records (already in view, content changed)
+            if is_optimistic {
+                for id in &updates {
+                    if let Some(_current_hash) = self.get_row_hash(id.as_str(), db) {
+                        let id_key = SmolStr::new(id.as_str());
+                        let version = self.version_map.entry(id_key).or_insert(0);
                         let _old_ver = *version;
                         *version += 1;
                         debug_log!(
