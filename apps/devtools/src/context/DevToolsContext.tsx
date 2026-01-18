@@ -175,9 +175,19 @@ export const DevToolsProvider: ParentComponent = (props) => {
   }
 
   /**
-   * Clear all events
+   * Clear all events - clears both local state and backend history
    */
   function clearEvents() {
+    // Clear backend history first
+    hostPage.clearHistory(
+      (result) => {
+        console.log("[DevTools] Clear history result:", result);
+      },
+      (error) => {
+        console.error("[DevTools] Error clearing history:", error);
+      }
+    );
+    // Clear local state immediately for responsive UI
     setState("events", []);
   }
 

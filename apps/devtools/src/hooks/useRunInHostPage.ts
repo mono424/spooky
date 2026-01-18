@@ -1,4 +1,4 @@
-import { createSignal } from "solid-js";
+import { createSignal } from 'solid-js';
 
 export interface RunInHostPageOptions<T> {
   onSuccess?: (result: T) => void;
@@ -18,26 +18,20 @@ export function useRunInHostPage() {
    * @param code - JavaScript code to execute in the host page
    * @param options - Success and error callbacks
    */
-  const run = <T = any>(
-    code: string,
-    options?: RunInHostPageOptions<T>
-  ): void => {
+  const run = <T = any>(code: string, options?: RunInHostPageOptions<T>): void => {
     setIsRunning(true);
     setError(null);
 
-    chrome.devtools.inspectedWindow.eval(
-      code,
-      (result: T, isException: any) => {
-        setIsRunning(false);
+    chrome.devtools.inspectedWindow.eval(code, (result: T, isException: any) => {
+      setIsRunning(false);
 
-        if (isException) {
-          setError(isException);
-          options?.onError?.(isException);
-        } else {
-          options?.onSuccess?.(result);
-        }
+      if (isException) {
+        setError(isException);
+        options?.onError?.(isException);
+      } else {
+        options?.onSuccess?.(result);
       }
-    );
+    });
   };
 
   /**
@@ -47,13 +41,10 @@ export function useRunInHostPage() {
     onSuccess: (state: any) => void,
     onError?: (error: any) => void
   ): void => {
-    run(
-      `window.__SPOOKY__ ? window.__SPOOKY__.getState() : null`,
-      {
-        onSuccess,
-        onError,
-      }
-    );
+    run(`window.__SPOOKY__ ? window.__SPOOKY__.getState() : null`, {
+      onSuccess,
+      onError,
+    });
   };
 
   /**
@@ -87,15 +78,29 @@ export function useRunInHostPage() {
   };
 
   /**
-   * Check if Spooky is available on the page
+   * Clear events history in the host page
    */
-  const checkSpookyAvailable = (
-    onSuccess: (available: boolean) => void
+  const clearHistory = (
+    onSuccess?: (result: { success: boolean }) => void,
+    onError?: (error: any) => void
   ): void => {
     run(
-      `!!window.__SPOOKY__`,
-      { onSuccess }
+      `(function() {
+        if (window.__SPOOKY__ && window.__SPOOKY__.clearHistory) {
+          window.__SPOOKY__.clearHistory();
+          return { success: true };
+        }
+        return { success: false };
+      })()`,
+      { onSuccess, onError }
     );
+  };
+
+  /**
+   * Check if Spooky is available on the page
+   */
+  const checkSpookyAvailable = (onSuccess: (available: boolean) => void): void => {
+    run(`!!window.__SPOOKY__`, { onSuccess });
   };
 
   /**
@@ -157,6 +162,7 @@ export function useRunInHostPage() {
     getTableData,
     updateTableRow,
     deleteTableRow,
+    clearHistory,
     checkSpookyAvailable,
     isRunning,
     error,
