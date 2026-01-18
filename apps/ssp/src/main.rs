@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use ssp::{
     Circuit, MaterializedViewUpdate, ViewUpdate,
-    engine::update::{StreamingUpdate, DeltaEvent},
+    engine::update::{StreamingUpdate, DeltaEvent, compute_flat_hash},
 };
 use surrealdb::engine::remote::ws::{Client, Ws};
 use surrealdb::opt::auth::Root;
@@ -266,9 +266,21 @@ async fn register_view_handler(
     let params_val = m["safe_params"].clone();
 
     // Extract the inner MaterializedViewUpdate from the ViewUpdate enum
-    let (result_hash, result_data) = match &result_update {
-        ViewUpdate::Flat(m) | ViewUpdate::Tree(m) => (m.result_hash.clone(), m.result_data.clone()),
-        ViewUpdate::Streaming(_) => (String::new(), Vec::new()), // Fallback for streaming
+    let (result_hash, result_data, is_streaming) = match &result_update {
+        ViewUpdate::Flat(m) | ViewUpdate::Tree(m) => {
+            (m.result_hash.clone(), m.result_data.clone(), false)
+        }
+        ViewUpdate::Streaming(s) => {
+            // Convert Created events to array format for initial state
+            let initial_data: Vec<(String, u64)> = s.records
+                .iter()
+                .filter(|r| r.event == DeltaEvent::Created)
+                .map(|r| (r.id.clone(), r.version))
+                .collect();
+            
+            let hash = compute_flat_hash(&initial_data);
+            (hash, initial_data, true)
+        }
     };
 
     let db_res = state.db.query(query)
@@ -287,6 +299,13 @@ async fn register_view_handler(
         return (StatusCode::INTERNAL_SERVER_ERROR, "DB Error").into_response();
     }
 
+    // Create initial edges for streaming mode
+    if is_streaming {
+        if let ViewUpdate::Streaming(s) = &result_update {
+            update_incantation_edges(&state.db, s).await;
+        }
+    }
+
     StatusCode::OK.into_response()
 }
 
@@ -301,6 +320,23 @@ async fn unregister_view_handler(
         circuit.unregister_view(&payload.id);
         state.saver.trigger_save();
     }
+    
+    // Delete all edges for this incantation
+    let id_str = format_incantation_id(&payload.id);
+    if let Some(from_id) = parse_record_id(&id_str) {
+        if let Err(e) = state.db
+            .query("DELETE $from->_spooky_list_ref")
+            .bind(("from", from_id))
+            .await
+        {
+            error!("Failed to delete edges for unregistered view {}: {}", id_str, e);
+        } else {
+            debug!("Successfully deleted all edges for view {}", id_str);
+        }
+    } else {
+        error!("Invalid incantation ID format: {}", id_str);
+    }
+    
     StatusCode::OK
 }
 
@@ -315,6 +351,14 @@ async fn reset_handler(State(state): State<AppState>) -> impl IntoResponse {
         // For reset, we might want immediate save to confirm empty state
         state.saver.trigger_save();
     }
+    
+    // Clean up ALL edges
+    if let Err(e) = state.db.query("DELETE _spooky_list_ref").await {
+        error!("Failed to delete all edges on reset: {}", e);
+    } else {
+        debug!("Successfully deleted all edges on reset");
+    }
+    
     StatusCode::OK
 }
 
@@ -351,21 +395,27 @@ async fn update_incantation_in_db(db: &Surreal<Client>, update: &MaterializedVie
         .await 
     {
         Ok(mut response) => {
-            // Use basic Value to check existence
-            match response.take::<Vec<serde_json::Value>>(0) {
-                Ok(records) => {
-                    if !records.is_empty() {
-                         debug!("Successfully updated incantation: {:?}", records[0]);
-                    } else {
-                         // Empty array means no records found/updated
-                         error!("Update executed but no records returned for id: {}. Record might not exist.", id_str);
-                    }
+            // RETURN AFTER returns a single record, not an array
+            match response.take::<Option<serde_json::Value>>(0) {
+                Ok(Some(record)) => {
+                    debug!("Successfully updated incantation: {:?}", record);
+                },
+                Ok(None) => {
+                    // None means no record was found/updated
+                    error!("Update executed but no record returned for id: {}. Record might not exist.", id_str);
                 },
                 Err(e) => error!("Failed to parse update response: {}", e),
             }
         },
         Err(e) => error!("Failed to update incantation result in DB: {}", e),
     }
+}
+
+use surrealdb::types::RecordId;
+
+/// Parse a string like "table:key" into a SurrealDB RecordId
+fn parse_record_id(id: &str) -> Option<RecordId> {
+    RecordId::parse_simple(id).ok()
 }
 
 /// Helper to format incantation ID with table prefix
@@ -378,42 +428,52 @@ fn format_incantation_id(id: &str) -> String {
 }
 
 /// Graph-based persistence for StreamingUpdate.
-/// Maps DeltaEvent to specific SurrealQL graph operations (blind writes).
+/// Maps DeltaEvent to specific SurrealQL graph operations.
 async fn update_incantation_edges(db: &Surreal<Client>, update: &StreamingUpdate) {
-    let incantation_id = format_incantation_id(&update.view_id);
+    let incantation_id_str = format_incantation_id(&update.view_id);
+    
+    let Some(from_id) = parse_record_id(&incantation_id_str) else {
+        error!("Invalid incantation ID format: {}", incantation_id_str);
+        return;
+    };
     
     debug!(
         "Processing graph update for {} with {} records",
-        incantation_id,
+        incantation_id_str,
         update.records.len()
     );
     
     for record in &update.records {
+        let Some(to_id) = parse_record_id(&record.id) else {
+            error!("Invalid record ID format: {}", record.id);
+            continue;
+        };
+        
         let result = match record.event {
             DeltaEvent::Created => {
-                // RELATE creates an edge from incantation → record with version
-                debug!("RELATE {}->_spooky_list_ref->{} version={}", incantation_id, record.id, record.version);
-                db.query("RELATE <record>$from->_spooky_list_ref-><record>$to SET version = $version, clientId = (SELECT clientId FROM ONLY <record>$from).clientId")
-                    .bind(("from", incantation_id.clone()))
-                    .bind(("to", record.id.clone()))
+                // RELATE creates a new edge from incantation → record with version
+                debug!("RELATE {}->_spooky_list_ref->{} version={}", incantation_id_str, record.id, record.version);
+                db.query("RELATE $from->_spooky_list_ref->$to SET version = $version, clientId = (SELECT clientId FROM ONLY $from).clientId")
+                    .bind(("from", from_id.clone()))
+                    .bind(("to", to_id.clone()))
+                    .bind(("version", record.version))
+                    .await
+            }
+            DeltaEvent::Updated => {
+                // UPDATE modifies version on existing edge
+                debug!("UPDATE {}->_spooky_list_ref SET version={} WHERE out = {}", incantation_id_str, record.version, record.id);
+                db.query("UPDATE $from->_spooky_list_ref SET version = $version WHERE out = $to")
+                    .bind(("from", from_id.clone()))
+                    .bind(("to", to_id.clone()))
                     .bind(("version", record.version))
                     .await
             }
             DeltaEvent::Deleted => {
                 // DELETE removes the specific edge
-                debug!("DELETE {}->_spooky_list_ref WHERE out = {}", incantation_id, record.id);
-                db.query("DELETE <record>$from->_spooky_list_ref WHERE out = <record>$to")
-                    .bind(("from", incantation_id.clone()))
-                    .bind(("to", record.id.clone()))
-                    .await
-            }
-            DeltaEvent::Updated => {
-                // UPDATE modifies version on existing edge
-                debug!("UPDATE {}->_spooky_list_ref SET version={} WHERE out = {}", incantation_id, record.version, record.id);
-                db.query("UPDATE <record>$from->_spooky_list_ref SET version = $version WHERE out = <record>$to")
-                    .bind(("from", incantation_id.clone()))
-                    .bind(("to", record.id.clone()))
-                    .bind(("version", record.version))
+                debug!("DELETE {}->_spooky_list_ref WHERE out = {}", incantation_id_str, record.id);
+                db.query("DELETE $from->_spooky_list_ref WHERE out = $to")
+                    .bind(("from", from_id.clone()))
+                    .bind(("to", to_id.clone()))
                     .await
             }
         };
@@ -421,7 +481,7 @@ async fn update_incantation_edges(db: &Surreal<Client>, update: &StreamingUpdate
         if let Err(e) = result {
             error!(
                 "Graph operation {:?} failed for {} -> {}: {}",
-                record.event, incantation_id, record.id, e
+                record.event, incantation_id_str, record.id, e
             );
         }
     }
