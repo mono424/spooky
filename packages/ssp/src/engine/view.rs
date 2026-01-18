@@ -126,10 +126,22 @@ impl View {
                 // Checking here would incorrectly mark subquery IDs as removals because
                 // target_set only contains main query results, not subquery results.
                 if !has_subquery_changes {
+                    // Get subquery tables to filter out subquery record IDs
+                    // We should only mark MAIN query records as removals here
+                    let subquery_tables: std::collections::HashSet<String> = 
+                        self.extract_subquery_tables(&self.plan.root).into_iter().collect();
+                    
                     for key in self.version_map.keys() {
                         if !target_set.contains_key(key.as_str()) {
-                            // Record leaving the view
-                            diff.insert(SmolStr::new(key), -1);
+                            // Extract the table name from the key (format: "table:id")
+                            // Only mark as removal if it's NOT from a subquery table
+                            if let Some((table_name, _)) = key.split_once(':') {
+                                if !subquery_tables.contains(table_name) {
+                                    // Main query record leaving the view
+                                    diff.insert(SmolStr::new(key), -1);
+                                }
+                                // Subquery records are handled in the has_subquery_changes branch
+                            }
                         }
                     }
                 }
