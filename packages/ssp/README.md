@@ -1,363 +1,257 @@
 # SSP – Spooky Stream Processor
 
-<div align="center">
-
 **High-performance incremental materialized views for real-time applications.**
-
-[![Rust](https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white)](https://www.rust-lang.org/)
-[![SurrealDB](https://img.shields.io/badge/SurrealDB-F06292?style=for-the-badge)](https://surrealdb.com/)
-
-</div>
 
 ---
 
 ## Overview
 
-SSP (Spooky Stream Processor) is an incremental view maintenance engine. It converts **SurrealQL queries** into internal operator graphs and maintains **materialized views** that update in real-time as data changes—pushing only deltas instead of recomputing entire query results.
+SSP (Spooky Stream Processor) is an incremental view maintenance engine that powers the reactive layer between **SurrealDB** and your application via the **Spooky Sidecar**.
 
-SSP powers the reactive layer of the Spooky ecosystem, sitting between **SurrealDB** (or any data source) and your application via the **Spooky Sidecar**.
+```
+SurrealDB  ──LIVE──►  Sidecar  ──ingest──►  SSP Circuit  ──ViewUpdate──►  DB / Client
+```
 
 ---
 
-## Architecture
+## Communication Flow
+
+### The Full Pipeline
 
 ```mermaid
-flowchart TB
-    subgraph External["External Systems"]
-        SDB[(SurrealDB)]
-        APP[Client Application]
-    end
+sequenceDiagram
+    participant DB as SurrealDB
+    participant SC as Sidecar (apps/ssp)
+    participant DBSP as Circuit (packages/ssp)
+    participant OUT as DB Persistence
+
+    Note over DB,OUT: === INGEST FLOW ===
     
-    subgraph Sidecar["Spooky Sidecar"]
-        CDC[Change Data Capture]
-        WS[WebSocket Layer]
-        REG[View Registration]
-    end
+    DB->>SC: Change Event (LIVE SELECT)
+    SC->>SC: prepare() - sanitize + hash
+    SC->>DBSP: ingest_record(table, op, id, record, hash, is_optimistic)
+    DBSP->>DBSP: View.process_ingest() for affected views
+    DBSP-->>SC: Vec<ViewUpdate>
     
-    subgraph SSP["SSP Engine"]
-        direction TB
-        SVC[Service Layer]
-        CONV[Converter]
-        CIRC[Circuit]
-        subgraph Views["Registered Views"]
-            V1[View 1]
-            V2[View 2]
-            VN[View N]
+    alt Flat/Tree Format
+        SC->>OUT: UPDATE _spooky_incantation SET hash, array
+    else Streaming Format
+        loop For each DeltaRecord
+            SC->>OUT: RELATE/UPDATE/DELETE _spooky_list_ref
         end
-        DB[(In-Memory Tables)]
     end
-    
-    SDB -->|LIVE Changes| CDC
-    CDC -->|Records| SVC
-    APP -->|SurrealQL| REG
-    REG -->|Config| SVC
-    SVC -->|Normalize + Hash| CONV
-    CONV -->|QueryPlan| CIRC
-    CIRC --> Views
-    Views -->|Delta Updates| WS
-    CIRC --> DB
-    WS -->|Push| APP
-    
-    style SSP fill:#1a1a2e,stroke:#16213e,color:#fff
-    style Sidecar fill:#0f3460,stroke:#16213e,color:#fff
-    style External fill:#e94560,stroke:#16213e,color:#fff
 ```
 
 ---
 
-## Data Flow
+## Traffic Objects
 
-### 1. Record Ingestion Pipeline
+### 1. IngestRequest (Sidecar Input)
 
-```mermaid
-sequenceDiagram
-    participant SDB as SurrealDB
-    participant SC as Spooky Sidecar
-    participant SVC as Service Layer
-    participant C as Circuit
-    participant V as Views
-    participant APP as Client
-    
-    SDB->>SC: LIVE Query Event (CREATE/UPDATE/DELETE)
-    SC->>SVC: Forward Record
-    SVC->>SVC: Normalize (sanitizer)
-    SVC->>SVC: Hash (blake3)
-    SVC->>C: ingest_batch(records)
-    C->>C: Update Tables
-    C->>V: Propagate Delta
-    V->>V: Incremental Eval
-    V-->>C: ViewUpdate (if changed)
-    C-->>SC: Delta Updates
-    SC-->>APP: Push via WebSocket
+What the sidecar receives from SurrealDB:
+
+```rust
+struct IngestRequest {
+    table: String,        // "thread", "user", "comment"
+    op: String,           // "CREATE", "UPDATE", "DELETE"
+    id: String,           // "thread:abc123"
+    record: Value,        // Full JSON record
+}
 ```
 
-### 2. View Registration Pipeline
+### 2. Circuit.ingest_record() Parameters
 
-```mermaid
-sequenceDiagram
-    participant APP as Client
-    participant SC as Spooky Sidecar
-    participant SVC as Service Layer
-    participant CONV as Converter
-    participant C as Circuit
-    participant V as New View
-    
-    APP->>SC: Register View (SurrealQL + params)
-    SC->>SVC: view::prepare_registration()
-    SVC->>CONV: convert_surql_to_dbsp()
-    CONV-->>SVC: Operator Tree
-    SVC-->>SC: QueryPlan + Metadata
-    SC->>C: register_view(plan, params, format)
-    C->>V: Create View Instance
-    V->>V: Initial Full Scan
-    V-->>C: Initial Snapshot
-    C-->>SC: ViewUpdate (full result)
-    SC-->>APP: Push Initial State
+```rust
+circuit.ingest_record(
+    table: &str,          // Table name
+    op: &str,             // Operation type
+    id: &str,             // Record ID (table:key format)
+    record: Value,        // JSON record data
+    hash: &str,           // Blake3 hash of record
+    is_optimistic: bool,  // true = increment versions, false = keep versions
+) -> Vec<ViewUpdate>
+```
+
+### 3. ViewUpdate (Engine Output)
+
+The engine returns one of three formats:
+
+#### Flat Format
+```rust
+ViewUpdate::Flat(MaterializedViewUpdate {
+    query_id: "thread_list",
+    result_hash: "d4a0562e39718e02...",
+    result_data: [
+        ("thread:abc123", 1),  // (record_id, version)
+        ("user:xyz789", 1),
+    ],
+})
+```
+
+#### Streaming Format
+```rust
+ViewUpdate::Streaming(StreamingUpdate {
+    view_id: "thread_list",
+    records: [
+        DeltaRecord { id: "thread:abc123", event: Created, version: 1 },
+        DeltaRecord { id: "user:xyz789", event: Updated, version: 2 },
+        DeltaRecord { id: "comment:old", event: Deleted, version: 0 },
+    ],
+})
+```
+
+### 4. DeltaEvent Types
+
+| Event | Meaning | DB Operation |
+|-------|---------|--------------|
+| `Created` | Record added to view | `RELATE $from->_spooky_list_ref->$to SET version` |
+| `Updated` | Record content changed | `UPDATE $from->_spooky_list_ref SET version WHERE out = $to` |
+| `Deleted` | Record removed from view | `DELETE $from->_spooky_list_ref WHERE out = $to` |
+
+### 5. DB Persistence (Sidecar Output)
+
+#### For Flat/Tree:
+```sql
+UPDATE <record>$id SET hash = <string>$hash, array = $array
+-- Example:
+UPDATE _spooky_incantation:thread_list SET 
+  hash = "d4a0562e39718e02...", 
+  array = [["thread:abc123", 1], ["user:xyz789", 1]]
+```
+
+#### For Streaming (Graph Edges):
+```sql
+-- Created
+RELATE _spooky_incantation:thread_list->_spooky_list_ref->thread:abc123 
+  SET version = 1, clientId = $clientId
+
+-- Updated  
+UPDATE _spooky_incantation:thread_list->_spooky_list_ref 
+  SET version = 2 WHERE out = thread:abc123
+
+-- Deleted
+DELETE _spooky_incantation:thread_list->_spooky_list_ref 
+  WHERE out = comment:old
 ```
 
 ---
 
-## Core Components
+## Debug Logs
 
-### Circuit
+SSP outputs debug logs prefixed with `[SSP DEBUG]`. Here's what each log means:
 
-The central coordinator managing tables and views. Handles record ingestion and propagates changes to affected views.
+### Ingestion Logs
 
-```rust
-use ssp::{Circuit, StreamProcessor};
-
-let mut circuit = Circuit::new();
-
-// Register a view
-circuit.register_view(plan, params, Some(ViewResultFormat::Flat));
-
-// Ingest data
-let updates = circuit.ingest_batch(records, false);
 ```
-
-### View
-
-Maintains a single materialized view. Performs incremental delta evaluation when possible, falling back to full scans when necessary.
-
-```mermaid
-flowchart LR
-    subgraph View["View Processing"]
-        IN[Input Delta]
-        CACHE[Version Map]
-        EVAL{Can Increment?}
-        DELTA[eval_delta_batch]
-        SNAP[eval_snapshot]
-        OUT[ViewUpdate]
-    end
-    
-    IN --> EVAL
-    EVAL -->|Yes| DELTA
-    EVAL -->|No| SNAP
-    DELTA --> CACHE
-    SNAP --> CACHE
-    CACHE --> OUT
-    
-    style View fill:#2d3436,stroke:#636e72,color:#fff
+[SSP DEBUG] DEBUG: Changed tables: ["thread", "user"]
 ```
+Tables affected by the current batch ingest.
 
-### QueryPlan & Operator Tree
+### View Processing Logs
 
-A query is represented as a tree of operators:
-
-```mermaid
-flowchart TB
-    ROOT[Project]
-    FILTER[Filter]
-    JOIN[Join]
-    SCAN1[Scan: users]
-    SCAN2[Scan: posts]
-    
-    ROOT --> FILTER
-    FILTER --> JOIN
-    JOIN --> SCAN1
-    JOIN --> SCAN2
-    
-    style ROOT fill:#6c5ce7,stroke:#a29bfe,color:#fff
-    style FILTER fill:#00b894,stroke:#55efc4,color:#fff
-    style JOIN fill:#fdcb6e,stroke:#ffeaa7,color:#000
-    style SCAN1 fill:#e17055,stroke:#fab1a0,color:#fff
-    style SCAN2 fill:#e17055,stroke:#fab1a0,color:#fff
 ```
-
-**Supported Operators:**
-
-| Operator | Description |
-|----------|-------------|
-| `Scan` | Read from a table |
-| `Filter` | Apply predicates |
-| `Project` | Select/transform fields |
-| `Join` | Combine tables (inner, left) |
-| `OrderBy` | Sort results |
-| `Limit` | Restrict result count |
-| `Aggregate` | SUM, COUNT, AVG, MIN, MAX |
-
----
-
-## Example: Real-Time Todo App
-
-### 1. Register a View
-
-```json
-{
-  "id": "user_todos_active",
-  "clientId": "client_abc123",
-  "surrealQL": "SELECT * FROM todos WHERE user_id = $user_id AND completed = false ORDER BY created_at DESC LIMIT 50",
-  "params": { "user_id": "user:alice" },
-  "ttl": "1h",
-  "lastActiveAt": "2026-01-17T16:30:00Z"
-}
+[SSP DEBUG] DEBUG VIEW: id=thread_list is_first_run=true has_subquery_changes=false is_streaming=true
 ```
+| Field | Meaning |
+|-------|---------|
+| `id` | View identifier |
+| `is_first_run` | First time evaluating (full scan) |
+| `has_subquery_changes` | Subquery tables have changes (needs full scan) |
+| `is_streaming` | Using streaming format |
 
-The Converter transforms this into:
-
-```rust
-QueryPlan {
-    id: "user_todos_active",
-    root: Operator::Limit {
-        count: 50,
-        input: Box::new(Operator::OrderBy {
-            specs: vec![OrderSpec { field: "created_at", desc: true }],
-            input: Box::new(Operator::Filter {
-                predicate: Predicate::And(vec![
-                    Predicate::Eq { field: "user_id", value: "$user_id" },
-                    Predicate::Eq { field: "completed", value: false }
-                ]),
-                input: Box::new(Operator::Scan { table: "todos" })
-            })
-        })
-    }
-}
 ```
-
-### 2. Ingest a New Todo
-
-```rust
-let record = json!({
-    "id": "todos:xyz123",
-    "user_id": "user:alice",
-    "title": "Buy milk",
-    "completed": false,
-    "created_at": "2026-01-17T16:35:00Z"
-});
-
-// Prepare and ingest
-let (spooky_value, hash) = ssp::service::ingest::prepare(record);
-let updates = circuit.ingest_record("todos", "CREATE", "todos:xyz123", record, &hash, false);
+[SSP DEBUG] DEBUG VIEW: id=thread_list view_delta_empty=false has_cached_updates=true is_optimistic=true updated_ids_len=3
 ```
+| Field | Meaning |
+|-------|---------|
+| `view_delta_empty` | Whether the main delta is empty |
+| `has_cached_updates` | Cached records need version updates |
+| `is_optimistic` | Versions will be incremented |
+| `updated_ids_len` | Number of records being updated |
 
-### 3. Receive Delta Update
+### Version Updates
 
-```json
-{
-  "format": "streaming",
-  "view_id": "user_todos_active",
-  "records": [
-    { "id": "todos:xyz123", "event": "created", "version": 1 }
-  ]
-}
 ```
+[SSP DEBUG] DEBUG VIEW: Incrementing version for id=thread:abc123 old=1 new=2
+```
+Version bump when `is_optimistic=true`.
+
+### Subquery Detection
+
+```
+[SSP DEBUG] DEBUG has_changes: view=thread_list subquery_tables=["user"] delta_tables=["thread"]
+```
+Checking if subquery tables were affected.
+
+```
+[SSP DEBUG] DEBUG has_changes: view=thread_list NO CHANGES FOUND
+```
+Subqueries unaffected, can use delta evaluation.
+
+### Streaming Output
+
+```
+[SSP DEBUG] DEBUG STREAMING_EMIT: view=thread_list delta_records_count=2 records=[("thread:abc123", Created), ("user:xyz789", Created)]
+```
+Final streaming update being emitted.
+
+### Updated Record Detection
+
+```
+[SSP DEBUG] DEBUG get_updated_records_streaming: view=thread_list table=thread found versioned record=thread:abc123
+```
+Found a cached record that needs version update.
 
 ---
 
 ## Output Formats
 
-| Format | Description | Use Case |
-|--------|-------------|----------|
-| `Flat` | `[(id, version), ...]` with result hash | Simple reconciliation |
-| `Streaming` | Delta events (created/updated/deleted) | Real-time UI updates |
-| `Tree` | Hierarchical structure (planned) | Nested data display |
+| Format | Payload | Use Case |
+|--------|---------|----------|
+| **Flat** | `[(id, version), ...]` + hash | Simple reconciliation, full state |
+| **Streaming** | `[{id, event, version}, ...]` | Real-time UI, minimal bandwidth |
+| **Tree** | Hierarchical (planned) | Nested data structures |
 
 ---
 
-## Integration with Spooky Sidecar
+## Key Types Reference
 
-```mermaid
-flowchart LR
-    subgraph SDB["SurrealDB"]
-        LIVE[LIVE SELECT]
-    end
-    
-    subgraph Sidecar["Spooky Sidecar (Rust)"]
-        direction TB
-        CDC[CDC Handler]
-        SSP_LIB["ssp (library)"]
-        WS_OUT[WebSocket Out]
-    end
-    
-    subgraph Client["Client App"]
-        WS_IN[WebSocket In]
-        STORE[Local Store]
-        UI[React/Vue/etc.]
-    end
-    
-    LIVE -->|Change Events| CDC
-    CDC --> SSP_LIB
-    SSP_LIB -->|ViewUpdate| WS_OUT
-    WS_OUT --> WS_IN
-    WS_IN --> STORE
-    STORE --> UI
-    
-    style SSP_LIB fill:#00cec9,stroke:#00b894,color:#000
+### QueryPlan
+```rust
+pub struct QueryPlan {
+    pub id: String,       // Unique view identifier
+    pub root: Operator,   // Operator tree root
+}
 ```
 
-The Sidecar uses SSP as a library:
-
+### Operator (subset)
 ```rust
-// In spooky-sidecar
-use ssp::{Circuit, StreamProcessor, service};
+pub enum Operator {
+    Scan { table: String },
+    Filter { input: Box<Operator>, predicate: Predicate },
+    Project { input: Box<Operator>, projections: Vec<Projection> },
+    Limit { input: Box<Operator>, limit: usize, order_by: Option<...> },
+    // ... more operators
+}
+```
 
-let mut circuit = Circuit::new();
-
-// On view registration request
-let reg_data = service::view::prepare_registration(config)?;
-circuit.register_view(reg_data.plan, reg_data.safe_params, Some(format));
-
-// On SurrealDB LIVE event
-let (value, hash) = service::ingest::prepare(record);
-let updates = circuit.ingest_record(table, op, id, record, &hash, is_optimistic);
-
-// Broadcast updates to clients
-for update in updates {
-    websocket.send(update).await?;
+### ViewResultFormat
+```rust
+pub enum ViewResultFormat {
+    Flat,       // Default - full snapshot
+    Tree,       // Hierarchical
+    Streaming,  // Delta events
 }
 ```
 
 ---
 
-## Performance Optimizations
+## Version Semantics
 
-| Optimization | Impact |
-|--------------|--------|
-| **Incremental Delta Evaluation** | Only recomputes affected rows |
-| **Dependency Graph** | O(1) view lookup by affected table |
-| **FxHash (rustc-hash)** | 2-3x faster internal hashing |
-| **SmolStr** | Zero-alloc for short identifiers |
-| **Blake3** | Fast cryptographic hashing for record fingerprints |
-| **Rayon (optional)** | Parallel batch preparation on native targets |
-| **mimalloc** | Optimized allocator for non-WASM builds |
-
----
-
-## WASM Support
-
-SSP compiles to WebAssembly for browser-based processing:
-
-```toml
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-getrandom = { version = "0.2", features = ["js"] }
-web-sys = { version = "0.3", features = ["console"] }
-```
-
-Disable parallel features for WASM:
-
-```bash
-cargo build --target wasm32-unknown-unknown --no-default-features
-```
+| `is_optimistic` | Behavior | Use Case |
+|-----------------|----------|----------|
+| `true` | Increment versions on changes | Local mutations (client-side) |
+| `false` | Keep versions as-is | Remote sync (server authority) |
 
 ---
 
@@ -366,21 +260,79 @@ cargo build --target wasm32-unknown-unknown --no-default-features
 ```
 ssp/
 ├── src/
-│   ├── lib.rs           # Public API: StreamProcessor trait
-│   ├── converter.rs     # SurrealQL → Operator tree
-│   ├── sanitizer.rs     # Input normalization
-│   ├── service.rs       # High-level ingest/view helpers
-│   ├── logging.rs       # Debug utilities
+│   ├── lib.rs            # StreamProcessor trait, public API
+│   ├── converter.rs      # SurrealQL → Operator tree
+│   ├── sanitizer.rs      # Input normalization
+│   ├── service.rs        # High-level helpers (prepare, register)
 │   └── engine/
-│       ├── circuit.rs   # Core coordinator
-│       ├── view.rs      # View logic & incremental eval
-│       ├── update.rs    # Output formatting (Flat/Streaming)
-│       ├── operators/   # Operator definitions
-│       ├── types/       # SpookyValue, ZSet, FastMap
-│       └── eval/        # Predicate evaluation, hashing
+│       ├── circuit.rs    # Core coordinator (Database + Views)
+│       ├── view.rs       # View logic, delta evaluation
+│       ├── update.rs     # ViewUpdate, DeltaEvent, formatters
+│       ├── operators/    # Operator definitions
+│       └── types/        # SpookyValue, ZSet, FastMap
 └── tests/
-    ├── benchmark.rs
+    ├── e2e_communication_test.rs   # Full pipeline validation
+    ├── streaming_subquery_edge_test.rs
     └── ...
+```
+
+---
+
+## Quick Usage
+
+```rust
+use ssp::{Circuit, StreamProcessor};
+use ssp::engine::update::ViewResultFormat;
+
+// Create circuit
+let mut circuit = Circuit::new();
+
+// Register a streaming view
+circuit.register_view(plan, params, Some(ViewResultFormat::Streaming));
+
+// Ingest changes
+let updates = circuit.ingest_record(
+    "thread",           // table
+    "CREATE",           // op
+    "thread:abc123",    // id
+    record,             // JSON
+    &hash,              // blake3 hash
+    true,               // is_optimistic
+);
+
+// Process updates
+for update in updates {
+    match update {
+        ViewUpdate::Flat(m) => {
+            // UPDATE _spooky_incantation SET hash, array
+        }
+        ViewUpdate::Streaming(s) => {
+            for rec in s.records {
+                match rec.event {
+                    DeltaEvent::Created => { /* RELATE edge */ }
+                    DeltaEvent::Updated => { /* UPDATE edge */ }
+                    DeltaEvent::Deleted => { /* DELETE edge */ }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+```
+
+---
+
+## Testing
+
+```bash
+# Run all tests
+cargo test
+
+# Run E2E communication test with verbose output
+cargo test --test e2e_communication_test -- --nocapture
+
+# Run streaming edge tests
+cargo test --test streaming_subquery_edge_test -- --nocapture
 ```
 
 ---
