@@ -8,11 +8,14 @@ import {
 import { SpookyConfig } from '../../types.js';
 import { Logger } from '../logger/index.js';
 import { AbstractDatabaseService } from './database.js';
+import { createDatabaseEventSystem, DatabaseEventTypes } from './events/index.js';
 
 export class RemoteDatabaseService extends AbstractDatabaseService {
   private config: SpookyConfig<any>['database'];
+  protected eventType = DatabaseEventTypes.RemoteQuery;
 
   constructor(config: SpookyConfig<any>['database'], logger: Logger) {
+    const events = createDatabaseEventSystem();
     super(
       new Surreal({
         engines: applyDiagnostics(
@@ -27,7 +30,8 @@ export class RemoteDatabaseService extends AbstractDatabaseService {
           }
         ),
       }),
-      logger
+      logger,
+      events
     );
     this.config = config;
   }

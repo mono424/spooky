@@ -25,6 +25,7 @@ import { QueryEventTypes } from './modules/data/events/query.js';
 import { StreamProcessorService } from './services/stream-processor/index.js';
 import { SyncEventTypes, UpEvent } from './modules/sync/index.js';
 import { EventSystem } from './events/index.js';
+import { DatabaseEventTypes } from './services/database/index.js';
 
 export class SpookyClient<S extends SchemaStructure> {
   private local: LocalDatabaseService;
@@ -210,6 +211,15 @@ export class SpookyClient<S extends SchemaStructure> {
       // --- Auth Events ---
       this.auth.eventSystem.subscribe(AuthEventTypes.AuthStateChanged, (event) => {
         // Handle auth state changes if needed (e.g. re-subscribe, clear cache)
+      });
+
+      // --- Database Events ---
+      this.local.getEvents().subscribe('DATABASE_LOCAL_QUERY', (event: any) => {
+        this.devTools.logEvent('LOCAL_QUERY', event.payload);
+      });
+
+      this.remote.getEvents().subscribe('DATABASE_REMOTE_QUERY', (event: any) => {
+        this.devTools.logEvent('REMOTE_QUERY', event.payload);
       });
     } catch (e) {
       this.logger.error({ error: e }, '[SpookyClient] Init failed');

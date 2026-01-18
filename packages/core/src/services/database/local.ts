@@ -3,11 +3,14 @@ import { createWasmWorkerEngines } from '@surrealdb/wasm';
 import { SpookyConfig } from '../../types.js';
 import { Logger } from '../logger/index.js';
 import { AbstractDatabaseService } from './database.js';
+import { createDatabaseEventSystem, DatabaseEventTypes } from './events/index.js';
 
 export class LocalDatabaseService extends AbstractDatabaseService {
   private config: SpookyConfig<any>['database'];
+  protected eventType = DatabaseEventTypes.LocalQuery;
 
   constructor(config: SpookyConfig<any>['database'], logger: Logger) {
+    const events = createDatabaseEventSystem();
     super(
       new Surreal({
         codecOptions: {
@@ -31,7 +34,8 @@ export class LocalDatabaseService extends AbstractDatabaseService {
           }
         ),
       }),
-      logger
+      logger,
+      events
     );
     this.config = config;
   }
