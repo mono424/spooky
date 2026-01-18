@@ -395,15 +395,14 @@ async fn update_incantation_in_db(db: &Surreal<Client>, update: &MaterializedVie
         .await 
     {
         Ok(mut response) => {
-            // Use basic Value to check existence
-            match response.take::<Vec<serde_json::Value>>(0) {
-                Ok(records) => {
-                    if !records.is_empty() {
-                         debug!("Successfully updated incantation: {:?}", records[0]);
-                    } else {
-                         // Empty array means no records found/updated
-                         error!("Update executed but no records returned for id: {}. Record might not exist.", id_str);
-                    }
+            // RETURN AFTER returns a single record, not an array
+            match response.take::<Option<serde_json::Value>>(0) {
+                Ok(Some(record)) => {
+                    debug!("Successfully updated incantation: {:?}", record);
+                },
+                Ok(None) => {
+                    // None means no record was found/updated
+                    error!("Update executed but no record returned for id: {}. Record might not exist.", id_str);
                 },
                 Err(e) => error!("Failed to parse update response: {}", e),
             }
