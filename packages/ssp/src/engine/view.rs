@@ -416,23 +416,26 @@ impl View {
                     }
                 }
             } else {
-                // For additions, also collect subquery IDs
-                let mut all_addition_ids: Vec<String> = Vec::new();
+                // Process main record additions first - these always get Created events
+                // because they are genuinely new to the view (came from view_delta with weight > 0)
+                let addition_ids_set: std::collections::HashSet<&str> = 
+                    additions.iter().map(|(id, _)| id.as_str()).collect();
+                
+                // Collect subquery IDs for all additions
+                let mut subquery_ids: Vec<String> = Vec::new();
                 for (id, _) in &additions {
-                    all_addition_ids.push(id.clone());
-                    
                     // Collect subquery IDs for this new parent record
                     if let Some(parent_row) = self.get_row_value(id.as_str(), db) {
-                        self.collect_subquery_ids_recursive(&self.plan.root, parent_row, db, &mut all_addition_ids);
+                        self.collect_subquery_ids_recursive(&self.plan.root, parent_row, db, &mut subquery_ids);
                     }
                 }
                 
-                // Deduplicate and update version_map for all new IDs
-                all_addition_ids.sort_unstable();
-                all_addition_ids.dedup();
+                // Deduplicate subquery IDs
+                subquery_ids.sort_unstable();
+                subquery_ids.dedup();
                 
-                // Map additions (including subquery results) → Created
-                for id in all_addition_ids {
+                // Emit Created events for main record additions (always)
+                for (id, _) in &additions {
                     let id_key = SmolStr::new(id.as_str());
                     let version = self.version_map.entry(id_key).or_insert(0);
                     if *version == 0 {
@@ -440,10 +443,35 @@ impl View {
                     }
                     
                     delta_records.push(DeltaRecord {
-                        id,
+                        id: id.clone(),
                         event: DeltaEvent::Created,
                         version: *version,
                     });
+                }
+                
+                // Emit Created events for subquery results (only if not already tracked)
+                for id in subquery_ids {
+                    // Skip if this ID is also a main addition (already handled above)
+                    if addition_ids_set.contains(id.as_str()) {
+                        continue;
+                    }
+                    
+                    let id_key = SmolStr::new(id.as_str());
+                    let is_new = !self.version_map.contains_key(&id_key);
+                    
+                    let version = self.version_map.entry(id_key).or_insert(0);
+                    if *version == 0 {
+                        *version = 1;
+                    }
+                    
+                    // Only emit Created event if this subquery result was not already tracked
+                    if is_new {
+                        delta_records.push(DeltaRecord {
+                            id,
+                            event: DeltaEvent::Created,
+                            version: *version,
+                        });
+                    }
                 }
 
                 // Map removals → Deleted

@@ -4,7 +4,7 @@
 //! that match the sync engine's usage patterns.
 
 use serde_json::{json, Value};
-use spooky_stream_processor::{
+use ssp::{
     engine::update::{ViewResultFormat, ViewUpdate},
     Circuit,
 };
