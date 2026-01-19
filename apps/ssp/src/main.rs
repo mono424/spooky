@@ -463,7 +463,8 @@ async fn update_incantation_array_from_streaming(
 }
 
 /// Update edges (streaming mode) - batched transaction
-/// Update edges (streaming mode) - unbatched for stability
+/// Update edges (streaming mode) - batched transaction (Hybrid Approach)
+/// Optimizes network calls: O(N) -> O(1) round-trips
 async fn update_incantation_edges(db: &Surreal<Client>, update: &StreamingUpdate) {
     if update.records.is_empty() {
         return;
@@ -478,11 +479,14 @@ async fn update_incantation_edges(db: &Surreal<Client>, update: &StreamingUpdate
     };
 
     debug!(
-        "Processing {} edge operations for {} (unbatched)",
+        "Processing {} edge operations for {} (batched)",
         update.records.len(),
         incantation_id_str
     );
 
+    // Build batched statements
+    let mut statements: Vec<String> = Vec::with_capacity(update.records.len());
+    
     for record in &update.records {
         // Validate record ID
         if parse_record_id(&record.id).is_none() {
@@ -490,7 +494,7 @@ async fn update_incantation_edges(db: &Surreal<Client>, update: &StreamingUpdate
             continue;
         }
 
-        let query = match record.event {
+        let stmt = match record.event {
             DeltaEvent::Created => {
                 format!(
                     "RELATE $from->_spooky_list_ref->{} SET version = {}, clientId = (SELECT clientId FROM ONLY $from).clientId",
@@ -511,12 +515,39 @@ async fn update_incantation_edges(db: &Surreal<Client>, update: &StreamingUpdate
             }
         };
         
-        // Execute individually
-        if let Err(e) = db.query(&query)
-            .bind(("from", from_id.clone()))
-            .await 
-        {
-            error!("Edge operation failed: {}", e);
+        statements.push(stmt);
+    }
+
+    if statements.is_empty() {
+        return;
+    }
+
+    // Wrap in transaction for atomicity
+    // CRITICAL: Join with ";\n" AND add a trailing ";" before COMMIT
+    let full_query = format!(
+        "BEGIN TRANSACTION;\n{};\nCOMMIT TRANSACTION;",
+        statements.join(";\n")
+    );
+
+    debug!("Executing batched transaction ({} chars)", full_query.len());
+
+    // Execute with single binding
+    match db.query(&full_query)
+        .bind(("from", from_id))
+        .await 
+    {
+        Ok(_) => {
+            debug!(
+                "Batched update completed for {} ({} ops)",
+                incantation_id_str,
+                statements.len()
+            );
+        }
+        Err(e) => {
+            error!(
+                "Batched update failed for {}: {}",
+                incantation_id_str, e
+            );
         }
     }
 }
