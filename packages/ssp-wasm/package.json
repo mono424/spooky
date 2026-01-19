@@ -2,12 +2,13 @@
     "name": "@spooky/ssp-wasm",
     "version": "0.1.0",
     "private": true,
-    "main": "pkg/spooky_stream_processor_wasm.js",
-    "types": "pkg/spooky_stream_processor_wasm.d.ts",
+    "main": "pkg/ssp_wasm.js",
+    "types": "pkg/ssp_wasm.d.ts",
     "files": [
         "pkg"
     ],
     "scripts": {
+        "build": "wasm-pack build --target web",
         "test": "vitest run",
         "test:watch": "vitest"
     },
