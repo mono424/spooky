@@ -95,7 +95,42 @@ pub fn generate_spooky_events(
         // --------------------------------------------------
         // A. Mutation Event
         // --------------------------------------------------
+        // --------------------------------------------------
+        // A. Mutation Event
+        // --------------------------------------------------
         events.push_str(&format!("-- Table: {} Mutation\n", table_name));
+        
+        // 1. Version Update Event (New)
+        // Maintain _spooky_version for this table
+        events.push_str(&format!("-- Maintain _spooky_version for {}\n", table_name));
+        
+        // On CREATE: Set version = 1
+         events.push_str(&format!(
+            "DEFINE EVENT OVERWRITE _spooky_{}_version_create ON TABLE {}\n",
+            table_name, table_name
+        ));
+        events.push_str("WHEN $event = \"CREATE\"\nTHEN {\n");
+        events.push_str("    CREATE _spooky_version SET record_id = $after.id, version = 1;\n");
+        events.push_str("};\n\n");
+
+        // On UPDATE: Increment version
+        events.push_str(&format!(
+            "DEFINE EVENT OVERWRITE _spooky_{}_version_update ON TABLE {}\n",
+            table_name, table_name
+        ));
+        events.push_str("WHEN $event = \"UPDATE\" AND $before != $after\nTHEN {\n");
+        events.push_str("    UPDATE _spooky_version SET version += 1 WHERE record_id = $after.id;\n");
+        events.push_str("};\n\n");
+        
+        // On DELETE: Remove version
+        events.push_str(&format!(
+            "DEFINE EVENT OVERWRITE _spooky_{}_version_delete ON TABLE {}\n",
+            table_name, table_name
+        ));
+        events.push_str("WHEN $event = \"DELETE\"\nTHEN {\n");
+        events.push_str("    DELETE _spooky_version WHERE record_id = $before.id;\n");
+        events.push_str("};\n\n");
+
         events.push_str(&format!(
             "DEFINE EVENT OVERWRITE _spooky_{}_mutation ON TABLE {}\n",
             table_name, table_name

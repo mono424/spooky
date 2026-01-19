@@ -51,3 +51,12 @@ DEFINE EVENT _spooky_dbsp_cleanup ON TABLE _spooky_incantation WHEN $event = "DE
 
 -- Note: Registration is now handled explicitly by fn::incantation::register calling mod::dbsp::register_view
 -- The previous _spooky_dbsp_register event is removed to prevent recursion and double-registration.
+
+-- ==================================================
+-- SPOOKY VERSION
+-- Tracks the version of every record for sync.
+-- ==================================================
+DEFINE TABLE _spooky_version SCHEMALESS;
+DEFINE FIELD record_id ON TABLE _spooky_version TYPE record;
+DEFINE FIELD version ON TABLE _spooky_version TYPE int;
+DEFINE INDEX idx_record_id ON TABLE _spooky_version COLUMNS record_id UNIQUE;
