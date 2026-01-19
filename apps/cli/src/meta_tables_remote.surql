@@ -36,6 +36,29 @@ DEFINE FIELD ttl ON TABLE _spooky_incantation TYPE duration
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- ==================================================
+-- SPOOKY LIST REF
+-- The current list of results for a query/incantation
+-- ==================================================
+
+DEFINE TABLE _spooky_list_ref SCHEMALESS
+    PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD in ON TABLE _spooky_list_ref TYPE record
+    PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD out ON TABLE _spooky_list_ref TYPE record
+    PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD clientId ON TABLE _spooky_list_ref TYPE string
+    PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD version ON TABLE _spooky_list_ref TYPE int
+    PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD updatedAt ON TABLE _spooky_list_ref TYPE datetime VALUE time::now() READONLY
+    PERMISSIONS FOR select, create, update WHERE true;
+
+-- ==================================================
 -- SPOOKY STREAM PROCESSOR STATE
 -- Stores the local state of the stream processor (DBSP)
 -- ==================================================

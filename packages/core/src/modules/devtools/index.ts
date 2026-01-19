@@ -62,9 +62,9 @@ export class DevToolsService implements StreamUpdateReceiver {
         variables: q.params || {},
         dataSize: q.records?.length || 0,
         data: q.records,
-        localHash: q.localHash,
+        // localHash: q.localHash,
         localArray: q.localArray,
-        remoteHash: q.remoteHash,
+        // remoteHash: q.remoteHash,
         remoteArray: q.remoteArray,
       });
     });
@@ -87,8 +87,8 @@ export class DevToolsService implements StreamUpdateReceiver {
     this.logger.debug(
       {
         id: payload.incantationId?.toString(),
-        localHash: payload.localHash,
-        remoteHash: payload.remoteHash,
+        // localHash: payload.localHash,
+        // remoteHash: payload.remoteHash,
       },
       '[DevToolsService] IncantationUpdated'
     );
