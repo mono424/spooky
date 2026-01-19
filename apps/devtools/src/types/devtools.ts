@@ -66,6 +66,7 @@ export interface AuthState {
 export interface DatabaseState {
   tables: string[];
   tableData: Record<string, Record<string, unknown>[]>;
+  schema?: Record<string, string[]>; // table -> column names
 }
 
 // Chrome Extension Message Types

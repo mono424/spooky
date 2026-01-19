@@ -1,7 +1,6 @@
 import { Logger } from '../../services/logger/index.js';
 import { UpQueue, DownQueue, UpEvent, DownEvent } from './queue/index.js';
 import { SyncQueueEventTypes } from './events/index.js';
-import { LocalDatabaseService } from '../../services/database/index.js';
 
 /**
  * SyncScheduler manages when to sync: queue management and orchestration.

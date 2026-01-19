@@ -7,7 +7,7 @@ import {
 } from './events/mutation.js';
 import { parseRecordIdString, encodeToSpooky } from '../../utils/index.js';
 import { SchemaStructure } from '@spooky/query-builder';
-import { createLogger, Logger } from '../../services/logger/index.js';
+import { Logger } from '../../services/logger/index.js';
 import { StreamProcessorService } from '../../services/stream-processor/index.js';
 
 export class MutationManager<S extends SchemaStructure> {
@@ -99,6 +99,9 @@ export class MutationManager<S extends SchemaStructure> {
       throw new Error('Failed to create record.');
     }
 
+    // Optimistic update: ingest record into DBSP
+    this.streamProcessor.ingest(tableName, 'CREATE', id, target);
+
     this._events.addEvent({
       type: MutationEventTypes.MutationCreated,
       payload: [
@@ -112,9 +115,6 @@ export class MutationManager<S extends SchemaStructure> {
         },
       ],
     });
-
-    // Optimistic update: ingest record into DBSP
-    this.streamProcessor.ingest(tableName, 'CREATE', id, target);
 
     return target;
   }
@@ -163,6 +163,9 @@ export class MutationManager<S extends SchemaStructure> {
       throw new Error('Failed to create record or mutation log.');
     }
 
+    // Optimistic update: ingest record into DBSP
+    this.streamProcessor.ingest(tableName, 'CREATE', id, target);
+
     this._events.addEvent({
       type: MutationEventTypes.MutationCreated,
       payload: [
@@ -176,9 +179,6 @@ export class MutationManager<S extends SchemaStructure> {
         },
       ],
     });
-
-    // Optimistic update: ingest record into DBSP
-    this.streamProcessor.ingest(tableName, 'CREATE', id, target);
 
     return target;
   }
@@ -224,6 +224,9 @@ export class MutationManager<S extends SchemaStructure> {
       throw new Error(`Failed to update record: ${id} not found.`);
     }
 
+    // Optimistic update: ingest record into DBSP
+    this.streamProcessor.ingest(table, 'update', id, target);
+
     this._events.addEvent({
       type: MutationEventTypes.MutationCreated,
       payload: [
@@ -237,9 +240,6 @@ export class MutationManager<S extends SchemaStructure> {
         },
       ],
     });
-
-    // Optimistic update: ingest record into DBSP
-    this.streamProcessor.ingest(table, 'update', id, target);
 
     return target;
   }
@@ -283,6 +283,9 @@ export class MutationManager<S extends SchemaStructure> {
       throw new Error(`Failed to update record: ${id} or create mutation log.`);
     }
 
+    // Optimistic update: ingest record into DBSP
+    this.streamProcessor.ingest(table, 'update', id, target);
+
     this._events.addEvent({
       type: MutationEventTypes.MutationCreated,
       payload: [
@@ -296,9 +299,6 @@ export class MutationManager<S extends SchemaStructure> {
         },
       ],
     });
-
-    // Optimistic update: ingest record into DBSP
-    this.streamProcessor.ingest(table, 'update', id, target);
 
     return target;
   }
@@ -319,6 +319,9 @@ export class MutationManager<S extends SchemaStructure> {
 
     await this.withRetry(() => this.db.query<any[]>(query, { id: rid }));
 
+    // Optimistic update: ingest delete into DBSP
+    this.streamProcessor.ingest(table, 'DELETE', id, {});
+
     this._events.addEvent({
       type: MutationEventTypes.MutationCreated,
       payload: [
@@ -330,9 +333,6 @@ export class MutationManager<S extends SchemaStructure> {
         },
       ],
     });
-
-    // Optimistic update: ingest delete into DBSP
-    this.streamProcessor.ingest(table, 'DELETE', id, {});
   }
 
   private async deleteLocalAndRemote(table: string, id: string): Promise<void> {
@@ -361,6 +361,9 @@ export class MutationManager<S extends SchemaStructure> {
 
     const resultMutationId = parseRecordIdString(result.mutation_id);
 
+    // Optimistic update: ingest delete into DBSP
+    this.streamProcessor.ingest(table, 'DELETE', id, {});
+
     this._events.addEvent({
       type: MutationEventTypes.MutationCreated,
       payload: [
@@ -372,8 +375,5 @@ export class MutationManager<S extends SchemaStructure> {
         },
       ],
     });
-
-    // Optimistic update: ingest delete into DBSP
-    this.streamProcessor.ingest(table, 'DELETE', id, {});
   }
 }

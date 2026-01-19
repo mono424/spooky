@@ -10,57 +10,128 @@ function getRecordId(row: Record<string, unknown>): string | null {
   return String(row.id);
 }
 
-export function TableView() {
-  const { state, selectedTable, setSelectedTable, fetchTableData, updateTableRow, deleteTableRow } = useDevTools();
-  const [filter, setFilter] = createSignal("");
+interface TableViewProps {
+  filter: string;
+  setFilter: (val: string) => void;
+  source: 'local' | 'remote';
+  onError?: (msg: string) => void;
+}
+
+export function TableView(props: TableViewProps) {
+  const { selectedTable, setSelectedTable, runQuery, updateTableRow, deleteTableRow } = useDevTools();
+  // Filter and source are now props
+  
   // Track editing by Record ID and Column instead of Index
   const [editingCell, setEditingCell] = createSignal<EditingCell | null>(null);
 
-  // Fetch table data when a table is selected
+  // Fetch table data when a table is selected or source changes
   createEffect(() => {
     const table = selectedTable();
-    if (table) {
-      if (typeof fetchTableData === 'function') {
-         fetchTableData(table);
-      }
-      setFilter(""); // Reset filter when changing tables
+    const currentSource = props.source;
+    if (table && runQuery) {
+        // Construct query: SELECT * FROM table LIMIT 20
+        setLoading(true);
+        console.log("[TableView] Triggering query for table:", table, "Source:", currentSource);
+        runQuery(`SELECT * FROM ${table} LIMIT 20`, currentSource)
+          .then((result: any) => {
+              console.log("[TableView] Query result:", result);
+              if (Array.isArray(result)) {
+                  // Unwrap SurrealDB result format [{ status: 'OK', result: [...] }]
+                  // SurrealDB can return different formats depending on version and transport.
+                  // Case 1: Wrapped in result object, single statement
+                  if (result.length > 0 && result[0] && typeof result[0] === 'object' && 'result' in result[0]) {
+                      const queryResult = result[0].result;
+                      setData(Array.isArray(queryResult) ? queryResult : []);
+                  } 
+                  // Case 2: Legacy/Flattened [[...]] (Double array)
+                  else if (result.length > 0 && Array.isArray(result[0])) {
+                       setData(result[0]);
+                  }
+                  // Case 3: Array of records directly (already unwrapped or different driver)
+                  else if (result.length > 0) {
+                       setData(result);
+                  }
+                  // Case 4: Empty array -> Empty table
+                  else if (result.length === 0) {
+                      setData([]);
+                  }
+                  else {
+                      // Fallback
+                      console.warn("[TableView] Unexpected result format", result);
+                      setData([]);
+                  }
+              } else {
+                  console.warn("[TableView] Result is not an array", result);
+                  // If result is { result: ... } (single object, not array of results)
+                  if (result && typeof result === 'object' && 'result' in result) {
+                       const queryResult = result.result;
+                       setData(Array.isArray(queryResult) ? queryResult : []);
+                  } else {
+                       setData([]);
+                  }
+              }
+          })
+          .catch((err) => {
+              console.error("[TableView] Query Error:", err);
+              let msg = err instanceof Error ? err.message : (typeof err === 'string' ? err : JSON.stringify(err));
+              if (!msg) {
+                  msg = `EMPTY ERROR OBJ: ${String(err)} type=${typeof err}`;
+              }
+              props.onError?.(msg);
+              setData([]);
+          })
+          .finally(() => setLoading(false));
     }
   });
+  
+  const [data, setData] = createSignal<Record<string, unknown>[]>([]);
+  const [loading, setLoading] = createSignal(false);
 
   const tableData = createMemo(() => {
-    const table = selectedTable();
-    if (!table) return null;
-    let data = state.database.tableData[table] || [];
-    
-    const filterText = filter().toLowerCase();
+    let currentData = data();
+    const filterText = props.filter.toLowerCase();
     if (filterText) {
-      data = data.filter(row => {
-        // Search in all values
+      currentData = currentData.filter(row => {
         return Object.values(row).some(val => 
           String(val).toLowerCase().includes(filterText)
         );
       });
     }
-    
-    return data;
+    return currentData;
   });
 
   const columns = createMemo(() => {
-    // Use original data for column discovery to ensure we see all potential columns even if filtered out
-    const fullData = selectedTable() ? state.database.tableData[selectedTable()!] : [];
+    const table = selectedTable();
+    const schemaCols = (table && useDevTools().state.database.schema?.[table]) || [];
     
-    if (!fullData || fullData.length === 0) return [];
+    const fullData = data();
+    const dataKeys = new Set<string>();
+    
+    if (fullData && fullData.length > 0) {
+        fullData.forEach((row) => {
+            if (row && typeof row === 'object') {
+                Object.keys(row).forEach((key) => dataKeys.add(key));
+            }
+        });
+    }
 
-    const keys = new Set<string>();
-    fullData.forEach((row) => {
-      Object.keys(row).forEach((key) => keys.add(key));
-    });
+    // Merge schema columns and data columns
+    const allKeys = new Set([...schemaCols, ...dataKeys]);
     
-    return Array.from(keys).sort((a, b) => {
+    const finalCols = Array.from(allKeys).sort((a, b) => {
+      // ID always first
       if (a.toLowerCase() === 'id') return -1;
       if (b.toLowerCase() === 'id') return 1;
+      
+      // Schema columns next (preserve order if possible, but sets are unordered)
+      // We can prioritize schema columns if we want, but alpha sort is standard
       return a.localeCompare(b);
     });
+
+    console.log("[TableView] Columns:", finalCols);
+    console.log("[TableView] Data Sample (first row):", fullData?.[0]);
+
+    return finalCols;
   });
 
   const handleStartEdit = (recordId: string, column: string) => {
@@ -85,8 +156,6 @@ export function TableView() {
     }
 
     const originalValue = row[column];
-
-    // Convert original value to string for comparison
     const originalValueStr =
       originalValue !== undefined && originalValue !== null
         ? typeof originalValue === "object"
@@ -101,7 +170,6 @@ export function TableView() {
           : String(newValue)
         : "";
 
-    // Don't update if value hasn't changed
     if (newValueStr === originalValueStr) {
       setEditingCell(null);
       return;
@@ -109,6 +177,23 @@ export function TableView() {
 
     updateTableRow(tableName, recordId, { [column]: newValue });
     setEditingCell(null);
+    
+    // Refresh data after update
+    const table = selectedTable();
+    const currentSource = props.source;
+    if (table && runQuery) {
+         runQuery(`SELECT * FROM ${table} LIMIT 20`, currentSource).then((res: any) => {
+             // Re-use logic or simple set for now, ideally refactor the resolver function
+             if (Array.isArray(res)) {
+                 if (res.length > 0 && res[0] && typeof res[0] === 'object' && 'result' in res[0]) {
+                      const queryResult = res[0].result;
+                      setData(Array.isArray(queryResult) ? queryResult : []);
+                 } else {
+                      setData(res);
+                 }
+             }
+         }).catch(console.error);
+    }
   };
 
   const handleDeleteRow = (row: Record<string, unknown>) => {
@@ -118,35 +203,26 @@ export function TableView() {
     if (!tableName) return;
     if (confirm(`Delete record ${recordId}?`)) {
       deleteTableRow(tableName, recordId);
+       // Refresh data after delete
+       const table = selectedTable();
+       const currentSource = props.source;
+       if (table && runQuery) {
+            runQuery(`SELECT * FROM ${table} LIMIT 20`, currentSource).then((res: any) => {
+                 if (Array.isArray(res)) {
+                     if (res.length > 0 && res[0] && typeof res[0] === 'object' && 'result' in res[0]) {
+                          const queryResult = res[0].result;
+                          setData(Array.isArray(queryResult) ? queryResult : []);
+                     } else {
+                          setData(res);
+                     }
+                 }
+            }).catch(console.error);
+       }
     }
   };
 
-  // Explicitly expose setFilter for external use if needed, but here we just bind
   return (
     <div class="database-data">
-      <div class="table-controls" style={{ padding: "4px 8px", "border-bottom": "1px solid var(--sys-color-divider)", display: "flex", "align-items": "center" }}>
-        <input
-          type="text"
-          placeholder="Filter..."
-          value={filter()}
-          onInput={(e) => setFilter(e.currentTarget.value)}
-          style={{
-            "width": "100%", /* Full width */
-            "padding": "2px 12px", /* More horizontal padding for rounded pill */
-            "height": "24px", 
-            "background": "var(--sys-color-surface-container-highest, #3d3d3d)",
-            "border": "1px solid var(--sys-color-outline-variant, #555)",
-            "color": "var(--sys-color-on-surface, #fff)",
-            "border-radius": "12px", /* Fully rounded (half of height) */
-            "font-family": "var(--sys-typescale-body-font, '.SFNSDisplay-Regular', 'Helvetica Neue', 'Lucida Grande', sans-serif)",
-            "font-size": "12px",
-            "line-height": "16px",
-            "outline": "none"
-          }}
-          onFocus={(e) => e.currentTarget.style.border = "1px solid var(--sys-color-primary, #1a73e8)"}
-          onBlur={(e) => e.currentTarget.style.border = "1px solid var(--sys-color-outline-variant, #555)"}
-        />
-      </div>
       <div class="table-data">
         <Show
           when={selectedTable()}
@@ -155,8 +231,9 @@ export function TableView() {
           }
         >
           <Show
-            when={tableData() && tableData()!.length >= 0} 
+            when={!loading() && tableData() && tableData()!.length >= 0} 
             fallback={
+                loading() ? <div class="empty-state">Loading...</div> :
               <div class="empty-state">
                 No data in table "{selectedTable()}"
               </div>
@@ -196,14 +273,13 @@ export function TableView() {
                               onUpdate={(newValue) => handleCellUpdate(row, column, newValue)}
                               onCancel={() => setEditingCell(null)}
                               onIdClick={(id) => {
-                                // Expected format: "tableName:recordId"
                                 const parts = id.split(':');
                                 const table = parts[0];
                                 if (table && table !== selectedTable()) {
                                   setSelectedTable(table);
-                                  setFilter(id);
+                                  props.setFilter(id);
                                 } else {
-                                   setFilter(id);
+                                   props.setFilter(id);
                                 }
                               }}
                             />

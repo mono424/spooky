@@ -1,8 +1,13 @@
 import { QueryManager } from './query.js';
 import { MutationManager } from './mutation.js';
 import { QueryTimeToLive, QueryHash } from '../../types.js';
+import { RecordId } from 'surrealdb';
 import { LocalDatabaseService } from '../../services/database/index.js';
-import { StreamProcessorService } from '../../services/stream-processor/index.js';
+import {
+  StreamProcessorService,
+  StreamUpdate,
+  StreamUpdateReceiver,
+} from '../../services/stream-processor/index.js';
 import { SchemaStructure } from '@spooky/query-builder';
 import { Logger } from '../../services/logger/index.js';
 import { QueryEventSystem } from './events/query.js';
@@ -11,8 +16,9 @@ import { MutationEventSystem } from './events/mutation.js';
 /**
  * DataManager - Unified facade for all local data operations.
  * Combines Query and Mutation functionality in a single API.
+ * Implements StreamUpdateReceiver for direct coupling with StreamProcessor.
  */
-export class DataManager<S extends SchemaStructure> {
+export class DataManager<S extends SchemaStructure> implements StreamUpdateReceiver {
   private queryManager: QueryManager<S>;
   private mutationManager: MutationManager<S>;
 
@@ -25,6 +31,9 @@ export class DataManager<S extends SchemaStructure> {
   ) {
     this.queryManager = new QueryManager(schema, local, streamProcessor, clientId, logger);
     this.mutationManager = new MutationManager(schema, local, streamProcessor, logger);
+
+    // Direct coupling: StreamProcessor calls DataManager.onStreamUpdate() directly
+    streamProcessor.addReceiver(this);
   }
 
   // ============ Query API ============
@@ -72,10 +81,14 @@ export class DataManager<S extends SchemaStructure> {
     return this.queryManager.getActiveQueries();
   }
 
+  getIncantation(id: string | RecordId) {
+    return this.queryManager.getIncantation(id);
+  }
+
   /**
-   * Handle stream processor updates
+   * Handle stream processor updates (implements StreamUpdateReceiver interface)
    */
-  handleStreamUpdate(update: any) {
+  onStreamUpdate(update: StreamUpdate) {
     return this.queryManager.handleStreamUpdate(update);
   }
 

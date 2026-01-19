@@ -1,5 +1,5 @@
-import { createSignal, onMount, onCleanup } from "solid-js";
-import type { ChromeMessage } from "../types/devtools";
+import { createSignal, onMount, onCleanup } from 'solid-js';
+import type { ChromeMessage } from '../types/devtools';
 
 export interface UseChromeConnectionOptions {
   onMessage?: (message: ChromeMessage) => void;
@@ -23,7 +23,7 @@ export function useChromeConnection(options?: UseChromeConnectionOptions) {
     if (currentPort && isConnected()) {
       currentPort.postMessage(message);
     } else {
-      console.warn("[DevTools] Cannot send message: not connected", message);
+      console.warn('[DevTools] Cannot send message: not connected', message);
     }
   };
 
@@ -31,48 +31,76 @@ export function useChromeConnection(options?: UseChromeConnectionOptions) {
    * Request Spooky state from the inspected page
    */
   const requestState = (): void => {
-    sendMessage({ type: "GET_SPOOKY_STATE" });
+    sendMessage({ type: 'GET_SPOOKY_STATE' });
   };
 
   onMount(() => {
-    // Connect to the background script
-    const newPort = chrome.runtime.connect({ name: "spooky-devtools" });
-    setPort(newPort);
-    setIsConnected(true);
+    let retryTimeout: number | undefined;
 
-    // Initialize connection with tab ID
-    newPort.postMessage({
-      name: "init",
-      tabId: chrome.devtools.inspectedWindow.tabId,
-    });
+    const connect = () => {
+      try {
+        // Connect to the background script
+        const newPort = chrome.runtime.connect({ name: 'spooky-devtools' });
 
-    console.log("[DevTools] Connected to background script");
-    options?.onConnect?.();
+        // Listen for messages from background script
+        const messageListener = (message: ChromeMessage) => {
+          console.log('[DevTools] Received message from background:', message);
+          options?.onMessage?.(message);
+        };
+        newPort.onMessage.addListener(messageListener);
 
-    // Listen for messages from background script
-    const messageListener = (message: ChromeMessage) => {
-      console.log("[DevTools] Received message from background:", message);
-      options?.onMessage?.(message);
+        // Handle disconnection
+        const disconnectListener = () => {
+          console.log('[DevTools] Disconnected from background script');
+          setIsConnected(false);
+          setPort(null);
+          options?.onDisconnect?.();
+
+          // Attempt to reconnect after 2 seconds
+          retryTimeout = setTimeout(connect, 2000);
+        };
+        newPort.onDisconnect.addListener(disconnectListener);
+
+        // Set up connection state
+        setPort(newPort);
+        setIsConnected(true);
+
+        // Initialize connection with tab ID
+        newPort.postMessage({
+          name: 'init',
+          tabId: chrome.devtools.inspectedWindow.tabId,
+        });
+
+        console.log('[DevTools] Connected to background script');
+        options?.onConnect?.();
+
+        return { newPort, messageListener, disconnectListener };
+      } catch (e) {
+        console.error('[DevTools] Connection failed:', e);
+        // Retry on immediate failure too
+        retryTimeout = setTimeout(connect, 2000);
+        return null;
+      }
     };
 
-    newPort.onMessage.addListener(messageListener);
-
-    // Handle disconnection
-    const disconnectListener = () => {
-      console.log("[DevTools] Disconnected from background script");
-      setIsConnected(false);
-      setPort(null);
-      options?.onDisconnect?.();
-    };
-
-    newPort.onDisconnect.addListener(disconnectListener);
+    let activeConnection = connect();
 
     // Cleanup on unmount
     onCleanup(() => {
-      console.log("[DevTools] Cleaning up connection");
-      newPort.onMessage.removeListener(messageListener);
-      newPort.onDisconnect.removeListener(disconnectListener);
-      newPort.disconnect();
+      console.log('[DevTools] Cleaning up connection');
+      clearTimeout(retryTimeout);
+
+      if (activeConnection) {
+        const { newPort, messageListener, disconnectListener } = activeConnection;
+        try {
+          newPort.onMessage.removeListener(messageListener);
+          newPort.onDisconnect.removeListener(disconnectListener);
+          newPort.disconnect();
+        } catch (e) {
+          /* ignore */
+        }
+      }
+
       setIsConnected(false);
       setPort(null);
     });

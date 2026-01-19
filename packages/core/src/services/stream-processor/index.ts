@@ -13,20 +13,45 @@ export interface StreamUpdate {
   localArray: any; // Flat array structure [[id, version], ...]
 }
 
-// Define events map
+// Define events map (kept for DevTools compatibility)
 export type StreamProcessorEvents = {
   stream_update: EventDefinition<'stream_update', StreamUpdate[]>;
 };
+/**
+ * Interface for receiving stream updates directly.
+ * Implemented by DataManager and DevToolsService for direct coupling.
+ */
+export interface StreamUpdateReceiver {
+  onStreamUpdate(update: StreamUpdate): void;
+}
 
 export class StreamProcessorService {
   private processor: WasmProcessor | undefined;
   private isInitialized = false;
+  private receivers: StreamUpdateReceiver[] = [];
 
   constructor(
     public events: EventSystem<StreamProcessorEvents>,
     private db: LocalDatabaseService,
     private logger: Logger
   ) {}
+
+  /**
+   * Add a receiver for stream updates.
+   * Multiple receivers can be registered (DataManager, DevTools, etc.)
+   */
+  addReceiver(receiver: StreamUpdateReceiver) {
+    this.receivers.push(receiver);
+  }
+
+  private notifyUpdates(updates: StreamUpdate[]) {
+    console.log('__diff__', updates);
+    for (const update of updates) {
+      for (const receiver of this.receivers) {
+        receiver.onStreamUpdate(update);
+      }
+    }
+  }
 
   /**
    * Initialize the WASM module and processor.
@@ -154,7 +179,8 @@ export class StreamProcessorService {
           localHash: u.result_hash,
           localArray: u.result_data,
         }));
-        this.events.emit('stream_update', updates);
+        // Direct handler call instead of event
+        this.notifyUpdates(updates);
       }
       this.saveState();
       return rawUpdates;
@@ -210,7 +236,8 @@ export class StreamProcessorService {
           localHash: u.result_hash,
           localArray: u.result_data,
         }));
-        this.events.emit('stream_update', updates);
+        // Direct handler call instead of event
+        this.notifyUpdates(updates);
       }
       this.saveState();
       return rawUpdates;
@@ -241,7 +268,8 @@ export class StreamProcessorService {
             localArray: update.result_data,
           },
         ];
-        this.events.emit('stream_update', updates);
+        // Direct handler call instead of event
+        this.notifyUpdates(updates);
         this.saveState();
       }
     } catch (e) {

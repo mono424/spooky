@@ -11,7 +11,7 @@ import {
   QueryEventTypes,
 } from './events/query.js';
 import { Event } from '../../events/index.js';
-import { decodeFromSpooky, parseRecordIdString } from '../../utils/index.js';
+import { decodeFromSpooky, extractIdPart, parseRecordIdString } from '../../utils/index.js';
 import { SchemaStructure, TableModel } from '@spooky/query-builder';
 import { StreamProcessorService } from '../../services/stream-processor/index.js';
 
@@ -78,6 +78,11 @@ export class QueryManager<S extends SchemaStructure> {
 
   public getActiveQueries() {
     return Array.from(this.activeQueries.values());
+  }
+
+  public getIncantation(fullId: string | RecordId) {
+    const id = extractIdPart(fullId);
+    return this.activeQueries.get(id);
   }
 
   public async init() {

@@ -70,7 +70,7 @@ export function useRunInHostPage() {
           }
           return { success: false, error: 'Spooky not found' };
         } catch (error) {
-          return { success: false, error: error.message };
+          return { success: false, error: error instanceof Error ? error.message : String(error) };
         }
       })()`,
       { onSuccess, onError }
@@ -124,7 +124,7 @@ export function useRunInHostPage() {
           }
           return { success: false, error: 'Spooky not found' };
         } catch (error) {
-          return { success: false, error: error.message };
+          return { success: false, error: error instanceof Error ? error.message : String(error) };
         }
       })()`,
       { onSuccess, onError }
@@ -149,7 +149,43 @@ export function useRunInHostPage() {
           }
           return { success: false, error: 'Spooky not found' };
         } catch (error) {
-          return { success: false, error: error.message };
+          return { success: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      })()`,
+      { onSuccess, onError }
+    );
+  };
+
+  /**
+   * Run a query in the host page
+   */
+  const runQuery = (
+    query: string,
+    target: 'local' | 'remote',
+    requestId: string,
+    onSuccess: (result: { success: boolean; data?: any; error?: string }) => void,
+    onError?: (error: any) => void
+  ): void => {
+    // Escape query for eval
+    const escapedQuery = query.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, ' ');
+
+    // We strictly use eval to DISPATCH THE EVENT.
+    // The actual execution happens in page-script.ts (which listens to this event).
+    // This avoids all async/await serialization issues in eval.
+    run(
+      `(function() {
+        try {
+            window.dispatchEvent(new CustomEvent('SPOOKY_RUN_QUERY', {
+                detail: {
+                    requestId: '${requestId}',
+                    query: "${escapedQuery}",
+                    target: "${target}"
+                }
+            }));
+            return { success: true, started: true };
+        } catch (error) {
+            var msg = error instanceof Error ? error.message : String(error);
+            return { success: false, error: msg || 'Unknown caught error in eval dispatch' };
         }
       })()`,
       { onSuccess, onError }
@@ -160,6 +196,7 @@ export function useRunInHostPage() {
     run,
     getSpookyState,
     getTableData,
+    runQuery,
     updateTableRow,
     deleteTableRow,
     clearHistory,
