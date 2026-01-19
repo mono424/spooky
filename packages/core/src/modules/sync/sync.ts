@@ -1,9 +1,7 @@
 import { LocalDatabaseService, RemoteDatabaseService } from '../../services/database/index.js';
-import { MutationEventTypes } from '../data/events/mutation.js';
-import { RecordVersionArray, RecordVersionDiff } from '../../types.js';
-import { QueryEventTypes } from '../data/events/query.js';
-import { SyncQueueEventTypes, createSyncEventSystem, SyncEventTypes } from './events/index.js';
-import { createLogger, Logger } from '../../services/logger/index.js';
+import { RecordVersionArray } from '../../types.js';
+import { createSyncEventSystem, SyncEventTypes } from './events/index.js';
+import { Logger } from '../../services/logger/index.js';
 import {
   CleanupEvent,
   DownEvent,
@@ -14,22 +12,17 @@ import {
   UpQueue,
 } from './queue/index.js';
 import { RecordId, Duration, Uuid } from 'surrealdb';
-import { diffRecordVersionArray, ArraySyncer } from './utils.js';
+import { ArraySyncer } from './utils.js';
 import { SyncEngine } from './engine.js';
 import { SyncScheduler } from './scheduler.js';
-import { parseRecordIdString, decodeFromSpooky } from '../../utils/index.js';
-import { TableModel } from '@spooky/query-builder';
 import { SchemaStructure } from '@spooky/query-builder';
 import { StreamProcessorService } from '../../services/stream-processor/index.js';
-// import { QueryManager } from '../query/index.js'; // REMOVED
+import { DataManager } from '../data/index.js';
 
 export class SpookySync<S extends SchemaStructure> {
   private upQueue: UpQueue;
   private downQueue: DownQueue;
   private isInit: boolean = false;
-  private isSyncingUp: boolean = false;
-  private isSyncingDown: boolean = false;
-  private relationshipMap: Map<string, Set<string>> = new Map();
   private logger: Logger;
   private syncEngine: SyncEngine;
   private scheduler: SyncScheduler;
@@ -40,24 +33,17 @@ export class SpookySync<S extends SchemaStructure> {
   }
 
   constructor(
-    private schema: S,
     private local: LocalDatabaseService,
     private remote: RemoteDatabaseService,
     private streamProcessor: StreamProcessorService,
+    private dataManager: DataManager<S>,
     private clientId: string,
     logger: Logger
   ) {
     this.logger = logger.child({ service: 'SpookySync' });
     this.upQueue = new UpQueue(this.local);
     this.downQueue = new DownQueue(this.local);
-    this.buildRelationshipMap();
-    this.syncEngine = new SyncEngine(
-      this.local,
-      this.remote,
-      this.streamProcessor,
-      this.relationshipMap,
-      this.logger
-    );
+    this.syncEngine = new SyncEngine(this.local, this.remote, this.streamProcessor, this.logger);
     this.scheduler = new SyncScheduler(
       this.upQueue,
       this.downQueue,
@@ -65,16 +51,6 @@ export class SpookySync<S extends SchemaStructure> {
       this.processDownEvent.bind(this),
       this.logger
     );
-  }
-
-  private buildRelationshipMap() {
-    if (!this.schema?.relationships) return;
-    for (const rel of this.schema.relationships) {
-      if (!this.relationshipMap.has(rel.from)) {
-        this.relationshipMap.set(rel.from, new Set());
-      }
-      this.relationshipMap.get(rel.from)?.add(rel.field);
-    }
   }
 
   public async init() {
@@ -105,16 +81,8 @@ export class SpookySync<S extends SchemaStructure> {
     (await this.remote.getClient().liveOf(queryUuid)).subscribe((message) => {
       this.logger.debug({ message }, 'Live update received');
       if (message.action === 'UPDATE' || message.action === 'CREATE') {
-        // Look for array, fallback to tree for backward compatibility if needed, or null
         const { id, hash, array, tree } = message.value;
-        // Use array if present, otherwise ignore (assuming complete switch)
-        // Or should we support both during migration?
-        // User request: "switch ... to a flat array of records"
-        // Let's expect 'array' field.
-
-        // Note: The backend might still send 'tree' if not updated, but we are asked to update frontend.
-        // We will prefer 'array'.
-        const remoteArray = array || tree; // Temporary fallback? Or just array?
+        const remoteArray = array || tree; // Still called tree I think
 
         if (!(id instanceof RecordId) || !hash || !remoteArray) {
           return;
@@ -137,7 +105,7 @@ export class SpookySync<S extends SchemaStructure> {
     remoteArray: RecordVersionArray
   ) {
     // Fetch local state to get necessary params
-    const existing = await this.findIncatationRecord(incantationId);
+    const existing = this.dataManager.getIncantation(incantationId);
     if (!existing) {
       this.logger.warn(
         { incantationId: incantationId.toString() },
@@ -146,7 +114,7 @@ export class SpookySync<S extends SchemaStructure> {
       return;
     }
 
-    const surrealql = existing.surrealql || existing.surrealQL;
+    const surrealql = existing.surrealql;
     const { params, localHash, localArray } = existing;
 
     await this.syncIncantation({
@@ -156,59 +124,8 @@ export class SpookySync<S extends SchemaStructure> {
       localHash,
       remoteHash,
       remoteArray,
-      params,
+      params: params ?? {},
     });
-  }
-
-  private async initUpQueue() {
-    await this.upQueue.loadFromDatabase();
-    this.upQueue.events.subscribe(SyncQueueEventTypes.MutationEnqueued, this.syncUp.bind(this));
-
-    /// TODO: In the future we can think about using DBSP or something smarter
-    /// to update only the queries that are really affected by the change not every
-    /// query that just involves this table.
-    // Moved to RouterService
-    // this.mutationEvents.subscribe(MutationEventTypes.MutationCreated, (event) => {
-    //   const { payload } = event;
-    //   for (const element of payload) {
-    //     this.refreshFromLocalCache(element.record_id.table.toString());
-    //   }
-    // });
-  }
-
-  private async initDownQueue() {
-    this.downQueue.events.subscribe(
-      SyncQueueEventTypes.QueryItemEnqueued,
-      this.syncDown.bind(this)
-    );
-  }
-
-  private async syncUp() {
-    if (this.isSyncingUp) return;
-    this.isSyncingUp = true;
-    try {
-      while (this.upQueue.size > 0) {
-        await this.upQueue.next(this.processUpEvent.bind(this));
-      }
-    } finally {
-      this.isSyncingUp = false;
-      void this.syncDown();
-    }
-  }
-
-  private async syncDown() {
-    if (this.isSyncingDown) return;
-    if (this.upQueue.size > 0) return;
-
-    this.isSyncingDown = true;
-    try {
-      while (this.downQueue.size > 0) {
-        if (this.upQueue.size > 0) break;
-        await this.downQueue.next(this.processDownEvent.bind(this));
-      }
-    } finally {
-      this.isSyncingDown = false;
-    }
   }
 
   public enqueueDownEvent(event: DownEvent) {
@@ -268,9 +185,6 @@ export class SpookySync<S extends SchemaStructure> {
     this.scheduler.enqueueMutation(mutations);
   }
 
-  // Deprecated/Removed: effectively replaced by refreshIncantations + Router
-  // public async refreshFromLocalCache(table: string) { ... }
-
   private async registerIncantation(event: RegisterEvent) {
     const {
       incantationId,
@@ -283,7 +197,7 @@ export class SpookySync<S extends SchemaStructure> {
 
     const effectiveTtl = ttl || '10m';
     try {
-      let existing = await this.findIncatationRecord(incantationId);
+      let existing = this.dataManager.getIncantation(incantationId);
       this.logger.debug({ existing }, 'Register Incantation state');
 
       // Use payload values as fallback if existing record doesn't have them
@@ -403,6 +317,7 @@ export class SpookySync<S extends SchemaStructure> {
         incantationId,
         remoteArray
       );
+
       if (added.length === 0 && updated.length === 0 && removed.length === 0) {
         break;
       }
@@ -506,20 +421,6 @@ export class SpookySync<S extends SchemaStructure> {
     }
   }
 
-  private async findIncatationRecord(incantationId: RecordId<string>) {
-    try {
-      const [cachedResults] = await this.local.query<[Record<string, any>]>(
-        'SELECT * FROM ONLY $id',
-        {
-          id: incantationId,
-        }
-      );
-      return cachedResults;
-    } catch (e) {
-      return null;
-    }
-  }
-
   private async updateIncantationRecord(
     incantationId: RecordId<string>,
     content: Record<string, any>
@@ -537,64 +438,6 @@ export class SpookySync<S extends SchemaStructure> {
       this.logger.error({ err: e }, 'Failed to update local incantation record');
       throw e;
     }
-  }
-
-  /**
-   * Recursively flattens a list of records, extracting nested objects that look like records (have an 'id')
-   * into the top-level list, and replacing them with their ID in the parent.
-   *
-   * schema-aware: Only flattens fields that are defined as relationships in the schema for the specific table.
-   */
-  // TODO: Move this to utils
-  private flattenResults(
-    results: Record<string, any>[],
-    visited: Set<string> = new Set(),
-    flattened: Record<string, any>[] = []
-  ): Record<string, any>[] {
-    for (const record of results) {
-      if (!record) continue;
-
-      // 1. Identify the Record
-      let recordIdStr: string | undefined;
-      let tableName: string | undefined;
-
-      if (record.id && record.id instanceof RecordId) {
-        recordIdStr = record.id.toString();
-        tableName = record.id.table.name;
-      }
-
-      // 2. Cycle Detection / Deduplication
-      if (recordIdStr) {
-        if (visited.has(recordIdStr)) continue;
-        visited.add(recordIdStr);
-      }
-
-      // 3. Create a shallow copy to modify fields without mutating original
-      const processedRecord: Record<string, any> = { ...record };
-
-      // 4. Handle Relationships recursively
-      if (tableName && this.relationshipMap.has(tableName)) {
-        const validFields = this.relationshipMap.get(tableName)!;
-
-        for (const key of validFields) {
-          if (!(key in processedRecord)) continue;
-
-          const value = processedRecord[key];
-
-          if (value && typeof value === 'object') {
-            if (Array.isArray(value)) {
-              processedRecord[key] = this.flattenResults(value, visited, flattened);
-            } else if (value.id && value.id instanceof RecordId) {
-              this.flattenResults([value], visited, flattened);
-              processedRecord[key] = value.id;
-            }
-          }
-        }
-      }
-      flattened.push(processedRecord);
-    }
-
-    return flattened;
   }
 
   private async heartbeatIncantation(event: HeartbeatEvent) {

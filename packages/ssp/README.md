@@ -26,13 +26,13 @@ sequenceDiagram
     participant OUT as DB Persistence
 
     Note over DB,OUT: === INGEST FLOW ===
-    
+
     DB->>SC: Change Event (LIVE SELECT)
     SC->>SC: prepare() - sanitize + hash
     SC->>DBSP: ingest_record(table, op, id, record, hash, is_optimistic)
     DBSP->>DBSP: View.process_ingest() for affected views
     DBSP-->>SC: Vec<ViewUpdate>
-    
+
     alt Flat/Tree Format
         SC->>OUT: UPDATE _spooky_incantation SET hash, array
     else Streaming Format
@@ -41,6 +41,7 @@ sequenceDiagram
 ```
 
 ### Deep Subquery Collection
+
 The engine uses a recursive `collect` method to identify all dependent records, including those from nested subqueries (e.g., `Thread -> Author -> Role`). This ensures that changes to deep dependencies correctly trigger updates for the main view.
 
 ---
@@ -78,6 +79,7 @@ circuit.ingest_record(
 The engine returns one of three formats:
 
 #### Flat Format
+
 ```rust
 ViewUpdate::Flat(MaterializedViewUpdate {
     query_id: "thread_list",
@@ -90,6 +92,7 @@ ViewUpdate::Flat(MaterializedViewUpdate {
 ```
 
 #### Streaming Format
+
 ```rust
 ViewUpdate::Streaming(StreamingUpdate {
     view_id: "thread_list",
@@ -103,37 +106,39 @@ ViewUpdate::Streaming(StreamingUpdate {
 
 ### 4. DeltaEvent Types
 
-| Event | Meaning | DB Operation |
-|-------|---------|--------------|
-| `Created` | Record added to view | `RELATE $from->_spooky_list_ref->$to SET version` |
-| `Updated` | Record content changed | `UPDATE $from->_spooky_list_ref SET version WHERE out = $to` |
-| `Deleted` | Record removed from view | `DELETE $from->_spooky_list_ref WHERE out = $to` |
+| Event     | Meaning                  | DB Operation                                                 |
+| --------- | ------------------------ | ------------------------------------------------------------ |
+| `Created` | Record added to view     | `RELATE $from->_spooky_list_ref->$to SET version`            |
+| `Updated` | Record content changed   | `UPDATE $from->_spooky_list_ref SET version WHERE out = $to` |
+| `Deleted` | Record removed from view | `DELETE $from->_spooky_list_ref WHERE out = $to`             |
 
 ### 5. DB Persistence (Sidecar Output)
 
 #### For Flat/Tree:
+
 ```sql
 UPDATE <record>$id SET hash = <string>$hash, array = $array
 -- Example:
-UPDATE _spooky_incantation:thread_list SET 
-  hash = "d4a0562e39718e02...", 
+UPDATE _spooky_incantation:thread_list SET
+  hash = "d4a0562e39718e02...",
   array = [["thread:abc123", 1], ["user:xyz789", 1]]
 ```
 
 #### For Streaming (Graph Edges):
+
 ```sql
 BEGIN TRANSACTION;
 
 -- Created
-RELATE _spooky_incantation:thread_list->_spooky_list_ref->thread:abc123 
+RELATE _spooky_incantation:thread_list->_spooky_list_ref->thread:abc123
   SET version = 1, clientId = $clientId;
 
--- Updated  
-UPDATE _spooky_incantation:thread_list->_spooky_list_ref 
+-- Updated
+UPDATE _spooky_incantation:thread_list->_spooky_list_ref
   SET version = 2 WHERE out = thread:abc123;
 
 -- Deleted
-DELETE _spooky_incantation:thread_list->_spooky_list_ref 
+DELETE _spooky_incantation:thread_list->_spooky_list_ref
   WHERE out = comment:old;
 
 COMMIT TRANSACTION;
@@ -150,6 +155,7 @@ SSP outputs debug logs prefixed with `[SSP DEBUG]`. Here's what each log means:
 ```
 [SSP DEBUG] DEBUG: Changed tables: ["thread", "user"]
 ```
+
 Tables affected by the current batch ingest.
 
 ### View Processing Logs
@@ -157,28 +163,31 @@ Tables affected by the current batch ingest.
 ```
 [SSP DEBUG] DEBUG VIEW: id=thread_list is_first_run=true has_subquery_changes=false is_streaming=true
 ```
-| Field | Meaning |
-|-------|---------|
-| `id` | View identifier |
-| `is_first_run` | First time evaluating (full scan) |
+
+| Field                  | Meaning                                        |
+| ---------------------- | ---------------------------------------------- |
+| `id`                   | View identifier                                |
+| `is_first_run`         | First time evaluating (full scan)              |
 | `has_subquery_changes` | Subquery tables have changes (needs full scan) |
-| `is_streaming` | Using streaming format |
+| `is_streaming`         | Using streaming format                         |
 
 ```
 [SSP DEBUG] DEBUG VIEW: id=thread_list view_delta_empty=false has_cached_updates=true is_optimistic=true updated_ids_len=3
 ```
-| Field | Meaning |
-|-------|---------|
-| `view_delta_empty` | Whether the main delta is empty |
+
+| Field                | Meaning                             |
+| -------------------- | ----------------------------------- |
+| `view_delta_empty`   | Whether the main delta is empty     |
 | `has_cached_updates` | Cached records need version updates |
-| `is_optimistic` | Versions will be incremented |
-| `updated_ids_len` | Number of records being updated |
+| `is_optimistic`      | Versions will be incremented        |
+| `updated_ids_len`    | Number of records being updated     |
 
 ### Version Updates
 
 ```
 [SSP DEBUG] DEBUG VIEW: Incrementing version for id=thread:abc123 old=1 new=2
 ```
+
 Version bump when `is_optimistic=true`.
 
 ### Subquery Detection
@@ -186,11 +195,13 @@ Version bump when `is_optimistic=true`.
 ```
 [SSP DEBUG] DEBUG has_changes: view=thread_list subquery_tables=["user"] delta_tables=["thread"]
 ```
+
 Checking if subquery tables were affected.
 
 ```
 [SSP DEBUG] DEBUG has_changes: view=thread_list NO CHANGES FOUND
 ```
+
 Subqueries unaffected, can use delta evaluation.
 
 ### Streaming Output
@@ -198,6 +209,7 @@ Subqueries unaffected, can use delta evaluation.
 ```
 [SSP DEBUG] DEBUG STREAMING_EMIT: view=thread_list delta_records_count=2 records=[("thread:abc123", Created), ("user:xyz789", Created)]
 ```
+
 Final streaming update being emitted.
 
 ### Updated Record Detection
@@ -205,23 +217,25 @@ Final streaming update being emitted.
 ```
 [SSP DEBUG] DEBUG get_updated_records_streaming: view=thread_list table=thread found versioned record=thread:abc123
 ```
+
 Found a cached record that needs version update.
 
 ---
 
 ## Output Formats
 
-| Format | Payload | Use Case |
-|--------|---------|----------|
-| **Flat** | `[(id, version), ...]` + hash | Simple reconciliation, full state |
-| **Streaming** | `[{id, event, version}, ...]` | Real-time UI, minimal bandwidth |
-| **Tree** | Hierarchical (planned) | Nested data structures |
+| Format        | Payload                       | Use Case                          |
+| ------------- | ----------------------------- | --------------------------------- |
+| **Flat**      | `[(id, version), ...]` + hash | Simple reconciliation, full state |
+| **Streaming** | `[{id, event, version}, ...]` | Real-time UI, minimal bandwidth   |
+| **Tree**      | Hierarchical (planned)        | Nested data structures            |
 
 ---
 
 ## Key Types Reference
 
 ### QueryPlan
+
 ```rust
 pub struct QueryPlan {
     pub id: String,       // Unique view identifier
@@ -230,6 +244,7 @@ pub struct QueryPlan {
 ```
 
 ### Operator (subset)
+
 ```rust
 pub enum Operator {
     Scan { table: String },
@@ -241,6 +256,7 @@ pub enum Operator {
 ```
 
 ### ViewResultFormat
+
 ```rust
 pub enum ViewResultFormat {
     Flat,       // Default - full snapshot
@@ -253,10 +269,10 @@ pub enum ViewResultFormat {
 
 ## Version Semantics
 
-| `is_optimistic` | Behavior | Use Case |
-|-----------------|----------|----------|
-| `true` | Increment versions on changes | Local mutations (client-side) |
-| `false` | Keep versions as-is | Remote sync (server authority) |
+| `is_optimistic` | Behavior                      | Use Case                       |
+| --------------- | ----------------------------- | ------------------------------ |
+| `true`          | Increment versions on changes | Local mutations (client-side)  |
+| `false`         | Keep versions as-is           | Remote sync (server authority) |
 
 ---
 
@@ -290,18 +306,24 @@ ssp/
 These utilities handle input normalization and hashing before data reaches the circuit.
 
 #### `prepare(record: Value) -> (SpookyValue, String)`
+
 Normalizes and hashes a single record.
+
 - **Input**: Raw JSON record
 - **Returns**: `(NormalizedValue, HashString)`
 - **Use Case**: Standard ingestion
 
 #### `prepare_batch(records: Vec<Value>) -> Vec<(SpookyValue, String)>`
+
 Normalizes and hashes a list of records.
+
 - **Optimization**: Uses `rayon` for parallel processing (native only)
 - **Use Case**: Bulk import / Initial load
 
 #### `prepare_fast(record: Value) -> (SpookyValue, String)`
-Hashes the record *without* normalization processing.
+
+Hashes the record _without_ normalization processing.
+
 - **Warning**: Input must be pre-normalized
 - **Use Case**: High-throughput scenarios where data integrity is guaranteed upstream
 
@@ -310,7 +332,9 @@ Hashes the record *without* normalization processing.
 The main entry points for interacting with the SSP engine.
 
 #### `ingest_record(...) -> Vec<ViewUpdate>`
+
 Ingests a single change event.
+
 ```rust
 fn ingest_record(
     &mut self,
@@ -324,7 +348,9 @@ fn ingest_record(
 ```
 
 #### `ingest_batch(...) -> Vec<ViewUpdate>`
+
 Ingests a batch of changes efficiently.
+
 ```rust
 fn ingest_batch(
     &mut self,
@@ -332,6 +358,7 @@ fn ingest_batch(
     is_optimistic: bool,
 ) -> Vec<ViewUpdate>
 ```
+
 - **Optimization**: Processes all global state updates first, then re-evaluates views once per batch.
 
 ---

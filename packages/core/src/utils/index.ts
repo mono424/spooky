@@ -1,6 +1,23 @@
 import { GetTable, SchemaStructure, TableModel, TableNames } from '@spooky/query-builder';
 import { Uuid, RecordId } from 'surrealdb';
 
+export const compareRecordIds = (
+  a: RecordId<string> | string,
+  b: RecordId<string> | string
+): boolean => {
+  const nA = a instanceof RecordId ? encodeRecordId(a) : a;
+  const nB = b instanceof RecordId ? encodeRecordId(b) : b;
+  return nA === nB;
+};
+
+export const encodeRecordId = (recordId: RecordId<string>): string => {
+  return `${recordId.table.toString()}:${recordId.id}`;
+};
+
+export const extractIdPart = (id: string | RecordId<string>): string => {
+  return typeof id === 'string' ? id.split(':').slice(1).join(':') : id.id.toString();
+};
+
 export const parseRecordIdString = (id: string): RecordId<string> => {
   const [table, ...idParts] = id.split(':');
   return new RecordId(table, idParts.join(':'));

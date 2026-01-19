@@ -8,7 +8,7 @@ console.log('Spooky DevTools content script loaded');
 function injectPageScript() {
   const script = document.createElement('script');
   script.src = chrome.runtime.getURL('page-script.js');
-  script.onload = function() {
+  script.onload = function () {
     // Remove script tag after execution to keep DOM clean
     try {
       script.remove();
@@ -17,7 +17,7 @@ function injectPageScript() {
       console.warn('[DevTools] Script removal failed:', e);
     }
   };
-  script.onerror = function(error) {
+  script.onerror = function (error) {
     console.error('[DevTools] Failed to load page-script.js:', error);
   };
   (document.head || document.documentElement).appendChild(script);
@@ -31,19 +31,21 @@ window.addEventListener('message', (event) => {
   // Only handle messages from our injected script
   if (event.data.source !== 'spooky-devtools-page') return;
 
+  // Debug logging - Log EVERYTHING to debug connection
+  console.log('[DevTools Content Script] Forwarding message:', event.data.type);
+
   // Forward to background script with all relevant data
   try {
-    chrome.runtime.sendMessage({
-      type: event.data.type,
-      data: event.data.data,
-      state: event.data.state, // Include state for SPOOKY_STATE_CHANGED messages
-      tableName: event.data.tableName, // Include tableName for table data responses
-    }).catch((error) => {
-      // Silently ignore "Extension context invalidated" errors (happens during dev reloads)
-      if (!error.message?.includes('Extension context invalidated')) {
-        console.warn('[DevTools] Failed to send message to background:', error);
-      }
-    });
+    chrome.runtime
+      .sendMessage({
+        ...event.data,
+      })
+      .catch((error) => {
+        // Silently ignore "Extension context invalidated" errors (happens during dev reloads)
+        if (!error.message?.includes('Extension context invalidated')) {
+          console.warn('[DevTools] Failed to send message to background:', error);
+        }
+      });
   } catch (error) {
     // Extension was reloaded, runtime is no longer available
     // This is normal during development, silently ignore
@@ -54,10 +56,20 @@ window.addEventListener('message', (event) => {
 chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
   if (message.type === 'GET_SPOOKY_STATE') {
     // Request state from the page
-    window.postMessage({
-      type: 'GET_STATE',
-      source: 'spooky-devtools-content'
-    }, '*');
+    window.postMessage(
+      {
+        type: 'GET_STATE',
+        source: 'spooky-devtools-content',
+      },
+      '*'
+    );
+  } else if (message.type === 'RUN_QUERY') {
+    // Dispatch event for page-script.ts to handle
+    window.dispatchEvent(
+      new CustomEvent('SPOOKY_RUN_QUERY', {
+        detail: message.payload,
+      })
+    );
   }
   // Return true to indicate we may send a response asynchronously
   return true;

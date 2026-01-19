@@ -25,6 +25,7 @@ import { QueryEventTypes } from './modules/data/events/query.js';
 import { StreamProcessorService } from './services/stream-processor/index.js';
 import { SyncEventTypes, UpEvent } from './modules/sync/index.js';
 import { EventSystem } from './events/index.js';
+import { DatabaseEventTypes } from './services/database/index.js';
 
 export class SpookyClient<S extends SchemaStructure> {
   private local: LocalDatabaseService;
@@ -80,20 +81,24 @@ export class SpookyClient<S extends SchemaStructure> {
       logger
     );
     this.sync = new SpookySync(
-      this.config.schema,
       this.local,
       this.remote,
       this.streamProcessor,
+      this.dataManager,
       clientId,
       logger
     );
     this.devTools = new DevToolsService(
       this.local,
+      this.remote,
       logger,
       this.config.schema,
       this.auth,
       this.dataManager
     );
+
+    // Register DevTools as a receiver for stream updates
+    this.streamProcessor.addReceiver(this.devTools);
   }
 
   async init() {
@@ -196,20 +201,21 @@ export class SpookyClient<S extends SchemaStructure> {
         // Just logging or devtools update if needed
       });
 
-      // --- StreamProcessor Events ---
-      this.streamProcessor.events.subscribe('stream_update', (event: any) => {
-        const payload = event.payload;
-        this.devTools.onStreamUpdate(payload);
-        if (Array.isArray(payload)) {
-          for (const update of payload) {
-            this.dataManager.handleStreamUpdate(update);
-          }
-        }
-      });
+      // Note: StreamProcessor updates are now handled directly by DataManager
+      // via setUpdateHandler() wiring in DataManager constructor
 
       // --- Auth Events ---
       this.auth.eventSystem.subscribe(AuthEventTypes.AuthStateChanged, (event) => {
         // Handle auth state changes if needed (e.g. re-subscribe, clear cache)
+      });
+
+      // --- Database Events ---
+      this.local.getEvents().subscribe('DATABASE_LOCAL_QUERY', (event: any) => {
+        this.devTools.logEvent('LOCAL_QUERY', event.payload);
+      });
+
+      this.remote.getEvents().subscribe('DATABASE_REMOTE_QUERY', (event: any) => {
+        this.devTools.logEvent('REMOTE_QUERY', event.payload);
       });
     } catch (e) {
       this.logger.error({ error: e }, '[SpookyClient] Init failed');

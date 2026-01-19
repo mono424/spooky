@@ -23,10 +23,15 @@ chrome.runtime.onConnect.addListener((port) => {
 
     // Forward messages to the content script
     if (tabId) {
+      if (message.type === 'RUN_QUERY') {
+        console.log('[DevTools Background] Forwarding RUN_QUERY to tab', tabId);
+      }
       chrome.tabs.sendMessage(tabId, message).catch((error) => {
         // Ignore errors if content script is not ready or tab is closed
         console.warn('Failed to send message to content script:', error);
       });
+    } else {
+      console.warn('[DevTools Background] Dropping message, no tabId for port', message);
     }
   };
 
@@ -43,9 +48,26 @@ chrome.runtime.onConnect.addListener((port) => {
 // Handle messages from content scripts
 chrome.runtime.onMessage.addListener((message, sender) => {
   // Forward state updates to the appropriate devtools panel
-  if (sender.tab?.id && connections.has(sender.tab.id)) {
-    const port = connections.get(sender.tab.id);
-    port?.postMessage(message);
+  if (sender.tab?.id) {
+    if (connections.has(sender.tab.id)) {
+      const port = connections.get(sender.tab.id);
+      console.log(
+        '[DevTools Background] Forwarding content message to panel. Type:',
+        message.type,
+        'Tab:',
+        sender.tab.id
+      );
+      port?.postMessage(message);
+    } else {
+      console.log(
+        '[DevTools Background] NO CONNECTION found for tab',
+        sender.tab.id,
+        'Active connections:',
+        Array.from(connections.keys())
+      );
+    }
+  } else {
+    console.warn('[DevTools Background] Message from unknown sender (no tab id)', sender);
   }
 });
 

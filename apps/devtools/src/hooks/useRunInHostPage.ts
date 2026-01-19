@@ -1,4 +1,4 @@
-import { createSignal } from "solid-js";
+import { createSignal } from 'solid-js';
 
 export interface RunInHostPageOptions<T> {
   onSuccess?: (result: T) => void;
@@ -18,26 +18,20 @@ export function useRunInHostPage() {
    * @param code - JavaScript code to execute in the host page
    * @param options - Success and error callbacks
    */
-  const run = <T = any>(
-    code: string,
-    options?: RunInHostPageOptions<T>
-  ): void => {
+  const run = <T = any>(code: string, options?: RunInHostPageOptions<T>): void => {
     setIsRunning(true);
     setError(null);
 
-    chrome.devtools.inspectedWindow.eval(
-      code,
-      (result: T, isException: any) => {
-        setIsRunning(false);
+    chrome.devtools.inspectedWindow.eval(code, (result: T, isException: any) => {
+      setIsRunning(false);
 
-        if (isException) {
-          setError(isException);
-          options?.onError?.(isException);
-        } else {
-          options?.onSuccess?.(result);
-        }
+      if (isException) {
+        setError(isException);
+        options?.onError?.(isException);
+      } else {
+        options?.onSuccess?.(result);
       }
-    );
+    });
   };
 
   /**
@@ -47,13 +41,10 @@ export function useRunInHostPage() {
     onSuccess: (state: any) => void,
     onError?: (error: any) => void
   ): void => {
-    run(
-      `window.__SPOOKY__ ? window.__SPOOKY__.getState() : null`,
-      {
-        onSuccess,
-        onError,
-      }
-    );
+    run(`window.__SPOOKY__ ? window.__SPOOKY__.getState() : null`, {
+      onSuccess,
+      onError,
+    });
   };
 
   /**
@@ -79,8 +70,27 @@ export function useRunInHostPage() {
           }
           return { success: false, error: 'Spooky not found' };
         } catch (error) {
-          return { success: false, error: error.message };
+          return { success: false, error: error instanceof Error ? error.message : String(error) };
         }
+      })()`,
+      { onSuccess, onError }
+    );
+  };
+
+  /**
+   * Clear events history in the host page
+   */
+  const clearHistory = (
+    onSuccess?: (result: { success: boolean }) => void,
+    onError?: (error: any) => void
+  ): void => {
+    run(
+      `(function() {
+        if (window.__SPOOKY__ && window.__SPOOKY__.clearHistory) {
+          window.__SPOOKY__.clearHistory();
+          return { success: true };
+        }
+        return { success: false };
       })()`,
       { onSuccess, onError }
     );
@@ -89,13 +99,8 @@ export function useRunInHostPage() {
   /**
    * Check if Spooky is available on the page
    */
-  const checkSpookyAvailable = (
-    onSuccess: (available: boolean) => void
-  ): void => {
-    run(
-      `!!window.__SPOOKY__`,
-      { onSuccess }
-    );
+  const checkSpookyAvailable = (onSuccess: (available: boolean) => void): void => {
+    run(`!!window.__SPOOKY__`, { onSuccess });
   };
 
   /**
@@ -119,7 +124,7 @@ export function useRunInHostPage() {
           }
           return { success: false, error: 'Spooky not found' };
         } catch (error) {
-          return { success: false, error: error.message };
+          return { success: false, error: error instanceof Error ? error.message : String(error) };
         }
       })()`,
       { onSuccess, onError }
@@ -144,7 +149,43 @@ export function useRunInHostPage() {
           }
           return { success: false, error: 'Spooky not found' };
         } catch (error) {
-          return { success: false, error: error.message };
+          return { success: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      })()`,
+      { onSuccess, onError }
+    );
+  };
+
+  /**
+   * Run a query in the host page
+   */
+  const runQuery = (
+    query: string,
+    target: 'local' | 'remote',
+    requestId: string,
+    onSuccess: (result: { success: boolean; data?: any; error?: string }) => void,
+    onError?: (error: any) => void
+  ): void => {
+    // Escape query for eval
+    const escapedQuery = query.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, ' ');
+
+    // We strictly use eval to DISPATCH THE EVENT.
+    // The actual execution happens in page-script.ts (which listens to this event).
+    // This avoids all async/await serialization issues in eval.
+    run(
+      `(function() {
+        try {
+            window.dispatchEvent(new CustomEvent('SPOOKY_RUN_QUERY', {
+                detail: {
+                    requestId: '${requestId}',
+                    query: "${escapedQuery}",
+                    target: "${target}"
+                }
+            }));
+            return { success: true, started: true };
+        } catch (error) {
+            var msg = error instanceof Error ? error.message : String(error);
+            return { success: false, error: msg || 'Unknown caught error in eval dispatch' };
         }
       })()`,
       { onSuccess, onError }
@@ -155,8 +196,10 @@ export function useRunInHostPage() {
     run,
     getSpookyState,
     getTableData,
+    runQuery,
     updateTableRow,
     deleteTableRow,
+    clearHistory,
     checkSpookyAvailable,
     isRunning,
     error,
