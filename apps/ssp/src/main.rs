@@ -429,59 +429,91 @@ fn format_incantation_id(id: &str) -> String {
 
 /// Graph-based persistence for StreamingUpdate.
 /// Maps DeltaEvent to specific SurrealQL graph operations.
+/// Batches all operations into a single transaction for efficiency.
+/// Graph-based persistence for StreamingUpdate.
+/// 
+/// OPTIMIZATION: Single transaction with one round-trip.
+/// - Uses single $from binding (not repeated per record)
+/// - Inlines validated record IDs directly (safe - already parsed via parse_record_id)
+/// - Wraps in transaction for atomicity
 async fn update_incantation_edges(db: &Surreal<Client>, update: &StreamingUpdate) {
+    if update.records.is_empty() {
+        return;
+    }
+
     let incantation_id_str = format_incantation_id(&update.view_id);
     
     let Some(from_id) = parse_record_id(&incantation_id_str) else {
         error!("Invalid incantation ID format: {}", incantation_id_str);
         return;
     };
-    
+
     debug!(
-        "Processing graph update for {} with {} records",
+        "Processing batched graph update for {} with {} records",
         incantation_id_str,
         update.records.len()
     );
+
+    // Build query statements - inline validated IDs, only bind $from once
+    let mut statements: Vec<String> = Vec::with_capacity(update.records.len());
     
     for record in &update.records {
-        let Some(to_id) = parse_record_id(&record.id) else {
+        // Validate record ID - this makes inlining safe
+        if parse_record_id(&record.id).is_none() {
             error!("Invalid record ID format: {}", record.id);
             continue;
-        };
-        
-        let result = match record.event {
+        }
+
+        let stmt = match record.event {
             DeltaEvent::Created => {
-                // RELATE creates a new edge from incantation → record with version
-                debug!("RELATE {}->_spooky_list_ref->{} version={}", incantation_id_str, record.id, record.version);
-                db.query("RELATE $from->_spooky_list_ref->$to SET version = $version, clientId = (SELECT clientId FROM ONLY $from).clientId")
-                    .bind(("from", from_id.clone()))
-                    .bind(("to", to_id.clone()))
-                    .bind(("version", record.version))
-                    .await
+                format!(
+                    "RELATE $from->_spooky_list_ref->{} SET version = {}, clientId = (SELECT clientId FROM ONLY $from).clientId",
+                    record.id, record.version
+                )
             }
             DeltaEvent::Updated => {
-                // UPDATE modifies version on existing edge
-                debug!("UPDATE {}->_spooky_list_ref SET version={} WHERE out = {}", incantation_id_str, record.version, record.id);
-                db.query("UPDATE $from->_spooky_list_ref SET version = $version WHERE out = $to")
-                    .bind(("from", from_id.clone()))
-                    .bind(("to", to_id.clone()))
-                    .bind(("version", record.version))
-                    .await
+                format!(
+                    "UPDATE $from->_spooky_list_ref SET version = {} WHERE out = {}",
+                    record.version, record.id
+                )
             }
             DeltaEvent::Deleted => {
-                // DELETE removes the specific edge
-                debug!("DELETE {}->_spooky_list_ref WHERE out = {}", incantation_id_str, record.id);
-                db.query("DELETE $from->_spooky_list_ref WHERE out = $to")
-                    .bind(("from", from_id.clone()))
-                    .bind(("to", to_id.clone()))
-                    .await
+                format!(
+                    "DELETE $from->_spooky_list_ref WHERE out = {}",
+                    record.id
+                )
             }
         };
         
-        if let Err(e) = result {
+        statements.push(stmt);
+    }
+
+    if statements.is_empty() {
+        return;
+    }
+
+    // Wrap in transaction for atomicity
+    let full_query = format!(
+        "BEGIN TRANSACTION;\n{}\nCOMMIT TRANSACTION;",
+        statements.join(";\n")
+    );
+
+    // Execute with single binding
+    match db.query(&full_query)
+        .bind(("from", from_id))
+        .await 
+    {
+        Ok(_) => {
+            debug!(
+                "Batched graph update completed for {} ({} operations)",
+                incantation_id_str,
+                statements.len()
+            );
+        }
+        Err(e) => {
             error!(
-                "Graph operation {:?} failed for {} -> {}: {}",
-                record.event, incantation_id_str, record.id, e
+                "Batched graph update failed for {}: {}",
+                incantation_id_str, e
             );
         }
     }
