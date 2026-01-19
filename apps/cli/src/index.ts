@@ -26,7 +26,7 @@ export interface SyncgenOptions {
 
 function findBinary(): string {
   // Possible locations for the binary
-  const binaryName = platform() === 'win32' ? 'syncgen.exe' : 'syncgen';
+  const binaryName = platform() === 'win32' ? 'spooky.exe' : 'spooky';
 
   const possiblePaths = [
     // Development/Source build location (from dist/index.js -> ../target/release)

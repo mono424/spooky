@@ -7,12 +7,23 @@ export const schema = {
       name: 'thread' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
-        content: { type: 'string' as const, optional: false },
         active: { type: 'boolean' as const, optional: true },
         author: { type: 'string' as const, recordId: true, optional: false },
+        content: { type: 'string' as const, optional: false },
         created_at: { type: 'string' as const, dateTime: true, optional: true },
         title: { type: 'string' as const, optional: false },
         comments: { type: 'string' as const, optional: true },
+      },
+      primaryKey: ['id'] as const
+    },
+    {
+      name: 'comment' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
+        author: { type: 'string' as const, recordId: true, optional: false },
+        thread: { type: 'string' as const, recordId: true, optional: false },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
+        content: { type: 'string' as const, optional: false },
       },
       primaryKey: ['id'] as const
     },
@@ -28,24 +39,25 @@ export const schema = {
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
         username: { type: 'string' as const, optional: false },
-        comments: { type: 'string' as const, optional: true },
         threads: { type: 'string' as const, optional: true },
-      },
-      primaryKey: ['id'] as const
-    },
-    {
-      name: 'comment' as const,
-      columns: {
-        id: { type: 'string' as const, recordId: true, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
-        content: { type: 'string' as const, optional: false },
-        author: { type: 'string' as const, recordId: true, optional: false },
-        thread: { type: 'string' as const, recordId: true, optional: false },
+        comments: { type: 'string' as const, optional: true },
       },
       primaryKey: ['id'] as const
     },
   ],
   relationships: [
+    {
+      from: 'user' as const,
+      field: 'threads' as const,
+      to: 'thread' as const,
+      cardinality: 'many' as const
+    },
+    {
+      from: 'user' as const,
+      field: 'comments' as const,
+      to: 'comment' as const,
+      cardinality: 'many' as const
+    },
     {
       from: 'comment' as const,
       field: 'author' as const,
@@ -57,18 +69,6 @@ export const schema = {
       field: 'thread' as const,
       to: 'thread' as const,
       cardinality: 'one' as const
-    },
-    {
-      from: 'user' as const,
-      field: 'comments' as const,
-      to: 'comment' as const,
-      cardinality: 'many' as const
-    },
-    {
-      from: 'user' as const,
-      field: 'threads' as const,
-      to: 'thread' as const,
-      cardinality: 'many' as const
     },
     {
       from: 'thread' as const,
@@ -84,7 +84,7 @@ export const schema = {
     },
   ],
   access: {
-    account: {"signIn":{"params":{"password":{"type":"string","optional":false},"username":{"type":"string","optional":false}}},"signup":{"params":{"password":{"type":"string","optional":false},"username":{"type":"string","optional":false}}}},
+    account: {"signIn":{"params":{"password":{"type":"string","optional":false},"username":{"type":"string","optional":false}}},"signup":{"params":{"username":{"type":"string","optional":false},"password":{"type":"string","optional":false}}}},
   }
 } as const;
 

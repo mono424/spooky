@@ -92,61 +92,31 @@ pub fn generate_spooky_events(
             continue;
         }
 
-        // --------------------------------------------------
-        // A. Mutation Event
-        // --------------------------------------------------
-        // --------------------------------------------------
-        // A. Mutation Event
-        // --------------------------------------------------
-        events.push_str(&format!("-- Table: {} Mutation\n", table_name));
-
-        // 1. Version Update Event (New)
-        // Maintain _spooky_version for this table
-        events.push_str(&format!("-- Maintain _spooky_version for {}\n", table_name));
-
-        // On CREATE: Set version = 1
-        events.push_str(&format!(
-            "DEFINE EVENT OVERWRITE _spooky_{}_version_create ON TABLE {}\n",
-            table_name, table_name
-        ));
-        events.push_str("WHEN $event = \"CREATE\"\nTHEN {\n");
-        events.push_str("    CREATE _spooky_version SET record_id = $after.id, version = 1;\n");
-        events.push_str("};\n\n");
-
-        // On UPDATE: Increment version or use forced version (if ID matches)
-        events.push_str(&format!(
-            "DEFINE EVENT OVERWRITE _spooky_{}_version_update ON TABLE {}\n",
-            table_name, table_name
-        ));
-        events.push_str("WHEN $event = \"UPDATE\" AND $before != $after\nTHEN {\n");
-        events.push_str(
-            "    IF $spooky_target_version != NONE AND $spooky_target_version.id == $after.id {\n",
-        );
-        events.push_str("        UPDATE _spooky_version SET version = <int>$spooky_target_version.version WHERE record_id = $after.id;\n");
-        events.push_str("        LET $spooky_target_version = NONE;\n");
-        events.push_str("    } ELSE {\n");
-        events.push_str(
-            "        UPDATE _spooky_version SET version += 1 WHERE record_id = $after.id;\n",
-        );
-        events.push_str("    };\n");
-        events.push_str("};\n\n");
-
-        // On DELETE: Remove version
-        events.push_str(&format!(
-            "DEFINE EVENT OVERWRITE _spooky_{}_version_delete ON TABLE {}\n",
-            table_name, table_name
-        ));
-        events.push_str("WHEN $event = \"DELETE\"\nTHEN {\n");
-        events.push_str("    DELETE _spooky_version WHERE record_id = $before.id;\n");
-        events.push_str("};\n\n");
-
+        // ===================================
+        // 1. MUTATION EVENT (CREATE / UPDATE)
+        // ===================================
+        // Merges version tracking and data ingestion
         events.push_str(&format!(
             "DEFINE EVENT OVERWRITE _spooky_{}_mutation ON TABLE {}\n",
             table_name, table_name
         ));
         events.push_str("WHEN $before != $after AND $event != \"DELETE\"\nTHEN {\n");
 
-        // Construct Plain Record for WASM (Sanitize Record Links to Strings)
+        // --- Versioning Logic ---
+        events.push_str("    IF $event = \"CREATE\" {\n");
+        events.push_str("        CREATE _spooky_version SET record_id = $after.id, version = 1;\n");
+        events.push_str("    } ELSE IF $event = \"UPDATE\" {\n");
+        events.push_str("        IF $spooky_target_version != NONE AND $spooky_target_version.id == $after.id {\n");
+        events.push_str("            UPDATE _spooky_version SET version = <int>$spooky_target_version.version WHERE record_id = $after.id;\n");
+        events.push_str("            LET $spooky_target_version = NONE;\n");
+        events.push_str("        } ELSE {\n");
+        events.push_str(
+            "            UPDATE _spooky_version SET version += 1 WHERE record_id = $after.id;\n",
+        );
+        events.push_str("        };\n");
+        events.push_str("    };\n\n");
+
+        // --- Ingestion Logic ---
         events.push_str("    LET $plain_after = {\n");
         events.push_str("        id: <string>($after.id OR \"\"),\n");
 
@@ -174,10 +144,6 @@ pub fn generate_spooky_events(
             let secret = sidecar_secret.unwrap_or("");
             let url = format!("{}/ingest", endpoint);
 
-            // Escape secret in case it contains weird chars
-            // Actually, we inject strings into a string template.
-            // We'll trust the secret is simple for now, but safer to just put it in.
-
             events.push_str("    LET $payload = {\n");
             events.push_str(&format!("        table: '{}',\n", table_name));
             events.push_str("        op: $event,\n");
@@ -186,7 +152,6 @@ pub fn generate_spooky_events(
             events.push_str("        hash: \"\"\n");
             events.push_str("    };\n");
 
-            // Construct HTTP call
             events.push_str(&format!(
                 "    http::post('{}', $payload, {{ \"Authorization\": \"Bearer {}\" }});\n",
                 url, secret
@@ -199,20 +164,22 @@ pub fn generate_spooky_events(
             ));
             events.push_str("    mod::dbsp::save_state(NONE);\n");
         }
-
         events.push_str("};\n\n");
 
-        // --------------------------------------------------
-        // B. Deletion Event
-        // --------------------------------------------------
-        events.push_str(&format!("-- Table: {} Deletion\n", table_name));
+        // ===================================
+        // 2. DELETE EVENT
+        // ===================================
+        // Merges version cleanup and data ingestion
         events.push_str(&format!(
             "DEFINE EVENT OVERWRITE _spooky_{}_delete ON TABLE {}\n",
             table_name, table_name
         ));
         events.push_str("WHEN $event = \"DELETE\"\nTHEN {\n");
 
-        // Construct Plain Record for WASM
+        // --- Versioning Logic ---
+        events.push_str("    DELETE _spooky_version WHERE record_id = $before.id;\n\n");
+
+        // --- Ingestion Logic ---
         events.push_str("    LET $plain_before = {\n");
         events.push_str("        id: <string>($before.id OR \"\"),\n");
 
@@ -259,7 +226,6 @@ pub fn generate_spooky_events(
             events.push_str(&format!("    mod::dbsp::ingest('{}', \"DELETE\", <string>($before.id OR \"\"), $plain_before);\n", table_name));
             events.push_str("    mod::dbsp::save_state(NONE);\n");
         }
-
         events.push_str("};\n\n");
     }
 
