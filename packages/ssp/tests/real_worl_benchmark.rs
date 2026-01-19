@@ -59,7 +59,7 @@ mod common;
 use common::*;
 use rayon::prelude::*;
 use serde_json::{json, Value};
-use spooky_stream_processor::{
+use ssp::{
     engine::update::{DeltaEvent, StreamingUpdate, ViewResultFormat, ViewUpdate},
     engine::{JoinCondition, Operator, OrderSpec, Path, Predicate, Projection},
     engine::view::QueryPlan,

@@ -3,7 +3,7 @@ mod common;
 
 use common::*;
 use serde_json::json;
-use spooky_stream_processor::engine::view::{Operator, Path, Predicate, Projection, QueryPlan};
+use ssp::engine::view::{Operator, Path, Predicate, Projection, QueryPlan};
 
 /// Debug test for subquery projection children population.
 /// Tests: SELECT *, (SELECT * FROM author WHERE id = $parent.author)[0] as author_data FROM thread
@@ -63,7 +63,7 @@ fn test_subquery_projection_children() {
     println!("=== View Update ===");
     println!("query_id: {}", view_update.query_id());
     println!("result_data: {:?}", view_update.result_data());
-    println!("result_hash: {}", match &view_update { spooky_stream_processor::ViewUpdate::Flat(f) | spooky_stream_processor::ViewUpdate::Tree(f) => &f.result_hash, _ => panic!("Expected Flat update") });
+    println!("result_hash: {}", match &view_update { ssp::ViewUpdate::Flat(f) | ssp::ViewUpdate::Tree(f) => &f.result_hash, _ => panic!("Expected Flat update") });
 
     // 4. Verify result contains BOTH the thread AND the author (from subquery)
     assert!(!view_update.result_data().is_empty(), "Expected results");

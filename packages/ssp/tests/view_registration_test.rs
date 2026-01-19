@@ -3,7 +3,7 @@ mod common;
 
 use common::*;
 use serde_json::json;
-use spooky_stream_processor::engine::view::{Operator, QueryPlan};
+use ssp::engine::view::{Operator, QueryPlan};
 
 /// Test that registering a view AFTER records are ingested correctly finds existing records
 #[test]
@@ -118,7 +118,7 @@ fn test_view_registration_after_ingestion_with_filter() {
     );
 
     // 2. Register a view that filters for active users only
-    use spooky_stream_processor::engine::view::{Path, Predicate};
+    use ssp::engine::view::{Path, Predicate};
 
     let plan = QueryPlan {
         id: "active_users".to_string(),

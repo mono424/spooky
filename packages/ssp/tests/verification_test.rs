@@ -1,8 +1,8 @@
 mod common;
 
 use common::ViewUpdateExt;
-use spooky_stream_processor::{Circuit, QueryPlan};
-use spooky_stream_processor::engine::view::{Operator, Predicate, Path};
+use ssp::{Circuit, QueryPlan};
+use ssp::engine::view::{Operator, Predicate, Path};
 use serde_json::json;
 
 #[test]

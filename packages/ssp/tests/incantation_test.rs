@@ -3,7 +3,7 @@ mod common;
 
 use common::*;
 use serde_json::json;
-use spooky_stream_processor::engine::view::{JoinCondition, Operator, Path, Predicate, QueryPlan};
+use ssp::engine::view::{JoinCondition, Operator, Path, Predicate, QueryPlan};
 
 #[test]
 fn test_complex_incantation_flow() {
@@ -78,7 +78,7 @@ fn test_complex_incantation_flow() {
     }
 
     // 4. Verify View State Helper
-    let check_view = |circuit: &spooky_stream_processor::Circuit, expect_present: bool| {
+    let check_view = |circuit: &ssp::Circuit, expect_present: bool| {
         let view = circuit
             .views
             .iter()

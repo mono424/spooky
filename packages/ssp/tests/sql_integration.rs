@@ -1,4 +1,4 @@
-use spooky_stream_processor::{converter, engine};
+use ssp::{converter, engine};
 use serde_json::Value;
 
 #[test]

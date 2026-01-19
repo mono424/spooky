@@ -3,8 +3,8 @@ mod common;
 
 use common::*;
 use serde_json::json;
-use spooky_stream_processor::converter::convert_surql_to_dbsp;
-use spooky_stream_processor::engine::view::Operator;
+use ssp::converter::convert_surql_to_dbsp;
+use ssp::engine::view::Operator;
 
 /// Debug the SQL conversion for the TypeScript test SQL
 #[test]
@@ -45,7 +45,7 @@ fn test_sql_conversion_for_ts_test() {
                     let has_subquery = projections.iter().any(|p| {
                         matches!(
                             p,
-                            spooky_stream_processor::engine::view::Projection::Subquery { .. }
+                            ssp::engine::view::Projection::Subquery { .. }
                         )
                     });
                     assert!(has_subquery, "Expected a Subquery projection");
@@ -82,7 +82,7 @@ fn test_subquery_via_sql_full_flow() {
         "lastActiveAt": "2026-01-15T00:00:00Z"
     });
 
-    let data = spooky_stream_processor::service::view::prepare_registration(config);
+    let data = ssp::service::view::prepare_registration(config);
     assert!(
         data.is_ok(),
         "Failed to prepare registration: {:?}",

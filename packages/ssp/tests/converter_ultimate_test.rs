@@ -1,4 +1,4 @@
-use spooky_stream_processor::converter::convert_surql_to_dbsp;
+use ssp::converter::convert_surql_to_dbsp;
 use serde_json::Value;
 
 fn parse_ok(sql: &str) -> Value {

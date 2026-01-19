@@ -12,8 +12,8 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use ssp::{
-    Circuit, MaterializedViewUpdate, ViewUpdate,
-    engine::update::{StreamingUpdate, DeltaEvent, compute_flat_hash, ViewResultFormat},
+    Circuit, ViewUpdate,
+    engine::update::{StreamingUpdate, DeltaEvent, ViewResultFormat},
 };
 use surrealdb::engine::remote::ws::{Client, Ws};
 use surrealdb::opt::auth::Root;
@@ -70,7 +70,7 @@ async fn main() -> anyhow::Result<()> {
         .with(file_layer)
         .init();
 
-    info!("Starting ssp (PARALLEL MODE: array + edges)...");
+    info!("Starting ssp (streaming mode)...");
 
     // Persistence Config
     let persistence_file = std::env::var("SPOOKY_PERSISTENCE_FILE")
@@ -192,12 +192,8 @@ async fn ingest_handler(
 
     let (clean_record, hash) = ssp::service::ingest::prepare(payload.record);
 
-    // Get updates from BOTH modes
-    let (flat_updates, streaming_updates) = {
+    let updates = {
         let mut circuit = state.processor.lock().unwrap();
-        
-        // We need to call ingest_record once - it returns updates based on the view's format
-        // But views are registered with Streaming format, so we get StreamingUpdate
         let updates = circuit.ingest_record(
             &payload.table,
             &payload.op,
@@ -206,43 +202,15 @@ async fn ingest_handler(
             &hash,
             true,
         );
-        
         state.saver.trigger_save();
-        
-        // Separate into flat data and streaming data
-        let mut flat: Vec<MaterializedViewUpdate> = Vec::new();
-        let mut streaming: Vec<StreamingUpdate> = Vec::new();
-        
-        for update in updates {
-            match update {
-                ViewUpdate::Streaming(s) => {
-                    // We need the FULL view state for flat mode, not just deltas
-                    // This is a limitation - we'll handle it differently
-                    streaming.push(s);
-                }
-                ViewUpdate::Flat(m) | ViewUpdate::Tree(m) => {
-                    flat.push(m);
-                }
-            }
-        }
-        
-        (flat, streaming)
+        updates
     };
 
-    // PARALLEL UPDATE: Both array AND edges
-    // 
-    // For flat updates (if any views are in flat mode)
-    for update in &flat_updates {
-        update_incantation_array(&state.db, update).await;
-    }
-    
-    // For streaming updates - update BOTH array and edges
-    for update in &streaming_updates {
-        // Update edges (streaming way)
-        update_incantation_edges(&state.db, update).await;
-        
-        // Also update array (flat way) - need to get full state from circuit
-        update_incantation_array_from_streaming(&state.db, &state.processor, &update.view_id).await;
+    // Update edges for all streaming updates
+    for update in updates {
+        if let ViewUpdate::Streaming(s) = update {
+            update_incantation_edges(&state.db, &s).await;
+        }
     }
 
     StatusCode::OK
@@ -259,9 +227,9 @@ async fn register_view_handler(
         Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     };
 
-    debug!("Registering view {} (PARALLEL: array + edges)", data.plan.id);
+    debug!("Registering view {}", data.plan.id);
 
-    // Always register with Streaming mode (it gives us delta info)
+    // Always register with Streaming mode
     let update = {
         let mut circuit = state.processor.lock().unwrap();
         let res = circuit.register_view(
@@ -283,26 +251,11 @@ async fn register_view_handler(
     let last_active_str = m["lastActiveAt"].as_str().unwrap().to_string();
     let params_val = m["safe_params"].clone();
 
-    // Extract initial data from streaming update
-    let (result_hash, result_data) = if let Some(ViewUpdate::Streaming(s)) = &update {
-        let initial_data: Vec<(String, u64)> = s.records
-            .iter()
-            .filter(|r| r.event == DeltaEvent::Created)
-            .map(|r| (r.id.clone(), r.version))
-            .collect();
-        let hash = compute_flat_hash(&initial_data);
-        (hash, initial_data)
-    } else {
-        (compute_flat_hash(&[]), vec![])
-    };
-
-    // UPSERT incantation with array (for flat/old sync)
-    let query = "UPSERT <record>$id SET hash = <string>$hash, array = $array, clientId = <string>$clientId, surrealQL = <string>$surrealQL, params = $params, ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt";
+    // Store incantation metadata (no array/hash - streaming uses edges)
+    let query = "UPSERT <record>$id SET clientId = <string>$clientId, surrealQL = <string>$surrealQL, params = $params, ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt";
 
     let db_res = state.db.query(query)
         .bind(("id", id_str.clone()))
-        .bind(("hash", result_hash))
-        .bind(("array", json!(result_data)))
         .bind(("clientId", client_id_str))
         .bind(("surrealQL", surql_str))
         .bind(("params", params_val))
@@ -315,13 +268,15 @@ async fn register_view_handler(
         return (StatusCode::INTERNAL_SERVER_ERROR, "DB Error").into_response();
     }
 
-    // ALSO create edges (for streaming/new sync)
+    // Create initial edges
     if let Some(ViewUpdate::Streaming(s)) = &update {
         debug!("Creating {} initial edges for view {}", s.records.len(), id_str);
         update_incantation_edges(&state.db, s).await;
     }
 
-    debug!("View {} registered with BOTH array ({} items) and edges", id_str, result_data.len());
+    debug!("View {} registered with {} edges", id_str, 
+        update.as_ref().map(|u| if let ViewUpdate::Streaming(s) = u { s.records.len() } else { 0 }).unwrap_or(0)
+    );
 
     StatusCode::OK.into_response()
 }
@@ -383,7 +338,7 @@ async fn save_handler(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 async fn version_handler() -> impl IntoResponse {
-    Json(json!("0.2.0-parallel"))
+    Json(json!("0.3.0-streaming"))
 }
 
 // --- Helper Functions ---
@@ -400,70 +355,7 @@ fn format_incantation_id(id: &str) -> String {
     }
 }
 
-/// Update incantation array (flat mode)
-async fn update_incantation_array(db: &Surreal<Client>, update: &MaterializedViewUpdate) {
-    let query = "UPDATE <record>$id SET hash = <string>$hash, array = $array";
-    let id_str = format_incantation_id(&update.query_id);
-    
-    debug!("Updating array for {} ({} items)", id_str, update.result_data.len());
-    
-    if let Err(e) = db.query(query)
-        .bind(("id", id_str.clone()))
-        .bind(("hash", update.result_hash.clone()))
-        .bind(("array", json!(update.result_data)))
-        .await 
-    {
-        error!("Failed to update array for {}: {}", id_str, e);
-    }
-}
-
-/// Update incantation array from streaming update by getting full view state
-async fn update_incantation_array_from_streaming(
-    db: &Surreal<Client>,
-    processor: &Arc<Mutex<Box<Circuit>>>,
-    view_id: &str,
-) {
-    let id_str = format_incantation_id(view_id);
-    
-    // Get full view state from circuit's view cache
-    let (hash, data) = {
-        let circuit = processor.lock().unwrap();
-        
-        // Find the view by ID
-        let view = circuit.views.iter().find(|v| v.plan.id == view_id);
-        
-        if let Some(v) = view {
-            // Build array from view's version_map (Streaming mode source of truth)
-            // Note: v.cache is empty in Streaming mode!
-            let records: Vec<(String, u64)> = v.version_map
-                .iter()
-                .map(|(id, version)| (id.to_string(), *version))
-                .collect();
-            
-            let hash = compute_flat_hash(&records);
-            (hash, records)
-        } else {
-            debug!("View {} not found in circuit", view_id);
-            return;
-        }
-    };
-    
-    let query = "UPDATE <record>$id SET hash = <string>$hash, array = $array";
-    
-    debug!("Updating array for {} ({} items)", id_str, data.len());
-    
-    if let Err(e) = db.query(query)
-        .bind(("id", id_str.clone()))
-        .bind(("hash", hash))
-        .bind(("array", json!(data)))
-        .await 
-    {
-        error!("Failed to update array for {}: {}", id_str, e);
-    }
-}
-
 /// Update edges (streaming mode) - batched transaction
-/// Update edges (streaming mode) - batched transaction (Hybrid Approach)
 /// Optimizes network calls: O(N) -> O(1) round-trips
 async fn update_incantation_edges(db: &Surreal<Client>, update: &StreamingUpdate) {
     if update.records.is_empty() {
@@ -472,14 +364,13 @@ async fn update_incantation_edges(db: &Surreal<Client>, update: &StreamingUpdate
 
     let incantation_id_str = format_incantation_id(&update.view_id);
     
-    // Validate from_id
     let Some(from_id) = parse_record_id(&incantation_id_str) else {
         error!("Invalid incantation ID format: {}", incantation_id_str);
         return;
     };
 
     debug!(
-        "Processing {} edge operations for {} (batched)",
+        "Processing {} edge operations for {}",
         update.records.len(),
         incantation_id_str
     );
@@ -488,7 +379,6 @@ async fn update_incantation_edges(db: &Surreal<Client>, update: &StreamingUpdate
     let mut statements: Vec<String> = Vec::with_capacity(update.records.len());
     
     for record in &update.records {
-        // Validate record ID
         if parse_record_id(&record.id).is_none() {
             error!("Invalid record ID format: {}", record.id);
             continue;
@@ -523,29 +413,25 @@ async fn update_incantation_edges(db: &Surreal<Client>, update: &StreamingUpdate
     }
 
     // Wrap in transaction for atomicity
-    // CRITICAL: Join with ";\n" AND add a trailing ";" before COMMIT
     let full_query = format!(
         "BEGIN TRANSACTION;\n{};\nCOMMIT TRANSACTION;",
         statements.join(";\n")
     );
 
-    debug!("Executing batched transaction ({} chars)", full_query.len());
-
-    // Execute with single binding
     match db.query(&full_query)
         .bind(("from", from_id))
         .await 
     {
         Ok(_) => {
             debug!(
-                "Batched update completed for {} ({} ops)",
-                incantation_id_str,
-                statements.len()
+                "Completed {} edge operations for {}",
+                statements.len(),
+                incantation_id_str
             );
         }
         Err(e) => {
             error!(
-                "Batched update failed for {}: {}",
+                "Edge update failed for {}: {}",
                 incantation_id_str, e
             );
         }
