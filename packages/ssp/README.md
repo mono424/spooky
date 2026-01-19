@@ -283,6 +283,59 @@ ssp/
 
 ---
 
+## API Reference
+
+### Service Helpers (`ssp::service`)
+
+These utilities handle input normalization and hashing before data reaches the circuit.
+
+#### `prepare(record: Value) -> (SpookyValue, String)`
+Normalizes and hashes a single record.
+- **Input**: Raw JSON record
+- **Returns**: `(NormalizedValue, HashString)`
+- **Use Case**: Standard ingestion
+
+#### `prepare_batch(records: Vec<Value>) -> Vec<(SpookyValue, String)>`
+Normalizes and hashes a list of records.
+- **Optimization**: Uses `rayon` for parallel processing (native only)
+- **Use Case**: Bulk import / Initial load
+
+#### `prepare_fast(record: Value) -> (SpookyValue, String)`
+Hashes the record *without* normalization processing.
+- **Warning**: Input must be pre-normalized
+- **Use Case**: High-throughput scenarios where data integrity is guaranteed upstream
+
+### Core Library (`ssp::lib`)
+
+The main entry points for interacting with the SSP engine.
+
+#### `ingest_record(...) -> Vec<ViewUpdate>`
+Ingests a single change event.
+```rust
+fn ingest_record(
+    &mut self,
+    table: &str,          // Table name
+    op: &str,             // "CREATE", "UPDATE", "DELETE"
+    id: &str,             // Record ID
+    record: Value,        // Normalized record data
+    hash: &str,           // Pre-computed hash
+    is_optimistic: bool,  // true = increment versions
+) -> Vec<ViewUpdate>
+```
+
+#### `ingest_batch(...) -> Vec<ViewUpdate>`
+Ingests a batch of changes efficiently.
+```rust
+fn ingest_batch(
+    &mut self,
+    batch: Vec<(String, String, String, Value, String)>, // (table, op, id, record, hash)
+    is_optimistic: bool,
+) -> Vec<ViewUpdate>
+```
+- **Optimization**: Processes all global state updates first, then re-evaluates views once per batch.
+
+---
+
 ## Quick Usage
 
 ```rust
