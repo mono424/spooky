@@ -1,6 +1,6 @@
 import { LocalDatabaseService, RemoteDatabaseService } from '../../services/database/index.js';
 import { RecordVersionArray, RecordVersionDiff } from '../../types.js';
-import { createSyncEventSystem, SyncEventTypes } from './events/index.js';
+import { createSyncEventSystem } from './events/index.js';
 import { Logger } from '../../services/logger/index.js';
 import {
   CleanupEvent,
@@ -75,7 +75,6 @@ export class SpookySync<S extends SchemaStructure> {
 
     (await this.remote.getClient().liveOf(queryUuid)).subscribe((message) => {
       this.logger.debug({ message }, 'Live update received');
-      console.log('__TEST__', message);
       if (message.action === 'KILLED') return;
       this.handleRemoteListRefChange(
         message.action,
@@ -103,11 +102,10 @@ export class SpookySync<S extends SchemaStructure> {
       return;
     }
 
-    const surrealql = existing.surrealql;
-    const { params } = existing;
+    const { localArray } = existing;
 
-    const diff = createDiffFromDbOp(action, recordId, version);
-    await this.syncIncantationDiff({ incantationId, surrealql, params: params ?? {} }, diff);
+    const diff = createDiffFromDbOp(action, recordId, version, localArray);
+    await this.syncIncantationDiff({ incantationId }, diff);
   }
 
   public enqueueDownEvent(event: DownEvent) {
@@ -172,16 +170,9 @@ export class SpookySync<S extends SchemaStructure> {
       let existing = this.dataManager.getIncantation(incantationId);
       this.logger.debug({ existing }, 'Register Incantation state');
 
-      await this.updateLocalIncantation(
-        incantationId,
-        {
-          surrealql,
-          params,
-        },
-        {
-          updateRecord: existing ? false : true,
-        }
-      );
+      // if (existing) {
+      //   await this.updateLocalIncantation(incantationId, {});
+      // }
 
       const { array: remoteArray } = await this.createRemoteIncantation(
         incantationId,
@@ -267,8 +258,6 @@ export class SpookySync<S extends SchemaStructure> {
     return this.syncIncantationDiff(
       {
         incantationId,
-        surrealql,
-        params,
       },
       diff
     );
@@ -277,12 +266,8 @@ export class SpookySync<S extends SchemaStructure> {
   private async syncIncantationDiff(
     {
       incantationId,
-      surrealql,
-      params,
     }: {
       incantationId: RecordId<string>;
-      surrealql: string;
-      params: Record<string, any>;
     },
     diff: RecordVersionDiff
   ) {
@@ -296,101 +281,25 @@ export class SpookySync<S extends SchemaStructure> {
       return;
     }
 
-    await this.updateLocalIncantation(
-      incantationId,
-      {
-        surrealql,
-        params,
-        diff: finalDiff,
-      },
-      {
-        updateRecord: true,
-      }
-    );
+    await this.updateLocalIncantation(incantationId, {
+      diff: finalDiff,
+    });
   }
 
   private async updateLocalIncantation(
     incantationId: RecordId<string>,
     {
-      surrealql,
-      params,
       diff,
     }: {
-      surrealql: string;
-      params?: Record<string, any>;
       diff?: RecordVersionDiff;
-    },
-    {
-      updateRecord = true,
-    }: {
-      updateRecord?: boolean;
     }
   ) {
     const localVersions = this.dataManager.getIncantation(incantationId)?.localArray || [];
     const newVersions = diff ? applyRecordVersionDiff(localVersions, diff) : localVersions;
 
-    if (updateRecord) {
-      await this.updateIncantationRecord(incantationId, {
-        localArray: newVersions,
-      });
-    }
-
-    try {
-      this.logger.debug(
-        {
-          incantationId: incantationId.toString(),
-          surrealql,
-          params,
-        },
-        'updateLocalIncantation Loading cached results start'
-      );
-
-      const [cachedResults] = await this.local.query<[Record<string, any>[]]>(surrealql, params);
-
-      // Verify Orphans if we have a remote tree to check against
-      // if (remoteTree) {
-      //   void this.verifyAndPurgeOrphans(cachedResults, remoteTree);
-      // }
-
-      this.logger.debug(
-        {
-          incantationId: incantationId.toString(),
-          recordCount: cachedResults?.length,
-        },
-        'updateLocalIncantation Loading cached results done'
-      );
-
-      this.events.emit(SyncEventTypes.IncantationUpdated, {
-        incantationId,
-        localArray: newVersions,
-        remoteArray: newVersions,
-        records: cachedResults || [],
-      });
-    } catch (e) {
-      this.logger.error(
-        { err: e },
-        'updateLocalIncantation failed to query local db or emit event'
-      );
-    }
-  }
-
-  private async updateIncantationRecord(
-    incantationId: RecordId<string>,
-    content: Record<string, any>
-  ) {
-    try {
-      this.logger.debug(
-        { incantationId: incantationId.toString(), content },
-        'Updating local incantation'
-      );
-      await this.local.query(`UPDATE $id MERGE $content`, {
-        id: incantationId,
-        content,
-      });
-    } catch (e) {
-      this.logger.error({ err: e }, 'Failed to update local incantation record');
-      throw e;
-    }
+    await this.dataManager.updateIncantationState(incantationId, {
+      localArray: newVersions,
+    });
   }
 
   private async heartbeatIncantation(event: HeartbeatEvent) {

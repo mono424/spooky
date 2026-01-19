@@ -421,4 +421,32 @@ export class QueryManager<S extends SchemaStructure> {
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
   }
+
+  public async updateIncantationState(
+    incantationId: RecordId<string>,
+    content: Record<string, any>
+  ) {
+    // 1. Update In-Memory State
+    const incantation = this.getIncantation(incantationId);
+    if (incantation) {
+      if (content.localArray) incantation.localArray = content.localArray;
+      if (content.remoteArray) incantation.remoteArray = content.remoteArray;
+      // potentially other fields if needed
+    }
+
+    // 2. Persist to DB
+    try {
+      this.logger.debug(
+        { incantationId: incantationId.toString(), content },
+        'Updating local incantation state'
+      );
+      await this.local.query(`UPDATE $id MERGE $content`, {
+        id: incantationId,
+        content,
+      });
+    } catch (e) {
+      this.logger.error({ err: e }, 'Failed to update local incantation record');
+      throw e;
+    }
+  }
 }

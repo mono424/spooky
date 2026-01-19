@@ -20,6 +20,7 @@ export interface WasmIngestItem {
   op: string;
   id: string;
   record: any;
+  version?: number;
 }
 
 // Interface matching the SpookyProcessor class from WASM

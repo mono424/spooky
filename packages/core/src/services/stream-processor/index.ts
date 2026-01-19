@@ -9,7 +9,6 @@ import { WasmProcessor, WasmStreamUpdate } from './wasm-types.js';
 // Matches MaterializedViewUpdate struct
 export interface StreamUpdate {
   query_id: string;
-  localHash: string;
   localArray: any; // Flat array structure [[id, version], ...]
 }
 
@@ -200,7 +199,7 @@ export class StreamProcessorService {
    * @param isOptimistic true = local mutation (increment versions), false = remote sync (keep versions)
    */
   ingestBatch(
-    batch: Array<{ table: string; op: string; id: string; record: any }>,
+    batch: Array<{ table: string; op: string; id: string; record: any; version?: number }>,
     isOptimistic: boolean = true
   ): WasmStreamUpdate[] {
     if (batch.length === 0) return [];
@@ -222,6 +221,7 @@ export class StreamProcessorService {
         op: item.op,
         id: item.id,
         record: this.normalizeValue(item.record),
+        version: item.version,
       }));
 
       const rawUpdates = this.processor.ingest_batch(normalizedBatch, isOptimistic);
@@ -233,7 +233,6 @@ export class StreamProcessorService {
       if (rawUpdates && Array.isArray(rawUpdates) && rawUpdates.length > 0) {
         const updates: StreamUpdate[] = rawUpdates.map((u: WasmStreamUpdate) => ({
           query_id: u.query_id,
-          localHash: u.result_hash,
           localArray: u.result_data,
         }));
         // Direct handler call instead of event
@@ -264,7 +263,6 @@ export class StreamProcessorService {
         const updates: StreamUpdate[] = [
           {
             query_id: update.query_id,
-            localHash: update.result_hash,
             localArray: update.result_data,
           },
         ];
@@ -331,7 +329,6 @@ export class StreamProcessorService {
       }
       const update: StreamUpdate = {
         query_id: initialUpdate.query_id,
-        localHash: initialUpdate.result_hash,
         localArray: initialUpdate.result_data,
       };
       this.saveState();

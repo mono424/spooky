@@ -39,14 +39,18 @@ export class SyncEngine {
     }
 
     // Fetch added/updated records from remote
-    const idsToFetch = [...added.map((x) => x.id), ...updated.map((x) => x.id)];
+    const toFetch = [...added, ...updated];
+    const idsToFetch = toFetch.map((x) => x.id);
     if (idsToFetch.length === 0) {
       return diff;
     }
 
-    const [remoteResults] = await this.remote.query<[Record<string, any>[]]>('SELECT * FROM $ids', {
-      ids: idsToFetch,
-    });
+    const [remoteResults] = await this.remote.query<[Record<string, any>[]]>(
+      "SELECT *, (SELECT version FROM ONLY _spooky_version WHERE record_id = <record>$parent.id)['version'] as _spookyv FROM $ids",
+      {
+        ids: idsToFetch,
+      }
+    );
 
     // BATCH PROCESSING: Cache all records locally first
     const cachePromises = remoteResults.map(async (record) => {
@@ -55,24 +59,40 @@ export class SyncEngine {
     await Promise.all(cachePromises);
 
     // Prepare batch for ingestion
-    const ingestBatch: Array<{ table: string; op: string; id: string; record: any }> = [];
+    const ingestBatch: Array<{
+      table: string;
+      op: string;
+      id: string;
+      record: any;
+      version: number;
+    }> = [];
 
-    for (const record of remoteResults) {
+    for (const { _spookyv, ...record } of remoteResults) {
       const fullId = record.id.toString();
       const table = record.id.table.toString();
       const isAdded = added.some((item) => item.id.toString() === fullId);
+
+      const anticipatedVersion = toFetch.find((item) => item.id.toString() === fullId)?.version;
+      if (anticipatedVersion && _spookyv < anticipatedVersion) {
+        this.logger.warn(
+          { recordId: fullId, version: _spookyv, anticipatedVersion },
+          'Received outdated record version. Skipping record __TEST__'
+        );
+        continue;
+      }
 
       ingestBatch.push({
         table,
         op: isAdded ? 'CREATE' : 'UPDATE',
         id: fullId,
         record,
+        version: _spookyv,
       });
     }
-
+    console.log('__TEST__', diff, ingestBatch);
     // Single batch ingest call (isOptimistic=false for remote sync)
     if (ingestBatch.length > 0) {
-      this.streamProcessor.ingestBatch(ingestBatch, false);
+      this.streamProcessor.ingestBatch(ingestBatch, true);
     }
 
     this.events.emit(SyncEventTypes.RemoteDataIngested, {

@@ -79,7 +79,8 @@ DEFINE EVENT _spooky_dbsp_cleanup ON TABLE _spooky_incantation WHEN $event = "DE
 -- SPOOKY VERSION
 -- Tracks the version of every record for sync.
 -- ==================================================
-DEFINE TABLE _spooky_version SCHEMALESS;
+DEFINE TABLE _spooky_version SCHEMALESS
+    PERMISSIONS FOR select WHERE true;
 DEFINE FIELD record_id ON TABLE _spooky_version TYPE record;
 DEFINE FIELD version ON TABLE _spooky_version TYPE int;
 DEFINE INDEX idx_record_id ON TABLE _spooky_version COLUMNS record_id UNIQUE;

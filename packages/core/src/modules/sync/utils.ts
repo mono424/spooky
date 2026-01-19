@@ -134,8 +134,20 @@ export function applyRecordVersionDiff(
 export function createDiffFromDbOp(
   op: 'CREATE' | 'UPDATE' | 'DELETE',
   recordId: RecordId,
-  version: number
+  version: number,
+  versions?: RecordVersionArray
 ): RecordVersionDiff {
+  const old = versions?.find((record) => record[0] === recordId.toString());
+
+  // console.log('__TEST__', old, version);
+  if (old && old[1] >= version) {
+    return {
+      added: [],
+      updated: [],
+      removed: [],
+    };
+  }
+
   if (op === 'CREATE') {
     return {
       added: [{ id: recordId, version }],

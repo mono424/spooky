@@ -99,6 +99,13 @@ export class DataManager<S extends SchemaStructure> implements StreamUpdateRecei
     return this.queryManager.handleIncomingUpdate(payload);
   }
 
+  /**
+   * Update incantation state (e.g. from Sync)
+   */
+  updateIncantationState(incantationId: RecordId<string>, content: Record<string, any>) {
+    return this.queryManager.updateIncantationState(incantationId, content);
+  }
+
   // ============ Mutation API ============
 
   /**
