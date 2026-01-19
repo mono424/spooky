@@ -36,11 +36,12 @@ sequenceDiagram
     alt Flat/Tree Format
         SC->>OUT: UPDATE _spooky_incantation SET hash, array
     else Streaming Format
-        loop For each DeltaRecord
-            SC->>OUT: RELATE/UPDATE/DELETE _spooky_list_ref
-        end
+        SC->>OUT: BEGIN TRANSACTION<br/>RELATE/UPDATE/DELETE...<br/>COMMIT
     end
 ```
+
+### Deep Subquery Collection
+The engine uses a recursive `collect` method to identify all dependent records, including those from nested subqueries (e.g., `Thread -> Author -> Role`). This ensures that changes to deep dependencies correctly trigger updates for the main view.
 
 ---
 
@@ -121,17 +122,21 @@ UPDATE _spooky_incantation:thread_list SET
 
 #### For Streaming (Graph Edges):
 ```sql
+BEGIN TRANSACTION;
+
 -- Created
 RELATE _spooky_incantation:thread_list->_spooky_list_ref->thread:abc123 
-  SET version = 1, clientId = $clientId
+  SET version = 1, clientId = $clientId;
 
 -- Updated  
 UPDATE _spooky_incantation:thread_list->_spooky_list_ref 
-  SET version = 2 WHERE out = thread:abc123
+  SET version = 2 WHERE out = thread:abc123;
 
 -- Deleted
 DELETE _spooky_incantation:thread_list->_spooky_list_ref 
-  WHERE out = comment:old
+  WHERE out = comment:old;
+
+COMMIT TRANSACTION;
 ```
 
 ---
@@ -307,13 +312,17 @@ for update in updates {
             // UPDATE _spooky_incantation SET hash, array
         }
         ViewUpdate::Streaming(s) => {
+            // Batch all operations into single transaction
+            let mut ops = Vec::new();
             for rec in s.records {
                 match rec.event {
-                    DeltaEvent::Created => { /* RELATE edge */ }
-                    DeltaEvent::Updated => { /* UPDATE edge */ }
-                    DeltaEvent::Deleted => { /* DELETE edge */ }
+                    DeltaEvent::Created => ops.push("RELATE ..."),
+                    DeltaEvent::Updated => ops.push("UPDATE ..."),
+                    DeltaEvent::Deleted => ops.push("DELETE ..."),
                 }
             }
+            // Execute as one atomic transaction (O(1) round-trip)
+            db.query("BEGIN TRANSACTION; ... COMMIT;");
         }
         _ => {}
     }
