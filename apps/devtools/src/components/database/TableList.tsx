@@ -1,5 +1,5 @@
-import { For, Show } from "solid-js";
-import { useDevTools } from "../../context/DevToolsContext";
+import { For, Show } from 'solid-js';
+import { useDevTools } from '../../context/DevToolsContext';
 
 export function TableList() {
   const { state, selectedTable, setSelectedTable } = useDevTools();
@@ -30,4 +30,3 @@ export function TableList() {
     </div>
   );
 }
-

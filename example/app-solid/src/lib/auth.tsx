@@ -1,20 +1,9 @@
-import {
-  createContext,
-  useContext,
-  createSignal,
-  JSX,
-  Show,
-  onCleanup,
-} from "solid-js";
-import { db } from "../db";
-import { schema } from "../schema.gen";
-import {
-  type GetTable,
-  type TableModel,
-  useQuery,
-} from "@spooky/client-solid";
+import { createContext, useContext, createSignal, JSX, Show, onCleanup } from 'solid-js';
+import { db } from '../db';
+import { schema } from '../schema.gen';
+import { type GetTable, type TableModel, useQuery } from '@spooky/client-solid';
 
-type User = TableModel<GetTable<typeof schema, "user">>;
+type User = TableModel<GetTable<typeof schema, 'user'>>;
 
 interface AuthContextType {
   userId: () => string | null;
@@ -30,13 +19,13 @@ const AuthContext = createContext<AuthContextType>();
 export function AuthProvider(props: { children: JSX.Element }) {
   const [userId, setUserId] = createSignal<string | null>(null);
   const [isInitializing, setIsInitializing] = createSignal(true);
-  
+
   // Subscribe to auth state
   const unsubscribe = db.auth.subscribe((uid) => {
     setUserId(uid);
     setIsInitializing(false);
   });
-  
+
   onCleanup(() => unsubscribe());
 
   // Only run query after auth is initialized and userId is available
@@ -47,7 +36,7 @@ export function AuthProvider(props: { children: JSX.Element }) {
       if (!currentUserId) {
         return null;
       }
-      return db.query("user").where({ id: currentUserId }).one().build();
+      return db.query('user').where({ id: currentUserId }).one().build();
     },
     {
       enabled: () => userId() !== null,
@@ -60,11 +49,11 @@ export function AuthProvider(props: { children: JSX.Element }) {
   };
 
   const signIn = async (username: string, password: string) => {
-    await db.auth.signIn("account", { username, password });
+    await db.auth.signIn('account', { username, password });
   };
 
   const signUp = async (username: string, password: string) => {
-    await db.auth.signUp("account", { username, password });
+    await db.auth.signUp('account', { username, password });
   };
 
   const signOut = async () => {
@@ -99,7 +88,7 @@ export function AuthProvider(props: { children: JSX.Element }) {
 export function useAuth() {
   const context = useContext(AuthContext);
   if (!context) {
-    throw new Error("useAuth must be used within an AuthProvider");
+    throw new Error('useAuth must be used within an AuthProvider');
   }
   return context;
 }

@@ -1,12 +1,12 @@
-import { createEffect, createSignal, For, Show } from "solid-js";
-import { useNavigate, useParams } from "@solidjs/router";
-import { db } from "../db";
-import { CommentForm } from "./CommentForm";
-import { useQuery } from "@spooky/client-solid";
-import { useAuth } from "../lib/auth";
-import { CommentBox } from "./CommentBox";
-import { ThreadSidebar } from "./ThreadSidebar";
-import { isInputActive, useKeyboard } from "../lib/keyboard";
+import { createEffect, createSignal, For, Show } from 'solid-js';
+import { useNavigate, useParams } from '@solidjs/router';
+import { db } from '../db';
+import { CommentForm } from './CommentForm';
+import { useQuery } from '@spooky/client-solid';
+import { useAuth } from '../lib/auth';
+import { CommentBox } from './CommentBox';
+import { ThreadSidebar } from './ThreadSidebar';
+import { isInputActive, useKeyboard } from '../lib/keyboard';
 
 const createQuery = ({
   threadId,
@@ -14,21 +14,21 @@ const createQuery = ({
   userId,
 }: {
   threadId: string;
-  commentFilter: "all" | "mine";
+  commentFilter: 'all' | 'mine';
   userId: string;
 }) => {
   return db
-    .query("thread")
+    .query('thread')
     .where({
       id: `thread:${threadId}`,
     })
-    .related("author")
-    .related("comments", (q) => {
-      const withAuthor = q.related("author");
-      if (commentFilter === "mine" && userId) {
+    .related('author')
+    .related('comments', (q) => {
+      const withAuthor = q.related('author');
+      if (commentFilter === 'mine' && userId) {
         return withAuthor.where({ author: userId });
       }
-      return withAuthor.orderBy("created_at", "desc").limit(10);
+      return withAuthor.orderBy('created_at', 'desc').limit(10);
     })
     .one()
     .build();
@@ -38,39 +38,39 @@ export function ThreadDetail() {
   const auth = useAuth();
   const params = useParams();
   const navigate = useNavigate();
-  const [commentFilter, setCommentFilter] = createSignal<"all" | "mine">("all");
+  const [commentFilter, setCommentFilter] = createSignal<'all' | 'mine'>('all');
 
   const threadResult = useQuery(db, () =>
     createQuery({
       threadId: params.id,
       commentFilter: commentFilter(),
-      userId: auth.user()?.id ?? "",
+      userId: auth.user()?.id ?? '',
     })
   );
   const thread = () => threadResult.data() || null;
-  
+
   createEffect(() => {
-    console.log("thread___", thread());
+    console.log('thread___', thread());
   });
 
   const handleBack = () => {
-    navigate("/");
+    navigate('/');
   };
 
   useKeyboard({
-    "r": (e) => {
-        e.preventDefault();
-        const textarea = document.querySelector("#comment-textarea") as HTMLTextAreaElement;
-        textarea?.focus();
+    r: (e) => {
+      e.preventDefault();
+      const textarea = document.querySelector('#comment-textarea') as HTMLTextAreaElement;
+      textarea?.focus();
     },
     // We can use Escape here because we want it to work even if nothing is focused to go back
-    "Escape": () => {
-        if (isInputActive()) {
-            (document.activeElement as HTMLElement).blur();
-        } else {
-            handleBack();
-        }
-    }
+    Escape: () => {
+      if (isInputActive()) {
+        (document.activeElement as HTMLElement).blur();
+      } else {
+        handleBack();
+      }
+    },
   });
 
   // Check if current user is the author
@@ -85,14 +85,14 @@ export function ThreadDetail() {
   const handleTitleChange = async (newTitle: string) => {
     const threadData = thread();
     if (!threadData || !threadData.id || !isAuthor()) return;
-    await db.update("thread", threadData.id, { title: newTitle });
+    await db.update('thread', threadData.id, { title: newTitle });
   };
 
   // Auto-save content changes
   const handleContentChange = async (newContent: string) => {
     const threadData = thread();
     if (!threadData || !threadData.id || !isAuthor()) return;
-    await db.update("thread", threadData.id, { content: newContent });
+    await db.update('thread', threadData.id, { content: newContent });
   };
 
   return (
@@ -111,7 +111,7 @@ export function ThreadDetail() {
             <span>&lt;&lt;</span> RETURN_TO_ROOT
           </button>
           <div class="text-[10px] uppercase text-gray-600">
-              MODE: {isAuthor() ? "READ_WRITE" : "READ_ONLY"}
+            MODE: {isAuthor() ? 'READ_WRITE' : 'READ_ONLY'}
           </div>
         </div>
 
@@ -119,22 +119,26 @@ export function ThreadDetail() {
           when={thread()}
           fallback={
             <div class="border-2 border-dashed border-red-900/50 p-12 text-center">
-               <div class="text-red-500 font-bold uppercase tracking-widest mb-2">
-                  ! ERROR_404: FILE_NOT_FOUND
-               </div>
-               <div class="text-xs text-gray-500">
-                  The requested thread ID does not exist in the database.
-               </div>
+              <div class="text-red-500 font-bold uppercase tracking-widest mb-2">
+                ! ERROR_404: FILE_NOT_FOUND
+              </div>
+              <div class="text-xs text-gray-500">
+                The requested thread ID does not exist in the database.
+              </div>
             </div>
           }
         >
           {(threadData) => (
             <div class="space-y-8">
               {/* Thread Content Wrapper */}
-              <div class={`border-2 p-6 relative bg-black ${isAuthor() ? "border-white" : "border-gray-700"}`}>
+              <div
+                class={`border-2 p-6 relative bg-black ${isAuthor() ? 'border-white' : 'border-gray-700'}`}
+              >
                 {/* Decorative Header */}
-                <div class={`absolute -top-3 left-4 bg-black px-2 text-xs font-bold uppercase border-x ${isAuthor() ? "border-white" : "border-gray-700"}`}>
-                   {isAuthor() ? "FILE_EDITOR" : "FILE_VIEWER"}
+                <div
+                  class={`absolute -top-3 left-4 bg-black px-2 text-xs font-bold uppercase border-x ${isAuthor() ? 'border-white' : 'border-gray-700'}`}
+                >
+                  {isAuthor() ? 'FILE_EDITOR' : 'FILE_VIEWER'}
                 </div>
 
                 <Show
@@ -144,20 +148,20 @@ export function ThreadDetail() {
                       {/* Read-Only Title */}
                       <div class="mb-6">
                         <label class="block text-[10px] text-gray-600 uppercase font-bold mb-1">
-                            &gt; SUBJECT_LINE
+                          &gt; SUBJECT_LINE
                         </label>
                         <h1 class="text-2xl font-bold w-full text-gray-400 uppercase tracking-wide">
-                          {threadData().title || "UNTITLED_THREAD"}
+                          {threadData().title || 'UNTITLED_THREAD'}
                         </h1>
                       </div>
 
                       {/* Read-Only Content */}
                       <div class="mb-6">
-                         <label class="block text-[10px] text-gray-600 uppercase font-bold mb-1">
-                            &gt; DATA_CONTENT
+                        <label class="block text-[10px] text-gray-600 uppercase font-bold mb-1">
+                          &gt; DATA_CONTENT
                         </label>
                         <div class="w-full text-gray-400 whitespace-pre-wrap border-l-2 border-gray-700 pl-4 min-h-[150px] leading-relaxed">
-                          {threadData().content || "No content data..."}
+                          {threadData().content || 'No content data...'}
                         </div>
                       </div>
                     </>
@@ -166,7 +170,7 @@ export function ThreadDetail() {
                   {/* Editable Title */}
                   <div class="mb-6 group">
                     <label class="block text-[10px] text-gray-500 uppercase font-bold mb-1 group-focus-within:text-white">
-                        &gt; SUBJECT_LINE
+                      &gt; SUBJECT_LINE
                     </label>
                     <input
                       type="text"
@@ -179,14 +183,14 @@ export function ThreadDetail() {
 
                   {/* Editable Content */}
                   <div class="mb-6 group">
-                     <label class="block text-[10px] text-gray-500 uppercase font-bold mb-1 group-focus-within:text-white">
-                        &gt; DATA_CONTENT
+                    <label class="block text-[10px] text-gray-500 uppercase font-bold mb-1 group-focus-within:text-white">
+                      &gt; DATA_CONTENT
                     </label>
                     <textarea
-                        value={threadData().content}
-                        onInput={(e) => handleContentChange(e.currentTarget.value)}
-                        class="w-full bg-black text-gray-300 focus:text-white whitespace-pre-wrap border-l-2 border-gray-800 focus:border-white outline-none pl-4 resize-none min-h-[150px] leading-relaxed transition-none rounded-none"
-                        placeholder="No content data..."
+                      value={threadData().content}
+                      onInput={(e) => handleContentChange(e.currentTarget.value)}
+                      class="w-full bg-black text-gray-300 focus:text-white whitespace-pre-wrap border-l-2 border-gray-800 focus:border-white outline-none pl-4 resize-none min-h-[150px] leading-relaxed transition-none rounded-none"
+                      placeholder="No content data..."
                     />
                   </div>
                 </Show>
@@ -194,12 +198,13 @@ export function ThreadDetail() {
                 {/* Metadata Footer */}
                 <div class="flex justify-between items-center text-[10px] uppercase text-gray-500 border-t border-dashed border-gray-700 pt-3 font-bold tracking-wider">
                   <div class="flex gap-4">
-                      <span>AUTHOR: <span class="text-white">{threadData().author?.username || "UNKNOWN"}</span></span>
-                      <span>ID: {threadData().id?.slice(0, 8)}</span>
+                    <span>
+                      AUTHOR:{' '}
+                      <span class="text-white">{threadData().author?.username || 'UNKNOWN'}</span>
+                    </span>
+                    <span>ID: {threadData().id?.slice(0, 8)}</span>
                   </div>
-                  <span>
-                    DATE: {new Date(threadData().created_at ?? 0).toLocaleDateString()}
-                  </span>
+                  <span>DATE: {new Date(threadData().created_at ?? 0).toLocaleDateString()}</span>
                 </div>
               </div>
 
@@ -207,27 +212,28 @@ export function ThreadDetail() {
               <div class="space-y-6">
                 <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b-2 border-white pb-2">
                   <h2 class="text-xl font-bold uppercase tracking-widest flex items-center gap-2">
-                    <span>//</span> ATTACHED_LOGS <span class="text-xs align-top">({threadData().comments?.length || 0})</span>
+                    <span>//</span> ATTACHED_LOGS{' '}
+                    <span class="text-xs align-top">({threadData().comments?.length || 0})</span>
                   </h2>
-                  
+
                   <Show when={auth.user()}>
                     <div class="flex text-xs font-bold">
                       <button
-                        onMouseDown={() => setCommentFilter("all")}
+                        onMouseDown={() => setCommentFilter('all')}
                         class={`px-3 py-1 border-2 border-r-0 border-white uppercase transition-none ${
-                          commentFilter() === "all"
-                            ? "bg-white text-black"
-                            : "bg-black text-white hover:bg-gray-900"
+                          commentFilter() === 'all'
+                            ? 'bg-white text-black'
+                            : 'bg-black text-white hover:bg-gray-900'
                         }`}
                       >
                         [ ALL_LOGS ]
                       </button>
                       <button
-                        onMouseDown={() => setCommentFilter("mine")}
+                        onMouseDown={() => setCommentFilter('mine')}
                         class={`px-3 py-1 border-2 border-white uppercase transition-none ${
-                          commentFilter() === "mine"
-                            ? "bg-white text-black"
-                            : "bg-black text-white hover:bg-gray-900"
+                          commentFilter() === 'mine'
+                            ? 'bg-white text-black'
+                            : 'bg-black text-white hover:bg-gray-900'
                         }`}
                       >
                         [ MY_LOGS ]
@@ -238,7 +244,9 @@ export function ThreadDetail() {
 
                 {/* Comment Form */}
                 <div class="bg-black border border-gray-800 p-4 hover:border-white transition-colors">
-                  <div class="text-[10px] uppercase text-gray-500 mb-2 font-bold">&gt; APPEND_NEW_ENTRY</div>
+                  <div class="text-[10px] uppercase text-gray-500 mb-2 font-bold">
+                    &gt; APPEND_NEW_ENTRY
+                  </div>
                   <CommentForm thread={threadData} />
                 </div>
 

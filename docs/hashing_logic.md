@@ -135,13 +135,11 @@ Because all aggregations use **XOR** (Reducible), the system is fully reversible
 **Scenario**: User updates their Avatar.
 
 1.  **User Table**:
-
     - `IntrinsicHash` changes (due to `avatar` field).
     - `TotalHash` changes.
     - _Event_: `_spooky_z_cascade` fires for `Thread` table.
 
 2.  **Thread Table** (Referencing User):
-
     - `_spooky_touch` updated.
     - Thread Mutation Event fires.
     - `CompositionHash` recalculates: Reads new `User.TotalHash`.

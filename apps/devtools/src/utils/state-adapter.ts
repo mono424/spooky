@@ -4,14 +4,12 @@ import type {
   SpookyEvent,
   ActiveQuery,
   AuthState,
-} from "../types/devtools";
+} from '../types/devtools';
 
 /**
  * Transforms backend DevTools state to frontend state structure
  */
-export function adaptBackendState(
-  backendState: BackendDevToolsState
-): DevToolsState {
+export function adaptBackendState(backendState: BackendDevToolsState): DevToolsState {
   // Transform events
   const events: SpookyEvent[] = backendState.eventsHistory.map((event) => ({
     type: event.eventType,
@@ -20,9 +18,7 @@ export function adaptBackendState(
   }));
 
   // Transform activeQueries from Record to Array
-  const activeQueries: ActiveQuery[] = Object.values(
-    backendState.activeQueries
-  );
+  const activeQueries: ActiveQuery[] = Object.values(backendState.activeQueries);
 
   // Transform auth state
   const auth: AuthState = {

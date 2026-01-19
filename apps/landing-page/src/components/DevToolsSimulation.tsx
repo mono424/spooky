@@ -685,8 +685,16 @@ const DEVTOOLS_CSS = `
 const MOCK_EVENTS = [
   { type: 'info', timestamp: 1715011321152, data: { msg: 'Spooky Sidecar initialized' } },
   { type: 'info', timestamp: 1715011321340, data: { msg: 'Loading dbsp_worker.wasm... (2.1MB)' } },
-  { type: 'warn', timestamp: 1715011322005, data: { msg: 'State rehydration took 115ms', hints: ['optimize-query'] } },
-  { type: 'info', timestamp: 1715011325112, data: { msg: 'Registered incantation "thread_list_view"' } },
+  {
+    type: 'warn',
+    timestamp: 1715011322005,
+    data: { msg: 'State rehydration took 115ms', hints: ['optimize-query'] },
+  },
+  {
+    type: 'info',
+    timestamp: 1715011325112,
+    data: { msg: 'Registered incantation "thread_list_view"' },
+  },
 ];
 
 const MOCK_QUERIES = [
@@ -699,7 +707,7 @@ const MOCK_QUERIES = [
     dataSize: 1024,
     query: 'SELECT * FROM thread ORDER BY created_at DESC',
     variables: { limit: 10 },
-    data: [{ id: 'thread:1', title: 'Why Rust?' }]
+    data: [{ id: 'thread:1', title: 'Why Rust?' }],
   },
   {
     queryHash: '0x99b1d4',
@@ -710,231 +718,278 @@ const MOCK_QUERIES = [
     dataSize: 256,
     query: 'SELECT count() FROM notifications',
     variables: {},
-    data: { count: 3 }
-  }
+    data: { count: 3 },
+  },
 ];
 
 const MOCK_TABLES = [
-    { name: 'user', count: 12 },
-    { name: 'thread', count: 45 },
-    { name: 'comment', count: 182 },
+  { name: 'user', count: 12 },
+  { name: 'thread', count: 45 },
+  { name: 'comment', count: 182 },
 ];
 const MOCK_THREAD_DATA = [
-    { id: 'thread:8x92m', title: 'Why Rust is the future', author: 'user:khadim', created: '2024-05-01' },
-    { id: 'thread:p09s1', title: 'Local-first architecture', author: 'user:sarah', created: '2024-05-02' },
-    { id: 'thread:7d66s', title: 'Spooky vs ElectricSQL', author: 'user:alex', created: '2024-05-03' },
+  {
+    id: 'thread:8x92m',
+    title: 'Why Rust is the future',
+    author: 'user:khadim',
+    created: '2024-05-01',
+  },
+  {
+    id: 'thread:p09s1',
+    title: 'Local-first architecture',
+    author: 'user:sarah',
+    created: '2024-05-02',
+  },
+  {
+    id: 'thread:7d66s',
+    title: 'Spooky vs ElectricSQL',
+    author: 'user:alex',
+    created: '2024-05-03',
+  },
 ];
 
 export const DevToolsSimulation = () => {
   const [activeTab, setActiveTab] = useState('events');
   const [selectedQueryHash, setSelectedQueryHash] = useState('0x8f2a9c');
 
-  const selectedQuery = MOCK_QUERIES.find(q => q.queryHash === selectedQueryHash);
+  const selectedQuery = MOCK_QUERIES.find((q) => q.queryHash === selectedQueryHash);
 
   return (
     <>
       <style>{BROWSER_CSS}</style>
       <style>{DEVTOOLS_CSS}</style>
-      
+
       <div className="browser-window">
         {/* Browser Header */}
         <div className="browser-header">
-            <div className="window-controls">
-                <div className="control-dot red"></div>
-                <div className="control-dot yellow"></div>
-                <div className="control-dot green"></div>
-            </div>
-            <div className="url-bar">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-                </svg>
-                <span>localhost:5173</span>
-            </div>
+          <div className="window-controls">
+            <div className="control-dot red"></div>
+            <div className="control-dot yellow"></div>
+            <div className="control-dot green"></div>
+          </div>
+          <div className="url-bar">
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+            </svg>
+            <span>localhost:5173</span>
+          </div>
         </div>
 
         {/* Browser Body split */}
         <div className="browser-body">
-            
-            {/* App Viewport */}
-            <div className="app-viewport">
-                <div className="app-placeholder">
-                    <svg style={{opacity: 0.05, marginBottom: 20}} width="100" height="100" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
-                        <path d="M2 17l10 5 10-5"></path>
-                        <path d="M2 12l10 5 10-5"></path>
-                    </svg>
-                    <h1 style={{fontSize: 24, fontWeight: 'bold', marginBottom: 8}}>My Spooky App</h1>
-                    <p style={{fontSize: 14, opacity: 0.6}}>Syncing active...</p>
-                </div>
+          {/* App Viewport */}
+          <div className="app-viewport">
+            <div className="app-placeholder">
+              <svg
+                style={{ opacity: 0.05, marginBottom: 20 }}
+                width="100"
+                height="100"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
+                <path d="M2 17l10 5 10-5"></path>
+                <path d="M2 12l10 5 10-5"></path>
+              </svg>
+              <h1 style={{ fontSize: 24, fontWeight: 'bold', marginBottom: 8 }}>My Spooky App</h1>
+              <p style={{ fontSize: 14, opacity: 0.6 }}>Syncing active...</p>
             </div>
+          </div>
 
-            {/* DevTools Docked at Bottom */}
-            <div className="devtools-container">
-                <div className="devtools-root">
-                    
-                    {/* Tabs Component Replicated */}
-                    <div className="tabs">
-                    <div className="toolbar-group">
-                        <div className="status-indicator">
-                        <span className="status-dot active" />
-                        </div>
-                    </div>
-                    {['events', 'queries', 'database', 'auth'].map(tab => (
-                        <button 
-                            key={tab}
-                            className={`tab-btn ${activeTab === tab ? 'active' : ''}`}
-                            onClick={() => setActiveTab(tab)}
-                        >
-                            {tab.charAt(0).toUpperCase() + tab.slice(1)}
-                        </button>
-                    ))}
-                    <div className="toolbar-group-right">
-                        <button className="btn">Refresh</button>
-                        <button className="btn">Clear Events</button>
-                    </div>
-                    </div>
-
-                    {/* Content Area */}
-                    <div className="content">
-                        
-                        {/* EVENTS TAB */}
-                        <div className={`tab-content ${activeTab === 'events' ? 'active' : ''}`}>
-                            <div className="events-container">
-                                <div className="events-header">
-                                    <h2>Events History</h2>
-                                </div>
-                                <div className="events-list">
-                                    {MOCK_EVENTS.map((event, i) => (
-                                        <div key={i} className="event-item">
-                                            <div className="event-header">
-                                                <span className="event-type">{event.type}</span>
-                                                <span className="event-time">
-                                                    {new Date(event.timestamp).toLocaleTimeString([], {hour12: false})}.{String(event.timestamp % 1000).padStart(3, '0')}
-                                                </span>
-                                            </div>
-                                            {event.data && (
-                                                <div className="event-payload">
-                                                    <pre>{JSON.stringify(event.data, null, 2)}</pre>
-                                                </div>
-                                            )}
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* QUERIES TAB */}
-                        <div className={`tab-content ${activeTab === 'queries' ? 'active' : ''}`}>
-                            <div className="queries-container">
-                                <div className="queries-list">
-                                    <div className="queries-header">
-                                        <h2>Active Queries</h2>
-                                    </div>
-                                    <div className="queries-list-content">
-                                        {MOCK_QUERIES.map(q => (
-                                            <div 
-                                                key={q.queryHash}
-                                                className={`query-item ${selectedQueryHash === q.queryHash ? 'selected' : ''}`}
-                                                onClick={() => setSelectedQueryHash(q.queryHash)}
-                                            >
-                                                <div className="query-header">
-                                                    <span className="query-hash">#{q.queryHash}</span>
-                                                    <span className={`query-status status-${q.status}`}>{q.status}</span>
-                                                </div>
-                                                <div className="query-meta">
-                                                    Updates: {q.updateCount} | Size: {q.dataSize}B
-                                                </div>
-                                                <div className="query-preview">{q.query.substring(0, 30)}...</div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                                
-                                {selectedQuery ? (
-                                    <div className="query-detail">
-                                        <div className="detail-header">
-                                            <h3>Query #{selectedQuery.queryHash}</h3>
-                                            <span className={`query-status status-${selectedQuery.status}`}>{selectedQuery.status}</span>
-                                        </div>
-                                        <div className="detail-section">
-                                            <div className="detail-label">Created</div>
-                                            <div className="detail-value">{new Date(selectedQuery.createdAt).toLocaleTimeString()}</div>
-                                        </div>
-                                        <div className="detail-section">
-                                            <div className="detail-label">Update Count</div>
-                                            <div className="detail-value mono">{selectedQuery.updateCount}</div>
-                                        </div>
-                                        <div className="detail-section">
-                                            <div className="detail-label">Query</div>
-                                            <pre className="query-code">{selectedQuery.query}</pre>
-                                        </div>
-                                        <div className="detail-section">
-                                            <div className="detail-label">Variables</div>
-                                            <pre className="query-code">{JSON.stringify(selectedQuery.variables, null, 2)}</pre>
-                                        </div>
-                                    </div>
-                                ) : (
-                                    <div className="query-detail"></div>
-                                )}
-                            </div>
-                        </div>
-
-                        {/* DATABASE TAB */}
-                        <div className={`tab-content ${activeTab === 'database' ? 'active' : ''}`}>
-                        <div className="database-container">
-                            <div className="database-tables">
-                                    <div className="events-header">
-                                        <h2>Tables</h2>
-                                    </div>
-                                    <div className="tables-list">
-                                        {MOCK_TABLES.map(t => (
-                                            <div key={t.name} className={`table-item ${t.name === 'thread' ? 'selected' : ''}`}>
-                                                <span className="table-name">{t.name}</span>
-                                                <span className="table-count">{t.count}</span>
-                                            </div>
-                                        ))}
-                                    </div>
-                            </div>
-                            <div className="data-grid">
-                                    <table>
-                                        <thead>
-                                            <tr>
-                                                <th>id</th>
-                                                <th>title</th>
-                                                <th>author</th>
-                                                <th>created</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {MOCK_THREAD_DATA.map(row => (
-                                                <tr key={row.id}>
-                                                    <td className="text-primary">{row.id}</td>
-                                                    <td className="text-string">"{row.title}"</td>
-                                                    <td className="text-primary">{row.author}</td>
-                                                    <td className="text-number">{row.created}</td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                            </div>
-                        </div>
-                        </div>
-
-                        {/* AUTH TAB placeholder */}
-                        <div className={`tab-content ${activeTab === 'auth' ? 'active' : ''}`}>
-                            <div className="events-container">
-                                <div className="events-header">
-                                    <h2>Authentication</h2>
-                                </div>
-                                <div style={{padding: 20, color: '#858585', fontFamily: 'var(--sys-typescale-body-font)'}}>
-                                    User authenticated: <span style={{color: '#4fc3f7'}}>user:khadim</span>
-                                </div>
-                            </div>
-                        </div>
-
-                    </div>
+          {/* DevTools Docked at Bottom */}
+          <div className="devtools-container">
+            <div className="devtools-root">
+              {/* Tabs Component Replicated */}
+              <div className="tabs">
+                <div className="toolbar-group">
+                  <div className="status-indicator">
+                    <span className="status-dot active" />
+                  </div>
                 </div>
+                {['events', 'queries', 'database', 'auth'].map((tab) => (
+                  <button
+                    key={tab}
+                    className={`tab-btn ${activeTab === tab ? 'active' : ''}`}
+                    onClick={() => setActiveTab(tab)}
+                  >
+                    {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                  </button>
+                ))}
+                <div className="toolbar-group-right">
+                  <button className="btn">Refresh</button>
+                  <button className="btn">Clear Events</button>
+                </div>
+              </div>
+
+              {/* Content Area */}
+              <div className="content">
+                {/* EVENTS TAB */}
+                <div className={`tab-content ${activeTab === 'events' ? 'active' : ''}`}>
+                  <div className="events-container">
+                    <div className="events-header">
+                      <h2>Events History</h2>
+                    </div>
+                    <div className="events-list">
+                      {MOCK_EVENTS.map((event, i) => (
+                        <div key={i} className="event-item">
+                          <div className="event-header">
+                            <span className="event-type">{event.type}</span>
+                            <span className="event-time">
+                              {new Date(event.timestamp).toLocaleTimeString([], { hour12: false })}.
+                              {String(event.timestamp % 1000).padStart(3, '0')}
+                            </span>
+                          </div>
+                          {event.data && (
+                            <div className="event-payload">
+                              <pre>{JSON.stringify(event.data, null, 2)}</pre>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* QUERIES TAB */}
+                <div className={`tab-content ${activeTab === 'queries' ? 'active' : ''}`}>
+                  <div className="queries-container">
+                    <div className="queries-list">
+                      <div className="queries-header">
+                        <h2>Active Queries</h2>
+                      </div>
+                      <div className="queries-list-content">
+                        {MOCK_QUERIES.map((q) => (
+                          <div
+                            key={q.queryHash}
+                            className={`query-item ${selectedQueryHash === q.queryHash ? 'selected' : ''}`}
+                            onClick={() => setSelectedQueryHash(q.queryHash)}
+                          >
+                            <div className="query-header">
+                              <span className="query-hash">#{q.queryHash}</span>
+                              <span className={`query-status status-${q.status}`}>{q.status}</span>
+                            </div>
+                            <div className="query-meta">
+                              Updates: {q.updateCount} | Size: {q.dataSize}B
+                            </div>
+                            <div className="query-preview">{q.query.substring(0, 30)}...</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {selectedQuery ? (
+                      <div className="query-detail">
+                        <div className="detail-header">
+                          <h3>Query #{selectedQuery.queryHash}</h3>
+                          <span className={`query-status status-${selectedQuery.status}`}>
+                            {selectedQuery.status}
+                          </span>
+                        </div>
+                        <div className="detail-section">
+                          <div className="detail-label">Created</div>
+                          <div className="detail-value">
+                            {new Date(selectedQuery.createdAt).toLocaleTimeString()}
+                          </div>
+                        </div>
+                        <div className="detail-section">
+                          <div className="detail-label">Update Count</div>
+                          <div className="detail-value mono">{selectedQuery.updateCount}</div>
+                        </div>
+                        <div className="detail-section">
+                          <div className="detail-label">Query</div>
+                          <pre className="query-code">{selectedQuery.query}</pre>
+                        </div>
+                        <div className="detail-section">
+                          <div className="detail-label">Variables</div>
+                          <pre className="query-code">
+                            {JSON.stringify(selectedQuery.variables, null, 2)}
+                          </pre>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="query-detail"></div>
+                    )}
+                  </div>
+                </div>
+
+                {/* DATABASE TAB */}
+                <div className={`tab-content ${activeTab === 'database' ? 'active' : ''}`}>
+                  <div className="database-container">
+                    <div className="database-tables">
+                      <div className="events-header">
+                        <h2>Tables</h2>
+                      </div>
+                      <div className="tables-list">
+                        {MOCK_TABLES.map((t) => (
+                          <div
+                            key={t.name}
+                            className={`table-item ${t.name === 'thread' ? 'selected' : ''}`}
+                          >
+                            <span className="table-name">{t.name}</span>
+                            <span className="table-count">{t.count}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="data-grid">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>id</th>
+                            <th>title</th>
+                            <th>author</th>
+                            <th>created</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {MOCK_THREAD_DATA.map((row) => (
+                            <tr key={row.id}>
+                              <td className="text-primary">{row.id}</td>
+                              <td className="text-string">"{row.title}"</td>
+                              <td className="text-primary">{row.author}</td>
+                              <td className="text-number">{row.created}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+
+                {/* AUTH TAB placeholder */}
+                <div className={`tab-content ${activeTab === 'auth' ? 'active' : ''}`}>
+                  <div className="events-container">
+                    <div className="events-header">
+                      <h2>Authentication</h2>
+                    </div>
+                    <div
+                      style={{
+                        padding: 20,
+                        color: '#858585',
+                        fontFamily: 'var(--sys-typescale-body-font)',
+                      }}
+                    >
+                      User authenticated: <span style={{ color: '#4fc3f7' }}>user:khadim</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
+          </div>
         </div>
       </div>
     </>

@@ -1,11 +1,6 @@
-import { For, Show, createMemo } from "solid-js";
-import { useDevTools } from "../../context/DevToolsContext";
-import {
-  formatTime,
-  formatRelativeTime,
-  formatBytes,
-} from "../../utils/formatters";
-
+import { For, Show, createMemo } from 'solid-js';
+import { useDevTools } from '../../context/DevToolsContext';
+import { formatTime, formatRelativeTime, formatBytes } from '../../utils/formatters';
 
 function QueryList() {
   const { state, selectedQueryHash, setSelectedQueryHash } = useDevTools();
@@ -34,18 +29,15 @@ function QueryList() {
               >
                 <div class="query-header">
                   <span class="query-hash">#{query.queryHash}</span>
-                  <span class={`query-status status-${query.status}`}>
-                    {query.status}
-                  </span>
+                  <span class={`query-status status-${query.status}`}>{query.status}</span>
                 </div>
                 <div class="query-meta">
-                  Updates: {query.updateCount} | Size:{" "}
-                  {formatBytes(query.dataSize)}
+                  Updates: {query.updateCount} | Size: {formatBytes(query.dataSize)}
                 </div>
                 <Show when={query.query}>
                   <div class="query-preview">
                     {query.query!.substring(0, 50)}
-                    {query.query!.length > 50 ? "..." : ""}
+                    {query.query!.length > 50 ? '...' : ''}
                   </div>
                 </Show>
               </div>
@@ -73,24 +65,20 @@ function QueryDetail() {
           <>
             <div class="detail-header">
               <h3>Query #{query().queryHash}</h3>
-              <span class={`query-status status-${query().status}`}>
-                {query().status}
-              </span>
+              <span class={`query-status status-${query().status}`}>{query().status}</span>
             </div>
 
             <div class="detail-section">
               <div class="detail-label">Created</div>
               <div class="detail-value">
-                {formatTime(query().createdAt)} (
-                {formatRelativeTime(query().createdAt)})
+                {formatTime(query().createdAt)} ({formatRelativeTime(query().createdAt)})
               </div>
             </div>
 
             <div class="detail-section">
               <div class="detail-label">Last Update</div>
               <div class="detail-value">
-                {formatTime(query().lastUpdate)} (
-                {formatRelativeTime(query().lastUpdate)})
+                {formatTime(query().lastUpdate)} ({formatRelativeTime(query().lastUpdate)})
               </div>
             </div>
 
@@ -102,9 +90,7 @@ function QueryDetail() {
             <Show when={query().dataSize !== undefined}>
               <div class="detail-section">
                 <div class="detail-label">Data Size</div>
-                <div class="detail-value mono">
-                  {formatBytes(query().dataSize)}
-                </div>
+                <div class="detail-value mono">{formatBytes(query().dataSize)}</div>
               </div>
             </Show>
 
@@ -118,9 +104,7 @@ function QueryDetail() {
             <Show when={query().variables}>
               <div class="detail-section">
                 <div class="detail-label">Variables</div>
-                <pre class="query-code">
-                  {JSON.stringify(query().variables, null, 2)}
-                </pre>
+                <pre class="query-code">{JSON.stringify(query().variables, null, 2)}</pre>
               </div>
             </Show>
 
@@ -134,9 +118,7 @@ function QueryDetail() {
             <Show when={query().localArray}>
               <div class="detail-section">
                 <div class="detail-label">Local Array</div>
-                <pre class="query-code">
-                  {JSON.stringify(query().localArray, null, 2)}
-                </pre>
+                <pre class="query-code">{JSON.stringify(query().localArray, null, 2)}</pre>
               </div>
             </Show>
 
@@ -150,18 +132,14 @@ function QueryDetail() {
             <Show when={query().remoteArray}>
               <div class="detail-section">
                 <div class="detail-label">Remote Array</div>
-                <pre class="query-code">
-                  {JSON.stringify(query().remoteArray, null, 2)}
-                </pre>
+                <pre class="query-code">{JSON.stringify(query().remoteArray, null, 2)}</pre>
               </div>
             </Show>
-            
+
             <Show when={query().data}>
               <div class="detail-section">
                 <div class="detail-label">Result Data</div>
-                <pre class="query-code">
-                  {JSON.stringify(query().data, null, 2)}
-                </pre>
+                <pre class="query-code">{JSON.stringify(query().data, null, 2)}</pre>
               </div>
             </Show>
 

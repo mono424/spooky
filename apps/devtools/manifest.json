@@ -19,12 +19,8 @@
       "run_at": "document_start"
     }
   ],
-  "permissions": [
-    "tabs"
-  ],
-  "host_permissions": [
-    "<all_urls>"
-  ],
+  "permissions": ["tabs"],
+  "host_permissions": ["<all_urls>"],
   "web_accessible_resources": [
     {
       "resources": ["page-script.js"],

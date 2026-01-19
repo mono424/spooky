@@ -1,4 +1,4 @@
-import { Show, createSignal, createEffect } from "solid-js";
+import { Show, createSignal, createEffect } from 'solid-js';
 
 export interface EditingCell {
   recordId: string;
@@ -17,23 +17,23 @@ interface CellProps {
 }
 
 function formatValue(value: unknown): string {
-  if (value === undefined || value === null) return "";
-  if (typeof value === "object") return JSON.stringify(value);
+  if (value === undefined || value === null) return '';
+  if (typeof value === 'object') return JSON.stringify(value);
   return String(value);
 }
 
 function parseValue(value: string): unknown {
   // Try to parse JSON for objects
-  if (value.startsWith("{") || value.startsWith("[")) {
+  if (value.startsWith('{') || value.startsWith('[')) {
     try {
       return JSON.parse(value);
     } catch {
       // Keep as string if parsing fails
       return value;
     }
-  } else if (value === "true" || value === "false") {
-    return value === "true";
-  } else if (!isNaN(Number(value)) && value !== "") {
+  } else if (value === 'true' || value === 'false') {
+    return value === 'true';
+  } else if (!isNaN(Number(value)) && value !== '') {
     return Number(value);
   }
   return value;
@@ -46,9 +46,9 @@ function isRecordId(value: string): boolean {
 }
 
 export function Cell(props: CellProps) {
-  const [editValue, setEditValue] = createSignal("");
+  const [editValue, setEditValue] = createSignal('');
   const [inputRef, setInputRef] = createSignal<HTMLInputElement | null>(null);
-  const isReadonly = props.column === "id";
+  const isReadonly = props.column === 'id';
 
   // Initialize edit value and focus input when editing starts
   createEffect(() => {
@@ -78,19 +78,19 @@ export function Cell(props: CellProps) {
     }
 
     if (isReadonly) return;
-    
+
     e.stopPropagation();
     props.onStartEdit(props.column);
     setEditValue(formatValue(props.value));
   };
 
   const handleKeyDown = (e: KeyboardEvent) => {
-    if (e.key === "Enter") {
+    if (e.key === 'Enter') {
       e.preventDefault();
       e.stopPropagation();
       const parsedValue = parseValue(editValue());
       props.onUpdate(parsedValue);
-    } else if (e.key === "Escape") {
+    } else if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();
       props.onCancel();
@@ -113,36 +113,44 @@ export function Cell(props: CellProps) {
   return (
     <td
       class="editable-cell"
-      classList={{ 
-        editing: props.isEditing, 
+      classList={{
+        editing: props.isEditing,
         readonly: isReadonly,
-        link: isLink && !props.isEditing
+        link: isLink && !props.isEditing,
       }}
       onClick={handleClick}
       title={isLink ? `Go to ${displayValue}` : displayValue}
-      style={isLink && !props.isEditing ? { cursor: "pointer" } : {}}
+      style={isLink && !props.isEditing ? { cursor: 'pointer' } : {}}
     >
-      <Show when={props.isEditing} fallback={
-        <div style={{ display: "flex", "align-items": "center", gap: "4px" }}>
-          <Show when={isLink}>
-            <svg 
-              viewBox="0 0 24 24" 
-              width="10" 
-              height="10" 
-              fill="none" 
-              stroke="currentColor" 
-              stroke-width="2" 
-              stroke-linecap="round" 
-              stroke-linejoin="round"
-              style={{ opacity: 0.7, "min-width": "10px" }}
+      <Show
+        when={props.isEditing}
+        fallback={
+          <div style={{ display: 'flex', 'align-items': 'center', gap: '4px' }}>
+            <Show when={isLink}>
+              <svg
+                viewBox="0 0 24 24"
+                width="10"
+                height="10"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style={{ opacity: 0.7, 'min-width': '10px' }}
+              >
+                <line x1="7" y1="17" x2="17" y2="7"></line>
+                <polyline points="7 7 17 7 17 17"></polyline>
+              </svg>
+            </Show>
+            <span
+              class="cell-value"
+              style={{ 'white-space': 'nowrap', overflow: 'hidden', 'text-overflow': 'ellipsis' }}
             >
-              <line x1="7" y1="17" x2="17" y2="7"></line>
-              <polyline points="7 7 17 7 17 17"></polyline>
-            </svg>
-          </Show>
-          <span class="cell-value" style={{ "white-space": "nowrap", "overflow": "hidden", "text-overflow": "ellipsis" }}>{displayValue}</span>
-        </div>
-      }>
+              {displayValue}
+            </span>
+          </div>
+        }
+      >
         <input
           ref={setInputRef}
           type="text"

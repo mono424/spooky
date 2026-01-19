@@ -28,33 +28,18 @@ export class SyncEngine {
    * Main entry point for sync operations.
    * Uses batch processing to minimize events emitted.
    */
-  async syncRecords(
-    arraySyncer: ArraySyncer,
-    incantationId: RecordId<string>,
-    remoteArray: RecordVersionArray
-  ): Promise<RecordVersionDiff> {
-    const diff = arraySyncer.nextSet();
-    if (!diff) {
-      return { added: [], updated: [], removed: [] };
-    }
-
+  async syncRecords(diff: RecordVersionDiff): Promise<RecordVersionDiff> {
     const { added, updated, removed } = diff;
 
     this.logger.debug({ added, updated, removed }, 'SyncEngine.syncRecords diff');
 
-    // Build remote version map for quick lookup
-    const remoteVersionMap = new Map<string, number>();
-    for (const [id, ver] of remoteArray) {
-      remoteVersionMap.set(id.toString(), ver);
-    }
-
     // Handle removed records: verify they don't exist remotely before deleting locally
     if (removed.length > 0) {
-      await this.handleRemovedRecords(removed, arraySyncer);
+      await this.handleRemovedRecords(removed);
     }
 
     // Fetch added/updated records from remote
-    const idsToFetch = [...added, ...updated];
+    const idsToFetch = [...added.map((x) => x.id), ...updated.map((x) => x.id)];
     if (idsToFetch.length === 0) {
       return diff;
     }
@@ -71,13 +56,11 @@ export class SyncEngine {
 
     // Prepare batch for ingestion
     const ingestBatch: Array<{ table: string; op: string; id: string; record: any }> = [];
-    const versionUpdates: Array<{ fullId: string; version: number; isAdded: boolean }> = [];
 
     for (const record of remoteResults) {
       const fullId = record.id.toString();
       const table = record.id.table.toString();
-      const isAdded = added.some((id) => id.toString() === fullId);
-      const remoteVer = remoteVersionMap.get(fullId);
+      const isAdded = added.some((item) => item.id.toString() === fullId);
 
       ingestBatch.push({
         table,
@@ -85,22 +68,11 @@ export class SyncEngine {
         id: fullId,
         record,
       });
-
-      if (remoteVer !== undefined) {
-        versionUpdates.push({ fullId, version: remoteVer, isAdded });
-      }
     }
 
     // Single batch ingest call (isOptimistic=false for remote sync)
     if (ingestBatch.length > 0) {
       this.streamProcessor.ingestBatch(ingestBatch, false);
-    }
-
-    // Set versions for all records
-    for (const { fullId, version, isAdded } of versionUpdates) {
-      this.streamProcessor.setRecordVersion(incantationId.toString(), fullId, version);
-      if (isAdded) arraySyncer.insert(fullId, version);
-      else arraySyncer.update(fullId, version);
     }
 
     this.events.emit(SyncEventTypes.RemoteDataIngested, {
@@ -113,7 +85,7 @@ export class SyncEngine {
   /**
    * Handle records that exist locally but not in remote array.
    */
-  private async handleRemovedRecords(removed: RecordId[], arraySyncer: ArraySyncer): Promise<void> {
+  private async handleRemovedRecords(removed: RecordId[]): Promise<void> {
     this.logger.debug({ removed: removed.map((r) => r.toString()) }, 'Checking removed records');
 
     const [existingRemote] = await this.remote.query<[{ id: string }[]]>('SELECT id FROM $ids', {
@@ -130,16 +102,7 @@ export class SyncEngine {
         await this.local.query('DELETE $id', { id: recordIdStr });
 
         // 2. Ingest deletion into DBSP
-        const result = await this.streamProcessor.ingest(
-          recordId.table.name,
-          'DELETE',
-          recordIdStr,
-          {},
-          false
-        );
-
-        // 3. Delete from arraySyncer
-        arraySyncer.delete(recordIdStr);
+        this.streamProcessor.ingest(recordId.table.name, 'DELETE', recordIdStr, {}, false);
       }
     }
   }

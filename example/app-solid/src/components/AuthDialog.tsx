@@ -1,52 +1,50 @@
-import { createSignal, Show, createEffect } from "solid-js";
-import { useAuth } from "../lib/auth";
-import { useKeyboard } from "../lib/keyboard";
-import { db } from "../db";
+import { createSignal, Show, createEffect } from 'solid-js';
+import { useAuth } from '../lib/auth';
+import { useKeyboard } from '../lib/keyboard';
+import { db } from '../db';
 
 interface AuthDialogProps {
   isOpen: boolean;
   onClose: () => void;
-  initialMode?: "signin" | "signup";
+  initialMode?: 'signin' | 'signup';
 }
 
 export function AuthDialog(props: AuthDialogProps) {
   const auth = useAuth();
   const [isSignUp, setIsSignUp] = createSignal(false);
-  const [username, setUsername] = createSignal("");
-  const [password, setPassword] = createSignal("");
-  const [error, setError] = createSignal("");
+  const [username, setUsername] = createSignal('');
+  const [password, setPassword] = createSignal('');
+  const [error, setError] = createSignal('');
   const [isLoading, setIsLoading] = createSignal(false);
 
   createEffect(() => {
     if (props.isOpen) {
-      setIsSignUp(props.initialMode === "signup");
-      setError("");
-      setUsername("");
-      setPassword("");
+      setIsSignUp(props.initialMode === 'signup');
+      setError('');
+      setUsername('');
+      setPassword('');
     }
   });
 
-
-
   useKeyboard({
-    "Escape": () => {
-        if (props.isOpen) {
-            props.onClose();
-        }
-    }
+    Escape: () => {
+      if (props.isOpen) {
+        props.onClose();
+      }
+    },
   });
 
   const handleSubmit = async (e: Event) => {
     e.preventDefault();
-    setError("");
+    setError('');
     setIsLoading(true);
 
     try {
       if (isSignUp()) {
         // TODO: REMOVE. POLYFLL BECAUSE IT JUST DOES NOT WORK OTHERWISE
-        await db.remote.query("fn::polyfill::createAccount($username,$password)", {
-          "username": username(),
-          "password": password(),
+        await db.remote.query('fn::polyfill::createAccount($username,$password)', {
+          username: username(),
+          password: password(),
         });
         await auth.signIn(username(), password());
         // TODO: REMOVE. POLYFLL BECAUSE IT JUST DOES NOT WORK OTHERWISE
@@ -57,16 +55,16 @@ export function AuthDialog(props: AuthDialogProps) {
       await new Promise((resolve) => setTimeout(resolve, 100));
       handleClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "An error occurred");
+      setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleClose = () => {
-    setUsername("");
-    setPassword("");
-    setError("");
+    setUsername('');
+    setPassword('');
+    setError('');
     props.onClose();
   };
 
@@ -98,14 +96,13 @@ export function AuthDialog(props: AuthDialogProps) {
       <div class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
         {/* Main Modal Container */}
         <div class="animate-terminal bg-black border-2 border-white w-full max-w-md relative shadow-[8px_8px_0px_0px_rgba(255,255,255,1)] flex flex-col">
-          
           {/* Header */}
           <div class="flex justify-between items-stretch border-b-2 border-white h-12">
             <div class="flex items-center px-4 border-r-2 border-white bg-white text-black font-bold uppercase tracking-widest text-sm">
-               [KEY]
+              [KEY]
             </div>
             <div class="flex-grow flex items-center px-4 font-mono text-sm uppercase tracking-wider">
-               {isSignUp() ? "INIT_REGISTRATION" : "AUTH_SEQUENCE"}
+              {isSignUp() ? 'INIT_REGISTRATION' : 'AUTH_SEQUENCE'}
             </div>
             <button
               onMouseDown={handleClose}
@@ -119,10 +116,12 @@ export function AuthDialog(props: AuthDialogProps) {
           {/* Content Wrapper */}
           <div class="p-8">
             <form onSubmit={handleSubmit} class="space-y-6">
-              
               {/* Username Input */}
               <div class="relative group">
-                <label for="username" class="absolute -top-2.5 left-2 bg-black px-2 text-[10px] uppercase font-bold tracking-wider border border-white group-focus-within:border-white z-10">
+                <label
+                  for="username"
+                  class="absolute -top-2.5 left-2 bg-black px-2 text-[10px] uppercase font-bold tracking-wider border border-white group-focus-within:border-white z-10"
+                >
                   Username
                 </label>
                 <input
@@ -139,7 +138,10 @@ export function AuthDialog(props: AuthDialogProps) {
 
               {/* Password Input */}
               <div class="relative group">
-                <label for="password" class="absolute -top-2.5 left-2 bg-black px-2 text-[10px] uppercase font-bold tracking-wider border border-white z-10">
+                <label
+                  for="password"
+                  class="absolute -top-2.5 left-2 bg-black px-2 text-[10px] uppercase font-bold tracking-wider border border-white z-10"
+                >
                   Password
                 </label>
                 <input
@@ -150,7 +152,7 @@ export function AuthDialog(props: AuthDialogProps) {
                   required
                   class="w-full bg-black border-2 border-white px-4 py-3 text-white focus:outline-none focus:shadow-[4px_4px_0px_0px_rgba(255,255,255,1)] transition-none placeholder-gray-700 font-mono text-sm"
                   placeholder="********"
-                  autocomplete={isSignUp() ? "new-password" : "current-password"}
+                  autocomplete={isSignUp() ? 'new-password' : 'current-password'}
                 />
               </div>
 
@@ -169,25 +171,23 @@ export function AuthDialog(props: AuthDialogProps) {
                 {isLoading() ? (
                   <span class="animate-pulse">PROCESSING...</span>
                 ) : isSignUp() ? (
-                  "[ EXECUTE_SIGN_UP ]"
+                  '[ EXECUTE_SIGN_UP ]'
                 ) : (
-                  "[ EXECUTE_LOGIN ]"
+                  '[ EXECUTE_LOGIN ]'
                 )}
               </button>
             </form>
 
             {/* Toggle Link */}
             <div class="mt-8 text-center flex items-center justify-center gap-2 text-xs uppercase text-gray-400">
-               <span>&gt;</span>
+              <span>&gt;</span>
               <button
                 onMouseDown={() => setIsSignUp(!isSignUp())}
                 class="hover:text-white hover:underline decoration-white underline-offset-4 transition-none"
               >
-                {isSignUp()
-                  ? "Access_Existing_Account"
-                  : "Create_New_Identifier"}
+                {isSignUp() ? 'Access_Existing_Account' : 'Create_New_Identifier'}
               </button>
-               <span class="animate-blink">_</span>
+              <span class="animate-blink">_</span>
             </div>
           </div>
         </div>

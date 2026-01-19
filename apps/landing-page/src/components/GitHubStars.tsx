@@ -10,7 +10,7 @@ export default function GitHubStarsBrutalist() {
     fetch('https://api.github.com/repos/mono424/spooky', {
       signal: controller.signal,
       // Optional: Cache for 1 hour to prevent hitting GitHub limits
-      next: { revalidate: 3600 } 
+      next: { revalidate: 3600 },
     })
       .then((res) => {
         if (!res.ok) throw new Error('Failed to fetch');
@@ -25,9 +25,12 @@ export default function GitHubStarsBrutalist() {
   }, []);
 
   // Format numbers (e.g., 1500 -> 1.5k)
-  const formattedStars = stars !== null 
-    ? new Intl.NumberFormat('en-US', { notation: "compact", compactDisplay: "short" }).format(stars)
-    : null;
+  const formattedStars =
+    stars !== null
+      ? new Intl.NumberFormat('en-US', { notation: 'compact', compactDisplay: 'short' }).format(
+          stars
+        )
+      : null;
 
   return (
     <a
@@ -36,13 +39,12 @@ export default function GitHubStarsBrutalist() {
       rel="noreferrer"
       className="group inline-flex items-center gap-2 border border-white/20 bg-black px-3 py-1.5 font-mono text-xs font-bold uppercase tracking-wider text-white transition-all hover:bg-white hover:text-black hover:shadow-[4px_4px_0px_0px_rgba(255,255,255,0.5)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
     >
-
       {/* Content Container */}
       <span className="flex items-center gap-2">
         <GitHubIcon className="h-3.5 w-3.5" />
-        
+
         <span>Github</span>
-        
+
         <span className="text-neutral-600 transition-colors group-hover:text-black/40">|</span>
 
         {formattedStars ? (
@@ -55,7 +57,6 @@ export default function GitHubStarsBrutalist() {
           <span className="animate-pulse text-neutral-500">...</span>
         )}
       </span>
-
     </a>
   );
 }

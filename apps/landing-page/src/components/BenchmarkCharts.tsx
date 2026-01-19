@@ -7,12 +7,7 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from 'recharts';
-import {
-  data10,
-  data100,
-  data1000,
-  data5000,
-} from './benchmarkData';
+import { data10, data100, data1000, data5000 } from './benchmarkData';
 
 interface ChartProps {
   data: {

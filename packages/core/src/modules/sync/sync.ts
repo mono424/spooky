@@ -1,5 +1,5 @@
 import { LocalDatabaseService, RemoteDatabaseService } from '../../services/database/index.js';
-import { RecordVersionArray } from '../../types.js';
+import { RecordVersionArray, RecordVersionDiff } from '../../types.js';
 import { createSyncEventSystem, SyncEventTypes } from './events/index.js';
 import { Logger } from '../../services/logger/index.js';
 import {
@@ -12,7 +12,7 @@ import {
   UpQueue,
 } from './queue/index.js';
 import { RecordId, Duration, Uuid } from 'surrealdb';
-import { ArraySyncer } from './utils.js';
+import { applyRecordVersionDiff, ArraySyncer, createDiffFromDbOp } from './utils.js';
 import { SyncEngine } from './engine.js';
 import { SyncScheduler } from './scheduler.js';
 import { SchemaStructure } from '@spooky/query-builder';
@@ -60,19 +60,14 @@ export class SpookySync<S extends SchemaStructure> {
     void this.scheduler.syncUp();
     void this.scheduler.syncUp();
     void this.scheduler.syncDown();
-    void this.startLiveQuery();
+    void this.startRefLiveQueries();
   }
 
-  private async startLiveQuery() {
-    this.logger.debug({ clientId: this.clientId }, 'Starting live query');
-    // Ensure clientId is set in remote if needed, but SpookySync usually assumes auth is handled.
-    // If we need to set the variable for the session:
-    // await this.remote.getClient().query('LET $clientId = $id', { id: this.clientId });
-    // Actually QueryManager did: await this.remote.getClient().set('_spooky_client_id', this.clientId);
-    await this.remote.getClient().set('_spooky_client_id', this.clientId);
+  private async startRefLiveQueries() {
+    this.logger.debug({ clientId: this.clientId }, 'Starting ref live queries');
 
     const [queryUuid] = await this.remote.query<[Uuid]>(
-      'LIVE SELECT * FROM _spooky_incantation WHERE clientId = $clientId',
+      'LIVE SELECT * FROM _spooky_list_ref WHERE clientId = $clientId',
       {
         clientId: this.clientId,
       }
@@ -80,31 +75,25 @@ export class SpookySync<S extends SchemaStructure> {
 
     (await this.remote.getClient().liveOf(queryUuid)).subscribe((message) => {
       this.logger.debug({ message }, 'Live update received');
-      if (message.action === 'UPDATE' || message.action === 'CREATE') {
-        const { id, hash, array, tree } = message.value;
-        const remoteArray = array || tree; // Still called tree I think
-
-        if (!(id instanceof RecordId) || !hash || !remoteArray) {
-          return;
-        }
-
-        this.handleRemoteIncantationChange(
-          id,
-          hash as string,
-          (remoteArray || []) as RecordVersionArray
-        ).catch((err) => {
-          this.logger.error({ err }, 'Error handling remote incantation change');
-        });
-      }
+      console.log('__TEST__', message);
+      if (message.action === 'KILLED') return;
+      this.handleRemoteListRefChange(
+        message.action,
+        message.value.in as RecordId<string>,
+        message.value.out as RecordId<string>,
+        message.value.version as number
+      ).catch((err) => {
+        this.logger.error({ err }, 'Error handling remote list ref change');
+      });
     });
   }
 
-  private async handleRemoteIncantationChange(
+  private async handleRemoteListRefChange(
+    action: 'CREATE' | 'UPDATE' | 'DELETE',
     incantationId: RecordId,
-    remoteHash: string,
-    remoteArray: RecordVersionArray
+    recordId: RecordId,
+    version: number
   ) {
-    // Fetch local state to get necessary params
     const existing = this.dataManager.getIncantation(incantationId);
     if (!existing) {
       this.logger.warn(
@@ -115,17 +104,10 @@ export class SpookySync<S extends SchemaStructure> {
     }
 
     const surrealql = existing.surrealql;
-    const { params, localHash, localArray } = existing;
+    const { params } = existing;
 
-    await this.syncIncantation({
-      incantationId,
-      surrealql,
-      localArray,
-      localHash,
-      remoteHash,
-      remoteArray,
-      params: params ?? {},
-    });
+    const diff = createDiffFromDbOp(action, recordId, version);
+    await this.syncIncantationDiff({ incantationId, surrealql, params: params ?? {} }, diff);
   }
 
   public enqueueDownEvent(event: DownEvent) {
@@ -163,14 +145,11 @@ export class SpookySync<S extends SchemaStructure> {
       case 'register':
         return this.registerIncantation(event);
       case 'sync':
-        const { incantationId, surrealql, params, localArray, localHash, remoteHash, remoteArray } =
-          event.payload;
-        return this.syncIncantation({
+        const { incantationId, surrealql, params, localArray, remoteArray } = event.payload;
+        return this.syncIncantationFromFullArray({
           incantationId,
           surrealql,
           localArray,
-          localHash,
-          remoteHash,
           remoteArray,
           params,
         });
@@ -186,54 +165,35 @@ export class SpookySync<S extends SchemaStructure> {
   }
 
   private async registerIncantation(event: RegisterEvent) {
-    const {
-      incantationId,
-      surrealql,
-      params,
-      ttl,
-      localHash: pLocalHash,
-      localArray: pLocalArray,
-    } = event.payload;
+    const { incantationId, surrealql, params, ttl } = event.payload;
 
     const effectiveTtl = ttl || '10m';
     try {
       let existing = this.dataManager.getIncantation(incantationId);
       this.logger.debug({ existing }, 'Register Incantation state');
 
-      // Use payload values as fallback if existing record doesn't have them
-      // This is critical for preventing the "empty start" loop if the incantation was just initialized
-      // with known state from the stream processor or previous context.
-      // NOTE: We use || and length checks because ?? doesn't work with empty strings/arrays
-      // (they are not null/undefined, so ?? returns them instead of the fallback)
-      const localHash = existing?.localHash || pLocalHash || '';
-      const localArray = existing?.localArray?.length ? existing.localArray : (pLocalArray ?? []);
-
       await this.updateLocalIncantation(
         incantationId,
         {
           surrealql,
           params,
-          localHash,
-          localArray,
         },
         {
           updateRecord: existing ? false : true,
         }
       );
 
-      const { hash: remoteHash, array: remoteArray } = await this.createRemoteIncantation(
+      const { array: remoteArray } = await this.createRemoteIncantation(
         incantationId,
         surrealql,
         params,
         effectiveTtl
       );
 
-      await this.syncIncantation({
+      await this.syncIncantationFromFullArray({
         incantationId,
         surrealql,
-        localArray,
-        localHash,
-        remoteHash,
+        localArray: existing?.localArray || [],
         remoteArray,
         params,
       });
@@ -262,41 +222,36 @@ export class SpookySync<S extends SchemaStructure> {
     const { ttl: _, ...safeConfig } = config;
 
     // Delegate to remote function which handles DBSP registration & persistence
-    const [{ hash, array }] = await this.remote.query<
-      [{ hash: string; array: RecordVersionArray }]
-    >('fn::incantation::register($config)', {
-      config: safeConfig,
-    });
+    const [{ array }] = await this.remote.query<[{ array: RecordVersionArray }]>(
+      'fn::incantation::register($config)',
+      {
+        config: safeConfig,
+      }
+    );
 
     this.logger.debug(
-      { incantationId: incantationId.toString(), hash, array },
+      { incantationId: incantationId.toString(), array },
       'createdRemoteIncantation'
     );
-    return { hash, array };
+    return { array };
   }
 
-  private async syncIncantation({
+  private async syncIncantationFromFullArray({
     incantationId,
     surrealql,
     localArray,
-    localHash,
-    remoteHash,
     remoteArray,
     params,
   }: {
     incantationId: RecordId<string>;
     surrealql: string;
     localArray: RecordVersionArray;
-    localHash: string;
-    remoteHash: string;
     remoteArray: RecordVersionArray;
     params: Record<string, any>;
   }) {
     this.logger.debug(
       {
         incantationId: incantationId.toString(),
-        localHash,
-        remoteHash,
         localArray,
         remoteArray,
         params,
@@ -304,31 +259,41 @@ export class SpookySync<S extends SchemaStructure> {
       'syncIncantation'
     );
 
-    const isDifferent = localHash !== remoteHash;
-    if (!isDifferent) {
+    const diff = new ArraySyncer(localArray, remoteArray).nextSet();
+    if (!diff) {
       return;
     }
 
-    const arraySyncer = new ArraySyncer(localArray, remoteArray);
-    let maxIter = 10;
-    while (maxIter > 0) {
-      const { added, updated, removed } = await this.syncEngine.syncRecords(
-        arraySyncer,
+    return this.syncIncantationDiff(
+      {
         incantationId,
-        remoteArray
-      );
+        surrealql,
+        params,
+      },
+      diff
+    );
+  }
 
-      if (added.length === 0 && updated.length === 0 && removed.length === 0) {
-        break;
-      }
-      this.logger.debug({ added, updated, removed }, '[SpookySync] syncIncantation iteration');
-      maxIter--;
-      if (maxIter <= 0) {
-        this.logger.warn(
-          { incantationId: incantationId.toString() },
-          'syncIncantation maxIter reached'
-        );
-      }
+  private async syncIncantationDiff(
+    {
+      incantationId,
+      surrealql,
+      params,
+    }: {
+      incantationId: RecordId<string>;
+      surrealql: string;
+      params: Record<string, any>;
+    },
+    diff: RecordVersionDiff
+  ) {
+    const finalDiff = await this.syncEngine.syncRecords(diff);
+
+    if (
+      finalDiff.added.length === 0 &&
+      finalDiff.updated.length === 0 &&
+      finalDiff.removed.length === 0
+    ) {
+      return;
     }
 
     await this.updateLocalIncantation(
@@ -336,10 +301,7 @@ export class SpookySync<S extends SchemaStructure> {
       {
         surrealql,
         params,
-        localHash: remoteHash, // After sync, local should match remote
-        localArray: remoteArray, // After sync, local should match remote
-        remoteHash,
-        remoteArray,
+        diff: finalDiff,
       },
       {
         updateRecord: true,
@@ -352,17 +314,11 @@ export class SpookySync<S extends SchemaStructure> {
     {
       surrealql,
       params,
-      localHash,
-      localArray,
-      remoteHash,
-      remoteArray,
+      diff,
     }: {
       surrealql: string;
       params?: Record<string, any>;
-      localHash?: string;
-      localArray?: RecordVersionArray;
-      remoteHash?: string;
-      remoteArray?: RecordVersionArray;
+      diff?: RecordVersionDiff;
     },
     {
       updateRecord = true,
@@ -370,14 +326,13 @@ export class SpookySync<S extends SchemaStructure> {
       updateRecord?: boolean;
     }
   ) {
-    if (updateRecord) {
-      const content: any = {};
-      if (localHash !== undefined) content.localHash = localHash;
-      if (localArray !== undefined) content.localArray = localArray;
-      if (remoteHash !== undefined) content.remoteHash = remoteHash;
-      if (remoteArray !== undefined) content.remoteArray = remoteArray;
+    const localVersions = this.dataManager.getIncantation(incantationId)?.localArray || [];
+    const newVersions = diff ? applyRecordVersionDiff(localVersions, diff) : localVersions;
 
-      await this.updateIncantationRecord(incantationId, content);
+    if (updateRecord) {
+      await this.updateIncantationRecord(incantationId, {
+        localArray: newVersions,
+      });
     }
 
     try {
@@ -407,10 +362,8 @@ export class SpookySync<S extends SchemaStructure> {
 
       this.events.emit(SyncEventTypes.IncantationUpdated, {
         incantationId,
-        localHash,
-        localArray,
-        remoteHash,
-        remoteArray,
+        localArray: newVersions,
+        remoteArray: newVersions,
         records: cachedResults || [],
       });
     } catch (e) {

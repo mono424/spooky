@@ -12,25 +12,25 @@ pnpm add db-solid
 
 ```typescript
 // db.ts
-import { SyncedDb, type SyncedDbConfig } from "db-solid";
-import { type Schema, SURQL_SCHEMA } from "./schema.gen";
+import { SyncedDb, type SyncedDbConfig } from 'db-solid';
+import { type Schema, SURQL_SCHEMA } from './schema.gen';
 
 export const dbConfig: SyncedDbConfig<Schema> = {
   schema: SURQL_SCHEMA,
-  localDbName: "my-app-local",
-  internalDbName: "syncdb-int",
-  storageStrategy: "indexeddb",
-  namespace: "main",
-  database: "my_db",
-  remoteUrl: "http://localhost:8000", // Your SurrealDB server
-  tables: ["user", "thread", "comment"],
+  localDbName: 'my-app-local',
+  internalDbName: 'syncdb-int',
+  storageStrategy: 'indexeddb',
+  namespace: 'main',
+  database: 'my_db',
+  remoteUrl: 'http://localhost:8000', // Your SurrealDB server
+  tables: ['user', 'thread', 'comment'],
 };
 
 export const db = new SyncedDb<Schema>(dbConfig);
 
 export async function initDatabase(): Promise<void> {
   await db.init();
-  console.log("Database initialized");
+  console.log('Database initialized');
 }
 ```
 
@@ -91,8 +91,8 @@ function ThreadList() {
 ```typescript
 // Find threads by specific criteria
 const liveQuery = await db.query.thread
-  .find({ status: "active", author: currentUserId })
-  .orderBy("created_at", "desc")
+  .find({ status: 'active', author: currentUserId })
+  .orderBy('created_at', 'desc')
   .limit(20)
   .query();
 
@@ -143,12 +143,12 @@ async function deleteThread(threadId: RecordId) {
 
 ```typescript
 db.query.tableName
-  .find(whereConditions)      // Optional: filter records
-  .select("field1", "field2") // Optional: select specific fields
-  .orderBy("field", "asc")    // Optional: sort results
-  .limit(50)                  // Optional: limit results
-  .offset(10)                 // Optional: pagination
-  .query();                   // Execute and return ReactiveQueryResult
+  .find(whereConditions) // Optional: filter records
+  .select('field1', 'field2') // Optional: select specific fields
+  .orderBy('field', 'asc') // Optional: sort results
+  .limit(50) // Optional: limit results
+  .offset(10) // Optional: pagination
+  .query(); // Execute and return ReactiveQueryResult
 ```
 
 ### CRUD Operations
@@ -215,10 +215,10 @@ Multiple components with identical queries share the same remote subscription:
 
 ```typescript
 // Component A
-const query1 = await db.query.thread.find({ status: "active" }).query();
+const query1 = await db.query.thread.find({ status: 'active' }).query();
 
 // Component B (different location)
-const query2 = await db.query.thread.find({ status: "active" }).query();
+const query2 = await db.query.thread.find({ status: 'active' }).query();
 
 // Result: Only ONE remote live query is created!
 // Both components update simultaneously when data changes
@@ -295,7 +295,7 @@ async function handleSubmit(formData: FormData) {
     // Navigate to detail page or show success
     navigate(`/item/${newItem.id}`);
   } catch (error) {
-    console.error("Failed to create item:", error);
+    console.error('Failed to create item:', error);
   }
 }
 ```
@@ -343,7 +343,7 @@ onMount(async () => {
 ```typescript
 export const dbConfig: SyncedDbConfig<Schema> = {
   // ... other config
-  remoteUrl: "http://localhost:8000", // Add this!
+  remoteUrl: 'http://localhost:8000', // Add this!
 };
 ```
 
@@ -376,7 +376,7 @@ pnpm run generate-schema
 // Use custom SQL for complex queries
 const result = await db.queryRemote(
   `SELECT *, author.* FROM thread WHERE created_at > $timestamp`,
-  { timestamp: new Date("2024-01-01") }
+  { timestamp: new Date('2024-01-01') }
 );
 
 const [threads] = await result.collect();
@@ -393,9 +393,9 @@ await db.authenticate(jwtToken);
 
 ```typescript
 const liveQuery = await db.query.thread
-  .find({ status: "active" })
-  .where({ category: "tech" }) // Add more conditions
-  .orderBy("votes", "desc")
+  .find({ status: 'active' })
+  .where({ category: 'tech' }) // Add more conditions
+  .orderBy('votes', 'desc')
   .limit(50)
   .query();
 ```
@@ -409,6 +409,7 @@ const liveQuery = await db.query.thread
 ## Support
 
 For issues or questions:
+
 - Open an issue on GitHub
 - Check the architecture documentation for detailed explanations
 - Review the example app for implementation patterns

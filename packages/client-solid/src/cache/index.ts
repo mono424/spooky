@@ -1,7 +1,7 @@
-export { SurrealDBWasmFactory } from "./surrealdb-wasm-factory";
+export { SurrealDBWasmFactory } from './surrealdb-wasm-factory';
 
-import { Surreal } from "surrealdb";
-import type { CacheStrategy } from "../types";
+import { Surreal } from 'surrealdb';
+import type { CacheStrategy } from '../types';
 
 /**
  * Creates a SurrealDB WASM instance with the specified storage strategy
@@ -12,7 +12,7 @@ export async function createSurrealDBWasm(
   namespace?: string,
   database?: string
 ): Promise<Surreal> {
-  const { SurrealDBWasmFactory } = await import("./surrealdb-wasm-factory");
+  const { SurrealDBWasmFactory } = await import('./surrealdb-wasm-factory');
   return SurrealDBWasmFactory.create(dbName, strategy, namespace, database);
 }
 
@@ -24,7 +24,7 @@ export async function createMemoryDB(
   namespace?: string,
   database?: string
 ): Promise<Surreal> {
-  const { SurrealDBWasmFactory } = await import("./surrealdb-wasm-factory");
+  const { SurrealDBWasmFactory } = await import('./surrealdb-wasm-factory');
   return SurrealDBWasmFactory.createMemory(dbName, namespace, database);
 }
 
@@ -36,6 +36,6 @@ export async function createIndexedDBDatabase(
   namespace?: string,
   database?: string
 ): Promise<Surreal> {
-  const { SurrealDBWasmFactory } = await import("./surrealdb-wasm-factory");
+  const { SurrealDBWasmFactory } = await import('./surrealdb-wasm-factory');
   return SurrealDBWasmFactory.createIndexedDB(dbName, namespace, database);
 }

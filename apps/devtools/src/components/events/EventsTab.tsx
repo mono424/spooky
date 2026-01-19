@@ -1,7 +1,7 @@
-import { For, Show, createSignal, createMemo } from "solid-js";
-import { useDevTools } from "../../context/DevToolsContext";
-import { formatTime } from "../../utils/formatters";
-import type { SpookyEvent } from "../../types/devtools";
+import { For, Show, createSignal, createMemo } from 'solid-js';
+import { useDevTools } from '../../context/DevToolsContext';
+import { formatTime } from '../../utils/formatters';
+import type { SpookyEvent } from '../../types/devtools';
 
 function EventItem(props: { event: SpookyEvent }) {
   return (
@@ -58,7 +58,7 @@ export function EventsTab() {
           <For each={availableTypes()}>
             {(type) => (
               <button
-                class={`filter-chip ${selectedTypes().has(type) ? "active" : ""}`}
+                class={`filter-chip ${selectedTypes().has(type) ? 'active' : ''}`}
                 onClick={() => toggleType(type)}
               >
                 {type}
@@ -73,9 +73,7 @@ export function EventsTab() {
           when={state.events.length > 0}
           fallback={<div class="empty-state">No events recorded yet</div>}
         >
-          <For each={filteredEvents()}>
-            {(event) => <EventItem event={event} />}
-          </For>
+          <For each={filteredEvents()}>{(event) => <EventItem event={event} />}</For>
         </Show>
       </div>
     </div>

@@ -113,7 +113,6 @@ The main entry point for data mutations. It accepts a change event from SurrealD
   ```
 
   **Supported Operators:**
-
   - `scan`: Reads a table.
   - `filter`: Applies a predicate (`prefix` or `eq`).
   - `join`: Inner join (nested loop).

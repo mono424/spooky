@@ -141,7 +141,8 @@ export const Search = () => {
                     <p>{error}</p>
                     {import.meta.env.DEV && (
                       <p className="text-xs text-zinc-600 max-w-xs">
-                        Dev note: Run `pnpm build && pnpm preview` to test search functionality fully.
+                        Dev note: Run `pnpm build && pnpm preview` to test search functionality
+                        fully.
                       </p>
                     )}
                   </div>
@@ -154,12 +155,12 @@ export const Search = () => {
                     onSelect={() => {
                       // Pagefind returns URLs relative to the indexed directory (dist).
                       // We need to prepend the site base URL if it's not already there.
-                      const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, "");
-                      const resultUrl = result.url.startsWith("/") ? result.url : `/${result.url}`;
-                      const fullUrl = resultUrl.startsWith(baseUrl) 
-                          ? resultUrl 
-                          : `${baseUrl}${resultUrl}`;
-                      
+                      const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
+                      const resultUrl = result.url.startsWith('/') ? result.url : `/${result.url}`;
+                      const fullUrl = resultUrl.startsWith(baseUrl)
+                        ? resultUrl
+                        : `${baseUrl}${resultUrl}`;
+
                       const finalUrl = fullUrl.replace('.html', '');
                       window.location.href = finalUrl;
                       setOpen(false);

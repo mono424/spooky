@@ -98,7 +98,7 @@ if (import.meta.env.DEV) {
     // Optional: hook for updates
     onUpdate: (callback: () => void) => {
       // Register callback to be called on state changes
-    }
+    },
   };
 
   // Optionally dispatch an event

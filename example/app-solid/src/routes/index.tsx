@@ -1,4 +1,4 @@
-import { ThreadList } from "../components/ThreadList";
+import { ThreadList } from '../components/ThreadList';
 
 export default function Home() {
   return <ThreadList />;

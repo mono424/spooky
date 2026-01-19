@@ -1,4 +1,6 @@
-export type EventPayloadDefinition<P> = ([P] extends [never] ? { payload: undefined } : { payload: P })
+export type EventPayloadDefinition<P> = [P] extends [never]
+  ? { payload: undefined }
+  : { payload: P };
 
 export type EventDefinition<T extends string, P> = {
   type: T;
@@ -11,8 +13,7 @@ export type EventTypeMap = Record<
 
 export type Event<E extends EventTypeMap, T extends EventType<E>> = E[T];
 
-export type EventPayload<E extends EventTypeMap, T extends EventType<E>> =
-  E[T]["payload"]
+export type EventPayload<E extends EventTypeMap, T extends EventType<E>> = E[T]['payload'];
 
 export type EventTypes<E extends EventTypeMap> = (keyof E)[];
 
@@ -51,9 +52,12 @@ export class EventSystem<E extends EventTypeMap> {
 
   constructor(private _eventTypes: EventTypes<E>) {
     this.buffer = [];
-    this.subscribers = this._eventTypes.reduce((acc, key) => {
-      return Object.assign(acc, { [key]: new Map() });
-    }, {} as { [K in EventType<E>]: Map<number, InnerEventHandler<E, K>> });
+    this.subscribers = this._eventTypes.reduce(
+      (acc, key) => {
+        return Object.assign(acc, { [key]: new Map() });
+      },
+      {} as { [K in EventType<E>]: Map<number, InnerEventHandler<E, K>> }
+    );
     this.lastEvents = {};
     this.subscribersTypeMap = new Map();
   }
@@ -135,17 +139,11 @@ export class EventSystem<E extends EventTypeMap> {
     return true;
   }
 
-  private setLastEvent<T extends EventType<E>>(
-    type: T,
-    event: Event<E, T>
-  ): void {
+  private setLastEvent<T extends EventType<E>>(type: T, event: Event<E, T>): void {
     this.lastEvents[type] = event;
   }
 
-  private broadcastEvent<T extends EventType<E>>(
-    type: T,
-    event: Event<E, T>
-  ): void {
+  private broadcastEvent<T extends EventType<E>>(type: T, event: Event<E, T>): void {
     const subscribers = this.subscribers[type].values();
     for (const subscriber of subscribers) {
       subscriber.handler(event);

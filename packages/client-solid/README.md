@@ -24,18 +24,18 @@ pnpm add db-solid
 
 ```typescript
 // db.ts
-import { SyncedDb, type SyncedDbConfig } from "db-solid";
-import { type Schema, SURQL_SCHEMA } from "./schema.gen";
+import { SyncedDb, type SyncedDbConfig } from 'db-solid';
+import { type Schema, SURQL_SCHEMA } from './schema.gen';
 
 export const dbConfig: SyncedDbConfig<Schema> = {
   schema: SURQL_SCHEMA,
-  localDbName: "my-app-local",
-  internalDbName: "syncdb-int",
-  storageStrategy: "indexeddb",
-  namespace: "main",
-  database: "my_db",
-  remoteUrl: "http://localhost:8000",
-  tables: ["user", "thread", "comment"],
+  localDbName: 'my-app-local',
+  internalDbName: 'syncdb-int',
+  storageStrategy: 'indexeddb',
+  namespace: 'main',
+  database: 'my_db',
+  remoteUrl: 'http://localhost:8000',
+  tables: ['user', 'thread', 'comment'],
 };
 
 export const db = new SyncedDb<Schema>(dbConfig);
@@ -81,8 +81,8 @@ function ThreadList() {
 ```typescript
 // Creates on remote server, automatically syncs to local cache and updates UI
 await db.query.thread.createRemote({
-  title: "New Thread",
-  content: "Thread content",
+  title: 'New Thread',
+  content: 'Thread content',
   author: userId,
   created_at: new Date(),
 });
@@ -133,9 +133,9 @@ await db.query.thread.createRemote({
 
 ```typescript
 db.query.tableName
-  .find({ status: "active" }) // Filter records
-  .select("field1", "field2") // Select fields (optional)
-  .orderBy("created_at", "desc") // Sort results
+  .find({ status: 'active' }) // Filter records
+  .select('field1', 'field2') // Select fields (optional)
+  .orderBy('created_at', 'desc') // Sort results
   .limit(50) // Limit results
   .offset(10) // Pagination
   .query(); // Execute and return ReactiveQueryResult
@@ -145,13 +145,13 @@ db.query.tableName
 
 ```typescript
 // Create
-await db.query.thread.createRemote({ title: "Hello", content: "World" });
+await db.query.thread.createRemote({ title: 'Hello', content: 'World' });
 
 // Read (with live updates)
 const liveQuery = await db.query.thread.find().query();
 
 // Update
-await db.query.thread.updateRemote(recordId, { title: "Updated" });
+await db.query.thread.updateRemote(recordId, { title: 'Updated' });
 
 // Delete
 await db.query.thread.deleteRemote(recordId);
@@ -180,10 +180,10 @@ Multiple components with identical queries automatically share a single remote s
 
 ```typescript
 // Component A
-const query1 = await db.query.thread.find({ status: "active" }).query();
+const query1 = await db.query.thread.find({ status: 'active' }).query();
 
 // Component B (elsewhere in your app)
-const query2 = await db.query.thread.find({ status: "active" }).query();
+const query2 = await db.query.thread.find({ status: 'active' }).query();
 
 // ✨ Only ONE remote subscription is created!
 // Both components update simultaneously when data changes
@@ -204,15 +204,15 @@ When you create, update, or delete records on the remote server:
 ```typescript
 // Full TypeScript support
 const [thread] = await db.query.thread.createRemote({
-  title: "Hello", // ✅ Type-checked
-  content: "World", // ✅ Type-checked
-  invalidField: "oops", // ❌ TypeScript error!
+  title: 'Hello', // ✅ Type-checked
+  content: 'World', // ✅ Type-checked
+  invalidField: 'oops', // ❌ TypeScript error!
 });
 
 // Autocomplete works everywhere
 const liveQuery = await db.query.thread
-  .find({ status: "active" }) // ✅ Status field is type-checked
-  .orderBy("created_at", "desc"); // ✅ Field names autocompleted
+  .find({ status: 'active' }) // ✅ Status field is type-checked
+  .orderBy('created_at', 'desc'); // ✅ Field names autocompleted
 ```
 
 ## Documentation
@@ -303,7 +303,7 @@ Make sure you have `remoteUrl` in your config:
 ```typescript
 export const dbConfig: SyncedDbConfig<Schema> = {
   // ... other config
-  remoteUrl: "http://localhost:8000", // Don't forget this!
+  remoteUrl: 'http://localhost:8000', // Don't forget this!
 };
 ```
 
@@ -324,6 +324,7 @@ Contributions are welcome! Please read the architecture documentation to underst
 ## Acknowledgments
 
 Built with:
+
 - [SurrealDB](https://surrealdb.com/) - The ultimate database
 - [Solid.js](https://www.solidjs.com/) - Simple and performant reactivity
 - [Valtio](https://github.com/pmndrs/valtio) - Proxy-based state management

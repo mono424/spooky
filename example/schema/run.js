@@ -21,7 +21,8 @@ if (fs.existsSync(configPath)) {
 }
 
 // Determine compose file
-const composeFile = mode === 'sidecar' ? 'docker-compose.sidecar.yml' : 'docker-compose.surrealism.yml';
+const composeFile =
+  mode === 'sidecar' ? 'docker-compose.sidecar.yml' : 'docker-compose.surrealism.yml';
 console.log(`[box] Loading configuration from spooky.yml`);
 console.log(`[box] Mode: ${mode}`);
 console.log(`[box] Using: ${composeFile}`);

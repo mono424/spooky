@@ -1,6 +1,6 @@
-import { createSignal, onMount } from "solid-js";
-import { useNavigate } from "@solidjs/router";
-import { CreateThreadDialog } from "../components/CreateThreadDialog";
+import { createSignal, onMount } from 'solid-js';
+import { useNavigate } from '@solidjs/router';
+import { CreateThreadDialog } from '../components/CreateThreadDialog';
 
 export default function CreateThreadPage() {
   const navigate = useNavigate();
@@ -12,7 +12,7 @@ export default function CreateThreadPage() {
 
   const handleClose = () => {
     setShowDialog(false);
-    navigate("/");
+    navigate('/');
   };
 
   return <CreateThreadDialog isOpen={showDialog()} onClose={handleClose} />;

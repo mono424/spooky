@@ -46,9 +46,7 @@ export class Incantation<T> {
   public id: RecordId<string>;
   public surrealql: string;
   public params?: Record<string, any>;
-  public localHash: string;
   public localArray: RecordVersionArray;
-  public remoteHash: string;
   public remoteArray: RecordVersionArray;
   public ttl: QueryTimeToLive | Duration;
   public lastActiveAt: Date | number | string;
@@ -74,9 +72,7 @@ export class Incantation<T> {
     this.id = data.id;
     this.surrealql = data.surrealql;
     this.params = data.params;
-    this.localHash = data.localHash;
     this.localArray = data.localArray;
-    this.remoteHash = data.remoteHash;
     this.remoteArray = data.remoteArray;
     this.lastActiveAt = new Date(data.lastActiveAt);
     this.ttl = data.ttl;
@@ -89,15 +85,8 @@ export class Incantation<T> {
     return this.meta.involvedTables?.includes(tableName) ?? false;
   }
 
-  public updateLocalState(records: T[], localHash: string, localArray: RecordVersionArray) {
-    if (localHash === this.localHash) {
-      console.log('-- HELL NAH 1 --', localHash, this.localHash);
-      return;
-    }
-    console.log('-- HELL NAH 2 --', localHash, this.localHash);
-
+  public updateLocalState(records: T[], localArray: RecordVersionArray) {
     this.results = records;
-    this.localHash = localHash;
     this.localArray = localArray;
     this.updateCounter++;
   }

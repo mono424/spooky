@@ -1,8 +1,8 @@
-import { createSignal, createEffect, Show, onCleanup } from "solid-js";
+import { createSignal, createEffect, Show, onCleanup } from 'solid-js';
 
 export interface ToastProps {
   message: string;
-  type?: "error" | "success" | "info";
+  type?: 'error' | 'success' | 'info';
   duration?: number;
   onDismiss?: () => void;
 }
@@ -24,21 +24,24 @@ export function Toast(props: ToastProps) {
     <Show when={visible()}>
       <div
         style={{
-          position: "fixed",
-          bottom: "20px",
-          right: "20px",
-          padding: "12px 16px",
-          background: props.type === "error" ? "var(--sys-color-error, #d32f2f)" : "var(--sys-color-surface-container-highest, #333)",
-          color: "white",
-          "border-radius": "4px",
-          "box-shadow": "0 2px 8px rgba(0,0,0,0.2)",
-          "z-index": 9999,
-          display: "flex",
-          "align-items": "center",
-          gap: "8px",
-          "font-family": "var(--sys-typescale-body-font)",
-          "font-size": "13px",
-          "animation": "slideIn 0.3s ease-out"
+          position: 'fixed',
+          bottom: '20px',
+          right: '20px',
+          padding: '12px 16px',
+          background:
+            props.type === 'error'
+              ? 'var(--sys-color-error, #d32f2f)'
+              : 'var(--sys-color-surface-container-highest, #333)',
+          color: 'white',
+          'border-radius': '4px',
+          'box-shadow': '0 2px 8px rgba(0,0,0,0.2)',
+          'z-index': 9999,
+          display: 'flex',
+          'align-items': 'center',
+          gap: '8px',
+          'font-family': 'var(--sys-typescale-body-font)',
+          'font-size': '13px',
+          animation: 'slideIn 0.3s ease-out',
         }}
       >
         <span>{props.message}</span>
@@ -48,12 +51,12 @@ export function Toast(props: ToastProps) {
             props.onDismiss?.();
           }}
           style={{
-            background: "transparent",
-            border: "none",
-            color: "white",
-            cursor: "pointer",
-            "font-size": "16px",
-            padding: "0 4px"
+            background: 'transparent',
+            border: 'none',
+            color: 'white',
+            cursor: 'pointer',
+            'font-size': '16px',
+            padding: '0 4px',
           }}
         >
           ×

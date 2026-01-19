@@ -1,17 +1,16 @@
-import { For, Show } from "solid-js";
-import { useDevTools } from "../context/DevToolsContext";
-import type { TabType } from "../types/devtools";
+import { For, Show } from 'solid-js';
+import { useDevTools } from '../context/DevToolsContext';
+import type { TabType } from '../types/devtools';
 
 const tabs: { id: TabType; label: string }[] = [
-  { id: "events", label: "Events" },
-  { id: "queries", label: "Queries" },
-  { id: "database", label: "Database" },
-  { id: "auth", label: "Auth" },
+  { id: 'events', label: 'Events' },
+  { id: 'queries', label: 'Queries' },
+  { id: 'database', label: 'Database' },
+  { id: 'auth', label: 'Auth' },
 ];
 
 export function Tabs() {
-  const { activeTab, setActiveTab, isSpookyAvailable, refresh, clearEvents } =
-    useDevTools();
+  const { activeTab, setActiveTab, isSpookyAvailable, refresh, clearEvents } = useDevTools();
 
   return (
     <div class="tabs">

@@ -53,12 +53,12 @@ To enable remote sync, update the database configuration in `src/lib/db.ts`:
 
 ```typescript
 const dbConfig: SyncedDbConfig = {
-  localDbName: "thread-app-local",
-  storageStrategy: "indexeddb",
-  namespace: "main",
-  database: "thread_app",
-  remoteUrl: "http://localhost:8000", // Uncomment for remote sync
-  token: "your-auth-token-here", // Add your auth token
+  localDbName: 'thread-app-local',
+  storageStrategy: 'indexeddb',
+  namespace: 'main',
+  database: 'thread_app',
+  remoteUrl: 'http://localhost:8000', // Uncomment for remote sync
+  token: 'your-auth-token-here', // Add your auth token
 };
 ```
 

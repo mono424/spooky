@@ -1,3 +1,4 @@
+import { RecordId } from 'surrealdb';
 import { RecordVersionArray, RecordVersionDiff } from '../../types.js';
 import { parseRecordIdString } from '../../utils/index.js';
 
@@ -91,8 +92,67 @@ export function diffRecordVersionArray(
   }
 
   return {
-    added: added.map(parseRecordIdString),
-    updated: updated.map(parseRecordIdString),
+    added: added.map((id) => ({
+      id: parseRecordIdString(id),
+      version: remoteMap.get(id)!,
+    })),
+    updated: updated.map((id) => ({
+      id: parseRecordIdString(id),
+      version: remoteMap.get(id)!,
+    })),
     removed: removed.map(parseRecordIdString),
   };
+}
+
+/**
+ * Applies a RecordVersionDiff to a RecordVersionArray and returns a new sorted array.
+ */
+export function applyRecordVersionDiff(
+  current: RecordVersionArray,
+  diff: RecordVersionDiff
+): RecordVersionArray {
+  const currentMap = new Map(current);
+
+  // Apply removals
+  for (const id of diff.removed) {
+    currentMap.delete(id.toString());
+  }
+
+  // Apply additions
+  for (const item of diff.added) {
+    currentMap.set(item.id.toString(), item.version);
+  }
+
+  // Apply updates
+  for (const item of diff.updated) {
+    currentMap.set(item.id.toString(), item.version);
+  }
+
+  return Array.from(currentMap).sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+export function createDiffFromDbOp(
+  op: 'CREATE' | 'UPDATE' | 'DELETE',
+  recordId: RecordId,
+  version: number
+): RecordVersionDiff {
+  if (op === 'CREATE') {
+    return {
+      added: [{ id: recordId, version }],
+      updated: [],
+      removed: [],
+    };
+  } else if (op === 'UPDATE') {
+    return {
+      added: [],
+      updated: [{ id: recordId, version }],
+      removed: [],
+    };
+  } else {
+    return {
+      added: [],
+      updated: [],
+      removed: [recordId],
+    };
+  }
 }

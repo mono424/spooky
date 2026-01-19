@@ -94,7 +94,7 @@ export class QueryManager<S extends SchemaStructure> {
   ) {
     const payload =
       eventOrPayload && 'payload' in eventOrPayload ? eventOrPayload.payload : eventOrPayload;
-    const { incantationId, records = [], remoteHash, remoteArray } = payload;
+    const { incantationId, records = [], remoteArray } = payload;
 
     if (!incantationId || !incantationId.id) {
       this.logger.error({ payload }, '[QueryManager] Invalid payload: missing incantationId');
@@ -140,9 +140,7 @@ export class QueryManager<S extends SchemaStructure> {
     this.logger.debug(
       {
         incantationId: incantationId?.toString(),
-        remoteHash,
         remoteArray: remoteArray ? 'PRESENT' : 'MISSING',
-        localHashInPayload: (payload as any).localHash,
         localArrayInPayload: (payload as any).localArray ? 'PRESENT' : 'MISSING',
       },
       '[QueryManager] handleIncomingUpdate payload'
@@ -160,21 +158,17 @@ export class QueryManager<S extends SchemaStructure> {
         '[QueryManager] Skipping empty update - incantation already has records'
       );
       // Still update remote state for sync purposes
-      incantation.remoteHash = remoteHash;
       incantation.remoteArray = remoteArray;
       return;
     }
 
-    incantation.updateLocalState(validRecords, incantation.localHash, incantation.localArray);
+    incantation.updateLocalState(validRecords, incantation.localArray);
     // Explicitly update remote state
-    incantation.remoteHash = remoteHash;
     incantation.remoteArray = remoteArray;
     this.events.emit(QueryEventTypes.IncantationUpdated, {
       incantationId,
       records: validRecords,
-      localHash: incantation.localHash,
       localArray: incantation.localArray,
-      remoteHash: remoteHash,
       remoteArray: remoteArray,
     });
 
@@ -182,7 +176,7 @@ export class QueryManager<S extends SchemaStructure> {
   }
 
   public async handleStreamUpdate(update: any) {
-    const { query_id, localHash, localArray } = update;
+    const { query_id, localArray } = update;
 
     // query_id from StreamProcessor is a string (e.g. "_spooky_incantation:...")
     // We need to convert it to a RecordId for the event payload
@@ -224,12 +218,11 @@ export class QueryManager<S extends SchemaStructure> {
         incantation.surrealql,
         incantation.params
       );
-      incantation.updateLocalState(records || [], localHash, localArray);
+      incantation.updateLocalState(records || [], localArray);
 
       this.events.emit(QueryEventTypes.IncantationUpdated, {
         incantationId: incantationRecordId,
         records: records || [],
-        localHash,
         localArray,
       });
     } catch (err) {
@@ -279,9 +272,7 @@ export class QueryManager<S extends SchemaStructure> {
         id: recordId,
         surrealql,
         params,
-        localHash: existing.localHash,
         localArray: existing.localArray,
-        remoteHash: existing.remoteHash,
         remoteArray: existing.remoteArray,
         lastActiveAt: existing.lastActiveAt,
         ttl: existing.ttl,
@@ -327,9 +318,7 @@ export class QueryManager<S extends SchemaStructure> {
             surrealQL: surrealql,
             params: params,
             clientId: this.clientId,
-            localHash: '',
             localArray: [],
-            remoteHash: '',
             remoteArray: [],
             lastActiveAt: new Date(),
             ttl: new Duration(ttl),
@@ -375,14 +364,13 @@ export class QueryManager<S extends SchemaStructure> {
       this.logger.warn({ err }, 'Failed to load initial cached records');
     }
 
-    incantation.updateLocalState(records, update.localHash, update.localArray);
+    incantation.updateLocalState(records, update.localArray);
 
     this.events.emit(QueryEventTypes.IncantationInitialized, {
       incantationId: incantation.id,
       surrealql: incantation.surrealql,
       params: incantation.params ?? {},
       ttl: incantation.ttl,
-      localHash: incantation.localHash,
       localArray: incantation.localArray,
       records,
     });

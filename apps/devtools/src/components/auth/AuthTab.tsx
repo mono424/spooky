@@ -1,6 +1,6 @@
-import { Show } from "solid-js";
-import { useDevTools } from "../../context/DevToolsContext";
-import { formatTime, formatRelativeTime } from "../../utils/formatters";
+import { Show } from 'solid-js';
+import { useDevTools } from '../../context/DevToolsContext';
+import { formatTime, formatRelativeTime } from '../../utils/formatters';
 
 export function AuthTab() {
   const { state } = useDevTools();
@@ -15,12 +15,12 @@ export function AuthTab() {
           class="auth-status"
           classList={{
             authenticated: state.auth.isAuthenticated,
-            "not-authenticated": !state.auth.isAuthenticated,
+            'not-authenticated': !state.auth.isAuthenticated,
           }}
         >
           <div>
-            <strong>Status:</strong>{" "}
-            {state.auth.isAuthenticated ? "Authenticated" : "Not authenticated"}
+            <strong>Status:</strong>{' '}
+            {state.auth.isAuthenticated ? 'Authenticated' : 'Not authenticated'}
           </div>
 
           <Show when={state.auth.user}>
@@ -34,8 +34,7 @@ export function AuthTab() {
                 </Show>
                 <Show when={state.auth.user?.roles && state.auth.user.roles.length > 0}>
                   <div style="margin-top: 4px;">
-                    <strong>Roles:</strong>{" "}
-                    {state.auth.user!.roles!.join(", ")}
+                    <strong>Roles:</strong> {state.auth.user!.roles!.join(', ')}
                   </div>
                 </Show>
               </div>
@@ -43,8 +42,8 @@ export function AuthTab() {
           </Show>
 
           <div style="margin-top: 12px;">
-            <strong>Last Check:</strong> {formatTime(state.auth.lastAuthCheck)}{" "}
-            ({formatRelativeTime(state.auth.lastAuthCheck)})
+            <strong>Last Check:</strong> {formatTime(state.auth.lastAuthCheck)} (
+            {formatRelativeTime(state.auth.lastAuthCheck)})
           </div>
         </div>
       </div>
