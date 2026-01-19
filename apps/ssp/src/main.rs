@@ -27,9 +27,12 @@ mod persistence;
 mod background_saver;
 use background_saver::BackgroundSaver;
 
+/// Shared database connection wrapped in Arc for true zero-copy sharing
+type SharedDb = Arc<Surreal<Client>>;
+
 #[derive(Clone)]
 struct AppState {
-    db: Surreal<Client>,
+    db: SharedDb,  // Arc-wrapped for efficient cloning
     processor: Arc<Mutex<Box<Circuit>>>,
     persistence_path: PathBuf,
     saver: Arc<BackgroundSaver>,
@@ -90,10 +93,13 @@ async fn main() -> anyhow::Result<()> {
     info!("Connecting to SurrealDB at {}", db_addr);
 
     let db = Surreal::new::<Ws>(db_addr).await.context("Failed to connect to SurrealDB")?;
-    db.signin(Root { username: db_user.clone(), password: db_pass.clone() }).await.context("Failed to signin")?;
+    db.signin(Root { username: db_user, password: db_pass }).await.context("Failed to signin")?;
     db.use_ns(&db_ns).use_db(&db_db).await.context("Failed to select ns/db")?;
 
-    info!("Connected to SurrealDB");
+    info!("Connected to SurrealDB (single persistent connection)");
+
+    // Wrap in Arc for zero-copy sharing across handlers
+    let db = Arc::new(db);
 
     // Load Circuit
     let processor = persistence::load_circuit(&persistence_path);
@@ -206,11 +212,14 @@ async fn ingest_handler(
         updates
     };
 
-    // Update edges for all streaming updates
-    for update in updates {
-        if let ViewUpdate::Streaming(s) = update {
-            update_incantation_edges(&state.db, &s).await;
-        }
+    // Collect all streaming updates and batch into single transaction
+    let streaming_updates: Vec<&StreamingUpdate> = updates
+        .iter()
+        .filter_map(|u| if let ViewUpdate::Streaming(s) = u { Some(s) } else { None })
+        .collect();
+
+    if !streaming_updates.is_empty() {
+        update_all_edges(&state.db, &streaming_updates).await;
     }
 
     StatusCode::OK
@@ -338,7 +347,7 @@ async fn save_handler(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 async fn version_handler() -> impl IntoResponse {
-    Json(json!("0.3.0-streaming"))
+    Json(json!("0.3.2-streaming-batched"))
 }
 
 // --- Helper Functions ---
@@ -355,85 +364,99 @@ fn format_incantation_id(id: &str) -> String {
     }
 }
 
-/// Update edges (streaming mode) - batched transaction
-/// Optimizes network calls: O(N) -> O(1) round-trips
-async fn update_incantation_edges(db: &Surreal<Client>, update: &StreamingUpdate) {
-    if update.records.is_empty() {
+/// Update edges for multiple views in a SINGLE transaction
+/// Optimizes: 3 views × 1 record = 1 transaction instead of 3
+async fn update_all_edges(db: &Surreal<Client>, updates: &[&StreamingUpdate]) {
+    if updates.is_empty() {
         return;
     }
 
-    let incantation_id_str = format_incantation_id(&update.view_id);
+    let mut all_statements: Vec<String> = Vec::new();
+    let mut bindings: Vec<(String, RecordId)> = Vec::new();
     
-    let Some(from_id) = parse_record_id(&incantation_id_str) else {
-        error!("Invalid incantation ID format: {}", incantation_id_str);
-        return;
-    };
-
-    debug!(
-        "Processing {} edge operations for {}",
-        update.records.len(),
-        incantation_id_str
-    );
-
-    // Build batched statements
-    let mut statements: Vec<String> = Vec::with_capacity(update.records.len());
-    
-    for record in &update.records {
-        if parse_record_id(&record.id).is_none() {
-            error!("Invalid record ID format: {}", record.id);
+    for (idx, update) in updates.iter().enumerate() {
+        if update.records.is_empty() {
             continue;
         }
 
-        let stmt = match record.event {
-            DeltaEvent::Created => {
-                format!(
-                    "RELATE $from->_spooky_list_ref->{} SET version = {}, clientId = (SELECT clientId FROM ONLY $from).clientId",
-                    record.id, record.version
-                )
-            }
-            DeltaEvent::Updated => {
-                format!(
-                    "UPDATE $from->_spooky_list_ref SET version = {} WHERE out = {}",
-                    record.version, record.id
-                )
-            }
-            DeltaEvent::Deleted => {
-                format!(
-                    "DELETE $from->_spooky_list_ref WHERE out = {}",
-                    record.id
-                )
-            }
-        };
+        let incantation_id_str = format_incantation_id(&update.view_id);
         
-        statements.push(stmt);
+        let Some(from_id) = parse_record_id(&incantation_id_str) else {
+            error!("Invalid incantation ID format: {}", incantation_id_str);
+            continue;
+        };
+
+        let binding_name = format!("from{}", idx);
+        bindings.push((binding_name.clone(), from_id));
+
+        for record in &update.records {
+            if parse_record_id(&record.id).is_none() {
+                error!("Invalid record ID format: {}", record.id);
+                continue;
+            }
+
+            let stmt = match record.event {
+                DeltaEvent::Created => {
+                    format!(
+                        "RELATE ${}->_spooky_list_ref->{} SET version = {}, clientId = (SELECT clientId FROM ONLY ${}).clientId",
+                        binding_name, record.id, record.version, binding_name
+                    )
+                }
+                DeltaEvent::Updated => {
+                    format!(
+                        "UPDATE ${}->_spooky_list_ref SET version = {} WHERE out = {}",
+                        binding_name, record.version, record.id
+                    )
+                }
+                DeltaEvent::Deleted => {
+                    format!(
+                        "DELETE ${}->_spooky_list_ref WHERE out = {}",
+                        binding_name, record.id
+                    )
+                }
+            };
+            
+            all_statements.push(stmt);
+        }
     }
 
-    if statements.is_empty() {
+    if all_statements.is_empty() {
         return;
     }
 
-    // Wrap in transaction for atomicity
-    let full_query = format!(
-        "BEGIN TRANSACTION;\n{};\nCOMMIT TRANSACTION;",
-        statements.join(";\n")
+    debug!(
+        "Processing {} edge operations across {} views in single transaction",
+        all_statements.len(),
+        updates.len()
     );
 
-    match db.query(&full_query)
-        .bind(("from", from_id))
-        .await 
-    {
+    // Wrap ALL statements in ONE transaction
+    let full_query = format!(
+        "BEGIN TRANSACTION;\n{};\nCOMMIT TRANSACTION;",
+        all_statements.join(";\n")
+    );
+
+    // Build query with all bindings
+    let mut query = db.query(&full_query);
+    for (name, id) in bindings {
+        query = query.bind((name, id));
+    }
+
+    match query.await {
         Ok(_) => {
             debug!(
-                "Completed {} edge operations for {}",
-                statements.len(),
-                incantation_id_str
+                "Completed {} edge operations across {} views",
+                all_statements.len(),
+                updates.len()
             );
         }
         Err(e) => {
-            error!(
-                "Edge update failed for {}: {}",
-                incantation_id_str, e
-            );
+            error!("Batched edge update failed: {}", e);
         }
     }
+}
+
+/// Update edges for a single view (used by register_view_handler)
+async fn update_incantation_edges(db: &Surreal<Client>, update: &StreamingUpdate) {
+    update_all_edges(db, &[update]).await;
 }
