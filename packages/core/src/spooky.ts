@@ -81,20 +81,24 @@ export class SpookyClient<S extends SchemaStructure> {
       logger
     );
     this.sync = new SpookySync(
-      this.config.schema,
       this.local,
       this.remote,
       this.streamProcessor,
+      this.dataManager,
       clientId,
       logger
     );
     this.devTools = new DevToolsService(
       this.local,
+      this.remote,
       logger,
       this.config.schema,
       this.auth,
       this.dataManager
     );
+
+    // Register DevTools as a receiver for stream updates
+    this.streamProcessor.addReceiver(this.devTools);
   }
 
   async init() {
@@ -197,16 +201,8 @@ export class SpookyClient<S extends SchemaStructure> {
         // Just logging or devtools update if needed
       });
 
-      // --- StreamProcessor Events ---
-      this.streamProcessor.events.subscribe('stream_update', (event: any) => {
-        const payload = event.payload;
-        this.devTools.onStreamUpdate(payload);
-        if (Array.isArray(payload)) {
-          for (const update of payload) {
-            this.dataManager.handleStreamUpdate(update);
-          }
-        }
-      });
+      // Note: StreamProcessor updates are now handled directly by DataManager
+      // via setUpdateHandler() wiring in DataManager constructor
 
       // --- Auth Events ---
       this.auth.eventSystem.subscribe(AuthEventTypes.AuthStateChanged, (event) => {

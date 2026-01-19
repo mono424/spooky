@@ -5,6 +5,7 @@ import { RecordVersionArray, RecordVersionDiff } from '../../types.js';
 import { ArraySyncer } from './utils.js';
 import { Logger } from '../../services/logger/index.js';
 import { SyncEventTypes, createSyncEventSystem } from './events/index.js';
+import { encodeRecordId } from '../../utils/index.js';
 
 /**
  * SyncEngine handles the core sync operations: fetching remote records,
@@ -19,7 +20,6 @@ export class SyncEngine {
     private local: LocalDatabaseService,
     private remote: RemoteDatabaseService,
     private streamProcessor: StreamProcessorService,
-    private relationshipMap: Map<string, Set<string>>,
     private logger: Logger
   ) {}
 
@@ -34,10 +34,13 @@ export class SyncEngine {
     remoteArray: RecordVersionArray
   ): Promise<RecordVersionDiff> {
     const diff = arraySyncer.nextSet();
-    const { added, updated, removed } = diff;
-    const idsToFetch = [...added, ...updated];
+    if (!diff) {
+      return { added: [], updated: [], removed: [] };
+    }
 
-    this.logger.debug({ added, updated, removed, idsToFetch }, 'SyncEngine.syncRecords diff');
+    const { added, updated, removed } = diff;
+
+    this.logger.debug({ added, updated, removed }, 'SyncEngine.syncRecords diff');
 
     // Build remote version map for quick lookup
     const remoteVersionMap = new Map<string, number>();
@@ -47,32 +50,30 @@ export class SyncEngine {
 
     // Handle removed records: verify they don't exist remotely before deleting locally
     if (removed.length > 0) {
-      await this.handleRemovedRecords(removed, incantationId, arraySyncer);
+      await this.handleRemovedRecords(removed, arraySyncer);
     }
 
     // Fetch added/updated records from remote
+    const idsToFetch = [...added, ...updated];
     if (idsToFetch.length === 0) {
-      return { added: [], updated: [], removed };
+      return diff;
     }
 
     const [remoteResults] = await this.remote.query<[Record<string, any>[]]>('SELECT * FROM $ids', {
       ids: idsToFetch,
     });
 
-    // Flatten and prepare results
-    const flatResults = this.flattenResults(remoteResults);
-
     // BATCH PROCESSING: Cache all records locally first
-    const cachePromises = flatResults.map(async (record) => {
+    const cachePromises = remoteResults.map(async (record) => {
       await this.local.getClient().upsert(record.id).content(record);
     });
     await Promise.all(cachePromises);
 
     // Prepare batch for ingestion
     const ingestBatch: Array<{ table: string; op: string; id: string; record: any }> = [];
-    const versionUpdates: Array<{ fullId: string; version: number }> = [];
+    const versionUpdates: Array<{ fullId: string; version: number; isAdded: boolean }> = [];
 
-    for (const record of flatResults) {
+    for (const record of remoteResults) {
       const fullId = record.id.toString();
       const table = record.id.table.toString();
       const isAdded = added.some((id) => id.toString() === fullId);
@@ -86,7 +87,7 @@ export class SyncEngine {
       });
 
       if (remoteVer !== undefined) {
-        versionUpdates.push({ fullId, version: remoteVer });
+        versionUpdates.push({ fullId, version: remoteVer, isAdded });
       }
     }
 
@@ -96,189 +97,50 @@ export class SyncEngine {
     }
 
     // Set versions for all records
-    for (const { fullId, version } of versionUpdates) {
+    for (const { fullId, version, isAdded } of versionUpdates) {
       this.streamProcessor.setRecordVersion(incantationId.toString(), fullId, version);
-    }
-
-    // Update arraySyncer with final state
-    const finalVersionArray: RecordVersionArray = versionUpdates.map(({ fullId, version }) => [
-      fullId,
-      version,
-    ]);
-    if (finalVersionArray.length > 0) {
-      arraySyncer.update(finalVersionArray);
+      if (isAdded) arraySyncer.insert(fullId, version);
+      else arraySyncer.update(fullId, version);
     }
 
     this.events.emit(SyncEventTypes.RemoteDataIngested, {
-      records: flatResults,
+      records: remoteResults,
     });
 
-    return { added, updated, removed };
+    return diff;
   }
 
   /**
    * Handle records that exist locally but not in remote array.
    */
-  private async handleRemovedRecords(
-    removed: RecordId[],
-    incantationId: RecordId<string>,
-    arraySyncer: ArraySyncer
-  ): Promise<void> {
+  private async handleRemovedRecords(removed: RecordId[], arraySyncer: ArraySyncer): Promise<void> {
     this.logger.debug({ removed: removed.map((r) => r.toString()) }, 'Checking removed records');
 
-    const [existingRemote] = await this.remote.query<[{ id: RecordId }[]]>('SELECT id FROM $ids', {
+    const [existingRemote] = await this.remote.query<[{ id: string }[]]>('SELECT id FROM $ids', {
       ids: removed,
     });
-    const existingRemoteIds = new Set(existingRemote.map((r) => r.id.toString()));
+    const existingRemoteIds = new Set(existingRemote.map((r) => r.id));
 
     for (const recordId of removed) {
-      if (!existingRemoteIds.has(recordId.toString())) {
-        this.logger.debug({ recordId: recordId.toString() }, 'Deleting confirmed removed record');
-        await this.deleteCacheEntry(recordId, incantationId, arraySyncer);
+      const recordIdStr = encodeRecordId(recordId);
+      if (!existingRemoteIds.has(recordIdStr)) {
+        this.logger.debug({ recordId: recordIdStr }, 'Deleting confirmed removed record');
+
+        // 1. Delete from local DB
+        await this.local.query('DELETE $id', { id: recordIdStr });
+
+        // 2. Ingest deletion into DBSP
+        const result = await this.streamProcessor.ingest(
+          recordId.table.name,
+          'DELETE',
+          recordIdStr,
+          {},
+          false
+        );
+
+        // 3. Delete from arraySyncer
+        arraySyncer.delete(recordIdStr);
       }
     }
-  }
-
-  /**
-   * Create a record in local cache and ingest into DBSP.
-   */
-  private async createCacheEntry(
-    record: Record<string, any>,
-    incantationId: RecordId<string>,
-    remoteVersion: number | undefined,
-    arraySyncer: ArraySyncer
-  ): Promise<void> {
-    const table = record.id.table.toString();
-    const fullId = record.id.toString();
-
-    // 1. Cache in local DB
-    await this.local.getClient().upsert(record.id).content(record);
-
-    // 2. Ingest into DBSP
-    const result = await this.streamProcessor.ingest(table, 'CREATE', fullId, record, true);
-
-    // 3. Set version if provided
-    if (remoteVersion !== undefined) {
-      this.streamProcessor.setRecordVersion(incantationId.toString(), fullId, remoteVersion);
-      arraySyncer.update([[fullId, remoteVersion]] as RecordVersionArray);
-    } else {
-      for (const update of result) {
-        if (update.query_id === incantationId.toString()) {
-          arraySyncer.update(update.result_data);
-        }
-      }
-    }
-  }
-
-  /**
-   * Update a record in local cache and ingest into DBSP.
-   */
-  private async updateCacheEntry(
-    record: Record<string, any>,
-    incantationId: RecordId<string>,
-    remoteVersion: number | undefined,
-    arraySyncer: ArraySyncer
-  ): Promise<void> {
-    const table = record.id.table.toString();
-    const fullId = record.id.toString();
-
-    // 1. Cache in local DB
-    await this.local.getClient().upsert(record.id).content(record);
-
-    // 2. Ingest into DBSP (isOptimistic=false to not auto-increment version)
-    const result = await this.streamProcessor.ingest(table, 'UPDATE', fullId, record, false);
-
-    // 3. Set version if provided
-    if (remoteVersion !== undefined) {
-      this.streamProcessor.setRecordVersion(incantationId.toString(), fullId, remoteVersion);
-      arraySyncer.update([[fullId, remoteVersion]] as RecordVersionArray);
-    } else {
-      for (const update of result) {
-        if (update.query_id === incantationId.toString()) {
-          arraySyncer.update(update.result_data);
-        }
-      }
-    }
-  }
-
-  /**
-   * Delete a record from local cache and ingest deletion into DBSP.
-   */
-  private async deleteCacheEntry(
-    recordId: RecordId,
-    incantationId: RecordId<string>,
-    arraySyncer: ArraySyncer
-  ): Promise<void> {
-    const table = recordId.table.toString();
-    const fullId = recordId.toString();
-
-    // 1. Delete from local DB
-    await this.local.query('DELETE $id', { id: recordId });
-
-    // 2. Ingest deletion into DBSP
-    const result = await this.streamProcessor.ingest(table, 'DELETE', fullId, {}, false);
-
-    for (const update of result) {
-      if (update.query_id === incantationId.toString()) {
-        arraySyncer.update(update.result_data);
-      }
-    }
-  }
-
-  /**
-   * Recursively flattens a list of records, extracting nested objects that look like records (have an 'id')
-   * into the top-level list, and replacing them with their ID in the parent.
-   *
-   * Schema-aware: Only flattens fields that are defined as relationships in the schema.
-   */
-  flattenResults(
-    results: Record<string, any>[],
-    visited: Set<string> = new Set(),
-    flattened: Record<string, any>[] = []
-  ): Record<string, any>[] {
-    for (const record of results) {
-      if (!record) continue;
-
-      // 1. Identify the Record
-      let recordIdStr: string | undefined;
-      let tableName: string | undefined;
-
-      if (record.id && record.id instanceof RecordId) {
-        recordIdStr = record.id.toString();
-        tableName = record.id.table.name;
-      }
-
-      // 2. Cycle Detection / Deduplication
-      if (recordIdStr) {
-        if (visited.has(recordIdStr)) continue;
-        visited.add(recordIdStr);
-      }
-
-      // 3. Create a shallow copy to modify fields without mutating original
-      const processedRecord: Record<string, any> = { ...record };
-
-      // 4. Handle Relationships recursively
-      if (tableName && this.relationshipMap.has(tableName)) {
-        const validFields = this.relationshipMap.get(tableName)!;
-
-        for (const key of validFields) {
-          if (!(key in processedRecord)) continue;
-
-          const value = processedRecord[key];
-
-          if (value && typeof value === 'object') {
-            if (Array.isArray(value)) {
-              processedRecord[key] = this.flattenResults(value, visited, flattened);
-            } else if (value.id && value.id instanceof RecordId) {
-              this.flattenResults([value], visited, flattened);
-              processedRecord[key] = value.id;
-            }
-          }
-        }
-      }
-      flattened.push(processedRecord);
-    }
-
-    return flattened;
   }
 }

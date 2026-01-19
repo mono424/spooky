@@ -1,7 +1,8 @@
-import { LocalDatabaseService } from '../../services/database/index.js';
+import { LocalDatabaseService, RemoteDatabaseService } from '../../services/database/index.js';
 import { Logger } from '../../services/logger/index.js';
 import { SchemaStructure } from '@spooky/query-builder';
 import { RecordId } from 'surrealdb';
+import { StreamUpdate, StreamUpdateReceiver } from '../../services/stream-processor/index.js';
 
 // DevTools interfaces (matching extension expectations)
 export interface DevToolsEvent {
@@ -15,7 +16,7 @@ import { DataManager } from '../data/index.js';
 import { AuthService } from '../auth/index.js';
 import { AuthEventTypes } from '../auth/events/index.js';
 
-export class DevToolsService {
+export class DevToolsService implements StreamUpdateReceiver {
   private eventsHistory: DevToolsEvent[] = [];
   private eventIdCounter = 0;
   private version = '1.0.0';
@@ -24,6 +25,7 @@ export class DevToolsService {
     // private mutationEvents: MutationEventSystem, // REMOVED
     // private queryEvents: QueryEventSystem, // REMOVED
     private databaseService: LocalDatabaseService,
+    private remoteDatabaseService: RemoteDatabaseService,
     private logger: Logger,
     private schema: SchemaStructure,
     private authService: AuthService<SchemaStructure>,
@@ -99,10 +101,10 @@ export class DevToolsService {
     this.notifyDevTools();
   }
 
-  public onStreamUpdate(payload: any) {
-    this.logger.debug({ payload }, '[DevToolsService] StreamUpdate');
+  public onStreamUpdate(update: StreamUpdate) {
+    this.logger.debug({ update }, '[DevToolsService] StreamUpdate');
     this.addEvent('STREAM_UPDATE', {
-      updates: payload,
+      updates: [update],
     });
     this.notifyDevTools();
   }
@@ -176,12 +178,28 @@ export class DevToolsService {
     }
   }
 
-  private serializeForDevTools(data: any): any {
-    if (data === null || data === undefined) {
-      return data;
+  private serializeForDevTools(data: any, seen = new WeakSet<object>()): any {
+    if (data === undefined) {
+      return 'undefined';
+    }
+
+    if (data === null) {
+      return null;
     }
 
     if (data instanceof RecordId) {
+      return data.toString();
+    }
+
+    if (Array.isArray(data)) {
+      if (seen.has(data)) {
+        return '[Circular Array]';
+      }
+      seen.add(data);
+      return data.map((item) => this.serializeForDevTools(item, seen));
+    }
+
+    if (typeof data === 'bigint') {
       return data.toString();
     }
 
@@ -189,15 +207,16 @@ export class DevToolsService {
       return data.toISOString();
     }
 
-    if (Array.isArray(data)) {
-      return data.map((item) => this.serializeForDevTools(item));
-    }
-
     if (typeof data === 'object') {
+      if (seen.has(data)) {
+        return '[Circular Object]';
+      }
+      seen.add(data);
+
       const result: Record<string, any> = {};
       for (const key in data) {
         if (Object.prototype.hasOwnProperty.call(data, key)) {
-          result[key] = this.serializeForDevTools(data[key]);
+          result[key] = this.serializeForDevTools(data[key], seen);
         }
       }
       return result;
@@ -258,9 +277,6 @@ export class DevToolsService {
           updates: Record<string, unknown>
         ) => {
           try {
-            // Ensure updates is mapped correctly for bindings
-            // const setClause = Object.keys(updates).map(k => `${k} = $val_${k}`).join(', ');
-            // But simplified: UPDATE recordId MERGE $updates
             await this.databaseService.query(`UPDATE ${recordId} MERGE $updates`, { updates });
             return { success: true };
           } catch (e: any) {
@@ -273,6 +289,51 @@ export class DevToolsService {
             return { success: true };
           } catch (e: any) {
             return { success: false, error: e.message };
+          }
+        },
+        runQuery: async (query: string, target: 'local' | 'remote' = 'local') => {
+          try {
+            this.logger.debug({ query, target }, '[DevTools] Running query (START)');
+            const service = target === 'remote' ? this.remoteDatabaseService : this.databaseService;
+
+            const startTime = Date.now();
+            const result = await service.query<any>(query);
+            const queryTime = Date.now() - startTime;
+
+            this.logger.debug(
+              {
+                query,
+                time: queryTime,
+                resultType: typeof result,
+                isArray: Array.isArray(result),
+              },
+              '[DevTools] Database returned result'
+            );
+
+            // Serialize the result for DevTools
+            const serializeStart = Date.now();
+            const serialized = this.serializeForDevTools(result);
+            const serializeTime = Date.now() - serializeStart;
+
+            this.logger.debug(
+              {
+                serializeTime,
+                serializedLength: JSON.stringify(serialized).length,
+              },
+              '[DevTools] Serialization complete'
+            );
+
+            return {
+              success: true,
+              data: serialized,
+              target,
+            };
+          } catch (e: any) {
+            this.logger.error({ err: e, query, target }, '[DevTools] Query execution failed');
+            // Ensure we always return a string for error
+            const errorMessage =
+              e instanceof Error ? e.message : typeof e === 'string' ? e : JSON.stringify(e);
+            return { success: false, error: errorMessage || 'Unknown occurred' };
           }
         },
       };

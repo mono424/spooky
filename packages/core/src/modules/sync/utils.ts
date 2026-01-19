@@ -4,25 +4,52 @@ import { parseRecordIdString } from '../../utils/index.js';
 export class ArraySyncer {
   private localArray: RecordVersionArray;
   private remoteArray: RecordVersionArray;
+  private needsSort = false;
 
   constructor(localArray: RecordVersionArray, remoteArray: RecordVersionArray) {
-    this.remoteArray = remoteArray || [];
-    this.localArray = localArray || [];
+    this.remoteArray = remoteArray.sort((a, b) => a[0].localeCompare(b[0]));
+    this.localArray = localArray.sort((a, b) => a[0].localeCompare(b[0]));
+  }
+
+  /**
+   * Inserts an item into the local array
+   */
+  insert(recordId: string, version: number) {
+    this.localArray.push([recordId, version]);
+    this.needsSort = true;
   }
 
   /**
    * Updates the current local RecordVersionArray state.
    */
-  update(local: RecordVersionArray) {
-    this.localArray = local || [];
+  update(recordId: string, version: number) {
+    this.localArray = this.localArray.map((record) => {
+      if (record[0] === recordId) {
+        this.needsSort = true;
+        return [recordId, version];
+      }
+      return record;
+    });
+  }
+
+  /**
+   * Deletes an item from the local array
+   */
+  delete(recordId: string) {
+    this.localArray = this.localArray.filter((record) => record[0] !== recordId);
   }
 
   /**
    * Returns the difference between the local and remote arrays.
    * Includes sets of added, updated, and removed records.
    */
-  nextSet(): RecordVersionDiff {
-    return diffRecordVersionArray(this.localArray, this.remoteArray);
+  nextSet(): RecordVersionDiff | null {
+    if (this.needsSort) {
+      this.localArray.sort((a, b) => a[0].localeCompare(b[0]));
+      this.needsSort = false;
+    }
+    const diff = diffRecordVersionArray(this.localArray, this.remoteArray);
+    return diff;
   }
 }
 
@@ -51,6 +78,8 @@ export function diffRecordVersionArray(
     } else if (localVersion < remoteVersion) {
       // Record exists in both but remote has newer version
       updated.push(recordId);
+
+      console.log('__diff__', localVersion, remoteVersion);
     }
   }
 
