@@ -1,5 +1,4 @@
 services:
-  # --- ERSETZT JAEGER ---
   aspire-dashboard:
     image: mcr.microsoft.com/dotnet/aspire-dashboard:latest
     container_name: aspire-dashboard
@@ -32,7 +31,7 @@ services:
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://aspire-dashboard:18889
       # Reduziert Terminal-Logs (optional, da wir jetzt traces haben)
       - SURREAL_LOG=info 
-      # - RUST_LOG=info,surrealdb::core=debug,surrealdb::dbs=debug 
+      #- RUST_LOG=debug # Force DEBUG globally to verify ssp package logs appear 
     command:
       - start
       - --bind

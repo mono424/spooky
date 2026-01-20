@@ -23,3 +23,4 @@ opentelemetry-appender-tracing = "0.27"
 
 dotenvy = "0.15.7"
 blake3 = "1.8.2"
+env = "1.0.1"

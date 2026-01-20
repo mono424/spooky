@@ -216,6 +216,7 @@ async fn ingest_handler(
     let (clean_record, hash) = ssp::service::ingest::prepare(payload.record);
 
     let updates = {
+        let _span = ssp::logging::get_module_span().entered();
         let mut circuit = state.processor.lock().unwrap();
 
         if let Some(version) = payload.version {
@@ -298,6 +299,7 @@ async fn register_view_handler(
 
     // Always register with Streaming mode
     let update = {
+        let _span = ssp::logging::get_module_span().entered();
         let mut circuit = state.processor.lock().unwrap();
         let res = circuit.register_view(
             data.plan.clone(), 
@@ -356,6 +358,7 @@ async fn unregister_view_handler(
     debug!("Unregistering view {}", payload.id);
     
     {
+        let _span = ssp::logging::get_module_span().entered();
         let mut circuit = state.processor.lock().unwrap();
         circuit.unregister_view(&payload.id);
         state.saver.trigger_save();
@@ -382,6 +385,7 @@ async fn reset_handler(State(state): State<AppState>) -> impl IntoResponse {
     info!("Resetting circuit state");
     
     {
+        let _span = ssp::logging::get_module_span().entered();
         let mut circuit = state.processor.lock().unwrap();
         *circuit = Box::new(Circuit::new());
         if state.persistence_path.exists() {

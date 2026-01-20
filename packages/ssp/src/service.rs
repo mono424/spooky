@@ -3,6 +3,7 @@ use crate::engine::view::{Operator, SpookyValue};
 use crate::{converter, sanitizer, MaterializedViewUpdate, QueryPlan};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
+use tracing::instrument;
 
 fn hash_value_recursive_blake3(v: &Value, hasher: &mut blake3::Hasher) {
     match v {
@@ -52,6 +53,7 @@ pub mod ingest {
     use super::*;
 
     /// Prepares a record for ingestion by normalizing and hashing it.
+    #[instrument(skip(record))]
     pub fn prepare(record: Value) -> (SpookyValue, String) {
         let clean_record = sanitizer::normalize_record(record);
         let mut hasher = blake3::Hasher::new();
@@ -61,6 +63,7 @@ pub mod ingest {
     }
 
     /// Prepares a batch of records, optionally in parallel.
+    #[instrument(skip(records))]
     pub fn prepare_batch(records: Vec<Value>) -> Vec<(SpookyValue, String)> {
         #[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
         {
@@ -98,6 +101,7 @@ pub mod view {
     }
 
     /// Prepares a view registration request.
+    #[instrument(skip(config))]
     pub fn prepare_registration(config: Value) -> Result<RegistrationData> {
         let id = config
             .get("id")
@@ -199,6 +203,7 @@ pub mod view {
         })
     }
 
+    #[instrument]
     pub fn default_result(id: &str) -> MaterializedViewUpdate {
         let empty_hash = blake3::hash(&[]).to_hex().to_string();
         MaterializedViewUpdate {
