@@ -53,6 +53,8 @@ export function ThreadDetail() {
     console.log('thread___', thread());
   });
 
+  
+
   const handleBack = () => {
     navigate('/');
   };
