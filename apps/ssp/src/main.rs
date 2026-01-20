@@ -21,12 +21,14 @@ use surrealdb::opt::auth::Root;
 use surrealdb::Surreal;
 use surrealdb::types::RecordId;
 use tracing::{info, error, debug, instrument};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+//use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use tokio::signal;
 
 mod persistence;
 mod background_saver;
 use background_saver::BackgroundSaver;
+
+mod open_telemetry;
 
 /// Shared database connection wrapped in Arc for true zero-copy sharing
 type SharedDb = Arc<Surreal<Client>>;
@@ -60,7 +62,7 @@ async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
 
     // Setup logging
-    let file_appender = tracing_appender::rolling::daily("logs", "ssp.log");
+    /*let file_appender = tracing_appender::rolling::daily("logs", "ssp.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
@@ -74,7 +76,8 @@ async fn main() -> anyhow::Result<()> {
         .with(stdout_layer)
         .with(file_layer)
         .init();
-
+    */
+    open_telemetry::init_tracing().context("Failed to initialize OpenTelemetry tracing")?;
     info!("Starting ssp (streaming mode)...");
 
     // Persistence Config
@@ -145,6 +148,8 @@ async fn main() -> anyhow::Result<()> {
         .with_graceful_shutdown(shutdown_signal(saver))
         .await
         .context("Server error")?;
+        
+    opentelemetry::global::shutdown_tracer_provider();
 
     Ok(())
 }

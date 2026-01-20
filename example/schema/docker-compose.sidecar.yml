@@ -1,4 +1,32 @@
 services:
+  # --- ERSETZT JAEGER ---
+  tempo:
+    image: grafana/tempo:latest
+    command: [ "-config.file=/etc/tempo.yaml" ]
+    volumes:
+      - ./.docker-config/tempo.yaml:/etc/tempo.yaml
+    ports:
+      - "14268:14268"  # Jaeger ingest
+      - "4317:4317"    # OTLP gRPC (WICHTIG für Rust)
+      - "4318:4318"    # OTLP HTTP
+      - "3200:3200"    # Tempo internal
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    volumes:
+      - ./.docker-config/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+    ports:
+      - "3000:3000"
+    depends_on:
+      - tempo
+    restart: unless-stopped
+  # ----------------------
+
   surrealdb:
     image: surrealdb/surrealdb:v3.0.0-beta.1
     ports:
@@ -8,13 +36,19 @@ services:
       - SURREAL_PASS=root
       - SURREAL_CAPS_ALLOW_EXPERIMENTAL=surrealism,files
       - SURREAL_BUCKET_FOLDER_ALLOWLIST=/modules
+      # --- OTLP KONFIGURATION ---
+      # Aktiviert OTLP Export für Tracing
+      - SURREAL_TELEMETRY_PROVIDER=otlp
+      - SURREAL_TELEMETRY_SERVICE_NAME=surrealdb-core
+      # Ziel: Jaeger Container Port 4317
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+      # Reduziert Terminal-Logs (optional, da wir jetzt traces haben)
+      - SURREAL_LOG=info 
     command:
       - start
       - --bind
       - 0.0.0.0:8000
       - --allow-all
-      - --log
-      - trace
       - --user
       - root
       - --pass
@@ -23,6 +57,8 @@ services:
     volumes:
       - ./.spooky/xor_module.surli:/modules/xor_module.surli:ro
       - ./.spooky/dbsp_module.surli:/modules/dbsp_module.surli:ro
+    depends_on:
+      - tempo
     healthcheck:
       test: ['CMD', '/surreal', 'isready', '--conn', 'http://localhost:8000']
       interval: 10s
@@ -38,6 +74,11 @@ services:
       - '8667:8667'
     environment:
       - RUST_LOG=debug
+      # --- OTLP KONFIGURATION ---
+      # Ziel für Rust Tracing
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+      - OTEL_SERVICE_NAME=spooky-sidecar
+      # DB Connection
       - SURREALDB_ADDR=surrealdb:8000/rpc
       - SURREALDB_NS=main
       - SURREALDB_DB=main
@@ -50,6 +91,8 @@ services:
     depends_on:
       surrealdb:
         condition: service_healthy
+      tempo:
+        condition: service_started
       schema-migration:
         condition: service_completed_successfully
     restart: unless-stopped
