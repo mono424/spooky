@@ -6,4 +6,3 @@ pub type Weight = i64;
 pub type RowKey = SmolStr;
 pub type FastMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<FxHasher>>;
 pub type ZSet = FastMap<RowKey, Weight>;
-pub type VersionMap = FastMap<SmolStr, u64>;

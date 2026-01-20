@@ -188,7 +188,7 @@ fn test_flat_format_e2e_flow() {
     // Phase 2: Register view in Flat format
     println!("PHASE 2: REGISTER VIEW (Flat)");
     let plan = build_thread_with_author_plan("thread_flat");
-    let reg_update = circuit.register_view(plan, None, Some(ViewResultFormat::Flat));
+    let reg_update = circuit.register_view(plan, None, Some(ViewResultFormat::Flat), None);
     
     assert!(reg_update.is_some(), "Registration should return update");
     let update = reg_update.unwrap();
@@ -277,7 +277,7 @@ fn test_streaming_format_e2e_flow() {
     // Phase 2: Register view in Streaming format
     println!("PHASE 2: REGISTER VIEW (Streaming)");
     let plan = build_thread_with_author_plan("thread_streaming");
-    let reg_update = circuit.register_view(plan, None, Some(ViewResultFormat::Streaming));
+    let reg_update = circuit.register_view(plan, None, Some(ViewResultFormat::Streaming), None);
     
     assert!(reg_update.is_some(), "Registration should return update");
     let update = reg_update.unwrap();
@@ -444,8 +444,8 @@ fn test_payload_comparison_flat_vs_streaming() {
     let plan_flat = build_thread_with_author_plan("view_flat");
     let plan_streaming = build_thread_with_author_plan("view_streaming");
     
-    let flat_update = circuit_flat.register_view(plan_flat, None, Some(ViewResultFormat::Flat));
-    let streaming_update = circuit_streaming.register_view(plan_streaming, None, Some(ViewResultFormat::Streaming));
+    let flat_update = circuit_flat.register_view(plan_flat, None, Some(ViewResultFormat::Flat), None);
+    let streaming_update = circuit_streaming.register_view(plan_streaming, None, Some(ViewResultFormat::Streaming), None);
 
     // Compare payloads
     println!("FLAT PAYLOAD:");

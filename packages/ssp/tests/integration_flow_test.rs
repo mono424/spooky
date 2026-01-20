@@ -286,7 +286,7 @@ fn test_integration_flow_thread_with_author() {
     
     print_register_payload(view_id, surreal_ql, None);
 
-    let initial_update = circuit.register_view(plan, None, Some(ViewResultFormat::Streaming));
+    let initial_update = circuit.register_view(plan, None, Some(ViewResultFormat::Streaming), None);
 
     if let Some(ref update) = initial_update {
         print_streaming_update(update, "Initial Registration");
@@ -426,7 +426,7 @@ fn test_integration_flow_thread_detail_with_comments() {
     
     print_register_payload(view_id, surreal_ql, Some("{ id: thread:xxx }"));
 
-    let initial_update = circuit.register_view(plan, None, Some(ViewResultFormat::Streaming));
+    let initial_update = circuit.register_view(plan, None, Some(ViewResultFormat::Streaming), None);
 
     if let Some(ref update) = initial_update {
         print_streaming_update(update, "Initial Registration");
@@ -508,7 +508,7 @@ fn test_version_map_state_tracking() {
 
     // Register view
     let (plan, _) = build_thread_list_with_author();
-    circuit.register_view(plan, None, Some(ViewResultFormat::Streaming));
+    circuit.register_view(plan, None, Some(ViewResultFormat::Streaming), None);
 
     // Function to print version map state
     let print_version_map = |circuit: &ssp::Circuit, view_id: &str, step: &str| {
@@ -516,7 +516,7 @@ fn test_version_map_state_tracking() {
             println!("\n┌──────────────────────────────────────────────────────────────────┐");
             println!("│ {} - Version Map State", step);
             println!("├──────────────────────────────────────────────────────────────────┤");
-            for (id, version) in &view.version_map {
+            for (id, version) in &view.metadata.versions {
                 println!("│  {} → version {}", id, version);
             }
             println!("└──────────────────────────────────────────────────────────────────┘");

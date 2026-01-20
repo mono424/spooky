@@ -85,7 +85,7 @@ mod operation_tests {
                 table: "items".to_string(),
             },
         };
-        circuit.register_view(plan, None, None);
+        circuit.register_view(plan, None, None, None);
 
         // CREATE adds record (weight +1)
         ingest(&mut circuit, "items", "CREATE", "items:1", json!({"id": "items:1"}), true);
@@ -121,7 +121,7 @@ mod mixed_ops_same_table_tests {
                 table: "users".to_string(),
             },
         };
-        circuit.register_view(plan, None, Some(ViewResultFormat::Streaming));
+        circuit.register_view(plan, None, Some(ViewResultFormat::Streaming), None);
 
         // Batch: create user:1, create user:2, update user:1, delete user:2
         let batch = vec![
@@ -159,7 +159,7 @@ mod mixed_ops_same_table_tests {
                 table: "items".to_string(),
             },
         };
-        circuit.register_view(plan, None, Some(ViewResultFormat::Streaming));
+        circuit.register_view(plan, None, Some(ViewResultFormat::Streaming), None);
 
         // Create initial record
         ingest(&mut circuit, "items", "CREATE", "items:1", json!({"id": "items:1", "counter": 0}), true);
@@ -198,7 +198,7 @@ mod mixed_ops_same_table_tests {
                 table: "ephemeral".to_string(),
             },
         };
-        circuit.register_view(plan, None, None);
+        circuit.register_view(plan, None, None, None);
 
         // Create and immediately delete in same batch
         let batch = vec![
@@ -238,7 +238,7 @@ mod mixed_tables_tests {
                     table: table.to_string(),
                 },
             };
-            circuit.register_view(plan, None, None);
+            circuit.register_view(plan, None, None, None);
         }
 
         // Single batch affecting all three tables
@@ -274,7 +274,7 @@ mod mixed_tables_tests {
                 table: "users".to_string(),
             },
         };
-        circuit.register_view(users_plan, None, Some(ViewResultFormat::Streaming));
+        circuit.register_view(users_plan, None, Some(ViewResultFormat::Streaming), None);
 
         // View only depends on "products"
         let products_plan = QueryPlan {
@@ -283,7 +283,7 @@ mod mixed_tables_tests {
                 table: "products".to_string(),
             },
         };
-        circuit.register_view(products_plan, None, Some(ViewResultFormat::Streaming));
+        circuit.register_view(products_plan, None, Some(ViewResultFormat::Streaming), None);
 
         // Batch affecting only "users"
         let batch = vec![
@@ -324,7 +324,7 @@ mod mixed_tables_tests {
                 },
             },
         };
-        circuit.register_view(plan, None, None);
+        circuit.register_view(plan, None, None, None);
 
         // Interleaved batch: book -> author update -> another book
         let batch = vec![
@@ -368,7 +368,7 @@ mod view_update_tests {
                 table: "items".to_string(),
             },
         };
-        circuit.register_view(plan, None, Some(ViewResultFormat::Streaming));
+        circuit.register_view(plan, None, Some(ViewResultFormat::Streaming), None);
 
         // CREATE should emit Created event
         let create_updates = ingest(&mut circuit, "items", "CREATE", "items:1", json!({"id": "items:1"}), true);
@@ -396,7 +396,7 @@ mod view_update_tests {
                 table: "versioned".to_string(),
             },
         };
-        circuit.register_view(plan, None, Some(ViewResultFormat::Streaming));
+        circuit.register_view(plan, None, Some(ViewResultFormat::Streaming), None);
 
         // Create record - version should be 1
         ingest(&mut circuit, "versioned", "CREATE", "versioned:1", json!({"id": "versioned:1"}), true);
@@ -436,7 +436,7 @@ mod view_update_tests {
             .views
             .iter()
             .find(|v| v.plan.id == view_id)
-            .and_then(|v| v.version_map.get(record_id).copied())
+            .and_then(|v| v.metadata.versions.get(record_id).copied())
             .unwrap_or(0)
     }
 }
@@ -460,7 +460,7 @@ mod optimization_tests {
             id: "perf_test_1".to_string(),
             root: Operator::Scan { table: "perf".to_string() },
         };
-        circuit1.register_view(plan1, None, None);
+        circuit1.register_view(plan1, None, None, None);
 
         let start_individual = Instant::now();
         for i in 0..NUM_RECORDS {
@@ -475,7 +475,7 @@ mod optimization_tests {
             id: "perf_test_2".to_string(),
             root: Operator::Scan { table: "perf".to_string() },
         };
-        circuit2.register_view(plan2, None, None);
+        circuit2.register_view(plan2, None, None, None);
 
         let batch: Vec<_> = (0..NUM_RECORDS)
             .map(|i| {
@@ -524,7 +524,7 @@ mod optimization_tests {
                     table: format!("table_{}", i),
                 },
             };
-            circuit.register_view(plan, None, None);
+            circuit.register_view(plan, None, None, None);
         }
 
         // Verify dependency graph has correct mappings
@@ -569,7 +569,7 @@ mod edge_case_tests {
             id: "empty_test".to_string(),
             root: Operator::Scan { table: "empty".to_string() },
         };
-        circuit.register_view(plan, None, None);
+        circuit.register_view(plan, None, None, None);
 
         let updates = circuit.ingest_batch(vec![], true);
         assert!(updates.is_empty(), "Empty batch should produce no updates");
@@ -605,7 +605,7 @@ mod edge_case_tests {
             id: "cycle_test".to_string(),
             root: Operator::Scan { table: "cycle".to_string() },
         };
-        circuit.register_view(plan, None, Some(ViewResultFormat::Streaming));
+        circuit.register_view(plan, None, Some(ViewResultFormat::Streaming), None);
 
         // Create and delete same record multiple times
         for cycle in 0..5 {
@@ -631,7 +631,7 @@ mod edge_case_tests {
             id: "large_test".to_string(),
             root: Operator::Scan { table: "large".to_string() },
         };
-        circuit.register_view(plan, None, None);
+        circuit.register_view(plan, None, None, None);
 
         const BATCH_SIZE: usize = 1000;
         let batch: Vec<_> = (0..BATCH_SIZE)
@@ -666,7 +666,7 @@ mod edge_case_tests {
             id: "unicode_test".to_string(),
             root: Operator::Scan { table: "unicode".to_string() },
         };
-        circuit.register_view(plan, None, None);
+        circuit.register_view(plan, None, None, None);
 
         let batch = vec![
             ("unicode".into(), "CREATE".into(), "unicode:1".into(), json!({"id": "unicode:1", "name": "日本語"}), "h1".into()),
@@ -706,7 +706,7 @@ mod complex_query_tests {
                 },
             },
         };
-        circuit.register_view(plan, None, None);
+        circuit.register_view(plan, None, None, None);
 
         // Batch: create author and thread together
         let batch = vec![
@@ -754,7 +754,7 @@ mod complex_query_tests {
                 ],
             },
         };
-        circuit.register_view(plan, None, Some(ViewResultFormat::Streaming));
+        circuit.register_view(plan, None, Some(ViewResultFormat::Streaming), None);
 
         // Batch: create user and thread together
         let batch = vec![
@@ -766,7 +766,7 @@ mod complex_query_tests {
 
         // Both thread and user should be in version_map
         let view = circuit.views.iter().find(|v| v.plan.id == "thread_with_author").unwrap();
-        let version_ids: Vec<_> = view.version_map.keys().map(|k| k.to_string()).collect();
+        let version_ids: Vec<_> = view.metadata.versions.keys().map(|k| k.to_string()).collect();
         
         assert!(version_ids.iter().any(|id| id.starts_with("thread:")), "Thread should be tracked");
         assert!(version_ids.iter().any(|id| id.starts_with("user:")), "User (from subquery) should be tracked");
@@ -807,7 +807,7 @@ mod complex_query_tests {
                 ],
             },
         };
-        circuit.register_view(plan, None, Some(ViewResultFormat::Streaming));
+        circuit.register_view(plan, None, Some(ViewResultFormat::Streaming), None);
 
         // 1. Create the user (author) first - unrelated to view yet
         ingest(&mut circuit, "user", "CREATE", "user:100", json!({"id": "user:100", "name": "Subquery User"}), true);

@@ -204,7 +204,7 @@ fn has_event(update: &ViewUpdate, id: &str, expected_event: &DeltaEvent) -> bool
 /// Get all IDs in version_map for a specific view
 fn get_version_map_ids(circuit: &ssp::Circuit, view_id: &str) -> Vec<String> {
     if let Some(view) = circuit.views.iter().find(|v| v.plan.id == view_id) {
-        view.version_map.keys().map(|k: &smol_str::SmolStr| k.to_string()).collect()
+        view.metadata.versions.keys().map(|k: &smol_str::SmolStr| k.to_string()).collect()
     } else {
         vec![]
     }
@@ -230,7 +230,7 @@ fn test_thread_update_preserves_user_edges() {
 
     // 3. Register streaming view: thread list with author subquery
     let plan = build_thread_list_with_author_plan("thread_list_with_author");
-    let initial_update = circuit.register_view(plan, None, Some(ViewResultFormat::Streaming));
+    let initial_update = circuit.register_view(plan, None, Some(ViewResultFormat::Streaming), None);
 
     // 4. Verify initial state has both thread and user
     assert!(initial_update.is_some(), "Expected initial update");
@@ -319,7 +319,7 @@ fn test_comment_deletion_streaming() {
 
     // 4. Register streaming view: thread detail with comments
     let plan = build_thread_detail_with_comments_plan("thread_detail");
-    let initial_update = circuit.register_view(plan, None, Some(ViewResultFormat::Streaming));
+    let initial_update = circuit.register_view(plan, None, Some(ViewResultFormat::Streaming), None);
 
     assert!(initial_update.is_some(), "Expected initial update");
     let init_update = initial_update.unwrap();
@@ -412,10 +412,10 @@ fn test_full_scenario_edge_tracking() {
 
     // 3. Register streaming views
     let plan1 = build_thread_list_with_author_plan("v_thread_list");
-    circuit.register_view(plan1, None, Some(ViewResultFormat::Streaming));
+    circuit.register_view(plan1, None, Some(ViewResultFormat::Streaming), None);
 
     let plan2 = build_thread_detail_with_comments_plan("v_thread_detail");
-    circuit.register_view(plan2, None, Some(ViewResultFormat::Streaming));
+    circuit.register_view(plan2, None, Some(ViewResultFormat::Streaming), None);
 
     // 4. Create comment
     let (comment_id, comment_record) = make_comment_for_thread("Test comment", &thread_id, &user_id);
@@ -510,7 +510,7 @@ fn test_subquery_ids_not_marked_as_removals_on_main_table_update() {
 
     // Register view
     let plan = build_thread_list_with_author_plan("subquery_test");
-    circuit.register_view(plan, None, Some(ViewResultFormat::Streaming));
+    circuit.register_view(plan, None, Some(ViewResultFormat::Streaming), None);
 
     // Record initial state
     let initial_ids = get_version_map_ids(&circuit, "subquery_test");

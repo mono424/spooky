@@ -20,7 +20,7 @@ fn test_dependency_graph_optimization() {
             }
         }
     };
-    circuit.register_view(plan, None, None);
+    circuit.register_view(plan, None, None, None);
 
     // 2. Create another view dependent on "products"
     let plan2 = QueryPlan {
@@ -33,7 +33,7 @@ fn test_dependency_graph_optimization() {
             }
         }
     };
-    circuit.register_view(plan2, None, None);
+    circuit.register_view(plan2, None, None, None);
 
     // 3. Verify Dependency Graph
     // "users" -> [0], "products" -> [1]

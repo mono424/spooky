@@ -407,7 +407,7 @@ fn run_format_benchmark(
             7..=8 => create_join_plan(&format!("{}_{}", format_name, i)),     // 20%
             _ => create_complex_plan(&format!("{}_{}", format_name, i)),      // 10%
         };
-        circuit.register_view(plan, None, Some(format.clone()));
+        circuit.register_view(plan, None, Some(format.clone()), None);
     }
 
     // === PREPARE DATA (parallel, outside measurement) ===
@@ -724,7 +724,7 @@ fn streaming_mode_benchmark() {
     // Register views in streaming mode
     for i in 0..50 {
         let plan = create_filter_plan(&format!("stream_{}", i));
-        circuit.register_view(plan, None, Some(ViewResultFormat::Streaming));
+        circuit.register_view(plan, None, Some(ViewResultFormat::Streaming), None);
     }
 
     // Track delta events
@@ -877,7 +877,7 @@ fn real_world_benchmark_quick() {
                 3 => create_prefix_plan(&format!("{}_{}", name, i)),
                 _ => create_join_plan(&format!("{}_{}", name, i)),
             };
-            circuit.register_view(plan, None, Some(format.clone()));
+            circuit.register_view(plan, None, Some(format.clone()), None);
         }
 
         // Prepare 500 records
@@ -996,7 +996,7 @@ fn sync_engine_simulation_benchmark() {
     let start = Instant::now();
     for (id, mut plan) in incantation_configs {
         plan.id = id.to_string();
-        let update = circuit.register_view(plan, None, Some(ViewResultFormat::Streaming));
+        let update = circuit.register_view(plan, None, Some(ViewResultFormat::Streaming), None);
         if let Some(u) = update {
             match u {
                 ViewUpdate::Streaming(s) => {
@@ -1152,7 +1152,7 @@ fn version_tracking_benchmark() {
 
     // Register a simple view in flat mode to inspect version numbers
     let plan = create_filter_plan("version_test_view");
-    circuit.register_view(plan, None, Some(ViewResultFormat::Flat));
+    circuit.register_view(plan, None, Some(ViewResultFormat::Flat), None);
 
     // Create a "Magic" comment that will be tracked by the view
     let (comment_id, comment_rec) = make_comment_record("Magic", "thread:test", "author:test");
@@ -1225,7 +1225,7 @@ fn subquery_benchmark() {
 
     // Register subquery view
     let plan = create_subquery_plan("threads_with_comments");
-    circuit.register_view(plan, None, Some(ViewResultFormat::Flat));
+    circuit.register_view(plan, None, Some(ViewResultFormat::Flat), None);
 
     // Create varying thread/comment ratios
     let scenarios = [
@@ -1290,7 +1290,7 @@ fn high_view_count_benchmark() {
                 2 => create_join_plan(&format!("v_{}", i)),
                 _ => create_complex_plan(&format!("v_{}", i)),
             };
-            circuit.register_view(plan, None, Some(ViewResultFormat::Streaming));
+            circuit.register_view(plan, None, Some(ViewResultFormat::Streaming), None);
         }
         let reg_time = reg_start.elapsed();
 

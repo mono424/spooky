@@ -69,7 +69,7 @@ fn test_complex_incantation_flow() {
     };
 
     // 3. Register View
-    let initial_update = circuit.register_view(plan, None, None);
+    let initial_update = circuit.register_view(plan, None, None, None);
 
     // Initially, Thread 1 exists and Author exists, but no comments.
     // So result should be empty.

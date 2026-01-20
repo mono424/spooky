@@ -56,7 +56,7 @@ fn test_subquery_projection_children() {
     };
 
     // 3. Register view
-    let update = circuit.register_view(plan, None, None);
+    let update = circuit.register_view(plan, None, None, None);
     assert!(update.is_some(), "Expected view update");
 
     let view_update = update.unwrap();

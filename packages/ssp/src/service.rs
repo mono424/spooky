@@ -86,12 +86,15 @@ pub mod ingest {
 pub mod view {
     use super::*;
 
+    use crate::engine::metadata::VersionStrategy;
+
     /// Parsed registration request data
     pub struct RegistrationData {
         pub plan: QueryPlan,
         pub safe_params: Option<Value>,
         pub metadata: Value,
         pub format: Option<ViewResultFormat>,
+        pub strategy: Option<VersionStrategy>,
     }
 
     /// Prepares a view registration request.
@@ -143,6 +146,19 @@ pub mod view {
                 _ => None,
             });
 
+        // Parse optional strategy
+        let strategy = config
+            .get("strategy")
+            .or_else(|| config.get("versionStrategy"))
+            .and_then(|v| v.as_str())
+            .and_then(|s| match s.to_lowercase().as_str() {
+                "optimistic" => Some(VersionStrategy::Optimistic),
+                "explicit" => Some(VersionStrategy::Explicit),
+                "hashbased" | "hash_based" => Some(VersionStrategy::HashBased),
+                "none" => Some(VersionStrategy::None),
+                _ => None,
+            });
+
         // Parse Query Plan
         // 1. Convert SURQL to generic Value
         let root_op_val = converter::convert_surql_to_dbsp(&surreal_ql)
@@ -179,6 +195,7 @@ pub mod view {
             safe_params,
             metadata,
             format,
+            strategy,
         })
     }
 

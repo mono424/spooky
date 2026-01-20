@@ -260,10 +260,17 @@ pub enum ViewResultFormat {
 
 ## Version Semantics
 
-| `is_optimistic` | Behavior                      | Use Case                       |
-| --------------- | ----------------------------- | ------------------------------ |
-| `true`          | Increment versions on changes | Local mutations (client-side)  |
-| `false`         | Keep versions as-is           | Remote sync (server authority) |
+The engine now supports pluggable versioning strategies via the `metadata` module.
+
+| Strategy       | Description                                      | Use Case                       |
+| -------------- | ------------------------------------------------ | ------------------------------ |
+| **Optimistic** | Auto-increment versions on every update (Default)| Local mutations, low latency   |
+| **Explicit**   | Use externally provided versions                 | Server-authoritative sync      |
+| **HashBased**  | Derive version from content hash                 | Distributed consistency (Tree) |
+| **None**       | Do not track versions                            | Stateless projections          |
+
+### Explicit Versioning
+To use explicit versioning, pass a `BatchMeta` object during ingestion or configure the view with `VersionStrategy::Explicit`.
 
 ---
 
@@ -275,16 +282,17 @@ ssp/
 │   ├── lib.rs            # StreamProcessor trait, public API
 │   ├── converter.rs      # SurrealQL → Operator tree
 │   ├── sanitizer.rs      # Input normalization
-│   ├── service.rs        # High-level helpers (prepare, register)
+│   ├── service.rs        # Hashing & Registration helpers
 │   └── engine/
-│       ├── circuit.rs    # Core coordinator (Database + Views)
-│       ├── view.rs       # View logic, delta evaluation
-│       ├── update.rs     # ViewUpdate, DeltaEvent, formatters
+│       ├── circuit.rs    # Coordinator: ingestion pipeline
+│       ├── view.rs       # View logic: Delta categorization, Subquery recursion
+│       ├── metadata.rs   # Versioning strategies, ViewMetadataState
+│       ├── update.rs     # Result builders (Streaming, Flat, Tree)
 │       ├── operators/    # Operator definitions
-│       └── types/        # SpookyValue, ZSet, FastMap
+│       └── types/        # ZSet, SpookyValue, FastMap
 └── tests/
-    ├── e2e_communication_test.rs   # Full pipeline validation
-    ├── improved_changes_test.rs    # Deep subquery and batching tests
+    ├── explicit_versioning.rs      # Version strategy tests
+    ├── improved_changes_test.rs    # Deep subquery & verification
     └── ...
 ```
 
@@ -366,14 +374,26 @@ let mut circuit = Circuit::new();
 // Register a streaming view
 circuit.register_view(plan, params, Some(ViewResultFormat::Streaming));
 
-// Ingest changes
+// Ingest changes (Simple Wrapper)
 let updates = circuit.ingest_record(
     "thread",           // table
     "CREATE",           // op
     "thread:abc123",    // id
     record,             // JSON
     &hash,              // blake3 hash
-    true,               // is_optimistic
+    true,               // is_optimistic (Default strategy)
+);
+
+// OR Ingest with Explicit Metadata
+use ssp::engine::metadata::{BatchMeta, RecordMeta, VersionStrategy};
+
+let mut meta = BatchMeta::new().with_strategy(VersionStrategy::Explicit);
+meta.add_record("thread:abc123", RecordMeta::new().with_version(100));
+
+let updates = circuit.ingest_with_meta(
+    "thread", "UPDATE", "thread:abc123", record, &hash, 
+    Some(&meta), 
+    true
 );
 
 // Process updates

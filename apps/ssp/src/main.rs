@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 use ssp::{
     Circuit, ViewUpdate,
     engine::update::{StreamingUpdate, DeltaEvent, ViewResultFormat},
+    engine::metadata::{BatchMeta, RecordMeta, VersionStrategy},
 };
 use surrealdb::engine::remote::ws::{Client, Ws};
 use surrealdb::opt::auth::Root;
@@ -44,6 +45,7 @@ struct IngestRequest {
     op: String,
     id: String,
     record: Value,
+    pub version: Option<u64>, // Added version
     #[serde(default)]
     _hash: String, 
 }
@@ -200,17 +202,37 @@ async fn ingest_handler(
 
     let updates = {
         let mut circuit = state.processor.lock().unwrap();
-        let updates = circuit.ingest_record(
-            &payload.table,
-            &payload.op,
-            &payload.id,
-            clean_record.into(),
-            &hash,
-            true,
-        );
-        state.saver.trigger_save();
-        updates
+
+        if let Some(version) = payload.version {
+            // Explicit Versioning
+            let mut meta = BatchMeta::new()
+                .with_strategy(VersionStrategy::Explicit);
+            
+            meta.add_record(payload.id.clone(), RecordMeta::new().with_version(version));
+
+            circuit.ingest_with_meta(
+                &payload.table,
+                &payload.op,
+                &payload.id,
+                clean_record.into(),
+                &hash,
+                Some(&meta),
+                true // still set is_optimistic=true to allow increment if fallback happens, 
+                     // but explicit strategy takes precedence for this record
+            )
+        } else {
+             // Default / Optimistic
+            circuit.ingest_record(
+                &payload.table,
+                &payload.op,
+                &payload.id,
+                clean_record.into(),
+                &hash,
+                true,
+            )
+        }
     };
+    state.saver.trigger_save();
 
     // Collect all streaming updates and batch into single transaction
     let streaming_updates: Vec<&StreamingUpdate> = updates
@@ -244,7 +266,8 @@ async fn register_view_handler(
         let res = circuit.register_view(
             data.plan.clone(), 
             data.safe_params, 
-            Some(ViewResultFormat::Streaming)
+            Some(ViewResultFormat::Streaming),
+            data.strategy.clone()
         );
         state.saver.trigger_save();
         res
