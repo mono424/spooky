@@ -1,0 +1,33 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: Mutate Data
+---
+
+import CodeBlock from '../../components/ui/CodeBlock.astro';
+import Warning from '../../components/ui/Warning.astro';
+import { mutateCreateCode, mutateUpdateCode, mutateDeleteCode } from './snippets';
+
+Mutating data in Spooky is performant and secure. Changes are instantly reflected in your local UI (optimistic updates) and synchronized with the server.
+
+## Creating Records
+
+To create a new record, use the `db.create` method. You need to specify the record ID (or let Spooky generate one) and the data.
+
+<CodeBlock code={mutateCreateCode} lang="typescript" />
+
+<Warning>
+  Ensure you adhere to the `PERMISSIONS` defined in your schema. If a user does not have permission
+  to create a record, the operation will fail.
+</Warning>
+
+## Updating Records
+
+Updating is just as simple using `db.merge` (for partial updates) or `db.update` (for full replacement).
+
+<CodeBlock code={mutateUpdateCode} lang="typescript" />
+
+## Deleting Records
+
+To delete a record, simply call `db.delete`.
+
+<CodeBlock code={mutateDeleteCode} lang="typescript" />

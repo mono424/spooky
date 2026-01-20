@@ -1,0 +1,55 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: Query Data
+---
+
+import CodeBlock from '../../components/ui/CodeBlock.astro';
+import Note from '../../components/ui/Note.astro';
+import { querySimpleCode, queryUnifiedCode, queryTypeSafetyCode, queryHooksCode } from './snippets';
+
+Querying data in Spooky is designed to be intuitive and reactive. The system handles the entire lifecycle of a query, from initialization to registration and liveness updates, ensuring your UI is always consistent with the database state.
+
+## Query Lifecycle
+
+1.  **Initialization**: When a component requests data, Spooky checks if a live query for that data already exists.
+2.  **Registration**: If not, it registers a new query with the sync engine.
+3.  **Liveness**: The query remains "live" as long as there are active subscribers. Spooky automatically manages subscriptions and unsubscription to optimize performance.
+
+## Fluent Query API
+
+The `db.query()` method provides a fluent interface to construct queries. It is fully typesafe based on your schema.
+
+<CodeBlock code={querySimpleCode} lang="typescript" />
+
+## Relationships
+
+Spooky makes fetching related data incredibly simple with the `.related()` method. It automatically handles the underlying graph traversals or joins.
+
+### Unified Query Syntax
+
+Whether you are fetching a simple 1:1 link, a 1:N collection, or traversing a complex N:M graph, the syntax remains exactly the same. Spooky uses your schema definition to determine how to fetch the data.
+
+<CodeBlock code={queryUnifiedCode} lang="typescript" />
+
+<Note>
+  **Magic behind the scenes:** You don't need to manually specify graph paths (e.g., `->liked->post`) or join conditions. Spooky inspects your `schema.surql` to understand that `liked` is a relation table connecting users to posts, and generates the correct query automatically.
+</Note>
+
+## Type Safety
+
+One of Spooky's strongest features is its end-to-end type safety.
+
+When you use `.related()`, the return type of your query is automatically adjusted.
+
+- **Without `.related()`**: The field is a `RecordId<"table">`.
+- **With `.related()`**: The field becomes `Fetched<TableType>`.
+
+<CodeBlock code={queryTypeSafetyCode} lang="typescript" />
+
+This ensures you can never accidentally access a property on a relation that hasn't been fetched. TypeScript will catch the error at compile time.
+
+## Using Hooks (SolidJS Example)
+
+For reactive applications, Spooky provides hooks that automatically update your component when the data changes.
+
+<CodeBlock code={queryHooksCode} lang="typescript" />
