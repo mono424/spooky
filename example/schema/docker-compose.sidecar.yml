@@ -1,31 +1,17 @@
 services:
   # --- ERSETZT JAEGER ---
-  tempo:
-    image: grafana/tempo:latest
-    command: [ "-config.file=/etc/tempo.yaml" ]
-    volumes:
-      - ./.docker-config/tempo.yaml:/etc/tempo.yaml
+  aspire-dashboard:
+    image: mcr.microsoft.com/dotnet/aspire-dashboard:latest
+    container_name: aspire-dashboard
+    environment:
+      - DOTNET_DASHBOARD_UNSECURED_ALLOW_ANONYMOUS=true
+      - DOTNET_DASHBOARD_OTLP_AUTH_MODE=Unsecured
     ports:
-      - "14268:14268"  # Jaeger ingest
-      - "4317:4317"    # OTLP gRPC (WICHTIG für Rust)
-      - "4318:4318"    # OTLP HTTP
-      - "3200:3200"    # Tempo internal
+      - "18888:18888"
+      - "4317:18889"
+      - "4318:18890"
     restart: unless-stopped
 
-  grafana:
-    image: grafana/grafana:latest
-    volumes:
-      - ./.docker-config/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml
-    environment:
-      - GF_AUTH_ANONYMOUS_ENABLED=true
-      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
-      - GF_AUTH_DISABLE_LOGIN_FORM=true
-    ports:
-      - "3000:3000"
-    depends_on:
-      - tempo
-    restart: unless-stopped
-  # ----------------------
 
   surrealdb:
     image: surrealdb/surrealdb:v3.0.0-beta.1
@@ -40,8 +26,8 @@ services:
       # Aktiviert OTLP Export für Tracing
       - SURREAL_TELEMETRY_PROVIDER=otlp
       - SURREAL_TELEMETRY_SERVICE_NAME=surrealdb-core
-      # Ziel: Jaeger Container Port 4317
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+      # Ziel: Aspire Dashboard
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://aspire-dashboard:18889
       # Reduziert Terminal-Logs (optional, da wir jetzt traces haben)
       - SURREAL_LOG=info 
     command:
@@ -58,7 +44,7 @@ services:
       - ./.spooky/xor_module.surli:/modules/xor_module.surli:ro
       - ./.spooky/dbsp_module.surli:/modules/dbsp_module.surli:ro
     depends_on:
-      - tempo
+      - aspire-dashboard
     healthcheck:
       test: ['CMD', '/surreal', 'isready', '--conn', 'http://localhost:8000']
       interval: 10s
@@ -76,7 +62,7 @@ services:
       - RUST_LOG=debug
       # --- OTLP KONFIGURATION ---
       # Ziel für Rust Tracing
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://aspire-dashboard:18889
       - OTEL_SERVICE_NAME=spooky-sidecar
       # DB Connection
       - SURREALDB_ADDR=surrealdb:8000/rpc
@@ -91,7 +77,7 @@ services:
     depends_on:
       surrealdb:
         condition: service_healthy
-      tempo:
+      aspire-dashboard:
         condition: service_started
       schema-migration:
         condition: service_completed_successfully

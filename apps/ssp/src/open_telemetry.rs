@@ -4,9 +4,11 @@ use opentelemetry_sdk::{
     propagation::TraceContextPropagator,
     runtime,
     trace::{RandomIdGenerator, Sampler, TracerProvider as SdkTracerProvider},
+    logs::LoggerProvider as SdkLoggerProvider,
     Resource,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Registry};
+use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 
 pub fn init_tracing() -> Result<(), anyhow::Error> {
     // 1. Set global propagator
@@ -17,38 +19,56 @@ pub fn init_tracing() -> Result<(), anyhow::Error> {
         KeyValue::new("service.name", "spooky-sidecar"),
     ]);
 
-    // 3. Create OTLP exporter
-    let exporter = opentelemetry_otlp::SpanExporter::builder()
+    // 3. Create OTLP exporter for Traces
+    let trace_exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_tonic()
-        .with_endpoint("http://tempo:4317")
+        .with_endpoint("http://aspire-dashboard:18889")
         .build()?;
 
     // 4. Create TracerProvider
-    let provider = SdkTracerProvider::builder()
-        .with_batch_exporter(exporter, runtime::Tokio)
+    let tracer_provider = SdkTracerProvider::builder()
+        .with_batch_exporter(trace_exporter, runtime::Tokio)
         .with_sampler(Sampler::AlwaysOn)
         .with_id_generator(RandomIdGenerator::default())
-        .with_resource(resource)
+        .with_resource(resource.clone())
         .build();
 
     // 5. Get tracer from provider BEFORE setting it as global
-    let tracer = provider.tracer("spooky-sidecar");
+    let tracer = tracer_provider.tracer("spooky-sidecar");
     
     // 6. Set global tracer provider
-    global::set_tracer_provider(provider);
+    global::set_tracer_provider(tracer_provider);
 
-    // 7. Create telemetry layer
+    // 7. Create telemetry layer (Traces)
     let telemetry_layer = tracing_opentelemetry::layer().with_tracer(tracer);
 
-    // 8. Env Filter
+    // --- LOGGING ---
+
+    // 8. Create OTLP exporter for Logs
+    let log_exporter = opentelemetry_otlp::LogExporter::builder()
+        .with_tonic()
+        .with_endpoint("http://aspire-dashboard:18889")
+        .build()?;
+
+    // 9. Create LoggerProvider
+    let logger_provider = SdkLoggerProvider::builder()
+        .with_batch_exporter(log_exporter, runtime::Tokio)
+        .with_resource(resource)
+        .build();
+    
+    // 10. Create Log Bridge Layer
+    let log_layer = OpenTelemetryTracingBridge::new(&logger_provider);
+
+    // 11. Env Filter
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| "ssp=debug,axum=info,tower_http=info".into());
 
-    // 9. Initialize Registry
+    // 12. Initialize Registry
     Registry::default()
         .with(env_filter)
         .with(tracing_subscriber::fmt::layer())
         .with(telemetry_layer)
+        .with(log_layer)
         .init();
 
     Ok(())

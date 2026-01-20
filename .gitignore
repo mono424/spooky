@@ -8,3 +8,6 @@ dist/
 **/target/
 **.zip
 .gitignore
+
+# Vite 
+vite.config.ts.timestamp-*
