@@ -7,7 +7,6 @@ use super::types::SpookyValue;
 use super::types::FastMap;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
-use std::collections::HashMap;
 
 pub type VersionMap = FastMap<SmolStr, u64>;
 
@@ -73,13 +72,13 @@ impl BatchMeta {
 }
 
 /// Store for content hashes
-pub type HashStore = HashMap<SmolStr, String>;
+pub type HashStore = FastMap<SmolStr, String>;
 
 /// Persistent state for view metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ViewMetadataState {
     pub versions: VersionMap,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "FastMap::is_empty")]
     pub hashes: HashStore,
     pub strategy: VersionStrategy,
     #[serde(default)]
@@ -98,6 +97,7 @@ impl Default for ViewMetadataState {
 }
 
 impl ViewMetadataState {
+    #[inline]
     pub fn new(strategy: VersionStrategy) -> Self {
         Self {
             strategy,
@@ -116,9 +116,24 @@ impl ViewMetadataState {
     }
 
     #[inline]
+    pub fn set_versions_batch(&mut self, items: impl IntoIterator<Item = (SmolStr, u64)>) {
+        for (id, version) in items {
+            self.versions.insert(id, version);
+        }
+    }
+
+    #[inline]
     pub fn remove(&mut self, id: &str) {
         self.versions.remove(id);
         self.hashes.remove(id);
+    }
+
+    #[inline]
+    pub fn remove_batch(&mut self, ids: impl IntoIterator<Item = impl AsRef<str>>) {
+        for id in ids {
+            self.versions.remove(id.as_ref());
+            self.hashes.remove(id.as_ref());
+        }
     }
 
     #[inline]
@@ -126,11 +141,13 @@ impl ViewMetadataState {
         self.versions.contains_key(id)
     }
 
+    #[inline]
     pub fn is_first_run(&self) -> bool {
         self.last_result_hash.is_empty() && self.versions.is_empty()
     }
     
     // Performance optimization: Reserve capacity
+    #[inline]
     pub fn reserve(&mut self, additional: usize) {
         self.versions.reserve(additional);
     }
@@ -148,6 +165,7 @@ pub struct VersionResult {
 }
 
 impl MetadataProcessor {
+    #[inline]
     pub fn new(strategy: VersionStrategy) -> Self {
         Self { strategy }
     }

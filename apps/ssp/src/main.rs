@@ -267,7 +267,6 @@ async fn register_view_handler(
             data.plan.clone(), 
             data.safe_params, 
             Some(ViewResultFormat::Streaming),
-            data.strategy.clone()
         );
         state.saver.trigger_save();
         res

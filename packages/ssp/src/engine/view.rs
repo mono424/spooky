@@ -27,6 +27,62 @@ pub struct QueryPlan {
     pub root: Operator,
 }
 
+/// Context for view processing - computed once, used throughout
+struct ProcessContext<'a> {
+    is_first_run: bool,
+    is_streaming: bool,
+    has_subquery_changes: bool,
+    batch_meta: Option<&'a BatchMeta>,
+}
+
+impl<'a> ProcessContext<'a> {
+    #[inline]
+    fn new(view: &mut View, deltas: &FastMap<String, ZSet>, db: &Database, batch_meta: Option<&'a BatchMeta>) -> Self {
+        let is_first_run = view.metadata.is_first_run();
+        // We need to pass &mut View to check for subquery changes IF we want to cache checking?
+        // Actually has_changes_for_subqueries doesn't mutate, but get_subquery_tables (which I will add) might mutate cache.
+        // Let's assume view is mut.
+        let has_subquery_changes = !is_first_run && view.has_changes_for_subqueries(deltas, db);
+        
+        Self {
+            is_first_run,
+            is_streaming: matches!(view.format, ViewResultFormat::Streaming),
+            has_subquery_changes,
+            batch_meta,
+        }
+    }
+
+    #[inline]
+    fn should_full_scan(&self) -> bool {
+        self.is_first_run || self.has_subquery_changes
+    }
+}
+
+/// Result of change categorization
+struct CategorizedChanges {
+    delta: ZSet,
+    additions: Vec<SmolStr>,
+    removals: Vec<SmolStr>,
+    updates: Vec<SmolStr>,
+}
+
+impl CategorizedChanges {
+    #[inline]
+    fn with_capacity(cap: usize) -> Self {
+        Self {
+            delta: FastMap::default(),
+            additions: Vec::with_capacity(cap),
+            removals: Vec::with_capacity(cap / 4),
+            updates: Vec::with_capacity(cap / 2),
+        }
+    }
+
+    #[inline]
+    fn is_empty(&self) -> bool {
+        self.additions.is_empty() && self.removals.is_empty() && self.updates.is_empty()
+    }
+}
+
 /// Helper function for serde to skip serializing empty caches
 fn is_cache_empty_or_streaming(cache: &ZSet) -> bool {
     cache.is_empty()
@@ -47,6 +103,10 @@ pub struct View {
     // NEW: Metadata state (replaces version_map + last_hash)
     #[serde(default)]
     pub metadata: ViewMetadataState,
+
+    // NEW: Cache subquery tables (computed once per view)
+    #[serde(skip)]
+    subquery_tables_cache: Option<std::collections::HashSet<SmolStr>>,
 }
 
 impl View {
@@ -68,6 +128,7 @@ impl View {
             params: params.map(SpookyValue::from),
             format: fmt,
             metadata: ViewMetadataState::new(strategy),
+            subquery_tables_cache: None,
         }
     }
     
@@ -84,6 +145,7 @@ impl View {
             params: params.map(SpookyValue::from),
             format: format.unwrap_or_default(),
             metadata: ViewMetadataState::new(strategy),
+            subquery_tables_cache: None,
         }
     }
 
@@ -106,8 +168,6 @@ impl View {
 
     /// Optimized 2-Phase Processing: Handles multiple table updates at once.
     /// is_optimistic: true = increment versions (local mutations), false = keep versions (remote sync)
-    /// Optimized 2-Phase Processing: Handles multiple table updates at once.
-    /// is_optimistic: true = increment versions (local mutations), false = keep versions (remote sync)
     pub fn process_ingest(
         &mut self,
         deltas: &FastMap<String, ZSet>,
@@ -125,46 +185,34 @@ impl View {
         is_optimistic: bool,
         batch_meta: Option<&BatchMeta>,
     ) -> Option<ViewUpdate> {
-        let is_first_run = self.metadata.is_first_run();
-        let is_streaming = matches!(self.format, ViewResultFormat::Streaming);
-        let has_subquery_changes = !is_first_run && self.has_changes_for_subqueries(deltas, db);
+        let ctx = ProcessContext::new(self, deltas, db, batch_meta);
 
         debug_log!(
             "DEBUG VIEW: id={} is_first_run={} has_subquery_changes={} is_streaming={}",
             self.plan.id,
-            is_first_run,
-            has_subquery_changes,
-            is_streaming
+            ctx.is_first_run,
+            ctx.has_subquery_changes,
+            ctx.is_streaming
         );
 
         // Step 1: Compute Delta
-        let input_delta = if is_first_run || has_subquery_changes {
+        let input_delta = if ctx.should_full_scan() {
              None
         } else {
              self.eval_delta_batch(&self.plan.root, deltas, db, self.params.as_ref())
         };
 
-        // Step 2: Compute Changes (Additions/Removals/Updates) and Actual Delta (ZSet)
-        // This consolidates the logic of identifying what changed
-        let (actual_delta, additions, removals, updates) = self.compute_changes(
-            input_delta, 
-            is_first_run, 
-            has_subquery_changes, 
-            is_streaming, 
-            deltas, 
-            db
-        );
+        // Step 2: Compute Changes using Context
+        let changes = self.compute_changes(input_delta, &ctx, deltas, db);
 
         // Step 3: Early Exit
-        if actual_delta.is_empty() && additions.is_empty() && removals.is_empty() && updates.is_empty() 
-           && !is_first_run && !has_subquery_changes 
-        {
+        if changes.is_empty() && !ctx.should_full_scan() {
              return None;
         }
 
         // Step 4: Update Cache (Non-streaming only)
-        if !is_streaming {
-            for (key, weight) in &actual_delta {
+        if !ctx.is_streaming {
+            for (key, weight) in &changes.delta {
                 let entry = self.cache.entry(key.clone()).or_insert(0);
                 *entry += weight;
                 if *entry == 0 {
@@ -174,18 +222,7 @@ impl View {
         }
 
         // Step 5: Build Raw Result
-        // This delegates versioning logic to metadata module
-        let raw_result = self.build_raw_result(
-            &additions, 
-            &removals, 
-            &updates,
-            &actual_delta, // Pass reference to delta for streaming fallback
-            is_first_run, 
-            has_subquery_changes, 
-            is_optimistic, 
-            batch_meta, 
-            db
-        );
+        let raw_result = self.build_raw_result(&changes, &ctx, is_optimistic, db);
 
         // Step 6: Format Output
         let update = build_update(raw_result, self.format.clone());
@@ -198,20 +235,18 @@ impl View {
         }
     }
 
-    /// Helper to compute ZSet delta and categorize changes into Acc/Rem/Upd
+    /// Helper to compute ZSet delta and categorize changes
     fn compute_changes(
         &self,
         input_delta: Option<ZSet>,
-        _is_first_run: bool,
-        has_subquery_changes: bool,
-        is_streaming: bool,
+        ctx: &ProcessContext,
         deltas: &FastMap<String, ZSet>,
         db: &Database,
-    ) -> (ZSet, Vec<(String, u64)>, Vec<String>, Vec<String>) {
+    ) -> CategorizedChanges {
         if let Some(d) = input_delta {
             // We have a computed delta, calculate changes
             // Identify updated records (content changed but still in view)
-            let updated_ids = if is_streaming {
+            let updated_ids = if ctx.is_streaming {
                 self.get_updated_records_streaming(deltas)
             } else {
                  self.get_updated_cached_records(deltas)
@@ -226,7 +261,7 @@ impl View {
             
             let mut diff = FastMap::default();
             
-            if is_streaming {
+            if ctx.is_streaming {
                 // Streaming diff against metadata
                 for (key, &new_w) in &target_set {
                     if new_w > 0 && !self.metadata.contains(key.as_str()) {
@@ -234,7 +269,10 @@ impl View {
                     }
                 }
                 
-                if !has_subquery_changes {
+                if !ctx.has_subquery_changes {
+                     // We can use the cached subquery tables here if we had access to mutable self, 
+                     // but compute_changes is &self.
+                     // However, extract_subquery_tables is fast enough for the fallback path usually.
                      let subquery_tables: std::collections::HashSet<String> = 
                         self.extract_subquery_tables(&self.plan.root).into_iter().collect();
 
@@ -263,7 +301,7 @@ impl View {
                 }
             }
 
-            let updated_ids = if is_streaming {
+            let updated_ids = if ctx.is_streaming {
                 self.get_updated_records_streaming(deltas)
             } else {
                  self.get_updated_cached_records(deltas)
@@ -277,49 +315,47 @@ impl View {
         &self,
         delta: ZSet,
         updated_record_ids: &[String],
-    ) -> (ZSet, Vec<(String, u64)>, Vec<String>, Vec<String>) {
+    ) -> CategorizedChanges {
          let delta_size = delta.len();
-         let mut additions = Vec::with_capacity(delta_size);
-         let mut removals = Vec::with_capacity(delta_size);
+         let mut changes = CategorizedChanges::with_capacity(delta_size);
+         changes.delta = delta;
+
+         // Use sorted vec for faster lookups if updated_record_ids is large, 
+         // but for now Hash set is O(1). 
          let updated_ids_set: std::collections::HashSet<&str> = 
             updated_record_ids.iter().map(|s| s.as_str()).collect();
 
-         for (key, weight) in &delta {
+         for (key, weight) in &changes.delta {
              if *weight > 0 {
                  if !updated_ids_set.contains(&key.as_str()) {
-                     additions.push((key.to_string(), 0));
+                     changes.additions.push(SmolStr::from(key.as_str()));
                  }
              } else if *weight < 0 {
-                 removals.push(key.to_string());
+                 changes.removals.push(SmolStr::from(key.as_str()));
              }
          }
 
          let removal_ids_set: std::collections::HashSet<&str> = 
-            removals.iter().map(|s| s.as_str()).collect();
+            changes.removals.iter().map(|s| s.as_str()).collect();
             
-         let updates: Vec<String> = updated_record_ids.iter()
+         changes.updates = updated_record_ids.iter()
             .filter(|id| !removal_ids_set.contains(id.as_str()))
-            .cloned()
+            .map(SmolStr::from)
             .collect();
 
-         (delta, additions, removals, updates)
+         changes
     }
+
 
     /// Build RawViewResult by coordinating with MetadataProcessor
     fn build_raw_result(
         &mut self,
-        additions: &[(String, u64)],
-        removals: &[String],
-        updates: &[String],
-        delta: &ZSet,
-        is_first_run: bool,
-        has_subquery_changes: bool,
+        changes: &CategorizedChanges,
+        ctx: &ProcessContext,
         is_optimistic: bool,
-        batch_meta: Option<&BatchMeta>,
         db: &Database,
     ) -> RawViewResult {
         let processor = MetadataProcessor::new(self.metadata.strategy.clone());
-        let is_streaming = matches!(self.format, ViewResultFormat::Streaming);
 
         let mut raw = RawViewResult {
             query_id: self.plan.id.clone(),
@@ -327,16 +363,15 @@ impl View {
             delta: None,
         };
 
-        if is_streaming {
+        if ctx.is_streaming {
             self.build_streaming_raw_result(
-                &mut raw, additions, removals, updates, delta,
-                is_first_run, has_subquery_changes, is_optimistic,
-                &processor, batch_meta, db
+                &mut raw, changes, ctx, is_optimistic,
+                &processor, db
             );
         } else {
             self.build_materialized_raw_result(
-                &mut raw, additions, removals, updates,
-                is_optimistic, &processor, batch_meta, db
+                &mut raw, changes,
+                is_optimistic, &processor, ctx, db
             );
         }
         
@@ -346,23 +381,18 @@ impl View {
     fn build_streaming_raw_result(
         &mut self,
         raw: &mut RawViewResult,
-        additions: &[(String, u64)],
-        removals: &[String],
-        updates: &[String],
-        delta: &ZSet,
-        is_first_run: bool,
-        has_subquery_changes: bool,
+        changes: &CategorizedChanges,
+        ctx: &ProcessContext,
         is_optimistic: bool,
         processor: &MetadataProcessor,
-        batch_meta: Option<&BatchMeta>,
         db: &Database,
     ) {
          let mut delta_out = ViewDelta::default();
 
-         if is_first_run {
+         if ctx.is_first_run {
              // First run logic
              let mut all_first_run_ids = Vec::new();
-             for (id, weight) in delta {
+             for (id, weight) in &changes.delta {
                  if *weight > 0 {
                      all_first_run_ids.push(id.to_string());
                      if let Some(parent_row) = self.get_row_value(id.as_str(), db) {
@@ -374,10 +404,10 @@ impl View {
              all_first_run_ids.dedup();
 
              for id in all_first_run_ids {
-                 let version = self.compute_and_store_version(&id, processor, batch_meta, true, false);
+                 let version = self.compute_and_store_version(&id, processor, ctx, true, false);
                  delta_out.additions.push((id, version));
              }
-         } else if has_subquery_changes {
+         } else if ctx.has_subquery_changes {
              // Subquery changes logic (simplified from original)
              let target_set = self.eval_snapshot(&self.plan.root, db, self.params.as_ref()).into_owned();
              let mut all_current_ids = Vec::new();
@@ -393,7 +423,7 @@ impl View {
              // Additions (New subquery results)
              for id in &all_current_ids {
                  if !self.metadata.contains(id.as_str()) {
-                     let version = self.compute_and_store_version(id, processor, batch_meta, true, false);
+                     let version = self.compute_and_store_version(id, processor, ctx, true, false);
                      delta_out.additions.push((id.clone(), version));
                  }
              }
@@ -409,9 +439,9 @@ impl View {
              }
          } else {
              // Normal streaming
-            for (id, _) in additions {
-                let version = self.compute_and_store_version(id, processor, batch_meta, true, false);
-                delta_out.additions.push((id.clone(), version));
+            for id in &changes.additions {
+                let version = self.compute_and_store_version(id, processor, ctx, true, false);
+                delta_out.additions.push((id.to_string(), version));
                 
                 // Recursively check for subquery records associated with this new record
                 if let Some(parent_row) = self.get_row_value(id, db) {
@@ -420,20 +450,20 @@ impl View {
                     
                     for sub_id in sub_ids {
                         // Only add if not already tracked (and not the main id we just added)
-                        if sub_id != *id && !self.metadata.contains(&sub_id) {
-                            let v = self.compute_and_store_version(&sub_id, processor, batch_meta, true, false);
+                        if sub_id != id.as_str() && !self.metadata.contains(&sub_id) {
+                            let v = self.compute_and_store_version(&sub_id, processor, ctx, true, false);
                             delta_out.additions.push((sub_id, v));
                         }
                     }
                 }
             }
-             for id in removals {
+             for id in &changes.removals {
                  self.metadata.remove(id);
-                 delta_out.removals.push(id.clone());
+                 delta_out.removals.push(id.to_string());
              }
-             for id in updates {
-                 let version = self.compute_and_store_version(id, processor, batch_meta, false, is_optimistic);
-                 delta_out.updates.push((id.clone(), version));
+             for id in &changes.updates {
+                 let version = self.compute_and_store_version(id, processor, ctx, false, is_optimistic);
+                 delta_out.updates.push((id.to_string(), version));
              }
          }
          
@@ -443,12 +473,10 @@ impl View {
     fn build_materialized_raw_result(
         &mut self,
         raw: &mut RawViewResult,
-        additions: &[(String, u64)],
-        _removals: &[String], // Unused for snapshot, but kept for signature consistency
-        updates: &[String],
+        changes: &CategorizedChanges,
         is_optimistic: bool,
         processor: &MetadataProcessor,
-        batch_meta: Option<&BatchMeta>,
+        ctx: &ProcessContext,
         db: &Database,
     ) {
          // Build full snapshot
@@ -465,36 +493,48 @@ impl View {
          all_ids.dedup();
          
          let additions_set: std::collections::HashSet<&str> = 
-             additions.iter().map(|(id, _)| id.as_str()).collect();
+             changes.additions.iter().map(|id| id.as_str()).collect();
+         let updates_set: std::collections::HashSet<&str> = 
+             changes.updates.iter().map(|id| id.as_str()).collect();
 
          for id in all_ids {
-             let is_update = updates.contains(&id);
+             let is_update = updates_set.contains(id.as_str());
              let is_new = additions_set.contains(id.as_str());
              
              // Logic to determine if version should change
              // If it's an update, we might increment. If it's existing, we keep.
              // If it's new (addition), we set.
              
-             let version = self.compute_and_store_version(&id, processor, batch_meta, is_new, is_optimistic && is_update);
+             let version = self.compute_and_store_version(&id, processor, ctx, is_new, is_optimistic && is_update);
              raw.records.push((id, version));
          }
     }
 
+    #[inline]
     fn compute_and_store_version(
         &mut self,
         id: &str,
         processor: &MetadataProcessor,
-        batch_meta: Option<&BatchMeta>,
+        ctx: &ProcessContext,
         is_new: bool,
         is_optimistic: bool,
     ) -> u64 {
         let current = self.metadata.get_version(id);
-        let record_meta = batch_meta.and_then(|bm| bm.get(id));
+        
+        // Check for explicit version in batch metadata
+        if let Some(batch_meta) = ctx.batch_meta {
+            if let Some(record_meta) = batch_meta.get(id) {
+                if let Some(explicit_version) = record_meta.version {
+                    self.metadata.set_version(id, explicit_version);
+                    return explicit_version;
+                }
+            }
+        }
         
         let result = if is_new {
-            processor.compute_new_version(id, current, record_meta)
+            processor.compute_new_version(id, current, None)
         } else {
-            processor.compute_update_version(id, current, record_meta, is_optimistic)
+            processor.compute_update_version(id, current, None, is_optimistic)
         };
         
         if result.changed || is_new {
@@ -660,63 +700,39 @@ impl View {
     }
 
     /// Check if deltas contain changes (CREATE or DELETE) for tables used in subqueries
-    /// This is needed because new/deleted records need full scan to update subquery results
-    fn has_changes_for_subqueries(&self, deltas: &FastMap<String, ZSet>, _db: &Database) -> bool {
+    fn has_changes_for_subqueries(&mut self, deltas: &FastMap<String, ZSet>, _db: &Database) -> bool {
+        // Clone ID to allow borrowing self below
+        let plan_id = self.plan.id.clone();
         // Get all tables used in subqueries
-        let subquery_tables = self.extract_subquery_tables(&self.plan.root);
+        let subquery_tables = self.get_subquery_tables();
 
         debug_log!(
             "DEBUG has_changes: view={} subquery_tables={:?} delta_tables={:?}",
-            self.plan.id,
+            plan_id,
             subquery_tables,
             deltas.keys().collect::<Vec<_>>()
         );
 
         if subquery_tables.is_empty() {
-            debug_log!(
-                "DEBUG has_changes: view={} NO SUBQUERY TABLES",
-                self.plan.id
-            );
             return false;
         }
 
         // Check if any delta for a subquery table contains changes (weight != 0)
-        for table in subquery_tables {
-            if let Some(delta) = deltas.get(&table) {
-                debug_log!(
-                    "DEBUG has_changes: view={} table={} delta_keys={:?}",
-                    self.plan.id,
-                    table,
-                    delta.keys().collect::<Vec<_>>()
-                );
+        // Copy keys to avoid referencing self (via subquery_tables which refers to cache)
+        let tables: Vec<String> = subquery_tables.iter().map(|s| s.to_string()).collect();
+        for table in tables {
+            if let Some(delta) = deltas.get(table.as_str()) {
                 // Check if any record in this delta is a CREATE (weight > 0 and not in version_map)
                 // or a DELETE (weight < 0 and in version_map)
                 for (key, weight) in delta {
-                    // Use SmolStr for lookup to ensure hash compatibility with FxHasher
                     let in_version_map = self.metadata.contains(key.as_str());
-                    debug_log!(
-                        "DEBUG has_changes: view={} key={} weight={} in_version_map={}",
-                        self.plan.id,
-                        key,
-                        weight,
-                        in_version_map
-                    );
-                    // CREATE: positive weight, not in version_map
-                    // DELETE: negative weight, in version_map
                     if (*weight > 0 && !in_version_map) || (*weight < 0 && in_version_map) {
-                        debug_log!(
-                            "DEBUG has_changes: view={} FOUND CHANGE key={} weight={}",
-                            self.plan.id,
-                            key,
-                            weight
-                        );
                         return true;
                     }
                 }
             }
         }
 
-        debug_log!("DEBUG has_changes: view={} NO CHANGES FOUND", self.plan.id);
         false
     }
 
@@ -809,6 +825,18 @@ impl View {
         } else {
             None
         }
+    }
+
+    fn get_subquery_tables(&mut self) -> &std::collections::HashSet<SmolStr> {
+        if self.subquery_tables_cache.is_none() {
+            self.subquery_tables_cache = Some(
+                self.extract_subquery_tables(&self.plan.root)
+                    .into_iter()
+                    .map(SmolStr::from)
+                    .collect()
+            );
+        }
+        self.subquery_tables_cache.as_ref().unwrap()
     }
 
     /// Extract all table names used in subquery projections

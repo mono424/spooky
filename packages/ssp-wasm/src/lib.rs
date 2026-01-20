@@ -145,7 +145,7 @@ impl SpookyProcessor {
         let plan_id = data.plan.id.clone();
         let initial_update = self
             .circuit
-            .register_view(data.plan, data.safe_params, data.format, data.strategy);
+            .register_view(data.plan, data.safe_params, data.format);
 
         // If None, return default empty result
         let result = initial_update

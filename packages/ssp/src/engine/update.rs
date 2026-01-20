@@ -84,7 +84,7 @@ pub enum ViewUpdate {
 pub fn compute_flat_hash(data: &[(String, u64)]) -> String {
     // Sort by record ID to ensure deterministic hash
     let mut sorted_data: Vec<_> = data.to_vec();
-    sorted_data.sort_by(|a, b| a.0.cmp(&b.0));
+    sorted_data.sort_unstable_by(|a, b| a.0.cmp(&b.0));
 
     let mut hasher = blake3::Hasher::new();
     for (id, version) in sorted_data {

@@ -35,7 +35,7 @@ fn test_comment_creation_updates_thread_view() {
 
     // Initial Register
     let update = circuit
-        .register_view(data.plan, data.safe_params, None, None)
+        .register_view(data.plan, data.safe_params, None)
         .expect("Initial view update failed");
 
     // Verify initial state (0 comments)

@@ -55,7 +55,7 @@ fn test_view_registration_after_ingestion() {
     };
 
     println!("[TEST] Registering view after ingestion");
-    let initial_update = circuit.register_view(plan, None, None, None);
+    let initial_update = circuit.register_view(plan, None, None);
 
     // 4. The initial update should contain the user that was already in the database
     assert!(
@@ -134,7 +134,7 @@ fn test_view_registration_after_ingestion_with_filter() {
     };
 
     println!("[TEST] Registering filtered view after ingestion");
-    let initial_update = circuit.register_view(plan, None, None, None);
+    let initial_update = circuit.register_view(plan, None, None);
 
     // 3. Should only find the active user
     assert!(

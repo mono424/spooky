@@ -123,7 +123,7 @@ fn benchmark_latency_mixed_stream() {
         io::stdout().flush().unwrap();
         for i in 0..view_count {
             let plan = create_magic_comments_plan(&format!("view_{}", i));
-            circuit.register_view(plan, None, None, None); // None = Flat format (default)
+            circuit.register_view(plan, None, None); // None = Flat format (default)
         }
         println!("Done.");
 
@@ -196,7 +196,7 @@ fn run_benchmark(view_count: usize, format: ViewResultFormat) -> BenchmarkResult
     // Register views with specified format
     for i in 0..view_count {
         let plan = create_magic_comments_plan(&format!("view_{}", i));
-        circuit.register_view(plan, None, Some(format.clone()), None);
+        circuit.register_view(plan, None, Some(format.clone()));
     }
 
     // Prepare data
