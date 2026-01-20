@@ -42,6 +42,15 @@ struct AppState {
 }
 
 #[derive(Deserialize, Debug)]
+struct LogRequest {
+    message: String,
+    #[serde(default)]
+    level: String,
+    #[serde(default)]
+    data: Option<Value>,
+}
+
+#[derive(Deserialize, Debug)]
 struct IngestRequest {
     table: String,
     op: String,
@@ -132,6 +141,7 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/ingest", post(ingest_handler))
+        .route("/log", post(log_handler))
         .route("/view/register", post(register_view_handler))
         .route("/view/unregister", post(unregister_view_handler))
         .route("/reset", post(reset_handler))
@@ -247,6 +257,27 @@ async fn ingest_handler(
 
     if !streaming_updates.is_empty() {
         update_all_edges(&state.db, &streaming_updates).await;
+    }
+
+    StatusCode::OK
+}
+
+#[instrument(skip(payload), fields(level = %payload.level))]
+async fn log_handler(
+    Json(payload): Json<LogRequest>,
+) -> impl IntoResponse {
+    let msg = if let Some(data) = &payload.data {
+        format!("{} | data: {}", payload.message, data)
+    } else {
+        payload.message.clone()
+    };
+
+    match payload.level.to_lowercase().as_str() {
+        "error" => error!(remote = true, "{}", msg),
+        "warn" => tracing::warn!(remote = true, "{}", msg),
+        "debug" => debug!(remote = true, "{}", msg),
+        "trace" => tracing::trace!(remote = true, "{}", msg),
+        _ => info!(remote = true, "{}", msg), // Default to info
     }
 
     StatusCode::OK

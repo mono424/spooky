@@ -25,11 +25,14 @@ services:
       # --- OTLP KONFIGURATION ---
       # Aktiviert OTLP Export für Tracing
       - SURREAL_TELEMETRY_PROVIDER=otlp
-      - SURREAL_TELEMETRY_SERVICE_NAME=surrealdb-core
+      - SURREAL_TELEMETRY_SERVICE_NAME=surrealdb
+      #- SURREAL_TELEMETRY_DISABLE_METRICS=true # Stop metrics collection (often source of 'collect' spans)
+      #- SURREAL_TELEMETRY_DISABLE_TRACING=true
       # Ziel: Aspire Dashboard
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://aspire-dashboard:18889
       # Reduziert Terminal-Logs (optional, da wir jetzt traces haben)
       - SURREAL_LOG=info 
+      # - RUST_LOG=info,surrealdb::core=debug,surrealdb::dbs=debug 
     command:
       - start
       - --bind
@@ -59,7 +62,7 @@ services:
     ports:
       - '8667:8667'
     environment:
-      - RUST_LOG=debug
+      - RUST_LOG=info,ssp=debug
       # --- OTLP KONFIGURATION ---
       # Ziel für Rust Tracing
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://aspire-dashboard:18889
