@@ -5,6 +5,8 @@ pub mod types;
 pub mod update;
 pub mod view;
 pub mod metadata;
+//deprecated
+pub mod deprecated;
 
 // Public re-exports (maintain backwards compatibility)
 pub use circuit::Circuit;

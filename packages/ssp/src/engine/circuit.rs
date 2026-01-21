@@ -1,13 +1,13 @@
 use crate::debug_log;
 use super::view::{
-    FastMap, QueryPlan, RowKey, SpookyValue, View, ViewUpdate, ZSet,
+    FastMap, QueryPlan, RowKey, SpookyValue, View, ViewUpdate, ZSet, Weight
 };
 use super::update::ViewResultFormat;
 use super::metadata::{BatchMeta, VersionStrategy, RecordMeta};
 // use rustc_hash::{FxHashMap, FxHasher}; // Unused in this file (used via FastMap)
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use smol_str::SmolStr;
+use smol_str::SmolStr;  
 
 // --- Types ---
 
@@ -31,7 +31,7 @@ impl Operation {
     }
 
     #[inline]
-    pub fn weight(&self) -> i64 {
+    pub fn weight(&self) -> Weight {
         match self {
             Operation::Create | Operation::Update => 1,
             Operation::Delete => -1,
@@ -99,6 +99,7 @@ impl BatchEntry {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct IngestBatch {
     entries: Vec<BatchEntry>,
     default_strategy: Option<VersionStrategy>,
@@ -306,119 +307,14 @@ impl Circuit {
     // Unified Ingestion API
     pub fn ingest(&mut self, batch: IngestBatch, is_optimistic: bool) -> Vec<ViewUpdate> {
         let (entries, strategy) = batch.build();
-        self.ingest_entries_internal(entries, strategy, is_optimistic)
-    }
-
-    pub fn ingest_entries(&mut self, entries: Vec<BatchEntry>, is_optimistic: bool) -> Vec<ViewUpdate> {
-        self.ingest_entries_internal(entries, None, is_optimistic)
-    }
-
-    // Backward compatibility wrappers
-    pub fn ingest_record(
-        &mut self,
-        table: &str,
-        op: &str,
-        id: &str,
-        record: Value,
-        hash: &str,
-        is_optimistic: bool,
-    ) -> Vec<ViewUpdate> {
-        let op = match Operation::from_str(op) {
-            Some(o) => o,
-            None => return Vec::new(),
-        };
-        self.ingest_entries(
-            vec![BatchEntry::new(table, op, id, SpookyValue::from(record), hash.to_string())],
-            is_optimistic,
-        )
-    }
-
-    pub fn ingest_batch(
-        &mut self,
-        batch: Vec<(String, String, String, Value, String)>,
-        is_optimistic: bool,
-    ) -> Vec<ViewUpdate> {
-        let entries: Vec<BatchEntry> = batch.into_iter().filter_map(BatchEntry::from_tuple).collect();
-        self.ingest_entries(entries, is_optimistic)
-    }
-
-    // Support existing ingest_with_meta by converting to unified format
-    pub fn ingest_with_meta(
-        &mut self,
-        table: &str,
-        op: &str,
-        id: &str,
-        record: Value,
-        hash: &str,
-        batch_meta: Option<&BatchMeta>,
-        is_optimistic: bool,
-    ) -> Vec<ViewUpdate> {
-        let op_enum = match Operation::from_str(op) {
-            Some(o) => o,
-            None => return Vec::new(),
-        };
-        
-        let mut entry = BatchEntry::new(
-            table,
-            op_enum,
-            id,
-            SpookyValue::from(record),
-            hash.to_string(),
-        );
-
-        // Attach metadata if present
-        if let Some(meta) = batch_meta {
-            if let Some(record_meta) = meta.get(id) {
-                entry = entry.with_meta(record_meta.clone());
-            }
-        }
-
-        // We can pass the strategy from batch_meta if we extract it, 
-        // but since we are attaching per-record meta, strictly speaking we might lose the 'default strategy' 
-        // if we don't pass it. 
-        // However, for single record ingestion, attaching meta is sufficient.
-        let strategy = batch_meta.map(|m| m.default_strategy.clone());
-        
-        self.ingest_entries_internal(vec![entry], strategy, is_optimistic)
-    }
-
-    // Re-impl of ingest_batch_with_meta using unified logic
-    pub fn ingest_batch_with_meta(
-        &mut self,
-        batch: Vec<(SmolStr, SmolStr, SmolStr, SpookyValue, String)>,
-        batch_meta: Option<&BatchMeta>,
-        is_optimistic: bool,
-    ) -> Vec<ViewUpdate> {
-        let entries: Vec<BatchEntry> = batch.into_iter().filter_map(|(t, o, i, r, h)| {
-            let op = Operation::from_str(&o)?;
-            let mut entry = BatchEntry::new(t, op, i.clone(), r, h);
-            if let Some(meta) = batch_meta {
-                if let Some(record_meta) = meta.get(i.as_str()) {
-                    entry = entry.with_meta(record_meta.clone());
-                }
-            }
-            Some(entry)
-        }).collect();
-
-        let strategy = batch_meta.map(|m| m.default_strategy.clone());
-        self.ingest_entries_internal(entries, strategy, is_optimistic)
-    }
-
-    // SINGLE internal implementation
-    fn ingest_entries_internal(
-        &mut self,
-        entries: Vec<BatchEntry>,
-        default_strategy: Option<VersionStrategy>,
-        is_optimistic: bool,
-    ) -> Vec<ViewUpdate> {
         if entries.is_empty() {
             return Vec::new();
         }
 
-        // Build per-record metadata map from entries that have explicit meta
-        let batch_meta = self.build_batch_meta(&entries, default_strategy);
+        // 1. Metadata vorbereiten
+        let batch_meta = self.build_batch_meta(&entries, strategy);
 
-        // Group by table for cache-friendly processing
+        // 2. Gruppieren nach Tabellen für effiziente DB-Updates
         let mut by_table: FastMap<SmolStr, Vec<BatchEntry>> = FastMap::default();
         for entry in entries {
             by_table.entry(entry.table.clone()).or_default().push(entry);
@@ -426,28 +322,27 @@ impl Circuit {
 
         let mut table_deltas: FastMap<String, ZSet> = FastMap::default();
 
-        // Process each table's entries together
         for (table, table_entries) in by_table {
             let tb = self.db.ensure_table(table.as_str());
             let delta = table_deltas.entry(table.to_string()).or_default();
 
             for entry in table_entries {
                 let weight = entry.op.weight();
-
                 if entry.op.is_additive() {
                     tb.update_row(entry.id.clone(), entry.record, entry.hash);
                 } else {
                     tb.delete_row(&entry.id);
                 }
-
                 *delta.entry(entry.id).or_insert(0) += weight;
             }
         }
-
+        println!("DEBUG: table_deltas: {:?}", table_deltas);
+        // 3. Änderungen an die Views propagieren
         self.propagate_deltas(table_deltas, batch_meta.as_ref(), is_optimistic)
     }
 
-    fn build_batch_meta(&self, entries: &[BatchEntry], default_strategy: Option<VersionStrategy>) -> Option<BatchMeta> {
+    //just for now public because of deprecated methods
+    pub fn build_batch_meta(&self, entries: &[BatchEntry], default_strategy: Option<VersionStrategy>) -> Option<BatchMeta> {
         let has_any_meta = entries.iter().any(|e| e.meta.is_some()) || default_strategy.is_some();
         if !has_any_meta {
             return None;
@@ -465,7 +360,8 @@ impl Circuit {
         Some(batch_meta)
     }
 
-    fn propagate_deltas(
+    //just for now public because of deprecated methods
+    pub fn propagate_deltas(
         &mut self, 
         mut table_deltas: FastMap<String, ZSet>, 
         batch_meta: Option<&BatchMeta>,
