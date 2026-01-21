@@ -31,6 +31,7 @@ pub enum Operator {
 
 impl Operator {
     /// Extract all table names referenced by this operator tree
+    // opti: q: String or SmolStr?
     pub fn referenced_tables(&self) -> Vec<String> {
         match self {
             Operator::Scan { table } => vec![table.clone()],

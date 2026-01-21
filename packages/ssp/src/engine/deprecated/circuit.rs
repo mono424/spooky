@@ -162,4 +162,35 @@ impl Circuit {
 
         self.propagate_deltas(table_deltas, batch_meta.as_ref(), is_optimistic)
     }
+
+    #[deprecated(note = "use ingest() instead")]
+    pub fn step(&mut self, table: String, delta: ZSet, is_optimistic: bool) -> Vec<ViewUpdate> {
+        {
+            let tb = self.db.ensure_table(&table);
+            tb.apply_delta(&delta);
+        }
+
+        let mut updates = Vec::new();
+
+        // Optimized Lazy Rebuild
+        if self.dependency_graph.is_empty() && !self.views.is_empty() {
+            self.rebuild_dependency_graph();
+        }
+
+        if let Some(indices) = self.dependency_graph.get(&table) {
+            // We need to clone indices to avoid borrowing self.dependency_graph while mutably borrowing self.views
+            let indices = indices.clone();
+            for i in indices {
+                if i < self.views.len() {
+                    if let Some(update) =
+                        self.views[i].process(&table, &delta, &self.db, is_optimistic)
+                    {
+                        updates.push(update);
+                    }
+                }
+            }
+        }
+
+        updates
+    }
 }

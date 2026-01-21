@@ -269,11 +269,19 @@ impl Circuit {
         Self {
             db: Database::new(),
             views: Vec::new(),
+            /*
+            dependency_graph = {
+                "users"    → [0, 2],     // Views 0 und 2 hängen von "users" ab
+                "orders"   → [1, 2],     // Views 1 und 2 hängen von "orders" ab
+                "products" → [1]         // View 1 hängt von "products" ab
+            }
+             */
             dependency_graph: FastMap::default(),
         }
     }
 
     // Must be called after Deserialization to rebuild the Cache!
+        // opti: q: dont remove cache for performance so i dont have to rebuild it?
     pub fn rebuild_dependency_graph(&mut self) {
         self.dependency_graph.clear();
         #[cfg(target_arch = "wasm32")]
@@ -295,6 +303,7 @@ impl Circuit {
                 .into(),
             );
             for t in tables {
+                // q: what exectly is the value i?
                 self.dependency_graph.entry(t).or_default().push(i);
             }
         }
@@ -323,6 +332,7 @@ impl Circuit {
         let mut table_deltas: FastMap<String, ZSet> = FastMap::default();
 
         for (table, table_entries) in by_table {
+            //opti: not convert to string make a total SmolStr chain (&table) (2+ Alloc) -> 0 Alloc if < 23 bytes)
             let tb = self.db.ensure_table(table.as_str());
             let delta = table_deltas.entry(table.to_string()).or_default();
 
@@ -370,10 +380,18 @@ impl Circuit {
         // Apply Deltas to DB ZSets
         let mut changed_tables = Vec::with_capacity(table_deltas.len());
         for (table, delta) in &mut table_deltas {
+
+            let delta: &mut ZSet = delta;
+
+            //remove all <tablename, ZSet> where zset weight is 0
             delta.retain(|_, w| *w != 0);
             if !delta.is_empty() {
+                //opti: not convert to string make a total SmolStr chain (&table) (2+ Alloc) -> 0 Alloc if < 23 bytes)
+                //q: why do i have to do it again?
                 let tb = self.db.ensure_table(table.as_str());
+                //add update weights of Table ZSet or remove ZSet when weight = 0
                 tb.apply_delta(delta);
+                //opti: SmolStr and resize changed_tables size delta.len()?
                 changed_tables.push(table.to_string());
             }
         }
@@ -411,6 +429,7 @@ impl Circuit {
 
         // Deduplicate View Indices (Sort + Dedup)
         // This ensures each view is processed EXACTLY ONCE, even if multiple input tables changed
+        // opti: remove sort and dedup use HashSet its faster when many views
         impacted_view_indices.sort_unstable();
         impacted_view_indices.dedup();
 
@@ -506,35 +525,6 @@ impl Circuit {
         self.rebuild_dependency_graph();
     }
 
-    pub fn step(&mut self, table: String, delta: ZSet, is_optimistic: bool) -> Vec<ViewUpdate> {
-        {
-            let tb = self.db.ensure_table(&table);
-            tb.apply_delta(&delta);
-        }
-
-        let mut updates = Vec::new();
-
-        // Optimized Lazy Rebuild
-        if self.dependency_graph.is_empty() && !self.views.is_empty() {
-            self.rebuild_dependency_graph();
-        }
-
-        if let Some(indices) = self.dependency_graph.get(&table) {
-            // We need to clone indices to avoid borrowing self.dependency_graph while mutably borrowing self.views
-            let indices = indices.clone();
-            for i in indices {
-                if i < self.views.len() {
-                    if let Some(update) =
-                        self.views[i].process(&table, &delta, &self.db, is_optimistic)
-                    {
-                        updates.push(update);
-                    }
-                }
-            }
-        }
-
-        updates
-    }
     pub fn set_record_version(
         &mut self,
         incantation_id: &str,

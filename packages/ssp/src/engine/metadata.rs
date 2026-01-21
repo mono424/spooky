@@ -29,6 +29,7 @@ pub enum VersionStrategy {
 #[derive(Debug, Clone, Default)]
 pub struct RecordMeta {
     pub version: Option<u64>,
+    //fastHashmap?
     pub hash: Option<String>,
     pub custom: Option<SpookyValue>,
 }
