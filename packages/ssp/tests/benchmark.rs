@@ -151,7 +151,7 @@ fn benchmark_latency_mixed_stream() {
             let batch_len = batch_data.len();
 
             let start = Instant::now();
-            circuit.ingest_batch(batch_data, true);
+            circuit.ingest_batch_outdated(batch_data);
             let duration = start.elapsed();
 
             total_ingest_duration += duration;
@@ -217,7 +217,7 @@ fn run_benchmark(view_count: usize, format: ViewResultFormat) -> BenchmarkResult
                 )
             })
             .collect();
-        circuit.ingest_batch(batch_data, true);
+        circuit.ingest_batch_outdated(batch_data);
     }
     let total_duration = start.elapsed();
 

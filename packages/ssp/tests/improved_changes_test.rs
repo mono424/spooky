@@ -42,7 +42,7 @@ mod operation_tests {
 
         // Invalid operations should not cause panics
         let mut circuit = setup();
-        let updates = circuit.ingest_batch(
+        let updates = circuit.ingest_batch_outdated(
             vec![(
                 "users".into(),
                 "INVALID_OP".into(), // Should be ignored
@@ -50,7 +50,6 @@ mod operation_tests {
                 json!({"name": "Test"}),
                 "hash".into(),
             )],
-            true,
         );
         // No crash, empty result since op was invalid
         assert!(updates.is_empty());
@@ -59,7 +58,7 @@ mod operation_tests {
     fn matches_op(input: &str, _expected: &str) -> bool {
         // Helper to verify operation parsing works
         let mut circuit = setup();
-        let result = circuit.ingest_batch(
+        let result = circuit.ingest_batch_outdated(
             vec![(
                 "test".into(),
                 input.into(),
@@ -67,7 +66,6 @@ mod operation_tests {
                 json!({"id": "test:1"}),
                 "hash".into(),
             )],
-            true,
         );
         // If parsing worked, the record was ingested
         circuit.db.tables.contains_key("test")
@@ -88,16 +86,16 @@ mod operation_tests {
         circuit.register_view(plan, None, None);
 
         // CREATE adds record (weight +1)
-        ingest(&mut circuit, "items", "CREATE", "items:1", json!({"id": "items:1"}), true);
+        ingest(&mut circuit, "items", "CREATE", "items:1", json!({"id": "items:1"}));
         assert!(circuit.db.tables.get("items").unwrap().zset.contains_key("items:1"));
 
         // DELETE removes record (weight -1)
-        ingest(&mut circuit, "items", "DELETE", "items:1", json!({}), true);
+        ingest(&mut circuit, "items", "DELETE", "items:1", json!({}));
         assert!(!circuit.db.tables.get("items").unwrap().zset.contains_key("items:1"));
 
         // UPDATE keeps record (weight +1, replaces existing)
-        ingest(&mut circuit, "items", "CREATE", "items:2", json!({"id": "items:2", "val": 1}), true);
-        ingest(&mut circuit, "items", "UPDATE", "items:2", json!({"id": "items:2", "val": 2}), true);
+        ingest(&mut circuit, "items", "CREATE", "items:2", json!({"id": "items:2", "val": 1}));
+        ingest(&mut circuit, "items", "UPDATE", "items:2", json!({"id": "items:2", "val": 2}));
         assert!(circuit.db.tables.get("items").unwrap().rows.contains_key("items:2"));
     }
 }
@@ -131,7 +129,7 @@ mod mixed_ops_same_table_tests {
             ("users".into(), "DELETE".into(), "users:2".into(), json!({}), "h4".into()),
         ];
 
-        let updates = circuit.ingest_batch(batch, true);
+        let updates = circuit.ingest_batch_outdated(batch);
 
         // Verify final state
         let users_table = circuit.db.tables.get("users").unwrap();
@@ -162,7 +160,7 @@ mod mixed_ops_same_table_tests {
         circuit.register_view(plan, None, Some(ViewResultFormat::Streaming));
 
         // Create initial record
-        ingest(&mut circuit, "items", "CREATE", "items:1", json!({"id": "items:1", "counter": 0}), true);
+        ingest(&mut circuit, "items", "CREATE", "items:1", json!({"id": "items:1", "counter": 0}));
 
         // Batch multiple updates (simulates rapid mutations)
         let batch = vec![
@@ -171,7 +169,7 @@ mod mixed_ops_same_table_tests {
             ("items".into(), "UPDATE".into(), "items:1".into(), json!({"id": "items:1", "counter": 3}), "h3".into()),
         ];
 
-        circuit.ingest_batch(batch, true);
+        circuit.ingest_batch_outdated(batch);
 
         // Final value should be counter: 3 (last update wins)
         let items = circuit.db.tables.get("items").unwrap();
@@ -206,7 +204,7 @@ mod mixed_ops_same_table_tests {
             ("ephemeral".into(), "DELETE".into(), "ephemeral:1".into(), json!({}), "h2".into()),
         ];
 
-        circuit.ingest_batch(batch, true);
+        circuit.ingest_batch_outdated(batch);
 
         // Record should not exist (weight cancels out: +1 - 1 = 0)
         let table = circuit.db.tables.get("ephemeral");
@@ -249,7 +247,7 @@ mod mixed_tables_tests {
             ("users".into(), "CREATE".into(), "users:2".into(), json!({"id": "users:2", "name": "Bob"}), "h4".into()),
         ];
 
-        let updates = circuit.ingest_batch(batch, true);
+        let updates = circuit.ingest_batch_outdated(batch);
 
         // Verify all tables have correct data
         assert!(circuit.db.tables.get("users").unwrap().rows.len() == 2);
@@ -290,7 +288,7 @@ mod mixed_tables_tests {
             ("users".into(), "CREATE".into(), "users:1".into(), json!({"id": "users:1"}), "h1".into()),
         ];
 
-        let updates = circuit.ingest_batch(batch, true);
+        let updates = circuit.ingest_batch_outdated(batch);
 
         // Only users_only view should be updated
         let view_ids: Vec<&str> = updates.iter().map(|u| u.query_id()).collect();
@@ -310,7 +308,7 @@ mod mixed_tables_tests {
         let mut circuit = setup();
 
         // Setup: create initial data
-        ingest(&mut circuit, "authors", "CREATE", "authors:1", json!({"id": "authors:1", "name": "Writer"}), true);
+        ingest(&mut circuit, "authors", "CREATE", "authors:1", json!({"id": "authors:1", "name": "Writer"}));
 
         // Register a join view
         let plan = QueryPlan {
@@ -333,7 +331,7 @@ mod mixed_tables_tests {
             ("books".into(), "CREATE".into(), "books:2".into(), json!({"id": "books:2", "title": "Book 2", "author": "authors:1"}), "h3".into()),
         ];
 
-        let updates = circuit.ingest_batch(batch, true);
+        let updates = circuit.ingest_batch_outdated(batch);
 
         // Both books should exist
         assert!(circuit.db.tables.get("books").unwrap().rows.len() == 2);
@@ -371,15 +369,15 @@ mod view_update_tests {
         circuit.register_view(plan, None, Some(ViewResultFormat::Streaming));
 
         // CREATE should emit Created event
-        let create_updates = ingest(&mut circuit, "items", "CREATE", "items:1", json!({"id": "items:1"}), true);
+        let create_updates = ingest(&mut circuit, "items", "CREATE", "items:1", json!({"id": "items:1"}));
         assert_has_event(&create_updates, "streaming_test", "items:1", DeltaEvent::Created);
 
         // UPDATE should emit Updated event
-        let update_updates = ingest(&mut circuit, "items", "UPDATE", "items:1", json!({"id": "items:1", "val": 1}), true);
+        let update_updates = ingest(&mut circuit, "items", "UPDATE", "items:1", json!({"id": "items:1", "val": 1}));
         assert_has_event(&update_updates, "streaming_test", "items:1", DeltaEvent::Updated);
 
         // DELETE should emit Deleted event
-        let delete_updates = ingest(&mut circuit, "items", "DELETE", "items:1", json!({}), true);
+        let delete_updates = ingest(&mut circuit, "items", "DELETE", "items:1", json!({}));
         assert_has_event(&delete_updates, "streaming_test", "items:1", DeltaEvent::Deleted);
 
         println!("[TEST] ✓ Streaming delta events are correct for CREATE/UPDATE/DELETE");
@@ -399,17 +397,17 @@ mod view_update_tests {
         circuit.register_view(plan, None, Some(ViewResultFormat::Streaming));
 
         // Create record - version should be 1
-        ingest(&mut circuit, "versioned", "CREATE", "versioned:1", json!({"id": "versioned:1"}), true);
+        ingest(&mut circuit, "versioned", "CREATE", "versioned:1", json!({"id": "versioned:1"}));
         let v1 = get_version(&circuit, "version_test", "versioned:1");
         assert_eq!(v1, 1, "Initial version should be 1");
 
         // Update record (optimistic) - version should increment
-        ingest(&mut circuit, "versioned", "UPDATE", "versioned:1", json!({"id": "versioned:1", "v": 1}), true);
+        ingest(&mut circuit, "versioned", "UPDATE", "versioned:1", json!({"id": "versioned:1", "v": 1}));
         let v2 = get_version(&circuit, "version_test", "versioned:1");
         assert_eq!(v2, 2, "Version should be 2 after first update");
 
         // Another update
-        ingest(&mut circuit, "versioned", "UPDATE", "versioned:1", json!({"id": "versioned:1", "v": 2}), true);
+        ingest(&mut circuit, "versioned", "UPDATE", "versioned:1", json!({"id": "versioned:1", "v": 2}));
         let v3 = get_version(&circuit, "version_test", "versioned:1");
         assert_eq!(v3, 3, "Version should be 3 after second update");
 
@@ -465,7 +463,7 @@ mod optimization_tests {
         let start_individual = Instant::now();
         for i in 0..NUM_RECORDS {
             let id = format!("perf:{}", i);
-            ingest(&mut circuit1, "perf", "CREATE", &id, json!({"id": id, "i": i}), true);
+            ingest(&mut circuit1, "perf", "CREATE", &id, json!({"id": id, "i": i}));
         }
         let individual_time = start_individual.elapsed();
 
@@ -487,7 +485,7 @@ mod optimization_tests {
             .collect();
 
         let start_batch = Instant::now();
-        circuit2.ingest_batch(batch, true);
+        circuit2.ingest_batch_outdated(batch);
         let batch_time = start_batch.elapsed();
 
         println!(
@@ -542,7 +540,6 @@ mod optimization_tests {
             "CREATE",
             "table_0:1",
             json!({"id": "table_0:1"}),
-            true,
         );
 
         // Should only have 1 update (for view_0)
@@ -571,7 +568,7 @@ mod edge_case_tests {
         };
         circuit.register_view(plan, None, None);
 
-        let updates = circuit.ingest_batch(vec![], true);
+        let updates = circuit.ingest_batch_outdated(vec![]);
         assert!(updates.is_empty(), "Empty batch should produce no updates");
 
         println!("[TEST] ✓ Empty batch handled correctly");
@@ -588,7 +585,7 @@ mod edge_case_tests {
         ];
 
         // Should not panic, just skip invalid ops
-        let updates = circuit.ingest_batch(batch, true);
+        let updates = circuit.ingest_batch_outdated(batch);
         
         // No valid operations = no table created
         assert!(!circuit.db.tables.contains_key("test"));
@@ -609,8 +606,8 @@ mod edge_case_tests {
 
         // Create and delete same record multiple times
         for cycle in 0..5 {
-            ingest(&mut circuit, "cycle", "CREATE", "cycle:1", json!({"id": "cycle:1", "cycle": cycle}), true);
-            ingest(&mut circuit, "cycle", "DELETE", "cycle:1", json!({}), true);
+            ingest(&mut circuit, "cycle", "CREATE", "cycle:1", json!({"id": "cycle:1", "cycle": cycle}));
+            ingest(&mut circuit, "cycle", "DELETE", "cycle:1", json!({}));
         }
 
         // Record should not exist
@@ -643,7 +640,7 @@ mod edge_case_tests {
             })
             .collect();
 
-        let updates = circuit.ingest_batch(batch, true);
+        let updates = circuit.ingest_batch_outdated(batch);
 
         // All records should be ingested
         assert_eq!(
@@ -674,7 +671,7 @@ mod edge_case_tests {
             ("unicode".into(), "CREATE".into(), "unicode:3".into(), json!({"id": "unicode:3", "special": "a\nb\tc\"d"}), "h3".into()),
         ];
 
-        circuit.ingest_batch(batch, true);
+        circuit.ingest_batch_outdated(batch);
 
         assert_eq!(circuit.db.tables.get("unicode").unwrap().rows.len(), 3);
 
@@ -714,7 +711,7 @@ mod complex_query_tests {
             ("thread".into(), "CREATE".into(), "thread:1".into(), json!({"id": "thread:1", "title": "Test", "author": "author:1"}), "h2".into()),
         ];
 
-        let updates = circuit.ingest_batch(batch, true);
+        let updates = circuit.ingest_batch_outdated(batch);
 
         // Join should match
         let view = circuit.views.iter().find(|v| v.plan.id == "threads_with_authors").unwrap();
@@ -762,7 +759,7 @@ mod complex_query_tests {
             ("thread".into(), "CREATE".into(), "thread:1".into(), json!({"id": "thread:1", "title": "Test", "author": "user:1"}), "h2".into()),
         ];
 
-        circuit.ingest_batch(batch, true);
+        circuit.ingest_batch_outdated(batch);
 
         // Both thread and user should be in version_map
         let view = circuit.views.iter().find(|v| v.plan.id == "thread_with_author").unwrap();
@@ -810,7 +807,7 @@ mod complex_query_tests {
         circuit.register_view(plan, None, Some(ViewResultFormat::Streaming));
 
         // 1. Create the user (author) first - unrelated to view yet
-        ingest(&mut circuit, "user", "CREATE", "user:100", json!({"id": "user:100", "name": "Subquery User"}), true);
+        ingest(&mut circuit, "user", "CREATE", "user:100", json!({"id": "user:100", "name": "Subquery User"}));
         
         // 2. Now create the thread that references this user.
         // This is a NEW main record for the view. 
@@ -818,7 +815,7 @@ mod complex_query_tests {
         // - Detect new thread
         // - Evaluate subquery -> find user:100
         // - Emit Created for thread:100 AND Created for user:100 (since it's new to the view)
-        let updates = ingest(&mut circuit, "thread", "CREATE", "thread:100", json!({"id": "thread:100", "title": "New Thread", "author": "user:100"}), true);
+        let updates = ingest(&mut circuit, "thread", "CREATE", "thread:100", json!({"id": "thread:100", "title": "New Thread", "author": "user:100"}));
 
         // Verify updates
         assert!(!updates.is_empty());

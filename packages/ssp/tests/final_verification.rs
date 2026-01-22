@@ -51,7 +51,7 @@ fn test_build_materialized_performance() {
             format!("hash:{}", i),
         ));
     }
-    circuit.ingest_batch(batch, true);
+    circuit.ingest_batch_outdated(batch);
 
     // Now perform a batch update that modifies MANY records
     // This triggers `build_materialized_raw_result` which had the O(n^2) bug
@@ -69,7 +69,7 @@ fn test_build_materialized_performance() {
     }
 
     let start = std::time::Instant::now();
-    circuit.ingest_batch(update_batch, true);
+    circuit.ingest_batch_outdated(update_batch);
     let duration = start.elapsed();
 
     println!("Update of {} records took {:?}", num_records / 2, duration);

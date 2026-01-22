@@ -212,20 +212,12 @@ impl MetadataProcessor {
         _id: &str,
         current_version: u64,
         meta: Option<&RecordMeta>,
-        is_optimistic: bool,
     ) -> VersionResult {
         match self.strategy {
             VersionStrategy::Optimistic => {
-                if is_optimistic {
-                     VersionResult {
-                        version: current_version + 1,
-                        changed: true,
-                    }
-                } else {
-                    VersionResult {
-                        version: current_version,
-                        changed: false,
-                    }
+                VersionResult {
+                    version: current_version + 1,
+                    changed: true,
                 }
             },
             VersionStrategy::Explicit => {

@@ -275,8 +275,36 @@ impl Circuit {
     }
 
     // Unified Ingestion API
+    // Optimized single record path (no meta, no version overhead)
+    #[instrument(target = "ssp_module", level = "debug", skip(self, record))]
+    pub fn ingest_single(
+        &mut self,
+        table: &str,
+        op: Operation,
+        id: &str,
+        record: SpookyValue,
+    ) -> Vec<ViewUpdate> {
+        let tb = self.db.ensure_table(table);
+        let id_smol = SmolStr::from(id);
+
+        if op.is_additive() {
+            tb.update_row(id_smol.clone(), record);
+        } else {
+            tb.delete_row(&id_smol);
+        }
+
+        // Optimized: minimal allocations for single record delta
+        let mut delta = ZSet::default();
+        delta.insert(id_smol, op.weight());
+
+        let mut table_deltas = FastMap::default();
+        table_deltas.insert(table.to_string(), delta);
+
+        self.propagate_deltas(table_deltas, None)
+    }
+
     #[instrument(target = "ssp_module", level = "debug", skip(self, batch))]
-    pub fn ingest(&mut self, batch: IngestBatch, is_optimistic: bool) -> Vec<ViewUpdate> {
+    pub fn ingest_batch(&mut self, batch: IngestBatch) -> Vec<ViewUpdate> {
         let (entries, strategy) = batch.build();
         if entries.is_empty() {
             return Vec::new();
@@ -320,7 +348,7 @@ impl Circuit {
         }
         
         // 3. Änderungen an die Views propagieren
-        self.propagate_deltas(table_deltas, batch_meta.as_ref(), is_optimistic)
+        self.propagate_deltas(table_deltas, batch_meta.as_ref())
     }
 
 
@@ -350,7 +378,6 @@ impl Circuit {
         &mut self, 
         mut table_deltas: FastMap<String, ZSet>, 
         batch_meta: Option<&BatchMeta>,
-        is_optimistic: bool
     ) -> Vec<ViewUpdate> {
         // Apply Deltas to DB ZSets
         let changed_tables = {
@@ -425,7 +452,7 @@ impl Circuit {
                         // Check if this view needs update.
                         // impacted_view_indices is sorted, so binary_search is efficient.
                         if impacted_view_indices.binary_search(&i).is_ok() {
-                            view.process_ingest_with_meta(deltas_ref, db_ref, is_optimistic, batch_meta)
+                            view.process_ingest_with_meta(deltas_ref, db_ref, batch_meta)
                         } else {
                             None
                         }
@@ -439,7 +466,7 @@ impl Circuit {
                 for i in impacted_view_indices {
                     if i < self.views.len() {
                         let view: &mut View = &mut self.views[i];
-                        if let Some(update) = view.process_ingest_with_meta(deltas_ref, db_ref, is_optimistic, batch_meta) {
+                        if let Some(update) = view.process_ingest_with_meta(deltas_ref, db_ref, batch_meta) {
                             ups.push(update);
                         }
                     }
@@ -514,7 +541,7 @@ impl Circuit {
         let initial_update = {
             let _span = tracing::debug_span!(target: "ssp_module", "initial_snapshot").entered();
             let empty_deltas: FastMap<String, ZSet> = FastMap::default();
-            view.process_ingest(&empty_deltas, &self.db, true)
+            view.process_ingest(&empty_deltas, &self.db)
         };
 
         // Add view and update dependency graph

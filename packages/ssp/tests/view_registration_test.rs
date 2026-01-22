@@ -27,7 +27,6 @@ fn test_view_registration_after_ingestion() {
         "CREATE",
         &user_id,
         user_record.clone(),
-        true,
     );
 
     // 2. Verify the record is in the database
@@ -106,7 +105,6 @@ fn test_view_registration_after_ingestion_with_filter() {
         "CREATE",
         &user1_id,
         user1_record.clone(),
-        true,
     );
     ingest(
         &mut circuit,
@@ -114,7 +112,6 @@ fn test_view_registration_after_ingestion_with_filter() {
         "CREATE",
         &user2_id,
         user2_record.clone(),
-        true,
     );
 
     // 2. Register a view that filters for active users only
@@ -198,7 +195,6 @@ fn test_lazy_rebuild_dependency_graph_after_deserialization() {
         "CREATE",
         &user_id,
         user_record,
-        true,
     );
 
     // 5. Verify: dependency_graph should now be rebuilt

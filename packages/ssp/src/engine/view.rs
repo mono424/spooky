@@ -186,29 +186,27 @@ impl View {
     /// The main function for updates.
     /// Uses delta optimization if possible.
     #[inline]
+    #[inline]
     pub fn process(
         &mut self,
         changed_table: &str,
         input_delta: &ZSet,
         db: &Database,
-        is_optimistic: bool,
     ) -> Option<ViewUpdate> {
         let mut deltas = FastMap::default();
         if !changed_table.is_empty() {
             deltas.insert(changed_table.to_string(), input_delta.clone());
         }
-        self.process_ingest(&deltas, db, is_optimistic)
+        self.process_ingest(&deltas, db)
     }
 
     /// Optimized 2-Phase Processing: Handles multiple table updates at once.
-    /// is_optimistic: true = increment versions (local mutations), false = keep versions (remote sync)
     pub fn process_ingest(
         &mut self,
         deltas: &FastMap<String, ZSet>,
         db: &Database,
-        is_optimistic: bool,
     ) -> Option<ViewUpdate> {
-        self.process_ingest_with_meta(deltas, db, is_optimistic, None)
+        self.process_ingest_with_meta(deltas, db, None)
     }
 
     /// NEW: Process with optional explicit metadata
@@ -217,7 +215,6 @@ impl View {
         &mut self,
         deltas: &FastMap<String, ZSet>,
         db: &Database,
-        is_optimistic: bool,
         batch_meta: Option<&BatchMeta>,
     ) -> Option<ViewUpdate> {
         let ctx = {
@@ -263,7 +260,7 @@ impl View {
         // Step 5: Build Raw Result
         let raw_result = {
             let _span = tracing::debug_span!(target: "ssp_module", "build_raw_result").entered();
-            self.build_raw_result(&changes, &ctx, is_optimistic, db)
+            self.build_raw_result(&changes, &ctx, db)
         };
 
         // Step 6: Format Output
@@ -370,7 +367,6 @@ impl View {
         &mut self,
         changes: &CategorizedChanges,
         ctx: &ProcessContext,
-        is_optimistic: bool,
         db: &Database,
     ) -> RawViewResult {
         let processor = MetadataProcessor::new(self.metadata.strategy.clone());
@@ -383,13 +379,13 @@ impl View {
 
         if ctx.is_streaming {
             self.build_streaming_raw_result(
-                &mut raw, changes, ctx, is_optimistic,
+                &mut raw, changes, ctx,
                 &processor, db
             );
         } else {
             self.build_materialized_raw_result(
                 &mut raw, changes,
-                is_optimistic, &processor, ctx, db
+                &processor, ctx, db
             );
         }
         
@@ -401,7 +397,6 @@ impl View {
         raw: &mut RawViewResult,
         changes: &CategorizedChanges,
         ctx: &ProcessContext,
-        is_optimistic: bool,
         processor: &MetadataProcessor,
         db: &Database,
     ) {
@@ -426,7 +421,7 @@ impl View {
                  if changes.delta.get(&SmolStr::from(&id)).is_none() {
                      self.subquery_cache.entry(SmolStr::from(&id)).or_insert(1);
                  }
-                 let version = self.compute_and_store_version(&id, processor, ctx, true, false);
+                 let version = self.compute_and_store_version(&id, processor, ctx, true);
                  delta_out.additions.push((id, version));
              }
          } else if ctx.has_subquery_changes {
@@ -451,7 +446,7 @@ impl View {
                  // Check if already version-tracked (not cache membership)
                  #[allow(deprecated)]
                  if !self.metadata.contains(id.as_str()) {
-                     let version = self.compute_and_store_version(id, processor, ctx, true, false);
+                     let version = self.compute_and_store_version(id, processor, ctx, true);
                      delta_out.additions.push((id.clone(), version));
                  }
              }
@@ -468,7 +463,7 @@ impl View {
          } else {
              // Normal streaming
             for id in &changes.additions {
-                let version = self.compute_and_store_version(id, processor, ctx, true, false);
+                let version = self.compute_and_store_version(id, processor, ctx, true);
                 delta_out.additions.push((id.to_string(), version));
                 
                 // Recursively check for subquery records associated with this new record
@@ -482,7 +477,7 @@ impl View {
                         // Only add if not already version-tracked (and not the main id we just added)
                         #[allow(deprecated)]
                         if sub_id != id.as_str() && !self.metadata.contains(&sub_id) {
-                            let v = self.compute_and_store_version(&sub_id, processor, ctx, true, false);
+                            let v = self.compute_and_store_version(&sub_id, processor, ctx, true);
                             delta_out.additions.push((sub_id, v));
                         }
                     }
@@ -493,7 +488,7 @@ impl View {
                  delta_out.removals.push(id.to_string());
              }
              for id in &changes.updates {
-                 let version = self.compute_and_store_version(id, processor, ctx, false, is_optimistic);
+                 let version = self.compute_and_store_version(id, processor, ctx, false);
                  delta_out.updates.push((id.to_string(), version));
              }
          }
@@ -505,7 +500,6 @@ impl View {
         &mut self,
         raw: &mut RawViewResult,
         changes: &CategorizedChanges,
-        is_optimistic: bool,
         processor: &MetadataProcessor,
         ctx: &ProcessContext,
         db: &Database,
@@ -536,7 +530,7 @@ impl View {
              // If it's an update, we might increment. If it's existing, we keep.
              // If it's new (addition), we set.
              
-             let version = self.compute_and_store_version(&id, processor, ctx, is_new, is_optimistic && is_update);
+             let version = self.compute_and_store_version(&id, processor, ctx, is_new);
              raw.records.push((id, version));
          }
     }
@@ -548,7 +542,6 @@ impl View {
         processor: &MetadataProcessor,
         ctx: &ProcessContext,
         is_new: bool,
-        is_optimistic: bool,
     ) -> u64 {
         let current = self.metadata.get_version(id);
         
@@ -565,7 +558,7 @@ impl View {
         let result = if is_new {
             processor.compute_new_version(id, current, None)
         } else {
-            processor.compute_update_version(id, current, None, is_optimistic)
+            processor.compute_update_version(id, current, None)
         };
         
         if result.changed || is_new {
@@ -844,9 +837,8 @@ impl View {
 
             // Trigger re-hashing by processing empty deltas
             let empty_deltas = FastMap::default();
-            // We pass is_optimistic=false because we've already manually manipulated the version map
-            // and we just want to recompute the hash and return the update.
-            self.process_ingest(&empty_deltas, db, false)
+            // We've already manually manipulated the version map, just recompute hash/update.
+            self.process_ingest(&empty_deltas, db)
         } else {
             None
         }
@@ -1108,11 +1100,7 @@ impl View {
         db.tables.get(table_name)?.rows.get(key)
     }
 
-    #[allow(dead_code)]
-    fn get_row_hash(&self, key: &str, db: &Database) -> Option<String> {
-        let (table_name, _id) = key.split_once(':')?;
-        db.tables.get(table_name)?.hashes.get(key).cloned()
-    }
+
 
     fn check_predicate(
         &self,

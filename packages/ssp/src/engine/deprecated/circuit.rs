@@ -10,9 +10,8 @@ impl Circuit {
     pub fn ingest_entries(
         &mut self,
         entries: Vec<BatchEntry>,
-        is_optimistic: bool,
     ) -> Vec<ViewUpdate> {
-        self.ingest_entries_internal(entries, None, is_optimistic)
+        self.ingest_entries_internal(entries, None)
     }
 
     #[deprecated(note = "Use ingest() instead")]
@@ -22,36 +21,35 @@ impl Circuit {
         op: &str,
         id: &str,
         record: Value,
-        hash: &str,
-        is_optimistic: bool,
+        _hash: &str,
     ) -> Vec<ViewUpdate> {
         let op = match Operation::from_str(op) {
             Some(o) => o,
             None => return Vec::new(),
         };
-        self.ingest_entries(
-            vec![BatchEntry::new(
-                table,
-                op,
-                id,
-                SpookyValue::from(record),
-                hash.to_string(),
-            )],
-            is_optimistic,
+        
+        // Use the new optimized single-record path
+        self.ingest_single(
+            table,
+            op,
+            id,
+            SpookyValue::from(record),
         )
     }
 
     #[deprecated(note = "Use ingest() instead")]
-    pub fn ingest_batch(
+    pub fn ingest_batch_outdated(
         &mut self,
         batch: Vec<(String, String, String, Value, String)>,
-        is_optimistic: bool,
     ) -> Vec<ViewUpdate> {
         let entries: Vec<BatchEntry> = batch
             .into_iter()
-            .filter_map(BatchEntry::from_tuple)
+            .filter_map(|(table, op_str, id, record, _hash)| {
+                let op = Operation::from_str(&op_str)?;
+                Some(BatchEntry::new(table, op, id, SpookyValue::from(record)))
+            })
             .collect();
-        self.ingest_entries(entries, is_optimistic)
+        self.ingest_entries(entries)
     }
 
     #[deprecated(note = "Use ingest() instead")]
@@ -61,9 +59,8 @@ impl Circuit {
         op: &str,
         id: &str,
         record: Value,
-        hash: &str,
+        _hash: &str,
         batch_meta: Option<&BatchMeta>,
-        is_optimistic: bool,
     ) -> Vec<ViewUpdate> {
         let op_enum = match Operation::from_str(op) {
             Some(o) => o,
@@ -75,7 +72,6 @@ impl Circuit {
             op_enum,
             id,
             SpookyValue::from(record),
-            hash.to_string(),
         );
 
         // Attach metadata if present
@@ -91,7 +87,7 @@ impl Circuit {
         // However, for single record ingestion, attaching meta is sufficient.
         let strategy = batch_meta.map(|m| m.default_strategy.clone());
 
-        self.ingest_entries_internal(vec![entry], strategy, is_optimistic)
+        self.ingest_entries_internal(vec![entry], strategy)
     }
 
     #[deprecated(note = "Use ingest() instead")]
@@ -99,13 +95,12 @@ impl Circuit {
         &mut self,
         batch: Vec<(SmolStr, SmolStr, SmolStr, SpookyValue, String)>,
         batch_meta: Option<&BatchMeta>,
-        is_optimistic: bool,
     ) -> Vec<ViewUpdate> {
         let entries: Vec<BatchEntry> = batch
             .into_iter()
-            .filter_map(|(t, o, i, r, h)| {
+            .filter_map(|(t, o, i, r, _h)| {
                 let op = Operation::from_str(&o)?;
-                let mut entry = BatchEntry::new(t, op, i.clone(), r, h);
+                let mut entry = BatchEntry::new(t, op, i.clone(), r);
                 if let Some(meta) = batch_meta {
                     if let Some(record_meta) = meta.get(i.as_str()) {
                         entry = entry.with_meta(record_meta.clone());
@@ -116,7 +111,7 @@ impl Circuit {
             .collect();
 
         let strategy = batch_meta.map(|m| m.default_strategy.clone());
-        self.ingest_entries_internal(entries, strategy, is_optimistic)
+        self.ingest_entries_internal(entries, strategy)
     }
 
     // SINGLE internal implementation
@@ -125,7 +120,6 @@ impl Circuit {
         &mut self,
         entries: Vec<BatchEntry>,
         default_strategy: Option<VersionStrategy>,
-        is_optimistic: bool,
     ) -> Vec<ViewUpdate> {
         if entries.is_empty() {
             return Vec::new();
@@ -151,7 +145,7 @@ impl Circuit {
                 let weight = entry.op.weight();
 
                 if entry.op.is_additive() {
-                    tb.update_row(entry.id.clone(), entry.record, entry.hash);
+                    tb.update_row(entry.id.clone(), entry.record);
                 } else {
                     tb.delete_row(&entry.id);
                 }
@@ -160,11 +154,11 @@ impl Circuit {
             }
         }
 
-        self.propagate_deltas(table_deltas, batch_meta.as_ref(), is_optimistic)
+        self.propagate_deltas(table_deltas, batch_meta.as_ref())
     }
 
     #[deprecated(note = "use ingest() instead")]
-    pub fn step(&mut self, table: String, delta: ZSet, is_optimistic: bool) -> Vec<ViewUpdate> {
+    pub fn step(&mut self, table: String, delta: ZSet) -> Vec<ViewUpdate> {
         {
             let tb = self.db.ensure_table(&table);
             tb.apply_delta(&delta);
@@ -183,7 +177,7 @@ impl Circuit {
             for i in indices {
                 if i < self.views.len() {
                     if let Some(update) =
-                        self.views[i].process(&table, &delta, &self.db, is_optimistic)
+                        self.views[i].process(&table, &delta, &self.db)
                     {
                         updates.push(update);
                     }

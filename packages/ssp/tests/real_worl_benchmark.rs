@@ -425,7 +425,7 @@ fn run_format_benchmark(
 
     // === WARMUP ===
     for batch in all_batches.iter().take(WARMUP_ITERATIONS) {
-        circuit.ingest_batch(batch.clone(), true);
+        circuit.ingest_batch_outdated(batch.clone());
     }
 
     // === CREATE PHASE MEASUREMENT ===
@@ -440,7 +440,7 @@ fn run_format_benchmark(
         let batch_len = batch.len();
 
         let start = Instant::now();
-        let updates = circuit.ingest_batch(batch.clone(), true); // is_optimistic=true for sync engine
+        let updates = circuit.ingest_batch_outdated(batch.clone()); // is_optimistic=true for sync engine
         let duration = start.elapsed();
 
         latencies.push(duration);
@@ -518,7 +518,7 @@ fn run_format_benchmark(
         for batch in update_batches {
             let batch_len = batch.len();
             let start = Instant::now();
-            let updates = circuit.ingest_batch(batch, true);
+            let updates = circuit.ingest_batch_outdated(batch);
             update_latencies.push(start.elapsed());
             updated_records += batch_len;
             update_total_updates += updates.len();
@@ -582,7 +582,7 @@ fn run_format_benchmark(
         for batch in delete_batches {
             let batch_len = batch.len();
             let start = Instant::now();
-            let updates = circuit.ingest_batch(batch, true);
+            let updates = circuit.ingest_batch_outdated(batch);
             delete_latencies.push(start.elapsed());
             deleted_records += batch_len;
             delete_total_updates += updates.len();
@@ -748,7 +748,6 @@ fn streaming_mode_benchmark() {
             &record.id,
             record.record.clone(),
             &record.hash,
-            true,
         );
 
         for update in updates {
@@ -795,7 +794,7 @@ fn streaming_mode_benchmark() {
         });
         let hash = generate_hash(&updated_rec);
 
-        let updates = circuit.ingest_record(&record.table, "UPDATE", &record.id, updated_rec, &hash, true);
+        let updates = circuit.ingest_record(&record.table, "UPDATE", &record.id, updated_rec, &hash);
 
         for update in updates {
             if let ViewUpdate::Streaming(s) = update {
@@ -832,7 +831,7 @@ fn streaming_mode_benchmark() {
     let start = Instant::now();
 
     for record in deletes_to_make {
-        let updates = circuit.ingest_record(&record.table, "DELETE", &record.id, json!({}), "", true);
+        let updates = circuit.ingest_record(&record.table, "DELETE", &record.id, json!({}), "");
 
         for update in updates {
             if let ViewUpdate::Streaming(s) = update {
@@ -897,7 +896,7 @@ fn real_world_benchmark_quick() {
         let mut total_updates = 0;
         for batch in batches {
             total_ops += batch.len();
-            let updates = circuit.ingest_batch(batch, true);
+            let updates = circuit.ingest_batch_outdated(batch);
             total_updates += updates.len();
         }
         let elapsed = start.elapsed();
@@ -1028,7 +1027,6 @@ fn sync_engine_simulation_benchmark() {
             &record.id,
             record.record.clone(),
             &record.hash,
-            true, // is_optimistic - local mutations
         );
 
         for update in updates {
@@ -1085,7 +1083,6 @@ fn sync_engine_simulation_benchmark() {
             &record.id,
             updated_rec,
             &hash,
-            true,
         );
 
         for update in updates {
@@ -1128,7 +1125,6 @@ fn sync_engine_simulation_benchmark() {
             &record.id,
             record.record.clone(),
             &record.hash,
-            false, // is_optimistic=false for remote sync
         );
     }
     let sync_time = start.elapsed();
@@ -1159,7 +1155,7 @@ fn version_tracking_benchmark() {
     let hash = generate_hash(&comment_rec);
 
     println!("  Step 1: Initial CREATE (optimistic)");
-    let updates = circuit.ingest_record("comment", "CREATE", &comment_id, comment_rec.clone(), &hash, true);
+    let updates = circuit.ingest_record("comment", "CREATE", &comment_id, comment_rec.clone(), &hash);
     if let Some(ViewUpdate::Flat(m)) = updates.first() {
         println!("    Records: {:?}", m.result_data);
     }
@@ -1174,7 +1170,7 @@ fn version_tracking_benchmark() {
         "score": 10
     });
     let hash = generate_hash(&updated_rec);
-    let updates = circuit.ingest_record("comment", "UPDATE", &comment_id, updated_rec, &hash, true);
+    let updates = circuit.ingest_record("comment", "UPDATE", &comment_id, updated_rec, &hash);
     if let Some(ViewUpdate::Flat(m)) = updates.first() {
         println!("    Records: {:?}", m.result_data);
     }
@@ -1189,7 +1185,7 @@ fn version_tracking_benchmark() {
         "score": 20
     });
     let hash = generate_hash(&updated_rec2);
-    let updates = circuit.ingest_record("comment", "UPDATE", &comment_id, updated_rec2, &hash, false);
+    let updates = circuit.ingest_record("comment", "UPDATE", &comment_id, updated_rec2, &hash);
     if let Some(ViewUpdate::Flat(m)) = updates.first() {
         println!("    Records: {:?}", m.result_data);
     }
@@ -1204,7 +1200,7 @@ fn version_tracking_benchmark() {
         "score": 30
     });
     let hash = generate_hash(&updated_rec3);
-    let updates = circuit.ingest_record("comment", "UPDATE", &comment_id, updated_rec3, &hash, true);
+    let updates = circuit.ingest_record("comment", "UPDATE", &comment_id, updated_rec3, &hash);
     if let Some(ViewUpdate::Flat(m)) = updates.first() {
         println!("    Records: {:?}", m.result_data);
     }
@@ -1308,7 +1304,6 @@ fn high_view_count_benchmark() {
                 &record.id,
                 record.record.clone(),
                 &record.hash,
-                true,
             );
         }
         let ingest_time = ingest_start.elapsed();

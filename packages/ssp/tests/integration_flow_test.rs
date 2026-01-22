@@ -249,7 +249,7 @@ fn test_integration_flow_thread_with_author() {
 
     print_ingest_payload("user", "CREATE", &user_id, &user_record);
     
-    let _updates = ingest(&mut circuit, "user", "CREATE", &user_id, user_record.clone(), true);
+    let _updates = ingest(&mut circuit, "user", "CREATE", &user_id, user_record.clone());
     println!("\n  → DBSP: No views registered yet, no updates emitted");
 
     // =========================================================================
@@ -271,7 +271,7 @@ fn test_integration_flow_thread_with_author() {
 
     print_ingest_payload("thread", "CREATE", &thread_id, &thread_record);
     
-    let _updates = ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record.clone(), true);
+    let _updates = ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record.clone());
     println!("\n  → DBSP: No views registered yet, no updates emitted");
 
     // =========================================================================
@@ -314,7 +314,7 @@ fn test_integration_flow_thread_with_author() {
 
     print_ingest_payload("thread", "CREATE", &thread2_id, &thread2_record);
 
-    let updates = ingest(&mut circuit, "thread", "CREATE", &thread2_id, thread2_record.clone(), true);
+    let updates = ingest(&mut circuit, "thread", "CREATE", &thread2_id, thread2_record.clone());
 
     for update in &updates {
         if update.query_id() == view_id {
@@ -343,7 +343,7 @@ fn test_integration_flow_thread_with_author() {
 
     print_ingest_payload("thread", "UPDATE", &thread_id, &updated_thread_record);
 
-    let updates = ingest(&mut circuit, "thread", "UPDATE", &thread_id, updated_thread_record, true);
+    let updates = ingest(&mut circuit, "thread", "UPDATE", &thread_id, updated_thread_record);
 
     for update in &updates {
         if update.query_id() == view_id {
@@ -370,7 +370,7 @@ fn test_integration_flow_thread_with_author() {
 
     print_ingest_payload("thread", "DELETE", &thread2_id, &json!({}));
 
-    let updates = ingest(&mut circuit, "thread", "DELETE", &thread2_id, json!({}), true);
+    let updates = ingest(&mut circuit, "thread", "DELETE", &thread2_id, json!({}));
 
     for update in &updates {
         if update.query_id() == view_id {
@@ -404,7 +404,7 @@ fn test_integration_flow_thread_detail_with_comments() {
     // Setup: Create user and thread
     let user_id = format!("user:{}", generate_id());
     let user_record = json!({ "id": &user_id, "name": "Bob", "type": "user" });
-    ingest(&mut circuit, "user", "CREATE", &user_id, user_record, true);
+    ingest(&mut circuit, "user", "CREATE", &user_id, user_record);
 
     let thread_id = format!("thread:{}", generate_id());
     let thread_record = json!({
@@ -414,7 +414,7 @@ fn test_integration_flow_thread_detail_with_comments() {
         "active": true,
         "type": "thread"
     });
-    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record, true);
+    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record);
 
     // Register view
     println!("\n\n======================================================================");
@@ -450,7 +450,7 @@ fn test_integration_flow_thread_detail_with_comments() {
 
     print_ingest_payload("comment", "CREATE", &comment_id, &comment_record);
 
-    let updates = ingest(&mut circuit, "comment", "CREATE", &comment_id, comment_record, true);
+    let updates = ingest(&mut circuit, "comment", "CREATE", &comment_id, comment_record);
 
     for update in &updates {
         if update.query_id() == view_id {
@@ -467,7 +467,7 @@ fn test_integration_flow_thread_detail_with_comments() {
 
     print_ingest_payload("comment", "DELETE", &comment_id, &json!({}));
 
-    let updates = ingest(&mut circuit, "comment", "DELETE", &comment_id, json!({}), true);
+    let updates = ingest(&mut circuit, "comment", "DELETE", &comment_id, json!({}));
 
     for update in &updates {
         if update.query_id() == view_id {
@@ -499,12 +499,12 @@ fn test_version_map_state_tracking() {
 
     // Setup
     let user_id = format!("user:{}", generate_id());
-    ingest(&mut circuit, "user", "CREATE", &user_id, json!({ "id": &user_id, "name": "Test" }), true);
+    ingest(&mut circuit, "user", "CREATE", &user_id, json!({ "id": &user_id, "name": "Test" }));
 
     let thread_id = format!("thread:{}", generate_id());
     ingest(&mut circuit, "thread", "CREATE", &thread_id, json!({ 
         "id": &thread_id, "title": "Test", "author": &user_id 
-    }), true);
+    }));
 
     // Register view
     let (plan, _) = build_thread_list_with_author();
@@ -532,7 +532,7 @@ fn test_version_map_state_tracking() {
             "title": format!("Update #{}", i),
             "author": &user_id
         });
-        ingest(&mut circuit, "thread", "UPDATE", &thread_id, updated, true);
+        ingest(&mut circuit, "thread", "UPDATE", &thread_id, updated);
         print_version_map(&circuit, "thread_list_with_author", &format!("After Update #{}", i));
     }
 

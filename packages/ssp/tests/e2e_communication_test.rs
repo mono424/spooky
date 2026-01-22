@@ -180,10 +180,10 @@ fn test_flat_format_e2e_flow() {
     // Phase 1: Create data
     println!("PHASE 1: CREATE");
     let (user_id, user_record) = make_user("Alice");
-    ingest(&mut circuit, "user", "CREATE", &user_id, user_record, true);
+    ingest(&mut circuit, "user", "CREATE", &user_id, user_record);
     
     let (thread_id, thread_record) = make_thread("First Thread", &user_id);
-    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record, true);
+    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record);
 
     // Phase 2: Register view in Flat format
     println!("PHASE 2: REGISTER VIEW (Flat)");
@@ -220,7 +220,7 @@ fn test_flat_format_e2e_flow() {
         "active": true,
         "type": "thread"
     });
-    let updates = ingest(&mut circuit, "thread", "UPDATE", &thread_id, updated_thread, true);
+    let updates = ingest(&mut circuit, "thread", "UPDATE", &thread_id, updated_thread);
     
     for update in &updates {
         if let Some(op) = simulate_update_flat("thread_flat", update) {
@@ -231,7 +231,7 @@ fn test_flat_format_e2e_flow() {
 
     // Phase 4: Delete thread
     println!("PHASE 4: DELETE");
-    let delete_updates = ingest(&mut circuit, "thread", "DELETE", &thread_id, json!({}), true);
+    let delete_updates = ingest(&mut circuit, "thread", "DELETE", &thread_id, json!({}));
     
     for update in &delete_updates {
         if let Some(op) = simulate_update_flat("thread_flat", update) {
@@ -269,10 +269,10 @@ fn test_streaming_format_e2e_flow() {
     // Phase 1: Create data
     println!("PHASE 1: CREATE DATA");
     let (user_id, user_record) = make_user("Bob");
-    ingest(&mut circuit, "user", "CREATE", &user_id, user_record, true);
+    ingest(&mut circuit, "user", "CREATE", &user_id, user_record);
     
     let (thread_id, thread_record) = make_thread("Streaming Thread", &user_id);
-    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record, true);
+    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record);
 
     // Phase 2: Register view in Streaming format
     println!("PHASE 2: REGISTER VIEW (Streaming)");
@@ -309,7 +309,7 @@ fn test_streaming_format_e2e_flow() {
         "active": true,
         "type": "thread"
     });
-    let updates = ingest(&mut circuit, "thread", "UPDATE", &thread_id, updated_thread, true);
+    let updates = ingest(&mut circuit, "thread", "UPDATE", &thread_id, updated_thread);
     
     for update in &updates {
         let ops = simulate_update_streaming("thread_streaming", update);
@@ -346,7 +346,7 @@ fn test_streaming_format_e2e_flow() {
     // Phase 4: Create comment (should trigger Created event)
     println!("PHASE 4: CREATE COMMENT");
     let (comment_id, comment_record) = make_comment("Test comment", &thread_id, &user_id);
-    let comment_updates = ingest(&mut circuit, "comment", "CREATE", &comment_id, comment_record, true);
+    let comment_updates = ingest(&mut circuit, "comment", "CREATE", &comment_id, comment_record);
     
     for update in &comment_updates {
         let ops = simulate_update_streaming("thread_streaming", update);
@@ -361,7 +361,7 @@ fn test_streaming_format_e2e_flow() {
 
     // Phase 5: Delete comment (should trigger Deleted event)
     println!("PHASE 5: DELETE COMMENT");
-    let delete_updates = ingest(&mut circuit, "comment", "DELETE", &comment_id, json!({}), true);
+    let delete_updates = ingest(&mut circuit, "comment", "DELETE", &comment_id, json!({}));
     
     for update in &delete_updates {
         let ops = simulate_update_streaming("thread_streaming", update);
@@ -387,7 +387,7 @@ fn test_streaming_format_e2e_flow() {
 
     // Phase 6: Final validation - delete thread
     println!("PHASE 6: DELETE THREAD");
-    let final_deletes = ingest(&mut circuit, "thread", "DELETE", &thread_id, json!({}), true);
+    let final_deletes = ingest(&mut circuit, "thread", "DELETE", &thread_id, json!({}));
     
     for update in &final_deletes {
         let ops = simulate_update_streaming("thread_streaming", update);
@@ -434,11 +434,11 @@ fn test_payload_comparison_flat_vs_streaming() {
     let (user_id, user_record) = make_user("Charlie");
     let (thread_id, thread_record) = make_thread("Comparison Thread", &user_id);
     
-    ingest(&mut circuit_flat, "user", "CREATE", &user_id, user_record.clone(), true);
-    ingest(&mut circuit_flat, "thread", "CREATE", &thread_id, thread_record.clone(), true);
+    ingest(&mut circuit_flat, "user", "CREATE", &user_id, user_record.clone());
+    ingest(&mut circuit_flat, "thread", "CREATE", &thread_id, thread_record.clone());
     
-    ingest(&mut circuit_streaming, "user", "CREATE", &user_id, user_record, true);
-    ingest(&mut circuit_streaming, "thread", "CREATE", &thread_id, thread_record, true);
+    ingest(&mut circuit_streaming, "user", "CREATE", &user_id, user_record);
+    ingest(&mut circuit_streaming, "thread", "CREATE", &thread_id, thread_record);
 
     // Register views with different formats
     let plan_flat = build_thread_with_author_plan("view_flat");
