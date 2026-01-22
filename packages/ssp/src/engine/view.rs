@@ -151,6 +151,19 @@ impl View {
         }
     }
 
+    /// Membership Check: ALWAYS via cache (Source of Truth)
+    #[inline]
+    pub fn contains(&self, id: &str) -> bool {
+        self.cache.get(id).map(|w| *w > 0).unwrap_or(false)
+    }
+
+    /// Get Version (Strictly for Client-Sync)
+    #[inline]
+    pub fn get_version(&self, id: &str) -> u64 {
+        self.metadata.get_version(id)
+    }
+
+
     /// The main function for updates.
     /// Uses delta optimization if possible.
     #[inline]
@@ -213,14 +226,12 @@ impl View {
              return None;
         }
 
-        // Step 4: Update Cache (Non-streaming only)
-        if !ctx.is_streaming {
-            for (key, weight) in &changes.delta {
-                let entry = self.cache.entry(key.clone()).or_insert(0);
-                *entry += weight;
-                if *entry == 0 {
-                    self.cache.remove(key);
-                }
+        // Step 4: Update Cache (ALWAYS - Cache is Source of Truth for membership)
+        for (key, weight) in &changes.delta {
+            let entry = self.cache.entry(key.clone()).or_insert(0);
+            *entry += weight;
+            if *entry == 0 {
+                self.cache.remove(key);
             }
         }
 
@@ -264,43 +275,16 @@ impl View {
             
             let mut diff = FastMap::default();
             
-            if ctx.is_streaming {
-                // Streaming diff against metadata
-                for (key, &new_w) in &target_set {
-                    if new_w > 0 && !self.metadata.contains(key.as_str()) {
-                         diff.insert(key.clone(), 1);
-                    }
+            // All modes use cache as Source of Truth for membership
+            for (key, &new_w) in &target_set {
+                let old_w = self.cache.get(key).copied().unwrap_or(0);
+                if new_w != old_w {
+                    diff.insert(key.clone(), new_w - old_w);
                 }
-                
-                if !ctx.has_subquery_changes {
-                     // We can use the cached subquery tables here if we had access to mutable self, 
-                     // but compute_changes is &self.
-                     // However, extract_subquery_tables is fast enough for the fallback path usually.
-                     let subquery_tables: std::collections::HashSet<String> = 
-                        self.extract_subquery_tables(&self.plan.root).into_iter().collect();
-
-                     for key in self.metadata.versions.keys() {
-                         if !target_set.contains_key(key.as_str()) {
-                             if let Some((table_name, _)) = key.split_once(':') {
-                                 if !subquery_tables.contains(table_name) {
-                                      diff.insert(key.clone(), -1);
-                                 }
-                             }
-                         }
-                     }
-                }
-            } else {
-                // Cache diff
-                for (key, &new_w) in &target_set {
-                    let old_w = self.cache.get(key).copied().unwrap_or(0);
-                    if new_w != old_w {
-                        diff.insert(key.clone(), new_w - old_w);
-                    }
-                }
-                for (key, &old_w) in &self.cache {
-                    if !target_set.contains_key(key) {
-                        diff.insert(key.clone(), 0 - old_w);
-                    }
+            }
+            for (key, &old_w) in &self.cache {
+                if !target_set.contains_key(key) {
+                    diff.insert(key.clone(), 0 - old_w);
                 }
             }
 
@@ -425,6 +409,8 @@ impl View {
 
              // Additions (New subquery results)
              for id in &all_current_ids {
+                 // Check if already version-tracked (not cache membership)
+                 #[allow(deprecated)]
                  if !self.metadata.contains(id.as_str()) {
                      let version = self.compute_and_store_version(id, processor, ctx, true, false);
                      delta_out.additions.push((id.clone(), version));
@@ -452,7 +438,8 @@ impl View {
                     self.collect_subquery_ids_recursive(&self.plan.root, parent_row, db, &mut sub_ids);
                     
                     for sub_id in sub_ids {
-                        // Only add if not already tracked (and not the main id we just added)
+                        // Only add if not already version-tracked (and not the main id we just added)
+                        #[allow(deprecated)]
                         if sub_id != id.as_str() && !self.metadata.contains(&sub_id) {
                             let v = self.compute_and_store_version(&sub_id, processor, ctx, true, false);
                             delta_out.additions.push((sub_id, v));
@@ -549,17 +536,10 @@ impl View {
 
     fn should_emit_update(&mut self, update: &ViewUpdate) -> bool {
         match update {
-            ViewUpdate::Streaming(_) => {
-                self.metadata.last_result_hash = "streaming".to_string();
-                true
-            }
+            ViewUpdate::Streaming(_) => true,
             ViewUpdate::Flat(m) | ViewUpdate::Tree(m) => {
-                if m.result_hash != self.metadata.last_result_hash {
-                    self.metadata.last_result_hash = m.result_hash.clone();
-                    true
-                } else {
-                    false
-                }
+                // Emit if there are actual changes (non-empty data)
+                !m.result_data.is_empty()
             }
         }
     }
@@ -728,8 +708,9 @@ impl View {
                 // Check if any record in this delta is a CREATE (weight > 0 and not in version_map)
                 // or a DELETE (weight < 0 and in version_map)
                 for (key, weight) in delta {
-                    let in_version_map = self.metadata.contains(key.as_str());
-                    if (*weight > 0 && !in_version_map) || (*weight < 0 && in_version_map) {
+                    // Use cache for membership check (Source of Truth)
+                    let in_cache = self.cache.get(key).map(|w| *w > 0).unwrap_or(false);
+                    if (*weight > 0 && !in_cache) || (*weight < 0 && in_cache) {
                         return true;
                     }
                 }
@@ -765,7 +746,7 @@ impl View {
         for (_table, delta) in deltas {
             for (record_id, weight) in delta {
                 if *weight > 0
-                    && self.metadata.contains(record_id.as_str())
+                    && self.contains(record_id.as_str())
                     && !updated_ids.contains(&record_id.to_string())
                 {
                     debug_log!("DEBUG get_updated_cached_records: view={} table={} found versioned record={}", self.plan.id, _table, record_id);
@@ -777,18 +758,18 @@ impl View {
         updated_ids
     }
 
-    /// Get all record IDs in the view (via version_map) that have been updated in the deltas.
-    /// This is the streaming-mode variant that uses version_map instead of cache.
+    /// Get all record IDs in the view (via cache) that have been updated in the deltas.
+    /// Uses cache for membership check (Source of Truth).
     fn get_updated_records_streaming(&self, deltas: &FastMap<String, ZSet>) -> Vec<String> {
         let mut updated_ids = Vec::new();
 
         for (_table, delta) in deltas {
             for (record_id, weight) in delta {
                 // Only check records with positive weight (existing/updated records)
-                // and that are already in the view (tracked in version_map)
-                if *weight > 0 && self.metadata.contains(record_id.as_str()) {
+                // Use cache for membership check (Source of Truth)
+                if *weight > 0 && self.cache.get(record_id).map(|w| *w > 0).unwrap_or(false) {
                     debug_log!(
-                        "DEBUG get_updated_records_streaming: view={} table={} found versioned record={}",
+                        "DEBUG get_updated_records_streaming: view={} table={} found cached record={}",
                         self.plan.id,
                         _table,
                         record_id

@@ -15,13 +15,13 @@ pub type VersionMap = FastMap<SmolStr, u64>;
 #[serde(rename_all = "lowercase")]
 pub enum VersionStrategy {
     /// Auto-increment versions on every update (default for Streaming)
-    #[default]
     Optimistic,
     /// Use explicit versions provided during ingestion
     Explicit,
     /// Derive version from content hash (for Tree/Flat consistency)
     HashBased,
     /// Do not track versions (stateless)
+    #[default]
     None,
 }
 
@@ -82,8 +82,6 @@ pub struct ViewMetadataState {
     #[serde(default, skip_serializing_if = "FastMap::is_empty")]
     pub hashes: HashStore,
     pub strategy: VersionStrategy,
-    #[serde(default)]
-    pub last_result_hash: String,
 }
 
 impl Default for ViewMetadataState {
@@ -92,7 +90,6 @@ impl Default for ViewMetadataState {
             versions: VersionMap::default(),
             hashes: HashStore::default(),
             strategy: VersionStrategy::default(),
-            last_result_hash: String::new(),
         }
     }
 }
@@ -138,13 +135,20 @@ impl ViewMetadataState {
     }
 
     #[inline]
+    /// Check if version is tracked (NOT a membership check - use View.contains() for that)
+    #[deprecated(note = "Use View.contains() for membership checks. This only checks version tracking.")]
     pub fn contains(&self, id: &str) -> bool {
         self.versions.contains_key(id)
     }
 
     #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.versions.is_empty()
+    }
+
+    #[inline]
     pub fn is_first_run(&self) -> bool {
-        self.last_result_hash.is_empty() && self.versions.is_empty()
+        self.versions.is_empty()
     }
     
     // Performance optimization: Reserve capacity
