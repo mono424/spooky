@@ -212,7 +212,7 @@ async fn ingest_handler(
     Json(payload): Json<IngestRequest>,
 ) -> impl IntoResponse {
     debug!("Received ingest request");
-
+    debug!("Payload: {:#?}", payload);
     let (clean_record, hash) = ssp::service::ingest::prepare(payload.record);
 
     let updates = {

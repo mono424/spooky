@@ -51,7 +51,6 @@ pub struct BatchEntry {
     pub op: Operation,
     pub id: SmolStr,
     pub record: SpookyValue,
-    pub hash: String,
     pub meta: Option<RecordMeta>,
 }
 
@@ -62,14 +61,12 @@ impl BatchEntry {
         op: Operation,
         id: impl Into<SmolStr>,
         record: SpookyValue,
-        hash: String,
     ) -> Self {
         Self {
             table: table.into(),
             op,
             id: id.into(),
             record,
-            hash,
             meta: None,
         }
     }
@@ -86,15 +83,14 @@ impl BatchEntry {
         self
     }
 
-    pub fn from_tuple(tuple: (String, String, String, Value, String)) -> Option<Self> {
-        let (table, op_str, id, record, hash) = tuple;
+    pub fn from_tuple(tuple: (String, String, String, Value)) -> Option<Self> {
+        let (table, op_str, id, record) = tuple;
         let op = Operation::from_str(&op_str)?;
         Some(Self {
             table: SmolStr::from(table),
             op,
             id: SmolStr::from(id),
             record: SpookyValue::from(record),
-            hash,
             meta: None,
         })
     }
@@ -124,32 +120,32 @@ impl IngestBatch {
     }
 
     #[inline]
-    pub fn create(mut self, table: &str, id: &str, record: SpookyValue, hash: String) -> Self {
-        self.entries.push(BatchEntry::new(table, Operation::Create, id, record, hash));
+    pub fn create(mut self, table: &str, id: &str, record: SpookyValue) -> Self {
+        self.entries.push(BatchEntry::new(table, Operation::Create, id, record));
         self
     }
 
     #[inline]
-    pub fn update(mut self, table: &str, id: &str, record: SpookyValue, hash: String) -> Self {
-        self.entries.push(BatchEntry::new(table, Operation::Update, id, record, hash));
+    pub fn update(mut self, table: &str, id: &str, record: SpookyValue) -> Self {
+        self.entries.push(BatchEntry::new(table, Operation::Update, id, record));
         self
     }
 
     #[inline]
     pub fn delete(mut self, table: &str, id: &str) -> Self {
-        self.entries.push(BatchEntry::new(table, Operation::Delete, id, SpookyValue::Null, String::new()));
+        self.entries.push(BatchEntry::new(table, Operation::Delete, id, SpookyValue::Null));
         self
     }
 
     #[inline]
-    pub fn create_with_version(mut self, table: &str, id: &str, record: SpookyValue, hash: String, version: u64) -> Self {
-        self.entries.push(BatchEntry::new(table, Operation::Create, id, record, hash).with_version(version));
+    pub fn create_with_version(mut self, table: &str, id: &str, record: SpookyValue, version: u64) -> Self {
+        self.entries.push(BatchEntry::new(table, Operation::Create, id, record).with_version(version));
         self
     }
 
     #[inline]
-    pub fn update_with_version(mut self, table: &str, id: &str, record: SpookyValue, hash: String, version: u64) -> Self {
-        self.entries.push(BatchEntry::new(table, Operation::Update, id, record, hash).with_version(version));
+    pub fn update_with_version(mut self, table: &str, id: &str, record: SpookyValue, version: u64) -> Self {
+        self.entries.push(BatchEntry::new(table, Operation::Update, id, record).with_version(version));
         self
     }
 
@@ -190,7 +186,6 @@ pub struct Table {
     pub name: String,
     pub zset: ZSet,                         // This is the fast FxHashMap
     pub rows: FastMap<RowKey, SpookyValue>, // Using SpookyValue
-    pub hashes: FastMap<RowKey, String>,
 }
 
 impl Table {
@@ -200,21 +195,18 @@ impl Table {
             name,
             zset: FastMap::default(),
             rows: FastMap::default(),
-            hashes: FastMap::default(),
         }
     }
 
     // Changing signature to use SmolStr is implied by RowKey definition change
     #[inline]
-    pub fn update_row(&mut self, key: SmolStr, data: SpookyValue, hash: String) {
-        self.rows.insert(key.clone(), data);
-        self.hashes.insert(key, hash);
+    pub fn update_row(&mut self, key: SmolStr, data: SpookyValue) {
+        self.rows.insert(key, data);
     }
 
     #[inline]
     pub fn delete_row(&mut self, key: &SmolStr) {
         self.rows.remove(key);
-        self.hashes.remove(key);
     }
 
     #[inline]
@@ -283,7 +275,7 @@ impl Circuit {
     }
 
     // Unified Ingestion API
-    #[instrument(target = "ssp_module", level = "debug", ret(level = "debug"))]
+    #[instrument(target = "ssp_module", level = "debug", skip(self, batch))]
     pub fn ingest(&mut self, batch: IngestBatch, is_optimistic: bool) -> Vec<ViewUpdate> {
         let (entries, strategy) = batch.build();
         if entries.is_empty() {
@@ -291,37 +283,49 @@ impl Circuit {
         }
 
         // 1. Metadata vorbereiten
-        let batch_meta = self.build_batch_meta(&entries, strategy);
+        let batch_meta = {
+            let _span = tracing::debug_span!(target: "ssp_module", "build_metadata").entered();
+            self.build_batch_meta(&entries, strategy)
+        };
 
         // 2. Gruppieren nach Tabellen für effiziente DB-Updates
-        let mut by_table: FastMap<SmolStr, Vec<BatchEntry>> = FastMap::default();
-        for entry in entries {
-            by_table.entry(entry.table.clone()).or_default().push(entry);
-        }
+        let by_table: FastMap<SmolStr, Vec<BatchEntry>> = {
+            let _span = tracing::debug_span!(target: "ssp_module", "group_by_table").entered();
+            let mut by_table: FastMap<SmolStr, Vec<BatchEntry>> = FastMap::default();
+            for entry in entries {
+                by_table.entry(entry.table.clone()).or_default().push(entry);
+            }
+            by_table
+        };
 
         let mut table_deltas: FastMap<String, ZSet> = FastMap::default();
 
-        for (table, table_entries) in by_table {
-            //opti: not convert to string make a total SmolStr chain (&table) (2+ Alloc) -> 0 Alloc if < 23 bytes)
-            let tb = self.db.ensure_table(table.as_str());
-            let delta = table_deltas.entry(table.to_string()).or_default();
+        {
+            let _span = tracing::debug_span!(target: "ssp_module", "apply_table_deltas", tables = by_table.len()).entered();
+            for (table, table_entries) in by_table {
+                //opti: not convert to string make a total SmolStr chain (&table) (2+ Alloc) -> 0 Alloc if < 23 bytes)
+                let tb = self.db.ensure_table(table.as_str());
+                let delta = table_deltas.entry(table.to_string()).or_default();
 
-            for entry in table_entries {
-                let weight = entry.op.weight();
-                if entry.op.is_additive() {
-                    tb.update_row(entry.id.clone(), entry.record, entry.hash);
-                } else {
-                    tb.delete_row(&entry.id);
+                for entry in table_entries {
+                    let weight = entry.op.weight();
+                    if entry.op.is_additive() {
+                        tb.update_row(entry.id.clone(), entry.record);
+                    } else {
+                        tb.delete_row(&entry.id);
+                    }
+                    *delta.entry(entry.id).or_insert(0) += weight;
                 }
-                *delta.entry(entry.id).or_insert(0) += weight;
             }
         }
+        
         // 3. Änderungen an die Views propagieren
         self.propagate_deltas(table_deltas, batch_meta.as_ref(), is_optimistic)
     }
 
+
     //just for now public because of deprecated methods
-    #[instrument(target = "ssp_module", level = "debug", ret(level = "debug"))]
+    #[instrument(target = "ssp_module", level = "debug", skip(self, entries))]
     pub fn build_batch_meta(&self, entries: &[BatchEntry], default_strategy: Option<VersionStrategy>) -> Option<BatchMeta> {
         let has_any_meta = entries.iter().any(|e| e.meta.is_some()) || default_strategy.is_some();
         if !has_any_meta {
@@ -341,7 +345,7 @@ impl Circuit {
     }
 
     //just for now public because of deprecated methods
-    #[instrument(target = "ssp_module", level = "debug", ret(level = "debug"))]
+    #[instrument(target = "ssp_module", level = "debug", skip(self, table_deltas, batch_meta))]
     pub fn propagate_deltas(
         &mut self, 
         mut table_deltas: FastMap<String, ZSet>, 
@@ -349,85 +353,99 @@ impl Circuit {
         is_optimistic: bool
     ) -> Vec<ViewUpdate> {
         // Apply Deltas to DB ZSets
-        let mut changed_tables = Vec::with_capacity(table_deltas.len());
-        for (table, delta) in &mut table_deltas {
+        let changed_tables = {
+            let _span = tracing::debug_span!(target: "ssp_module", "apply_db_deltas", table_count = table_deltas.len()).entered();
+            let mut changed_tables = Vec::with_capacity(table_deltas.len());
+            for (table, delta) in &mut table_deltas {
 
-            let delta: &mut ZSet = delta;
+                let delta: &mut ZSet = delta;
 
-            //remove all <tablename, ZSet> where zset weight is 0
-            delta.retain(|_, w| *w != 0);
-            if !delta.is_empty() {
-                //opti: not convert to string make a total SmolStr chain (&table) (2+ Alloc) -> 0 Alloc if < 23 bytes)
-                //q: why do i have to do it again?
-                let tb = self.db.ensure_table(table.as_str());
-                //add update weights of Table ZSet or remove ZSet when weight = 0
-                tb.apply_delta(delta);
-                //opti: SmolStr and resize changed_tables size delta.len()?
-                changed_tables.push(table.to_string());
+                //remove all <tablename, ZSet> where zset weight is 0
+                delta.retain(|_, w| *w != 0);
+                if !delta.is_empty() {
+                    //opti: not convert to string make a total SmolStr chain (&table) (2+ Alloc) -> 0 Alloc if < 23 bytes)
+                    //q: why do i have to do it again?
+                    let tb = self.db.ensure_table(table.as_str());
+                    //add update weights of Table ZSet or remove ZSet when weight = 0
+                    tb.apply_delta(delta);
+                    //opti: SmolStr and resize changed_tables size delta.len()?
+                    changed_tables.push(table.to_string());
+                }
             }
-        }
-        info!(target: "ssp_module", "Changed tables: {:?}", changed_tables);
+            info!(target: "ssp_module", "Changed tables: {:?}", changed_tables);
+            changed_tables
+        };
 
         // Optimized Lazy Rebuild Check (once per batch)
-        debug!(target: "ssp_module", "Dependency graph: {:?}, views: {}", self.dependency_graph, self.views.len());
-        if self.dependency_graph.is_empty() && !self.views.is_empty() {
-            self.rebuild_dependency_graph();
-            info!(target: "ssp_module", "Dependency graph rebuilt");
+        {
+            let _span = tracing::debug_span!(target: "ssp_module", "check_dependency_graph").entered();
+            debug!(target: "ssp_module", "Dependency graph: {:?}, views: {}", self.dependency_graph, self.views.len());
+            if self.dependency_graph.is_empty() && !self.views.is_empty() {
+                self.rebuild_dependency_graph();
+                info!(target: "ssp_module", "Dependency graph rebuilt");
+            }
         }
 
         // Identify ALL affected views from ALL changed tables
-        let mut impacted_view_indices: Vec<usize> = Vec::with_capacity(self.views.len());
-        
-        info!(target: "ssp_module", "Changed tables: {:?}", changed_tables);
+        let impacted_view_indices = {
+            let _span = tracing::debug_span!(target: "ssp_module", "find_impacted_views", changed_tables = changed_tables.len()).entered();
+            let mut impacted_view_indices: Vec<usize> = Vec::with_capacity(self.views.len());
+            
+            info!(target: "ssp_module", "Changed tables: {:?}", changed_tables);
 
-        for table in changed_tables {
-            if let Some(indices) = self.dependency_graph.get(&table) {
-                impacted_view_indices.extend(indices.iter().copied());
-            } else {
-                info!(target: "ssp_module", "Table {} changed, but no views depend on it", table);
-            }
-        }
-
-        // Deduplicate View Indices (Sort + Dedup)
-        // This ensures each view is processed EXACTLY ONCE, even if multiple input tables changed
-        // opti: remove sort and dedup use HashSet its faster when many views
-        impacted_view_indices.sort_unstable();
-        impacted_view_indices.dedup();
-
-        // 3. Execution Phase
-        let db_ref = &self.db;
-        let deltas_ref = &table_deltas;
-
-        #[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
-        {
-            use rayon::prelude::*;
-            self.views
-                .par_iter_mut()
-                .enumerate()
-                .filter_map(|(i, view)| {
-                    // Check if this view needs update.
-                    // impacted_view_indices is sorted, so binary_search is efficient.
-                    if impacted_view_indices.binary_search(&i).is_ok() {
-                        view.process_ingest_with_meta(deltas_ref, db_ref, is_optimistic, batch_meta)
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        }
-
-        #[cfg(any(target_arch = "wasm32", not(feature = "parallel")))]
-        {
-            let mut ups = Vec::new();
-            for i in impacted_view_indices {
-                if i < self.views.len() {
-                    let view: &mut View = &mut self.views[i];
-                    if let Some(update) = view.process_ingest_with_meta(deltas_ref, db_ref, is_optimistic, batch_meta) {
-                        ups.push(update);
-                    }
+            for table in changed_tables {
+                if let Some(indices) = self.dependency_graph.get(&table) {
+                    impacted_view_indices.extend(indices.iter().copied());
+                } else {
+                    info!(target: "ssp_module", "Table {} changed, but no views depend on it", table);
                 }
             }
-            ups
+
+            // Deduplicate View Indices (Sort + Dedup)
+            // This ensures each view is processed EXACTLY ONCE, even if multiple input tables changed
+            // opti: remove sort and dedup use HashSet its faster when many views
+            impacted_view_indices.sort_unstable();
+            impacted_view_indices.dedup();
+            impacted_view_indices
+        };
+
+        // 3. Execution Phase - Group all view processing under one span
+        {
+            let _span = tracing::debug_span!(target: "ssp_module", "process_views", view_count = impacted_view_indices.len()).entered();
+            let db_ref = &self.db;
+            let deltas_ref = &table_deltas;
+
+            #[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
+            {
+                use rayon::prelude::*;
+                self.views
+                    .par_iter_mut()
+                    .enumerate()
+                    .filter_map(|(i, view)| {
+                        // Check if this view needs update.
+                        // impacted_view_indices is sorted, so binary_search is efficient.
+                        if impacted_view_indices.binary_search(&i).is_ok() {
+                            view.process_ingest_with_meta(deltas_ref, db_ref, is_optimistic, batch_meta)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            }
+
+            #[cfg(any(target_arch = "wasm32", not(feature = "parallel")))]
+            {
+                let mut ups = Vec::new();
+                for i in impacted_view_indices {
+                    if i < self.views.len() {
+                        let view: &mut View = &mut self.views[i];
+                        if let Some(update) = view.process_ingest_with_meta(deltas_ref, db_ref, is_optimistic, batch_meta) {
+                            ups.push(update);
+                        }
+                    }
+                }
+                ups
+            }
         }
     }
 
@@ -461,6 +479,7 @@ impl Circuit {
     }
 
     /// Register a view with explicit version strategy
+    #[instrument(target = "ssp_module", level = "debug", skip(self, plan, params))]
     pub fn register_view_with_strategy(
         &mut self,
         plan: QueryPlan,
@@ -468,31 +487,47 @@ impl Circuit {
         format: Option<ViewResultFormat>,
         strategy: Option<VersionStrategy>,
     ) -> Option<ViewUpdate> {
-        if let Some(pos) = self.views.iter().position(|v| v.plan.id == plan.id) {
-            self.views.remove(pos);
-            self.rebuild_dependency_graph();
+        // Remove existing view if present
+        {
+            let _span = tracing::debug_span!(target: "ssp_module", "remove_existing_view").entered();
+            if let Some(pos) = self.views.iter().position(|v| v.plan.id == plan.id) {
+                self.views.remove(pos);
+                self.rebuild_dependency_graph();
+            }
         }
 
-        let mut view = View::new_with_strategy(
-            plan, 
-            params, 
-            format.clone(), 
-            strategy.unwrap_or_else(|| match format {
-                Some(ViewResultFormat::Tree) => VersionStrategy::HashBased,
-                _ => VersionStrategy::Optimistic,
-            })
-        );
+        // Create new view
+        let mut view = {
+            let _span = tracing::debug_span!(target: "ssp_module", "create_view").entered();
+            View::new_with_strategy(
+                plan, 
+                params, 
+                format.clone(), 
+                strategy.unwrap_or_else(|| match format {
+                    Some(ViewResultFormat::Tree) => VersionStrategy::HashBased,
+                    _ => VersionStrategy::Optimistic,
+                })
+            )
+        };
 
-        let empty_deltas: FastMap<String, ZSet> = FastMap::default();
-        let initial_update = view.process_ingest(&empty_deltas, &self.db, true);
+        // Process initial snapshot
+        let initial_update = {
+            let _span = tracing::debug_span!(target: "ssp_module", "initial_snapshot").entered();
+            let empty_deltas: FastMap<String, ZSet> = FastMap::default();
+            view.process_ingest(&empty_deltas, &self.db, true)
+        };
 
-        let view_idx = self.views.len();
-        self.views.push(view);
+        // Add view and update dependency graph
+        {
+            let _span = tracing::debug_span!(target: "ssp_module", "update_dependencies").entered();
+            let view_idx = self.views.len();
+            self.views.push(view);
 
-        if let Some(v) = self.views.last() {
-            let tables = v.plan.root.referenced_tables();
-            for t in tables {
-                self.dependency_graph.entry(t).or_default().push(view_idx);
+            if let Some(v) = self.views.last() {
+                let tables = v.plan.root.referenced_tables();
+                for t in tables {
+                    self.dependency_graph.entry(t).or_default().push(view_idx);
+                }
             }
         }
 

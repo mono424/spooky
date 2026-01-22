@@ -9,7 +9,7 @@ use serde_json::Value;
 use smol_str::SmolStr;
 use std::cmp::Ordering;
 
-use tracing::{instrument, info, debug};
+use tracing::{instrument, debug};
 
 use super::metadata::{MetadataProcessor, ViewMetadataState, VersionStrategy, BatchMeta};
 use super::update::{
@@ -97,6 +97,9 @@ pub struct View {
     /// Skip serializing if empty (streaming mode keeps it empty).
     #[serde(default, skip_serializing_if = "is_cache_empty_or_streaming")]
     pub cache: ZSet,
+    /// Subquery records - IDs from nested queries (kept separate from main cache)
+    #[serde(default, skip_serializing_if = "FastMap::is_empty")]
+    pub subquery_cache: ZSet,
     #[serde(default)]
     pub params: Option<SpookyValue>,
     #[serde(default)]
@@ -127,6 +130,7 @@ impl View {
         Self {
             plan,
             cache: FastMap::default(),
+            subquery_cache: FastMap::default(),
             params: params.map(SpookyValue::from),
             format: fmt,
             metadata: ViewMetadataState::new(strategy),
@@ -144,6 +148,7 @@ impl View {
         Self {
             plan,
             cache: FastMap::default(),
+            subquery_cache: FastMap::default(),
             params: params.map(SpookyValue::from),
             format: format.unwrap_or_default(),
             metadata: ViewMetadataState::new(strategy),
@@ -152,9 +157,23 @@ impl View {
     }
 
     /// Membership Check: ALWAYS via cache (Source of Truth)
+    /// Now checks both main cache and subquery cache
     #[inline]
     pub fn contains(&self, id: &str) -> bool {
         self.cache.get(id).map(|w| *w > 0).unwrap_or(false)
+            || self.subquery_cache.get(id).map(|w| *w > 0).unwrap_or(false)
+    }
+
+    /// Check if ID is a main record (from root query)
+    #[inline]
+    pub fn is_main_record(&self, id: &str) -> bool {
+        self.cache.get(id).map(|w| *w > 0).unwrap_or(false)
+    }
+
+    /// Check if ID is a subquery record
+    #[inline]
+    pub fn is_subquery_record(&self, id: &str) -> bool {
+        self.subquery_cache.get(id).map(|w| *w > 0).unwrap_or(false)
     }
 
     /// Get Version (Strictly for Client-Sync)
@@ -193,7 +212,7 @@ impl View {
     }
 
     /// NEW: Process with optional explicit metadata
-    #[instrument(target = "ssp_module", level = "debug", ret(level = "debug"))]
+    #[instrument(target = "ssp_module", level = "debug", skip(self, deltas, db, batch_meta))]
     pub fn process_ingest_with_meta(
         &mut self,
         deltas: &FastMap<String, ZSet>,
@@ -201,25 +220,28 @@ impl View {
         is_optimistic: bool,
         batch_meta: Option<&BatchMeta>,
     ) -> Option<ViewUpdate> {
-        let ctx = ProcessContext::new(self, deltas, db, batch_meta);
+        let ctx = {
+            let _span = tracing::debug_span!(target: "ssp_module", "compute_context").entered();
+            ProcessContext::new(self, deltas, db, batch_meta)
+        };
 
-        debug_log!(
-            "DEBUG VIEW: id={} is_first_run={} has_subquery_changes={} is_streaming={}",
-            self.plan.id,
-            ctx.is_first_run,
-            ctx.has_subquery_changes,
-            ctx.is_streaming
-        );
+        debug!("Process ingest: id={} is_first_run={} has_subquery_changes={} is_streaming={}", self.plan.id, ctx.is_first_run, ctx.has_subquery_changes, ctx.is_streaming);
 
         // Step 1: Compute Delta
-        let input_delta = if ctx.should_full_scan() {
-             None
-        } else {
-             self.eval_delta_batch(&self.plan.root, deltas, db, self.params.as_ref())
+        let input_delta = {
+            let _span = tracing::debug_span!(target: "ssp_module", "eval_delta", full_scan = ctx.should_full_scan()).entered();
+            if ctx.should_full_scan() {
+                None
+            } else {
+                self.eval_delta_batch(&self.plan.root, deltas, db, self.params.as_ref())
+            }
         };
 
         // Step 2: Compute Changes using Context
-        let changes = self.compute_changes(input_delta, &ctx, deltas, db);
+        let changes = {
+            let _span = tracing::debug_span!(target: "ssp_module", "compute_changes").entered();
+            self.compute_changes(input_delta, &ctx, deltas, db)
+        };
 
         // Step 3: Early Exit
         if changes.is_empty() && !ctx.should_full_scan() {
@@ -227,19 +249,28 @@ impl View {
         }
 
         // Step 4: Update Cache (ALWAYS - Cache is Source of Truth for membership)
-        for (key, weight) in &changes.delta {
-            let entry = self.cache.entry(key.clone()).or_insert(0);
-            *entry += weight;
-            if *entry == 0 {
-                self.cache.remove(key);
+        {
+            let _span = tracing::debug_span!(target: "ssp_module", "update_cache", delta_size = changes.delta.len()).entered();
+            for (key, weight) in &changes.delta {
+                let entry = self.cache.entry(key.clone()).or_insert(0);
+                *entry += weight;
+                if *entry == 0 {
+                    self.cache.remove(key);
+                }
             }
         }
 
         // Step 5: Build Raw Result
-        let raw_result = self.build_raw_result(&changes, &ctx, is_optimistic, db);
+        let raw_result = {
+            let _span = tracing::debug_span!(target: "ssp_module", "build_raw_result").entered();
+            self.build_raw_result(&changes, &ctx, is_optimistic, db)
+        };
 
         // Step 6: Format Output
-        let update = build_update(raw_result, self.format.clone());
+        let update = {
+            let _span = tracing::debug_span!(target: "ssp_module", "format_output").entered();
+            build_update(raw_result, self.format.clone())
+        };
 
         // Step 7: Check if update should be emitted
         if self.should_emit_update(&update) {
@@ -391,6 +422,10 @@ impl View {
              all_first_run_ids.dedup();
 
              for id in all_first_run_ids {
+                 // Add subquery IDs to subquery_cache (those not in changes.delta are subqueries)
+                 if changes.delta.get(&SmolStr::from(&id)).is_none() {
+                     self.subquery_cache.entry(SmolStr::from(&id)).or_insert(1);
+                 }
                  let version = self.compute_and_store_version(&id, processor, ctx, true, false);
                  delta_out.additions.push((id, version));
              }
@@ -409,6 +444,10 @@ impl View {
 
              // Additions (New subquery results)
              for id in &all_current_ids {
+                 // Track if this is a subquery ID (not in main target_set)
+                 if !target_set.contains_key(id.as_str()) {
+                     self.subquery_cache.entry(SmolStr::from(id.as_str())).or_insert(1);
+                 }
                  // Check if already version-tracked (not cache membership)
                  #[allow(deprecated)]
                  if !self.metadata.contains(id.as_str()) {
@@ -438,6 +477,8 @@ impl View {
                     self.collect_subquery_ids_recursive(&self.plan.root, parent_row, db, &mut sub_ids);
                     
                     for sub_id in sub_ids {
+                        // Store in subquery_cache
+                        self.subquery_cache.entry(SmolStr::from(sub_id.as_str())).or_insert(1);
                         // Only add if not already version-tracked (and not the main id we just added)
                         #[allow(deprecated)]
                         if sub_id != id.as_str() && !self.metadata.contains(&sub_id) {
