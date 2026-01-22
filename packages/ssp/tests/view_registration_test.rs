@@ -156,3 +156,56 @@ fn test_view_registration_after_ingestion_with_filter() {
 
     println!("[TEST] ✓ Filtered view correctly found pre-existing active record!");
 }
+
+/// Test that rebuild_dependency_graph is called when dependency_graph is empty but views exist
+/// This simulates the post-deserialization scenario (serde skips dependency_graph)
+#[test]
+fn test_lazy_rebuild_dependency_graph_after_deserialization() {
+    let mut circuit = setup();
+
+    // 1. Register a view and ingest a record
+    use ssp::engine::view::{Operator, QueryPlan};
+
+    let plan = QueryPlan {
+        id: "user_view".to_string(),
+        root: Operator::Scan {
+            table: "user".to_string(),
+        },
+    };
+
+    circuit.register_view(plan, None, None);
+    assert!(!circuit.views.is_empty(), "Should have 1 view registered");
+    assert!(!circuit.dependency_graph.is_empty(), "Dependency graph should be populated after registration");
+
+    // 2. Simulate deserialization: serialize then deserialize (this clears dependency_graph due to #[serde(skip)])
+    let serialized = serde_json::to_string(&circuit).expect("Failed to serialize");
+    let mut deserialized: ssp::Circuit = serde_json::from_str(&serialized).expect("Failed to deserialize");
+
+    // 3. Verify dependency_graph is empty after deserialization (due to #[serde(skip)])
+    assert!(deserialized.dependency_graph.is_empty(), "Dependency graph should be empty after deserialization");
+    assert!(!deserialized.views.is_empty(), "Views should still exist after deserialization");
+
+    // 4. Ingest a record - this should trigger the lazy rebuild
+    let user_id = format!("user:{}", generate_id());
+    let user_record = json!({
+        "id": user_id,
+        "username": "testuser",
+    });
+
+    let updates = ingest(
+        &mut deserialized,
+        "user",
+        "CREATE",
+        &user_id,
+        user_record,
+        true,
+    );
+
+    // 5. Verify: dependency_graph should now be rebuilt
+    assert!(!deserialized.dependency_graph.is_empty(), "Dependency graph should be rebuilt after ingest");
+    assert!(deserialized.dependency_graph.contains_key("user"), "Should have 'user' table in dependency graph");
+
+    // 6. Verify the view received the update
+    assert_eq!(updates.len(), 1, "Should have 1 view update");
+    println!("[TEST] ✓ Lazy rebuild of dependency_graph triggered after deserialization!");
+}

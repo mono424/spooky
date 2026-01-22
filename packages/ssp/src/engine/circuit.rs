@@ -1,4 +1,3 @@
-use crate::debug_log;
 use super::view::{
     FastMap, QueryPlan, RowKey, SpookyValue, View, ViewUpdate, ZSet, Weight
 };
@@ -8,6 +7,8 @@ use super::metadata::{BatchMeta, VersionStrategy, RecordMeta};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use smol_str::SmolStr;  
+
+use tracing::{instrument, info, debug};
 
 // --- Types ---
 
@@ -181,6 +182,7 @@ impl Default for IngestBatch {
 }
 
 // --- Table & Database ---
+// opti: when make a module use redb + rkyv
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[allow(dead_code)]
@@ -239,7 +241,7 @@ impl Database {
             tables: FastMap::default(),
         }
     }
-
+    
     pub fn ensure_table(&mut self, name: &str) -> &mut Table {
         self.tables
             .entry(name.to_string())
@@ -280,40 +282,8 @@ impl Circuit {
         }
     }
 
-    // Must be called after Deserialization to rebuild the Cache!
-        // opti: q: dont remove cache for performance so i dont have to rebuild it?
-    pub fn rebuild_dependency_graph(&mut self) {
-        self.dependency_graph.clear();
-        #[cfg(target_arch = "wasm32")]
-        web_sys::console::log_1(
-            &format!(
-                "DEBUG: Rebuilding dependency graph for {} views",
-                self.views.len()
-            )
-            .into(),
-        );
-        for (i, view) in self.views.iter().enumerate() {
-            let tables = view.plan.root.referenced_tables();
-            #[cfg(target_arch = "wasm32")]
-            web_sys::console::log_1(
-                &format!(
-                    "DEBUG: View {} (id: {}) depends on tables: {:?}",
-                    i, view.plan.id, tables
-                )
-                .into(),
-            );
-            for t in tables {
-                // q: what exectly is the value i?
-                self.dependency_graph.entry(t).or_default().push(i);
-            }
-        }
-        #[cfg(target_arch = "wasm32")]
-        web_sys::console::log_1(
-            &format!("DEBUG: Final dependency graph: {:?}", self.dependency_graph).into(),
-        );
-    }
-
     // Unified Ingestion API
+    #[instrument(target = "ssp_module", level = "debug", ret(level = "debug"))]
     pub fn ingest(&mut self, batch: IngestBatch, is_optimistic: bool) -> Vec<ViewUpdate> {
         let (entries, strategy) = batch.build();
         if entries.is_empty() {
@@ -346,12 +316,12 @@ impl Circuit {
                 *delta.entry(entry.id).or_insert(0) += weight;
             }
         }
-        println!("DEBUG: table_deltas: {:?}", table_deltas);
         // 3. Änderungen an die Views propagieren
         self.propagate_deltas(table_deltas, batch_meta.as_ref(), is_optimistic)
     }
 
     //just for now public because of deprecated methods
+    #[instrument(target = "ssp_module", level = "debug", ret(level = "debug"))]
     pub fn build_batch_meta(&self, entries: &[BatchEntry], default_strategy: Option<VersionStrategy>) -> Option<BatchMeta> {
         let has_any_meta = entries.iter().any(|e| e.meta.is_some()) || default_strategy.is_some();
         if !has_any_meta {
@@ -371,6 +341,7 @@ impl Circuit {
     }
 
     //just for now public because of deprecated methods
+    #[instrument(target = "ssp_module", level = "debug", ret(level = "debug"))]
     pub fn propagate_deltas(
         &mut self, 
         mut table_deltas: FastMap<String, ZSet>, 
@@ -395,37 +366,27 @@ impl Circuit {
                 changed_tables.push(table.to_string());
             }
         }
+        info!(target: "ssp_module", "Changed tables: {:?}", changed_tables);
 
         // Optimized Lazy Rebuild Check (once per batch)
+        debug!(target: "ssp_module", "Dependency graph: {:?}, views: {}", self.dependency_graph, self.views.len());
         if self.dependency_graph.is_empty() && !self.views.is_empty() {
             self.rebuild_dependency_graph();
+            info!(target: "ssp_module", "Dependency graph rebuilt");
         }
 
         // Identify ALL affected views from ALL changed tables
         let mut impacted_view_indices: Vec<usize> = Vec::with_capacity(self.views.len());
-        debug_log!("DEBUG: Changed tables: {:?}", changed_tables);
+        
+        info!(target: "ssp_module", "Changed tables: {:?}", changed_tables);
+
         for table in changed_tables {
             if let Some(indices) = self.dependency_graph.get(&table) {
-                #[cfg(target_arch = "wasm32")]
-                web_sys::console::log_1(
-                    &format!("DEBUG: Table {} impacts views: {:?}", table, indices).into(),
-                );
                 impacted_view_indices.extend(indices.iter().copied());
             } else {
-                #[cfg(target_arch = "wasm32")]
-                web_sys::console::log_1(
-                    &format!("DEBUG: Table {} changed, but no views depend on it", table).into(),
-                );
+                info!(target: "ssp_module", "Table {} changed, but no views depend on it", table);
             }
         }
-        #[cfg(target_arch = "wasm32")]
-        web_sys::console::log_1(
-            &format!(
-                "DEBUG: Total impacted view indices (before dedup): {:?}",
-                impacted_view_indices
-            )
-            .into(),
-        );
 
         // Deduplicate View Indices (Sort + Dedup)
         // This ensures each view is processed EXACTLY ONCE, even if multiple input tables changed
@@ -467,6 +428,25 @@ impl Circuit {
                 }
             }
             ups
+        }
+    }
+
+    // Must be called after Deserialization to rebuild the Cache!
+    // opti: q: dont remove cache for performance so i dont have to rebuild it?
+    // it just have to be rebuild when i Deserializat circuit JSON -> Struct
+    #[instrument(target = "ssp_module", level = "debug", ret(level = "debug"))]
+    pub fn rebuild_dependency_graph(&mut self) {
+        self.dependency_graph.clear();
+
+        info!(target: "ssp_module", "Rebuilding dependency graph for {} views", self.views.len());
+
+        for (i, view) in self.views.iter().enumerate() {
+            let tables = view.plan.root.referenced_tables();
+
+            for t in tables {
+                // q: what exectly is the value i?
+                self.dependency_graph.entry(t).or_default().push(i);
+            }
         }
     }
 

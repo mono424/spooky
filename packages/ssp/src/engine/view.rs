@@ -9,6 +9,8 @@ use serde_json::Value;
 use smol_str::SmolStr;
 use std::cmp::Ordering;
 
+use tracing::{instrument, info, debug};
+
 use super::metadata::{MetadataProcessor, ViewMetadataState, VersionStrategy, BatchMeta};
 use super::update::{
     build_update, RawViewResult, ViewDelta,
@@ -178,6 +180,7 @@ impl View {
     }
 
     /// NEW: Process with optional explicit metadata
+    #[instrument(target = "ssp_module", level = "debug", ret(level = "debug"))]
     pub fn process_ingest_with_meta(
         &mut self,
         deltas: &FastMap<String, ZSet>,
