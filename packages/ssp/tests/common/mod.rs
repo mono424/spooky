@@ -12,12 +12,12 @@ use ulid::Ulid;
 
 /// Extension trait to provide convenient accessors for ViewUpdate
 pub trait ViewUpdateExt {
-    fn result_data(&self) -> &[(String, u64)];
+    fn result_data(&self) -> &[String];
     fn query_id(&self) -> &str;
 }
 
 impl ViewUpdateExt for ViewUpdate {
-    fn result_data(&self) -> &[(String, u64)] {
+    fn result_data(&self) -> &[String] {
         match self {
             ViewUpdate::Flat(m) | ViewUpdate::Tree(m) => &m.result_data,
             ViewUpdate::Streaming(_) => &[],
@@ -57,10 +57,10 @@ pub fn ingest(
     op: &str,
     id: &str,
     record: Value,
-    is_optimistic: bool,
+
 ) -> Vec<ViewUpdate> {
     let hash = generate_hash(&record);
-    circuit.ingest_record(table, op, id, record, &hash, is_optimistic)
+    circuit.ingest_record(table, op, id, record, &hash)
 }
 
 /// Ingest with verbose logging (useful for debugging)
@@ -70,11 +70,11 @@ pub fn ingest_verbose(
     op: &str,
     id: &str,
     record: Value,
-    is_optimistic: bool,
+
 ) -> Vec<ViewUpdate> {
     let hash = generate_hash(&record);
     println!("[Ingest] {} -> {}: {:#}", op, table, record);
-    circuit.ingest_record(table, op, id, record, &hash, is_optimistic)
+    circuit.ingest_record(table, op, id, record, &hash)
 }
 
 /// Create an author record (matches sync engine data model)
@@ -119,14 +119,14 @@ pub fn make_comment_record(text: &str, thread_id: &str, author_id: &str) -> (Str
 /// Create and ingest an author, returning the author ID
 pub fn create_author(circuit: &mut Circuit, name: &str) -> String {
     let (id, record) = make_author_record(name);
-    ingest(circuit, "author", "CREATE", &id, record, true);
+    ingest(circuit, "author", "CREATE", &id, record);
     id
 }
 
 /// Create and ingest a thread, returning the thread ID
 pub fn create_thread(circuit: &mut Circuit, title: &str, author_id: &str) -> String {
     let (id, record) = make_thread_record(title, author_id);
-    ingest(circuit, "thread", "CREATE", &id, record, true);
+    ingest(circuit, "thread", "CREATE", &id, record);
     id
 }
 
@@ -138,7 +138,7 @@ pub fn create_comment(
     author_id: &str,
 ) -> String {
     let (id, record) = make_comment_record(text, thread_id, author_id);
-    ingest(circuit, "comment", "CREATE", &id, record, true);
+    ingest(circuit, "comment", "CREATE", &id, record);
     id
 }
 
@@ -156,7 +156,6 @@ pub fn create_author_with_format(
 pub fn ingest_batch(
     circuit: &mut Circuit,
     records: Vec<(String, String, String, Value)>,
-    is_optimistic: bool,
 ) -> Vec<ViewUpdate> {
     let batch: Vec<(String, String, String, Value, String)> = records
         .into_iter()
@@ -166,7 +165,7 @@ pub fn ingest_batch(
         })
         .collect();
 
-    circuit.ingest_batch(batch, is_optimistic)
+    circuit.ingest_batch(batch)
 }
 
 /// Helper to count updates by type

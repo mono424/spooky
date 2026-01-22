@@ -13,28 +13,28 @@ mod common;
 use common::*;
 use serde_json::json;
 use ssp::engine::update::{DeltaEvent, ViewResultFormat, ViewUpdate};
-use ssp::engine::view::{Operator, Path, Predicate, Projection, QueryPlan};
+use ssp::{Operator, Path, Predicate, Projection, QueryPlan};
 
 /// Simulated DB operation for testing persistence logic
 #[derive(Debug, Clone, PartialEq)]
 enum DbOperation {
-    /// UPDATE _spooky_incantation SET hash = $hash, array = $array
+    /// UPDATE incantations SET hash = $hash, array = $array WHERE id = $incantation_id
     UpdateIncantation {
         incantation_id: String,
         hash: String,
-        array: Vec<(String, u64)>,
+        array: Vec<String>,
     },
-    /// RELATE $from->_spooky_list_ref->$to SET version = $version
+    /// RELATE $from->_spooky_list_ref->$to
     RelateEdge {
         from: String,
         to: String,
-        version: u64,
+        // version removed
     },
-    /// UPDATE $from->_spooky_list_ref SET version = $version WHERE out = $to
+    /// UPDATE $from->_spooky_list_ref SET ... WHERE out = $to
     UpdateEdge {
         from: String,
         to: String,
-        version: u64,
+        // version removed
     },
     /// DELETE $from->_spooky_list_ref WHERE out = $to
     DeleteEdge {
@@ -72,12 +72,10 @@ fn simulate_update_streaming(view_id: &str, update: &ViewUpdate) -> Vec<DbOperat
                 DeltaEvent::Created => DbOperation::RelateEdge {
                     from: from.clone(),
                     to: record.id.clone(),
-                    version: record.version,
                 },
                 DeltaEvent::Updated => DbOperation::UpdateEdge {
                     from: from.clone(),
                     to: record.id.clone(),
-                    version: record.version,
                 },
                 DeltaEvent::Deleted => DbOperation::DeleteEdge {
                     from: from.clone(),
@@ -180,10 +178,10 @@ fn test_flat_format_e2e_flow() {
     // Phase 1: Create data
     println!("PHASE 1: CREATE");
     let (user_id, user_record) = make_user("Alice");
-    ingest(&mut circuit, "user", "CREATE", &user_id, user_record, true);
+    ingest(&mut circuit, "user", "CREATE", &user_id, user_record);
     
     let (thread_id, thread_record) = make_thread("First Thread", &user_id);
-    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record, true);
+    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record);
 
     // Phase 2: Register view in Flat format
     println!("PHASE 2: REGISTER VIEW (Flat)");
@@ -204,7 +202,7 @@ fn test_flat_format_e2e_flow() {
             assert_eq!(array.len(), 2, "Should have thread + user");
             
             // Verify both records are present
-            let ids: Vec<String> = array.iter().map(|(id, _)| id.clone()).collect();
+            let ids: Vec<String> = array.iter().cloned().collect();
             assert!(ids.contains(&thread_id), "Array should contain thread");
             assert!(ids.contains(&user_id), "Array should contain user (from subquery)");
             println!("  ✓ Flat payload validated: {} records, hash={}", array.len(), &hash[..8]);
@@ -220,7 +218,7 @@ fn test_flat_format_e2e_flow() {
         "active": true,
         "type": "thread"
     });
-    let updates = ingest(&mut circuit, "thread", "UPDATE", &thread_id, updated_thread, true);
+    let updates = ingest(&mut circuit, "thread", "UPDATE", &thread_id, updated_thread);
     
     for update in &updates {
         if let Some(op) = simulate_update_flat("thread_flat", update) {
@@ -231,7 +229,7 @@ fn test_flat_format_e2e_flow() {
 
     // Phase 4: Delete thread
     println!("PHASE 4: DELETE");
-    let delete_updates = ingest(&mut circuit, "thread", "DELETE", &thread_id, json!({}), true);
+    let delete_updates = ingest(&mut circuit, "thread", "DELETE", &thread_id, json!({}));
     
     for update in &delete_updates {
         if let Some(op) = simulate_update_flat("thread_flat", update) {
@@ -269,10 +267,10 @@ fn test_streaming_format_e2e_flow() {
     // Phase 1: Create data
     println!("PHASE 1: CREATE DATA");
     let (user_id, user_record) = make_user("Bob");
-    ingest(&mut circuit, "user", "CREATE", &user_id, user_record, true);
+    ingest(&mut circuit, "user", "CREATE", &user_id, user_record);
     
     let (thread_id, thread_record) = make_thread("Streaming Thread", &user_id);
-    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record, true);
+    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record);
 
     // Phase 2: Register view in Streaming format
     println!("PHASE 2: REGISTER VIEW (Streaming)");
@@ -309,7 +307,7 @@ fn test_streaming_format_e2e_flow() {
         "active": true,
         "type": "thread"
     });
-    let updates = ingest(&mut circuit, "thread", "UPDATE", &thread_id, updated_thread, true);
+    let updates = ingest(&mut circuit, "thread", "UPDATE", &thread_id, updated_thread);
     
     for update in &updates {
         let ops = simulate_update_streaming("thread_streaming", update);
@@ -346,7 +344,7 @@ fn test_streaming_format_e2e_flow() {
     // Phase 4: Create comment (should trigger Created event)
     println!("PHASE 4: CREATE COMMENT");
     let (comment_id, comment_record) = make_comment("Test comment", &thread_id, &user_id);
-    let comment_updates = ingest(&mut circuit, "comment", "CREATE", &comment_id, comment_record, true);
+    let comment_updates = ingest(&mut circuit, "comment", "CREATE", &comment_id, comment_record);
     
     for update in &comment_updates {
         let ops = simulate_update_streaming("thread_streaming", update);
@@ -361,7 +359,7 @@ fn test_streaming_format_e2e_flow() {
 
     // Phase 5: Delete comment (should trigger Deleted event)
     println!("PHASE 5: DELETE COMMENT");
-    let delete_updates = ingest(&mut circuit, "comment", "DELETE", &comment_id, json!({}), true);
+    let delete_updates = ingest(&mut circuit, "comment", "DELETE", &comment_id, json!({}));
     
     for update in &delete_updates {
         let ops = simulate_update_streaming("thread_streaming", update);
@@ -387,7 +385,7 @@ fn test_streaming_format_e2e_flow() {
 
     // Phase 6: Final validation - delete thread
     println!("PHASE 6: DELETE THREAD");
-    let final_deletes = ingest(&mut circuit, "thread", "DELETE", &thread_id, json!({}), true);
+    let final_deletes = ingest(&mut circuit, "thread", "DELETE", &thread_id, json!({}));
     
     for update in &final_deletes {
         let ops = simulate_update_streaming("thread_streaming", update);
@@ -434,11 +432,11 @@ fn test_payload_comparison_flat_vs_streaming() {
     let (user_id, user_record) = make_user("Charlie");
     let (thread_id, thread_record) = make_thread("Comparison Thread", &user_id);
     
-    ingest(&mut circuit_flat, "user", "CREATE", &user_id, user_record.clone(), true);
-    ingest(&mut circuit_flat, "thread", "CREATE", &thread_id, thread_record.clone(), true);
+    ingest(&mut circuit_flat, "user", "CREATE", &user_id, user_record.clone());
+    ingest(&mut circuit_flat, "thread", "CREATE", &thread_id, thread_record.clone());
     
-    ingest(&mut circuit_streaming, "user", "CREATE", &user_id, user_record, true);
-    ingest(&mut circuit_streaming, "thread", "CREATE", &thread_id, thread_record, true);
+    ingest(&mut circuit_streaming, "user", "CREATE", &user_id, user_record);
+    ingest(&mut circuit_streaming, "thread", "CREATE", &thread_id, thread_record);
 
     // Register views with different formats
     let plan_flat = build_thread_with_author_plan("view_flat");
@@ -453,8 +451,8 @@ fn test_payload_comparison_flat_vs_streaming() {
         println!("  query_id: {}", m.query_id);
         println!("  result_hash: {}", &m.result_hash[..16]);
         println!("  result_data ({} records):", m.result_data.len());
-        for (id, version) in &m.result_data {
-            println!("    - {} (v{})", id, version);
+        for id in &m.result_data {
+            println!("    - {}", id);
         }
     }
 
@@ -463,7 +461,7 @@ fn test_payload_comparison_flat_vs_streaming() {
         println!("  view_id: {}", s.view_id);
         println!("  records ({} delta events):", s.records.len());
         for rec in &s.records {
-            println!("    - {:?}: {} (v{})", rec.event, rec.id, rec.version);
+            println!("    - {:?}: {}", rec.event, rec.id);
         }
     }
 
@@ -472,7 +470,7 @@ fn test_payload_comparison_flat_vs_streaming() {
         println!("\nCONSISTENCY CHECK:");
         
         // Both should track the same IDs
-        let flat_ids: std::collections::HashSet<_> = m.result_data.iter().map(|(id, _)| id).collect();
+        let flat_ids: std::collections::HashSet<_> = m.result_data.iter().collect();
         let streaming_ids: std::collections::HashSet<_> = s.records.iter().map(|r| &r.id).collect();
         
         assert_eq!(flat_ids, streaming_ids, "Flat and Streaming should track the same record IDs");

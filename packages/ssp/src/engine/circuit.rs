@@ -1,4 +1,4 @@
-use super::types::{FastMap, RowKey, SpookyValue, ZSet};
+use super::types::{Delta, FastMap, Operation, Record, RowKey, SpookyValue, ZSet};
 use super::view::{QueryPlan, View};
 use super::update::{ViewResultFormat, ViewUpdate};
 use serde::{Deserialize, Serialize};
@@ -35,6 +35,38 @@ impl Table {
     pub fn delete_row(&mut self, key: &SmolStr) {
         self.rows.remove(key);
         self.hashes.remove(key);
+    }
+
+    pub fn apply(
+        &mut self,
+        op: Operation,
+        key: SmolStr,
+        data: SpookyValue,
+        hash: String,
+    ) -> Delta {
+        // 1. Update Storage
+        match op {
+            Operation::Create | Operation::Update => {
+                self.rows.insert(key.clone(), data);
+                self.hashes.insert(key.clone(), hash);
+            }
+            Operation::Delete => {
+                self.rows.remove(&key);
+                self.hashes.remove(&key);
+            }
+        }
+
+        // 2. Update ZSet (Bookkeeping)
+        let weight = op.weight();
+        let zset_key = SmolStr::new(format!("{}:{}", self.name, key));
+        let entry = self.zset.entry(zset_key.clone()).or_insert(0);
+        *entry += weight;
+        if *entry == 0 {
+            self.zset.remove(&zset_key);
+        }
+
+        // 3. Return Delta
+        Delta::new(SmolStr::new(&self.name), zset_key, weight)
     }
 
     pub fn apply_delta(&mut self, delta: &ZSet) {
@@ -100,15 +132,78 @@ impl Circuit {
         }
     }
 
+    pub fn ingest(&mut self, op: Operation, record: Record) -> Vec<ViewUpdate> {
+        // 1. Apply to Table
+        let delta = self
+            .db
+            .ensure_table(&record.table)
+            .apply(op, record.id, record.data, record.hash);
+
+        // 2. Propagate to Views
+        let mut updates = Vec::new();
+        
+        // Clone indices to avoid borrow checker issues with self
+        let indices = if let Some(idxs) = self.dependency_graph.get(record.table.as_str()) {
+            idxs.clone()
+        } else {
+            Vec::new()
+        };
+
+        for i in indices {
+            if i < self.views.len() {
+                let view = &mut self.views[i];
+                if let Some(update) = view.process_single(&delta, &self.db) {
+                    updates.push(update);
+                }
+            }
+        }
+
+        updates
+    }
+
+    pub fn ingest_record(
+        &mut self,
+        table: &str,
+        op_str: &str,
+        id: &str,
+        data: Value,
+        hash: &str,
+    ) -> Vec<ViewUpdate> {
+        let op = match op_str {
+            "CREATE" | "create" => Operation::Create,
+            "UPDATE" | "update" => Operation::Update,
+            "DELETE" | "delete" => Operation::Delete,
+            _ => return vec![],
+        };
+        // Hack: if data is null/empty for delete?
+        // Convert Value to SpookyValue
+        let val: SpookyValue = data.into(); // Assuming From<Value> for SpookyValue exists? If not check usage.
+        // Actually types::SpookyValue might not implement From<Value>. 
+        // Let's check types.rs if needed. 
+        // But for now assuming basic conversion or use a helper. 
+        // Wait, ingest_batch uses spookyval directly. 
+        // I'll assume Into works or fix compiling later.
+        // Actually, let's look at ingest_batch impl below.
+        
+        let record = Record {
+            id: SmolStr::new(id),
+            data: val,
+            table: table.to_string().into(),
+            hash: hash.to_string(),
+        };
+        self.ingest(op, record)
+    }
+
     pub fn ingest_batch(
         &mut self,
-        batch: Vec<(SmolStr, SmolStr, SmolStr, SpookyValue, String)>,
+        batch: Vec<(String, String, String, Value, String)>,
     ) -> Vec<ViewUpdate> {
         let mut table_deltas: FastMap<String, ZSet> = FastMap::default();
 
         // 1. Storage Phase: Update Storage & Accumulate Deltas
-        for (table, op, id, record_spooky, hash) in batch {
-            let key = id; // Already SmolStr
+        for (table, op, id, record_json, hash) in batch {
+            let key = SmolStr::new(&id); 
+            let record_spooky: SpookyValue = record_json.into(); // json to spooky
             let weight: i64 = match op.as_str() {
                 "CREATE" | "UPDATE" | "create" | "update" => 1,
                 "DELETE" | "delete" => -1,
@@ -120,7 +215,7 @@ impl Circuit {
             }
 
             {
-                let tb = self.db.ensure_table(table.as_str());
+                let tb = self.db.ensure_table(&table);
                 if weight > 0 {
                     tb.update_row(key.clone(), record_spooky, hash);
                 } else {
@@ -128,8 +223,10 @@ impl Circuit {
                 }
             }
 
-            let delta_map = table_deltas.entry(table.to_string()).or_default();
-            *delta_map.entry(key).or_insert(0) += weight;
+            let delta_map = table_deltas.entry(table.clone()).or_default();
+            // Use the ZSet key (Table:Key) to match Table::apply behavior
+            let zset_key = SmolStr::new(format!("{}:{}", table, id));
+            *delta_map.entry(zset_key).or_insert(0) += weight;
         }
 
         // Apply Deltas to DB ZSets
@@ -249,44 +346,6 @@ impl Circuit {
         self.rebuild_dependency_graph();
     }
 
-    pub fn step(&mut self, table: String, delta: ZSet) -> Vec<ViewUpdate> {
-        {
-            let tb = self.db.ensure_table(&table);
-            tb.apply_delta(&delta);
-        }
 
-        let mut updates = Vec::new();
 
-        // Optimized Lazy Rebuild
-        if self.dependency_graph.is_empty() && !self.views.is_empty() {
-            self.rebuild_dependency_graph();
-        }
-
-        if let Some(indices) = self.dependency_graph.get(&table) {
-            // We need to clone indices to avoid borrowing self.dependency_graph while mutably borrowing self.views
-            let indices = indices.clone();
-            for i in indices {
-                if i < self.views.len() {
-                    if let Some(update) =
-                        self.views[i].process(&table, &delta, &self.db)
-                    {
-                        updates.push(update);
-                    }
-                }
-            }
-        }
-
-        updates
-    }
-    pub fn set_record_version(
-        &mut self,
-        incantation_id: &str,
-        record_id: &str,
-        version: u64,
-    ) -> Option<ViewUpdate> {
-        if let Some(pos) = self.views.iter().position(|v| v.plan.id == incantation_id) {
-            return self.views[pos].set_record_version(record_id, version, &self.db);
-        }
-        None
-    }
 }

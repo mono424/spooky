@@ -128,8 +128,8 @@ pub fn extract_number_column(
     let mut numbers = Vec::with_capacity(zset.len());
 
     for (key, weight) in zset {
-        let val_opt = if let Some((table, _)) = key.split_once(':') {
-            db.tables.get(table).and_then(|t| t.rows.get(key))
+        let val_opt = if let Some((table, id)) = key.split_once(':') {
+            db.tables.get(table).and_then(|t| t.rows.get(id))
         } else {
             None
         };

@@ -13,7 +13,7 @@ mod common;
 use common::*;
 use serde_json::json;
 use ssp::engine::update::{DeltaEvent, ViewResultFormat, ViewUpdate};
-use ssp::engine::view::{Operator, Path, Predicate, Projection, QueryPlan};
+use ssp::{Operator, Path, Predicate, Projection, QueryPlan};
 
 /// Represents an edge operation that would be sent to the database
 #[derive(Debug, Clone)]
@@ -21,7 +21,6 @@ struct EdgeOperation {
     op_type: &'static str, // "RELATE" or "DELETE"
     from: String,          // incantation ID
     to: String,            // record ID
-    version: u64,
 }
 
 /// Simulates what the sidecar would do with a StreamingUpdate
@@ -43,7 +42,6 @@ fn process_streaming_update(
                 op_type,
                 from: format!("_spooky_incantation:{}", incantation_id),
                 to: record.id.clone(),
-                version: record.version,
             });
         }
     }
@@ -63,7 +61,6 @@ fn print_streaming_update(update: &ViewUpdate, step: &str) {
         for (i, record) in s.records.iter().enumerate() {
             println!("║  [{}] id: {}", i, record.id);
             println!("║      event: {:?}", record.event);
-            println!("║      version: {}", record.version);
         }
         println!("╚══════════════════════════════════════════════════════════════════╝");
     }
@@ -77,7 +74,7 @@ fn print_edge_operations(ops: &[EdgeOperation], step: &str) {
     for (i, op) in ops.iter().enumerate() {
         println!("│  [{}] {} {}->_spooky_list_ref->{}", i, op.op_type, op.from, op.to);
         if op.op_type != "DELETE" {
-            println!("│      SET version = {}", op.version);
+            // println!("│      SET version = {}", op.version); // Removed
         }
     }
     println!("└──────────────────────────────────────────────────────────────────┘");
@@ -492,7 +489,7 @@ fn test_integration_flow_thread_detail_with_comments() {
 fn test_version_map_state_tracking() {
     println!("\n");
     println!("╔══════════════════════════════════════════════════════════════════╗");
-    println!("║         VERSION MAP STATE TRACKING TEST                          ║");
+    println!("║         STATE TRACKING TEST                                      ║");
     println!("╚══════════════════════════════════════════════════════════════════╝");
 
     let mut circuit = setup();
@@ -502,28 +499,36 @@ fn test_version_map_state_tracking() {
     ingest(&mut circuit, "user", "CREATE", &user_id, json!({ "id": &user_id, "name": "Test" }));
 
     let thread_id = format!("thread:{}", generate_id());
-    ingest(&mut circuit, "thread", "CREATE", &thread_id, json!({ 
-        "id": &thread_id, "title": "Test", "author": &user_id 
-    }));
+    ingest(
+        &mut circuit,
+        "thread",
+        "CREATE",
+        &thread_id,
+        json!({
+            "id": &thread_id,
+            "title": "Test",
+            "author": &user_id
+        }),
+    );
 
     // Register view
     let (plan, _) = build_thread_list_with_author();
     circuit.register_view(plan, None, Some(ViewResultFormat::Streaming));
 
-    // Function to print version map state
-    let print_version_map = |circuit: &ssp::Circuit, view_id: &str, step: &str| {
+    // Function to print cache state
+    let print_cache_state = |circuit: &ssp::Circuit, view_id: &str, step: &str| {
         if let Some(view) = circuit.views.iter().find(|v| v.plan.id == view_id) {
             println!("\n┌──────────────────────────────────────────────────────────────────┐");
-            println!("│ {} - Version Map State", step);
+            println!("│ {} - Cache State", step);
             println!("├──────────────────────────────────────────────────────────────────┤");
-            for (id, version) in &view.metadata.versions {
-                println!("│  {} → version {}", id, version);
+            for (id, weight) in &view.cache {
+                println!("│  {} → weight {}", id, weight);
             }
             println!("└──────────────────────────────────────────────────────────────────┘");
         }
     };
 
-    print_version_map(&circuit, "thread_list_with_author", "After Registration");
+    print_cache_state(&circuit, "thread_list_with_author", "After Registration");
 
     // Update thread multiple times
     for i in 1..=3 {
@@ -533,7 +538,7 @@ fn test_version_map_state_tracking() {
             "author": &user_id
         });
         ingest(&mut circuit, "thread", "UPDATE", &thread_id, updated);
-        print_version_map(&circuit, "thread_list_with_author", &format!("After Update #{}", i));
+        print_cache_state(&circuit, "thread_list_with_author", &format!("After Update #{}", i));
     }
 
     println!("\n[TEST] ✓ Version map correctly tracks all IDs across updates");

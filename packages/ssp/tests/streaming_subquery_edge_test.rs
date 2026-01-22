@@ -14,7 +14,7 @@ mod common;
 use common::*;
 use serde_json::json;
 use ssp::engine::update::{DeltaEvent, ViewResultFormat, ViewUpdate};
-use ssp::engine::view::{Operator, Path, Predicate, Projection, QueryPlan};
+use ssp::{Operator, Path, Predicate, Projection, QueryPlan};
 
 /// Helper to create a user record
 fn make_user_record(name: &str) -> (String, serde_json::Value) {
@@ -204,7 +204,7 @@ fn has_event(update: &ViewUpdate, id: &str, expected_event: &DeltaEvent) -> bool
 /// Get all IDs in version_map for a specific view
 fn get_version_map_ids(circuit: &ssp::Circuit, view_id: &str) -> Vec<String> {
     if let Some(view) = circuit.views.iter().find(|v| v.plan.id == view_id) {
-        view.version_map.keys().map(|k: &smol_str::SmolStr| k.to_string()).collect()
+        view.cache.keys().map(|k: &smol_str::SmolStr| k.to_string()).collect()
     } else {
         vec![]
     }
@@ -222,11 +222,11 @@ fn test_thread_update_preserves_user_edges() {
 
     // 1. Create user
     let (user_id, user_record) = make_user_record("Alice");
-    ingest(&mut circuit, "user", "CREATE", &user_id, user_record, true);
+    ingest(&mut circuit, "user", "CREATE", &user_id, user_record);
 
     // 2. Create thread authored by user
     let (thread_id, thread_record) = make_thread_record_with_author("First Thread", &user_id);
-    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record, true);
+    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record);
 
     // 3. Register streaming view: thread list with author subquery
     let plan = build_thread_list_with_author_plan("thread_list_with_author");
@@ -247,11 +247,11 @@ fn test_thread_update_preserves_user_edges() {
         "Expected user in initial update (from subquery)"
     );
 
-    // 5. Verify version_map contains both IDs
+    // 5. Verify version_map contains both IDs (prefixed with table source)
     let version_ids = get_version_map_ids(&circuit, "thread_list_with_author");
     println!("Version map IDs after register: {:?}", version_ids);
-    assert!(version_ids.contains(&thread_id), "Version map should contain thread");
-    assert!(version_ids.contains(&user_id), "Version map should contain user");
+    assert!(version_ids.contains(&format!("thread:{}", thread_id)), "Version map should contain thread");
+    assert!(version_ids.contains(&format!("user:{}", user_id)), "Version map should contain user");
 
     // 6. Update thread title (NOT deleting anything!)
     let updated_thread_record = json!({
@@ -261,18 +261,18 @@ fn test_thread_update_preserves_user_edges() {
         "active": true,
         "type": "thread"
     });
-    let updates = ingest(&mut circuit, "thread", "UPDATE", &thread_id, updated_thread_record, true);
+    let updates = ingest(&mut circuit, "thread", "UPDATE", &thread_id, updated_thread_record);
 
     // 7. CRITICAL: Verify user is NOT deleted from version_map
     let version_ids_after = get_version_map_ids(&circuit, "thread_list_with_author");
     println!("Version map IDs after update: {:?}", version_ids_after);
     
     assert!(
-        version_ids_after.contains(&thread_id),
+        version_ids_after.contains(&format!("thread:{}", thread_id)),
         "Thread should still be in version_map after update"
     );
     assert!(
-        version_ids_after.contains(&user_id),
+        version_ids_after.contains(&format!("user:{}", user_id)),
         "BUG DETECTED: User was removed from version_map when only thread was updated!"
     );
 
@@ -307,15 +307,15 @@ fn test_comment_deletion_streaming() {
 
     // 1. Create user
     let (user_id, user_record) = make_user_record("Bob");
-    ingest(&mut circuit, "user", "CREATE", &user_id, user_record, true);
+    ingest(&mut circuit, "user", "CREATE", &user_id, user_record);
 
     // 2. Create thread
     let (thread_id, thread_record) = make_thread_record_with_author("Thread with Comments", &user_id);
-    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record, true);
+    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record);
 
     // 3. Create first comment
     let (comment1_id, comment1_record) = make_comment_for_thread("First comment", &thread_id, &user_id);
-    ingest(&mut circuit, "comment", "CREATE", &comment1_id, comment1_record, true);
+    ingest(&mut circuit, "comment", "CREATE", &comment1_id, comment1_record);
 
     // 4. Register streaming view: thread detail with comments
     let plan = build_thread_detail_with_comments_plan("thread_detail");
@@ -327,16 +327,15 @@ fn test_comment_deletion_streaming() {
     
     println!("Initial records: {:?}", init_records);
     
-    // 5. Verify initial state has thread, user, and comment
     let version_ids = get_version_map_ids(&circuit, "thread_detail");
     println!("Version map after register: {:?}", version_ids);
-    assert!(version_ids.contains(&thread_id), "Should have thread");
-    assert!(version_ids.contains(&user_id), "Should have user");
-    assert!(version_ids.contains(&comment1_id), "Should have comment");
+    assert!(version_ids.contains(&format!("thread:{}", thread_id)), "Should have thread");
+    assert!(version_ids.contains(&format!("user:{}", user_id)), "Should have user");
+    assert!(version_ids.contains(&format!("comment:{}", comment1_id)), "Should have comment");
 
     // 6. Create second comment
     let (comment2_id, comment2_record) = make_comment_for_thread("Second comment", &thread_id, &user_id);
-    let create_updates = ingest(&mut circuit, "comment", "CREATE", &comment2_id, comment2_record, true);
+    let create_updates = ingest(&mut circuit, "comment", "CREATE", &comment2_id, comment2_record);
     
     // Verify comment2 was added
     for update in &create_updates {
@@ -349,10 +348,10 @@ fn test_comment_deletion_streaming() {
     }
 
     let version_ids_after_create = get_version_map_ids(&circuit, "thread_detail");
-    assert!(version_ids_after_create.contains(&comment2_id), "Should have second comment");
+    assert!(version_ids_after_create.contains(&format!("comment:{}", comment2_id)), "Should have second comment");
 
     // 7. Delete first comment
-    let delete_updates = ingest(&mut circuit, "comment", "DELETE", &comment1_id, json!({}), true);
+    let delete_updates = ingest(&mut circuit, "comment", "DELETE", &comment1_id, json!({}));
 
     // 8. Verify comment1 has Deleted event
     let mut found_delete = false;
@@ -370,19 +369,19 @@ fn test_comment_deletion_streaming() {
     println!("Version map after delete: {:?}", version_ids_after_delete);
     
     assert!(
-        !version_ids_after_delete.contains(&comment1_id),
+        !version_ids_after_delete.contains(&format!("comment:{}", comment1_id)),
         "Deleted comment should NOT be in version_map"
     );
     assert!(
-        version_ids_after_delete.contains(&comment2_id),
+        version_ids_after_delete.contains(&format!("comment:{}", comment2_id)),
         "Second comment should still be in version_map"
     );
     assert!(
-        version_ids_after_delete.contains(&user_id),
+        version_ids_after_delete.contains(&format!("user:{}", user_id)),
         "User should still be in version_map"
     );
     assert!(
-        version_ids_after_delete.contains(&thread_id),
+        version_ids_after_delete.contains(&format!("thread:{}", thread_id)),
         "Thread should still be in version_map"
     );
 
@@ -404,11 +403,11 @@ fn test_full_scenario_edge_tracking() {
 
     // 1. Create user
     let (user_id, user_record) = make_user_record("Charlie");
-    ingest(&mut circuit, "user", "CREATE", &user_id, user_record, true);
+    ingest(&mut circuit, "user", "CREATE", &user_id, user_record);
 
     // 2. Create thread
     let (thread_id, thread_record) = make_thread_record_with_author("Original Title", &user_id);
-    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record, true);
+    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record);
 
     // 3. Register streaming views
     let plan1 = build_thread_list_with_author_plan("v_thread_list");
@@ -419,7 +418,7 @@ fn test_full_scenario_edge_tracking() {
 
     // 4. Create comment
     let (comment_id, comment_record) = make_comment_for_thread("Test comment", &thread_id, &user_id);
-    ingest(&mut circuit, "comment", "CREATE", &comment_id, comment_record, true);
+    ingest(&mut circuit, "comment", "CREATE", &comment_id, comment_record);
 
     // Verify state after comment creation
     let list_ids = get_version_map_ids(&circuit, "v_thread_list");
@@ -429,11 +428,11 @@ fn test_full_scenario_edge_tracking() {
     println!("  v_thread_list: {:?}", list_ids);
     println!("  v_thread_detail: {:?}", detail_ids);
 
-    assert!(list_ids.contains(&thread_id), "List should have thread");
-    assert!(list_ids.contains(&user_id), "List should have user");
-    assert!(detail_ids.contains(&thread_id), "Detail should have thread");
-    assert!(detail_ids.contains(&user_id), "Detail should have user");
-    assert!(detail_ids.contains(&comment_id), "Detail should have comment");
+    assert!(list_ids.contains(&format!("thread:{}", thread_id)), "List should have thread");
+    assert!(list_ids.contains(&format!("user:{}", user_id)), "List should have user");
+    assert!(detail_ids.contains(&format!("thread:{}", thread_id)), "Detail should have thread");
+    assert!(detail_ids.contains(&format!("user:{}", user_id)), "Detail should have user");
+    assert!(detail_ids.contains(&format!("comment:{}", comment_id)), "Detail should have comment");
 
     // 5. Update thread title
     let updated_thread = json!({
@@ -443,7 +442,7 @@ fn test_full_scenario_edge_tracking() {
         "active": true,
         "type": "thread"
     });
-    ingest(&mut circuit, "thread", "UPDATE", &thread_id, updated_thread, true);
+    ingest(&mut circuit, "thread", "UPDATE", &thread_id, updated_thread);
 
     // Verify state after thread update - NO edges should be lost!
     let list_ids_after_update = get_version_map_ids(&circuit, "v_thread_list");
@@ -453,23 +452,23 @@ fn test_full_scenario_edge_tracking() {
     println!("  v_thread_list: {:?}", list_ids_after_update);
     println!("  v_thread_detail: {:?}", detail_ids_after_update);
 
-    assert!(list_ids_after_update.contains(&thread_id), "List should still have thread");
+    assert!(list_ids_after_update.contains(&format!("thread:{}", thread_id)), "List should still have thread");
     assert!(
-        list_ids_after_update.contains(&user_id),
+        list_ids_after_update.contains(&format!("user:{}", user_id)),
         "BUG: List lost user after thread update!"
     );
-    assert!(detail_ids_after_update.contains(&thread_id), "Detail should still have thread");
+    assert!(detail_ids_after_update.contains(&format!("thread:{}", thread_id)), "Detail should still have thread");
     assert!(
-        detail_ids_after_update.contains(&user_id),
+        detail_ids_after_update.contains(&format!("user:{}", user_id)),
         "BUG: Detail lost user after thread update!"
     );
     assert!(
-        detail_ids_after_update.contains(&comment_id),
+        detail_ids_after_update.contains(&format!("comment:{}", comment_id)),
         "Detail should still have comment"
     );
 
     // 6. Delete comment
-    ingest(&mut circuit, "comment", "DELETE", &comment_id, json!({}), true);
+    ingest(&mut circuit, "comment", "DELETE", &comment_id, json!({}));
 
     // Verify state after comment deletion
     let list_ids_after_delete = get_version_map_ids(&circuit, "v_thread_list");
@@ -479,12 +478,12 @@ fn test_full_scenario_edge_tracking() {
     println!("  v_thread_list: {:?}", list_ids_after_delete);
     println!("  v_thread_detail: {:?}", detail_ids_after_delete);
 
-    assert!(list_ids_after_delete.contains(&thread_id), "List should still have thread");
-    assert!(list_ids_after_delete.contains(&user_id), "List should still have user");
-    assert!(detail_ids_after_delete.contains(&thread_id), "Detail should still have thread");
-    assert!(detail_ids_after_delete.contains(&user_id), "Detail should still have user");
+    assert!(list_ids_after_delete.contains(&format!("thread:{}", thread_id)), "List should still have thread");
+    assert!(list_ids_after_delete.contains(&format!("user:{}", user_id)), "List should still have user");
+    assert!(detail_ids_after_delete.contains(&format!("thread:{}", thread_id)), "Detail should still have thread");
+    assert!(detail_ids_after_delete.contains(&format!("user:{}", user_id)), "Detail should still have user");
     assert!(
-        !detail_ids_after_delete.contains(&comment_id),
+        !detail_ids_after_delete.contains(&format!("comment:{}", comment_id)),
         "Detail should NOT have deleted comment"
     );
 
@@ -503,10 +502,10 @@ fn test_subquery_ids_not_marked_as_removals_on_main_table_update() {
 
     // Setup: user + thread
     let (user_id, user_record) = make_user_record("Diana");
-    ingest(&mut circuit, "user", "CREATE", &user_id, user_record, true);
+    ingest(&mut circuit, "user", "CREATE", &user_id, user_record);
 
     let (thread_id, thread_record) = make_thread_record_with_author("Test Thread", &user_id);
-    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record, true);
+    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record);
 
     // Register view
     let plan = build_thread_list_with_author_plan("subquery_test");
@@ -514,8 +513,8 @@ fn test_subquery_ids_not_marked_as_removals_on_main_table_update() {
 
     // Record initial state
     let initial_ids = get_version_map_ids(&circuit, "subquery_test");
-    let initial_user_present = initial_ids.contains(&user_id);
-    let initial_thread_present = initial_ids.contains(&thread_id);
+    let initial_user_present = initial_ids.contains(&format!("user:{}", user_id));
+    let initial_thread_present = initial_ids.contains(&format!("thread:{}", thread_id));
 
     println!("Initial version_map: {:?}", initial_ids);
     assert!(initial_user_present, "User should be tracked initially");
@@ -530,17 +529,17 @@ fn test_subquery_ids_not_marked_as_removals_on_main_table_update() {
             "active": true,
             "type": "thread"
         });
-        let updates = ingest(&mut circuit, "thread", "UPDATE", &thread_id, updated, true);
+        let updates = ingest(&mut circuit, "thread", "UPDATE", &thread_id, updated);
 
         // After EACH update, verify user is still present
         let ids = get_version_map_ids(&circuit, "subquery_test");
         
         assert!(
-            ids.contains(&user_id),
+            ids.contains(&format!("user:{}", user_id)),
             "BUG at update #{}: User was incorrectly removed from version_map", i
         );
         assert!(
-            ids.contains(&thread_id),
+            ids.contains(&format!("thread:{}", thread_id)),
             "Thread should still be in version_map after update #{}", i
         );
 

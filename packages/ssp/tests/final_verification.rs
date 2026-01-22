@@ -1,11 +1,9 @@
-use ssp::{Circuit, engine::{QueryPlan, Operator, update::ViewResultFormat, metadata::IngestStrategy}};
+use ssp::{Circuit, QueryPlan, Operator, ViewResultFormat};
 
-fn create_simple_plan(id: &str) -> QueryPlan {
+fn create_simple_plan(view_id: &str) -> QueryPlan {
     QueryPlan {
-        id: id.to_string(),
-        root: Operator::Scan {
-            table: "test_table".to_string(),
-        },
+        id: view_id.to_string(),
+        root: Operator::Scan { table: "test_table".to_string() }
     }
 }
 
@@ -18,19 +16,7 @@ fn test_backward_compat_register_view() {
     assert!(true);
 }
 
-#[test]
-fn test_register_view_with_strategy() {
-    let mut circuit = Circuit::new();
-    let plan = create_simple_plan("view2");
-    // Should compile with 4 arguments
-    let _ = circuit.register_view_with_strategy(
-        plan, 
-        None, 
-        Some(ViewResultFormat::Flat),
-        Some(IngestStrategy::Explicit)
-    );
-    assert!(true);
-}
+
 
 #[test]
 fn test_build_materialized_performance() {
@@ -51,7 +37,7 @@ fn test_build_materialized_performance() {
             format!("hash:{}", i),
         ));
     }
-    circuit.ingest_batch_outdated(batch);
+    let _ = circuit.ingest_batch(batch);
 
     // Now perform a batch update that modifies MANY records
     // This triggers `build_materialized_raw_result` which had the O(n^2) bug
@@ -69,7 +55,7 @@ fn test_build_materialized_performance() {
     }
 
     let start = std::time::Instant::now();
-    circuit.ingest_batch_outdated(update_batch);
+    let _ = circuit.ingest_batch(update_batch);
     let duration = start.elapsed();
 
     println!("Update of {} records took {:?}", num_records / 2, duration);
