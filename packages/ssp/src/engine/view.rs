@@ -3,16 +3,13 @@ use super::eval::{
     apply_numeric_filter, compare_spooky_values, hash_spooky_value, normalize_record_id,
     resolve_nested_value, NumericFilterConfig,
 };
-use crate::debug_log;
+use super::operators::{Operator, Predicate, Projection};
+use super::types::{FastMap, Path, SpookyValue, VersionMap, ZSet};
+use super::update::{ViewResultFormat, ViewUpdate};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use smol_str::SmolStr;
 use std::cmp::Ordering;
-
-// Re-export types for backward compatibility
-pub use super::operators::{JoinCondition, Operator, OrderSpec, Predicate, Projection};
-pub use super::types::{FastMap, Path, RowKey, SpookyValue, VersionMap, Weight, ZSet};
-pub use super::update::{MaterializedViewUpdate, ViewResultFormat, ViewUpdate};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct QueryPlan {
@@ -53,29 +50,24 @@ impl View {
         }
     }
 
-    /// The main function for updates.
-    /// Uses delta optimization if possible.
     pub fn process(
         &mut self,
         changed_table: &str,
         input_delta: &ZSet,
         db: &Database,
-        is_optimistic: bool,
     ) -> Option<ViewUpdate> {
         let mut deltas = FastMap::default();
         if !changed_table.is_empty() {
             deltas.insert(changed_table.to_string(), input_delta.clone());
         }
-        self.process_ingest(&deltas, db, is_optimistic)
+        self.process_ingest(&deltas, db)
     }
 
     /// Optimized 2-Phase Processing: Handles multiple table updates at once.
-    /// is_optimistic: true = increment versions (local mutations), false = keep versions (remote sync)
     pub fn process_ingest(
         &mut self,
         deltas: &FastMap<String, ZSet>,
         db: &Database,
-        is_optimistic: bool,
     ) -> Option<ViewUpdate> {
         // FIX: FIRST RUN CHECK
         let is_first_run = self.last_hash.is_empty();
@@ -83,14 +75,6 @@ impl View {
 
         // Check if any delta contains CREATE or DELETE operations for tables used in subqueries
         let has_subquery_changes = !is_first_run && self.has_changes_for_subqueries(deltas, db);
-
-        debug_log!(
-            "DEBUG VIEW: id={} is_first_run={} has_subquery_changes={} is_streaming={}",
-            self.plan.id,
-            is_first_run,
-            has_subquery_changes,
-            is_streaming
-        );
 
         let maybe_delta = if is_first_run || has_subquery_changes {
             // Force full scan if:
@@ -171,8 +155,6 @@ impl View {
         };
         let has_cached_updates = !updated_record_ids.is_empty();
 
-        debug_log!("DEBUG VIEW: id={} view_delta_empty={} has_cached_updates={} is_optimistic={} updated_ids_len={}", self.plan.id, view_delta.is_empty(), has_cached_updates, is_optimistic, updated_record_ids.len());
-
         if view_delta.is_empty() && !is_first_run && !has_subquery_changes && !has_cached_updates {
             return None;
         }
@@ -192,7 +174,7 @@ impl View {
         // CAPTURE DELTA SETS (needed for all formats)
         // Pre-allocate based on view_delta size for efficiency
         let delta_size = view_delta.len();
-        let mut additions: Vec<(String, u64)> = Vec::with_capacity(delta_size);
+        let mut additions: Vec<String> = Vec::with_capacity(delta_size);
         let mut removals: Vec<String> = Vec::with_capacity(delta_size);
 
         // Convert updated_record_ids to a HashSet for O(1) lookup
@@ -206,7 +188,7 @@ impl View {
                 // A record is a CREATE if it's genuinely new to the view
                 if !updated_ids_set.contains(key.as_str()) {
                     // Genuinely new record entering the view
-                    additions.push((key.to_string(), 0)); // version TBD
+                    additions.push(key.to_string());
                 }
                 // If it IS in updated_ids_set, it will be handled as an update below
             } else if *weight < 0 {
@@ -238,7 +220,7 @@ impl View {
             }
 
             // Update versions for new additions (records entering the view)
-            for (id, _) in &additions {
+            for id in &additions {
                 if let Some(_current_hash) = self.get_row_hash(id.as_str(), db) {
                     let id_key = SmolStr::new(id.as_str());
                     let version = self.version_map.entry(id_key).or_insert(0);
@@ -248,32 +230,7 @@ impl View {
                 }
             }
 
-            // Update versions for updated records (already in view, content changed)
-            if is_optimistic {
-                for id in &updates {
-                    if let Some(_current_hash) = self.get_row_hash(id.as_str(), db) {
-                        let id_key = SmolStr::new(id.as_str());
-                        let version = self.version_map.entry(id_key).or_insert(0);
-                        let _old_ver = *version;
-                        *version += 1;
-                        debug_log!(
-                            "DEBUG VIEW: Incrementing version for id={} old={} new={}",
-                            id,
-                            _old_ver,
-                            *version
-                        );
-                    }
-                }
-            }
 
-            // Finalize delta sets with versions
-            let additions_with_versions: Vec<(String, u64)> = additions
-                .iter()
-                .map(|(id, _)| {
-                    let version = self.version_map.get(id.as_str()).copied().unwrap_or(1);
-                    (id.clone(), version)
-                })
-                .collect();
 
             let updates_with_versions: Vec<(String, u64)> = updates
                 .iter()
@@ -319,7 +276,6 @@ impl View {
                     delta_records.push(DeltaRecord {
                         id,
                         event: DeltaEvent::Created,
-                        version: 1,
                     });
                 }
             } else if has_subquery_changes {
@@ -327,24 +283,12 @@ impl View {
                 // We need to re-evaluate ALL subqueries for all main records
                 // and emit Created/Deleted events for any NEW/REMOVED subquery results
                 
-                // DEBUG: Log current version_map state
-                debug_log!(
-                    "DEBUG SUBQUERY_CHANGES: view={} version_map_keys={:?}",
-                    self.plan.id,
-                    self.version_map.keys().collect::<Vec<_>>()
-                );
                 
                 // Get all main record IDs from version_map that are "main" records (not subquery results)
                 // We identify main records by checking if they're in the target_set from eval_snapshot
                 let target_set = self
                     .eval_snapshot(&self.plan.root, db, self.params.as_ref())
                     .into_owned();
-                
-                debug_log!(
-                    "DEBUG SUBQUERY_CHANGES: view={} target_set_keys={:?}",
-                    self.plan.id,
-                    target_set.keys().collect::<Vec<_>>()
-                );
                 
                 // Collect ALL current subquery IDs
                 let mut all_current_ids: Vec<String> = Vec::new();
@@ -358,12 +302,6 @@ impl View {
                 all_current_ids.sort_unstable();
                 all_current_ids.dedup();
                 
-                debug_log!(
-                    "DEBUG SUBQUERY_CHANGES: view={} all_current_ids={:?}",
-                    self.plan.id,
-                    all_current_ids
-                );
-                
                 // Find NEW IDs (in current but not in version_map)
                 for id in &all_current_ids {
                     if !self.version_map.contains_key(id.as_str()) {
@@ -374,7 +312,6 @@ impl View {
                         delta_records.push(DeltaRecord {
                             id: id.clone(),
                             event: DeltaEvent::Created,
-                            version: 1,
                         });
                     }
                 }
@@ -384,34 +321,14 @@ impl View {
                     all_current_ids.iter().map(|s| s.as_str()).collect();
                 let version_keys: Vec<SmolStr> = self.version_map.keys().cloned().collect();
                 
-                debug_log!(
-                    "DEBUG SUBQUERY_CHANGES: view={} checking_removals version_keys={:?} current_set_len={}",
-                    self.plan.id,
-                    version_keys,
-                    current_set.len()
-                );
-                
                 for id in version_keys {
                     let in_current = current_set.contains(id.as_str());
-                    debug_log!(
-                        "DEBUG SUBQUERY_CHANGES: view={} checking id={} in_current={}",
-                        self.plan.id,
-                        id,
-                        in_current
-                    );
                     if !in_current {
-                        // Removed subquery result
-                        debug_log!(
-                            "DEBUG SUBQUERY_CHANGES: view={} EMITTING DELETED for id={}",
-                            self.plan.id,
-                            id
-                        );
                         self.version_map.remove(&id);
                         
                         delta_records.push(DeltaRecord {
                             id: id.to_string(),
                             event: DeltaEvent::Deleted,
-                            version: 0,
                         });
                     }
                 }
@@ -419,11 +336,11 @@ impl View {
                 // Process main record additions first - these always get Created events
                 // because they are genuinely new to the view (came from view_delta with weight > 0)
                 let addition_ids_set: std::collections::HashSet<&str> = 
-                    additions.iter().map(|(id, _)| id.as_str()).collect();
+                    additions.iter().map(|id| id.as_str()).collect();
                 
                 // Collect subquery IDs for all additions
                 let mut subquery_ids: Vec<String> = Vec::new();
-                for (id, _) in &additions {
+                for id in &additions {
                     // Collect subquery IDs for this new parent record
                     if let Some(parent_row) = self.get_row_value(id.as_str(), db) {
                         self.collect_subquery_ids_recursive(&self.plan.root, parent_row, db, &mut subquery_ids);
@@ -435,7 +352,7 @@ impl View {
                 subquery_ids.dedup();
                 
                 // Emit Created events for main record additions (always)
-                for (id, _) in &additions {
+                for id in &additions {
                     let id_key = SmolStr::new(id.as_str());
                     let version = self.version_map.entry(id_key).or_insert(0);
                     if *version == 0 {
@@ -445,7 +362,6 @@ impl View {
                     delta_records.push(DeltaRecord {
                         id: id.clone(),
                         event: DeltaEvent::Created,
-                        version: *version,
                     });
                 }
                 
@@ -469,7 +385,6 @@ impl View {
                         delta_records.push(DeltaRecord {
                             id,
                             event: DeltaEvent::Created,
-                            version: *version,
                         });
                     }
                 }
@@ -480,7 +395,6 @@ impl View {
                     delta_records.push(DeltaRecord {
                         id,
                         event: DeltaEvent::Deleted,
-                        version: 0,
                     });
                 }
 
@@ -491,7 +405,6 @@ impl View {
                     delta_records.push(DeltaRecord {
                         id,
                         event: DeltaEvent::Updated,
-                        version,
                     });
                 }
             }
@@ -501,14 +414,6 @@ impl View {
             // Note: If view switches from Streaming to Flat mode, the first Flat update will
             // always trigger due to hash mismatch, which is acceptable for rare mode switches.
             self.last_hash = "streaming".to_string();
-
-            // DEBUG: Log all delta_records being emitted
-            debug_log!(
-                "DEBUG STREAMING_EMIT: view={} delta_records_count={} records={:?}",
-                self.plan.id,
-                delta_records.len(),
-                delta_records.iter().map(|r| (&r.id, &r.event)).collect::<Vec<_>>()
-            );
 
             return Some(ViewUpdate::Streaming(StreamingUpdate {
                 view_id: self.plan.id.clone(),
@@ -547,45 +452,16 @@ impl View {
                 let version = self.version_map.entry(id_key).or_insert(0);
                 if *version == 0 {
                     *version = 1;
-                } else if is_optimistic && updated_record_ids.contains(id) {
-                    // Optimistic update: increment version to trigger hash change
-                    let _old_ver = *version;
-                    *version += 1;
-                    debug_log!(
-                        "DEBUG VIEW: Incrementing version for id={} old={} new={}",
-                        id,
-                        _old_ver,
-                        *version
-                    );
                 }
             }
         }
 
-        // Finalize delta sets with versions
-        let additions_with_versions: Vec<(String, u64)> = additions
-            .iter()
-            .map(|(id, _)| {
-                let version = self.version_map.get(id.as_str()).copied().unwrap_or(1);
-                (id.clone(), version)
-            })
-            .collect();
 
-        let updates_with_versions: Vec<(String, u64)> = updates
-            .iter()
-            .map(|id| {
-                let version = self.version_map.get(id.as_str()).copied().unwrap_or(1);
-                (id.clone(), version)
-            })
-            .collect();
+
+
 
         // Build raw result data (format-agnostic)
-        let result_data: Vec<(String, u64)> = all_ids
-            .iter()
-            .map(|id| {
-                let version = self.version_map.get(id.as_str()).copied().unwrap_or(1);
-                (id.clone(), version)
-            })
-            .collect();
+        let result_data: Vec<String> = all_ids;
 
         // Delegate formatting to update module (Strategy Pattern)
         use super::update::{build_update, compute_flat_hash, RawViewResult, ViewDelta};
@@ -594,9 +470,9 @@ impl View {
             None // First run = treat as full snapshot
         } else {
             Some(ViewDelta {
-                additions: additions_with_versions,
+                additions,
                 removals,
-                updates: updates_with_versions,
+                updates,
             })
         };
 
@@ -765,59 +641,24 @@ impl View {
         // Get all tables used in subqueries
         let subquery_tables = self.extract_subquery_tables(&self.plan.root);
 
-        debug_log!(
-            "DEBUG has_changes: view={} subquery_tables={:?} delta_tables={:?}",
-            self.plan.id,
-            subquery_tables,
-            deltas.keys().collect::<Vec<_>>()
-        );
-
-        if subquery_tables.is_empty() {
-            debug_log!(
-                "DEBUG has_changes: view={} NO SUBQUERY TABLES",
-                self.plan.id
-            );
-            return false;
-        }
-
         // Check if any delta for a subquery table contains changes (weight != 0)
         for table in subquery_tables {
             if let Some(delta) = deltas.get(&table) {
-                debug_log!(
-                    "DEBUG has_changes: view={} table={} delta_keys={:?}",
-                    self.plan.id,
-                    table,
-                    delta.keys().collect::<Vec<_>>()
-                );
                 // Check if any record in this delta is a CREATE (weight > 0 and not in version_map)
                 // or a DELETE (weight < 0 and in version_map)
                 for (key, weight) in delta {
                     // Use SmolStr for lookup to ensure hash compatibility with FxHasher
                     let key_smol = SmolStr::new(key.as_str());
                     let in_version_map = self.version_map.contains_key(&key_smol);
-                    debug_log!(
-                        "DEBUG has_changes: view={} key={} weight={} in_version_map={}",
-                        self.plan.id,
-                        key,
-                        weight,
-                        in_version_map
-                    );
                     // CREATE: positive weight, not in version_map
                     // DELETE: negative weight, in version_map
                     if (*weight > 0 && !in_version_map) || (*weight < 0 && in_version_map) {
-                        debug_log!(
-                            "DEBUG has_changes: view={} FOUND CHANGE key={} weight={}",
-                            self.plan.id,
-                            key,
-                            weight
-                        );
                         return true;
                     }
                 }
             }
         }
 
-        debug_log!("DEBUG has_changes: view={} NO CHANGES FOUND", self.plan.id);
         false
     }
 
@@ -832,12 +673,6 @@ impl View {
                 // Only check records with positive weight (existing/updated records)
                 // Negative weight means deletion which is handled elsewhere
                 if *weight > 0 && self.cache.contains_key(record_id.as_str()) {
-                    debug_log!(
-                        "DEBUG get_updated_cached_records: view={} table={} found cached record={}",
-                        self.plan.id,
-                        _table,
-                        record_id
-                    );
                     updated_ids.push(record_id.to_string());
                 }
             }
@@ -850,7 +685,6 @@ impl View {
                     && self.version_map.contains_key(record_id.as_str())
                     && !updated_ids.contains(&record_id.to_string())
                 {
-                    debug_log!("DEBUG get_updated_cached_records: view={} table={} found versioned record={}", self.plan.id, _table, record_id);
                     updated_ids.push(record_id.to_string());
                 }
             }
@@ -869,12 +703,6 @@ impl View {
                 // Only check records with positive weight (existing/updated records)
                 // and that are already in the view (tracked in version_map)
                 if *weight > 0 && self.version_map.contains_key(record_id.as_str()) {
-                    debug_log!(
-                        "DEBUG get_updated_records_streaming: view={} table={} found versioned record={}",
-                        self.plan.id,
-                        _table,
-                        record_id
-                    );
                     updated_ids.push(record_id.to_string());
                 }
             }
@@ -893,20 +721,11 @@ impl View {
         let current_version = self.version_map.get(record_id).copied().unwrap_or(0);
 
         if current_version != version {
-            debug_log!(
-                "DEBUG VIEW: set_record_version id={} record={} old={} new={}",
-                self.plan.id,
-                record_id,
-                current_version,
-                version
-            );
             self.version_map.insert(SmolStr::new(record_id), version);
 
             // Trigger re-hashing by processing empty deltas
             let empty_deltas = FastMap::default();
-            // We pass is_optimistic=false because we've already manually manipulated the version map
-            // and we just want to recompute the hash and return the update.
-            self.process_ingest(&empty_deltas, db, false)
+            self.process_ingest(&empty_deltas, db)
         } else {
             None
         }

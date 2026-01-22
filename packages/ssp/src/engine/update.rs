@@ -1,6 +1,6 @@
 //! Update formatting logic (Strategy Pattern).
 //!
-//! This module is responsible for taking raw view results (IDs + versions)
+//! This module is responsible for taking raw view results (IDs)
 //! and formatting them into the desired output structure based on ViewResultFormat.
 
 use serde::{Deserialize, Serialize};
@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ViewResultFormat {
-    /// Flat list: [(id, version), ...] with hash
+    /// Flat list: [id, ...] with hash
     #[default]
     Flat,
     /// Tree structure (future)
@@ -22,27 +22,27 @@ pub enum ViewResultFormat {
 #[derive(Debug, Clone, Default)]
 pub struct ViewDelta {
     /// Records added to the view (weight > 0)
-    pub additions: Vec<(String, u64)>, // (id, version)
+    pub additions: Vec<String>,
     /// Records removed from the view (weight < 0)
-    pub removals: Vec<String>, // just ids
+    pub removals: Vec<String>,
     /// Records updated in place (content changed, still in view)
-    pub updates: Vec<(String, u64)>, // (id, new_version)
+    pub updates: Vec<String>,
 }
 
 /// Raw view result (format-agnostic data from View)
 #[derive(Debug, Clone)]
 pub struct RawViewResult {
     pub query_id: String,
-    pub records: Vec<(String, u64)>, // (id, version) - full snapshot for Flat/Tree
-    pub delta: Option<ViewDelta>,    // delta info for Streaming
+    pub records: Vec<String>, // full snapshot for Flat/Tree
+    pub delta: Option<ViewDelta>, // delta info for Streaming
 }
 
-/// Flat list output (current version-approach format)
+/// Flat list output
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MaterializedViewUpdate {
     pub query_id: String,
     pub result_hash: String,
-    pub result_data: Vec<(String, u64)>, // [(record-id, version), ...]
+    pub result_data: Vec<String>, // [record-id, ...]
 }
 
 /// Delta event for streaming format
@@ -59,7 +59,6 @@ pub enum DeltaEvent {
 pub struct DeltaRecord {
     pub id: String,
     pub event: DeltaEvent,
-    pub version: u64,
 }
 
 /// Streaming update output (minimal payload)
@@ -78,18 +77,16 @@ pub enum ViewUpdate {
     Streaming(StreamingUpdate),
 }
 
-/// Compute hash from flat array of [record-id, version] pairs.
+/// Compute hash from flat array of record IDs.
 /// IMPORTANT: Sorts by record ID before hashing to ensure deterministic output
 /// regardless of insertion order.
-pub fn compute_flat_hash(data: &[(String, u64)]) -> String {
-    // Sort by record ID to ensure deterministic hash
+pub fn compute_flat_hash(data: &[String]) -> String {
     let mut sorted_data: Vec<_> = data.to_vec();
-    sorted_data.sort_by(|a, b| a.0.cmp(&b.0));
+    sorted_data.sort();
 
     let mut hasher = blake3::Hasher::new();
-    for (id, version) in sorted_data {
+    for id in sorted_data {
         hasher.update(id.as_bytes());
-        hasher.update(&version.to_le_bytes());
         hasher.update(&[0]); // Delimiter
     }
     hasher.finalize().to_hex().to_string()
@@ -107,8 +104,6 @@ pub fn build_update(raw: RawViewResult, format: ViewResultFormat) -> ViewUpdate 
             })
         }
         ViewResultFormat::Tree => {
-            // Future: Build tree structure
-            // For now, return flat format
             let hash = compute_flat_hash(&raw.records);
             ViewUpdate::Tree(MaterializedViewUpdate {
                 query_id: raw.query_id,
@@ -120,39 +115,31 @@ pub fn build_update(raw: RawViewResult, format: ViewResultFormat) -> ViewUpdate 
             let mut delta_records = Vec::new();
 
             if let Some(delta) = raw.delta {
-                // Map additions → Created
-                for (id, version) in delta.additions {
+                for id in delta.additions {
                     delta_records.push(DeltaRecord {
                         id,
                         event: DeltaEvent::Created,
-                        version,
                     });
                 }
 
-                // Map removals → Deleted
                 for id in delta.removals {
                     delta_records.push(DeltaRecord {
                         id,
                         event: DeltaEvent::Deleted,
-                        version: 0,
                     });
                 }
 
-                // Map updates → Updated
-                for (id, version) in delta.updates {
+                for id in delta.updates {
                     delta_records.push(DeltaRecord {
                         id,
                         event: DeltaEvent::Updated,
-                        version,
                     });
                 }
             } else {
-                // Fallback: treat all as Created (first run case)
-                for (id, version) in raw.records {
+                for id in raw.records {
                     delta_records.push(DeltaRecord {
                         id,
                         event: DeltaEvent::Created,
-                        version,
                     });
                 }
             }
@@ -168,18 +155,17 @@ pub fn build_update(raw: RawViewResult, format: ViewResultFormat) -> ViewUpdate 
 /// Build streaming delta update from ZSet delta
 pub fn build_streaming_delta(
     query_id: String,
-    delta: &[(String, i64, u64)], // (id, weight, version)
+    delta: &[(String, i64)], // (id, weight)
 ) -> StreamingUpdate {
     let records = delta
         .iter()
-        .map(|(id, weight, version)| DeltaRecord {
+        .map(|(id, weight)| DeltaRecord {
             id: id.clone(),
             event: if *weight > 0 {
                 DeltaEvent::Created
             } else {
                 DeltaEvent::Deleted
             },
-            version: *version,
         })
         .collect();
 

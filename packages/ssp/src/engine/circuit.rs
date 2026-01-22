@@ -1,9 +1,6 @@
-use crate::debug_log;
-use super::view::{
-    FastMap, QueryPlan, RowKey, SpookyValue, View, ViewUpdate, ZSet,
-};
-use super::update::ViewResultFormat;
-// use rustc_hash::{FxHashMap, FxHasher}; // Unused in this file (used via FastMap)
+use super::types::{FastMap, RowKey, SpookyValue, ZSet};
+use super::view::{QueryPlan, View};
+use super::update::{ViewResultFormat, ViewUpdate};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use smol_str::SmolStr;
@@ -95,81 +92,17 @@ impl Circuit {
     // Must be called after Deserialization to rebuild the Cache!
     pub fn rebuild_dependency_graph(&mut self) {
         self.dependency_graph.clear();
-        #[cfg(target_arch = "wasm32")]
-        web_sys::console::log_1(
-            &format!(
-                "DEBUG: Rebuilding dependency graph for {} views",
-                self.views.len()
-            )
-            .into(),
-        );
         for (i, view) in self.views.iter().enumerate() {
             let tables = view.plan.root.referenced_tables();
-            #[cfg(target_arch = "wasm32")]
-            web_sys::console::log_1(
-                &format!(
-                    "DEBUG: View {} (id: {}) depends on tables: {:?}",
-                    i, view.plan.id, tables
-                )
-                .into(),
-            );
             for t in tables {
                 self.dependency_graph.entry(t).or_default().push(i);
             }
         }
-        #[cfg(target_arch = "wasm32")]
-        web_sys::console::log_1(
-            &format!("DEBUG: Final dependency graph: {:?}", self.dependency_graph).into(),
-        );
-    }
-
-    pub fn ingest_record(
-        &mut self,
-        table: &str,
-        op: &str,
-        id: &str,
-        record: Value,
-        hash: &str,
-        is_optimistic: bool,
-    ) -> Vec<ViewUpdate> {
-        self.ingest_batch_spooky(
-            vec![(
-                SmolStr::from(table),
-                SmolStr::from(op),
-                SmolStr::from(id),
-                SpookyValue::from(record),
-                hash.to_string(),
-            )],
-            is_optimistic,
-        )
     }
 
     pub fn ingest_batch(
         &mut self,
-        batch: Vec<(String, String, String, Value, String)>,
-        is_optimistic: bool,
-    ) -> Vec<ViewUpdate> {
-        // Convert to SpookyValue
-        let batch_spooky: Vec<(SmolStr, SmolStr, SmolStr, SpookyValue, String)> = batch
-            .into_iter()
-            .map(|(t, o, i, r, h)| {
-                (
-                    SmolStr::from(t),
-                    SmolStr::from(o),
-                    SmolStr::from(i),
-                    SpookyValue::from(r),
-                    h,
-                )
-            })
-            .collect();
-
-        self.ingest_batch_spooky(batch_spooky, is_optimistic)
-    }
-
-    pub fn ingest_batch_spooky(
-        &mut self,
         batch: Vec<(SmolStr, SmolStr, SmolStr, SpookyValue, String)>,
-        is_optimistic: bool,
     ) -> Vec<ViewUpdate> {
         let mut table_deltas: FastMap<String, ZSet> = FastMap::default();
 
@@ -219,29 +152,14 @@ impl Circuit {
 
         // Identify ALL affected views from ALL changed tables
         let mut impacted_view_indices: Vec<usize> = Vec::new();
-        debug_log!("DEBUG: Changed tables: {:?}", changed_tables);
         for table in changed_tables {
             if let Some(indices) = self.dependency_graph.get(&table) {
-                #[cfg(target_arch = "wasm32")]
-                web_sys::console::log_1(
-                    &format!("DEBUG: Table {} impacts views: {:?}", table, indices).into(),
-                );
+
                 impacted_view_indices.extend(indices.iter().copied());
             } else {
-                #[cfg(target_arch = "wasm32")]
-                web_sys::console::log_1(
-                    &format!("DEBUG: Table {} changed, but no views depend on it", table).into(),
-                );
+
             }
         }
-        #[cfg(target_arch = "wasm32")]
-        web_sys::console::log_1(
-            &format!(
-                "DEBUG: Total impacted view indices (before dedup): {:?}",
-                impacted_view_indices
-            )
-            .into(),
-        );
 
         // Deduplicate View Indices (Sort + Dedup)
         // This ensures each view is processed EXACTLY ONCE, even if multiple input tables changed
@@ -265,7 +183,7 @@ impl Circuit {
                     // Check if this view needs update.
                     // impacted_view_indices is sorted, so binary_search is efficient.
                     if impacted_view_indices.binary_search(&i).is_ok() {
-                        view.process_ingest(deltas_ref, db_ref, is_optimistic)
+                        view.process_ingest(deltas_ref, db_ref)
                     } else {
                         None
                     }
@@ -279,7 +197,7 @@ impl Circuit {
             for i in impacted_view_indices {
                 if i < self.views.len() {
                     let view: &mut View = &mut self.views[i];
-                    if let Some(update) = view.process_ingest(deltas_ref, db_ref, is_optimistic) {
+                    if let Some(update) = view.process_ingest(deltas_ref, db_ref) {
                         ups.push(update);
                     }
                 }
@@ -308,7 +226,7 @@ impl Circuit {
         // Trigger initial full scan by passing None to process_ingest
         // Use is_optimistic=true for initial registration
         let empty_deltas: FastMap<String, ZSet> = FastMap::default();
-        let initial_update = view.process_ingest(&empty_deltas, &self.db, true);
+        let initial_update = view.process_ingest(&empty_deltas, &self.db);
 
         let view_idx = self.views.len();
         self.views.push(view);
@@ -331,7 +249,7 @@ impl Circuit {
         self.rebuild_dependency_graph();
     }
 
-    pub fn step(&mut self, table: String, delta: ZSet, is_optimistic: bool) -> Vec<ViewUpdate> {
+    pub fn step(&mut self, table: String, delta: ZSet) -> Vec<ViewUpdate> {
         {
             let tb = self.db.ensure_table(&table);
             tb.apply_delta(&delta);
@@ -350,7 +268,7 @@ impl Circuit {
             for i in indices {
                 if i < self.views.len() {
                     if let Some(update) =
-                        self.views[i].process(&table, &delta, &self.db, is_optimistic)
+                        self.views[i].process(&table, &delta, &self.db)
                     {
                         updates.push(update);
                     }
