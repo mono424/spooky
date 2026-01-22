@@ -12,9 +12,9 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use ssp::{
-    Circuit, ViewUpdate,
-    engine::update::{StreamingUpdate, DeltaEvent, ViewResultFormat},
-    engine::metadata::{BatchMeta, RecordMeta, VersionStrategy},
+    engine::circuit::{Circuit, IngestBatch, BatchEntry, Operation},
+    engine::update::{StreamingUpdate, DeltaEvent, ViewResultFormat, ViewUpdate},
+    engine::metadata::VersionStrategy,
 };
 use surrealdb::engine::remote::ws::{Client, Ws};
 use surrealdb::opt::auth::Root;
@@ -219,34 +219,24 @@ async fn ingest_handler(
         let _span = ssp::logging::get_module_span().entered();
         let mut circuit = state.processor.lock().unwrap();
 
-        if let Some(version) = payload.version {
-            // Explicit Versioning
-            let mut meta = BatchMeta::new()
-                .with_strategy(VersionStrategy::Explicit);
-            
-            meta.add_record(payload.id.clone(), RecordMeta::new().with_version(version));
+        let op = Operation::from_str(&payload.op).unwrap_or(Operation::Create);
 
-            circuit.ingest_with_meta(
-                &payload.table,
-                &payload.op,
-                &payload.id,
-                clean_record.into(),
-                &hash,
-                Some(&meta),
-                true // still set is_optimistic=true to allow increment if fallback happens, 
-                     // but explicit strategy takes precedence for this record
-            )
-        } else {
-             // Default / Optimistic
-            circuit.ingest_record(
-                &payload.table,
-                &payload.op,
-                &payload.id,
-                clean_record.into(),
-                &hash,
-                true,
-            )
+        let mut entry = BatchEntry::new(
+             &payload.table,
+             op,
+             &payload.id,
+             clean_record.into(),
+             hash,
+        );
+
+        let mut batch = IngestBatch::new();
+
+        if let Some(version) = payload.version {
+             entry = entry.with_version(version);
+             batch = batch.with_strategy(VersionStrategy::Explicit);
         }
+
+        circuit.ingest(batch.entry(entry), true)
     };
     state.saver.trigger_save();
 
