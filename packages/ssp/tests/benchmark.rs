@@ -2,8 +2,8 @@ mod common;
 use common::*;
 use rayon::prelude::*;
 use serde_json::json;
-use ssp::engine::update::ViewResultFormat;
-use ssp::engine::view::{JoinCondition, Operator, Path, Predicate, QueryPlan};
+use spooky_stream_processor::engine::update::ViewResultFormat;
+use spooky_stream_processor::engine::view::{JoinCondition, Operator, Path, Predicate, QueryPlan};
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
 use std::time::{Duration, Instant};
@@ -151,7 +151,7 @@ fn benchmark_latency_mixed_stream() {
             let batch_len = batch_data.len();
 
             let start = Instant::now();
-            circuit.ingest_batch_outdated(batch_data);
+            circuit.ingest_batch(batch_data, true);
             let duration = start.elapsed();
 
             total_ingest_duration += duration;
@@ -217,7 +217,7 @@ fn run_benchmark(view_count: usize, format: ViewResultFormat) -> BenchmarkResult
                 )
             })
             .collect();
-        circuit.ingest_batch_outdated(batch_data);
+        circuit.ingest_batch(batch_data, true);
     }
     let total_duration = start.elapsed();
 

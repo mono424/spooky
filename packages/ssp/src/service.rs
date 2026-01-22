@@ -3,7 +3,6 @@ use crate::engine::view::{Operator, SpookyValue};
 use crate::{converter, sanitizer, MaterializedViewUpdate, QueryPlan};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
-use tracing::instrument;
 
 fn hash_value_recursive_blake3(v: &Value, hasher: &mut blake3::Hasher) {
     match v {
@@ -53,7 +52,6 @@ pub mod ingest {
     use super::*;
 
     /// Prepares a record for ingestion by normalizing and hashing it.
-    #[instrument(skip(record))]
     pub fn prepare(record: Value) -> (SpookyValue, String) {
         let clean_record = sanitizer::normalize_record(record);
         let mut hasher = blake3::Hasher::new();
@@ -63,7 +61,6 @@ pub mod ingest {
     }
 
     /// Prepares a batch of records, optionally in parallel.
-    #[instrument(skip(records))]
     pub fn prepare_batch(records: Vec<Value>) -> Vec<(SpookyValue, String)> {
         #[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
         {
@@ -89,19 +86,15 @@ pub mod ingest {
 pub mod view {
     use super::*;
 
-    use crate::engine::metadata::IngestStrategy;
-
     /// Parsed registration request data
     pub struct RegistrationData {
         pub plan: QueryPlan,
         pub safe_params: Option<Value>,
         pub metadata: Value,
         pub format: Option<ViewResultFormat>,
-        pub strategy: Option<IngestStrategy>,
     }
 
     /// Prepares a view registration request.
-    #[instrument(skip(config))]
     pub fn prepare_registration(config: Value) -> Result<RegistrationData> {
         let id = config
             .get("id")
@@ -150,19 +143,6 @@ pub mod view {
                 _ => None,
             });
 
-        // Parse optional strategy
-        let strategy = config
-            .get("strategy")
-            .or_else(|| config.get("versionStrategy"))
-            .and_then(|v| v.as_str())
-            .and_then(|s| match s.to_lowercase().as_str() {
-                "optimistic" => Some(IngestStrategy::Optimistic),
-                "explicit" => Some(IngestStrategy::Explicit),
-                "hashbased" | "hash_based" => Some(IngestStrategy::HashBased),
-                "none" => Some(IngestStrategy::None),
-                _ => None,
-            });
-
         // Parse Query Plan
         // 1. Convert SURQL to generic Value
         let root_op_val = converter::convert_surql_to_dbsp(&surreal_ql)
@@ -199,11 +179,9 @@ pub mod view {
             safe_params,
             metadata,
             format,
-            strategy,
         })
     }
 
-    #[instrument]
     pub fn default_result(id: &str) -> MaterializedViewUpdate {
         let empty_hash = blake3::hash(&[]).to_hex().to_string();
         MaterializedViewUpdate {

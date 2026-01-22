@@ -1,4 +1,4 @@
-use ssp::converter::convert_surql_to_dbsp;
+use spooky_stream_processor::converter::convert_surql_to_dbsp;
 use serde_json::json;
 
 #[test]

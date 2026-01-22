@@ -30,7 +30,7 @@ fn test_comment_creation_updates_thread_view() {
         "lastActiveAt": "2026-01-16T00:00:00Z"
     });
 
-    let data = ssp::service::view::prepare_registration(config)
+    let data = spooky_stream_processor::service::view::prepare_registration(config)
         .expect("Registration failed");
 
     // Initial Register
@@ -57,6 +57,7 @@ fn test_comment_creation_updates_thread_view() {
         "CREATE",
         &comment_id,
         comment_record,
+        true,
     );
 
     println!("Updates received: {:?}", updates);

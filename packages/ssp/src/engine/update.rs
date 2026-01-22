@@ -22,19 +22,18 @@ pub enum ViewResultFormat {
 #[derive(Debug, Clone, Default)]
 pub struct ViewDelta {
     /// Records added to the view (weight > 0)
-    pub additions: Vec<(String, u64, Option<super::metadata::RecordMeta>)>, // (id, version, meta)
+    pub additions: Vec<(String, u64)>, // (id, version)
     /// Records removed from the view (weight < 0)
     pub removals: Vec<String>, // just ids
     /// Records updated in place (content changed, still in view)
-    pub updates: Vec<(String, u64, Option<super::metadata::RecordMeta>)>, // (id, new_version, meta)
+    pub updates: Vec<(String, u64)>, // (id, new_version)
 }
 
 /// Raw view result (format-agnostic data from View)
 #[derive(Debug, Clone)]
 pub struct RawViewResult {
     pub query_id: String,
-    // (id, version, metadata)
-    pub records: Vec<(String, u64, Option<super::metadata::RecordMeta>)>,
+    pub records: Vec<(String, u64)>, // (id, version) - full snapshot for Flat/Tree
     pub delta: Option<ViewDelta>,    // delta info for Streaming
 }
 
@@ -43,8 +42,7 @@ pub struct RawViewResult {
 pub struct MaterializedViewUpdate {
     pub query_id: String,
     pub result_hash: String,
-    // (id, version, metadata)
-    pub result_data: Vec<(String, u64, Option<super::metadata::RecordMeta>)>,
+    pub result_data: Vec<(String, u64)>, // [(record-id, version), ...]
 }
 
 /// Delta event for streaming format
@@ -62,8 +60,6 @@ pub struct DeltaRecord {
     pub id: String,
     pub event: DeltaEvent,
     pub version: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<super::metadata::RecordMeta>,
 }
 
 /// Streaming update output (minimal payload)
@@ -85,16 +81,13 @@ pub enum ViewUpdate {
 /// Compute hash from flat array of [record-id, version] pairs.
 /// IMPORTANT: Sorts by record ID before hashing to ensure deterministic output
 /// regardless of insertion order.
-/// Compute hash from flat array of [record-id, version, meta] pairs.
-/// IMPORTANT: Sorts by record ID before hashing to ensure deterministic output
-/// regardless of insertion order.
-pub fn compute_flat_hash(data: &[(String, u64, Option<super::metadata::RecordMeta>)]) -> String {
+pub fn compute_flat_hash(data: &[(String, u64)]) -> String {
     // Sort by record ID to ensure deterministic hash
     let mut sorted_data: Vec<_> = data.to_vec();
-    sorted_data.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    sorted_data.sort_by(|a, b| a.0.cmp(&b.0));
 
     let mut hasher = blake3::Hasher::new();
-    for (id, version, _) in sorted_data {
+    for (id, version) in sorted_data {
         hasher.update(id.as_bytes());
         hasher.update(&version.to_le_bytes());
         hasher.update(&[0]); // Delimiter
@@ -128,12 +121,11 @@ pub fn build_update(raw: RawViewResult, format: ViewResultFormat) -> ViewUpdate 
 
             if let Some(delta) = raw.delta {
                 // Map additions → Created
-                for (id, version, metadata) in delta.additions {
+                for (id, version) in delta.additions {
                     delta_records.push(DeltaRecord {
                         id,
                         event: DeltaEvent::Created,
                         version,
-                        metadata,
                     });
                 }
 
@@ -143,27 +135,24 @@ pub fn build_update(raw: RawViewResult, format: ViewResultFormat) -> ViewUpdate 
                         id,
                         event: DeltaEvent::Deleted,
                         version: 0,
-                        metadata: None,
                     });
                 }
 
                 // Map updates → Updated
-                for (id, version, metadata) in delta.updates {
+                for (id, version) in delta.updates {
                     delta_records.push(DeltaRecord {
                         id,
                         event: DeltaEvent::Updated,
                         version,
-                        metadata,
                     });
                 }
             } else {
                 // Fallback: treat all as Created (first run case)
-                for (id, version, metadata) in raw.records {
+                for (id, version) in raw.records {
                     delta_records.push(DeltaRecord {
                         id,
                         event: DeltaEvent::Created,
                         version,
-                        metadata,
                     });
                 }
             }
@@ -179,11 +168,11 @@ pub fn build_update(raw: RawViewResult, format: ViewResultFormat) -> ViewUpdate 
 /// Build streaming delta update from ZSet delta
 pub fn build_streaming_delta(
     query_id: String,
-    delta: &[(String, i64, u64, Option<super::metadata::RecordMeta>)], // (id, weight, version, meta)
+    delta: &[(String, i64, u64)], // (id, weight, version)
 ) -> StreamingUpdate {
     let records = delta
         .iter()
-        .map(|(id, weight, version, metadata)| DeltaRecord {
+        .map(|(id, weight, version)| DeltaRecord {
             id: id.clone(),
             event: if *weight > 0 {
                 DeltaEvent::Created
@@ -191,7 +180,6 @@ pub fn build_streaming_delta(
                 DeltaEvent::Deleted
             },
             version: *version,
-            metadata: metadata.clone(),
         })
         .collect();
 

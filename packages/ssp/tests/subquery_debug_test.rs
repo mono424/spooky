@@ -3,7 +3,7 @@ mod common;
 
 use common::*;
 use serde_json::json;
-use ssp::engine::view::{Operator, Path, Predicate, Projection, QueryPlan};
+use spooky_stream_processor::engine::view::{Operator, Path, Predicate, Projection, QueryPlan};
 
 /// Debug test for subquery projection children population.
 /// Tests: SELECT *, (SELECT * FROM author WHERE id = $parent.author)[0] as author_data FROM thread
@@ -13,10 +13,10 @@ fn test_subquery_projection_children() {
 
     // 1. Setup: Create author and thread
     let (author_id, author_record) = make_author_record("Alice");
-    ingest(&mut circuit, "author", "CREATE", &author_id, author_record);
+    ingest(&mut circuit, "author", "CREATE", &author_id, author_record, true);
 
     let (thread_id, thread_record) = make_thread_record("Hello World", &author_id);
-    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record);
+    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record, true);
 
     // 2. Build query plan with subquery projection
     // This mimics: SELECT *, (SELECT * FROM author WHERE id = $parent.author)[0] as author_data FROM thread
@@ -63,7 +63,7 @@ fn test_subquery_projection_children() {
     println!("=== View Update ===");
     println!("query_id: {}", view_update.query_id());
     println!("result_data: {:?}", view_update.result_data());
-    println!("result_hash: {}", match &view_update { ssp::ViewUpdate::Flat(f) | ssp::ViewUpdate::Tree(f) => &f.result_hash, _ => panic!("Expected Flat update") });
+    println!("result_hash: {}", match &view_update { spooky_stream_processor::ViewUpdate::Flat(f) | spooky_stream_processor::ViewUpdate::Tree(f) => &f.result_hash, _ => panic!("Expected Flat update") });
 
     // 4. Verify result contains BOTH the thread AND the author (from subquery)
     assert!(!view_update.result_data().is_empty(), "Expected results");

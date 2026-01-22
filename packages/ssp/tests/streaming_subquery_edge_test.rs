@@ -204,7 +204,7 @@ fn has_event(update: &ViewUpdate, id: &str, expected_event: &DeltaEvent) -> bool
 /// Get all IDs in version_map for a specific view
 fn get_version_map_ids(circuit: &ssp::Circuit, view_id: &str) -> Vec<String> {
     if let Some(view) = circuit.views.iter().find(|v| v.plan.id == view_id) {
-        view.metadata.versions.keys().map(|k: &smol_str::SmolStr| k.to_string()).collect()
+        view.version_map.keys().map(|k: &smol_str::SmolStr| k.to_string()).collect()
     } else {
         vec![]
     }
@@ -222,11 +222,11 @@ fn test_thread_update_preserves_user_edges() {
 
     // 1. Create user
     let (user_id, user_record) = make_user_record("Alice");
-    ingest(&mut circuit, "user", "CREATE", &user_id, user_record);
+    ingest(&mut circuit, "user", "CREATE", &user_id, user_record, true);
 
     // 2. Create thread authored by user
     let (thread_id, thread_record) = make_thread_record_with_author("First Thread", &user_id);
-    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record);
+    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record, true);
 
     // 3. Register streaming view: thread list with author subquery
     let plan = build_thread_list_with_author_plan("thread_list_with_author");
@@ -261,7 +261,7 @@ fn test_thread_update_preserves_user_edges() {
         "active": true,
         "type": "thread"
     });
-    let updates = ingest(&mut circuit, "thread", "UPDATE", &thread_id, updated_thread_record);
+    let updates = ingest(&mut circuit, "thread", "UPDATE", &thread_id, updated_thread_record, true);
 
     // 7. CRITICAL: Verify user is NOT deleted from version_map
     let version_ids_after = get_version_map_ids(&circuit, "thread_list_with_author");
@@ -307,15 +307,15 @@ fn test_comment_deletion_streaming() {
 
     // 1. Create user
     let (user_id, user_record) = make_user_record("Bob");
-    ingest(&mut circuit, "user", "CREATE", &user_id, user_record);
+    ingest(&mut circuit, "user", "CREATE", &user_id, user_record, true);
 
     // 2. Create thread
     let (thread_id, thread_record) = make_thread_record_with_author("Thread with Comments", &user_id);
-    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record);
+    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record, true);
 
     // 3. Create first comment
     let (comment1_id, comment1_record) = make_comment_for_thread("First comment", &thread_id, &user_id);
-    ingest(&mut circuit, "comment", "CREATE", &comment1_id, comment1_record);
+    ingest(&mut circuit, "comment", "CREATE", &comment1_id, comment1_record, true);
 
     // 4. Register streaming view: thread detail with comments
     let plan = build_thread_detail_with_comments_plan("thread_detail");
@@ -336,7 +336,7 @@ fn test_comment_deletion_streaming() {
 
     // 6. Create second comment
     let (comment2_id, comment2_record) = make_comment_for_thread("Second comment", &thread_id, &user_id);
-    let create_updates = ingest(&mut circuit, "comment", "CREATE", &comment2_id, comment2_record);
+    let create_updates = ingest(&mut circuit, "comment", "CREATE", &comment2_id, comment2_record, true);
     
     // Verify comment2 was added
     for update in &create_updates {
@@ -352,7 +352,7 @@ fn test_comment_deletion_streaming() {
     assert!(version_ids_after_create.contains(&comment2_id), "Should have second comment");
 
     // 7. Delete first comment
-    let delete_updates = ingest(&mut circuit, "comment", "DELETE", &comment1_id, json!({}));
+    let delete_updates = ingest(&mut circuit, "comment", "DELETE", &comment1_id, json!({}), true);
 
     // 8. Verify comment1 has Deleted event
     let mut found_delete = false;
@@ -404,11 +404,11 @@ fn test_full_scenario_edge_tracking() {
 
     // 1. Create user
     let (user_id, user_record) = make_user_record("Charlie");
-    ingest(&mut circuit, "user", "CREATE", &user_id, user_record);
+    ingest(&mut circuit, "user", "CREATE", &user_id, user_record, true);
 
     // 2. Create thread
     let (thread_id, thread_record) = make_thread_record_with_author("Original Title", &user_id);
-    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record);
+    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record, true);
 
     // 3. Register streaming views
     let plan1 = build_thread_list_with_author_plan("v_thread_list");
@@ -419,7 +419,7 @@ fn test_full_scenario_edge_tracking() {
 
     // 4. Create comment
     let (comment_id, comment_record) = make_comment_for_thread("Test comment", &thread_id, &user_id);
-    ingest(&mut circuit, "comment", "CREATE", &comment_id, comment_record);
+    ingest(&mut circuit, "comment", "CREATE", &comment_id, comment_record, true);
 
     // Verify state after comment creation
     let list_ids = get_version_map_ids(&circuit, "v_thread_list");
@@ -443,7 +443,7 @@ fn test_full_scenario_edge_tracking() {
         "active": true,
         "type": "thread"
     });
-    ingest(&mut circuit, "thread", "UPDATE", &thread_id, updated_thread);
+    ingest(&mut circuit, "thread", "UPDATE", &thread_id, updated_thread, true);
 
     // Verify state after thread update - NO edges should be lost!
     let list_ids_after_update = get_version_map_ids(&circuit, "v_thread_list");
@@ -469,7 +469,7 @@ fn test_full_scenario_edge_tracking() {
     );
 
     // 6. Delete comment
-    ingest(&mut circuit, "comment", "DELETE", &comment_id, json!({}));
+    ingest(&mut circuit, "comment", "DELETE", &comment_id, json!({}), true);
 
     // Verify state after comment deletion
     let list_ids_after_delete = get_version_map_ids(&circuit, "v_thread_list");
@@ -503,10 +503,10 @@ fn test_subquery_ids_not_marked_as_removals_on_main_table_update() {
 
     // Setup: user + thread
     let (user_id, user_record) = make_user_record("Diana");
-    ingest(&mut circuit, "user", "CREATE", &user_id, user_record);
+    ingest(&mut circuit, "user", "CREATE", &user_id, user_record, true);
 
     let (thread_id, thread_record) = make_thread_record_with_author("Test Thread", &user_id);
-    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record);
+    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record, true);
 
     // Register view
     let plan = build_thread_list_with_author_plan("subquery_test");
@@ -530,7 +530,7 @@ fn test_subquery_ids_not_marked_as_removals_on_main_table_update() {
             "active": true,
             "type": "thread"
         });
-        let updates = ingest(&mut circuit, "thread", "UPDATE", &thread_id, updated);
+        let updates = ingest(&mut circuit, "thread", "UPDATE", &thread_id, updated, true);
 
         // After EACH update, verify user is still present
         let ids = get_version_map_ids(&circuit, "subquery_test");

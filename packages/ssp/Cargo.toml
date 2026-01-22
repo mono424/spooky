@@ -22,7 +22,6 @@ nom = "7.1.3"
 rustc-hash = "2.1.1"
 smol_str = { version = "0.3.1", features = ["serde"] }
 rayon = { version = "1.8", optional = true }
-tracing = "0.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 mimalloc = "0.1.48"

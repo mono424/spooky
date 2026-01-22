@@ -3,7 +3,7 @@ mod common;
 
 use common::*;
 use serde_json::json;
-use ssp::engine::view::{JoinCondition, Operator, Path, Predicate, QueryPlan};
+use spooky_stream_processor::engine::view::{JoinCondition, Operator, Path, Predicate, QueryPlan};
 
 #[test]
 fn test_complex_incantation_flow() {
@@ -78,7 +78,7 @@ fn test_complex_incantation_flow() {
     }
 
     // 4. Verify View State Helper
-    let check_view = |circuit: &ssp::Circuit, expect_present: bool| {
+    let check_view = |circuit: &spooky_stream_processor::Circuit, expect_present: bool| {
         let view = circuit
             .views
             .iter()
@@ -109,6 +109,7 @@ fn test_complex_incantation_flow() {
         "DELETE",
         &magic_comment_id,
         json!({}),
+        true,
     );
     check_view(&circuit, true);
 
@@ -119,6 +120,7 @@ fn test_complex_incantation_flow() {
         "DELETE",
         &magic_comment_2,
         json!({}),
+        true,
     );
     check_view(&circuit, false);
 
@@ -127,6 +129,6 @@ fn test_complex_incantation_flow() {
     let _magic_comment_3 = create_comment(&mut circuit, "Magic", &thread_1, &author_alice);
     check_view(&circuit, true);
 
-    ingest(&mut circuit, "author", "DELETE", &author_alice, json!({}));
+    ingest(&mut circuit, "author", "DELETE", &author_alice, json!({}), true);
     check_view(&circuit, false);
 }
