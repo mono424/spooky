@@ -2,7 +2,7 @@ use super::view::{
     FastMap, QueryPlan, RowKey, SpookyValue, View, ViewUpdate, ZSet, Weight
 };
 use super::update::ViewResultFormat;
-use super::metadata::{BatchMeta, VersionStrategy, RecordMeta};
+use super::metadata::{BatchMeta, IngestStrategy, RecordMeta};
 // use rustc_hash::{FxHashMap, FxHasher}; // Unused in this file (used via FastMap)
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -99,7 +99,7 @@ impl BatchEntry {
 #[derive(Clone, Debug)]
 pub struct IngestBatch {
     entries: Vec<BatchEntry>,
-    default_strategy: Option<VersionStrategy>,
+    default_strategy: Option<IngestStrategy>,
 }
 
 impl IngestBatch {
@@ -114,7 +114,7 @@ impl IngestBatch {
     }
 
     #[inline]
-    pub fn with_strategy(mut self, strategy: VersionStrategy) -> Self {
+    pub fn with_strategy(mut self, strategy: IngestStrategy) -> Self {
         self.default_strategy = Some(strategy);
         self
     }
@@ -156,7 +156,7 @@ impl IngestBatch {
     }
 
     #[inline]
-    pub fn build(self) -> (Vec<BatchEntry>, Option<VersionStrategy>) {
+    pub fn build(self) -> (Vec<BatchEntry>, Option<IngestStrategy>) {
         (self.entries, self.default_strategy)
     }
 
@@ -348,13 +348,16 @@ impl Circuit {
         }
         
         // 3. Änderungen an die Views propagieren
-        self.propagate_deltas(table_deltas, batch_meta.as_ref())
+        let updates = self.propagate_deltas(table_deltas, batch_meta.as_ref());
+        
+        // 4. Enrich updates with metadata
+        self.enrich_updates_with_meta(updates, batch_meta.as_ref())
     }
 
 
     //just for now public because of deprecated methods
     #[instrument(target = "ssp_module", level = "debug", skip(self, entries))]
-    pub fn build_batch_meta(&self, entries: &[BatchEntry], default_strategy: Option<VersionStrategy>) -> Option<BatchMeta> {
+    pub fn build_batch_meta(&self, entries: &[BatchEntry], default_strategy: Option<IngestStrategy>) -> Option<BatchMeta> {
         let has_any_meta = entries.iter().any(|e| e.meta.is_some()) || default_strategy.is_some();
         if !has_any_meta {
             return None;
@@ -476,6 +479,48 @@ impl Circuit {
         }
     }
 
+    /// Helper to enrich ViewUpdates with metadata from the batch
+    fn enrich_updates_with_meta(
+        &self,
+        updates: Vec<ViewUpdate>,
+        batch_meta: Option<&BatchMeta>
+    ) -> Vec<ViewUpdate> {
+        // If no batch meta, nothing to enrich
+        let meta = match batch_meta {
+            Some(m) if !m.records.is_empty() => m,
+            _ => return updates,
+        };
+
+        updates.into_iter().map(|mut update| {
+            match &mut update {
+                ViewUpdate::Streaming(streaming) => {
+                    for record in &mut streaming.records {
+                        // Only enrich if metadata is missing (it's initialized to None in View)
+                        if record.metadata.is_none() {
+                            if let Some(record_meta) = meta.records.get(record.id.as_str()) {
+                                record.metadata = Some(record_meta.clone());
+                            }
+                        }
+                    }
+                },
+                ViewUpdate::Flat(mat) | ViewUpdate::Tree(mat) => {
+                    for (id, _, metadata) in &mut mat.result_data {
+                        if metadata.is_none() {
+                            if let Some(record_meta) = meta.records.get(id.as_str()) {
+                                *metadata = Some(record_meta.clone());
+                            }
+                        }
+                    }
+                    // Recompute hash because metadata changed?
+                    // The hash function now includes metadata.
+                    // But we modified the vector in place. The hash in struct is stale.
+                    mat.result_hash = super::update::compute_flat_hash(&mat.result_data);
+                }
+            }
+            update
+        }).collect()
+    }
+
     // Must be called after Deserialization to rebuild the Cache!
     // opti: q: dont remove cache for performance so i dont have to rebuild it?
     // it just have to be rebuild when i Deserializat circuit JSON -> Struct
@@ -512,7 +557,7 @@ impl Circuit {
         plan: QueryPlan,
         params: Option<Value>,
         format: Option<ViewResultFormat>,
-        strategy: Option<VersionStrategy>,
+        strategy: Option<IngestStrategy>,
     ) -> Option<ViewUpdate> {
         // Remove existing view if present
         {
@@ -531,8 +576,8 @@ impl Circuit {
                 params, 
                 format.clone(), 
                 strategy.unwrap_or_else(|| match format {
-                    Some(ViewResultFormat::Tree) => VersionStrategy::HashBased,
-                    _ => VersionStrategy::Optimistic,
+                    Some(ViewResultFormat::Tree) => IngestStrategy::HashBased,
+                    _ => IngestStrategy::Optimistic,
                 })
             )
         };

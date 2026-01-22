@@ -11,7 +11,7 @@ use std::cmp::Ordering;
 
 use tracing::{instrument, debug};
 
-use super::metadata::{MetadataProcessor, ViewMetadataState, VersionStrategy, BatchMeta};
+use super::metadata::{MetadataProcessor, ViewMetadataState, IngestStrategy, BatchMeta};
 use super::update::{
     build_update, RawViewResult, ViewDelta,
 };
@@ -123,8 +123,8 @@ impl View {
              // For Tree/Flat, we often rely on hash changes, but for simplicity default to Optimistic
              // or HashBased if we want purely content-based versioning.
              // The plan suggests HashBased for Tree.
-            ViewResultFormat::Tree => VersionStrategy::HashBased,
-            _ => VersionStrategy::Optimistic,
+            ViewResultFormat::Tree => IngestStrategy::HashBased,
+            _ => IngestStrategy::Optimistic,
         };
 
         Self {
@@ -143,7 +143,7 @@ impl View {
         plan: QueryPlan,
         params: Option<Value>,
         format: Option<ViewResultFormat>,
-        strategy: VersionStrategy,
+        strategy: IngestStrategy,
     ) -> Self {
         Self {
             plan,
@@ -422,7 +422,7 @@ impl View {
                      self.subquery_cache.entry(SmolStr::from(&id)).or_insert(1);
                  }
                  let version = self.compute_and_store_version(&id, processor, ctx, true);
-                 delta_out.additions.push((id, version));
+                 delta_out.additions.push((id, version, None));
              }
          } else if ctx.has_subquery_changes {
              // Subquery changes logic (simplified from original)
@@ -447,7 +447,7 @@ impl View {
                  #[allow(deprecated)]
                  if !self.metadata.contains(id.as_str()) {
                      let version = self.compute_and_store_version(id, processor, ctx, true);
-                     delta_out.additions.push((id.clone(), version));
+                     delta_out.additions.push((id.clone(), version, None));
                  }
              }
              
@@ -464,7 +464,7 @@ impl View {
              // Normal streaming
             for id in &changes.additions {
                 let version = self.compute_and_store_version(id, processor, ctx, true);
-                delta_out.additions.push((id.to_string(), version));
+                delta_out.additions.push((id.to_string(), version, None));
                 
                 // Recursively check for subquery records associated with this new record
                 if let Some(parent_row) = self.get_row_value(id, db) {
@@ -478,7 +478,7 @@ impl View {
                         #[allow(deprecated)]
                         if sub_id != id.as_str() && !self.metadata.contains(&sub_id) {
                             let v = self.compute_and_store_version(&sub_id, processor, ctx, true);
-                            delta_out.additions.push((sub_id, v));
+                            delta_out.additions.push((sub_id, v, None));
                         }
                     }
                 }
@@ -489,7 +489,7 @@ impl View {
              }
              for id in &changes.updates {
                  let version = self.compute_and_store_version(id, processor, ctx, false);
-                 delta_out.updates.push((id.to_string(), version));
+                 delta_out.updates.push((id.to_string(), version, None));
              }
          }
          
@@ -531,7 +531,7 @@ impl View {
              // If it's new (addition), we set.
              
              let version = self.compute_and_store_version(&id, processor, ctx, is_new);
-             raw.records.push((id, version));
+             raw.records.push((id, version, None));
          }
     }
 
@@ -544,21 +544,12 @@ impl View {
         is_new: bool,
     ) -> u64 {
         let current = self.metadata.get_version(id);
-        
-        // Check for explicit version in batch metadata
-        if let Some(batch_meta) = ctx.batch_meta {
-            if let Some(record_meta) = batch_meta.get(id) {
-                if let Some(explicit_version) = record_meta.version {
-                    self.metadata.set_version(id, explicit_version);
-                    return explicit_version;
-                }
-            }
-        }
-        
+        let meta = ctx.batch_meta.and_then(|bm| bm.get(id));
+
         let result = if is_new {
-            processor.compute_new_version(id, current, None)
+            processor.compute_new_version(id, current, meta)
         } else {
-            processor.compute_update_version(id, current, None)
+            processor.compute_update_version(id, current, meta)
         };
         
         if result.changed || is_new {

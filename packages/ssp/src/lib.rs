@@ -42,7 +42,7 @@ pub trait StreamProcessor: Send + Sync {
         plan: QueryPlan,
         params: Option<Value>,
         format: Option<ViewResultFormat>,
-        strategy: Option<crate::engine::metadata::VersionStrategy>,
+        strategy: Option<crate::engine::metadata::IngestStrategy>,
     ) -> Option<ViewUpdate>;
 
     fn unregister_view(&mut self, id: &str);

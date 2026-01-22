@@ -89,7 +89,7 @@ pub mod ingest {
 pub mod view {
     use super::*;
 
-    use crate::engine::metadata::VersionStrategy;
+    use crate::engine::metadata::IngestStrategy;
 
     /// Parsed registration request data
     pub struct RegistrationData {
@@ -97,7 +97,7 @@ pub mod view {
         pub safe_params: Option<Value>,
         pub metadata: Value,
         pub format: Option<ViewResultFormat>,
-        pub strategy: Option<VersionStrategy>,
+        pub strategy: Option<IngestStrategy>,
     }
 
     /// Prepares a view registration request.
@@ -156,10 +156,10 @@ pub mod view {
             .or_else(|| config.get("versionStrategy"))
             .and_then(|v| v.as_str())
             .and_then(|s| match s.to_lowercase().as_str() {
-                "optimistic" => Some(VersionStrategy::Optimistic),
-                "explicit" => Some(VersionStrategy::Explicit),
-                "hashbased" | "hash_based" => Some(VersionStrategy::HashBased),
-                "none" => Some(VersionStrategy::None),
+                "optimistic" => Some(IngestStrategy::Optimistic),
+                "explicit" => Some(IngestStrategy::Explicit),
+                "hashbased" | "hash_based" => Some(IngestStrategy::HashBased),
+                "none" => Some(IngestStrategy::None),
                 _ => None,
             });
 

@@ -1,4 +1,4 @@
-use ssp::{Circuit, engine::{QueryPlan, Operator, update::ViewResultFormat, metadata::VersionStrategy}};
+use ssp::{Circuit, engine::{QueryPlan, Operator, update::ViewResultFormat, metadata::IngestStrategy}};
 
 fn create_simple_plan(id: &str) -> QueryPlan {
     QueryPlan {
@@ -27,7 +27,7 @@ fn test_register_view_with_strategy() {
         plan, 
         None, 
         Some(ViewResultFormat::Flat),
-        Some(VersionStrategy::Explicit)
+        Some(IngestStrategy::Explicit)
     );
     assert!(true);
 }

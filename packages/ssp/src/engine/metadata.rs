@@ -13,7 +13,7 @@ pub type VersionMap = FastMap<SmolStr, u64>;
 /// Strategy for computing record versions
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum VersionStrategy {
+pub enum IngestStrategy {
     /// Auto-increment versions on every update (default for Streaming)
     Optimistic,
     /// Use explicit versions provided during ingestion
@@ -26,12 +26,16 @@ pub enum VersionStrategy {
 }
 
 /// Metadata for a single record update
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct RecordMeta {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<u64>,
-    //fastHashmap?
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub custom: Option<SpookyValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strategy: Option<IngestStrategy>,
 }
 
 impl RecordMeta {
@@ -43,13 +47,23 @@ impl RecordMeta {
         self.version = Some(version);
         self
     }
+
+    pub fn with_strategy(mut self, strategy: IngestStrategy) -> Self {
+        self.strategy = Some(strategy);
+        self
+    }
+
+    pub fn with_custom(mut self, custom: SpookyValue) -> Self {
+        self.custom = Some(custom);
+        self
+    }
 }
 
 /// Metadata for a batch of updates
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BatchMeta {
     pub records: FastMap<SmolStr, RecordMeta>,
-    pub default_strategy: VersionStrategy,
+    pub default_strategy: IngestStrategy,
 }
 
 impl BatchMeta {
@@ -57,7 +71,7 @@ impl BatchMeta {
         Self::default()
     }
 
-    pub fn with_strategy(mut self, strategy: VersionStrategy) -> Self {
+    pub fn with_strategy(mut self, strategy: IngestStrategy) -> Self {
         self.default_strategy = strategy;
         self
     }
@@ -81,7 +95,7 @@ pub struct ViewMetadataState {
     pub versions: VersionMap,
     #[serde(default, skip_serializing_if = "FastMap::is_empty")]
     pub hashes: HashStore,
-    pub strategy: VersionStrategy,
+    pub strategy: IngestStrategy,
 }
 
 impl Default for ViewMetadataState {
@@ -89,14 +103,14 @@ impl Default for ViewMetadataState {
         Self {
             versions: VersionMap::default(),
             hashes: HashStore::default(),
-            strategy: VersionStrategy::default(),
+            strategy: IngestStrategy::default(),
         }
     }
 }
 
 impl ViewMetadataState {
     #[inline]
-    pub fn new(strategy: VersionStrategy) -> Self {
+    pub fn new(strategy: IngestStrategy) -> Self {
         Self {
             strategy,
             ..Default::default()
@@ -161,7 +175,7 @@ impl ViewMetadataState {
 /// Helper struct for computing versions
 #[derive(Debug)]
 pub struct MetadataProcessor {
-    pub strategy: VersionStrategy,
+    pub strategy: IngestStrategy,
 }
 
 pub struct VersionResult {
@@ -171,7 +185,7 @@ pub struct VersionResult {
 
 impl MetadataProcessor {
     #[inline]
-    pub fn new(strategy: VersionStrategy) -> Self {
+    pub fn new(strategy: IngestStrategy) -> Self {
         Self { strategy }
     }
 
@@ -182,24 +196,28 @@ impl MetadataProcessor {
         current_version: u64,
         meta: Option<&RecordMeta>,
     ) -> VersionResult {
-        match self.strategy {
-            VersionStrategy::Optimistic => VersionResult {
-                version: if current_version == 0 { 1 } else { current_version + 1 },
-                changed: true,
+        let strategy = meta.and_then(|m| m.strategy.as_ref()).unwrap_or(&self.strategy);
+        match strategy {
+            IngestStrategy::Optimistic => {
+                let base = meta.and_then(|m| m.version).unwrap_or(current_version);
+                VersionResult {
+                    version: if base == 0 { 1 } else { base + 1 },
+                    changed: true,
+                }
             },
-            VersionStrategy::Explicit => {
+            IngestStrategy::Explicit => {
                 let version = meta.and_then(|m| m.version).unwrap_or(current_version);
                 VersionResult {
                     version,
                     changed: version != current_version,
                 }
             },
-            VersionStrategy::HashBased => {
+            IngestStrategy::HashBased => {
                 // For hash-based, we usually need the hash to compute version
                 // but for new records, we might just default to 1 or explicit
                 VersionResult { version: 1, changed: true }
             },
-            VersionStrategy::None => VersionResult {
+            IngestStrategy::None => VersionResult {
                 version: 0,
                 changed: false,
             },
@@ -213,14 +231,16 @@ impl MetadataProcessor {
         current_version: u64,
         meta: Option<&RecordMeta>,
     ) -> VersionResult {
-        match self.strategy {
-            VersionStrategy::Optimistic => {
+        let strategy = meta.and_then(|m| m.strategy.as_ref()).unwrap_or(&self.strategy);
+        match strategy {
+            IngestStrategy::Optimistic => {
+                let base = meta.and_then(|m| m.version).unwrap_or(current_version);
                 VersionResult {
-                    version: current_version + 1,
+                    version: base + 1,
                     changed: true,
                 }
             },
-            VersionStrategy::Explicit => {
+            IngestStrategy::Explicit => {
                 if let Some(m) = meta {
                     if let Some(v) = m.version {
                          return VersionResult {
@@ -235,14 +255,14 @@ impl MetadataProcessor {
                     changed: false,
                 }
             },
-            VersionStrategy::HashBased => {
+            IngestStrategy::HashBased => {
                 // Logic usually handled by caller comparing hashes
                  VersionResult {
                     version: current_version + 1, // Placeholder
                     changed: true,
                 }
             },
-            VersionStrategy::None => VersionResult {
+            IngestStrategy::None => VersionResult {
                 version: 0,
                 changed: false,
             },

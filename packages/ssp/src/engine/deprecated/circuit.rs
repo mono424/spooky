@@ -1,5 +1,5 @@
 use crate::engine::circuit::{BatchEntry, Circuit, Operation};
-use crate::engine::metadata::{BatchMeta, VersionStrategy};
+use crate::engine::metadata::{BatchMeta, IngestStrategy};
 use crate::engine::types::{FastMap, SpookyValue, ZSet};
 use crate::engine::update::ViewUpdate;
 use serde_json::Value;
@@ -119,7 +119,7 @@ impl Circuit {
     fn ingest_entries_internal(
         &mut self,
         entries: Vec<BatchEntry>,
-        default_strategy: Option<VersionStrategy>,
+        default_strategy: Option<IngestStrategy>,
     ) -> Vec<ViewUpdate> {
         if entries.is_empty() {
             return Vec::new();
