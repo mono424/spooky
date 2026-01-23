@@ -130,11 +130,7 @@ impl View {
                 
                 let result_data = self.build_result_data();
                 
-                let view_delta = ViewDelta {
-                    additions: vec![],
-                    removals: vec![Self::strip_table_prefix_smol(&delta.key)],
-                    updates: vec![],
-                };
+                let view_delta = ViewDelta::removals_only(vec![Self::strip_table_prefix_smol(&delta.key)]);
                 
                 let raw_result = RawViewResult {
                     query_id: self.plan.id.clone(),
@@ -142,7 +138,7 @@ impl View {
                     delta: Some(view_delta),
                 };
                 
-                let update = build_update(raw_result, self.format.clone());
+                let update = build_update(raw_result, self.format);
                 
                 // Update last hash
                 let hash = match &update {
@@ -200,11 +196,7 @@ impl View {
         
         let result_data = self.build_result_data();
         
-        let view_delta = ViewDelta {
-            additions: vec![],
-            removals: vec![],
-            updates: vec![Self::strip_table_prefix_smol(key)],
-        };
+        let view_delta = ViewDelta::updates_only(vec![Self::strip_table_prefix_smol(key)]);
         
         let raw_result = RawViewResult {
             query_id: self.plan.id.clone(),
@@ -212,7 +204,7 @@ impl View {
             delta: Some(view_delta),
         };
         
-        let update = build_update(raw_result, self.format.clone());
+        let update = build_update(raw_result, self.format);
         
         // For streaming, always emit. For flat/tree, content changed but set didn't - still notify
         match &update {
@@ -309,7 +301,7 @@ impl View {
             delta: view_delta_struct,
         };
         
-        let update = build_update(raw_result, self.format.clone());
+        let update = build_update(raw_result, self.format);
         
         // Hash check
         let hash = match &update {
@@ -371,7 +363,7 @@ impl View {
             delta: view_delta_struct,
         };
         
-        let update = build_update(raw_result, self.format.clone());
+        let update = build_update(raw_result, self.format);
         
         // Hash check
         let hash = match &update {
@@ -453,7 +445,7 @@ impl View {
         };
 
         // Build update using the configured format
-        let update = build_update(raw_result, self.format.clone());
+        let update = build_update(raw_result, self.format);
 
         // Extract hash for comparison (depends on format)
         let hash = match &update {
