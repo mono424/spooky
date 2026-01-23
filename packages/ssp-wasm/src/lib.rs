@@ -1,6 +1,8 @@
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::Value; // Keep Value import
 use ssp::{Circuit, ViewUpdate};
+use ssp::engine::circuit::dto::BatchEntry;
+use ssp::engine::types::Operation;
 use wasm_bindgen::prelude::*;
 
 // When the `wee_alloc` feature is enabled, use `wee_alloc` as the global
@@ -49,46 +51,46 @@ impl SpookyProcessor {
     }
 
     /// Ingest a record into the stream processor
-    /// is_optimistic: true = local mutation (increment versions), false = remote sync (keep versions)
     pub fn ingest(
         &mut self,
         table: String,
         op: String,
         id: String,
         record: JsValue,
-        is_optimistic: bool,
+        _is_optimistic: bool, // Ignored in new API? Or todo? New API doesn't seem to take it in ingest_single
     ) -> Result<JsValue, JsValue> {
         let record: Value = serde_wasm_bindgen::from_value(record)
             .map_err(|e| JsValue::from_str(&format!("Failed to parse record: {}", e)))?;
 
         // internal preparation (hash calc)
-        let (clean_record, hash) = ssp::service::ingest::prepare(record);
+        let (clean_record, _hash) = ssp::service::ingest::prepare(record);
 
-        let updates =
-            self.circuit
-                .ingest_record(&table, &op, &id, clean_record.into(), &hash, is_optimistic);
+        let op_enum = Operation::from_str(&op).unwrap_or(Operation::Create);
+
+        let entry = BatchEntry::new(
+             &table,
+             op_enum,
+             &id,
+             clean_record.into(),
+        );
+
+        let updates = self.circuit.ingest_single(entry);
 
         // Use Serializer with serialize_maps_as_objects(true) to output plain JS objects
-        // instead of JS Map objects (which stringify as {} for HashMap)
         let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
         Ok(updates.serialize(&serializer)?)
     }
 
     /// Ingest multiple records into the stream processor in a single batch.
-    /// This is more efficient than calling ingest() multiple times as it:
-    /// 1. Processes all records together
-    /// 2. Emits a single set of view updates
-    /// is_optimistic: true = local mutation (increment versions), false = remote sync (keep versions)
     pub fn ingest_batch(
         &mut self,
         batch: JsValue, // Array of { table, op, id, record }
-        is_optimistic: bool,
+        _is_optimistic: bool,
     ) -> Result<JsValue, JsValue> {
         let batch_array: Vec<Value> = serde_wasm_bindgen::from_value(batch)
             .map_err(|e| JsValue::from_str(&format!("Failed to parse batch: {}", e)))?;
 
-        let mut prepared_batch: Vec<(String, String, String, Value, String)> =
-            Vec::with_capacity(batch_array.len());
+        let mut entries: Vec<BatchEntry> = Vec::with_capacity(batch_array.len());
 
         for item in batch_array {
             let table = item
@@ -96,7 +98,7 @@ impl SpookyProcessor {
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| JsValue::from_str("Missing 'table' field"))?
                 .to_string();
-            let op = item
+            let op_str = item
                 .get("op")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| JsValue::from_str("Missing 'op' field"))?
@@ -108,40 +110,31 @@ impl SpookyProcessor {
                 .to_string();
             let record = item.get("record").cloned().unwrap_or(Value::Null);
 
-            let (clean_record, hash) = ssp::service::ingest::prepare(record);
-            prepared_batch.push((table, op, id, clean_record.into(), hash));
+            let (clean_record, _hash) = ssp::service::ingest::prepare(record);
+            let op_enum = Operation::from_str(&op_str).unwrap_or(Operation::Create);
+
+            entries.push(BatchEntry::new(
+                 &table,
+                 op_enum,
+                 &id,
+                 clean_record.into(),
+            ));
         }
 
-        let updates = self.circuit.ingest_batch(prepared_batch, is_optimistic);
+        let updates = self.circuit.ingest_batch(entries);
 
         let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
         Ok(updates.serialize(&serializer)?)
     }
 
     /// Register a new materialized view
-    /// Config can be the QueryPlan object OR a configuration object with SQL
-    /// For JS convenience we accept a generic object and try to process it.
-    /// If it has 'id', 'surrealQL' etc it is treated as a config.
-    /// If it looks like a plan, we try to use it directly, but current requirement implies SQL usage.
-    /// Actually, to match `surrealsim`, we should accept a config object containing `surrealQL`.
     pub fn register_view(&mut self, config: JsValue) -> Result<JsValue, JsValue> {
         let config_val: Value = serde_wasm_bindgen::from_value(config)
             .map_err(|e| JsValue::from_str(&format!("Failed to parse config: {}", e)))?;
 
-        // We use the shared service logic to parse SQL and prepare params
-        // This handles "id", "surrealQL", "params" etc.
-        // Note: verify if `prepare_registration` is generic enough.
-        // It expects keys: id, surrealQL, clientId, ttl, lastActiveAt.
-        // If the JS caller only sends id + sql, it might fail validation.
-        // Let's check typical usage.
-        // If we want minimal usage (id + plan/sql), we might need loose parsing or constructing default metadata.
-        // But the user asked for "register view should work with sql string".
-        // Let's assume the user passes a config object with these fields, similar to the module.
-
         let data = ssp::service::view::prepare_registration(config_val)
             .map_err(|e| JsValue::from_str(&format!("Registration failed: {}", e)))?;
 
-        // Extract plan ID before moving the plan
         let plan_id = data.plan.id.clone();
         let initial_update = self
             .circuit
@@ -151,7 +144,6 @@ impl SpookyProcessor {
         let result = initial_update
             .unwrap_or_else(|| ViewUpdate::Flat(ssp::service::view::default_result(&plan_id)));
 
-        // Use Serializer with serialize_maps_as_objects(true) to output plain JS objects
         let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
         Ok(result.serialize(&serializer)?)
     }
@@ -160,7 +152,7 @@ impl SpookyProcessor {
     pub fn unregister_view(&mut self, id: String) {
         self.circuit.unregister_view(&id);
     }
-
+    /*
     /// Explicitly set the version of a record for a specific view
     pub fn set_record_version(
         &mut self,
@@ -180,6 +172,7 @@ impl SpookyProcessor {
             Ok(JsValue::NULL)
         }
     }
+    */
 
     /// Save the current circuit state as a JSON string
     pub fn save_state(&self) -> Result<String, JsValue> {
@@ -194,8 +187,9 @@ impl SpookyProcessor {
 
         // The circuit needs to rebuild dependency graph after deserialization
         self.circuit = circuit;
-        self.circuit.rebuild_dependency_graph();
+        self.circuit.rebuild_dependency_list();
 
         Ok(())
     }
 }
+
