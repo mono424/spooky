@@ -40,12 +40,23 @@ pub struct View {
     has_subqueries_cached: bool,
     #[serde(skip)]
     referenced_tables_cached: Vec<String>,
+    #[serde(skip)]
+    is_simple_scan: bool,
+    #[serde(skip)]
+    is_simple_filter: bool,
 }
 
 impl View {
     pub fn new(plan: QueryPlan, params: Option<Value>, format: Option<ViewResultFormat>) -> Self {
         let has_subqueries_cached = plan.root.has_subquery_projections();
         let referenced_tables_cached = plan.root.referenced_tables();
+
+        let is_simple_scan = matches!(plan.root, Operator::Scan { .. });
+        let is_simple_filter = if let Operator::Filter { input, .. } = &plan.root {
+             matches!(input.as_ref(), Operator::Scan { .. })
+        } else {
+            false
+        };
 
         Self {
             plan,
@@ -55,6 +66,8 @@ impl View {
             format: format.unwrap_or_default(),
             has_subqueries_cached,
             referenced_tables_cached,
+            is_simple_scan,
+            is_simple_filter,
         }
     }
 
@@ -84,6 +97,11 @@ impl View {
     /// Try fast single-record processing for simple views (Scan, Filter)
     /// Returns Some(result) if fast path was taken, None if fallback needed
     fn try_fast_single(&mut self, delta: &Delta, db: &Database) -> Option<Option<ViewUpdate>> {
+        // Optimization: Early check using pre-computed flags
+        if !self.is_simple_scan && !self.is_simple_filter {
+            return None;
+        }
+
         match &self.plan.root {
             Operator::Scan { table } => {
                 if table.as_str() != delta.table.as_str() {

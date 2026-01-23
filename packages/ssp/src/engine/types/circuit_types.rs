@@ -24,9 +24,28 @@ impl Operation {
     #[inline]
     pub fn weight(&self) -> i64 {
         match self {
-            Operation::Create | Operation::Update => 1,
+            Operation::Create => 1,
+            Operation::Update => 0,  // No membership change
             Operation::Delete => -1,
         }
+    }
+    
+    /// Does this operation change record content?
+    #[inline]
+    pub fn changes_content(&self) -> bool {
+        matches!(self, Operation::Create | Operation::Update)
+    }
+    
+    /// Does this operation change set membership?
+    #[inline]
+    pub fn changes_membership(&self) -> bool {
+        matches!(self, Operation::Create | Operation::Delete)
+    }
+    
+    /// Is this an addition (Create or Update)?
+    #[inline]
+    pub fn is_additive(&self) -> bool {
+        matches!(self, Operation::Create | Operation::Update)
     }
 }
 
@@ -51,11 +70,18 @@ pub struct Delta {
     pub table: SmolStr,
     pub key: SmolStr,
     pub weight: i64,
+    /// True if the record content was modified (Create or Update)
+    pub content_changed: bool,
 }
 
 impl Delta {
     pub fn new(table: SmolStr, key: SmolStr, weight: i64) -> Self {
-        Self { table, key, weight }
+        Self {
+            table,
+            key,
+            weight,
+            content_changed: weight >= 0, // Create/Update change content
+        }
     }
 
     /// Create a delta from an operation
@@ -65,6 +91,18 @@ impl Delta {
             table,
             key,
             weight: op.weight(),
+            content_changed: op.changes_content(),
+        }
+    }
+    
+    /// Create a content-only update delta (weight=0, content_changed=true)
+    #[inline]
+    pub fn content_update(table: SmolStr, key: SmolStr) -> Self {
+        Self {
+            table,
+            key,
+            weight: 0,
+            content_changed: true,
         }
     }
 }
