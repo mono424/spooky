@@ -160,9 +160,22 @@ impl Circuit {
             dependency_list: FastMap::default(),
         }
     }
+}
+
+impl Default for Circuit {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Circuit {
 
     // --- Ingestion API 1: Single Record ---
 
+    /// Single record ingestion - optimized for the 99% use case.
+    /// 
+    /// **Note:** If multiple views depend on the affected table, only the first
+    /// view's update is returned. For comprehensive updates, use `ingest_batch()`.
     pub fn ingest_single(
         &mut self,
         table: &str,
@@ -390,24 +403,6 @@ impl Circuit {
 
     fn unregister_view_by_index(&mut self, index: usize) {
         self.views.swap_remove(index);
-        
-        if index < self.views.len() {
-            if let Some(moved_view) = self.views.get(index) {
-                let moved_tables = moved_view.plan.root.referenced_tables();
-                let old_index = self.views.len();
-
-                for t in moved_tables {
-                    if let Some(deps) = self.dependency_list.get_mut(t.as_str()) {
-                        for idx in deps {
-                            if *idx == old_index {
-                                *idx = index;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
         self.rebuild_dependency_list();
     }
 
