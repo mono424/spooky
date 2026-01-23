@@ -3244,6 +3244,7 @@ dependencies = [
  "anyhow",
  "blake3",
  "getrandom 0.2.17",
+ "indexmap 2.13.0",
  "lazy_static",
  "mimalloc",
  "nom",
@@ -3252,8 +3253,8 @@ dependencies = [
  "rustc-hash",
  "serde",
  "serde_json",
+ "smallvec",
  "smol_str",
- "tracing",
  "ulid",
  "web-sys",
 ]

@@ -12,9 +12,9 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use ssp::{
-    engine::circuit::{Circuit, IngestBatch, BatchEntry, Operation},
+    engine::circuit::{Circuit, dto::BatchEntry},
+    engine::types::Operation,
     engine::update::{StreamingUpdate, DeltaEvent, ViewResultFormat, ViewUpdate},
-    engine::metadata::VersionStrategy,
 };
 use surrealdb::engine::remote::ws::{Client, Ws};
 use surrealdb::opt::auth::Root;
@@ -56,9 +56,6 @@ struct IngestRequest {
     op: String,
     id: String,
     record: Value,
-    pub version: Option<u64>, // Added version
-    #[serde(default)]
-    _hash: String, 
 }
 
 #[derive(Deserialize, Debug)]
@@ -213,30 +210,30 @@ async fn ingest_handler(
 ) -> impl IntoResponse {
     debug!("Received ingest request");
     debug!("Payload: {:#?}", payload);
-    let (clean_record, hash) = ssp::service::ingest::prepare(payload.record);
+    
+    // Parse operation
+    let op = match Operation::from_str(&payload.op) {
+        Some(op) => op,
+        None => {
+            tracing::warn!(op = %payload.op, "Invalid operation type");
+            return StatusCode::BAD_REQUEST;
+        }
+    };
+
+    let (clean_record, _hash) = ssp::service::ingest::prepare(payload.record);
 
     let updates = {
-        let _span = ssp::logging::get_module_span().entered();
         let mut circuit = state.processor.lock().unwrap();
 
-        let op = Operation::from_str(&payload.op).unwrap_or(Operation::Create);
-
-        let mut entry = BatchEntry::new(
+        let entry = BatchEntry::new(
              &payload.table,
              op,
              &payload.id,
              clean_record.into(),
-             hash,
         );
 
-        let mut batch = IngestBatch::new();
-
-        if let Some(version) = payload.version {
-             entry = entry.with_version(version);
-             batch = batch.with_strategy(VersionStrategy::Explicit);
-        }
-
-        circuit.ingest(batch.entry(entry), true)
+        // Changed from ingest(batch) to ingest_single(entry)
+        circuit.ingest_single(entry)
     };
     state.saver.trigger_save();
 
@@ -289,7 +286,6 @@ async fn register_view_handler(
 
     // Always register with Streaming mode
     let update = {
-        let _span = ssp::logging::get_module_span().entered();
         let mut circuit = state.processor.lock().unwrap();
         let res = circuit.register_view(
             data.plan.clone(), 
@@ -348,7 +344,6 @@ async fn unregister_view_handler(
     debug!("Unregistering view {}", payload.id);
     
     {
-        let _span = ssp::logging::get_module_span().entered();
         let mut circuit = state.processor.lock().unwrap();
         circuit.unregister_view(&payload.id);
         state.saver.trigger_save();
@@ -375,7 +370,6 @@ async fn reset_handler(State(state): State<AppState>) -> impl IntoResponse {
     info!("Resetting circuit state");
     
     {
-        let _span = ssp::logging::get_module_span().entered();
         let mut circuit = state.processor.lock().unwrap();
         *circuit = Box::new(Circuit::new());
         if state.persistence_path.exists() {
@@ -450,14 +444,14 @@ async fn update_all_edges(db: &Surreal<Client>, updates: &[&StreamingUpdate]) {
             let stmt = match record.event {
                 DeltaEvent::Created => {
                     format!(
-                        "RELATE ${}->_spooky_list_ref->{} SET version = {}, clientId = (SELECT clientId FROM ONLY ${}).clientId",
-                        binding_name, record.id, record.version, binding_name
+                        "RELATE ${}->_spooky_list_ref->{} SET clientId = (SELECT clientId FROM ONLY ${}).clientId",
+                        binding_name, record.id, binding_name
                     )
                 }
                 DeltaEvent::Updated => {
                     format!(
-                        "UPDATE ${}->_spooky_list_ref SET version = {} WHERE out = {}",
-                        binding_name, record.version, record.id
+                        "UPDATE ${}->_spooky_list_ref WHERE out = {}",
+                        binding_name, record.id
                     )
                 }
                 DeltaEvent::Deleted => {
