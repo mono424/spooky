@@ -113,26 +113,38 @@ impl View {
 
     /// Handle content-only update (no membership change)
     fn process_content_update(&mut self, delta: &Delta, db: &Database) -> Option<ViewUpdate> {
-        // Check if this record is in our view
-        if !self.cache.contains_key(&delta.key) {
-            return None; // Not in view, no update needed
-        }
+        let is_in_cache = self.cache.contains_key(&delta.key);
+        let matches_filter = self.record_matches_view(&delta.key, db);
         
-        // Check if record still matches filter (might need to leave view)
-        let still_matches = self.record_matches_view(&delta.key, db);
-        
-        if still_matches {
-            // Content update, still in view
-            self.build_content_update_notification(&delta.key)
-        } else {
-            // No longer matches filter - treat as removal
-            let removal_delta = Delta {
-                table: delta.table.clone(),
-                key: delta.key.clone(),
-                weight: -1,
-                content_changed: false,
-            };
-            self.process_delta(&removal_delta, db)
+        match (is_in_cache, matches_filter) {
+            (true, true) => {
+                // Was in view, still in view - content update
+                self.build_content_update_notification(&delta.key)
+            }
+            (true, false) => {
+                // Was in view, no longer matches - treat as removal
+                let removal_delta = Delta {
+                    table: delta.table.clone(),
+                    key: delta.key.clone(),
+                    weight: -1,
+                    content_changed: false,
+                };
+                self.process_delta(&removal_delta, db)
+            }
+            (false, true) => {
+                // Was not in view, now matches - treat as addition
+                let addition_delta = Delta {
+                    table: delta.table.clone(),
+                    key: delta.key.clone(),
+                    weight: 1,
+                    content_changed: false,
+                };
+                self.process_delta(&addition_delta, db)
+            }
+            (false, false) => {
+                // Was not in view, still doesn't match - no update
+                None
+            }
         }
     }
 
