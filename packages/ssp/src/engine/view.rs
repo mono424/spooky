@@ -4,7 +4,8 @@ use super::eval::{
     resolve_nested_value, NumericFilterConfig,
 };
 use super::operators::{Operator, Predicate, Projection};
-use super::types::{Delta, FastMap, Path, SpookyValue, ZSet};
+use super::types::{Delta, FastMap, Path, SpookyValue, ZSet, BatchDeltas};
+
 use super::update::{ViewResultFormat, ViewUpdate};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -86,12 +87,24 @@ impl View {
         }
         
         // Fallback: Use batch processing for complex views
-        let mut deltas = FastMap::default();
-        let mut zset = ZSet::default();
-        zset.insert(delta.key.clone(), delta.weight);
-        deltas.insert(delta.table.to_string(), zset);
+        let mut batch_deltas = BatchDeltas::new();
         
-        self.process_batch(&deltas, db)
+        // Track membership change
+        if delta.weight != 0 {
+            let mut zset = ZSet::default();
+            zset.insert(delta.key.clone(), delta.weight);
+            batch_deltas.membership.insert(delta.table.to_string(), zset);
+        }
+        
+        // Track content change
+        if delta.content_changed {
+            batch_deltas.content_updates
+                .entry(delta.table.to_string())
+                .or_default()
+                .push(delta.key.clone());
+        }
+        
+        self.process_batch(&batch_deltas, db)
     }
 
     /// Try fast single-record processing for simple views (Scan, Filter)
@@ -274,15 +287,15 @@ impl View {
     /// Optimized 2-Phase Processing: Handles multiple table updates at once.
     pub fn process_batch(
         &mut self,
-        deltas: &FastMap<String, ZSet>,
+        batch_deltas: &BatchDeltas,
         db: &Database,
     ) -> Option<ViewUpdate> {
         // FIX: FIRST RUN CHECK
         let is_first_run = self.last_hash.is_empty();
 
-        // Compute view delta
-        let view_delta = self.compute_view_delta(deltas, db, is_first_run);
-        let updated_record_ids = self.get_updated_cached_records(deltas);
+        // Compute view delta from membership changes
+        let view_delta = self.compute_view_delta(&batch_deltas.membership, db, is_first_run);
+        let updated_record_ids = self.get_updated_cached_records(&batch_deltas.membership);
         
         // Early return if no changes
         if view_delta.is_empty() && !is_first_run && updated_record_ids.is_empty() {

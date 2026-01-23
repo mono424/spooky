@@ -1,4 +1,4 @@
-use super::types::{Delta, FastMap, Operation, RowKey, SpookyValue, ZSet};
+use super::types::{BatchDeltas, Delta, FastMap, Operation, RowKey, SpookyValue, ZSet};
 use super::view::{QueryPlan, View};
 use super::update::{ViewResultFormat, ViewUpdate};
 use serde::{Deserialize, Serialize};
@@ -187,12 +187,9 @@ impl Circuit {
         &mut self,
         entrie: BatchEntry
     ) -> ViewUpdateList {
+        let op = entrie.op;
         let key = SmolStr::new(entrie.id);
-        let (zset_key, weight) = self.db.ensure_table(entrie.table.as_str()).apply_mutation(entrie.op, key, entrie.data);
-
-        if weight == 0 {
-            return SmallVec::new();
-        }
+        let (zset_key, _weight) = self.db.ensure_table(entrie.table.as_str()).apply_mutation(op, key, entrie.data);
 
         self.ensure_dependency_list();
 
@@ -209,7 +206,8 @@ impl Circuit {
             return SmallVec::new();
         }
 
-        let delta = Delta::new(table_key, zset_key, weight);
+        // Use Delta::from_operation to include content_changed flag
+        let delta = Delta::from_operation(table_key, zset_key, op);
         let mut updates: ViewUpdateList = SmallVec::new();
         
         for view_idx in view_indices {
@@ -233,7 +231,7 @@ impl Circuit {
             by_table.entry(entry.table.clone()).or_default().push(entry);
         }
 
-        let mut table_deltas: FastMap<String, ZSet> = FastMap::default();
+        let mut batch_deltas = BatchDeltas::new();
         let mut changed_tables: Vec<TableName> = Vec::with_capacity(by_table.len());
 
         // Parallel Storage Phase
@@ -245,34 +243,42 @@ impl Circuit {
             }
 
             // P2.2: Parallel Delta Computation
-            // We iterate via database tables (String keys) but filter by our batch (SmolStr keys)
-            let results: Vec<(String, ZSet)> = self.db.tables
+            let results: Vec<(String, ZSet, Vec<SmolStr>)> = self.db.tables
                 .par_iter_mut()
                 .filter_map(|(name, table)| {
-                    // Check if this table is in our batch (requires SmolStr conversion for lookup)
                     let name_smol = SmolStr::new(name);
                     let entries = by_table.get(&name_smol)?;
                     
                     let mut delta = ZSet::default();
+                    let mut content_updates = Vec::new();
+                    
                     for entry in entries {
                         let (zset_key, weight) = table.apply_mutation(entry.op, entry.id.clone(), entry.data.clone());
                         if weight != 0 {
-                            *delta.entry(zset_key).or_insert(0) += weight;
+                            *delta.entry(zset_key.clone()).or_insert(0) += weight;
+                        }
+                        if entry.op.changes_content() {
+                            content_updates.push(zset_key);
                         }
                     }
                     delta.retain(|_, w| *w != 0);
                     
-                    if !delta.is_empty() {
-                        Some((name.clone(), delta))
+                    if !delta.is_empty() || !content_updates.is_empty() {
+                        Some((name.clone(), delta, content_updates))
                     } else {
                         None
                     }
                 })
                 .collect();
 
-            for (name_str, delta) in results {
+            for (name_str, delta, content_updates) in results {
                 let smol_name = SmolStr::new(&name_str);
-                table_deltas.insert(name_str, delta);
+                if !delta.is_empty() {
+                    batch_deltas.membership.insert(name_str.clone(), delta);
+                }
+                if !content_updates.is_empty() {
+                    batch_deltas.content_updates.insert(name_str, content_updates);
+                }
                 changed_tables.push(smol_name);
             }
         }
@@ -282,22 +288,36 @@ impl Circuit {
         {
             for (table_name, table_entries) in by_table {
                 let tb = self.db.ensure_table(table_name.as_str());
-                let delta = table_deltas.entry(table_name.to_string()).or_default();
-
+                
+                let mut has_changes = false;
                 for entry in table_entries {
                     let (zset_key, weight) = tb.apply_mutation(entry.op, entry.id, entry.data);
+                    
                     if weight != 0 {
-                        *delta.entry(zset_key).or_insert(0) += weight;
+                        let delta = batch_deltas.membership.entry(table_name.to_string()).or_default();
+                        *delta.entry(zset_key.clone()).or_insert(0) += weight;
+                        has_changes = true;
+                    }
+                    
+                    if entry.op.changes_content() {
+                        batch_deltas.content_updates
+                            .entry(table_name.to_string())
+                            .or_default()
+                            .push(zset_key);
+                        has_changes = true;
                     }
                 }
-                delta.retain(|_, w| *w != 0);
-                if !delta.is_empty() {
+                
+                if has_changes {
                     changed_tables.push(table_name);
                 }
             }
+            
+            // Clean up empty deltas
+            batch_deltas.membership.retain(|_, delta| !delta.is_empty());
         }
 
-        self.propagate_deltas(&table_deltas, &changed_tables)
+        self.propagate_deltas(&batch_deltas, &changed_tables)
     }
 
     // --- Ingestion API 3: Init Load ---
@@ -330,7 +350,7 @@ impl Circuit {
 
     fn propagate_deltas(
         &mut self,
-        table_deltas: &FastMap<String, ZSet>,
+        batch_deltas: &BatchDeltas,
         changed_tables: &[TableName],
     ) -> Vec<ViewUpdate> {
         self.ensure_dependency_list();
@@ -358,7 +378,7 @@ impl Circuit {
                 .enumerate()
                 .filter_map(|(i, view)| -> Option<ViewUpdate> {
                     if impacted_view_indices.binary_search(&i).is_ok() {
-                        view.process_batch(table_deltas, db_ref) 
+                        view.process_batch(batch_deltas, db_ref) 
                     } else {
                         None
                     }
@@ -371,7 +391,7 @@ impl Circuit {
             let mut updates = Vec::with_capacity(impacted_view_indices.len());
             for i in impacted_view_indices {
                 if let Some(view) = self.views.get_mut(i) {
-                     if let Some(update) = view.process_batch(table_deltas, db_ref) {
+                     if let Some(update) = view.process_batch(batch_deltas, db_ref) {
                         updates.push(update);
                     }
                 }
@@ -394,7 +414,7 @@ impl Circuit {
 
         let mut view = View::new(plan.clone(), params, format);
 
-        let empty_deltas: FastMap<String, ZSet> = FastMap::default();
+        let empty_deltas = BatchDeltas::new();
         let initial_update = view.process_batch(&empty_deltas, &self.db);
 
         self.views.push(view);
