@@ -75,36 +75,114 @@ impl View {
     /// Process a delta for this view - optimized fast path for simple views
     pub fn process_delta(&mut self, delta: &Delta, db: &Database) -> Option<ViewUpdate> {
         // Fast check: Does this view even care about this table?
-        // Note: circuit.rs usually handles this via dependency list, but this
-        // specific check avoids work if called directly or if dependency logic is loose.
         if !self.referenced_tables_cached.iter().any(|t| t == delta.table.as_str()) {
             return None;
         }
 
-        // Fast path: Try optimized processing for simple Scan/Filter views
-        if let Some(result) = self.try_fast_single(delta, db) {
-            return result;
-        }
-        
-        // Fallback: Use batch processing for complex views
-        let mut batch_deltas = BatchDeltas::new();
-        
-        // Track membership change
+        // Case 1: Membership change (Create or Delete)
         if delta.weight != 0 {
+            // Fast path: Try optimized processing for simple Scan/Filter views
+            if let Some(result) = self.try_fast_single(delta, db) {
+                return result;
+            }
+            
+            // Fallback: Use batch processing for complex views
+            let mut batch_deltas = BatchDeltas::new();
             let mut zset = ZSet::default();
             zset.insert(delta.key.clone(), delta.weight);
             batch_deltas.membership.insert(delta.table.to_string(), zset);
+            
+            if delta.content_changed {
+                batch_deltas.content_updates
+                    .entry(delta.table.to_string())
+                    .or_default()
+                    .push(delta.key.clone());
+            }
+            
+            return self.process_batch(&batch_deltas, db);
         }
         
-        // Track content change
+        // Case 2: Content-only update (weight=0, content_changed=true)
         if delta.content_changed {
-            batch_deltas.content_updates
-                .entry(delta.table.to_string())
-                .or_default()
-                .push(delta.key.clone());
+            return self.process_content_update(delta, db);
         }
         
-        self.process_batch(&batch_deltas, db)
+        // Case 3: No change
+        None
+    }
+
+    /// Handle content-only update (no membership change)
+    fn process_content_update(&mut self, delta: &Delta, db: &Database) -> Option<ViewUpdate> {
+        // Check if this record is in our view
+        if !self.cache.contains_key(&delta.key) {
+            return None; // Not in view, no update needed
+        }
+        
+        // Check if record still matches filter (might need to leave view)
+        let still_matches = self.record_matches_view(&delta.key, db);
+        
+        if still_matches {
+            // Content update, still in view
+            self.build_content_update_notification(&delta.key)
+        } else {
+            // No longer matches filter - treat as removal
+            let removal_delta = Delta {
+                table: delta.table.clone(),
+                key: delta.key.clone(),
+                weight: -1,
+                content_changed: false,
+            };
+            self.process_delta(&removal_delta, db)
+        }
+    }
+
+    /// Check if a record matches this view's filters
+    fn record_matches_view(&self, key: &SmolStr, db: &Database) -> bool {
+        match &self.plan.root {
+            Operator::Scan { table } => {
+                // Simple scan - just check table exists
+                key.starts_with(&format!("{}:", table))
+            }
+            Operator::Filter { input, predicate } => {
+                if let Operator::Scan { table } = input.as_ref() {
+                    if !key.starts_with(&format!("{}:", table)) {
+                        return false;
+                    }
+                    return self.check_predicate(predicate, key, db, self.params.as_ref());
+                }
+                // Complex query - assume it matches (will be corrected by full diff)
+                true
+            }
+            _ => true // Complex queries handled by full diff
+        }
+    }
+
+    /// Build notification for content-only update
+    fn build_content_update_notification(&mut self, key: &SmolStr) -> Option<ViewUpdate> {
+        use super::update::{build_update, RawViewResult, ViewDelta};
+        
+        let result_data = self.build_result_data();
+        
+        let view_delta = ViewDelta {
+            additions: vec![],
+            removals: vec![],
+            updates: vec![Self::strip_table_prefix_smol(key)],
+        };
+        
+        let raw_result = RawViewResult {
+            query_id: self.plan.id.clone(),
+            records: result_data,
+            delta: Some(view_delta),
+        };
+        
+        let update = build_update(raw_result, self.format.clone());
+        
+        // For streaming, always emit. For flat/tree, content changed but set didn't - still notify
+        match &update {
+            ViewUpdate::Streaming(s) if !s.records.is_empty() => Some(update),
+            ViewUpdate::Flat(_) | ViewUpdate::Tree(_) => Some(update),
+            _ => None,
+        }
     }
 
     /// Try fast single-record processing for simple views (Scan, Filter)
@@ -295,7 +373,7 @@ impl View {
 
         // Compute view delta from membership changes
         let view_delta = self.compute_view_delta(&batch_deltas.membership, db, is_first_run);
-        let updated_record_ids = self.get_updated_cached_records(&batch_deltas.membership);
+        let updated_record_ids = self.get_content_updates_in_view(batch_deltas);
         
         // Early return if no changes
         if view_delta.is_empty() && !is_first_run && updated_record_ids.is_empty() {
@@ -569,23 +647,19 @@ impl View {
         result_data
     }
 
-    /// Get all record IDs currently in the view's cache/version_map that have been updated in the deltas
-    /// This handles UPDATE operations where the ID set doesn't change but content does
-    fn get_updated_cached_records(&self, deltas: &FastMap<String, ZSet>) -> Vec<SmolStr> {
-        let mut updated_ids = Vec::new();
-
-        // For each table in the deltas, check if any updated record is in our cache
-        for (_table, delta) in deltas {
-            for (record_id, weight) in delta {
-                // Only check records with positive weight (existing/updated records)
-                // Negative weight means deletion which is handled elsewhere
-                if *weight > 0 && self.cache.contains_key(record_id.as_str()) {
-                    updated_ids.push(record_id.clone());
+    /// Get content updates that affect records in this view
+    fn get_content_updates_in_view(&self, batch_deltas: &BatchDeltas) -> Vec<SmolStr> {
+        let mut updates = Vec::new();
+        
+        for (_table, keys) in &batch_deltas.content_updates {
+            for key in keys {
+                if self.cache.contains_key(key.as_str()) {
+                    updates.push(key.clone());
                 }
             }
         }
-
-        updated_ids
+        
+        updates
     }
 
 
