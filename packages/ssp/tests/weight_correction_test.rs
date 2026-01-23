@@ -95,11 +95,8 @@ fn test_cache_correctness_multiple_updates() {
     assert_eq!(cache_weight, None, "Delete should remove from cache (weight 0)");
 }
 
-// TODO: This test currently fails because filter re-evaluation on updates
-// needs more work. The record_matches_view logic is correct but may need
-// cache invalidation or forced re-computation
+// Fixed: Filter re-evaluation now works correctly via direct cache manipulation
 #[test]
-#[ignore]
 fn test_filter_transition_on_update() {
     let mut circuit = Circuit::new();
     

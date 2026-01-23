@@ -122,14 +122,39 @@ impl View {
                 self.build_content_update_notification(&delta.key)
             }
             (true, false) => {
-                // Was in view, no longer matches - treat as removal
-                let removal_delta = Delta {
-                    table: delta.table.clone(),
-                    key: delta.key.clone(),
-                    weight: -1,
-                    content_changed: false,
+                // Was in view, no longer matches - directly remove from cache
+                self.cache.remove(&delta.key);
+                
+                // Build removal notification
+                use super::update::{build_update, RawViewResult, ViewDelta};
+                
+                let result_data = self.build_result_data();
+                
+                let view_delta = ViewDelta {
+                    additions: vec![],
+                    removals: vec![Self::strip_table_prefix_smol(&delta.key)],
+                    updates: vec![],
                 };
-                self.process_delta(&removal_delta, db)
+                
+                let raw_result = RawViewResult {
+                    query_id: self.plan.id.clone(),
+                    records: result_data.clone(),
+                    delta: Some(view_delta),
+                };
+                
+                let update = build_update(raw_result, self.format.clone());
+                
+                // Update last hash
+                let hash = match &update {
+                    ViewUpdate::Flat(flat) | ViewUpdate::Tree(flat) => flat.result_hash.clone(),
+                    ViewUpdate::Streaming(_) => {
+                        use super::update::compute_flat_hash;
+                        compute_flat_hash(&result_data)
+                    }
+                };
+                self.last_hash = hash;
+                
+                Some(update)
             }
             (false, true) => {
                 // Was not in view, now matches - treat as addition
