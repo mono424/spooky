@@ -57,10 +57,15 @@ pub fn ingest(
     op: &str,
     id: &str,
     record: Value,
-
 ) -> Vec<ViewUpdate> {
-    let hash = generate_hash(&record);
-    circuit.ingest_record(table, op, id, record, &hash)
+    use ssp::engine::circuit::dto::BatchEntry;
+    use ssp::engine::types::Operation;
+
+    let operation = Operation::from_str(op).expect("Invalid operation string");
+    let entry = BatchEntry::new(table, operation, id, record.into());
+    
+    // ingest_single returns SmallVec, convert to Vec for compatibility
+    circuit.ingest_single(entry).into_vec()
 }
 
 /// Ingest with verbose logging (useful for debugging)
@@ -70,11 +75,9 @@ pub fn ingest_verbose(
     op: &str,
     id: &str,
     record: Value,
-
 ) -> Vec<ViewUpdate> {
-    let hash = generate_hash(&record);
     println!("[Ingest] {} -> {}: {:#}", op, table, record);
-    circuit.ingest_record(table, op, id, record, &hash)
+    ingest(circuit, table, op, id, record)
 }
 
 /// Create an author record (matches sync engine data model)
@@ -157,11 +160,14 @@ pub fn ingest_batch(
     circuit: &mut Circuit,
     records: Vec<(String, String, String, Value)>,
 ) -> Vec<ViewUpdate> {
-    let batch: Vec<(String, String, String, Value, String)> = records
+    use ssp::engine::circuit::dto::BatchEntry;
+    use ssp::engine::types::Operation;
+
+    let batch: Vec<BatchEntry> = records
         .into_iter()
         .map(|(table, op, id, record)| {
-            let hash = generate_hash(&record);
-            (table, op, id, record, hash)
+            let operation = Operation::from_str(&op).expect("Invalid operation string in test");
+            BatchEntry::new(table, operation, id, record.into())
         })
         .collect();
 

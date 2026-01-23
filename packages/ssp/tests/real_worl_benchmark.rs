@@ -60,8 +60,9 @@ use common::*;
 use rayon::prelude::*;
 use serde_json::{json, Value};
 use ssp::{
-    engine::update::{DeltaEvent, StreamingUpdate, ViewResultFormat, ViewUpdate},
-    Circuit,
+    engine::update::{DeltaEvent, ViewResultFormat, ViewUpdate},
+    engine::circuit::dto::{BatchEntry},
+    engine::types::Operation,
     JoinCondition, Operator, OrderSpec, Path, Predicate, Projection,
     QueryPlan,
 };
@@ -417,10 +418,17 @@ fn run_format_benchmark(
         .flat_map(make_linked_record_set)
         .collect();
 
-    let all_batches: Vec<Vec<(String, String, String, Value, String)>> = prepared_stream
+    let all_batches: Vec<Vec<BatchEntry>> = prepared_stream
         .chunks(batch_size)
         .take(record_count / batch_size)
-        .map(|chunk| chunk.iter().map(to_batch_tuple).collect())
+        .map(|chunk| chunk.iter().map(|r| {
+            BatchEntry::new(
+                r.table.clone(),
+                Operation::from_str(&r.op).unwrap(),
+                r.id.clone(),
+                r.record.clone().into()
+            )
+        }).collect())
         .collect();
 
     // === WARMUP ===
@@ -482,7 +490,7 @@ fn run_format_benchmark(
         .collect();
 
     if !update_ids.is_empty() {
-        let update_batches: Vec<Vec<(String, String, String, Value, String)>> = update_ids
+        let update_batches: Vec<Vec<BatchEntry>> = update_ids
             .chunks(batch_size)
             .map(|chunk| {
                 chunk
@@ -497,12 +505,10 @@ fn run_format_benchmark(
                             "type": "comment",
                             "status": "edited"
                         });
-                        (
+                        BatchEntry::update(
                             item.table.clone(),
-                            "UPDATE".to_string(),
                             item.id.clone(),
-                            updated.clone(),
-                            generate_hash(&updated),
+                            updated.into()
                         )
                     })
                     .collect()
@@ -555,18 +561,15 @@ fn run_format_benchmark(
         .collect();
 
     if !delete_ids.is_empty() {
-        let delete_batches: Vec<Vec<(String, String, String, Value, String)>> = delete_ids
+        let delete_batches: Vec<Vec<BatchEntry>> = delete_ids
             .chunks(batch_size)
             .map(|chunk| {
                 chunk
                     .iter()
                     .map(|item| {
-                        (
+                        BatchEntry::delete(
                             item.table.clone(),
-                            "DELETE".to_string(),
-                            item.id.clone(),
-                            json!({}), // Empty record for delete
-                            String::new(),
+                            item.id.clone()
                         )
                     })
                     .collect()
@@ -742,12 +745,12 @@ fn streaming_mode_benchmark() {
     let start = Instant::now();
 
     for record in &records {
-        let updates = circuit.ingest_record(
+        let updates = circuit.ingest_single(
+            BatchEntry::create(
             &record.table,
-            &record.op,
             &record.id,
-            record.record.clone(),
-            &record.hash,
+            record.record.clone().into(),
+        )
         );
 
         for update in updates {
@@ -794,7 +797,9 @@ fn streaming_mode_benchmark() {
         });
         let hash = generate_hash(&updated_rec);
 
-        let updates = circuit.ingest_record(&record.table, "UPDATE", &record.id, updated_rec, &hash);
+        let updates = circuit.ingest_single(
+            BatchEntry::update(&record.table, &record.id, updated_rec.into())
+        );
 
         for update in updates {
             if let ViewUpdate::Streaming(s) = update {
@@ -831,7 +836,14 @@ fn streaming_mode_benchmark() {
     let start = Instant::now();
 
     for record in deletes_to_make {
-        let updates = circuit.ingest_record(&record.table, "DELETE", &record.id, json!({}), "");
+        let updates = circuit.ingest_single(
+            BatchEntry::new(
+                &record.table,
+                Operation::Delete,
+                &record.id,
+                json!({}).into()
+            )
+        );
 
         for update in updates {
             if let ViewUpdate::Streaming(s) = update {
@@ -885,9 +897,16 @@ fn real_world_benchmark_quick() {
             .flat_map(make_linked_record_set)
             .collect();
 
-        let batches: Vec<Vec<_>> = prepared
+        let batches: Vec<Vec<BatchEntry>> = prepared
             .chunks(50)
-            .map(|c| c.iter().map(to_batch_tuple).collect())
+            .map(|chunk| chunk.iter().map(|r| {
+                BatchEntry::new(
+                    r.table.clone(),
+                    Operation::from_str(&r.op).unwrap(),
+                    r.id.clone(),
+                    r.record.clone().into()
+                )
+            }).collect())
             .collect();
 
         // Measure
@@ -1021,12 +1040,13 @@ fn sync_engine_simulation_benchmark() {
 
     let start = Instant::now();
     for record in &records {
-        let updates = circuit.ingest_record(
-            &record.table,
-            &record.op,
-            &record.id,
-            record.record.clone(),
-            &record.hash,
+        let updates = circuit.ingest_single(
+            BatchEntry::new(
+                &record.table,
+                Operation::from_str(&record.op).unwrap(),
+                &record.id,
+                record.record.clone().into()
+            )
         );
 
         for update in updates {
@@ -1077,12 +1097,13 @@ fn sync_engine_simulation_benchmark() {
         });
         let hash = generate_hash(&updated_rec);
         
-        let updates = circuit.ingest_record(
-            &record.table,
-            "UPDATE",
-            &record.id,
-            updated_rec,
-            &hash,
+        let updates = circuit.ingest_single(
+            BatchEntry::new(
+                &record.table,
+                Operation::Update,
+                &record.id,
+                updated_rec.into()
+            )
         );
 
         for update in updates {
@@ -1119,12 +1140,13 @@ fn sync_engine_simulation_benchmark() {
 
     let start = Instant::now();
     for record in &remote_records {
-        circuit.ingest_record(
-            &record.table,
-            &record.op,
-            &record.id,
-            record.record.clone(),
-            &record.hash,
+        circuit.ingest_single(
+            BatchEntry::new(
+                &record.table,
+                Operation::from_str(&record.op).unwrap(),
+                &record.id,
+                record.record.clone().into()
+            )
         );
     }
     let sync_time = start.elapsed();
@@ -1155,7 +1177,9 @@ fn version_tracking_benchmark() {
     let hash = generate_hash(&comment_rec);
 
     println!("  Step 1: Initial CREATE (optimistic)");
-    let updates = circuit.ingest_record("comment", "CREATE", &comment_id, comment_rec.clone(), &hash);
+    let updates = circuit.ingest_single(
+        BatchEntry::create("comment", &comment_id, comment_rec.clone().into())
+    );
     if let Some(ViewUpdate::Flat(m)) = updates.first() {
         println!("    Records: {:?}", m.result_data);
     }
@@ -1170,7 +1194,9 @@ fn version_tracking_benchmark() {
         "score": 10
     });
     let hash = generate_hash(&updated_rec);
-    let updates = circuit.ingest_record("comment", "UPDATE", &comment_id, updated_rec, &hash);
+    let updates = circuit.ingest_single(
+        BatchEntry::update("comment", &comment_id, updated_rec.into())
+    );
     if let Some(ViewUpdate::Flat(m)) = updates.first() {
         println!("    Records: {:?}", m.result_data);
     }
@@ -1185,7 +1211,9 @@ fn version_tracking_benchmark() {
         "score": 20
     });
     let hash = generate_hash(&updated_rec2);
-    let updates = circuit.ingest_record("comment", "UPDATE", &comment_id, updated_rec2, &hash);
+    let updates = circuit.ingest_single(
+        BatchEntry::update("comment", &comment_id, updated_rec2.into())
+    );
     if let Some(ViewUpdate::Flat(m)) = updates.first() {
         println!("    Records: {:?}", m.result_data);
     }
@@ -1200,7 +1228,9 @@ fn version_tracking_benchmark() {
         "score": 30
     });
     let hash = generate_hash(&updated_rec3);
-    let updates = circuit.ingest_record("comment", "UPDATE", &comment_id, updated_rec3, &hash);
+    let updates = circuit.ingest_single(
+        BatchEntry::update("comment", &comment_id, updated_rec3.into())
+    );
     if let Some(ViewUpdate::Flat(m)) = updates.first() {
         println!("    Records: {:?}", m.result_data);
     }
@@ -1298,12 +1328,13 @@ fn high_view_count_benchmark() {
 
         let ingest_start = Instant::now();
         for record in &records {
-            circuit.ingest_record(
-                &record.table,
-                &record.op,
-                &record.id,
-                record.record.clone(),
-                &record.hash,
+            circuit.ingest_single(
+                BatchEntry::new(
+                    &record.table,
+                    Operation::from_str(&record.op).unwrap(),
+                    &record.id,
+                    record.record.clone().into()
+                )
             );
         }
         let ingest_time = ingest_start.elapsed();

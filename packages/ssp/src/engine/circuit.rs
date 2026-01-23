@@ -214,7 +214,7 @@ impl Circuit {
         
         for view_idx in view_indices {
             if let Some(view) = self.views.get_mut(view_idx) {
-                if let Some(update) = view.process_single(&delta, &self.db) {
+                if let Some(update) = view.process_delta(&delta, &self.db) {
                     updates.push(update);
                 }
             }

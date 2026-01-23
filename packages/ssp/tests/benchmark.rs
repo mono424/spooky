@@ -3,6 +3,8 @@ use common::*;
 use rayon::prelude::*;
 use serde_json::json;
 use ssp::engine::update::ViewResultFormat;
+use ssp::engine::circuit::dto::BatchEntry;
+use ssp::engine::types::Operation;
 use ssp::{JoinCondition, Operator, Path, Predicate, QueryPlan};
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
@@ -135,15 +137,14 @@ fn benchmark_latency_mixed_stream() {
         let mut global_record_count = 0;
 
         for chunk in prepared_stream.chunks(BATCH_SIZE) {
-            let batch_data: Vec<(String, String, String, serde_json::Value, String)> = chunk
+            let batch_data: Vec<BatchEntry> = chunk
                 .iter()
                 .map(|item| {
-                    (
+                    BatchEntry::new(
                         item.table.clone(),
-                        item.op.clone(),
+                        Operation::from_str(&item.op).unwrap(),
                         item.id.clone(),
-                        item.record.clone(),
-                        item.hash.clone(),
+                        item.record.clone().into(),
                     )
                 })
                 .collect();
@@ -205,15 +206,14 @@ fn run_benchmark(view_count: usize, format: ViewResultFormat) -> BenchmarkResult
     // Ingest and measure
     let start = Instant::now();
     for chunk in prepared_stream.chunks(BATCH_SIZE) {
-        let batch_data: Vec<(String, String, String, serde_json::Value, String)> = chunk
+        let batch_data: Vec<BatchEntry> = chunk
             .iter()
             .map(|item| {
-                (
+                BatchEntry::new(
                     item.table.clone(),
-                    item.op.clone(),
+                    Operation::from_str(&item.op).unwrap(),
                     item.id.clone(),
-                    item.record.clone(),
-                    item.hash.clone(),
+                    item.record.clone().into(),
                 )
             })
             .collect();

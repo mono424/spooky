@@ -37,13 +37,13 @@ fn test_dependency_graph_optimization() {
 
     // 3. Verify Dependency Graph
     // "users" -> [0], "products" -> [1]
-    assert_eq!(circuit.dependency_graph.get("users").unwrap().len(), 1);
-    assert_eq!(circuit.dependency_graph.get("products").unwrap().len(), 1);
+    assert_eq!(circuit.dependency_list.get("users").unwrap().len(), 1);
+    assert_eq!(circuit.dependency_list.get("products").unwrap().len(), 1);
     
     // 4. Ingest Batch affecting ONLY "users"
     // The "products" view should NOT be processed.
     let batch = vec![
-        ("users".to_string(), "CREATE".to_string(), "users:1".to_string(), json!({"id": "users:1", "age": 105}), "hash1".to_string()),
+        ssp::engine::circuit::dto::BatchEntry::create("users", "users:1", json!({"id": "users:1", "age": 105}).into()),
     ];
 
     let updates = circuit.ingest_batch(batch);

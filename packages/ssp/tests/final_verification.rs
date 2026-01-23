@@ -26,15 +26,15 @@ fn test_build_materialized_performance() {
     circuit.register_view(plan, None, Some(ViewResultFormat::Flat));
 
     // Ingest MANY records to fill the view
+    use ssp::engine::circuit::dto::BatchEntry;
+    
     let num_records = 10_000;
     let mut batch = Vec::new();
     for i in 0..num_records {
-        batch.push((
-            "test_table".to_string(),
-            "CREATE".to_string(),
+        batch.push(BatchEntry::create(
+            "test_table",
             format!("id:{}", i),
-            serde_json::json!({"id": format!("id:{}", i), "val": i}),
-            format!("hash:{}", i),
+            serde_json::json!({"id": format!("id:{}", i), "val": i}).into(),
         ));
     }
     let _ = circuit.ingest_batch(batch);
@@ -44,12 +44,10 @@ fn test_build_materialized_performance() {
     let mut update_batch = Vec::new();
     for i in 0..num_records {
         if i % 2 == 0 { // Update half of them
-            update_batch.push((
-                "test_table".to_string(),
-                "UPDATE".to_string(),
+            update_batch.push(BatchEntry::update(
+                "test_table",
                 format!("id:{}", i),
-                serde_json::json!({"id": format!("id:{}", i), "val": i + 1000}),
-                format!("hash_new:{}", i),
+                serde_json::json!({"id": format!("id:{}", i), "val": i + 1000}).into(),
             ));
         }
     }

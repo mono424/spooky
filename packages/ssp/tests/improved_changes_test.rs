@@ -14,6 +14,8 @@ mod common;
 use common::*;
 use serde_json::json;
 use ssp::engine::update::{DeltaEvent, ViewResultFormat, ViewUpdate};
+use ssp::engine::circuit::dto::BatchEntry;
+use ssp::engine::types::Operation;
 use ssp::{Circuit, QueryPlan, Operator, JoinCondition, Path, Predicate, Projection, SpookyValue};
 
 // ============================================================================
@@ -41,29 +43,24 @@ mod operation_tests {
 
         // Invalid operations should not cause panics
         let mut circuit = setup();
-        let updates = circuit.ingest_batch(
-            vec![(
-                "users".into(),
-                "INVALID_OP".into(), // Should be ignored
-                "users:1".into(),
-                json!({"name": "Test"}),
-                "hash".into(),
-            )],
-    );
-        // No crash, empty result since op was invalid
-        assert!(updates.is_empty());
+        // Invalid operations should be handled at parsing level
+       assert!(Operation::from_str("INVALID_OP").is_none());
     }
 
     fn matches_op(input: &str, _expected: &str) -> bool {
         // Helper to verify operation parsing works
         let mut circuit = setup();
+        let op = match Operation::from_str(input) {
+            Some(op) => op,
+            None => return false,
+        };
+        
         let result = circuit.ingest_batch(
-            vec![(
-                "test".into(),
-                input.into(),
-                "test:1".into(),
-                json!({"id": "test:1"}),
-                "hash".into(),
+            vec![BatchEntry::new(
+                "test",
+                op,
+                "test:1",
+                json!({"id": "test:1"}).into()
             )],
         );
         // If parsing worked, the record was ingested
@@ -122,10 +119,10 @@ mod mixed_ops_same_table_tests {
 
         // Batch: create user:1, create user:2, update user:1, delete user:2
         let batch = vec![
-            ("users".into(), "CREATE".into(), "users:1".into(), json!({"id": "users:1", "name": "Alice"}), "h1".into()),
-            ("users".into(), "CREATE".into(), "users:2".into(), json!({"id": "users:2", "name": "Bob"}), "h2".into()),
-            ("users".into(), "UPDATE".into(), "users:1".into(), json!({"id": "users:1", "name": "Alice Smith"}), "h3".into()),
-            ("users".into(), "DELETE".into(), "users:2".into(), json!({}), "h4".into()),
+            BatchEntry::create("users", "users:1", json!({"id": "users:1", "name": "Alice"}).into()),
+            BatchEntry::create("users", "users:2", json!({"id": "users:2", "name": "Bob"}).into()),
+            BatchEntry::update("users", "users:1", json!({"id": "users:1", "name": "Alice Smith"}).into()),
+            BatchEntry::delete("users", "users:2"),
         ];
 
         let updates = circuit.ingest_batch(batch);
@@ -163,9 +160,9 @@ mod mixed_ops_same_table_tests {
 
         // Batch multiple updates (simulates rapid mutations)
         let batch = vec![
-            ("items".into(), "UPDATE".into(), "items:1".into(), json!({"id": "items:1", "counter": 1}), "h1".into()),
-            ("items".into(), "UPDATE".into(), "items:1".into(), json!({"id": "items:1", "counter": 2}), "h2".into()),
-            ("items".into(), "UPDATE".into(), "items:1".into(), json!({"id": "items:1", "counter": 3}), "h3".into()),
+            BatchEntry::update("items", "items:1", json!({"id": "items:1", "counter": 1}).into()),
+            BatchEntry::update("items", "items:1", json!({"id": "items:1", "counter": 2}).into()),
+            BatchEntry::update("items", "items:1", json!({"id": "items:1", "counter": 3}).into()),
         ];
 
         circuit.ingest_batch(batch);
@@ -199,8 +196,8 @@ mod mixed_ops_same_table_tests {
 
         // Create and immediately delete in same batch
         let batch = vec![
-            ("ephemeral".into(), "CREATE".into(), "ephemeral:1".into(), json!({"id": "ephemeral:1"}), "h1".into()),
-            ("ephemeral".into(), "DELETE".into(), "ephemeral:1".into(), json!({}), "h2".into()),
+            BatchEntry::create("ephemeral", "ephemeral:1", json!({"id": "ephemeral:1"}).into()),
+            BatchEntry::delete("ephemeral", "ephemeral:1"),
         ];
 
         circuit.ingest_batch(batch);
@@ -240,10 +237,10 @@ mod mixed_tables_tests {
 
         // Single batch affecting all three tables
         let batch = vec![
-            ("users".into(), "CREATE".into(), "users:1".into(), json!({"id": "users:1", "name": "Alice"}), "h1".into()),
-            ("posts".into(), "CREATE".into(), "posts:1".into(), json!({"id": "posts:1", "title": "Hello", "author": "users:1"}), "h2".into()),
-            ("comments".into(), "CREATE".into(), "comments:1".into(), json!({"id": "comments:1", "text": "Nice!", "post": "posts:1"}), "h3".into()),
-            ("users".into(), "CREATE".into(), "users:2".into(), json!({"id": "users:2", "name": "Bob"}), "h4".into()),
+            BatchEntry::create("users", "users:1", json!({"id": "users:1", "name": "Alice"}).into()),
+            BatchEntry::create("posts", "posts:1", json!({"id": "posts:1", "title": "Hello", "author": "users:1"}).into()),
+            BatchEntry::create("comments", "comments:1", json!({"id": "comments:1", "text": "Nice!", "post": "posts:1"}).into()),
+            BatchEntry::create("users", "users:2", json!({"id": "users:2", "name": "Bob"}).into()),
         ];
 
         let updates = circuit.ingest_batch(batch);
@@ -284,7 +281,7 @@ mod mixed_tables_tests {
 
         // Batch affecting only "users"
         let batch = vec![
-            ("users".into(), "CREATE".into(), "users:1".into(), json!({"id": "users:1"}), "h1".into()),
+            BatchEntry::create("users", "users:1", json!({"id": "users:1"}).into()),
         ];
 
         let updates = circuit.ingest_batch(batch);
@@ -295,8 +292,8 @@ mod mixed_tables_tests {
         
         // products_only should NOT be in the updates (unless it's the initial empty state)
         // Actually on first batch it might have initial state, so check dependency graph
-        assert!(circuit.dependency_graph.get("users").unwrap().len() == 1);
-        assert!(circuit.dependency_graph.get("products").unwrap().len() == 1);
+        assert!(circuit.dependency_list.get("users").unwrap().len() == 1);
+        assert!(circuit.dependency_list.get("products").unwrap().len() == 1);
 
         println!("[TEST] ✓ Dependency isolation works - only affected views are updated");
     }
@@ -325,9 +322,9 @@ mod mixed_tables_tests {
 
         // Interleaved batch: book -> author update -> another book
         let batch = vec![
-            ("books".into(), "CREATE".into(), "books:1".into(), json!({"id": "books:1", "title": "Book 1", "author": "authors:1"}), "h1".into()),
-            ("authors".into(), "UPDATE".into(), "authors:1".into(), json!({"id": "authors:1", "name": "Famous Writer"}), "h2".into()),
-            ("books".into(), "CREATE".into(), "books:2".into(), json!({"id": "books:2", "title": "Book 2", "author": "authors:1"}), "h3".into()),
+            BatchEntry::create("books", "books:1", json!({"id": "books:1", "title": "Book 1", "author": "authors:1"}).into()),
+            BatchEntry::update("authors", "authors:1", json!({"id": "authors:1", "name": "Famous Writer"}).into()),
+            BatchEntry::create("books", "books:2", json!({"id": "books:2", "title": "Book 2", "author": "authors:1"}).into()),
         ];
 
         let updates = circuit.ingest_batch(batch);
@@ -438,8 +435,7 @@ mod optimization_tests {
             .map(|i| {
                 let id = format!("perf:{}", i);
                 let record = json!({"id": &id, "i": i});
-                let hash = generate_hash(&record);
-                ("perf".to_string(), "CREATE".to_string(), id, record, hash)
+                BatchEntry::create("perf", id, record.into())
             })
             .collect();
 
@@ -487,7 +483,7 @@ mod optimization_tests {
         // Verify dependency graph has correct mappings
         for i in 0..10 {
             let table = format!("table_{}", i);
-            let deps = circuit.dependency_graph.get(&table);
+            let deps = circuit.dependency_list.get(table.as_str());
             assert!(deps.is_some(), "Table {} should have dependencies", table);
             assert_eq!(deps.unwrap().len(), 1, "Each table should have exactly 1 view");
         }
@@ -536,20 +532,10 @@ mod edge_case_tests {
     /// Test batch with all invalid operations
     #[test]
     fn test_all_invalid_ops_batch() {
-        let mut circuit = setup();
+        let _circuit = setup();
 
-        let batch = vec![
-            ("test".into(), "INVALID1".into(), "test:1".into(), json!({}), "h1".into()),
-            ("test".into(), "INVALID2".into(), "test:2".into(), json!({}), "h2".into()),
-        ];
-
-        // Should not panic, just skip invalid ops
-        let updates = circuit.ingest_batch(batch);
-        
-        // No valid operations = no table created
-        assert!(!circuit.db.tables.contains_key("test"));
-
-        println!("[TEST] ✓ All invalid ops batch handled gracefully");
+        assert!(Operation::from_str("INVALID1").is_none());
+        assert!(Operation::from_str("INVALID2").is_none());
     }
 
     /// Test rapid create/delete cycles
@@ -594,8 +580,7 @@ mod edge_case_tests {
             .map(|i| {
                 let id = format!("large:{}", i);
                 let record = json!({"id": &id, "index": i});
-                let hash = generate_hash(&record);
-                ("large".to_string(), "CREATE".to_string(), id, record, hash)
+                BatchEntry::create("large", id, record.into())
             })
             .collect();
 
@@ -625,9 +610,9 @@ mod edge_case_tests {
         circuit.register_view(plan, None, None);
 
         let batch = vec![
-            ("unicode".into(), "CREATE".into(), "unicode:1".into(), json!({"id": "unicode:1", "name": "日本語"}), "h1".into()),
-            ("unicode".into(), "CREATE".into(), "unicode:2".into(), json!({"id": "unicode:2", "emoji": "🎉🚀💯"}), "h2".into()),
-            ("unicode".into(), "CREATE".into(), "unicode:3".into(), json!({"id": "unicode:3", "special": "a\nb\tc\"d"}), "h3".into()),
+            BatchEntry::create("unicode", "unicode:1", json!({"id": "unicode:1", "name": "日本語"}).into()),
+            BatchEntry::create("unicode", "unicode:2", json!({"id": "unicode:2", "emoji": "🎉🚀💯"}).into()),
+            BatchEntry::create("unicode", "unicode:3", json!({"id": "unicode:3", "special": "a\nb\tc\"d"}).into()),
         ];
 
         circuit.ingest_batch(batch);
@@ -666,8 +651,8 @@ mod complex_query_tests {
 
         // Batch: create author and thread together
         let batch = vec![
-            ("author".into(), "CREATE".into(), "author:1".into(), json!({"id": "author:1", "name": "Alice"}), "h1".into()),
-            ("thread".into(), "CREATE".into(), "thread:1".into(), json!({"id": "thread:1", "title": "Test", "author": "author:1"}), "h2".into()),
+            BatchEntry::create("author", "author:1", json!({"id": "author:1", "name": "Alice"}).into()),
+            BatchEntry::create("thread", "thread:1", json!({"id": "thread:1", "title": "Test", "author": "author:1"}).into()),
         ];
 
         let updates = circuit.ingest_batch(batch);
@@ -714,8 +699,8 @@ mod complex_query_tests {
 
         // Batch: create user and thread together
         let batch = vec![
-            ("user".into(), "CREATE".into(), "user:1".into(), json!({"id": "user:1", "name": "Alice"}), "h1".into()),
-            ("thread".into(), "CREATE".into(), "thread:1".into(), json!({"id": "thread:1", "title": "Test", "author": "user:1"}), "h2".into()),
+            BatchEntry::create("user", "user:1", json!({"id": "user:1", "name": "Alice"}).into()),
+            BatchEntry::create("thread", "thread:1", json!({"id": "thread:1", "title": "Test", "author": "user:1"}).into()),
         ];
 
         circuit.ingest_batch(batch);

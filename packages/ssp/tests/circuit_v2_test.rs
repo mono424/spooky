@@ -39,17 +39,18 @@ fn test_circuit_v2_ingest() {
     circuit.register_view(plan, None, None);
 
     // 2. Ingest: "Alice", age 30. Should presumably NOT match filter.
-    let record = Record::new(
-        SmolStr::new("users"),
-        SmolStr::new("1"),
+    use ssp::engine::circuit::dto::BatchEntry;
+    
+    let record = BatchEntry::create(
+        "users",
+        "1",
         SpookyValue::from(json!({
             "name": "Alice",
             "age": 30
-        })),
-        "hash1".to_string(),
+        }))
     );
 
-    let updates = circuit.ingest(Operation::Create, record);
+    let updates = circuit.ingest_single(record);
 
     if !updates.is_empty() {
         match &updates[0] {
@@ -61,17 +62,16 @@ fn test_circuit_v2_ingest() {
     }
     
     // 4. Ingest Update: "Alice", age 31. Should match filter.
-    let record_update = Record::new(
-        SmolStr::new("users"),
-        SmolStr::new("1"),
+    let record_update = BatchEntry::update(
+        "users",
+        "1",
         SpookyValue::from(json!({
             "name": "Alice",
             "age": 31
-        })),
-        "hash2".to_string(),
+        }))
     );
     
-    let updates2 = circuit.ingest(Operation::Update, record_update);
+    let updates2 = circuit.ingest_single(record_update);
     assert_eq!(updates2.len(), 1, "Expected 1 update for age 31");
 }
 
