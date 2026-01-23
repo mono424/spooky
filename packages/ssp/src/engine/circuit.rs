@@ -22,6 +22,9 @@ pub mod types {
     
     /// Optimized storage for dependency lists (inline stack allocation for <4 items).
     pub type DependencyList = SmallVec<[ViewIndex; 4]>;
+    
+    /// Return type for ingest_single - inline storage for ≤2 updates
+    pub type ViewUpdateList = SmallVec<[ViewUpdate; 2]>;
 }
 
 pub mod dto {
@@ -172,40 +175,52 @@ impl Circuit {
 
     // --- Ingestion API 1: Single Record ---
 
-    /// Single record ingestion - optimized for the 99% use case.
+    /// Future optimization: ViewUpdateList is a Vec<ViewUpdate> but with inline storage for ≤2 updates
+    /// Single record ingestion - returns ALL affected view updates
     /// 
-    /// **Note:** If multiple views depend on the affected table, only the first
-    /// view's update is returned. For comprehensive updates, use `ingest_batch()`.
+    /// # Performance
+    /// - Optimized for single-record mutations
+    /// - Returns `SmallVec` (no heap allocation for ≤2 updates)
+    /// - Processes all dependent views
+
     pub fn ingest_single(
         &mut self,
-        table: &str,
-        op: Operation,
-        id: &str,
-        data: SpookyValue,
-    ) -> Option<ViewUpdate> {
-        let key = SmolStr::new(id);
-        let (zset_key, weight) = self.db.ensure_table(table).apply_mutation(op, key, data);
+        entrie: BatchEntry
+    ) -> ViewUpdateList {
+        let key = SmolStr::new(entrie.id);
+        let (zset_key, weight) = self.db.ensure_table(entrie.table.as_str()).apply_mutation(entrie.op, key, entrie.data);
 
-        if weight == 0 { return None; }
+        if weight == 0 {
+            return SmallVec::new();
+        }
 
         self.ensure_dependency_list();
+
+        let table_key = SmolStr::new(entrie.table);
         
-        // Dependency graph still uses SmolStr keys (optimized)
-        let table_key = SmolStr::new(table);
-        let view_count = self.dependency_list.get(&table_key).map(|v| v.len()).unwrap_or(0);
-        if view_count == 0 { return None; }
+        // Clone indices to avoid borrow conflict with self.views
+        let view_indices: SmallVec<[ViewIndex; 4]> = self
+            .dependency_list
+            .get(&table_key)
+            .map(|v| v.iter().copied().collect())
+            .unwrap_or_default();
 
-        let delta = Delta::new(table_key.clone(), zset_key, weight);
+        if view_indices.is_empty() {
+            return SmallVec::new();
+        }
 
-        for idx in 0..view_count {
-            let view_idx = self.dependency_list.get(&table_key).unwrap()[idx];
+        let delta = Delta::new(table_key, zset_key, weight);
+        let mut updates: ViewUpdateList = SmallVec::new();
+        
+        for view_idx in view_indices {
             if let Some(view) = self.views.get_mut(view_idx) {
                 if let Some(update) = view.process_single(&delta, &self.db) {
-                    return Some(update);
+                    updates.push(update);
                 }
             }
         }
-        None
+
+        updates
     }
 
     // --- Ingestion API 2: Batch ---
