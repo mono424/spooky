@@ -52,4 +52,24 @@ impl Operator {
             }
         }
     }
+
+    /// Check if the operator tree contains any subquery projections
+    pub fn has_subquery_projections(&self) -> bool {
+        match self {
+            Operator::Scan { .. } => false,
+            Operator::Filter { input, .. } => input.has_subquery_projections(),
+            Operator::Project { input, projections } => {
+                let has_local_subquery = projections.iter().any(|p| matches!(p, Projection::Subquery { .. }));
+                if has_local_subquery {
+                    true
+                } else {
+                    input.has_subquery_projections()
+                }
+            },
+            Operator::Limit { input, .. } => input.has_subquery_projections(),
+            Operator::Join { left, right, .. } => {
+                left.has_subquery_projections() || right.has_subquery_projections()
+            }
+        }
+    }
 }

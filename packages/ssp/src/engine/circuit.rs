@@ -358,7 +358,7 @@ impl Circuit {
                 .enumerate()
                 .filter_map(|(i, view)| -> Option<ViewUpdate> {
                     if impacted_view_indices.binary_search(&i).is_ok() {
-                        view.process_ingest(table_deltas, db_ref) 
+                        view.process_batch(table_deltas, db_ref) 
                     } else {
                         None
                     }
@@ -371,7 +371,7 @@ impl Circuit {
             let mut updates = Vec::with_capacity(impacted_view_indices.len());
             for i in impacted_view_indices {
                 if let Some(view) = self.views.get_mut(i) {
-                     if let Some(update) = view.process_ingest(table_deltas, db_ref) {
+                     if let Some(update) = view.process_batch(table_deltas, db_ref) {
                         updates.push(update);
                     }
                 }
@@ -395,7 +395,7 @@ impl Circuit {
         let mut view = View::new(plan.clone(), params, format);
 
         let empty_deltas: FastMap<String, ZSet> = FastMap::default();
-        let initial_update = view.process_ingest(&empty_deltas, &self.db);
+        let initial_update = view.process_batch(&empty_deltas, &self.db);
 
         self.views.push(view);
         let view_idx = self.views.len() - 1;

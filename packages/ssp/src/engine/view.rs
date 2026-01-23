@@ -34,21 +34,39 @@ pub struct View {
     pub params: Option<SpookyValue>,
     #[serde(default)]
     pub format: ViewResultFormat, // Output format strategy
+
+    // Cached characteristics
+    #[serde(skip)]
+    has_subqueries_cached: bool,
+    #[serde(skip)]
+    referenced_tables_cached: Vec<String>,
 }
 
 impl View {
     pub fn new(plan: QueryPlan, params: Option<Value>, format: Option<ViewResultFormat>) -> Self {
+        let has_subqueries_cached = plan.root.has_subquery_projections();
+        let referenced_tables_cached = plan.root.referenced_tables();
+
         Self {
             plan,
             cache: FastMap::default(),
             last_hash: String::new(),
             params: params.map(SpookyValue::from),
             format: format.unwrap_or_default(),
+            has_subqueries_cached,
+            referenced_tables_cached,
         }
     }
 
     /// Process a delta for this view - optimized fast path for simple views
     pub fn process_delta(&mut self, delta: &Delta, db: &Database) -> Option<ViewUpdate> {
+        // Fast check: Does this view even care about this table?
+        // Note: circuit.rs usually handles this via dependency list, but this
+        // specific check avoids work if called directly or if dependency logic is loose.
+        if !self.referenced_tables_cached.iter().any(|t| t == delta.table.as_str()) {
+            return None;
+        }
+
         // Fast path: Try optimized processing for simple Scan/Filter views
         if let Some(result) = self.try_fast_single(delta, db) {
             return result;
@@ -60,24 +78,23 @@ impl View {
         zset.insert(delta.key.clone(), delta.weight);
         deltas.insert(delta.table.to_string(), zset);
         
-        self.process_ingest(&deltas, db)
+        self.process_batch(&deltas, db)
     }
 
     /// Try fast single-record processing for simple views (Scan, Filter)
     /// Returns Some(result) if fast path was taken, None if fallback needed
     fn try_fast_single(&mut self, delta: &Delta, db: &Database) -> Option<Option<ViewUpdate>> {
-        // Only optimize for creates/updates (positive weight)
-        if delta.weight <= 0 {
-            return None; // Deletes need full batch processing
-        }
-        
         match &self.plan.root {
             Operator::Scan { table } => {
                 if table.as_str() != delta.table.as_str() {
                     return Some(None); // Different table, no effect
                 }
-                // Direct pass-through for matching table
-                Some(self.apply_single_create(&delta.key, db))
+                // Handle both creates and deletes
+                if delta.weight > 0 {
+                    Some(self.apply_single_create(&delta.key))
+                } else {
+                    Some(self.apply_single_delete(&delta.key))
+                }
             }
             Operator::Filter { input, predicate } => {
                 // Only optimize Scan+Filter
@@ -87,7 +104,11 @@ impl View {
                     }
                     // Check if record passes filter
                     if self.check_predicate(predicate, &delta.key, db, self.params.as_ref()) {
-                        return Some(self.apply_single_create(&delta.key, db));
+                        if delta.weight > 0 {
+                            return Some(self.apply_single_create(&delta.key));
+                        } else {
+                            return Some(self.apply_single_delete(&delta.key));
+                        }
                     } else {
                         return Some(None); // Filtered out
                     }
@@ -99,7 +120,7 @@ impl View {
     }
 
     /// Apply a single record creation to the view (fast path)
-    fn apply_single_create(&mut self, key: &SmolStr, _db: &Database) -> Option<ViewUpdate> {
+    fn apply_single_create(&mut self, key: &SmolStr) -> Option<ViewUpdate> {
         let is_first_run = self.last_hash.is_empty();
         let was_cached = self.cache.contains_key(key);
         
@@ -111,9 +132,9 @@ impl View {
         
         // Determine change type
         let (additions, updates) = if was_cached {
-            (vec![], vec![Self::strip_table_prefix(key)])
+            (vec![], vec![Self::strip_table_prefix_smol(key)])
         } else {
-            (vec![Self::strip_table_prefix(key)], vec![])
+            (vec![Self::strip_table_prefix_smol(key)], vec![])
         };
         
         // Build update
@@ -129,9 +150,16 @@ impl View {
             })
         };
         
+        // Compute hash if needed (for Streaming) before moving result_data
+        let pre_hash = if matches!(self.format, ViewResultFormat::Streaming) {
+            Some(compute_flat_hash(&result_data))
+        } else {
+            None
+        };
+        
         let raw_result = RawViewResult {
             query_id: self.plan.id.clone(),
-            records: result_data.clone(),
+            records: result_data,
             delta: view_delta_struct,
         };
         
@@ -140,7 +168,7 @@ impl View {
         // Hash check
         let hash = match &update {
             ViewUpdate::Flat(flat) | ViewUpdate::Tree(flat) => flat.result_hash.clone(),
-            ViewUpdate::Streaming(_) => compute_flat_hash(&result_data),
+            ViewUpdate::Streaming(_) => pre_hash.unwrap_or_default(),
         };
         
         let has_changes = match &update {
@@ -156,10 +184,77 @@ impl View {
         }
     }
 
+    /// Apply a single record deletion to the view (fast path)
+    fn apply_single_delete(&mut self, key: &SmolStr) -> Option<ViewUpdate> {
+        let is_first_run = self.last_hash.is_empty();
+        
+        // Check if key exists in cache
+        if !self.cache.contains_key(key) {
+            return None; // Not in view, no change
+        }
+        
+        // Remove from cache
+        self.cache.remove(key);
+        
+        // Build result data
+        let result_data = self.build_result_data();
+        
+        // Build update
+        use super::update::{build_update, compute_flat_hash, RawViewResult, ViewDelta};
+        
+        let view_delta_struct = if is_first_run {
+            None
+        } else {
+            Some(ViewDelta {
+                additions: vec![],
+                removals: vec![Self::strip_table_prefix_smol(key)],
+                updates: vec![],
+            })
+        };
+        
+        // Compute hash if needed (for Streaming) before moving result_data
+        let pre_hash = if matches!(self.format, ViewResultFormat::Streaming) {
+            Some(compute_flat_hash(&result_data))
+        } else {
+            None
+        };
+        
+        let raw_result = RawViewResult {
+            query_id: self.plan.id.clone(),
+            records: result_data,
+            delta: view_delta_struct,
+        };
+        
+        let update = build_update(raw_result, self.format.clone());
+        
+        // Hash check
+        let hash = match &update {
+            ViewUpdate::Flat(flat) | ViewUpdate::Tree(flat) => flat.result_hash.clone(),
+            ViewUpdate::Streaming(_) => pre_hash.unwrap_or_default(),
+        };
+        
+        let has_changes = match &update {
+            ViewUpdate::Streaming(s) => !s.records.is_empty(),
+            _ => hash != self.last_hash,
+        };
+        
+        if has_changes {
+            self.last_hash = hash;
+            Some(update)
+        } else {
+            None
+        }
+    }
+
+    /// Check if this view has any subquery projections
+    fn has_subqueries(&self) -> bool {
+        self.has_subqueries_cached
+    }
+
 
 
     /// Optimized 2-Phase Processing: Handles multiple table updates at once.
-    pub fn process_ingest(
+    pub fn process_batch(
         &mut self,
         deltas: &FastMap<String, ZSet>,
         db: &Database,
@@ -192,15 +287,22 @@ impl View {
             None // First run = treat as full snapshot
         } else {
             Some(ViewDelta {
-                additions: additions.clone(),
-                removals: removals.clone(),
-                updates: updates.clone(),
+                additions,
+                removals,
+                updates,
             })
+        };
+
+        // Compute hash if needed (for Streaming) before moving result_data
+        let pre_hash = if matches!(self.format, ViewResultFormat::Streaming) {
+            Some(compute_flat_hash(&result_data))
+        } else {
+            None
         };
 
         let raw_result = RawViewResult {
             query_id: self.plan.id.clone(),
-            records: result_data.clone(),
+            records: result_data,
             delta: view_delta_struct,
         };
 
@@ -210,7 +312,7 @@ impl View {
         // Extract hash for comparison (depends on format)
         let hash = match &update {
             ViewUpdate::Flat(flat) | ViewUpdate::Tree(flat) => flat.result_hash.clone(),
-            ViewUpdate::Streaming(_) => compute_flat_hash(&result_data),
+            ViewUpdate::Streaming(_) => pre_hash.unwrap_or_default(),
         };
 
         let has_changes = match &update {
@@ -228,6 +330,11 @@ impl View {
 
     /// Helper to expand a ZSet of root records to include all their subquery dependencies
     fn expand_with_subqueries(&self, zset: &mut ZSet, db: &Database) {
+        // Early exit if query has no subqueries
+        if !self.has_subqueries() {
+            return;
+        }
+        
         // We must iterate a copy of keys to safely mutate zset
         let keys: Vec<(SmolStr, i64)> = zset.iter().map(|(k, v)| (k.clone(), *v)).collect();
 
@@ -368,25 +475,36 @@ impl View {
     fn categorize_changes(
         &self,
         view_delta: &ZSet,
-        updated_record_ids: &[String],
-    ) -> (Vec<String>, Vec<String>, Vec<String>) {
+        updated_record_ids: &[SmolStr],
+    ) -> (Vec<SmolStr>, Vec<SmolStr>, Vec<SmolStr>) {
         let delta_size = view_delta.len();
-        let mut additions: Vec<String> = Vec::with_capacity(delta_size);
-        let mut removals: Vec<String> = Vec::with_capacity(delta_size);
+        let mut additions: Vec<SmolStr> = Vec::with_capacity(delta_size);
+        let mut removals: Vec<SmolStr> = Vec::with_capacity(delta_size);
 
         // Build set of updated IDs for O(1) lookup
-        let updated_ids_set: std::collections::HashSet<&str> = 
-            updated_record_ids.iter().map(|s| s.as_str()).collect();
+        // Optimization: Use linear search for small sets
+        let use_hashset = updated_record_ids.len() > 8;
+        let updated_ids_set: Option<std::collections::HashSet<&str>> = if use_hashset {
+            Some(updated_record_ids.iter().map(|s| s.as_str()).collect())
+        } else {
+            None
+        };
 
         // Categorize additions and removals
         for (key, weight) in view_delta {
             if *weight > 0 {
                 // Check if this is genuinely new or an update
-                if !updated_ids_set.contains(key.as_str()) {
-                    additions.push(Self::strip_table_prefix(key));
+                let is_update = if let Some(set) = &updated_ids_set {
+                    set.contains(key.as_str())
+                } else {
+                    updated_record_ids.iter().any(|id| id == key.as_str())
+                };
+
+                if !is_update {
+                    additions.push(Self::strip_table_prefix_smol(key));
                 }
             } else if *weight < 0 {
-                removals.push(Self::strip_table_prefix(key));
+                removals.push(Self::strip_table_prefix_smol(key));
             }
         }
 
@@ -398,22 +516,22 @@ impl View {
                 .collect();
 
         // Updates: records in updated_record_ids that are NOT being removed
-        let updates: Vec<String> = updated_record_ids
+        let updates: Vec<SmolStr> = updated_record_ids
             .iter()
             .filter(|id| !removal_set_unstripped.contains(id.as_str()))
-            .map(|id| Self::strip_table_prefix(id))
+            .map(|id| Self::strip_table_prefix_smol(id))
             .collect();
 
         (additions, removals, updates)
     }
 
     /// Build sorted result data from current cache
-    fn build_result_data(&self) -> Vec<String> {
-        let mut result_data: Vec<String> = self.cache.keys()
+    fn build_result_data(&self) -> Vec<SmolStr> {
+        let mut result_data: Vec<SmolStr> = self.cache.keys()
             .map(|k| {
                 k.split_once(':')
-                 .map(|(_, id)| id.to_string())
-                 .unwrap_or_else(|| k.to_string())
+                 .map(|(_, id)| SmolStr::new(id))
+                 .unwrap_or_else(|| k.clone())
             })
             .collect();
         result_data.sort_unstable();
@@ -422,7 +540,7 @@ impl View {
 
     /// Get all record IDs currently in the view's cache/version_map that have been updated in the deltas
     /// This handles UPDATE operations where the ID set doesn't change but content does
-    fn get_updated_cached_records(&self, deltas: &FastMap<String, ZSet>) -> Vec<String> {
+    fn get_updated_cached_records(&self, deltas: &FastMap<String, ZSet>) -> Vec<SmolStr> {
         let mut updated_ids = Vec::new();
 
         // For each table in the deltas, check if any updated record is in our cache
@@ -431,7 +549,7 @@ impl View {
                 // Only check records with positive weight (existing/updated records)
                 // Negative weight means deletion which is handled elsewhere
                 if *weight > 0 && self.cache.contains_key(record_id.as_str()) {
-                    updated_ids.push(record_id.to_string());
+                    updated_ids.push(record_id.clone());
                 }
             }
         }
@@ -626,10 +744,12 @@ impl View {
         db.tables.get(table_name)?.rows.get(id)
     }
 
-    /// Strip "table:" prefix from ZSet key to get row ID
+
+
+    /// Strip "table:" prefix from ZSet key to get row ID (SmolStr version)
     #[inline]
-    fn strip_table_prefix(key: &str) -> String {
-        key.split_once(':').map(|(_, id)| id.to_string()).unwrap_or_else(|| key.to_string())
+    fn strip_table_prefix_smol(key: &str) -> SmolStr {
+        key.split_once(':').map(|(_, id)| SmolStr::new(id)).unwrap_or_else(|| SmolStr::new(key))
     }
 
     /// Resolve predicate value, handling $param references to context

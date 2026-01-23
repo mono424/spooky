@@ -14,13 +14,14 @@ use common::*;
 use serde_json::json;
 use ssp::engine::update::{DeltaEvent, ViewResultFormat, ViewUpdate};
 use ssp::{Operator, Path, Predicate, Projection, QueryPlan};
+use smol_str::SmolStr;
 
 /// Represents an edge operation that would be sent to the database
 #[derive(Debug, Clone)]
 struct EdgeOperation {
     op_type: &'static str, // "RELATE" or "DELETE"
     from: String,          // incantation ID
-    to: String,            // record ID
+    to: SmolStr,           // record ID
 }
 
 /// Simulates what the sidecar would do with a StreamingUpdate
@@ -351,7 +352,7 @@ fn test_integration_flow_thread_with_author() {
 
             // Verify no DELETE operations for user
             for op in &edge_ops {
-                if op.to.starts_with("user:") && op.op_type == "DELETE" {
+                if op.to.as_str().starts_with("user:") && op.op_type == "DELETE" {
                     panic!("BUG: User edge incorrectly deleted on thread update!");
                 }
             }

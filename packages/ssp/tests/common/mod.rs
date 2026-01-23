@@ -9,15 +9,16 @@ use ssp::{
     Circuit,
 };
 use ulid::Ulid;
+use smol_str::SmolStr;
 
 /// Extension trait to provide convenient accessors for ViewUpdate
 pub trait ViewUpdateExt {
-    fn result_data(&self) -> &[String];
+    fn result_data(&self) -> &[SmolStr];
     fn query_id(&self) -> &str;
 }
 
 impl ViewUpdateExt for ViewUpdate {
-    fn result_data(&self) -> &[String] {
+    fn result_data(&self) -> &[SmolStr] {
         match self {
             ViewUpdate::Flat(m) | ViewUpdate::Tree(m) => &m.result_data,
             ViewUpdate::Streaming(_) => &[],

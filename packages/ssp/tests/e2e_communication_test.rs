@@ -14,6 +14,7 @@ use common::*;
 use serde_json::json;
 use ssp::engine::update::{DeltaEvent, ViewResultFormat, ViewUpdate};
 use ssp::{Operator, Path, Predicate, Projection, QueryPlan};
+use smol_str::SmolStr;
 
 /// Simulated DB operation for testing persistence logic
 #[derive(Debug, Clone, PartialEq)]
@@ -22,24 +23,24 @@ enum DbOperation {
     UpdateIncantation {
         incantation_id: String,
         hash: String,
-        array: Vec<String>,
+        array: Vec<SmolStr>,
     },
     /// RELATE $from->_spooky_list_ref->$to
     RelateEdge {
         from: String,
-        to: String,
+        to: SmolStr,
         // version removed
     },
     /// UPDATE $from->_spooky_list_ref SET ... WHERE out = $to
     UpdateEdge {
         from: String,
-        to: String,
+        to: SmolStr,
         // version removed
     },
     /// DELETE $from->_spooky_list_ref WHERE out = $to
     DeleteEdge {
         from: String,
-        to: String,
+        to: SmolStr,
     },
 }
 
@@ -202,7 +203,7 @@ fn test_flat_format_e2e_flow() {
             assert_eq!(array.len(), 2, "Should have thread + user");
             
             // Verify both records are present
-            let ids: Vec<String> = array.iter().cloned().collect();
+            let ids: Vec<String> = array.iter().map(|s| s.to_string()).collect();
             assert!(ids.contains(&thread_id), "Array should contain thread");
             assert!(ids.contains(&user_id), "Array should contain user (from subquery)");
             println!("  ✓ Flat payload validated: {} records, hash={}", array.len(), &hash[..8]);
@@ -330,7 +331,7 @@ fn test_streaming_format_e2e_flow() {
             // CRITICAL: User should NOT have a delete operation
             for op in &delete_ops {
                 if let DbOperation::DeleteEdge { to, .. } = op {
-                    assert_ne!(to, &user_id, "BUG: User should not be deleted when thread is updated!");
+                    assert_ne!(to.as_str(), user_id.as_str(), "BUG: User should not be deleted when thread is updated!");
                 }
             }
             

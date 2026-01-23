@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use smol_str::SmolStr;
+
 /// Output format strategy
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -22,18 +24,18 @@ pub enum ViewResultFormat {
 #[derive(Debug, Clone, Default)]
 pub struct ViewDelta {
     /// Records added to the view (weight > 0)
-    pub additions: Vec<String>,
+    pub additions: Vec<SmolStr>,
     /// Records removed from the view (weight < 0)
-    pub removals: Vec<String>,
+    pub removals: Vec<SmolStr>,
     /// Records updated in place (content changed, still in view)
-    pub updates: Vec<String>,
+    pub updates: Vec<SmolStr>,
 }
 
 /// Raw view result (format-agnostic data from View)
 #[derive(Debug, Clone)]
 pub struct RawViewResult {
     pub query_id: String,
-    pub records: Vec<String>, // full snapshot for Flat/Tree
+    pub records: Vec<SmolStr>, // full snapshot for Flat/Tree
     pub delta: Option<ViewDelta>, // delta info for Streaming
 }
 
@@ -42,7 +44,7 @@ pub struct RawViewResult {
 pub struct MaterializedViewUpdate {
     pub query_id: String,
     pub result_hash: String,
-    pub result_data: Vec<String>, // [record-id, ...]
+    pub result_data: Vec<SmolStr>, // [record-id, ...]
 }
 
 /// Delta event for streaming format
@@ -57,7 +59,7 @@ pub enum DeltaEvent {
 /// Delta record for streaming format
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct DeltaRecord {
-    pub id: String,
+    pub id: SmolStr,
     pub event: DeltaEvent,
 }
 
@@ -80,7 +82,7 @@ pub enum ViewUpdate {
 /// Compute hash from flat array of record IDs.
 /// IMPORTANT: Sorts by record ID before hashing to ensure deterministic output
 /// regardless of insertion order.
-pub fn compute_flat_hash(data: &[String]) -> String {
+pub fn compute_flat_hash(data: &[SmolStr]) -> String {
     let mut sorted_data: Vec<_> = data.to_vec();
     sorted_data.sort();
 
@@ -155,7 +157,7 @@ pub fn build_update(raw: RawViewResult, format: ViewResultFormat) -> ViewUpdate 
 /// Build streaming delta update from ZSet delta
 pub fn build_streaming_delta(
     query_id: String,
-    delta: &[(String, i64)], // (id, weight)
+    delta: &[(SmolStr, i64)], // (id, weight)
 ) -> StreamingUpdate {
     let records = delta
         .iter()
