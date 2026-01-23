@@ -10,7 +10,9 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
 use ssp::{
     engine::circuit::{Circuit, dto::BatchEntry},
     engine::types::Operation,
@@ -37,8 +39,8 @@ type SharedDb = Arc<Surreal<Client>>;
 
 #[derive(Clone)]
 struct AppState {
-    db: SharedDb,  // Arc-wrapped for efficient cloning
-    processor: Arc<Mutex<Box<Circuit>>>,
+    db: SharedDb,
+    processor: Arc<RwLock<Circuit>>,
     persistence_path: PathBuf,
     saver: Arc<BackgroundSaver>,
     metrics: Arc<Metrics>,
@@ -66,6 +68,65 @@ struct UnregisterViewRequest {
     id: String,
 }
 
+struct Config {
+    persistence_path: PathBuf,
+    listen_addr: String,
+    debounce_ms: u64,
+    db_addr: String,
+    db_user: String,
+    db_pass: String,
+    db_ns: String,
+    db_db: String,
+}
+
+fn load_config() -> Config {
+    Config {
+        persistence_path: PathBuf::from(
+            std::env::var("SPOOKY_PERSISTENCE_FILE")
+                .unwrap_or_else(|_| "data/spooky_state.json".to_string())
+        ),
+        listen_addr: std::env::var("LISTEN_ADDR")
+            .unwrap_or_else(|_| "0.0.0.0:8667".to_string()),
+        debounce_ms: std::env::var("SAVE_DEBOUNCE_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(2000),
+        db_addr: std::env::var("SURREALDB_ADDR")
+            .unwrap_or_else(|_| "127.0.0.1:8000".to_string()),
+        db_user: std::env::var("SURREALDB_USER")
+            .unwrap_or_else(|_| "root".to_string()),
+        db_pass: std::env::var("SURREALDB_PASS")
+            .unwrap_or_else(|_| "root".to_string()),
+        db_ns: std::env::var("SURREALDB_NS")
+            .unwrap_or_else(|_| "test".to_string()),
+        db_db: std::env::var("SURREALDB_DB")
+            .unwrap_or_else(|_| "test".to_string()),
+    }
+}
+
+async fn connect_database(config: &Config) -> anyhow::Result<SharedDb> {
+    info!(addr = %config.db_addr, "Connecting to SurrealDB");
+    
+    let db = Surreal::new::<Ws>(&config.db_addr)
+        .await
+        .context("Failed to connect to SurrealDB")?;
+    
+    db.signin(Root {
+        username: config.db_user.clone(),
+        password: config.db_pass.clone(),
+    })
+    .await
+    .context("Failed to signin")?;
+    
+    db.use_ns(&config.db_ns)
+        .use_db(&config.db_db)
+        .await
+        .context("Failed to select ns/db")?;
+    
+    info!("Connected to SurrealDB");
+    Ok(Arc::new(db))
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
@@ -77,48 +138,24 @@ async fn main() -> anyhow::Result<()> {
     
     info!("Starting ssp (streaming mode)...");
 
-    // Persistence Config
-    let persistence_file = std::env::var("SPOOKY_PERSISTENCE_FILE")
-        .unwrap_or_else(|_| "data/spooky_state.json".to_string());
-    let persistence_path = PathBuf::from(persistence_file);
-
-    // Auth Config
-    let _auth_secret = std::env::var("SPOOKY_AUTH_SECRET").expect("SPOOKY_AUTH_SECRET must be set");
-
-    // SurrealDB Config
-    let db_addr = std::env::var("SURREALDB_ADDR").unwrap_or_else(|_| "127.0.0.1:8000".to_string());
-    let db_user = std::env::var("SURREALDB_USER").unwrap_or_else(|_| "root".to_string());
-    let db_pass = std::env::var("SURREALDB_PASS").unwrap_or_else(|_| "root".to_string());
-    let db_ns = std::env::var("SURREALDB_NS").unwrap_or_else(|_| "test".to_string());
-    let db_db = std::env::var("SURREALDB_DB").unwrap_or_else(|_| "test".to_string());
-
-    info!("Connecting to SurrealDB at {}", db_addr);
-
-    let db = Surreal::new::<Ws>(db_addr).await.context("Failed to connect to SurrealDB")?;
-    db.signin(Root { username: db_user, password: db_pass }).await.context("Failed to signin")?;
-    db.use_ns(&db_ns).use_db(&db_db).await.context("Failed to select ns/db")?;
-
-    info!("Connected to SurrealDB (single persistent connection)");
-
-    // Wrap in Arc for zero-copy sharing across handlers
-    let db = Arc::new(db);
+    let config = load_config();
+    let db = connect_database(&config).await?;
 
     // Load Circuit
-    let processor = persistence::load_circuit(&persistence_path);
-    let processor_arc = Arc::new(Mutex::new(Box::new(processor)));
+    let processor = persistence::load_circuit(&config.persistence_path);
+    let processor_arc = Arc::new(RwLock::new(processor));
     
     // Initial view count metric
     {
-        let guard = processor_arc.lock().unwrap();
+        let guard = processor_arc.read().await;
         metrics.view_count.add(guard.views.len() as i64, &[]);
     }
 
     // Initialize Background Saver
-    let debounce_ms = 2000;
     let saver = Arc::new(BackgroundSaver::new(
-        persistence_path.clone(),
+        config.persistence_path.clone(),
         processor_arc.clone(),
-        debounce_ms,
+        config.debounce_ms,
     ));
     
     let saver_clone = saver.clone();
@@ -129,7 +166,7 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState {
         db,
         processor: processor_arc,
-        persistence_path,
+        persistence_path: config.persistence_path,
         saver: saver.clone(),
         metrics,
     };
@@ -141,13 +178,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/view/unregister", post(unregister_view_handler))
         .route("/reset", post(reset_handler))
         .route("/save", post(save_handler))
+        .route("/health", get(health_handler))
         .route("/version", get(version_handler))
         .layer(middleware::from_fn(auth_middleware))
         .with_state(state);
 
-    let listener_addr = "0.0.0.0:8667";
-    let listener = tokio::net::TcpListener::bind(listener_addr).await.context("Failed to bind port")?;
-    info!("Listening on {}", listener_addr);
+    let listener = tokio::net::TcpListener::bind(&config.listen_addr).await.context("Failed to bind port")?;
+    info!(addr = %config.listen_addr, "Listening");
     
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal(saver, meter_provider))
@@ -239,7 +276,8 @@ async fn ingest_handler(
     let (clean_record, _hash) = ssp::service::ingest::prepare(payload.record);
 
     let updates = {
-        let mut circuit = state.processor.lock().unwrap();
+        // Use write lock for ingestion
+        let mut circuit = state.processor.write().await;
 
         let entry = BatchEntry::new(
              &payload.table,
@@ -319,7 +357,7 @@ async fn register_view_handler(
 
     // Always register with Streaming mode
     let update = {
-        let mut circuit = state.processor.lock().unwrap();
+        let mut circuit = state.processor.write().await;
         let res = circuit.register_view(
             data.plan.clone(), 
             data.safe_params, 
@@ -375,7 +413,7 @@ async fn unregister_view_handler(
     debug!("Unregistering view {}", payload.id);
     
     {
-        let mut circuit = state.processor.lock().unwrap();
+        let mut circuit = state.processor.write().await;
         circuit.unregister_view(&payload.id);
         state.saver.trigger_save();
     }
@@ -403,9 +441,9 @@ async fn reset_handler(State(state): State<AppState>) -> impl IntoResponse {
     info!("Resetting circuit state");
     
     let old_view_count = {
-        let mut circuit = state.processor.lock().unwrap();
+        let mut circuit = state.processor.write().await;
         let count = circuit.views.len();
-        *circuit = Box::new(Circuit::new());
+        *circuit = Circuit::new();
         if state.persistence_path.exists() {
             let _ = std::fs::remove_file(&state.persistence_path);
         }
@@ -429,8 +467,20 @@ async fn save_handler(State(state): State<AppState>) -> impl IntoResponse {
     StatusCode::OK
 }
 
+async fn health_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let circuit = state.processor.read().await;
+    Json(json!({
+        "status": "healthy",
+        "views": circuit.views.len(),
+        "tables": circuit.db.tables.len(),
+    }))
+}
+
 async fn version_handler() -> impl IntoResponse {
-    Json(json!("0.3.2-streaming-batched"))
+    Json(json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "mode": "streaming"
+    }))
 }
 
 // --- Helper Functions ---

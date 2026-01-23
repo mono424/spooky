@@ -1,7 +1,7 @@
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, RwLock};
 use tokio::time::sleep;
 use tracing::{info, error, debug};
 use ssp::Circuit;
@@ -9,14 +9,14 @@ use crate::persistence;
 
 pub struct BackgroundSaver {
     path: PathBuf,
-    circuit: Arc<Mutex<Box<Circuit>>>,
+    circuit: Arc<RwLock<Circuit>>,
     notify: Arc<Notify>,
     shutdown: Arc<Notify>,
     debounce_duration: Duration,
 }
 
 impl BackgroundSaver {
-    pub fn new(path: PathBuf, circuit: Arc<Mutex<Box<Circuit>>>, debounce_ms: u64) -> Self {
+    pub fn new(path: PathBuf, circuit: Arc<RwLock<Circuit>>, debounce_ms: u64) -> Self {
         Self {
             path,
             circuit,
@@ -39,18 +39,11 @@ impl BackgroundSaver {
                     debug!("Change detected, waiting {:?} before saving", self.debounce_duration);
                     sleep(self.debounce_duration).await;
                     
-                    // Consume any extra notifications that happened during sleep
-                    // access internal logic or just proceed. 
-                    // Notify uses standard behavior, multiple notifications while not awaiting are coalesced? 
-                    // No, `notify_one` wakes one waiter. If we are sleeping, we are not waiting.
-                    // But `notified()` is cancellation safe. 
-                    // Let's just save.
-                    
-                    self.save_now();
+                    self.save_now().await;
                 }
                 _ = self.shutdown.notified() => {
                     info!("Shutdown signal received, performing final save");
-                    self.save_now();
+                    self.save_now().await;
                     break;
                 }
             }
@@ -62,9 +55,9 @@ impl BackgroundSaver {
         self.shutdown.notify_one();
     }
 
-    fn save_now(&self) {
+    async fn save_now(&self) {
         debug!("Saving state to disk...");
-        let circuit_guard = self.circuit.lock().unwrap();
+        let circuit_guard = self.circuit.read().await;
         if let Err(e) = persistence::save_circuit(&self.path, &circuit_guard) {
             error!("Background save failed: {}", e);
         } else {
@@ -72,3 +65,4 @@ impl BackgroundSaver {
         }
     }
 }
+
