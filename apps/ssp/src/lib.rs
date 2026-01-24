@@ -587,15 +587,25 @@ async fn update_all_edges(db: &Surreal<Client>, updates: &[&StreamingUpdate], me
                 DeltaEvent::Updated => {
                     updated_count += 1;
                     format!(
-                        "UPDATE ${}->_spooky_list_ref WHERE out = {}",
-                        binding_name, record.id
+                        "
+                        LET $spooky_version = (SELECT id, version FROM ONLY _spooky_version WHERE record_id = {0});
+                        LET $target = $spooky_version.id;
+                        UPDATE ${1}->_spooky_list_ref SET version += 1 WHERE out = $target;
+                        ",
+                        record.id,
+                        binding_name
                     )
                 }
                 DeltaEvent::Deleted => {
                     deleted_count += 1;
                     format!(
-                        "DELETE ${}->_spooky_list_ref WHERE out = {}",
-                        binding_name, record.id
+                        "
+                        LET $spooky_version = (SELECT id FROM ONLY _spooky_version WHERE record_id = {0});
+                        LET $target = $spooky_version.id;
+                        DELETE ${1}->_spooky_list_ref WHERE out = $target;
+                        ",
+                        record.id,
+                        binding_name
                     )
                 }
             };
