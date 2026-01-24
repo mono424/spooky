@@ -1,14 +1,14 @@
 use anyhow::Context;
 use axum::{
-    extract::{State, Json, Request},
+    Router,
+    extract::{Json, Request, State},
     http::{StatusCode, header::AUTHORIZATION},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
-    Router,
 };
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -16,23 +16,23 @@ use tokio::sync::RwLock;
 use ssp::{
     engine::circuit::{Circuit, dto::BatchEntry},
     engine::types::Operation,
-    engine::update::{StreamingUpdate, DeltaEvent, ViewResultFormat, ViewUpdate},
+    engine::update::{DeltaEvent, StreamingUpdate, ViewResultFormat, ViewUpdate},
 };
+use surrealdb::Surreal;
 use surrealdb::engine::remote::ws::{Client, Ws};
 use surrealdb::opt::auth::Root;
-use surrealdb::Surreal;
 use surrealdb::types::RecordId;
-use tracing::{info, error, debug, instrument, Span};
-use tracing::field::Empty;
 use tokio::signal;
+use tracing::field::Empty;
+use tracing::{Span, debug, error, info, instrument};
 
 // ... (imports)
 
 // Expose these for use in main.rs and tests
-pub mod persistence;
 pub mod background_saver;
-pub mod open_telemetry;
 pub mod metrics;
+pub mod open_telemetry;
+pub mod persistence;
 
 use background_saver::BackgroundSaver;
 use metrics::Metrics;
@@ -86,46 +86,40 @@ pub fn load_config() -> Config {
     Config {
         persistence_path: PathBuf::from(
             std::env::var("SPOOKY_PERSISTENCE_FILE")
-                .unwrap_or_else(|_| "data/spooky_state.json".to_string())
+                .unwrap_or_else(|_| "data/spooky_state.json".to_string()),
         ),
-        listen_addr: std::env::var("LISTEN_ADDR")
-            .unwrap_or_else(|_| "0.0.0.0:8667".to_string()),
+        listen_addr: std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:8667".to_string()),
         debounce_ms: std::env::var("SAVE_DEBOUNCE_MS")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(2000),
-        db_addr: std::env::var("SURREALDB_ADDR")
-            .unwrap_or_else(|_| "127.0.0.1:8000".to_string()),
-        db_user: std::env::var("SURREALDB_USER")
-            .unwrap_or_else(|_| "root".to_string()),
-        db_pass: std::env::var("SURREALDB_PASS")
-            .unwrap_or_else(|_| "root".to_string()),
-        db_ns: std::env::var("SURREALDB_NS")
-            .unwrap_or_else(|_| "test".to_string()),
-        db_db: std::env::var("SURREALDB_DB")
-            .unwrap_or_else(|_| "test".to_string()),
+        db_addr: std::env::var("SURREALDB_ADDR").unwrap_or_else(|_| "127.0.0.1:8000".to_string()),
+        db_user: std::env::var("SURREALDB_USER").unwrap_or_else(|_| "root".to_string()),
+        db_pass: std::env::var("SURREALDB_PASS").unwrap_or_else(|_| "root".to_string()),
+        db_ns: std::env::var("SURREALDB_NS").unwrap_or_else(|_| "test".to_string()),
+        db_db: std::env::var("SURREALDB_DB").unwrap_or_else(|_| "test".to_string()),
     }
 }
 
 pub async fn connect_database(config: &Config) -> anyhow::Result<SharedDb> {
     info!(addr = %config.db_addr, "Connecting to SurrealDB");
-    
+
     let db = Surreal::new::<Ws>(&config.db_addr)
         .await
         .context("Failed to connect to SurrealDB")?;
-    
+
     db.signin(Root {
         username: config.db_user.clone(),
         password: config.db_pass.clone(),
     })
     .await
     .context("Failed to signin")?;
-    
+
     db.use_ns(&config.db_ns)
         .use_db(&config.db_db)
         .await
         .context("Failed to select ns/db")?;
-    
+
     info!("Connected to SurrealDB");
     Ok(Arc::new(db))
 }
@@ -149,9 +143,10 @@ pub async fn run_server() -> anyhow::Result<()> {
 
     // Initialize observability
     open_telemetry::init_tracing().context("Failed to initialize OpenTelemetry tracing")?;
-    let (meter_provider, metrics) = metrics::init_metrics().context("Failed to initialize metrics")?;
+    let (meter_provider, metrics) =
+        metrics::init_metrics().context("Failed to initialize metrics")?;
     let metrics = Arc::new(metrics);
-    
+
     info!("Starting ssp (streaming mode)...");
 
     let config = load_config();
@@ -160,7 +155,7 @@ pub async fn run_server() -> anyhow::Result<()> {
     // Load Circuit
     let processor = persistence::load_circuit(&config.persistence_path);
     let processor_arc = Arc::new(RwLock::new(processor));
-    
+
     // Initial view count metric
     {
         let guard = processor_arc.read().await;
@@ -173,7 +168,7 @@ pub async fn run_server() -> anyhow::Result<()> {
         processor_arc.clone(),
         config.debounce_ms,
     ));
-    
+
     let saver_clone = saver.clone();
     tokio::spawn(async move {
         saver_clone.run().await;
@@ -189,19 +184,20 @@ pub async fn run_server() -> anyhow::Result<()> {
 
     let app = create_app(state);
 
-    let listener = tokio::net::TcpListener::bind(&config.listen_addr).await.context("Failed to bind port")?;
+    let listener = tokio::net::TcpListener::bind(&config.listen_addr)
+        .await
+        .context("Failed to bind port")?;
     info!(addr = %config.listen_addr, "Listening");
-    
+
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal(saver, meter_provider))
         .await
         .context("Server error")?;
-        
+
     opentelemetry::global::shutdown_tracer_provider();
-    
+
     Ok(())
 }
-
 
 async fn shutdown_signal(
     saver: Arc<BackgroundSaver>,
@@ -232,7 +228,7 @@ async fn shutdown_signal(
     info!("Signal received, starting graceful shutdown");
     saver.signal_shutdown();
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    
+
     if let Err(e) = meter_provider.shutdown() {
         error!(error = %e, "Failed to shutdown meter provider");
     }
@@ -254,10 +250,10 @@ async fn auth_middleware(req: Request, next: Next) -> Response {
 use axum::body::Bytes;
 
 #[instrument(
-    skip(state, body), 
+    skip(state, body),
     fields(
-        table = Empty, 
-        op = Empty, 
+        table = Empty,
+        op = Empty,
         id = Empty,
         payload_size_bytes = Empty,
         views_affected = Empty,
@@ -270,9 +266,12 @@ async fn ingest_handler(
 ) -> impl IntoResponse {
     let start = std::time::Instant::now();
     let span = Span::current();
-    
+
     let payload_size = body.len();
-    debug!("Received Record ingest request: payload size: {} bytes", payload_size);
+    debug!(
+        "Received Record ingest request: payload size: {} bytes",
+        payload_size
+    );
 
     // 2. Deserialisierung (von Bytes zu deinem Struct)
     let payload: IngestRequest = match serde_json::from_slice(&body) {
@@ -282,7 +281,7 @@ async fn ingest_handler(
             return StatusCode::BAD_REQUEST;
         }
     };
-    
+
     // Parse operation
     let op = match Operation::from_str(&payload.op) {
         Some(op) => op,
@@ -298,38 +297,46 @@ async fn ingest_handler(
         // Use write lock for ingestion
         let mut circuit = state.processor.write().await;
 
-        let entry = BatchEntry::new(
-             &payload.table,
-             op,
-             &payload.id,
-             clean_record.into(),
-        );
+        let entry = BatchEntry::new(&payload.table, op, &payload.id, clean_record.into());
 
         circuit.ingest_single(entry)
     };
-    
+
     // Record metrics
-    state.metrics.inc_ingest(1, &[
-        opentelemetry::KeyValue::new("table", payload.table.clone()),
-        opentelemetry::KeyValue::new("op", payload.op.clone()),
-    ]);
+    state.metrics.inc_ingest(
+        1,
+        &[
+            opentelemetry::KeyValue::new("table", payload.table.clone()),
+            opentelemetry::KeyValue::new("op", payload.op.clone()),
+        ],
+    );
     span.record("views_affected", updates.len());
-    
+
     state.saver.trigger_save();
 
     // Collect all streaming updates and batch into single transaction
     let streaming_updates: Vec<&StreamingUpdate> = updates
         .iter()
-        .filter_map(|u| if let ViewUpdate::Streaming(s) = u { Some(s) } else { None })
+        .filter_map(|u| {
+            if let ViewUpdate::Streaming(s) = u {
+                Some(s)
+            } else {
+                None
+            }
+        })
         .collect();
 
     if !streaming_updates.is_empty() {
-        let edge_count = streaming_updates.iter().map(|s| s.records.len()).sum::<usize>();
+        let edge_count = streaming_updates
+            .iter()
+            .map(|s| s.records.len())
+            .sum::<usize>();
         span.record("edges_updated", edge_count);
-        
+
+        debug!("BEFORE EDGE UPDATE: updates: {:?}", streaming_updates);
         update_all_edges(&state.db, &streaming_updates, &state.metrics).await;
     }
-    
+
     // Record duration
     let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
     state.metrics.ingest_duration.record(duration_ms, &[]);
@@ -338,9 +345,7 @@ async fn ingest_handler(
 }
 
 #[instrument(skip(payload), fields(level = %payload.level))]
-async fn log_handler(
-    Json(payload): Json<LogRequest>,
-) -> impl IntoResponse {
+async fn log_handler(Json(payload): Json<LogRequest>) -> impl IntoResponse {
     let msg = if let Some(data) = &payload.data {
         format!("{} | data: {}", payload.message, data)
     } else {
@@ -361,10 +366,10 @@ async fn log_handler(
 #[instrument(skip(state), fields(view_id = Empty))]
 async fn register_view_handler(
     State(state): State<AppState>,
-    Json(payload): Json<Value>, 
+    Json(payload): Json<Value>,
 ) -> impl IntoResponse {
     let span = Span::current();
-    
+
     let result = ssp::service::view::prepare_registration(payload);
     let data = match result {
         Ok(d) => d,
@@ -378,14 +383,14 @@ async fn register_view_handler(
     let update = {
         let mut circuit = state.processor.write().await;
         let res = circuit.register_view(
-            data.plan.clone(), 
-            data.safe_params, 
+            data.plan.clone(),
+            data.safe_params,
             Some(ViewResultFormat::Streaming),
         );
         state.saver.trigger_save();
         res
     };
-    
+
     state.metrics.view_count.add(1, &[]);
 
     let m = &data.metadata;
@@ -401,7 +406,9 @@ async fn register_view_handler(
     // Store incantation metadata
     let query = "UPSERT <record>$id SET clientId = <string>$clientId, surrealQL = <string>$surrealQL, params = $params, ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt";
 
-    let db_res = state.db.query(query)
+    let db_res = state
+        .db
+        .query(query)
         .bind(("id", id_str.clone()))
         .bind(("clientId", client_id_str))
         .bind(("surrealQL", surql_str))
@@ -417,7 +424,11 @@ async fn register_view_handler(
 
     // Create initial edges
     if let Some(ViewUpdate::Streaming(s)) = &update {
-        debug!("Creating {} initial edges for view {}", s.records.len(), id_str);
+        debug!(
+            "Creating {} initial edges for view {}",
+            s.records.len(),
+            id_str
+        );
         update_incantation_edges(&state.db, s, &state.metrics).await;
     }
 
@@ -430,19 +441,20 @@ async fn unregister_view_handler(
     Json(payload): Json<UnregisterViewRequest>,
 ) -> impl IntoResponse {
     debug!("Unregistering view {}", payload.id);
-    
+
     {
         let mut circuit = state.processor.write().await;
         circuit.unregister_view(&payload.id);
         state.saver.trigger_save();
     }
-    
+
     state.metrics.view_count.add(-1, &[]);
-    
+
     // Delete all edges for this incantation
     let id_str = format_incantation_id(&payload.id);
     if let Some(from_id) = parse_record_id(&id_str) {
-        if let Err(e) = state.db
+        if let Err(e) = state
+            .db
             .query("DELETE $from->_spooky_list_ref")
             .bind(("from", from_id))
             .await
@@ -452,13 +464,13 @@ async fn unregister_view_handler(
             debug!("Deleted all edges for view {}", id_str);
         }
     }
-    
+
     StatusCode::OK
 }
 
 async fn reset_handler(State(state): State<AppState>) -> impl IntoResponse {
     info!("Resetting circuit state");
-    
+
     let old_view_count = {
         let mut circuit = state.processor.write().await;
         let count = circuit.views.len();
@@ -469,14 +481,14 @@ async fn reset_handler(State(state): State<AppState>) -> impl IntoResponse {
         state.saver.trigger_save();
         count
     };
-    
+
     state.metrics.view_count.add(-(old_view_count as i64), &[]);
-    
+
     // Delete all edges
     if let Err(e) = state.db.query("DELETE _spooky_list_ref").await {
         error!("Failed to delete all edges on reset: {}", e);
     }
-    
+
     StatusCode::OK
 }
 
@@ -519,11 +531,7 @@ fn format_incantation_id(id: &str) -> String {
 /// Update edges for multiple views in a SINGLE transaction
 /// Optimizes: 3 views × 1 record = 1 transaction instead of 3
 #[instrument(skip(db, updates, metrics), fields(total_operations = Empty))]
-async fn update_all_edges(
-    db: &Surreal<Client>, 
-    updates: &[&StreamingUpdate],
-    metrics: &Metrics
-) {
+async fn update_all_edges(db: &Surreal<Client>, updates: &[&StreamingUpdate], metrics: &Metrics) {
     if updates.is_empty() {
         return;
     }
@@ -531,25 +539,30 @@ async fn update_all_edges(
     let span = Span::current();
     let mut all_statements: Vec<String> = Vec::new();
     let mut bindings: Vec<(String, RecordId)> = Vec::new();
-    
+
     let mut created_count = 0;
     let mut updated_count = 0;
     let mut deleted_count = 0;
-    
+
     for (idx, update) in updates.iter().enumerate() {
         if update.records.is_empty() {
             continue;
         }
 
         let incantation_id_str = format_incantation_id(&update.view_id);
-        
+
         let Some(from_id) = parse_record_id(&incantation_id_str) else {
             error!("Invalid incantation ID format: {}", incantation_id_str);
             continue;
         };
 
         let binding_name = format!("from{}", idx);
-        bindings.push((binding_name.clone(), from_id));
+        bindings.push((binding_name.clone(), from_id.clone()));
+
+        debug!(
+            "EDGE UPDATE: I_id_str: {}, I_id: {:?}, bindingname: {}",
+            incantation_id_str, from_id, binding_name
+        );
 
         for record in &update.records {
             if parse_record_id(&record.id).is_none() {
@@ -561,8 +574,12 @@ async fn update_all_edges(
                 DeltaEvent::Created => {
                     created_count += 1;
                     format!(
-                        "RELATE ${}->_spooky_list_ref->{} SET clientId = (SELECT clientId FROM ONLY ${}).clientId",
-                        binding_name, record.id, binding_name
+                        "
+                        LET $spooky_version = (SELECT id, version FROM ONLY _spooky_version WHERE record_id = {0});
+                        RELATE ${1}->_spooky_list_ref->{0} SET version = ($spooky_version.version);
+                        ",
+                        record.id,
+                        binding_name,
                     )
                 }
                 DeltaEvent::Updated => {
@@ -580,7 +597,7 @@ async fn update_all_edges(
                     )
                 }
             };
-            
+
             all_statements.push(stmt);
         }
     }
@@ -590,16 +607,19 @@ async fn update_all_edges(
     }
 
     span.record("total_operations", all_statements.len());
-    
-    metrics.edge_operations.add(created_count, &[
-        opentelemetry::KeyValue::new("operation", "create"),
-    ]);
-    metrics.edge_operations.add(updated_count, &[
-        opentelemetry::KeyValue::new("operation", "update"),
-    ]);
-    metrics.edge_operations.add(deleted_count, &[
-        opentelemetry::KeyValue::new("operation", "delete"),
-    ]);
+
+    metrics.edge_operations.add(
+        created_count,
+        &[opentelemetry::KeyValue::new("operation", "create")],
+    );
+    metrics.edge_operations.add(
+        updated_count,
+        &[opentelemetry::KeyValue::new("operation", "update")],
+    );
+    metrics.edge_operations.add(
+        deleted_count,
+        &[opentelemetry::KeyValue::new("operation", "delete")],
+    );
 
     debug!(
         "Processing {} edge operations across {} views",
@@ -615,9 +635,17 @@ async fn update_all_edges(
 
     // Build query with all bindings
     let mut query = db.query(&full_query);
+    let mut debug_query = full_query.clone();
+
     for (name, id) in bindings {
+        // Create a string representation for debugging
+        let id_str = format!("{:?}", id);
+        debug_query = debug_query.replace(&format!("${}", name), &id_str);
+
         query = query.bind((name, id));
     }
+
+    debug!("FULL_QUERY_DEBUG:\n{}", debug_query);
 
     match query.await {
         Ok(_) => {
@@ -634,6 +662,10 @@ async fn update_all_edges(
 }
 
 /// Update edges for a single view (used by register_view_handler)
-async fn update_incantation_edges(db: &Surreal<Client>, update: &StreamingUpdate, metrics: &Metrics) {
+async fn update_incantation_edges(
+    db: &Surreal<Client>,
+    update: &StreamingUpdate,
+    metrics: &Metrics,
+) {
     update_all_edges(db, &[update], metrics).await;
 }
