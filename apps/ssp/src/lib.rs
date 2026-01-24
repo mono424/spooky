@@ -251,25 +251,37 @@ async fn auth_middleware(req: Request, next: Next) -> Response {
 }
 
 // --- Handlers ---
+use axum::body::Bytes;
 
 #[instrument(
-    skip(state), 
+    skip(state, body), 
     fields(
-        table = %payload.table, 
-        op = %payload.op, 
-        id = %payload.id,
+        table = Empty, 
+        op = Empty, 
+        id = Empty,
+        payload_size_bytes = Empty,
         views_affected = Empty,
         edges_updated = Empty,
     )
 )]
 async fn ingest_handler(
     State(state): State<AppState>,
-    Json(payload): Json<IngestRequest>,
+    body: Bytes, // Hier steckt NUR dein JSON-Payload drin
 ) -> impl IntoResponse {
     let start = std::time::Instant::now();
     let span = Span::current();
     
-    debug!("Received ingest request");
+    let payload_size = body.len();
+    debug!("Received Record ingest request: payload size: {} bytes", payload_size);
+
+    // 2. Deserialisierung (von Bytes zu deinem Struct)
+    let payload: IngestRequest = match serde_json::from_slice(&body) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!(error = %e, "Payload ist kein gültiges JSON");
+            return StatusCode::BAD_REQUEST;
+        }
+    };
     
     // Parse operation
     let op = match Operation::from_str(&payload.op) {
@@ -297,7 +309,7 @@ async fn ingest_handler(
     };
     
     // Record metrics
-    state.metrics.ingest_counter.add(1, &[
+    state.metrics.inc_ingest(1, &[
         opentelemetry::KeyValue::new("table", payload.table.clone()),
         opentelemetry::KeyValue::new("op", payload.op.clone()),
     ]);
