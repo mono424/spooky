@@ -18,10 +18,10 @@ use ssp::{
     engine::types::Operation,
     engine::update::{DeltaEvent, StreamingUpdate, ViewResultFormat, ViewUpdate},
 };
-use surrealdb::Surreal;
 use surrealdb::engine::remote::ws::{Client, Ws};
 use surrealdb::opt::auth::Root;
 use surrealdb::types::RecordId;
+use surrealdb::{Surreal, types::ToSql};
 use tokio::signal;
 use tracing::field::Empty;
 use tracing::{Span, debug, error, info, instrument};
@@ -576,7 +576,9 @@ async fn update_all_edges(db: &Surreal<Client>, updates: &[&StreamingUpdate], me
                     format!(
                         "
                         LET $spooky_version = (SELECT id, version FROM ONLY _spooky_version WHERE record_id = {0});
-                        RELATE ${1}->_spooky_list_ref->{0} SET version = ($spooky_version.version);
+                        LET $target = $spooky_version.id;
+                        LET $clientid = (SELECT clientId FROM ONLY ${1}).clientId;
+                        RELATE ${1}->_spooky_list_ref->$target SET version = ($spooky_version.version), clientId = $clientid;
                         ",
                         record.id,
                         binding_name,
