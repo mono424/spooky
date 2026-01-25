@@ -4,7 +4,7 @@ use super::eval::{
     resolve_nested_value, NumericFilterConfig,
 };
 use super::operators::{Operator, Predicate, Projection};
-use super::types::{Delta, FastMap, Path, SpookyValue, ZSet, BatchDeltas};
+use super::types::{Delta, FastMap, Path, SpookyValue, ZSet, BatchDeltas, parse_zset_key};
 
 use super::update::{ViewResultFormat, ViewUpdate};
 use serde::{Deserialize, Serialize};
@@ -786,7 +786,7 @@ impl View {
     fn build_result_data(&self) -> Vec<SmolStr> {
         let mut result_data: Vec<SmolStr> = self.cache.keys()
             .map(|k| {
-                k.split_once(':')
+                parse_zset_key(k)
                  .map(|(_, id)| SmolStr::new(id))
                  .unwrap_or_else(|| k.clone())
             })
@@ -993,7 +993,7 @@ impl View {
         // Optimization: Avoid allocation for split if possible or use SmolStr if we change internal map keys
         // For now, key is &str, db uses SmolStr keys.
         // We assume valid format "table:id" (ZSet Key) -> "id" (Row Key)
-        let (table_name, id) = key.split_once(':')?;
+        let (table_name, id) = parse_zset_key(key)?;
         db.tables.get(table_name)?.rows.get(id)
     }
 
@@ -1002,7 +1002,7 @@ impl View {
     /// Strip "table:" prefix from ZSet key to get row ID (SmolStr version)
     #[inline]
     fn strip_table_prefix_smol(key: &str) -> SmolStr {
-        key.split_once(':').map(|(_, id)| SmolStr::new(id)).unwrap_or_else(|| SmolStr::new(key))
+        parse_zset_key(key).map(|(_, id)| SmolStr::new(id)).unwrap_or_else(|| SmolStr::new(key))
     }
 
     /// Resolve predicate value, handling $param references to context
@@ -1079,7 +1079,7 @@ impl View {
 
                 let actual_val_opt = if field.0.len() == 1 && field.0[0] == "id" {
                     // Match against RowKey (stripped), not ZSetKey
-                    let row_key = key.split_once(':').map(|(_, id)| id).unwrap_or(key);
+                    let row_key = parse_zset_key(key).map(|(_, id)| id).unwrap_or(key);
                     Some(SpookyValue::Str(SmolStr::new(row_key)))
                 } else {
                     self.get_row_value(key, db)
@@ -1135,8 +1135,8 @@ mod tests {
             if let Some(record) = update.records.first() {
                  use crate::engine::update::DeltaEvent;
                  assert!(matches!(record.event, DeltaEvent::Created));
-                 // Verify Option A: Record ID should preserve table prefix (users:1)
-                 assert_eq!(record.id.as_str(), "users:1");
+                 // Verify: Record ID is the raw ID (1). Table prefix is stripped by view.
+                 assert_eq!(record.id.as_str(), "1");
             }
         } else {
             panic!("Expected Streaming update");

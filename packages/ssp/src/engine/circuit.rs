@@ -1,4 +1,4 @@
-use super::types::{BatchDeltas, Delta, FastMap, Operation, RowKey, SpookyValue, ZSet};
+use super::types::{BatchDeltas, Delta, FastMap, Operation, RowKey, SpookyValue, ZSet, make_zset_key};
 use super::view::{QueryPlan, View};
 use super::update::{ViewResultFormat, ViewUpdate};
 use serde::{Deserialize, Serialize};
@@ -104,7 +104,7 @@ impl Table {
             Operation::Delete => { self.rows.remove(&key); }
         }
 
-        let zset_key = build_zset_key(&self.name, &key);
+        let zset_key = make_zset_key(&self.name, &key);
         if weight != 0 {
             let entry = self.zset.entry(zset_key.clone()).or_insert(0);
             *entry += weight;
@@ -349,7 +349,7 @@ impl Circuit {
     pub fn init_load(&mut self, records: impl IntoIterator<Item = LoadRecord>) {
         for record in records {
             let tb = self.db.ensure_table(record.table.as_str());
-            let zset_key = build_zset_key(&record.table, &record.id);
+            let zset_key = make_zset_key(&record.table, &record.id);
             tb.rows.insert(record.id, record.data);
             tb.zset.insert(zset_key, 1);
         }
@@ -363,7 +363,7 @@ impl Circuit {
             let tb = self.db.ensure_table(table_name.as_str());
             tb.reserve(records.len());
             for (id, data) in records {
-                let zset_key = build_zset_key(&table_name, &id);
+                let zset_key = make_zset_key(&table_name, &id);
                 tb.rows.insert(id, data);
                 tb.zset.insert(zset_key, 1);
             }
@@ -512,21 +512,5 @@ impl Circuit {
         if self.dependency_list.is_empty() && !self.views.is_empty() {
             self.rebuild_dependency_list();
         }
-    }
-}
-
-// --- Helpers ---
-
-#[inline]
-fn build_zset_key(table: &str, id: &str) -> SmolStr {
-    let combined_len = table.len() + 1 + id.len();
-    if combined_len <= 23 {
-        let mut buf = String::with_capacity(combined_len);
-        buf.push_str(table);
-        buf.push(':');
-        buf.push_str(id);
-        SmolStr::new(buf)
-    } else {
-        SmolStr::new(format!("{}:{}", table, id))
     }
 }
