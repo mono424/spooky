@@ -14,6 +14,46 @@ SurrealDB  ──LIVE──►  Sidecar  ──ingest──►  SSP Circuit  ─
 
 ---
 
+## DBSP Semantics
+
+SSP uses **DBSP (Database Stream Processing)** semantics for incremental view maintenance. This ensures mathematically correct delta propagation and handles complex scenarios like multi-table joins and subqueries robustly.
+
+### 1. ZSet (Z-Set)
+A ZSet is a multiset represented as a map from elements to integer weights:
+- `weight > 0`: Element present with multiplicity `weight`
+- `weight = 0`: Element not present (removed from map)
+- `weight < 0`: Element "negatively present" (used in deltas)
+
+### 2. Delta Propagation
+Changes propagate through the query plan as weighted deltas:
+```
+Input Delta → Filter → Project → Output Delta
+    ΔI     →   Δ(Filter(I))  →  ΔO
+```
+
+### 3. Membership vs Multiplicity
+For edge management, we strictly distinguish:
+- **Membership change**: Record enters or leaves the view (weight crosses 0)
+- **Multiplicity change**: Record's count changes but it remains in the view
+
+Only membership changes trigger `Created` (0 -> 1) or `Deleted` (1 -> 0) events. Multiplicity changes (1 -> 2) are tracked internally but do not flap the visibility.
+
+#### Example: Weight Accumulation
+```
+Thread 1 → User A (weight 1)
+Thread 2 → User A (weight 1)
+─────────────────────────────
+User A total weight = 2 (Present)
+
+Delete Thread 1:
+User A weight: 2 → 1 (Still Present - No "Deleted" event)
+
+Delete Thread 2:
+User A weight: 1 → 0 (Removed - "Deleted" event emitted)
+```
+
+---
+
 ## Communication Flow
 
 ### The Full Pipeline
