@@ -18,10 +18,10 @@ use ssp::{
     engine::types::Operation,
     engine::update::{DeltaEvent, StreamingUpdate, ViewResultFormat, ViewUpdate},
 };
+use surrealdb::{Surreal, Connection};
 use surrealdb::engine::remote::ws::{Client, Ws};
 use surrealdb::opt::auth::Root;
 use surrealdb::types::RecordId;
-use surrealdb::{Surreal, types::ToSql};
 use tokio::signal;
 use tracing::field::Empty;
 use tracing::{Span, debug, error, info, instrument};
@@ -531,12 +531,13 @@ fn format_incantation_id(id: &str) -> String {
 /// Update edges for multiple views in a SINGLE transaction
 /// Optimizes: 3 views × 1 record = 1 transaction instead of 3
 #[instrument(skip(db, updates, metrics), fields(total_operations = Empty))]
-async fn update_all_edges(db: &Surreal<Client>, updates: &[&StreamingUpdate], metrics: &Metrics) {
+pub async fn update_all_edges<C: Connection>(db: &Surreal<C>, updates: &[&StreamingUpdate], metrics: &Metrics) {
     if updates.is_empty() {
         return;
     }
 
     let span = Span::current();
+    debug!(target: "ssp-server::update", "view_eges: {}, record: {}", updates.len(), updates.iter().map(|u| u.records.len()).sum::<usize>());
     let mut all_statements: Vec<String> = Vec::new();
     let mut bindings: Vec<(String, RecordId)> = Vec::new();
 
@@ -550,6 +551,7 @@ async fn update_all_edges(db: &Surreal<Client>, updates: &[&StreamingUpdate], me
         }
 
         let incantation_id_str = format_incantation_id(&update.view_id);
+        debug!(target: "ssp-server::update", "Incantation ID: {}", incantation_id_str);
 
         let Some(from_id) = parse_record_id(&incantation_id_str) else {
             error!("Invalid incantation ID format: {}", incantation_id_str);
@@ -559,27 +561,20 @@ async fn update_all_edges(db: &Surreal<Client>, updates: &[&StreamingUpdate], me
         let binding_name = format!("from{}", idx);
         bindings.push((binding_name.clone(), from_id.clone()));
 
-        debug!(
-            "EDGE UPDATE: I_id_str: {}, I_id: {:?}, bindingname: {}",
-            incantation_id_str, from_id, binding_name
-        );
-
         for record in &update.records {
             if parse_record_id(&record.id).is_none() {
                 error!("Invalid record ID format: {}", record.id);
                 continue;
             }
+            debug!(target: "ssp-server::update", "Record: {:?}", record);
 
             let stmt = match record.event {
                 DeltaEvent::Created => {
                     created_count += 1;
                     format!(
-                        "
-                        LET $spooky_version = (SELECT id, version FROM ONLY _spooky_version WHERE record_id = {0});
-                        LET $target = $spooky_version.id;
-                        LET $clientid = (SELECT clientId FROM ONLY ${1}).clientId;
-                        RELATE ${1}->_spooky_list_ref->$target SET version = ($spooky_version.version), clientId = $clientid;
-                        ",
+                        "RELATE ${1}->_spooky_list_ref->(SELECT id FROM ONLY _spooky_version WHERE record_id = {0}) 
+                            SET version = (SELECT version FROM ONLY _spooky_version WHERE record_id = {0}).version, 
+                                clientId = (SELECT clientId FROM ONLY ${1}).clientId",
                         record.id,
                         binding_name,
                     )
@@ -587,11 +582,7 @@ async fn update_all_edges(db: &Surreal<Client>, updates: &[&StreamingUpdate], me
                 DeltaEvent::Updated => {
                     updated_count += 1;
                     format!(
-                        "
-                        LET $spooky_version = (SELECT id, version FROM ONLY _spooky_version WHERE record_id = {0});
-                        LET $target = $spooky_version.id;
-                        UPDATE ${1}->_spooky_list_ref SET version += 1 WHERE out = $target;
-                        ",
+                        "UPDATE ${1}->_spooky_list_ref SET version += 1 WHERE out = (SELECT id FROM ONLY _spooky_version WHERE record_id = {0})",
                         record.id,
                         binding_name
                     )
@@ -599,11 +590,7 @@ async fn update_all_edges(db: &Surreal<Client>, updates: &[&StreamingUpdate], me
                 DeltaEvent::Deleted => {
                     deleted_count += 1;
                     format!(
-                        "
-                        LET $spooky_version = (SELECT id FROM ONLY _spooky_version WHERE record_id = {0});
-                        LET $target = $spooky_version.id;
-                        DELETE ${1}->_spooky_list_ref WHERE out = $target;
-                        ",
+                        "DELETE ${1}->_spooky_list_ref WHERE out = (SELECT id FROM ONLY _spooky_version WHERE record_id = {0})",
                         record.id,
                         binding_name
                     )
@@ -657,7 +644,7 @@ async fn update_all_edges(db: &Surreal<Client>, updates: &[&StreamingUpdate], me
         query = query.bind((name, id));
     }
 
-    debug!("FULL_QUERY_DEBUG:\n{}", debug_query);
+    debug!(target: "ssp-server::update", debug_query);
 
     match query.await {
         Ok(_) => {
@@ -674,8 +661,8 @@ async fn update_all_edges(db: &Surreal<Client>, updates: &[&StreamingUpdate], me
 }
 
 /// Update edges for a single view (used by register_view_handler)
-async fn update_incantation_edges(
-    db: &Surreal<Client>,
+async fn update_incantation_edges<C: Connection>(
+    db: &Surreal<C>,
     update: &StreamingUpdate,
     metrics: &Metrics,
 ) {
