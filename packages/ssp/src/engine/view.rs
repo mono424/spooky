@@ -532,85 +532,121 @@ impl View {
     }
 
     /// Helper to expand a ZSet of root records to include all their subquery dependencies
-    fn expand_with_subqueries(&self, zset: &mut ZSet, db: &Database) {
+    ///
+    /// For each parent record in the target set, evaluate subqueries and add
+    /// referenced records with appropriate weights.
+    ///
+    /// Weight semantics:
+    /// - If parent has weight W and subquery returns record R with weight 1,
+    ///   then R gets weight += W in the result
+    /// - This ensures correct delta propagation when parents are added/removed
+    fn expand_with_subqueries(&self, target_set: &mut ZSet, db: &Database) {
         // Early exit if query has no subqueries
         if !self.has_subqueries() {
             return;
         }
-        
-        // We must iterate a copy of keys to safely mutate zset
-        let keys: Vec<(SmolStr, i64)> = zset.iter().map(|(k, v)| (k.clone(), *v)).collect();
 
-        for (key, weight) in keys {
-            // If record is present (weight > 0), find its children
-            if weight > 0 {
-                if let Some(row) = self.get_row_value(&key, db) {
-                    let mut sub_ids = Vec::new();
-                    // recursively collect all sub-ids for this parent row
-                    self.collect_subquery_ids(&self.plan.root, row, db, &mut sub_ids);
-                    
-                    for sub_id in sub_ids {
-                        // Add sub-id with same weight (ref counting)
-                        *zset.entry(SmolStr::new(sub_id)).or_insert(0) += weight;
-                    }
-                }
+        // Collect subquery results with parent weights
+        let mut subquery_additions: ZSet = FastMap::default();
+
+        // Get parent records (before modification)
+        // We iterate a snapshot of the keys to safely mutate zset later
+        let parent_records: Vec<(SmolStr, i64)> = target_set
+            .iter()
+            .map(|(k, &w)| (k.clone(), w))
+            .collect();
+
+        for (parent_key, parent_weight) in parent_records {
+            if parent_weight <= 0 {
+                continue;  // Skip non-present parents
             }
+
+            // Get parent record data
+            let parent_data = match self.get_row_value(&parent_key, db) {
+                Some(data) => data,
+                None => continue,
+            };
+
+            // Evaluate subqueries for this parent
+            let subquery_results = self.evaluate_subqueries_for_parent(
+                &self.plan.root,
+                parent_data,
+                db,
+            );
+
+            // Add subquery results with weight = parent_weight
+            // This ensures correct propagation: if parent appears twice,
+            // its subquery results also appear twice
+            for (subquery_key, subquery_weight) in subquery_results {
+                *subquery_additions.entry(subquery_key).or_insert(0) +=
+                    parent_weight * subquery_weight;
+            }
+        }
+
+        // Merge subquery results into target set
+        for (key, weight) in subquery_additions {
+            *target_set.entry(key).or_insert(0) += weight;
         }
     }
 
-
-
-    /// Recursively collect all record IDs from subqueries.
-    /// Handles nested subqueries by using the correct parent context at each level.
-    fn collect_subquery_ids(
+    /// Evaluate subqueries for a parent record
+    fn evaluate_subqueries_for_parent(
         &self,
         op: &Operator,
-        parent_row: &SpookyValue,
+        parent_context: &SpookyValue,
         db: &Database,
-        out: &mut Vec<String>,
-    ) {
+    ) -> ZSet {
+        let mut results = FastMap::default();
+
         match op {
             Operator::Project { input, projections } => {
-                // First, recurse into the input operator
-                self.collect_subquery_ids(input, parent_row, db, out);
-                
-                // Then process each subquery projection at this level
+                // First, recurse into input
+                let input_results = self.evaluate_subqueries_for_parent(input, parent_context, db);
+                for (k, w) in input_results {
+                    *results.entry(k).or_insert(0) += w;
+                }
+
+                // Then evaluate projections
                 for proj in projections {
-                    if let Projection::Subquery { plan, .. } = proj {
-                        // Evaluate this subquery with the current parent context
-                        let subquery_results = self
-                            .eval_snapshot(plan, db, Some(parent_row))
-                            .into_owned();
-                        
-                        // For each result, add the ID and recursively process nested subqueries
-                        for (sub_id, _weight) in &subquery_results {
-                            out.push(sub_id.to_string());
-                            
-                            // Get the actual row data for this subquery result
-                            // to use as parent context for any nested subqueries WITHIN this subquery
-                            if let Some(sub_row) = self.get_row_value(sub_id.as_str(), db) {
-                                // Recurse into the subquery's plan to find nested subqueries
-                                // This handles cases like: comments -> comment.author, comments -> comment.replies -> reply.author
-                                self.collect_subquery_ids(plan, sub_row, db, out);
+                    if let Projection::Subquery { alias: _, plan: operator } = proj {
+                        // Evaluate subquery with parent context
+                        let subquery_result = self.eval_snapshot(operator, db, Some(parent_context));
+
+                        for (key, weight) in subquery_result.iter() {
+                            *results.entry(key.clone()).or_insert(0) += *weight;
+
+                            // Recursively expand nested subqueries
+                            if let Some(record) = self.get_row_value(key, db) {
+                                let nested = self.evaluate_subqueries_for_parent(operator, record, db);
+                                for (nested_key, nested_weight) in nested {
+                                    *results.entry(nested_key).or_insert(0) += nested_weight;
+                                }
                             }
                         }
                     }
                 }
             }
             Operator::Filter { input, .. } => {
-                self.collect_subquery_ids(input, parent_row, db, out);
+                 return self.evaluate_subqueries_for_parent(input, parent_context, db);
             }
             Operator::Limit { input, .. } => {
-                self.collect_subquery_ids(input, parent_row, db, out);
+                 return self.evaluate_subqueries_for_parent(input, parent_context, db);
             }
             Operator::Join { left, right, .. } => {
-                self.collect_subquery_ids(left, parent_row, db, out);
-                self.collect_subquery_ids(right, parent_row, db, out);
+                let l = self.evaluate_subqueries_for_parent(left, parent_context, db);
+                let r = self.evaluate_subqueries_for_parent(right, parent_context, db);
+                // Union results
+                results = l;
+                for (k, w) in r {
+                    *results.entry(k).or_insert(0) += w;
+                }
             }
             Operator::Scan { .. } => {
-                // Base case: no subqueries in a scan
+                // Leaf node, no subqueries here (unless we support subqueries in Scan params later?)
             }
         }
+
+        results
     }
 
 
