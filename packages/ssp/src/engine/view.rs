@@ -439,11 +439,12 @@ impl View {
             return None;
         }
 
-        // Apply delta to cache
-        self.apply_cache_delta(&view_delta);
-
-        // Categorize changes
+        // Categorize changes BEFORE applying delta to detect membership transitions (0 <-> 1)
+        // This functionality uses the OLD cache state.
         let (additions, removals, updates) = self.categorize_changes(&view_delta, &updated_record_ids);
+
+        // Apply delta to cache (Update state)
+        self.apply_cache_delta(&view_delta);
 
         tracing::debug!(
             target: "ssp::view::process_batch",
@@ -699,54 +700,53 @@ impl View {
         );
     }
 
-    /// Categorize changes into additions, removals, and updates
+    /// Categorize changes into additions, removals, and updates based on MEMBERSHIP transitions
     fn categorize_changes(
         &self,
         view_delta: &ZSet,
         updated_record_ids: &[SmolStr],
     ) -> (Vec<SmolStr>, Vec<SmolStr>, Vec<SmolStr>) {
-        let delta_size = view_delta.len();
-        let mut additions: Vec<SmolStr> = Vec::with_capacity(delta_size);
-        let mut removals: Vec<SmolStr> = Vec::with_capacity(delta_size);
+        use crate::engine::types::WeightTransition;
 
-        // Build set of updated IDs for O(1) lookup
-        // Optimization: Use linear search for small sets
-        let use_hashset = updated_record_ids.len() > 8;
-        let updated_ids_set: Option<std::collections::HashSet<&str>> = if use_hashset {
-            Some(updated_record_ids.iter().map(|s| s.as_str()).collect())
-        } else {
-            None
-        };
+        let mut additions: Vec<SmolStr> = Vec::with_capacity(view_delta.len());
+        let mut removals: Vec<SmolStr> = Vec::with_capacity(view_delta.len());
 
-        // Categorize additions and removals
-        for (key, weight) in view_delta {
-            if *weight > 0 {
-                // Check if this is genuinely new or an update
-                let is_update = if let Some(set) = &updated_ids_set {
-                    set.contains(key.as_str())
-                } else {
-                    updated_record_ids.iter().any(|id| id == key.as_str())
-                };
+        // Process weight changes to find membership transitions
+        for (key, &weight_delta) in view_delta {
+            // Get old weight from cache (BEFORE applying delta)
+            let old_weight = self.cache.get(key).copied().unwrap_or(0);
+            let new_weight = old_weight + weight_delta;
+            
+            // Only consider membership changes (presence 0 <-> >0)
+            let transition = WeightTransition::compute(old_weight, new_weight);
 
-                if !is_update {
-                    additions.push(key.clone());
-                }
-            } else if *weight < 0 {
-                removals.push(key.clone());
+            match transition {
+               WeightTransition::Inserted => additions.push(key.clone()),
+               WeightTransition::Deleted => removals.push(key.clone()),
+               _ => {} // Multiplicity changes (e.g. 1->2, 2->1) do NOT trigger edge events
             }
         }
 
-        // Build removal set for filtering updates
-        let removal_set_unstripped: std::collections::HashSet<&str> = 
-            view_delta.iter()
-                .filter(|(_, w)| **w < 0)
-                .map(|(k, _)| k.as_str())
-                .collect();
+        // Build removal set for filtering updates O(1)
+        let removal_set: std::collections::HashSet<&str> = 
+            removals.iter().map(|s| s.as_str()).collect();
 
-        // Updates: records in updated_record_ids that are NOT being removed
+        // Updates: records in updated_record_ids that are PERSISTENT
+        // Must be currently present (Old > 0) AND locally present (New > 0)
         let updates: Vec<SmolStr> = updated_record_ids
             .iter()
-            .filter(|id| !removal_set_unstripped.contains(id.as_str()))
+            .filter(|id| {
+                if removal_set.contains(id.as_str()) {
+                    return false;
+                }
+                
+                let old_w = self.cache.get(*id).copied().unwrap_or(0);
+                let delta_w = view_delta.get(*id).copied().unwrap_or(0);
+                let new_w = old_w + delta_w;
+                
+                // Persistent: Was present AND Is present
+                old_w > 0 && new_w > 0
+            })
             .map(|id| id.clone())
             .collect();
 
