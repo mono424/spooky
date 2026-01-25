@@ -4,7 +4,7 @@ use super::eval::{
     resolve_nested_value, NumericFilterConfig,
 };
 use super::operators::{Operator, Predicate, Projection};
-use super::types::{Delta, FastMap, Path, SpookyValue, ZSet, BatchDeltas, parse_zset_key};
+use super::types::{Delta, FastMap, Path, SpookyValue, ZSet, BatchDeltas, parse_zset_key, ZSetOps};
 
 use super::update::{ViewResultFormat, ViewUpdate};
 use serde::{Deserialize, Serialize};
@@ -131,7 +131,7 @@ impl View {
                 
                 let result_data = self.build_result_data();
                 
-                let view_delta = ViewDelta::removals_only(vec![Self::strip_table_prefix_smol(&delta.key)]);
+                let view_delta = ViewDelta::removals_only(vec![delta.key.clone()]);
                 
                 let raw_result = RawViewResult {
                     query_id: self.plan.id.clone(),
@@ -197,7 +197,7 @@ impl View {
         
         let result_data = self.build_result_data();
         
-        let view_delta = ViewDelta::updates_only(vec![Self::strip_table_prefix_smol(key)]);
+        let view_delta = ViewDelta::updates_only(vec![key.clone()]);
         
         let raw_result = RawViewResult {
             query_id: self.plan.id.clone(),
@@ -271,9 +271,9 @@ impl View {
         
         // Determine change type
         let (additions, updates) = if was_cached {
-            (vec![], vec![Self::strip_table_prefix_smol(key)])
+            (vec![], vec![key.clone()])
         } else {
-            (vec![Self::strip_table_prefix_smol(key)], vec![])
+            (vec![key.clone()], vec![])
         };
         
         // Build update
@@ -346,7 +346,7 @@ impl View {
         } else {
             Some(ViewDelta {
                 additions: vec![],
-                removals: vec![Self::strip_table_prefix_smol(key)],
+                removals: vec![key.clone()],
                 updates: vec![],
             })
         };
@@ -666,55 +666,28 @@ impl View {
             view_id = %self.plan.id,
             target_set_size = target_set.len(),
             cache_size = self.cache.len(),
-            target_sample = ?target_set.keys().take(5).collect::<Vec<_>>(),
-            cache_sample = ?self.cache.keys().take(5).collect::<Vec<_>>(),
             "compute_full_diff: comparing target vs cache"
         );
 
-        let mut diff = FastMap::default();
-
-        // Compute diff: new weights - old weights
-        for (key, &new_w) in &target_set {
-            let old_w = self.cache.get(key).copied().unwrap_or(0);
-            if new_w != old_w {
-                diff.insert(key.clone(), new_w - old_w);
-            }
-        }
-        // Records that were removed
-        for (key, &old_w) in &self.cache {
-            if !target_set.contains_key(key) {
-                diff.insert(key.clone(), 0 - old_w);
-            }
-        }
+        // Use ZSetOps::diff for correct DBSP semantics
+        let diff = self.cache.diff(&target_set);
         
         tracing::debug!(
             target: "ssp::view::delta",
             view_id = %self.plan.id,
             diff_size = diff.len(),
-            diff_additions = diff.iter().filter(|(_, w)| **w > 0).count(),
-            diff_removals = diff.iter().filter(|(_, w)| **w < 0).count(),
+            positive_weights = diff.values().filter(|&&w| w > 0).count(),
+            negative_weights = diff.values().filter(|&&w| w < 0).count(),
             "compute_full_diff: result"
         );
         
         diff
     }
 
-    /// Apply delta to cache, updating weights
+    /// Apply delta to cache using DBSP semantics
     fn apply_cache_delta(&mut self, delta: &ZSet) {
         let cache_before = self.cache.len();
-        let mut added = 0;
-        let mut removed = 0;
-        
-        for (key, weight) in delta {
-            let entry = self.cache.entry(key.clone()).or_insert(0);
-            *entry += weight;
-            if *entry == 0 {
-                self.cache.remove(key);
-                removed += 1;
-            } else if *weight > 0 {
-                added += 1;
-            }
-        }
+        self.cache.add_delta(delta);
         
         tracing::debug!(
             target: "ssp::view::cache",
@@ -722,9 +695,7 @@ impl View {
             cache_before = cache_before,
             cache_after = self.cache.len(),
             delta_size = delta.len(),
-            added = added,
-            removed = removed,
-            "Cache updated"
+            "Cache updated with delta"
         );
     }
 
@@ -758,10 +729,10 @@ impl View {
                 };
 
                 if !is_update {
-                    additions.push(Self::strip_table_prefix_smol(key));
+                    additions.push(key.clone());
                 }
             } else if *weight < 0 {
-                removals.push(Self::strip_table_prefix_smol(key));
+                removals.push(key.clone());
             }
         }
 
@@ -776,7 +747,7 @@ impl View {
         let updates: Vec<SmolStr> = updated_record_ids
             .iter()
             .filter(|id| !removal_set_unstripped.contains(id.as_str()))
-            .map(|id| Self::strip_table_prefix_smol(id))
+            .map(|id| id.clone())
             .collect();
 
         (additions, removals, updates)
@@ -784,13 +755,7 @@ impl View {
 
     /// Build sorted result data from current cache
     fn build_result_data(&self) -> Vec<SmolStr> {
-        let mut result_data: Vec<SmolStr> = self.cache.keys()
-            .map(|k| {
-                parse_zset_key(k)
-                 .map(|(_, id)| SmolStr::new(id))
-                 .unwrap_or_else(|| k.clone())
-            })
-            .collect();
+        let mut result_data: Vec<SmolStr> = self.cache.keys().cloned().collect();
         result_data.sort_unstable();
         result_data
     }
@@ -990,14 +955,22 @@ impl View {
     }
 
     fn get_row_value<'a>(&self, key: &str, db: &'a Database) -> Option<&'a SpookyValue> {
-        // Optimization: Avoid allocation for split if possible or use SmolStr if we change internal map keys
-        // For now, key is &str, db uses SmolStr keys.
-        // We assume valid format "table:id" (ZSet Key) -> "id" (Row Key)
+        // We assume valid format "table:id" (ZSet Key) -> "id" (Row Key or Stripped Row Key)
         let (table_name, id) = parse_zset_key(key)?;
-        db.tables.get(table_name)?.rows.get(id)
+        let table = db.tables.get(table_name)?;
+        
+        // Try raw ID first (Fast path if ID has no prefix in DB)
+        if let Some(row) = table.rows.get(id) {
+            return Some(row);
+        }
+
+        // Try with table prefix reconstruction (if ID was "table:id" and stripped)
+        // This handles the ambiguity introduced by stripping keys in make_zset_key
+        // Avoid allocation if possible? 
+        // For now, simple format is correct.
+        let prefixed_key = format!("{}:{}", table_name, id);
+        table.rows.get(prefixed_key.as_str())
     }
-
-
 
     /// Strip "table:" prefix from ZSet key to get row ID (SmolStr version)
     #[inline]
@@ -1077,14 +1050,11 @@ impl View {
                 }
                 let target_val = target_val.unwrap();
 
-                let actual_val_opt = if field.0.len() == 1 && field.0[0] == "id" {
-                    // Match against RowKey (stripped), not ZSetKey
-                    let row_key = parse_zset_key(key).map(|(_, id)| id).unwrap_or(key);
-                    Some(SpookyValue::Str(SmolStr::new(row_key)))
-                } else {
-                    self.get_row_value(key, db)
-                        .and_then(|r| resolve_nested_value(Some(r), field).cloned())
-                };
+                // FIX: Look up actual value from row even for "id", to ensure we match
+                // the canonical ID stored in the DB (which might be "table:id").
+                // The previous optimization incorrectly assumed stripped ID == Row ID.
+                let actual_val_opt = self.get_row_value(key, db)
+                        .and_then(|r| resolve_nested_value(Some(r), field).cloned());
 
                 if let Some(actual_val) = actual_val_opt {
                     let ord = compare_spooky_values(Some(&actual_val), Some(&target_val));
@@ -1135,8 +1105,8 @@ mod tests {
             if let Some(record) = update.records.first() {
                  use crate::engine::update::DeltaEvent;
                  assert!(matches!(record.event, DeltaEvent::Created));
-                 // Verify: Record ID is the raw ID (1). Table prefix is stripped by view.
-                 assert_eq!(record.id.as_str(), "1");
+                 // Verify: Record ID is the full ZSet Key (Global ID).
+                 assert_eq!(record.id.as_str(), "users:1");
             }
         } else {
             panic!("Expected Streaming update");

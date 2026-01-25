@@ -83,11 +83,11 @@ mod operation_tests {
 
         // CREATE adds record (weight +1)
         ingest(&mut circuit, "items", "CREATE", "items:1", json!({"id": "items:1"}));
-        assert!(circuit.db.tables.get("items").unwrap().zset.contains_key("items:items:1"));
+        assert!(circuit.db.tables.get("items").unwrap().zset.contains_key("items:1"));
 
         // DELETE removes record (weight -1)
         ingest(&mut circuit, "items", "DELETE", "items:1", json!({}));
-        assert!(!circuit.db.tables.get("items").unwrap().zset.contains_key("items:items:1"));
+        assert!(!circuit.db.tables.get("items").unwrap().zset.contains_key("items:1"));
 
         // UPDATE keeps record (weight +1, replaces existing)
         ingest(&mut circuit, "items", "CREATE", "items:2", json!({"id": "items:2", "val": 1}));
@@ -659,7 +659,7 @@ mod complex_query_tests {
 
         // Join should match
         let view = circuit.views.iter().find(|v| v.plan.id == "threads_with_authors").unwrap();
-        assert!(view.cache.contains_key("thread:thread:1"), "Thread should be in join result");
+        assert!(view.cache.contains_key("thread:1"), "Thread should be in join result");
 
         println!("[TEST] ✓ Batch with join view works correctly");
     }

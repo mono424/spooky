@@ -128,8 +128,20 @@ pub fn extract_number_column(
     let mut numbers = Vec::with_capacity(zset.len());
 
     for (key, weight) in zset {
-        let val_opt = if let Some((table, id)) = key.split_once(':') {
-            db.tables.get(table).and_then(|t| t.rows.get(id))
+        let val_opt = if let Some((table_name, id)) = key.split_once(':') {
+            if let Some(t) = db.tables.get(table_name) {
+                 // Try raw ID first, then prefixed ID
+                 t.rows.get(id).or_else(|| {
+                     // Allocating string here might hurt SIMD perf, but correctness first.
+                     // Ideally we'd use a reusable buffer or Cow.
+                     // Given this loop builds vectors, one allocation per row is manageable but suboptimal.
+                     // Optimization: Use Cow? No, keys in map are owned SmolStr.
+                     // Just format for now.
+                     t.rows.get(format!("{}:{}", table_name, id).as_str())
+                 })
+            } else {
+                None
+            }
         } else {
             None
         };

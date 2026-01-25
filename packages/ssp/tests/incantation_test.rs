@@ -84,9 +84,9 @@ fn test_complex_incantation_flow() {
             .iter()
             .find(|v| v.plan.id == "magic_threads_by_alice")
             .expect("View not found");
-        // circuit stores keys as "table:id", and thread_1 is "thread:xxx". 
-        // ingest prefixes it during storage. View cache holds storage keys.
-        let storage_key = format!("thread:{}", thread_1);
+        // circuit stores keys as "table:id" (e.g. "thread:123").
+        // ZSet key IS the global ID.
+        let storage_key = thread_1.clone();
         let present = view.cache.contains_key(storage_key.as_str());
         assert_eq!(present, expect_present, "Thread 1 presence mismatch in cache");
     };

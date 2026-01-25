@@ -250,8 +250,8 @@ fn test_thread_update_preserves_user_edges() {
     // 5. Verify version_map contains both IDs (prefixed with table source)
     let version_ids = get_version_map_ids(&circuit, "thread_list_with_author");
     println!("Version map IDs after register: {:?}", version_ids);
-    assert!(version_ids.contains(&format!("thread:{}", thread_id)), "Version map should contain thread");
-    assert!(version_ids.contains(&format!("user:{}", user_id)), "Version map should contain user");
+    assert!(version_ids.contains(&thread_id), "Version map should contain thread");
+    assert!(version_ids.contains(&user_id), "Version map should contain user");
 
     // 6. Update thread title (NOT deleting anything!)
     let updated_thread_record = json!({
@@ -268,11 +268,11 @@ fn test_thread_update_preserves_user_edges() {
     println!("Version map IDs after update: {:?}", version_ids_after);
     
     assert!(
-        version_ids_after.contains(&format!("thread:{}", thread_id)),
+        version_ids_after.contains(&thread_id),
         "Thread should still be in version_map after update"
     );
     assert!(
-        version_ids_after.contains(&format!("user:{}", user_id)),
+        version_ids_after.contains(&user_id),
         "BUG DETECTED: User was removed from version_map when only thread was updated!"
     );
 
@@ -329,9 +329,9 @@ fn test_comment_deletion_streaming() {
     
     let version_ids = get_version_map_ids(&circuit, "thread_detail");
     println!("Version map after register: {:?}", version_ids);
-    assert!(version_ids.contains(&format!("thread:{}", thread_id)), "Should have thread");
-    assert!(version_ids.contains(&format!("user:{}", user_id)), "Should have user");
-    assert!(version_ids.contains(&format!("comment:{}", comment1_id)), "Should have comment");
+    assert!(version_ids.contains(&thread_id), "Should have thread");
+    assert!(version_ids.contains(&user_id), "Should have user");
+    assert!(version_ids.contains(&comment1_id), "Should have comment");
 
     // 6. Create second comment
     let (comment2_id, comment2_record) = make_comment_for_thread("Second comment", &thread_id, &user_id);
@@ -348,7 +348,7 @@ fn test_comment_deletion_streaming() {
     }
 
     let version_ids_after_create = get_version_map_ids(&circuit, "thread_detail");
-    assert!(version_ids_after_create.contains(&format!("comment:{}", comment2_id)), "Should have second comment");
+    assert!(version_ids_after_create.contains(&comment2_id), "Should have second comment");
 
     // 7. Delete first comment
     let delete_updates = ingest(&mut circuit, "comment", "DELETE", &comment1_id, json!({}));
@@ -369,19 +369,19 @@ fn test_comment_deletion_streaming() {
     println!("Version map after delete: {:?}", version_ids_after_delete);
     
     assert!(
-        !version_ids_after_delete.contains(&format!("comment:{}", comment1_id)),
+        !version_ids_after_delete.contains(&comment1_id),
         "Deleted comment should NOT be in version_map"
     );
     assert!(
-        version_ids_after_delete.contains(&format!("comment:{}", comment2_id)),
+        version_ids_after_delete.contains(&comment2_id),
         "Second comment should still be in version_map"
     );
     assert!(
-        version_ids_after_delete.contains(&format!("user:{}", user_id)),
+        version_ids_after_delete.contains(&user_id),
         "User should still be in version_map"
     );
     assert!(
-        version_ids_after_delete.contains(&format!("thread:{}", thread_id)),
+        version_ids_after_delete.contains(&thread_id),
         "Thread should still be in version_map"
     );
 
@@ -428,11 +428,11 @@ fn test_full_scenario_edge_tracking() {
     println!("  v_thread_list: {:?}", list_ids);
     println!("  v_thread_detail: {:?}", detail_ids);
 
-    assert!(list_ids.contains(&format!("thread:{}", thread_id)), "List should have thread");
-    assert!(list_ids.contains(&format!("user:{}", user_id)), "List should have user");
-    assert!(detail_ids.contains(&format!("thread:{}", thread_id)), "Detail should have thread");
-    assert!(detail_ids.contains(&format!("user:{}", user_id)), "Detail should have user");
-    assert!(detail_ids.contains(&format!("comment:{}", comment_id)), "Detail should have comment");
+    assert!(list_ids.contains(&thread_id), "List should have thread");
+    assert!(list_ids.contains(&user_id), "List should have user");
+    assert!(detail_ids.contains(&thread_id), "Detail should have thread");
+    assert!(detail_ids.contains(&user_id), "Detail should have user");
+    assert!(detail_ids.contains(&comment_id), "Detail should have comment");
 
     // 5. Update thread title
     let updated_thread = json!({
@@ -452,18 +452,18 @@ fn test_full_scenario_edge_tracking() {
     println!("  v_thread_list: {:?}", list_ids_after_update);
     println!("  v_thread_detail: {:?}", detail_ids_after_update);
 
-    assert!(list_ids_after_update.contains(&format!("thread:{}", thread_id)), "List should still have thread");
+    assert!(list_ids_after_update.contains(&thread_id), "List should still have thread");
     assert!(
-        list_ids_after_update.contains(&format!("user:{}", user_id)),
+        list_ids_after_update.contains(&user_id),
         "BUG: List lost user after thread update!"
     );
-    assert!(detail_ids_after_update.contains(&format!("thread:{}", thread_id)), "Detail should still have thread");
+    assert!(detail_ids_after_update.contains(&thread_id), "Detail should still have thread");
     assert!(
-        detail_ids_after_update.contains(&format!("user:{}", user_id)),
+        detail_ids_after_update.contains(&user_id),
         "BUG: Detail lost user after thread update!"
     );
     assert!(
-        detail_ids_after_update.contains(&format!("comment:{}", comment_id)),
+        detail_ids_after_update.contains(&comment_id),
         "Detail should still have comment"
     );
 
@@ -478,12 +478,12 @@ fn test_full_scenario_edge_tracking() {
     println!("  v_thread_list: {:?}", list_ids_after_delete);
     println!("  v_thread_detail: {:?}", detail_ids_after_delete);
 
-    assert!(list_ids_after_delete.contains(&format!("thread:{}", thread_id)), "List should still have thread");
-    assert!(list_ids_after_delete.contains(&format!("user:{}", user_id)), "List should still have user");
-    assert!(detail_ids_after_delete.contains(&format!("thread:{}", thread_id)), "Detail should still have thread");
-    assert!(detail_ids_after_delete.contains(&format!("user:{}", user_id)), "Detail should still have user");
+    assert!(list_ids_after_delete.contains(&thread_id), "List should still have thread");
+    assert!(list_ids_after_delete.contains(&user_id), "List should still have user");
+    assert!(detail_ids_after_delete.contains(&thread_id), "Detail should still have thread");
+    assert!(detail_ids_after_delete.contains(&user_id), "Detail should still have user");
     assert!(
-        !detail_ids_after_delete.contains(&format!("comment:{}", comment_id)),
+        !detail_ids_after_delete.contains(&comment_id),
         "Detail should NOT have deleted comment"
     );
 
@@ -513,8 +513,8 @@ fn test_subquery_ids_not_marked_as_removals_on_main_table_update() {
 
     // Record initial state
     let initial_ids = get_version_map_ids(&circuit, "subquery_test");
-    let initial_user_present = initial_ids.contains(&format!("user:{}", user_id));
-    let initial_thread_present = initial_ids.contains(&format!("thread:{}", thread_id));
+    let initial_user_present = initial_ids.contains(&user_id);
+    let initial_thread_present = initial_ids.contains(&thread_id);
 
     println!("Initial version_map: {:?}", initial_ids);
     assert!(initial_user_present, "User should be tracked initially");
@@ -535,11 +535,11 @@ fn test_subquery_ids_not_marked_as_removals_on_main_table_update() {
         let ids = get_version_map_ids(&circuit, "subquery_test");
         
         assert!(
-            ids.contains(&format!("user:{}", user_id)),
+            ids.contains(&user_id),
             "BUG at update #{}: User was incorrectly removed from version_map", i
         );
         assert!(
-            ids.contains(&format!("thread:{}", thread_id)),
+            ids.contains(&thread_id),
             "Thread should still be in version_map after update #{}", i
         );
 

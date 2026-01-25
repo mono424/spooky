@@ -38,7 +38,7 @@ fn test_view_registration_after_ingestion() {
     assert!(
         user_table
             .zset
-            .contains_key(format!("user:{}", user_id).as_str()),
+            .contains_key(user_id.as_str()),
         "User should be in zset"
     );
     assert!(
