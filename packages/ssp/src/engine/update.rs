@@ -85,7 +85,12 @@ pub struct MaterializedViewUpdate {
     pub result_data: Vec<SmolStr>, // [record-id, ...]
 }
 
-/// Delta event for streaming format
+/// Delta event types for streaming updates
+/// 
+/// These represent MEMBERSHIP changes, not multiplicity changes:
+/// - Created: Record newly appears in view (weight went from <=0 to >0)
+/// - Updated: Record content changed (weight unchanged, still present)
+/// - Deleted: Record removed from view (weight went from >0 to <=0)
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum DeltaEvent {

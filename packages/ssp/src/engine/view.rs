@@ -756,6 +756,17 @@ impl View {
             // Only consider membership changes (presence 0 <-> >0)
             let transition = WeightTransition::compute(old_weight, new_weight);
 
+            tracing::trace!(
+                target: "ssp::view::weights",
+                view_id = %self.plan.id,
+                key = %key,
+                old_weight = old_weight,
+                new_weight = new_weight,
+                weight_delta = weight_delta,
+                transition = ?transition,
+                "Weight transition"
+            );
+
             match transition {
                WeightTransition::Inserted => additions.push(key.clone()),
                WeightTransition::Deleted => removals.push(key.clone()),
