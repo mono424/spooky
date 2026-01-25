@@ -189,7 +189,7 @@ impl Circuit {
     ) -> ViewUpdateList {
         let op = entrie.op;
         let key = SmolStr::new(entrie.id);
-        let (zset_key, _weight) = self.db.ensure_table(entrie.table.as_str()).apply_mutation(op, key, entrie.data);
+        let (zset_key, _weight) = self.db.ensure_table(entrie.table.as_str()).apply_mutation(op, key.clone(), entrie.data);
 
         self.ensure_dependency_list();
 
@@ -202,7 +202,22 @@ impl Circuit {
             .map(|v| v.iter().copied().collect())
             .unwrap_or_default();
 
+        tracing::debug!(
+            target: "ssp::circuit::ingest",
+            table = %table_key,
+            record_id = %key,
+            op = ?op,
+            views_to_notify = view_indices.len(),
+            total_views = self.views.len(),
+            "Ingesting record"
+        );
+
         if view_indices.is_empty() {
+            tracing::debug!(
+                target: "ssp::circuit::ingest",
+                table = %table_key,
+                "No views depend on this table"
+            );
             return SmallVec::new();
         }
 
@@ -212,6 +227,15 @@ impl Circuit {
         
         for view_idx in view_indices {
             if let Some(view) = self.views.get_mut(view_idx) {
+                tracing::info!(
+                    target: "ssp::circuit::ingest",
+                    view_idx = view_idx,
+                    view_id = %view.plan.id,
+                    cache_size = view.cache.len(),
+                    last_hash_empty = view.last_hash.is_empty(),
+                    "Processing delta for view"
+                );
+                
                 if let Some(update) = view.process_delta(&delta, &self.db) {
                     updates.push(update);
                 }
@@ -409,13 +433,35 @@ impl Circuit {
         format: Option<ViewResultFormat>,
     ) -> Option<ViewUpdate> {
         if let Some(pos) = self.views.iter().position(|v| v.plan.id == plan.id) {
+            tracing::warn!(
+                target: "ssp::circuit::register",
+                view_id = %plan.id,
+                old_cache_size = self.views[pos].cache.len(),
+                "Re-registering existing view - old cache will be lost!"
+            );
             self.unregister_view_by_index(pos);
         }
+
+        let referenced_tables = plan.root.referenced_tables();
+        tracing::info!(
+            target: "ssp::circuit::register",
+            view_id = %plan.id,
+            referenced_tables = ?referenced_tables,
+            "Registering new view"
+        );
 
         let mut view = View::new(plan.clone(), params, format);
 
         let empty_deltas = BatchDeltas::new();
         let initial_update = view.process_batch(&empty_deltas, &self.db);
+
+        tracing::info!(
+            target: "ssp::circuit::register",
+            view_id = %plan.id,
+            cache_size_after_init = view.cache.len(),
+            last_hash = %view.last_hash,
+            "View initialized"
+        );
 
         self.views.push(view);
         let view_idx = self.views.len() - 1;
@@ -426,6 +472,14 @@ impl Circuit {
                 .or_default()
                 .push(view_idx);
         }
+
+        tracing::debug!(
+            target: "ssp::circuit::register",
+            view_id = %plan.id,
+            view_idx = view_idx,
+            total_views = self.views.len(),
+            "View added to circuit"
+        );
 
         initial_update
     }

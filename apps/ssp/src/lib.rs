@@ -297,6 +297,8 @@ async fn ingest_handler(
         // Use write lock for ingestion
         let mut circuit = state.processor.write().await;
 
+        // i want it normalized not like soe table:id and other just id
+        // i want it normalized not like soe table:id and other just id
         let entry = BatchEntry::new(&payload.table, op, &payload.id, clean_record.into());
 
         circuit.ingest_single(entry)
@@ -377,6 +379,40 @@ async fn register_view_handler(
     };
 
     span.record("view_id", &data.plan.id);
+    
+    // Extract metadata for cleanup check
+    let m = &data.metadata;
+    let raw_id = m.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
+    let id_str = format_incantation_id(raw_id);
+
+    // Check if view exists and clean up old edges
+    let view_existed = {
+        let circuit = state.processor.read().await;
+        circuit.views.iter().any(|v| v.plan.id == data.plan.id)
+    };
+
+    if view_existed {
+        info!(
+            target: "ssp::edges",
+            view_id = %id_str,
+            "Re-registering view - deleting old edges first"
+        );
+        
+        // Parse record ID safely
+        if let Some(from_id) = parse_record_id(&id_str) {
+            match state.db
+                .query("DELETE $from->_spooky_list_ref RETURN BEFORE")
+                .bind(("from", from_id))
+                .await 
+            {
+                Ok(_) => debug!("Successfully cleaned up old edges for {}", id_str),
+                Err(e) => error!("Failed to cleanup old edges for {}: {}", id_str, e),
+            }
+        } else {
+             error!("Failed to parse view ID for cleanup: {}", id_str);
+        }
+    }
+
     debug!("Registering view {}", data.plan.id);
 
     // Always register with Streaming mode
@@ -393,15 +429,12 @@ async fn register_view_handler(
 
     state.metrics.view_count.add(1, &[]);
 
-    let m = &data.metadata;
-    let raw_id = m["id"].as_str().unwrap();
-    let id_str = format_incantation_id(raw_id);
-
-    let client_id_str = m["clientId"].as_str().unwrap().to_string();
-    let surql_str = m["surrealQL"].as_str().unwrap().to_string();
-    let ttl_str = m["ttl"].as_str().unwrap().to_string();
-    let last_active_str = m["lastActiveAt"].as_str().unwrap().to_string();
-    let params_val = m["safe_params"].clone();
+    // i dont know which version is better at version-approach ad commit: 7ba7676
+    let client_id_str = m.get("clientId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let surql_str = m.get("surrealQL").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let ttl_str = m.get("ttl").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let last_active_str = m.get("lastActiveAt").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let params_val = m.get("safe_params").cloned().unwrap_or(serde_json::Value::Null);
 
     // Store incantation metadata
     let query = "UPSERT <record>$id SET clientId = <string>$clientId, surrealQL = <string>$surrealQL, params = $params, ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt";
@@ -534,6 +567,22 @@ fn format_incantation_id(id: &str) -> String {
 pub async fn update_all_edges<C: Connection>(db: &Surreal<C>, updates: &[&StreamingUpdate], metrics: &Metrics) {
     if updates.is_empty() {
         return;
+    }
+
+    // Tracing remove for performance?
+    for update in updates.iter() {
+        let created: Vec<_> = update.records.iter()
+            .filter(|r| matches!(r.event, DeltaEvent::Created))
+            .map(|r| r.id.as_str())
+            .collect();
+        
+        tracing::info!(
+            target: "ssp::edges",
+            view_id = %update.view_id,
+            created_count = created.len(),
+            created_ids = ?created.iter().take(10).collect::<Vec<_>>(),
+            "StreamingUpdate record IDs (these are used in SQL queries)"
+        );
     }
 
     let span = Span::current();

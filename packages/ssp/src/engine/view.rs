@@ -28,7 +28,8 @@ pub struct View {
     pub plan: QueryPlan,
     /// Unified cache: Source of truth for all modes (Flat, Tree, Streaming).
     /// Tracks ALL records that are part of the view (including subquery results).
-    #[serde(default, skip_serializing_if = "is_cache_empty_or_streaming")]
+    /// IMPORTANT: Always serialize - needed for correct delta computation!
+    #[serde(default)]
     pub cache: ZSet,
     pub last_hash: String,
     #[serde(default)]
@@ -400,12 +401,41 @@ impl View {
         // FIX: FIRST RUN CHECK
         let is_first_run = self.last_hash.is_empty();
 
+        tracing::debug!(
+            target: "ssp::view::process_batch",
+            view_id = %self.plan.id,
+            is_first_run = is_first_run,
+            cache_size_before = self.cache.len(),
+            last_hash = %self.last_hash,
+            "Starting process_batch"
+        );
+
         // Compute view delta from membership changes
         let view_delta = self.compute_view_delta(&batch_deltas.membership, db, is_first_run);
         let updated_record_ids = self.get_content_updates_in_view(batch_deltas);
+
+        let delta_additions: Vec<_> = view_delta.iter().filter(|(_, w)| **w > 0).map(|(k, _)| k.as_str()).collect();
+        let delta_removals: Vec<_> = view_delta.iter().filter(|(_, w)| **w < 0).map(|(k, _)| k.as_str()).collect();
+        
+        tracing::debug!(
+            target: "ssp::view::process_batch",
+            view_id = %self.plan.id,
+            delta_total = view_delta.len(),
+            additions_count = delta_additions.len(),
+            removals_count = delta_removals.len(),
+            additions_sample = ?delta_additions.iter().take(5).collect::<Vec<_>>(),
+            removals_sample = ?delta_removals.iter().take(5).collect::<Vec<_>>(),
+            content_updates = updated_record_ids.len(),
+            "Computed view delta (ZSet keys include table prefix)"
+        );
         
         // Early return if no changes
         if view_delta.is_empty() && !is_first_run && updated_record_ids.is_empty() {
+            tracing::debug!(
+                target: "ssp::view::process_batch",
+                view_id = %self.plan.id,
+                "No changes detected, returning None"
+            );
             return None;
         }
 
@@ -415,14 +445,48 @@ impl View {
         // Categorize changes
         let (additions, removals, updates) = self.categorize_changes(&view_delta, &updated_record_ids);
 
+        tracing::debug!(
+            target: "ssp::view::process_batch",
+            view_id = %self.plan.id,
+            cache_size_after = self.cache.len(),
+            categorized_additions = additions.len(),
+            categorized_removals = removals.len(),
+            categorized_updates = updates.len(),
+            additions_sample = ?additions.iter().take(5).collect::<Vec<_>>(),
+            removals_sample = ?removals.iter().take(5).collect::<Vec<_>>(),
+            "Categorized changes (IDs are STRIPPED of table prefix)"
+        );
+
         // Build result data
         let result_data = self.build_result_data();
+
+        tracing::debug!(
+            target: "ssp::view::process_batch",
+            view_id = %self.plan.id,
+            result_data_count = result_data.len(),
+            result_sample = ?result_data.iter().take(5).collect::<Vec<_>>(),
+            "Built result_data (these IDs go to StreamingUpdate)"
+        );
 
         // Delegate formatting to update module (Strategy Pattern)
         use super::update::{build_update, compute_flat_hash, RawViewResult, ViewDelta};
 
+        // FIX: On first run, we should still provide a delta for edge creation!
+        // Previously this was None, causing build_update to use raw.records as Created
+        // Now we explicitly create a delta with all records as additions
         let view_delta_struct = if is_first_run {
-            None // First run = treat as full snapshot
+            tracing::info!(
+                target: "ssp::view::process_batch",
+                view_id = %self.plan.id,
+                initial_records = additions.len(),
+                "First run - creating delta with all records as additions"
+            );
+            // On first run, all records in result are additions
+            Some(ViewDelta {
+                additions: additions.clone(),
+                removals: vec![],
+                updates: vec![],
+            })
         } else {
             Some(ViewDelta {
                 additions,
@@ -558,13 +622,30 @@ impl View {
         is_first_run: bool,
     ) -> ZSet {
         if is_first_run {
+            tracing::debug!(
+                target: "ssp::view::delta",
+                view_id = %self.plan.id,
+                "First run - using full scan"
+            );
             // First run: full scan and diff
             self.compute_full_diff(db)
         } else {
             // Try incremental evaluation first
             if let Some(delta) = self.eval_delta_batch(&self.plan.root, deltas, db, self.params.as_ref()) {
+                tracing::debug!(
+                    target: "ssp::view::delta",
+                    view_id = %self.plan.id,
+                    delta_size = delta.len(),
+                    "Incremental eval succeeded"
+                );
                 delta
             } else {
+                tracing::warn!(
+                    target: "ssp::view::delta",
+                    view_id = %self.plan.id,
+                    cache_size = self.cache.len(),
+                    "Incremental eval failed (subquery/join/limit?) - falling back to FULL SCAN"
+                );
                 // Fallback to full scan
                 self.compute_full_diff(db)
             }
@@ -579,6 +660,16 @@ impl View {
         
         // Expand target set to include implicitly included subquery records
         self.expand_with_subqueries(&mut target_set, db);
+
+        tracing::debug!(
+            target: "ssp::view::delta",
+            view_id = %self.plan.id,
+            target_set_size = target_set.len(),
+            cache_size = self.cache.len(),
+            target_sample = ?target_set.keys().take(5).collect::<Vec<_>>(),
+            cache_sample = ?self.cache.keys().take(5).collect::<Vec<_>>(),
+            "compute_full_diff: comparing target vs cache"
+        );
 
         let mut diff = FastMap::default();
 
@@ -595,18 +686,46 @@ impl View {
                 diff.insert(key.clone(), 0 - old_w);
             }
         }
+        
+        tracing::debug!(
+            target: "ssp::view::delta",
+            view_id = %self.plan.id,
+            diff_size = diff.len(),
+            diff_additions = diff.iter().filter(|(_, w)| **w > 0).count(),
+            diff_removals = diff.iter().filter(|(_, w)| **w < 0).count(),
+            "compute_full_diff: result"
+        );
+        
         diff
     }
 
     /// Apply delta to cache, updating weights
     fn apply_cache_delta(&mut self, delta: &ZSet) {
+        let cache_before = self.cache.len();
+        let mut added = 0;
+        let mut removed = 0;
+        
         for (key, weight) in delta {
             let entry = self.cache.entry(key.clone()).or_insert(0);
             *entry += weight;
             if *entry == 0 {
                 self.cache.remove(key);
+                removed += 1;
+            } else if *weight > 0 {
+                added += 1;
             }
         }
+        
+        tracing::debug!(
+            target: "ssp::view::cache",
+            view_id = %self.plan.id,
+            cache_before = cache_before,
+            cache_after = self.cache.len(),
+            delta_size = delta.len(),
+            added = added,
+            removed = removed,
+            "Cache updated"
+        );
     }
 
     /// Categorize changes into additions, removals, and updates
@@ -987,3 +1106,40 @@ impl View {
 }
 
 //unity test in weight_correction_test.rs
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_first_run_emits_additions() {
+        // Setup: Create view with empty cache
+        let plan = QueryPlan { 
+            id: "test".to_string(), 
+            root: Operator::Scan { table: "users".to_string() } 
+        };
+        let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
+        
+        // Setup: Create database with one record
+        let mut db = Database::new();
+        let table = db.ensure_table("users");
+        table.rows.insert(SmolStr::new("1"), SpookyValue::Null);
+        table.zset.insert(SmolStr::new("users:1"), 1);
+        
+        // Act: Process empty batch (simulates first run on registration)
+        let result = view.process_batch(&BatchDeltas::new(), &db);
+        
+        // Assert: Should return StreamingUpdate with Created event
+        assert!(result.is_some());
+        if let Some(ViewUpdate::Streaming(update)) = result {
+            assert_eq!(update.records.len(), 1);
+            if let Some(record) = update.records.first() {
+                 use crate::engine::update::DeltaEvent;
+                 assert!(matches!(record.event, DeltaEvent::Created));
+                 // Verify Option A: Record ID should preserve table prefix (users:1)
+                 assert_eq!(record.id.as_str(), "users:1");
+            }
+        } else {
+            panic!("Expected Streaming update");
+        }
+    }
+}

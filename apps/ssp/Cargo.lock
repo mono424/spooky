@@ -3255,6 +3255,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "smol_str",
+ "tracing",
  "ulid",
  "web-sys",
 ]
