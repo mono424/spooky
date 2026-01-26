@@ -12,6 +12,11 @@ use serde_json::Value;
 use smol_str::SmolStr;
 use std::cmp::Ordering;
 
+mod sort_direction {
+    pub const DESC: &str = "DESC";
+    // pub const ASC: &str = "ASC";
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct QueryPlan {
     pub id: String,
@@ -299,14 +304,10 @@ impl View {
     /// Apply a single record creation to the view (fast path)
     /// Apply a single record creation to the view (fast path)
     fn apply_single_create(&mut self, key: &SmolStr) -> Option<ViewUpdate> {
-        let is_first_run = self.last_hash.is_empty();
         let was_member = self.cache.is_member(key);
         
         // FIX: Use membership-aware add
         self.cache.add_member(key.clone());
-        
-        // Build result data
-        let result_data = self.build_result_data();
         
         // Determine change type
         let (additions, updates) = if was_member {
@@ -315,7 +316,29 @@ impl View {
             (vec![key.clone()], vec![])
         };
         
-        // Build update
+        self.build_single_update(additions, vec![], updates)
+    }
+
+    /// Apply a single record deletion to the view (fast path)
+    fn apply_single_delete(&mut self, key: &SmolStr) -> Option<ViewUpdate> {
+        if !self.cache.is_member(key) {
+            return None;
+        }
+        
+        self.cache.remove_member(key);
+        self.build_single_update(vec![], vec![key.clone()], vec![])
+    }
+
+    /// Helper to build update for single record changes
+    fn build_single_update(
+        &mut self,
+        additions: Vec<SmolStr>,
+        removals: Vec<SmolStr>,
+        updates: Vec<SmolStr>,
+    ) -> Option<ViewUpdate> {
+        let is_first_run = self.last_hash.is_empty();
+        let result_data = self.build_result_data();
+        
         use super::update::{build_update, compute_flat_hash, RawViewResult, ViewDelta};
         
         let view_delta_struct = if is_first_run {
@@ -323,70 +346,8 @@ impl View {
         } else {
             Some(ViewDelta {
                 additions,
-                removals: vec![],
+                removals,
                 updates,
-            })
-        };
-        
-        // Compute hash if needed (for Streaming) before moving result_data
-        let pre_hash = if matches!(self.format, ViewResultFormat::Streaming) {
-            Some(compute_flat_hash(&result_data))
-        } else {
-            None
-        };
-        
-        let raw_result = RawViewResult {
-            query_id: self.plan.id.clone(),
-            records: result_data,
-            delta: view_delta_struct,
-        };
-        
-        let update = build_update(raw_result, self.format);
-        
-        // Hash check
-        let hash = match &update {
-            ViewUpdate::Flat(flat) | ViewUpdate::Tree(flat) => flat.result_hash.clone(),
-            ViewUpdate::Streaming(_) => pre_hash.unwrap_or_default(),
-        };
-        
-        let has_changes = match &update {
-            ViewUpdate::Streaming(s) => !s.records.is_empty(),
-            _ => hash != self.last_hash,
-        };
-        
-        if has_changes {
-            self.last_hash = hash;
-            Some(update)
-        } else {
-            None
-        }
-    }
-
-    /// Apply a single record deletion to the view (fast path)
-    fn apply_single_delete(&mut self, key: &SmolStr) -> Option<ViewUpdate> {
-        let is_first_run = self.last_hash.is_empty();
-        
-        // Check if key exists in cache
-        if !self.cache.contains_key(key) {
-            return None; // Not in view, no change
-        }
-        
-        // Remove from cache
-        self.cache.remove(key);
-        
-        // Build result data
-        let result_data = self.build_result_data();
-        
-        // Build update
-        use super::update::{build_update, compute_flat_hash, RawViewResult, ViewDelta};
-        
-        let view_delta_struct = if is_first_run {
-            None
-        } else {
-            Some(ViewDelta {
-                additions: vec![],
-                removals: vec![key.clone()],
-                updates: vec![],
             })
         };
         
@@ -796,27 +757,35 @@ impl View {
                 (false, true) => {
                     // Entering view
                     additions.push(key.clone());
-                    tracing::trace!(
-                        target: "ssp::view::membership",
-                        view_id = %self.plan.id,
-                        key = %key,
-                        "Record ENTERING view"
-                    );
                 }
                 (true, false) => {
                     // Leaving view
                     removals.push(key.clone());
-                    tracing::trace!(
-                        target: "ssp::view::membership",
-                        view_id = %self.plan.id,
-                        key = %key,
-                        "Record LEAVING view"
-                    );
                 }
                 _ => {
                     // No membership change (staying in or staying out)
                 }
             }
+        }
+
+        // Batch logging for entering/leaving records
+        if !additions.is_empty() {
+             tracing::trace!(
+                target: "ssp::view::membership",
+                view_id = %self.plan.id,
+                count = additions.len(),
+                sample = ?additions.iter().take(3).collect::<Vec<_>>(),
+                "Records ENTERING view"
+            );
+        }
+        if !removals.is_empty() {
+             tracing::trace!(
+                target: "ssp::view::membership",
+                view_id = %self.plan.id,
+                count = removals.len(),
+                sample = ?removals.iter().take(3).collect::<Vec<_>>(),
+                "Records LEAVING view"
+            );
         }
 
         // Content updates: keys that are members AND have content changes AND not leaving
@@ -990,7 +959,7 @@ impl View {
 
                             let cmp = compare_spooky_values(val_a, val_b);
                             if cmp != Ordering::Equal {
-                                return if ord.direction.eq_ignore_ascii_case("DESC") {
+                                return if ord.direction.eq_ignore_ascii_case(sort_direction::DESC) {
                                     cmp.reverse()
                                 } else {
                                     cmp
@@ -1263,5 +1232,29 @@ mod tests {
         assert!(loaded.is_simple_filter);
         assert!(!loaded.is_simple_scan);
         assert_eq!(loaded.referenced_tables_cached, vec!["users"]);
+    }
+    #[test]
+    fn test_fast_path_readd_stays_at_weight_one() {
+        // 1. Setup a simple view (Scan table "user")
+        let plan = QueryPlan {
+            id: "view_1".to_string(),
+            root: Operator::Scan { table: "user".into() },
+        };
+        
+        let mut view = View::new(plan, None, None);
+        
+        // 2. Add a record (Fast Path)
+        let key = "user:123";
+        view.apply_single_create(&key.into());
+        
+        assert!(view.cache.is_member(key));
+        assert_eq!(view.cache.get(key), Some(&1));
+        
+        // 3. Add same record again (Fast Path Idempotency Check)
+        // AFTER FIX: This should keep weight at 1
+        view.apply_single_create(&key.into());
+        
+        assert!(view.cache.is_member(key));
+        assert_eq!(view.cache.get(key), Some(&1), "Weight should remain 1 after re-add");
     }
 }

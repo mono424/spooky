@@ -46,8 +46,10 @@ pub enum WeightTransition {
     /// Record newly appears (old_weight <= 0, new_weight > 0)
     Inserted,
     /// Record's multiplicity increased (old_weight > 0, new_weight > old_weight)
+    #[allow(dead_code)]
     MultiplicityIncreased,
     /// Record's multiplicity decreased but still present (new_weight > 0, new_weight < old_weight)
+    #[allow(dead_code)]
     MultiplicityDecreased,
     /// Record removed entirely (old_weight > 0, new_weight <= 0)
     Deleted,
