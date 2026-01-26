@@ -9,9 +9,9 @@ use ssp::engine::circuit::Database;
 
 mod common;
 
-/// Test: When two threads reference the same user, user should have weight 2
+/// Test: When two threads reference the same user, user should have weight 1 (Membership)
 #[test]
-fn test_subquery_weight_accumulation() {
+fn test_subquery_membership_idempotency() {
     let mut db = Database::new();
 
     // Create user:1 (Weight = 1)
@@ -57,8 +57,8 @@ fn test_subquery_weight_accumulation() {
     assert_eq!(view.cache.get("thread:1").copied(), Some(1));
     assert_eq!(view.cache.get("thread:2").copied(), Some(1));
 
-    // User weight should be 2 (referenced twice)
-    assert_eq!(view.cache.get("user:1").copied(), Some(2), "User:1 should have weight 2 because it is referenced by 2 threads");
+    // User weight should be 1 (referenced twice, but membership normalization enforces 1)
+    assert_eq!(view.cache.get("user:1").copied(), Some(1), "User:1 should have weight 1 even if referenced by 2 threads (Membership Logic)");
 
     // Verify Streaming Output: Only ONE 'Created' event for user:1
     if let Some(ViewUpdate::Streaming(s)) = update {
@@ -71,9 +71,9 @@ fn test_subquery_weight_accumulation() {
     }
 }
 
-/// Test: When one thread is deleted, user weight decreases but user stays
+/// Test: When one thread is deleted, user stays in view (weight remains 1)
 #[test]
-fn test_subquery_weight_decrease_no_removal() {
+fn test_subquery_membership_persistence() {
     let mut db = Database::new();
     
     // Setup initial state: 2 threads -> 1 user
@@ -128,7 +128,7 @@ fn test_subquery_weight_decrease_no_removal() {
     let update = view.process_delta(&delta, &db);
 
     // Verify weights
-    assert_eq!(view.cache.get("user:1").copied(), Some(1), "User weight should decrease to 1");
+    assert_eq!(view.cache.get("user:1").copied(), Some(1), "User weight should remain 1");
     
     // No 'Deleted' event because user is still present via thread:2
     if let Some(ViewUpdate::Streaming(s)) = update {

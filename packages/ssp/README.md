@@ -32,25 +32,48 @@ Input Delta → Filter → Project → Output Delta
 ```
 
 ### 3. Membership vs Multiplicity
-For edge management, we strictly distinguish:
-- **Membership change**: Record enters or leaves the view (weight crosses 0)
-- **Multiplicity change**: Record's count changes but it remains in the view
+For edge management, we strictly use a **Membership Model** (a simplified subset of DBSP):
 
-Only membership changes trigger `Created` (0 -> 1) or `Deleted` (1 -> 0) events. Multiplicity changes (1 -> 2) are tracked internally but do not flap the visibility.
+#### The 1-Weight Invariant
+- **Present**: Weight is strictly `1`.
+- **Absent**: Weight is `0` (removed from map).
+- **Negative**: Used transiently in deltas to represent removals.
 
-#### Example: Weight Accumulation
+Unlike standard DBSP which allows weights > 1 (multiset semantics), SSP normalizes all weights to 1 after every operation (joins, subqueries, etc.). This ensures that:
+- One edge per (view, record) pair.
+- No "flickering" edges due to multiplicity changes.
+- Idempotent fast-path updates (re-adding an existing record is a no-op).
+
+#### Example: Weight Accumulation (Normalized)
 ```
-Thread 1 → User A (weight 1)
-Thread 2 → User A (weight 1)
-─────────────────────────────
-User A total weight = 2 (Present)
+Thread 1 → User A (Reference count: 1)
+Thread 2 → User A (Reference count: 2)
+──────────────────────────────────────
+User A Membership Weight = 1 (Present)
 
 Delete Thread 1:
-User A weight: 2 → 1 (Still Present - No "Deleted" event)
+User A Reference count: 2 → 1
+User A Membership Weight = 1 (Still Present - No "Deleted" event)
 
 Delete Thread 2:
-User A weight: 1 → 0 (Removed - "Deleted" event emitted)
+User A Reference count: 1 → 0
+User A Membership Weight = 0 (Removed - "Deleted" event emitted)
 ```
+
+---
+
+---
+
+## Architecture & Performance Improvements (v0.2)
+
+### Zero-Allocation Hot Paths
+- **Streaming Sort**: Streaming views (delta-only) skip implementation of sorting logic entirely, improving emission latency.
+- **In-Place Normalization**: Membership normalization happens in-place without vector allocations.
+- **Direct Diffs**: Difference calculation (`membership_diff_into`) writes directly to the target map, eliminating intermediate collections.
+
+### Correctness Guarantees
+- **Strict Idempotency**: Re-ingesting an existing record via the Fast Path is guaranteed to be a no-op (weight remains 1).
+- **Initialization Safety**: Deserialized views properly recompute all cached metadata flags to prevent false positives.
 
 ---
 
