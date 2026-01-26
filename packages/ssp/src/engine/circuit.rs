@@ -163,6 +163,24 @@ impl Circuit {
             dependency_list: FastMap::default(),
         }
     }
+
+    /// Load circuit state from JSON string and initialize all views
+    pub fn load_from_json(json: &str) -> anyhow::Result<Self> {
+        let mut circuit: Circuit = serde_json::from_str(json)?;
+        
+        // CRITICAL: Initialize cached flags for all views
+        for view in &mut circuit.views {
+            view.initialize_after_deserialize();
+        }
+        
+        tracing::debug!(
+            target: "ssp::circuit::load",
+            views_count = circuit.views.len(),
+            "Loaded and initialized circuit from JSON"
+        );
+        
+        Ok(circuit)
+    }
 }
 
 impl Default for Circuit {

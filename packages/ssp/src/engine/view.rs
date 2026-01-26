@@ -4,7 +4,7 @@ use super::eval::{
     resolve_nested_value, NumericFilterConfig,
 };
 use super::operators::{Operator, Predicate, Projection};
-use super::types::{Delta, FastMap, Path, SpookyValue, ZSet, BatchDeltas, parse_zset_key, ZSetOps};
+use super::types::{Delta, FastMap, Path, SpookyValue, ZSet, BatchDeltas, parse_zset_key};
 
 use super::update::{ViewResultFormat, ViewUpdate};
 use serde::{Deserialize, Serialize};
@@ -18,10 +18,7 @@ pub struct QueryPlan {
     pub root: Operator,
 }
 
-/// Helper function for serde to skip serializing empty caches
-fn is_cache_empty_or_streaming(cache: &ZSet) -> bool {
-    cache.is_empty()
-}
+
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct View {
@@ -71,6 +68,40 @@ impl View {
             is_simple_scan,
             is_simple_filter,
         }
+    }
+
+    /// Initialize cached flags after deserialization
+    /// 
+    /// IMPORTANT: Call this after deserializing a View from storage!
+    /// The cached flags are not serialized to save space, so they must
+    /// be recomputed when loading state.
+    pub fn initialize_after_deserialize(&mut self) {
+        self.has_subqueries_cached = self.plan.root.has_subquery_projections();
+        self.referenced_tables_cached = self.plan.root.referenced_tables();
+        self.is_simple_scan = matches!(self.plan.root, Operator::Scan { .. });
+        self.is_simple_filter = if let Operator::Filter { input, .. } = &self.plan.root {
+             matches!(input.as_ref(), Operator::Scan { .. })
+        } else {
+            false
+        };
+        
+        tracing::debug!(
+            target: "ssp::view::init",
+            view_id = %self.plan.id,
+            has_subqueries = self.has_subqueries_cached,
+            is_simple_scan = self.is_simple_scan,
+            is_simple_filter = self.is_simple_filter,
+            referenced_tables = ?self.referenced_tables_cached,
+            "Initialized cached flags after deserialize"
+        );
+    }
+    
+    /// Check if cached flags are initialized
+    pub fn is_initialized(&self) -> bool {
+        // If referenced_tables is empty but plan has operators, not initialized
+        // (A valid initialized view with Scan would have at least one table)
+        !self.referenced_tables_cached.is_empty() || 
+            matches!(self.plan.root, Operator::Scan { .. })
     }
 
     /// Process a delta for this view - optimized fast path for simple views
@@ -531,80 +562,75 @@ impl View {
         None
     }
 
-    /// Helper to expand a ZSet of root records to include all their subquery dependencies
-    ///
-    /// For each parent record in the target set, evaluate subqueries and add
-    /// referenced records with appropriate weights.
-    ///
-    /// Weight semantics:
-    /// - If parent has weight W and subquery returns record R with weight 1,
-    ///   then R gets weight += W in the result
-    /// - This ensures correct delta propagation when parents are added/removed
+    /// Expand target set with subquery results
+    /// 
+    /// MEMBERSHIP MODEL: After expansion, all weights are normalized to 1.
+    /// OPTIMIZATION: Uses shared accumulator to avoid allocations per parent.
     fn expand_with_subqueries(&self, target_set: &mut ZSet, db: &Database) {
-        // Early exit if query has no subqueries
+        use crate::engine::types::ZSetMembershipOps;
+        
         if !self.has_subqueries() {
             return;
         }
 
-        // Collect subquery results with parent weights
+        // Collect subquery results (Accumulator reused for all parents)
         let mut subquery_additions: ZSet = FastMap::default();
 
-        // Get parent records (before modification)
-        // We iterate a snapshot of the keys to safely mutate zset later
         let parent_records: Vec<(SmolStr, i64)> = target_set
             .iter()
+            .filter(|(_, &w)| w > 0)  // Only process present records
             .map(|(k, &w)| (k.clone(), w))
             .collect();
 
-        for (parent_key, parent_weight) in parent_records {
-            if parent_weight <= 0 {
-                continue;  // Skip non-present parents
-            }
-
-            // Get parent record data
+        for (parent_key, _parent_weight) in parent_records {
+            // Note: We ignore parent_weight for membership model
+            
             let parent_data = match self.get_row_value(&parent_key, db) {
                 Some(data) => data,
                 None => continue,
             };
 
-            // Evaluate subqueries for this parent
-            let subquery_results = self.evaluate_subqueries_for_parent(
+            // Recursively evaluate into accumulator
+            self.evaluate_subqueries_for_parent_into(
                 &self.plan.root,
                 parent_data,
                 db,
+                &mut subquery_additions
             );
-
-            // Add subquery results with weight = parent_weight
-            // This ensures correct propagation: if parent appears twice,
-            // its subquery results also appear twice
-            for (subquery_key, subquery_weight) in subquery_results {
-                *subquery_additions.entry(subquery_key).or_insert(0) +=
-                    parent_weight * subquery_weight;
-            }
         }
 
-        // Merge subquery results into target set
-        for (key, weight) in subquery_additions {
-            *target_set.entry(key).or_insert(0) += weight;
+        // Merge subquery results (membership: weight = 1)
+        // First normalize the accumulator to ensure we only add valid members
+        subquery_additions.normalize_to_membership();
+        
+        for (key, _) in subquery_additions {
+            target_set.add_member(key);
         }
+
+        // Ensure entire target set is normalized
+        target_set.normalize_to_membership();
+
+        tracing::debug!(
+            target: "ssp::view::subquery",
+            view_id = %self.plan.id,
+            target_set_size = target_set.len(),
+            "Expanded and normalized subqueries"
+        );
     }
 
-    /// Evaluate subqueries for a parent record
-    fn evaluate_subqueries_for_parent(
+    /// Evaluate subqueries for a parent record into accumulator
+    /// OPTIMIZATION: Pass mutable results map to avoid allocation recursion
+    fn evaluate_subqueries_for_parent_into(
         &self,
         op: &Operator,
         parent_context: &SpookyValue,
         db: &Database,
-    ) -> ZSet {
-        let mut results = FastMap::default();
-
+        results: &mut ZSet,
+    ) {
         match op {
             Operator::Project { input, projections } => {
                 // First, recurse into input
-                let input_results = self.evaluate_subqueries_for_parent(input, parent_context, db);
-                for (k, w) in input_results {
-                    *results.entry(k).or_insert(0) += w;
-                }
+                self.evaluate_subqueries_for_parent_into(input, parent_context, db, results);
 
                 // Then evaluate projections
                 for proj in projections {
@@ -617,36 +643,26 @@ impl View {
 
                             // Recursively expand nested subqueries
                             if let Some(record) = self.get_row_value(key, db) {
-                                let nested = self.evaluate_subqueries_for_parent(operator, record, db);
-                                for (nested_key, nested_weight) in nested {
-                                    *results.entry(nested_key).or_insert(0) += nested_weight;
-                                }
+                                self.evaluate_subqueries_for_parent_into(operator, record, db, results);
                             }
                         }
                     }
                 }
             }
             Operator::Filter { input, .. } => {
-                 return self.evaluate_subqueries_for_parent(input, parent_context, db);
+                 self.evaluate_subqueries_for_parent_into(input, parent_context, db, results);
             }
             Operator::Limit { input, .. } => {
-                 return self.evaluate_subqueries_for_parent(input, parent_context, db);
+                 self.evaluate_subqueries_for_parent_into(input, parent_context, db, results);
             }
             Operator::Join { left, right, .. } => {
-                let l = self.evaluate_subqueries_for_parent(left, parent_context, db);
-                let r = self.evaluate_subqueries_for_parent(right, parent_context, db);
-                // Union results
-                results = l;
-                for (k, w) in r {
-                    *results.entry(k).or_insert(0) += w;
-                }
+                self.evaluate_subqueries_for_parent_into(left, parent_context, db, results);
+                self.evaluate_subqueries_for_parent_into(right, parent_context, db, results);
             }
             Operator::Scan { .. } => {
-                // Leaf node, no subqueries here (unless we support subqueries in Scan params later?)
+                // Leaf node, no subqueries here
             }
         }
-
-        results
     }
 
 
@@ -689,42 +705,65 @@ impl View {
         }
     }
 
-    /// Compute full diff between current cache and target state
-    fn compute_full_diff(&mut self, db: &Database) -> ZSet {
+    /// Compute full diff using membership semantics
+    fn compute_full_diff(&self, db: &Database) -> ZSet {
+        use crate::engine::types::ZSetMembershipOps;
+        
+        // Compute target state
         let mut target_set = self
             .eval_snapshot(&self.plan.root, db, self.params.as_ref())
             .into_owned();
         
-        // Expand target set to include implicitly included subquery records
+        // Expand with subqueries (will normalize weights)
         self.expand_with_subqueries(&mut target_set, db);
+        
+        // Ensure target is normalized to membership
+        target_set.normalize_to_membership();
 
         tracing::debug!(
             target: "ssp::view::delta",
             view_id = %self.plan.id,
             target_set_size = target_set.len(),
             cache_size = self.cache.len(),
-            "compute_full_diff: comparing target vs cache"
+            target_sample = ?target_set.keys().take(3).collect::<Vec<_>>(),
+            cache_sample = ?self.cache.keys().take(3).collect::<Vec<_>>(),
+            "compute_full_diff: membership comparison"
         );
 
-        // Use ZSetOps::diff for correct DBSP semantics
-        let diff = self.cache.diff(&target_set);
+        // Compute membership diff and convert to ZSet delta format
+        let (additions, removals) = self.cache.membership_diff(&target_set);
+        
+        let mut diff = FastMap::default();
+        for key in additions {
+            diff.insert(key, 1);  // +1 = entering
+        }
+        for key in removals {
+            diff.insert(key, -1); // -1 = leaving
+        }
         
         tracing::debug!(
             target: "ssp::view::delta",
             view_id = %self.plan.id,
-            diff_size = diff.len(),
-            positive_weights = diff.values().filter(|&&w| w > 0).count(),
-            negative_weights = diff.values().filter(|&&w| w < 0).count(),
+            diff_additions = diff.values().filter(|&&w| w > 0).count(),
+            diff_removals = diff.values().filter(|&&w| w < 0).count(),
             "compute_full_diff: result"
         );
         
         diff
     }
 
-    /// Apply delta to cache using DBSP semantics
+    /// Apply delta to cache using MEMBERSHIP semantics
+    /// 
+    /// Key difference from DBSP:
+    /// - Weights are normalized to 1 (present) or removed (absent)
+    /// - This ensures one edge per (view, record) pair
     fn apply_cache_delta(&mut self, delta: &ZSet) {
+        use crate::engine::types::ZSetMembershipOps;
+        
         let cache_before = self.cache.len();
-        self.cache.add_delta(delta);
+        
+        // Use membership-aware delta application
+        self.cache.apply_membership_delta(delta);
         
         tracing::debug!(
             target: "ssp::view::cache",
@@ -732,7 +771,7 @@ impl View {
             cache_before = cache_before,
             cache_after = self.cache.len(),
             delta_size = delta.len(),
-            "Cache updated with delta"
+            "Cache updated with membership delta"
         );
     }
 
@@ -742,68 +781,81 @@ impl View {
         view_delta: &ZSet,
         updated_record_ids: &[SmolStr],
     ) -> (Vec<SmolStr>, Vec<SmolStr>, Vec<SmolStr>) {
-        use crate::engine::types::WeightTransition;
+        use crate::engine::types::ZSetMembershipOps;
+        
+        let mut additions = Vec::new();
+        let mut removals = Vec::new();
 
-        let mut additions: Vec<SmolStr> = Vec::with_capacity(view_delta.len());
-        let mut removals: Vec<SmolStr> = Vec::with_capacity(view_delta.len());
-
-        // Process weight changes to find membership transitions
         for (key, &weight_delta) in view_delta {
-            // Get old weight from cache (BEFORE applying delta)
-            let old_weight = self.cache.get(key).copied().unwrap_or(0);
-            let new_weight = old_weight + weight_delta;
-            
-            // Only consider membership changes (presence 0 <-> >0)
-            let transition = WeightTransition::compute(old_weight, new_weight);
+            let is_currently_member = self.cache.is_member(key);
+            let will_be_member = {
+                let old_weight = self.cache.get(key).copied().unwrap_or(0);
+                old_weight + weight_delta > 0
+            };
 
-            tracing::trace!(
-                target: "ssp::view::weights",
-                view_id = %self.plan.id,
-                key = %key,
-                old_weight = old_weight,
-                new_weight = new_weight,
-                weight_delta = weight_delta,
-                transition = ?transition,
-                "Weight transition"
-            );
-
-            match transition {
-               WeightTransition::Inserted => additions.push(key.clone()),
-               WeightTransition::Deleted => removals.push(key.clone()),
-               _ => {} // Multiplicity changes (e.g. 1->2, 2->1) do NOT trigger edge events
+            match (is_currently_member, will_be_member) {
+                (false, true) => {
+                    // Entering view
+                    additions.push(key.clone());
+                    tracing::trace!(
+                        target: "ssp::view::membership",
+                        view_id = %self.plan.id,
+                        key = %key,
+                        "Record ENTERING view"
+                    );
+                }
+                (true, false) => {
+                    // Leaving view
+                    removals.push(key.clone());
+                    tracing::trace!(
+                        target: "ssp::view::membership",
+                        view_id = %self.plan.id,
+                        key = %key,
+                        "Record LEAVING view"
+                    );
+                }
+                _ => {
+                    // No membership change (staying in or staying out)
+                }
             }
         }
 
-        // Build removal set for filtering updates O(1)
+        // Content updates: keys that are members AND have content changes AND not leaving
         let removal_set: std::collections::HashSet<&str> = 
             removals.iter().map(|s| s.as_str()).collect();
-
-        // Updates: records in updated_record_ids that are PERSISTENT
-        // Must be currently present (Old > 0) AND locally present (New > 0)
+        
         let updates: Vec<SmolStr> = updated_record_ids
             .iter()
-            .filter(|id| {
-                if removal_set.contains(id.as_str()) {
-                    return false;
-                }
-                
-                let old_w = self.cache.get(*id).copied().unwrap_or(0);
-                let delta_w = view_delta.get(*id).copied().unwrap_or(0);
-                let new_w = old_w + delta_w;
-                
-                // Persistent: Was present AND Is present
-                old_w > 0 && new_w > 0
+            .filter(|key| {
+                self.cache.is_member(key) && !removal_set.contains(key.as_str())
             })
-            .map(|id| id.clone())
+            .cloned()
             .collect();
+
+        tracing::debug!(
+            target: "ssp::view::categorize",
+            view_id = %self.plan.id,
+            additions = additions.len(),
+            removals = removals.len(),
+            updates = updates.len(),
+            "Categorized membership changes"
+        );
 
         (additions, removals, updates)
     }
 
     /// Build sorted result data from current cache
+    /// 
+    /// For Streaming mode, sorting is optional since we only emit deltas.
+    /// For Flat/Tree modes, sorting is required for consistent hashing.
     fn build_result_data(&self) -> Vec<SmolStr> {
         let mut result_data: Vec<SmolStr> = self.cache.keys().cloned().collect();
-        result_data.sort_unstable();
+        // Sort only if needed (not Streaming) or if size > 1 to ensure deterministic order if required by clients
+        // But for hash consistency we usually need sorted order. 
+        // Plan says: "Streaming mode doesn't need sorted data for delta emission"
+        if !matches!(self.format, ViewResultFormat::Streaming) || self.cache.len() > 1 {
+             result_data.sort_unstable();
+        }
         result_data
     }
 
@@ -967,14 +1019,14 @@ impl View {
                 let mut out = FastMap::default();
 
                 // 1. BUILD PHASE: Build Index for the RIGHT side
-                // Map: Hash of Join-Field -> List of (Key, Weight)
-                let mut right_index: FastMap<u64, Vec<(&SmolStr, &i64)>> = FastMap::default();
+                // Map: Hash of Join-Field -> List of (Key, Weight, FieldValue)
+                let mut right_index: FastMap<u64, Vec<(&SmolStr, &i64, &SpookyValue)>> = FastMap::default();
 
                 for (r_key, r_weight) in s_right.as_ref() {
                     if let Some(r_val) = self.get_row_value(r_key.as_str(), db) {
                         if let Some(r_field) = resolve_nested_value(Some(r_val), &on.right_field) {
                             let hash = hash_spooky_value(r_field);
-                            right_index.entry(hash).or_default().push((r_key, r_weight));
+                            right_index.entry(hash).or_default().push((r_key, r_weight, r_field));
                         }
                     }
                 }
@@ -985,12 +1037,14 @@ impl View {
                         if let Some(l_field) = resolve_nested_value(Some(l_val), &on.left_field) {
                             let hash = hash_spooky_value(l_field);
 
-                            // Hash Lookup instead of Loop!
+                            // Hash Lookup + Verification
                             if let Some(matches) = right_index.get(&hash) {
-                                for (_r_key, r_weight) in matches {
-                                    // We have a match! (Should double check equality with compare_spooky_values for strictness)
-                                    let w = l_weight * *r_weight;
-                                    *out.entry(l_key.clone()).or_insert(0) += w;
+                                for (_r_key, r_weight, r_field) in matches {
+                                    // Verify actual equality!
+                                    if compare_spooky_values(Some(l_field), Some(*r_field)) == Ordering::Equal {
+                                        let w = l_weight * *r_weight;
+                                        *out.entry(l_key.clone()).or_insert(0) += w;
+                                    }
                                 }
                             }
                         }
@@ -1001,29 +1055,37 @@ impl View {
         }
     }
 
+    /// Get row value from database by ZSet key
+    /// 
+    /// OPTIMIZATION: Avoid allocation by trying raw ID first.
+    /// If your DB consistently uses one format, simplify this.
+    #[inline]
     fn get_row_value<'a>(&self, key: &str, db: &'a Database) -> Option<&'a SpookyValue> {
-        // We assume valid format "table:id" (ZSet Key) -> "id" (Row Key or Stripped Row Key)
         let (table_name, id) = parse_zset_key(key)?;
         let table = db.tables.get(table_name)?;
         
-        // Try raw ID first (Fast path if ID has no prefix in DB)
+        // Fast path: Try raw ID (most common case)
         if let Some(row) = table.rows.get(id) {
             return Some(row);
         }
-
-        // Try with table prefix reconstruction (if ID was "table:id" and stripped)
-        // This handles the ambiguity introduced by stripping keys in make_zset_key
-        // Avoid allocation if possible? 
-        // For now, simple format is correct.
-        let prefixed_key = format!("{}:{}", table_name, id);
-        table.rows.get(prefixed_key.as_str())
+        
+        // Slow path: Try with table prefix
+        // TODO: Normalize row key format at ingestion to eliminate this branch
+        // For now, use a static buffer pattern to reduce allocations
+        
+        // Check if the key format matches "table:id" where id doesn't have prefix
+        // If so, the row might be stored with the full key
+        if !id.contains(':') {
+            // ID doesn't have prefix, try reconstructing
+            // This allocation is unavoidable without changing ingestion
+            let prefixed = format!("{}:{}", table_name, id);
+            return table.rows.get(prefixed.as_str());
+        }
+        
+        None
     }
 
-    /// Strip "table:" prefix from ZSet key to get row ID (SmolStr version)
-    #[inline]
-    fn strip_table_prefix_smol(key: &str) -> SmolStr {
-        parse_zset_key(key).map(|(_, id)| SmolStr::new(id)).unwrap_or_else(|| SmolStr::new(key))
-    }
+
 
     /// Resolve predicate value, handling $param references to context
     fn resolve_predicate_value(
@@ -1158,5 +1220,48 @@ mod tests {
         } else {
             panic!("Expected Streaming update");
         }
+    }
+
+
+    #[test]
+    fn test_view_serialization_roundtrip() {
+        use crate::engine::operators::Predicate;
+        use crate::engine::types::Path;
+
+        // Create a view with computed flags
+        let plan = QueryPlan {
+            id: "test".to_string(),
+            root: Operator::Filter {
+                input: Box::new(Operator::Scan { table: "users".to_string() }),
+                predicate: Predicate::Eq {
+                    field: Path::new("id"),
+                    value: serde_json::json!("user:1"),
+                },
+            },
+        };
+        let view = View::new(plan, None, Some(ViewResultFormat::Streaming));
+        
+        // Verify flags are set
+        assert!(view.is_simple_filter);
+        assert!(!view.is_simple_scan);
+        assert_eq!(view.referenced_tables_cached, vec!["users"]);
+        
+        // Serialize
+        let json = serde_json::to_string(&view).unwrap();
+        
+        // Deserialize
+        let mut loaded: View = serde_json::from_str(&json).unwrap();
+        
+        // Flags should be default (false/empty) before initialization because they are skipped
+        assert!(!loaded.is_simple_filter);
+        assert!(loaded.referenced_tables_cached.is_empty());
+        
+        // Initialize
+        loaded.initialize_after_deserialize();
+        
+        // Now flags should match original
+        assert!(loaded.is_simple_filter);
+        assert!(!loaded.is_simple_scan);
+        assert_eq!(loaded.referenced_tables_cached, vec!["users"]);
     }
 }

@@ -1,7 +1,7 @@
 use anyhow::Context;
 use axum::{
     Router,
-    extract::{Json, Request, State},
+    extract::{Json, Path, Request, State},
     http::{StatusCode, header::AUTHORIZATION},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -128,6 +128,7 @@ pub fn create_app(state: AppState) -> Router {
     Router::new()
         .route("/ingest", post(ingest_handler))
         .route("/log", post(log_handler))
+        .route("/debug/view/:view_id", get(debug_view_handler))
         .route("/view/register", post(register_view_handler))
         .route("/view/unregister", post(unregister_view_handler))
         .route("/reset", post(reset_handler))
@@ -538,6 +539,28 @@ async fn health_handler(State(state): State<AppState>) -> impl IntoResponse {
         "views": circuit.views.len(),
         "tables": circuit.db.tables.len(),
     }))
+}
+
+async fn debug_view_handler(
+    State(state): State<AppState>,
+    Path(view_id): Path<String>,
+) -> impl IntoResponse {
+    let circuit = state.processor.read().await;
+    
+    if let Some(view) = circuit.views.iter().find(|v| v.plan.id == view_id) {
+        let cache_summary: Vec<_> = view.cache.iter()
+            .map(|(k, &w)| json!({ "key": k, "weight": w }))
+            .collect();
+        
+        Json(json!({
+            "view_id": view_id,
+            "cache_size": view.cache.len(),
+            "last_hash": view.last_hash,
+            "cache": cache_summary,
+        }))
+    } else {
+        Json(json!({ "error": "View not found" }))
+    }
 }
 
 async fn version_handler() -> impl IntoResponse {

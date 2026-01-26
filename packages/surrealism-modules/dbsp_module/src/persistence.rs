@@ -1,5 +1,6 @@
 use serde_json::Value;
-use spooky_stream_processor::engine::Circuit;
+use spooky_stream_processor::engine::circuit::Circuit;
+use smol_str::SmolStr;
 use surrealism::imports::sql;
 
 pub fn load() -> Circuit {
@@ -28,7 +29,7 @@ pub fn clear() {
     let _ = sql::<&str, Vec<Value>>("DELETE _spooky_module_state:dbsp");
 }
 
-pub fn apply_incantation_update(id: &str, hash: &str, _data: &[(String, u64)]) {
+pub fn apply_incantation_update(id: &str, hash: &str, _data: &[SmolStr]) {
     eprintln!(
         "DEBUG: apply_incantation_update: Mock update for {} hash {} (Bypassing SQL)...",
         id, hash
@@ -38,7 +39,7 @@ pub fn apply_incantation_update(id: &str, hash: &str, _data: &[(String, u64)]) {
 pub fn upsert_incantation(
     id: &str,
     hash: &str,
-    _data: &[(String, u64)],
+    _data: &[SmolStr],
     _client_id: &str,
     _surrealql: &str,
     _params: &Value,

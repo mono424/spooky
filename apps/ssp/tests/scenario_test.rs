@@ -45,7 +45,7 @@ async fn update_all_edges<C: Connection>(db: &Surreal<C>, updates: &[&StreamingU
                 DeltaEvent::Created => {
                     format!(
                         "
-                        LET $spooky_version = (SELECT id, version FROM ONLY _spooky_version WHERE record_id = {0});
+                        LET $spooky_version = (SELECT id, version FROM ONLY _spooky_version WHERE ref_id = '{0}');
                         LET $target = $spooky_version.id;
                         RELATE ${1}->_spooky_list_ref->$target SET version = ($spooky_version.version);
                         ",
@@ -56,7 +56,7 @@ async fn update_all_edges<C: Connection>(db: &Surreal<C>, updates: &[&StreamingU
                 DeltaEvent::Updated => {
                      format!(
                         "
-                        LET $spooky_version = (SELECT id FROM ONLY _spooky_version WHERE record_id = {0});
+                        LET $spooky_version = (SELECT id, version FROM ONLY _spooky_version WHERE ref_id = '{0}');
                         UPDATE ${1}->_spooky_list_ref SET version += 1 WHERE out = $spooky_version.id;
                         ",
                         record.id,
@@ -66,7 +66,7 @@ async fn update_all_edges<C: Connection>(db: &Surreal<C>, updates: &[&StreamingU
                 DeltaEvent::Deleted => {
                      format!(
                         "
-                        LET $spooky_version = (SELECT id FROM ONLY _spooky_version WHERE record_id = {0});
+                        LET $spooky_version = (SELECT id, version FROM ONLY _spooky_version WHERE ref_id = '{0}');
                         DELETE ${1}->_spooky_list_ref WHERE out = $spooky_version.id;
                         ",
                         record.id,
@@ -80,6 +80,7 @@ async fn update_all_edges<C: Connection>(db: &Surreal<C>, updates: &[&StreamingU
 
     if !all_statements.is_empty() {
         let full_query = format!("BEGIN TRANSACTION;\n{};\nCOMMIT TRANSACTION;", all_statements.join(";\n"));
+        println!("DEBUG QUERY:\n{}", full_query);
         let mut query = db.query(&full_query);
         for (name, id) in bindings { query = query.bind((name, id)); }
         if let Err(e) = query.await { eprintln!("Error executing update_all_edges: {}", e); }
@@ -90,6 +91,8 @@ async fn update_all_edges<C: Connection>(db: &Surreal<C>, updates: &[&StreamingU
 async fn test_full_scenario() {
     let db = Surreal::new::<Mem>(()).await.unwrap();
     db.use_ns("test").use_db("test").await.unwrap();
+    db.query("DEFINE TABLE _spooky_version SCHEMALESS;").await.unwrap();
+    db.query("DEFINE TABLE _spooky_list_ref SCHEMALESS;").await.unwrap();
     
     let circuit = Arc::new(RwLock::new(Circuit::new()));
 
@@ -98,18 +101,19 @@ async fn test_full_scenario() {
     // ======================================================
     let user_id = "user:alice";
     // Create Version
-    let v_sql = format!("CREATE _spooky_version:{} SET record_id = {}, version = 1, id = _spooky_version:{};", user_id.replace(":", "_"), user_id, user_id.replace(":", "_"));
-    db.query(&v_sql).await.unwrap();
-
-    let _updates_1 = {
+    let v_sql = format!("INSERT INTO _spooky_version (ref_id, version) VALUES ('{}', 1);", user_id);
+    println!("INSERT SQL: {}", v_sql);
+    let res: Vec<serde_json::Value> = db.query(&v_sql).await.unwrap().take(0).unwrap();
+    println!("INSERT RES: {:?}", res);
+    let _updates_1: Vec<ViewUpdate> = {
         let mut p = circuit.write().await;
         let entry = ssp::engine::circuit::dto::BatchEntry::new(
-            "user", 
-            ssp::engine::types::Operation::Create, 
-            user_id, 
+            "user",
+            ssp::engine::types::Operation::Create,
+            user_id,
             json!({"id": user_id, "name": "Alice"}).into()
         );
-        p.ingest_single(entry)
+        p.ingest_single(entry).to_vec()
     };
     
     
@@ -131,8 +135,11 @@ async fn test_full_scenario() {
         let mut p = circuit.write().await;
         p.register_view(prep_1.plan, prep_1.safe_params, Some(ViewResultFormat::Streaming))
     };
+    println!("Init Update 1: {:?}", init_update_1);
     
-    if let Some(ViewUpdate::Streaming(s)) = init_update_1 {
+    println!("Versions: {:?}", db.query("SELECT * FROM _spooky_version").await.unwrap().take::<Vec<serde_json::Value>>(0).unwrap());
+    
+    if let Some(ViewUpdate::Streaming(s)) = &init_update_1 {
         update_all_edges(&db, &[&s]).await;
     }
     
@@ -152,10 +159,12 @@ async fn test_full_scenario() {
     // ======================================================
     let thread_id = "thread:t1";
     // Create Version
-    let v_sql = format!("CREATE _spooky_version:{} SET record_id = {}, version = 1, id = _spooky_version:{};", thread_id.replace(":", "_"), thread_id, thread_id.replace(":", "_"));
-    db.query(&v_sql).await.unwrap();
+    let v_sql = format!("INSERT INTO _spooky_version (ref_id, version) VALUES ('{}', 1);", thread_id);
+    println!("INSERT SQL: {}", v_sql);
+    let res: Vec<serde_json::Value> = db.query(&v_sql).await.unwrap().take(0).unwrap();
+    println!("INSERT RES: {:?}", res);
     
-    let updates_thread = {
+    let updates_thread: Vec<ViewUpdate> = {
         let mut p = circuit.write().await;
         let entry = ssp::engine::circuit::dto::BatchEntry::new(
             "thread", 
@@ -163,7 +172,7 @@ async fn test_full_scenario() {
             thread_id, 
             json!({"id": thread_id, "title": "My Thread", "author": user_id}).into()
         );
-        p.ingest_single(entry)
+        p.ingest_single(entry).to_vec()
     };
     let streaming_updates: Vec<&StreamingUpdate> = updates_thread.iter().filter_map(|u| if let ViewUpdate::Streaming(s) = u { Some(s) } else { None }).collect();
     update_all_edges(&db, &streaming_updates).await;
@@ -243,10 +252,12 @@ async fn test_full_scenario() {
     // ======================================================
     let comment_id = "comment:c1";
     // Create Version
-    let v_sql = format!("CREATE _spooky_version:{} SET record_id = {}, version = 1, id = _spooky_version:{};", comment_id.replace(":", "_"), comment_id, comment_id.replace(":", "_"));
-    db.query(&v_sql).await.unwrap();
+    let v_sql = format!("INSERT INTO _spooky_version (ref_id, version) VALUES ('{}', 1);", comment_id);
+    println!("INSERT SQL: {}", v_sql);
+    let res: Vec<serde_json::Value> = db.query(&v_sql).await.unwrap().take(0).unwrap();
+    println!("INSERT RES: {:?}", res);
     
-    let updates_comment = {
+    let updates_comment: Vec<ssp::engine::update::ViewUpdate> = {
         let mut p = circuit.write().await;
         let entry = ssp::engine::circuit::dto::BatchEntry::new(
             "comment", 
@@ -260,7 +271,7 @@ async fn test_full_scenario() {
                 "created_at": "2024-01-02"
             }).into()
         );
-        p.ingest_single(entry)
+        p.ingest_single(entry).to_vec()
     };
     
     let streaming_updates_c: Vec<&StreamingUpdate> = updates_comment.iter().filter_map(|u| if let ViewUpdate::Streaming(s) = u { Some(s) } else { None }).collect();
