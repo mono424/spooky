@@ -97,11 +97,10 @@ impl View {
     }
     
     /// Check if cached flags are initialized
+    /// Check if cached flags are initialized
     pub fn is_initialized(&self) -> bool {
-        // If referenced_tables is empty but plan has operators, not initialized
-        // (A valid initialized view with Scan would have at least one table)
-        !self.referenced_tables_cached.is_empty() || 
-            matches!(self.plan.root, Operator::Scan { .. })
+        // FIX: Check if ANY cached flag is set (they're all computed together)
+        !self.referenced_tables_cached.is_empty()
     }
 
     /// Process a delta for this view - optimized fast path for simple views
@@ -202,23 +201,29 @@ impl View {
     }
 
     /// Check if a record matches this view's filters
+    /// OPTIMIZATION: Avoid format! allocations using parse_zset_key
+    #[inline]
     fn record_matches_view(&self, key: &SmolStr, db: &Database) -> bool {
         match &self.plan.root {
             Operator::Scan { table } => {
-                // Simple scan - just check table exists
-                key.starts_with(&format!("{}:", table))
+                parse_zset_key(key)
+                    .map(|(t, _)| t == table)
+                    .unwrap_or(false)
             }
             Operator::Filter { input, predicate } => {
                 if let Operator::Scan { table } = input.as_ref() {
-                    if !key.starts_with(&format!("{}:", table)) {
+                    let matches_table = parse_zset_key(key)
+                        .map(|(t, _)| t == table)
+                        .unwrap_or(false);
+                        
+                    if !matches_table {
                         return false;
                     }
                     return self.check_predicate(predicate, key, db, self.params.as_ref());
                 }
-                // Complex query - assume it matches (will be corrected by full diff)
                 true
             }
-            _ => true // Complex queries handled by full diff
+            _ => true
         }
     }
 
@@ -290,18 +295,21 @@ impl View {
     }
 
     /// Apply a single record creation to the view (fast path)
+    /// Apply a single record creation to the view (fast path)
     fn apply_single_create(&mut self, key: &SmolStr) -> Option<ViewUpdate> {
+        use crate::engine::types::ZSetMembershipOps;
+
         let is_first_run = self.last_hash.is_empty();
-        let was_cached = self.cache.contains_key(key);
+        let was_member = self.cache.is_member(key);
         
-        // Update cache
-        *self.cache.entry(key.clone()).or_insert(0) += 1;
+        // FIX: Use membership-aware add
+        self.cache.add_member(key.clone());
         
         // Build result data
         let result_data = self.build_result_data();
         
         // Determine change type
-        let (additions, updates) = if was_cached {
+        let (additions, updates) = if was_member {
             (vec![], vec![key.clone()])
         } else {
             (vec![key.clone()], vec![])
@@ -607,8 +615,6 @@ impl View {
             target_set.add_member(key);
         }
 
-        // Ensure entire target set is normalized
-        target_set.normalize_to_membership();
 
         tracing::debug!(
             target: "ssp::view::subquery",
@@ -717,9 +723,6 @@ impl View {
         // Expand with subqueries (will normalize weights)
         self.expand_with_subqueries(&mut target_set, db);
         
-        // Ensure target is normalized to membership
-        target_set.normalize_to_membership();
-
         tracing::debug!(
             target: "ssp::view::delta",
             view_id = %self.plan.id,
