@@ -174,7 +174,13 @@ pub trait ZSetMembershipOps {
 
     /// Compute membership changes from self to target
     /// Returns (keys_added, keys_removed)
+    /// Compute membership changes from self to target
+    /// Returns (keys_added, keys_removed)
     fn membership_diff(&self, target: &ZSet) -> (Vec<SmolStr>, Vec<SmolStr>);
+
+    /// Compute membership diff (additions, removals) into provided ZSet
+    /// OPTIMIZATION: Avoids allocations
+    fn membership_diff_into(&self, target: &ZSet, diff: &mut ZSet);
 
     /// Normalize all weights to membership (1 if present, remove if not)
     fn normalize_to_membership(&mut self);
@@ -213,50 +219,54 @@ impl ZSetMembershipOps for ZSet {
         }
     }
 
-    fn membership_diff(&self, target: &ZSet) -> (Vec<SmolStr>, Vec<SmolStr>) {
-        let mut additions = Vec::new();
-        let mut removals = Vec::new();
-
-        // Records in target but not in self (or not present in self)
+    /// Compute membership diff (additions, removals)
+    /// OPTIMIZATION: Returns diff into provided ZSet to avoid allocations
+    fn membership_diff_into(&self, target: &ZSet, diff: &mut ZSet) {
+        // Records in target but not in self
         for (key, &weight) in target {
             if weight > 0 && !self.is_member(key) {
-                additions.push(key.clone());
+                diff.insert(key.clone(), 1);
             }
         }
-
-        // Records in self but not in target (or not present in target)
+        
+        // Records in self but not in target
         for (key, &weight) in self.iter() {
-            if weight > 0 {
-                let target_present = target.get(key).map(|&w| w > 0).unwrap_or(false);
-                if !target_present {
-                    removals.push(key.clone());
-                }
+            if weight > 0 && !target.get(key).map(|&w| w > 0).unwrap_or(false) {
+                diff.insert(key.clone(), -1);
             }
         }
+    }
 
+    /// Compute membership diff (additions, removals)
+    /// Wraps membership_diff_into for convenience
+    fn membership_diff(&self, target: &ZSet) -> (Vec<SmolStr>, Vec<SmolStr>) {
+        let mut diff_set = FastMap::default();
+        self.membership_diff_into(target, &mut diff_set);
+        
+        let mut additions = Vec::new();
+        let mut removals = Vec::new();
+        
+        for (key, weight) in diff_set {
+            if weight > 0 {
+                additions.push(key);
+            } else {
+                removals.push(key);
+            }
+        }
         (additions, removals)
     }
 
+    /// Normalize weights to membership (0 or 1)
+    /// OPTIMIZATION: In-place modification
     fn normalize_to_membership(&mut self) {
-        // Collect keys to modify (can't mutate while iterating)
-        let keys_to_normalize: Vec<_> = self
-            .iter()
-            .filter(|(_, &w)| w > 1)
-            .map(|(k, _)| k.clone())
-            .collect();
-
-        let keys_to_remove: Vec<_> = self
-            .iter()
-            .filter(|(_, &w)| w <= 0)
-            .map(|(k, _)| k.clone())
-            .collect();
-
-        for key in keys_to_normalize {
-            self.insert(key, 1);
-        }
-
-        for key in keys_to_remove {
-            self.remove(&key);
+        // Remove non-members first
+        self.retain(|_, &mut w| w > 0);
+        
+        // Normalize remaining to 1
+        for weight in self.values_mut() {
+            if *weight > 1 {
+                *weight = 1;
+            }
         }
     }
 

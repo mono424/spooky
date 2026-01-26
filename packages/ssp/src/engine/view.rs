@@ -4,7 +4,7 @@ use super::eval::{
     resolve_nested_value, NumericFilterConfig,
 };
 use super::operators::{Operator, Predicate, Projection};
-use super::types::{Delta, FastMap, Path, SpookyValue, ZSet, BatchDeltas, parse_zset_key};
+use super::types::{Delta, FastMap, Path, SpookyValue, ZSet, BatchDeltas, parse_zset_key, ZSetMembershipOps};
 
 use super::update::{ViewResultFormat, ViewUpdate};
 use serde::{Deserialize, Serialize};
@@ -202,6 +202,8 @@ impl View {
 
     /// Check if a record matches this view's filters
     /// OPTIMIZATION: Avoid format! allocations using parse_zset_key
+    /// Check if a record matches this view's filters
+    /// OPTIMIZATION: Avoid format! allocations using parse_zset_key
     #[inline]
     fn record_matches_view(&self, key: &SmolStr, db: &Database) -> bool {
         match &self.plan.root {
@@ -297,8 +299,6 @@ impl View {
     /// Apply a single record creation to the view (fast path)
     /// Apply a single record creation to the view (fast path)
     fn apply_single_create(&mut self, key: &SmolStr) -> Option<ViewUpdate> {
-        use crate::engine::types::ZSetMembershipOps;
-
         let is_first_run = self.last_hash.is_empty();
         let was_member = self.cache.is_member(key);
         
@@ -425,6 +425,7 @@ impl View {
     }
 
     /// Check if this view has any subquery projections
+    #[inline]
     fn has_subqueries(&self) -> bool {
         self.has_subqueries_cached
     }
@@ -575,8 +576,6 @@ impl View {
     /// MEMBERSHIP MODEL: After expansion, all weights are normalized to 1.
     /// OPTIMIZATION: Uses shared accumulator to avoid allocations per parent.
     fn expand_with_subqueries(&self, target_set: &mut ZSet, db: &Database) {
-        use crate::engine::types::ZSetMembershipOps;
-        
         if !self.has_subqueries() {
             return;
         }
@@ -733,26 +732,27 @@ impl View {
             "compute_full_diff: membership comparison"
         );
 
-        // Compute membership diff and convert to ZSet delta format
-        let (additions, removals) = self.cache.membership_diff(&target_set);
-        
-        let mut diff = FastMap::default();
-        for key in additions {
-            diff.insert(key, 1);  // +1 = entering
-        }
-        for key in removals {
-            diff.insert(key, -1); // -1 = leaving
-        }
+        // Compute diff using new optimized method
+        let mut diff_set = FastMap::default();
+        self.cache.membership_diff_into(&target_set, &mut diff_set);
+
+        // Convert the diff set into delta for processing
+        // Since diff_set keys are owned SmolStr, we move them into result map
+        // This avoids one allocation compared to the Vec logic
+        // But compute_view_delta expects &FastMap<String, ZSet>, we are in full diff mode so we fake it?
+        // Wait, compute_full_diff returns ZSet.
+        // The original logic returned ZSet from additions/removals.
+        // We can just return the populated diff_set!
         
         tracing::debug!(
             target: "ssp::view::delta",
             view_id = %self.plan.id,
-            diff_additions = diff.values().filter(|&&w| w > 0).count(),
-            diff_removals = diff.values().filter(|&&w| w < 0).count(),
+            diff_additions = diff_set.values().filter(|&&w| w > 0).count(),
+            diff_removals = diff_set.values().filter(|&&w| w < 0).count(),
             "compute_full_diff: result"
         );
         
-        diff
+        diff_set
     }
 
     /// Apply delta to cache using MEMBERSHIP semantics
@@ -761,8 +761,6 @@ impl View {
     /// - Weights are normalized to 1 (present) or removed (absent)
     /// - This ensures one edge per (view, record) pair
     fn apply_cache_delta(&mut self, delta: &ZSet) {
-        use crate::engine::types::ZSetMembershipOps;
-        
         let cache_before = self.cache.len();
         
         // Use membership-aware delta application
@@ -784,8 +782,6 @@ impl View {
         view_delta: &ZSet,
         updated_record_ids: &[SmolStr],
     ) -> (Vec<SmolStr>, Vec<SmolStr>, Vec<SmolStr>) {
-        use crate::engine::types::ZSetMembershipOps;
-        
         let mut additions = Vec::new();
         let mut removals = Vec::new();
 
@@ -851,13 +847,14 @@ impl View {
     /// 
     /// For Streaming mode, sorting is optional since we only emit deltas.
     /// For Flat/Tree modes, sorting is required for consistent hashing.
+    #[inline]
     fn build_result_data(&self) -> Vec<SmolStr> {
         let mut result_data: Vec<SmolStr> = self.cache.keys().cloned().collect();
-        // Sort only if needed (not Streaming) or if size > 1 to ensure deterministic order if required by clients
-        // But for hash consistency we usually need sorted order. 
-        // Plan says: "Streaming mode doesn't need sorted data for delta emission"
-        if !matches!(self.format, ViewResultFormat::Streaming) || self.cache.len() > 1 {
+        // Only sort for Flat/Tree (needed for hash consistency)
+        // Streaming emits deltas, order doesn't matter
+        if !matches!(self.format, ViewResultFormat::Streaming) {
              result_data.sort_unstable();
+
         }
         result_data
     }
