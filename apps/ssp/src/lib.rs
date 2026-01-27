@@ -670,6 +670,95 @@ pub async fn update_all_edges<C: Connection>(
         );
     }
 
+
+    // --- DEBUG VERSION: Send updates separately ---
+    let mut created_count = 0;
+    let mut updated_count = 0;
+    let mut deleted_count = 0;
+
+    for update in updates {
+        let incantation_id_str = format_incantation_id(&update.view_id);
+        let Some(from_id) = parse_record_id(&incantation_id_str) else {
+            error!("Invalid incantation ID format: {}", incantation_id_str);
+            continue;
+        };
+
+        for record in &update.records {
+             if parse_record_id(&record.id).is_none() {
+                error!(
+                    target: "ssp::edges",
+                    record_id = %record.id,
+                    view_id = %update.view_id,
+                    event = ?record.event,
+                    "Invalid record ID format - skipping edge operation"
+                );
+                continue;
+            }
+
+            let query = match record.event {
+                DeltaEvent::Created => {
+                    created_count += 1;
+                    format!(
+                        "
+                        RELATE $from->_spooky_list_ref->{0}
+                        SET version = 1, clientId = (SELECT VALUE clientId FROM $from LIMIT 1)[0];
+                        ",
+                        record.id
+                    )
+                }
+                DeltaEvent::Updated => {
+                    updated_count += 1;
+                     format!(
+                        "
+                        UPDATE $from->_spooky_list_ref 
+                        SET version += 1 
+                        WHERE out = {0};
+                        ",
+                        record.id
+                    )
+                }
+                DeltaEvent::Deleted => {
+                    deleted_count += 1;
+                     format!(
+                        "
+                        DELETE $from->_spooky_list_ref 
+                        WHERE out = {0};
+                        ",
+                        record.id
+                    )
+                }
+            };
+
+            debug!(target: "ssp::edges::sql", "Executing: {}", query);
+
+            let res = db.query(&query).bind(("from", from_id.clone())).await;
+            debug!(target: "ssp::edges::sql", "Response: {:?}", res);
+
+            if let Err(e) = res {
+                error!(
+                    target: "ssp::edges",
+                    error = %e,
+                    query = %query,
+                    "Edge update failed"
+                );
+            }
+        }
+    }
+
+    metrics.edge_operations.add(
+        created_count,
+        &[opentelemetry::KeyValue::new("operation", "create")],
+    );
+     metrics.edge_operations.add(
+        updated_count,
+        &[opentelemetry::KeyValue::new("operation", "update")],
+    );
+     metrics.edge_operations.add(
+        deleted_count,
+        &[opentelemetry::KeyValue::new("operation", "delete")],
+    );
+
+    /* --- OPTIMIZED VERSION (Commented out for debug) ---
     let span = Span::current();
     debug!(target: "ssp-server::update", "view_eges: {}, record: {}", updates.len(), updates.iter().map(|u| u.records.len()).sum::<usize>());
     let mut all_statements: Vec<String> = Vec::new();
@@ -811,6 +900,7 @@ pub async fn update_all_edges<C: Connection>(
             // For now, logging prominently (Issue 6).
         }
     }
+    */
 }
 
 /// Update edges for a single view (used by register_view_handler)
