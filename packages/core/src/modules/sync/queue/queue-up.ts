@@ -1,5 +1,4 @@
 import { RecordId } from 'surrealdb';
-import { MutationEventSystem, MutationEventTypes } from '../../data/events/mutation.js';
 import { LocalDatabaseService } from '../../../services/database/index.js';
 import {
   createSyncQueueEventSystem,
@@ -7,6 +6,7 @@ import {
   SyncQueueEventTypes,
 } from '../events/index.js';
 import { parseRecordIdString } from '../../../utils/index.js';
+import { Logger } from '../../../services/logger/index.js';
 
 export type CreateEvent = {
   type: 'create';
@@ -38,13 +38,18 @@ export type UpEvent = CreateEvent | UpdateEvent | DeleteEvent;
 export class UpQueue {
   private queue: UpEvent[] = [];
   private _events: SyncQueueEventSystem;
+  private logger: Logger;
 
   get events(): SyncQueueEventSystem {
     return this._events;
   }
 
-  constructor(private local: LocalDatabaseService) {
+  constructor(
+    private local: LocalDatabaseService,
+    logger: Logger
+  ) {
     this._events = createSyncQueueEventSystem();
+    this.logger = logger.child({ service: 'UpQueue' });
   }
 
   get size(): number {
@@ -65,16 +70,17 @@ export class UpQueue {
       try {
         await fn(event);
       } catch (error) {
-        console.error('Failed to process mutation', event, error);
+        this.logger.error({ error, event }, 'Failed to process mutation');
         this.queue.unshift(event);
         throw error;
       }
       try {
         await this.removeEventFromDatabase(event.mutation_id);
       } catch (error) {
-        // TODO: handle this, we still have this mutation in the database, eventough it
-        // was processed successfully
-        console.error('Failed to remove mutation from database', event, error);
+        this.logger.error(
+          { error, event },
+          'Failed to remove mutation from database after successful processing'
+        );
       }
     }
   }
@@ -113,16 +119,16 @@ export class UpQueue {
                 record_id: parseRecordIdString(r.recordId),
               };
             default:
-              console.warn(`Unknown mutation type: ${r.mutationType}`, r);
+              this.logger.warn(
+                { mutationType: r.mutationType, record: r },
+                'Unknown mutation type'
+              );
               return null;
           }
         })
         .filter((e: UpEvent | null): e is UpEvent => e !== null);
     } catch (error) {
-      console.error('Failed to load pending mutations from database:', error);
-      // TODO: clarify if we want to throw or not
-      // Don't crash, just start with empty queue? Or throw?
-      // For now, logging is safer.
+      this.logger.error({ error }, 'Failed to load pending mutations from database');
     }
   }
 }

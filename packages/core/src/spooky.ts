@@ -1,5 +1,11 @@
-import { DataManager } from './modules/data/index.js';
-import { SpookyConfig, QueryTimeToLive, SpookyQueryResultPromise } from './types.js';
+import { DataModule } from './modules/data/index.js';
+import {
+  SpookyConfig,
+  QueryTimeToLive,
+  SpookyQueryResultPromise,
+  PersistenceClient,
+  MutationEvent,
+} from './types.js';
 import {
   LocalDatabaseService,
   LocalMigrator,
@@ -19,19 +25,20 @@ import {
 import { DevToolsService } from './modules/devtools/index.js';
 import { createLogger } from './services/logger/index.js';
 import { AuthService } from './modules/auth/index.js';
-import { AuthEventTypes } from './modules/auth/index.js';
-import { MutationEventTypes } from './modules/data/events/mutation.js';
-import { QueryEventTypes } from './modules/data/events/query.js';
 import { StreamProcessorService } from './services/stream-processor/index.js';
-import { SyncEventTypes, UpEvent } from './modules/sync/index.js';
 import { EventSystem } from './events/index.js';
-import { DatabaseEventTypes } from './services/database/index.js';
+import { CacheModule } from './modules/cache/index.js';
+import { LocalStoragePersistenceClient } from './services/persistence/localstorage.js';
+import { generateId } from './utils/index.js';
 
 export class SpookyClient<S extends SchemaStructure> {
   private local: LocalDatabaseService;
   private remote: RemoteDatabaseService;
+  private persistenceClient: PersistenceClient;
+
   private migrator: LocalMigrator;
-  private dataManager: DataManager<S>;
+  private cache: CacheModule;
+  private dataModule: DataModule<S>;
   private sync: SpookySync<S>;
   private devTools: DevToolsService;
 
@@ -51,59 +58,107 @@ export class SpookyClient<S extends SchemaStructure> {
     const logger = createLogger(config.logLevel ?? 'info');
     this.logger = logger.child({ service: 'SpookyClient' });
 
-    const clientId = this.config.clientId ?? this.loadOrGenerateClientId();
-    this.persistClientId(clientId);
-
     this.logger.info(
       { config: { ...config, schema: '[SchemaStructure]' } },
       '[SpookyClient] Constructor called'
     );
+
+    if (config.persistenceClient) {
+      this.persistenceClient = config.persistenceClient;
+    } else {
+      this.persistenceClient = new LocalStoragePersistenceClient();
+    }
+
     this.local = new LocalDatabaseService(this.config.database, logger);
     this.remote = new RemoteDatabaseService(this.config.database, logger);
+
     this.streamProcessor = new StreamProcessorService(
       new EventSystem(['stream_update']),
       this.local,
       logger
     );
     this.migrator = new LocalMigrator(this.local, logger);
-    this.dataManager = new DataManager(
-      this.config.schema,
+
+    this.cache = new CacheModule(
       this.local,
       this.streamProcessor,
-      clientId,
+      (update) => {
+        // Direct callback from cache to data module
+        this.dataModule.onStreamUpdate(update);
+      },
       logger
     );
+
+    this.dataModule = new DataModule(this.cache, this.local, this.config.schema, logger);
+
+    // Initialize Auth
     this.auth = new AuthService(
       this.config.schema,
       this.remote,
       this.local,
-      this.dataManager,
+      this.dataModule,
       logger
     );
-    this.sync = new SpookySync(
-      this.local,
-      this.remote,
-      this.streamProcessor,
-      this.dataManager,
-      clientId,
-      logger
-    );
+
+    // Initialize Sync
+    this.sync = new SpookySync(this.local, this.remote, this.cache, this.dataModule, this.logger);
+
+    // Initialize DevTools
     this.devTools = new DevToolsService(
       this.local,
       this.remote,
       logger,
       this.config.schema,
       this.auth,
-      this.dataManager
+      this.dataModule
     );
 
     // Register DevTools as a receiver for stream updates
     this.streamProcessor.addReceiver(this.devTools);
+
+    // Wire up callbacks instead of events
+    this.setupCallbacks();
+  }
+
+  /**
+   * Setup direct callbacks instead of event subscriptions
+   */
+  private setupCallbacks() {
+    // Mutation callback for sync
+    this.dataModule.onMutation((mutations: MutationEvent[]) => {
+      // Notify DevTools
+      this.devTools.onMutation(mutations);
+
+      // Enqueue in Sync (filter out localOnly)
+      const mutationsToSync = mutations.filter((e) => !e.localOnly);
+      if (mutationsToSync.length > 0) {
+        this.sync.enqueueMutation(mutationsToSync as any);
+      }
+    });
+
+    // Sync events for incoming updates
+    this.sync.events.subscribe('SYNC_QUERY_UPDATED', (event: any) => {
+      this.devTools.logEvent('SYNC_QUERY_UPDATED', event.payload);
+    });
+
+    // Database events for DevTools
+    this.local.getEvents().subscribe('DATABASE_LOCAL_QUERY', (event: any) => {
+      this.devTools.logEvent('LOCAL_QUERY', event.payload);
+    });
+
+    this.remote.getEvents().subscribe('DATABASE_REMOTE_QUERY', (event: any) => {
+      this.devTools.logEvent('REMOTE_QUERY', event.payload);
+    });
   }
 
   async init() {
     this.logger.info('[SpookyClient] Init started');
     try {
+      this.logger.debug('[SpookyClient] Loading or generating client ID...');
+      const clientId = this.config.clientId ?? (await this.loadOrGenerateClientId());
+      this.persistClientId(clientId);
+      this.logger.debug({ clientId }, '[SpookyClient] Client ID loaded or generated');
+
       this.logger.debug('[SpookyClient] Connecting to local DB...');
       await this.local.connect();
       this.logger.debug('[SpookyClient] Local connected');
@@ -124,99 +179,15 @@ export class SpookyClient<S extends SchemaStructure> {
       await this.auth.init();
       this.logger.debug('[SpookyClient] Auth initialized');
 
-      this.logger.debug('[SpookyClient] Initializing DataManager...');
-      await this.dataManager.init();
-      this.logger.debug('[SpookyClient] DataManager initialized');
+      this.logger.debug('[SpookyClient] Initializing DataModule...');
+      await this.dataModule.init();
+      this.logger.debug('[SpookyClient] DataModule initialized');
 
       this.logger.debug('[SpookyClient] Initializing Sync...');
-      await this.sync.init();
+      await this.sync.init(clientId);
       this.logger.debug('[SpookyClient] Sync initialized');
 
-      // -------------------------------------------------------------------------
-      // EVENT ROUTING
-      // -------------------------------------------------------------------------
-
-      // --- Mutation Events ---
-      this.dataManager.mutationEvents.subscribe(MutationEventTypes.MutationCreated, (event) => {
-        const payload = event.payload;
-        // 1. Notify DevTools
-        this.devTools.onMutation(payload);
-
-        // 2. Enqueue in Sync (filter out localOnly)
-        const mutationsToSync = payload.filter((e: UpEvent) => !e.localOnly);
-        if (mutationsToSync.length > 0) {
-          this.sync.enqueueMutation(mutationsToSync);
-        }
-
-        // 3. Ingest into StreamProcessor
-        for (const element of payload) {
-          const tableName = element.record_id.table.toString();
-          // Use full record for create/update, fall back to data if record not available
-          const recordData =
-            element.type === 'delete' ? undefined : ((element as any).record ?? element.data);
-          this.streamProcessor.ingest(
-            tableName,
-            element.type,
-            element.record_id.toString(),
-            recordData
-          );
-        }
-      });
-
-      // --- Query Events ---
-      this.dataManager.queryEvents.subscribe(QueryEventTypes.IncantationInitialized, (event) => {
-        this.devTools.onQueryInitialized(event.payload);
-        this.sync.enqueueDownEvent({ type: 'register', payload: event.payload });
-      });
-
-      this.dataManager.queryEvents.subscribe(
-        QueryEventTypes.IncantationRemoteHashUpdate,
-        (event) => {
-          this.devTools.logEvent('QUERY_REMOTE_HASH_UPDATE', event.payload);
-          this.sync.enqueueDownEvent({ type: 'sync', payload: event.payload });
-        }
-      );
-
-      this.dataManager.queryEvents.subscribe(QueryEventTypes.IncantationTTLHeartbeat, (event) => {
-        this.devTools.logEvent('QUERY_TTL_HEARTBEAT', event.payload);
-        this.sync.enqueueDownEvent({ type: 'heartbeat', payload: event.payload });
-      });
-
-      this.dataManager.queryEvents.subscribe(QueryEventTypes.IncantationCleanup, (event) => {
-        this.devTools.logEvent('QUERY_CLEANUP', event.payload);
-        this.sync.enqueueDownEvent({ type: 'cleanup', payload: event.payload });
-      });
-
-      this.dataManager.queryEvents.subscribe(QueryEventTypes.IncantationUpdated, (event) => {
-        this.devTools.onQueryUpdated(event.payload);
-      });
-
-      // --- Sync Events ---
-      this.sync.events.subscribe(SyncEventTypes.IncantationUpdated, (event: any) => {
-        this.devTools.logEvent('SYNC_INCANTATION_UPDATED', event.payload);
-        this.dataManager.handleIncomingUpdate(event.payload);
-      });
-
-      this.sync.events.subscribe(SyncEventTypes.RemoteDataIngested, (event: any) => {
-        // Just logging or devtools update if needed
-      });
-
-      // Note: StreamProcessor updates are now handled directly by DataManager
-      // via setUpdateHandler() wiring in DataManager constructor
-
-      // --- Auth Events ---
-      this.auth.eventSystem.subscribe(AuthEventTypes.AuthStateChanged, (event) => {
-        // Handle auth state changes if needed (e.g. re-subscribe, clear cache)
-      });
-
-      // --- Database Events ---
-      this.local.getEvents().subscribe('DATABASE_LOCAL_QUERY', (event: any) => {
-        this.devTools.logEvent('LOCAL_QUERY', event.payload);
-      });
-
-      this.remote.getEvents().subscribe('DATABASE_REMOTE_QUERY', (event: any) => {
-        this.devTools.logEvent('REMOTE_QUERY', event.payload);
-      });
+      this.logger.info('[SpookyClient] Init completed successfully');
     } catch (e) {
       this.logger.error({ error: e }, '[SpookyClient] Init failed');
       throw e;
@@ -245,7 +216,7 @@ export class SpookyClient<S extends SchemaStructure> {
       this.config.schema,
       table,
       async (q) => ({
-        hash: await this.dataManager.query(
+        hash: await this.dataModule.query(
           table,
           q.selectQuery.query,
           q.selectQuery.vars ?? {},
@@ -258,7 +229,7 @@ export class SpookyClient<S extends SchemaStructure> {
 
   async queryRaw(sql: string, params: Record<string, any>, ttl: QueryTimeToLive) {
     const tableName = sql.split('FROM ')[1].split(' ')[0];
-    return this.dataManager.query(tableName, sql, params, ttl);
+    return this.dataModule.query(tableName, sql, params, ttl);
   }
 
   async subscribe(
@@ -266,19 +237,19 @@ export class SpookyClient<S extends SchemaStructure> {
     callback: (records: Record<string, any>[]) => void,
     options?: { immediate?: boolean }
   ): Promise<() => void> {
-    return this.dataManager.subscribe(queryHash, callback, options);
+    return this.dataModule.subscribe(queryHash, callback, options);
   }
 
   create(id: string, data: Record<string, unknown>) {
-    return this.dataManager.create(id, data);
+    return this.dataModule.create(id, data);
   }
 
   update(table: string, id: string, data: Record<string, unknown>) {
-    return this.dataManager.update(table, id, data);
+    return this.dataModule.update(table, id, data);
   }
 
   delete(table: string, id: string) {
-    return this.dataManager.delete(table, id);
+    return this.dataModule.delete(table, id);
   }
 
   async useRemote<T>(fn: (client: Surreal) => Promise<T> | T): Promise<T> {
@@ -295,18 +266,15 @@ export class SpookyClient<S extends SchemaStructure> {
     }
   }
 
-  private loadOrGenerateClientId(): string {
-    try {
-      if (typeof localStorage !== 'undefined') {
-        const stored = localStorage.getItem('spooky_client_id');
-        if (stored) return stored;
-      }
-    } catch (e) {
-      this.logger.warn({ error: e }, '[SpookyClient] Failed to load client ID');
+  private async loadOrGenerateClientId(): Promise<string> {
+    const clientId = await this.persistenceClient.get('spooky_client_id');
+
+    if (clientId) {
+      return clientId;
     }
 
-    const newId = crypto.randomUUID();
-    this.persistClientId(newId);
+    const newId = generateId();
+    await this.persistenceClient.set('spooky_client_id', newId);
     return newId;
   }
 }

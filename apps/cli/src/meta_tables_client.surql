@@ -31,7 +31,7 @@ DEFINE TABLE _spooky_incantation SCHEMALESS
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- The raw query string (for re-hydration/debugging)
-DEFINE FIELD surrealQL ON TABLE _spooky_incantation TYPE option<string>
+DEFINE FIELD sql ON TABLE _spooky_incantation TYPE option<string>
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- The raw query string (for re-hydration/debugging)

@@ -2,13 +2,30 @@ import init, { SpookyProcessor } from '@spooky/ssp-wasm';
 import { EventDefinition, EventSystem } from '../../events/index.js';
 import { Logger } from 'pino';
 import { LocalDatabaseService } from '../database/index.js';
-import { Incantation } from '../../modules/data/incantation.js';
 import { WasmProcessor, WasmStreamUpdate } from './wasm-types.js';
+import { RecordId, Duration } from 'surrealdb';
+import { QueryTimeToLive, RecordVersionArray } from '../../types.js';
+import { encodeRecordId } from '../../utils/index.js';
+
+// Simple interface for query plan registration (replaces Incantation class)
+interface QueryPlanConfig {
+  id: RecordId<string>;
+  sql: string;
+  params: Record<string, any>;
+  ttl: QueryTimeToLive | Duration;
+  lastActiveAt: Date;
+  localArray: RecordVersionArray;
+  remoteArray: RecordVersionArray;
+  meta: {
+    tableName: string;
+    involvedTables?: string[];
+  };
+}
 
 // Define the shape of an update from the Wasm module
 // Matches MaterializedViewUpdate struct
 export interface StreamUpdate {
-  query_id: string;
+  queryHash: string;
   localArray: any; // Flat array structure [[id, version], ...]
 }
 
@@ -44,7 +61,6 @@ export class StreamProcessorService {
   }
 
   private notifyUpdates(updates: StreamUpdate[]) {
-    console.log('__diff__', updates);
     for (const update of updates) {
       for (const receiver of this.receivers) {
         receiver.onStreamUpdate(update);
@@ -174,8 +190,7 @@ export class StreamProcessorService {
 
       if (rawUpdates && Array.isArray(rawUpdates) && rawUpdates.length > 0) {
         const updates: StreamUpdate[] = rawUpdates.map((u: WasmStreamUpdate) => ({
-          query_id: u.query_id,
-          localHash: u.result_hash,
+          queryHash: u.query_id,
           localArray: u.result_data,
         }));
         // Direct handler call instead of event
@@ -232,7 +247,7 @@ export class StreamProcessorService {
 
       if (rawUpdates && Array.isArray(rawUpdates) && rawUpdates.length > 0) {
         const updates: StreamUpdate[] = rawUpdates.map((u: WasmStreamUpdate) => ({
-          query_id: u.query_id,
+          queryHash: u.query_id,
           localArray: u.result_data,
         }));
         // Direct handler call instead of event
@@ -250,19 +265,19 @@ export class StreamProcessorService {
    * Explicitly set the version of a record in a specific view.
    * This is used during remote sync to ensure local state matches remote versioning.
    */
-  setRecordVersion(incantationId: string, recordId: string, version: number) {
+  setRecordVersion(queryId: string, recordId: string, version: number) {
     if (!this.processor) return;
 
-    this.logger.debug({ incantationId, recordId, version }, '[StreamProcessor] setRecordVersion');
+    this.logger.debug({ queryId, recordId, version }, '[StreamProcessor] setRecordVersion');
 
     try {
       // Note: recordId must be fully qualified table:id string
-      const update = this.processor.set_record_version(incantationId, recordId, version);
+      const update = this.processor.set_record_version(queryId, recordId, version);
 
       if (update) {
         const updates: StreamUpdate[] = [
           {
-            query_id: update.query_id,
+            queryHash: update.query_id,
             localArray: update.result_data,
           },
         ];
@@ -276,10 +291,10 @@ export class StreamProcessorService {
   }
 
   /**
-   * Register a new incantation (query plan).
+   * Register a new query plan.
    * Emits 'stream_update' with the initial result.
    */
-  registerIncantation(incantation: Incantation<unknown>) {
+  registerQueryPlan(queryPlan: QueryPlanConfig) {
     if (!this.processor) {
       this.logger.warn('[StreamProcessor] Not initialized, skipping registration');
       return;
@@ -287,34 +302,34 @@ export class StreamProcessorService {
 
     this.logger.debug(
       {
-        incantationId: incantation.id,
-        surrealQL: incantation.surrealql,
-        params: incantation.params,
+        queryId: queryPlan.id,
+        sql: queryPlan.sql,
+        params: queryPlan.params,
       },
-      '[StreamProcessor] Registering incantation'
+      '[StreamProcessor] Registering query plan'
     );
     this.logger.debug(
       {
-        id: incantation.id.toString(),
-        sql: incantation.surrealql,
-        params: incantation.params,
+        id: encodeRecordId(queryPlan.id),
+        sql: queryPlan.sql,
+        params: queryPlan.params,
       },
-      '[StreamProcessor] registerIncantation called'
+      '[StreamProcessor] registerQueryPlan called'
     );
 
     try {
-      const normalizedParams = this.normalizeValue(incantation.params);
+      const normalizedParams = this.normalizeValue(queryPlan.params);
       this.logger.debug(
         { normalizedParams },
-        '[StreamProcessor] registerIncantation normalized params'
+        '[StreamProcessor] registerQueryPlan normalized params'
       );
 
       const initialUpdate = this.processor.register_view({
-        id: incantation.id.toString(),
-        surrealQL: incantation.surrealql,
+        id: encodeRecordId(queryPlan.id),
+        sql: queryPlan.sql,
         params: normalizedParams,
         clientId: 'local',
-        ttl: incantation.ttl.toString(),
+        ttl: queryPlan.ttl.toString(),
         lastActiveAt: new Date().toISOString(),
       });
 
@@ -325,39 +340,39 @@ export class StreamProcessorService {
       );
 
       if (!initialUpdate) {
-        throw new Error('Failed to register incantation');
+        throw new Error('Failed to register query plan');
       }
       const update: StreamUpdate = {
-        query_id: initialUpdate.query_id,
+        queryHash: initialUpdate.query_id,
         localArray: initialUpdate.result_data,
       };
       this.saveState();
       this.logger.debug(
         {
-          incantationId: incantation.id,
-          surrealQL: incantation.surrealql,
-          params: incantation.params,
+          queryId: queryPlan.id,
+          sql: queryPlan.sql,
+          params: queryPlan.params,
         },
-        '[StreamProcessor] Registered incantation'
+        '[StreamProcessor] Registered query plan'
       );
       return update;
     } catch (e) {
-      this.logger.error(e, '[StreamProcessor] Error registering incantation');
-      this.logger.error({ error: e }, '[StreamProcessor] Error registering incantation');
+      this.logger.error(e, '[StreamProcessor] Error registering query plan');
+      this.logger.error({ error: e }, '[StreamProcessor] Error registering query plan');
       throw e;
     }
   }
 
   /**
-   * Unregister an incantation by ID.
+   * Unregister a query plan by ID.
    */
-  unregisterIncantation(id: string) {
+  unregisterQueryPlan(id: string) {
     if (!this.processor) return;
     try {
       this.processor.unregister_view(id);
       this.saveState();
     } catch (e) {
-      this.logger.error(e, '[StreamProcessor] Error unregistering incantation');
+      this.logger.error(e, '[StreamProcessor] Error unregistering query plan');
     }
   }
 

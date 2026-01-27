@@ -60,7 +60,7 @@ describe('DBSP Storage Persistence', () => {
     const autoIncantSql = `
       UPSERT _spooky_incantation:${autoIncantId} CONTENT {
         id: '${autoIncantId}',
-        surrealQL: 'SELECT * FROM storage_items',
+        sql: 'SELECT * FROM storage_items',
         params: {},
         ttl: 10m,
         lastActiveAt: time::now(),
@@ -98,7 +98,7 @@ describe('DBSP Storage Persistence', () => {
     const paramIncantSql = `
       UPSERT _spooky_incantation:${paramIncantId} CONTENT {
         id: '${paramIncantId}',
-        surrealQL: 'SELECT * FROM user WHERE id = $id',
+        sql: 'SELECT * FROM user WHERE id = $id',
         params: { id: "user:alice" },
         ttl: 10m,
         lastActiveAt: time::now(),
@@ -124,7 +124,7 @@ describe('DBSP Storage Persistence', () => {
     expect(state.views[0].plan.id).toBe('storage_view');
   });
 
-  test('should handle unquoted record ID parameters (SurrealQL style)', async () => {
+  test('should handle unquoted record ID parameters (sql style)', async () => {
     // Mimic the failing scenario: { id: thread:123 }
     // Create a dummy thread
     await runQuery(
@@ -141,7 +141,7 @@ describe('DBSP Storage Persistence', () => {
       LET $params = { id: thread:test_parsing };
       UPSERT _spooky_incantation:parsing_test_view SET 
           id = '${viewName}', 
-          surrealQL = "${query}", 
+          sql = "${query}", 
           params = $params,
           ttl = 1h;
     `);
@@ -153,7 +153,7 @@ describe('DBSP Storage Persistence', () => {
     expect(record.hash).not.toBe('');
   }, 20000);
 
-  test('should handle backticked record ID parameters (SurrealQL complex style)', async () => {
+  test('should handle backticked record ID parameters (sql complex style)', async () => {
     // Mimic the failing scenario: { id: thread:`thread:b6a...` }
     const threadId = 'thread:complex_id';
     await runQuery(
@@ -180,7 +180,7 @@ describe('DBSP Storage Persistence', () => {
       LET $res = mod::dbsp::register_view('${viewName}', "${query}", "${trickyParams}");
       UPSERT _spooky_incantation:complex_test_view SET 
           id = '${viewName}', 
-          surrealQL = "${query}", 
+          sql = "${query}", 
           params = { id: ${threadId} },
           hash = $res.result_hash,
           ttl = 1h;
@@ -211,7 +211,7 @@ describe('DBSP Storage Persistence', () => {
       LET $res = mod::dbsp::register_view('${viewName}', "${query}", "${params}");
       UPSERT _spooky_incantation:${viewName} SET 
           id = '${viewName}', 
-          surrealQL = "${query}", 
+          sql = "${query}", 
           params = { id: ${threadId} },
           hash = $res.result_hash,
           ttl = 1h;
@@ -234,7 +234,7 @@ describe('DBSP Storage Persistence', () => {
       LET $res = mod::dbsp::register_view('${viewName}', "${query}", "${initialParams}");
       UPSERT _spooky_incantation:${viewName} SET 
         id = '${viewName}',
-        surrealQL = "${query}",
+        sql = "${query}",
         params = ${initialParams},
         hash = $res.result_hash,
         ttl = 1h;
@@ -255,7 +255,7 @@ describe('DBSP Storage Persistence', () => {
       LET $res = mod::dbsp::register_view('${viewName}', "${query}", "${newParams}");
       UPSERT _spooky_incantation:${viewName} SET 
         id = '${viewName}',
-        surrealQL = "${query}",
+        sql = "${query}",
         params = ${newParams},
         hash = $res.result_hash,
         ttl = 1h;
@@ -288,7 +288,7 @@ describe('DBSP Storage Persistence', () => {
       LET $res = mod::dbsp::register_view('${viewName}', "${query}", "${params}");
       UPSERT _spooky_incantation:${viewName} SET 
           id = '${viewName}', 
-          surrealQL = "${query}", 
+          sql = "${query}", 
           params = ${params},
           hash = $res.result_hash,
           ttl = 1h;
@@ -357,7 +357,7 @@ describe('DBSP Storage Persistence', () => {
     const createQuery = `
       UPSERT _spooky_incantation:${incantId} CONTENT {
         id: '${incantId}',
-        surrealQL: 'SELECT * FROM thread',
+        sql: 'SELECT * FROM thread',
         params: {},
         ttl: 10m,
         lastActiveAt: time::now(),

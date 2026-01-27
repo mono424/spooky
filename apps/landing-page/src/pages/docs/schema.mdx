@@ -6,7 +6,7 @@ title: Schema
 import CodeBlock from '../../components/ui/CodeBlock.astro';
 import Warning from '../../components/ui/Warning.astro';
 
-In Spooky, you define your data model using **SurrealQL** schema files. This approach serves as the single source of truth for your application, from which TypeScript interfaces are automatically generated.
+In Spooky, you define your data model using **sql** schema files. This approach serves as the single source of truth for your application, from which TypeScript interfaces are automatically generated.
 
 ## Defining Your Schema
 
@@ -87,7 +87,7 @@ FROM user TO post;
 -- 3. (Optional) Define properties on the edge
 DEFINE FIELD created_at ON TABLE liked TYPE datetime VALUE time::now();
 
--- 4. Create the relationship using standard SurrealQL or Events
+-- 4. Create the relationship using standard sql or Events
 -- RELATE user:john->liked->post:surrealdb_is_cool;`}
 lang="sql"
 />

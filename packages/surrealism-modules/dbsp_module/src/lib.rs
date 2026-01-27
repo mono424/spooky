@@ -125,7 +125,7 @@ fn register_view(config: Value) -> Result<Value, &'static str> {
             &hash,
             &result_data,
             m["clientId"].as_str().unwrap(),
-            m["surrealQL"].as_str().unwrap(),
+            m["sql"].as_str().unwrap(),
             &m["safe_params"], // Use the safe params we stored
             m["ttl"].as_str().unwrap(),
             m["lastActiveAt"].as_str().unwrap(),

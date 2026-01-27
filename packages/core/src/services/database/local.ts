@@ -4,6 +4,7 @@ import { SpookyConfig } from '../../types.js';
 import { Logger } from '../logger/index.js';
 import { AbstractDatabaseService } from './database.js';
 import { createDatabaseEventSystem, DatabaseEventTypes } from './events/index.js';
+import { encodeRecordId } from '../../utils/index.js';
 
 export class LocalDatabaseService extends AbstractDatabaseService {
   private config: SpookyConfig<any>['database'];
@@ -16,7 +17,7 @@ export class LocalDatabaseService extends AbstractDatabaseService {
         codecOptions: {
           valueDecodeVisitor(value) {
             if (value instanceof RecordId) {
-              return `${value.table.toString()}:${value.id.toString()}`;
+              return encodeRecordId(value);
             }
 
             return value;

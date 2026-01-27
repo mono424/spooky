@@ -101,7 +101,7 @@ fn print_register_payload(view_id: &str, surreal_ql: &str, params: Option<&str>)
     println!("│ Client → Sidecar: Register View");
     println!("├──────────────────────────────────────────────────────────────────┤");
     println!("│  id: \"{}\"", view_id);
-    println!("│  surrealQL: \"{}\"", surreal_ql);
+    println!("│  sql: \"{}\"", surreal_ql);
     if let Some(p) = params {
         println!("│  params: \"{}\"", p);
     }

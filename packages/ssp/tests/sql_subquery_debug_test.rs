@@ -75,7 +75,7 @@ fn test_subquery_via_sql_full_flow() {
     // Use the service layer's prepare_registration like WASM does
     let config = json!({
         "id": "test_sql_subquery_view",
-        "surrealQL": sql,
+        "sql": sql,
         "params": {},
         "clientId": "test-client",
         "ttl": "3600s",

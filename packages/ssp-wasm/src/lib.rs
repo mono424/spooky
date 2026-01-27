@@ -24,7 +24,7 @@ export interface WasmStreamUpdate {
 
 export interface WasmIncantationConfig {
   id: string;
-  surrealQL: string;
+  sql: string;
   params?: Record<string, any>;
   clientId: string;
   ttl: string;
@@ -121,17 +121,17 @@ impl SpookyProcessor {
     /// Register a new materialized view
     /// Config can be the QueryPlan object OR a configuration object with SQL
     /// For JS convenience we accept a generic object and try to process it.
-    /// If it has 'id', 'surrealQL' etc it is treated as a config.
+    /// If it has 'id', 'sql' etc it is treated as a config.
     /// If it looks like a plan, we try to use it directly, but current requirement implies SQL usage.
-    /// Actually, to match `surrealsim`, we should accept a config object containing `surrealQL`.
+    /// Actually, to match `surrealsim`, we should accept a config object containing `sql`.
     pub fn register_view(&mut self, config: JsValue) -> Result<JsValue, JsValue> {
         let config_val: Value = serde_wasm_bindgen::from_value(config)
             .map_err(|e| JsValue::from_str(&format!("Failed to parse config: {}", e)))?;
 
         // We use the shared service logic to parse SQL and prepare params
-        // This handles "id", "surrealQL", "params" etc.
+        // This handles "id", "sql", "params" etc.
         // Note: verify if `prepare_registration` is generic enough.
-        // It expects keys: id, surrealQL, clientId, ttl, lastActiveAt.
+        // It expects keys: id, sql, clientId, ttl, lastActiveAt.
         // If the JS caller only sends id + sql, it might fail validation.
         // Let's check typical usage.
         // If we want minimal usage (id + plan/sql), we might need loose parsing or constructing default metadata.

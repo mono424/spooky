@@ -9,7 +9,7 @@ DEFINE FUNCTION fn::incantation::register($config: object) {
 
     LET $module_config = {
         id: <string>$config.id,
-        surrealQL: <string>$config.surrealQL,
+        sql: <string>$config.sql,
         params: <string>($config.params OR {}),
         clientId: <string>$config.clientId,
         ttl: <string>($config.ttl OR '1h'),

@@ -1,5 +1,9 @@
 import { GetTable, SchemaStructure, TableModel, TableNames } from '@spooky/query-builder';
-import { Uuid, RecordId } from 'surrealdb';
+import { Uuid, RecordId, Duration } from 'surrealdb';
+import { Logger } from '../services/logger/index.js';
+import { QueryTimeToLive } from '../types.js';
+
+// ==================== RECORDID UTILITIES ====================
 
 export const compareRecordIds = (
   a: RecordId<string> | string,
@@ -15,7 +19,16 @@ export const encodeRecordId = (recordId: RecordId<string>): string => {
 };
 
 export const extractIdPart = (id: string | RecordId<string>): string => {
-  return typeof id === 'string' ? id.split(':').slice(1).join(':') : id.id.toString();
+  if (typeof id === 'string') {
+    return id.split(':').slice(1).join(':');
+  }
+  // RecordId.id can be string, number, object, or array
+  const idValue = id.id;
+  if (typeof idValue === 'string') {
+    return idValue;
+  }
+  // For other types (number, object, array), convert to string
+  return String(idValue);
 };
 
 export const parseRecordIdString = (id: string): RecordId<string> => {
@@ -23,9 +36,17 @@ export const parseRecordIdString = (id: string): RecordId<string> => {
   return new RecordId(table, idParts.join(':'));
 };
 
-import { createLogger } from '../services/logger/index.js';
+export function generateId(): string {
+  return Uuid.v4().toString().replace(/-/g, '');
+}
 
-const logger = createLogger('info').child({ module: 'utils' });
+export function generateNewTableId<S extends SchemaStructure, T extends TableNames<S>>(
+  tableName: T
+): RecordId {
+  return new RecordId(tableName, generateId());
+}
+
+// ==================== SCHEMA ENCODING/DECODING ====================
 
 export function decodeFromSpooky<S extends SchemaStructure, T extends TableNames<S>>(
   schema: S,
@@ -59,8 +80,6 @@ export function decodeFromSpooky<S extends SchemaStructure, T extends TableNames
       }
     }
   }
-
-  logger.trace({ encoded }, 'Decoded record');
 
   return encoded as TableModel<GetTable<S, T>>;
 }
@@ -103,8 +122,76 @@ export function encodeToSpooky<
   return decoded;
 }
 
-export function generateNewId<S extends SchemaStructure, T extends TableNames<S>>(
-  tableName: T
-): RecordId {
-  return new RecordId(tableName, Uuid.v4().toString().replace(/-/g, ''));
+// ==================== TIME/DURATION UTILITIES ====================
+
+/**
+ * Parse duration string or Duration object to milliseconds
+ */
+export function parseDuration(duration: QueryTimeToLive | Duration): number {
+  if (duration instanceof Duration) {
+    const ms = (duration as any).milliseconds || (duration as any)._milliseconds;
+    if (ms) return Number(ms);
+    const str = duration.toString();
+    if (str !== '[object Object]') return parseDuration(str as any);
+    return 600000;
+  }
+
+  if (typeof duration === 'bigint') {
+    return Number(duration);
+  }
+
+  if (typeof duration !== 'string') return 600000;
+
+  const match = duration.match(/^(\d+)([smh])$/);
+  if (!match) return 600000;
+  const val = parseInt(match[1], 10);
+  const unit = match[2];
+  switch (unit) {
+    case 's':
+      return val * 1000;
+    case 'h':
+      return val * 3600000;
+    case 'm':
+    default:
+      return val * 60000;
+  }
+}
+
+// ==================== DATABASE UTILITIES ====================
+
+/**
+ * Helper for retrying DB operations with exponential backoff
+ */
+export async function withRetry<T>(
+  logger: Logger,
+  operation: () => Promise<T>,
+  retries = 3,
+  delayMs = 100
+): Promise<T> {
+  let lastError;
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await operation();
+    } catch (err: any) {
+      lastError = err;
+      if (
+        err?.message?.includes('Can not open transaction') ||
+        err?.message?.includes('transaction') ||
+        err?.message?.includes('Database is busy')
+      ) {
+        logger.warn(
+          {
+            attempt: i + 1,
+            retries,
+            error: err.message,
+          },
+          'Retrying DB operation'
+        );
+        await new Promise((res) => setTimeout(res, delayMs * (i + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastError;
 }

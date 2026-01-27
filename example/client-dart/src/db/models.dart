@@ -127,7 +127,7 @@ class SpookyIncantation {
     
     ///Any type
     dynamic remoteTree;
-    String? surrealQl;
+    String? sql;
     
     ///ISO 8601 duration
     String ttl;
@@ -140,7 +140,7 @@ class SpookyIncantation {
         required this.localTree,
         this.remoteHash,
         required this.remoteTree,
-        this.surrealQl,
+        this.sql,
         required this.ttl,
     });
 
@@ -152,7 +152,7 @@ class SpookyIncantation {
         localTree: json["localTree"],
         remoteHash: json["remoteHash"],
         remoteTree: json["remoteTree"],
-        surrealQl: json["surrealQL"],
+        sql: json["sql"],
         ttl: json["ttl"],
     );
 
@@ -164,7 +164,7 @@ class SpookyIncantation {
         "localTree": localTree,
         "remoteHash": remoteHash,
         "remoteTree": remoteTree,
-        "surrealQL": surrealQl,
+        "sql": sql,
         "ttl": ttl,
     };
 }
@@ -458,7 +458,7 @@ DEFINE TABLE _spooky_incantation SCHEMALESS
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
 -- The raw query string (for re-hydration/debugging)
-DEFINE FIELD surrealQL ON TABLE _spooky_incantation TYPE option<string>
+DEFINE FIELD sql ON TABLE _spooky_incantation TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- The raw query string (for re-hydration/debugging)

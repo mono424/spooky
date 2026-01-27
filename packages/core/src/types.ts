@@ -5,6 +5,12 @@ export type { Level } from 'pino';
 
 export type StoreType = 'memory' | 'indexdb';
 
+export interface PersistenceClient {
+  set(key: string, value: string): Promise<void>;
+  get(key: string): Promise<string | null>;
+  remove(key: string): Promise<void>;
+}
+
 export type QueryTimeToLive =
   | '1m'
   | '5m'
@@ -49,25 +55,12 @@ export interface SpookyConfig<S extends SchemaStructure> {
   schema: S;
   schemaSurql: string;
   logLevel: Level;
+  persistenceClient?: PersistenceClient;
 }
 
 export type QueryHash = string;
 
 import { Duration } from 'surrealdb';
-
-export interface Incantation {
-  id: RecordId<QueryHash>;
-  surrealql: string;
-  params?: Record<string, any>;
-  localArray: RecordVersionArray;
-  remoteArray: RecordVersionArray;
-  lastActiveAt: number | Date | string;
-  ttl: QueryTimeToLive | Duration;
-  meta: {
-    tableName: string;
-    involvedTables?: string[];
-  };
-}
 
 // Flat array format: [[record-id, version], [record-id, version], ...]
 export type RecordVersionArray = Array<[string, number]>;
@@ -76,4 +69,37 @@ export interface RecordVersionDiff {
   added: Array<{ id: RecordId<string>; version: number }>;
   updated: Array<{ id: RecordId<string>; version: number }>;
   removed: RecordId<string>[];
+}
+
+export interface QueryConfig {
+  id: RecordId<string>;
+  sql: string;
+  params: Record<string, any>;
+  localArray: RecordVersionArray;
+  remoteArray: RecordVersionArray;
+  ttl: QueryTimeToLive;
+  lastActiveAt: Date;
+  tableName: string;
+}
+
+export interface QueryState {
+  config: QueryConfig;
+  records: Record<string, any>[];
+  ttlTimer: NodeJS.Timeout | null;
+  ttlDurationMs: number;
+  updateCount: number;
+}
+
+// Callback types
+export type QueryUpdateCallback = (records: Record<string, any>[]) => void;
+export type MutationCallback = (mutations: MutationEvent[]) => void;
+
+// Mutation event for sync
+export interface MutationEvent {
+  type: 'create' | 'update' | 'delete';
+  mutation_id: RecordId<string>;
+  record_id: RecordId<string>;
+  data?: any;
+  record?: any;
+  localOnly: boolean;
 }

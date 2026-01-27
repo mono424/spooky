@@ -282,7 +282,7 @@ pub enum ViewResultFormat {
 ssp/
 ├── src/
 │   ├── lib.rs            # StreamProcessor trait, public API
-│   ├── converter.rs      # SurrealQL → Operator tree
+│   ├── converter.rs      # sql → Operator tree
 │   ├── sanitizer.rs      # Input normalization
 │   ├── service.rs        # High-level helpers (prepare, register)
 │   └── engine/

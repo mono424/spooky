@@ -40,7 +40,7 @@ pub fn upsert_incantation(
     hash: &str,
     _data: &[(String, u64)],
     _client_id: &str,
-    _surrealql: &str,
+    _sql: &str,
     _params: &Value,
     _ttl: &str,
     _last_active_at: &str,

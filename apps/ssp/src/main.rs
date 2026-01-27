@@ -255,18 +255,18 @@ async fn register_view_handler(
     let id_str = format_incantation_id(raw_id);
 
     let client_id_str = m["clientId"].as_str().unwrap().to_string();
-    let surql_str = m["surrealQL"].as_str().unwrap().to_string();
+    let surql_str = m["sql"].as_str().unwrap().to_string();
     let ttl_str = m["ttl"].as_str().unwrap().to_string();
     let last_active_str = m["lastActiveAt"].as_str().unwrap().to_string();
     let params_val = m["safe_params"].clone();
 
     // Store incantation metadata (no array/hash - streaming uses edges)
-    let query = "UPSERT <record>$id SET clientId = <string>$clientId, surrealQL = <string>$surrealQL, params = $params, ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt";
+    let query = "UPSERT <record>$id SET clientId = <string>$clientId, sql = <string>$sql, params = $params, ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt";
 
     let db_res = state.db.query(query)
         .bind(("id", id_str.clone()))
         .bind(("clientId", client_id_str))
-        .bind(("surrealQL", surql_str))
+        .bind(("sql", surql_str))
         .bind(("params", params_val))
         .bind(("ttl", ttl_str))
         .bind(("lastActiveAt", last_active_str))

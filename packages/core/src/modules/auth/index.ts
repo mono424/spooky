@@ -1,6 +1,6 @@
 import { RemoteDatabaseService } from '../../services/database/remote.js';
 import { LocalDatabaseService } from '../../services/database/local.js';
-import { DataManager } from '../data/index.js';
+import { DataModule } from '../data/index.js';
 import {
   SchemaStructure,
   AccessDefinition,
@@ -8,6 +8,7 @@ import {
   TypeNameToTypeMap,
 } from '@spooky/query-builder';
 import { Logger } from '../../services/logger/index.js';
+import { encodeRecordId } from '../../utils/index.js';
 export * from './events/index.js';
 import { AuthEventTypes, createAuthEventSystem } from './events/index.js';
 
@@ -53,7 +54,7 @@ export class AuthService<S extends SchemaStructure> {
     private schema: S,
     private remote: RemoteDatabaseService,
     private local: LocalDatabaseService,
-    private mutation: DataManager<S>,
+    private mutation: DataModule<S>,
     private logger: Logger
   ) {}
 
@@ -186,7 +187,7 @@ export class AuthService<S extends SchemaStructure> {
     // Hydrate local database with user record using MutationManager to trigger reactivity
     const hydrateUser = async () => {
       try {
-        const userId = user.id.toString();
+        const userId = encodeRecordId(user.id);
         // Check if user exists locally
         const [existing] = await this.local.query<any[]>(`SELECT * FROM ONLY ${userId}`);
 

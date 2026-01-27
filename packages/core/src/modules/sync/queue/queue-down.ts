@@ -4,27 +4,34 @@ import {
   SyncQueueEventSystem,
   SyncQueueEventTypes,
 } from '../events/index.js';
-import { QueryEventTypeMap } from '../../data/events/query.js';
-import { EventPayload } from '../../../events/index.js';
+import { Logger } from '../../../services/logger/index.js';
 
 export type RegisterEvent = {
   type: 'register';
-  payload: EventPayload<QueryEventTypeMap, 'QUERY_INCANTATION_INITIALIZED'>;
+  payload: {
+    queryId: string;
+  };
 };
 
 export type SyncEvent = {
   type: 'sync';
-  payload: EventPayload<QueryEventTypeMap, 'QUERY_INCANTATION_REMOTE_HASH_UPDATE'>;
+  payload: {
+    queryId: string;
+  };
 };
 
 export type HeartbeatEvent = {
   type: 'heartbeat';
-  payload: EventPayload<QueryEventTypeMap, 'QUERY_INCANTATION_TTL_HEARTBEAT'>;
+  payload: {
+    queryId: string;
+  };
 };
 
 export type CleanupEvent = {
   type: 'cleanup';
-  payload: EventPayload<QueryEventTypeMap, 'QUERY_INCANTATION_CLEANUP'>;
+  payload: {
+    queryId: string;
+  };
 };
 
 export type DownEvent = RegisterEvent | SyncEvent | HeartbeatEvent | CleanupEvent;
@@ -32,13 +39,18 @@ export type DownEvent = RegisterEvent | SyncEvent | HeartbeatEvent | CleanupEven
 export class DownQueue {
   private queue: DownEvent[] = [];
   private _events: SyncQueueEventSystem;
+  private logger: Logger;
 
   get events(): SyncQueueEventSystem {
     return this._events;
   }
 
-  constructor(private local: LocalDatabaseService) {
+  constructor(
+    private local: LocalDatabaseService,
+    logger: Logger
+  ) {
     this._events = createSyncQueueEventSystem();
+    this.logger = logger.child({ service: 'DownQueue' });
   }
 
   get size(): number {
@@ -65,7 +77,7 @@ export class DownQueue {
       try {
         await fn(event);
       } catch (error) {
-        console.error('Failed to process query', event, error);
+        this.logger.error({ error, event }, 'Failed to process query');
         this.queue.unshift(event);
         throw error;
       }

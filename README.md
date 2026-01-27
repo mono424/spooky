@@ -13,7 +13,7 @@ Spooky simplifies building real-time, offline-capable applications by bridging y
 
 - **🚀 Live Queries**: Your UI updates instantly when data changes.
 - **💾 Local-First**: Works offline using IndexedDB, syncs when back online.
-- **🛡️ End-to-End Type Safety**: Generated TypeScript definitions from your SurrealQL schema.
+- **🛡️ End-to-End Type Safety**: Generated TypeScript definitions from your sql schema.
 - **⚡ Optimistic UI**: Immediate feedback for user actions while syncing in the background.
 
 ## 📦 Components
