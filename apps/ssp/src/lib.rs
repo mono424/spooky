@@ -15,10 +15,10 @@ use tokio::sync::RwLock;
 
 use ssp::{
     engine::circuit::{Circuit, dto::BatchEntry},
-    engine::types::Operation,
-    engine::update::{DeltaEvent, StreamingUpdate, ViewResultFormat, ViewUpdate},
-    engine::types::SpookyValue,
     engine::eval::normalize_record_id,
+    engine::types::Operation,
+    engine::types::SpookyValue,
+    engine::update::{DeltaEvent, StreamingUpdate, ViewResultFormat, ViewUpdate},
 };
 use surrealdb::engine::remote::ws::{Client, Ws};
 use surrealdb::opt::auth::Root;
@@ -66,6 +66,8 @@ pub struct IngestRequest {
     pub op: String,
     pub id: String,
     pub record: Value,
+    #[serde(default, rename = "_spooky_version")]
+    pub spooky_version: Option<i64>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -208,16 +210,16 @@ async fn shutdown_signal(
 ) {
     let ctrl_c = async {
         signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl+C handler");
+        .await
+        .expect("failed to install Ctrl+C handler");
     };
 
     #[cfg(unix)]
     let terminate = async {
         signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("failed to install signal handler")
-            .recv()
-            .await;
+        .expect("failed to install signal handler")
+        .recv()
+        .await;
     };
 
     #[cfg(not(unix))]
@@ -258,6 +260,7 @@ use axum::body::Bytes;
         table = Empty,
         op = Empty,
         id = Empty,
+        _spooky_version = Empty,
         payload_size_bytes = Empty,
         views_affected = Empty,
         edges_updated = Empty,
@@ -285,6 +288,8 @@ async fn ingest_handler(
         }
     };
 
+    debug!(target: "ssp::ingest_handler", "payload: {:#?}", payload);
+
     // Parse operation
     let op = match Operation::from_str(&payload.op) {
         Some(op) => op,
@@ -294,7 +299,14 @@ async fn ingest_handler(
         }
     };
 
-    let (clean_record, _hash) = ssp::service::ingest::prepare(payload.record);
+    let mut record = payload.record;
+    if let Some(v) = payload.spooky_version {
+        if let Some(obj) = record.as_object_mut() {
+            obj.insert("_spooky_version".to_string(), json!(v));
+        }
+    }
+
+    let (clean_record, _hash) = ssp::service::ingest::prepare(record);
 
     let updates = {
         // Use write lock for ingestion
@@ -303,22 +315,22 @@ async fn ingest_handler(
 
         // i want it normalized not like soe table:id and other just id
         let record_id = clean_record
-        .get("id")
-        .cloned()
-        .map(normalize_record_id)
-        .and_then(|v| match v {
-            SpookyValue::Str(s) => Some(s.to_string()),
-            _ => None,
-        })
-        .unwrap_or_else(|| {
-            tracing::warn!(
-                target: "ssp::ingest",
-                table = %payload.table,
-                "Could not extract record ID from clean_record"
-            );
-            // This fallback should rarely/never happen now
-            format!("{}:{}", payload.table, payload.id)
-        });
+            .get("id")
+            .cloned()
+            .map(normalize_record_id)
+            .and_then(|v| match v {
+                SpookyValue::Str(s) => Some(s.to_string()),
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                tracing::warn!(
+                    target: "ssp::ingest",
+                    table = %payload.table,
+                    "Could not extract record ID from clean_record"
+                );
+                // This fallback should rarely/never happen now
+                format!("{}:{}", payload.table, payload.id)
+            });
 
         debug!("payload: {:?}", clean_record);
         let entry = BatchEntry::new(&payload.table, op, record_id, clean_record.into());
@@ -413,41 +425,41 @@ async fn register_view_handler(
         circuit.views.iter().any(|v| v.plan.id == data.plan.id)
     };
 
-        if view_existed {
-            info!(
-                target: "ssp::edges",
-                view_id = %id_str,
-                "Re-registering view - deleting old edges first"
-            );
+    if view_existed {
+        info!(
+            target: "ssp::edges",
+            view_id = %id_str,
+            "Re-registering view - deleting old edges first"
+        );
 
-            // Parse record ID safely
-            if let Some(from_id) = parse_record_id(&id_str) {
-                // We are holding the lock, so no one can be creating edges right now via ingest
-                // BUT we need to be careful about not blocking the async runtime with DB calls if we can avoid it.
-                // However, since we need atomicity regarding the "view existence", we must do this logic here.
-                // Or we accept that delete happens, then register happens.
-                // The race was:
-                // 1. Check exists (read lock) -> True
-                // 2. Delete edges (NO lock)
-                // 3. Ingest happens (read lock) -> Sees view -> Creates edges
-                // 4. Register happens (write lock)
-                // 5. Create edges
+        // Parse record ID safely
+        if let Some(from_id) = parse_record_id(&id_str) {
+            // We are holding the lock, so no one can be creating edges right now via ingest
+            // BUT we need to be careful about not blocking the async runtime with DB calls if we can avoid it.
+            // However, since we need atomicity regarding the "view existence", we must do this logic here.
+            // Or we accept that delete happens, then register happens.
+            // The race was:
+            // 1. Check exists (read lock) -> True
+            // 2. Delete edges (NO lock)
+            // 3. Ingest happens (read lock) -> Sees view -> Creates edges
+            // 4. Register happens (write lock)
+            // 5. Create edges
 
-                // If we hold write lock, Step 3 cannot happen.
+            // If we hold write lock, Step 3 cannot happen.
 
-                match state
-                    .db
-                    .query("DELETE $from->_spooky_list_ref RETURN BEFORE;")
-                    .bind(("from", from_id))
-                    .await
-                {
-                    Ok(_) => debug!("Successfully cleaned up old edges for {}", id_str),
-                    Err(e) => error!("Failed to cleanup old edges for {}: {}", id_str, e),
-                }
-            } else {
-                error!("Failed to parse view ID for cleanup: {}", id_str);
+            match state
+                .db
+                .query("DELETE $from->_spooky_list_ref RETURN BEFORE;")
+                .bind(("from", from_id))
+                .await
+            {
+                Ok(_) => debug!("Successfully cleaned up old edges for {}", id_str),
+                Err(e) => error!("Failed to cleanup old edges for {}: {}", id_str, e),
             }
+        } else {
+            error!("Failed to parse view ID for cleanup: {}", id_str);
         }
+    }
 
     debug!("Registering view {}", data.plan.id);
 
@@ -670,95 +682,6 @@ pub async fn update_all_edges<C: Connection>(
         );
     }
 
-
-    // --- DEBUG VERSION: Send updates separately ---
-    let mut created_count = 0;
-    let mut updated_count = 0;
-    let mut deleted_count = 0;
-
-    for update in updates {
-        let incantation_id_str = format_incantation_id(&update.view_id);
-        let Some(from_id) = parse_record_id(&incantation_id_str) else {
-            error!("Invalid incantation ID format: {}", incantation_id_str);
-            continue;
-        };
-
-        for record in &update.records {
-             if parse_record_id(&record.id).is_none() {
-                error!(
-                    target: "ssp::edges",
-                    record_id = %record.id,
-                    view_id = %update.view_id,
-                    event = ?record.event,
-                    "Invalid record ID format - skipping edge operation"
-                );
-                continue;
-            }
-
-            let query = match record.event {
-                DeltaEvent::Created => {
-                    created_count += 1;
-                    format!(
-                        "
-                        RELATE $from->_spooky_list_ref->{0}
-                        SET version = 1, clientId = (SELECT VALUE clientId FROM $from LIMIT 1)[0];
-                        ",
-                        record.id
-                    )
-                }
-                DeltaEvent::Updated => {
-                    updated_count += 1;
-                     format!(
-                        "
-                        UPDATE $from->_spooky_list_ref 
-                        SET version += 1 
-                        WHERE out = {0};
-                        ",
-                        record.id
-                    )
-                }
-                DeltaEvent::Deleted => {
-                    deleted_count += 1;
-                     format!(
-                        "
-                        DELETE $from->_spooky_list_ref 
-                        WHERE out = {0};
-                        ",
-                        record.id
-                    )
-                }
-            };
-
-            debug!(target: "ssp::edges::sql", "Executing: {}", query);
-
-            let res = db.query(&query).bind(("from", from_id.clone())).await;
-            debug!(target: "ssp::edges::sql", "Response: {:?}", res);
-
-            if let Err(e) = res {
-                error!(
-                    target: "ssp::edges",
-                    error = %e,
-                    query = %query,
-                    "Edge update failed"
-                );
-            }
-        }
-    }
-
-    metrics.edge_operations.add(
-        created_count,
-        &[opentelemetry::KeyValue::new("operation", "create")],
-    );
-     metrics.edge_operations.add(
-        updated_count,
-        &[opentelemetry::KeyValue::new("operation", "update")],
-    );
-     metrics.edge_operations.add(
-        deleted_count,
-        &[opentelemetry::KeyValue::new("operation", "delete")],
-    );
-
-    /* --- OPTIMIZED VERSION (Commented out for debug) ---
     let span = Span::current();
     debug!(target: "ssp-server::update", "view_eges: {}, record: {}", updates.len(), updates.iter().map(|u| u.records.len()).sum::<usize>());
     let mut all_statements: Vec<String> = Vec::new();
@@ -784,7 +707,7 @@ pub async fn update_all_edges<C: Connection>(
         let binding_name = format!("from{}", idx);
         bindings.push((binding_name.clone(), from_id.clone()));
 
-        for (r_idx, record) in update.records.iter().enumerate() {
+        for (_r_idx, record) in update.records.iter().enumerate() {
             if parse_record_id(&record.id).is_none() {
                 error!(
                     target: "ssp::edges",
@@ -807,9 +730,10 @@ pub async fn update_all_edges<C: Connection>(
                     // 3. RELATE safely.
                     // 4. Set version using similar safe fetch.
                     format!(
-                        "RELATE ${1}->_spooky_list_ref->(SELECT id FROM ONLY _spooky_version WHERE record_id = {0}) 
-                            SET version = (SELECT version FROM ONLY _spooky_version WHERE record_id = {0}).version, 
-                                clientId = (SELECT clientId FROM ONLY ${1}).clientId",
+                        "
+                        RELATE ${1}->_spooky_list_ref->{0}
+                        SET version = 1, clientId = (SELECT VALUE clientId FROM ${1} LIMIT 1)[0];
+                        ",
                         record.id,
                         binding_name,
                     )
@@ -818,7 +742,7 @@ pub async fn update_all_edges<C: Connection>(
                     updated_count += 1;
                     // Fix version update logic (Issue 4) - removing quotes for RecordId match
                     format!(
-                        "UPDATE ${1}->_spooky_list_ref SET version += 1 WHERE out = (SELECT id FROM ONLY _spooky_version WHERE record_id = {0})",
+                        "UPDATE ${1}->_spooky_list_ref SET version += 1 WHERE out = {0}",
                         record.id,
                         binding_name
                     )
@@ -826,7 +750,7 @@ pub async fn update_all_edges<C: Connection>(
                 DeltaEvent::Deleted => {
                     deleted_count += 1;
                     format!(
-                        "DELETE ${1}->_spooky_list_ref WHERE out = (SELECT id FROM ONLY _spooky_version WHERE record_id = {0})",
+                        "DELETE ${1}->_spooky_list_ref WHERE out = {0}",
                         record.id,
                         binding_name
                     )
@@ -900,7 +824,7 @@ pub async fn update_all_edges<C: Connection>(
             // For now, logging prominently (Issue 6).
         }
     }
-    */
+
 }
 
 /// Update edges for a single view (used by register_view_handler)
