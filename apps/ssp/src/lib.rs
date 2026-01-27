@@ -297,8 +297,8 @@ async fn ingest_handler(
     let updates = {
         // Use write lock for ingestion
         let mut circuit = state.processor.write().await;
+        tracing::debug!(target: "ssp::ingest_handler", "circuit: {:#?}", circuit);
 
-        // i want it normalized not like soe table:id and other just id
         // i want it normalized not like soe table:id and other just id
         let record_id = clean_record
             .get("id")
@@ -393,12 +393,11 @@ async fn register_view_handler(
     let raw_id = m.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
     let id_str = format_incantation_id(raw_id);
 
-    // Register process with cleanup INSIDE the write lock to prevent race conditions (Issue 5)
-    let update = {
-        let mut circuit = state.processor.write().await;
-
-        // Check if view exists and clean up old edges WHILE HOLDING LOCK
-        let view_existed = circuit.views.iter().any(|v| v.plan.id == data.plan.id);
+    // Check if view exists and clean up old edges
+    let view_existed = {
+        let circuit = state.processor.read().await;
+        circuit.views.iter().any(|v| v.plan.id == data.plan.id)
+    };
 
         if view_existed {
             info!(
@@ -424,7 +423,7 @@ async fn register_view_handler(
 
                 match state
                     .db
-                    .query("DELETE $from->_spooky_list_ref RETURN BEFORE")
+                    .query("DELETE $from->_spooky_list_ref RETURN BEFORE;")
                     .bind(("from", from_id))
                     .await
                 {
@@ -436,6 +435,11 @@ async fn register_view_handler(
             }
         }
 
+    debug!("Registering view {}", data.plan.id);
+
+    // Always register with Streaming mode
+    let update = {
+        let mut circuit = state.processor.write().await;
         let res = circuit.register_view(
             data.plan.clone(),
             data.safe_params,
@@ -711,15 +715,17 @@ pub async fn update_all_edges<C: Connection>(
                     updated_count += 1;
                     // Fix version update logic (Issue 4) - removing quotes for RecordId match
                     format!(
-                        "UPDATE ${1}->_spooky_list_ref SET version = (SELECT VALUE version FROM _spooky_version WHERE record_id = {0} LIMIT 1)[0] WHERE out = (SELECT VALUE id FROM _spooky_version WHERE record_id = {0} LIMIT 1)[0]",
-                        record.id, binding_name
+                        "UPDATE ${1}->_spooky_list_ref SET version += 1 WHERE out = (SELECT id FROM ONLY _spooky_version WHERE record_id = {0})",
+                        record.id,
+                        binding_name
                     )
                 }
                 DeltaEvent::Deleted => {
                     deleted_count += 1;
                     format!(
-                        "DELETE ${1}->_spooky_list_ref WHERE out = (SELECT VALUE id FROM _spooky_version WHERE record_id = {0} LIMIT 1)[0]",
-                        record.id, binding_name
+                        "DELETE ${1}->_spooky_list_ref WHERE out = (SELECT id FROM ONLY _spooky_version WHERE record_id = {0})",
+                        record.id,
+                        binding_name
                     )
                 }
             };

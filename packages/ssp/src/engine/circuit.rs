@@ -137,7 +137,8 @@ impl Table {
             }
         }
 
-        let zset_key = make_zset_key(&key);
+        let zset_key = make_zset_key(&self.name, &key);
+        tracing::debug!(target: "ssp::circuit::apply_mutation", "table: {}, id: {}, zset: {}", self.name, key, zset_key);
         if weight != 0 {
             let entry = self.zset.entry(zset_key.clone()).or_insert(0);
             *entry += weight;
@@ -150,6 +151,7 @@ impl Table {
 
     pub fn apply_delta(&mut self, delta: &ZSet) {
         for (key, weight) in delta {
+            tracing::debug!(target: "ssp::circuit::apply_delta", "key: {}", key);
             let entry = self.zset.entry(key.clone()).or_insert(0);
             *entry += weight;
             if *entry == 0 {
@@ -267,10 +269,11 @@ impl Circuit {
     pub fn ingest_single(&mut self, entrie: BatchEntry) -> ViewUpdateList {
         let op = entrie.op;
         let key = SmolStr::new(entrie.id);
-        let (zset_key, _weight) =
-            self.db
-                .ensure_table(entrie.id)
-                .apply_mutation(op, key.clone(), entrie.data);
+        let (zset_key, _weight) = self.db.ensure_table(entrie.table.as_str()).apply_mutation(
+            op,
+            key.clone(),
+            entrie.data,
+        );
 
         self.ensure_dependency_list();
 
@@ -364,6 +367,7 @@ impl Circuit {
                     for entry in entries {
                         let (zset_key, weight) =
                             table.apply_mutation(entry.op, entry.id.clone(), entry.data.clone());
+                        tracing::debug!(target: "ssp::circut::ingest_batch", "entry id: {}, zset: {}", entry.id, zset_key);
                         if weight != 0 {
                             *delta.entry(zset_key.clone()).or_insert(0) += weight;
                         }
@@ -441,7 +445,8 @@ impl Circuit {
     pub fn init_load(&mut self, records: impl IntoIterator<Item = LoadRecord>) {
         for record in records {
             let tb = self.db.ensure_table(record.table.as_str());
-            let zset_key = make_zset_key(&record.id);
+            tracing::debug!(target: "ssp::circuit::init_load", "table: {}, id: {}", record.table, record.id);
+            let zset_key = make_zset_key(&record.table, &record.id);
             tb.rows.insert(record.id, record.data);
             tb.zset.insert(zset_key, 1);
         }
@@ -455,7 +460,8 @@ impl Circuit {
             let tb = self.db.ensure_table(table_name.as_str());
             tb.reserve(records.len());
             for (id, data) in records {
-                let zset_key = make_zset_key(&id);
+                tracing::debug!(target: "ssp::circuit::init_load_grouped", "table: {}, id: {}", table_name, id);
+                let zset_key = make_zset_key(&table_name, &id);
                 tb.rows.insert(id, data);
                 tb.zset.insert(zset_key, 1);
             }
