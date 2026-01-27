@@ -1,15 +1,19 @@
 use serde::Serialize;
 use serde_json::Value; // Keep Value import
-use ssp::{Circuit, ViewUpdate};
 use ssp::engine::circuit::dto::BatchEntry;
+use ssp::engine::eval::normalize_record_id;
 use ssp::engine::types::Operation;
+use ssp::engine::types::SpookyValue;
+use ssp::{Circuit, ViewUpdate};
 use wasm_bindgen::prelude::*;
 
 // When the `wee_alloc` feature is enabled, use `wee_alloc` as the global
 // allocator.
-#[cfg(feature = "wee_alloc")]
-#[global_allocator]
-static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
+// When the `wee_alloc` feature is enabled, use `wee_alloc` as the global
+// allocator.
+// #[cfg(feature = "wee_alloc")]
+// #[global_allocator]
+// static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 
 #[wasm_bindgen]
 pub struct SpookyProcessor {
@@ -31,6 +35,8 @@ export interface WasmIncantationConfig {
   clientId: string;
   ttl: string;
   lastActiveAt: string;
+  safe_params?: Record<string, any>;
+  format?: 'flat' | 'tree' | 'streaming';
 }
 
 export interface WasmIngestItem {
@@ -57,7 +63,7 @@ impl SpookyProcessor {
         op: String,
         id: String,
         record: JsValue,
-        _is_optimistic: bool, // Ignored in new API? Or todo? New API doesn't seem to take it in ingest_single
+        //_is_optimistic: bool, // Ignored in new API? Or todo? New API doesn't seem to take it in ingest_single
     ) -> Result<JsValue, JsValue> {
         let record: Value = serde_wasm_bindgen::from_value(record)
             .map_err(|e| JsValue::from_str(&format!("Failed to parse record: {}", e)))?;
@@ -65,14 +71,30 @@ impl SpookyProcessor {
         // internal preparation (hash calc)
         let (clean_record, _hash) = ssp::service::ingest::prepare(record);
 
+        let record_id = clean_record
+            .get("id")
+            .cloned()
+            .map(normalize_record_id)
+            .and_then(|v| match v {
+                SpookyValue::Str(s) => Some(s.to_string()),
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                tracing::warn!(
+                    target: "ssp::ingest",
+                    table = table,
+                    "Could not extract record ID from clean_record"
+                );
+                // This fallback should rarely/never happen now
+                format!("{}:{}", table, id)
+            });
+
         let op_enum = Operation::from_str(&op).unwrap_or(Operation::Create);
 
-        let entry = BatchEntry::new(
-             &table,
-             op_enum,
-             &id,
-             clean_record.into(),
-        );
+        // Convert clean_record (Value) to SpookyValue
+        let data: SpookyValue = clean_record.into();
+
+        let entry = BatchEntry::new(&table, op_enum, record_id, data);
 
         let updates = self.circuit.ingest_single(entry);
 
@@ -111,14 +133,29 @@ impl SpookyProcessor {
             let record = item.get("record").cloned().unwrap_or(Value::Null);
 
             let (clean_record, _hash) = ssp::service::ingest::prepare(record);
-            let op_enum = Operation::from_str(&op_str).unwrap_or(Operation::Create);
 
-            entries.push(BatchEntry::new(
-                 &table,
-                 op_enum,
-                 &id,
-                 clean_record.into(),
-            ));
+            let record_id = clean_record
+                .get("id")
+                .cloned()
+                .map(normalize_record_id)
+                .and_then(|v| match v {
+                    SpookyValue::Str(s) => Some(s.to_string()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| {
+                    tracing::warn!(
+                        target: "ssp::ingest",
+                        table = table,
+                        "Could not extract record ID from clean_record"
+                    );
+                    // This fallback should rarely/never happen now
+                    format!("{}:{}", table, id)
+                });
+
+            let op_enum = Operation::from_str(&op_str).unwrap_or(Operation::Create);
+            let data: SpookyValue = clean_record.into();
+
+            entries.push(BatchEntry::new(&table, op_enum, record_id, data));
         }
 
         let updates = self.circuit.ingest_batch(entries);
@@ -192,4 +229,3 @@ impl SpookyProcessor {
         Ok(())
     }
 }
-

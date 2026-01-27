@@ -544,6 +544,20 @@ impl Circuit {
         }
 
         let referenced_tables = plan.root.referenced_tables();
+        
+        #[cfg(debug_assertions)]
+        {
+            let unique: std::collections::HashSet<_> = referenced_tables.iter().collect();
+            if unique.len() != referenced_tables.len() {
+                tracing::warn!(
+                    target: "ssp::circuit::register",
+                    view_id = %plan.id,
+                    referenced = ?referenced_tables,
+                    "referenced_tables() returned duplicates - this should be fixed in Operator"
+                );
+            }
+        }
+
         tracing::info!(
             target: "ssp::circuit::register",
             view_id = %plan.id,
@@ -567,7 +581,7 @@ impl Circuit {
         self.views.push(view);
         let view_idx = self.views.len() - 1;
 
-        for t in plan.root.referenced_tables() {
+        for t in referenced_tables {
             self.dependency_list
                 .entry(SmolStr::new(t))
                 .or_default()
@@ -604,6 +618,21 @@ impl Circuit {
                     .entry(SmolStr::new(t))
                     .or_default()
                     .push(i);
+            }
+        }
+        
+        #[cfg(debug_assertions)]
+        {
+            for (table, indices) in &self.dependency_list {
+                let unique: std::collections::HashSet<_> = indices.iter().collect();
+                if unique.len() != indices.len() {
+                    tracing::error!(
+                        target: "ssp::circuit",
+                        table = %table,
+                        indices = ?indices,
+                        "Duplicate view indices in dependency_list!"
+                    );
+                }
             }
         }
     }

@@ -477,6 +477,7 @@ dependencies = [
  "serde-wasm-bindgen",
  "serde_json",
  "ssp",
+ "tracing",
  "wasm-bindgen",
  "web-sys",
 ]

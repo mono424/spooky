@@ -17,6 +17,8 @@ use ssp::{
     engine::circuit::{Circuit, dto::BatchEntry},
     engine::types::Operation,
     engine::update::{DeltaEvent, StreamingUpdate, ViewResultFormat, ViewUpdate},
+    engine::types::SpookyValue,
+    engine::eval::normalize_record_id,
 };
 use surrealdb::engine::remote::ws::{Client, Ws};
 use surrealdb::opt::auth::Root;
@@ -301,10 +303,22 @@ async fn ingest_handler(
 
         // i want it normalized not like soe table:id and other just id
         let record_id = clean_record
-            .get("id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| payload.id.clone());
+        .get("id")
+        .cloned()
+        .map(normalize_record_id)
+        .and_then(|v| match v {
+            SpookyValue::Str(s) => Some(s.to_string()),
+            _ => None,
+        })
+        .unwrap_or_else(|| {
+            tracing::warn!(
+                target: "ssp::ingest",
+                table = %payload.table,
+                "Could not extract record ID from clean_record"
+            );
+            // This fallback should rarely/never happen now
+            format!("{}:{}", payload.table, payload.id)
+        });
 
         debug!("payload: {:?}", clean_record);
         let entry = BatchEntry::new(&payload.table, op, record_id, clean_record.into());
