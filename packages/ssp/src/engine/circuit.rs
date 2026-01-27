@@ -1,10 +1,12 @@
-use super::types::{BatchDeltas, Delta, FastMap, Operation, RowKey, SpookyValue, ZSet, make_zset_key};
-use super::view::{QueryPlan, View};
+use super::types::{
+    make_zset_key, BatchDeltas, Delta, FastMap, Operation, RowKey, SpookyValue, ZSet,
+};
 use super::update::{ViewResultFormat, ViewUpdate};
+use super::view::{QueryPlan, View};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use smol_str::SmolStr;
 use smallvec::SmallVec;
+use smol_str::SmolStr;
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
@@ -13,16 +15,16 @@ use rayon::prelude::*;
 
 pub mod types {
     use super::*;
-    
+
     /// Index of a view in the circuit's storage.
     pub type ViewIndex = usize;
-    
+
     /// Optimized string type for table names (inlines strings <= 23 bytes).
     pub type TableName = SmolStr;
-    
+
     /// Optimized storage for dependency lists (inline stack allocation for <4 items).
     pub type DependencyList = SmallVec<[ViewIndex; 4]>;
-    
+
     /// Return type for ingest_single - inline storage for ≤2 updates
     pub type ViewUpdateList = SmallVec<[ViewUpdate; 2]>;
 }
@@ -40,15 +42,33 @@ pub mod dto {
     }
 
     impl BatchEntry {
-        pub fn new(table: impl Into<TableName>, op: Operation, id: impl Into<SmolStr>, data: SpookyValue) -> Self {
-            Self { table: table.into(), op, id: id.into(), data }
+        pub fn new(
+            table: impl Into<TableName>,
+            op: Operation,
+            id: impl Into<SmolStr>,
+            data: SpookyValue,
+        ) -> Self {
+            Self {
+                table: table.into(),
+                op,
+                id: id.into(),
+                data,
+            }
         }
-        
-        pub fn create(table: impl Into<TableName>, id: impl Into<SmolStr>, data: SpookyValue) -> Self {
+
+        pub fn create(
+            table: impl Into<TableName>,
+            id: impl Into<SmolStr>,
+            data: SpookyValue,
+        ) -> Self {
             Self::new(table, Operation::Create, id, data)
         }
 
-        pub fn update(table: impl Into<TableName>, id: impl Into<SmolStr>, data: SpookyValue) -> Self {
+        pub fn update(
+            table: impl Into<TableName>,
+            id: impl Into<SmolStr>,
+            data: SpookyValue,
+        ) -> Self {
             Self::new(table, Operation::Update, id, data)
         }
 
@@ -66,7 +86,11 @@ pub mod dto {
 
     impl LoadRecord {
         pub fn new(table: impl Into<TableName>, id: impl Into<SmolStr>, data: SpookyValue) -> Self {
-            Self { table: table.into(), id: id.into(), data }
+            Self {
+                table: table.into(),
+                id: id.into(),
+                data,
+            }
         }
     }
 }
@@ -97,18 +121,29 @@ impl Table {
         self.zset.reserve(additional);
     }
 
-    pub fn apply_mutation(&mut self, op: Operation, key: SmolStr, data: SpookyValue) -> (SmolStr, i64) {
+    pub fn apply_mutation(
+        &mut self,
+        op: Operation,
+        key: SmolStr,
+        data: SpookyValue,
+    ) -> (SmolStr, i64) {
         let weight = op.weight();
         match op {
-            Operation::Create | Operation::Update => { self.rows.insert(key.clone(), data); }
-            Operation::Delete => { self.rows.remove(&key); }
+            Operation::Create | Operation::Update => {
+                self.rows.insert(key.clone(), data);
+            }
+            Operation::Delete => {
+                self.rows.remove(&key);
+            }
         }
 
-        let zset_key = make_zset_key(&self.name, &key);
+        let zset_key = make_zset_key(&key);
         if weight != 0 {
             let entry = self.zset.entry(zset_key.clone()).or_insert(0);
             *entry += weight;
-            if *entry == 0 { self.zset.remove(&zset_key); }
+            if *entry == 0 {
+                self.zset.remove(&zset_key);
+            }
         }
         (zset_key, weight)
     }
@@ -117,8 +152,35 @@ impl Table {
         for (key, weight) in delta {
             let entry = self.zset.entry(key.clone()).or_insert(0);
             *entry += weight;
-            if *entry == 0 { self.zset.remove(key); }
+            if *entry == 0 {
+                self.zset.remove(key);
+            }
         }
+    }
+}
+
+//cargo test -p ssp --lib engine::circuit::table::apply_mutation
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn apply_mutation() {
+        let record_user1 = LoadRecord::new(
+            "user",
+            "user:23lk4j233jd",
+            json!({ "status": "spooky", "level": 10 }).into(),
+        );
+        let mut tb_user = Table::new(SmolStr::from("user"));
+        let (zset_key, weight) = tb_user.apply_mutation(
+            Operation::Create,
+            SmolStr::from("incation_id"),
+            record_user1.data,
+        );
+
+        assert_eq!(zset_key, SmolStr::from("user:23lk4j233jd"));
+        assert_eq!(weight, 1 as i64);
     }
 }
 
@@ -132,7 +194,9 @@ pub struct Database {
 
 impl Database {
     pub fn new() -> Self {
-        Self { tables: FastMap::default() }
+        Self {
+            tables: FastMap::default(),
+        }
     }
 
     pub fn ensure_table(&mut self, name: &str) -> &mut Table {
@@ -140,7 +204,7 @@ impl Database {
             .entry(name.to_string())
             .or_insert_with(|| Table::new(SmolStr::new(name)))
     }
-    
+
     pub fn get_table(&self, name: &str) -> Option<&Table> {
         self.tables.get(name)
     }
@@ -167,18 +231,18 @@ impl Circuit {
     /// Load circuit state from JSON string and initialize all views
     pub fn load_from_json(json: &str) -> anyhow::Result<Self> {
         let mut circuit: Circuit = serde_json::from_str(json)?;
-        
+
         // CRITICAL: Initialize cached flags for all views
         for view in &mut circuit.views {
             view.initialize_after_deserialize();
         }
-        
+
         tracing::debug!(
             target: "ssp::circuit::load",
             views_count = circuit.views.len(),
             "Loaded and initialized circuit from JSON"
         );
-        
+
         Ok(circuit)
     }
 }
@@ -190,29 +254,28 @@ impl Default for Circuit {
 }
 
 impl Circuit {
-
     // --- Ingestion API 1: Single Record ---
 
     /// Future optimization: ViewUpdateList is a Vec<ViewUpdate> but with inline storage for ≤2 updates
     /// Single record ingestion - returns ALL affected view updates
-    /// 
+    ///
     /// # Performance
     /// - Optimized for single-record mutations
     /// - Returns `SmallVec` (no heap allocation for ≤2 updates)
     /// - Processes all dependent views
 
-    pub fn ingest_single(
-        &mut self,
-        entrie: BatchEntry
-    ) -> ViewUpdateList {
+    pub fn ingest_single(&mut self, entrie: BatchEntry) -> ViewUpdateList {
         let op = entrie.op;
         let key = SmolStr::new(entrie.id);
-        let (zset_key, _weight) = self.db.ensure_table(entrie.table.as_str()).apply_mutation(op, key.clone(), entrie.data);
+        let (zset_key, _weight) =
+            self.db
+                .ensure_table(entrie.id)
+                .apply_mutation(op, key.clone(), entrie.data);
 
         self.ensure_dependency_list();
 
         let table_key = SmolStr::new(entrie.table);
-        
+
         // Clone indices to avoid borrow conflict with self.views
         let view_indices: SmallVec<[ViewIndex; 4]> = self
             .dependency_list
@@ -242,7 +305,7 @@ impl Circuit {
         // Use Delta::from_operation to include content_changed flag
         let delta = Delta::from_operation(table_key, zset_key, op);
         let mut updates: ViewUpdateList = SmallVec::new();
-        
+
         for view_idx in view_indices {
             if let Some(view) = self.views.get_mut(view_idx) {
                 tracing::info!(
@@ -253,7 +316,7 @@ impl Circuit {
                     last_hash_empty = view.last_hash.is_empty(),
                     "Processing delta for view"
                 );
-                
+
                 if let Some(update) = view.process_delta(&delta, &self.db) {
                     updates.push(update);
                 }
@@ -266,7 +329,9 @@ impl Circuit {
     // --- Ingestion API 2: Batch ---
 
     pub fn ingest_batch(&mut self, entries: Vec<BatchEntry>) -> Vec<ViewUpdate> {
-        if entries.is_empty() { return Vec::new(); }
+        if entries.is_empty() {
+            return Vec::new();
+        }
 
         let mut by_table: FastMap<TableName, Vec<BatchEntry>> = FastMap::default();
         for entry in entries {
@@ -285,17 +350,20 @@ impl Circuit {
             }
 
             // P2.2: Parallel Delta Computation
-            let results: Vec<(String, ZSet, Vec<SmolStr>)> = self.db.tables
+            let results: Vec<(String, ZSet, Vec<SmolStr>)> = self
+                .db
+                .tables
                 .par_iter_mut()
                 .filter_map(|(name, table)| {
                     let name_smol = SmolStr::new(name);
                     let entries = by_table.get(&name_smol)?;
-                    
+
                     let mut delta = ZSet::default();
                     let mut content_updates = Vec::new();
-                    
+
                     for entry in entries {
-                        let (zset_key, weight) = table.apply_mutation(entry.op, entry.id.clone(), entry.data.clone());
+                        let (zset_key, weight) =
+                            table.apply_mutation(entry.op, entry.id.clone(), entry.data.clone());
                         if weight != 0 {
                             *delta.entry(zset_key.clone()).or_insert(0) += weight;
                         }
@@ -304,7 +372,7 @@ impl Circuit {
                         }
                     }
                     delta.retain(|_, w| *w != 0);
-                    
+
                     if !delta.is_empty() || !content_updates.is_empty() {
                         Some((name.clone(), delta, content_updates))
                     } else {
@@ -319,7 +387,9 @@ impl Circuit {
                     batch_deltas.membership.insert(name_str.clone(), delta);
                 }
                 if !content_updates.is_empty() {
-                    batch_deltas.content_updates.insert(name_str, content_updates);
+                    batch_deltas
+                        .content_updates
+                        .insert(name_str, content_updates);
                 }
                 changed_tables.push(smol_name);
             }
@@ -330,31 +400,35 @@ impl Circuit {
         {
             for (table_name, table_entries) in by_table {
                 let tb = self.db.ensure_table(table_name.as_str());
-                
+
                 let mut has_changes = false;
                 for entry in table_entries {
                     let (zset_key, weight) = tb.apply_mutation(entry.op, entry.id, entry.data);
-                    
+
                     if weight != 0 {
-                        let delta = batch_deltas.membership.entry(table_name.to_string()).or_default();
+                        let delta = batch_deltas
+                            .membership
+                            .entry(table_name.to_string())
+                            .or_default();
                         *delta.entry(zset_key.clone()).or_insert(0) += weight;
                         has_changes = true;
                     }
-                    
+
                     if entry.op.changes_content() {
-                        batch_deltas.content_updates
+                        batch_deltas
+                            .content_updates
                             .entry(table_name.to_string())
                             .or_default()
                             .push(zset_key);
                         has_changes = true;
                     }
                 }
-                
+
                 if has_changes {
                     changed_tables.push(table_name);
                 }
             }
-            
+
             // Clean up empty deltas
             batch_deltas.membership.retain(|_, delta| !delta.is_empty());
         }
@@ -367,7 +441,7 @@ impl Circuit {
     pub fn init_load(&mut self, records: impl IntoIterator<Item = LoadRecord>) {
         for record in records {
             let tb = self.db.ensure_table(record.table.as_str());
-            let zset_key = make_zset_key(&record.table, &record.id);
+            let zset_key = make_zset_key(&record.id);
             tb.rows.insert(record.id, record.data);
             tb.zset.insert(zset_key, 1);
         }
@@ -381,7 +455,7 @@ impl Circuit {
             let tb = self.db.ensure_table(table_name.as_str());
             tb.reserve(records.len());
             for (id, data) in records {
-                let zset_key = make_zset_key(&table_name, &id);
+                let zset_key = make_zset_key(&id);
                 tb.rows.insert(id, data);
                 tb.zset.insert(zset_key, 1);
             }
@@ -397,15 +471,18 @@ impl Circuit {
     ) -> Vec<ViewUpdate> {
         self.ensure_dependency_list();
 
-        let mut impacted_view_indices: Vec<ViewIndex> = Vec::with_capacity(changed_tables.len() * 2);
-        
+        let mut impacted_view_indices: Vec<ViewIndex> =
+            Vec::with_capacity(changed_tables.len() * 2);
+
         for table in changed_tables {
             if let Some(indices) = self.dependency_list.get(table) {
                 impacted_view_indices.extend(indices.iter().copied());
             }
         }
 
-        if impacted_view_indices.is_empty() { return Vec::new(); }
+        if impacted_view_indices.is_empty() {
+            return Vec::new();
+        }
 
         impacted_view_indices.sort_unstable();
         impacted_view_indices.dedup();
@@ -420,7 +497,7 @@ impl Circuit {
                 .enumerate()
                 .filter_map(|(i, view)| -> Option<ViewUpdate> {
                     if impacted_view_indices.binary_search(&i).is_ok() {
-                        view.process_batch(batch_deltas, db_ref) 
+                        view.process_batch(batch_deltas, db_ref)
                     } else {
                         None
                     }
@@ -433,7 +510,7 @@ impl Circuit {
             let mut updates = Vec::with_capacity(impacted_view_indices.len());
             for i in impacted_view_indices {
                 if let Some(view) = self.views.get_mut(i) {
-                     if let Some(update) = view.process_batch(batch_deltas, db_ref) {
+                    if let Some(update) = view.process_batch(batch_deltas, db_ref) {
                         updates.push(update);
                     }
                 }
@@ -483,7 +560,7 @@ impl Circuit {
 
         self.views.push(view);
         let view_idx = self.views.len() - 1;
-        
+
         for t in plan.root.referenced_tables() {
             self.dependency_list
                 .entry(SmolStr::new(t))
