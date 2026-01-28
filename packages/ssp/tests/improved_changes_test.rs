@@ -10,13 +10,12 @@
 //! Run with: cargo test --test improved_changes_test
 
 mod common;
-
 use common::*;
 use serde_json::json;
 use ssp::engine::update::{DeltaEvent, ViewResultFormat, ViewUpdate};
 use ssp::engine::circuit::dto::BatchEntry;
 use ssp::engine::types::Operation;
-use ssp::{Circuit, QueryPlan, Operator, JoinCondition, Path, Predicate, Projection, SpookyValue};
+use ssp::{QueryPlan, Operator, JoinCondition, Path, Predicate, Projection, SpookyValue};
 
 // ============================================================================
 // PART 1: Operation Enum Tests
@@ -41,8 +40,6 @@ mod operation_tests {
         assert!(matches_op("update", "UPDATE"));
         assert!(matches_op("delete", "DELETE"));
 
-        // Invalid operations should not cause panics
-        let mut circuit = setup();
         // Invalid operations should be handled at parsing level
        assert!(Operation::from_str("INVALID_OP").is_none());
     }
@@ -55,7 +52,8 @@ mod operation_tests {
             None => return false,
         };
         
-        let result = circuit.ingest_batch(
+        // Use prefix underscore to suppress unused variable warning
+        let _result = circuit.ingest_batch(
             vec![BatchEntry::new(
                 "test",
                 op,
@@ -327,7 +325,7 @@ mod mixed_tables_tests {
             BatchEntry::create("books", "books:2", json!({"id": "books:2", "title": "Book 2", "author": "authors:1"}).into()),
         ];
 
-        let updates = circuit.ingest_batch(batch);
+        let _updates = circuit.ingest_batch(batch);
 
         // Both books should exist
         assert!(circuit.db.tables.get("books").unwrap().rows.len() == 2);
@@ -655,7 +653,7 @@ mod complex_query_tests {
             BatchEntry::create("thread", "thread:1", json!({"id": "thread:1", "title": "Test", "author": "author:1"}).into()),
         ];
 
-        let updates = circuit.ingest_batch(batch);
+        let _updates = circuit.ingest_batch(batch);
 
         // Join should match
         let view = circuit.views.iter().find(|v| v.plan.id == "threads_with_authors").unwrap();
@@ -782,19 +780,4 @@ mod complex_query_tests {
     }
 }
 
-// ============================================================================
-// Helper trait for view updates
-// ============================================================================
 
-trait ViewUpdateExt {
-    fn query_id(&self) -> &str;
-}
-
-impl ViewUpdateExt for ViewUpdate {
-    fn query_id(&self) -> &str {
-        match self {
-            ViewUpdate::Flat(m) | ViewUpdate::Tree(m) => &m.query_id,
-            ViewUpdate::Streaming(s) => &s.view_id,
-        }
-    }
-}

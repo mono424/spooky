@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Common utilities for spooky-stream-processor benchmarks
 //!
 //! Provides setup functions, ID generation, hashing, and record creation helpers

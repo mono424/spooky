@@ -8,7 +8,7 @@
 //! AND subquery IDs (users, comments), but target_set only contains main query results.
 //! This caused subquery IDs to be incorrectly marked as removals.
 
-use common::ViewUpdateExt;
+
 mod common;
 
 use common::*;

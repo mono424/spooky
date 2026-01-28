@@ -26,11 +26,9 @@ use surrealdb::types::RecordId;
 use surrealdb::{Connection, Surreal};
 use tokio::signal;
 use tracing::field::Empty;
-use tracing::{Span, debug, error, info, instrument};
+use tracing::{Span, debug, error, info, instrument, warn};
 
-// ... (imports)
-
-// Expose these for use in main.rs and tests
+// Expose modules for use in main.rs and tests
 pub mod background_saver;
 pub mod metrics;
 pub mod open_telemetry;
@@ -39,7 +37,7 @@ pub mod persistence;
 use background_saver::BackgroundSaver;
 use metrics::Metrics;
 
-/// Shared database connection wrapped in Arc for true zero-copy sharing
+/// Shared database connection wrapped in Arc for zero-copy sharing across tasks
 pub type SharedDb = Arc<Surreal<Client>>;
 
 #[derive(Clone)]
@@ -50,6 +48,8 @@ pub struct AppState {
     pub saver: Arc<BackgroundSaver>,
     pub metrics: Arc<Metrics>,
 }
+
+// --- Request/Response DTOs ---
 
 #[derive(Deserialize, Debug)]
 pub struct LogRequest {
@@ -72,6 +72,8 @@ pub struct IngestRequest {
 pub struct UnregisterViewRequest {
     pub id: String,
 }
+
+// --- Configuration ---
 
 pub struct Config {
     pub persistence_path: PathBuf,
@@ -103,6 +105,8 @@ pub fn load_config() -> Config {
     }
 }
 
+// --- Database Connection ---
+
 pub async fn connect_database(config: &Config) -> anyhow::Result<SharedDb> {
     info!(addr = %config.db_addr, "Connecting to SurrealDB");
 
@@ -120,11 +124,13 @@ pub async fn connect_database(config: &Config) -> anyhow::Result<SharedDb> {
     db.use_ns(&config.db_ns)
         .use_db(&config.db_db)
         .await
-        .context("Failed to select ns/db")?;
+        .context("Failed to select namespace/database")?;
 
-    info!("Connected to SurrealDB");
+    info!("Connected to SurrealDB successfully");
     Ok(Arc::new(db))
 }
+
+// --- Router Setup ---
 
 pub fn create_app(state: AppState) -> Router {
     Router::new()
@@ -141,6 +147,8 @@ pub fn create_app(state: AppState) -> Router {
         .with_state(state)
 }
 
+// --- Server Lifecycle ---
+
 pub async fn run_server() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
 
@@ -150,22 +158,22 @@ pub async fn run_server() -> anyhow::Result<()> {
         metrics::init_metrics().context("Failed to initialize metrics")?;
     let metrics = Arc::new(metrics);
 
-    info!("Starting ssp (streaming mode)...");
+    info!("Starting SSP sidecar (streaming mode)...");
 
     let config = load_config();
     let db = connect_database(&config).await?;
 
-    // Load Circuit
+    // Load or initialize Circuit
     let processor = persistence::load_circuit(&config.persistence_path);
     let processor_arc = Arc::new(RwLock::new(processor));
 
-    // Initial view count metric
+    // Record initial view count metric
     {
         let guard = processor_arc.read().await;
         metrics.view_count.add(guard.views.len() as i64, &[]);
     }
 
-    // Initialize Background Saver
+    // Initialize background saver
     let saver = Arc::new(BackgroundSaver::new(
         config.persistence_path.clone(),
         processor_arc.clone(),
@@ -190,7 +198,8 @@ pub async fn run_server() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&config.listen_addr)
         .await
         .context("Failed to bind port")?;
-    info!(addr = %config.listen_addr, "Listening");
+
+    info!(addr = %config.listen_addr, "Listening for requests");
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal(saver, meter_provider))
@@ -209,13 +218,13 @@ async fn shutdown_signal(
     let ctrl_c = async {
         signal::ctrl_c()
             .await
-            .expect("failed to install Ctrl+C handler");
+            .expect("Failed to install Ctrl+C handler");
     };
 
     #[cfg(unix)]
     let terminate = async {
         signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("failed to install signal handler")
+            .expect("Failed to install signal handler")
             .recv()
             .await;
     };
@@ -237,6 +246,8 @@ async fn shutdown_signal(
     }
 }
 
+// --- Middleware ---
+
 async fn auth_middleware(req: Request, next: Next) -> Response {
     let auth_header = req.headers().get(AUTHORIZATION);
     let secret = std::env::var("SPOOKY_AUTH_SECRET").unwrap_or_default();
@@ -249,9 +260,9 @@ async fn auth_middleware(req: Request, next: Next) -> Response {
     }
 }
 
-// --- Handlers ---
-use axum::body::Bytes;
+// --- Request Handlers ---
 
+/// Ingest handler - processes single record updates and propagates to affected views
 #[instrument(
     skip(state, body),
     fields(
@@ -265,66 +276,43 @@ use axum::body::Bytes;
 )]
 async fn ingest_handler(
     State(state): State<AppState>,
-    body: Bytes, // Hier steckt NUR dein JSON-Payload drin
+    body: axum::body::Bytes,
 ) -> impl IntoResponse {
     let start = std::time::Instant::now();
     let span = Span::current();
 
     let payload_size = body.len();
-    debug!(
-        "Received Record ingest request: payload size: {} bytes",
-        payload_size
-    );
+    span.record("payload_size_bytes", payload_size);
 
-    // 2. Deserialisierung (von Bytes zu deinem Struct)
+    // Deserialize request
     let payload: IngestRequest = match serde_json::from_slice(&body) {
         Ok(p) => p,
         Err(e) => {
-            tracing::error!(error = %e, "Payload ist kein gültiges JSON");
+            error!(error = %e, "Invalid JSON payload");
             return StatusCode::BAD_REQUEST;
         }
     };
 
-    debug!(target: "ssp::ingest_handler", "payload: {:#?}", payload);
+    span.record("table", &payload.table);
+    span.record("op", &payload.op);
+    span.record("id", &payload.id);
 
     // Parse operation
     let op = match Operation::from_str(&payload.op) {
         Some(op) => op,
         None => {
-            tracing::warn!(op = %payload.op, "Invalid operation type");
+            warn!(op = %payload.op, "Invalid operation type");
             return StatusCode::BAD_REQUEST;
         }
     };
 
+    // Prepare record data
     let (clean_record, _hash) = ssp::service::ingest::prepare(payload.record);
 
+    // Process through circuit
     let updates = {
-        // Use write lock for ingestion
         let mut circuit = state.processor.write().await;
-        tracing::debug!(target: "ssp::ingest_handler", "circuit: {:#?}", circuit);
-
-        // i want it normalized not like soe table:id and other just id
-        /*let record_id = clean_record
-        .get("id")
-        .cloned()
-        .map(normalize_record_id)
-        .and_then(|v| match v {
-            SpookyValue::Str(s) => Some(s.to_string()),
-            _ => None,
-        })
-        .unwrap_or_else(|| {
-            tracing::warn!(
-                target: "ssp::ingest",
-                table = %payload.table,
-                "Could not extract record ID from clean_record"
-            );
-            // This fallback should rarely/never happen now
-            format!("{}:{}", payload.table, payload.id)
-        });
-        */
-        debug!("payload: {:?}", clean_record);
         let entry = BatchEntry::new(&payload.table, op, payload.id, clean_record.into());
-
         circuit.ingest_single(entry)
     };
 
@@ -338,28 +326,44 @@ async fn ingest_handler(
     );
     span.record("views_affected", updates.len());
 
+    // Trigger background save
     state.saver.trigger_save();
 
-    // Collect all streaming updates and batch into single transaction
+    // Extract streaming updates for edge creation
     let streaming_updates: Vec<&StreamingUpdate> = updates
         .iter()
-        .filter_map(|u| {
-            if let ViewUpdate::Streaming(s) = u {
-                Some(s)
-            } else {
-                None
-            }
+        .filter_map(|u| match u {
+            ViewUpdate::Streaming(s) => Some(s),
+            _ => None,
         })
         .collect();
 
     if !streaming_updates.is_empty() {
-        let edge_count = streaming_updates
-            .iter()
-            .map(|s| s.records.len())
-            .sum::<usize>();
+        // DIAGNOSTIC LOGGING - Remove after debugging
+        #[cfg(debug_assertions)]
+        {
+            warn!(
+                target: "ssp::debug::ingest",
+                total_views = streaming_updates.len(),
+                "Processing streaming updates"
+            );
+
+            for (idx, update) in streaming_updates.iter().enumerate() {
+                warn!(
+                    target: "ssp::debug::ingest",
+                    view_idx = idx,
+                    view_id = %update.view_id,
+                    records_count = update.records.len(),
+                    records_sample = ?update.records.iter().take(3).map(|r| &r.id).collect::<Vec<_>>(),
+                    "View update details"
+                );
+            }
+        }
+
+        let edge_count: usize = streaming_updates.iter().map(|s| s.records.len()).sum();
         span.record("edges_updated", edge_count);
 
-        debug!("BEFORE EDGE UPDATE: updates: {:?}", streaming_updates);
+        // Update edges in database
         update_all_edges(&state.db, &streaming_updates, &state.metrics).await;
     }
 
@@ -370,6 +374,7 @@ async fn ingest_handler(
     StatusCode::OK
 }
 
+/// Log handler - receives logs from client and forwards to tracing
 #[instrument(skip(payload), fields(level = %payload.level))]
 async fn log_handler(Json(payload): Json<LogRequest>) -> impl IntoResponse {
     let msg = if let Some(data) = &payload.data {
@@ -380,15 +385,16 @@ async fn log_handler(Json(payload): Json<LogRequest>) -> impl IntoResponse {
 
     match payload.level.to_lowercase().as_str() {
         "error" => error!(remote = true, "{}", msg),
-        "warn" => tracing::warn!(remote = true, "{}", msg),
+        "warn" => warn!(remote = true, "{}", msg),
         "debug" => debug!(remote = true, "{}", msg),
         "trace" => tracing::trace!(remote = true, "{}", msg),
-        _ => info!(remote = true, "{}", msg), // Default to info
+        _ => info!(remote = true, "{}", msg),
     }
 
     StatusCode::OK
 }
 
+/// Register view handler - creates a new view and initializes edges
 #[instrument(skip(state), fields(view_id = Empty))]
 async fn register_view_handler(
     State(state): State<AppState>,
@@ -396,18 +402,24 @@ async fn register_view_handler(
 ) -> impl IntoResponse {
     let span = Span::current();
 
-    let result = ssp::service::view::prepare_registration(payload);
-    let data = match result {
+    // Parse and validate registration data
+    let data = match ssp::service::view::prepare_registration(payload) {
         Ok(d) => d,
-        Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+        Err(e) => {
+            error!(error = %e, "Invalid view registration payload");
+            return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
+        }
     };
 
     span.record("view_id", &data.plan.id);
 
-    // Extract metadata for cleanup check
-    let m = &data.metadata;
-    let raw_id = m.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
-    let id_str = format_incantation_id(raw_id);
+    // Extract metadata
+    let raw_id = data
+        .metadata
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let incantation_id = format_incantation_id(raw_id);
 
     // Check if view exists and clean up old edges
     let view_existed = {
@@ -418,42 +430,31 @@ async fn register_view_handler(
     if view_existed {
         info!(
             target: "ssp::edges",
-            view_id = %id_str,
-            "Re-registering view - deleting old edges first"
+            view_id = %incantation_id,
+            "Re-registering view - cleaning up old edges"
         );
 
-        // Parse record ID safely
-        if let Some(from_id) = parse_record_id(&id_str) {
-            // We are holding the lock, so no one can be creating edges right now via ingest
-            // BUT we need to be careful about not blocking the async runtime with DB calls if we can avoid it.
-            // However, since we need atomicity regarding the "view existence", we must do this logic here.
-            // Or we accept that delete happens, then register happens.
-            // The race was:
-            // 1. Check exists (read lock) -> True
-            // 2. Delete edges (NO lock)
-            // 3. Ingest happens (read lock) -> Sees view -> Creates edges
-            // 4. Register happens (write lock)
-            // 5. Create edges
-
-            // If we hold write lock, Step 3 cannot happen.
-
+        if let Some(from_id) = parse_record_id(&incantation_id) {
             match state
                 .db
                 .query("DELETE $from->_spooky_list_ref RETURN BEFORE;")
                 .bind(("from", from_id))
                 .await
             {
-                Ok(_) => debug!("Successfully cleaned up old edges for {}", id_str),
-                Err(e) => error!("Failed to cleanup old edges for {}: {}", id_str, e),
+                Ok(_) => debug!("Successfully cleaned up old edges for {}", incantation_id),
+                Err(e) => error!("Failed to cleanup old edges for {}: {}", incantation_id, e),
             }
         } else {
-            error!("Failed to parse view ID for cleanup: {}", id_str);
+            error!(
+                "Failed to parse incantation ID for cleanup: {}",
+                incantation_id
+            );
         }
     }
 
-    debug!("Registering view {}", data.plan.id);
+    debug!("Registering view: {}", data.plan.id);
 
-    // Always register with Streaming mode
+    // Register view with Streaming format
     let update = {
         let mut circuit = state.processor.write().await;
         let res = circuit.register_view(
@@ -467,49 +468,53 @@ async fn register_view_handler(
 
     state.metrics.view_count.add(1, &[]);
 
-    // i dont know which version is better at version-approach ad commit: 7ba7676
-    let client_id_str = m
+    // Extract metadata fields
+    let client_id = data
+        .metadata
         .get("clientId")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let surql_str = m
+    let surreal_ql = data
+        .metadata
         .get("surrealQL")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let ttl_str = m
+    let ttl = data
+        .metadata
         .get("ttl")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let last_active_str = m
+    let last_active_at = data
+        .metadata
         .get("lastActiveAt")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let params_val = m
+    let params = data
+        .metadata
         .get("safe_params")
         .cloned()
-        .unwrap_or(serde_json::Value::Null);
+        .unwrap_or(Value::Null);
 
     // Store incantation metadata
     let query = "UPSERT <record>$id SET clientId = <string>$clientId, surrealQL = <string>$surrealQL, params = $params, ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt";
 
-    let db_res = state
+    if let Err(e) = state
         .db
         .query(query)
-        .bind(("id", id_str.clone()))
-        .bind(("clientId", client_id_str))
-        .bind(("surrealQL", surql_str))
-        .bind(("params", params_val))
-        .bind(("ttl", ttl_str))
-        .bind(("lastActiveAt", last_active_str))
-        .await;
-
-    if let Err(e) = db_res {
+        .bind(("id", incantation_id.clone()))
+        .bind(("clientId", client_id))
+        .bind(("surrealQL", surreal_ql))
+        .bind(("params", params))
+        .bind(("ttl", ttl))
+        .bind(("lastActiveAt", last_active_at))
+        .await
+    {
         error!("Failed to upsert incantation metadata: {}", e);
-        return (StatusCode::INTERNAL_SERVER_ERROR, "DB Error").into_response();
+        return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response();
     }
 
     // Create initial edges
@@ -517,7 +522,7 @@ async fn register_view_handler(
         debug!(
             "Creating {} initial edges for view {}",
             s.records.len(),
-            id_str
+            incantation_id
         );
         update_incantation_edges(&state.db, s, &state.metrics).await;
     }
@@ -525,13 +530,15 @@ async fn register_view_handler(
     StatusCode::OK.into_response()
 }
 
+/// Unregister view handler - removes view and deletes all associated edges
 #[instrument(skip(state), fields(view_id = %payload.id))]
 async fn unregister_view_handler(
     State(state): State<AppState>,
     Json(payload): Json<UnregisterViewRequest>,
 ) -> impl IntoResponse {
-    debug!("Unregistering view {}", payload.id);
+    debug!("Unregistering view: {}", payload.id);
 
+    // Remove from circuit
     {
         let mut circuit = state.processor.write().await;
         circuit.unregister_view(&payload.id);
@@ -541,23 +548,24 @@ async fn unregister_view_handler(
     state.metrics.view_count.add(-1, &[]);
 
     // Delete all edges for this incantation
-    let id_str = format_incantation_id(&payload.id);
-    if let Some(from_id) = parse_record_id(&id_str) {
+    let incantation_id = format_incantation_id(&payload.id);
+    if let Some(from_id) = parse_record_id(&incantation_id) {
         if let Err(e) = state
             .db
             .query("DELETE $from->_spooky_list_ref")
             .bind(("from", from_id))
             .await
         {
-            error!("Failed to delete edges for view {}: {}", id_str, e);
+            error!("Failed to delete edges for view {}: {}", incantation_id, e);
         } else {
-            debug!("Deleted all edges for view {}", id_str);
+            debug!("Deleted all edges for view {}", incantation_id);
         }
     }
 
     StatusCode::OK
 }
 
+/// Reset handler - clears all circuit state and edges
 async fn reset_handler(State(state): State<AppState>) -> impl IntoResponse {
     info!("Resetting circuit state");
 
@@ -582,12 +590,14 @@ async fn reset_handler(State(state): State<AppState>) -> impl IntoResponse {
     StatusCode::OK
 }
 
+/// Force save handler - triggers immediate persistence
 async fn save_handler(State(state): State<AppState>) -> impl IntoResponse {
     info!("Force saving state");
     state.saver.trigger_save();
     StatusCode::OK
 }
 
+/// Health check handler
 async fn health_handler(State(state): State<AppState>) -> impl IntoResponse {
     let circuit = state.processor.read().await;
     Json(json!({
@@ -597,6 +607,7 @@ async fn health_handler(State(state): State<AppState>) -> impl IntoResponse {
     }))
 }
 
+/// Debug view handler - returns cache state for a specific view
 async fn debug_view_handler(
     State(state): State<AppState>,
     Path(view_id): Path<String>,
@@ -614,6 +625,7 @@ async fn debug_view_handler(
             "view_id": view_id,
             "cache_size": view.cache.len(),
             "last_hash": view.last_hash,
+            "format": view.format,
             "cache": cache_summary,
         }))
     } else {
@@ -621,6 +633,7 @@ async fn debug_view_handler(
     }
 }
 
+/// Version handler
 async fn version_handler() -> impl IntoResponse {
     Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
@@ -630,10 +643,12 @@ async fn version_handler() -> impl IntoResponse {
 
 // --- Helper Functions ---
 
+/// Parse a record ID string into SurrealDB RecordId
 fn parse_record_id(id: &str) -> Option<RecordId> {
     RecordId::parse_simple(id).ok()
 }
 
+/// Format incantation ID with proper prefix
 fn format_incantation_id(id: &str) -> String {
     if id.starts_with("_spooky_incantation:") {
         id.to_string()
@@ -642,8 +657,12 @@ fn format_incantation_id(id: &str) -> String {
     }
 }
 
-/// Update edges for multiple views in a SINGLE transaction
-/// Optimizes: 3 views × 1 record = 1 transaction instead of 3
+/// Update edges for multiple views in a SINGLE database transaction
+///
+/// This batches all edge operations across multiple views into one transaction,
+/// significantly reducing database round-trips.
+///
+/// Example: 3 views × 1 record each = 1 transaction instead of 3
 #[instrument(skip(db, updates, metrics), fields(total_operations = Empty))]
 pub async fn update_all_edges<C: Connection>(
     db: &Surreal<C>,
@@ -654,26 +673,7 @@ pub async fn update_all_edges<C: Connection>(
         return;
     }
 
-    // Tracing remove for performance?
-    for update in updates.iter() {
-        let created: Vec<_> = update
-            .records
-            .iter()
-            .filter(|r| matches!(r.event, DeltaEvent::Created))
-            .map(|r| r.id.as_str())
-            .collect();
-
-        tracing::info!(
-            target: "ssp::edges",
-            view_id = %update.view_id,
-            created_count = created.len(),
-            created_ids = ?created.iter().take(10).collect::<Vec<_>>(),
-            "StreamingUpdate record IDs (these are used in SQL queries)"
-        );
-    }
-
     let span = Span::current();
-    debug!(target: "ssp-server::update", "view_eges: {}, record: {}", updates.len(), updates.iter().map(|u| u.records.len()).sum::<usize>());
     let mut all_statements: Vec<String> = Vec::new();
     let mut bindings: Vec<(String, RecordId)> = Vec::new();
 
@@ -681,23 +681,27 @@ pub async fn update_all_edges<C: Connection>(
     let mut updated_count = 0;
     let mut deleted_count = 0;
 
+    // Build SQL statements for each view's updates
     for (idx, update) in updates.iter().enumerate() {
         if update.records.is_empty() {
             continue;
         }
 
-        let incantation_id_str = format_incantation_id(&update.view_id);
-        debug!(target: "ssp::edges", "Incantation ID: {}", incantation_id_str);
+        let incantation_id = format_incantation_id(&update.view_id);
 
-        let Some(from_id) = parse_record_id(&incantation_id_str) else {
-            error!("Invalid incantation ID format: {}", incantation_id_str);
+        let Some(from_id) = parse_record_id(&incantation_id) else {
+            error!(
+                incantation_id = %incantation_id,
+                "Invalid incantation ID format - skipping view"
+            );
             continue;
         };
 
         let binding_name = format!("from{}", idx);
-        bindings.push((binding_name.clone(), from_id.clone()));
+        bindings.push((binding_name.clone(), from_id));
 
-        for (_r_idx, record) in update.records.iter().enumerate() {
+        // Process each record in the update
+        for record in &update.records {
             if parse_record_id(&record.id).is_none() {
                 error!(
                     target: "ssp::edges",
@@ -708,37 +712,26 @@ pub async fn update_all_edges<C: Connection>(
                 );
                 continue;
             }
-            debug!(target: "ssp::edges", "Record: {:?}", record);
 
-            // Fix Issues 1, 2, 3, 4, 8
             let stmt = match record.event {
                 DeltaEvent::Created => {
                     created_count += 1;
-                    // Logic:
-                    // 1. Get target ID safely using LIMIT 1, selecting [0] to handle array/none.
-                    // 2. Check if target exists (non-none) AND edge does NOT exist.
-                    // 3. RELATE safely.
-                    // 4. Set version using similar safe fetch.
                     format!(
-                        "
-                        RELATE ${1}->_spooky_list_ref->{0}
-                        SET version = 1, clientId = (SELECT VALUE clientId FROM ${1} LIMIT 1)[0];
-                        ",
-                        record.id, binding_name,
+                        "RELATE ${1}->_spooky_list_ref->{0} SET version = 1, clientId = (SELECT VALUE clientId FROM ${1} LIMIT 1)[0]",
+                        record.id, binding_name
                     )
                 }
                 DeltaEvent::Updated => {
                     updated_count += 1;
-                    // Fix version update logic (Issue 4) - removing quotes for RecordId match
                     format!(
-                        "UPDATE ${0}->_spooky_list_ref SET version = 2",
-                        binding_name
+                        "UPDATE _spooky_list_ref SET version = 2 WHERE in = ${0} AND out = {1}",
+                        binding_name, record.id
                     )
                 }
                 DeltaEvent::Deleted => {
                     deleted_count += 1;
                     format!(
-                        "DELETE ${1}->_spooky_list_ref WHERE out = {0};",
+                        "DELETE ${1}->_spooky_list_ref WHERE out = {0}",
                         record.id, binding_name
                     )
                 }
@@ -754,6 +747,7 @@ pub async fn update_all_edges<C: Connection>(
 
     span.record("total_operations", all_statements.len());
 
+    // Record metrics
     metrics.edge_operations.add(
         created_count,
         &[opentelemetry::KeyValue::new("operation", "create")],
@@ -768,52 +762,57 @@ pub async fn update_all_edges<C: Connection>(
     );
 
     debug!(
-        "Processing {} edge operations across {} views",
-        all_statements.len(),
-        updates.len()
+        created = created_count,
+        updated = updated_count,
+        deleted = deleted_count,
+        views = updates.len(),
+        "Processing edge operations"
     );
 
-    // Wrap ALL statements in ONE transaction
+    // Wrap all statements in a single transaction
     let full_query = format!(
         "BEGIN TRANSACTION;\n{};\nCOMMIT TRANSACTION;",
         all_statements.join(";\n")
     );
 
-    // Build query with all bindings
+    // Build query with bindings
     let mut query = db.query(&full_query);
-    let mut debug_query = full_query.clone();
+
+    #[cfg(debug_assertions)]
+    {
+        let mut debug_query = full_query.clone();
+        for (name, id) in &bindings {
+            let id_str = format!("{:?}", id);
+            debug_query = debug_query.replace(&format!("${}", name), &id_str);
+        }
+        debug!(target: "ssp::edges::sql", "{}", debug_query);
+    }
 
     for (name, id) in bindings {
-        // Create a string representation for debugging
-        let id_str = format!("{:?}", id);
-        debug_query = debug_query.replace(&format!("${}", name), &id_str);
-
         query = query.bind((name, id));
     }
 
-    debug!(target: "ssp::edges::sql", debug_query);
-
+    // Execute transaction
     match query.await {
-        Ok(result) => {
+        Ok(_) => {
             debug!(
-                target: "ssp::edges::sql",
-                "response: {:#?}",
-                result
+                target: "ssp::edges",
+                operations = all_statements.len(),
+                "Edge update transaction completed successfully"
             );
         }
         Err(e) => {
             error!(
                 target: "ssp::edges",
                 error = %e,
-                "Batched edge update transaction failed! Data may be out of sync. Consider retry or full sync."
+                operations = all_statements.len(),
+                "Edge update transaction failed - data may be out of sync"
             );
-            // In a real production system, we might want to schedule a retry here or mark the view as "dirty".
-            // For now, logging prominently (Issue 6).
         }
     }
 }
 
-/// Update edges for a single view (used by register_view_handler)
+/// Update edges for a single view (convenience wrapper for register_view_handler)
 async fn update_incantation_edges<C: Connection>(
     db: &Surreal<C>,
     update: &StreamingUpdate,

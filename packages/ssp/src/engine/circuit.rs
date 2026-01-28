@@ -177,7 +177,7 @@ mod tests {
         let mut tb_user = Table::new(SmolStr::from("user"));
         let (zset_key, weight) = tb_user.apply_mutation(
             Operation::Create,
-            SmolStr::from("incation_id"),
+            SmolStr::from("23lk4j233jd"),
             record_user1.data,
         );
 

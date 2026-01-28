@@ -171,7 +171,16 @@ impl View {
                 // Build removal notification
                 use super::update::{build_update, RawViewResult, ViewDelta};
 
-                let result_data = self.build_result_data();
+                // For streaming mode, only include the removed record
+                // For Flat/Tree modes, need all remaining records for hash computation
+                let result_data = match self.format {
+                    ViewResultFormat::Streaming => {
+                        vec![delta.key.clone()]
+                    }
+                    ViewResultFormat::Flat | ViewResultFormat::Tree => {
+                        self.build_result_data()
+                    }
+                };
 
                 let view_delta = ViewDelta::removals_only(vec![delta.key.clone()]);
 
@@ -243,7 +252,16 @@ impl View {
     fn build_content_update_notification(&mut self, key: &SmolStr) -> Option<ViewUpdate> {
         use super::update::{build_update, RawViewResult, ViewDelta};
 
-        let result_data = self.build_result_data();
+        // For streaming mode, only include the updated record
+        // For Flat/Tree modes, need all records for hash computation
+        let result_data = match self.format {
+            ViewResultFormat::Streaming => {
+                vec![key.clone()]
+            }
+            ViewResultFormat::Flat | ViewResultFormat::Tree => {
+                self.build_result_data()
+            }
+        };
 
         let view_delta = ViewDelta::updates_only(vec![key.clone()]);
 
@@ -290,7 +308,8 @@ impl View {
                         return Some(None); // Different table
                     }
                     // Check if record passes filter
-                    if self.check_predicate(predicate, &delta.key, db, self.params.as_ref()) {
+                    let matches = self.check_predicate(predicate, &delta.key, db, self.params.as_ref());
+                    if matches {
                         if delta.weight > 0 {
                             return Some(self.apply_single_create(&delta.key));
                         } else {
@@ -342,7 +361,21 @@ impl View {
         updates: Vec<SmolStr>,
     ) -> Option<ViewUpdate> {
         let is_first_run = self.last_hash.is_empty();
-        let result_data = self.build_result_data();
+        
+        // For streaming mode, only include changed records
+        // For Flat/Tree modes, need all records for hash
+        let result_data = match self.format {
+            ViewResultFormat::Streaming => {
+                let mut changed_keys = Vec::with_capacity(additions.len() + removals.len() + updates.len());
+                changed_keys.extend(additions.iter().cloned());
+                changed_keys.extend(removals.iter().cloned());
+                changed_keys.extend(updates.iter().cloned());
+                changed_keys
+            }
+            ViewResultFormat::Flat | ViewResultFormat::Tree => {
+                self.build_result_data()
+            }
+        };
 
         use super::update::{build_update, compute_flat_hash, RawViewResult, ViewDelta};
 
@@ -396,7 +429,20 @@ impl View {
         self.has_subqueries_cached
     }
 
-    /// Optimized 2-Phase Processing: Handles multiple table updates at once.
+    /// Process a batch of deltas and produce a `ViewUpdate` if the view state changed.
+    ///
+    /// # Optimization: Streaming vs Flat
+    /// - **Streaming Mode**: Result data is filtered to ONLY include records that changed (Added/Removed/Updated).
+    ///   This ensures O(1) payload size for O(1) changes, preventing full-view re-transmission.
+    /// - **Flat/Tree Mode**: Result data includes ALL records in the view. This is required to compute
+    ///   a consistent hash of the view state, which clients use to detect desynchronization.
+    ///
+    /// # Logic
+    /// 1. Computes `view_delta` (Membership changes: Added/Removed).
+    /// 2. Identifies `updated_record_ids` (Content changes for existing members).
+    /// 3. Categorizes changes into `additions`, `removals`, `updates`.
+    /// 4. Updates strict cache state.
+    /// 5. Builds result data based on format (Filtered vs Full).
     pub fn process_batch(
         &mut self,
         batch_deltas: &BatchDeltas,
@@ -472,7 +518,30 @@ impl View {
         );
 
         // Build result data
-        let result_data = self.build_result_data();
+        // For Streaming mode: only include changed records to avoid sending entire view
+        // For Flat/Tree modes: include all records for hash computation
+        let result_data = match self.format {
+            ViewResultFormat::Streaming => {
+                // Collect only records that changed
+                let mut changed_keys = Vec::with_capacity(additions.len() + removals.len() + updates.len());
+                changed_keys.extend(additions.iter().cloned());
+                changed_keys.extend(removals.iter().cloned());
+                changed_keys.extend(updates.iter().cloned());
+
+                tracing::debug!(
+                    target: "ssp::view::process_batch",
+                    view_id = %self.plan.id,
+                    changed_count = changed_keys.len(),
+                    "Streaming mode: filtered to changed records only"
+                );
+
+                changed_keys
+            }
+            ViewResultFormat::Flat | ViewResultFormat::Tree => {
+                // Need all records for hash computation
+                self.build_result_data()
+            }
+        };
 
         tracing::debug!(
             target: "ssp::view::process_batch",

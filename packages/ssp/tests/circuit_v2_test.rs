@@ -1,6 +1,6 @@
-use ssp::engine::circuit::{Circuit, Database, Table};
+use ssp::engine::circuit::{Circuit, Database};
 use ssp::engine::operators::{Operator, Predicate, Projection};
-use ssp::engine::types::{Operation, Record, SpookyValue, Path, ZSet, FastMap};
+use ssp::engine::types::{SpookyValue, Path, ZSet};
 use ssp::engine::view::QueryPlan;
 use ssp::engine::update::ViewUpdate;
 use ssp::engine::eval::{apply_numeric_filter, NumericFilterConfig};

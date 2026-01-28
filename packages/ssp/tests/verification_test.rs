@@ -1,6 +1,6 @@
 mod common;
 
-use common::ViewUpdateExt;
+
 use ssp::{Circuit, QueryPlan};
 use ssp::{Operator, Predicate, Path};
 use serde_json::json;

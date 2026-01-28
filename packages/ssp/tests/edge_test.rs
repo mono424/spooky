@@ -11,7 +11,8 @@
 //!
 //! Run with: cargo test --package ssp --lib -- engine::view::ultimate_tests --nocapture
 
-use ssp::engine::circuit::Database;
+#![allow(unused)]
+use ssp::engine::circuit::{Circuit, Database, Table};
 use ssp::engine::operators::{Operator, Predicate, Projection, OrderSpec};
 use ssp::engine::types::{
     BatchDeltas, Delta, FastMap, Path, SpookyValue, ZSet,
@@ -21,7 +22,7 @@ use ssp::engine::types::{
 use ssp::engine::update::{DeltaEvent, ViewResultFormat, ViewUpdate};
 use ssp::engine::view::{QueryPlan, View};
 use smol_str::SmolStr;
-use std::collections::HashMap;
+
 
 // ============================================================================
 // TEST HELPERS

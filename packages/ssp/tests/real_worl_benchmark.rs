@@ -55,6 +55,7 @@ Reports registration time, ingestion throughput, and memory estimates
 */
 //! Run with: cargo test --release real_world_benchmark -- --nocapture --ignored
 
+#![allow(unused)]
 mod common;
 use common::*;
 use rayon::prelude::*;

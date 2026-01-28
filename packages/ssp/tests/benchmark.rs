@@ -1,9 +1,10 @@
+#![allow(unused)]
 mod common;
 use common::*;
 use rayon::prelude::*;
 use serde_json::json;
 use ssp::engine::update::ViewResultFormat;
-use ssp::engine::circuit::dto::BatchEntry;
+use ssp::engine::circuit::dto::{BatchEntry, LoadRecord};
 use ssp::engine::types::Operation;
 use ssp::{JoinCondition, Operator, Path, Predicate, QueryPlan};
 use std::fs::File;
@@ -95,6 +96,63 @@ fn benchmark_streaming_quick() {
         println!(
             "{:4} views: {:7.1}ms | {:6.3}ms/rec | {:8.0} ops/sec",
             view_count, result.total_time_ms, result.latency_per_record_ms, result.ops_per_sec
+        );
+    }
+}
+
+/// Benchmark to demonstrate the massive performance difference for single updates
+#[test]
+#[ignore] // Run with: cargo test benchmark_streaming_vs_flat_single_update --release -- --ignored --nocapture
+fn benchmark_streaming_vs_flat_single_update() {
+    println!("╔════════════════════════════════════════════════╗");
+    println!("║  Single Update Latency: Streaming vs Flat      ║");
+    println!("╚════════════════════════════════════════════════╝\n");
+
+    let record_count = 10_000;
+    println!("Preparing {} records...", record_count);
+
+    // Prepare large dataset
+    let mut circuit = setup();
+    let records: Vec<_> = (0..record_count)
+        .map(|i| LoadRecord::new("users", format!("user:{}", i), json!({"name": "Alice"}).into()))
+        .collect();
+    circuit.init_load(records);
+
+    // Define simple view
+    let plan = QueryPlan {
+        id: "view".to_string(),
+        root: Operator::Scan { table: "users".to_string() }
+    };
+
+    for format in [ViewResultFormat::Flat, ViewResultFormat::Streaming] {
+        let format_name = format!("{:?}", format);
+        // Clean circuit for fair comparison
+        let mut circuit_run = circuit.clone(); 
+        
+        // Register view (load cache)
+        circuit_run.register_view(plan.clone(), None, Some(format));
+
+        let start = Instant::now();
+        // Create ONE record (force addition)
+        let updates = circuit_run.ingest_batch(vec![
+            BatchEntry::create("users", "user:10001", json!({"name": "New User"}).into())
+        ]);
+        let elapsed = start.elapsed();
+
+        assert_eq!(updates.len(), 1);
+        
+        // Check payload size
+        let payload_size = match &updates[0] {
+            ssp::engine::update::ViewUpdate::Flat(f) => f.result_data.len(),
+            ssp::engine::update::ViewUpdate::Streaming(s) => s.records.len(),
+            _ => 0,
+        };
+
+        println!(
+            "{:10} | Latency: {:8.2} µs | Payload Size: {:5} records",
+            format_name,
+            elapsed.as_micros() as f64,
+            payload_size
         );
     }
 }
