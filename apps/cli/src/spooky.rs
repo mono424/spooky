@@ -102,19 +102,19 @@ pub fn generate_spooky_events(
         ));
         events.push_str("WHEN $before != $after AND $event != \"DELETE\"\nTHEN {\n");
 
-        // --- Versioning Logic ---
-        events.push_str("    IF $event = \"CREATE\" {\n");
-        events.push_str("        CREATE _spooky_version SET record_id = $after.id, version = 1;\n");
+                // --- Versioning Logic ---
+        events.push_str("    LET $spooky_ver_rec = IF $event = \"CREATE\" {\n");
+        events.push_str("        (CREATE _spooky_version SET record_id = $after.id, version = 1 RETURN AFTER)\n");
         events.push_str("    } ELSE IF $event = \"UPDATE\" {\n");
         events.push_str("        IF $spooky_target_version != NONE AND $spooky_target_version.id == $after.id {\n");
-        events.push_str("            UPDATE _spooky_version SET version = <int>$spooky_target_version.version WHERE record_id = $after.id;\n");
+        events.push_str("            LET $u = (UPDATE _spooky_version SET version = <int>$spooky_target_version.version WHERE record_id = $after.id RETURN AFTER);\n");
         events.push_str("            LET $spooky_target_version = NONE;\n");
+        events.push_str("            $u\n");
         events.push_str("        } ELSE {\n");
-        events.push_str(
-            "            UPDATE _spooky_version SET version += 1 WHERE record_id = $after.id;\n",
-        );
-        events.push_str("        };\n");
-        events.push_str("    };\n\n");
+        events.push_str("            (UPDATE _spooky_version SET version += 1 WHERE record_id = $after.id RETURN AFTER)\n");
+        events.push_str("        }\n");
+        events.push_str("    };\n");
+        events.push_str("    LET $spooky_ver = $spooky_ver_rec[0].version;\n\n");
 
         // --- Ingestion Logic ---
         events.push_str("    LET $plain_after = {\n");

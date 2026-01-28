@@ -66,8 +66,6 @@ pub struct IngestRequest {
     pub op: String,
     pub id: String,
     pub record: Value,
-    #[serde(default, rename = "_spooky_version")]
-    pub spooky_version: Option<i64>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -210,16 +208,16 @@ async fn shutdown_signal(
 ) {
     let ctrl_c = async {
         signal::ctrl_c()
-        .await
-        .expect("failed to install Ctrl+C handler");
+            .await
+            .expect("failed to install Ctrl+C handler");
     };
 
     #[cfg(unix)]
     let terminate = async {
         signal::unix::signal(signal::unix::SignalKind::terminate())
-        .expect("failed to install signal handler")
-        .recv()
-        .await;
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
     };
 
     #[cfg(not(unix))]
@@ -260,7 +258,6 @@ use axum::body::Bytes;
         table = Empty,
         op = Empty,
         id = Empty,
-        _spooky_version = Empty,
         payload_size_bytes = Empty,
         views_affected = Empty,
         edges_updated = Empty,
@@ -299,14 +296,7 @@ async fn ingest_handler(
         }
     };
 
-    let mut record = payload.record;
-    if let Some(v) = payload.spooky_version {
-        if let Some(obj) = record.as_object_mut() {
-            obj.insert("_spooky_version".to_string(), json!(v));
-        }
-    }
-
-    let (clean_record, _hash) = ssp::service::ingest::prepare(record);
+    let (clean_record, _hash) = ssp::service::ingest::prepare(payload.record);
 
     let updates = {
         // Use write lock for ingestion
@@ -314,26 +304,26 @@ async fn ingest_handler(
         tracing::debug!(target: "ssp::ingest_handler", "circuit: {:#?}", circuit);
 
         // i want it normalized not like soe table:id and other just id
-        let record_id = clean_record
-            .get("id")
-            .cloned()
-            .map(normalize_record_id)
-            .and_then(|v| match v {
-                SpookyValue::Str(s) => Some(s.to_string()),
-                _ => None,
-            })
-            .unwrap_or_else(|| {
-                tracing::warn!(
-                    target: "ssp::ingest",
-                    table = %payload.table,
-                    "Could not extract record ID from clean_record"
-                );
-                // This fallback should rarely/never happen now
-                format!("{}:{}", payload.table, payload.id)
-            });
-
+        /*let record_id = clean_record
+        .get("id")
+        .cloned()
+        .map(normalize_record_id)
+        .and_then(|v| match v {
+            SpookyValue::Str(s) => Some(s.to_string()),
+            _ => None,
+        })
+        .unwrap_or_else(|| {
+            tracing::warn!(
+                target: "ssp::ingest",
+                table = %payload.table,
+                "Could not extract record ID from clean_record"
+            );
+            // This fallback should rarely/never happen now
+            format!("{}:{}", payload.table, payload.id)
+        });
+        */
         debug!("payload: {:?}", clean_record);
-        let entry = BatchEntry::new(&payload.table, op, record_id, clean_record.into());
+        let entry = BatchEntry::new(&payload.table, op, payload.id, clean_record.into());
 
         circuit.ingest_single(entry)
     };
@@ -734,25 +724,22 @@ pub async fn update_all_edges<C: Connection>(
                         RELATE ${1}->_spooky_list_ref->{0}
                         SET version = 1, clientId = (SELECT VALUE clientId FROM ${1} LIMIT 1)[0];
                         ",
-                        record.id,
-                        binding_name,
+                        record.id, binding_name,
                     )
                 }
                 DeltaEvent::Updated => {
                     updated_count += 1;
                     // Fix version update logic (Issue 4) - removing quotes for RecordId match
                     format!(
-                        "UPDATE ${1}->_spooky_list_ref SET version += 1 WHERE out = {0}",
-                        record.id,
+                        "UPDATE ${0}->_spooky_list_ref SET version = 2",
                         binding_name
                     )
                 }
                 DeltaEvent::Deleted => {
                     deleted_count += 1;
                     format!(
-                        "DELETE ${1}->_spooky_list_ref WHERE out = {0}",
-                        record.id,
-                        binding_name
+                        "DELETE ${1}->_spooky_list_ref WHERE out = {0};",
+                        record.id, binding_name
                     )
                 }
             };
@@ -807,11 +794,11 @@ pub async fn update_all_edges<C: Connection>(
     debug!(target: "ssp::edges::sql", debug_query);
 
     match query.await {
-        Ok(_) => {
+        Ok(result) => {
             debug!(
-                "Completed {} edge operations across {} views",
-                all_statements.len(),
-                updates.len()
+                target: "ssp::edges::sql",
+                "response: {:#?}",
+                result
             );
         }
         Err(e) => {
@@ -824,7 +811,6 @@ pub async fn update_all_edges<C: Connection>(
             // For now, logging prominently (Issue 6).
         }
     }
-
 }
 
 /// Update edges for a single view (used by register_view_handler)
