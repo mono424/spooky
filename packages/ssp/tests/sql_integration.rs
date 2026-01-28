@@ -1,5 +1,4 @@
-use ssp::{converter, engine};
-use serde_json::Value;
+use ssp::converter;
 
 #[test]
 fn test_join_deserialization() {
@@ -9,10 +8,10 @@ fn test_join_deserialization() {
     println!("Plan JSON: {}", serde_json::to_string_pretty(&plan_json).unwrap());
 
     // Attempt to deserialize into Operator
-    let op: engine::view::Operator = serde_json::from_value(plan_json).expect("Deserialization to Operator failed!");
+    let op: ssp::Operator = serde_json::from_value(plan_json).expect("Deserialization to Operator failed!");
 
     // Verify it is a Join
-    if let engine::view::Operator::Join { left, right, on } = op {
+    if let ssp::Operator::Join { left, right, on } = op {
         println!("Successfully parsed Join!");
         println!("Left: {:?}", left);
         println!("Right: {:?}", right);
@@ -21,7 +20,7 @@ fn test_join_deserialization() {
         // Assert keys
         assert_eq!(on.left_field.0.join("."), "thread.author.name");
         assert_eq!(on.right_field.0.join("."), "id"); 
-    } else if let engine::view::Operator::Filter { .. } = op {
+    } else if let ssp::Operator::Filter { .. } = op {
         println!("Parsed as Filter (expected for literal comparison).");
     } else {
         panic!("Parsed as unexpected operator: {:?}", op);
@@ -34,9 +33,9 @@ fn test_explicit_join_deserialization() {
     let sql = "SELECT * FROM comment WHERE post = post.id";
     let plan_json = converter::convert_surql_to_dbsp(sql).expect("Conversion failed");
     
-    let op: engine::view::Operator = serde_json::from_value(plan_json).expect("Deserialization to Operator failed!");
+    let op: ssp::Operator = serde_json::from_value(plan_json).expect("Deserialization to Operator failed!");
     
-    if let engine::view::Operator::Join { on, .. } = op {
+    if let ssp::Operator::Join { on, .. } = op {
         assert_eq!(on.left_field.as_str(), "post");
         assert_eq!(on.right_field.as_str(), "id");
     } else {
@@ -49,10 +48,10 @@ fn test_subquery_projection() {
     let sql = "SELECT id, (SELECT name FROM tags WHERE parent = id) AS tag_name FROM items";
     let plan_json = converter::convert_surql_to_dbsp(sql).expect("Conversion failed");
     
-    let op: engine::view::Operator = serde_json::from_value(plan_json).expect("Deserialization to Operator failed!");
+    let op: ssp::Operator = serde_json::from_value(plan_json).expect("Deserialization to Operator failed!");
 
-    if let engine::view::Operator::Project { projections, .. } = op {
-        let has_subquery = projections.iter().any(|p| matches!(p, engine::view::Projection::Subquery { .. }));
+    if let ssp::Operator::Project { projections, .. } = op {
+        let has_subquery = projections.iter().any(|p| matches!(p, ssp::Projection::Subquery { .. }));
         assert!(has_subquery, "Expected Subquery projection");
     } else {
          panic!("Expected Project, got {:?}", op);

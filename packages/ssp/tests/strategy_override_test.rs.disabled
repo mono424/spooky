@@ -1,0 +1,167 @@
+/*
+// Obsolete test file - uses removed APIs (metadata, IngestBatch struct, old Flat format)
+// Needs rewrite for new architecture or deletion.
+
+use ssp::engine::circuit::{Circuit, Operation, IngestBatch, BatchEntry};
+...
+*/
+use ssp::engine::metadata::{RecordMeta, IngestStrategy};
+use ssp::{QueryPlan, Operator, ViewUpdate, ViewResultFormat};
+use ssp::engine::types::SpookyValue;
+use serde_json::json;
+
+#[test]
+fn test_strategy_override() {
+    // Setup
+    let mut circuit = Circuit::new();
+
+    // Register a view to track versions
+    // By default, register_view uses IngestStrategy::Optimistic if format is None or Streaming
+    let plan = QueryPlan {
+        id: "view1".to_string(),
+        root: Operator::Scan { table: "table1".to_string() }
+    };
+    circuit.register_view(plan, None, None); 
+
+    // 1. Ingest "r1" without strategy (Default behavior: Optimistic)
+    // Should result in Version 1
+    let record1 = json!({"id": "r1", "val": "A"});
+    circuit.ingest_single("table1", Operation::Create, "r1", record1.into());
+    
+    // Verify version 1
+    // Access view metadata directly (assuming public)
+    let v1 = circuit.views[0].metadata.get_version("r1");
+    assert_eq!(v1, 1, "Expected version 1 for default optimistic strategy");
+
+    // 2. Ingest "r1" with Meta Version 50 + Optimistic Strategy
+    // This demonstrates that the strategy reads the metadata version as base.
+    // Base = 50. Result = 51.
+    // If it ignored metadata (used current DB version 1), result would be 2.
+    
+    let meta = RecordMeta::new()
+        .with_strategy(IngestStrategy::Optimistic)
+        .with_version(50);
+        
+    let batch = IngestBatch::new()
+        .entry(
+            BatchEntry::new("table1", Operation::Update, "r1", json!({"val": "B"}).into())
+            .with_meta(meta)
+        );
+        
+    circuit.ingest_batch(batch);
+    
+    let v2 = circuit.views[0].metadata.get_version("r1");
+    assert_eq!(v2, 51, "Expected version 51 (meta 50 + 1) verifying strategy override and base logic");
+}
+
+#[test]
+fn test_user_requested_scenario() {
+     // "first without any strategy and now meta data then one with optimistic strategy and meta daten version 1 and the output should version 2"
+     
+    let mut circuit = Circuit::new();
+    let plan = QueryPlan {
+        id: "view2".to_string(),
+        root: Operator::Scan { table: "table2".to_string() }
+    };
+    circuit.register_view(plan, None, None); 
+
+    // 1. Without strategy and no metadata
+    circuit.ingest_single("table2", Operation::Create, "r1", json!({"id": "r1"}).into());
+    
+    let v1 = circuit.views[0].metadata.get_version("r1");
+    assert_eq!(v1, 1, "Initial version should be 1");
+    
+    // 2. Optimistic strategy and meta data version 1
+    let meta = RecordMeta::new()
+        .with_strategy(IngestStrategy::Optimistic)
+        .with_version(1);
+        
+    let batch = IngestBatch::new()
+        .entry(
+            BatchEntry::new("table2", Operation::Update, "r1", json!({"id": "r1", "val": "new"}).into())
+            .with_meta(meta)
+        );
+        
+    circuit.ingest_batch(batch);
+    
+    let v2 = circuit.views[0].metadata.get_version("r1");
+    assert_eq!(v2, 2, "Expected version 2 (meta 1 + 1)");
+}
+
+#[test]
+fn test_view_update_metadata_exposure() {
+    let mut circuit = Circuit::new();
+    let plan = QueryPlan {
+        id: "meta_view".to_string(),
+        root: Operator::Scan { table: "meta_table".to_string() }
+    };
+    
+    // Use Streaming format to test DeltaRecord enrichment
+    circuit.register_view(plan.clone(), None, Some(ViewResultFormat::Streaming));
+
+    let custom_data = SpookyValue::Str("my-custom-data".into());
+    let meta = RecordMeta::new()
+        .with_version(100)
+        .with_custom(custom_data.clone());
+
+    let batch = IngestBatch::new()
+        .entry(
+            BatchEntry::new("meta_table", Operation::Create, "r1", json!({"val": "X"}).into())
+            .with_meta(meta.clone())
+        );
+
+    let updates = circuit.ingest_batch(batch);
+    assert_eq!(updates.len(), 1);
+
+    if let ViewUpdate::Streaming(streaming) = &updates[0] {
+        assert_eq!(streaming.records.len(), 1);
+        let record = &streaming.records[0];
+        assert_eq!(record.id, "r1");
+        assert_eq!(record.version, 101, "Optimistic: 100 + 1");
+        
+        let output_meta = record.metadata.as_ref().expect("Metadata should be present");
+        assert_eq!(output_meta.version, Some(100)); // The input version
+        assert_eq!(output_meta.custom, Some(custom_data), "Custom data should be preserved");
+    } else {
+        panic!("Expected Streaming update");
+    }
+}
+
+#[test]
+fn test_view_update_metadata_exposure_flat() {
+    let mut circuit = Circuit::new();
+    let plan = QueryPlan {
+        id: "meta_view_flat".to_string(),
+        root: Operator::Scan { table: "meta_table_flat".to_string() }
+    };
+    
+    // Use Flat format
+    circuit.register_view(plan, None, Some(ViewResultFormat::Flat));
+
+    let custom_data = SpookyValue::Number(12345.0);
+    let meta = RecordMeta::new()
+        .with_version(200)
+        .with_custom(custom_data.clone());
+
+    let batch = IngestBatch::new()
+        .entry(
+            BatchEntry::new("meta_table_flat", Operation::Create, "r1", json!({"val": "X"}).into())
+            .with_meta(meta.clone())
+        );
+
+    let updates = circuit.ingest_batch(batch);
+    assert_eq!(updates.len(), 1);
+
+    if let ViewUpdate::Flat(flat) = &updates[0] {
+        assert_eq!(flat.result_data.len(), 1);
+        let (id, version, output_meta_opt) = &flat.result_data[0];
+        
+        assert_eq!(id, "r1");
+        assert_eq!(*version, 201);
+        
+        let output_meta = output_meta_opt.as_ref().expect("Metadata should be present");
+        assert_eq!(output_meta.custom, Some(custom_data));
+    } else {
+        panic!("Expected Flat update");
+    }
+}

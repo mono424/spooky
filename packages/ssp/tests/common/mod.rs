@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Common utilities for spooky-stream-processor benchmarks
 //!
 //! Provides setup functions, ID generation, hashing, and record creation helpers
@@ -9,15 +10,16 @@ use ssp::{
     Circuit,
 };
 use ulid::Ulid;
+use smol_str::SmolStr;
 
 /// Extension trait to provide convenient accessors for ViewUpdate
 pub trait ViewUpdateExt {
-    fn result_data(&self) -> &[(String, u64)];
+    fn result_data(&self) -> &[SmolStr];
     fn query_id(&self) -> &str;
 }
 
 impl ViewUpdateExt for ViewUpdate {
-    fn result_data(&self) -> &[(String, u64)] {
+    fn result_data(&self) -> &[SmolStr] {
         match self {
             ViewUpdate::Flat(m) | ViewUpdate::Tree(m) => &m.result_data,
             ViewUpdate::Streaming(_) => &[],
@@ -57,10 +59,15 @@ pub fn ingest(
     op: &str,
     id: &str,
     record: Value,
-    is_optimistic: bool,
 ) -> Vec<ViewUpdate> {
-    let hash = generate_hash(&record);
-    circuit.ingest_record(table, op, id, record, &hash, is_optimistic)
+    use ssp::engine::circuit::dto::BatchEntry;
+    use ssp::engine::types::Operation;
+
+    let operation = Operation::from_str(op).expect("Invalid operation string");
+    let entry = BatchEntry::new(table, operation, id, record.into());
+    
+    // ingest_single returns SmallVec, convert to Vec for compatibility
+    circuit.ingest_single(entry).into_vec()
 }
 
 /// Ingest with verbose logging (useful for debugging)
@@ -70,11 +77,9 @@ pub fn ingest_verbose(
     op: &str,
     id: &str,
     record: Value,
-    is_optimistic: bool,
 ) -> Vec<ViewUpdate> {
-    let hash = generate_hash(&record);
     println!("[Ingest] {} -> {}: {:#}", op, table, record);
-    circuit.ingest_record(table, op, id, record, &hash, is_optimistic)
+    ingest(circuit, table, op, id, record)
 }
 
 /// Create an author record (matches sync engine data model)
@@ -119,14 +124,14 @@ pub fn make_comment_record(text: &str, thread_id: &str, author_id: &str) -> (Str
 /// Create and ingest an author, returning the author ID
 pub fn create_author(circuit: &mut Circuit, name: &str) -> String {
     let (id, record) = make_author_record(name);
-    ingest(circuit, "author", "CREATE", &id, record, true);
+    ingest(circuit, "author", "CREATE", &id, record);
     id
 }
 
 /// Create and ingest a thread, returning the thread ID
 pub fn create_thread(circuit: &mut Circuit, title: &str, author_id: &str) -> String {
     let (id, record) = make_thread_record(title, author_id);
-    ingest(circuit, "thread", "CREATE", &id, record, true);
+    ingest(circuit, "thread", "CREATE", &id, record);
     id
 }
 
@@ -138,7 +143,7 @@ pub fn create_comment(
     author_id: &str,
 ) -> String {
     let (id, record) = make_comment_record(text, thread_id, author_id);
-    ingest(circuit, "comment", "CREATE", &id, record, true);
+    ingest(circuit, "comment", "CREATE", &id, record);
     id
 }
 
@@ -156,17 +161,19 @@ pub fn create_author_with_format(
 pub fn ingest_batch(
     circuit: &mut Circuit,
     records: Vec<(String, String, String, Value)>,
-    is_optimistic: bool,
 ) -> Vec<ViewUpdate> {
-    let batch: Vec<(String, String, String, Value, String)> = records
+    use ssp::engine::circuit::dto::BatchEntry;
+    use ssp::engine::types::Operation;
+
+    let batch: Vec<BatchEntry> = records
         .into_iter()
         .map(|(table, op, id, record)| {
-            let hash = generate_hash(&record);
-            (table, op, id, record, hash)
+            let operation = Operation::from_str(&op).expect("Invalid operation string in test");
+            BatchEntry::new(table, operation, id, record.into())
         })
         .collect();
 
-    circuit.ingest_batch(batch, is_optimistic)
+    circuit.ingest_batch(batch)
 }
 
 /// Helper to count updates by type

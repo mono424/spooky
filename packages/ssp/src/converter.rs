@@ -334,7 +334,8 @@ fn wrap_conditions(input_op: Value, predicate: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::view::Operator;
+    use crate::engine::operators::Operator;
+    use crate::engine::operators::Projection;
 
     #[test]
     fn test_parse_failing_subquery() {
@@ -370,7 +371,7 @@ mod tests {
                         // Check that we have a subquery projection
                         let has_subquery = projections
                             .iter()
-                            .any(|p| matches!(p, crate::engine::view::Projection::Subquery { .. }));
+                            .any(|p| matches!(p, Projection::Subquery { .. }));
                         assert!(has_subquery, "Expected at least one subquery projection");
                     }
 

@@ -3,60 +3,20 @@ use super::eval::{
     apply_numeric_filter, compare_spooky_values, hash_spooky_value, normalize_record_id,
     resolve_nested_value, NumericFilterConfig,
 };
-use crate::debug_log;
+use super::operators::{Operator, Predicate, Projection};
+use super::types::{
+    parse_zset_key, BatchDeltas, Delta, FastMap, Path, SpookyValue, ZSet, ZSetMembershipOps,
+};
+
+use super::update::{ViewResultFormat, ViewUpdate};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use smol_str::SmolStr;
 use std::cmp::Ordering;
 
-// Re-export types for backward compatibility
-pub use super::operators::{JoinCondition, Operator, OrderSpec, Predicate, Projection};
-pub use super::types::{FastMap, Path, RowKey, SpookyValue, VersionMap, Weight, ZSet};
-pub use super::update::{
-    DeltaEvent, DeltaRecord, MaterializedViewUpdate, StreamingUpdate, ViewResultFormat, ViewUpdate,
-};
-
-/// Context for view processing - computed once, used throughout
-struct ProcessContext {
-    is_first_run: bool,
-    is_streaming: bool,
-    has_subquery_changes: bool,
-}
-
-impl ProcessContext {
-    fn new(view: &View, deltas: &FastMap<String, ZSet>, db: &Database) -> Self {
-        let is_first_run = view.last_hash.is_empty();
-        Self {
-            is_first_run,
-            is_streaming: matches!(view.format, ViewResultFormat::Streaming),
-            has_subquery_changes: !is_first_run && view.has_changes_for_subqueries(deltas, db),
-        }
-    }
-
-    fn should_full_scan(&self) -> bool {
-        self.is_first_run || self.has_subquery_changes
-    }
-}
-
-/// Categorized changes from view delta
-struct DeltaCategories {
-    additions: Vec<String>,
-    removals: Vec<String>,
-    updates: Vec<String>,
-}
-
-impl DeltaCategories {
-    fn with_capacity(cap: usize) -> Self {
-        Self {
-            additions: Vec::with_capacity(cap),
-            removals: Vec::with_capacity(cap),
-            updates: Vec::with_capacity(cap),
-        }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.additions.is_empty() && self.removals.is_empty() && self.updates.is_empty()
-    }
+mod sort_direction {
+    pub const DESC: &str = "DESC";
+    // pub const ASC: &str = "ASC";
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -65,826 +25,906 @@ pub struct QueryPlan {
     pub root: Operator,
 }
 
-/// Helper function for serde to skip serializing empty caches
-fn is_cache_empty_or_streaming(cache: &ZSet) -> bool {
-    cache.is_empty()
-}
-
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct View {
     pub plan: QueryPlan,
-    /// Cache is only used for Flat/Tree modes. For Streaming mode, version_map is the source of truth.
-    /// Skip serializing if empty (streaming mode keeps it empty).
-    #[serde(default, skip_serializing_if = "is_cache_empty_or_streaming")]
+    /// Unified cache: Source of truth for all modes (Flat, Tree, Streaming).
+    /// Tracks ALL records that are part of the view (including subquery results).
+    /// IMPORTANT: Always serialize - needed for correct delta computation!
+    #[serde(default)]
     pub cache: ZSet,
     pub last_hash: String,
     #[serde(default)]
     pub params: Option<SpookyValue>,
     #[serde(default)]
-    pub version_map: VersionMap, // Track versions for each record
-    #[serde(default)]
     pub format: ViewResultFormat, // Output format strategy
+
+    // Cached characteristics
+    #[serde(skip)]
+    pub has_subqueries_cached: bool,
+    #[serde(skip)]
+    pub referenced_tables_cached: Vec<String>,
+    #[serde(skip)]
+    pub is_simple_scan: bool,
+    #[serde(skip)]
+    pub is_simple_filter: bool,
 }
 
 impl View {
     pub fn new(plan: QueryPlan, params: Option<Value>, format: Option<ViewResultFormat>) -> Self {
+        let has_subqueries_cached = plan.root.has_subquery_projections();
+        let referenced_tables_cached = plan.root.referenced_tables();
+
+        let is_simple_scan = matches!(plan.root, Operator::Scan { .. });
+        let is_simple_filter = if let Operator::Filter { input, .. } = &plan.root {
+            matches!(input.as_ref(), Operator::Scan { .. })
+        } else {
+            false
+        };
+
         Self {
             plan,
             cache: FastMap::default(),
             last_hash: String::new(),
             params: params.map(SpookyValue::from),
-            version_map: FastMap::default(),
             format: format.unwrap_or_default(),
+            has_subqueries_cached,
+            referenced_tables_cached,
+            is_simple_scan,
+            is_simple_filter,
         }
     }
 
-    /// The main function for updates.
-    /// Uses delta optimization if possible.
-    pub fn process(
-        &mut self,
-        changed_table: &str,
-        input_delta: &ZSet,
-        db: &Database,
-        is_optimistic: bool,
-    ) -> Option<ViewUpdate> {
-        let mut deltas = FastMap::default();
-        if !changed_table.is_empty() {
-            deltas.insert(changed_table.to_string(), input_delta.clone());
-        }
-        self.process_ingest(&deltas, db, is_optimistic)
-    }
-
-    /// Optimized 2-Phase Processing: Handles multiple table updates at once.
-    /// is_optimistic: true = increment versions (local mutations), false = keep versions (remote sync)
-    pub fn process_ingest(
-        &mut self,
-        deltas: &FastMap<String, ZSet>,
-        db: &Database,
-        is_optimistic: bool,
-    ) -> Option<ViewUpdate> {
-        let ctx = ProcessContext::new(self, deltas, db);
-
-        debug_log!(
-            "DEBUG VIEW: id={} is_first_run={} has_subquery_changes={} is_streaming={}",
-            self.plan.id,
-            ctx.is_first_run,
-            ctx.has_subquery_changes,
-            ctx.is_streaming
-        );
-
-        // Step 1: Compute view delta
-        let view_delta = self.compute_view_delta(&ctx, deltas, db)?;
-
-        // Step 2: Identify updated records (records in view that changed)
-        let updated_record_ids = self.identify_updated_records(&ctx, deltas);
-
-        // Step 3: Categorize changes
-        let categories = self.categorize_changes(&view_delta, &updated_record_ids);
-
-        // Step 4: Early exit if no meaningful changes
-        if categories.is_empty() && !ctx.is_first_run && !ctx.has_subquery_changes {
-            return None;
-        }
-
-        // Step 5: Emit update based on format
-        // Step 5: Emit update based on format
-        // Step 5: Emit update based on format
-        match ctx.is_streaming {
-            true => self.emit_streaming_update(&ctx, &categories, db, is_optimistic),
-            false => self.emit_materialized_update(&ctx, &view_delta, &categories, db, is_optimistic),
-        }
-    }
-
-    fn compute_view_delta(
-        &self,
-        ctx: &ProcessContext,
-        deltas: &FastMap<String, ZSet>,
-        db: &Database,
-    ) -> Option<ZSet> {
-        if ctx.should_full_scan() {
-            // Full scan strategy
-            return Some(self.compute_snapshot_delta(ctx, db));
-        }
-
-        // Try incremental strategy
-        if let Some(delta) = self.eval_delta_batch(&self.plan.root, deltas, db, self.params.as_ref()) {
-            return Some(delta);
-        }
-
-        // Fallback to full scan strategy if incremental not supported for operator
-        Some(self.compute_snapshot_delta(ctx, db))
-    }
-
-    fn compute_snapshot_delta(&self, ctx: &ProcessContext, db: &Database) -> ZSet {
-        let target_set = self
-            .eval_snapshot(&self.plan.root, db, self.params.as_ref())
-            .into_owned();
-        self.diff_against_cache(&target_set, ctx.is_streaming)
-    }
-
-    fn diff_against_cache(&self, target_set: &ZSet, is_streaming: bool) -> ZSet {
-        let mut diff = FastMap::default();
-
-        if is_streaming {
-            // Streaming mode: compare against version_map
-            for (key, &new_w) in target_set {
-                if new_w > 0 && !self.version_map.contains_key(key.as_str()) {
-                    diff.insert(key.clone(), 1);
-                }
-            }
-            // Check for removals (only non-subquery records)
-            let subquery_tables: std::collections::HashSet<String> = 
-                self.extract_subquery_tables(&self.plan.root).into_iter().collect();
-            
-            for key in self.version_map.keys() {
-                if !target_set.contains_key(key.as_str()) {
-                    if let Some((table_name, _)) = key.split_once(':') {
-                        if !subquery_tables.contains(table_name) {
-                            diff.insert(SmolStr::new(key), -1);
-                        }
-                    }
-                }
-            }
+    /// Initialize cached flags after deserialization
+    ///
+    /// IMPORTANT: Call this after deserializing a View from storage!
+    /// The cached flags are not serialized to save space, so they must
+    /// be recomputed when loading state.
+    pub fn initialize_after_deserialize(&mut self) {
+        self.has_subqueries_cached = self.plan.root.has_subquery_projections();
+        self.referenced_tables_cached = self.plan.root.referenced_tables();
+        self.is_simple_scan = matches!(self.plan.root, Operator::Scan { .. });
+        self.is_simple_filter = if let Operator::Filter { input, .. } = &self.plan.root {
+            matches!(input.as_ref(), Operator::Scan { .. })
         } else {
-            // Flat/Tree mode: use cache
-            for (key, &new_w) in target_set {
-                let old_w = self.cache.get(key).copied().unwrap_or(0);
-                if new_w != old_w {
-                    diff.insert(key.clone(), new_w - old_w);
-                }
-            }
-            for (key, &old_w) in &self.cache {
-                if !target_set.contains_key(key) {
-                    diff.insert(key.clone(), -old_w);
-                }
-            }
-        }
-
-        diff
-    }
-
-    fn identify_updated_records(
-        &self,
-        ctx: &ProcessContext,
-        deltas: &FastMap<String, ZSet>,
-    ) -> Vec<String> {
-        if ctx.is_streaming {
-            self.get_updated_records_streaming(deltas)
-        } else {
-            self.get_updated_cached_records(deltas)
-        }
-    }
-
-    fn categorize_changes(
-        &self,
-        view_delta: &ZSet,
-        updated_record_ids: &[String],
-    ) -> DeltaCategories {
-        let mut categories = DeltaCategories::with_capacity(view_delta.len());
-
-        // Build lookup set for O(1) update checks
-        let updated_set: std::collections::HashSet<&str> = 
-            updated_record_ids.iter().map(|s| s.as_str()).collect();
-
-        for (key, weight) in view_delta {
-            if *weight > 0 {
-                // Positive weight: addition (unless it's an update)
-                if !updated_set.contains(key.as_str()) {
-                    categories.additions.push(key.to_string());
-                }
-            } else if *weight < 0 {
-                // Negative weight: removal
-                categories.removals.push(key.to_string());
-            }
-        }
-
-        // Updates: records that changed but weren't removed
-        let removal_set: std::collections::HashSet<&str> = 
-            categories.removals.iter().map(|s| s.as_str()).collect();
-        
-        for id in updated_record_ids {
-            if !removal_set.contains(id.as_str()) {
-                categories.updates.push(id.clone());
-            }
-        }
-
-        categories
-    }
-
-    fn emit_streaming_update(
-        &mut self,
-        ctx: &ProcessContext,
-        categories: &DeltaCategories,
-        db: &Database,
-        is_optimistic: bool,
-    ) -> Option<ViewUpdate> {
-        let mut delta_records: Vec<DeltaRecord> = Vec::new();
-
-        if ctx.is_first_run {
-            delta_records = self.handle_first_run_streaming(db);
-        } else if ctx.has_subquery_changes {
-            delta_records = self.handle_subquery_changes_streaming(db);
-        } else {
-            delta_records = self.handle_normal_streaming(categories, db, is_optimistic);
-        }
-
-        // Update sentinel hash
-        self.last_hash = "streaming".to_string();
-
-        if delta_records.is_empty() && !ctx.is_first_run {
-            return None;
-        }
-
-        Some(ViewUpdate::Streaming(StreamingUpdate {
-            view_id: self.plan.id.clone(),
-            records: delta_records,
-        }))
-    }
-
-    fn handle_first_run_streaming(&mut self, db: &Database) -> Vec<DeltaRecord> {
-        let mut records = Vec::new();
-        let target_set = self
-            .eval_snapshot(&self.plan.root, db, self.params.as_ref())
-            .into_owned();
-
-        // Collect all IDs including subquery children
-        let mut all_ids: Vec<String> = Vec::new();
-        for (id, weight) in &target_set {
-            if *weight > 0 {
-                all_ids.push(id.to_string());
-                if let Some(parent_row) = self.get_row_value(id.as_str(), db) {
-                    self.collect_subquery_ids_recursive(&self.plan.root, parent_row, db, &mut all_ids);
-                }
-            }
-        }
-
-        // Deduplicate
-        all_ids.sort_unstable();
-        all_ids.dedup();
-
-        // Create events
-        for id in all_ids {
-            let id_key = SmolStr::new(id.as_str());
-            self.version_map.insert(id_key, 1);
-            records.push(DeltaRecord {
-                id,
-                event: DeltaEvent::Created,
-                version: 1,
-            });
-        }
-
-        records
-    }
-
-    fn handle_subquery_changes_streaming(&mut self, db: &Database) -> Vec<DeltaRecord> {
-        let mut records = Vec::new();
-        let target_set = self
-            .eval_snapshot(&self.plan.root, db, self.params.as_ref())
-            .into_owned();
-
-        // Collect all current IDs
-        let mut current_ids: Vec<String> = Vec::new();
-        for (main_id, _) in &target_set {
-            current_ids.push(main_id.to_string());
-            if let Some(parent_row) = self.get_row_value(main_id.as_str(), db) {
-                self.collect_subquery_ids_recursive(&self.plan.root, parent_row, db, &mut current_ids);
-            }
-        }
-        current_ids.sort_unstable();
-        current_ids.dedup();
-
-        let current_set: std::collections::HashSet<&str> = 
-            current_ids.iter().map(|s| s.as_str()).collect();
-
-        // Find NEW IDs
-        for id in &current_ids {
-            if !self.version_map.contains_key(id.as_str()) {
-                let id_key = SmolStr::new(id.as_str());
-                self.version_map.insert(id_key, 1);
-                records.push(DeltaRecord {
-                    id: id.clone(),
-                    event: DeltaEvent::Created,
-                    version: 1,
-                });
-            }
-        }
-
-        // Find REMOVED IDs
-        let version_keys: Vec<SmolStr> = self.version_map.keys().cloned().collect();
-        for id in version_keys {
-            if !current_set.contains(id.as_str()) {
-                self.version_map.remove(&id);
-                records.push(DeltaRecord {
-                    id: id.to_string(),
-                    event: DeltaEvent::Deleted,
-                    version: 0,
-                });
-            }
-        }
-
-        records
-    }
-
-    fn handle_normal_streaming(
-        &mut self,
-        categories: &DeltaCategories,
-        db: &Database,
-        is_optimistic: bool,
-    ) -> Vec<DeltaRecord> {
-        let mut records = Vec::new();
-
-        // Handle removals first
-        for id in &categories.removals {
-            let id_key = SmolStr::new(id.as_str());
-            self.version_map.remove(&id_key);
-            records.push(DeltaRecord {
-                id: id.clone(),
-                event: DeltaEvent::Deleted,
-                version: 0,
-            });
-        }
-
-        // Handle additions
-        for id in &categories.additions {
-            let id_key = SmolStr::new(id.as_str());
-            let version = self.version_map.entry(id_key).or_insert(0);
-            if *version == 0 {
-                *version = 1;
-            }
-            records.push(DeltaRecord {
-                id: id.clone(),
-                event: DeltaEvent::Created,
-                version: *version,
-            });
-
-            // Collect subquery IDs for new additions
-            if let Some(parent_row) = self.get_row_value(id.as_str(), db) {
-                let mut subquery_ids = Vec::new();
-                self.collect_subquery_ids_recursive(&self.plan.root, parent_row, db, &mut subquery_ids);
-                for sub_id in subquery_ids {
-                    if !self.version_map.contains_key(sub_id.as_str()) {
-                        let sub_key = SmolStr::new(sub_id.as_str());
-                        self.version_map.insert(sub_key, 1);
-                        records.push(DeltaRecord {
-                            id: sub_id,
-                            event: DeltaEvent::Created,
-                            version: 1,
-                        });
-                    }
-                }
-            }
-        }
-
-        // Handle updates
-        if is_optimistic {
-            for id in &categories.updates {
-                let id_key = SmolStr::new(id.as_str());
-                let version = self.version_map.entry(id_key).or_insert(0);
-                *version += 1;
-                records.push(DeltaRecord {
-                    id: id.clone(),
-                    event: DeltaEvent::Updated,
-                    version: *version,
-                });
-            }
-        } else {
-            // Non-optimistic: still emit updates but don't increment version
-            for id in &categories.updates {
-                let version = self.version_map.get(id.as_str()).copied().unwrap_or(1);
-                records.push(DeltaRecord {
-                    id: id.clone(),
-                    event: DeltaEvent::Updated,
-                    version,
-                });
-            }
-        }
-
-        records
-    }
-
-    fn emit_materialized_update(
-        &mut self,
-        ctx: &ProcessContext,
-        view_delta: &ZSet,
-        categories: &DeltaCategories,
-        db: &Database,
-        is_optimistic: bool,
-    ) -> Option<ViewUpdate> {
-        // Apply cache updates
-        if !ctx.is_streaming {
-            for (key, weight) in view_delta {
-                let entry = self.cache.entry(key.clone()).or_insert(0);
-                *entry += weight;
-                if *entry == 0 {
-                    self.cache.remove(key);
-                }
-            }
-        }
-
-        // Build result set
-        let mut result_ids: Vec<String> = self.cache.keys().map(|k| k.to_string()).collect();
-        result_ids.sort_unstable();
-
-        // Collect all IDs including subqueries
-        let mut all_ids: Vec<String> = Vec::new();
-        for id in &result_ids {
-            all_ids.push(id.clone());
-            if let Some(parent_row) = self.get_row_value(id, db) {
-                self.collect_subquery_ids_recursive(&self.plan.root, parent_row, db, &mut all_ids);
-            }
-        }
-        all_ids.sort_unstable();
-        all_ids.dedup();
-
-        // Update version map
-        for id in &all_ids {
-            if let Some(_hash) = self.get_row_hash(id, db) {
-                let id_key = SmolStr::new(id);
-                let version = self.version_map.entry(id_key).or_insert(0);
-                if *version == 0 {
-                    *version = 1;
-                } else if is_optimistic && categories.updates.contains(id) {
-                    *version += 1;
-                }
-            }
-        }
-
-        // Build result data
-        let result_data: Vec<(String, u64)> = all_ids
-            .iter()
-            .map(|id| {
-                let version = self.version_map.get(id.as_str()).copied().unwrap_or(1);
-                (id.clone(), version)
-            })
-            .collect();
-
-        // Compute hash
-        let hash = super::update::compute_flat_hash(&result_data);
-        
-        if hash == self.last_hash && !ctx.is_first_run {
-            return None;
-        }
-        self.last_hash = hash.clone();
-
-        let update = MaterializedViewUpdate {
-            query_id: self.plan.id.clone(),
-            result_hash: hash,
-            result_data,
+            false
         };
 
-        Some(match self.format {
-            ViewResultFormat::Tree => ViewUpdate::Tree(update),
-            _ => ViewUpdate::Flat(update),
-        })
-    }
-
-    /// Find all Subquery projections in the operator tree
-    fn find_subquery_projections(&self, op: &Operator) -> Vec<Operator> {
-        let mut subqueries = Vec::new();
-        self.collect_subquery_projections(op, &mut subqueries);
-        subqueries
-    }
-
-    fn collect_subquery_projections(&self, op: &Operator, out: &mut Vec<Operator>) {
-        match op {
-            Operator::Project { input, projections } => {
-                for proj in projections {
-                    if let Projection::Subquery { plan, .. } = proj {
-                        out.push((**plan).clone());
-                        // Recursively check nested subqueries
-                        self.collect_subquery_projections(plan, out);
-                    }
-                }
-                self.collect_subquery_projections(input, out);
-            }
-            Operator::Filter { input, .. } => {
-                self.collect_subquery_projections(input, out);
-            }
-            Operator::Limit { input, .. } => {
-                self.collect_subquery_projections(input, out);
-            }
-            Operator::Join { left, right, .. } => {
-                self.collect_subquery_projections(left, out);
-                self.collect_subquery_projections(right, out);
-            }
-            Operator::Scan { .. } => {}
-        }
-    }
-
-    /// Recursively collect all record IDs from subqueries, using the correct parent context for each level.
-    /// This ensures nested subqueries (like comment.author inside comments) get the right parent row.
-    fn collect_subquery_ids_recursive(
-        &self,
-        op: &Operator,
-        parent_row: &SpookyValue,
-        db: &Database,
-        out: &mut Vec<String>,
-    ) {
-        match op {
-            Operator::Project { input, projections } => {
-                // First, recurse into the input operator (to handle any projections further down)
-                self.collect_subquery_ids_recursive(input, parent_row, db, out);
-                
-                // Then process each subquery projection at this level
-                for proj in projections {
-                    if let Projection::Subquery { plan, .. } = proj {
-                        // Evaluate this subquery with the current parent context
-                        let subquery_results = self
-                            .eval_snapshot(plan, db, Some(parent_row))
-                            .into_owned();
-                        
-                        // For each result, add the ID and recursively process nested subqueries
-                        for (sub_id, _weight) in &subquery_results {
-                            out.push(sub_id.to_string());
-                            
-                            // Get the actual row data for this subquery result
-                            // to use as parent context for any nested subqueries WITHIN this subquery
-                            if let Some(sub_row) = self.get_row_value(sub_id.as_str(), db) {
-                                // Only recurse into the subquery's plan to find ITS nested subqueries
-                                // This handles cases like: comments -> comment.author, comments -> comment.replies -> reply.author
-                                self.collect_nested_subquery_ids(plan, sub_row, db, out);
-                            }
-                        }
-                    }
-                }
-            }
-            Operator::Filter { input, .. } => {
-                self.collect_subquery_ids_recursive(input, parent_row, db, out);
-            }
-            Operator::Limit { input, .. } => {
-                self.collect_subquery_ids_recursive(input, parent_row, db, out);
-            }
-            Operator::Join { left, right, .. } => {
-                self.collect_subquery_ids_recursive(left, parent_row, db, out);
-                self.collect_subquery_ids_recursive(right, parent_row, db, out);
-            }
-            Operator::Scan { .. } => {
-                // Base case: no subqueries in a scan
-            }
-        }
-    }
-
-    /// Helper: Collect IDs from subqueries nested within a subquery's plan.
-    /// This is separate from collect_subquery_ids_recursive because we only want to find
-    /// the Project nodes that contain subquery projections, not re-evaluate the entire query.
-    fn collect_nested_subquery_ids(
-        &self,
-        op: &Operator,
-        parent_row: &SpookyValue,
-        db: &Database,
-        out: &mut Vec<String>,
-    ) {
-        match op {
-            Operator::Project { input, projections } => {
-                // First check the input for any nested Projects with subqueries
-                self.collect_nested_subquery_ids(input, parent_row, db, out);
-                
-                // Process subquery projections at this level
-                for proj in projections {
-                    if let Projection::Subquery { plan, .. } = proj {
-                        // Evaluate this nested subquery with the current parent context
-                        let subquery_results = self
-                            .eval_snapshot(plan, db, Some(parent_row))
-                            .into_owned();
-                        
-                        for (sub_id, _weight) in &subquery_results {
-                            out.push(sub_id.to_string());
-                            
-                            // Recursively handle even deeper nesting
-                            if let Some(sub_row) = self.get_row_value(sub_id.as_str(), db) {
-                                self.collect_nested_subquery_ids(plan, sub_row, db, out);
-                            }
-                        }
-                    }
-                }
-            }
-            Operator::Filter { input, .. } => {
-                self.collect_nested_subquery_ids(input, parent_row, db, out);
-            }
-            Operator::Limit { input, .. } => {
-                self.collect_nested_subquery_ids(input, parent_row, db, out);
-            }
-            Operator::Join { left, right, .. } => {
-                self.collect_nested_subquery_ids(left, parent_row, db, out);
-                self.collect_nested_subquery_ids(right, parent_row, db, out);
-            }
-            Operator::Scan { .. } => {
-                // Base case
-            }
-        }
-    }
-
-    /// Check if deltas contain changes (CREATE or DELETE) for tables used in subqueries
-    /// This is needed because new/deleted records need full scan to update subquery results
-    fn has_changes_for_subqueries(&self, deltas: &FastMap<String, ZSet>, _db: &Database) -> bool {
-        // Get all tables used in subqueries
-        let subquery_tables = self.extract_subquery_tables(&self.plan.root);
-
-        debug_log!(
-            "DEBUG has_changes: view={} subquery_tables={:?} delta_tables={:?}",
-            self.plan.id,
-            subquery_tables,
-            deltas.keys().collect::<Vec<_>>()
+        tracing::debug!(
+            target: "ssp::view::init",
+            view_id = %self.plan.id,
+            has_subqueries = self.has_subqueries_cached,
+            is_simple_scan = self.is_simple_scan,
+            is_simple_filter = self.is_simple_filter,
+            referenced_tables = ?self.referenced_tables_cached,
+            "Initialized cached flags after deserialize"
         );
+    }
 
-        if subquery_tables.is_empty() {
-            debug_log!(
-                "DEBUG has_changes: view={} NO SUBQUERY TABLES",
-                self.plan.id
-            );
-            return false;
+    /// Check if cached flags are initialized
+    /// Check if cached flags are initialized
+    pub fn is_initialized(&self) -> bool {
+        // FIX: Check if ANY cached flag is set (they're all computed together)
+        !self.referenced_tables_cached.is_empty()
+    }
+
+    /// Process a delta for this view - optimized fast path for simple views
+    pub fn process_delta(&mut self, delta: &Delta, db: &Database) -> Option<ViewUpdate> {
+        // Fast check: Does this view even care about this table?
+        if !self
+            .referenced_tables_cached
+            .iter()
+            .any(|t| t == delta.table.as_str())
+        {
+            return None;
         }
 
-        // Check if any delta for a subquery table contains changes (weight != 0)
-        for table in subquery_tables {
-            if let Some(delta) = deltas.get(&table) {
-                debug_log!(
-                    "DEBUG has_changes: view={} table={} delta_keys={:?}",
-                    self.plan.id,
-                    table,
-                    delta.keys().collect::<Vec<_>>()
-                );
-                // Check if any record in this delta is a CREATE (weight > 0 and not in version_map)
-                // or a DELETE (weight < 0 and in version_map)
-                for (key, weight) in delta {
-                    // Use SmolStr for lookup to ensure hash compatibility with FxHasher
-                    let key_smol = SmolStr::new(key.as_str());
-                    let in_version_map = self.version_map.contains_key(&key_smol);
-                    debug_log!(
-                        "DEBUG has_changes: view={} key={} weight={} in_version_map={}",
-                        self.plan.id,
-                        key,
-                        weight,
-                        in_version_map
-                    );
-                    // CREATE: positive weight, not in version_map
-                    // DELETE: negative weight, in version_map
-                    if (*weight > 0 && !in_version_map) || (*weight < 0 && in_version_map) {
-                        debug_log!(
-                            "DEBUG has_changes: view={} FOUND CHANGE key={} weight={}",
-                            self.plan.id,
-                            key,
-                            weight
-                        );
-                        return true;
+        // Case 1: Membership change (Create or Delete)
+        if delta.weight != 0 {
+            // Fast path: Try optimized processing for simple Scan/Filter views
+            if let Some(result) = self.try_fast_single(delta, db) {
+                return result;
+            }
+
+            // Fallback: Use batch processing for complex views
+            let mut batch_deltas = BatchDeltas::new();
+            let mut zset = ZSet::default();
+            zset.insert(delta.key.clone(), delta.weight);
+            batch_deltas
+                .membership
+                .insert(delta.table.to_string(), zset);
+
+            if delta.content_changed {
+                batch_deltas
+                    .content_updates
+                    .entry(delta.table.to_string())
+                    .or_default()
+                    .push(delta.key.clone());
+            }
+
+            return self.process_batch(&batch_deltas, db);
+        }
+
+        // Case 2: Content-only update (weight=0, content_changed=true)
+        if delta.content_changed {
+            return self.process_content_update(delta, db);
+        }
+
+        // Case 3: No change
+        None
+    }
+
+    /// Handle content-only update (no membership change)
+    fn process_content_update(&mut self, delta: &Delta, db: &Database) -> Option<ViewUpdate> {
+        let is_in_cache = self.cache.contains_key(&delta.key);
+        let matches_filter = self.record_matches_view(&delta.key, db);
+
+        match (is_in_cache, matches_filter) {
+            (true, true) => {
+                // Was in view, still in view - content update
+                self.build_content_update_notification(&delta.key)
+            }
+            (true, false) => {
+                // Was in view, no longer matches - directly remove from cache
+                self.cache.remove(&delta.key);
+
+                // Build removal notification
+                use super::update::{build_update, RawViewResult, ViewDelta};
+
+                // For streaming mode, only include the removed record
+                // For Flat/Tree modes, need all remaining records for hash computation
+                let result_data = match self.format {
+                    ViewResultFormat::Streaming => {
+                        vec![delta.key.clone()]
+                    }
+                    ViewResultFormat::Flat | ViewResultFormat::Tree => {
+                        self.build_result_data()
+                    }
+                };
+
+                let view_delta = ViewDelta::removals_only(vec![delta.key.clone()]);
+
+                let raw_result = RawViewResult {
+                    query_id: self.plan.id.clone(),
+                    records: result_data.clone(),
+                    delta: Some(view_delta),
+                };
+
+                let update = build_update(raw_result, self.format);
+
+                // Update last hash
+                let hash = match &update {
+                    ViewUpdate::Flat(flat) | ViewUpdate::Tree(flat) => flat.result_hash.clone(),
+                    ViewUpdate::Streaming(_) => {
+                        use super::update::compute_flat_hash;
+                        compute_flat_hash(&result_data)
+                    }
+                };
+                self.last_hash = hash;
+
+                Some(update)
+            }
+            (false, true) => {
+                // Was not in view, now matches - treat as addition
+                let addition_delta = Delta {
+                    table: delta.table.clone(),
+                    key: delta.key.clone(),
+                    weight: 1,
+                    content_changed: false,
+                };
+                self.process_delta(&addition_delta, db)
+            }
+            (false, false) => {
+                // Was not in view, still doesn't match - no update
+                None
+            }
+        }
+    }
+
+    /// Check if a record matches this view's filters
+    /// OPTIMIZATION: Avoid format! allocations using parse_zset_key
+    /// Check if a record matches this view's filters
+    /// OPTIMIZATION: Avoid format! allocations using parse_zset_key
+    #[inline]
+    fn record_matches_view(&self, key: &SmolStr, db: &Database) -> bool {
+        match &self.plan.root {
+            Operator::Scan { table } => parse_zset_key(key)
+                .map(|(t, _)| t == table)
+                .unwrap_or(false),
+            Operator::Filter { input, predicate } => {
+                if let Operator::Scan { table } = input.as_ref() {
+                    let matches_table = parse_zset_key(key)
+                        .map(|(t, _)| t == table)
+                        .unwrap_or(false);
+
+                    if !matches_table {
+                        return false;
+                    }
+                    return self.check_predicate(predicate, key, db, self.params.as_ref());
+                }
+                true
+            }
+            _ => true,
+        }
+    }
+
+    /// Build notification for content-only update
+    fn build_content_update_notification(&mut self, key: &SmolStr) -> Option<ViewUpdate> {
+        use super::update::{build_update, RawViewResult, ViewDelta};
+
+        // For streaming mode, only include the updated record
+        // For Flat/Tree modes, need all records for hash computation
+        let result_data = match self.format {
+            ViewResultFormat::Streaming => {
+                vec![key.clone()]
+            }
+            ViewResultFormat::Flat | ViewResultFormat::Tree => {
+                self.build_result_data()
+            }
+        };
+
+        let view_delta = ViewDelta::updates_only(vec![key.clone()]);
+
+        let raw_result = RawViewResult {
+            query_id: self.plan.id.clone(),
+            records: result_data,
+            delta: Some(view_delta),
+        };
+
+        let update = build_update(raw_result, self.format);
+
+        // For streaming, always emit. For flat/tree, content changed but set didn't - still notify
+        match &update {
+            ViewUpdate::Streaming(s) if !s.records.is_empty() => Some(update),
+            ViewUpdate::Flat(_) | ViewUpdate::Tree(_) => Some(update),
+            _ => None,
+        }
+    }
+
+    /// Try fast single-record processing for simple views (Scan, Filter)
+    /// Returns Some(result) if fast path was taken, None if fallback needed
+    fn try_fast_single(&mut self, delta: &Delta, db: &Database) -> Option<Option<ViewUpdate>> {
+        // Optimization: Early check using pre-computed flags
+        if !self.is_simple_scan && !self.is_simple_filter {
+            return None;
+        }
+
+        match &self.plan.root {
+            Operator::Scan { table } => {
+                if table.as_str() != delta.table.as_str() {
+                    return Some(None); // Different table, no effect
+                }
+                // Handle both creates and deletes
+                if delta.weight > 0 {
+                    Some(self.apply_single_create(&delta.key))
+                } else {
+                    Some(self.apply_single_delete(&delta.key))
+                }
+            }
+            Operator::Filter { input, predicate } => {
+                // Only optimize Scan+Filter
+                if let Operator::Scan { table } = input.as_ref() {
+                    if table.as_str() != delta.table.as_str() {
+                        return Some(None); // Different table
+                    }
+                    // Check if record passes filter
+                    let matches = self.check_predicate(predicate, &delta.key, db, self.params.as_ref());
+                    if matches {
+                        if delta.weight > 0 {
+                            return Some(self.apply_single_create(&delta.key));
+                        } else {
+                            return Some(self.apply_single_delete(&delta.key));
+                        }
+                    } else {
+                        return Some(None); // Filtered out
                     }
                 }
+                None // Complex filter, use batch path
             }
+            _ => None, // Complex query (Join, Project, Limit), use batch path
         }
-
-        debug_log!("DEBUG has_changes: view={} NO CHANGES FOUND", self.plan.id);
-        false
     }
 
-    /// Get all record IDs currently in the view's cache/version_map that have been updated in the deltas
-    /// This handles UPDATE operations where the ID set doesn't change but content does
-    fn get_updated_cached_records(&self, deltas: &FastMap<String, ZSet>) -> Vec<String> {
-        let mut updated_ids = Vec::new();
+    /// Apply a single record creation to the view (fast path)
+    /// Apply a single record creation to the view (fast path)
+    fn apply_single_create(&mut self, key: &SmolStr) -> Option<ViewUpdate> {
+        let was_member = self.cache.is_member(key);
 
-        // For each table in the deltas, check if any updated record is in our cache
-        for (_table, delta) in deltas {
-            for (record_id, weight) in delta {
-                // Only check records with positive weight (existing/updated records)
-                // Negative weight means deletion which is handled elsewhere
-                if *weight > 0 && self.cache.contains_key(record_id.as_str()) {
-                    debug_log!(
-                        "DEBUG get_updated_cached_records: view={} table={} found cached record={}",
-                        self.plan.id,
-                        _table,
-                        record_id
-                    );
-                    updated_ids.push(record_id.to_string());
-                }
-            }
-        }
+        // FIX: Use membership-aware add
+        self.cache.add_member(key.clone());
 
-        // Also check version_map for subquery records that might be affected
-        for (_table, delta) in deltas {
-            for (record_id, weight) in delta {
-                if *weight > 0
-                    && self.version_map.contains_key(record_id.as_str())
-                    && !updated_ids.contains(&record_id.to_string())
-                {
-                    debug_log!("DEBUG get_updated_cached_records: view={} table={} found versioned record={}", self.plan.id, _table, record_id);
-                    updated_ids.push(record_id.to_string());
-                }
-            }
-        }
+        // Determine change type
+        let (additions, updates) = if was_member {
+            (vec![], vec![key.clone()])
+        } else {
+            (vec![key.clone()], vec![])
+        };
 
-        updated_ids
+        self.build_single_update(additions, vec![], updates)
     }
 
-    /// Get all record IDs in the view (via version_map) that have been updated in the deltas.
-    /// This is the streaming-mode variant that uses version_map instead of cache.
-    fn get_updated_records_streaming(&self, deltas: &FastMap<String, ZSet>) -> Vec<String> {
-        let mut updated_ids = Vec::new();
-
-        for (_table, delta) in deltas {
-            for (record_id, weight) in delta {
-                // Only check records with positive weight (existing/updated records)
-                // and that are already in the view (tracked in version_map)
-                if *weight > 0 && self.version_map.contains_key(record_id.as_str()) {
-                    debug_log!(
-                        "DEBUG get_updated_records_streaming: view={} table={} found versioned record={}",
-                        self.plan.id,
-                        _table,
-                        record_id
-                    );
-                    updated_ids.push(record_id.to_string());
-                }
-            }
+    /// Apply a single record deletion to the view (fast path)
+    fn apply_single_delete(&mut self, key: &SmolStr) -> Option<ViewUpdate> {
+        if !self.cache.is_member(key) {
+            return None;
         }
 
-        updated_ids
+        self.cache.remove_member(key);
+        self.build_single_update(vec![], vec![key.clone()], vec![])
     }
 
-    /// Explicitly set the version of a record in the view
-    pub fn set_record_version(
+    /// Helper to build update for single record changes
+    fn build_single_update(
         &mut self,
-        record_id: &str,
-        version: u64,
-        db: &Database,
+        additions: Vec<SmolStr>,
+        removals: Vec<SmolStr>,
+        updates: Vec<SmolStr>,
     ) -> Option<ViewUpdate> {
-        let current_version = self.version_map.get(record_id).copied().unwrap_or(0);
+        let is_first_run = self.last_hash.is_empty();
+        
+        // For streaming mode, only include changed records
+        // For Flat/Tree modes, need all records for hash
+        let result_data = match self.format {
+            ViewResultFormat::Streaming => {
+                let mut changed_keys = Vec::with_capacity(additions.len() + removals.len() + updates.len());
+                changed_keys.extend(additions.iter().cloned());
+                changed_keys.extend(removals.iter().cloned());
+                changed_keys.extend(updates.iter().cloned());
+                changed_keys
+            }
+            ViewResultFormat::Flat | ViewResultFormat::Tree => {
+                self.build_result_data()
+            }
+        };
 
-        if current_version != version {
-            debug_log!(
-                "DEBUG VIEW: set_record_version id={} record={} old={} new={}",
-                self.plan.id,
-                record_id,
-                current_version,
-                version
-            );
-            self.version_map.insert(SmolStr::new(record_id), version);
+        use super::update::{build_update, compute_flat_hash, RawViewResult, ViewDelta};
 
-            // Trigger re-hashing by processing empty deltas
-            let empty_deltas = FastMap::default();
-            // We pass is_optimistic=false because we've already manually manipulated the version map
-            // and we just want to recompute the hash and return the update.
-            self.process_ingest(&empty_deltas, db, false)
+        let view_delta_struct = if is_first_run {
+            None
+        } else {
+            Some(ViewDelta {
+                additions,
+                removals,
+                updates,
+            })
+        };
+
+        // Compute hash if needed (for Streaming) before moving result_data
+        let pre_hash = if matches!(self.format, ViewResultFormat::Streaming) {
+            Some(compute_flat_hash(&result_data))
+        } else {
+            None
+        };
+
+        let raw_result = RawViewResult {
+            query_id: self.plan.id.clone(),
+            records: result_data,
+            delta: view_delta_struct,
+        };
+
+        let update = build_update(raw_result, self.format);
+
+        // Hash check
+        let hash = match &update {
+            ViewUpdate::Flat(flat) | ViewUpdate::Tree(flat) => flat.result_hash.clone(),
+            ViewUpdate::Streaming(_) => pre_hash.unwrap_or_default(),
+        };
+
+        let has_changes = match &update {
+            ViewUpdate::Streaming(s) => !s.records.is_empty(),
+            _ => hash != self.last_hash,
+        };
+
+        if has_changes {
+            self.last_hash = hash;
+            Some(update)
         } else {
             None
         }
     }
 
-    /// Extract all table names used in subquery projections
-    fn extract_subquery_tables(&self, op: &Operator) -> Vec<String> {
-        let mut tables = Vec::new();
-        self.collect_subquery_tables(op, &mut tables);
-        tables.sort_unstable();
-        tables.dedup();
-        tables
+    /// Check if this view has any subquery projections
+    #[inline]
+    fn has_subqueries(&self) -> bool {
+        self.has_subqueries_cached
     }
 
-    fn collect_subquery_tables(&self, op: &Operator, out: &mut Vec<String>) {
+    /// Process a batch of deltas and produce a `ViewUpdate` if the view state changed.
+    ///
+    /// # Optimization: Streaming vs Flat
+    /// - **Streaming Mode**: Result data is filtered to ONLY include records that changed (Added/Removed/Updated).
+    ///   This ensures O(1) payload size for O(1) changes, preventing full-view re-transmission.
+    /// - **Flat/Tree Mode**: Result data includes ALL records in the view. This is required to compute
+    ///   a consistent hash of the view state, which clients use to detect desynchronization.
+    ///
+    /// # Logic
+    /// 1. Computes `view_delta` (Membership changes: Added/Removed).
+    /// 2. Identifies `updated_record_ids` (Content changes for existing members).
+    /// 3. Categorizes changes into `additions`, `removals`, `updates`.
+    /// 4. Updates strict cache state.
+    /// 5. Builds result data based on format (Filtered vs Full).
+    pub fn process_batch(
+        &mut self,
+        batch_deltas: &BatchDeltas,
+        db: &Database,
+    ) -> Option<ViewUpdate> {
+        // FIX: FIRST RUN CHECK
+        let is_first_run = self.last_hash.is_empty();
+
+        tracing::debug!(
+            target: "ssp::view::process_batch",
+            view_id = %self.plan.id,
+            is_first_run = is_first_run,
+            cache_size_before = self.cache.len(),
+            last_hash = %self.last_hash,
+            "Starting process_batch"
+        );
+
+        // Compute view delta from membership changes
+        let view_delta = self.compute_view_delta(&batch_deltas.membership, db, is_first_run);
+        let updated_record_ids = self.get_content_updates_in_view(batch_deltas);
+
+        let delta_additions: Vec<_> = view_delta
+            .iter()
+            .filter(|(_, w)| **w > 0)
+            .map(|(k, _)| k.as_str())
+            .collect();
+        let delta_removals: Vec<_> = view_delta
+            .iter()
+            .filter(|(_, w)| **w < 0)
+            .map(|(k, _)| k.as_str())
+            .collect();
+
+        tracing::debug!(
+            target: "ssp::view::process_batch",
+            view_id = %self.plan.id,
+            delta_total = view_delta.len(),
+            additions_count = delta_additions.len(),
+            removals_count = delta_removals.len(),
+            additions_sample = ?delta_additions.iter().take(5).collect::<Vec<_>>(),
+            removals_sample = ?delta_removals.iter().take(5).collect::<Vec<_>>(),
+            content_updates = updated_record_ids.len(),
+            "Computed view delta (ZSet keys include table prefix)"
+        );
+
+        // Early return if no changes
+        if view_delta.is_empty() && !is_first_run && updated_record_ids.is_empty() {
+            tracing::debug!(
+                target: "ssp::view::process_batch",
+                view_id = %self.plan.id,
+                "No changes detected, returning None"
+            );
+            return None;
+        }
+
+        // Categorize changes BEFORE applying delta to detect membership transitions (0 <-> 1)
+        // This functionality uses the OLD cache state.
+        let (additions, removals, updates) =
+            self.categorize_changes(&view_delta, &updated_record_ids);
+
+        // Apply delta to cache (Update state)
+        self.apply_cache_delta(&view_delta);
+
+        tracing::debug!(
+            target: "ssp::view::process_batch",
+            view_id = %self.plan.id,
+            cache_size_after = self.cache.len(),
+            categorized_additions = additions.len(),
+            categorized_removals = removals.len(),
+            categorized_updates = updates.len(),
+            additions_sample = ?additions.iter().take(5).collect::<Vec<_>>(),
+            removals_sample = ?removals.iter().take(5).collect::<Vec<_>>(),
+            "Categorized changes (IDs are STRIPPED of table prefix)"
+        );
+
+        // Build result data
+        // For Streaming mode: only include changed records to avoid sending entire view
+        // For Flat/Tree modes: include all records for hash computation
+        let result_data = match self.format {
+            ViewResultFormat::Streaming => {
+                // Collect only records that changed
+                let mut changed_keys = Vec::with_capacity(additions.len() + removals.len() + updates.len());
+                changed_keys.extend(additions.iter().cloned());
+                changed_keys.extend(removals.iter().cloned());
+                changed_keys.extend(updates.iter().cloned());
+
+                tracing::debug!(
+                    target: "ssp::view::process_batch",
+                    view_id = %self.plan.id,
+                    changed_count = changed_keys.len(),
+                    "Streaming mode: filtered to changed records only"
+                );
+
+                changed_keys
+            }
+            ViewResultFormat::Flat | ViewResultFormat::Tree => {
+                // Need all records for hash computation
+                self.build_result_data()
+            }
+        };
+
+        tracing::debug!(
+            target: "ssp::view::process_batch",
+            view_id = %self.plan.id,
+            result_data_count = result_data.len(),
+            result_sample = ?result_data.iter().take(5).collect::<Vec<_>>(),
+            "Built result_data (these IDs go to StreamingUpdate)"
+        );
+
+        // Delegate formatting to update module (Strategy Pattern)
+        use super::update::{build_update, compute_flat_hash, RawViewResult, ViewDelta};
+
+        // FIX: On first run, we should still provide a delta for edge creation!
+        // Previously this was None, causing build_update to use raw.records as Created
+        // Now we explicitly create a delta with all records as additions
+        let view_delta_struct = if is_first_run {
+            tracing::info!(
+                target: "ssp::view::process_batch",
+                view_id = %self.plan.id,
+                initial_records = additions.len(),
+                "First run - creating delta with all records as additions"
+            );
+            // On first run, all records in result are additions
+            Some(ViewDelta {
+                additions: additions.clone(),
+                removals: vec![],
+                updates: vec![],
+            })
+        } else {
+            Some(ViewDelta {
+                additions,
+                removals,
+                updates,
+            })
+        };
+
+        // Compute hash if needed (for Streaming) before moving result_data
+        let pre_hash = if matches!(self.format, ViewResultFormat::Streaming) {
+            Some(compute_flat_hash(&result_data))
+        } else {
+            None
+        };
+
+        let raw_result = RawViewResult {
+            query_id: self.plan.id.clone(),
+            records: result_data,
+            delta: view_delta_struct,
+        };
+
+        // Build update using the configured format
+        let update = build_update(raw_result, self.format);
+
+        // Extract hash for comparison (depends on format)
+        let hash = match &update {
+            ViewUpdate::Flat(flat) | ViewUpdate::Tree(flat) => flat.result_hash.clone(),
+            ViewUpdate::Streaming(_) => pre_hash.unwrap_or_default(),
+        };
+
+        let has_changes = match &update {
+            ViewUpdate::Streaming(s) => !s.records.is_empty(),
+            _ => hash != self.last_hash,
+        };
+
+        if has_changes {
+            self.last_hash = hash;
+            return Some(update);
+        }
+
+        None
+    }
+
+    /// Expand target set with subquery results
+    ///
+    /// MEMBERSHIP MODEL: After expansion, all weights are normalized to 1.
+    /// OPTIMIZATION: Uses shared accumulator to avoid allocations per parent.
+    fn expand_with_subqueries(&self, target_set: &mut ZSet, db: &Database) {
+        if !self.has_subqueries() {
+            return;
+        }
+
+        // Collect subquery results (Accumulator reused for all parents)
+        let mut subquery_additions: ZSet = FastMap::default();
+
+        let parent_records: Vec<(SmolStr, i64)> = target_set
+            .iter()
+            .filter(|(_, &w)| w > 0) // Only process present records
+            .map(|(k, &w)| (k.clone(), w))
+            .collect();
+
+        for (parent_key, _parent_weight) in parent_records {
+            // Note: We ignore parent_weight for membership model
+
+            let parent_data = match self.get_row_value(&parent_key, db) {
+                Some(data) => data,
+                None => continue,
+            };
+
+            // Recursively evaluate into accumulator
+            self.evaluate_subqueries_for_parent_into(
+                &self.plan.root,
+                parent_data,
+                db,
+                &mut subquery_additions,
+            );
+        }
+
+        // Merge subquery results (membership: weight = 1)
+        // First normalize the accumulator to ensure we only add valid members
+        subquery_additions.normalize_to_membership();
+
+        for (key, _) in subquery_additions {
+            target_set.add_member(key);
+        }
+
+        tracing::debug!(
+            target: "ssp::view::subquery",
+            view_id = %self.plan.id,
+            target_set_size = target_set.len(),
+            "Expanded and normalized subqueries"
+        );
+    }
+
+    /// Evaluate subqueries for a parent record into accumulator
+    /// OPTIMIZATION: Pass mutable results map to avoid allocation recursion
+    fn evaluate_subqueries_for_parent_into(
+        &self,
+        op: &Operator,
+        parent_context: &SpookyValue,
+        db: &Database,
+        results: &mut ZSet,
+    ) {
         match op {
             Operator::Project { input, projections } => {
+                // First, recurse into input
+                self.evaluate_subqueries_for_parent_into(input, parent_context, db, results);
+
+                // Then evaluate projections
                 for proj in projections {
-                    if let Projection::Subquery { plan, .. } = proj {
-                        // Extract tables from the subquery plan
-                        self.collect_tables_from_operator(plan, out);
+                    if let Projection::Subquery {
+                        alias: _,
+                        plan: operator,
+                    } = proj
+                    {
+                        // Evaluate subquery with parent context
+                        let subquery_result =
+                            self.eval_snapshot(operator, db, Some(parent_context));
+
+                        for (key, weight) in subquery_result.iter() {
+                            *results.entry(key.clone()).or_insert(0) += *weight;
+
+                            // Recursively expand nested subqueries
+                            if let Some(record) = self.get_row_value(key, db) {
+                                self.evaluate_subqueries_for_parent_into(
+                                    operator, record, db, results,
+                                );
+                            }
+                        }
                     }
                 }
-                self.collect_subquery_tables(input, out);
             }
             Operator::Filter { input, .. } => {
-                self.collect_subquery_tables(input, out);
+                self.evaluate_subqueries_for_parent_into(input, parent_context, db, results);
             }
             Operator::Limit { input, .. } => {
-                self.collect_subquery_tables(input, out);
+                self.evaluate_subqueries_for_parent_into(input, parent_context, db, results);
             }
             Operator::Join { left, right, .. } => {
-                self.collect_subquery_tables(left, out);
-                self.collect_subquery_tables(right, out);
+                self.evaluate_subqueries_for_parent_into(left, parent_context, db, results);
+                self.evaluate_subqueries_for_parent_into(right, parent_context, db, results);
             }
-            Operator::Scan { .. } => {}
+            Operator::Scan { .. } => {
+                // Leaf node, no subqueries here
+            }
         }
     }
 
-    fn collect_tables_from_operator(&self, op: &Operator, out: &mut Vec<String>) {
-        match op {
-            Operator::Scan { table } => {
-                out.push(table.clone());
-            }
-            Operator::Filter { input, .. } => {
-                self.collect_tables_from_operator(input, out);
-            }
-            Operator::Project { input, projections } => {
-                self.collect_tables_from_operator(input, out);
-                for proj in projections {
-                    if let Projection::Subquery { plan, .. } = proj {
-                        self.collect_tables_from_operator(plan, out);
-                    }
-                }
-            }
-            Operator::Limit { input, .. } => {
-                self.collect_tables_from_operator(input, out);
-            }
-            Operator::Join { left, right, .. } => {
-                self.collect_tables_from_operator(left, out);
-                self.collect_tables_from_operator(right, out);
+    /// Compute the view delta using incremental or full-scan approach
+    fn compute_view_delta(
+        &mut self,
+        deltas: &FastMap<String, ZSet>,
+        db: &Database,
+        is_first_run: bool,
+    ) -> ZSet {
+        if is_first_run {
+            tracing::debug!(
+                target: "ssp::view::delta",
+                view_id = %self.plan.id,
+                "First run - using full scan"
+            );
+            // First run: full scan and diff
+            self.compute_full_diff(db)
+        } else {
+            // Try incremental evaluation first
+            if let Some(delta) =
+                self.eval_delta_batch(&self.plan.root, deltas, db, self.params.as_ref())
+            {
+                tracing::debug!(
+                    target: "ssp::view::delta",
+                    view_id = %self.plan.id,
+                    delta_size = delta.len(),
+                    "Incremental eval succeeded"
+                );
+                delta
+            } else {
+                tracing::warn!(
+                    target: "ssp::view::delta",
+                    view_id = %self.plan.id,
+                    cache_size = self.cache.len(),
+                    "Incremental eval failed (subquery/join/limit?) - falling back to FULL SCAN"
+                );
+                // Fallback to full scan
+                self.compute_full_diff(db)
             }
         }
+    }
+
+    /// Compute full diff using membership semantics
+    fn compute_full_diff(&self, db: &Database) -> ZSet {
+        use crate::engine::types::ZSetMembershipOps;
+
+        // Compute target state
+        let mut target_set = self
+            .eval_snapshot(&self.plan.root, db, self.params.as_ref())
+            .into_owned();
+
+        // Expand with subqueries (will normalize weights)
+        self.expand_with_subqueries(&mut target_set, db);
+
+        tracing::debug!(
+            target: "ssp::view::delta",
+            view_id = %self.plan.id,
+            target_set_size = target_set.len(),
+            cache_size = self.cache.len(),
+            target_sample = ?target_set.keys().take(3).collect::<Vec<_>>(),
+            cache_sample = ?self.cache.keys().take(3).collect::<Vec<_>>(),
+            "compute_full_diff: membership comparison"
+        );
+
+        // Compute diff using new optimized method
+        let mut diff_set = FastMap::default();
+        self.cache.membership_diff_into(&target_set, &mut diff_set);
+
+        // Convert the diff set into delta for processing
+        // Since diff_set keys are owned SmolStr, we move them into result map
+        // This avoids one allocation compared to the Vec logic
+        // But compute_view_delta expects &FastMap<String, ZSet>, we are in full diff mode so we fake it?
+        // Wait, compute_full_diff returns ZSet.
+        // The original logic returned ZSet from additions/removals.
+        // We can just return the populated diff_set!
+
+        tracing::debug!(
+            target: "ssp::view::delta",
+            view_id = %self.plan.id,
+            diff_additions = diff_set.values().filter(|&&w| w > 0).count(),
+            diff_removals = diff_set.values().filter(|&&w| w < 0).count(),
+            "compute_full_diff: result"
+        );
+
+        diff_set
+    }
+
+    /// Apply delta to cache using MEMBERSHIP semantics
+    ///
+    /// Key difference from DBSP:
+    /// - Weights are normalized to 1 (present) or removed (absent)
+    /// - This ensures one edge per (view, record) pair
+    fn apply_cache_delta(&mut self, delta: &ZSet) {
+        let cache_before = self.cache.len();
+
+        // Use membership-aware delta application
+        self.cache.apply_membership_delta(delta);
+
+        tracing::debug!(
+            target: "ssp::view::cache",
+            view_id = %self.plan.id,
+            cache_before = cache_before,
+            cache_after = self.cache.len(),
+            delta_size = delta.len(),
+            "Cache updated with membership delta"
+        );
+    }
+
+    /// Categorize changes into additions, removals, and updates based on MEMBERSHIP transitions
+    fn categorize_changes(
+        &self,
+        view_delta: &ZSet,
+        updated_record_ids: &[SmolStr],
+    ) -> (Vec<SmolStr>, Vec<SmolStr>, Vec<SmolStr>) {
+        let mut additions = Vec::new();
+        let mut removals = Vec::new();
+
+        for (key, &weight_delta) in view_delta {
+            let is_currently_member = self.cache.is_member(key);
+            let will_be_member = {
+                let old_weight = self.cache.get(key).copied().unwrap_or(0);
+                old_weight + weight_delta > 0
+            };
+
+            match (is_currently_member, will_be_member) {
+                (false, true) => {
+                    // Entering view
+                    additions.push(key.clone());
+                }
+                (true, false) => {
+                    // Leaving view
+                    removals.push(key.clone());
+                }
+                _ => {
+                    // No membership change (staying in or staying out)
+                }
+            }
+        }
+
+        // Batch logging for entering/leaving records
+        if !additions.is_empty() {
+            tracing::trace!(
+                target: "ssp::view::membership",
+                view_id = %self.plan.id,
+                count = additions.len(),
+                sample = ?additions.iter().take(3).collect::<Vec<_>>(),
+                "Records ENTERING view"
+            );
+        }
+        if !removals.is_empty() {
+            tracing::trace!(
+                target: "ssp::view::membership",
+                view_id = %self.plan.id,
+                count = removals.len(),
+                sample = ?removals.iter().take(3).collect::<Vec<_>>(),
+                "Records LEAVING view"
+            );
+        }
+
+        // Content updates: keys that are members AND have content changes AND not leaving
+        let removal_set: std::collections::HashSet<&str> =
+            removals.iter().map(|s| s.as_str()).collect();
+
+        let updates: Vec<SmolStr> = updated_record_ids
+            .iter()
+            .filter(|key| self.cache.is_member(key) && !removal_set.contains(key.as_str()))
+            .cloned()
+            .collect();
+
+        tracing::debug!(
+            target: "ssp::view::categorize",
+            view_id = %self.plan.id,
+            additions = additions.len(),
+            removals = removals.len(),
+            updates = updates.len(),
+            "Categorized membership changes"
+        );
+
+        (additions, removals, updates)
+    }
+
+    /// Build sorted result data from current cache
+    ///
+    /// For Streaming mode, sorting is optional since we only emit deltas.
+    /// For Flat/Tree modes, sorting is required for consistent hashing.
+    #[inline]
+    fn build_result_data(&self) -> Vec<SmolStr> {
+        let mut result_data: Vec<SmolStr> = self.cache.keys().cloned().collect();
+        // Only sort for Flat/Tree (needed for hash consistency)
+        // Streaming emits deltas, order doesn't matter
+        if !matches!(self.format, ViewResultFormat::Streaming) {
+            result_data.sort_unstable();
+        }
+        result_data
+    }
+
+    /// Get content updates that affect records in this view
+    fn get_content_updates_in_view(&self, batch_deltas: &BatchDeltas) -> Vec<SmolStr> {
+        let mut updates = Vec::new();
+
+        for (_table, keys) in &batch_deltas.content_updates {
+            for key in keys {
+                if self.cache.contains_key(key.as_str()) {
+                    updates.push(key.clone());
+                }
+            }
+        }
+
+        updates
     }
 
     /// Attempts to calculate the delta purely incrementally for a BATCH of changes.
@@ -921,26 +961,21 @@ impl View {
                     Some(out_delta)
                 }
             }
-            Operator::Project { input, .. } => self.eval_delta_batch(input, deltas, db, context),
+            Operator::Project { input, projections } => {
+                // If any projection is a subquery, we cannot safely compute delta incrementally
+                // without knowing dependencies. Fallback to full snapshot.
+                for proj in projections {
+                    if let Projection::Subquery { .. } = proj {
+                        return None;
+                    }
+                }
+
+                self.eval_delta_batch(input, deltas, db, context)
+            }
 
             // Complex operators (Joins, Limits) fall back to snapshot
             Operator::Join { .. } | Operator::Limit { .. } => None,
         }
-    }
-
-    /// Deprecated: Helper wrapper for single-table delta (retained for compatibility if needed internally)
-    #[allow(dead_code)]
-    fn eval_delta(
-        &self,
-        op: &Operator,
-        changed_table: &str,
-        input_delta: &ZSet,
-        db: &Database,
-        context: Option<&SpookyValue>,
-    ) -> Option<ZSet> {
-        let mut deltas = FastMap::default();
-        deltas.insert(changed_table.to_string(), input_delta.clone());
-        self.eval_delta_batch(op, &deltas, db, context)
     }
 
     /// The classic detailed Full-Scan Evaluator (for fallback and init)
@@ -1000,7 +1035,7 @@ impl View {
 
                             let cmp = compare_spooky_values(val_a, val_b);
                             if cmp != Ordering::Equal {
-                                return if ord.direction.eq_ignore_ascii_case("DESC") {
+                                return if ord.direction.eq_ignore_ascii_case(sort_direction::DESC) {
                                     cmp.reverse()
                                 } else {
                                     cmp
@@ -1029,14 +1064,18 @@ impl View {
                 let mut out = FastMap::default();
 
                 // 1. BUILD PHASE: Build Index for the RIGHT side
-                // Map: Hash of Join-Field -> List of (Key, Weight)
-                let mut right_index: FastMap<u64, Vec<(&SmolStr, &i64)>> = FastMap::default();
+                // Map: Hash of Join-Field -> List of (Key, Weight, FieldValue)
+                let mut right_index: FastMap<u64, Vec<(&SmolStr, &i64, &SpookyValue)>> =
+                    FastMap::default();
 
                 for (r_key, r_weight) in s_right.as_ref() {
                     if let Some(r_val) = self.get_row_value(r_key.as_str(), db) {
                         if let Some(r_field) = resolve_nested_value(Some(r_val), &on.right_field) {
                             let hash = hash_spooky_value(r_field);
-                            right_index.entry(hash).or_default().push((r_key, r_weight));
+                            right_index
+                                .entry(hash)
+                                .or_default()
+                                .push((r_key, r_weight, r_field));
                         }
                     }
                 }
@@ -1047,12 +1086,16 @@ impl View {
                         if let Some(l_field) = resolve_nested_value(Some(l_val), &on.left_field) {
                             let hash = hash_spooky_value(l_field);
 
-                            // Hash Lookup instead of Loop!
+                            // Hash Lookup + Verification
                             if let Some(matches) = right_index.get(&hash) {
-                                for (_r_key, r_weight) in matches {
-                                    // We have a match! (Should double check equality with compare_spooky_values for strictness)
-                                    let w = l_weight * *r_weight;
-                                    *out.entry(l_key.clone()).or_insert(0) += w;
+                                for (_r_key, r_weight, r_field) in matches {
+                                    // Verify actual equality!
+                                    if compare_spooky_values(Some(l_field), Some(*r_field))
+                                        == Ordering::Equal
+                                    {
+                                        let w = l_weight * *r_weight;
+                                        *out.entry(l_key.clone()).or_insert(0) += w;
+                                    }
                                 }
                             }
                         }
@@ -1063,17 +1106,60 @@ impl View {
         }
     }
 
+    /// Get row value from database by ZSet key
+    ///
+    /// OPTIMIZATION: Avoid allocation by trying raw ID first.
+    /// If your DB consistently uses one format, simplify this.
+    #[inline]
     fn get_row_value<'a>(&self, key: &str, db: &'a Database) -> Option<&'a SpookyValue> {
-        // Optimization: Avoid allocation for split if possible or use SmolStr if we change internal map keys
-        // For now, key is &str, db uses SmolStr keys.
-        // We assume valid format "table:id"
-        let (table_name, _id) = key.split_once(':')?;
-        db.tables.get(table_name)?.rows.get(key)
+        let (table_name, id) = parse_zset_key(key)?;
+        let table = db.tables.get(table_name)?;
+
+        // Fast path: Try raw ID (most common case)
+        if let Some(row) = table.rows.get(id) {
+            return Some(row);
+        }
+
+        // Slow path: Try with table prefix
+        // TODO: Normalize row key format at ingestion to eliminate this branch
+        // For now, use a static buffer pattern to reduce allocations
+
+        // Check if the key format matches "table:id" where id doesn't have prefix
+        // If so, the row might be stored with the full key
+        if !id.contains(':') {
+            // ID doesn't have prefix, try reconstructing
+            // This allocation is unavoidable without changing ingestion
+            let prefixed = format!("{}:{}", table_name, id);
+            return table.rows.get(prefixed.as_str());
+        }
+
+        None
     }
 
-    fn get_row_hash(&self, key: &str, db: &Database) -> Option<String> {
-        let (table_name, _id) = key.split_once(':')?;
-        db.tables.get(table_name)?.hashes.get(key).cloned()
+    /// Resolve predicate value, handling $param references to context
+    fn resolve_predicate_value(
+        value: &Value,
+        context: Option<&SpookyValue>,
+    ) -> Option<SpookyValue> {
+        if let Some(obj) = value.as_object() {
+            if let Some(param_path) = obj.get("$param") {
+                let ctx = context?;
+                let path_str = param_path.as_str().unwrap_or("");
+                let effective_path = if path_str.starts_with("parent.") {
+                    &path_str[7..] // Strip "parent." prefix
+                } else {
+                    path_str
+                };
+                let path = Path::new(effective_path);
+                resolve_nested_value(Some(ctx), &path)
+                    .cloned()
+                    .map(normalize_record_id)
+            } else {
+                Some(SpookyValue::from(value.clone()))
+            }
+        } else {
+            Some(SpookyValue::from(value.clone()))
+        }
     }
 
     fn check_predicate(
@@ -1084,34 +1170,6 @@ impl View {
         context: Option<&SpookyValue>,
     ) -> bool {
         // Helper to get actual SpookyValue for comparison from the Predicate (which stores Value)
-        let resolve_val = |_field: &Path, value: &Value| -> Option<SpookyValue> {
-            if let Some(obj) = value.as_object() {
-                if let Some(param_path) = obj.get("$param") {
-                    if let Some(ctx) = context {
-                        // $param is usually a path like "parent.author" or just "author"
-                        // Strip "parent." prefix since context IS the parent row
-                        let path_str = param_path.as_str().unwrap_or("");
-                        let effective_path = if path_str.starts_with("parent.") {
-                            &path_str[7..] // Strip "parent." (7 chars)
-                        } else {
-                            path_str
-                        };
-                        let path = Path::new(effective_path);
-                        // resolve nested param path from SpookyValue context!
-                        // IMPORTANT: Normalize RecordId-like objects to strings for proper comparison
-                        resolve_nested_value(Some(ctx), &path)
-                            .cloned()
-                            .map(normalize_record_id)
-                    } else {
-                        None
-                    }
-                } else {
-                    Some(SpookyValue::from(value.clone()))
-                }
-            } else {
-                Some(SpookyValue::from(value.clone()))
-            }
-        };
 
         match pred {
             Predicate::And { predicates } => predicates
@@ -1140,18 +1198,18 @@ impl View {
             | Predicate::Gte { field, value }
             | Predicate::Lt { field, value }
             | Predicate::Lte { field, value } => {
-                let target_val = resolve_val(field, value);
+                let target_val = Self::resolve_predicate_value(value, context);
                 if target_val.is_none() {
                     return false;
                 }
                 let target_val = target_val.unwrap();
 
-                let actual_val_opt = if field.0.len() == 1 && field.0[0] == "id" {
-                    Some(SpookyValue::Str(SmolStr::new(key)))
-                } else {
-                    self.get_row_value(key, db)
-                        .and_then(|r| resolve_nested_value(Some(r), field).cloned())
-                };
+                // FIX: Look up actual value from row even for "id", to ensure we match
+                // the canonical ID stored in the DB (which might be "table:id").
+                // The previous optimization incorrectly assumed stripped ID == Row ID.
+                let actual_val_opt = self
+                    .get_row_value(key, db)
+                    .and_then(|r| resolve_nested_value(Some(r), field).cloned());
 
                 if let Some(actual_val) = actual_val_opt {
                     let ord = compare_spooky_values(Some(&actual_val), Some(&target_val));
@@ -1169,5 +1227,120 @@ impl View {
                 }
             }
         }
+    }
+}
+
+//unity test in weight_correction_test.rs
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_first_run_emits_additions() {
+        // Setup: Create view with empty cache
+        let plan = QueryPlan {
+            id: "test".to_string(),
+            root: Operator::Scan {
+                table: "users".to_string(),
+            },
+        };
+        let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
+
+        // Setup: Create database with one record
+        let mut db = Database::new();
+        let table = db.ensure_table("users");
+        table.rows.insert(SmolStr::new("1"), SpookyValue::Null);
+        table.zset.insert(SmolStr::new("users:1"), 1);
+
+        // Act: Process empty batch (simulates first run on registration)
+        let result = view.process_batch(&BatchDeltas::new(), &db);
+
+        // Assert: Should return StreamingUpdate with Created event
+        assert!(result.is_some());
+        if let Some(ViewUpdate::Streaming(update)) = result {
+            assert_eq!(update.records.len(), 1);
+            if let Some(record) = update.records.first() {
+                use crate::engine::update::DeltaEvent;
+                assert!(matches!(record.event, DeltaEvent::Created));
+                // Verify: Record ID is the full ZSet Key (Global ID).
+                assert_eq!(record.id.as_str(), "users:1");
+            }
+        } else {
+            panic!("Expected Streaming update");
+        }
+    }
+
+    #[test]
+    fn test_view_serialization_roundtrip() {
+        use crate::engine::operators::Predicate;
+        use crate::engine::types::Path;
+
+        // Create a view with computed flags
+        let plan = QueryPlan {
+            id: "test".to_string(),
+            root: Operator::Filter {
+                input: Box::new(Operator::Scan {
+                    table: "users".to_string(),
+                }),
+                predicate: Predicate::Eq {
+                    field: Path::new("id"),
+                    value: serde_json::json!("user:1"),
+                },
+            },
+        };
+        let view = View::new(plan, None, Some(ViewResultFormat::Streaming));
+
+        // Verify flags are set
+        assert!(view.is_simple_filter);
+        assert!(!view.is_simple_scan);
+        assert_eq!(view.referenced_tables_cached, vec!["users"]);
+
+        // Serialize
+        let json = serde_json::to_string(&view).unwrap();
+
+        // Deserialize
+        let mut loaded: View = serde_json::from_str(&json).unwrap();
+
+        // Flags should be default (false/empty) before initialization because they are skipped
+        assert!(!loaded.is_simple_filter);
+        assert!(loaded.referenced_tables_cached.is_empty());
+
+        // Initialize
+        loaded.initialize_after_deserialize();
+
+        // Now flags should match original
+        assert!(loaded.is_simple_filter);
+        assert!(!loaded.is_simple_scan);
+        assert_eq!(loaded.referenced_tables_cached, vec!["users"]);
+    }
+    #[test]
+    fn test_fast_path_readd_stays_at_weight_one() {
+        // 1. Setup a simple view (Scan table "user")
+        let plan = QueryPlan {
+            id: "view_1".to_string(),
+            root: Operator::Scan {
+                table: "user".into(),
+            },
+        };
+
+        let mut view = View::new(plan, None, None);
+
+        // 2. Add a record (Fast Path)
+        let key = "user:123";
+        view.apply_single_create(&key.into());
+
+        assert!(view.cache.is_member(key));
+        assert_eq!(view.cache.get(key), Some(&1));
+
+        // 3. Add same record again (Fast Path Idempotency Check)
+        // AFTER FIX: This should keep weight at 1
+        view.apply_single_create(&key.into());
+
+        assert!(view.cache.is_member(key));
+        assert_eq!(
+            view.cache.get(key),
+            Some(&1),
+            "Weight should remain 1 after re-add"
+        );
     }
 }

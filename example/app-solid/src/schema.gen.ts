@@ -58,6 +58,8 @@ export const schema = {
       to: 'comment' as const,
       cardinality: 'many' as const
     },
+  ],
+  relationships: [
     {
       from: 'thread' as const,
       field: 'author' as const,
@@ -82,9 +84,21 @@ export const schema = {
       to: 'thread' as const,
       cardinality: 'one' as const
     },
+    {
+      from: 'user' as const,
+      field: 'threads' as const,
+      to: 'thread' as const,
+      cardinality: 'many' as const
+    },
+    {
+      from: 'user' as const,
+      field: 'comments' as const,
+      to: 'comment' as const,
+      cardinality: 'many' as const
+    },
   ],
   access: {
-    account: {"signIn":{"params":{"username":{"type":"string","optional":false},"password":{"type":"string","optional":false}}},"signup":{"params":{"username":{"type":"string","optional":false},"password":{"type":"string","optional":false}}}},
+    account: {"signIn":{"params":{"username":{"type":"string","optional":false},"password":{"type":"string","optional":false}}},"signup":{"params":{"password":{"type":"string","optional":false},"username":{"type":"string","optional":false}}}},
   }
 } as const;
 

@@ -117,19 +117,30 @@ fn hash_value_recursive(v: &SpookyValue, hasher: &mut FxHasher) {
 }
 
 /// Extract a column of f64 values from ZSet for SIMD processing
+/// Extract a column of f64 values from ZSet for SIMD processing
+/// OPTIMIZATION: Returns references to keys to avoid cloning
 #[inline(always)]
-pub fn extract_number_column(
-    zset: &ZSet,
+pub fn extract_number_column<'a>(
+    zset: &'a ZSet,
     path: &Path,
     db: &Database,
-) -> (Vec<SmolStr>, Vec<i64>, Vec<f64>) {
+) -> (Vec<&'a SmolStr>, Vec<i64>, Vec<f64>) {
+    use crate::engine::types::parse_zset_key;
+
     let mut ids = Vec::with_capacity(zset.len());
     let mut weights = Vec::with_capacity(zset.len());
     let mut numbers = Vec::with_capacity(zset.len());
 
     for (key, weight) in zset {
-        let val_opt = if let Some((table, _)) = key.split_once(':') {
-            db.tables.get(table).and_then(|t| t.rows.get(key))
+        let val_opt = if let Some((table_name, id)) = parse_zset_key(key) {
+            if let Some(t) = db.tables.get(table_name) {
+                 // Try raw ID first, then prefixed ID
+                 t.rows.get(id).or_else(|| {
+                     t.rows.get(format!("{}:{}", table_name, id).as_str())
+                 })
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -144,7 +155,7 @@ pub fn extract_number_column(
             f64::NAN
         };
 
-        ids.push(key.clone());
+        ids.push(key);
         weights.push(*weight);
         numbers.push(num_val);
     }
@@ -305,8 +316,60 @@ impl<'a> NumericFilterConfig<'a> {
 
 /// Apply SIMD-optimized numeric filter to a ZSet.
 /// Uses extract_number_column and filter_f64_batch for vectorized filtering.
+/// Lazy numeric filter for small datasets to avoid allocation overhead of column extraction
+fn filter_numeric_lazy(upstream: &ZSet, config: &NumericFilterConfig, db: &Database) -> ZSet {
+    use crate::engine::types::parse_zset_key;
+    
+    let mut out = FastMap::default();
+    
+    for (key, weight) in upstream {
+        // Parse key
+        let (table_name, id) = match parse_zset_key(key) {
+             Some(pair) => pair,
+             None => continue,
+        };
+        
+        let table = match db.tables.get(table_name) {
+             Some(t) => t,
+             None => continue,
+        };
+        
+        // Get row (using optimized lookup pattern)
+        let row_opt = table.rows.get(id).or_else(|| {
+              table.rows.get(format!("{}:{}", table_name, id).as_str()) 
+        });
+        
+        if let Some(row) = row_opt {
+             if let Some(SpookyValue::Number(n)) = resolve_nested_value(Some(row), config.path) {
+                 let pass = match config.op {
+                    NumericOp::Gt => *n > config.target,
+                    NumericOp::Gte => *n >= config.target,
+                    NumericOp::Lt => *n < config.target,
+                    NumericOp::Lte => *n <= config.target,
+                    NumericOp::Eq => (*n - config.target).abs() < f64::EPSILON,
+                    NumericOp::Neq => (*n - config.target).abs() > f64::EPSILON,
+                 };
+                 
+                 if pass {
+                     out.insert(key.clone(), *weight);
+                 }
+             }
+        }
+    }
+    
+    out
+}
+
+/// Apply SIMD-optimized numeric filter to a ZSet.
+/// Uses extract_number_column and filter_f64_batch for vectorized filtering.
+/// Automatically switches to lazy evaluation for small datasets.
 #[inline]
 pub fn apply_numeric_filter(upstream: &ZSet, config: &NumericFilterConfig, db: &Database) -> ZSet {
+    // Optimization: Lazy filter for small N to avoid column allocation overhead
+    if upstream.len() < 64 {
+        return filter_numeric_lazy(upstream, config, db);
+    }
+
     let (keys, weights, numbers) = extract_number_column(upstream, config.path, db);
     let passing_indices = filter_f64_batch(&numbers, config.target, config.op);
 

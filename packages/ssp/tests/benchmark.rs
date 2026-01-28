@@ -1,9 +1,12 @@
+#![allow(unused)]
 mod common;
 use common::*;
 use rayon::prelude::*;
 use serde_json::json;
 use ssp::engine::update::ViewResultFormat;
-use ssp::engine::view::{JoinCondition, Operator, Path, Predicate, QueryPlan};
+use ssp::engine::circuit::dto::{BatchEntry, LoadRecord};
+use ssp::engine::types::Operation;
+use ssp::{JoinCondition, Operator, Path, Predicate, QueryPlan};
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
 use std::time::{Duration, Instant};
@@ -97,6 +100,63 @@ fn benchmark_streaming_quick() {
     }
 }
 
+/// Benchmark to demonstrate the massive performance difference for single updates
+#[test]
+#[ignore] // Run with: cargo test benchmark_streaming_vs_flat_single_update --release -- --ignored --nocapture
+fn benchmark_streaming_vs_flat_single_update() {
+    println!("╔════════════════════════════════════════════════╗");
+    println!("║  Single Update Latency: Streaming vs Flat      ║");
+    println!("╚════════════════════════════════════════════════╝\n");
+
+    let record_count = 10_000;
+    println!("Preparing {} records...", record_count);
+
+    // Prepare large dataset
+    let mut circuit = setup();
+    let records: Vec<_> = (0..record_count)
+        .map(|i| LoadRecord::new("users", format!("user:{}", i), json!({"name": "Alice"}).into()))
+        .collect();
+    circuit.init_load(records);
+
+    // Define simple view
+    let plan = QueryPlan {
+        id: "view".to_string(),
+        root: Operator::Scan { table: "users".to_string() }
+    };
+
+    for format in [ViewResultFormat::Flat, ViewResultFormat::Streaming] {
+        let format_name = format!("{:?}", format);
+        // Clean circuit for fair comparison
+        let mut circuit_run = circuit.clone(); 
+        
+        // Register view (load cache)
+        circuit_run.register_view(plan.clone(), None, Some(format));
+
+        let start = Instant::now();
+        // Create ONE record (force addition)
+        let updates = circuit_run.ingest_batch(vec![
+            BatchEntry::create("users", "user:10001", json!({"name": "New User"}).into())
+        ]);
+        let elapsed = start.elapsed();
+
+        assert_eq!(updates.len(), 1);
+        
+        // Check payload size
+        let payload_size = match &updates[0] {
+            ssp::engine::update::ViewUpdate::Flat(f) => f.result_data.len(),
+            ssp::engine::update::ViewUpdate::Streaming(s) => s.records.len(),
+            _ => 0,
+        };
+
+        println!(
+            "{:10} | Latency: {:8.2} µs | Payload Size: {:5} records",
+            format_name,
+            elapsed.as_micros() as f64,
+            payload_size
+        );
+    }
+}
+
 /// Original comprehensive benchmark (Flat mode, all view counts)
 #[test]
 #[ignore] // Run with: cargo test benchmark_latency_mixed_stream --release -- --ignored --nocapture
@@ -135,15 +195,14 @@ fn benchmark_latency_mixed_stream() {
         let mut global_record_count = 0;
 
         for chunk in prepared_stream.chunks(BATCH_SIZE) {
-            let batch_data: Vec<(String, String, String, serde_json::Value, String)> = chunk
+            let batch_data: Vec<BatchEntry> = chunk
                 .iter()
                 .map(|item| {
-                    (
+                    BatchEntry::new(
                         item.table.clone(),
-                        item.op.clone(),
+                        Operation::from_str(&item.op).unwrap(),
                         item.id.clone(),
-                        item.record.clone(),
-                        item.hash.clone(),
+                        item.record.clone().into(),
                     )
                 })
                 .collect();
@@ -151,7 +210,7 @@ fn benchmark_latency_mixed_stream() {
             let batch_len = batch_data.len();
 
             let start = Instant::now();
-            circuit.ingest_batch(batch_data, true);
+            circuit.ingest_batch(batch_data);
             let duration = start.elapsed();
 
             total_ingest_duration += duration;
@@ -205,19 +264,18 @@ fn run_benchmark(view_count: usize, format: ViewResultFormat) -> BenchmarkResult
     // Ingest and measure
     let start = Instant::now();
     for chunk in prepared_stream.chunks(BATCH_SIZE) {
-        let batch_data: Vec<(String, String, String, serde_json::Value, String)> = chunk
+        let batch_data: Vec<BatchEntry> = chunk
             .iter()
             .map(|item| {
-                (
+                BatchEntry::new(
                     item.table.clone(),
-                    item.op.clone(),
+                    Operation::from_str(&item.op).unwrap(),
                     item.id.clone(),
-                    item.record.clone(),
-                    item.hash.clone(),
+                    item.record.clone().into(),
                 )
             })
             .collect();
-        circuit.ingest_batch(batch_data, true);
+        circuit.ingest_batch(batch_data);
     }
     let total_duration = start.elapsed();
 
