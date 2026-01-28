@@ -1,0 +1,112 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: Schema
+---
+
+import CodeBlock from '../../components/ui/CodeBlock.astro';
+import Warning from '../../components/ui/Warning.astro';
+
+In Spooky, you define your data model using **SurrealQL** schema files. This approach serves as the single source of truth for your application, from which TypeScript interfaces are automatically generated.
+
+## Defining Your Schema
+
+You start by creating `.surql` files in your `schema` directory. Spooky advocates for a "Schema First" approach, ensuring your data structure is explicit, typesafe, and secure.
+
+### Tables and Fields
+
+Here is a simple example of how to define a `user` table. Note the use of `DEFINE TABLE` and `DEFINE FIELD` to enforce data integrity.
+
+<CodeBlock
+  code={`-- Define the user table with full schema enforcement
+DEFINE TABLE user SCHEMAFULL
+  PERMISSIONS
+    FOR select, create WHERE true
+    FOR update, delete WHERE id = $auth.id; -- Only the user can modify their own record
+
+-- Define fields with strict types and assertions
+DEFINE FIELD username ON TABLE user TYPE string
+ASSERT $value != NONE AND string::len($value) > 3;
+
+DEFINE INDEX unique_username ON TABLE user FIELDS username UNIQUE;
+
+DEFINE FIELD created_at ON TABLE user TYPE datetime
+VALUE time::now();`}
+lang="sql"
+/>
+
+## Relationships
+
+SurrealDB shines with its graph capabilities. Relationships are first-class citizens and can be modeled in several ways depending on your needs.
+
+### One-to-One (1:1)
+
+For a one-to-one relationship, such as a User having a single Profile, you can simply use a `record<table_name>` type.
+
+<CodeBlock
+  code={`DEFINE TABLE user SCHEMAFULL;
+DEFINE TABLE profile SCHEMAFULL;
+
+-- The user table has a link to a specific profile
+DEFINE FIELD profile ON TABLE user TYPE record<profile>;
+
+-- The profile can also link back to the user if needed
+DEFINE FIELD user ON TABLE profile TYPE record<user>;`}
+lang="sql"
+/>
+
+### One-to-Many (1:N)
+
+Models like a Thread having many Comments are classic one-to-many relationships. You define this by putting a `record<parent>` field on the child table.
+
+<CodeBlock
+  code={`DEFINE TABLE thread SCHEMAFULL;
+DEFINE TABLE comment SCHEMAFULL;
+
+-- Child (Comment) stores a reference to Parent (Thread)
+DEFINE FIELD thread ON TABLE comment TYPE record<thread>;
+
+-- You can also optionally store an array of references on the parent (not strictly required for querying)
+DEFINE FIELD comments ON TABLE thread TYPE array<record<comment>>;`}
+lang="sql"
+/>
+
+### Many-to-Many (N:M)
+
+For complex relationships, like Users following other Users (graph), or Posts having Tags, use a **Relation Table**. This is a special table that stores the edges of the graph.
+
+<CodeBlock
+  code={`-- 1. Define the component tables
+DEFINE TABLE user SCHEMAFULL;
+DEFINE TABLE post SCHEMAFULL;
+
+-- 2. Define the edge (relation) table
+-- It connects a 'user' (from) to a 'post' (to) via a 'liked' edge
+DEFINE TABLE liked SCHEMAFULL TYPE RELATION
+FROM user TO post;
+
+-- 3. (Optional) Define properties on the edge
+DEFINE FIELD created_at ON TABLE liked TYPE datetime VALUE time::now();
+
+-- 4. Create the relationship using standard SurrealQL or Events
+-- RELATE user:john->liked->post:surrealdb_is_cool;`}
+lang="sql"
+/>
+
+## Generated Types
+
+Once your schema is defined, running `syncgen dev` will automatically generate TypeScript definitions for you. You don't need to manually write interfaces.
+
+For example, the `user` table above might generate:
+
+<CodeBlock
+  code={`export type User = {
+    id: RecordId<"user">;
+    username: string;
+    created_at: Date;
+    // Relationships are typed as RecordIds
+    profile?: RecordId<"profile">;
+};`}
+  lang="typescript"
+/>
+
+These types are then available directly in your client application, ensuring that your frontend code is always in sync with your database schema.

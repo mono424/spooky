@@ -8,6 +8,21 @@ interface Props {
 }
 
 const { code, lang = 'bash', fileName } = Astro.props;
+
+const languageMap: Record<string, string> = {
+  typescript: 'TypeScript',
+  ts: 'TypeScript',
+  javascript: 'JavaScript',
+  js: 'JavaScript',
+  sql: 'SurrealQL',
+  bash: 'Bash',
+  sh: 'Shell',
+  json: 'JSON',
+  html: 'HTML',
+  css: 'CSS',
+};
+
+const displayName = languageMap[lang.toLowerCase()] || lang;
 ---
 
 <div
@@ -30,6 +45,13 @@ const { code, lang = 'bash', fileName } = Astro.props;
   }
 
   <div class="relative">
+    {/* Language Label */}
+    <span
+      class="absolute top-3 right-12 px-2 py-1 text-[10px] font-mono font-medium text-text-muted uppercase tracking-wider opacity-0 group-hover:opacity-100 transition-opacity duration-200 select-none"
+    >
+      {displayName}
+    </span>
+
     {/* Copy Button */}
     <button
       class="copy-btn absolute top-3 right-3 p-2 rounded-md bg-surface/50 border border-border/50 text-text-muted opacity-0 group-hover:opacity-100 transition-all duration-200 hover:bg-surface hover:text-text-main focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-primary/50 backdrop-blur-sm z-10"
@@ -76,6 +98,8 @@ const { code, lang = 'bash', fileName } = Astro.props;
       const code = btn.getAttribute('data-code');
       const copyIcon = btn.querySelector('.copy-icon');
       const checkIcon = btn.querySelector('.check-icon');
+
+      if (!code || !copyIcon || !checkIcon) return;
 
       try {
         await navigator.clipboard.writeText(code);

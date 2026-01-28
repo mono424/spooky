@@ -1,0 +1,49 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: Authentication
+---
+
+import CodeBlock from '../../components/ui/CodeBlock.astro';
+import Warning from '../../components/ui/Warning.astro';
+import Note from '../../components/ui/Note.astro';
+import { authSchemaCode, authSignInCode, authSignUpCode, authStateCode } from './snippets';
+
+Authentication in Spooky is built directly into the SurrealQL schema, making it robust, typesafe, and dynamic. Because access control is defined at the database layer, your rules are consistently enforced regardless of how the data is accessed.
+
+## Schema Configuration
+
+You define authentication using `DEFINE ACCESS`. This allows you to specify exactly how users sign up and sign in, and what permissions they have.
+
+<CodeBlock code={authSchemaCode} lang="sql" />
+
+## Client-Side Authentication
+
+Spooky provides a strongly-typed authentication service on the client. It integrates seamlessly with the schema definitions.
+
+### Sign In
+
+<CodeBlock code={authSignInCode} lang="typescript" />
+
+### Sign Up
+
+<CodeBlock code={authSignUpCode} lang="typescript" />
+
+### Reacting to Auth State
+
+You can subscribe to authentication state changes to update your UI dynamically.
+
+<CodeBlock code={authStateCode} lang="typescript" />
+
+## Third-Party Providers
+
+### Clerk
+
+<Note>Integration coming soon.</Note>
+
+### Firebase
+
+<Note>Integration coming soon.</Note>
+
+### Auth0
+
+<Note>Integration coming soon.</Note>

@@ -4,6 +4,10 @@ export const docsNav = [
     links: [
       { text: 'Introduction', href: '/spooky/docs' },
       { text: 'Installation', href: '/spooky/docs/install' },
+      { text: 'Schema', href: '/spooky/docs/schema' },
+      { text: 'Authentication', href: '/spooky/docs/authentication' },
+      { text: 'Query Data', href: '/spooky/docs/query-data' },
+      { text: 'Mutate Data', href: '/spooky/docs/mutate-data' },
     ],
   },
   {

@@ -1,4 +1,14 @@
 ---
+interface Heading {
+  depth: number;
+  slug: string;
+  text: string;
+}
+
+interface Props {
+  headings?: Heading[];
+}
+
 const { headings = [] } = Astro.props;
 ---
 
@@ -10,7 +20,14 @@ const { headings = [] } = Astro.props;
         <li>
           <a
             href={`#${h.slug}`}
-            class="block pl-4 text-text-muted hover:text-primary transition-colors line-clamp-1 border-l-2 border-transparent -ml-[1px]"
+            class:list={[
+              'block text-text-muted hover:text-primary transition-colors line-clamp-1 border-l-2 border-transparent -ml-[1px]',
+              {
+                'pl-4': h.depth === 2,
+                'pl-6': h.depth === 3,
+                'pl-8': h.depth > 3,
+              },
+            ]}
             data-heading-link={h.slug}
           >
             {h.text}
