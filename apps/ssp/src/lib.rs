@@ -15,9 +15,7 @@ use tokio::sync::RwLock;
 
 use ssp::{
     engine::circuit::{Circuit, dto::BatchEntry},
-    engine::eval::normalize_record_id,
     engine::types::Operation,
-    engine::types::SpookyValue,
     engine::update::{DeltaEvent, StreamingUpdate, ViewResultFormat, ViewUpdate},
 };
 use surrealdb::engine::remote::ws::{Client, Ws};
@@ -364,7 +362,8 @@ async fn ingest_handler(
         span.record("edges_updated", edge_count);
 
         // Update edges in database
-        update_all_edges(&state.db, &streaming_updates, &state.metrics).await;
+        let circuit = state.processor.read().await;
+        update_all_edges(&state.db, &streaming_updates, &state.metrics, &circuit).await;
     }
 
     // Record duration
@@ -519,12 +518,9 @@ async fn register_view_handler(
 
     // Create initial edges
     if let Some(ViewUpdate::Streaming(s)) = &update {
-        debug!(
-            "Creating {} initial edges for view {}",
-            s.records.len(),
-            incantation_id
-        );
-        update_incantation_edges(&state.db, s, &state.metrics).await;
+        debug!(incantation_id);
+        let circuit = state.processor.read().await;
+        update_incantation_edges(&state.db, s, &state.metrics, &circuit).await;
     }
 
     StatusCode::OK.into_response()
@@ -668,6 +664,7 @@ pub async fn update_all_edges<C: Connection>(
     db: &Surreal<C>,
     updates: &[&StreamingUpdate],
     metrics: &Metrics,
+    circuit: &Circuit,
 ) {
     if updates.is_empty() {
         return;
@@ -713,19 +710,40 @@ pub async fn update_all_edges<C: Connection>(
                 continue;
             }
 
+            let record_id_parsed = parse_record_id(&record.id);
+            if record_id_parsed.is_none() {
+                continue;
+            }
+            let table_name = &record_id_parsed.unwrap().table;
+
+            let record_verion = circuit
+                .db
+                .get_table(table_name)
+                .and_then(|t| t.get_record_version(&record.id));
+            println!("Record version: {:?}", record_verion.unwrap());
+
+            tracing::debug!(
+                target: "ssp::edges",
+                record_version = record_verion,
+            );
+
             let stmt = match record.event {
                 DeltaEvent::Created => {
                     created_count += 1;
                     format!(
-                        "RELATE ${1}->_spooky_list_ref->{0} SET version = 1, clientId = (SELECT VALUE clientId FROM ${1} LIMIT 1)[0]",
-                        record.id, binding_name
+                        "RELATE ${1}->_spooky_list_ref->{0} SET version = {2}, clientId = (SELECT VALUE clientId FROM ${1} LIMIT 1)[0]",
+                        record.id,
+                        binding_name,
+                        record_verion.unwrap_or(1)
                     )
                 }
                 DeltaEvent::Updated => {
                     updated_count += 1;
                     format!(
-                        "UPDATE _spooky_list_ref SET version = 2 WHERE in = ${0} AND out = {1}",
-                        binding_name, record.id
+                        "UPDATE _spooky_list_ref SET version = {2} WHERE in = ${0} AND out = {1}",
+                        binding_name,
+                        record.id,
+                        record_verion.unwrap_or(1)
                     )
                 }
                 DeltaEvent::Deleted => {
@@ -817,6 +835,7 @@ async fn update_incantation_edges<C: Connection>(
     db: &Surreal<C>,
     update: &StreamingUpdate,
     metrics: &Metrics,
+    circuit: &Circuit,
 ) {
-    update_all_edges(db, &[update], metrics).await;
+    update_all_edges(db, &[update], metrics, circuit).await;
 }

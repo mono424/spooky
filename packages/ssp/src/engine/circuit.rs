@@ -116,6 +116,13 @@ impl Table {
         }
     }
 
+    //quick fix for version look up
+    pub fn get_record_version(&self, id: &str) -> Option<i64> {
+        let sv = self.rows.get(id)?;
+        let version = sv.get("_spooky_version")?.as_f64()?;
+        Some(version as i64)
+    }
+
     pub fn reserve(&mut self, additional: usize) {
         self.rows.reserve(additional);
         self.zset.reserve(additional);
@@ -183,6 +190,27 @@ mod tests {
 
         assert_eq!(zset_key, SmolStr::from("user:23lk4j233jd"));
         assert_eq!(weight, 1 as i64);
+    }
+
+    #[test]
+    fn get_version() {
+        let record_user1 = LoadRecord::new(
+            "user",
+            "user:23lk4j233jd",
+            json!({ "status": "spooky", "level": 10, "_spooky_version": 3 }).into(),
+        );
+        let mut tb_user = Table::new(SmolStr::from("user"));
+        let (zset_key, weight) = tb_user.apply_mutation(
+            Operation::Create,
+            SmolStr::from("23lk4j233jd"),
+            record_user1.data,
+        );
+
+        let version = tb_user.get_record_version("23lk4j233jd");
+
+        assert_eq!(zset_key, SmolStr::from("user:23lk4j233jd"));
+        assert_eq!(weight, 1 as i64);
+        assert_eq!(version, Some(3));
     }
 }
 
@@ -544,7 +572,7 @@ impl Circuit {
         }
 
         let referenced_tables = plan.root.referenced_tables();
-        
+
         #[cfg(debug_assertions)]
         {
             let unique: std::collections::HashSet<_> = referenced_tables.iter().collect();
@@ -620,7 +648,7 @@ impl Circuit {
                     .push(i);
             }
         }
-        
+
         #[cfg(debug_assertions)]
         {
             for (table, indices) in &self.dependency_list {
