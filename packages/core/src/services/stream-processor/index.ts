@@ -213,7 +213,7 @@ export class StreamProcessorService {
    * @param isOptimistic true = local mutation (increment versions), false = remote sync (keep versions)
    */
   ingestBatch(
-    batch: Array<{ table: string; op: string; id: string; record: any; version?: number }>,
+    batch: Array<{ table: string; op: string; record: any; version?: number }>,
     isOptimistic: boolean = true
   ): WasmStreamUpdate[] {
     if (batch.length === 0) return [];
@@ -233,7 +233,7 @@ export class StreamProcessorService {
       const normalizedBatch = batch.map((item) => ({
         table: item.table,
         op: item.op,
-        id: item.id,
+        id: item.record.id,
         record: this.normalizeValue(item.record),
         version: item.version,
       }));

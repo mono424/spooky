@@ -50,24 +50,19 @@ export class CacheModule implements StreamUpdateReceiver {
    * Used by mutations (create/update)
    */
   async save(cacheRecord: CacheRecord, isOptimistic: boolean = true): Promise<void> {
-    const { table, id, record, op } = cacheRecord;
-    this.logger.debug({ table, id, op, isOptimistic }, 'Saving record');
+    const { table, record, op } = cacheRecord;
+    this.logger.debug({ table, op, isOptimistic }, 'Saving record');
 
     try {
-      // 1. Write to local database
-      const recordId =
-        typeof id === 'string' && id.includes(':') ? parseRecordIdString(id) : (id as any); // Type assertion for flexibility
-      await this.local
-        .getClient()
-        .upsert(recordId as any)
-        .content(record);
+      const { id, ...content } = record;
+      await this.local.getClient().upsert(parseRecordIdString(id)).content(content);
 
       // 2. Ingest into DBSP
       this.streamProcessor.ingest(table, op, id, record, isOptimistic);
 
       this.logger.debug({ table, id, op }, 'Record saved successfully');
     } catch (err) {
-      this.logger.error({ err, table, id, op }, 'Failed to save record');
+      this.logger.error({ err, table, record }, 'Failed to save record');
       throw err;
     }
   }
@@ -86,14 +81,8 @@ export class CacheModule implements StreamUpdateReceiver {
       // 1. Write all records to local DB in parallel
       await Promise.all(
         records.map((r) => {
-          const recordId =
-            typeof r.id === 'string' && r.id.includes(':')
-              ? parseRecordIdString(r.id)
-              : (r.id as any);
-          return this.local
-            .getClient()
-            .upsert(recordId as any)
-            .content(r.record);
+          const { id, ...content } = r.record;
+          return this.local.getClient().upsert(parseRecordIdString(id)).content(content);
         })
       );
 

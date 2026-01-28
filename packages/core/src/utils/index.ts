@@ -122,6 +122,19 @@ export function encodeToSpooky<
   return decoded;
 }
 
+export function encodeToSpookyContent<
+  S extends SchemaStructure,
+  T extends TableNames<S>,
+  R extends Partial<TableModel<GetTable<S, T>>>,
+>(schema: S, tableName: T, record: R): Omit<R, 'id'> {
+  const encoded = encodeToSpooky(schema, tableName, record);
+  if (encoded.id) {
+    delete encoded.id;
+  }
+  console.log('xxxxxxx', encoded);
+  return encoded;
+}
+
 // ==================== TIME/DURATION UTILITIES ====================
 
 /**

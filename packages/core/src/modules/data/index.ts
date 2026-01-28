@@ -1,7 +1,7 @@
 import { RecordId, Duration } from 'surrealdb';
 import { SchemaStructure, TableNames } from '@spooky/query-builder';
 import { LocalDatabaseService } from '../../services/database/index.js';
-import { CacheModule } from '../cache/index.js';
+import { CacheModule, RecordWithId } from '../cache/index.js';
 import { Logger } from '../../services/logger/index.js';
 import { StreamUpdate } from '../../services/stream-processor/index.js';
 import {
@@ -17,6 +17,7 @@ import {
 import {
   parseRecordIdString,
   encodeToSpooky,
+  encodeToSpookyContent,
   extractIdPart,
   encodeRecordId,
   parseDuration,
@@ -227,7 +228,7 @@ export class DataModule<S extends SchemaStructure> {
     const isLocalOnly = options?.localOnly ?? false;
     const rid = parseRecordIdString(id);
     const tableName = rid.table.toString();
-    const encodedData = encodeToSpooky(this.schema, tableName, data as any);
+    const encodedData = encodeToSpookyContent(this.schema, tableName, data as any);
 
     const mutationId = isLocalOnly
       ? new RecordId('_spooky_pending_mutations', 'local_only')
@@ -281,13 +282,16 @@ export class DataModule<S extends SchemaStructure> {
       }
     }
 
+    if (!target.id) {
+      throw Error(`Failed to gather record ID: ${id}`);
+    }
+
     // Save to cache (which handles DBSP ingestion)
     await this.cache.save(
       {
         table: tableName,
         op: 'CREATE',
-        id: id,
-        record: target,
+        record: target as RecordWithId,
       },
       true
     );
@@ -322,7 +326,7 @@ export class DataModule<S extends SchemaStructure> {
   ): Promise<T> {
     const isLocalOnly = options?.localOnly ?? false;
     const rid = id.includes(':') ? parseRecordIdString(id) : new RecordId(table, id);
-    const encodedData = encodeToSpooky(this.schema, table as any, data as any);
+    const encodedData = encodeToSpookyContent(this.schema, table as any, data as any);
 
     const mutationId = isLocalOnly
       ? new RecordId('_spooky_pending_mutations', 'local_only')
@@ -372,13 +376,16 @@ export class DataModule<S extends SchemaStructure> {
       }
     }
 
+    if (!target.id) {
+      throw Error(`Failed to gather record ID: ${id}`);
+    }
+
     // Save to cache
     await this.cache.save(
       {
         table: table,
         op: 'UPDATE',
-        id: encodeRecordId(rid),
-        record: target,
+        record: target as RecordWithId,
       },
       true
     );
