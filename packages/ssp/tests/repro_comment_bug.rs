@@ -57,7 +57,6 @@ fn test_comment_creation_updates_thread_view() {
         "CREATE",
         &comment_id,
         comment_record,
-        true,
     );
 
     println!("Updates received: {:?}", updates);

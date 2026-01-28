@@ -3,7 +3,7 @@ mod common;
 
 use common::*;
 use serde_json::json;
-use ssp::engine::view::{JoinCondition, Operator, Path, Predicate, QueryPlan};
+use ssp::{Circuit, JoinCondition, Operator, Path, Predicate, QueryPlan};
 
 #[test]
 fn test_complex_incantation_flow() {
@@ -78,14 +78,17 @@ fn test_complex_incantation_flow() {
     }
 
     // 4. Verify View State Helper
-    let check_view = |circuit: &ssp::Circuit, expect_present: bool| {
+    let check_view = |circuit: &Circuit, expect_present: bool| {
         let view = circuit
             .views
             .iter()
             .find(|v| v.plan.id == "magic_threads_by_alice")
             .expect("View not found");
-        let present = view.cache.contains_key(thread_1.as_str());
-        assert_eq!(present, expect_present, "Thread 1 presence mismatch");
+        // circuit stores keys as "table:id" (e.g. "thread:123").
+        // ZSet key IS the global ID.
+        let storage_key = thread_1.clone();
+        let present = view.cache.contains_key(storage_key.as_str());
+        assert_eq!(present, expect_present, "Thread 1 presence mismatch in cache");
     };
 
     check_view(&circuit, false);
@@ -109,7 +112,7 @@ fn test_complex_incantation_flow() {
         "DELETE",
         &magic_comment_id,
         json!({}),
-        true,
+
     );
     check_view(&circuit, true);
 
@@ -120,7 +123,7 @@ fn test_complex_incantation_flow() {
         "DELETE",
         &magic_comment_2,
         json!({}),
-        true,
+
     );
     check_view(&circuit, false);
 
@@ -129,6 +132,6 @@ fn test_complex_incantation_flow() {
     let _magic_comment_3 = create_comment(&mut circuit, "Magic", &thread_1, &author_alice);
     check_view(&circuit, true);
 
-    ingest(&mut circuit, "author", "DELETE", &author_alice, json!({}), true);
+    ingest(&mut circuit, "author", "DELETE", &author_alice, json!({}));
     check_view(&circuit, false);
 }

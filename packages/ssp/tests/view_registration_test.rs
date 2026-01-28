@@ -3,7 +3,7 @@ mod common;
 
 use common::*;
 use serde_json::json;
-use ssp::engine::view::{Operator, QueryPlan};
+use ssp::{Operator, QueryPlan};
 
 /// Test that registering a view AFTER records are ingested correctly finds existing records
 #[test]
@@ -27,7 +27,6 @@ fn test_view_registration_after_ingestion() {
         "CREATE",
         &user_id,
         user_record.clone(),
-        true,
     );
 
     // 2. Verify the record is in the database
@@ -37,7 +36,9 @@ fn test_view_registration_after_ingestion() {
     );
     let user_table = &circuit.db.tables["user"];
     assert!(
-        user_table.zset.contains_key(user_id.as_str()),
+        user_table
+            .zset
+            .contains_key(user_id.as_str()),
         "User should be in zset"
     );
     assert!(
@@ -71,10 +72,10 @@ fn test_view_registration_after_ingestion() {
 
     assert_eq!(update.result_data().len(), 1, "Should find 1 user");
     assert_eq!(
-        update.result_data()[0].0, user_id,
+        update.result_data()[0], user_id,
         "Should find the correct user"
     );
-    assert!(update.result_data()[0].1 > 0, "Version should be positive");
+    // assert!(update.result_data()[0].1 > 0, "Version should be positive"); // Version not in result data anymore
 
     println!("[TEST] ✓ View correctly found pre-existing record!");
 }
@@ -106,7 +107,6 @@ fn test_view_registration_after_ingestion_with_filter() {
         "CREATE",
         &user1_id,
         user1_record.clone(),
-        true,
     );
     ingest(
         &mut circuit,
@@ -114,11 +114,10 @@ fn test_view_registration_after_ingestion_with_filter() {
         "CREATE",
         &user2_id,
         user2_record.clone(),
-        true,
     );
 
     // 2. Register a view that filters for active users only
-    use ssp::engine::view::{Path, Predicate};
+    use ssp::{Path, Predicate};
 
     let plan = QueryPlan {
         id: "active_users".to_string(),
@@ -150,7 +149,7 @@ fn test_view_registration_after_ingestion_with_filter() {
 
     assert_eq!(update.result_data().len(), 1, "Should find 1 active user");
     assert_eq!(
-        update.result_data()[0].0, user1_id,
+        update.result_data()[0], user1_id,
         "Should find alice (active user)"
     );
 

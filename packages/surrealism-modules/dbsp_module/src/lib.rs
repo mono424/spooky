@@ -5,7 +5,15 @@ use surrealism::surrealism;
 // 1. Declare Modules
 mod persistence;
 
-use spooky_stream_processor::{Circuit, MaterializedViewUpdate};
+use spooky_stream_processor::{
+    engine::{
+        circuit::{dto::BatchEntry, Circuit},
+        types::Operation,
+    },
+    MaterializedViewUpdate,
+};
+use smol_str::SmolStr;
+
 
 // 2. Global State Wrapper
 lazy_static::lazy_static! {
@@ -35,13 +43,16 @@ fn ingest(
 ) -> Result<Value, &'static str> {
     // A. Prepare (Normalize & Hash) using centralized logic
     // Use ssp alias correctly
-    let (clean_record, hash) = spooky_stream_processor::service::ingest::prepare(record);
+    let (clean_record, _hash) = spooky_stream_processor::service::ingest::prepare(record);
 
     // B. Run Engine
     let _ = with_circuit(|circuit| {
         // Pass borrowed strings and add is_optimistic=true
-        let updates =
-            circuit.ingest_record(&table, &operation, &id, clean_record.into(), &hash, true);
+        // Parse operation
+        let op = Operation::from_str(&operation).unwrap_or(Operation::Create); // TODO: handle error?
+
+        let entry = BatchEntry::new(&table, op, &id, clean_record.into());
+        let updates = circuit.ingest_single(entry);
 
         // C. Apply Updates Directly (Side Effects)
         for update in updates {
@@ -85,7 +96,7 @@ fn register_view(config: Value) -> Result<Value, &'static str> {
             "Invalid Configuration"
         })?;
 
-    let result = with_circuit(|circuit| {
+    let _result = with_circuit(|circuit| {
         let plan = data.plan;
         // Pass None for format (defaults to Flat)
         let initial_res = circuit.register_view(plan.clone(), data.safe_params, None);
@@ -97,7 +108,7 @@ fn register_view(config: Value) -> Result<Value, &'static str> {
 
         // Helper to extract data from ViewUpdate
         let extract =
-            |u: spooky_stream_processor::ViewUpdate| -> (String, String, Vec<(String, u64)>) {
+            |u: spooky_stream_processor::ViewUpdate| -> (String, String, Vec<SmolStr>) {
                 match u {
                     spooky_stream_processor::ViewUpdate::Flat(f)
                     | spooky_stream_processor::ViewUpdate::Tree(f) => {
@@ -107,7 +118,7 @@ fn register_view(config: Value) -> Result<Value, &'static str> {
                 }
             };
 
-        let (query_id, hash, result_data) = if let Some(u) = initial_res {
+        let (_query_id, hash, result_data) = if let Some(u) = initial_res {
             extract(u)
         } else {
             let def = spooky_stream_processor::service::view::default_result(&plan.id);

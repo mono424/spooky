@@ -4,7 +4,7 @@ mod common;
 use common::*;
 use serde_json::json;
 use ssp::converter::convert_surql_to_dbsp;
-use ssp::engine::view::Operator;
+use ssp::Operator;
 
 /// Debug the SQL conversion for the TypeScript test SQL
 #[test]
@@ -45,7 +45,7 @@ fn test_sql_conversion_for_ts_test() {
                     let has_subquery = projections.iter().any(|p| {
                         matches!(
                             p,
-                            ssp::engine::view::Projection::Subquery { .. }
+                            ssp::Projection::Subquery { .. }
                         )
                     });
                     assert!(has_subquery, "Expected a Subquery projection");
@@ -64,10 +64,10 @@ fn test_subquery_via_sql_full_flow() {
 
     // 1. Create author and thread
     let (author_id, author_record) = make_author_record("Alice");
-    ingest(&mut circuit, "author", "CREATE", &author_id, author_record, true);
+    ingest(&mut circuit, "author", "CREATE", &author_id, author_record);
 
     let (thread_id, thread_record) = make_thread_record("Hello World", &author_id);
-    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record, true);
+    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record);
 
     // 2. Register view via SQL (using the service layer like WASM does)
     let sql = "SELECT *, (SELECT * FROM author WHERE id = $parent.author)[0] as author_data FROM thread LIMIT 100";
@@ -107,7 +107,7 @@ fn test_subquery_via_sql_full_flow() {
     let result_ids: Vec<&str> = view_update
         .result_data()
         .iter()
-        .map(|(id, _)| id.as_str())
+        .map(|id| id.as_str())
         .collect();
     assert!(
         result_ids.contains(&thread_id.as_str()),

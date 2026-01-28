@@ -1,5 +1,6 @@
 use crate::engine::update::ViewResultFormat;
-use crate::engine::view::{Operator, SpookyValue};
+use crate::engine::operators::Operator;
+use crate::engine::types::SpookyValue;
 use crate::{converter, sanitizer, MaterializedViewUpdate, QueryPlan};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};

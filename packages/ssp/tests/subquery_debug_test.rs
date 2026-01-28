@@ -3,7 +3,7 @@ mod common;
 
 use common::*;
 use serde_json::json;
-use ssp::engine::view::{Operator, Path, Predicate, Projection, QueryPlan};
+use ssp::{Operator, Path, Predicate, Projection, QueryPlan};
 
 /// Debug test for subquery projection children population.
 /// Tests: SELECT *, (SELECT * FROM author WHERE id = $parent.author)[0] as author_data FROM thread
@@ -13,10 +13,10 @@ fn test_subquery_projection_children() {
 
     // 1. Setup: Create author and thread
     let (author_id, author_record) = make_author_record("Alice");
-    ingest(&mut circuit, "author", "CREATE", &author_id, author_record, true);
+    ingest(&mut circuit, "author", "CREATE", &author_id, author_record);
 
     let (thread_id, thread_record) = make_thread_record("Hello World", &author_id);
-    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record, true);
+    ingest(&mut circuit, "thread", "CREATE", &thread_id, thread_record);
 
     // 2. Build query plan with subquery projection
     // This mimics: SELECT *, (SELECT * FROM author WHERE id = $parent.author)[0] as author_data FROM thread
@@ -72,7 +72,7 @@ fn test_subquery_projection_children() {
     let result_ids: Vec<&str> = view_update
         .result_data()
         .iter()
-        .map(|(id, _)| id.as_str())
+        .map(|id| id.as_str())
         .collect();
 
     assert!(

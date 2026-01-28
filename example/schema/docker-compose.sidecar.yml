@@ -1,4 +1,17 @@
 services:
+  aspire-dashboard:
+    image: mcr.microsoft.com/dotnet/aspire-dashboard:latest
+    container_name: aspire-dashboard
+    environment:
+      - DOTNET_DASHBOARD_UNSECURED_ALLOW_ANONYMOUS=true
+      - DOTNET_DASHBOARD_OTLP_AUTH_MODE=Unsecured
+    ports:
+      - "18888:18888"
+      - "4317:18889"
+      - "4318:18890"
+    restart: unless-stopped
+
+
   surrealdb:
     image: surrealdb/surrealdb:v3.0.0-beta.1
     ports:
@@ -8,13 +21,22 @@ services:
       - SURREAL_PASS=root
       - SURREAL_CAPS_ALLOW_EXPERIMENTAL=surrealism,files
       - SURREAL_BUCKET_FOLDER_ALLOWLIST=/modules
+      # --- OTLP KONFIGURATION ---
+      # Aktiviert OTLP Export für Tracing
+      - SURREAL_TELEMETRY_PROVIDER=otlp
+      - SURREAL_TELEMETRY_SERVICE_NAME=surrealdb
+      #- SURREAL_TELEMETRY_DISABLE_METRICS=true # Stop metrics collection (often source of 'collect' spans)
+      #- SURREAL_TELEMETRY_DISABLE_TRACING=true
+      # Ziel: Aspire Dashboard
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://aspire-dashboard:18889
+      # Reduziert Terminal-Logs (optional, da wir jetzt traces haben)
+      - SURREAL_LOG=info 
+      #- RUST_LOG=debug # Force DEBUG globally to verify ssp package logs appear 
     command:
       - start
       - --bind
       - 0.0.0.0:8000
       - --allow-all
-      - --log
-      - trace
       - --user
       - root
       - --pass
@@ -23,6 +45,8 @@ services:
     volumes:
       - ./.spooky/xor_module.surli:/modules/xor_module.surli:ro
       - ./.spooky/dbsp_module.surli:/modules/dbsp_module.surli:ro
+    depends_on:
+      - aspire-dashboard
     healthcheck:
       test: ['CMD', '/surreal', 'isready', '--conn', 'http://localhost:8000']
       interval: 10s
@@ -37,7 +61,12 @@ services:
     ports:
       - '8667:8667'
     environment:
-      - RUST_LOG=debug
+      - RUST_LOG=info,ssp=debug
+      # --- OTLP KONFIGURATION ---
+      # Ziel für Rust Tracing
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://aspire-dashboard:18889
+      - OTEL_SERVICE_NAME=spooky-sidecar
+      # DB Connection
       - SURREALDB_ADDR=surrealdb:8000/rpc
       - SURREALDB_NS=main
       - SURREALDB_DB=main
@@ -50,6 +79,8 @@ services:
     depends_on:
       surrealdb:
         condition: service_healthy
+      aspire-dashboard:
+        condition: service_started
       schema-migration:
         condition: service_completed_successfully
     restart: unless-stopped

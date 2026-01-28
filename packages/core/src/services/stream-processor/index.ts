@@ -136,7 +136,6 @@ export class StreamProcessorService {
                 UPDATE _spooky_stream_processor_state 
                 SET state = $state, updated_at = time::now() 
                 WHERE id = 'singleton'
-                UPSERT
                 `,
             { state }
           );
