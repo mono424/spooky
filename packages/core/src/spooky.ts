@@ -31,6 +31,7 @@ import { EventSystem } from './events/index.js';
 import { CacheModule } from './modules/cache/index.js';
 import { LocalStoragePersistenceClient } from './services/persistence/localstorage.js';
 import { generateId, parseParams } from './utils/index.js';
+import { SurrealDBPersistenceClient } from './services/persistence/surrealdb.js';
 
 export class SpookyClient<S extends SchemaStructure> {
   private local: LocalDatabaseService;
@@ -64,18 +65,21 @@ export class SpookyClient<S extends SchemaStructure> {
       '[SpookyClient] Constructor called'
     );
 
-    if (config.persistenceClient) {
-      this.persistenceClient = config.persistenceClient;
-    } else {
-      this.persistenceClient = new LocalStoragePersistenceClient();
-    }
-
     this.local = new LocalDatabaseService(this.config.database, logger);
     this.remote = new RemoteDatabaseService(this.config.database, logger);
+
+    if (config.persistenceClient === 'surrealdb') {
+      this.persistenceClient = new SurrealDBPersistenceClient(this.local, logger);
+    } else if (config.persistenceClient === 'localstorage' || !config.persistenceClient) {
+      this.persistenceClient = new LocalStoragePersistenceClient(logger);
+    } else {
+      this.persistenceClient = config.persistenceClient;
+    }
 
     this.streamProcessor = new StreamProcessorService(
       new EventSystem(['stream_update']),
       this.local,
+      this.persistenceClient,
       logger
     );
     this.migrator = new LocalMigrator(this.local, logger);
@@ -93,7 +97,7 @@ export class SpookyClient<S extends SchemaStructure> {
     this.dataModule = new DataModule(this.cache, this.local, this.config.schema, logger);
 
     // Initialize Auth
-    this.auth = new AuthService(this.config.schema, this.remote, this.local, logger);
+    this.auth = new AuthService(this.config.schema, this.remote, this.persistenceClient, logger);
 
     // Initialize Sync
     this.sync = new SpookySync(this.local, this.remote, this.cache, this.dataModule, this.logger);
@@ -274,23 +278,21 @@ export class SpookyClient<S extends SchemaStructure> {
 
   private persistClientId(id: string) {
     try {
-      if (typeof localStorage !== 'undefined') {
-        localStorage.setItem('spooky_client_id', id);
-      }
+      this.persistenceClient.set('spooky_client_id', id);
     } catch (e) {
       this.logger.warn({ error: e }, '[SpookyClient] Failed to persist client ID');
     }
   }
 
   private async loadOrGenerateClientId(): Promise<string> {
-    const clientId = await this.persistenceClient.get('spooky_client_id');
+    const clientId = await this.persistenceClient.get<string>('spooky_client_id');
 
     if (clientId) {
       return clientId;
     }
 
     const newId = generateId();
-    await this.persistenceClient.set('spooky_client_id', newId);
+    await this.persistClientId(newId);
     return newId;
   }
 }

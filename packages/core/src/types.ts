@@ -3,11 +3,11 @@ import { Level } from 'pino';
 
 export type { Level } from 'pino';
 
-export type StoreType = 'memory' | 'indexdb';
+export type StoreType = 'memory' | 'indexeddb';
 
 export interface PersistenceClient {
-  set(key: string, value: string): Promise<void>;
-  get(key: string): Promise<string | null>;
+  set<T>(key: string, value: T): Promise<void>;
+  get<T>(key: string): Promise<T | null>;
   remove(key: string): Promise<void>;
 }
 
@@ -55,12 +55,10 @@ export interface SpookyConfig<S extends SchemaStructure> {
   schema: S;
   schemaSurql: string;
   logLevel: Level;
-  persistenceClient?: PersistenceClient;
+  persistenceClient?: PersistenceClient | 'surrealdb' | 'localstorage';
 }
 
 export type QueryHash = string;
-
-import { Duration } from 'surrealdb';
 
 // Flat array format: [[record-id, version], [record-id, version], ...]
 export type RecordVersionArray = Array<[string, number]>;

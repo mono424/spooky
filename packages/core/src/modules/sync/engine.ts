@@ -13,13 +13,16 @@ import { encodeRecordId } from '../../utils/index.js';
  * This is extracted from SpookySync to separate "how to sync" from "when to sync".
  */
 export class SyncEngine {
+  private logger: Logger;
   public events = createSyncEventSystem();
 
   constructor(
     private remote: RemoteDatabaseService,
     private cache: CacheModule,
-    private logger: Logger
-  ) {}
+    logger: Logger
+  ) {
+    this.logger = logger.child({ service: 'SpookySync:SyncEngine' });
+  }
 
   /**
    * Sync missing/updated/removed records between local and remote.

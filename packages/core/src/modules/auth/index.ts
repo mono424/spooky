@@ -11,6 +11,7 @@ import { Logger } from '../../services/logger/index.js';
 import { encodeRecordId } from '../../utils/index.js';
 export * from './events/index.js';
 import { AuthEventTypes, createAuthEventSystem } from './events/index.js';
+import { PersistenceClient } from '../../types.js';
 
 // Helper to pretty print types
 type Prettify<T> = {
@@ -53,7 +54,7 @@ export class AuthService<S extends SchemaStructure> {
   constructor(
     private schema: S,
     private remote: RemoteDatabaseService,
-    private local: LocalDatabaseService,
+    private persistenceClient: PersistenceClient,
     private logger: Logger
   ) {}
 
@@ -94,7 +95,7 @@ export class AuthService<S extends SchemaStructure> {
     this.isLoading = true;
 
     try {
-      const token = accessToken || (await this.local.getKv<string>('spooky_auth_token'));
+      const token = accessToken || (await this.persistenceClient.get<string>('spooky_auth_token'));
 
       if (!token) {
         this.logger.debug('[AuthService] No token found in storage or arguments');
@@ -158,7 +159,7 @@ export class AuthService<S extends SchemaStructure> {
     this.currentUser = null;
     this.isAuthenticated = false;
 
-    await this.local.deleteKv('spooky_auth_token');
+    await this.persistenceClient.remove('spooky_auth_token');
 
     try {
       await this.remote.getClient().invalidate();
@@ -173,7 +174,7 @@ export class AuthService<S extends SchemaStructure> {
     this.token = token;
     this.currentUser = user;
     this.isAuthenticated = true;
-    await this.local.setKv('spooky_auth_token', token);
+    await this.persistenceClient.set('spooky_auth_token', token);
     this.notifyListeners();
   }
 

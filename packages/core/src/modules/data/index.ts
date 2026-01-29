@@ -58,11 +58,11 @@ export class DataModule<S extends SchemaStructure> {
    */
   async query<T extends TableNames<S>>(
     tableName: T,
-    surql: string,
+    surqlString: string,
     params: Record<string, any>,
     ttl: QueryTimeToLive
   ): Promise<QueryHash> {
-    const hash = await this.calculateHash({ surql, params });
+    const hash = await this.calculateHash({ surql: surqlString, params });
 
     const recordId = new RecordId('_spooky_query', hash);
 
@@ -72,7 +72,7 @@ export class DataModule<S extends SchemaStructure> {
 
     const queryState = await this.createNewQuery<T>({
       recordId,
-      surql,
+      surql: surqlString,
       params,
       ttl,
       tableName,
@@ -80,14 +80,17 @@ export class DataModule<S extends SchemaStructure> {
 
     const { localArray } = this.cache.registerQuery({
       queryHash: hash,
-      surql,
+      surql: surqlString,
       params,
       ttl: new Duration(ttl),
       lastActiveAt: new Date(),
     });
 
     await withRetry(this.logger, () =>
-      this.local.getClient().upsert(recordId).replace({ localArray })
+      this.local.query(surql.seal(surql.updateSet('id', ['localArray'])), {
+        id: recordId,
+        localArray,
+      })
     );
 
     this.activeQueries.set(hash, queryState);
@@ -148,7 +151,7 @@ export class DataModule<S extends SchemaStructure> {
    */
   async onStreamUpdate(update: StreamUpdate): Promise<void> {
     const { queryHash, localArray } = update;
-
+    console.log('xxxxSSS', localArray);
     const queryState = this.activeQueries.get(queryHash);
     if (!queryState) {
       this.logger.warn({ queryHash }, 'Received update for unknown query. Skipping...');
@@ -166,7 +169,7 @@ export class DataModule<S extends SchemaStructure> {
       queryState.records = records || [];
       queryState.config.localArray = localArray;
       queryState.updateCount++;
-      await this.local.getClient().query(surql.seal(surql.updateSet('id', ['localArray'])), {
+      await this.local.query(surql.seal(surql.updateSet('id', ['localArray'])), {
         id: queryState.config.id,
         localArray,
       });
@@ -213,7 +216,10 @@ export class DataModule<S extends SchemaStructure> {
       return;
     }
     queryState.config.localArray = localArray;
-    await this.local.getClient().upsert(queryState.config.id).replace({ localArray });
+    await this.local.query(surql.seal(surql.updateSet('id', ['localArray'])), {
+      id: queryState.config.id,
+      localArray,
+    });
   }
 
   async updateQueryRemoteArray(hash: string, remoteArray: RecordVersionArray): Promise<void> {
@@ -223,7 +229,10 @@ export class DataModule<S extends SchemaStructure> {
       return;
     }
     queryState.config.remoteArray = remoteArray;
-    await this.local.getClient().upsert(queryState.config.id).replace({ remoteArray });
+    await this.local.query(surql.seal(surql.updateSet('id', ['remoteArray'])), {
+      id: queryState.config.id,
+      remoteArray,
+    });
   }
 
   // ==================== MUTATION MANAGEMENT ====================
@@ -310,7 +319,7 @@ export class DataModule<S extends SchemaStructure> {
     const query = surql.seal(
       surql.tx([
         surql.let('updated', surql.updateMerge('id', 'data')),
-        surql.let('mutation', surql.createMutation('update', 'mid', 'id', 'data')),
+        surql.createMutation('update', 'mid', 'id', 'data'),
         surql.returnObject([{ key: 'target', variable: 'updated' }]),
       ])
     );
@@ -318,8 +327,8 @@ export class DataModule<S extends SchemaStructure> {
     const [{ target }] = await withRetry(this.logger, () =>
       this.local.query<[{ target: T }]>(query, {
         id: rid,
-        data: params,
         mid: mutationId,
+        data: params,
       })
     );
 
@@ -392,7 +401,7 @@ export class DataModule<S extends SchemaStructure> {
 
   private async createNewQuery<T extends TableNames<S>>({
     recordId,
-    surql,
+    surql: surqlString,
     params,
     ttl,
     tableName,
@@ -415,17 +424,21 @@ export class DataModule<S extends SchemaStructure> {
     );
 
     if (!configRecord) {
-      configRecord = await withRetry(this.logger, () =>
-        this.local.getClient().create<QueryConfigRecord>(recordId).content({
-          surql: surql,
-          params: params,
-          localArray: [],
-          remoteArray: [],
-          lastActiveAt: new Date(),
-          ttl,
-          tableName,
+      const [createdRecord] = await withRetry(this.logger, () =>
+        this.local.query<[QueryConfigRecord]>(surql.seal(surql.create('id', 'data')), {
+          id: recordId,
+          data: {
+            surql: surqlString,
+            params: params,
+            localArray: [],
+            remoteArray: [],
+            lastActiveAt: new Date(),
+            ttl,
+            tableName,
+          },
         })
       );
+      configRecord = createdRecord;
     }
 
     const config: QueryConfig = {
@@ -436,7 +449,7 @@ export class DataModule<S extends SchemaStructure> {
 
     let records: Record<string, any>[] = [];
     try {
-      const [result] = await this.local.query<[Record<string, any>[]]>(surql, params);
+      const [result] = await this.local.query<[Record<string, any>[]]>(surqlString, params);
       records = result || [];
     } catch (err) {
       this.logger.warn({ err }, 'Failed to load initial cached records');

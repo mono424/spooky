@@ -41,7 +41,10 @@ export type InferRelationshipsFromConst<S extends SchemaStructure, Schema extend
   };
 };
 
-export type SyncedDbConfig<S extends SchemaStructure> = SpookyConfig<S>;
+// Prettify helper expands types for better intellisense
+type Prettify<T> = { [K in keyof T]: T[K] } & {};
+
+export type SyncedDbConfig<S extends SchemaStructure> = Prettify<SpookyConfig<S>>;
 
 // export interface LocalDbConfig {
 //   name: string;

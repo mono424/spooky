@@ -9,6 +9,10 @@ export const surql = {
     return `BEGIN TRANSACTION;${queries.join(';')};COMMIT TRANSACTION`;
   },
 
+  selectById(idVar: string, returnValues: string[]) {
+    return `SELECT ${returnValues.join(',')} FROM ONLY $${idVar}`;
+  },
+
   create(idVar: string, dataVar: string) {
     return `CREATE ONLY $${idVar} CONTENT $${dataVar}`;
   },
