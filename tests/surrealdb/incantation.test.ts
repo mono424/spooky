@@ -30,9 +30,9 @@ describe('Spooky Incantations', () => {
     const sql = "SELECT * FROM thread WHERE id = 'thread:active*'";
 
     // 2. Register Incantation via Generated Function
-    // Usage: fn::incantation::register({ id: '...', table: '...', query: 'SQL', ... })
+    // Usage: fn::query::register({ id: '...', table: '...', query: 'SQL', ... })
     const registerQuery = `
-            RETURN fn::incantation::register({
+            RETURN fn::query::register({
                 id: "inc_active_threads",
                 client_id: "client_1",
                 items: [],
@@ -94,7 +94,7 @@ describe('Spooky Incantations', () => {
     // The event should have updated _spooky_incantation table
     // We look for the record with Id "view_active_threads" (ID from Plan) OR "inc_active_threads"?
     // Wait. `fn::dbsp::register_query` uses `$after.Id` from `_spooky_incantation`.
-    // `fn::incantation::register` sets `_spooky_incantation.Id` to "inc_active_threads".
+    // `fn::query::register` sets `_spooky_incantation.Id` to "inc_active_threads".
     // So the Plan ID should match that!
     // But in step 1, I named the plan "view_active_threads".
     // `fn::dbsp::register_query` (in Lib.rs) takes `id` and `plan_json`.
@@ -167,7 +167,7 @@ describe('Spooky Incantations', () => {
     const sql = "SELECT * FROM det_item WHERE id = 'det:item*'";
 
     const registerQuery = `
-            RETURN fn::incantation::register({
+            RETURN fn::query::register({
                 id: "inc_det",
                 client_id: "client_1",
                 items: [],

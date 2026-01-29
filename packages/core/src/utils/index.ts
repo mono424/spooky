@@ -3,6 +3,8 @@ import { Uuid, RecordId, Duration } from 'surrealdb';
 import { Logger } from '../services/logger/index.js';
 import { QueryTimeToLive } from '../types.js';
 
+export * from './surql.js';
+
 // ==================== RECORDID UTILITIES ====================
 
 export const compareRecordIds = (

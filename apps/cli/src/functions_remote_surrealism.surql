@@ -2,7 +2,7 @@
 -- SURREALISM (WASM) IMPLEMENTATION
 -- ==================================================
 
-DEFINE FUNCTION fn::incantation::register($config: object) {
+DEFINE FUNCTION fn::query::register($config: object) {
     IF $config.clientId == NONE THEN {
         THROW 'Missing client id';
     } END;

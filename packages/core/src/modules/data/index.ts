@@ -22,6 +22,7 @@ import {
   encodeRecordId,
   parseDuration,
   withRetry,
+  surql,
 } from '../../utils/index.js';
 
 /**
@@ -183,9 +184,15 @@ export class DataModule<S extends SchemaStructure> {
   /**
    * Get query state (for sync and devtools)
    */
-  getQueryState(id: string | RecordId): QueryState | undefined {
-    const hash = extractIdPart(id);
+  getQueryByHash(hash: string): QueryState | undefined {
     return this.activeQueries.get(hash);
+  }
+
+  /**
+   * Get query state by id (for sync and devtools)
+   */
+  getQueryById(id: RecordId<string>): QueryState | undefined {
+    return this.activeQueries.get(extractIdPart(id));
   }
 
   /**
@@ -205,10 +212,10 @@ export class DataModule<S extends SchemaStructure> {
     await this.local.getClient().upsert(queryState.config.id).replace({ localArray });
   }
 
-  async updateQueryRemoteArray(id: string, remoteArray: RecordVersionArray): Promise<void> {
-    const queryState = this.activeQueries.get(id);
+  async updateQueryRemoteArray(hash: string, remoteArray: RecordVersionArray): Promise<void> {
+    const queryState = this.getQueryByHash(hash);
     if (!queryState) {
-      this.logger.warn({ id }, 'Query to update remote array not found');
+      this.logger.warn({ hash }, 'Query to update remote array not found');
       return;
     }
     queryState.config.remoteArray = remoteArray;
@@ -220,66 +227,31 @@ export class DataModule<S extends SchemaStructure> {
   /**
    * Create a new record
    */
-  async create<T extends Record<string, unknown>>(
-    id: string,
-    data: T,
-    options?: { localOnly?: boolean }
-  ): Promise<T> {
-    const isLocalOnly = options?.localOnly ?? false;
+  async create<T extends Record<string, unknown>>(id: string, data: T): Promise<T> {
     const rid = parseRecordIdString(id);
     const tableName = rid.table.toString();
     const encodedData = encodeToSpookyContent(this.schema, tableName, data as any);
 
-    const mutationId = isLocalOnly
-      ? new RecordId('_spooky_pending_mutations', 'local_only')
-      : parseRecordIdString(`_spooky_pending_mutations:${Date.now()}`);
+    const mutationId = parseRecordIdString(`_spooky_pending_mutations:${Date.now()}`);
 
-    let target: T;
+    const query = surql.seal(
+      surql.tx([
+        surql.let('created', surql.create('id', 'data')),
+        surql.createMutation('create', 'mid', 'id', 'data'),
+        surql.returnObject([{ key: 'target', variable: 'created' }]),
+      ])
+    );
 
-    if (isLocalOnly) {
-      // Local-only: just create the record
-      const query = `
-        LET $created = CREATE ONLY $id CONTENT $data;
-        RETURN { target: $created };
-      `;
+    const [{ target }] = await withRetry(this.logger, () =>
+      this.local.query<[{ target: T }]>(query, {
+        id: rid,
+        data: encodedData,
+        mid: mutationId,
+      })
+    );
 
-      const [_, result] = await withRetry(this.logger, () =>
-        this.local.query<[undefined, { target: T[] }]>(query, {
-          id: rid,
-          data: encodedData,
-        })
-      );
-
-      target = result?.target?.[0]!;
-      if (!target) {
-        throw new Error('Failed to create record');
-      }
-    } else {
-      // Create record + mutation log in transaction
-      const query = `
-        BEGIN TRANSACTION;
-        LET $created = CREATE ONLY $id CONTENT $data;
-        LET $mutation = CREATE ONLY $mid CONTENT {
-          mutationType: 'create',
-          recordId: $created.id,
-          data: $data
-        };
-        RETURN { target: $created, mutation_id: $mutation.id };
-        COMMIT TRANSACTION;
-      `;
-
-      const [result] = await withRetry(this.logger, () =>
-        this.local.query<[{ target: T; mutation_id: string }]>(query, {
-          id: rid,
-          data: encodedData,
-          mid: mutationId,
-        })
-      );
-
-      target = result?.target!;
-      if (!target) {
-        throw new Error('Failed to create record or mutation log');
-      }
+    if (!target) {
+      throw new Error('Failed to create record or mutation log');
     }
 
     if (!target.id) {
@@ -303,14 +275,13 @@ export class DataModule<S extends SchemaStructure> {
       record_id: rid,
       data: encodedData,
       record: target,
-      localOnly: isLocalOnly,
     };
 
     for (const callback of this.mutationCallbacks) {
       callback([mutationEvent]);
     }
 
-    this.logger.debug({ id, isLocalOnly }, 'Record created');
+    this.logger.debug({ id }, 'Record created');
 
     return target;
   }
@@ -321,59 +292,34 @@ export class DataModule<S extends SchemaStructure> {
   async update<T extends Record<string, unknown>>(
     table: string,
     id: string,
-    data: Partial<T>,
-    options?: { localOnly?: boolean }
+    data: Partial<T>
   ): Promise<T> {
-    const isLocalOnly = options?.localOnly ?? false;
     const rid = id.includes(':') ? parseRecordIdString(id) : new RecordId(table, id);
     const encodedData = encodeToSpookyContent(this.schema, table as any, data as any);
 
-    const mutationId = isLocalOnly
-      ? new RecordId('_spooky_pending_mutations', 'local_only')
-      : parseRecordIdString(`_spooky_pending_mutations:${Date.now()}`);
+    const mutationId = parseRecordIdString(`_spooky_pending_mutations:${Date.now()}`);
 
     let target: T;
 
-    if (isLocalOnly) {
-      const query = `
-        LET $updated = UPDATE ONLY $id MERGE $data;
-        RETURN { target: $updated };
-      `;
+    const query = surql.seal(
+      surql.tx([
+        surql.let('updated', surql.updateMerge('id', 'data')),
+        surql.let('mutation', surql.createMutation('update', 'mid', 'id', 'data')),
+        surql.returnObject([{ key: 'target', variable: 'updated' }]),
+      ])
+    );
 
-      const [result] = await withRetry(this.logger, () =>
-        this.local.query<[{ target: T[] }]>(query, {
-          id: rid,
-          data: encodedData,
-        })
-      );
+    const [result] = await withRetry(this.logger, () =>
+      this.local.query<[{ target: T }]>(query, {
+        id: rid,
+        data: encodedData,
+        mid: mutationId,
+      })
+    );
 
-      target = result?.target?.[0]!;
-      if (!target) {
-        throw new Error(`Failed to update record: ${id}`);
-      }
-    } else {
-      const query = `
-        BEGIN TRANSACTION;
-        LET $updated = UPDATE ONLY $id MERGE $data;
-        LET $mutation = CREATE ONLY _spooky_pending_mutations SET 
-          mutationType = 'update',
-          recordId = $id,
-          data = $data;
-        RETURN { target: $updated, mutation_id: $mutation.id };
-        COMMIT TRANSACTION;
-      `;
-
-      const [result] = await withRetry(this.logger, () =>
-        this.local.query<[{ target: T; mutation_id: string }]>(query, {
-          id: rid,
-          data: encodedData,
-        })
-      );
-
-      target = result?.target!;
-      if (!target) {
-        throw new Error(`Failed to update record: ${id}`);
-      }
+    target = result?.target!;
+    if (!target) {
+      throw new Error(`Failed to update record: ${id}`);
     }
 
     if (!target.id) {
@@ -397,14 +343,13 @@ export class DataModule<S extends SchemaStructure> {
       record_id: rid,
       data: encodedData,
       record: target,
-      localOnly: isLocalOnly,
     };
 
     for (const callback of this.mutationCallbacks) {
       callback([mutationEvent]);
     }
 
-    this.logger.debug({ id, isLocalOnly }, 'Record updated');
+    this.logger.debug({ id }, 'Record updated');
 
     return target;
   }
@@ -412,31 +357,16 @@ export class DataModule<S extends SchemaStructure> {
   /**
    * Delete a record
    */
-  async delete(table: string, id: string, options?: { localOnly?: boolean }): Promise<void> {
-    const isLocalOnly = options?.localOnly ?? false;
+  async delete(table: string, id: string): Promise<void> {
     const rid = id.includes(':') ? parseRecordIdString(id) : new RecordId(table, id);
 
-    const mutationId = isLocalOnly
-      ? new RecordId('_spooky_pending_mutations', 'local_only')
-      : parseRecordIdString(`_spooky_pending_mutations:${Date.now()}`);
+    const mutationId = parseRecordIdString(`_spooky_pending_mutations:${Date.now()}`);
 
-    if (isLocalOnly) {
-      await withRetry(this.logger, () => this.local.query('DELETE $id', { id: rid }));
-    } else {
-      const query = `
-        BEGIN TRANSACTION;
-        DELETE $id;
-        LET $mutation = CREATE ONLY _spooky_pending_mutations SET 
-          mutationType = 'delete',
-          recordId = $id;
-        RETURN { mutation_id: $mutation.id };
-        COMMIT TRANSACTION;
-      `;
+    const query = surql.seal(
+      surql.tx([surql.delete('id'), surql.createMutation('delete', 'mid', 'id')])
+    );
 
-      await withRetry(this.logger, () => this.local.query(query, { id: rid }));
-    }
-
-    // Delete from cache
+    await withRetry(this.logger, () => this.local.query(query, { id: rid, mid: mutationId }));
     await this.cache.delete(table, encodeRecordId(rid), true);
 
     // Emit mutation event
@@ -444,14 +374,13 @@ export class DataModule<S extends SchemaStructure> {
       type: 'delete',
       mutation_id: mutationId,
       record_id: rid,
-      localOnly: isLocalOnly,
     };
 
     for (const callback of this.mutationCallbacks) {
       callback([mutationEvent]);
     }
 
-    this.logger.debug({ id, isLocalOnly }, 'Record deleted');
+    this.logger.debug({ id }, 'Record deleted');
   }
 
   // ==================== PRIVATE HELPERS ====================

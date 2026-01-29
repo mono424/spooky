@@ -54,7 +54,6 @@ export class AuthService<S extends SchemaStructure> {
     private schema: S,
     private remote: RemoteDatabaseService,
     private local: LocalDatabaseService,
-    private mutation: DataModule<S>,
     private logger: Logger
   ) {}
 
@@ -95,10 +94,7 @@ export class AuthService<S extends SchemaStructure> {
     this.isLoading = true;
 
     try {
-      // Get token from arg or localStorage
-      const token =
-        accessToken ||
-        (typeof window !== 'undefined' ? localStorage.getItem('spooky_auth_token') : null);
+      const token = accessToken || (await this.local.getKv<string>('spooky_auth_token'));
 
       if (!token) {
         this.logger.debug('[AuthService] No token found in storage or arguments');
@@ -119,7 +115,7 @@ export class AuthService<S extends SchemaStructure> {
 
       if (user && user.id) {
         this.logger.info({ user }, '[AuthService] Auth check complete (via $auth.id)');
-        this.setSession(token, user);
+        await this.setSession(token, user);
       } else {
         this.logger.warn('[AuthService] $auth.id empty, attempting manual user fetch');
 
@@ -137,7 +133,7 @@ export class AuthService<S extends SchemaStructure> {
             { user: manualUser },
             '[AuthService] Auth check complete (via manual fetch)'
           );
-          this.setSession(token, manualUser);
+          await this.setSession(token, manualUser);
         } else {
           this.logger.warn('[AuthService] Token valid but user not found via fallback');
           await this.signOut();
@@ -162,9 +158,7 @@ export class AuthService<S extends SchemaStructure> {
     this.currentUser = null;
     this.isAuthenticated = false;
 
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('spooky_auth_token');
-    }
+    await this.local.deleteKv('spooky_auth_token');
 
     try {
       await this.remote.getClient().invalidate();
@@ -175,36 +169,11 @@ export class AuthService<S extends SchemaStructure> {
     this.notifyListeners();
   }
 
-  private setSession(token: string, user: any) {
+  private async setSession(token: string, user: any) {
     this.token = token;
     this.currentUser = user;
     this.isAuthenticated = true;
-
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('spooky_auth_token', token);
-    }
-
-    // Hydrate local database with user record using MutationManager to trigger reactivity
-    const hydrateUser = async () => {
-      try {
-        const userId = encodeRecordId(user.id);
-        // Check if user exists locally
-        const [existing] = await this.local.query<any[]>(`SELECT * FROM ONLY ${userId}`);
-
-        if (existing) {
-          this.logger.debug({ userId }, '[AuthService] Hydration: updating existing user');
-          const table = userId.split(':')[0];
-          await this.mutation.update(table, userId, user, { localOnly: true });
-        } else {
-          this.logger.debug({ userId }, '[AuthService] Hydration: creating new user');
-          await this.mutation.create(userId, user, { localOnly: true });
-        }
-      } catch (err) {
-        this.logger.error({ error: err }, '[AuthService] Failed to hydrate local user');
-      }
-    };
-    hydrateUser();
-
+    await this.local.setKv('spooky_auth_token', token);
     this.notifyListeners();
   }
 

@@ -87,7 +87,7 @@ export class SpookySync<S extends SchemaStructure> {
     recordId: RecordId,
     version: number
   ) {
-    const existing = this.dataModule.getQueryState(queryId);
+    const existing = this.dataModule.getQueryById(queryId);
 
     if (!existing) {
       this.logger.warn(
@@ -145,10 +145,10 @@ export class SpookySync<S extends SchemaStructure> {
     }
   }
 
-  public async syncQuery(queryId: string) {
-    const queryState = this.dataModule.getQueryState(queryId);
+  public async syncQuery(hash: string) {
+    const queryState = this.dataModule.getQueryByHash(hash);
     if (!queryState) {
-      this.logger.warn({ queryId }, 'Query not found');
+      this.logger.warn({ hash }, 'Query not found');
       return;
     }
     const diff = new ArraySyncer(
@@ -171,33 +171,33 @@ export class SpookySync<S extends SchemaStructure> {
       await this.createRemoteQuery(queryId);
       await this.syncQuery(queryId);
     } catch (e) {
+      console.log('registerQuery error', JSON.stringify(e));
       this.logger.error({ err: e }, 'registerQuery error');
       throw e;
     }
   }
 
-  private async createRemoteQuery(queryId: string) {
-    const queryState = this.dataModule.getQueryState(queryId);
+  private async createRemoteQuery(hash: string) {
+    const queryState = this.dataModule.getQueryByHash(hash);
+
     if (!queryState) {
-      this.logger.warn({ queryId }, 'Query to register not found');
-      return;
+      this.logger.warn({ hash }, 'Query to register not found');
+      throw new Error('Query to register not found');
     }
     // Delegate to remote function which handles DBSP registration & persistence
-    const [{ array }] = await this.remote.query<[{ array: RecordVersionArray }]>(
-      'fn::query::register($config)',
-      {
-        config: {
-          ...queryState.config,
-          clientId: this.clientId,
-        },
-      }
-    );
-
+    const res = await this.remote.query('fn::query::register($config)', {
+      config: {
+        ...queryState.config,
+        clientId: this.clientId,
+      },
+    });
+    console.log('xxxxxxx', res);
+    return;
     this.logger.debug(
       { queryId: encodeRecordId(queryState.config.id), array },
       'createdRemoteQuery'
     );
-    await this.dataModule.updateQueryRemoteArray(queryId, array);
+    await this.dataModule.updateQueryRemoteArray(hash, array);
   }
 
   private async heartbeatQuery(queryId: string) {

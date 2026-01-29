@@ -94,12 +94,13 @@ export interface QueryState {
 export type QueryUpdateCallback = (records: Record<string, any>[]) => void;
 export type MutationCallback = (mutations: MutationEvent[]) => void;
 
+export type MutationEventType = 'create' | 'update' | 'delete';
+
 // Mutation event for sync
 export interface MutationEvent {
-  type: 'create' | 'update' | 'delete';
+  type: MutationEventType;
   mutation_id: RecordId<string>;
   record_id: RecordId<string>;
   data?: any;
   record?: any;
-  localOnly: boolean;
 }

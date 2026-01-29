@@ -72,7 +72,7 @@ DEFINE EVENT _spooky_dbsp_cleanup ON TABLE _spooky_incantation WHEN $event = "DE
     let $result = mod::dbsp::unregister_view(<string>$before.id);
 };
 
--- Note: Registration is now handled explicitly by fn::incantation::register calling mod::dbsp::register_view
+-- Note: Registration is now handled explicitly by fn::query::register calling mod::dbsp::register_view
 -- The previous _spooky_dbsp_register event is removed to prevent recursion and double-registration.
 
 -- ==================================================

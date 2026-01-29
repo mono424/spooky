@@ -15,6 +15,7 @@ import { Surreal } from 'surrealdb';
 import { SpookySync } from './modules/sync/index.js';
 import {
   GetTable,
+  InnerQuery,
   QueryBuilder,
   QueryOptions,
   SchemaStructure,
@@ -92,13 +93,7 @@ export class SpookyClient<S extends SchemaStructure> {
     this.dataModule = new DataModule(this.cache, this.local, this.config.schema, logger);
 
     // Initialize Auth
-    this.auth = new AuthService(
-      this.config.schema,
-      this.remote,
-      this.local,
-      this.dataModule,
-      logger
-    );
+    this.auth = new AuthService(this.config.schema, this.remote, this.local, logger);
 
     // Initialize Sync
     this.sync = new SpookySync(this.local, this.remote, this.cache, this.dataModule, this.logger);
@@ -129,10 +124,9 @@ export class SpookyClient<S extends SchemaStructure> {
       // Notify DevTools
       this.devTools.onMutation(mutations);
 
-      // Enqueue in Sync (filter out localOnly)
-      const mutationsToSync = mutations.filter((e) => !e.localOnly);
-      if (mutationsToSync.length > 0) {
-        this.sync.enqueueMutation(mutationsToSync as any);
+      // Enqueue in Sync
+      if (mutations.length > 0) {
+        this.sync.enqueueMutation(mutations as any);
       }
     });
 
@@ -216,15 +210,32 @@ export class SpookyClient<S extends SchemaStructure> {
       this.config.schema,
       table,
       async (q) => ({
-        hash: await this.dataModule.query(
-          table,
-          q.selectQuery.query,
-          q.selectQuery.vars ?? {},
-          ttl
-        ),
+        hash: await this.initQuery(table, q, ttl),
       }),
       options
     );
+  }
+
+  private async initQuery<Table extends TableNames<S>>(
+    table: Table,
+    q: InnerQuery<any, any, any>,
+    ttl: QueryTimeToLive
+  ) {
+    const hash = await this.dataModule.query(
+      table,
+      q.selectQuery.query,
+      q.selectQuery.vars ?? {},
+      ttl
+    );
+
+    await this.sync.enqueueDownEvent({
+      type: 'register',
+      payload: {
+        queryId: hash,
+      },
+    });
+
+    return hash;
   }
 
   async queryRaw(sql: string, params: Record<string, any>, ttl: QueryTimeToLive) {
