@@ -4,6 +4,7 @@ import { schema, SURQL_SCHEMA } from './schema.gen';
 // Database configuration
 export const dbConfig: SyncedDbConfig<typeof schema> = {
   logLevel: 'trace',
+  otelEndpoint: '/v1/logs',
   schema: schema,
   schemaSurql: SURQL_SCHEMA,
   database: {

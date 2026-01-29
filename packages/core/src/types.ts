@@ -56,6 +56,7 @@ export interface SpookyConfig<S extends SchemaStructure> {
   schemaSurql: string;
   logLevel: Level;
   persistenceClient?: PersistenceClient | 'surrealdb' | 'localstorage';
+  otelEndpoint?: string;
 }
 
 export type QueryHash = string;

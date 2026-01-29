@@ -57,7 +57,7 @@ export class SpookyClient<S extends SchemaStructure> {
   }
 
   constructor(private config: SpookyConfig<S>) {
-    const logger = createLogger(config.logLevel ?? 'info');
+    const logger = createLogger(config.logLevel ?? 'info', config.otelEndpoint);
     this.logger = logger.child({ service: 'SpookyClient' });
 
     this.logger.info(

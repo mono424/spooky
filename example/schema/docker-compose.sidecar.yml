@@ -10,6 +10,11 @@ services:
     environment:
       - DOTNET_DASHBOARD_UNSECURED_ALLOW_ANONYMOUS=true
       - DOTNET_DASHBOARD_OTLP_AUTH_MODE=Unsecured
+      - ASPNETCORE_ENVIRONMENT=Development
+      - DOTNET_DASHBOARD_OTLP_CORS_ALLOWED_ORIGINS=http://localhost:3006,http://localhost:3000,http://127.0.0.1:3006,http://127.0.0.1:3000,https://localhost:3006,https://localhost:3000
+      - DOTNET_DASHBOARD_OTLP_CORS_ALLOWED_HEADERS=*
+      - DASHBOARD__OTLP__CORS__ALLOWEDORIGINS=http://localhost:3006,http://localhost:3000,http://127.0.0.1:3006,http://127.0.0.1:3000,https://localhost:3006,https://localhost:3000
+      - DASHBOARD__OTLP__CORS__ALLOWEDHEADERS=*
     ports:
       - "18888:18888"
       - "4317:18889"
