@@ -107,7 +107,7 @@ pub mod view {
             .get("surql")
             .or_else(|| config.get("surreal_ql"))
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow!("Missing or invalid 'sql'"))?
+            .ok_or_else(|| anyhow!("Missing or invalid 'surql'"))?
             .to_string();
 
         let client_id = config
