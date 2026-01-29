@@ -64,10 +64,10 @@ async fn test_edge_overlap_count() {
     
     // Verify specific edges exist
     // Check View 1 -> r3
-    let v1_r3 = db.query("SELECT * FROM _spooky_list_ref WHERE in = _spooky_incantation:view_1 AND out = _spooky_version:r3").await.unwrap().take::<Vec<serde_json::Value>>(0).unwrap();
+    let v1_r3 = db.query("SELECT * FROM _spooky_list_ref WHERE in = _spooky_query:view_1 AND out = _spooky_version:r3").await.unwrap().take::<Vec<serde_json::Value>>(0).unwrap();
     assert_eq!(v1_r3.len(), 1, "View 1 should link to r3");
 
     // Check View 2 -> r3
-    let v2_r3 = db.query("SELECT * FROM _spooky_list_ref WHERE in = _spooky_incantation:view_2 AND out = _spooky_version:r3").await.unwrap().take::<Vec<serde_json::Value>>(0).unwrap();
+    let v2_r3 = db.query("SELECT * FROM _spooky_list_ref WHERE in = _spooky_query:view_2 AND out = _spooky_version:r3").await.unwrap().take::<Vec<serde_json::Value>>(0).unwrap();
     assert_eq!(v2_r3.len(), 1, "View 2 should ALSO link to r3 (Overlap)");
 }

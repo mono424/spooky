@@ -5,7 +5,7 @@ export type RecordWithId = Record<string, any> & { id: string };
 
 export interface QueryConfig {
   id: RecordId<string>;
-  sql: string;
+  surql: string;
   params: Record<string, any>;
   ttl: QueryTimeToLive | Duration;
   lastActiveAt: Date;

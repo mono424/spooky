@@ -39,7 +39,7 @@ if [ $retries -eq $max_retries ]; then
   exit 1
 fi
 
-# Check if _spooky_incantation exists
+# Check if _spooky_query exists
 RESPONSE=$(check_table)
 echo "Check Response: $RESPONSE"
 

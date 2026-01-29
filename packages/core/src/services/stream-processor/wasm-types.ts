@@ -8,7 +8,7 @@ export interface WasmStreamUpdate {
 
 export interface WasmQueryConfig {
   id: string;
-  sql: string;
+  surql: string;
   params?: Record<string, any>;
   clientId: string;
   ttl: string;

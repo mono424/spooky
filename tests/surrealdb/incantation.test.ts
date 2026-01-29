@@ -49,7 +49,7 @@ describe('Spooky Incantations', () => {
 
     // DEBUG: Check what was actually saved
     const checkQuery = `
-            LET $inc = (SELECT * FROM _spooky_incantation WHERE Id = 'inc_active_threads')[0];
+            LET $inc = (SELECT * FROM _spooky_query WHERE Id = 'inc_active_threads')[0];
             LET $state = fn::dbsp::get_state();
             RETURN { incantation: $inc, state: $state };
         `;
@@ -70,7 +70,7 @@ describe('Spooky Incantations', () => {
 
     // DEBUG: Check state after CREATE
     const afterCreateQuery = `
-            LET $inc = (SELECT * FROM _spooky_incantation WHERE Id = 'inc_active_threads')[0];
+            LET $inc = (SELECT * FROM _spooky_query WHERE Id = 'inc_active_threads')[0];
             LET $state = fn::dbsp::get_state();
             RETURN { incantation: $inc, state: $state };
         `;
@@ -91,10 +91,10 @@ describe('Spooky Incantations', () => {
         `);
 
     // 4. Verify Incantation State Loop
-    // The event should have updated _spooky_incantation table
+    // The event should have updated _spooky_query table
     // We look for the record with Id "view_active_threads" (ID from Plan) OR "inc_active_threads"?
-    // Wait. `fn::dbsp::register_query` uses `$after.Id` from `_spooky_incantation`.
-    // `fn::query::register` sets `_spooky_incantation.Id` to "inc_active_threads".
+    // Wait. `fn::dbsp::register_query` uses `$after.Id` from `_spooky_query`.
+    // `fn::query::register` sets `_spooky_query.Id` to "inc_active_threads".
     // So the Plan ID should match that!
     // But in step 1, I named the plan "view_active_threads".
     // `fn::dbsp::register_query` (in Lib.rs) takes `id` and `plan_json`.
@@ -104,7 +104,7 @@ describe('Spooky Incantations', () => {
     // So the WASM module will key the view by "inc_active_threads".
 
     // Check local state in DB
-    const incQuery = `SELECT * FROM _spooky_incantation WHERE Id = 'inc_active_threads'`;
+    const incQuery = `SELECT * FROM _spooky_query WHERE Id = 'inc_active_threads'`;
     const incRes = await runQuery(incQuery);
     const incRecord = incRes[0][0];
 
@@ -182,7 +182,7 @@ describe('Spooky Incantations', () => {
 
     // Helper to get current Hash
     const getHash = async () => {
-      const r = await runQuery(`SELECT Hash FROM ONLY _spooky_incantation WHERE Id = 'inc_det'`);
+      const r = await runQuery(`SELECT Hash FROM ONLY _spooky_query WHERE Id = 'inc_det'`);
       return r[0] ? r[0].Hash : null;
     };
 

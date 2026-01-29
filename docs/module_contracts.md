@@ -131,7 +131,7 @@ Triggers an ingest operation on the server-side circuit.
 ```
 
 **Response:** `200 OK`
-_Side Effects:_ Updates persistent state and `_spooky_incantation` records in SurrealDB.
+_Side Effects:_ Updates persistent state and `_spooky_query` records in SurrealDB.
 
 #### `POST /view/register`
 
@@ -151,7 +151,7 @@ Registers an incantation on the sidecar.
 ```
 
 **Response:** `200 OK`
-_Side Effects:_ Upserts `_spooky_incantation` metadata record in SurrealDB.
+_Side Effects:_ Upserts `_spooky_query` metadata record in SurrealDB.
 
 #### `POST /view/unregister`
 
@@ -188,7 +188,7 @@ function::dbsp::ingest($table, $event, $id, $after)
 | `$id`    | The record ID                                            |
 | `$after` | The record content (use `$before` for deletes if needed) |
 
-**Updates:** Directly modifies `_spooky_incantation` tables via internal Rust calls.
+**Updates:** Directly modifies `_spooky_query` tables via internal Rust calls.
 
 #### `function::dbsp::register_view`
 

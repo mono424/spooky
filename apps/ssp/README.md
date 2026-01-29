@@ -2,7 +2,7 @@
 
 The **SSP Server** (`apps/ssp`) is the specialized sidecar responsible for real-time stream processing, managing live views, and maintaining the graph-based cache in SurrealDB.
 
-It acts as a bridge between SurrealDB's raw data events and the reactive `_spooky_incantation` graph.
+It acts as a bridge between SurrealDB's raw data events and the reactive `_spooky_query` graph.
 
 ## 🧠 Architecture & Communication Flow
 
@@ -85,7 +85,7 @@ When a client subscribes to a live query:
 
 1.  **Preparation**: SSP parses the query and parameters.
 2.  **Engine Registration**: The engine registers the query and computes the _initial state_.
-3.  **Metadata Upsert**: Saves view metadata (`clientId`, `ttl`, `sql`) to `_spooky_incantation`.
+3.  **Metadata Upsert**: Saves view metadata (`clientId`, `ttl`, `sql`) to `_spooky_query`.
 4.  **Initial Population**: Takes the initial snapshot and bulk-inserts edges in a single transaction.
     - **Metric**: **1 Registration = 2 DB Round-trips** (1 Metadata + 1 Edges).
 

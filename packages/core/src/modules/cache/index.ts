@@ -124,7 +124,7 @@ export class CacheModule implements StreamUpdateReceiver {
     this.logger.debug(
       {
         id: encodeRecordId(config.id),
-        sql: config.sql,
+        surql: config.surql,
       },
       'Registering query'
     );
@@ -132,7 +132,7 @@ export class CacheModule implements StreamUpdateReceiver {
     try {
       const update = this.streamProcessor.registerQueryPlan({
         id: config.id,
-        sql: config.sql,
+        surql: config.surql,
         params: config.params,
         ttl: config.ttl,
         lastActiveAt: config.lastActiveAt,

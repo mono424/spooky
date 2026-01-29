@@ -73,7 +73,7 @@ export interface RecordVersionDiff {
 
 export interface QueryConfig {
   id: RecordId<string>;
-  sql: string;
+  surql: string;
   params: Record<string, any>;
   localArray: RecordVersionArray;
   remoteArray: RecordVersionArray;

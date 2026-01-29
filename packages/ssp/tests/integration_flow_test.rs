@@ -41,7 +41,7 @@ fn process_streaming_update(
             
             ops.push(EdgeOperation {
                 op_type,
-                from: format!("_spooky_incantation:{}", incantation_id),
+                from: format!("_spooky_query:{}", incantation_id),
                 to: record.id.clone(),
             });
         }

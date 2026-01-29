@@ -10,7 +10,7 @@ import { encodeRecordId } from '../../utils/index.js';
 // Simple interface for query plan registration (replaces Incantation class)
 interface QueryPlanConfig {
   id: RecordId<string>;
-  sql: string;
+  surql: string;
   params: Record<string, any>;
   ttl: QueryTimeToLive | Duration;
   lastActiveAt: Date;
@@ -302,7 +302,7 @@ export class StreamProcessorService {
     this.logger.debug(
       {
         queryId: queryPlan.id,
-        sql: queryPlan.sql,
+        surql: queryPlan.surql,
         params: queryPlan.params,
       },
       '[StreamProcessor] Registering query plan'
@@ -310,7 +310,7 @@ export class StreamProcessorService {
     this.logger.debug(
       {
         id: encodeRecordId(queryPlan.id),
-        sql: queryPlan.sql,
+        surql: queryPlan.surql,
         params: queryPlan.params,
       },
       '[StreamProcessor] registerQueryPlan called'
@@ -325,7 +325,7 @@ export class StreamProcessorService {
 
       const initialUpdate = this.processor.register_view({
         id: encodeRecordId(queryPlan.id),
-        sql: queryPlan.sql,
+        surql: queryPlan.surql,
         params: normalizedParams,
         clientId: 'local',
         ttl: queryPlan.ttl.toString(),
@@ -349,7 +349,7 @@ export class StreamProcessorService {
       this.logger.debug(
         {
           queryId: queryPlan.id,
-          sql: queryPlan.sql,
+          ssurqlql: queryPlan.surql,
           params: queryPlan.params,
         },
         '[StreamProcessor] Registered query plan'

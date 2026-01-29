@@ -12,8 +12,8 @@ Schema schemaFromJson(String str) => Schema.fromJson(json.decode(str));
 String schemaToJson(Schema data) => json.encode(data.toJson());
 
 class Schema {
-    SpookyIncantation spookyIncantation;
     SpookyPendingMutations spookyPendingMutations;
+    SpookyQuery spookyQuery;
     SpookySchema spookySchema;
     SpookyStreamProcessorState spookyStreamProcessorState;
     Comment comment;
@@ -22,8 +22,8 @@ class Schema {
     User user;
 
     Schema({
-        required this.spookyIncantation,
         required this.spookyPendingMutations,
+        required this.spookyQuery,
         required this.spookySchema,
         required this.spookyStreamProcessorState,
         required this.comment,
@@ -33,8 +33,8 @@ class Schema {
     });
 
     factory Schema.fromJson(Map<String, dynamic> json) => Schema(
-        spookyIncantation: SpookyIncantation.fromJson(json["_spooky_incantation"]),
         spookyPendingMutations: SpookyPendingMutations.fromJson(json["_spooky_pending_mutations"]),
+        spookyQuery: SpookyQuery.fromJson(json["_spooky_query"]),
         spookySchema: SpookySchema.fromJson(json["_spooky_schema"]),
         spookyStreamProcessorState: SpookyStreamProcessorState.fromJson(json["_spooky_stream_processor_state"]),
         comment: Comment.fromJson(json["comment"]),
@@ -44,8 +44,8 @@ class Schema {
     );
 
     Map<String, dynamic> toJson() => {
-        "_spooky_incantation": spookyIncantation.toJson(),
         "_spooky_pending_mutations": spookyPendingMutations.toJson(),
+        "_spooky_query": spookyQuery.toJson(),
         "_spooky_schema": spookySchema.toJson(),
         "_spooky_stream_processor_state": spookyStreamProcessorState.toJson(),
         "comment": comment.toJson(),
@@ -113,62 +113,6 @@ class CommentedOn {
     };
 }
 
-class SpookyIncantation {
-    String? clientId;
-    
-    ///Record ID
-    String id;
-    DateTime lastActiveAt;
-    String? localHash;
-    
-    ///Any type
-    dynamic localTree;
-    String? remoteHash;
-    
-    ///Any type
-    dynamic remoteTree;
-    String? sql;
-    
-    ///ISO 8601 duration
-    String ttl;
-
-    SpookyIncantation({
-        this.clientId,
-        required this.id,
-        required this.lastActiveAt,
-        this.localHash,
-        required this.localTree,
-        this.remoteHash,
-        required this.remoteTree,
-        this.sql,
-        required this.ttl,
-    });
-
-    factory SpookyIncantation.fromJson(Map<String, dynamic> json) => SpookyIncantation(
-        clientId: json["clientId"],
-        id: json["id"],
-        lastActiveAt: DateTime.parse(json["lastActiveAt"]),
-        localHash: json["localHash"],
-        localTree: json["localTree"],
-        remoteHash: json["remoteHash"],
-        remoteTree: json["remoteTree"],
-        sql: json["sql"],
-        ttl: json["ttl"],
-    );
-
-    Map<String, dynamic> toJson() => {
-        "clientId": clientId,
-        "id": id,
-        "lastActiveAt": lastActiveAt.toIso8601String(),
-        "localHash": localHash,
-        "localTree": localTree,
-        "remoteHash": remoteHash,
-        "remoteTree": remoteTree,
-        "sql": sql,
-        "ttl": ttl,
-    };
-}
-
 class SpookyPendingMutations {
     
     ///Any type
@@ -198,6 +142,52 @@ class SpookyPendingMutations {
         "id": id,
         "mutationType": mutationType,
         "recordId": recordId,
+    };
+}
+
+class SpookyQuery {
+    
+    ///Record ID
+    String id;
+    DateTime lastActiveAt;
+    
+    ///Any type
+    dynamic localArray;
+    
+    ///Any type
+    dynamic remoteArray;
+    String surql;
+    String tableName;
+    String ttl;
+
+    SpookyQuery({
+        required this.id,
+        required this.lastActiveAt,
+        required this.localArray,
+        required this.remoteArray,
+        required this.surql,
+        required this.tableName,
+        required this.ttl,
+    });
+
+    factory SpookyQuery.fromJson(Map<String, dynamic> json) => SpookyQuery(
+        id: json["id"],
+        lastActiveAt: DateTime.parse(json["lastActiveAt"]),
+        localArray: json["localArray"],
+        remoteArray: json["remoteArray"],
+        surql: json["surql"],
+        tableName: json["tableName"],
+        ttl: json["ttl"],
+    );
+
+    Map<String, dynamic> toJson() => {
+        "id": id,
+        "lastActiveAt": lastActiveAt.toIso8601String(),
+        "localArray": localArray,
+        "remoteArray": remoteArray,
+        "surql": surql,
+        "tableName": tableName,
+        "ttl": ttl,
     };
 }
 
@@ -454,39 +444,25 @@ DEFINE FIELD IF NOT EXISTS updated_at ON _spooky_stream_processor_state TYPE dat
 -- The Registry of active Live Queries (Incantations).
 -- ==================================================
 
-DEFINE TABLE _spooky_incantation SCHEMALESS
+DEFINE TABLE _spooky_query SCHEMALESS
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
--- The raw query string (for re-hydration/debugging)
-DEFINE FIELD sql ON TABLE _spooky_incantation TYPE option<string>
+DEFINE FIELD surql ON TABLE _spooky_query TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
--- The raw query string (for re-hydration/debugging)
-DEFINE FIELD clientId ON TABLE _spooky_incantation TYPE option<string>
+DEFINE FIELD localArray ON TABLE _spooky_query TYPE any
 PERMISSIONS FOR select, create, update WHERE true;
 
--- The current XOR sum of all results in this query
-DEFINE FIELD localHash ON TABLE _spooky_incantation TYPE option<string>
+DEFINE FIELD remoteArray ON TABLE _spooky_query TYPE any
 PERMISSIONS FOR select, create, update WHERE true;
 
--- The Radix Tree of Result IDs for efficient sync
-DEFINE FIELD localTree ON TABLE _spooky_incantation TYPE any
+DEFINE FIELD lastActiveAt ON TABLE _spooky_query TYPE option<datetime> DEFAULT time::now()
 PERMISSIONS FOR select, create, update WHERE true;
 
--- The current XOR sum of all results in this query
-DEFINE FIELD remoteHash ON TABLE _spooky_incantation TYPE option<string>
+DEFINE FIELD ttl ON TABLE _spooky_query TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
--- The Radix Tree of Result IDs for efficient sync
-DEFINE FIELD remoteTree ON TABLE _spooky_incantation TYPE any
-PERMISSIONS FOR select, create, update WHERE true;
-
--- For garbage collection (Heartbeat)
-DEFINE FIELD lastActiveAt ON TABLE _spooky_incantation TYPE option<datetime> DEFAULT time::now()
-PERMISSIONS FOR select, create, update WHERE true;
-
--- How long this Incantation stays alive without activity
-DEFINE FIELD ttl ON TABLE _spooky_incantation TYPE option<duration>
+DEFINE FIELD tableName ON TABLE _spooky_query TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- ==================================================

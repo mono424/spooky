@@ -43,7 +43,7 @@ title: SpookySync Service
 
 ### 1. Live Query Flow (The "Incantation" Loop)
 
-1. **Startup**: `SpookySync` subscribes to `LIVE SELECT * FROM _spooky_incantation`.
+1. **Startup**: `SpookySync` subscribes to `LIVE SELECT * FROM _spooky_query`.
 2. **Update**: When the remote server updates an Incantation (e.g., due to a data change from another client), `SpookySync` receives a notification.
 3. **Fetch**: The service calculates the difference between the local Merkle Tree and the remote Merkle Tree.
 4. **Sync**: It fetches only the missing/changed records (`delta sync`).

@@ -27,39 +27,25 @@ DEFINE FIELD IF NOT EXISTS updated_at ON _spooky_stream_processor_state TYPE dat
 -- The Registry of active Live Queries (Incantations).
 -- ==================================================
 
-DEFINE TABLE _spooky_incantation SCHEMALESS
+DEFINE TABLE _spooky_query SCHEMALESS
     PERMISSIONS FOR select, create, update WHERE true;
 
--- The raw query string (for re-hydration/debugging)
-DEFINE FIELD sql ON TABLE _spooky_incantation TYPE option<string>
+DEFINE FIELD surql ON TABLE _spooky_query TYPE string
     PERMISSIONS FOR select, create, update WHERE true;
 
--- The raw query string (for re-hydration/debugging)
-DEFINE FIELD clientId ON TABLE _spooky_incantation TYPE option<string>
+DEFINE FIELD localArray ON TABLE _spooky_query TYPE any
     PERMISSIONS FOR select, create, update WHERE true;
 
--- The current XOR sum of all results in this query
-DEFINE FIELD localHash ON TABLE _spooky_incantation TYPE option<string>
+DEFINE FIELD remoteArray ON TABLE _spooky_query TYPE any
     PERMISSIONS FOR select, create, update WHERE true;
 
--- The Radix Tree of Result IDs for efficient sync
-DEFINE FIELD localTree ON TABLE _spooky_incantation TYPE any
+DEFINE FIELD lastActiveAt ON TABLE _spooky_query TYPE datetime DEFAULT time::now()
     PERMISSIONS FOR select, create, update WHERE true;
 
--- The current XOR sum of all results in this query
-DEFINE FIELD remoteHash ON TABLE _spooky_incantation TYPE option<string>
+DEFINE FIELD ttl ON TABLE _spooky_query TYPE string
     PERMISSIONS FOR select, create, update WHERE true;
 
--- The Radix Tree of Result IDs for efficient sync
-DEFINE FIELD remoteTree ON TABLE _spooky_incantation TYPE any
-    PERMISSIONS FOR select, create, update WHERE true;
-
--- For garbage collection (Heartbeat)
-DEFINE FIELD lastActiveAt ON TABLE _spooky_incantation TYPE datetime DEFAULT time::now()
-    PERMISSIONS FOR select, create, update WHERE true;
-
--- How long this Incantation stays alive without activity
-DEFINE FIELD ttl ON TABLE _spooky_incantation TYPE duration
+DEFINE FIELD tableName ON TABLE _spooky_query TYPE string
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- ==================================================

@@ -35,7 +35,7 @@ fn test_complex_subquery_bug_streaming() {
 
     let config = json!({
         "id": "streaming_subquery_view",
-        "surrealQL": sql,
+        "surql": sql,
         "params": {
             "id": thread_id
         },

@@ -68,7 +68,7 @@ pub fn process_batch(
         .filter(|(_, w)| **w < 0)
         .map(|(k, _)| k.as_str())
         .collect();
-    
+
     tracing::debug!(
         target: "ssp::view::process_batch",
         view_id = %self.plan.id,
@@ -91,8 +91,8 @@ pub fn process_batch(
 
 ```rust
 pub async fn update_all_edges<C: Connection>(
-    db: &Surreal<C>, 
-    updates: &[&StreamingUpdate], 
+    db: &Surreal<C>,
+    updates: &[&StreamingUpdate],
     metrics: &Metrics
 ) {
     // ADD THIS LOGGING BLOCK AT START
@@ -101,7 +101,7 @@ pub async fn update_all_edges<C: Connection>(
             .filter(|r| matches!(r.event, DeltaEvent::Created))
             .map(|r| r.id.as_str())
             .collect();
-        
+
         tracing::info!(
             target: "ssp::edges",
             view_id = %update.view_id,
@@ -159,6 +159,7 @@ SELECT id, record_id FROM _spooky_version LIMIT 5;
 **Location:** Around line 424 in `process_batch`
 
 **Before:**
+
 ```rust
 let view_delta_struct = if is_first_run {
     None // First run = treat as full snapshot
@@ -172,6 +173,7 @@ let view_delta_struct = if is_first_run {
 ```
 
 **After:**
+
 ```rust
 let view_delta_struct = if is_first_run {
     tracing::info!(
@@ -208,21 +210,21 @@ mod tests {
     #[test]
     fn test_first_run_emits_additions() {
         // Setup: Create view with empty cache
-        let plan = QueryPlan { 
-            id: "test".to_string(), 
-            root: Operator::Scan { table: "users".to_string() } 
+        let plan = QueryPlan {
+            id: "test".to_string(),
+            root: Operator::Scan { table: "users".to_string() }
         };
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
-        
+
         // Setup: Create database with one record
         let mut db = Database::new();
         let table = db.ensure_table("users");
         table.rows.insert(SmolStr::new("1"), SpookyValue::Null);
         table.zset.insert(SmolStr::new("users:1"), 1);
-        
+
         // Act: Process empty batch (simulates first run on registration)
         let result = view.process_batch(&BatchDeltas::new(), &db);
-        
+
         // Assert: Should return StreamingUpdate with Created event
         assert!(result.is_some());
         if let Some(ViewUpdate::Streaming(update)) = result {
@@ -266,7 +268,7 @@ Also update `categorize_changes` to NOT strip prefix:
 
 ```rust
 fn categorize_changes(...) -> (Vec<SmolStr>, Vec<SmolStr>, Vec<SmolStr>) {
-    // ... 
+    // ...
     for (key, weight) in view_delta {
         if *weight > 0 {
             // CHANGED: Don't strip prefix
@@ -293,8 +295,8 @@ DeltaEvent::Created => {
     format!(
         r#"LET $target = (SELECT id FROM _spooky_version WHERE record_id = '{0}');
         IF $target THEN
-            RELATE ${1}->_spooky_list_ref->$target[0].id 
-                SET version = $target[0].version, 
+            RELATE ${1}->_spooky_list_ref->$target[0].id
+                SET version = $target[0].version,
                     clientId = (SELECT clientId FROM ONLY ${1}).clientId
         ELSE
             RETURN {{ status: 'skipped', reason: 'no_version', record_id: '{0}' }}
@@ -312,7 +314,7 @@ Ensure UPDATE and DELETE also use correct format:
 ```rust
 DeltaEvent::Updated => {
     format!(
-        "UPDATE ${1}->_spooky_list_ref SET version += 1 
+        "UPDATE ${1}->_spooky_list_ref SET version += 1
          WHERE out = (SELECT id FROM _spooky_version WHERE record_id = '{0}')[0]",
         record.id,
         binding_name
@@ -321,7 +323,7 @@ DeltaEvent::Updated => {
 
 DeltaEvent::Deleted => {
     format!(
-        "DELETE ${1}->_spooky_list_ref 
+        "DELETE ${1}->_spooky_list_ref
          WHERE out = (SELECT id FROM _spooky_version WHERE record_id = '{0}')[0]",
         record.id,
         binding_name
@@ -356,7 +358,7 @@ async fn register_view_handler(
     };
 
     span.record("view_id", &data.plan.id);
-    
+
     let m = &data.metadata;
     let raw_id = m["id"].as_str().unwrap();
     let id_str = format_incantation_id(raw_id);
@@ -373,7 +375,7 @@ async fn register_view_handler(
             view_id = %id_str,
             "Re-registering view - deleting old edges first"
         );
-        
+
         if let Some(from_id) = parse_record_id(&id_str) {
             match state.db
                 .query("DELETE $from->_spooky_list_ref RETURN BEFORE")
@@ -399,7 +401,7 @@ async fn register_view_handler(
                 }
             }
         }
-        
+
         // Adjust metrics since we're replacing, not adding
         state.metrics.view_count.add(-1, &[]);
     }
@@ -452,6 +454,7 @@ surreal sql --conn http://localhost:8000 --ns test --db test \
 ```
 
 **Expected logs:**
+
 ```
 INFO ssp::view::process_batch: First run - emitting all records as additions view_id=... initial_records=1
 INFO ssp::edges: StreamingUpdate record IDs view_id=... created_count=1 created_ids=["1"]
@@ -485,6 +488,7 @@ surreal sql "SELECT * FROM _spooky_list_ref"
 ```
 
 **Expected logs:**
+
 ```
 INFO ssp::edges: Re-registering view - deleting old edges first view_id=...
 INFO ssp::edges: Cleaned up old edges view_id=... deleted_edge_count=2
@@ -500,7 +504,7 @@ curl -X POST http://localhost:8667/view/register -H "Authorization: Bearer $SECR
   -d '{ ... second view for users ... }'
 
 # Verify edges from BOTH views exist
-surreal sql "SELECT *, <-_spooky_incantation AS from_view FROM _spooky_list_ref"
+surreal sql "SELECT *, <-_spooky_query AS from_view FROM _spooky_list_ref"
 ```
 
 **Expected:** 4 edges total (2 records × 2 views), each with correct `from_view`.
@@ -512,29 +516,29 @@ surreal sql "SELECT *, <-_spooky_incantation AS from_view FROM _spooky_list_ref"
 async fn test_edge_sync_lifecycle() {
     // Setup test server and DB
     let app = setup_test_app().await;
-    
+
     // 1. Ingest record
     let resp = app.ingest("users", "CREATE", "user:1", json!({"name": "Test"})).await;
     assert_eq!(resp.status(), 200);
-    
+
     // 2. Register view
     let resp = app.register_view("test-view", "SELECT * FROM users").await;
     assert_eq!(resp.status(), 200);
-    
+
     // 3. Verify edge created
     let edges = app.query_db("SELECT * FROM _spooky_list_ref").await;
     assert_eq!(edges.len(), 1);
-    
+
     // 4. Ingest second record
     app.ingest("users", "CREATE", "user:2", json!({"name": "Test2"})).await;
-    
+
     // 5. Verify second edge created, first unchanged
     let edges = app.query_db("SELECT * FROM _spooky_list_ref").await;
     assert_eq!(edges.len(), 2);
-    
+
     // 6. Re-register view
     app.register_view("test-view", "SELECT * FROM users").await;
-    
+
     // 7. Verify edges recreated (not duplicated)
     let edges = app.query_db("SELECT * FROM _spooky_list_ref").await;
     assert_eq!(edges.len(), 2);
@@ -552,12 +556,12 @@ Add comments explaining the fix:
 ```rust
 // In view.rs
 /// Optimized 2-Phase Processing: Handles multiple table updates at once.
-/// 
+///
 /// # Edge Sync Behavior
 /// - First run (empty last_hash): Emits ALL matching records as additions
 ///   so that edges are created in SurrealDB
 /// - Subsequent runs: Emits only changes (additions/removals/updates)
-/// 
+///
 /// # Record ID Format
 /// - Cache keys use ZSet format: "table:id" (e.g., "users:123")
 /// - Result data uses stripped format: "123"
@@ -650,7 +654,7 @@ pub fn process_batch(
 
     let delta_additions: Vec<_> = view_delta.iter().filter(|(_, w)| **w > 0).map(|(k, _)| k.as_str()).collect();
     let delta_removals: Vec<_> = view_delta.iter().filter(|(_, w)| **w < 0).map(|(k, _)| k.as_str()).collect();
-    
+
     tracing::debug!(
         target: "ssp::view::process_batch",
         view_id = %self.plan.id,
@@ -662,7 +666,7 @@ pub fn process_batch(
         content_updates = updated_record_ids.len(),
         "Computed view delta (ZSet keys include table prefix)"
     );
-    
+
     // Early return if no changes
     if view_delta.is_empty() && !is_first_run && updated_record_ids.is_empty() {
         tracing::debug!(
@@ -851,20 +855,20 @@ async fn register_view_handler(
     state.metrics.view_count.add(1, &[]);
 
     let client_id_str = m["clientId"].as_str().unwrap().to_string();
-    let surql_str = m["surrealQL"].as_str().unwrap().to_string();
+    let surql_str = m["surql"].as_str().unwrap().to_string();
     let ttl_str = m["ttl"].as_str().unwrap().to_string();
     let last_active_str = m["lastActiveAt"].as_str().unwrap().to_string();
     let params_val = m["safe_params"].clone();
 
     // Store incantation metadata
-    let query = "UPSERT <record>$id SET clientId = <string>$clientId, surrealQL = <string>$surrealQL, params = $params, ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt";
+    let query = "UPSERT <record>$id SET clientId = <string>$clientId, surql = <string>$surql, params = $params, ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt";
 
     let db_res = state
         .db
         .query(query)
         .bind(("id", id_str.clone()))
         .bind(("clientId", client_id_str))
-        .bind(("surrealQL", surql_str))
+        .bind(("surql", surql_str))
         .bind(("params", params_val))
         .bind(("ttl", ttl_str))
         .bind(("lastActiveAt", last_active_str))
@@ -904,7 +908,7 @@ pub async fn update_all_edges<C: Connection>(db: &Surreal<C>, updates: &[&Stream
     }
 
     let span = Span::current();
-    
+
     // Detailed logging of what we're about to process
     info!(
         target: "ssp::edges",
@@ -912,17 +916,17 @@ pub async fn update_all_edges<C: Connection>(db: &Surreal<C>, updates: &[&Stream
         total_records = updates.iter().map(|u| u.records.len()).sum::<usize>(),
         "update_all_edges called"
     );
-    
+
     for update in updates.iter() {
         let created: Vec<_> = update.records.iter().filter(|r| matches!(r.event, DeltaEvent::Created)).map(|r| r.id.as_str()).collect();
         let updated: Vec<_> = update.records.iter().filter(|r| matches!(r.event, DeltaEvent::Updated)).map(|r| r.id.as_str()).collect();
         let deleted: Vec<_> = update.records.iter().filter(|r| matches!(r.event, DeltaEvent::Deleted)).map(|r| r.id.as_str()).collect();
-        
+
         info!(
             target: "ssp::edges",
             view_id = %update.view_id,
             created_count = created.len(),
-            updated_count = updated.len(), 
+            updated_count = updated.len(),
             deleted_count = deleted.len(),
             created_ids = ?created.iter().take(10).collect::<Vec<_>>(),
             updated_ids = ?updated.iter().take(10).collect::<Vec<_>>(),
@@ -965,7 +969,7 @@ pub async fn update_all_edges<C: Connection>(db: &Surreal<C>, updates: &[&Stream
                 );
                 continue;
             }
-            
+
             debug!(
                 target: "ssp::edges",
                 view_id = %update.view_id,
@@ -983,8 +987,8 @@ pub async fn update_all_edges<C: Connection>(db: &Surreal<C>, updates: &[&Stream
                     format!(
                         r#"LET $target = (SELECT id, record_id FROM _spooky_version WHERE record_id = '{0}');
                         IF $target THEN
-                            RELATE ${1}->_spooky_list_ref->$target.id 
-                                SET version = $target.version, 
+                            RELATE ${1}->_spooky_list_ref->$target.id
+                                SET version = $target.version,
                                     clientId = (SELECT clientId FROM ONLY ${1}).clientId;
                         ELSE
                             RETURN {{ status: 'skipped', reason: 'no_version_record', record_id: '{0}', view_id: '{2}' }};
@@ -1067,7 +1071,7 @@ pub async fn update_all_edges<C: Connection>(db: &Surreal<C>, updates: &[&Stream
         deleted = deleted_count,
         "Executing edge transaction"
     );
-    
+
     debug!(target: "ssp::edges", query = %debug_query, "Full query");
 
     match query.await {
@@ -1077,7 +1081,7 @@ pub async fn update_all_edges<C: Connection>(db: &Surreal<C>, updates: &[&Stream
                 statement_count = all_statements.len(),
                 "Edge transaction completed successfully"
             );
-            
+
             // Try to extract any returned data for debugging
             // This helps identify if RELATE/UPDATE/DELETE actually affected rows
             for i in 0..all_statements.len() {
@@ -1150,15 +1154,15 @@ Run these in SurrealDB to verify the fix:
 SELECT id, record_id FROM _spooky_version LIMIT 5;
 
 -- Count edges per incantation
-SELECT in AS incantation, count() AS edge_count 
-FROM _spooky_list_ref 
+SELECT in AS incantation, count() AS edge_count
+FROM _spooky_list_ref
 GROUP BY in;
 
 -- Check edges for a specific view
-SELECT ->_spooky_list_ref->_spooky_version.record_id AS records 
-FROM _spooky_incantation:YOUR_VIEW_ID;
+SELECT ->_spooky_list_ref->_spooky_version.record_id AS records
+FROM _spooky_query:YOUR_VIEW_ID;
 
 -- Find orphaned edges (edges to non-existent versions)
-SELECT * FROM _spooky_list_ref 
+SELECT * FROM _spooky_list_ref
 WHERE out NOT IN (SELECT id FROM _spooky_version);
 ```

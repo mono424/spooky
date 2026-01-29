@@ -57,11 +57,11 @@ export class DataModule<S extends SchemaStructure> {
    */
   async query<T extends TableNames<S>>(
     tableName: T,
-    sql: string,
+    surql: string,
     params: Record<string, any>,
     ttl: QueryTimeToLive
   ): Promise<QueryHash> {
-    const hash = await this.calculateHash({ sql, params });
+    const hash = await this.calculateHash({ surql, params });
 
     const recordId = new RecordId('_spooky_query', hash);
 
@@ -71,7 +71,7 @@ export class DataModule<S extends SchemaStructure> {
 
     const queryState = await this.createNewQuery<T>({
       recordId,
-      sql,
+      surql,
       params,
       ttl,
       tableName,
@@ -79,7 +79,7 @@ export class DataModule<S extends SchemaStructure> {
 
     const { localArray } = this.cache.registerQuery({
       id: recordId,
-      sql,
+      surql,
       params,
       ttl: new Duration(ttl),
       lastActiveAt: new Date(),
@@ -157,7 +157,7 @@ export class DataModule<S extends SchemaStructure> {
     try {
       // Fetch updated records
       const [records] = await this.local.query<[Record<string, any>[]]>(
-        queryState.config.sql,
+        queryState.config.surql,
         queryState.config.params
       );
 
@@ -387,13 +387,13 @@ export class DataModule<S extends SchemaStructure> {
 
   private async createNewQuery<T extends TableNames<S>>({
     recordId,
-    sql,
+    surql,
     params,
     ttl,
     tableName,
   }: {
     recordId: RecordId;
-    sql: string;
+    surql: string;
     params: Record<string, any>;
     ttl: QueryTimeToLive;
     tableName: T;
@@ -408,7 +408,7 @@ export class DataModule<S extends SchemaStructure> {
       config = await withRetry(this.logger, () =>
         this.local.getClient().create<QueryConfig>(recordId).content({
           id: recordId,
-          sql: sql,
+          surql: surql,
           params: params,
           localArray: [],
           remoteArray: [],
@@ -425,7 +425,7 @@ export class DataModule<S extends SchemaStructure> {
 
     let records: Record<string, any>[] = [];
     try {
-      const [result] = await this.local.query<[Record<string, any>[]]>(sql, params);
+      const [result] = await this.local.query<[Record<string, any>[]]>(surql, params);
       records = result || [];
     } catch (err) {
       this.logger.warn({ err }, 'Failed to load initial cached records');

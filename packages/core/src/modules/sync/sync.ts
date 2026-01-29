@@ -10,7 +10,7 @@ import { SyncScheduler } from './scheduler.js';
 import { SchemaStructure } from '@spooky/query-builder';
 import { CacheModule } from '../cache/index.js';
 import { DataModule } from '../data/index.js';
-import { encodeRecordId } from '../../utils/index.js';
+import { encodeRecordId, parseDuration } from '../../utils/index.js';
 
 export class SpookySync<S extends SchemaStructure> {
   private clientId: string = '';
@@ -185,19 +185,28 @@ export class SpookySync<S extends SchemaStructure> {
       throw new Error('Query to register not found');
     }
     // Delegate to remote function which handles DBSP registration & persistence
-    const res = await this.remote.query('fn::query::register($config)', {
-      config: {
-        ...queryState.config,
-        clientId: this.clientId,
-      },
-    });
-    console.log('xxxxxxx', res);
-    return;
+    const [{ array }] = await this.remote.query<[{ array: RecordVersionArray }]>(
+      'fn::query::register($config)',
+      {
+        config: {
+          clientId: this.clientId,
+          id: queryState.config.id,
+          surql: queryState.config.surql,
+          params: queryState.config.params,
+          ttl: queryState.config.ttl,
+        },
+      }
+    );
+
     this.logger.debug(
       { queryId: encodeRecordId(queryState.config.id), array },
       'createdRemoteQuery'
     );
-    await this.dataModule.updateQueryRemoteArray(hash, array);
+
+    if (array) {
+      /// Incantation existed already
+      await this.dataModule.updateQueryRemoteArray(hash, array);
+    }
   }
 
   private async heartbeatQuery(queryId: string) {
