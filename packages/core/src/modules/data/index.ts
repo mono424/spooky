@@ -249,7 +249,7 @@ export class DataModule<S extends SchemaStructure> {
         surql.returnObject([{ key: 'target', variable: 'created' }]),
       ])
     );
-    console.log('xxx UPDATE', params);
+
     const [{ target }] = await withRetry(this.logger, () =>
       this.local.query<[{ target: T }]>(query, {
         id: rid,
@@ -267,10 +267,10 @@ export class DataModule<S extends SchemaStructure> {
         op: 'CREATE',
         record: parsedRecord,
       },
+      true,
       true
     );
 
-    console.log('xxx UPDATE', parsedRecord);
     // Emit mutation event for sync
     const mutationEvent: MutationEvent = {
       type: 'create',
@@ -332,6 +332,7 @@ export class DataModule<S extends SchemaStructure> {
         op: 'UPDATE',
         record: parsedRecord,
       },
+      true,
       true
     );
 
@@ -357,8 +358,13 @@ export class DataModule<S extends SchemaStructure> {
    * Delete a record
    */
   async delete(table: string, id: string): Promise<void> {
-    const rid = id.includes(':') ? parseRecordIdString(id) : new RecordId(table, id);
+    const tableName = extractTablePart(id);
+    const tableSchema = this.schema.tables.find((t) => t.name === tableName);
+    if (!tableSchema) {
+      throw new Error(`Table ${tableName} not found`);
+    }
 
+    const rid = parseRecordIdString(id);
     const mutationId = parseRecordIdString(`_spooky_pending_mutations:${Date.now()}`);
 
     const query = surql.seal(
@@ -366,7 +372,7 @@ export class DataModule<S extends SchemaStructure> {
     );
 
     await withRetry(this.logger, () => this.local.query(query, { id: rid, mid: mutationId }));
-    await this.cache.delete(table, encodeRecordId(rid), true);
+    await this.cache.delete(table, id, true, true);
 
     // Emit mutation event
     const mutationEvent: MutationEvent = {

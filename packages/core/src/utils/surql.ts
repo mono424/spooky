@@ -32,7 +32,7 @@ export const surql = {
   },
 
   delete(idVar: string) {
-    return `DELETE FROM ONLY $${idVar}`;
+    return `DELETE $${idVar}`;
   },
 
   let(name: string, query: string) {

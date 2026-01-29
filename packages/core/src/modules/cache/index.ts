@@ -49,13 +49,20 @@ export class CacheModule implements StreamUpdateReceiver {
    * Save a single record to local DB and ingest into DBSP
    * Used by mutations (create/update)
    */
-  async save(cacheRecord: CacheRecord, isOptimistic: boolean = true): Promise<void> {
+  async save(
+    cacheRecord: CacheRecord,
+    isOptimistic: boolean = true,
+    skipDbInsert: boolean = false
+  ): Promise<void> {
     const { table, record, op } = cacheRecord;
     this.logger.debug({ table, op, isOptimistic }, 'Saving record');
 
     try {
       const { id, ...content } = record;
-      await this.local.getClient().upsert(id).content(content);
+
+      if (!skipDbInsert) {
+        await this.local.getClient().upsert(id).content(content);
+      }
 
       // 2. Ingest into DBSP
       this.streamProcessor.ingest(table, op, encodeRecordId(id), record, isOptimistic);
@@ -131,12 +138,19 @@ export class CacheModule implements StreamUpdateReceiver {
   /**
    * Delete a record from local DB and ingest deletion into DBSP
    */
-  async delete(table: string, id: string, isOptimistic: boolean = true): Promise<void> {
+  async delete(
+    table: string,
+    id: string,
+    isOptimistic: boolean = true,
+    skipDbDelete: boolean = false
+  ): Promise<void> {
     this.logger.debug({ table, id, isOptimistic }, 'Deleting record');
 
     try {
       // 1. Delete from local database
-      await this.local.query('DELETE $id', { id });
+      if (!skipDbDelete) {
+        await this.local.query('DELETE $id', { id });
+      }
 
       // 2. Ingest deletion into DBSP
       this.streamProcessor.ingest(table, 'DELETE', id, {}, isOptimistic);

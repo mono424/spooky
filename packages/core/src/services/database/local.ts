@@ -1,4 +1,4 @@
-import { applyDiagnostics, Diagnostic, RecordId, Surreal } from 'surrealdb';
+import { applyDiagnostics, DateTime, Diagnostic, RecordId, Surreal } from 'surrealdb';
 import { createWasmWorkerEngines } from '@surrealdb/wasm';
 import { SpookyConfig } from '../../types.js';
 import { Logger } from '../logger/index.js';
@@ -18,6 +18,10 @@ export class LocalDatabaseService extends AbstractDatabaseService {
           valueDecodeVisitor(value) {
             if (value instanceof RecordId) {
               return encodeRecordId(value);
+            }
+
+            if (value instanceof DateTime) {
+              return value.toDate();
             }
 
             return value;
