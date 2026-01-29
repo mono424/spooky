@@ -41,6 +41,7 @@ export interface StreamUpdateReceiver {
 }
 
 export class StreamProcessorService {
+  private logger: Logger;
   private processor: WasmProcessor | undefined;
   private isInitialized = false;
   private receivers: StreamUpdateReceiver[] = [];
@@ -49,8 +50,10 @@ export class StreamProcessorService {
     public events: EventSystem<StreamProcessorEvents>,
     private db: LocalDatabaseService,
     private persistenceClient: PersistenceClient,
-    private logger: Logger
-  ) {}
+    logger: Logger
+  ) {
+    this.logger = logger.child({ name: 'StreamProcessorService' });
+  }
 
   /**
    * Add a receiver for stream updates.

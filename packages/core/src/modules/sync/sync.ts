@@ -87,6 +87,9 @@ export class SpookySync<S extends SchemaStructure> {
     recordId: RecordId,
     version: number
   ) {
+    if (action === 'DELETE') {
+      return;
+    }
     const existing = this.dataModule.getQueryById(queryId);
 
     if (!existing) {

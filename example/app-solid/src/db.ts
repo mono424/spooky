@@ -11,7 +11,7 @@ export const dbConfig: SyncedDbConfig<typeof schema> = {
     namespace: 'main',
     database: 'main',
     endpoint: 'ws://localhost:8666/rpc',
-    store: 'indexeddb',
+    store: 'memory',
     persistenceClient: 'localstorage',
     // auth: { ... } // If needed later
   },

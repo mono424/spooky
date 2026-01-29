@@ -57,15 +57,24 @@ export function createLogger(level: Level = 'info', otelEndpoint?: string): Logg
       level: level,
       send: (levelLabel: string, logEvent: any) => {
         try {
+          const messages = [...logEvent.messages];
           const severityNumber = mapLevelToSeverityNumber(levelLabel);
 
           // Construct the message body
           let body = '';
-          const msg = logEvent.messages[0];
+          const msg = messages.pop();
+
           if (typeof msg === 'string') {
             body = msg;
           } else if (msg) {
             body = JSON.stringify(msg);
+          }
+
+          const attributes = {};
+          for (const msg of messages) {
+            if (typeof msg === 'object') {
+              Object.assign(attributes, msg);
+            }
           }
 
           // Emit to OTEL SDK
@@ -74,8 +83,8 @@ export function createLogger(level: Level = 'info', otelEndpoint?: string): Logg
             severityText: levelLabel.toUpperCase(),
             body: body,
             attributes: {
-              ...logEvent.bindings[0], // Bindings usually contain pid, hostname, name
-              ...(typeof msg === 'object' ? msg : {}), // Flatten msg properties if object
+              ...logEvent.bindings[0],
+              ...attributes,
             },
             timestamp: new Date(logEvent.ts),
           });
