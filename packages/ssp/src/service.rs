@@ -104,7 +104,7 @@ pub mod view {
             .to_string();
 
         let surreal_ql = config
-            .get("sql")
+            .get("surql")
             .or_else(|| config.get("surreal_ql"))
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow!("Missing or invalid 'sql'"))?

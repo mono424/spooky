@@ -349,7 +349,7 @@ export class StreamProcessorService {
       this.logger.debug(
         {
           queryId: queryPlan.id,
-          ssurqlql: queryPlan.surql,
+          surql: queryPlan.surql,
           params: queryPlan.params,
         },
         '[StreamProcessor] Registered query plan'
