@@ -30,7 +30,7 @@ import { StreamProcessorService } from './services/stream-processor/index.js';
 import { EventSystem } from './events/index.js';
 import { CacheModule } from './modules/cache/index.js';
 import { LocalStoragePersistenceClient } from './services/persistence/localstorage.js';
-import { generateId } from './utils/index.js';
+import { generateId, parseParams } from './utils/index.js';
 
 export class SpookyClient<S extends SchemaStructure> {
   private local: LocalDatabaseService;
@@ -221,10 +221,15 @@ export class SpookyClient<S extends SchemaStructure> {
     q: InnerQuery<any, any, any>,
     ttl: QueryTimeToLive
   ) {
+    const tableSchema = this.config.schema.tables.find((t) => t.name === table);
+    if (!tableSchema) {
+      throw new Error(`Table ${table} not found`);
+    }
+
     const hash = await this.dataModule.query(
       table,
       q.selectQuery.query,
-      q.selectQuery.vars ?? {},
+      parseParams(tableSchema.columns, q.selectQuery.vars ?? {}),
       ttl
     );
 

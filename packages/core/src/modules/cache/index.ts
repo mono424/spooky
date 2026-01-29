@@ -121,11 +121,8 @@ export class CacheModule implements StreamUpdateReceiver {
         isOptimistic
       );
 
-      console.log('abc1234');
-
       this.logger.debug({ count: records.length }, 'Batch saved successfully');
     } catch (err) {
-      console.log('xxx222', err);
       this.logger.error({ err, count: records.length }, 'Failed to save batch');
       throw err;
     }

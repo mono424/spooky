@@ -17,13 +17,13 @@ import {
 } from '../../types.js';
 import {
   parseRecordIdString,
-  encodeToSpooky,
-  encodeToSpookyContent,
   extractIdPart,
   encodeRecordId,
   parseDuration,
   withRetry,
   surql,
+  parseParams,
+  extractTablePart,
 } from '../../utils/index.js';
 
 /**
@@ -166,7 +166,6 @@ export class DataModule<S extends SchemaStructure> {
       queryState.records = records || [];
       queryState.config.localArray = localArray;
       queryState.updateCount++;
-      console.log(queryState.config);
       await this.local.getClient().query(surql.seal(surql.updateSet('id', ['localArray'])), {
         id: queryState.config.id,
         localArray,
@@ -233,10 +232,14 @@ export class DataModule<S extends SchemaStructure> {
    * Create a new record
    */
   async create<T extends Record<string, unknown>>(id: string, data: T): Promise<T> {
-    const rid = parseRecordIdString(id);
-    const tableName = rid.table.toString();
-    const encodedData = encodeToSpookyContent(this.schema, tableName, data as any);
+    const tableName = extractTablePart(id);
+    const tableSchema = this.schema.tables.find((t) => t.name === tableName);
+    if (!tableSchema) {
+      throw new Error(`Table ${tableName} not found`);
+    }
 
+    const rid = parseRecordIdString(id);
+    const params = parseParams(tableSchema.columns, data);
     const mutationId = parseRecordIdString(`_spooky_pending_mutations:${Date.now()}`);
 
     const query = surql.seal(
@@ -246,39 +249,34 @@ export class DataModule<S extends SchemaStructure> {
         surql.returnObject([{ key: 'target', variable: 'created' }]),
       ])
     );
-
+    console.log('xxx UPDATE', params);
     const [{ target }] = await withRetry(this.logger, () =>
       this.local.query<[{ target: T }]>(query, {
         id: rid,
-        data: encodedData,
+        data: params,
         mid: mutationId,
       })
     );
 
-    if (!target) {
-      throw new Error('Failed to create record or mutation log');
-    }
-
-    if (!target.id) {
-      throw Error(`Failed to gather record ID: ${id}`);
-    }
+    const parsedRecord = parseParams(tableSchema.columns, target) as RecordWithId;
 
     // Save to cache (which handles DBSP ingestion)
     await this.cache.save(
       {
         table: tableName,
         op: 'CREATE',
-        record: target as RecordWithId,
+        record: parsedRecord,
       },
       true
     );
 
+    console.log('xxx UPDATE', parsedRecord);
     // Emit mutation event for sync
     const mutationEvent: MutationEvent = {
       type: 'create',
       mutation_id: mutationId,
       record_id: rid,
-      data: encodedData,
+      data: params,
       record: target,
     };
 
@@ -299,12 +297,15 @@ export class DataModule<S extends SchemaStructure> {
     id: string,
     data: Partial<T>
   ): Promise<T> {
-    const rid = id.includes(':') ? parseRecordIdString(id) : new RecordId(table, id);
-    const encodedData = encodeToSpookyContent(this.schema, table as any, data as any);
+    const tableName = extractTablePart(id);
+    const tableSchema = this.schema.tables.find((t) => t.name === tableName);
+    if (!tableSchema) {
+      throw new Error(`Table ${tableName} not found`);
+    }
 
+    const rid = parseRecordIdString(id);
+    const params = parseParams(tableSchema.columns, data);
     const mutationId = parseRecordIdString(`_spooky_pending_mutations:${Date.now()}`);
-
-    let target: T;
 
     const query = surql.seal(
       surql.tx([
@@ -314,29 +315,22 @@ export class DataModule<S extends SchemaStructure> {
       ])
     );
 
-    const [result] = await withRetry(this.logger, () =>
+    const [{ target }] = await withRetry(this.logger, () =>
       this.local.query<[{ target: T }]>(query, {
         id: rid,
-        data: encodedData,
+        data: params,
         mid: mutationId,
       })
     );
 
-    target = result?.target!;
-    if (!target) {
-      throw new Error(`Failed to update record: ${id}`);
-    }
-
-    if (!target.id) {
-      throw Error(`Failed to gather record ID: ${id}`);
-    }
+    const parsedRecord = parseParams(tableSchema.columns, target) as RecordWithId;
 
     // Save to cache
     await this.cache.save(
       {
         table: table,
         op: 'UPDATE',
-        record: target as RecordWithId,
+        record: parsedRecord,
       },
       true
     );
@@ -346,7 +340,7 @@ export class DataModule<S extends SchemaStructure> {
       type: 'update',
       mutation_id: mutationId,
       record_id: rid,
-      data: encodedData,
+      data: params,
       record: target,
     };
 
@@ -403,6 +397,11 @@ export class DataModule<S extends SchemaStructure> {
     ttl: QueryTimeToLive;
     tableName: T;
   }): Promise<QueryState> {
+    const tableSchema = this.schema.tables.find((t) => t.name === tableName);
+    if (!tableSchema) {
+      throw new Error(`Table ${tableName} not found`);
+    }
+
     let [configRecord] = await withRetry(this.logger, () =>
       this.local.query<[QueryConfigRecord]>('SELECT * FROM ONLY $id', {
         id: recordId,
@@ -426,6 +425,7 @@ export class DataModule<S extends SchemaStructure> {
     const config: QueryConfig = {
       ...configRecord,
       id: recordId,
+      params: parseParams(tableSchema.columns, configRecord.params),
     };
 
     let records: Record<string, any>[] = [];

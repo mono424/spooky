@@ -109,6 +109,7 @@ export class SpookySync<S extends SchemaStructure> {
   private async processUpEvent(event: UpEvent) {
     switch (event.type) {
       case 'create':
+        console.log('xxx CREATE', event);
         await this.remote.query(`CREATE $id CONTENT $data`, {
           id: event.record_id,
           data: event.data,

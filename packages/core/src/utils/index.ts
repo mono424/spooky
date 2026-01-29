@@ -4,6 +4,7 @@ import { Logger } from '../services/logger/index.js';
 import { QueryTimeToLive } from '../types.js';
 
 export * from './surql.js';
+export * from './parser.js';
 
 // ==================== RECORDID UTILITIES ====================
 
@@ -31,6 +32,13 @@ export const extractIdPart = (id: string | RecordId<string>): string => {
   }
   // For other types (number, object, array), convert to string
   return String(idValue);
+};
+
+export const extractTablePart = (id: string | RecordId<string>): string => {
+  if (typeof id === 'string') {
+    return id.split(':')[0];
+  }
+  return id.table.toString();
 };
 
 export const parseRecordIdString = (id: string): RecordId<string> => {
@@ -84,57 +92,6 @@ export function decodeFromSpooky<S extends SchemaStructure, T extends TableNames
   }
 
   return encoded as TableModel<GetTable<S, T>>;
-}
-
-export function encodeToSpooky<
-  S extends SchemaStructure,
-  T extends TableNames<S>,
-  R extends Partial<TableModel<GetTable<S, T>>>,
->(schema: S, tableName: T, record: R): R {
-  const table = schema.tables.find((t) => t.name === tableName);
-  if (!table) {
-    throw new Error(`Table ${tableName} not found in schema`);
-  }
-
-  const decoded = { ...record } as any;
-  for (const field of Object.keys(table.columns)) {
-    const column = table.columns[field] as any;
-
-    if (column.recordId && decoded[field] != null) {
-      if (decoded[field] instanceof RecordId) {
-        decoded[field] = decoded[field];
-      } else if (typeof decoded[field] === 'string') {
-        if (!decoded[field].includes(':')) {
-          decoded[field] = new RecordId(tableName, decoded[field]);
-        } else {
-          decoded[field] = parseRecordIdString(decoded[field]);
-        }
-      }
-    }
-
-    if (column.dateTime && decoded[field] != null) {
-      if (typeof decoded[field] === 'string') {
-        decoded[field] = new Date(decoded[field]);
-      } else if (decoded[field] instanceof Date) {
-        decoded[field] = decoded[field];
-      }
-    }
-  }
-
-  return decoded;
-}
-
-export function encodeToSpookyContent<
-  S extends SchemaStructure,
-  T extends TableNames<S>,
-  R extends Partial<TableModel<GetTable<S, T>>>,
->(schema: S, tableName: T, record: R): Omit<R, 'id'> {
-  const encoded = encodeToSpooky(schema, tableName, record);
-  if (encoded.id) {
-    delete encoded.id;
-  }
-  console.log('xxxxxxx', encoded);
-  return encoded;
 }
 
 // ==================== TIME/DURATION UTILITIES ====================
