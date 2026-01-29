@@ -1,5 +1,12 @@
 import { GetTable, SchemaStructure, TableModel, TableNames } from '@spooky/query-builder';
-import { Uuid, RecordId } from 'surrealdb';
+import { Uuid, RecordId, Duration } from 'surrealdb';
+import { Logger } from '../services/logger/index.js';
+import { QueryTimeToLive } from '../types.js';
+
+export * from './surql.js';
+export * from './parser.js';
+
+// ==================== RECORDID UTILITIES ====================
 
 export const compareRecordIds = (
   a: RecordId<string> | string,
@@ -15,7 +22,23 @@ export const encodeRecordId = (recordId: RecordId<string>): string => {
 };
 
 export const extractIdPart = (id: string | RecordId<string>): string => {
-  return typeof id === 'string' ? id.split(':').slice(1).join(':') : id.id.toString();
+  if (typeof id === 'string') {
+    return id.split(':').slice(1).join(':');
+  }
+  // RecordId.id can be string, number, object, or array
+  const idValue = id.id;
+  if (typeof idValue === 'string') {
+    return idValue;
+  }
+  // For other types (number, object, array), convert to string
+  return String(idValue);
+};
+
+export const extractTablePart = (id: string | RecordId<string>): string => {
+  if (typeof id === 'string') {
+    return id.split(':')[0];
+  }
+  return id.table.toString();
 };
 
 export const parseRecordIdString = (id: string): RecordId<string> => {
@@ -23,9 +46,17 @@ export const parseRecordIdString = (id: string): RecordId<string> => {
   return new RecordId(table, idParts.join(':'));
 };
 
-import { createLogger } from '../services/logger/index.js';
+export function generateId(): string {
+  return Uuid.v4().toString().replace(/-/g, '');
+}
 
-const logger = createLogger('info').child({ module: 'utils' });
+export function generateNewTableId<S extends SchemaStructure, T extends TableNames<S>>(
+  tableName: T
+): RecordId {
+  return new RecordId(tableName, generateId());
+}
+
+// ==================== SCHEMA ENCODING/DECODING ====================
 
 export function decodeFromSpooky<S extends SchemaStructure, T extends TableNames<S>>(
   schema: S,
@@ -60,51 +91,79 @@ export function decodeFromSpooky<S extends SchemaStructure, T extends TableNames
     }
   }
 
-  logger.trace({ encoded }, 'Decoded record');
-
   return encoded as TableModel<GetTable<S, T>>;
 }
 
-export function encodeToSpooky<
-  S extends SchemaStructure,
-  T extends TableNames<S>,
-  R extends Partial<TableModel<GetTable<S, T>>>,
->(schema: S, tableName: T, record: R): R {
-  const table = schema.tables.find((t) => t.name === tableName);
-  if (!table) {
-    throw new Error(`Table ${tableName} not found in schema`);
+// ==================== TIME/DURATION UTILITIES ====================
+
+/**
+ * Parse duration string or Duration object to milliseconds
+ */
+export function parseDuration(duration: QueryTimeToLive | Duration): number {
+  if (duration instanceof Duration) {
+    const ms = (duration as any).milliseconds || (duration as any)._milliseconds;
+    if (ms) return Number(ms);
+    const str = duration.toString();
+    if (str !== '[object Object]') return parseDuration(str as any);
+    return 600000;
   }
 
-  const decoded = { ...record } as any;
-  for (const field of Object.keys(table.columns)) {
-    const column = table.columns[field] as any;
-
-    if (column.recordId && decoded[field] != null) {
-      if (decoded[field] instanceof RecordId) {
-        decoded[field] = decoded[field];
-      } else if (typeof decoded[field] === 'string') {
-        if (!decoded[field].includes(':')) {
-          decoded[field] = new RecordId(tableName, decoded[field]);
-        } else {
-          decoded[field] = parseRecordIdString(decoded[field]);
-        }
-      }
-    }
-
-    if (column.dateTime && decoded[field] != null) {
-      if (typeof decoded[field] === 'string') {
-        decoded[field] = new Date(decoded[field]);
-      } else if (decoded[field] instanceof Date) {
-        decoded[field] = decoded[field];
-      }
-    }
+  if (typeof duration === 'bigint') {
+    return Number(duration);
   }
 
-  return decoded;
+  if (typeof duration !== 'string') return 600000;
+
+  const match = duration.match(/^(\d+)([smh])$/);
+  if (!match) return 600000;
+  const val = parseInt(match[1], 10);
+  const unit = match[2];
+  switch (unit) {
+    case 's':
+      return val * 1000;
+    case 'h':
+      return val * 3600000;
+    case 'm':
+    default:
+      return val * 60000;
+  }
 }
 
-export function generateNewId<S extends SchemaStructure, T extends TableNames<S>>(
-  tableName: T
-): RecordId {
-  return new RecordId(tableName, Uuid.v4().toString().replace(/-/g, ''));
+// ==================== DATABASE UTILITIES ====================
+
+/**
+ * Helper for retrying DB operations with exponential backoff
+ */
+export async function withRetry<T>(
+  logger: Logger,
+  operation: () => Promise<T>,
+  retries = 3,
+  delayMs = 100
+): Promise<T> {
+  let lastError;
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await operation();
+    } catch (err: any) {
+      lastError = err;
+      if (
+        err?.message?.includes('Can not open transaction') ||
+        err?.message?.includes('transaction') ||
+        err?.message?.includes('Database is busy')
+      ) {
+        logger.warn(
+          {
+            attempt: i + 1,
+            retries,
+            error: err.message,
+          },
+          'Retrying DB operation'
+        );
+        await new Promise((res) => setTimeout(res, delayMs * (i + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastError;
 }

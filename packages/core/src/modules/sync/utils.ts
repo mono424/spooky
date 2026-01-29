@@ -1,6 +1,6 @@
 import { RecordId } from 'surrealdb';
 import { RecordVersionArray, RecordVersionDiff } from '../../types.js';
-import { parseRecordIdString } from '../../utils/index.js';
+import { parseRecordIdString, encodeRecordId } from '../../utils/index.js';
 
 export class ArraySyncer {
   private localArray: RecordVersionArray;
@@ -79,8 +79,6 @@ export function diffRecordVersionArray(
     } else if (localVersion < remoteVersion) {
       // Record exists in both but remote has newer version
       updated.push(recordId);
-
-      console.log('__diff__', localVersion, remoteVersion);
     }
   }
 
@@ -115,17 +113,17 @@ export function applyRecordVersionDiff(
 
   // Apply removals
   for (const id of diff.removed) {
-    currentMap.delete(id.toString());
+    currentMap.delete(encodeRecordId(id));
   }
 
   // Apply additions
   for (const item of diff.added) {
-    currentMap.set(item.id.toString(), item.version);
+    currentMap.set(encodeRecordId(item.id), item.version);
   }
 
   // Apply updates
   for (const item of diff.updated) {
-    currentMap.set(item.id.toString(), item.version);
+    currentMap.set(encodeRecordId(item.id), item.version);
   }
 
   return Array.from(currentMap).sort((a, b) => a[0].localeCompare(b[0]));
@@ -137,9 +135,8 @@ export function createDiffFromDbOp(
   version: number,
   versions?: RecordVersionArray
 ): RecordVersionDiff {
-  const old = versions?.find((record) => record[0] === recordId.toString());
+  const old = versions?.find((record) => record[0] === encodeRecordId(recordId));
 
-  // console.log('__TEST__', old, version);
   if (old && old[1] >= version) {
     return {
       added: [],

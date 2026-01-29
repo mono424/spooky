@@ -104,10 +104,10 @@ pub mod view {
             .to_string();
 
         let surreal_ql = config
-            .get("surrealQL")
+            .get("surql")
             .or_else(|| config.get("surreal_ql"))
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow!("Missing or invalid 'surrealQL'"))?
+            .ok_or_else(|| anyhow!("Missing or invalid 'surql'"))?
             .to_string();
 
         let client_id = config
@@ -168,7 +168,7 @@ pub mod view {
         let metadata = json!({
             "id": id,
             "clientId": client_id,
-            "surrealQL": surreal_ql,
+            "sql": surreal_ql,
             "params": params,
             "safe_params": safe_params_val,
             "ttl": ttl,

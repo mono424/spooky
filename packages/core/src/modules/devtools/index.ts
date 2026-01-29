@@ -3,6 +3,7 @@ import { Logger } from '../../services/logger/index.js';
 import { SchemaStructure } from '@spooky/query-builder';
 import { RecordId } from 'surrealdb';
 import { StreamUpdate, StreamUpdateReceiver } from '../../services/stream-processor/index.js';
+import { encodeRecordId } from '../../utils/index.js';
 
 // DevTools interfaces (matching extension expectations)
 export interface DevToolsEvent {
@@ -12,7 +13,7 @@ export interface DevToolsEvent {
   payload: any;
 }
 
-import { DataManager } from '../data/index.js';
+import { DataModule } from '../data/index.js';
 import { AuthService } from '../auth/index.js';
 import { AuthEventTypes } from '../auth/events/index.js';
 
@@ -22,14 +23,12 @@ export class DevToolsService implements StreamUpdateReceiver {
   private version = '1.0.0';
 
   constructor(
-    // private mutationEvents: MutationEventSystem, // REMOVED
-    // private queryEvents: QueryEventSystem, // REMOVED
     private databaseService: LocalDatabaseService,
     private remoteDatabaseService: RemoteDatabaseService,
     private logger: Logger,
     private schema: SchemaStructure,
     private authService: AuthService<SchemaStructure>,
-    private dataManager?: DataManager<any>
+    private dataManager?: DataModule<SchemaStructure>
   ) {
     this.exposeToWindow();
 
@@ -48,36 +47,34 @@ export class DevToolsService implements StreamUpdateReceiver {
 
     const queries = this.dataManager.getActiveQueries();
     queries.forEach((q) => {
-      const queryHash = this.hashString(q.id.toString());
+      const queryHash = this.hashString(encodeRecordId(q.config.id));
       result.set(queryHash, {
         queryHash,
         status: 'active',
         createdAt:
-          q.lastActiveAt instanceof Date
-            ? q.lastActiveAt.getTime()
-            : new Date(q.lastActiveAt || Date.now()).getTime(),
+          q.config.lastActiveAt instanceof Date
+            ? q.config.lastActiveAt.getTime()
+            : new Date(q.config.lastActiveAt || Date.now()).getTime(),
         lastUpdate: Date.now(),
         updateCount: q.updateCount,
-        query: q.surrealql,
-        variables: q.params || {},
+        query: q.config.sql,
+        variables: q.config.params || {},
         dataSize: q.records?.length || 0,
         data: q.records,
-        // localHash: q.localHash,
-        localArray: q.localArray,
-        // remoteHash: q.remoteHash,
-        remoteArray: q.remoteArray,
+        localArray: q.config.localArray,
+        remoteArray: q.config.remoteArray,
       });
     });
     return result;
   }
 
   public onQueryInitialized(payload: any) {
-    this.logger.debug({ payload }, '[DevToolsService] IncantationInitialized');
-    const queryHash = this.hashString(payload.incantationId.toString());
+    this.logger.debug({ payload }, '[DevToolsService] QueryInitialized');
+    const queryHash = this.hashString(payload.queryId.toString());
 
     this.addEvent('QUERY_REQUEST_INIT', {
       queryHash,
-      query: payload.surrealql,
+      query: payload.sql,
       variables: {},
     });
     this.notifyDevTools();
@@ -86,13 +83,11 @@ export class DevToolsService implements StreamUpdateReceiver {
   public onQueryUpdated(payload: any) {
     this.logger.debug(
       {
-        id: payload.incantationId?.toString(),
-        // localHash: payload.localHash,
-        // remoteHash: payload.remoteHash,
+        id: payload.queryId?.toString(),
       },
-      '[DevToolsService] IncantationUpdated'
+      '[DevToolsService] QueryUpdated'
     );
-    const queryHash = this.hashString(payload.incantationId.toString());
+    const queryHash = this.hashString(payload.queryId.toString());
 
     this.addEvent('QUERY_UPDATED', {
       queryHash,
@@ -116,7 +111,7 @@ export class DevToolsService implements StreamUpdateReceiver {
         mutation: {
           type: 'create', // simplifying
           data: 'data' in p ? p.data : undefined,
-          selector: p.record_id.toString(),
+          selector: encodeRecordId(p.record_id),
         },
       });
     });

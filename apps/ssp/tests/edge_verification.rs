@@ -11,10 +11,10 @@ fn parse_record_id(id: &str) -> Option<RecordId> {
 }
 
 fn format_incantation_id(id: &str) -> String {
-    if id.starts_with("_spooky_incantation:") {
+    if id.starts_with("_spooky_query:") {
         id.to_string()
     } else {
-        format!("_spooky_incantation:{}", id)
+        format!("_spooky_query:{}", id)
     }
 }
 

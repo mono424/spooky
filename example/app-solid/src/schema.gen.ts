@@ -7,11 +7,11 @@ export const schema = {
       name: 'thread' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
+        title: { type: 'string' as const, optional: false },
         created_at: { type: 'string' as const, dateTime: true, optional: true },
         author: { type: 'string' as const, recordId: true, optional: false },
         active: { type: 'boolean' as const, optional: true },
         content: { type: 'string' as const, optional: false },
-        title: { type: 'string' as const, optional: false },
         comments: { type: 'string' as const, optional: true },
       },
       primaryKey: ['id'] as const
@@ -37,8 +37,8 @@ export const schema = {
       name: 'comment' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
-        author: { type: 'string' as const, recordId: true, optional: false },
         content: { type: 'string' as const, optional: false },
+        author: { type: 'string' as const, recordId: true, optional: false },
         created_at: { type: 'string' as const, dateTime: true, optional: true },
         thread: { type: 'string' as const, recordId: true, optional: false },
       },
@@ -58,20 +58,6 @@ export const schema = {
       to: 'comment' as const,
       cardinality: 'many' as const
     },
-  ],
-  relationships: [
-    {
-      from: 'thread' as const,
-      field: 'author' as const,
-      to: 'user' as const,
-      cardinality: 'one' as const
-    },
-    {
-      from: 'thread' as const,
-      field: 'comments' as const,
-      to: 'comment' as const,
-      cardinality: 'many' as const
-    },
     {
       from: 'comment' as const,
       field: 'author' as const,
@@ -85,20 +71,20 @@ export const schema = {
       cardinality: 'one' as const
     },
     {
-      from: 'user' as const,
-      field: 'threads' as const,
-      to: 'thread' as const,
-      cardinality: 'many' as const
+      from: 'thread' as const,
+      field: 'author' as const,
+      to: 'user' as const,
+      cardinality: 'one' as const
     },
     {
-      from: 'user' as const,
+      from: 'thread' as const,
       field: 'comments' as const,
       to: 'comment' as const,
       cardinality: 'many' as const
     },
   ],
   access: {
-    account: {"signIn":{"params":{"username":{"type":"string","optional":false},"password":{"type":"string","optional":false}}},"signup":{"params":{"password":{"type":"string","optional":false},"username":{"type":"string","optional":false}}}},
+    account: {"signIn":{"params":{"password":{"type":"string","optional":false},"username":{"type":"string","optional":false}}},"signup":{"params":{"username":{"type":"string","optional":false},"password":{"type":"string","optional":false}}}},
   }
 } as const;
 
@@ -225,39 +211,25 @@ DEFINE FIELD IF NOT EXISTS updated_at ON _spooky_stream_processor_state TYPE dat
 -- The Registry of active Live Queries (Incantations).
 -- ==================================================
 
-DEFINE TABLE _spooky_incantation SCHEMALESS
+DEFINE TABLE _spooky_query SCHEMALESS
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
--- The raw query string (for re-hydration/debugging)
-DEFINE FIELD surrealQL ON TABLE _spooky_incantation TYPE option<string>
+DEFINE FIELD surql ON TABLE _spooky_query TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
--- The raw query string (for re-hydration/debugging)
-DEFINE FIELD clientId ON TABLE _spooky_incantation TYPE option<string>
+DEFINE FIELD localArray ON TABLE _spooky_query TYPE any
 PERMISSIONS FOR select, create, update WHERE true;
 
--- The current XOR sum of all results in this query
-DEFINE FIELD localHash ON TABLE _spooky_incantation TYPE option<string>
+DEFINE FIELD remoteArray ON TABLE _spooky_query TYPE any
 PERMISSIONS FOR select, create, update WHERE true;
 
--- The Radix Tree of Result IDs for efficient sync
-DEFINE FIELD localTree ON TABLE _spooky_incantation TYPE any
+DEFINE FIELD lastActiveAt ON TABLE _spooky_query TYPE option<datetime> DEFAULT time::now()
 PERMISSIONS FOR select, create, update WHERE true;
 
--- The current XOR sum of all results in this query
-DEFINE FIELD remoteHash ON TABLE _spooky_incantation TYPE option<string>
+DEFINE FIELD ttl ON TABLE _spooky_query TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
--- The Radix Tree of Result IDs for efficient sync
-DEFINE FIELD remoteTree ON TABLE _spooky_incantation TYPE any
-PERMISSIONS FOR select, create, update WHERE true;
-
--- For garbage collection (Heartbeat)
-DEFINE FIELD lastActiveAt ON TABLE _spooky_incantation TYPE option<datetime> DEFAULT time::now()
-PERMISSIONS FOR select, create, update WHERE true;
-
--- How long this Incantation stays alive without activity
-DEFINE FIELD ttl ON TABLE _spooky_incantation TYPE option<duration>
+DEFINE FIELD tableName ON TABLE _spooky_query TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- ==================================================

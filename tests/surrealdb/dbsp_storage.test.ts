@@ -58,9 +58,9 @@ describe('DBSP Storage Persistence', () => {
     // Create an incantation and verify Hash is updated automatically (by _spooky_dbsp_register event)
     const autoIncantId = 'auto_test_view';
     const autoIncantSql = `
-      UPSERT _spooky_incantation:${autoIncantId} CONTENT {
+      UPSERT _spooky_query:${autoIncantId} CONTENT {
         id: '${autoIncantId}',
-        surrealQL: 'SELECT * FROM storage_items',
+        sql: 'SELECT * FROM storage_items',
         params: {},
         ttl: 10m,
         lastActiveAt: time::now(),
@@ -70,7 +70,7 @@ describe('DBSP Storage Persistence', () => {
     await runQuery(autoIncantSql);
 
     // Check if Hash is populated
-    const checkAutoSql = `SELECT * FROM _spooky_incantation:${autoIncantId}`;
+    const checkAutoSql = `SELECT * FROM _spooky_query:${autoIncantId}`;
     const autoRes = await runQuery(checkAutoSql);
     // console.log("Auto Incantation Res:", JSON.stringify(autoRes, null, 2));
 
@@ -96,9 +96,9 @@ describe('DBSP Storage Persistence', () => {
     // Create a user first.
     await runQuery(`CREATE user:alice SET username = 'alice', password = 'password123';`);
     const paramIncantSql = `
-      UPSERT _spooky_incantation:${paramIncantId} CONTENT {
+      UPSERT _spooky_query:${paramIncantId} CONTENT {
         id: '${paramIncantId}',
-        surrealQL: 'SELECT * FROM user WHERE id = $id',
+        sql: 'SELECT * FROM user WHERE id = $id',
         params: { id: "user:alice" },
         ttl: 10m,
         lastActiveAt: time::now(),
@@ -108,7 +108,7 @@ describe('DBSP Storage Persistence', () => {
     await runQuery(paramIncantSql);
 
     // Check Auto Hash
-    const checkParamSql = `SELECT * FROM _spooky_incantation:${paramIncantId}`;
+    const checkParamSql = `SELECT * FROM _spooky_query:${paramIncantId}`;
     const paramRes = await runQuery(checkParamSql);
     const paramRecord = (paramRes[0].result || paramRes[0])[0];
 
@@ -124,7 +124,7 @@ describe('DBSP Storage Persistence', () => {
     expect(state.views[0].plan.id).toBe('storage_view');
   });
 
-  test('should handle unquoted record ID parameters (SurrealQL style)', async () => {
+  test('should handle unquoted record ID parameters (sql style)', async () => {
     // Mimic the failing scenario: { id: thread:123 }
     // Create a dummy thread
     await runQuery(
@@ -139,21 +139,21 @@ describe('DBSP Storage Persistence', () => {
     // We strictly use the Event-driven flow: UPSERT the Incantation, and expect the Event to register it and populate Hash.
     await runQuery(`
       LET $params = { id: thread:test_parsing };
-      UPSERT _spooky_incantation:parsing_test_view SET 
+      UPSERT _spooky_query:parsing_test_view SET 
           id = '${viewName}', 
-          surrealQL = "${query}", 
+          sql = "${query}", 
           params = $params,
           ttl = 1h;
     `);
 
     // Check if Hash is populated
-    const records = await runQuery(`SELECT * FROM _spooky_incantation:parsing_test_view`);
+    const records = await runQuery(`SELECT * FROM _spooky_query:parsing_test_view`);
     const record = (records[0].result || records[0])[0];
     expect(record.hash).toBeDefined();
     expect(record.hash).not.toBe('');
   }, 20000);
 
-  test('should handle backticked record ID parameters (SurrealQL complex style)', async () => {
+  test('should handle backticked record ID parameters (sql complex style)', async () => {
     // Mimic the failing scenario: { id: thread:`thread:b6a...` }
     const threadId = 'thread:complex_id';
     await runQuery(
@@ -178,16 +178,16 @@ describe('DBSP Storage Persistence', () => {
 
     await runQuery(`
       LET $res = mod::dbsp::register_view('${viewName}', "${query}", "${trickyParams}");
-      UPSERT _spooky_incantation:complex_test_view SET 
+      UPSERT _spooky_query:complex_test_view SET 
           id = '${viewName}', 
-          surrealQL = "${query}", 
+          sql = "${query}", 
           params = { id: ${threadId} },
           hash = $res.result_hash,
           ttl = 1h;
     `);
 
     // Check if Hash is populated
-    const records = await runQuery(`SELECT * FROM _spooky_incantation:complex_test_view`);
+    const records = await runQuery(`SELECT * FROM _spooky_query:complex_test_view`);
     const record = (records[0].result || records[0])[0];
     expect(record.hash).toBeDefined();
     expect(record.hash).not.toBe('');
@@ -209,15 +209,15 @@ describe('DBSP Storage Persistence', () => {
 
     await runQuery(`
       LET $res = mod::dbsp::register_view('${viewName}', "${query}", "${params}");
-      UPSERT _spooky_incantation:${viewName} SET 
+      UPSERT _spooky_query:${viewName} SET 
           id = '${viewName}', 
-          surrealQL = "${query}", 
+          sql = "${query}", 
           params = { id: ${threadId} },
           hash = $res.result_hash,
           ttl = 1h;
     `);
 
-    const records = await runQuery(`SELECT * FROM _spooky_incantation:${viewName}`);
+    const records = await runQuery(`SELECT * FROM _spooky_query:${viewName}`);
     const record = (records[0].result || records[0])[0];
 
     expect(record.hash).toBeDefined();
@@ -232,15 +232,15 @@ describe('DBSP Storage Persistence', () => {
     // 1. Register with valid params
     await runQuery(`
       LET $res = mod::dbsp::register_view('${viewName}', "${query}", "${initialParams}");
-      UPSERT _spooky_incantation:${viewName} SET 
+      UPSERT _spooky_query:${viewName} SET 
         id = '${viewName}',
-        surrealQL = "${query}",
+        sql = "${query}",
         params = ${initialParams},
         hash = $res.result_hash,
         ttl = 1h;
     `);
 
-    let records = await runQuery(`SELECT * FROM _spooky_incantation:${viewName}`);
+    let records = await runQuery(`SELECT * FROM _spooky_query:${viewName}`);
     let record = (records[0].result || records[0])[0];
     const initialHash = record.hash;
     expect(initialHash).not.toBe('');
@@ -253,15 +253,15 @@ describe('DBSP Storage Persistence', () => {
 
     await runQuery(`
       LET $res = mod::dbsp::register_view('${viewName}', "${query}", "${newParams}");
-      UPSERT _spooky_incantation:${viewName} SET 
+      UPSERT _spooky_query:${viewName} SET 
         id = '${viewName}',
-        surrealQL = "${query}",
+        sql = "${query}",
         params = ${newParams},
         hash = $res.result_hash,
         ttl = 1h;
     `);
 
-    records = await runQuery(`SELECT * FROM _spooky_incantation:${viewName}`);
+    records = await runQuery(`SELECT * FROM _spooky_query:${viewName}`);
     record = (records[0].result || records[0])[0];
 
     expect(record.hash).toBeDefined();
@@ -286,9 +286,9 @@ describe('DBSP Storage Persistence', () => {
     // 1. Ingest/Register
     await runQuery(`
       LET $res = mod::dbsp::register_view('${viewName}', "${query}", "${params}");
-      UPSERT _spooky_incantation:${viewName} SET 
+      UPSERT _spooky_query:${viewName} SET 
           id = '${viewName}', 
-          surrealQL = "${query}", 
+          sql = "${query}", 
           params = ${params},
           hash = $res.result_hash,
           ttl = 1h;
@@ -355,9 +355,9 @@ describe('DBSP Storage Persistence', () => {
 
     // 1. Create a thread record (mutation) - Ensure cleanup/isolation via unique ID
     const createQuery = `
-      UPSERT _spooky_incantation:${incantId} CONTENT {
+      UPSERT _spooky_query:${incantId} CONTENT {
         id: '${incantId}',
-        surrealQL: 'SELECT * FROM thread',
+        sql: 'SELECT * FROM thread',
         params: {},
         ttl: 10m,
         lastActiveAt: time::now(),
@@ -408,8 +408,8 @@ describe('DBSP Storage Persistence', () => {
 
     expect(hashRecord.id.toString()).toMatch(/_spooky_data_hash:.+/);
 
-    // 4. Verify Merkle Tree in _spooky_incantation does NOT have MISSING_HASH
-    const incantations = await runQuery(`SELECT * FROM _spooky_incantation:${incantId}`);
+    // 4. Verify Merkle Tree in _spooky_query does NOT have MISSING_HASH
+    const incantations = await runQuery(`SELECT * FROM _spooky_query:${incantId}`);
     const tree =
       incantations[0]?.result?.[0]?.tree ||
       incantations[0]?.tree ||

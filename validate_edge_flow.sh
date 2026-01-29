@@ -60,7 +60,7 @@ echo "--- Step 3: Registering View (Scenario A) ---"
 VIEW_DEF='{
   "id": "incantation:active_users",
   "clientId": "client_1",
-  "surrealQL": "SELECT * FROM users WHERE age > 20",
+  "surql": "SELECT * FROM users WHERE age > 20",
   "ttl": "1h",
   "lastActiveAt": "2023-01-01T00:00:00Z",
   "safe_params": {}
