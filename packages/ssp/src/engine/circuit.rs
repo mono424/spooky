@@ -145,7 +145,6 @@ impl Table {
         }
 
         let zset_key = make_zset_key(&self.name, &key);
-        tracing::debug!(target: "ssp::circuit::apply_mutation", "table: {}, id: {}, zset: {}", self.name, key, zset_key);
         if weight != 0 {
             let entry = self.zset.entry(zset_key.clone()).or_insert(0);
             *entry += weight;
@@ -174,43 +173,63 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    #[test]
-    fn apply_mutation() {
-        let record_user1 = LoadRecord::new(
-            "user",
-            "user:23lk4j233jd",
-            json!({ "status": "spooky", "level": 10 }).into(),
-        );
+    fn create_record(tb_name: &str, record_id: &str) -> LoadRecord {
+        LoadRecord::new(
+            tb_name,
+            record_id,
+            json!({ "status": "spooky", "level": 10, "_spooky_version": 3 }).into(),
+        )
+    }
+
+    fn common() -> (SmolStr, i64, Table) {
+        let record_user1 = create_record("user", "user:23lk4j233jd");
         let mut tb_user = Table::new(SmolStr::from("user"));
         let (zset_key, weight) = tb_user.apply_mutation(
             Operation::Create,
-            SmolStr::from("23lk4j233jd"),
+            SmolStr::from("user:23lk4j233jd"),
             record_user1.data,
         );
+        return (zset_key, weight, tb_user);
+    }
+
+    #[test]
+    fn apply_mutation_check() {
+        let (zset_key, weight, _) = common();
 
         assert_eq!(zset_key, SmolStr::from("user:23lk4j233jd"));
         assert_eq!(weight, 1 as i64);
     }
 
     #[test]
-    fn get_version() {
-        let record_user1 = LoadRecord::new(
-            "user",
-            "user:23lk4j233jd",
-            json!({ "status": "spooky", "level": 10, "_spooky_version": 3 }).into(),
-        );
-        let mut tb_user = Table::new(SmolStr::from("user"));
-        let (zset_key, weight) = tb_user.apply_mutation(
-            Operation::Create,
-            SmolStr::from("23lk4j233jd"),
-            record_user1.data,
-        );
-
-        let version = tb_user.get_record_version("23lk4j233jd");
-
-        assert_eq!(zset_key, SmolStr::from("user:23lk4j233jd"));
-        assert_eq!(weight, 1 as i64);
+    fn version_check() {
+        let (_, _, tb) = common();
+        let version = tb.get_record_version("user:23lk4j233jd");
         assert_eq!(version, Some(3));
+    }
+
+    #[test]
+    fn apply_delta_check() {
+        let mut tb = Table::new(SmolStr::new("user"));
+        let mut zset: ZSet = FastMap::default();
+        zset.entry(SmolStr::new("user:23lk4j233jd")).or_insert(1);
+        zset.entry(SmolStr::new("user:ssdf8sdf")).or_insert(1);
+        tb.apply_delta(&zset);
+
+        let zset_value = tb.zset.get("user:23lk4j233jd").unwrap();
+        assert_eq!(*zset_value, 1 as i64);
+        let zset_value = tb.zset.get("user:ssdf8sdf").unwrap();
+        assert_eq!(*zset_value, 1 as i64);
+        let mut delta_zset: ZSet = FastMap::default();
+        delta_zset.insert(SmolStr::new("user:ssdf8sdf"), 1);
+        tb.apply_delta(&delta_zset);
+        let zset_value = tb.zset.get("user:ssdf8sdf").unwrap();
+        assert_eq!(*zset_value, 2 as i64);
+        let mut delta_zset: ZSet = FastMap::default();
+        delta_zset.insert(SmolStr::new("user:ssdf8sdf"), -2);
+        tb.apply_delta(&delta_zset);
+
+        let zset_value = tb.zset.get("user:ssdf8sdf");
+        assert!(zset_value.is_none());
     }
 }
 
