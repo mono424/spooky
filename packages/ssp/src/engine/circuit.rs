@@ -674,7 +674,7 @@ impl Circuit {
                 let unique: std::collections::HashSet<_> = indices.iter().collect();
                 if unique.len() != indices.len() {
                     tracing::error!(
-                        target: "ssp::circuit",
+                        target: "ssp::circuit::unreister_view_index",
                         table = %table,
                         indices = ?indices,
                         "Duplicate view indices in dependency_list!"

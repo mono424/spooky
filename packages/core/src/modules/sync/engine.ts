@@ -1,6 +1,6 @@
 import { RecordId } from 'surrealdb';
 import { RemoteDatabaseService } from '../../services/database/index.js';
-import { CacheModule } from '../cache/index.js';
+import { CacheModule, RecordWithId } from '../cache/index.js';
 import { RecordVersionDiff } from '../../types.js';
 import { Logger } from '../../services/logger/index.js';
 import { SyncEventTypes, createSyncEventSystem } from './events/index.js';
@@ -43,7 +43,7 @@ export class SyncEngine {
       return;
     }
 
-    const [remoteResults] = await this.remote.query<[Record<string, any>[]]>(
+    const [remoteResults] = await this.remote.query<[RecordWithId[]]>(
       "SELECT *, (SELECT version FROM ONLY _spooky_version WHERE record_id = <record>$parent.id)['version'] as _spookyv FROM $ids",
       {
         ids: idsToFetch,
