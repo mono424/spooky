@@ -1,3 +1,8 @@
+x-bake:
+  default:
+    args:
+      DOCKER_BUILDKIT: 1
+
 services:
   surrealdb:
     image: surrealdb/surrealdb:v3.0.0-beta.1

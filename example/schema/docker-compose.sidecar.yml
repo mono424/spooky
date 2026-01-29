@@ -1,3 +1,8 @@
+x-bake:
+  default:
+    args:
+      DOCKER_BUILDKIT: 1
+
 services:
   aspire-dashboard:
     image: mcr.microsoft.com/dotnet/aspire-dashboard:latest

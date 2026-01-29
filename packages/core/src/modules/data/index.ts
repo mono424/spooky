@@ -13,6 +13,7 @@ import {
   QueryUpdateCallback,
   MutationCallback,
   RecordVersionArray,
+  QueryConfigRecord,
 } from '../../types.js';
 import {
   parseRecordIdString,
@@ -78,7 +79,7 @@ export class DataModule<S extends SchemaStructure> {
     });
 
     const { localArray } = this.cache.registerQuery({
-      id: recordId,
+      queryHash: hash,
       surql,
       params,
       ttl: new Duration(ttl),
@@ -165,7 +166,11 @@ export class DataModule<S extends SchemaStructure> {
       queryState.records = records || [];
       queryState.config.localArray = localArray;
       queryState.updateCount++;
-      await this.local.getClient().upsert(queryState.config.id).replace({ localArray });
+      console.log(queryState.config);
+      await this.local.getClient().query(surql.seal(surql.updateSet('id', ['localArray'])), {
+        id: queryState.config.id,
+        localArray,
+      });
 
       // Notify subscribers
       const subscribers = this.subscriptions.get(queryHash);
@@ -398,16 +403,15 @@ export class DataModule<S extends SchemaStructure> {
     ttl: QueryTimeToLive;
     tableName: T;
   }): Promise<QueryState> {
-    let [config] = await withRetry(this.logger, () =>
-      this.local.query<[QueryConfig]>('SELECT * FROM ONLY $id', {
+    let [configRecord] = await withRetry(this.logger, () =>
+      this.local.query<[QueryConfigRecord]>('SELECT * FROM ONLY $id', {
         id: recordId,
       })
     );
 
-    if (!config) {
-      config = await withRetry(this.logger, () =>
-        this.local.getClient().create<QueryConfig>(recordId).content({
-          id: recordId,
+    if (!configRecord) {
+      configRecord = await withRetry(this.logger, () =>
+        this.local.getClient().create<QueryConfigRecord>(recordId).content({
           surql: surql,
           params: params,
           localArray: [],
@@ -419,9 +423,10 @@ export class DataModule<S extends SchemaStructure> {
       );
     }
 
-    if (!config) {
-      throw new Error('Failed to create or retrieve query');
-    }
+    const config: QueryConfig = {
+      ...configRecord,
+      id: recordId,
+    };
 
     let records: Record<string, any>[] = [];
     try {

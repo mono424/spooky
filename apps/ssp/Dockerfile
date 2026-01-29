@@ -27,8 +27,10 @@ WORKDIR /usr/src/app
 COPY --from=planner /usr/src/app/apps/ssp/recipe.json apps/ssp/recipe.json
 COPY packages/ssp packages/ssp
 WORKDIR /usr/src/app/apps/ssp
-# Cook dependencies - protoc wird hier gebraucht!
-RUN cargo chef cook --release --recipe-path recipe.json
+# Cook dependencies with cache mounts - protoc wird hier gebraucht!
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo chef cook --release --recipe-path recipe.json
 
 # Builder stage
 FROM chef as builder
@@ -37,8 +39,10 @@ COPY apps/ssp apps/ssp
 COPY --from=cacher /usr/src/app/apps/ssp/target apps/ssp/target
 COPY --from=cacher /usr/local/cargo /usr/local/cargo
 WORKDIR /usr/src/app/apps/ssp
-# Build binary - protoc wird hier gebraucht!
-RUN cargo build --release
+# Build binary with cache mounts - protoc wird hier gebraucht!
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo build --release
 
 # Runtime Stage
 FROM debian:bookworm-slim

@@ -135,13 +135,13 @@ export class SpookySync<S extends SchemaStructure> {
     this.logger.debug({ event }, 'Processing down event');
     switch (event.type) {
       case 'register':
-        return this.registerQuery(event.payload.queryId);
+        return this.registerQuery(event.payload.hash);
       case 'sync':
-        return this.syncQuery(event.payload.queryId);
+        return this.syncQuery(event.payload.hash);
       case 'heartbeat':
-        return this.heartbeatQuery(event.payload.queryId);
+        return this.heartbeatQuery(event.payload.hash);
       case 'cleanup':
-        return this.cleanupQuery(event.payload.queryId);
+        return this.cleanupQuery(event.payload.hash);
     }
   }
 
@@ -165,11 +165,11 @@ export class SpookySync<S extends SchemaStructure> {
     this.scheduler.enqueueMutation(mutations);
   }
 
-  private async registerQuery(queryId: string) {
+  private async registerQuery(queryHash: string) {
     try {
-      this.logger.debug({ queryId }, 'Register Query state');
-      await this.createRemoteQuery(queryId);
-      await this.syncQuery(queryId);
+      this.logger.debug({ queryHash }, 'Register Query state');
+      await this.createRemoteQuery(queryHash);
+      await this.syncQuery(queryHash);
     } catch (e) {
       console.log('registerQuery error', JSON.stringify(e));
       this.logger.error({ err: e }, 'registerQuery error');
@@ -177,11 +177,11 @@ export class SpookySync<S extends SchemaStructure> {
     }
   }
 
-  private async createRemoteQuery(hash: string) {
-    const queryState = this.dataModule.getQueryByHash(hash);
+  private async createRemoteQuery(queryHash: string) {
+    const queryState = this.dataModule.getQueryByHash(queryHash);
 
     if (!queryState) {
-      this.logger.warn({ hash }, 'Query to register not found');
+      this.logger.warn({ queryHash }, 'Query to register not found');
       throw new Error('Query to register not found');
     }
     // Delegate to remote function which handles DBSP registration & persistence
@@ -205,19 +205,29 @@ export class SpookySync<S extends SchemaStructure> {
 
     if (array) {
       /// Incantation existed already
-      await this.dataModule.updateQueryRemoteArray(hash, array);
+      await this.dataModule.updateQueryRemoteArray(queryHash, array);
     }
   }
 
-  private async heartbeatQuery(queryId: string) {
+  private async heartbeatQuery(queryHash: string) {
+    const queryState = this.dataModule.getQueryByHash(queryHash);
+    if (!queryState) {
+      this.logger.warn({ queryHash }, 'Query to register not found');
+      throw new Error('Query to register not found');
+    }
     await this.remote.query('fn::query::heartbeat($id)', {
-      id: queryId,
+      id: queryState.config.id,
     });
   }
 
-  private async cleanupQuery(queryId: string) {
+  private async cleanupQuery(queryHash: string) {
+    const queryState = this.dataModule.getQueryByHash(queryHash);
+    if (!queryState) {
+      this.logger.warn({ queryHash }, 'Query to register not found');
+      throw new Error('Query to register not found');
+    }
     await this.remote.query(`DELETE $id`, {
-      id: queryId,
+      id: queryState.config.id,
     });
   }
 }

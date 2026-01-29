@@ -9,28 +9,28 @@ import { Logger } from '../../../services/logger/index.js';
 export type RegisterEvent = {
   type: 'register';
   payload: {
-    queryId: string;
+    hash: string;
   };
 };
 
 export type SyncEvent = {
   type: 'sync';
   payload: {
-    queryId: string;
+    hash: string;
   };
 };
 
 export type HeartbeatEvent = {
   type: 'heartbeat';
   payload: {
-    queryId: string;
+    hash: string;
   };
 };
 
 export type CleanupEvent = {
   type: 'cleanup';
   payload: {
-    queryId: string;
+    hash: string;
   };
 };
 

@@ -82,6 +82,8 @@ export interface QueryConfig {
   tableName: string;
 }
 
+export type QueryConfigRecord = QueryConfig & { id: string };
+
 export interface QueryState {
   config: QueryConfig;
   records: Record<string, any>[];

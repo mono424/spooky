@@ -5,7 +5,7 @@ import {
   StreamUpdateReceiver,
 } from '../../services/stream-processor/index.js';
 import { Logger } from '../../services/logger/index.js';
-import { parseRecordIdString, encodeRecordId } from '../../utils/index.js';
+import { parseRecordIdString, encodeRecordId, surql } from '../../utils/index.js';
 import { CacheRecord, QueryConfig } from './types.js';
 import { RecordVersionArray } from '../../types.js';
 
@@ -55,10 +55,10 @@ export class CacheModule implements StreamUpdateReceiver {
 
     try {
       const { id, ...content } = record;
-      await this.local.getClient().upsert(parseRecordIdString(id)).content(content);
+      await this.local.getClient().upsert(id).content(content);
 
       // 2. Ingest into DBSP
-      this.streamProcessor.ingest(table, op, id, record, isOptimistic);
+      this.streamProcessor.ingest(table, op, encodeRecordId(id), record, isOptimistic);
 
       this.logger.debug({ table, id, op }, 'Record saved successfully');
     } catch (err) {
@@ -78,19 +78,54 @@ export class CacheModule implements StreamUpdateReceiver {
     this.logger.debug({ count: records.length, isOptimistic }, 'Saving record batch');
 
     try {
-      // 1. Write all records to local DB in parallel
-      await Promise.all(
-        records.map((r) => {
-          const { id, ...content } = r.record;
-          return this.local.getClient().upsert(parseRecordIdString(id)).content(content);
-        })
+      const populatedRecords = records.map((record) => {
+        return {
+          ...record,
+          record: {
+            ...record.record,
+            _spooky_version: record.version,
+          },
+        };
+      });
+
+      const query = surql.seal(
+        surql.tx(
+          populatedRecords.map((_, i) => {
+            return surql.upsert(`id${i}`, `content${i}`);
+          })
+        )
       );
 
+      const params = populatedRecords.reduce(
+        (acc, record, i) => {
+          const { id, ...content } = record.record;
+          return {
+            ...acc,
+            [`id${i}`]: id,
+            [`content${i}`]: content,
+          };
+        },
+        {} as Record<string, any>
+      );
+
+      await this.local.query(query, params);
+
+      console.log('abc123', records);
+
       // 2. Batch ingest into DBSP
-      this.streamProcessor.ingestBatch(records, isOptimistic);
+      this.streamProcessor.ingestBatch(
+        records.map((record) => ({
+          ...record,
+          record: { ...record.record, id: encodeRecordId(record.record.id) },
+        })),
+        isOptimistic
+      );
+
+      console.log('abc1234');
 
       this.logger.debug({ count: records.length }, 'Batch saved successfully');
     } catch (err) {
+      console.log('xxx222', err);
       this.logger.error({ err, count: records.length }, 'Failed to save batch');
       throw err;
     }
@@ -123,7 +158,7 @@ export class CacheModule implements StreamUpdateReceiver {
   registerQuery(config: QueryConfig): { localArray: RecordVersionArray } {
     this.logger.debug(
       {
-        id: encodeRecordId(config.id),
+        queryHash: config.queryHash,
         surql: config.surql,
       },
       'Registering query'
@@ -131,7 +166,7 @@ export class CacheModule implements StreamUpdateReceiver {
 
     try {
       const update = this.streamProcessor.registerQueryPlan({
-        id: config.id,
+        queryHash: config.queryHash,
         surql: config.surql,
         params: config.params,
         ttl: config.ttl,
@@ -148,13 +183,13 @@ export class CacheModule implements StreamUpdateReceiver {
       }
 
       this.logger.debug(
-        { id: encodeRecordId(config.id), arrayLength: update.localArray?.length },
+        { queryHash: config.queryHash, arrayLength: update.localArray?.length },
         'Query registered successfully'
       );
 
       return { localArray: update.localArray };
     } catch (err) {
-      this.logger.error({ err, id: encodeRecordId(config.id) }, 'Failed to register query');
+      this.logger.error({ err, queryHash: config.queryHash }, 'Failed to register query');
       throw err;
     }
   }
@@ -162,13 +197,13 @@ export class CacheModule implements StreamUpdateReceiver {
   /**
    * Unregister a query from DBSP
    */
-  unregisterQuery(id: string): void {
-    this.logger.debug({ id }, 'Unregistering query');
+  unregisterQuery(queryHash: string): void {
+    this.logger.debug({ queryHash }, 'Unregistering query');
     try {
-      this.streamProcessor.unregisterQueryPlan(id);
-      this.logger.debug({ id }, 'Query unregistered successfully');
+      this.streamProcessor.unregisterQueryPlan(queryHash);
+      this.logger.debug({ queryHash }, 'Query unregistered successfully');
     } catch (err) {
-      this.logger.error({ err, id }, 'Failed to unregister query');
+      this.logger.error({ err, queryHash }, 'Failed to unregister query');
     }
   }
 
@@ -176,7 +211,7 @@ export class CacheModule implements StreamUpdateReceiver {
    * Set the version of a record in a specific query view
    * Used during remote sync
    */
-  setRecordVersion(queryId: string, recordId: string, version: number): void {
-    this.streamProcessor.setRecordVersion(queryId, recordId, version);
+  setRecordVersion(queryHash: string, recordId: string, version: number): void {
+    this.streamProcessor.setRecordVersion(queryHash, recordId, version);
   }
 }

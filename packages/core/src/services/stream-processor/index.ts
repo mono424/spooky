@@ -9,7 +9,7 @@ import { encodeRecordId } from '../../utils/index.js';
 
 // Simple interface for query plan registration (replaces Incantation class)
 interface QueryPlanConfig {
-  id: RecordId<string>;
+  queryHash: string;
   surql: string;
   params: Record<string, any>;
   ttl: QueryTimeToLive | Duration;
@@ -301,7 +301,7 @@ export class StreamProcessorService {
 
     this.logger.debug(
       {
-        queryId: queryPlan.id,
+        queryHash: queryPlan.queryHash,
         surql: queryPlan.surql,
         params: queryPlan.params,
       },
@@ -309,7 +309,7 @@ export class StreamProcessorService {
     );
     this.logger.debug(
       {
-        id: encodeRecordId(queryPlan.id),
+        queryHash: queryPlan.queryHash,
         surql: queryPlan.surql,
         params: queryPlan.params,
       },
@@ -324,7 +324,7 @@ export class StreamProcessorService {
       );
 
       const initialUpdate = this.processor.register_view({
-        id: encodeRecordId(queryPlan.id),
+        id: queryPlan.queryHash,
         surql: queryPlan.surql,
         params: normalizedParams,
         clientId: 'local',
@@ -348,7 +348,7 @@ export class StreamProcessorService {
       this.saveState();
       this.logger.debug(
         {
-          queryId: queryPlan.id,
+          queryHash: queryPlan.queryHash,
           surql: queryPlan.surql,
           params: queryPlan.params,
         },
@@ -365,10 +365,10 @@ export class StreamProcessorService {
   /**
    * Unregister a query plan by ID.
    */
-  unregisterQueryPlan(id: string) {
+  unregisterQueryPlan(queryHash: string) {
     if (!this.processor) return;
     try {
-      this.processor.unregister_view(id);
+      this.processor.unregister_view(queryHash);
       this.saveState();
     } catch (e) {
       this.logger.error(e, '[StreamProcessor] Error unregistering query plan');

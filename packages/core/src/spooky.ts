@@ -231,7 +231,7 @@ export class SpookyClient<S extends SchemaStructure> {
     await this.sync.enqueueDownEvent({
       type: 'register',
       payload: {
-        queryId: hash,
+        hash,
       },
     });
 

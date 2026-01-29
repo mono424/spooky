@@ -13,8 +13,22 @@ export const surql = {
     return `CREATE ONLY $${idVar} CONTENT $${dataVar}`;
   },
 
+  upsert(idVar: string, dataVar: string) {
+    return `UPSERT ONLY $${idVar} REPLACE $${dataVar}`;
+  },
+
   updateMerge(idVar: string, dataVar: string) {
     return `UPDATE ONLY $${idVar} MERGE $${dataVar}`;
+  },
+
+  updateSet(idVar: string, keyDataVar: ({ key: string; variable: string } | string)[]) {
+    return `UPDATE $${idVar} SET ${keyDataVar
+      .map((keyDataVar) =>
+        typeof keyDataVar === 'string'
+          ? `${keyDataVar} = $${keyDataVar}`
+          : `${keyDataVar.key} = $${keyDataVar.variable}`
+      )
+      .join(',')}`;
   },
 
   delete(idVar: string) {
