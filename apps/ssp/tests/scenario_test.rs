@@ -19,10 +19,10 @@ fn parse_record_id(id: &str) -> Option<RecordId> {
 }
 
 fn format_incantation_id(id: &str) -> String {
-    if id.starts_with("_spooky_incantation:") {
+    if id.starts_with("_spooky_query:") {
         id.to_string()
     } else {
-        format!("_spooky_incantation:{}", id)
+        format!("_spooky_query:{}", id)
     }
 }
 
@@ -123,7 +123,7 @@ async fn test_full_scenario() {
     let view_id_1 = "view_user";
     let payload_1 = json!({
         "id": view_id_1,
-        "surrealQL": "SELECT * FROM user WHERE id = $id LIMIT 1",
+        "surql": "SELECT * FROM user WHERE id = $id LIMIT 1",
         "params": { "id": user_id },
         "clientId": "test",
         "ttl": "1h",
@@ -145,7 +145,7 @@ async fn test_full_scenario() {
     
     // VERIFY View 1
     {
-        let incantation_id = format!("_spooky_incantation:{}", view_id_1);
+        let incantation_id = format!("_spooky_query:{}", view_id_1);
         let version_id = format!("_spooky_version:{}", user_id.replace(":", "_"));
         let q = format!("SELECT count() as total FROM _spooky_list_ref WHERE in = {} AND out = {} GROUP ALL", incantation_id, version_id);
         let count_res: Vec<serde_json::Value> = db.query(&q).await.unwrap().take(0).unwrap();
@@ -184,7 +184,7 @@ async fn test_full_scenario() {
     let view_id_2 = "view_threads";
     let payload_2 = json!({
         "id": view_id_2,
-        "surrealQL": "SELECT *, (SELECT * FROM user WHERE id=$parent.author LIMIT 1)[0] AS author FROM thread ORDER BY title desc LIMIT 10",
+        "surql": "SELECT *, (SELECT * FROM user WHERE id=$parent.author LIMIT 1)[0] AS author FROM thread ORDER BY title desc LIMIT 10",
         "params": {},
         "clientId": "test",
         "ttl": "1h",
@@ -203,7 +203,7 @@ async fn test_full_scenario() {
 
     // VERIFY View 2
     {
-        let incantation_id = format!("_spooky_incantation:{}", view_id_2);
+        let incantation_id = format!("_spooky_query:{}", view_id_2);
         // Check T1 (Manual ID construction)
         let vid_t1 = format!("_spooky_version:{}", thread_id.replace(":", "_"));
         let ct1_res: Vec<serde_json::Value> = db.query(&format!("SELECT count() as total FROM _spooky_list_ref WHERE in = {} AND out = {} GROUP ALL", incantation_id, vid_t1)).await.unwrap().take(0).unwrap();
@@ -222,7 +222,7 @@ async fn test_full_scenario() {
     let view_id_3 = "view_detail";
     let payload_3 = json!({
         "id": view_id_3,
-        "surrealQL": "SELECT *, (SELECT * FROM user WHERE id=$parent.author LIMIT 1)[0] AS author, (SELECT *, (SELECT * FROM user WHERE id=$parent.author LIMIT 1)[0] AS author FROM comment WHERE thread=$parent.id ORDER BY created_at desc LIMIT 10) AS comments FROM thread WHERE id = $id LIMIT 1",
+        "surql": "SELECT *, (SELECT * FROM user WHERE id=$parent.author LIMIT 1)[0] AS author, (SELECT *, (SELECT * FROM user WHERE id=$parent.author LIMIT 1)[0] AS author FROM comment WHERE thread=$parent.id ORDER BY created_at desc LIMIT 10) AS comments FROM thread WHERE id = $id LIMIT 1",
         "params": { "id": thread_id },
         "clientId": "test",
         "ttl": "1h",
@@ -241,7 +241,7 @@ async fn test_full_scenario() {
     
     // VERIFY View 3 exists
     {
-         let incantation_id = format!("_spooky_incantation:{}", view_id_3);
+         let incantation_id = format!("_spooky_query:{}", view_id_3);
          let edges_res: Vec<serde_json::Value> = db.query(&format!("SELECT count() as total FROM _spooky_list_ref WHERE in = {} GROUP ALL", incantation_id)).await.unwrap().take(0).unwrap();
          assert!(edges_res[0]["total"].as_i64().unwrap() > 0, "V3 Edges exist");
     }
@@ -280,7 +280,7 @@ async fn test_full_scenario() {
     
     // VERIFY View 3 now has Comment
     {
-        let incantation_id = format!("_spooky_incantation:{}", view_id_3);
+        let incantation_id = format!("_spooky_query:{}", view_id_3);
         let vid_c1 = format!("_spooky_version:{}", comment_id.replace(":", "_"));
         let cc1_res: Vec<serde_json::Value> = db.query(&format!("SELECT count() as total FROM _spooky_list_ref WHERE in = {} AND out = {} GROUP ALL", incantation_id, vid_c1)).await.unwrap().take(0).unwrap();
         assert_eq!(cc1_res[0]["total"].as_i64().unwrap(), 1, "Verify V3->Comment");

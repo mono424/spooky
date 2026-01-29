@@ -50,7 +50,7 @@ fn simulate_update_flat(view_id: &str, update: &ViewUpdate) -> Option<DbOperatio
         ViewUpdate::Flat(m) | ViewUpdate::Tree(m) => {
             assert_eq!(m.query_id, view_id, "View ID mismatch");
             Some(DbOperation::UpdateIncantation {
-                incantation_id: format!("_spooky_incantation:{}", view_id),
+                incantation_id: format!("_spooky_query:{}", view_id),
                 hash: m.result_hash.clone(),
                 array: m.result_data.clone(),
             })
@@ -66,7 +66,7 @@ fn simulate_update_streaming(view_id: &str, update: &ViewUpdate) -> Vec<DbOperat
     if let ViewUpdate::Streaming(s) = update {
         assert_eq!(s.view_id, view_id, "View ID mismatch");
         
-        let from = format!("_spooky_incantation:{}", view_id);
+        let from = format!("_spooky_query:{}", view_id);
         
         for record in &s.records {
             let op = match record.event {

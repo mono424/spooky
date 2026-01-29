@@ -41,7 +41,7 @@ fn process_streaming_update(
             
             ops.push(EdgeOperation {
                 op_type,
-                from: format!("_spooky_incantation:{}", incantation_id),
+                from: format!("_spooky_query:{}", incantation_id),
                 to: record.id.clone(),
             });
         }
@@ -99,7 +99,7 @@ fn print_register_payload(view_id: &str, surreal_ql: &str, params: Option<&str>)
     println!("│ Client → Sidecar: Register View");
     println!("├──────────────────────────────────────────────────────────────────┤");
     println!("│  id: \"{}\"", view_id);
-    println!("│  surrealQL: \"{}\"", surreal_ql);
+    println!("│  sql: \"{}\"", surreal_ql);
     if let Some(p) = params {
         println!("│  params: \"{}\"", p);
     }

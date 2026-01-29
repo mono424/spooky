@@ -3,36 +3,36 @@
 -- The Registry of active Live Queries (Incantations).
 -- ==================================================
 
-DEFINE TABLE _spooky_incantation SCHEMALESS
+DEFINE TABLE _spooky_query SCHEMALESS
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- The raw query string (for re-hydration/debugging)
 -- The raw query string (for re-hydration/debugging)
-DEFINE FIELD surrealQL ON TABLE _spooky_incantation TYPE option<string>
+DEFINE FIELD surql ON TABLE _spooky_query TYPE option<string>
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- The raw query string (for re-hydration/debugging)
-DEFINE FIELD clientId ON TABLE _spooky_incantation TYPE option<string>
+DEFINE FIELD clientId ON TABLE _spooky_query TYPE option<string>
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- The current XOR sum of all results in this query
-DEFINE FIELD hash ON TABLE _spooky_incantation TYPE option<string>
+DEFINE FIELD hash ON TABLE _spooky_query TYPE option<string>
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- The Radix Tree of Result IDs for efficient sync (deprecated, kept for backward compat)
-DEFINE FIELD tree ON TABLE _spooky_incantation TYPE any
+DEFINE FIELD tree ON TABLE _spooky_query TYPE any
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- The flat array of Result IDs for efficient sync
-DEFINE FIELD array ON TABLE _spooky_incantation TYPE any
+DEFINE FIELD array ON TABLE _spooky_query TYPE any
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- For garbage collection (Heartbeat)
-DEFINE FIELD lastActiveAt ON TABLE _spooky_incantation TYPE datetime DEFAULT time::now()
+DEFINE FIELD lastActiveAt ON TABLE _spooky_query TYPE datetime DEFAULT time::now()
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- How long this Incantation stays alive without activity
-DEFINE FIELD ttl ON TABLE _spooky_incantation TYPE duration
+DEFINE FIELD ttl ON TABLE _spooky_query TYPE duration
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- ==================================================
@@ -68,11 +68,11 @@ DEFINE TABLE _spooky_module_state SCHEMALESS PERMISSIONS FULL;
 
 -- Unregister from DBSP on deletion
 -- Unregister from DBSP on deletion
-DEFINE EVENT _spooky_dbsp_cleanup ON TABLE _spooky_incantation WHEN $event = "DELETE" THEN {
+DEFINE EVENT _spooky_dbsp_cleanup ON TABLE _spooky_query WHEN $event = "DELETE" THEN {
     let $result = mod::dbsp::unregister_view(<string>$before.id);
 };
 
--- Note: Registration is now handled explicitly by fn::incantation::register calling mod::dbsp::register_view
+-- Note: Registration is now handled explicitly by fn::query::register calling mod::dbsp::register_view
 -- The previous _spooky_dbsp_register event is removed to prevent recursion and double-registration.
 
 -- ==================================================

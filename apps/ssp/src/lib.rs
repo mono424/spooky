@@ -476,7 +476,7 @@ async fn register_view_handler(
         .to_string();
     let surreal_ql = data
         .metadata
-        .get("surrealQL")
+        .get("surql")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
@@ -499,14 +499,14 @@ async fn register_view_handler(
         .unwrap_or(Value::Null);
 
     // Store incantation metadata
-    let query = "UPSERT <record>$id SET clientId = <string>$clientId, surrealQL = <string>$surrealQL, params = $params, ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt";
+    let query = "UPSERT <record>$id SET clientId = <string>$clientId, surql = <string>$surql, params = $params, ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt";
 
     if let Err(e) = state
         .db
         .query(query)
         .bind(("id", incantation_id.clone()))
         .bind(("clientId", client_id))
-        .bind(("surrealQL", surreal_ql))
+        .bind(("surql", surreal_ql))
         .bind(("params", params))
         .bind(("ttl", ttl))
         .bind(("lastActiveAt", last_active_at))
@@ -646,10 +646,10 @@ fn parse_record_id(id: &str) -> Option<RecordId> {
 
 /// Format incantation ID with proper prefix
 fn format_incantation_id(id: &str) -> String {
-    if id.starts_with("_spooky_incantation:") {
+    if id.starts_with("_spooky_query:") {
         id.to_string()
     } else {
-        format!("_spooky_incantation:{}", id)
+        format!("_spooky_query:{}", id)
     }
 }
 

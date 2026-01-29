@@ -441,7 +441,7 @@ fn main() -> Result<()> {
             OutputFormat::JsonSchema => "JSON Schema",
             OutputFormat::Typescript => "TypeScript",
             OutputFormat::Dart => "Dart",
-            OutputFormat::Surql => "SurrealQL",
+            OutputFormat::Surql => "sql",
         };
 
         if matches!(output_format, OutputFormat::Surql) && args.mode == "surrealism" {

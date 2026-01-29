@@ -41,7 +41,7 @@ The `MutationManager` is responsible for all **Write Operations** (Create, Updat
 ### The "Optimistic" Write
 
 1. Application calls `client.create('tasks:1', { text: 'Buy milk' })`.
-2. `MutationManager` constructs a SurrealQL transaction:
+2. `MutationManager` constructs a sql transaction:
    ```sql
    BEGIN TRANSACTION;
    CREATE tasks:1 CONTENT { text: 'Buy milk' };

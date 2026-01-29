@@ -89,12 +89,12 @@ export function makeUserRecord(
  */
 export function createViewConfig(
   id: string,
-  surrealQL: string,
+  sql: string,
   params?: Record<string, unknown>
 ): WasmIncantationConfig {
   return {
     id,
-    surrealQL,
+    sql,
     params,
     clientId: 'test-client',
     ttl: '3600s',

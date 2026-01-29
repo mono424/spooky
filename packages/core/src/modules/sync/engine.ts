@@ -1,8 +1,7 @@
 import { RecordId } from 'surrealdb';
-import { LocalDatabaseService, RemoteDatabaseService } from '../../services/database/index.js';
-import { StreamProcessorService } from '../../services/stream-processor/index.js';
-import { RecordVersionArray, RecordVersionDiff } from '../../types.js';
-import { ArraySyncer } from './utils.js';
+import { RemoteDatabaseService } from '../../services/database/index.js';
+import { CacheModule } from '../cache/index.js';
+import { RecordVersionDiff } from '../../types.js';
 import { Logger } from '../../services/logger/index.js';
 import { SyncEventTypes, createSyncEventSystem } from './events/index.js';
 import { encodeRecordId } from '../../utils/index.js';
@@ -17,9 +16,8 @@ export class SyncEngine {
   public events = createSyncEventSystem();
 
   constructor(
-    private local: LocalDatabaseService,
     private remote: RemoteDatabaseService,
-    private streamProcessor: StreamProcessorService,
+    private cache: CacheModule,
     private logger: Logger
   ) {}
 
@@ -28,7 +26,7 @@ export class SyncEngine {
    * Main entry point for sync operations.
    * Uses batch processing to minimize events emitted.
    */
-  async syncRecords(diff: RecordVersionDiff): Promise<RecordVersionDiff> {
+  async syncRecords(diff: RecordVersionDiff): Promise<void> {
     const { added, updated, removed } = diff;
 
     this.logger.debug({ added, updated, removed }, 'SyncEngine.syncRecords diff');
@@ -42,7 +40,7 @@ export class SyncEngine {
     const toFetch = [...added, ...updated];
     const idsToFetch = toFetch.map((x) => x.id);
     if (idsToFetch.length === 0) {
-      return diff;
+      return;
     }
 
     const [remoteResults] = await this.remote.query<[Record<string, any>[]]>(
@@ -52,36 +50,24 @@ export class SyncEngine {
       }
     );
 
-    // BATCH PROCESSING: Cache all records locally first
-    const cachePromises = remoteResults.map(async (record) => {
-      await this.local.getClient().upsert(record.id).content(record);
-    });
-    await Promise.all(cachePromises);
-
-    // Prepare batch for ingestion
-    const ingestBatch: Array<{
-      table: string;
-      op: string;
-      id: string;
-      record: any;
-      version: number;
-    }> = [];
+    // Prepare batch for cache (which handles both DB and DBSP)
+    const cacheBatch = [];
 
     for (const { _spookyv, ...record } of remoteResults) {
-      const fullId = record.id.toString();
+      const fullId = encodeRecordId(record.id);
       const table = record.id.table.toString();
-      const isAdded = added.some((item) => item.id.toString() === fullId);
+      const isAdded = added.some((item) => encodeRecordId(item.id) === fullId);
 
-      const anticipatedVersion = toFetch.find((item) => item.id.toString() === fullId)?.version;
+      const anticipatedVersion = toFetch.find((item) => encodeRecordId(item.id) === fullId)?.version;
       if (anticipatedVersion && _spookyv < anticipatedVersion) {
         this.logger.warn(
           { recordId: fullId, version: _spookyv, anticipatedVersion },
-          'Received outdated record version. Skipping record __TEST__'
+          'Received outdated record version. Skipping record'
         );
         continue;
       }
 
-      ingestBatch.push({
+      cacheBatch.push({
         table,
         op: isAdded ? 'CREATE' : 'UPDATE',
         id: fullId,
@@ -89,17 +75,15 @@ export class SyncEngine {
         version: _spookyv,
       });
     }
-    console.log('__TEST__', diff, ingestBatch);
-    // Single batch ingest call (isOptimistic=false for remote sync)
-    if (ingestBatch.length > 0) {
-      this.streamProcessor.ingestBatch(ingestBatch, true);
+
+    // Use CacheModule to handle both local DB and DBSP ingestion
+    if (cacheBatch.length > 0) {
+      await this.cache.saveBatch(cacheBatch, false); // isOptimistic=false for remote sync
     }
 
     this.events.emit(SyncEventTypes.RemoteDataIngested, {
       records: remoteResults,
     });
-
-    return diff;
   }
 
   /**
@@ -118,11 +102,8 @@ export class SyncEngine {
       if (!existingRemoteIds.has(recordIdStr)) {
         this.logger.debug({ recordId: recordIdStr }, 'Deleting confirmed removed record');
 
-        // 1. Delete from local DB
-        await this.local.query('DELETE $id', { id: recordIdStr });
-
-        // 2. Ingest deletion into DBSP
-        this.streamProcessor.ingest(recordId.table.name, 'DELETE', recordIdStr, {}, false);
+        // Use CacheModule to handle both local DB and DBSP deletion
+        await this.cache.delete(recordId.table.name, recordIdStr, false);
       }
     }
   }

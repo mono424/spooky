@@ -30,7 +30,7 @@ export interface WasmStreamUpdate {
 
 export interface WasmIncantationConfig {
   id: string;
-  surrealQL: string;
+  sql: string;
   params?: Record<string, any>;
   clientId: string;
   ttl: string;

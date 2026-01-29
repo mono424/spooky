@@ -24,7 +24,7 @@ fn prepare_registration(config: Value) -> Result<RegistrationData, Error>;
 ```
 
 - Validates configuration.
-- Parses options (id, surrealQL, params, etc.).
+- Parses options (id, sql, params, etc.).
 - Returns prepared query plan and safe parameters.
 
 ### Circuit Interface (Internal)
@@ -86,7 +86,7 @@ Registers a new active query (incantation).
 ```typescript
 interface WasmIncantationConfig {
   id: string; // Incantation ID
-  surrealQL: string; // The query string
+  sql: string; // The query string
   params?: Record<string, any>; // Query parameters
   clientId: string; // Client identifier
   ttl: string; // Time to live
@@ -131,7 +131,7 @@ Triggers an ingest operation on the server-side circuit.
 ```
 
 **Response:** `200 OK`
-_Side Effects:_ Updates persistent state and `_spooky_incantation` records in SurrealDB.
+_Side Effects:_ Updates persistent state and `_spooky_query` records in SurrealDB.
 
 #### `POST /view/register`
 
@@ -142,7 +142,7 @@ Registers an incantation on the sidecar.
 ```json
 {
   "id": "string",
-  "surrealQL": "string",
+  "sql": "string",
   "params": { ... },
   "clientId": "string",
   "ttl": "string",
@@ -151,7 +151,7 @@ Registers an incantation on the sidecar.
 ```
 
 **Response:** `200 OK`
-_Side Effects:_ Upserts `_spooky_incantation` metadata record in SurrealDB.
+_Side Effects:_ Upserts `_spooky_query` metadata record in SurrealDB.
 
 #### `POST /view/unregister`
 
@@ -171,13 +171,13 @@ _Side Effects:_ Upserts `_spooky_incantation` metadata record in SurrealDB.
 **Execution Config:** Embedded Module (loaded via `.so` / `.dylib`)
 **Event Trigger:** SurrealDB `DEFINE EVENT` triggers.
 
-### SurrealQL Functions
+### sql Functions
 
 #### `function::dbsp::ingest`
 
 Called automatically by database events to keep the processor in sync with DB writes.
 
-```surrealql
+```sql
 function::dbsp::ingest($table, $event, $id, $after)
 ```
 
@@ -188,16 +188,16 @@ function::dbsp::ingest($table, $event, $id, $after)
 | `$id`    | The record ID                                            |
 | `$after` | The record content (use `$before` for deletes if needed) |
 
-**Updates:** Directly modifies `_spooky_incantation` tables via internal Rust calls.
+**Updates:** Directly modifies `_spooky_query` tables via internal Rust calls.
 
 #### `function::dbsp::register_view`
 
 Registers a view directly from SQL.
 
-```surrealql
+```sql
 function::dbsp::register_view({
     "id": $id,
-    "surrealQL": "SELECT ...",
+    "sql": "SELECT ...",
     "params": $params,
     ...
 })
@@ -205,7 +205,7 @@ function::dbsp::register_view({
 
 #### `function::dbsp::unregister_view`
 
-```surrealql
+```sql
 function::dbsp::unregister_view($incantation_id)
 ```
 

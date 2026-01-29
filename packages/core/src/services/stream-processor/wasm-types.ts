@@ -6,9 +6,9 @@ export interface WasmStreamUpdate {
   result_data: RecordVersionArray; // Match Rust 'result_data' field
 }
 
-export interface WasmIncantationConfig {
+export interface WasmQueryConfig {
   id: string;
-  surrealQL: string;
+  surql: string;
   params?: Record<string, any>;
   clientId: string;
   ttl: string;
@@ -34,11 +34,11 @@ export interface WasmProcessor {
   ): WasmStreamUpdate[];
   ingest_batch(batch: WasmIngestItem[], isOptimistic: boolean): WasmStreamUpdate[];
   set_record_version(
-    incantation_id: string,
+    query_id: string,
     record_id: string,
     version: number
   ): WasmStreamUpdate | undefined;
-  register_view(config: WasmIncantationConfig): WasmStreamUpdate | undefined;
+  register_view(config: WasmQueryConfig): WasmStreamUpdate | undefined;
   unregister_view(id: string): void;
   // Add other methods if needed
 }
