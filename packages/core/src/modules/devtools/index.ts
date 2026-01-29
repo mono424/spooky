@@ -57,7 +57,7 @@ export class DevToolsService implements StreamUpdateReceiver {
             : new Date(q.config.lastActiveAt || Date.now()).getTime(),
         lastUpdate: Date.now(),
         updateCount: q.updateCount,
-        query: q.config.sql,
+        query: q.config.surql,
         variables: q.config.params || {},
         dataSize: q.records?.length || 0,
         data: q.records,
