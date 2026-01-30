@@ -17,17 +17,6 @@ DEFINE FUNCTION fn::query::register($config: object) {
         format: <string>($config.format OR 'flat')
     };
 
-    -- Check if Incantation already exists
-    LET $inc_id = <record>('_spooky_query:' + <string>$config.id);
-    LET $existing = SELECT * FROM $inc_id;
-
-    IF array::len($existing) > 0 THEN {
-        RETURN { hash: $existing[0].hash, array: $existing[0].array };
-    } END;
-
     -- Call Sidecar via HTTP
     http::post('{{SIDECAR_ENDPOINT}}/view/register', $module_config, { "Authorization": "Bearer {{SIDECAR_SECRET}}" });
-    
-    -- Return empty placeholders
-    RETURN { hash: "", array: [] };
 };

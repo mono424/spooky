@@ -3,6 +3,9 @@ import { LoggerProvider, BatchLogRecordProcessor } from '@opentelemetry/sdk-logs
 import { OTLPLogExporter } from '@opentelemetry/exporter-logs-otlp-proto';
 import { resourceFromAttributes } from '@opentelemetry/resources';
 import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions';
+import { createContextKey } from '@opentelemetry/api';
+
+const CATEGORY_KEY = createContextKey('Category');
 
 export type Logger = PinoLogger;
 
@@ -51,7 +54,14 @@ export function createLogger(level: Level = 'info', otelEndpoint?: string): Logg
       processors: [new BatchLogRecordProcessor(exporter)],
     });
 
-    const otelLogger = loggerProvider.getLogger('spooky-client');
+    const otelLogger: Record<string, ReturnType<typeof loggerProvider.getLogger>> = {};
+
+    const getOtelLogger = (category: string) => {
+      if (!otelLogger[category]) {
+        otelLogger[category] = loggerProvider.getLogger(category);
+      }
+      return otelLogger[category];
+    };
 
     browserConfig.transmit = {
       level: level,
@@ -70,15 +80,21 @@ export function createLogger(level: Level = 'info', otelEndpoint?: string): Logg
             body = JSON.stringify(msg);
           }
 
+          let category = 'spooky-client::unknown';
+
           const attributes = {};
           for (const msg of messages) {
             if (typeof msg === 'object') {
+              if (msg.Category) {
+                category = msg.Category;
+                delete msg.Category;
+              }
               Object.assign(attributes, msg);
             }
           }
 
           // Emit to OTEL SDK
-          otelLogger.emit({
+          getOtelLogger(category).emit({
             severityNumber: severityNumber,
             severityText: levelLabel.toUpperCase(),
             body: body,

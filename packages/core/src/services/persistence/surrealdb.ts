@@ -18,7 +18,10 @@ export class SurrealDBPersistenceClient implements PersistenceClient {
       const id = parseRecordIdString(`_spooky_kv:${key}`);
       await this.db.query(surql.seal(surql.upsert('id', 'data')), { id, data: { val } });
     } catch (error) {
-      this.logger.error({ error }, 'Failed to set KV');
+      this.logger.error(
+        { error, Category: 'spooky-client::SurrealDBPersistenceClient::set' },
+        'Failed to set KV'
+      );
       throw error;
     }
   }
@@ -37,7 +40,10 @@ export class SurrealDBPersistenceClient implements PersistenceClient {
       }
       return result.val;
     } catch (error) {
-      this.logger.warn({ error }, 'Failed to get KV');
+      this.logger.warn(
+        { error, Category: 'spooky-client::SurrealDBPersistenceClient::get' },
+        'Failed to get KV'
+      );
       return null;
     }
   }
@@ -47,7 +53,10 @@ export class SurrealDBPersistenceClient implements PersistenceClient {
       const id = parseRecordIdString(`_spooky_kv:${key}`);
       await this.db.query(surql.seal(surql.delete('id')), { id });
     } catch (err) {
-      this.logger.info({ err }, 'Failed to delete KV');
+      this.logger.info(
+        { err, Category: 'spooky-client::SurrealDBPersistenceClient::remove' },
+        'Failed to delete KV'
+      );
     }
   }
 }

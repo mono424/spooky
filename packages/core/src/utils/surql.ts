@@ -13,6 +13,26 @@ export const surql = {
     return `SELECT ${returnValues.join(',')} FROM ONLY $${idVar}`;
   },
 
+  selectByFieldsAnd(
+    table: string,
+    whereVar: ({ field: string; variable: string } | string)[],
+    returnValues: ({ field: string; alias: string } | string)[]
+  ) {
+    return `SELECT ${returnValues
+      .map((returnValues) =>
+        typeof returnValues === 'string'
+          ? returnValues
+          : `${returnValues.field} as ${returnValues.alias}`
+      )
+      .join(',')} FROM ${table} WHERE ${whereVar
+      .map((whereVar) =>
+        typeof whereVar === 'string'
+          ? `${whereVar} = $${whereVar}`
+          : `${whereVar.field} = $${whereVar.variable}`
+      )
+      .join(' AND ')}`;
+  },
+
   create(idVar: string, dataVar: string) {
     return `CREATE ONLY $${idVar} CONTENT $${dataVar}`;
   },

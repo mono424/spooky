@@ -61,8 +61,11 @@ export class SpookyClient<S extends SchemaStructure> {
     this.logger = logger.child({ service: 'SpookyClient' });
 
     this.logger.info(
-      { config: { ...config, schema: '[SchemaStructure]' } },
-      '[SpookyClient] Constructor called'
+      {
+        config: { ...config, schema: '[SchemaStructure]' },
+        Category: 'spooky-client::SpookyClient::constructor',
+      },
+      'SpookyClient initialized'
     );
 
     this.local = new LocalDatabaseService(this.config.database, logger);
@@ -150,44 +153,60 @@ export class SpookyClient<S extends SchemaStructure> {
   }
 
   async init() {
-    this.logger.info('[SpookyClient] Init started');
+    this.logger.info(
+      { Category: 'spooky-client::SpookyClient::init' },
+      'SpookyClient initialization started'
+    );
     try {
-      this.logger.debug('[SpookyClient] Loading or generating client ID...');
       const clientId = this.config.clientId ?? (await this.loadOrGenerateClientId());
       this.persistClientId(clientId);
-      this.logger.debug({ clientId }, '[SpookyClient] Client ID loaded or generated');
+      this.logger.debug(
+        { clientId, Category: 'spooky-client::SpookyClient::init' },
+        'Client ID loaded'
+      );
 
-      this.logger.debug('[SpookyClient] Connecting to local DB...');
       await this.local.connect();
-      this.logger.debug('[SpookyClient] Local connected');
+      this.logger.debug(
+        { Category: 'spooky-client::SpookyClient::init' },
+        'Local database connected'
+      );
 
-      this.logger.debug('[SpookyClient] Provisioning schema...');
       await this.migrator.provision(this.config.schemaSurql);
-      this.logger.debug('[SpookyClient] Migrator provisioned');
+      this.logger.debug({ Category: 'spooky-client::SpookyClient::init' }, 'Schema provisioned');
 
-      this.logger.debug('[SpookyClient] Connecting to remote DB...');
       await this.remote.connect();
-      this.logger.debug('[SpookyClient] Remote connected');
+      this.logger.debug(
+        { Category: 'spooky-client::SpookyClient::init' },
+        'Remote database connected'
+      );
 
-      this.logger.debug('[SpookyClient] Initializing StreamProcessor...');
       await this.streamProcessor.init();
-      this.logger.debug('[SpookyClient] StreamProcessor initialized');
+      this.logger.debug(
+        { Category: 'spooky-client::SpookyClient::init' },
+        'StreamProcessor initialized'
+      );
 
-      this.logger.debug('[SpookyClient] Initializing Auth...');
       await this.auth.init();
-      this.logger.debug('[SpookyClient] Auth initialized');
+      this.logger.debug({ Category: 'spooky-client::SpookyClient::init' }, 'Auth initialized');
 
-      this.logger.debug('[SpookyClient] Initializing DataModule...');
       await this.dataModule.init();
-      this.logger.debug('[SpookyClient] DataModule initialized');
+      this.logger.debug(
+        { Category: 'spooky-client::SpookyClient::init' },
+        'DataModule initialized'
+      );
 
-      this.logger.debug('[SpookyClient] Initializing Sync...');
       await this.sync.init(clientId);
-      this.logger.debug('[SpookyClient] Sync initialized');
+      this.logger.debug({ Category: 'spooky-client::SpookyClient::init' }, 'Sync initialized');
 
-      this.logger.info('[SpookyClient] Init completed successfully');
+      this.logger.info(
+        { Category: 'spooky-client::SpookyClient::init' },
+        'SpookyClient initialization completed successfully'
+      );
     } catch (e) {
-      this.logger.error({ error: e }, '[SpookyClient] Init failed');
+      this.logger.error(
+        { error: e, Category: 'spooky-client::SpookyClient::init' },
+        'SpookyClient initialization failed'
+      );
       throw e;
     }
   }
@@ -280,7 +299,10 @@ export class SpookyClient<S extends SchemaStructure> {
     try {
       this.persistenceClient.set('spooky_client_id', id);
     } catch (e) {
-      this.logger.warn({ error: e }, '[SpookyClient] Failed to persist client ID');
+      this.logger.warn(
+        { error: e, Category: 'spooky-client::SpookyClient::persistClientId' },
+        'Failed to persist client ID'
+      );
     }
   }
 

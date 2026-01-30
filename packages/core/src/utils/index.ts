@@ -151,11 +151,13 @@ export async function withRetry<T>(
         err?.message?.includes('transaction') ||
         err?.message?.includes('Database is busy')
       ) {
+        const msg = err instanceof Error ? err.message : String(err);
         logger.warn(
           {
             attempt: i + 1,
             retries,
-            error: err.message,
+            error: msg,
+            Category: 'spooky-client::utils::withRetry',
           },
           'Retrying DB operation'
         );

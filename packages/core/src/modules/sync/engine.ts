@@ -32,7 +32,15 @@ export class SyncEngine {
   async syncRecords(diff: RecordVersionDiff): Promise<void> {
     const { added, updated, removed } = diff;
 
-    this.logger.debug({ added, updated, removed }, 'SyncEngine.syncRecords diff');
+    this.logger.debug(
+      {
+        added,
+        updated,
+        removed,
+        Category: 'spooky-client::SyncEngine::syncRecords',
+      },
+      'SyncEngine.syncRecords diff'
+    );
 
     // Handle removed records: verify they don't exist remotely before deleting locally
     if (removed.length > 0) {
@@ -66,7 +74,12 @@ export class SyncEngine {
       )?.version;
       if (anticipatedVersion && _spookyv < anticipatedVersion) {
         this.logger.warn(
-          { recordId: fullId, version: _spookyv, anticipatedVersion },
+          {
+            recordId: fullId,
+            version: _spookyv,
+            anticipatedVersion,
+            Category: 'spooky-client::SyncEngine::syncRecords',
+          },
           'Received outdated record version. Skipping record'
         );
         continue;
@@ -95,7 +108,13 @@ export class SyncEngine {
    * Handle records that exist locally but not in remote array.
    */
   private async handleRemovedRecords(removed: RecordId[]): Promise<void> {
-    this.logger.debug({ removed: removed.map((r) => r.toString()) }, 'Checking removed records');
+    this.logger.debug(
+      {
+        removed: removed.map((r) => r.toString()),
+        Category: 'spooky-client::SyncEngine::handleRemovedRecords',
+      },
+      'Checking removed records'
+    );
 
     const [existingRemote] = await this.remote.query<[{ id: string }[]]>('SELECT id FROM $ids', {
       ids: removed,
@@ -105,7 +124,13 @@ export class SyncEngine {
     for (const recordId of removed) {
       const recordIdStr = encodeRecordId(recordId);
       if (!existingRemoteIds.has(recordIdStr)) {
-        this.logger.debug({ recordId: recordIdStr }, 'Deleting confirmed removed record');
+        this.logger.debug(
+          {
+            recordId: recordIdStr,
+            Category: 'spooky-client::SyncEngine::handleRemovedRecords',
+          },
+          'Deleting confirmed removed record'
+        );
 
         // Use CacheModule to handle both local DB and DBSP deletion
         await this.cache.delete(recordId.table.name, recordIdStr, false);

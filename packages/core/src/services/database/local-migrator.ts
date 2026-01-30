@@ -33,7 +33,10 @@ export class LocalMigrator {
     const { database } = this.localDb.getConfig();
 
     if (await this.isSchemaUpToDate(hash)) {
-      this.logger.info('[Provisioning] Schema is up to date, skipping migration');
+      this.logger.info(
+        { Category: 'spooky-client::LocalMigrator::provision' },
+        '[Provisioning] Schema is up to date, skipping migration'
+      );
       return;
     }
 
@@ -57,6 +60,7 @@ export class LocalMigrator {
       // SKIP INDEXES: WASM engine hangs on DEFINE INDEX (confirmed)
       if (cleanStatement.toUpperCase().startsWith('DEFINE INDEX')) {
         this.logger.warn(
+          { Category: 'spooky-client::LocalMigrator::provision' },
           `[Provisioning] Skipping index definition (WASM hang avoidance): ${cleanStatement.substring(0, 50)}...`
         );
         continue;
@@ -64,12 +68,17 @@ export class LocalMigrator {
 
       try {
         this.logger.info(
+          { Category: 'spooky-client::LocalMigrator::provision' },
           `[Provisioning] (${i + 1}/${statements.length}) Executing: ${statement.substring(0, 50)}...`
         );
         await this.localDb.query(statement);
-        this.logger.info(`[Provisioning] (${i + 1}/${statements.length}) Done`);
+        this.logger.info(
+          { Category: 'spooky-client::LocalMigrator::provision' },
+          `[Provisioning] (${i + 1}/${statements.length}) Done`
+        );
       } catch (e) {
         this.logger.error(
+          { Category: 'spooky-client::LocalMigrator::provision' },
           `[Provisioning] (${i + 1}/${statements.length}) Error executing statement: ${statement}`
         );
         throw e;

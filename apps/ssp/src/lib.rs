@@ -430,25 +430,10 @@ async fn register_view_handler(
         info!(
             target: "ssp::edges",
             view_id = %incantation_id,
-            "Re-registering view - cleaning up old edges"
+            "View already existed - skipping registration"
         );
 
-        if let Some(from_id) = parse_record_id(&incantation_id) {
-            match state
-                .db
-                .query("DELETE $from->_spooky_list_ref RETURN BEFORE;")
-                .bind(("from", from_id))
-                .await
-            {
-                Ok(_) => debug!("Successfully cleaned up old edges for {}", incantation_id),
-                Err(e) => error!("Failed to cleanup old edges for {}: {}", incantation_id, e),
-            }
-        } else {
-            error!(
-                "Failed to parse incantation ID for cleanup: {}",
-                incantation_id
-            );
-        }
+        return StatusCode::OK.into_response();
     }
 
     debug!("Registering view: {}", data.plan.id);

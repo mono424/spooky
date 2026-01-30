@@ -443,8 +443,8 @@ impl CodeGenerator {
         true // If no required array, assume optional
     }
 
-    fn extract_table_relationships(&self, schema: &serde_json::Value) -> Result<std::collections::HashMap<String, Vec<(String, String, String)>>> {
-        let mut table_relationships = std::collections::HashMap::new();
+    fn extract_table_relationships(&self, schema: &serde_json::Value) -> Result<std::collections::BTreeMap<String, Vec<(String, String, String)>>> {
+        let mut table_relationships = std::collections::BTreeMap::new();
 
         if let Some(defs) = schema.get("definitions") {
             if let serde_json::Value::Object(defs_obj) = defs {
@@ -536,7 +536,7 @@ impl CodeGenerator {
                     .get("definitions")
                     .and_then(|defs| {
                         // Collect relationships from each table definition
-                        let mut all_rels = std::collections::HashMap::new();
+                        let mut all_rels = std::collections::BTreeMap::new();
                         if let serde_json::Value::Object(defs_obj) = defs {
                             println!("Processing definitions, found {} tables", defs_obj.len());
                             for (table_name, table_def) in defs_obj {
@@ -685,7 +685,7 @@ impl CodeGenerator {
         Ok(content.to_string())
     }
 
-    fn update_interface_relationships(&self, content: &str, table_relationships: &std::collections::HashMap<String, Vec<(String, String, String)>>) -> Result<String> {
+    fn update_interface_relationships(&self, content: &str, table_relationships: &std::collections::BTreeMap<String, Vec<(String, String, String)>>) -> Result<String> {
         let lines: Vec<&str> = content.lines().collect();
         let mut result = Vec::new();
         let mut i = 0;

@@ -39,7 +39,11 @@ export class CacheModule implements StreamUpdateReceiver {
    */
   onStreamUpdate(update: StreamUpdate): void {
     this.logger.debug(
-      { queryHash: update.queryHash, arrayLength: update.localArray?.length },
+      {
+        queryHash: update.queryHash,
+        arrayLength: update.localArray?.length,
+        Category: 'spooky-client::CacheModule::onStreamUpdate',
+      },
       'Stream update received'
     );
     this.streamUpdateCallback(update);
@@ -69,7 +73,14 @@ export class CacheModule implements StreamUpdateReceiver {
   ): Promise<void> {
     if (records.length === 0) return;
 
-    this.logger.debug({ count: records.length, isOptimistic }, 'Saving record batch');
+    this.logger.debug(
+      {
+        count: records.length,
+        isOptimistic,
+        Category: 'spooky-client::CacheModule::saveBatch',
+      },
+      'Saving record batch'
+    );
 
     try {
       const populatedRecords = records.map((record) => {
@@ -107,7 +118,7 @@ export class CacheModule implements StreamUpdateReceiver {
       }
 
       // 2. Batch ingest into DBSP
-      this.streamProcessor.ingestBatch(
+      await this.streamProcessor.ingestBatch(
         records.map((record) => ({
           table: record.table,
           op: record.op,
@@ -116,9 +127,15 @@ export class CacheModule implements StreamUpdateReceiver {
         isOptimistic
       );
 
-      this.logger.debug({ count: records.length }, 'Batch saved successfully');
+      this.logger.debug(
+        { count: records.length, Category: 'spooky-client::CacheModule::saveBatch' },
+        'Batch saved successfully'
+      );
     } catch (err) {
-      this.logger.error({ err, count: records.length }, 'Failed to save batch');
+      this.logger.error(
+        { err, count: records.length, Category: 'spooky-client::CacheModule::saveBatch' },
+        'Failed to save batch'
+      );
       throw err;
     }
   }
@@ -132,7 +149,10 @@ export class CacheModule implements StreamUpdateReceiver {
     isOptimistic: boolean = true,
     skipDbDelete: boolean = false
   ): Promise<void> {
-    this.logger.debug({ table, id, isOptimistic }, 'Deleting record');
+    this.logger.debug(
+      { table, id, isOptimistic, Category: 'spooky-client::CacheModule::delete' },
+      'Deleting record'
+    );
 
     try {
       // 1. Delete from local database
@@ -141,11 +161,17 @@ export class CacheModule implements StreamUpdateReceiver {
       }
 
       // 2. Ingest deletion into DBSP
-      this.streamProcessor.ingest(table, 'DELETE', id, {}, isOptimistic);
+      await this.streamProcessor.ingest(table, 'DELETE', id, {}, isOptimistic);
 
-      this.logger.debug({ table, id }, 'Record deleted successfully');
+      this.logger.debug(
+        { table, id, Category: 'spooky-client::CacheModule::delete' },
+        'Record deleted successfully'
+      );
     } catch (err) {
-      this.logger.error({ err, table, id }, 'Failed to delete record');
+      this.logger.error(
+        { err, table, id, Category: 'spooky-client::CacheModule::delete' },
+        'Failed to delete record'
+      );
       throw err;
     }
   }
@@ -159,6 +185,7 @@ export class CacheModule implements StreamUpdateReceiver {
       {
         queryHash: config.queryHash,
         surql: config.surql,
+        Category: 'spooky-client::CacheModule::registerQuery',
       },
       'Registering query'
     );
@@ -182,13 +209,20 @@ export class CacheModule implements StreamUpdateReceiver {
       }
 
       this.logger.debug(
-        { queryHash: config.queryHash, arrayLength: update.localArray?.length },
+        {
+          queryHash: config.queryHash,
+          arrayLength: update.localArray?.length,
+          Category: 'spooky-client::CacheModule::registerQuery',
+        },
         'Query registered successfully'
       );
 
       return { localArray: update.localArray };
     } catch (err) {
-      this.logger.error({ err, queryHash: config.queryHash }, 'Failed to register query');
+      this.logger.error(
+        { err, queryHash: config.queryHash, Category: 'spooky-client::CacheModule::registerQuery' },
+        'Failed to register query'
+      );
       throw err;
     }
   }
@@ -197,12 +231,21 @@ export class CacheModule implements StreamUpdateReceiver {
    * Unregister a query from DBSP
    */
   unregisterQuery(queryHash: string): void {
-    this.logger.debug({ queryHash }, 'Unregistering query');
+    this.logger.debug(
+      { queryHash, Category: 'spooky-client::CacheModule::unregisterQuery' },
+      'Unregistering query'
+    );
     try {
       this.streamProcessor.unregisterQueryPlan(queryHash);
-      this.logger.debug({ queryHash }, 'Query unregistered successfully');
+      this.logger.debug(
+        { queryHash, Category: 'spooky-client::CacheModule::unregisterQuery' },
+        'Query unregistered successfully'
+      );
     } catch (err) {
-      this.logger.error({ err, queryHash }, 'Failed to unregister query');
+      this.logger.error(
+        { err, queryHash, Category: 'spooky-client::CacheModule::unregisterQuery' },
+        'Failed to unregister query'
+      );
     }
   }
 }
