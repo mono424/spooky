@@ -67,7 +67,10 @@ export class UpQueue {
       try {
         await fn(event);
       } catch (error) {
-        this.logger.error({ error, event }, 'Failed to process mutation');
+        this.logger.error(
+          { error, event, Category: 'spooky-client::UpQueue::next' },
+          'Failed to process mutation'
+        );
         this.queue.unshift(event);
         throw error;
       }
@@ -75,7 +78,7 @@ export class UpQueue {
         await this.removeEventFromDatabase(event.mutation_id);
       } catch (error) {
         this.logger.error(
-          { error, event },
+          { error, event, Category: 'spooky-client::UpQueue::next' },
           'Failed to remove mutation from database after successful processing'
         );
       }
@@ -117,7 +120,11 @@ export class UpQueue {
               };
             default:
               this.logger.warn(
-                { mutationType: r.mutationType, record: r },
+                {
+                  mutationType: r.mutationType,
+                  record: r,
+                  Category: 'spooky-client::UpQueue::loadFromDatabase',
+                },
                 'Unknown mutation type'
               );
               return null;
@@ -125,7 +132,10 @@ export class UpQueue {
         })
         .filter((e: UpEvent | null): e is UpEvent => e !== null);
     } catch (error) {
-      this.logger.error({ error }, 'Failed to load pending mutations from database');
+      this.logger.error(
+        { error, Category: 'spooky-client::UpQueue::loadFromDatabase' },
+        'Failed to load pending mutations from database'
+      );
     }
   }
 }

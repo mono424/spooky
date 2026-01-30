@@ -45,7 +45,10 @@ export abstract class AbstractDatabaseService {
         .then(async () => {
           const startTime = performance.now();
           try {
-            this.logger.debug({ query, vars }, 'Executing query');
+            this.logger.debug(
+              { query, vars, Category: 'spooky-client::Database::query' },
+              'Executing query'
+            );
             const pending = this.client.query(query, vars);
             // In SurrealDB 2.0, .query() collects results by default.
             // We cast to T directly as proper typing depends on the caller knowing the return structure.
@@ -62,7 +65,10 @@ export abstract class AbstractDatabaseService {
             });
 
             resolve(result);
-            this.logger.trace({ query, result }, 'Query executed successfully');
+            this.logger.trace(
+              { query, result, Category: 'spooky-client::Database::query' },
+              'Query executed successfully'
+            );
           } catch (err) {
             const duration = performance.now() - startTime;
 
@@ -76,7 +82,10 @@ export abstract class AbstractDatabaseService {
               timestamp: Date.now(),
             });
 
-            this.logger.error({ query, vars, err }, 'Query execution failed');
+            this.logger.error(
+              { query, vars, err, Category: 'spooky-client::Database::query' },
+              'Query execution failed'
+            );
             reject(err);
           }
         })
@@ -87,7 +96,7 @@ export abstract class AbstractDatabaseService {
   }
 
   async close(): Promise<void> {
-    this.logger.info('Closing database connection');
+    this.logger.info({ Category: 'spooky-client::Database::close' }, 'Closing database connection');
     await this.client.close();
   }
 }

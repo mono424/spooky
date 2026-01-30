@@ -77,7 +77,10 @@ export class DownQueue {
       try {
         await fn(event);
       } catch (error) {
-        this.logger.error({ error, event }, 'Failed to process query');
+        this.logger.error(
+          { error, event, Category: 'spooky-client::DownQueue::next' },
+          'Failed to process query'
+        );
         this.queue.unshift(event);
         throw error;
       }

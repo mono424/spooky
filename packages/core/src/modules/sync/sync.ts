@@ -58,7 +58,10 @@ export class SpookySync<S extends SchemaStructure> {
   }
 
   private async startRefLiveQueries() {
-    this.logger.debug({ clientId: this.clientId }, 'Starting ref live queries');
+    this.logger.debug(
+      { clientId: this.clientId, Category: 'spooky-client::SpookySync::startRefLiveQueries' },
+      'Starting ref live queries'
+    );
 
     const [queryUuid] = await this.remote.query<[Uuid]>(
       'LIVE SELECT * FROM _spooky_list_ref WHERE clientId = $clientId',
@@ -68,7 +71,10 @@ export class SpookySync<S extends SchemaStructure> {
     );
 
     (await this.remote.getClient().liveOf(queryUuid)).subscribe((message) => {
-      this.logger.debug({ message }, 'Live update received');
+      this.logger.debug(
+        { message, Category: 'spooky-client::SpookySync::startRefLiveQueries' },
+        'Live update received'
+      );
       if (message.action === 'KILLED') return;
       this.handleRemoteListRefChange(
         message.action,
@@ -76,7 +82,10 @@ export class SpookySync<S extends SchemaStructure> {
         message.value.out as RecordId<string>,
         message.value.version as number
       ).catch((err) => {
-        this.logger.error({ err }, 'Error handling remote list ref change');
+        this.logger.error(
+          { err, Category: 'spooky-client::SpookySync::startRefLiveQueries' },
+          'Error handling remote list ref change'
+        );
       });
     });
   }
@@ -91,7 +100,10 @@ export class SpookySync<S extends SchemaStructure> {
 
     if (!existing) {
       this.logger.warn(
-        { queryId: queryId.toString() },
+        {
+          queryId: queryId.toString(),
+          Category: 'spooky-client::SpookySync::handleRemoteListRefChange',
+        },
         'Received remote update for unknown local query'
       );
       return;
@@ -100,7 +112,14 @@ export class SpookySync<S extends SchemaStructure> {
     const { localArray } = existing.config;
 
     this.logger.debug(
-      { action, queryId, recordId, version, localArray },
+      {
+        action,
+        queryId,
+        recordId,
+        version,
+        localArray,
+        Category: 'spooky-client::SpookySync::handleRemoteListRefChange',
+      },
       'Live update is being processed'
     );
     const diff = createDiffFromDbOp(action, recordId, version, localArray);
@@ -131,13 +150,19 @@ export class SpookySync<S extends SchemaStructure> {
         });
         break;
       default:
-        this.logger.error({ event }, 'processUpEvent unknown event type');
+        this.logger.error(
+          { event, Category: 'spooky-client::SpookySync::processUpEvent' },
+          'processUpEvent unknown event type'
+        );
         return;
     }
   }
 
   private async processDownEvent(event: DownEvent) {
-    this.logger.debug({ event }, 'Processing down event');
+    this.logger.debug(
+      { event, Category: 'spooky-client::SpookySync::processDownEvent' },
+      'Processing down event'
+    );
     switch (event.type) {
       case 'register':
         return this.registerQuery(event.payload.hash);
@@ -153,15 +178,18 @@ export class SpookySync<S extends SchemaStructure> {
   public async syncQuery(hash: string) {
     const queryState = this.dataModule.getQueryByHash(hash);
     if (!queryState) {
-      this.logger.warn({ hash }, 'Query not found');
+      this.logger.warn(
+        { hash, Category: 'spooky-client::SpookySync::syncQuery' },
+        'Query not found'
+      );
       return;
     }
-    console.log('xxxx333');
+
     const diff = new ArraySyncer(
       queryState.config.localArray,
       queryState.config.remoteArray
     ).nextSet();
-    console.log('xxxx444', diff);
+
     if (!diff) {
       return;
     }
@@ -174,11 +202,17 @@ export class SpookySync<S extends SchemaStructure> {
 
   private async registerQuery(queryHash: string) {
     try {
-      this.logger.debug({ queryHash }, 'Register Query state');
+      this.logger.debug(
+        { queryHash, Category: 'spooky-client::SpookySync::registerQuery' },
+        'Register Query state'
+      );
       await this.createRemoteQuery(queryHash);
       await this.syncQuery(queryHash);
     } catch (e) {
-      this.logger.error({ err: e }, 'registerQuery error');
+      this.logger.error(
+        { err: e, Category: 'spooky-client::SpookySync::registerQuery' },
+        'registerQuery error'
+      );
       throw e;
     }
   }
@@ -187,7 +221,10 @@ export class SpookySync<S extends SchemaStructure> {
     const queryState = this.dataModule.getQueryByHash(queryHash);
 
     if (!queryState) {
-      this.logger.warn({ queryHash }, 'Query to register not found');
+      this.logger.warn(
+        { queryHash, Category: 'spooky-client::SpookySync::createRemoteQuery' },
+        'Query to register not found'
+      );
       throw new Error('Query to register not found');
     }
     // Delegate to remote function which handles DBSP registration & persistence
@@ -209,14 +246,22 @@ export class SpookySync<S extends SchemaStructure> {
     );
 
     this.logger.trace(
-      { queryId: encodeRecordId(queryState.config.id), items },
+      {
+        queryId: encodeRecordId(queryState.config.id),
+        items,
+        Category: 'spooky-client::SpookySync::createRemoteQuery',
+      },
       'Got query record version array from remote'
     );
 
     const array: RecordVersionArray = items.map((item) => [encodeRecordId(item.out), item.version]);
 
     this.logger.debug(
-      { queryId: encodeRecordId(queryState.config.id), array },
+      {
+        queryId: encodeRecordId(queryState.config.id),
+        array,
+        Category: 'spooky-client::SpookySync::createRemoteQuery',
+      },
       'createdRemoteQuery'
     );
 
@@ -229,7 +274,10 @@ export class SpookySync<S extends SchemaStructure> {
   private async heartbeatQuery(queryHash: string) {
     const queryState = this.dataModule.getQueryByHash(queryHash);
     if (!queryState) {
-      this.logger.warn({ queryHash }, 'Query to register not found');
+      this.logger.warn(
+        { queryHash, Category: 'spooky-client::SpookySync::heartbeatQuery' },
+        'Query to register not found'
+      );
       throw new Error('Query to register not found');
     }
     await this.remote.query('fn::query::heartbeat($id)', {
@@ -240,7 +288,10 @@ export class SpookySync<S extends SchemaStructure> {
   private async cleanupQuery(queryHash: string) {
     const queryState = this.dataModule.getQueryByHash(queryHash);
     if (!queryState) {
-      this.logger.warn({ queryHash }, 'Query to register not found');
+      this.logger.warn(
+        { queryHash, Category: 'spooky-client::SpookySync::cleanupQuery' },
+        'Query to register not found'
+      );
       throw new Error('Query to register not found');
     }
     await this.remote.query(`DELETE $id`, {

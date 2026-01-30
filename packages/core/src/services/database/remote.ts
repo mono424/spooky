@@ -22,9 +22,16 @@ export class RemoteDatabaseService extends AbstractDatabaseService {
           createRemoteEngines(),
           ({ key, type, phase, ...other }: Diagnostic) => {
             if (phase === 'progress' || phase === 'after') {
-              logger.info(
-                { ...other, key, type, phase, service: 'surrealdb:remote' },
-                `[SurrealDB:REMOTE] [${key}] ${type}:${phase}`
+              logger.trace(
+                {
+                  ...other,
+                  key,
+                  type,
+                  phase,
+                  service: 'surrealdb:remote',
+                  Category: 'spooky-client::RemoteDatabaseService::diagnostics',
+                },
+                `Remote SurrealDB diagnostics captured ${key} ${type}:${phase}`
               );
             }
           }
@@ -43,7 +50,15 @@ export class RemoteDatabaseService extends AbstractDatabaseService {
   async connect(): Promise<void> {
     const { endpoint, token, namespace, database } = this.getConfig();
     if (endpoint) {
-      this.logger.info({ endpoint, namespace, database }, 'Connecting to remote database');
+      this.logger.info(
+        {
+          endpoint,
+          namespace,
+          database,
+          Category: 'spooky-client::RemoteDatabaseService::connect',
+        },
+        'Connecting to remote database'
+      );
       try {
         await this.client.connect(endpoint);
         await this.client.use({
@@ -52,16 +67,28 @@ export class RemoteDatabaseService extends AbstractDatabaseService {
         });
 
         if (token) {
-          this.logger.debug('Authenticating with token');
+          this.logger.debug(
+            { Category: 'spooky-client::RemoteDatabaseService::connect' },
+            'Authenticating with token'
+          );
           await this.client.authenticate(token);
         }
-        this.logger.info('Connected to remote database');
+        this.logger.info(
+          { Category: 'spooky-client::RemoteDatabaseService::connect' },
+          'Connected to remote database'
+        );
       } catch (err) {
-        this.logger.error({ err }, 'Failed to connect to remote database');
+        this.logger.error(
+          { err, Category: 'spooky-client::RemoteDatabaseService::connect' },
+          'Failed to connect to remote database'
+        );
         throw err;
       }
     } else {
-      this.logger.warn('No endpoint configured for remote database');
+      this.logger.warn(
+        { Category: 'spooky-client::RemoteDatabaseService::connect' },
+        'No endpoint configured for remote database'
+      );
     }
   }
 

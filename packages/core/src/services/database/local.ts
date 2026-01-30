@@ -31,9 +31,16 @@ export class LocalDatabaseService extends AbstractDatabaseService {
           createWasmWorkerEngines(),
           ({ key, type, phase, ...other }: Diagnostic) => {
             if (phase === 'progress' || phase === 'after') {
-              logger.info(
-                { ...other, key, type, phase, service: 'surrealdb:local' },
-                `[SurrealDB:LOCAL] [${key}] ${type}:${phase}`
+              logger.trace(
+                {
+                  ...other,
+                  key,
+                  type,
+                  phase,
+                  service: 'surrealdb:local',
+                  Category: 'spooky-client::LocalDatabaseService::diagnostics',
+                },
+                `Local SurrealDB diagnostics captured ${key} ${type}:${phase}`
               );
             }
           }
@@ -51,14 +58,20 @@ export class LocalDatabaseService extends AbstractDatabaseService {
 
   async connect(): Promise<void> {
     const { namespace, database } = this.getConfig();
-    this.logger.info({ namespace, database }, 'Connecting to local database');
+    this.logger.info(
+      { namespace, database, Category: 'spooky-client::LocalDatabaseService::connect' },
+      'Connecting to local database'
+    );
     try {
       const store = this.getConfig().store ?? 'memory';
       const storeUrl = store === 'memory' ? 'mem://' : 'indxdb://spooky';
-      this.logger.debug({ storeUrl }, '[LocalDatabaseService] Calling client.connect');
+      this.logger.debug(
+        { storeUrl, Category: 'spooky-client::LocalDatabaseService::connect' },
+        '[LocalDatabaseService] Calling client.connect'
+      );
       await this.client.connect(storeUrl, {});
       this.logger.debug(
-        { namespace, database },
+        { namespace, database, Category: 'spooky-client::LocalDatabaseService::connect' },
         '[LocalDatabaseService] client.connect returned. Calling client.use'
       );
 
@@ -66,12 +79,20 @@ export class LocalDatabaseService extends AbstractDatabaseService {
         namespace,
         database,
       });
-      this.logger.debug('[LocalDatabaseService] client.use returned');
+      this.logger.debug(
+        { Category: 'spooky-client::LocalDatabaseService::connect' },
+        '[LocalDatabaseService] client.use returned'
+      );
 
-      this.logger.info('Connected to local database');
+      this.logger.info(
+        { Category: 'spooky-client::LocalDatabaseService::connect' },
+        'Connected to local database'
+      );
     } catch (err) {
-      this.logger.error({ err }, '[LocalDatabaseService] Error during connect');
-      this.logger.error({ err }, 'Failed to connect to local database');
+      this.logger.error(
+        { err, Category: 'spooky-client::LocalDatabaseService::connect' },
+        'Failed to connect to local database'
+      );
       throw err;
     }
   }

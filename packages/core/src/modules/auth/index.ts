@@ -98,7 +98,10 @@ export class AuthService<S extends SchemaStructure> {
       const token = accessToken || (await this.persistenceClient.get<string>('spooky_auth_token'));
 
       if (!token) {
-        this.logger.debug('[AuthService] No token found in storage or arguments');
+        this.logger.debug(
+          { Category: 'spooky-client::AuthService::check' },
+          'No token found in storage or arguments'
+        );
         this.isLoading = false;
         this.isAuthenticated = false;
         this.notifyListeners();
@@ -115,10 +118,16 @@ export class AuthService<S extends SchemaStructure> {
       const user = Array.isArray(items) ? items[0] : items;
 
       if (user && user.id) {
-        this.logger.info({ user }, '[AuthService] Auth check complete (via $auth.id)');
+        this.logger.info(
+          { user, Category: 'spooky-client::AuthService::check' },
+          'Auth check complete (via $auth.id)'
+        );
         await this.setSession(token, user);
       } else {
-        this.logger.warn('[AuthService] $auth.id empty, attempting manual user fetch');
+        this.logger.warn(
+          { Category: 'spooky-client::AuthService::check' },
+          '$auth.id empty, attempting manual user fetch'
+        );
 
         const manualResult = await this.remote.query(
           'SELECT * FROM user WHERE id = $auth.id LIMIT 1'
@@ -131,19 +140,22 @@ export class AuthService<S extends SchemaStructure> {
 
         if (manualUser && manualUser.id) {
           this.logger.info(
-            { user: manualUser },
-            '[AuthService] Auth check complete (via manual fetch)'
+            { user: manualUser, Category: 'spooky-client::AuthService::check' },
+            'Auth check complete (via manual fetch)'
           );
           await this.setSession(token, manualUser);
         } else {
-          this.logger.warn('[AuthService] Token valid but user not found via fallback');
+          this.logger.warn(
+            { Category: 'spooky-client::AuthService::check' },
+            'Token valid but user not found via fallback'
+          );
           await this.signOut();
         }
       }
     } catch (error) {
       this.logger.error(
-        { error, stack: (error as Error).stack },
-        '[AuthService] Auth check failed'
+        { error, stack: (error as Error).stack, Category: 'spooky-client::AuthService::check' },
+        'Auth check failed'
       );
       await this.signOut();
     } finally {
@@ -199,14 +211,20 @@ export class AuthService<S extends SchemaStructure> {
       );
     }
 
-    this.logger.info({ accessName, runtimeParams }, '[AuthService] Attempting signup');
+    this.logger.info(
+      { accessName, runtimeParams, Category: 'spooky-client::AuthService::signUp' },
+      'Attempting signup'
+    );
 
     const { access } = await this.remote.getClient().signup({
       access: accessName,
       variables: runtimeParams,
     });
 
-    this.logger.info('[AuthService] Signup successful, token received');
+    this.logger.info(
+      { Category: 'spooky-client::AuthService::signUp' },
+      'Signup successful, token received'
+    );
 
     // After signup, we usually get a token.
     // We should also fetch the user or trust the token works.
@@ -233,6 +251,11 @@ export class AuthService<S extends SchemaStructure> {
         `Missing required signin params for '${accessName}': ${missingParams.join(', ')}`
       );
     }
+
+    this.logger.info(
+      { accessName, Category: 'spooky-client::AuthService::signIn' },
+      'Attempting signin'
+    );
 
     const { access } = await this.remote.getClient().signin({
       access: accessName,

@@ -48,7 +48,7 @@ export class DataModule<S extends SchemaStructure> {
   }
 
   async init(): Promise<void> {
-    this.logger.info('DataModule initialized');
+    this.logger.info({ Category: 'spooky-client::DataModule::init' }, 'DataModule initialized');
   }
 
   // ==================== QUERY MANAGEMENT ====================
@@ -63,16 +63,25 @@ export class DataModule<S extends SchemaStructure> {
     ttl: QueryTimeToLive
   ): Promise<QueryHash> {
     const hash = await this.calculateHash({ surql: surqlString, params });
-    this.logger.debug({ hash }, 'Query Initialization: started');
+    this.logger.debug(
+      { hash, Category: 'spooky-client::DataModule::query' },
+      'Query Initialization: started'
+    );
 
     const recordId = new RecordId('_spooky_query', hash);
 
     if (this.activeQueries.has(hash)) {
-      this.logger.debug({ hash }, 'Query Initialization: exists, returning');
+      this.logger.debug(
+        { hash, Category: 'spooky-client::DataModule::query' },
+        'Query Initialization: exists, returning'
+      );
       return hash;
     }
 
-    this.logger.debug({ hash }, 'Query Initialization: not found, creating new query');
+    this.logger.debug(
+      { hash, Category: 'spooky-client::DataModule::query' },
+      'Query Initialization: not found, creating new query'
+    );
     const queryState = await this.createNewQuery<T>({
       recordId,
       surql: surqlString,
@@ -99,7 +108,12 @@ export class DataModule<S extends SchemaStructure> {
     this.activeQueries.set(hash, queryState);
     this.startTTLHeartbeat(queryState);
     this.logger.debug(
-      { hash, tableName, recordCount: queryState.records.length },
+      {
+        hash,
+        tableName,
+        recordCount: queryState.records.length,
+        Category: 'spooky-client::DataModule::query',
+      },
       'Query registered'
     );
 
@@ -154,10 +168,12 @@ export class DataModule<S extends SchemaStructure> {
    */
   async onStreamUpdate(update: StreamUpdate): Promise<void> {
     const { queryHash, localArray } = update;
-    console.log('xxxxSSS', localArray);
     const queryState = this.activeQueries.get(queryHash);
     if (!queryState) {
-      this.logger.warn({ queryHash }, 'Received update for unknown query. Skipping...');
+      this.logger.warn(
+        { queryHash, Category: 'spooky-client::DataModule::onStreamUpdate' },
+        'Received update for unknown query. Skipping...'
+      );
       return;
     }
 
@@ -185,9 +201,19 @@ export class DataModule<S extends SchemaStructure> {
         }
       }
 
-      this.logger.debug({ queryHash, recordCount: records?.length }, 'Query updated from stream');
+      this.logger.debug(
+        {
+          queryHash,
+          recordCount: records?.length,
+          Category: 'spooky-client::DataModule::onStreamUpdate',
+        },
+        'Query updated from stream'
+      );
     } catch (err) {
-      this.logger.error({ err, queryHash }, 'Failed to fetch records for stream update');
+      this.logger.error(
+        { err, queryHash, Category: 'spooky-client::DataModule::onStreamUpdate' },
+        'Failed to fetch records for stream update'
+      );
     }
   }
 
@@ -215,7 +241,10 @@ export class DataModule<S extends SchemaStructure> {
   async updateQueryLocalArray(id: string, localArray: RecordVersionArray): Promise<void> {
     const queryState = this.activeQueries.get(id);
     if (!queryState) {
-      this.logger.warn({ id }, 'Query to update local array not found');
+      this.logger.warn(
+        { id, Category: 'spooky-client::DataModule::updateQueryLocalArray' },
+        'Query to update local array not found'
+      );
       return;
     }
     queryState.config.localArray = localArray;
@@ -228,7 +257,10 @@ export class DataModule<S extends SchemaStructure> {
   async updateQueryRemoteArray(hash: string, remoteArray: RecordVersionArray): Promise<void> {
     const queryState = this.getQueryByHash(hash);
     if (!queryState) {
-      this.logger.warn({ hash }, 'Query to update remote array not found');
+      this.logger.warn(
+        { hash, Category: 'spooky-client::DataModule::updateQueryRemoteArray' },
+        'Query to update remote array not found'
+      );
       return;
     }
     queryState.config.remoteArray = remoteArray;
@@ -296,7 +328,7 @@ export class DataModule<S extends SchemaStructure> {
       callback([mutationEvent]);
     }
 
-    this.logger.debug({ id }, 'Record created');
+    this.logger.debug({ id, Category: 'spooky-client::DataModule::create' }, 'Record created');
 
     return target;
   }
@@ -361,7 +393,7 @@ export class DataModule<S extends SchemaStructure> {
       callback([mutationEvent]);
     }
 
-    this.logger.debug({ id }, 'Record updated');
+    this.logger.debug({ id, Category: 'spooky-client::DataModule::update' }, 'Record updated');
 
     return target;
   }
@@ -397,7 +429,7 @@ export class DataModule<S extends SchemaStructure> {
       callback([mutationEvent]);
     }
 
-    this.logger.debug({ id }, 'Record deleted');
+    this.logger.debug({ id, Category: 'spooky-client::DataModule::delete' }, 'Record deleted');
   }
 
   // ==================== PRIVATE HELPERS ====================
@@ -455,7 +487,10 @@ export class DataModule<S extends SchemaStructure> {
       const [result] = await this.local.query<[Record<string, any>[]]>(surqlString, params);
       records = result || [];
     } catch (err) {
-      this.logger.warn({ err }, 'Failed to load initial cached records');
+      this.logger.warn(
+        { err, Category: 'spooky-client::DataModule::createNewQuery' },
+        'Failed to load initial cached records'
+      );
     }
 
     return {
@@ -482,7 +517,13 @@ export class DataModule<S extends SchemaStructure> {
 
     queryState.ttlTimer = setTimeout(() => {
       // TODO: Emit heartbeat event for sync
-      this.logger.debug({ id: encodeRecordId(queryState.config.id) }, 'TTL heartbeat');
+      this.logger.debug(
+        {
+          id: encodeRecordId(queryState.config.id),
+          Category: 'spooky-client::DataModule::startTTLHeartbeat',
+        },
+        'TTL heartbeat'
+      );
       this.startTTLHeartbeat(queryState);
     }, heartbeatTime);
   }

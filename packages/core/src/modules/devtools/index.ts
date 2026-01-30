@@ -37,7 +37,7 @@ export class DevToolsService implements StreamUpdateReceiver {
       this.notifyDevTools();
     });
 
-    this.logger.debug('[DevTools] Service initialized');
+    this.logger.debug({ Category: 'spooky-client::DevToolsService::init' }, 'Service initialized');
   }
 
   // Get active queries directly from DataManager (single source of truth)
@@ -69,7 +69,10 @@ export class DevToolsService implements StreamUpdateReceiver {
   }
 
   public onQueryInitialized(payload: any) {
-    this.logger.debug({ payload }, '[DevToolsService] QueryInitialized');
+    this.logger.debug(
+      { payload, Category: 'spooky-client::DevToolsService::onQueryInitialized' },
+      'QueryInitialized'
+    );
     const queryHash = this.hashString(payload.queryId.toString());
 
     this.addEvent('QUERY_REQUEST_INIT', {
@@ -84,8 +87,9 @@ export class DevToolsService implements StreamUpdateReceiver {
     this.logger.debug(
       {
         id: payload.queryId?.toString(),
+        Category: 'spooky-client::DevToolsService::onQueryUpdated',
       },
-      '[DevToolsService] QueryUpdated'
+      'QueryUpdated'
     );
     const queryHash = this.hashString(payload.queryId.toString());
 
@@ -97,7 +101,10 @@ export class DevToolsService implements StreamUpdateReceiver {
   }
 
   public onStreamUpdate(update: StreamUpdate) {
-    this.logger.debug({ update }, '[DevToolsService] StreamUpdate');
+    this.logger.debug(
+      { update, Category: 'spooky-client::DevToolsService::onStreamUpdate' },
+      'StreamUpdate'
+    );
     this.addEvent('STREAM_UPDATE', {
       updates: [update],
     });
@@ -262,7 +269,10 @@ export class DevToolsService implements StreamUpdateReceiver {
 
             return this.serializeForDevTools(records) || [];
           } catch (e) {
-            this.logger.error({ err: e }, 'Failed to get table data');
+            this.logger.error(
+              { err: e, Category: 'spooky-client::DevToolsService::exposeToWindow' },
+              'Failed to get table data'
+            );
             return [];
           }
         },
@@ -288,7 +298,10 @@ export class DevToolsService implements StreamUpdateReceiver {
         },
         runQuery: async (query: string, target: 'local' | 'remote' = 'local') => {
           try {
-            this.logger.debug({ query, target }, '[DevTools] Running query (START)');
+            this.logger.debug(
+              { query, target, Category: 'spooky-client::DevToolsService::runQuery' },
+              'Running query (START)'
+            );
             const service = target === 'remote' ? this.remoteDatabaseService : this.databaseService;
 
             const startTime = Date.now();
@@ -301,8 +314,9 @@ export class DevToolsService implements StreamUpdateReceiver {
                 time: queryTime,
                 resultType: typeof result,
                 isArray: Array.isArray(result),
+                Category: 'spooky-client::DevToolsService::runQuery',
               },
-              '[DevTools] Database returned result'
+              'Database returned result'
             );
 
             // Serialize the result for DevTools
@@ -314,8 +328,9 @@ export class DevToolsService implements StreamUpdateReceiver {
               {
                 serializeTime,
                 serializedLength: JSON.stringify(serialized).length,
+                Category: 'spooky-client::DevToolsService::runQuery',
               },
-              '[DevTools] Serialization complete'
+              'Serialization complete'
             );
 
             return {
@@ -324,7 +339,10 @@ export class DevToolsService implements StreamUpdateReceiver {
               target,
             };
           } catch (e: any) {
-            this.logger.error({ err: e, query, target }, '[DevTools] Query execution failed');
+            this.logger.error(
+              { err: e, query, target, Category: 'spooky-client::DevToolsService::runQuery' },
+              'Query execution failed'
+            );
             // Ensure we always return a string for error
             const errorMessage =
               e instanceof Error ? e.message : typeof e === 'string' ? e : JSON.stringify(e);
