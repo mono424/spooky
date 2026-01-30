@@ -63,13 +63,16 @@ export class DataModule<S extends SchemaStructure> {
     ttl: QueryTimeToLive
   ): Promise<QueryHash> {
     const hash = await this.calculateHash({ surql: surqlString, params });
+    this.logger.debug({ hash }, 'Query initializing');
 
     const recordId = new RecordId('_spooky_query', hash);
 
     if (this.activeQueries.has(hash)) {
+      this.logger.debug({ hash }, 'Query already exists, returning');
       return hash;
     }
 
+    this.logger.debug({ hash }, 'Query not found, creating new query');
     const queryState = await this.createNewQuery<T>({
       recordId,
       surql: surqlString,
