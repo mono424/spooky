@@ -79,7 +79,7 @@ export class StreamProcessorService {
     if (this.isInitialized) return;
 
     this.logger.info(
-      { Category: 'spooky-client::StreamProcessorService::init' },
+      { Category: 'spooky-client:SPS::init' },
       'Initializing WASM...'
     );
     try {
@@ -92,12 +92,12 @@ export class StreamProcessorService {
 
       this.isInitialized = true;
       this.logger.info(
-        { Category: 'spooky-client::StreamProcessorService::init' },
+        { Category: 'spooky-client:SPS::init' },
         'Initialized successfully'
       );
     } catch (e) {
       this.logger.error(
-        { error: e, Category: 'spooky-client::StreamProcessorService::init' },
+        { error: e, Category: 'spooky-client:SPS::init' },
         'Failed to initialize'
       );
       throw e;
@@ -121,7 +121,7 @@ export class StreamProcessorService {
         this.logger.info(
           {
             stateLength: state.length,
-            Category: 'spooky-client::StreamProcessorService::loadState',
+            Category: 'spooky-client:SPS::loadState',
           },
           'Loading state from DB'
         );
@@ -131,19 +131,19 @@ export class StreamProcessorService {
           (this.processor as any).load_state(state);
         } else {
           this.logger.warn(
-            { Category: 'spooky-client::StreamProcessorService::loadState' },
+            { Category: 'spooky-client:SPS::loadState' },
             'load_state method not found on processor'
           );
         }
       } else {
         this.logger.info(
-          { Category: 'spooky-client::StreamProcessorService::loadState' },
+          { Category: 'spooky-client:SPS::loadState' },
           'No saved state found'
         );
       }
     } catch (e) {
       this.logger.error(
-        { error: e, Category: 'spooky-client::StreamProcessorService::loadState' },
+        { error: e, Category: 'spooky-client:SPS::loadState' },
         'Failed to load state'
       );
     }
@@ -158,19 +158,24 @@ export class StreamProcessorService {
         if (state) {
           await this.persistenceClient.set('_spooky_stream_processor_state', state);
           this.logger.trace(
-            { Category: 'spooky-client::StreamProcessorService::saveState' },
+            { Category: 'spooky-client:SPS::saveState' },
             'State saved'
           );
         }
       }
     } catch (e) {
       this.logger.error(
-        { error: e, Category: 'spooky-client::StreamProcessorService::saveState' },
+        { error: e, Category: 'spooky-client:SPS::saveState' },
         'Failed to save state'
       );
     }
   }
 
+  /**
+   * Ingest a record change into the processor.
+   * Emits 'stream_update' event if materialized views are affected.
+   * @param isOptimistic true = local mutation (increment versions), false = remote sync (keep versions)
+   */
   /**
    * Ingest a record change into the processor.
    * Emits 'stream_update' event if materialized views are affected.
@@ -189,14 +194,14 @@ export class StreamProcessorService {
         op,
         id,
         isOptimistic,
-        Category: 'spooky-client::StreamProcessorService::ingest',
+        Category: 'spooky-client:SPS::ingest',
       },
       'Ingesting record'
     );
 
     if (!this.processor) {
       this.logger.warn(
-        { Category: 'spooky-client::StreamProcessorService::ingest' },
+        { Category: 'spooky-client:SPS::ingest' },
         'Not initialized, skipping ingest'
       );
       return [];
@@ -205,9 +210,9 @@ export class StreamProcessorService {
     try {
       const normalizedRecord = this.normalizeValue(record);
 
-      const rawUpdates = this.processor.ingest(table, op, id, normalizedRecord, isOptimistic);
+      const rawUpdates = this.processor.ingest_single(table, op, id, normalizedRecord, isOptimistic);
       this.logger.debug(
-        { rawUpdates, Category: 'spooky-client::StreamProcessorService::ingest' },
+        { rawUpdates, Category: 'spooky-client:SPS::ingest' },
         'ingest result'
       );
 
@@ -223,7 +228,7 @@ export class StreamProcessorService {
       return rawUpdates;
     } catch (e) {
       this.logger.error(
-        { error: e, Category: 'spooky-client::StreamProcessorService::ingest' },
+        { error: e, Category: 'spooky-client:SPS::ingest' },
         'Error during ingestion'
       );
     }
@@ -248,40 +253,49 @@ export class StreamProcessorService {
       {
         batchSize: batch.length,
         isOptimistic,
-        Category: 'spooky-client::StreamProcessorService::ingestBatch',
+        Category: 'spooky-client:SPS::ingestBatch',
       },
       'Ingesting batch'
     );
 
     if (!this.processor) {
       this.logger.warn(
-        { Category: 'spooky-client::StreamProcessorService::ingestBatch' },
+        { Category: 'spooky-client:SPS::ingestBatch' },
         'Not initialized, skipping batch ingest'
       );
       return [];
     }
 
     try {
-      // Normalize all records in the batch
-      const normalizedBatch = batch.map((item) => ({
-        table: item.table,
-        op: item.op,
-        id: item.record.id,
-        record: this.normalizeValue(item.record),
-      }));
+      const allUpdates: WasmStreamUpdate[] = [];
 
-      const rawUpdates = this.processor.ingest_batch(normalizedBatch, isOptimistic);
+      // Manually iterate and ingest single records
+      for (const item of batch) {
+        const normalizedRecord = this.normalizeValue(item.record);
+        // We use ingest_single for each item
+        const updates = this.processor.ingest_single(
+          item.table,
+          item.op,
+          item.record.id, // Assuming record.id is available as in previous code
+          normalizedRecord,
+          isOptimistic
+        );
+        
+        if (updates && Array.isArray(updates)) {
+            allUpdates.push(...updates);
+        }
+      }
 
       this.logger.debug(
         {
-          updateCount: rawUpdates?.length,
-          Category: 'spooky-client::StreamProcessorService::ingestBatch',
+          updateCount: allUpdates.length,
+          Category: 'spooky-client:SPS::ingestBatch',
         },
         'batch ingest result'
       );
 
-      if (rawUpdates && Array.isArray(rawUpdates) && rawUpdates.length > 0) {
-        const updates: StreamUpdate[] = rawUpdates.map((u: WasmStreamUpdate) => ({
+      if (allUpdates.length > 0) {
+        const updates: StreamUpdate[] = allUpdates.map((u: WasmStreamUpdate) => ({
           queryHash: u.query_id,
           localArray: u.result_data,
         }));
@@ -289,10 +303,10 @@ export class StreamProcessorService {
         this.notifyUpdates(updates);
       }
       this.saveState();
-      return rawUpdates;
+      return allUpdates;
     } catch (e) {
       this.logger.error(
-        { error: e, Category: 'spooky-client::StreamProcessorService::ingestBatch' },
+        { error: e, Category: 'spooky-client:SPS::ingestBatch' },
         'Error during batch ingestion'
       );
     }
@@ -306,7 +320,7 @@ export class StreamProcessorService {
   registerQueryPlan(queryPlan: QueryPlanConfig) {
     if (!this.processor) {
       this.logger.warn(
-        { Category: 'spooky-client::StreamProcessorService::registerQueryPlan' },
+        { Category: 'spooky-client:SPS::registerQueryPlan' },
         'Not initialized, skipping registration'
       );
       return;
@@ -317,7 +331,7 @@ export class StreamProcessorService {
         queryHash: queryPlan.queryHash,
         surql: queryPlan.surql,
         params: queryPlan.params,
-        Category: 'spooky-client::StreamProcessorService::registerQueryPlan',
+        Category: 'spooky-client:SPS::registerQueryPlan',
       },
       'Registering query plan'
     );
@@ -335,7 +349,7 @@ export class StreamProcessorService {
       });
 
       this.logger.debug(
-        { initialUpdate, Category: 'spooky-client::StreamProcessorService::registerQueryPlan' },
+        { initialUpdate, Category: 'spooky-client:SPS::registerQueryPlan' },
         'register_view result'
       );
 
@@ -352,14 +366,14 @@ export class StreamProcessorService {
           queryHash: queryPlan.queryHash,
           surql: queryPlan.surql,
           params: queryPlan.params,
-          Category: 'spooky-client::StreamProcessorService::registerQueryPlan',
+          Category: 'spooky-client:SPS::registerQueryPlan',
         },
         'Registered query plan'
       );
       return update;
     } catch (e) {
       this.logger.error(
-        { error: e, Category: 'spooky-client::StreamProcessorService::registerQueryPlan' },
+        { error: e, Category: 'spooky-client:SPS::registerQueryPlan' },
         'Error registering query plan'
       );
       throw e;
@@ -376,7 +390,7 @@ export class StreamProcessorService {
       this.saveState();
     } catch (e) {
       this.logger.error(
-        { error: e, Category: 'spooky-client::StreamProcessorService::unregisterQueryPlan' },
+        { error: e, Category: 'spooky-client:SPS::unregisterQueryPlan' },
         'Error unregistering query plan'
       );
     }
@@ -397,7 +411,7 @@ export class StreamProcessorService {
       if (hasTable && hasId && hasToString && isNotPlainObject) {
         const result = value.toString();
         this.logger.trace(
-          { result, Category: 'spooky-client::StreamProcessorService::normalizeValue' },
+          { result, Category: 'spooky-client:SPS::normalizeValue' },
           'RecordId detected'
         );
         return result;
