@@ -1,24 +1,102 @@
-import pino, { type Logger as PinoLogger } from 'pino';
-import { Level } from 'pino';
+import pino, { Level, type Logger as PinoLogger, type LoggerOptions } from 'pino';
+import { LoggerProvider, BatchLogRecordProcessor } from '@opentelemetry/sdk-logs';
+import { OTLPLogExporter } from '@opentelemetry/exporter-logs-otlp-proto';
+import { resourceFromAttributes } from '@opentelemetry/resources';
+import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions';
 
 export type Logger = PinoLogger;
 
-function getLevelLabel(levelVal: number) {
-  if (levelVal >= 50) return 'ERROR';
-  if (levelVal >= 40) return 'WARN';
-  return 'INFO';
+// Map pino levels to OTEL severity numbers
+// https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/logs/data-model.md#severity-fields
+function mapLevelToSeverityNumber(level: string): number {
+  switch (level) {
+    case 'trace':
+      return 1;
+    case 'debug':
+      return 5;
+    case 'info':
+      return 9;
+    case 'warn':
+      return 13;
+    case 'error':
+      return 17;
+    case 'fatal':
+      return 21;
+    default:
+      return 9;
+  }
 }
 
-export function createLogger(level: Level = 'info'): Logger {
+export function createLogger(level: Level = 'info', otelEndpoint?: string): Logger {
+  const browserConfig: LoggerOptions['browser'] = {
+    asObject: true,
+    write: (o: any) => {
+      console.log(JSON.stringify(o));
+    },
+  };
+
+  if (otelEndpoint) {
+    // Initialize OTEL LoggerProvider
+    const resource = resourceFromAttributes({
+      [ATTR_SERVICE_NAME]: 'spooky-client',
+    });
+
+    const exporter = new OTLPLogExporter({
+      url: otelEndpoint,
+    });
+
+    // Pass processors in constructor as this SDK version requires it
+    const loggerProvider = new LoggerProvider({
+      resource,
+      processors: [new BatchLogRecordProcessor(exporter)],
+    });
+
+    const otelLogger = loggerProvider.getLogger('spooky-client');
+
+    browserConfig.transmit = {
+      level: level,
+      send: (levelLabel: string, logEvent: any) => {
+        try {
+          const messages = [...logEvent.messages];
+          const severityNumber = mapLevelToSeverityNumber(levelLabel);
+
+          // Construct the message body
+          let body = '';
+          const msg = messages.pop();
+
+          if (typeof msg === 'string') {
+            body = msg;
+          } else if (msg) {
+            body = JSON.stringify(msg);
+          }
+
+          const attributes = {};
+          for (const msg of messages) {
+            if (typeof msg === 'object') {
+              Object.assign(attributes, msg);
+            }
+          }
+
+          // Emit to OTEL SDK
+          otelLogger.emit({
+            severityNumber: severityNumber,
+            severityText: levelLabel.toUpperCase(),
+            body: body,
+            attributes: {
+              ...logEvent.bindings[0],
+              ...attributes,
+            },
+            timestamp: new Date(logEvent.ts),
+          });
+        } catch (e) {
+          console.warn('Failed to transmit log to OTEL endpoint', e);
+        }
+      },
+    };
+  }
+
   return pino({
     level,
-    browser: {
-      asObject: true,
-      write: (o) => {
-        console.log(JSON.stringify(o));
-      },
-    },
-    // We can add a custom serializer or transport if needed,
-    // but default JSON is standard for pino.
+    browser: browserConfig,
   });
 }

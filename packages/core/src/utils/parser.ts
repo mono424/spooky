@@ -7,7 +7,6 @@ export function parseParams(
   params: Record<string, any>
 ) {
   const parsedParams: Record<string, any> = {};
-  console.log('xxx', params);
   for (const [key, value] of Object.entries(params)) {
     const column = tableSchema[key];
     if (column && value !== undefined) {

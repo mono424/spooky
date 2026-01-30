@@ -2,8 +2,9 @@ import { SyncedDb, SyncedDbConfig } from '@spooky/client-solid';
 import { schema, SURQL_SCHEMA } from './schema.gen';
 
 // Database configuration
-export const dbConfig = {
+export const dbConfig: SyncedDbConfig<typeof schema> = {
   logLevel: 'trace',
+  otelEndpoint: '/v1/logs',
   schema: schema,
   schemaSurql: SURQL_SCHEMA,
   database: {
@@ -11,9 +12,10 @@ export const dbConfig = {
     database: 'main',
     endpoint: 'ws://localhost:8666/rpc',
     store: 'memory',
+    persistenceClient: 'localstorage',
     // auth: { ... } // If needed later
   },
-} satisfies SyncedDbConfig<typeof schema>;
+};
 
 export const db = new SyncedDb<typeof schema>(dbConfig);
 

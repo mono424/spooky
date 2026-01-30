@@ -3,9 +3,8 @@ import { EventDefinition, EventSystem } from '../../events/index.js';
 import { Logger } from 'pino';
 import { LocalDatabaseService } from '../database/index.js';
 import { WasmProcessor, WasmStreamUpdate } from './wasm-types.js';
-import { RecordId, Duration } from 'surrealdb';
-import { QueryTimeToLive, RecordVersionArray } from '../../types.js';
-import { encodeRecordId } from '../../utils/index.js';
+import { Duration } from 'surrealdb';
+import { PersistenceClient, QueryTimeToLive, RecordVersionArray } from '../../types.js';
 
 // Simple interface for query plan registration (replaces Incantation class)
 interface QueryPlanConfig {
@@ -26,7 +25,7 @@ interface QueryPlanConfig {
 // Matches MaterializedViewUpdate struct
 export interface StreamUpdate {
   queryHash: string;
-  localArray: any; // Flat array structure [[id, version], ...]
+  localArray: RecordVersionArray;
 }
 
 // Define events map (kept for DevTools compatibility)
@@ -42,6 +41,7 @@ export interface StreamUpdateReceiver {
 }
 
 export class StreamProcessorService {
+  private logger: Logger;
   private processor: WasmProcessor | undefined;
   private isInitialized = false;
   private receivers: StreamUpdateReceiver[] = [];
@@ -49,8 +49,11 @@ export class StreamProcessorService {
   constructor(
     public events: EventSystem<StreamProcessorEvents>,
     private db: LocalDatabaseService,
-    private logger: Logger
-  ) {}
+    private persistenceClient: PersistenceClient,
+    logger: Logger
+  ) {
+    this.logger = logger.child({ name: 'StreamProcessorService' });
+  }
 
   /**
    * Add a receiver for stream updates.
@@ -95,9 +98,7 @@ export class StreamProcessorService {
   async loadState() {
     if (!this.processor) return;
     try {
-      const result = await this.db.query<[{ state: string }[]]>(
-        'SELECT state FROM _spooky_stream_processor_state LIMIT 1'
-      );
+      const result = await this.persistenceClient.get('_spooky_stream_processor_state');
 
       // Check if we have a valid result from the query
       if (
@@ -131,14 +132,7 @@ export class StreamProcessorService {
       if (typeof (this.processor as any).save_state === 'function') {
         const state = (this.processor as any).save_state();
         if (state) {
-          await this.db.query(
-            `
-                UPDATE _spooky_stream_processor_state 
-                SET state = $state, updated_at = time::now() 
-                WHERE id = 'singleton'
-                `,
-            { state }
-          );
+          await this.persistenceClient.set('_spooky_stream_processor_state', state);
           this.logger.trace('[StreamProcessor] State saved');
         }
       }
@@ -235,15 +229,16 @@ export class StreamProcessorService {
         op: item.op,
         id: item.record.id,
         record: this.normalizeValue(item.record),
-        version: item.version,
       }));
 
       const rawUpdates = this.processor.ingest_batch(normalizedBatch, isOptimistic);
+
       this.logger.debug(
         { updateCount: rawUpdates?.length },
         '[StreamProcessor] batch ingest result'
       );
 
+      console.log('rawUpdates', rawUpdates);
       if (rawUpdates && Array.isArray(rawUpdates) && rawUpdates.length > 0) {
         const updates: StreamUpdate[] = rawUpdates.map((u: WasmStreamUpdate) => ({
           queryHash: u.query_id,
@@ -258,35 +253,6 @@ export class StreamProcessorService {
       this.logger.error(e, '[StreamProcessor] Error during batch ingestion');
     }
     return [];
-  }
-
-  /**
-   * Explicitly set the version of a record in a specific view.
-   * This is used during remote sync to ensure local state matches remote versioning.
-   */
-  setRecordVersion(queryId: string, recordId: string, version: number) {
-    if (!this.processor) return;
-
-    this.logger.debug({ queryId, recordId, version }, '[StreamProcessor] setRecordVersion');
-
-    try {
-      // Note: recordId must be fully qualified table:id string
-      const update = this.processor.set_record_version(queryId, recordId, version);
-
-      if (update) {
-        const updates: StreamUpdate[] = [
-          {
-            queryHash: update.query_id,
-            localArray: update.result_data,
-          },
-        ];
-        // Direct handler call instead of event
-        this.notifyUpdates(updates);
-        this.saveState();
-      }
-    } catch (e) {
-      this.logger.error(e, '[StreamProcessor] Error setting record version');
-    }
   }
 
   /**
