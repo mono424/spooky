@@ -10,7 +10,7 @@ import { SyncScheduler } from './scheduler.js';
 import { SchemaStructure } from '@spooky/query-builder';
 import { CacheModule } from '../cache/index.js';
 import { DataModule } from '../data/index.js';
-import { encodeRecordId, parseDuration } from '../../utils/index.js';
+import { encodeRecordId, parseDuration, surql } from '../../utils/index.js';
 
 export class SpookySync<S extends SchemaStructure> {
   private clientId: string = '';
@@ -191,18 +191,29 @@ export class SpookySync<S extends SchemaStructure> {
       throw new Error('Query to register not found');
     }
     // Delegate to remote function which handles DBSP registration & persistence
-    const [{ array }] = await this.remote.query<[{ array: RecordVersionArray }]>(
-      'fn::query::register($config)',
+    await this.remote.query('fn::query::register($config)', {
+      config: {
+        clientId: this.clientId,
+        id: queryState.config.id,
+        surql: queryState.config.surql,
+        params: queryState.config.params,
+        ttl: queryState.config.ttl,
+      },
+    });
+
+    const [items] = await this.remote.query<[{ out: RecordId<string>; version: number }[]]>(
+      surql.selectByFieldsAnd('_spooky_list_ref', ['in'], ['out', 'version']),
       {
-        config: {
-          clientId: this.clientId,
-          id: queryState.config.id,
-          surql: queryState.config.surql,
-          params: queryState.config.params,
-          ttl: queryState.config.ttl,
-        },
+        in: queryState.config.id,
       }
     );
+
+    this.logger.trace(
+      { queryId: encodeRecordId(queryState.config.id), items },
+      'Got query record version array from remote'
+    );
+
+    const array: RecordVersionArray = items.map((item) => [encodeRecordId(item.out), item.version]);
 
     this.logger.debug(
       { queryId: encodeRecordId(queryState.config.id), array },
