@@ -1,13 +1,13 @@
 use crate::parser::{FieldType, TableSchema};
 use regex::Regex;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// Generate Spooky events for data hashing and graph synchronization
 // ... imports ...
 
 /// Generate Spooky events for data hashing and graph synchronization
 pub fn generate_spooky_events(
-    tables: &HashMap<String, TableSchema>,
+    tables: &BTreeMap<String, TableSchema>,
     raw_content: &str,
     is_client: bool,
     mode: &str,
@@ -102,7 +102,7 @@ pub fn generate_spooky_events(
         ));
         events.push_str("WHEN $before != $after AND $event != \"DELETE\"\nTHEN {\n");
 
-                // --- Versioning Logic ---
+        // --- Versioning Logic ---
         events.push_str("    LET $spooky_ver_rec = IF $event = \"CREATE\" {\n");
         events.push_str("        (CREATE _spooky_version SET record_id = $after.id, version = 1 RETURN AFTER)\n");
         events.push_str("    } ELSE IF $event = \"UPDATE\" {\n");

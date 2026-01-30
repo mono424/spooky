@@ -1,7 +1,7 @@
 use crate::parser::{FieldType, SchemaParser, TableSchema};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct JsonSchema {
@@ -11,10 +11,10 @@ pub struct JsonSchema {
     #[serde(rename = "type")]
     pub schema_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub properties: Option<HashMap<String, Value>>,
+    pub properties: Option<BTreeMap<String, Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub required: Option<Vec<String>>,
-    pub definitions: HashMap<String, Value>,
+    pub definitions: BTreeMap<String, Value>,
 }
 
 pub struct JsonSchemaGenerator;
@@ -25,12 +25,12 @@ impl JsonSchemaGenerator {
     }
 
     pub fn generate(&self, parser: &SchemaParser) -> JsonSchema {
-        let mut definitions = HashMap::new();
-        let mut properties = HashMap::new();
+        let mut definitions = BTreeMap::new();
+        let mut properties = BTreeMap::new();
         let mut required_tables = Vec::new();
 
         // Build relationships map (from field references)
-        let mut relationships: HashMap<String, Vec<Value>> = HashMap::new();
+        let mut relationships: BTreeMap<String, Vec<Value>> = BTreeMap::new();
         for (table_name, table_schema) in &parser.tables {
             if !table_schema.relationships.is_empty() {
                 let relationship_objects: Vec<Value> = table_schema

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use surrealdb_core::dbs::capabilities::ExperimentalTarget;
 use surrealdb_core::dbs::Capabilities;
 use surrealdb_core::sql::statements::DefineStatement;
@@ -13,7 +13,7 @@ use surrealdb_core::syn::parse_with_capabilities;
 pub struct TableSchema {
     #[allow(dead_code)]
     pub name: String,
-    pub fields: HashMap<String, FieldDefinition>,
+    pub fields: BTreeMap<String, FieldDefinition>,
     pub schemafull: bool,
     pub relationships: Vec<Relationship>, // List of relationships with field info
     pub is_relation: bool,                // Whether this is a relation table
@@ -30,8 +30,8 @@ pub struct Relationship {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccessDefinition {
     pub name: String,
-    pub signin_params: HashMap<String, FieldDefinition>,
-    pub signup_params: HashMap<String, FieldDefinition>,
+    pub signin_params: BTreeMap<String, FieldDefinition>,
+    pub signup_params: BTreeMap<String, FieldDefinition>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,15 +62,15 @@ pub enum FieldType {
 }
 
 pub struct SchemaParser {
-    pub tables: HashMap<String, TableSchema>,
-    pub access: HashMap<String, AccessDefinition>,
+    pub tables: BTreeMap<String, TableSchema>,
+    pub access: BTreeMap<String, AccessDefinition>,
 }
 
 impl SchemaParser {
     pub fn new() -> Self {
         Self {
-            tables: HashMap::new(),
-            access: HashMap::new(),
+            tables: BTreeMap::new(),
+            access: BTreeMap::new(),
         }
     }
 
@@ -208,7 +208,7 @@ impl SchemaParser {
                     table_name.clone(),
                     TableSchema {
                         name: table_name,
-                        fields: HashMap::new(),
+                        fields: BTreeMap::new(),
                         schemafull,
                         relationships: Vec::new(),
                         is_relation,
@@ -279,22 +279,22 @@ impl SchemaParser {
                         } else if let Some(ref auth) = access_def.authenticate {
                             Self::extract_params(&format!("{}", auth))
                         } else {
-                            HashMap::new()
+                            BTreeMap::new()
                         };
 
                         let signup = if let Some(ref su) = record_access.signup {
                             Self::extract_params(&format!("{}", su))
                         } else {
-                            HashMap::new()
+                            BTreeMap::new()
                         };
                         (signin, signup)
                     } else {
                         let signin = if let Some(ref auth) = access_def.authenticate {
                             Self::extract_params(&format!("{}", auth))
                         } else {
-                            HashMap::new()
+                            BTreeMap::new()
                         };
-                        (signin, HashMap::new())
+                        (signin, BTreeMap::new())
                     };
 
                 self.access.insert(
@@ -393,8 +393,8 @@ impl SchemaParser {
         (Some(perm_str), should_strip)
     }
 
-    fn extract_params(content: &str) -> HashMap<String, FieldDefinition> {
-        let mut params = HashMap::new();
+    fn extract_params(content: &str) -> BTreeMap<String, FieldDefinition> {
+        let mut params = BTreeMap::new();
         let mut excluded_vars = HashSet::new();
 
         // Regex to find LET definitions: LET $var = ...
