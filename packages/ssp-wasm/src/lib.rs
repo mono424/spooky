@@ -4,7 +4,7 @@ use ssp::engine::circuit::dto::BatchEntry;
 use ssp::engine::eval::normalize_record_id;
 use ssp::engine::types::Operation;
 use ssp::engine::types::SpookyValue;
-use ssp::{Circuit, ViewUpdate};
+use ssp::{Circuit, ViewResultFormat, ViewUpdate};
 use wasm_bindgen::prelude::*;
 
 /// Version from Cargo.toml
@@ -56,28 +56,6 @@ fn transform_updates(updates: &[ViewUpdate], circuit: &Circuit) -> Vec<WasmViewU
 /// Transform a single ViewUpdate
 fn transform_single_update(update: ViewUpdate, circuit: &Circuit) -> WasmViewUpdate {
     match update {
-        ViewUpdate::Flat(m) | ViewUpdate::Tree(m) => {
-            let result_data: Vec<(String, i64)> = m
-                .result_data
-                .iter()
-                .map(|id| {
-                    let table_name = id.split(':').next().unwrap_or("");
-                    let version = circuit
-                        .db
-                        .get_table(table_name)
-                        .and_then(|t| t.get_record_version(id))
-                        .unwrap_or(1);
-                    (id.to_string(), version)
-                })
-                .collect();
-
-            WasmViewUpdate {
-                query_id: m.query_id.clone(),
-                result_hash: m.result_hash.clone(),
-                result_data,
-                delta: None,
-            }
-        }
         ViewUpdate::Streaming(s) => {
             let records: Vec<WasmDeltaRecord> = s
                 .records
@@ -108,6 +86,19 @@ fn transform_single_update(update: ViewUpdate, circuit: &Circuit) -> WasmViewUpd
                 }),
             }
         }
+        _ => {
+            // Log warning or panic depending on strictness.
+            // Since user said "we only get ViewUpdate::Streaiming", we'll just return empty or panic.
+            // Returning empty safe default for other formats if they accidentally slip in.
+            // But realistically should not happen if we register with Streaming.
+            let query_id = update.query_id().to_string();
+             WasmViewUpdate {
+                query_id,
+                result_hash: String::new(),
+                result_data: vec![],
+                delta: None,
+            }
+        }
     }
 }
 
@@ -133,7 +124,6 @@ export interface WasmIncantationConfig {
   ttl: string;
   lastActiveAt: string;
   safe_params?: Record<string, any>;
-  format?: 'flat' | 'tree' | 'streaming';
 }
 
 export interface WasmIngestItem {
@@ -160,11 +150,10 @@ impl SpookyProcessor {
         op: String,
         id: String,
         record: JsValue,
-        //_is_optimistic: bool, // Ignored in new API? Or todo? New API doesn't seem to take it in ingest_single
     ) -> Result<JsValue, JsValue> {
         let record: Value = serde_wasm_bindgen::from_value(record)
             .map_err(|e| JsValue::from_str(&format!("Failed to parse record: {}", e)))?;
-
+         web_sys::console::log_1(&format!("[ssp-wasm] ingest").into());
         // internal preparation (hash calc)
         let (clean_record, _hash) = ssp::service::ingest::prepare(record);
 
@@ -275,13 +264,23 @@ impl SpookyProcessor {
             .map_err(|e| JsValue::from_str(&format!("Registration failed: {}", e)))?;
 
         let plan_id = data.plan.id.clone();
+        
+        // Force Streaming format regardless of what might have been parsed
         let initial_update = self
             .circuit
-            .register_view(data.plan, data.safe_params, data.format);
+            .register_view(data.plan, data.safe_params, Some(ViewResultFormat::Streaming));
 
         // If None, return default empty result
-        let result = initial_update
-            .unwrap_or_else(|| ViewUpdate::Flat(ssp::service::view::default_result(&plan_id)));
+        // For streaming, default might be empty records
+        let result = initial_update.unwrap_or_else(|| {
+             // Return simplified default for streaming? Or just re-use service default and let transform handle it?
+             // service::default_result returns MaterializedViewUpdate (Flat).
+             // Let's manually construct an empty Streaming update to be consistent.
+             ViewUpdate::Streaming(ssp::engine::update::StreamingUpdate {
+                 view_id: plan_id,
+                 records: vec![],
+             })
+        });
 
         // Transform to include versions
         let wasm_result = transform_single_update(result, &self.circuit);
