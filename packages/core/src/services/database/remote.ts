@@ -31,7 +31,7 @@ export class RemoteDatabaseService extends AbstractDatabaseService {
                   service: 'surrealdb:remote',
                   Category: 'spooky-client::RemoteDatabaseService::diagnostics',
                 },
-                `Remote SurrealDB diagnostics captured ${key} ${type}:${phase}`
+                `Remote SurrealDB diagnostics captured ${type}:${phase}`
               );
             }
           }

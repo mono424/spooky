@@ -40,7 +40,7 @@ export class LocalDatabaseService extends AbstractDatabaseService {
                   service: 'surrealdb:local',
                   Category: 'spooky-client::LocalDatabaseService::diagnostics',
                 },
-                `Local SurrealDB diagnostics captured ${key} ${type}:${phase}`
+                `Local SurrealDB diagnostics captured ${type}:${phase}`
               );
             }
           }
