@@ -59,18 +59,6 @@ export const schema = {
       cardinality: 'one' as const
     },
     {
-      from: 'user' as const,
-      field: 'comments' as const,
-      to: 'comment' as const,
-      cardinality: 'many' as const
-    },
-    {
-      from: 'user' as const,
-      field: 'threads' as const,
-      to: 'thread' as const,
-      cardinality: 'many' as const
-    },
-    {
       from: 'thread' as const,
       field: 'author' as const,
       to: 'user' as const,
@@ -80,6 +68,18 @@ export const schema = {
       from: 'thread' as const,
       field: 'comments' as const,
       to: 'comment' as const,
+      cardinality: 'many' as const
+    },
+    {
+      from: 'user' as const,
+      field: 'comments' as const,
+      to: 'comment' as const,
+      cardinality: 'many' as const
+    },
+    {
+      from: 'user' as const,
+      field: 'threads' as const,
+      to: 'thread' as const,
       cardinality: 'many' as const
     },
   ],
