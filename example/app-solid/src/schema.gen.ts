@@ -25,6 +25,17 @@ export const schema = {
       primaryKey: ['id'] as const
     },
     {
+      name: 'comment' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
+        author: { type: 'string' as const, recordId: true, optional: false },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
+        content: { type: 'string' as const, optional: false },
+        thread: { type: 'string' as const, recordId: true, optional: false },
+      },
+      primaryKey: ['id'] as const
+    },
+    {
       name: 'thread' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
@@ -33,6 +44,8 @@ export const schema = {
         title: { type: 'string' as const, optional: false },
         content: { type: 'string' as const, optional: false },
         created_at: { type: 'string' as const, dateTime: true, optional: true },
+        author: { type: 'string' as const, recordId: true, optional: false },
+        active: { type: 'boolean' as const, optional: true },
         comments: { type: 'string' as const, optional: true },
       },
       primaryKey: ['id'] as const
@@ -46,18 +59,6 @@ export const schema = {
     },
   ],
   relationships: [
-    {
-      from: 'comment' as const,
-      field: 'author' as const,
-      to: 'user' as const,
-      cardinality: 'one' as const
-    },
-    {
-      from: 'comment' as const,
-      field: 'thread' as const,
-      to: 'thread' as const,
-      cardinality: 'one' as const
-    },
     {
       from: 'user' as const,
       field: 'threads' as const,
@@ -81,6 +82,18 @@ export const schema = {
       field: 'comments' as const,
       to: 'comment' as const,
       cardinality: 'many' as const
+    },
+    {
+      from: 'comment' as const,
+      field: 'author' as const,
+      to: 'user' as const,
+      cardinality: 'one' as const
+    },
+    {
+      from: 'comment' as const,
+      field: 'thread' as const,
+      to: 'thread' as const,
+      cardinality: 'one' as const
     },
   ],
   access: {

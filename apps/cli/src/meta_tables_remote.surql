@@ -15,18 +15,6 @@ DEFINE FIELD surql ON TABLE _spooky_query TYPE option<string>
 DEFINE FIELD clientId ON TABLE _spooky_query TYPE option<string>
     PERMISSIONS FOR select, create, update WHERE true;
 
--- The current XOR sum of all results in this query
-DEFINE FIELD hash ON TABLE _spooky_query TYPE option<string>
-    PERMISSIONS FOR select, create, update WHERE true;
-
--- The Radix Tree of Result IDs for efficient sync (deprecated, kept for backward compat)
-DEFINE FIELD tree ON TABLE _spooky_query TYPE any
-    PERMISSIONS FOR select, create, update WHERE true;
-
--- The flat array of Result IDs for efficient sync
-DEFINE FIELD array ON TABLE _spooky_query TYPE any
-    PERMISSIONS FOR select, create, update WHERE true;
-
 -- For garbage collection (Heartbeat)
 DEFINE FIELD lastActiveAt ON TABLE _spooky_query TYPE datetime DEFAULT time::now()
     PERMISSIONS FOR select, create, update WHERE true;
