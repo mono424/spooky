@@ -476,7 +476,7 @@ async fn register_view_handler(
         .to_string();
     let surreal_ql = data
         .metadata
-        .get("surql")
+        .get("sql")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
