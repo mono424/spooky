@@ -7,26 +7,123 @@ use ssp::engine::types::SpookyValue;
 use ssp::{Circuit, ViewUpdate};
 use wasm_bindgen::prelude::*;
 
-// When the `wee_alloc` feature is enabled, use `wee_alloc` as the global
-// allocator.
-// When the `wee_alloc` feature is enabled, use `wee_alloc` as the global
-// allocator.
-// #[cfg(feature = "wee_alloc")]
-// #[global_allocator]
-// static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
+/// Version from Cargo.toml
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Called when WASM module is loaded
+#[wasm_bindgen(start)]
+pub fn init() {
+    web_sys::console::log_1(&format!("[ssp-wasm] v{} loaded", VERSION).into());
+}
 
 #[wasm_bindgen]
 pub struct SpookyProcessor {
     circuit: Circuit,
 }
 
+/// Custom DTO for WASM output with [[record-id, version], ...] format
+/// Custom DTO for WASM output with [[record-id, version], ...] format
+#[derive(Serialize)]
+struct WasmViewUpdate {
+    query_id: String,
+    result_hash: String,
+    result_data: Vec<(String, i64)>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    delta: Option<WasmStreamingUpdate>,
+}
+
+#[derive(Serialize)]
+struct WasmStreamingUpdate {
+    view_id: String,
+    records: Vec<WasmDeltaRecord>,
+}
+
+#[derive(Serialize)]
+struct WasmDeltaRecord {
+    id: String,
+    event: ssp::engine::update::DeltaEvent,
+    version: i64,
+}
+
+/// Transform ViewUpdate to WasmViewUpdate with versions extracted from circuit database
+fn transform_updates(updates: &[ViewUpdate], circuit: &Circuit) -> Vec<WasmViewUpdate> {
+    updates
+        .iter()
+        .map(|update| transform_single_update(update.clone(), circuit))
+        .collect()
+}
+
+/// Transform a single ViewUpdate
+fn transform_single_update(update: ViewUpdate, circuit: &Circuit) -> WasmViewUpdate {
+    match update {
+        ViewUpdate::Flat(m) | ViewUpdate::Tree(m) => {
+            let result_data: Vec<(String, i64)> = m
+                .result_data
+                .iter()
+                .map(|id| {
+                    let table_name = id.split(':').next().unwrap_or("");
+                    let version = circuit
+                        .db
+                        .get_table(table_name)
+                        .and_then(|t| t.get_record_version(id))
+                        .unwrap_or(1);
+                    (id.to_string(), version)
+                })
+                .collect();
+
+            WasmViewUpdate {
+                query_id: m.query_id.clone(),
+                result_hash: m.result_hash.clone(),
+                result_data,
+                delta: None,
+            }
+        }
+        ViewUpdate::Streaming(s) => {
+            let records: Vec<WasmDeltaRecord> = s
+                .records
+                .iter()
+                .map(|rec| {
+                    let table_name = rec.id.split(':').next().unwrap_or("");
+                    let version = circuit
+                        .db
+                        .get_table(table_name)
+                        .and_then(|t| t.get_record_version(&rec.id))
+                        .unwrap_or(1);
+
+                    WasmDeltaRecord {
+                        id: rec.id.to_string(),
+                        event: rec.event.clone(),
+                        version,
+                    }
+                })
+                .collect();
+
+            WasmViewUpdate {
+                query_id: s.view_id.clone(),
+                result_hash: String::new(),
+                result_data: vec![],
+                delta: Some(WasmStreamingUpdate {
+                    view_id: s.view_id.clone(),
+                    records,
+                }),
+            }
+        }
+    }
+}
+
+// This is appended to the generated .d.ts file
 #[wasm_bindgen(typescript_custom_section)]
 const TS_APPEND_CONTENT: &'static str = r#"
 export interface WasmStreamUpdate {
   query_id: string;
   result_hash: string;
   result_data: [string, number][];
+  delta?: {
+    view_id: string;
+    records: { id: string; event: any; version: number }[];
+  };
 }
+
 
 export interface WasmIncantationConfig {
   id: string;
@@ -98,9 +195,11 @@ impl SpookyProcessor {
 
         let updates = self.circuit.ingest_single(entry);
 
-        // Use Serializer with serialize_maps_as_objects(true) to output plain JS objects
+        // Transform to include versions
+        let wasm_updates = transform_updates(&updates, &self.circuit);
+
         let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
-        Ok(updates.serialize(&serializer)?)
+        Ok(wasm_updates.serialize(&serializer)?)
     }
 
     /// Ingest multiple records into the stream processor in a single batch.
@@ -160,8 +259,11 @@ impl SpookyProcessor {
 
         let updates = self.circuit.ingest_batch(entries);
 
+        // Transform to include versions
+        let wasm_updates = transform_updates(&updates, &self.circuit);
+
         let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
-        Ok(updates.serialize(&serializer)?)
+        Ok(wasm_updates.serialize(&serializer)?)
     }
 
     /// Register a new materialized view
@@ -181,35 +283,17 @@ impl SpookyProcessor {
         let result = initial_update
             .unwrap_or_else(|| ViewUpdate::Flat(ssp::service::view::default_result(&plan_id)));
 
+        // Transform to include versions
+        let wasm_result = transform_single_update(result, &self.circuit);
+
         let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
-        Ok(result.serialize(&serializer)?)
+        Ok(wasm_result.serialize(&serializer)?)
     }
 
     /// Unregister a view by ID
     pub fn unregister_view(&mut self, id: String) {
         self.circuit.unregister_view(&id);
     }
-    /*
-    /// Explicitly set the version of a record for a specific view
-    pub fn set_record_version(
-        &mut self,
-        incantation_id: String,
-        record_id: String,
-        version: f64, // JS numbers are f64, cast to u64
-    ) -> Result<JsValue, JsValue> {
-        let ver_u64 = version as u64;
-        let update = self
-            .circuit
-            .set_record_version(&incantation_id, &record_id, ver_u64);
-
-        if let Some(up) = update {
-            let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
-            Ok(up.serialize(&serializer)?)
-        } else {
-            Ok(JsValue::NULL)
-        }
-    }
-    */
 
     /// Save the current circuit state as a JSON string
     pub fn save_state(&self) -> Result<String, JsValue> {

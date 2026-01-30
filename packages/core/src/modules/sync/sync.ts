@@ -98,6 +98,11 @@ export class SpookySync<S extends SchemaStructure> {
     }
 
     const { localArray } = existing.config;
+
+    this.logger.debug(
+      { action, queryId, recordId, version, localArray },
+      'Live update is being processed'
+    );
     const diff = createDiffFromDbOp(action, recordId, version, localArray);
     await this.syncEngine.syncRecords(diff);
   }
@@ -109,7 +114,6 @@ export class SpookySync<S extends SchemaStructure> {
   private async processUpEvent(event: UpEvent) {
     switch (event.type) {
       case 'create':
-        console.log('xxx CREATE', event);
         await this.remote.query(`CREATE $id CONTENT $data`, {
           id: event.record_id,
           data: event.data,
@@ -152,10 +156,12 @@ export class SpookySync<S extends SchemaStructure> {
       this.logger.warn({ hash }, 'Query not found');
       return;
     }
+    console.log('xxxx333');
     const diff = new ArraySyncer(
       queryState.config.localArray,
       queryState.config.remoteArray
     ).nextSet();
+    console.log('xxxx444', diff);
     if (!diff) {
       return;
     }
@@ -172,7 +178,6 @@ export class SpookySync<S extends SchemaStructure> {
       await this.createRemoteQuery(queryHash);
       await this.syncQuery(queryHash);
     } catch (e) {
-      console.log('registerQuery error', JSON.stringify(e));
       this.logger.error({ err: e }, 'registerQuery error');
       throw e;
     }

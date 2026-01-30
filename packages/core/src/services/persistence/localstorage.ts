@@ -1,13 +1,22 @@
+import { Logger } from 'pino';
 import { PersistenceClient } from '../../types.js';
 
 export class LocalStoragePersistenceClient implements PersistenceClient {
-  set(key: string, value: string): Promise<void> {
-    localStorage.setItem(key, value);
+  private logger: Logger;
+
+  constructor(logger: Logger) {
+    this.logger = logger.child({ service: 'PersistenceClient:LocalStorage' });
+  }
+
+  set<T>(key: string, value: T): Promise<void> {
+    localStorage.setItem(key, JSON.stringify(value));
     return Promise.resolve();
   }
 
-  get(key: string): Promise<string | null> {
-    return Promise.resolve(localStorage.getItem(key));
+  get<T>(key: string): Promise<T | null> {
+    const value = localStorage.getItem(key);
+    if (!value) return Promise.resolve(null);
+    return Promise.resolve(JSON.parse(value));
   }
 
   remove(key: string): Promise<void> {

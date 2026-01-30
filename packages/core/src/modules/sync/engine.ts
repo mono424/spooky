@@ -13,13 +13,16 @@ import { encodeRecordId } from '../../utils/index.js';
  * This is extracted from SpookySync to separate "how to sync" from "when to sync".
  */
 export class SyncEngine {
+  private logger: Logger;
   public events = createSyncEventSystem();
 
   constructor(
     private remote: RemoteDatabaseService,
     private cache: CacheModule,
-    private logger: Logger
-  ) {}
+    logger: Logger
+  ) {
+    this.logger = logger.child({ service: 'SpookySync:SyncEngine' });
+  }
 
   /**
    * Sync missing/updated/removed records between local and remote.
@@ -58,7 +61,9 @@ export class SyncEngine {
       const table = record.id.table.toString();
       const isAdded = added.some((item) => encodeRecordId(item.id) === fullId);
 
-      const anticipatedVersion = toFetch.find((item) => encodeRecordId(item.id) === fullId)?.version;
+      const anticipatedVersion = toFetch.find(
+        (item) => encodeRecordId(item.id) === fullId
+      )?.version;
       if (anticipatedVersion && _spookyv < anticipatedVersion) {
         this.logger.warn(
           { recordId: fullId, version: _spookyv, anticipatedVersion },

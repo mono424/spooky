@@ -49,6 +49,7 @@ export class ArraySyncer {
       this.localArray.sort((a, b) => a[0].localeCompare(b[0]));
       this.needsSort = false;
     }
+    console.log('xxxx555', this.localArray, this.remoteArray);
     const diff = diffRecordVersionArray(this.localArray, this.remoteArray);
     return diff;
   }
