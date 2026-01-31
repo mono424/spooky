@@ -6,35 +6,7 @@ It uses the [nom](https://github.com/rust-bakery/nom) parser combinator library 
 
 ---
 
-## 1. Public API
-
-### `convert_surql_to_dbsp`
-**Description:**
-The main entry point for the module. It takes a raw SurQL query string, cleans it, and attempts to parse it into a JSON Query Plan (`serde_json::Value`).
-
-**Usage:**
-```rust
-let sql = "SELECT * FROM users WHERE age > 18;";
-let plan = convert_surql_to_dbsp(sql)?;
-```
-
-**Input:**
-- `sql: &str` - The raw SQL query string.
-
-**Output:**
-- `Result<Value>` - A JSON object representing the operator tree on success, or an `anyhow::Error` on failure.
-
-**Complexity (Big O):**
-- **Time:** $O(N)$ where $N$ is the length of the SQL string. `nom` parses linearly.
-- **Space:** $O(D)$ where $D$ is the depth of the resulting query tree (AST construction).
-
-**Future Optimizations:**
-- **Zero-copy parsing:** Currently, it allocates Strings for identifiers and values. Using `Cow<str>` or `&str` references in the AST until the final serialization step could reduce allocations.
-- **Pre-allocation:** Pre-allocating vectors for fields/predicates if sizes are known or estimated.
-
----
-
-## 2. Query Plan Structure
+## 1. Query Plan Structure & Logic
 
 ### Purpose
 The **Query Plan** serves as an intermediate representation (IR) between the raw SurQL string and the execution engine's internal state. It is a tree structure where:
@@ -42,50 +14,60 @@ The **Query Plan** serves as an intermediate representation (IR) between the raw
 - **Nodes** are operators (filtering, joining, projecting, limiting).
 - **Root** represents the final result set.
 
-This JSON plan can be serialized, transmitted, or stored, allowing the query parsing logic to be decoupled from the execution engine (e.g., parsing on a server and executing on a client or edge node).
+### Operator Order & Execution Flow
+**Is the order important?**
+**Yes, strictly.** The JSON structure represents the *execution tree* directly. The outer-most operator is the *last* to be executed.
+- `Limit(Project(Filter(Scan)))` means:
+    1.  **Scan** the table (get all rows).
+    2.  **Filter** (discard rows).
+    3.  **Project** (transform remaining rows).
+    4.  **Limit** (take the first N).
 
-### Structure & Appearance
-The plan is a recursive JSON object. Each node has an `op` field defining its operation type and specific fields for that operation.
+**Can it be "ordered smart"? (Optimization)**
+The *current* implementation builds the tree in a fixed, naive order based on SQL semantics:
+`FROM` -> `WHERE` (Joins then Filters) -> `SELECT` (Projections) -> `LIMIT`.
 
-#### Example Plan
-**Source SQL:**
-```sql
-SELECT name, age FROM users WHERE age >= 18 LIMIT 10
-```
+However, the Query Engine *could* reorder this tree (Query Optimization) before execution. For example:
+- **Predicate Pushdown**: Moving a `filter` deeper inside a `join` to reduce the dataset early.
+- **Projection Pushdown**: Moving `project` down to scan to avoid carrying unused columns.
 
-**JSON Output:**
+### Root Operator Calculation
+The root is calculated bottom-up in `parse_full_query`:
+1.  **Start** with a `Scan` of the table found in `FROM`.
+2.  **Wrap** in logic `Filter`s or `Join`s if `WHERE` exists.
+3.  **Wrap** in `Project` if `SELECT` fields are not just `*`.
+4.  **Wrap** in `Limit` if `LIMIT` exists.
+The final wrapper is returned as the **Root Operator**.
+
+---
+
+## 2. Public API
+
+### `convert_surql_to_dbsp`
+**Description:**
+The main entry point. Cleans input and parses it.
+
+**Input:**
+- `sql`: `"SELECT name FROM user WHERE age > 10;"`
+
+**Output:**
 ```json
 {
-  "op": "limit",
-  "limit": 10,
+  "op": "project",
+  "projections": [{ "type": "field", "name": "name" }],
   "input": {
-    "op": "project",
-    "projections": [
-      { "type": "field", "name": "name" },
-      { "type": "field", "name": "age" }
-    ],
-    "input": {
-      "op": "filter",
-      "predicate": {
-        "type": "gte",
-        "field": "age",
-        "value": 18
-      },
-      "input": {
-        "op": "scan",
-        "table": "users"
-      }
-    }
+    "op": "filter",
+    "predicate": { "type": "gt", "field": "age", "value": 10 },
+    "input": { "op": "scan", "table": "user" }
   }
 }
 ```
 
-#### Node Types
-- **`scan`**: The leaf node. `{ "op": "scan", "table": "users" }`
-- **`filter`**: Filters rows. `{ "op": "filter", "predicate": {...}, "input": {...} }`
-- **`join`**: Joins two inputs. `{ "op": "join", "left": {...}, "right": {...}, "on": {...} }`
-- **`project`**: Selects/transforms fields. `{ "op": "project", "projections": [...], "input": {...} }`
-- **`limit`**: Limits result count. `{ "op": "limit", "limit": 10, "input": {...} }`
+**Explanation:**
+The function trims the trailing `;`, calls `parse_full_query`, and returns the JSON plan.
+
+**Complexity:** $O(N)$
+**Optimizations:** Zero-copy parsing (using `&str` instead of `String`).
 
 ---
 
@@ -93,80 +75,69 @@ SELECT name, age FROM users WHERE age >= 18 LIMIT 10
 
 ### `ws`
 **Description:**
-A combinator wrapper that ignores surrounding whitespace (spaces, tabs, newlines) around another parser.
+Wraps a parser to ignore surrounding whitespace.
 
-**Input:**
-- `inner: F` - The parser to wrap.
-- `input: &str` - The input string.
+**Input:** `  my_table  ` (and the inner parser expects "my_table")
+**Output:** `"my_table"` (inner parser result)
 
-**Output:**
-- `IResult<&str, O>` - The result of the inner parser.
+**Explanation:**
+It runs `multispace0` (consume spaces), runs the inner parser, then `multispace0` again.
 
-**Complexity:**
-- **Time:** $O(W + P)$ where $W$ is the length of whitespace and $P$ is the cost of the inner parser.
-- **Space:** $O(1)$.
+**Complexity:** $O(W + P)$ (Whitespace length + Inner parser complexity)
 
 ---
 
 ### `parse_identifier`
 **Description:**
-Parses valid identifiers (table names, column names, aliases).
-Rules:
-- Starts with an alphabetic char or `_`.
-- Followed by alphanumeric chars, `_`, `.`, or `:`.
+Parses table names, columns, or aliases.
 
-**Input:**
-- `input: &str`
+**Input:** `"user_table.id"`
+**Output:** `"user_table.id"` (String)
 
-**Output:**
-- `IResult<&str, String>`
+**Explanation:**
+It scans for valid identifier characters (alphanumeric, `_`, `.`, `:`) and returns them as a String.
 
-**Complexity:**
-- **Time:** $O(L)$ where $L$ is the length of the identifier.
-- **Space:** $O(L)$ (allocates a new String).
-
-**Future Optimizations:**
-- Return `&str` instead of `String` to avoid allocation during the parsing phase.
+**Complexity:** $O(L)$
 
 ---
 
 ## 4. Value Parsing
 
-### `ParsedValue` (Enum)
-A helper enum used only during parsing to distinguish between raw JSON values, Identifiers (likely column references), and Prefixes.
-
 ### `parse_string_literal`
 **Description:**
-Parses single or double-quoted strings. Handles prefix wildcards (e.g., `'foo*'`).
+Parses quotes and handles prefix wildcards.
 
-**Input:**
-- `input: &str`
+**Example 1:**
+- **Input:** `'hello world'`
+- **Output:** `ParsedValue::Json(String("hello world"))`
 
-**Output:**
-- `IResult<&str, ParsedValue>`
+**Example 2 (Prefix):**
+- **Input:** `"user_*"`
+- **Output:** `ParsedValue::Prefix("user_")`
 
-**Complexity:**
-- **Time:** $O(L)$ where $L$ is the length of the string literal.
-- **Space:** $O(L)$.
+**Explanation:**
+It detects the quote usage. If the string ends in `*`, it returns a `Prefix` variant, used for prefix scans; otherwise, a standard JSON string.
+
+**Complexity:** $O(L)$
+
+---
 
 ### `parse_value_entry`
 **Description:**
-Parses a "value" which can be:
-- Boolean (`true`, `false`)
-- Parameter (`$param`)
-- Number (Integer)
-- String Literal
-- Identifier
+Parses individual values.
 
-**Input:**
-- `input: &str`
+**Example 1:**
+- **Input:** `123`
+- **Output:** `ParsedValue::Json(Number(123))`
 
-**Output:**
-- `IResult<&str, ParsedValue>`
+**Example 2:**
+- **Input:** `$parent`
+- **Output:** `ParsedValue::Json({ "$param": "parent" })`
 
-**Complexity:**
-- **Time:** $O(1)$ to $O(L)$ depending on the token type.
-- **Space:** $O(L)$ for strings/identifiers.
+**Explanation:**
+It tries multiple parsers in order: logical boolean -> param variable -> number -> identifier -> string.
+
+**Complexity:** $O(1)$ to $O(L)$
 
 ---
 
@@ -174,89 +145,73 @@ Parses a "value" which can be:
 
 ### `parse_leaf_predicate`
 **Description:**
-Parses a basic comparison (e.g., `age > 18`, `name = 'Alice'`).
-Recognized Operators: `>=`, `<=`, `!=`, `=`, `>`, `<`, `CONTAINS`, `INSIDE`.
+Parses a single comparison condition.
 
-**Input:**
-- `input: &str`
+**Example 1 (Filter):**
+- **Input:** `age >= 18`
+- **Output:**
+```json
+{ "type": "gte", "field": "age", "value": 18 }
+```
 
-**Output:**
-- `IResult<&str, Value>` - A JSON object representing the predicate.
-  - Normal: `{ "type": "eq", "field": "age", "value": 18 }`
-  - Join Candidate: `{ "type": "__JOIN_CANDIDATE__", "left": "author", "right": "user.id" }` (if the right side is an Identifier, it's assumed to be a join key).
+**Example 2 (Join Candidate):**
+- **Input:** `author = user.id`
+- **Output:**
+```json
+{ "type": "__JOIN_CANDIDATE__", "left": "author", "right": "user.id" }
+```
 
-**Complexity:**
-- **Time:** $O(1)$ (fixed size components).
-- **Space:** $O(1)$.
+**Explanation:**
+It parses `Left OP Right`. It checks the `Right` side: if it's a value, it's a standard filter (`type: gte`). If it's another identifier (like `user.id`), it flags it as a `__JOIN_CANDIDATE__`.
 
-### `parse_term`
+**Complexity:** $O(1)$
+
+---
+
+### `parse_where_logic` (& `parse_and`/`parse_or`)
 **Description:**
-Parses a term in a logic expression. It handles parentheses for grouping.
-`term ::= ( expression ) | leaf_predicate`
+Parses the full `WHERE` clause logic tree.
 
-**Input:**
-- `input: &str`
-
+**Input:** `WHERE age > 18 AND active = true`
 **Output:**
-- `IResult<&str, Value>`
+```json
+{
+  "type": "and",
+  "predicates": [
+    { "type": "gt", "field": "age", "value": 18 },
+    { "type": "eq", "field": "active", "value": true }
+  ]
+}
+```
 
-**Complexity:**
-- **Time:** Depends on recursion depth.
+**Explanation:**
+1.  Parser sees `WHERE`.
+2.  Enters `parse_or_expression`.
+3.  Enters `parse_and_expression`.
+4.  Parses `age > 18` and `active = true` as terms.
+5.  Returns a composite `AND` object.
 
-### `parse_and_expression` & `parse_or_expression`
-**Description:**
-Parses `AND` and `OR` chains.
-- `AND` binds tighter than `OR` (standard precedence).
-- `parse_or` calls `parse_and`, which calls `parse_term`.
-
-**Input:**
-- `input: &str`
-
-**Output:**
-- `IResult<&str, Value>` - Returns a composite predicate `{ "type": "and", "predicates": [...] }` or the single term if no operator is found.
-
-**Complexity:**
-- **Time:** $O(N)$ for the number of terms.
-- **Space:** $O(N)$ for the vector of terms.
-
-**Future Optimizations:**
-- Flatten nested AND/ORs during parsing (e.g., `A AND (B AND C)` -> `A AND B AND C`) to simplify the evaluation engine.
-
-### `parse_where_logic`
-**Description:**
-Parses the `WHERE` clause, expecting an `OR` expression (root of logic tree).
+**Complexity:** $O(N)$ terms.
 
 ---
 
 ## 6. Main Query Clauses
 
 ### `parse_limit_clause`
-**Description:**
-Parses `LIMIT <number>`.
-
-**Input:**
-- `input: &str`
-
-**Output:**
-- `IResult<&str, usize>`
-
-**Complexity:**
-- **Time:** $O(D)$ digits.
-- **Space:** $O(1)$.
+**Input:** `LIMIT 50`
+**Output:** `50` (usize)
+**Complexity:** $O(1)$
 
 ### `parse_order_clause`
-**Description:**
-Parses `ORDER BY field [ASC|DESC], ...`.
-
-**Input:**
-- `input: &str`
-
+**Input:** `ORDER BY age DESC, name`
 **Output:**
-- `IResult<&str, Vec<Value>>`
-
-**Complexity:**
-- **Time:** $O(N)$ fields.
-- **Space:** $O(N)$.
+```json
+[
+  { "field": "age", "direction": "DESC" },
+  { "field": "name", "direction": "ASC" }
+]
+```
+**Complexity:** $O(N)$ fields.
 
 ---
 
@@ -264,52 +219,54 @@ Parses `ORDER BY field [ASC|DESC], ...`.
 
 ### `match_subquery_projection`
 **Description:**
-Parses a subquery inside a projection, usually capturing a scalar value or array element.
-Format: `(SELECT ...)[index] AS alias`
+Parses scalar subqueries in the select list.
 
-**Input:**
-- `input: &str`
-
+**Input:** `(SELECT name FROM user WHERE id = $parent.author)[0] AS author_name`
 **Output:**
-- `IResult<&str, Value>` - JSON with `{ "type": "subquery", "plan": ..., "alias": ... }`.
+```json
+{
+  "type": "subquery",
+  "alias": "author_name",
+  "plan": { ... subquery plan ... }
+}
+```
 
-**Complexity:**
-- **Time:** Recursive call to `parse_full_query`. Cost is sum of subquery complexity.
-- **Space:** Recursive stack depth.
+**Explanation:**
+Recursive call. It parses the inner query completely, captures the optional index `[0]`, and the alias.
+
+**Complexity:** Recursive cost.
 
 ### `parse_field_projection`
-**Description:**
-Parses a simple field or `*`.
-
-**Input:**
-- `input: &str`
-
-**Output:**
-- `IResult<&str, Value>`
+**Input:** `my_field`
+**Output:** `{ "type": "field", "name": "my_field" }`
 
 ### `parse_full_query`
 **Description:**
-The core parser. Parses `SELECT ... FROM ... [WHERE ...] [ORDER BY ...] [LIMIT ...]`.
-It constructs the initial Operator Tree (Scan -> [Join/Filter] -> [Project] -> [Limit]).
+Builds the entire Operator Tree.
 
-**Input:**
-- `input: &str`
+**Input:** `SELECT name FROM user WHERE age > 20 LIMIT 5`
+**Step-by-Step Execution:**
+1.  **Parse SELECT**: `name` (Project List).
+2.  **Parse FROM**: `user` (Table). -> **Current:** `{ op: scan, table: user }`
+3.  **Parse WHERE**: `age > 20`.
+    - Function `wrap_conditions` is called.
+    - Result wraps Scan: `{ op: filter, predicate: {age > 20}, input: {scan...} }`.
+4.  **Parse SELECT**: List is not empty/Wildcard.
+    - Wraps current: `{ op: project, projections: [name], input: {filter...} }`.
+5.  **Parse LIMIT**: `5`.
+    - Wraps current: `{ op: limit, limit: 5, input: {project...} }`.
+6.  **Return Root**.
 
-**Output:**
-- `IResult<&str, Value>` - The root of the Operator JSON tree.
+**Input:** `SELECT * FROM user`
+**Step-by-Step:**
+1.  **Project List**: `*` (`{type: all}`).
+2.  **Wrappers**:
+    - No Where -> Skip.
+    - Project is `type: all` -> Skip wrapping.
+    - No Limit -> Skip.
+3.  **Returns**: `{ op: scan, table: user }`.
 
-**Structure Built:**
-1.  **Scan**: Starts with `{ "op": "scan", "table": "..." }`.
-2.  **Filter/Join**: Calls `wrap_conditions` to wrap the Scan.
-3.  **Project**: Wraps with `{ "op": "project", ... }` if specific fields are selected.
-4.  **Limit**: Wraps with `{ "op": "limit", ... }` if a limit exists.
-
-**Complexity:**
-- **Time:** Linear scan of the query string components.
-- **Space:** Proportional to the complexity of the query structure.
-
-**Future Optimizations:**
-- **Operator Fusion**: Combine `scan` + `filter` into a single `Scan` operator that accepts a predicate (push-down optimization) immediately during parsing, instead of wrapping.
+**Complexity:** Linear $O(N)$.
 
 ---
 
@@ -317,25 +274,24 @@ It constructs the initial Operator Tree (Scan -> [Join/Filter] -> [Project] -> [
 
 ### `wrap_conditions`
 **Description:**
-Takes a generic operator (usually a Scan) and a WHERE clause predicate. It intelligently splits the predicate into **Joins** and **Filters**.
+Intelligently distributes `WHERE` clauses into `Filter` or `Join` operators.
 
-**Logic:**
-1.  **Normalization**: Flattens top-level `AND`s.
-2.  **Classification**: Checks if a predicate is a "Join Candidate" (comparing a field to an identifier like `$parent` or another table's field) or a "Filter".
-3.  **Join Application (Bottom-Up)**: Wraps the input in `join` operators for every join candidate found.
-4.  **Filter Application**: Wraps the result in a `filter` operator if there are remaining logic predicates.
+**Input OP:** `{ op: scan, table: thread }`
+**Predicate:** `author = user.id AND topic = 'tech'`
 
-**Input:**
-- `input_op: Value` - The operator to wrap (e.g., Scan).
-- `predicate: Value` - The WHERE clause logic.
+**Execution:**
+1.  **Normalize**: Splits `AND` into `[author = user.id, topic = 'tech']`.
+2.  **Classify**:
+    - `author = user.id` -> `Right` is identifier -> **Join Candidate**.
+    - `topic = 'tech'` -> `Right` is literal -> **Filter**.
+3.  **Apply Joins**:
+    - Wraps input scan with `Join`.
+    - Left: `{scan thread}`
+    - Right: `{scan user}` (Derived from `user.id`)
+    - On: `left: author`, `right: id`.
+4.  **Apply Filters**:
+    - Wraps the Join with `Filter`.
+    - Predicate: `topic = 'tech'`.
+5.  **Output**: `Filter(Join(Scan(thread), Scan(user)))`.
 
-**Output:**
-- `Value` - The new root operator.
-
-**Complexity:**
-- **Time:** $O(P)$ where $P$ is the number of predicates.
-- **Space:** $O(P)$.
-
-**Future Optimizations:**
-- **Join Reordering**: Currently applies joins in order of appearance. A query optimizer could reorder these based on statistics to minimize intermediate row counts.
-- **Join Types**: Currently assumes a standard join logic. Could infer Left/Inner joins based on syntax.
+**Complexity:** $O(P)$ predicates.
