@@ -55,10 +55,9 @@ export class CacheModule implements StreamUpdateReceiver {
    */
   async save(
     cacheRecord: CacheRecord,
-    isOptimistic: boolean = true,
     skipDbInsert: boolean = false
   ): Promise<void> {
-    return this.saveBatch([cacheRecord], isOptimistic, skipDbInsert);
+    return this.saveBatch([cacheRecord], skipDbInsert);
   }
 
   /**
@@ -68,7 +67,6 @@ export class CacheModule implements StreamUpdateReceiver {
    */
   async saveBatch(
     records: CacheRecord[],
-    isOptimistic: boolean = false,
     skipDbInsert: boolean = false
   ): Promise<void> {
     if (records.length === 0) return;
@@ -76,7 +74,6 @@ export class CacheModule implements StreamUpdateReceiver {
     this.logger.debug(
       {
         count: records.length,
-        isOptimistic,
         Category: 'spooky-client::CacheModule::saveBatch',
       },
       'Saving record batch'
@@ -123,8 +120,7 @@ export class CacheModule implements StreamUpdateReceiver {
           table: record.table,
           op: record.op,
           record: { ...record.record, id: encodeRecordId(record.record.id) },
-        })),
-        isOptimistic
+        }))
       );
 
       this.logger.debug(
@@ -146,11 +142,10 @@ export class CacheModule implements StreamUpdateReceiver {
   async delete(
     table: string,
     id: string,
-    isOptimistic: boolean = true,
     skipDbDelete: boolean = false
   ): Promise<void> {
     this.logger.debug(
-      { table, id, isOptimistic, Category: 'spooky-client::CacheModule::delete' },
+      { table, id, Category: 'spooky-client::CacheModule::delete' },
       'Deleting record'
     );
 
@@ -161,7 +156,7 @@ export class CacheModule implements StreamUpdateReceiver {
       }
 
       // 2. Ingest deletion into DBSP
-      await this.streamProcessor.ingest(table, 'DELETE', id, {}, isOptimistic);
+      await this.streamProcessor.ingest(table, 'DELETE', id, {});
 
       this.logger.debug(
         { table, id, Category: 'spooky-client::CacheModule::delete' },

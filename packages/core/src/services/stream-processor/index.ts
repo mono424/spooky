@@ -177,23 +177,21 @@ export class StreamProcessorService {
    * @param isOptimistic true = local mutation (increment versions), false = remote sync (keep versions)
    */
   /**
+  /**
    * Ingest a record change into the processor.
    * Emits 'stream_update' event if materialized views are affected.
-   * @param isOptimistic true = local mutation (increment versions), false = remote sync (keep versions)
    */
   ingest(
     table: string,
     op: string,
     id: string,
-    record: any,
-    isOptimistic: boolean = true
+    record: any
   ): WasmStreamUpdate[] {
     this.logger.debug(
       {
         table,
         op,
         id,
-        isOptimistic,
         Category: 'spooky-client:SPS::ingest',
       },
       'Ingesting record'
@@ -210,7 +208,7 @@ export class StreamProcessorService {
     try {
       const normalizedRecord = this.normalizeValue(record);
 
-      const rawUpdates = this.processor.ingest_single(table, op, id, normalizedRecord, isOptimistic);
+      const rawUpdates = this.processor.ingest_single(table, op, id, normalizedRecord);
       this.logger.debug(
         { rawUpdates, Category: 'spooky-client:SPS::ingest' },
         'ingest result'
@@ -241,18 +239,15 @@ export class StreamProcessorService {
    * 1. Processes all records together in WASM
    * 2. Emits a SINGLE stream_update event with all results
    * 3. Saves state only once at the end
-   * @param isOptimistic true = local mutation (increment versions), false = remote sync (keep versions)
    */
   ingestBatch(
-    batch: Array<{ table: string; op: string; record: any; version?: number }>,
-    isOptimistic: boolean = true
+    batch: Array<{ table: string; op: string; record: any; version?: number }>
   ): WasmStreamUpdate[] {
     if (batch.length === 0) return [];
 
     this.logger.debug(
       {
         batchSize: batch.length,
-        isOptimistic,
         Category: 'spooky-client:SPS::ingestBatch',
       },
       'Ingesting batch'
@@ -277,8 +272,7 @@ export class StreamProcessorService {
           item.table,
           item.op,
           item.record.id, // Assuming record.id is available as in previous code
-          normalizedRecord,
-          isOptimistic
+          normalizedRecord
         );
         
         if (updates && Array.isArray(updates)) {

@@ -21,8 +21,7 @@ export interface WasmProcessor {
     table: string,
     op: string,
     id: string,
-    record: any,
-    isOptimistic: boolean
+    record: any
   ): WasmStreamUpdate[];
   set_record_version(
     query_id: string,
