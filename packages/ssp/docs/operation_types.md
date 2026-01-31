@@ -107,6 +107,21 @@ Truncates the result set, optionally sorting it first.
         *   Changes to the input set (Additions/Removals) usually require re-evaluating the top-k window.
         *   **Cost**: **O(N log N)** (Fallback). Differential maintenance of finding the "next best" record after a deletion requires full re-sort or advanced structures (Heap) not currently fully optimized in incremental path.
 
+### Future Optimizations (Operators)
+
+1.  **Join Improvements**:
+    *   **Hash Join**: Explicit Hash Join implementation for larger datasets to avoid O(N*M) worst cases in naive joins.
+    *   **Sort-Merge Join**: If inputs are already sorted (via index or previous Sort output), join can be O(N+M) without memory overhead of Hash Build.
+    *   **Broadcast Join**: For small right-side tables, broadcast to all partitions (in distributed mode).
+
+2.  **Limit/Sort Optimization**:
+    *   **Top-K Heap**: Instead of full sort `O(N log N)`, use a Min-Heap of size K to maintain top elements. Reduces complexity to `O(N log K)`.
+    *   **Pushdown**: Push limit to source to avoid reading/deserializing unnecessary records.
+
+3.  **Scan Optimization**:
+    *   **Columnar Storage**: Adapt `Scan` to read from columnar sources (Parquet/Arrow) for faster analytics (OLAP).
+    *   **Index Scan**: Use secondary indexes (Skiplist/B-Tree) to jump directly to records matching a Filter, changing Scan complexity from O(N) to O(log N).
+
 ---
 
 ### 2. Impl `Operator`
@@ -207,6 +222,15 @@ Recursive combinations of predicates.
     *   `Or`: Short-circuiting. Stops at first `true`.
 *   **Complexity**: **O(C)** where C is number of child predicates. In worst case, evaluates all.
 
+### Future Optimizations (Predicates)
+
+1.  **JIT Compilation**:
+    *   Compile predicate trees into native machine code (using Cranelift or LLVM) to eliminate interpretation overhead and recursive function calls.
+2.  **Selectivity Reordering**:
+    *   Gather statistics on data distribution. Reorder `AND` clauses so that the most likely to return `false` (highest selectivity) are checked first.
+3.  **SIMD Vectorization**:
+    *   Apply predicates to batches of columnar data using SIMD instructions (AVX-512) to compare 8-16 values at once.
+
 ---
 
 ## Module: `ssp::engine::operators::projection`
@@ -290,3 +314,12 @@ Defines the equality condition for a Join.
     ```
 *   **Usage**: `ON left.id = right.user_id`.
 *   **Constraint**: Currently only supports Equi-Join on a single field pair.
+
+### Future Optimizations (Projections)
+
+1.  **Common Subexpression Elimination (CSE)**:
+    *   Identify repeated path lookups or calculations in projection list and compute them once.
+2.  **Subquery Decorrelation**:
+    *   Rewrite Correlated Subqueries into `LEFT JOIN` operations where possible. This transforms `O(N * Cost)` into `O(N + Cost)`, a massive speedup.
+3.  **Lazy Evaluation**:
+    *   Delay projection evaluation until the field is actually requested by the serializer or downstream operator.
