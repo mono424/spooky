@@ -75,7 +75,7 @@ pub fn init_tracing() -> Result<(), anyhow::Error> {
     // 12. Initialize Registry
     Registry::default()
         .with(env_filter)
-        .with(tracing_subscriber::fmt::layer()) // Enabled Console Logging
+        //.with(tracing_subscriber::fmt::layer()) // Enabled Console Logging
         .with(telemetry_layer)
         .with(log_layer)
         .init();
