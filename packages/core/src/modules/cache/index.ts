@@ -118,14 +118,15 @@ export class CacheModule implements StreamUpdateReceiver {
       }
 
       // 2. Batch ingest into DBSP
-      await this.streamProcessor.ingestBatch(
-        records.map((record) => ({
-          table: record.table,
-          op: record.op,
-          record: { ...record.record, id: encodeRecordId(record.record.id) },
-        })),
-        isOptimistic
-      );
+      for (const record of records) {
+        this.streamProcessor.ingest(
+          record.table,
+          record.op,
+          encodeRecordId(record.record.id),
+          record.record,
+          isOptimistic
+        );
+      }
 
       this.logger.debug(
         { count: records.length, Category: 'spooky-client::CacheModule::saveBatch' },
