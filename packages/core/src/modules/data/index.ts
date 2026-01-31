@@ -311,7 +311,6 @@ export class DataModule<S extends SchemaStructure> {
         op: 'CREATE',
         record: parsedRecord,
       },
-      true,
       true
     );
 
@@ -376,7 +375,6 @@ export class DataModule<S extends SchemaStructure> {
         op: 'UPDATE',
         record: parsedRecord,
       },
-      true,
       true
     );
 
@@ -416,7 +414,7 @@ export class DataModule<S extends SchemaStructure> {
     );
 
     await withRetry(this.logger, () => this.local.query(query, { id: rid, mid: mutationId }));
-    await this.cache.delete(table, id, true, true);
+    await this.cache.delete(table, id, true);
 
     // Emit mutation event
     const mutationEvent: MutationEvent = {

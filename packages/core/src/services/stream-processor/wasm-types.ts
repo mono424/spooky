@@ -15,24 +15,14 @@ export interface WasmQueryConfig {
   lastActiveAt: string;
 }
 
-export interface WasmIngestItem {
-  table: string;
-  op: string;
-  id: string;
-  record: any;
-  version?: number;
-}
-
 // Interface matching the SpookyProcessor class from WASM
 export interface WasmProcessor {
-  ingest(
+  ingest_single(
     table: string,
     op: string,
     id: string,
-    record: any,
-    isOptimistic: boolean
+    record: any
   ): WasmStreamUpdate[];
-  ingest_batch(batch: WasmIngestItem[], isOptimistic: boolean): WasmStreamUpdate[];
   set_record_version(
     query_id: string,
     record_id: string,

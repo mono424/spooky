@@ -14,7 +14,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use ssp::{
-    engine::circuit::{Circuit, dto::BatchEntry},
+    engine::circuit::{Circuit, Database, dto::BatchEntry},
     engine::types::Operation,
     engine::update::{DeltaEvent, StreamingUpdate, ViewResultFormat, ViewUpdate},
 };
@@ -363,7 +363,7 @@ async fn ingest_handler(
 
         // Update edges in database
         let circuit = state.processor.read().await;
-        update_all_edges(&state.db, &streaming_updates, &state.metrics, &circuit).await;
+        update_all_edges(&state.db, &streaming_updates, &state.metrics, &circuit.db).await;
     }
 
     // Record duration
@@ -425,6 +425,8 @@ async fn register_view_handler(
         let circuit = state.processor.read().await;
         circuit.views.iter().any(|v| v.plan.id == data.plan.id)
     };
+
+    debug!(target: "ssp::rvh::registation", "view_existed: {}", view_existed);
 
     if view_existed {
         info!(
@@ -505,7 +507,7 @@ async fn register_view_handler(
     if let Some(ViewUpdate::Streaming(s)) = &update {
         debug!(incantation_id);
         let circuit = state.processor.read().await;
-        update_incantation_edges(&state.db, s, &state.metrics, &circuit).await;
+        update_incantation_edges(&state.db, s, &state.metrics, &circuit.db).await;
     }
 
     StatusCode::OK.into_response()
@@ -649,7 +651,7 @@ pub async fn update_all_edges<C: Connection>(
     db: &Surreal<C>,
     updates: &[&StreamingUpdate],
     metrics: &Metrics,
-    circuit: &Circuit,
+    circuit_db: &Database,
 ) {
     if updates.is_empty() {
         return;
@@ -701,8 +703,7 @@ pub async fn update_all_edges<C: Connection>(
             }
             let table_name = &record_id_parsed.unwrap().table;
 
-            let record_verion = circuit
-                .db
+            let record_verion = circuit_db
                 .get_table(table_name)
                 .and_then(|t| t.get_record_version(&record.id));
             println!("Record version: {:?}", record_verion.unwrap());
@@ -820,7 +821,7 @@ async fn update_incantation_edges<C: Connection>(
     db: &Surreal<C>,
     update: &StreamingUpdate,
     metrics: &Metrics,
-    circuit: &Circuit,
+    circuit_db: &Database,
 ) {
-    update_all_edges(db, &[update], metrics, circuit).await;
+    update_all_edges(db, &[update], metrics, circuit_db).await;
 }
