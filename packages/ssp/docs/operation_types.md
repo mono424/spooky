@@ -151,3 +151,142 @@ Checks if this operator or any of its children contains a Subquery projection.
         2.  If no, recurses into `input.has_subquery_projections()`.
 *   **Usage**: Used to set the `has_subqueries_cached` flag on the View. Views with subqueries require significantly more expensive processing logic (`expand_with_subqueries`).
 *   **Complexity**: **O(N)** traversal. Returns early (short-circuit) if a subquery is found.
+
+---
+
+## Module: `ssp::engine::operators::predicate`
+
+Defines the structure for Boolean Logic used in `Filter` operations.
+
+### 1. Enum `Predicate`
+
+**Type**: `Recursive Enum`
+**Derives**: `Serialize`, `Deserialize`, `Clone`, `Debug`
+**Serialization**: Tagged "type", all fields lowercase.
+
+Represents a condition that evaluates to `true` or `false` for a given record.
+
+#### Variants
+
+##### 1.1 `Prefix`
+Checks if a string field starts with a given substring.
+
+*   **Structure**:
+    ```rust
+    Prefix {
+        field: Path,    // Accessor path to value
+        prefix: String, // Value to check for
+    }
+    ```
+*   **Usage**: `WHERE name LIKE 'John%'`.
+*   **Complexity**: **O(M)** where M is length of `prefix`. String prefix check is linear in pattern length.
+
+##### 1.2 Comparison Operators (`Eq`, `Neq`, `Gt`, `Gte`, `Lt`, `Lte`)
+Standard comparison logic.
+
+*   **Structure**: (All share same structure)
+    ```rust
+    OpVariant {
+        field: Path,
+        value: Value, // serde_json::Value (Constant)
+    }
+    ```
+*   **Complexity**: **O(1)** (assuming simple scalar comparisons).
+*   **Note**: `SpookyValue` comparison handles type coercion logic (e.g., Number vs Number).
+
+##### 1.3 Logical Combinators (`And`, `Or`)
+Recursive combinations of predicates.
+
+*   **Structure**:
+    ```rust
+    And { predicates: Vec<Predicate> },
+    Or { predicates: Vec<Predicate> },
+    ```
+*   **Execution Logic**:
+    *   `And`: Short-circuiting. Stops at first `false`.
+    *   `Or`: Short-circuiting. Stops at first `true`.
+*   **Complexity**: **O(C)** where C is number of child predicates. In worst case, evaluates all.
+
+---
+
+## Module: `ssp::engine::operators::projection`
+
+Defines structures for data transformation and shaping.
+
+### 1. Struct `OrderSpec`
+
+**Type**: `Struct`
+**Derives**: `Serialize`, `Deserialize`, `Clone`, `Debug`
+
+Describes a sorting rule.
+
+*   **Structure**:
+    ```rust
+    pub struct OrderSpec {
+        pub field: Path,
+        pub direction: String, // "ASC" or "DESC"
+    }
+    ```
+*   **Usage**: In `Limit` operator.
+
+### 2. Enum `Projection`
+
+**Type**: `Enum`
+**Derives**: `Serialize`, `Deserialize`, `Clone`, `Debug`
+**Serialization**: Tagged "type", all fields lowercase.
+
+Describes a single output column or transformation.
+
+#### Variants
+
+##### 2.1 `All`
+Selects the entire record object.
+
+*   **Structure**: `All` (Unit variant).
+*   **Usage**: `SELECT *`.
+*   **Complexity**: **O(1)** (Reference copy or Clone).
+
+##### 2.2 `Field`
+Selects a specific nested field.
+
+*   **Structure**:
+    ```rust
+    Field {
+        name: Path, // Accessor path
+    }
+    ```
+*   **Usage**: `SELECT address.zip`.
+*   **Complexity**: **O(D)** where D is depth of path. `resolve_nested_value` traverses the `SpookyValue` tree.
+
+##### 2.3 `Subquery`
+Executes a nested query for the current record context.
+
+*   **Structure**:
+    ```rust
+    Subquery {
+        alias: String,       // Output field name
+        plan: Box<Operator>, // The subquery plan
+    }
+    ```
+*   **Usage**: `SELECT (SELECT count(*) FROM comments WHERE post_id=$parent.id) AS comment_count`.
+*   **Complexity**: **O(SubPlan)**.
+    *   **Critical Performance Impact**: This executes the `plan` *once per record* in the parent projection.
+    *   If parent has 1,000 records, subquery runs 1,000 times.
+    *   The `expand_with_subqueries` function in `View` handles this recursion.
+
+### 3. Struct `JoinCondition`
+
+**Type**: `Struct`
+**Derives**: `Serialize`, `Deserialize`, `Clone`, `Debug`
+
+Defines the equality condition for a Join.
+
+*   **Structure**:
+    ```rust
+    pub struct JoinCondition {
+        pub left_field: Path,
+        pub right_field: Path,
+    }
+    ```
+*   **Usage**: `ON left.id = right.user_id`.
+*   **Constraint**: Currently only supports Equi-Join on a single field pair.
