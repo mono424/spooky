@@ -323,3 +323,243 @@ Defines the equality condition for a Join.
     *   Rewrite Correlated Subqueries into `LEFT JOIN` operations where possible. This transforms `O(N * Cost)` into `O(N + Cost)`, a massive speedup.
 3.  **Lazy Evaluation**:
     *   Delay projection evaluation until the field is actually requested by the serializer or downstream operator.
+
+---
+
+## 4. Example Query Plans
+
+This section demonstrates how SURQL-like queries are parsed into the `Operator` tree structure. These examples illustrate the hierarchy of Scans, Filters, Projections, and Limits.
+
+### 4.1 Simple List
+**Query**:
+```sql
+SELECT * FROM thread ORDER BY title asc LIMIT 20;
+```
+
+**Explanation**:
+A straightforward scan of the `thread` table. Since `SELECT *` is used, no explicit `Project` operator is needed as the `Scan` produces the full record. The `Limit` operator handles both the sorting (`order_by`) and the truncation (`limit`).
+
+**Query Plan (JSON)**:
+```json
+{
+  "op": "limit",
+  "limit": 20,
+  "order_by": [
+    { "field": "title", "direction": "ASC" }
+  ],
+  "input": {
+    "op": "scan",
+    "table": "thread"
+  }
+}
+```
+
+### 4.2 List with Subquery Projection
+**Query**:
+```sql
+SELECT *, (SELECT * FROM user WHERE id=$parent.author LIMIT 1)[0] AS author FROM thread ORDER BY title desc LIMIT 10;
+```
+
+**Explanation**:
+This query introduces a `Project` operator because it requests a computed field (`author`).
+1.  **Scan**: Reads `thread`.
+2.  **Project**:
+    *   `type: all`: Includes all original thread fields.
+    *   `type: subquery`: Executes a nested plan for every thread. The subquery finds the `user` where `id` matches the current thread's `author` (`$parent.author`).
+3.  **Limit**: Sorts by `title` and takes top 10.
+
+**Query Plan (JSON)**:
+```json
+{
+  "op": "limit",
+  "limit": 10,
+  "order_by": [
+    { "field": "title", "direction": "DESC" }
+  ],
+  "input": {
+    "op": "project",
+    "projections": [
+      { "type": "all" },
+      {
+        "type": "subquery",
+        "alias": "author",
+        "plan": {
+          "op": "limit",
+          "limit": 1,
+          "input": {
+            "op": "filter",
+            "predicate": {
+              "type": "eq",
+              "field": "id",
+              "value": { "$param": "parent.author" }
+            },
+            "input": {
+              "op": "scan",
+              "table": "user"
+            }
+          }
+        }
+      }
+    ],
+    "input": {
+      "op": "scan",
+      "table": "thread"
+    }
+  }
+}
+```
+
+### 4.3 Deeply Nested Subqueries
+**Query**:
+```sql
+SELECT *, 
+  (SELECT * FROM user WHERE id=$parent.author LIMIT 1)[0] AS author, 
+  (SELECT *, 
+    (SELECT * FROM user WHERE id=$parent.author LIMIT 1)[0] AS author 
+   FROM comment 
+   WHERE thread=$parent.id 
+   ORDER BY created_at desc 
+   LIMIT 10
+  ) AS comments 
+FROM thread 
+WHERE id = $id 
+LIMIT 1;
+```
+
+**Explanation**:
+Fetching a single thread by ID, including its author, and its recent comments (which also include their authors).
+1.  **Filter (Outer)**: `id = $id` restricts the `thread` scan.
+2.  **Project (Outer)**:
+    *   `author`: Subquery to fetch thread author.
+    *   `comments`: Subquery which searches `comment` table.
+        *   **Filter (Inner)**: `thread = $parent.id` (correlates comment to thread).
+        *   **Project (Inner)**: Fetches comment author (nested subquery).
+        *   **Limit (Inner)**: Top 10 recent comments.
+3.  **Limit (Outer)**: Returns 1 result.
+
+**Query Plan (JSON)**:
+```json
+{
+  "op": "limit",
+  "limit": 1,
+  "input": {
+    "op": "project",
+    "projections": [
+      { "type": "all" },
+      {
+        "type": "subquery",
+        "alias": "author",
+        "plan": {
+          "op": "limit",
+          "limit": 1,
+          "input": {
+            "op": "filter",
+            "predicate": {
+              "type": "eq",
+              "field": "id",
+              "value": { "$param": "parent.author" }
+            },
+            "input": {
+              "op": "scan",
+              "table": "user"
+            }
+          }
+        }
+      },
+      {
+        "type": "subquery",
+        "alias": "comments",
+        "plan": {
+          "op": "limit",
+          "limit": 10,
+          "order_by": [
+            { "field": "created_at", "direction": "DESC" }
+          ],
+          "input": {
+            "op": "project",
+            "projections": [
+              { "type": "all" },
+              {
+                "type": "subquery",
+                "alias": "author",
+                "plan": {
+                  "op": "limit",
+                  "limit": 1,
+                  "input": {
+                    "op": "filter",
+                    "predicate": {
+                      "type": "eq",
+                      "field": "id",
+                      "value": { "$param": "parent.author" }
+                    },
+                    "input": {
+                      "op": "scan",
+                      "table": "user"
+                    }
+                  }
+                }
+              }
+            ],
+            "input": {
+              "op": "filter",
+              "predicate": {
+                "type": "eq",
+                "field": "thread",
+                "value": { "$param": "parent.id" }
+              },
+              "input": {
+                "op": "scan",
+                "table": "comment"
+              }
+            }
+          }
+        }
+      }
+    ],
+    "input": {
+      "op": "filter",
+      "predicate": {
+        "type": "eq",
+        "field": "id",
+        "value": { "$param": "id" }
+      },
+      "input": {
+        "op": "scan",
+        "table": "thread"
+      }
+    }
+  }
+}
+```
+
+### 4.4 Get Single User
+**Query**:
+```sql
+SELECT * FROM user WHERE id = $id LIMIT 1;
+```
+
+**Explanation**:
+The standard pattern for fetching a document by primary key.
+1.  **Scan**: `user` table.
+2.  **Filter**: select row where `id` matches param.
+3.  **Limit**: 1. (Efficient engines will optimize `Limit 1` + `Filter on PK` to a direct lookup).
+
+**Query Plan (JSON)**:
+```json
+{
+  "op": "limit",
+  "limit": 1,
+  "input": {
+    "op": "filter",
+    "predicate": {
+      "type": "eq",
+      "field": "id",
+      "value": { "$param": "id" }
+    },
+    "input": {
+      "op": "scan",
+      "table": "user"
+    }
+  }
+}
+```

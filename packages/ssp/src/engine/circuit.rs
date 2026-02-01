@@ -592,19 +592,6 @@ impl Circuit {
 
         let referenced_tables = plan.root.referenced_tables();
 
-        #[cfg(debug_assertions)]
-        {
-            let unique: std::collections::HashSet<_> = referenced_tables.iter().collect();
-            if unique.len() != referenced_tables.len() {
-                tracing::warn!(
-                    target: "ssp::circuit::register",
-                    view_id = %plan.id,
-                    referenced = ?referenced_tables,
-                    "referenced_tables() returned duplicates - this should be fixed in Operator"
-                );
-            }
-        }
-
         tracing::info!(
             target: "ssp::circuit::register",
             view_id = %plan.id,
