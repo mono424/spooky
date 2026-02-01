@@ -1,13 +1,14 @@
 use super::circuit::Database;
 use super::eval::{
-    apply_numeric_filter, compare_spooky_values, hash_spooky_value, normalize_record_id,
-    resolve_nested_value, NumericFilterConfig,
+    apply_numeric_filter, compare_spooky_values, hash_spooky_value, resolve_nested_value,
+    NumericFilterConfig,
 };
-use super::operators::{Operator, Predicate, Projection};
+use super::operators::{Operator, Projection};
 use super::types::{
-    parse_zset_key, BatchDeltas, Delta, FastMap, Path, SpookyValue, ZSet, ZSetMembershipOps,
+    parse_zset_key, BatchDeltas, Delta, FastMap, SpookyValue, ZSet, ZSetMembershipOps,
 };
 
+use super::operators::check_predicate;
 use super::update::{ViewResultFormat, ViewUpdate};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -177,9 +178,7 @@ impl View {
                     ViewResultFormat::Streaming => {
                         vec![delta.key.clone()]
                     }
-                    ViewResultFormat::Flat | ViewResultFormat::Tree => {
-                        self.build_result_data()
-                    }
+                    ViewResultFormat::Flat | ViewResultFormat::Tree => self.build_result_data(),
                 };
 
                 let view_delta = ViewDelta::removals_only(vec![delta.key.clone()]);
@@ -240,7 +239,7 @@ impl View {
                     if !matches_table {
                         return false;
                     }
-                    return self.check_predicate(predicate, key, db, self.params.as_ref());
+                    return check_predicate(&self, predicate, key, db, self.params.as_ref());
                 }
                 true
             }
@@ -258,9 +257,7 @@ impl View {
             ViewResultFormat::Streaming => {
                 vec![key.clone()]
             }
-            ViewResultFormat::Flat | ViewResultFormat::Tree => {
-                self.build_result_data()
-            }
+            ViewResultFormat::Flat | ViewResultFormat::Tree => self.build_result_data(),
         };
 
         let view_delta = ViewDelta::updates_only(vec![key.clone()]);
@@ -308,7 +305,8 @@ impl View {
                         return Some(None); // Different table
                     }
                     // Check if record passes filter
-                    let matches = self.check_predicate(predicate, &delta.key, db, self.params.as_ref());
+                    let matches =
+                        check_predicate(&self, predicate, &delta.key, db, self.params.as_ref());
                     if matches {
                         if delta.weight > 0 {
                             return Some(self.apply_single_create(&delta.key));
@@ -361,20 +359,19 @@ impl View {
         updates: Vec<SmolStr>,
     ) -> Option<ViewUpdate> {
         let is_first_run = self.last_hash.is_empty();
-        
+
         // For streaming mode, only include changed records
         // For Flat/Tree modes, need all records for hash
         let result_data = match self.format {
             ViewResultFormat::Streaming => {
-                let mut changed_keys = Vec::with_capacity(additions.len() + removals.len() + updates.len());
+                let mut changed_keys =
+                    Vec::with_capacity(additions.len() + removals.len() + updates.len());
                 changed_keys.extend(additions.iter().cloned());
                 changed_keys.extend(removals.iter().cloned());
                 changed_keys.extend(updates.iter().cloned());
                 changed_keys
             }
-            ViewResultFormat::Flat | ViewResultFormat::Tree => {
-                self.build_result_data()
-            }
+            ViewResultFormat::Flat | ViewResultFormat::Tree => self.build_result_data(),
         };
 
         use super::update::{build_update, compute_flat_hash, RawViewResult, ViewDelta};
@@ -523,7 +520,8 @@ impl View {
         let result_data = match self.format {
             ViewResultFormat::Streaming => {
                 // Collect only records that changed
-                let mut changed_keys = Vec::with_capacity(additions.len() + removals.len() + updates.len());
+                let mut changed_keys =
+                    Vec::with_capacity(additions.len() + removals.len() + updates.len());
                 changed_keys.extend(additions.iter().cloned());
                 changed_keys.extend(removals.iter().cloned());
                 changed_keys.extend(updates.iter().cloned());
@@ -954,7 +952,7 @@ impl View {
                     // Slow Path (non-numeric predicates)
                     let mut out_delta = FastMap::default();
                     for (key, weight) in upstream_delta {
-                        if self.check_predicate(predicate, &key, db, context) {
+                        if check_predicate(&self, predicate, &key, db, context) {
                             out_delta.insert(key, weight);
                         }
                     }
@@ -1008,7 +1006,7 @@ impl View {
                     // Slow Path (non-numeric predicates)
                     let mut out = FastMap::default();
                     for (key, weight) in upstream.as_ref() {
-                        if self.check_predicate(predicate, key, db, context) {
+                        if check_predicate(&self, predicate, key, db, context) {
                             out.insert(key.clone(), *weight);
                         }
                     }
@@ -1111,7 +1109,7 @@ impl View {
     /// OPTIMIZATION: Avoid allocation by trying raw ID first.
     /// If your DB consistently uses one format, simplify this.
     #[inline]
-    fn get_row_value<'a>(&self, key: &str, db: &'a Database) -> Option<&'a SpookyValue> {
+    pub fn get_row_value<'a>(&self, key: &str, db: &'a Database) -> Option<&'a SpookyValue> {
         let (table_name, id) = parse_zset_key(key)?;
         let table = db.tables.get(table_name)?;
 
@@ -1134,99 +1132,6 @@ impl View {
         }
 
         None
-    }
-
-    /// Resolve predicate value, handling $param references to context
-    fn resolve_predicate_value(
-        value: &Value,
-        context: Option<&SpookyValue>,
-    ) -> Option<SpookyValue> {
-        if let Some(obj) = value.as_object() {
-            if let Some(param_path) = obj.get("$param") {
-                let ctx = context?;
-                let path_str = param_path.as_str().unwrap_or("");
-                let effective_path = if path_str.starts_with("parent.") {
-                    &path_str[7..] // Strip "parent." prefix
-                } else {
-                    path_str
-                };
-                let path = Path::new(effective_path);
-                resolve_nested_value(Some(ctx), &path)
-                    .cloned()
-                    .map(normalize_record_id)
-            } else {
-                Some(SpookyValue::from(value.clone()))
-            }
-        } else {
-            Some(SpookyValue::from(value.clone()))
-        }
-    }
-
-    fn check_predicate(
-        &self,
-        pred: &Predicate,
-        key: &str,
-        db: &Database,
-        context: Option<&SpookyValue>,
-    ) -> bool {
-        // Helper to get actual SpookyValue for comparison from the Predicate (which stores Value)
-
-        match pred {
-            Predicate::And { predicates } => predicates
-                .iter()
-                .all(|p| self.check_predicate(p, key, db, context)),
-            Predicate::Or { predicates } => predicates
-                .iter()
-                .any(|p| self.check_predicate(p, key, db, context)),
-            Predicate::Prefix { field, prefix } => {
-                // Check if field value starts with prefix
-                if field.0.len() == 1 && field.0[0] == "id" {
-                    return key.starts_with(prefix);
-                }
-                if let Some(row_val) = self.get_row_value(key, db) {
-                    if let Some(val) = resolve_nested_value(Some(row_val), field) {
-                        if let SpookyValue::Str(s) = val {
-                            return s.starts_with(prefix);
-                        }
-                    }
-                }
-                false
-            }
-            Predicate::Eq { field, value }
-            | Predicate::Neq { field, value }
-            | Predicate::Gt { field, value }
-            | Predicate::Gte { field, value }
-            | Predicate::Lt { field, value }
-            | Predicate::Lte { field, value } => {
-                let target_val = Self::resolve_predicate_value(value, context);
-                if target_val.is_none() {
-                    return false;
-                }
-                let target_val = target_val.unwrap();
-
-                // FIX: Look up actual value from row even for "id", to ensure we match
-                // the canonical ID stored in the DB (which might be "table:id").
-                // The previous optimization incorrectly assumed stripped ID == Row ID.
-                let actual_val_opt = self
-                    .get_row_value(key, db)
-                    .and_then(|r| resolve_nested_value(Some(r), field).cloned());
-
-                if let Some(actual_val) = actual_val_opt {
-                    let ord = compare_spooky_values(Some(&actual_val), Some(&target_val));
-                    match pred {
-                        Predicate::Eq { .. } => ord == Ordering::Equal,
-                        Predicate::Neq { .. } => ord != Ordering::Equal,
-                        Predicate::Gt { .. } => ord == Ordering::Greater,
-                        Predicate::Gte { .. } => ord == Ordering::Greater || ord == Ordering::Equal,
-                        Predicate::Lt { .. } => ord == Ordering::Less,
-                        Predicate::Lte { .. } => ord == Ordering::Less || ord == Ordering::Equal,
-                        _ => false,
-                    }
-                } else {
-                    false
-                }
-            }
-        }
     }
 }
 

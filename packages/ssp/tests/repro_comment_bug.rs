@@ -21,7 +21,7 @@ fn test_comment_creation_updates_thread_view() {
 
     let config = json!({
         "id": "view_thread_detail",
-        "sql": sql,
+        "surql": sql,
         "params": {
             "id": thread_id
         },
