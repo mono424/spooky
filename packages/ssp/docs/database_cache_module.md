@@ -655,6 +655,1380 @@ fn serialize_field_value(value: &SpookyValue) -> (Vec<u8>, u8) {
 
 5. **Future-proof for rkyv**: The hybrid format is essentially what rkyv does internally - you're building the same structure manually, which makes rkyv migration straightforward later
 
+---
+
+##### When to Use rkyv in the Hybrid Approach
+
+The hybrid format can be implemented with **manual serialization** (as shown above) or with **rkyv**. Here's a detailed guide on when rkyv adds value versus when it's overhead.
+
+###### Understanding rkyv's Value Proposition
+
+rkyv (Rust Archive) provides **zero-copy deserialization** - you can read data directly from bytes without copying or parsing. But this comes with trade-offs:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    SERIALIZATION COMPARISON                              │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  JSON Deserialization:                                                   │
+│  ┌──────────────┐     Parse      ┌──────────────┐    Allocate    ┌────┐│
+│  │ Disk/Memory  │ ───────────► │   Tokens     │ ────────────► │Heap ││
+│  │   Bytes      │    O(n)       │              │     O(n)      │Copy ││
+│  └──────────────┘               └──────────────┘               └────┘│
+│  Total: ~5µs for 1KB record                                          │
+│                                                                          │
+│  rkyv Zero-Copy:                                                        │
+│  ┌──────────────┐    Validate    ┌──────────────┐                      │
+│  │ Disk/Memory  │ ───────────► │ Direct Use   │  (no allocation)      │
+│  │   Bytes      │    O(1)*      │ via &ref     │                       │
+│  └──────────────┘               └──────────────┘                       │
+│  Total: ~100ns for 1KB record                                          │
+│                                                                          │
+│  * O(1) with unsafe, O(n) with validation enabled                       │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+###### Decision Matrix: When to Use rkyv
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│                         RKYV DECISION MATRIX                                │
+├────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│                              Record Size                                    │
+│              ┌─────────────┬─────────────┬─────────────┬─────────────┐     │
+│              │   < 256B    │  256B-1KB   │   1KB-10KB  │    > 10KB   │     │
+│  ┌───────────┼─────────────┼─────────────┼─────────────┼─────────────┤     │
+│  │Read Full  │ ❌ JSON     │ ⚠️ Either   │ ✅ rkyv    │ ✅ rkyv    │     │
+│  │Record     │ (fast enough)│            │ (50x faster)│ (100x faster)│    │
+│  ├───────────┼─────────────┼─────────────┼─────────────┼─────────────┤     │
+│  │Read 1-2   │ ❌ JSON     │ ✅ rkyv    │ ✅ rkyv    │ ✅ rkyv    │     │
+│  │Fields     │             │ (10x faster)│ (50x faster)│              │     │
+│  ├───────────┼─────────────┼─────────────┼─────────────┼─────────────┤     │
+│  │Frequent   │ ❌ JSON     │ ❌ JSON     │ ⚠️ Either   │ ⚠️ Either   │     │
+│  │Writes     │(no overhead)│(serialize cost)│           │              │     │
+│  ├───────────┼─────────────┼─────────────┼─────────────┼─────────────┤     │
+│  │View Cache │ ⚠️ Either   │ ✅ rkyv    │ ✅ rkyv    │ ✅ rkyv    │     │
+│  │(arrays)   │             │ (huge win)  │ (huge win)  │ (huge win)  │     │
+│  ├───────────┼─────────────┼─────────────┼─────────────┼─────────────┤     │
+│  │WASM       │ ❌ JSON     │ ❌ JSON     │ ⚠️ rkyv*   │ ⚠️ rkyv*   │     │
+│  │Target     │             │             │ *reduced benefit          │     │
+│  └───────────┴─────────────┴─────────────┴─────────────┴─────────────┘     │
+│                                                                             │
+│  Legend: ❌ Don't use rkyv  ⚠️ Measure first  ✅ Use rkyv                  │
+│                                                                             │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+###### rkyv for Different Data Types in SSP
+
+| Data Type | Typical Size | Read Pattern | Recommendation |
+|-----------|--------------|--------------|----------------|
+| User records | 200-500B | Full record, frequent | **JSON** - small, dynamic schema |
+| Thread records | 300-800B | Full + field projection | **Measure** - borderline |
+| Message content | 1-50KB | Often just preview field | **rkyv** - large, partial reads |
+| Embedded media metadata | 2-20KB | Specific fields only | **rkyv** - large, sparse access |
+| View cache (100 records) | 20-200KB | Full array iteration | **rkyv** - huge arrays, read-heavy |
+| View cache (1000 records) | 200KB-2MB | Full array iteration | **rkyv** - absolutely essential |
+| ZSet weights | 8B | Single i64 | **Raw bytes** - no serialization |
+| Secondary indexes | 0B (key only) | Existence check | **None** - just key presence |
+
+###### Concrete Performance Numbers
+
+Based on typical SSP workloads:
+
+```rust
+// Benchmark: Reading a single field from a 1KB record
+
+// JSON approach
+fn get_email_json(bytes: &[u8]) -> String {
+    let record: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+    record["email"].as_str().unwrap().to_string()
+}
+// Time: ~4,500 ns (4.5 µs)
+// Allocations: 15-20 (parsing + string copies)
+
+// Manual hybrid approach (from earlier in this doc)  
+fn get_email_hybrid(bytes: &[u8]) -> String {
+    let record = HybridRecord::from_bytes(bytes);
+    record.get_field("email").unwrap().as_str().to_string()
+}
+// Time: ~800 ns
+// Allocations: 1 (final string copy)
+
+// rkyv approach
+fn get_email_rkyv(bytes: &[u8]) -> &str {
+    let archived = unsafe { rkyv::archived_root::<Record>(bytes) };
+    &archived.email  // Zero-copy reference!
+}
+// Time: ~50 ns
+// Allocations: 0
+```
+
+**The 90x speedup** from JSON to rkyv matters when:
+- You're doing thousands of field accesses per second
+- You're iterating over large view caches
+- Latency is critical (realtime updates)
+
+**It doesn't matter when:**
+- You're reading < 100 records/second
+- The record is small (< 256 bytes)
+- You need the full record anyway and it's small
+
+###### rkyv Implementation for Hybrid Format
+
+Here's how to integrate rkyv into the hybrid approach:
+
+```rust
+use rkyv::{Archive, Deserialize, Serialize, archived_root, to_bytes};
+use rkyv::ser::serializers::AllocSerializer;
+
+// Define archived versions of your types
+#[derive(Archive, Deserialize, Serialize, Debug)]
+#[archive(check_bytes)]  // Enable validation (recommended for untrusted data)
+pub struct ArchivedHybridRecord {
+    pub version: i64,
+    pub fields: Vec<ArchivedField>,
+}
+
+#[derive(Archive, Deserialize, Serialize, Debug)]
+pub struct ArchivedField {
+    pub name_hash: u64,
+    pub value: ArchivedFieldValue,
+}
+
+#[derive(Archive, Deserialize, Serialize, Debug)]
+pub enum ArchivedFieldValue {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    String(String),
+    // For nested objects, store as JSON bytes (pragmatic compromise)
+    Json(Vec<u8>),
+}
+
+impl ArchivedHybridRecord {
+    /// Zero-copy field access
+    pub fn get_field(&self, name: &str) -> Option<&ArchivedFieldValue> {
+        let target_hash = hash_field_name(name);
+        self.fields
+            .iter()
+            .find(|f| f.name_hash == target_hash)
+            .map(|f| &f.value)
+    }
+}
+
+// Serialization
+pub fn serialize_record_rkyv(value: &SpookyValue, version: i64) -> Vec<u8> {
+    let fields: Vec<ArchivedField> = match value {
+        SpookyValue::Object(map) => {
+            map.iter().map(|(k, v)| ArchivedField {
+                name_hash: hash_field_name(k),
+                value: spooky_to_archived(v),
+            }).collect()
+        }
+        _ => panic!("Records must be objects"),
+    };
+    
+    let record = ArchivedHybridRecord { version, fields };
+    
+    // Serialize with rkyv
+    to_bytes::<_, 1024>(&record)  // 1024 = scratch space hint
+        .expect("serialization failed")
+        .into_vec()
+}
+
+// Zero-copy deserialization
+pub fn read_record_rkyv(bytes: &[u8]) -> &ArchivedArchivedHybridRecord {
+    // SAFETY: Data must be valid rkyv archive
+    // Use check_bytes feature for validation in untrusted contexts
+    unsafe { archived_root::<ArchivedHybridRecord>(bytes) }
+}
+
+// Safe version with validation (slower but safe for untrusted data)
+pub fn read_record_rkyv_safe(bytes: &[u8]) -> Result<&ArchivedArchivedHybridRecord, rkyv::validation::CheckArchiveError> {
+    rkyv::check_archived_root::<ArchivedHybridRecord>(bytes)
+}
+
+fn spooky_to_archived(v: &SpookyValue) -> ArchivedFieldValue {
+    match v {
+        SpookyValue::Null => ArchivedFieldValue::Null,
+        SpookyValue::Bool(b) => ArchivedFieldValue::Bool(*b),
+        SpookyValue::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                ArchivedFieldValue::Int(i)
+            } else {
+                ArchivedFieldValue::Float(n.as_f64().unwrap())
+            }
+        }
+        SpookyValue::String(s) => ArchivedFieldValue::String(s.clone()),
+        // Nested objects: fall back to JSON (pragmatic)
+        SpookyValue::Array(_) | SpookyValue::Object(_) => {
+            ArchivedFieldValue::Json(serde_json::to_vec(v).unwrap())
+        }
+    }
+}
+```
+
+###### The Pragmatic Compromise: Nested Objects
+
+rkyv works best with **statically known structures**. Your `SpookyValue` is dynamically typed (like `serde_json::Value`), which is awkward for rkyv.
+
+**Three approaches for nested objects:**
+
+1. **Store nested as JSON bytes** (recommended for SSP)
+   ```rust
+   ArchivedFieldValue::Json(Vec<u8>)  // Parse on access if needed
+   ```
+   - ✅ Simple, handles any nesting
+   - ✅ Top-level fields still get zero-copy
+   - ❌ Nested access requires JSON parse
+
+2. **Recursive archive structure**
+   ```rust
+   enum ArchivedFieldValue {
+       Object(Vec<(u64, ArchivedFieldValue)>),  // Recursive
+       Array(Vec<ArchivedFieldValue>),
+       // ...
+   }
+   ```
+   - ✅ Full zero-copy for everything
+   - ❌ Complex implementation
+   - ❌ Schema changes are painful
+
+3. **Flatten on write, reconstruct on read**
+   ```rust
+   // Store: user.profile.bio → field "profile.bio"
+   fields: [
+       ("profile.bio", "Developer"),
+       ("profile.avatar", "https://..."),
+   ]
+   ```
+   - ✅ All fields are top-level, all get zero-copy
+   - ❌ Reconstructing nested structure is complex
+   - ❌ Array indexing becomes weird ("items.0.name")
+
+**Recommendation for SSP:** Use approach #1. Most queries access top-level fields. When you need nested data, the JSON parse is still faster than parsing the entire record.
+
+###### View Cache: Where rkyv Shines Most
+
+View caches are the **highest-value target** for rkyv in SSP:
+
+```rust
+#[derive(Archive, Deserialize, Serialize)]
+pub struct ArchivedViewCache {
+    pub result_count: u64,
+    pub content_hash: [u8; 32],
+    pub params_hash: u64,
+    pub last_updated: i64,
+    pub results: Vec<ArchivedCacheRecord>,  // This is the big win
+}
+
+#[derive(Archive, Deserialize, Serialize)]
+pub struct ArchivedCacheRecord {
+    pub id: String,
+    pub hash: u64,
+    pub data: Vec<u8>,  // Individual record bytes (could be rkyv or JSON)
+}
+```
+
+**Why view cache benefits most:**
+
+| Factor | Impact |
+|--------|--------|
+| Size | Caches can be 100KB-10MB (1000s of records) |
+| Read pattern | Always iterate full array |
+| Write frequency | Only on view update (relatively rare) |
+| Structure | Homogeneous array (all same type) |
+| Lifetime | Long-lived, read many times |
+
+**Performance example:**
+
+```rust
+// View cache with 1000 records, ~500KB total
+
+// JSON approach
+fn load_cache_json(bytes: &[u8]) -> Vec<CacheRecord> {
+    serde_json::from_slice(bytes).unwrap()
+}
+// Time: ~25ms
+// Allocations: ~3000 (vec + 1000 records + strings)
+// Memory: 500KB copied to heap
+
+// rkyv approach  
+fn load_cache_rkyv(bytes: &[u8]) -> &ArchivedVec<ArchivedCacheRecord> {
+    let archived = unsafe { archived_root::<ArchivedViewCache>(bytes) };
+    &archived.results
+}
+// Time: ~1µs (just pointer cast)
+// Allocations: 0
+// Memory: 0 (reads directly from mmap'd file)
+
+// Iteration is also faster with rkyv
+fn iterate_cache_rkyv(bytes: &[u8]) {
+    let cache = unsafe { archived_root::<ArchivedViewCache>(bytes) };
+    for record in cache.results.iter() {
+        // record is &ArchivedCacheRecord - zero copy
+        process(&record.id, record.hash);
+    }
+}
+// 1000 iterations: ~50µs
+
+fn iterate_cache_json(cache: &[CacheRecord]) {
+    for record in cache {
+        process(&record.id, record.hash);
+    }
+}
+// 1000 iterations: ~100µs (still need to access heap-allocated data)
+```
+
+###### Migration Strategy: JSON → Hybrid → rkyv
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        MIGRATION PHASES                                  │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  Phase 1: JSON Baseline (Current)                                        │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │ • SpookyValue stored as JSON bytes                               │    │
+│  │ • Simple, debuggable, flexible schema                            │    │
+│  │ • Baseline for performance comparison                            │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│                              │                                           │
+│                              ▼                                           │
+│  Phase 2: Manual Hybrid (Recommended First Step)                         │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │ • Implement HybridRecord format from this doc                    │    │
+│  │ • Field index enables partial reads                              │    │
+│  │ • Still uses JSON for field values (simple)                      │    │
+│  │ • No external dependencies                                       │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│                              │                                           │
+│                              ▼                                           │
+│  Phase 3: rkyv for View Cache (High Value, Low Risk)                    │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │ • Keep records as hybrid/JSON                                    │    │
+│  │ • Use rkyv ONLY for view_cache table                            │    │
+│  │ • Biggest performance win with minimal complexity               │    │
+│  │ • View cache structure is stable (won't change often)           │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│                              │                                           │
+│                              ▼                                           │
+│  Phase 4: rkyv for Large Records (Only If Needed)                       │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │ • Profile shows record deserialization is bottleneck             │    │
+│  │ • Average record size > 1KB                                      │    │
+│  │ • Add rkyv for records table                                     │    │
+│  │ • Keep JSON fallback for debugging                               │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+###### rkyv Gotchas and Pitfalls
+
+| Gotcha | Impact | Mitigation |
+|--------|--------|------------|
+| Schema evolution | Adding/removing fields breaks existing archives | Version field + migration code |
+| Endianness | Archives are platform-specific by default | Use `#[archive(archived = "...")]` for portability |
+| Unsafe by default | `archived_root` is unsafe | Use `check_archived_root` for untrusted data |
+| No human readability | Can't inspect with text editor | Keep JSON debug dump option |
+| Alignment requirements | Some platforms need aligned reads | rkyv handles this, but be aware |
+| Nested dynamic types | `Vec<Value>` is awkward | Use JSON fallback for nested objects |
+| WASM memory model | No mmap, less benefit | Still faster than JSON, but gap is smaller |
+
+###### Summary: rkyv Recommendations for SSP
+
+| Component | Use rkyv? | When to Implement |
+|-----------|-----------|-------------------|
+| Records (< 512B) | ❌ No | Never |
+| Records (> 512B) | ⚠️ Maybe | Phase 4, only if profiling shows need |
+| View cache | ✅ Yes | Phase 3, high priority |
+| ZSet weights | ❌ No | Never (raw i64 is fine) |
+| Secondary indexes | ❌ No | Never (key-only) |
+| Metadata | ❌ No | Never (human-readable preferred) |
+
+**Bottom line:** Start with manual hybrid format for records, add rkyv for view cache when you need it, and only consider rkyv for records if profiling shows deserialization is a bottleneck.
+
+---
+
+##### Critical Analysis: I/O vs CPU Trade-offs
+
+**Important realization:** The hybrid format (Option C) optimizes for **CPU parsing time**, not **disk I/O**. When reading from redb, you must load the entire value before you can access any field.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│            THE HIDDEN COST OF HYBRID FORMAT                              │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  To read ONE field ("email") from a 2KB hybrid record in redb:          │
+│                                                                          │
+│  Step 1: redb.get("users:abc123")                                       │
+│          └─► Database reads ENTIRE 2KB value from disk                  │
+│          └─► This is unavoidable with key-value stores                  │
+│                                                                          │
+│  Step 2: Parse header (16 bytes)                    ✓ Fast              │
+│  Step 3: Scan field index (160 bytes)               ✓ Fast              │
+│  Step 4: Jump to offset, read email (20 bytes)      ✓ Fast              │
+│  Step 5: Deserialize only email field               ✓ Fast              │
+│                                                                          │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │  PROBLEM: Step 1 already loaded 2KB from disk!                   │    │
+│  │  Steps 2-5 save CPU time, but I/O damage is already done.       │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+###### Actual I/O Comparison Across All Options
+
+| Approach | Read 1 Field | Read Full Record | Write 1 Field | Storage Overhead |
+|----------|--------------|------------------|---------------|------------------|
+| **Option A: Whole JSON** | 2KB read, 2KB parse | 2KB read, 2KB parse | 2KB write | None |
+| **Option B: Field-per-key** | **20B read** ✅ | 2KB (N fetches) | 20B write | High (N keys) |
+| **Option C: Hybrid** | 2KB read, 20B parse | 2KB read, 2KB parse | 2KB write | Low (~160B) |
+| **Option C + rkyv** | 2KB read, zero-copy | 2KB read, zero-copy | 2KB write | Low |
+
+**Key insight:** Option C (Hybrid) only wins when:
+- Data is already in memory/page cache (no disk I/O)
+- CPU parsing is the bottleneck
+- You're reading multiple fields from the same record
+
+Option B wins when:
+- Disk I/O is the bottleneck
+- You consistently need only 1-2 fields
+- Working set exceeds available memory
+
+###### Real-World Bottleneck Analysis
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│                    WHERE IS YOUR ACTUAL BOTTLENECK?                         │
+├────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Scenario 1: DISK I/O BOUND                                                │
+│  ┌───────────────────────────────────────────────────────────────────┐     │
+│  │ Symptoms:                                                          │     │
+│  │ • Slow SSD or spinning disk                                        │     │
+│  │ • Dataset larger than available RAM                                │     │
+│  │ • High disk wait times in profiler                                 │     │
+│  │ • redb file not fitting in page cache                             │     │
+│  │                                                                    │     │
+│  │ Winner: Option B (field-per-key)                                   │     │
+│  │ • 20B read vs 2KB read = 100x less I/O                            │     │
+│  │ • Worth the key-space overhead                                     │     │
+│  │ • Or: Option D (hot/cold split) - see below                       │     │
+│  └───────────────────────────────────────────────────────────────────┘     │
+│                                                                             │
+│  Scenario 2: CPU/PARSING BOUND                                             │
+│  ┌───────────────────────────────────────────────────────────────────┐     │
+│  │ Symptoms:                                                          │     │
+│  │ • Fast NVMe SSD                                                    │     │
+│  │ • Dataset fits in RAM / page cache                                 │     │
+│  │ • High CPU usage during queries                                    │     │
+│  │ • Flamegraph shows time in serde_json::from_slice                 │     │
+│  │                                                                    │     │
+│  │ Winner: Option C (Hybrid) + rkyv                                   │     │
+│  │ • I/O is effectively free (cached)                                │     │
+│  │ • Zero-copy parsing eliminates allocations                        │     │
+│  │ • Field index avoids parsing unused data                          │     │
+│  └───────────────────────────────────────────────────────────────────┘     │
+│                                                                             │
+│  Scenario 3: MEMORY BOUND                                                  │
+│  ┌───────────────────────────────────────────────────────────────────┐     │
+│  │ Symptoms:                                                          │     │
+│  │ • Limited RAM (embedded, mobile, WASM)                            │     │
+│  │ • Many concurrent views                                            │     │
+│  │ • Memory pressure / GC pauses                                      │     │
+│  │                                                                    │     │
+│  │ Winner: Option B or Option D                                       │     │
+│  │ • Smaller working set per query                                   │     │
+│  │ • Better cache line utilization                                   │     │
+│  │ • Less allocation pressure                                        │     │
+│  └───────────────────────────────────────────────────────────────────┘     │
+│                                                                             │
+│  Scenario 4: WRITE THROUGHPUT BOUND                                        │
+│  ┌───────────────────────────────────────────────────────────────────┐     │
+│  │ Symptoms:                                                          │     │
+│  │ • High mutation rate (>10K writes/sec)                            │     │
+│  │ • Write latency spikes                                            │     │
+│  │ • redb compaction overhead                                        │     │
+│  │                                                                    │     │
+│  │ Winner: Option A or C (whole record per key)                      │     │
+│  │ • Single key write vs N key writes                                │     │
+│  │ • Less write amplification                                        │     │
+│  │ • Simpler transaction handling                                    │     │
+│  └───────────────────────────────────────────────────────────────────┘     │
+│                                                                             │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### Option D: Hot/Cold Split (New Recommendation)
+
+Given the I/O vs CPU trade-off analysis, **Option D** emerges as the best approach for SSP's specific workload. It combines the benefits of whole-record storage with minimal I/O for common operations.
+
+##### Core Concept: Separate Hot and Cold Data
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    OPTION D: HOT/COLD SPLIT ARCHITECTURE                 │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  The insight: DBSP operations rarely need full records.                 │
+│  Most operations need only:                                              │
+│  • Record ID (for ZSet membership)                                      │
+│  • Version (for change detection)                                       │
+│  • Hash (for content change detection)                                  │
+│  • 2-3 commonly filtered fields (status, updated_at, etc.)             │
+│                                                                          │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │                         redb Tables                              │    │
+│  ├─────────────────────────────────────────────────────────────────┤    │
+│  │                                                                  │    │
+│  │  HOT TABLE (record_hot) ──────────────────────────────────────  │    │
+│  │  Key: "{table}:{id}"                                            │    │
+│  │  Value: 48-128 bytes (fixed size, rkyv)                         │    │
+│  │  ┌────────────────────────────────────────────────────────┐     │    │
+│  │  │ • id (SmolStr)           - 24 bytes                    │     │    │
+│  │  │ • version (i64)          - 8 bytes                     │     │    │
+│  │  │ • content_hash (u64)     - 8 bytes                     │     │    │
+│  │  │ • hot_field_0 (status)   - variable                    │     │    │
+│  │  │ • hot_field_1 (updated)  - 8 bytes                     │     │    │
+│  │  │ • ... up to 5 hot fields                               │     │    │
+│  │  └────────────────────────────────────────────────────────┘     │    │
+│  │  Read: ~100 bytes for most DBSP operations                      │    │
+│  │                                                                  │    │
+│  │  COLD TABLE (record_cold) ────────────────────────────────────  │    │
+│  │  Key: "{table}:{id}"                                            │    │
+│  │  Value: Full record (JSON or hybrid format)                     │    │
+│  │  ┌────────────────────────────────────────────────────────┐     │    │
+│  │  │ • Complete SpookyValue with all fields                 │     │    │
+│  │  │ • 500B - 50KB typical                                  │     │    │
+│  │  └────────────────────────────────────────────────────────┘     │    │
+│  │  Read: Only when view needs full record or non-hot fields       │    │
+│  │                                                                  │    │
+│  │  ZSETS TABLE ─────────────────────────────────────────────────  │    │
+│  │  Key: "{table}:{id}"                                            │    │
+│  │  Value: i64 weight                                              │    │
+│  │                                                                  │    │
+│  │  VIEW_CACHE TABLE ────────────────────────────────────────────  │    │
+│  │  Key: "{view_id}"                                               │    │
+│  │  Value: rkyv serialized cache                                   │    │
+│  │                                                                  │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+##### Why Hot/Cold Split Works for SSP
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     SSP OPERATION ANALYSIS                               │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  Operation                    │ Fields Needed      │ Hot Table Enough?  │
+│  ────────────────────────────│───────────────────│───────────────────  │
+│  ZSet membership check        │ just key existence │ ✅ Yes (ZSet table)│
+│  Delta propagation            │ id, version        │ ✅ Yes             │
+│  Change detection             │ content_hash       │ ✅ Yes             │
+│  WHERE status = 'active'      │ status             │ ✅ Yes (if hot)    │
+│  WHERE updated_at > X         │ updated_at         │ ✅ Yes (if hot)    │
+│  SELECT id, name, email       │ id + 2 fields      │ ⚠️ Maybe          │
+│  SELECT * FROM users          │ all fields         │ ❌ No (need cold)  │
+│  Subquery: get author name    │ specific fields    │ ⚠️ Depends        │
+│                                                                          │
+│  Estimated hot table hit rate for typical DBSP workload: 70-85%         │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+##### Hot Record Structure
+
+```rust
+use rkyv::{Archive, Deserialize, Serialize};
+use smol_str::SmolStr;
+
+/// Fixed-size hot record for fast access
+/// Total size: 64-128 bytes depending on configuration
+#[derive(Archive, Deserialize, Serialize, Clone, Debug)]
+#[archive(check_bytes)]
+pub struct HotRecord {
+    // === Core DBSP fields (always present) === //
+    
+    /// Record version for optimistic/authoritative update tracking
+    pub version: i64,
+    
+    /// Hash of full record content for change detection
+    /// Computed as: xxhash64(canonical_json(full_record))
+    pub content_hash: u64,
+    
+    /// Timestamp of last modification (Unix millis)
+    pub updated_at: i64,
+    
+    // === Configurable hot fields (table-specific) === //
+    
+    /// Up to 5 frequently-accessed fields stored inline
+    /// Configuration is per-table in TableSchema
+    pub hot_fields: HotFields,
+}
+
+/// Table-specific hot fields
+/// Each table can configure which fields are "hot"
+#[derive(Archive, Deserialize, Serialize, Clone, Debug)]
+pub enum HotFields {
+    /// No additional hot fields (just core DBSP fields)
+    None,
+    
+    /// Generic: up to 5 named fields with dynamic values
+    Generic {
+        fields: [(u64, HotFieldValue); 5],  // (name_hash, value)
+        field_count: u8,
+    },
+    
+    /// User table optimized layout
+    User {
+        status: HotFieldValue,      // active/inactive/banned
+        role: HotFieldValue,        // admin/user/guest
+    },
+    
+    /// Thread/Post table optimized layout  
+    Thread {
+        status: HotFieldValue,      // draft/published/archived
+        author_id: SmolStr,         // For JOIN optimization
+        category_id: SmolStr,       // For filtering
+    },
+    
+    /// Message table optimized layout
+    Message {
+        thread_id: SmolStr,         // Parent reference
+        sender_id: SmolStr,         // For filtering
+        is_read: bool,              // Common filter
+    },
+}
+
+/// Compact field value representation
+#[derive(Archive, Deserialize, Serialize, Clone, Debug)]
+pub enum HotFieldValue {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    /// Short strings stored inline (up to 23 bytes with SmolStr)
+    String(SmolStr),
+    /// Reference to full record for larger values
+    /// Signals: "this field exists but fetch from cold storage"
+    InCold,
+}
+
+impl HotRecord {
+    /// Size in bytes when serialized with rkyv
+    /// Predictable size enables better cache utilization
+    pub const MAX_SIZE: usize = 128;
+    
+    /// Check if a field is available in hot storage
+    pub fn has_hot_field(&self, field_name: &str) -> bool {
+        let hash = hash_field_name(field_name);
+        match &self.hot_fields {
+            HotFields::None => false,
+            HotFields::Generic { fields, field_count } => {
+                fields[..*field_count as usize]
+                    .iter()
+                    .any(|(h, _)| *h == hash)
+            }
+            // Table-specific variants have known fields
+            HotFields::User { .. } => {
+                matches!(field_name, "status" | "role")
+            }
+            HotFields::Thread { .. } => {
+                matches!(field_name, "status" | "author_id" | "category_id")
+            }
+            HotFields::Message { .. } => {
+                matches!(field_name, "thread_id" | "sender_id" | "is_read")
+            }
+        }
+    }
+    
+    /// Get a hot field value
+    pub fn get_hot_field(&self, field_name: &str) -> Option<&HotFieldValue> {
+        match &self.hot_fields {
+            HotFields::None => None,
+            HotFields::Generic { fields, field_count } => {
+                let hash = hash_field_name(field_name);
+                fields[..*field_count as usize]
+                    .iter()
+                    .find(|(h, _)| *h == hash)
+                    .map(|(_, v)| v)
+            }
+            HotFields::User { status, role } => match field_name {
+                "status" => Some(status),
+                "role" => Some(role),
+                _ => None,
+            },
+            HotFields::Thread { status, author_id, category_id } => match field_name {
+                "status" => Some(status),
+                "author_id" => Some(&HotFieldValue::String(author_id.clone())),
+                "category_id" => Some(&HotFieldValue::String(category_id.clone())),
+                _ => None,
+            },
+            // ... etc
+        }
+    }
+}
+```
+
+##### Table Schema Configuration
+
+```rust
+/// Per-table configuration for hot/cold split
+#[derive(Clone, Debug)]
+pub struct TableSchema {
+    pub name: SmolStr,
+    
+    /// Fields to include in hot record (besides core DBSP fields)
+    /// Order matters: first fields are most likely to be accessed
+    pub hot_fields: Vec<HotFieldConfig>,
+    
+    /// Maximum number of hot fields (default: 5)
+    pub max_hot_fields: usize,
+    
+    /// Fields that should trigger content_hash recalculation
+    /// Default: all fields. Set to specific fields for optimization.
+    pub hash_fields: HashFieldsConfig,
+}
+
+#[derive(Clone, Debug)]
+pub struct HotFieldConfig {
+    pub name: SmolStr,
+    /// Maximum size for this field in hot storage
+    /// Larger values get InCold marker
+    pub max_size: usize,
+    /// Whether this field is commonly used in WHERE clauses
+    pub is_filter_field: bool,
+}
+
+#[derive(Clone, Debug)]
+pub enum HashFieldsConfig {
+    /// Hash all fields (default, safest)
+    All,
+    /// Hash only specific fields (optimization)
+    /// Use when some fields change frequently but don't affect views
+    Only(Vec<SmolStr>),
+    /// Hash all except specific fields
+    Except(Vec<SmolStr>),
+}
+
+// Example configurations
+impl TableSchema {
+    pub fn users() -> Self {
+        Self {
+            name: SmolStr::new("users"),
+            hot_fields: vec![
+                HotFieldConfig { 
+                    name: SmolStr::new("status"), 
+                    max_size: 16,
+                    is_filter_field: true,
+                },
+                HotFieldConfig { 
+                    name: SmolStr::new("role"), 
+                    max_size: 16,
+                    is_filter_field: true,
+                },
+                HotFieldConfig { 
+                    name: SmolStr::new("name"), 
+                    max_size: 64,
+                    is_filter_field: false,
+                },
+            ],
+            max_hot_fields: 5,
+            hash_fields: HashFieldsConfig::Except(vec![
+                SmolStr::new("last_seen_at"),  // Changes often, doesn't affect views
+            ]),
+        }
+    }
+    
+    pub fn messages() -> Self {
+        Self {
+            name: SmolStr::new("messages"),
+            hot_fields: vec![
+                HotFieldConfig { 
+                    name: SmolStr::new("thread_id"), 
+                    max_size: 32,
+                    is_filter_field: true,
+                },
+                HotFieldConfig { 
+                    name: SmolStr::new("sender_id"), 
+                    max_size: 32,
+                    is_filter_field: true,
+                },
+                HotFieldConfig { 
+                    name: SmolStr::new("is_read"), 
+                    max_size: 1,
+                    is_filter_field: true,
+                },
+            ],
+            max_hot_fields: 5,
+            hash_fields: HashFieldsConfig::All,
+        }
+    }
+}
+```
+
+##### Storage Implementation
+
+```rust
+use redb::{Database, ReadableTable, TableDefinition, WriteTransaction};
+
+const HOT_RECORDS: TableDefinition<&str, &[u8]> = TableDefinition::new("record_hot");
+const COLD_RECORDS: TableDefinition<&str, &[u8]> = TableDefinition::new("record_cold");
+const ZSETS: TableDefinition<&str, i64> = TableDefinition::new("zsets");
+const VIEW_CACHE: TableDefinition<&str, &[u8]> = TableDefinition::new("view_cache");
+
+pub struct HotColdStorage {
+    db: Database,
+    schemas: FastMap<SmolStr, TableSchema>,
+}
+
+impl HotColdStorage {
+    pub fn new(path: &Path, schemas: Vec<TableSchema>) -> Result<Self> {
+        let db = Database::create(path)?;
+        let schemas = schemas.into_iter()
+            .map(|s| (s.name.clone(), s))
+            .collect();
+        Ok(Self { db, schemas })
+    }
+    
+    /// Get hot record only (fast path)
+    /// Returns None if record doesn't exist
+    pub fn get_hot(&self, table: &str, id: &str) -> Option<HotRecord> {
+        let key = format!("{}:{}", table, id);
+        let read_txn = self.db.begin_read().ok()?;
+        let hot_table = read_txn.open_table(HOT_RECORDS).ok()?;
+        let bytes = hot_table.get(key.as_str()).ok()??;
+        
+        // Zero-copy access with rkyv
+        let archived = unsafe { 
+            rkyv::archived_root::<HotRecord>(bytes.value()) 
+        };
+        // Deserialize only if needed (often can use archived directly)
+        Some(archived.deserialize(&mut rkyv::Infallible).unwrap())
+    }
+    
+    /// Get specific fields, using hot or cold as needed
+    pub fn get_fields(
+        &self, 
+        table: &str, 
+        id: &str, 
+        fields: &[&str]
+    ) -> Option<SpookyValue> {
+        // Check if all requested fields are in hot storage
+        let schema = self.schemas.get(table)?;
+        let all_hot = fields.iter().all(|f| {
+            *f == "id" || 
+            *f == "_spooky_version" ||
+            schema.hot_fields.iter().any(|hf| hf.name == *f)
+        });
+        
+        if all_hot {
+            // Fast path: read from hot table only
+            let hot = self.get_hot(table, id)?;
+            Some(self.hot_to_partial_spooky(&hot, fields))
+        } else {
+            // Slow path: need cold record
+            self.get_cold(table, id)
+        }
+    }
+    
+    /// Get full record (cold storage)
+    pub fn get_cold(&self, table: &str, id: &str) -> Option<SpookyValue> {
+        let key = format!("{}:{}", table, id);
+        let read_txn = self.db.begin_read().ok()?;
+        let cold_table = read_txn.open_table(COLD_RECORDS).ok()?;
+        let bytes = cold_table.get(key.as_str()).ok()??;
+        
+        // Cold storage uses JSON for flexibility
+        serde_json::from_slice(bytes.value()).ok()
+    }
+    
+    /// Write record to both hot and cold storage
+    pub fn put_record(
+        &self, 
+        table: &str, 
+        id: &str, 
+        data: &SpookyValue,
+        version: i64,
+    ) -> Result<()> {
+        let key = format!("{}:{}", table, id);
+        let schema = self.schemas.get(table)
+            .cloned()
+            .unwrap_or_else(|| TableSchema::default());
+        
+        // Build hot record
+        let hot = self.build_hot_record(data, version, &schema);
+        let hot_bytes = rkyv::to_bytes::<_, 256>(&hot)?;
+        
+        // Serialize cold record (JSON)
+        let cold_bytes = serde_json::to_vec(data)?;
+        
+        // Write both atomically
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut hot_table = write_txn.open_table(HOT_RECORDS)?;
+            let mut cold_table = write_txn.open_table(COLD_RECORDS)?;
+            
+            hot_table.insert(key.as_str(), hot_bytes.as_slice())?;
+            cold_table.insert(key.as_str(), cold_bytes.as_slice())?;
+        }
+        write_txn.commit()?;
+        
+        Ok(())
+    }
+    
+    /// Delete record from both hot and cold storage
+    pub fn delete_record(&self, table: &str, id: &str) -> Result<()> {
+        let key = format!("{}:{}", table, id);
+        
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut hot_table = write_txn.open_table(HOT_RECORDS)?;
+            let mut cold_table = write_txn.open_table(COLD_RECORDS)?;
+            
+            hot_table.remove(key.as_str())?;
+            cold_table.remove(key.as_str())?;
+        }
+        write_txn.commit()?;
+        
+        Ok(())
+    }
+    
+    /// Build hot record from full SpookyValue
+    fn build_hot_record(
+        &self, 
+        data: &SpookyValue, 
+        version: i64,
+        schema: &TableSchema,
+    ) -> HotRecord {
+        let content_hash = self.compute_content_hash(data, schema);
+        let updated_at = data.get("updated_at")
+            .and_then(|v| v.as_i64())
+            .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+        
+        let hot_fields = self.extract_hot_fields(data, schema);
+        
+        HotRecord {
+            version,
+            content_hash,
+            updated_at,
+            hot_fields,
+        }
+    }
+    
+    /// Extract configured hot fields from full record
+    fn extract_hot_fields(&self, data: &SpookyValue, schema: &TableSchema) -> HotFields {
+        if schema.hot_fields.is_empty() {
+            return HotFields::None;
+        }
+        
+        let mut fields = [(0u64, HotFieldValue::Null); 5];
+        let mut count = 0;
+        
+        for (i, config) in schema.hot_fields.iter().take(5).enumerate() {
+            let hash = hash_field_name(&config.name);
+            let value = data.get(&config.name)
+                .map(|v| self.to_hot_field_value(v, config.max_size))
+                .unwrap_or(HotFieldValue::Null);
+            
+            fields[i] = (hash, value);
+            count += 1;
+        }
+        
+        HotFields::Generic {
+            fields,
+            field_count: count,
+        }
+    }
+    
+    /// Convert SpookyValue to HotFieldValue
+    fn to_hot_field_value(&self, v: &SpookyValue, max_size: usize) -> HotFieldValue {
+        match v {
+            SpookyValue::Null => HotFieldValue::Null,
+            SpookyValue::Bool(b) => HotFieldValue::Bool(*b),
+            SpookyValue::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    HotFieldValue::Int(i)
+                } else {
+                    HotFieldValue::Float(n.as_f64().unwrap_or(0.0))
+                }
+            }
+            SpookyValue::String(s) => {
+                if s.len() <= max_size {
+                    HotFieldValue::String(SmolStr::new(s))
+                } else {
+                    HotFieldValue::InCold  // Too large, reference cold storage
+                }
+            }
+            // Objects and arrays always go to cold
+            SpookyValue::Object(_) | SpookyValue::Array(_) => HotFieldValue::InCold,
+        }
+    }
+    
+    /// Compute content hash based on schema configuration
+    fn compute_content_hash(&self, data: &SpookyValue, schema: &TableSchema) -> u64 {
+        use std::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+        
+        let mut hasher = DefaultHasher::new();
+        
+        match &schema.hash_fields {
+            HashFieldsConfig::All => {
+                // Hash canonical JSON representation
+                let json = serde_json::to_string(data).unwrap_or_default();
+                json.hash(&mut hasher);
+            }
+            HashFieldsConfig::Only(fields) => {
+                for field in fields {
+                    if let Some(v) = data.get(field.as_str()) {
+                        field.hash(&mut hasher);
+                        serde_json::to_string(v).unwrap_or_default().hash(&mut hasher);
+                    }
+                }
+            }
+            HashFieldsConfig::Except(excluded) => {
+                if let SpookyValue::Object(map) = data {
+                    for (k, v) in map {
+                        if !excluded.iter().any(|e| e == k) {
+                            k.hash(&mut hasher);
+                            serde_json::to_string(v).unwrap_or_default().hash(&mut hasher);
+                        }
+                    }
+                }
+            }
+        }
+        
+        hasher.finish()
+    }
+    
+    /// Convert hot record to partial SpookyValue with only requested fields
+    fn hot_to_partial_spooky(&self, hot: &HotRecord, fields: &[&str]) -> SpookyValue {
+        let mut map = serde_json::Map::new();
+        
+        for field in fields {
+            let value = match *field {
+                "_spooky_version" => Some(SpookyValue::Number(hot.version.into())),
+                "updated_at" => Some(SpookyValue::Number(hot.updated_at.into())),
+                _ => hot.get_hot_field(field).and_then(|hf| hf.to_spooky_value()),
+            };
+            
+            if let Some(v) = value {
+                map.insert(field.to_string(), v);
+            }
+        }
+        
+        SpookyValue::Object(map)
+    }
+}
+
+impl HotFieldValue {
+    pub fn to_spooky_value(&self) -> Option<SpookyValue> {
+        match self {
+            HotFieldValue::Null => Some(SpookyValue::Null),
+            HotFieldValue::Bool(b) => Some(SpookyValue::Bool(*b)),
+            HotFieldValue::Int(i) => Some(SpookyValue::Number((*i).into())),
+            HotFieldValue::Float(f) => Some(SpookyValue::Number(
+                serde_json::Number::from_f64(*f).unwrap_or(serde_json::Number::from(0))
+            )),
+            HotFieldValue::String(s) => Some(SpookyValue::String(s.to_string())),
+            HotFieldValue::InCold => None,  // Caller must fetch from cold
+        }
+    }
+}
+```
+
+##### Query Optimization with Hot/Cold
+
+```rust
+impl View {
+    /// Optimized record fetching based on query analysis
+    pub fn fetch_records_optimized(
+        &self,
+        storage: &HotColdStorage,
+        table: &str,
+        ids: &[SmolStr],
+    ) -> Vec<SpookyValue> {
+        // Analyze which fields this view actually needs
+        let needed_fields = self.plan.root.referenced_fields(table);
+        
+        // Check if hot storage is sufficient
+        let schema = storage.schemas.get(table);
+        let can_use_hot = needed_fields.iter().all(|f| {
+            f == "id" || 
+            f == "_spooky_version" ||
+            schema.map(|s| s.hot_fields.iter().any(|hf| &hf.name == f))
+                .unwrap_or(false)
+        });
+        
+        if can_use_hot {
+            // Fast path: hot storage only
+            tracing::debug!(
+                target: "ssp::storage",
+                table = %table,
+                records = ids.len(),
+                "Using hot storage path"
+            );
+            
+            ids.iter()
+                .filter_map(|id| storage.get_fields(table, id, &needed_fields))
+                .collect()
+        } else {
+            // Slow path: need cold storage
+            tracing::debug!(
+                target: "ssp::storage", 
+                table = %table,
+                records = ids.len(),
+                needed_fields = ?needed_fields,
+                "Falling back to cold storage"
+            );
+            
+            ids.iter()
+                .filter_map(|id| storage.get_cold(table, id))
+                .collect()
+        }
+    }
+}
+
+impl Operator {
+    /// Analyze which fields are actually referenced by this operator
+    pub fn referenced_fields(&self, table: &str) -> Vec<&str> {
+        let mut fields = Vec::new();
+        self.collect_referenced_fields(table, &mut fields);
+        fields
+    }
+    
+    fn collect_referenced_fields<'a>(&'a self, table: &str, fields: &mut Vec<&'a str>) {
+        match self {
+            Operator::Scan { table: t, .. } if t == table => {
+                // Scan needs all fields unless there's a projection
+                fields.push("*");
+            }
+            Operator::Filter { predicate, input, .. } => {
+                // Collect fields used in predicate
+                predicate.collect_field_refs(table, fields);
+                input.collect_referenced_fields(table, fields);
+            }
+            Operator::Project { columns, input, .. } => {
+                // Only need projected columns
+                for col in columns {
+                    if col.table.as_deref() == Some(table) || col.table.is_none() {
+                        fields.push(&col.name);
+                    }
+                }
+                input.collect_referenced_fields(table, fields);
+            }
+            Operator::Join { left, right, condition, .. } => {
+                condition.collect_field_refs(table, fields);
+                left.collect_referenced_fields(table, fields);
+                right.collect_referenced_fields(table, fields);
+            }
+            // ... handle other operators
+            _ => {}
+        }
+    }
+}
+```
+
+##### Performance Comparison
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    OPTION D PERFORMANCE ANALYSIS                         │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  Benchmark: 10,000 records, average 1.5KB each                          │
+│                                                                          │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │ Operation: Filter by status (hot field)                         │    │
+│  │ Query: SELECT * FROM users WHERE status = 'active'              │    │
+│  │ Records matching: 3,000                                         │    │
+│  ├─────────────────────────────────────────────────────────────────┤    │
+│  │                                                                  │    │
+│  │ Option A (JSON):     Read 15MB, parse 15MB      │ ~750ms        │    │
+│  │ Option B (per-field): Read 300KB (status only)  │ ~15ms         │    │
+│  │ Option C (Hybrid):   Read 15MB, parse 300KB     │ ~200ms        │    │
+│  │ Option D (Hot/Cold): Read 1MB (hot), filter     │ ~25ms      ✅ │    │
+│  │                      Then read 4.5MB (cold)     │ +~100ms       │    │
+│  │                      Total for full records     │ ~125ms        │    │
+│  │                                                                  │    │
+│  │ If view only needs id, status (hot fields):     │ ~25ms      ✅ │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│                                                                          │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │ Operation: Delta propagation (version check)                    │    │
+│  │ Check: Which records changed since last sync?                   │    │
+│  │ Records to check: 10,000                                        │    │
+│  ├─────────────────────────────────────────────────────────────────┤    │
+│  │                                                                  │    │
+│  │ Option A (JSON):     Read 15MB, parse versions  │ ~500ms        │    │
+│  │ Option C (Hybrid):   Read 15MB, scan headers    │ ~150ms        │    │
+│  │ Option D (Hot/Cold): Read 1MB (hot only)        │ ~20ms      ✅ │    │
+│  │                                                                  │    │
+│  │ Hot table has version + content_hash = instant delta detection  │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│                                                                          │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │ Operation: Full table scan for view computation                 │    │
+│  │ Query: SELECT id, name, email, bio FROM users                   │    │
+│  │ Fields: 2 hot (id, name), 2 cold (email, bio)                  │    │
+│  ├─────────────────────────────────────────────────────────────────┤    │
+│  │                                                                  │    │
+│  │ Option A (JSON):     Read 15MB                  │ ~500ms        │    │
+│  │ Option C (Hybrid):   Read 15MB                  │ ~200ms        │    │
+│  │ Option D (Hot/Cold): Must read cold (mixed)     │ ~500ms        │    │
+│  │                                                                  │    │
+│  │ Note: Option D doesn't help when you need cold fields           │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+##### Pros and Cons Summary
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     OPTION D: PROS AND CONS                              │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  ✅ PROS                                                                 │
+│  ───────────────────────────────────────────────────────────────────    │
+│  • Minimal I/O for common DBSP operations (70-85% hot table hits)       │
+│  • Version/hash checks are O(100 bytes) not O(2KB)                      │
+│  • Hot table fits in cache better (10x smaller working set)             │
+│  • Filter queries on hot fields are dramatically faster                  │
+│  • Configurable per-table based on access patterns                       │
+│  • Cold storage can use simple JSON (human readable, debuggable)        │
+│  • Hot storage uses rkyv (zero-copy, compact)                           │
+│  • Write overhead is acceptable (2 small writes vs 1 large write)       │
+│  • Natural fit for DBSP change detection (version + hash in hot)        │
+│  • Graceful degradation: cold path still works for complex queries      │
+│                                                                          │
+│  ❌ CONS                                                                 │
+│  ───────────────────────────────────────────────────────────────────    │
+│  • Two tables per logical record (more complexity)                       │
+│  • Must keep hot and cold in sync (transaction overhead)                │
+│  • Schema configuration required (which fields are hot?)                │
+│  • Queries needing cold fields don't benefit                            │
+│  • Storage overhead: ~100 bytes per record for hot table                │
+│  • Must analyze queries to determine if hot path is usable              │
+│  • Hot field changes require migration                                   │
+│  • More complex debugging (data in two places)                          │
+│                                                                          │
+│  ⚠️ TRADE-OFFS                                                          │
+│  ───────────────────────────────────────────────────────────────────    │
+│  • Write amplification: 2x writes, but both are smaller                 │
+│  • Complexity vs performance: significant gains for DBSP workloads      │
+│  • Configuration burden: must understand access patterns                 │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+##### When to Use Option D
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    OPTION D DECISION GUIDE                               │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  USE Option D when:                                                      │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │ ✓ Records are large (>500 bytes average)                        │    │
+│  │ ✓ Most operations need only a few fields                        │    │
+│  │ ✓ You have predictable "hot" fields (status, timestamps, IDs)   │    │
+│  │ ✓ Delta detection (version/hash) is frequent                    │    │
+│  │ ✓ Filter queries dominate your workload                         │    │
+│  │ ✓ Dataset doesn't fit comfortably in page cache                 │    │
+│  │ ✓ You can tolerate slightly more complex write path             │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│                                                                          │
+│  DON'T USE Option D when:                                               │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │ ✗ Records are small (<300 bytes) - overhead not worth it        │    │
+│  │ ✗ Most queries need all fields anyway                           │    │
+│  │ ✗ No predictable hot fields (random access patterns)            │    │
+│  │ ✗ Simplicity is more important than performance                 │    │
+│  │ ✗ Write throughput is critical (2x write overhead hurts)        │    │
+│  │ ✗ Dataset fits easily in memory (page cache handles it)         │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│                                                                          │
+│  SSP RECOMMENDATION:                                                     │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │ Option D is IDEAL for SSP because:                              │    │
+│  │ • DBSP constantly checks versions and hashes (hot path)         │    │
+│  │ • ZSet operations need only record existence (hot path)         │    │
+│  │ • Filter predicates often use status/category (configurable)    │    │
+│  │ • Full records only needed for final view output                │    │
+│  │ • Local-first sync benefits from compact delta checks           │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+##### Migration Path: Adding Option D
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    MIGRATION TO OPTION D                                 │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  Phase 1: Implement Storage Abstraction (Week 1)                        │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │ • Define Storage trait with get_hot / get_cold / get_fields     │    │
+│  │ • Implement MemoryStorage (current behavior, both return same)  │    │
+│  │ • Refactor Circuit to use Arc<dyn Storage>                      │    │
+│  │ • All tests pass, no behavior change                            │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│                              │                                           │
+│                              ▼                                           │
+│  Phase 2: Add redb with Single Table (Week 2)                           │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │ • Implement RedbStorage with just cold table (Option A/C)       │    │
+│  │ • Benchmark baseline performance                                 │    │
+│  │ • Identify actual bottlenecks with production data              │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│                              │                                           │
+│                              ▼                                           │
+│  Phase 3: Add Hot Table (Week 3)                                        │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │ • Add record_hot table with HotRecord structure                  │    │
+│  │ • Implement dual-write in put_record                            │    │
+│  │ • Add get_hot method                                            │    │
+│  │ • Feature flag: --hot-cold-split                                │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│                              │                                           │
+│                              ▼                                           │
+│  Phase 4: Query Optimization (Week 4)                                   │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │ • Implement referenced_fields() analysis in Operator            │    │
+│  │ • Add hot path routing in View::fetch_records_optimized         │    │
+│  │ • Configure TableSchema for each table                          │    │
+│  │ • Benchmark improvement                                          │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│                              │                                           │
+│                              ▼                                           │
+│  Phase 5: Tune and Optimize (Ongoing)                                   │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │ • Monitor hot table hit rate                                     │    │
+│  │ • Adjust hot field configurations based on real usage           │    │
+│  │ • Add rkyv to hot table for zero-copy reads                     │    │
+│  │ • Consider rkyv for view_cache                                  │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
 ### When rkyv Makes Sense
 
 | Scenario | Use rkyv? | Why |
