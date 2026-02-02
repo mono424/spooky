@@ -25,20 +25,7 @@ export interface WasmIngestItem {
 
 // Interface matching the SpookyProcessor class from WASM
 export interface WasmProcessor {
-  ingest(
-    table: string,
-    op: string,
-    id: string,
-    record: any,
-    isOptimistic: boolean
-  ): WasmStreamUpdate[];
-  ingest_batch(batch: WasmIngestItem[], isOptimistic: boolean): WasmStreamUpdate[];
-  set_record_version(
-    query_id: string,
-    record_id: string,
-    version: number
-  ): WasmStreamUpdate | undefined;
+  ingest(table: string, op: string, id: string, record: any): WasmStreamUpdate[];
   register_view(config: WasmQueryConfig): WasmStreamUpdate | undefined;
   unregister_view(id: string): void;
-  // Add other methods if needed
 }

@@ -49,12 +49,6 @@ export function ThreadDetail() {
   );
   const thread = () => threadResult.data() || null;
 
-  createEffect(() => {
-    console.log('thread___', thread());
-  });
-
-  
-
   const handleBack = () => {
     navigate('/');
   };
@@ -87,14 +81,14 @@ export function ThreadDetail() {
   const handleTitleChange = async (newTitle: string) => {
     const threadData = thread();
     if (!threadData || !threadData.id || !isAuthor()) return;
-    await db.update('thread', threadData.id, { title: newTitle });
+    await db.update('thread', threadData.id, { title: newTitle }, { debounced: true });
   };
 
   // Auto-save content changes
   const handleContentChange = async (newContent: string) => {
     const threadData = thread();
     if (!threadData || !threadData.id || !isAuthor()) return;
-    await db.update('thread', threadData.id, { content: newContent });
+    await db.update('thread', threadData.id, { content: newContent }, { debounced: true });
   };
 
   return (

@@ -53,12 +53,8 @@ export class CacheModule implements StreamUpdateReceiver {
    * Save a single record to local DB and ingest into DBSP
    * Used by mutations (create/update)
    */
-  async save(
-    cacheRecord: CacheRecord,
-    isOptimistic: boolean = true,
-    skipDbInsert: boolean = false
-  ): Promise<void> {
-    return this.saveBatch([cacheRecord], isOptimistic, skipDbInsert);
+  async save(cacheRecord: CacheRecord, skipDbInsert: boolean = false): Promise<void> {
+    return this.saveBatch([cacheRecord], skipDbInsert);
   }
 
   /**
@@ -66,17 +62,12 @@ export class CacheModule implements StreamUpdateReceiver {
    * More efficient than calling save() multiple times
    * Used by sync operations
    */
-  async saveBatch(
-    records: CacheRecord[],
-    isOptimistic: boolean = false,
-    skipDbInsert: boolean = false
-  ): Promise<void> {
+  async saveBatch(records: CacheRecord[], skipDbInsert: boolean = false): Promise<void> {
     if (records.length === 0) return;
 
     this.logger.debug(
       {
         count: records.length,
-        isOptimistic,
         Category: 'spooky-client::CacheModule::saveBatch',
       },
       'Saving record batch'
@@ -123,8 +114,7 @@ export class CacheModule implements StreamUpdateReceiver {
           record.table,
           record.op,
           encodeRecordId(record.record.id),
-          record.record,
-          isOptimistic
+          record.record
         );
       }
 
@@ -144,14 +134,9 @@ export class CacheModule implements StreamUpdateReceiver {
   /**
    * Delete a record from local DB and ingest deletion into DBSP
    */
-  async delete(
-    table: string,
-    id: string,
-    isOptimistic: boolean = true,
-    skipDbDelete: boolean = false
-  ): Promise<void> {
+  async delete(table: string, id: string, skipDbDelete: boolean = false): Promise<void> {
     this.logger.debug(
-      { table, id, isOptimistic, Category: 'spooky-client::CacheModule::delete' },
+      { table, id, Category: 'spooky-client::CacheModule::delete' },
       'Deleting record'
     );
 
@@ -162,7 +147,7 @@ export class CacheModule implements StreamUpdateReceiver {
       }
 
       // 2. Ingest deletion into DBSP
-      await this.streamProcessor.ingest(table, 'DELETE', id, {}, isOptimistic);
+      await this.streamProcessor.ingest(table, 'DELETE', id, {});
 
       this.logger.debug(
         { table, id, Category: 'spooky-client::CacheModule::delete' },

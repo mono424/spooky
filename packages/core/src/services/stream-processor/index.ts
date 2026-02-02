@@ -176,22 +176,15 @@ export class StreamProcessorService {
    * Emits 'stream_update' event if materialized views are affected.
    * @param isOptimistic true = local mutation (increment versions), false = remote sync (keep versions)
    */
-  ingest(
-    table: string,
-    op: string,
-    id: string,
-    record: any,
-    isOptimistic: boolean = true
-  ): WasmStreamUpdate[] {
+  ingest(table: string, op: string, id: string, record: any): WasmStreamUpdate[] {
     this.logger.debug(
       {
         table,
         op,
         id,
-        isOptimistic,
         Category: 'spooky-client::StreamProcessorService::ingest',
       },
-      'Ingesting record'
+      'Ingesting into ssp'
     );
 
     if (!this.processor) {
@@ -205,10 +198,16 @@ export class StreamProcessorService {
     try {
       const normalizedRecord = this.normalizeValue(record);
 
-      const rawUpdates = this.processor.ingest(table, op, id, normalizedRecord, isOptimistic);
+      const rawUpdates = this.processor.ingest(table, op, id, normalizedRecord);
       this.logger.debug(
-        { rawUpdates, Category: 'spooky-client::StreamProcessorService::ingest' },
-        'ingest result'
+        {
+          table,
+          op,
+          id,
+          rawUpdates: rawUpdates.length,
+          Category: 'spooky-client::StreamProcessorService::ingest',
+        },
+        'Ingesting into ssp done'
       );
 
       if (rawUpdates && Array.isArray(rawUpdates) && rawUpdates.length > 0) {
@@ -224,76 +223,7 @@ export class StreamProcessorService {
     } catch (e) {
       this.logger.error(
         { error: e, Category: 'spooky-client::StreamProcessorService::ingest' },
-        'Error during ingestion'
-      );
-    }
-    return [];
-  }
-
-  /**
-   * Ingest multiple record changes in a single batch.
-   * More efficient than calling ingest() multiple times as it:
-   * 1. Processes all records together in WASM
-   * 2. Emits a SINGLE stream_update event with all results
-   * 3. Saves state only once at the end
-   * @param isOptimistic true = local mutation (increment versions), false = remote sync (keep versions)
-   */
-  ingestBatch(
-    batch: Array<{ table: string; op: string; record: any; version?: number }>,
-    isOptimistic: boolean = true
-  ): WasmStreamUpdate[] {
-    if (batch.length === 0) return [];
-
-    this.logger.debug(
-      {
-        batchSize: batch.length,
-        isOptimistic,
-        Category: 'spooky-client::StreamProcessorService::ingestBatch',
-      },
-      'Ingesting batch'
-    );
-
-    if (!this.processor) {
-      this.logger.warn(
-        { Category: 'spooky-client::StreamProcessorService::ingestBatch' },
-        'Not initialized, skipping batch ingest'
-      );
-      return [];
-    }
-
-    try {
-      // Normalize all records in the batch
-      const normalizedBatch = batch.map((item) => ({
-        table: item.table,
-        op: item.op,
-        id: item.record.id,
-        record: this.normalizeValue(item.record),
-      }));
-
-      const rawUpdates = this.processor.ingest_batch(normalizedBatch, isOptimistic);
-
-      this.logger.debug(
-        {
-          updateCount: rawUpdates?.length,
-          Category: 'spooky-client::StreamProcessorService::ingestBatch',
-        },
-        'batch ingest result'
-      );
-
-      if (rawUpdates && Array.isArray(rawUpdates) && rawUpdates.length > 0) {
-        const updates: StreamUpdate[] = rawUpdates.map((u: WasmStreamUpdate) => ({
-          queryHash: u.query_id,
-          localArray: u.result_data,
-        }));
-        // Direct handler call instead of event
-        this.notifyUpdates(updates);
-      }
-      this.saveState();
-      return rawUpdates;
-    } catch (e) {
-      this.logger.error(
-        { error: e, Category: 'spooky-client::StreamProcessorService::ingestBatch' },
-        'Error during batch ingestion'
+        'Ingesting into ssp failed'
       );
     }
     return [];

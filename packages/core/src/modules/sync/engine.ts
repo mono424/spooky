@@ -96,7 +96,7 @@ export class SyncEngine {
 
     // Use CacheModule to handle both local DB and DBSP ingestion
     if (cacheBatch.length > 0) {
-      await this.cache.saveBatch(cacheBatch, false); // isOptimistic=false for remote sync
+      await this.cache.saveBatch(cacheBatch);
     }
 
     this.events.emit(SyncEventTypes.RemoteDataIngested, {
@@ -133,7 +133,7 @@ export class SyncEngine {
         );
 
         // Use CacheModule to handle both local DB and DBSP deletion
-        await this.cache.delete(recordId.table.name, recordIdStr, false);
+        await this.cache.delete(recordId.table.name, recordIdStr);
       }
     }
   }

@@ -160,7 +160,6 @@ impl SpookyProcessor {
         op: String,
         id: String,
         record: JsValue,
-        //_is_optimistic: bool, // Ignored in new API? Or todo? New API doesn't seem to take it in ingest_single
     ) -> Result<JsValue, JsValue> {
         let record: Value = serde_wasm_bindgen::from_value(record)
             .map_err(|e| JsValue::from_str(&format!("Failed to parse record: {}", e)))?;
@@ -194,70 +193,6 @@ impl SpookyProcessor {
         let entry = BatchEntry::new(&table, op_enum, record_id, data);
 
         let updates = self.circuit.ingest_single(entry);
-
-        // Transform to include versions
-        let wasm_updates = transform_updates(&updates, &self.circuit);
-
-        let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
-        Ok(wasm_updates.serialize(&serializer)?)
-    }
-
-    /// Ingest multiple records into the stream processor in a single batch.
-    pub fn ingest_batch(
-        &mut self,
-        batch: JsValue, // Array of { table, op, id, record }
-        _is_optimistic: bool,
-    ) -> Result<JsValue, JsValue> {
-        let batch_array: Vec<Value> = serde_wasm_bindgen::from_value(batch)
-            .map_err(|e| JsValue::from_str(&format!("Failed to parse batch: {}", e)))?;
-
-        let mut entries: Vec<BatchEntry> = Vec::with_capacity(batch_array.len());
-
-        for item in batch_array {
-            let table = item
-                .get("table")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| JsValue::from_str("Missing 'table' field"))?
-                .to_string();
-            let op_str = item
-                .get("op")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| JsValue::from_str("Missing 'op' field"))?
-                .to_string();
-            let id = item
-                .get("id")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| JsValue::from_str("Missing 'id' field"))?
-                .to_string();
-            let record = item.get("record").cloned().unwrap_or(Value::Null);
-
-            let (clean_record, _hash) = ssp::service::ingest::prepare(record);
-
-            let record_id = clean_record
-                .get("id")
-                .cloned()
-                .map(normalize_record_id)
-                .and_then(|v| match v {
-                    SpookyValue::Str(s) => Some(s.to_string()),
-                    _ => None,
-                })
-                .unwrap_or_else(|| {
-                    tracing::warn!(
-                        target: "ssp::ingest",
-                        table = table,
-                        "Could not extract record ID from clean_record"
-                    );
-                    // This fallback should rarely/never happen now
-                    format!("{}:{}", table, id)
-                });
-
-            let op_enum = Operation::from_str(&op_str).unwrap_or(Operation::Create);
-            let data: SpookyValue = clean_record.into();
-
-            entries.push(BatchEntry::new(&table, op_enum, record_id, data));
-        }
-
-        let updates = self.circuit.ingest_batch(entries);
 
         // Transform to include versions
         let wasm_updates = transform_updates(&updates, &self.circuit);
