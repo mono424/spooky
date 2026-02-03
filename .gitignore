@@ -11,3 +11,6 @@ dist/
 
 # Vite 
 vite.config.ts.timestamp-*
+
+# Env
+.env.local

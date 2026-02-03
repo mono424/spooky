@@ -109,6 +109,11 @@ export interface SpookyConfig<S extends SchemaStructure> {
   persistenceClient?: PersistenceClient | 'surrealdb' | 'localstorage';
   /** OpenTelemetry collector endpoint for telemetry data. */
   otelEndpoint?: string;
+  /**
+   * Debounce time in milliseconds for stream updates.
+   * Defaults to 100ms.
+   */
+  streamDebounceTime?: number;
 }
 
 export type QueryHash = string;

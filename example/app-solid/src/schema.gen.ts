@@ -28,8 +28,10 @@ export const schema = {
         active: { type: 'boolean' as const, optional: true },
         author: { type: 'string' as const, recordId: true, optional: false },
         content: { type: 'string' as const, optional: false },
+        content_suggestion: { type: 'string' as const, optional: true },
         created_at: { type: 'string' as const, dateTime: true, optional: true },
         title: { type: 'string' as const, optional: false },
+        title_suggestion: { type: 'string' as const, optional: true },
         comments: { type: 'string' as const, optional: true },
       },
       primaryKey: ['id'] as const
@@ -133,12 +135,15 @@ DEFINE TABLE thread SCHEMAFULL
 PERMISSIONS FOR select, create, update, delete WHERE true
 ;
 
-
 DEFINE FIELD title ON TABLE thread TYPE option<string>
     ASSERT $value != NONE AND string::len($value) > 0 AND string::len($value) <= 200;
 
 DEFINE FIELD content ON TABLE thread TYPE option<string>
     ASSERT $value != NONE AND string::len($value) > 0;
+
+DEFINE FIELD title_suggestion ON TABLE thread TYPE option<string>;
+
+DEFINE FIELD content_suggestion ON TABLE thread TYPE option<string>;
 
 DEFINE FIELD author ON TABLE thread TYPE option<record<user>>; -- @parent
 

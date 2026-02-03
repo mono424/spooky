@@ -13,7 +13,7 @@ import {
   RemoteDatabaseService,
 } from './services/database/index.js';
 import { Surreal } from 'surrealdb';
-import { SpookySync } from './modules/sync/index.js';
+import { SpookySync, UpEvent } from './modules/sync/index.js';
 import {
   GetTable,
   InnerQuery,
@@ -98,7 +98,13 @@ export class SpookyClient<S extends SchemaStructure> {
       logger
     );
 
-    this.dataModule = new DataModule(this.cache, this.local, this.config.schema, logger);
+    this.dataModule = new DataModule(
+      this.cache,
+      this.local,
+      this.config.schema,
+      logger,
+      this.config.streamDebounceTime
+    );
 
     // Initialize Auth
     this.auth = new AuthService(this.config.schema, this.remote, this.persistenceClient, logger);
@@ -128,7 +134,7 @@ export class SpookyClient<S extends SchemaStructure> {
    */
   private setupCallbacks() {
     // Mutation callback for sync
-    this.dataModule.onMutation((mutations: MutationEvent[]) => {
+    this.dataModule.onMutation((mutations: UpEvent[]) => {
       // Notify DevTools
       this.devTools.onMutation(mutations);
 

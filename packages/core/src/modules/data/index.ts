@@ -46,7 +46,8 @@ export class DataModule<S extends SchemaStructure> {
     private cache: CacheModule,
     private local: LocalDatabaseService,
     private schema: S,
-    logger: Logger
+    logger: Logger,
+    private streamDebounceTime: number = 100
   ) {
     this.logger = logger.child({ service: 'DataModule' });
   }
@@ -182,7 +183,7 @@ export class DataModule<S extends SchemaStructure> {
     const timer = setTimeout(async () => {
       this.debounceTimers.delete(queryHash);
       await this.processStreamUpdate(update);
-    }, 100); // TODO: Make this adaptable
+    }, this.streamDebounceTime);
 
     this.debounceTimers.set(queryHash, timer);
   }

@@ -250,6 +250,7 @@ class Thread {
     
     ///Assert: $value != NONE AND string::len($value) > 0
     String content;
+    String? contentSuggestion;
     DateTime? createdAt;
     
     ///Record ID
@@ -257,15 +258,18 @@ class Thread {
     
     ///Assert: $value != NONE AND string::len($value) > 0 AND string::len($value) <= 200
     String title;
+    String? titleSuggestion;
 
     Thread({
         this.active,
         required this.author,
         this.comments,
         required this.content,
+        this.contentSuggestion,
         this.createdAt,
         required this.id,
         required this.title,
+        this.titleSuggestion,
     });
 
     factory Thread.fromJson(Map<String, dynamic> json) => Thread(
@@ -273,9 +277,11 @@ class Thread {
         author: json["author"],
         comments: json["comments"] == null ? [] : List<String>.from(json["comments"]!.map((x) => x)),
         content: json["content"],
+        contentSuggestion: json["content_suggestion"],
         createdAt: json["created_at"] == null ? null : DateTime.parse(json["created_at"]),
         id: json["id"],
         title: json["title"],
+        titleSuggestion: json["title_suggestion"],
     );
 
     Map<String, dynamic> toJson() => {
@@ -283,9 +289,11 @@ class Thread {
         "author": author,
         "comments": comments == null ? [] : List<dynamic>.from(comments!.map((x) => x)),
         "content": content,
+        "content_suggestion": contentSuggestion,
         "created_at": createdAt?.toIso8601String(),
         "id": id,
         "title": title,
+        "title_suggestion": titleSuggestion,
     };
 }
 
@@ -366,12 +374,15 @@ DEFINE TABLE thread SCHEMAFULL
 PERMISSIONS FOR select, create, update, delete WHERE true
 ;
 
-
 DEFINE FIELD title ON TABLE thread TYPE option<string>
     ASSERT \$value != NONE AND string::len(\$value) > 0 AND string::len(\$value) <= 200;
 
 DEFINE FIELD content ON TABLE thread TYPE option<string>
     ASSERT \$value != NONE AND string::len(\$value) > 0;
+
+DEFINE FIELD title_suggestion ON TABLE thread TYPE option<string>;
+
+DEFINE FIELD content_suggestion ON TABLE thread TYPE option<string>;
 
 DEFINE FIELD author ON TABLE thread TYPE option<record<user>>; -- @parent
 

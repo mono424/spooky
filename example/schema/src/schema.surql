@@ -47,7 +47,7 @@ DEFINE FIELD created_at ON TABLE user TYPE datetime
 VALUE time::now()
 PERMISSIONS
     FOR select WHERE false
-    FOR create WHERE true
+    FOR create WHERE truet
     FOR update WHERE $access = "account" AND id = $auth.id;
 
 -- ##################################################################
@@ -60,12 +60,15 @@ DEFINE TABLE thread SCHEMAFULL
     FOR update, delete, create WHERE $access = "account" AND author.id = $auth.id
 ;
 
-
 DEFINE FIELD title ON TABLE thread TYPE string
     ASSERT $value != NONE AND string::len($value) > 0 AND string::len($value) <= 200;
 
 DEFINE FIELD content ON TABLE thread TYPE string
     ASSERT $value != NONE AND string::len($value) > 0;
+
+DEFINE FIELD title_suggestion ON TABLE thread TYPE option<string>;
+
+DEFINE FIELD content_suggestion ON TABLE thread TYPE option<string>;
 
 DEFINE FIELD author ON TABLE thread TYPE record<user>; -- @parent
 

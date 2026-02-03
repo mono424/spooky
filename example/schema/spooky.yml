@@ -1,1 +1,5 @@
 mode: sidecar # "sidecar" or "surrealism"
+backends:
+  - src/backends
+
+        

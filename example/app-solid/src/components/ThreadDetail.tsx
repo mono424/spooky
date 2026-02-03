@@ -91,6 +91,44 @@ export function ThreadDetail() {
     await db.update('thread', threadData.id, { content: newContent }, { debounced: { delay: 2000, key: 'recordId_x_fields' } });
   };
 
+  const handleAcceptTitle = async (suggestion: string) => {
+    const threadData = thread();
+    if (!threadData || !threadData.id || !isAuthor()) return;
+
+    await db.update('thread', threadData.id, {
+      title: suggestion,
+      title_suggestion: ""
+    });
+  };
+
+  const handleDeclineTitle = async () => {
+    const threadData = thread();
+    if (!threadData || !threadData.id || !isAuthor()) return;
+
+    await db.update('thread', threadData.id, {
+      title_suggestion: ""
+    });
+  };
+
+  const handleAcceptContent = async (suggestion: string) => {
+    const threadData = thread();
+    if (!threadData || !threadData.id || !isAuthor()) return;
+
+    await db.update('thread', threadData.id, {
+      content: suggestion,
+      content_suggestion: ""
+    });
+  };
+
+  const handleDeclineContent = async () => {
+    const threadData = thread();
+    if (!threadData || !threadData.id || !isAuthor()) return;
+
+    await db.update('thread', threadData.id, {
+      content_suggestion: ""
+    });
+  };
+
   return (
     <div class="flex h-full">
       {/* Thread Sidebar */}
@@ -163,6 +201,34 @@ export function ThreadDetail() {
                     </>
                   }
                 >
+                  {/* Title Suggestion */}
+                  <Show when={threadData().title_suggestion}>
+                    <div class="mb-6 border border-yellow-500/30 bg-yellow-900/10 p-4">
+                      <div class="flex justify-between items-start mb-2">
+                        <label class="text-[10px] text-yellow-500 uppercase font-bold tracking-wider">
+                          &gt; AI_SUGGESTION_DETECTED
+                        </label>
+                        <div class="flex gap-2">
+                           <button
+                             onMouseDown={() => handleAcceptTitle(threadData().title_suggestion!)}
+                             class="text-[10px] font-bold bg-yellow-500 text-black px-3 py-1 uppercase hover:bg-yellow-400 transition-colors"
+                           >
+                             [ ACCEPT ]
+                           </button>
+                           <button
+                               onMouseDown={() => handleDeclineTitle()}
+                               class="text-[10px] font-bold text-yellow-600 px-3 py-1 uppercase hover:text-yellow-400 transition-colors"
+                           >
+                             [ DECLINE ]
+                           </button>
+                        </div>
+                      </div>
+                      <div class="text-xl font-bold text-yellow-100 uppercase tracking-wide">
+                        {threadData().title_suggestion}
+                      </div>
+                    </div>
+                  </Show>
+
                   {/* Editable Title */}
                   <div class="mb-6 group">
                     <label class="block text-[10px] text-gray-500 uppercase font-bold mb-1 group-focus-within:text-white">
@@ -176,6 +242,34 @@ export function ThreadDetail() {
                       placeholder="UNTITLED_THREAD"
                     />
                   </div>
+
+                  {/* Content Suggestion */}
+                  <Show when={threadData().content_suggestion}>
+                    <div class="mb-6 border border-yellow-500/30 bg-yellow-900/10 p-4">
+                      <div class="flex justify-between items-start mb-2">
+                        <label class="text-[10px] text-yellow-500 uppercase font-bold tracking-wider">
+                          &gt; AI_CONTENT_OPTIMIZATION
+                        </label>
+                        <div class="flex gap-2">
+                           <button
+                             onMouseDown={() => handleAcceptContent(threadData().content_suggestion!)}
+                             class="text-[10px] font-bold bg-yellow-500 text-black px-3 py-1 uppercase hover:bg-yellow-400 transition-colors"
+                           >
+                             [ ACCEPT ]
+                           </button>
+                           <button
+                               onMouseDown={() => handleDeclineContent()}
+                               class="text-[10px] font-bold text-yellow-600 px-3 py-1 uppercase hover:text-yellow-400 transition-colors"
+                           >
+                             [ DECLINE ]
+                           </button>
+                        </div>
+                      </div>
+                      <div class="text-sm text-yellow-100 whitespace-pre-wrap leading-relaxed border-l-2 border-yellow-500/30 pl-4">
+                        {threadData().content_suggestion}
+                      </div>
+                    </div>
+                  </Show>
 
                   {/* Editable Content */}
                   <div class="mb-6 group">
