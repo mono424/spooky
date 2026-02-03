@@ -15,6 +15,7 @@ import {
   RecordVersionArray,
   QueryConfigRecord,
   UpdateOptions,
+  RunOptions,
 } from '../../types.js';
 import {
   parseRecordIdString,
@@ -25,6 +26,7 @@ import {
   surql,
   parseParams,
   extractTablePart,
+  generateId,
 } from '../../utils/index.js';
 import { CreateEvent, DeleteEvent, UpdateEvent } from '../sync/index.js';
 import { PushEventOptions } from '../../events/index.js';
@@ -290,6 +292,50 @@ export class DataModule<S extends SchemaStructure> {
       id: queryState.config.id,
       remoteArray,
     });
+  }
+
+  // ====================      RUN JOBS       ====================
+
+  async run<T extends Record<string, unknown>>(
+    backend: string,
+    path: string,
+    data: T,
+    options?: RunOptions
+  ): Promise<T> {
+    const route = this.schema.backends?.[backend]?.routes?.[path];
+    if (!route) {
+      throw new Error(`Route ${backend}.${path} not found`);
+    }
+
+    const tableName = this.schema.backends?.[backend]?.outboxTable;
+    if (!tableName) {
+      throw new Error(`Outbox table for backend ${backend} not found`);
+    }
+
+    const payload: Record<string, unknown> = {};
+    for (const argName of Object.keys(route.args)) {
+      const arg = route.args[argName];
+      if (data[argName] === undefined && arg.optional === false) {
+        throw new Error(`Missing required argument ${argName}`);
+      }
+      payload[argName] = data[argName];
+    }
+
+    const record: Record<string, unknown> = {
+      path,
+      payload,
+      retries: 0,
+      max_retries: options?.max_retries ?? 3,
+      retry_strategy: options?.retry_strategy ?? 'linear',
+      status: 'pending',
+    };
+
+    if (options?.assignedTo) {
+      record.assigned_to = options.assignedTo;
+    }
+
+    const recordId = `${tableName}:${generateId()}`;
+    return this.create(recordId, record) as Promise<T>;
   }
 
   // ==================== MUTATION MANAGEMENT ====================

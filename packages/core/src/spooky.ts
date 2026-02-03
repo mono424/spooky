@@ -6,6 +6,7 @@ import {
   PersistenceClient,
   MutationEvent,
   UpdateOptions,
+  RunOptions,
 } from './types.js';
 import {
   LocalDatabaseService,
@@ -284,6 +285,10 @@ export class SpookyClient<S extends SchemaStructure> {
     options?: { immediate?: boolean }
   ): Promise<() => void> {
     return this.dataModule.subscribe(queryHash, callback, options);
+  }
+
+  run(backend: string, path: string, payload: Record<string, unknown>, options?: RunOptions) {
+    return this.dataModule.run(backend, path, payload, options);
   }
 
   create(id: string, data: Record<string, unknown>) {

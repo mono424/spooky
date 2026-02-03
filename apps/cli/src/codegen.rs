@@ -1,4 +1,6 @@
+use crate::backend::BackendDefinition;
 use anyhow::{Context, Result};
+use std::collections::BTreeMap;
 use std::fs;
 use std::process::Command;
 
@@ -46,7 +48,7 @@ impl CodeGenerator {
     }
 
     pub fn generate(&self, json_schema_content: &str, _top_level_name: &str) -> Result<String> {
-        self.generate_with_schema(json_schema_content, _top_level_name, None, None)
+        self.generate_with_schema(json_schema_content, _top_level_name, None, None, None)
     }
 
     pub fn generate_with_schema(
@@ -55,10 +57,11 @@ impl CodeGenerator {
         _top_level_name: &str,
         raw_schema: Option<&str>,
         spooky_events: Option<&str>,
+        backend_definitions: Option<&BTreeMap<String, BackendDefinition>>,
     ) -> Result<String> {
         let mut content = match self.format {
             OutputFormat::JsonSchema => json_schema_content.to_string(),
-            OutputFormat::Typescript => self.generate_typescript(json_schema_content)?,
+            OutputFormat::Typescript => self.generate_typescript(json_schema_content, backend_definitions)?,
             OutputFormat::Dart => self.generate_dart(json_schema_content)?,
             OutputFormat::Surql => {
                 let mut schema = String::new();
@@ -105,13 +108,18 @@ impl CodeGenerator {
         Ok(content)
     }
 
-    fn generate_typescript(&self, json_schema_content: &str) -> Result<String> {
+    fn generate_typescript(
+        &self,
+        json_schema_content: &str,
+        backend_definitions: Option<&BTreeMap<String, BackendDefinition>>,
+    ) -> Result<String> {
         println!("Generating TypeScript from JSON schema...");
 
         // Generate only the schema metadata - no interfaces
         println!("Adding schema metadata...");
-        let output_with_metadata = self.add_schema_metadata("", json_schema_content)?;
-        Ok(output_with_metadata)
+        let output = self.add_schema_metadata("", json_schema_content, backend_definitions)?;
+
+        Ok(output)
     }
 
     fn generate_dart(&self, json_schema_content: &str) -> Result<String> {
@@ -273,7 +281,7 @@ impl CodeGenerator {
         result.join("\n")
     }
 
-    fn add_schema_metadata(&self, content: &str, json_schema_content: &str) -> Result<String> {
+    fn add_schema_metadata(&self, content: &str, json_schema_content: &str, backend_definitions: Option<&BTreeMap<String, BackendDefinition>>) -> Result<String> {
         // Parse JSON schema to extract schema information
         let schema: serde_json::Value = serde_json::from_str(json_schema_content)
             .context("Failed to parse JSON schema")?;
@@ -288,7 +296,7 @@ impl CodeGenerator {
             if let serde_json::Value::Object(defs_obj) = definitions {
                 // Process each table (skip Relationships and RelationTables)
                 for (table_name, table_def) in defs_obj {
-                    if table_name == "Relationships" || table_name == "RelationTables" || table_name == "Access" || table_name.starts_with("_spooky_") {
+                    if table_name == "Relationships" || table_name == "RelationTables" || table_name == "Access" || table_name.starts_with("_spooky_") || table_name == "backend_api_outbox" {
                         continue;
                     }
 
@@ -351,6 +359,9 @@ impl CodeGenerator {
 
         for (table_name, rels) in &table_relationships {
             for (field_name, related_table, cardinality) in rels {
+                if table_name == "backend_api_outbox" || related_table == "backend_api_outbox" {
+                    continue;
+                }
                 tables_lines.push("    {".to_string());
                 tables_lines.push(format!("      from: '{}' as const,", table_name));
                 tables_lines.push(format!("      field: '{}' as const,", field_name));
@@ -379,7 +390,37 @@ impl CodeGenerator {
             }
         }
 
-        tables_lines.push("  }".to_string());
+
+        tables_lines.push("  },".to_string());
+
+        if let Some(backends) = backend_definitions {
+            tables_lines.push("  backends: {".to_string());
+            for (backend_name, backend_def) in backends {
+                tables_lines.push(format!("    \"{}\": {{", backend_name));
+                
+                if let Some(table) = &backend_def.outbox_table {
+                    tables_lines.push(format!("      outboxTable: '{}' as const,", table));
+                }
+
+                tables_lines.push("      routes: {".to_string());
+                for (route_path, route_def) in &backend_def.routes {
+                    tables_lines.push(format!("        \"{}\": {{", route_path));
+                    tables_lines.push("          args: {".to_string());
+                    for (arg_name, arg_def) in &route_def.args {
+                        tables_lines.push(format!("            \"{}\": {{", arg_name));
+                        tables_lines.push(format!("              type: '{}' as const,", arg_def.arg_type));
+                        tables_lines.push(format!("              optional: {} as const", !arg_def.required));
+                        tables_lines.push("            },".to_string());
+                    }
+                    tables_lines.push("          }".to_string());
+                    tables_lines.push("        },".to_string());
+                }
+                tables_lines.push("      }".to_string());
+                tables_lines.push("    },".to_string());
+            }
+            tables_lines.push("  },".to_string());
+        }
+
         tables_lines.push("} as const;".to_string());
         tables_lines.push("".to_string());
 

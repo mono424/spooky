@@ -1,0 +1,6 @@
+type: http
+spec: ../../../api/openapi.yml
+method:
+  type: outbox
+  table: backend_api_outbox
+  schema: ./outbox.surql

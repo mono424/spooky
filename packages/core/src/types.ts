@@ -203,6 +203,15 @@ export interface MutationEvent {
 }
 
 /**
+ * Options for run operations.
+ */
+export interface RunOptions {
+  assignedTo?: string;
+  max_retries?: number;
+  retry_strategy?: 'linear' | 'exponential';
+}
+
+/**
  * Options for update operations.
  */
 export interface UpdateOptions {

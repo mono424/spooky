@@ -78,6 +78,9 @@ impl SchemaParser {
         // Pre-process the content to remove EVENT definitions
         // Events may contain syntax that the parser doesn't fully support yet
         let processed_content = Self::remove_events(content);
+        // Workaround for parser not supporting FOR ALL
+        let processed_content =
+            processed_content.replace("FOR ALL", "FOR select, create, update, delete");
 
         // Create capabilities with all features enabled to support experimental syntax like mod::
         let capabilities = Capabilities::all();

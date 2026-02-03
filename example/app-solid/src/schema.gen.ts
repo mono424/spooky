@@ -32,6 +32,7 @@ export const schema = {
         created_at: { type: 'string' as const, dateTime: true, optional: true },
         title: { type: 'string' as const, optional: false },
         title_suggestion: { type: 'string' as const, optional: true },
+        backend_api_outboxes: { type: 'string' as const, optional: true },
         comments: { type: 'string' as const, optional: true },
       },
       primaryKey: ['id'] as const
@@ -87,7 +88,22 @@ export const schema = {
   ],
   access: {
     account: {"signIn":{"params":{"password":{"type":"string","optional":false},"username":{"type":"string","optional":false}}},"signup":{"params":{"password":{"type":"string","optional":false},"username":{"type":"string","optional":false}}}},
-  }
+  },
+  backends: {
+    "api": {
+      outboxTable: 'backend_api_outbox' as const,
+      routes: {
+        "/spookify": {
+          args: {
+            "id": {
+              type: 'string' as const,
+              optional: false as const
+            },
+          }
+        },
+      }
+    },
+  },
 } as const;
 
 export type SchemaDefinition = typeof schema;
@@ -181,6 +197,47 @@ PERMISSIONS FOR select, create, update, delete WHERE true;
 DEFINE EVENT comment_created ON TABLE comment WHEN $event = "CREATE" THEN
   RELATE ($after.id)->commented_on->($after.thread)
 ;
+
+-- Backend Schema: "./src/api/backend.yml"
+-- ##################################################################
+-- API OUTBOX TABLE
+-- ##################################################################
+
+DEFINE TABLE backend_api_outbox SCHEMAFULL
+PERMISSIONS FOR select, create, update, delete WHERE true;
+
+DEFINE FIELD assigned_to ON TABLE backend_api_outbox TYPE option<record<thread>>
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD path ON TABLE backend_api_outbox TYPE option<string>
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD payload ON TABLE backend_api_outbox TYPE option<object>
+ASSERT $value.id = <string> assigned_to.id
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD retries ON TABLE backend_api_outbox TYPE option<int> DEFAULT 0
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD max_retries ON TABLE backend_api_outbox TYPE option<int> DEFAULT 3
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD retry_strategy ON TABLE backend_api_outbox TYPE option<string> DEFAULT "linear"
+ASSERT $value IN ["linear", "exponential"]
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD status ON TABLE backend_api_outbox TYPE option<string> DEFAULT "pending"
+ASSERT $value IN ["pending", "success", "failed"]
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD updated_at ON TABLE backend_api_outbox TYPE option<datetime>
+PERMISSIONS FOR select, create, update WHERE true
+VALUE time::now();
+
+DEFINE FIELD created_at ON TABLE backend_api_outbox TYPE option<datetime>
+PERMISSIONS FOR select, create, update WHERE true
+VALUE time::now();
+
 -- ==================================================
 -- SPOOKY INCANTATION
 -- The Registry of active Live Queries (Incantations).
@@ -261,6 +318,7 @@ DEFINE FIELD spooky_rv ON TABLE _spooky_pending_mutations TYPE int DEFAULT 0 PER
 DEFINE FIELD spooky_rv ON TABLE _spooky_query TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
 DEFINE FIELD spooky_rv ON TABLE _spooky_schema TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
 DEFINE FIELD spooky_rv ON TABLE _spooky_stream_processor_state TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
+DEFINE FIELD spooky_rv ON TABLE backend_api_outbox TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
 DEFINE FIELD spooky_rv ON TABLE comment TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
 DEFINE FIELD spooky_rv ON TABLE commented_on TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
 DEFINE FIELD spooky_rv ON TABLE thread TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
@@ -270,6 +328,20 @@ DEFINE FIELD spooky_rv ON TABLE user TYPE int DEFAULT 0 PERMISSIONS FOR select, 
 -- ==================================================
 -- AUTO-GENERATED SPOOKY EVENTS
 -- ==================================================
+
+-- Table: backend_api_outbox Client Mutation
+DEFINE EVENT OVERWRITE _spooky_backend_api_outbox_client_mutation ON TABLE backend_api_outbox
+WHEN $before != $after AND $event != "DELETE"
+THEN {
+    -- No-op for now. Client mutation sync logic moved to DBSP.
+};
+
+-- Table: backend_api_outbox Client Deletion
+DEFINE EVENT OVERWRITE _spooky_backend_api_outbox_client_delete ON TABLE backend_api_outbox
+WHEN $event = "DELETE"
+THEN {
+    -- No-op for now.
+};
 
 -- Table: comment Client Mutation
 DEFINE EVENT OVERWRITE _spooky_comment_client_mutation ON TABLE comment

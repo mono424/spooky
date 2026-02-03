@@ -7,6 +7,7 @@ import { useAuth } from '../lib/auth';
 import { CommentBox } from './CommentBox';
 import { ThreadSidebar } from './ThreadSidebar';
 import { isInputActive, useKeyboard } from '../lib/keyboard';
+import SpookButton from './SpookButton';
 
 const createQuery = ({
   threadId,
@@ -39,6 +40,7 @@ export function ThreadDetail() {
   const params = useParams();
   const navigate = useNavigate();
   const [commentFilter, setCommentFilter] = createSignal<'all' | 'mine'>('all');
+  const [spookifySending, setSpookifySending] = createSignal(false);
 
   const threadResult = useQuery(db, () =>
     createQuery({
@@ -129,6 +131,19 @@ export function ThreadDetail() {
     });
   };
 
+  const handleSpookify = async () => {
+    setSpookifySending(true);
+    const threadData = thread();
+    if (!threadData || !threadData.id) return;
+    
+    try {
+      await db.run('api', '/spookify', { id: threadData.id }, { assignedTo: threadData.id });
+    } catch (err) {
+      console.error('Spookify failed:', err);
+    }
+    setSpookifySending(false);
+  };
+
   return (
     <div class="flex h-full">
       {/* Thread Sidebar */}
@@ -144,8 +159,14 @@ export function ThreadDetail() {
           >
             <span>&lt;&lt;</span> RETURN_TO_ROOT
           </button>
-          <div class="text-[10px] uppercase text-gray-600">
-            MODE: {isAuthor() ? 'READ_WRITE' : 'READ_ONLY'}
+          
+          <div class="flex items-center gap-6">
+            <SpookButton loading={spookifySending()} loadingLabel="HAUNTING..." onClick={handleSpookify}>
+              SPOOKIFY
+            </SpookButton>
+            <div class="text-[10px] uppercase text-gray-600">
+              MODE: {isAuthor() ? 'READ_WRITE' : 'READ_ONLY'}
+            </div>
           </div>
         </div>
 

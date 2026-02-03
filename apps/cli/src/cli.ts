@@ -28,6 +28,7 @@ program
   )
   .option('--sidecar-endpoint <url>', 'Spooky Sidecar Endpoint URL')
   .option('--sidecar-secret <secret>', 'Spooky Sidecar Auth Secret')
+  .option('--config <path>', 'Path to spooky.yml configuration file')
   .parse(process.argv);
 
 const options = program.opts();
@@ -52,6 +53,7 @@ async function main() {
       mode: options.mode,
       sidecarEndpoint: options.sidecarEndpoint,
       sidecarSecret: options.sidecarSecret,
+      config: options.config,
     });
 
     console.log(output);

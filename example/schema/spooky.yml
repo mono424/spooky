@@ -1,5 +1,5 @@
 mode: sidecar # "sidecar" or "surrealism"
 backends:
-  - src/backends
+  - src/api/backend.yml
 
         

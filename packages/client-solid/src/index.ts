@@ -4,6 +4,7 @@ import {
   AuthService,
   type SpookyQueryResultPromise,
   UpdateOptions,
+  RunOptions,
 } from '@spooky/core';
 
 import {
@@ -158,6 +159,19 @@ export class SyncedDb<S extends SchemaStructure> {
   ): QueryBuilder<S, TName, SpookyQueryResultPromise, {}, false> {
     if (!this.spooky) throw new Error('SyncedDb not initialized');
     return this.spooky.query(table, {});
+  }
+
+  /**
+   * Run a backend operation
+   */
+  public async run(
+    backend: string,
+    path: string,
+    payload: Record<string, unknown>,
+    options?: RunOptions
+  ): Promise<void> {
+    if (!this.spooky) throw new Error('SyncedDb not initialized');
+    await this.spooky.run(backend, path, payload, options);
   }
 
   /**

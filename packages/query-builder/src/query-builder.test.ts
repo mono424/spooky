@@ -66,6 +66,7 @@ const testSchema = {
       cardinality: 'one' as const,
     },
   ],
+  backends: {},
 } as const;
 
 describe('QueryBuilder', () => {

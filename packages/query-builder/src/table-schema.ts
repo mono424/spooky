@@ -131,7 +131,22 @@ export interface SchemaStructure {
     readonly to: string;
     readonly cardinality: Cardinality;
   }[];
+  readonly backends: Record<string, HTTPOutboxBackendDefinition>;
   readonly access?: Record<string, AccessDefinition>;
+}
+
+export interface HTTPOutboxBackendDefinition {
+  readonly outboxTable: string;
+  readonly routes: Record<string, HTTPBackendRouteDefinition>;
+}
+
+export interface HTTPBackendRouteDefinition {
+  readonly args: Record<string, HTTPBackendRouteArgsDefinition>;
+}
+
+export interface HTTPBackendRouteArgsDefinition {
+  readonly type: ValueType;
+  readonly optional: boolean;
 }
 
 /**
