@@ -1,5 +1,5 @@
 import { Logger } from '../../services/logger/index.js';
-import { UpQueue, DownQueue, UpEvent, DownEvent } from './queue/index.js';
+import { UpQueue, DownQueue, DownEvent, UpEvent } from './queue/index.js';
 import { SyncQueueEventTypes } from './events/index.js';
 
 /**

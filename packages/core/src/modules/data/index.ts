@@ -14,6 +14,7 @@ import {
   MutationCallback,
   RecordVersionArray,
   QueryConfigRecord,
+  UpdateOptions,
 } from '../../types.js';
 import {
   parseRecordIdString,
@@ -25,6 +26,8 @@ import {
   parseParams,
   extractTablePart,
 } from '../../utils/index.js';
+import { CreateEvent, DeleteEvent, UpdateEvent } from '../sync/index.js';
+import { PushEventOptions } from '../../events/index.js';
 
 /**
  * DataModule - Unified query and mutation management
@@ -316,7 +319,7 @@ export class DataModule<S extends SchemaStructure> {
     );
 
     // Emit mutation event for sync
-    const mutationEvent: MutationEvent = {
+    const mutationEvent: CreateEvent = {
       type: 'create',
       mutation_id: mutationId,
       record_id: rid,
@@ -339,7 +342,8 @@ export class DataModule<S extends SchemaStructure> {
   async update<T extends Record<string, unknown>>(
     table: string,
     id: string,
-    data: Partial<T>
+    data: Partial<T>,
+    options?: UpdateOptions
   ): Promise<T> {
     const tableName = extractTablePart(id);
     const tableSchema = this.schema.tables.find((t) => t.name === tableName);
@@ -381,13 +385,29 @@ export class DataModule<S extends SchemaStructure> {
       true
     );
 
+    let pushEventOptions: PushEventOptions = {};
+    if (options?.debounced) {
+      const delay = options.debounced !== true ? (options.debounced?.delay ?? 200) : 200;
+      const keyType = options.debounced !== true ? (options.debounced?.key ?? id) : id;
+      const key =
+        keyType === 'recordId_x_fields' ? `${id}::${Object.keys(data).sort().join('#')}` : id;
+
+      pushEventOptions = {
+        debounced: {
+          delay,
+          key,
+        },
+      };
+    }
+
     // Emit mutation event
-    const mutationEvent: MutationEvent = {
+    const mutationEvent: UpdateEvent = {
       type: 'update',
       mutation_id: mutationId,
       record_id: rid,
       data: params,
       record: target,
+      options: pushEventOptions,
     };
 
     for (const callback of this.mutationCallbacks) {
@@ -420,7 +440,7 @@ export class DataModule<S extends SchemaStructure> {
     await this.cache.delete(table, id, true);
 
     // Emit mutation event
-    const mutationEvent: MutationEvent = {
+    const mutationEvent: DeleteEvent = {
       type: 'delete',
       mutation_id: mutationId,
       record_id: rid,

@@ -7,6 +7,7 @@ import {
 } from '../events/index.js';
 import { parseRecordIdString } from '../../../utils/index.js';
 import { Logger } from '../../../services/logger/index.js';
+import { PushEventOptions } from '../../../events/index.js';
 
 export type CreateEvent = {
   type: 'create';
@@ -14,6 +15,7 @@ export type CreateEvent = {
   record_id: RecordId;
   data: Record<string, unknown>;
   record?: Record<string, unknown>;
+  options?: PushEventOptions;
 };
 
 export type UpdateEvent = {
@@ -22,12 +24,14 @@ export type UpdateEvent = {
   record_id: RecordId;
   data: Record<string, unknown>;
   record?: Record<string, unknown>;
+  options?: PushEventOptions;
 };
 
 export type DeleteEvent = {
   type: 'delete';
   mutation_id: RecordId;
   record_id: RecordId;
+  options?: PushEventOptions;
 };
 
 export type UpEvent = CreateEvent | UpdateEvent | DeleteEvent;
@@ -36,6 +40,7 @@ export class UpQueue {
   private queue: UpEvent[] = [];
   private _events: SyncQueueEventSystem;
   private logger: Logger;
+  private debouncedMutations: Map<string, { timer: any }>;
 
   get events(): SyncQueueEventSystem {
     return this._events;
@@ -47,6 +52,7 @@ export class UpQueue {
   ) {
     this._events = createSyncQueueEventSystem();
     this.logger = logger.child({ service: 'UpQueue' });
+    this.debouncedMutations = new Map();
   }
 
   get size(): number {
@@ -54,11 +60,33 @@ export class UpQueue {
   }
 
   push(event: UpEvent) {
+    if (event.options?.debounced) {
+      const { key, delay } = event.options.debounced;
+      this.handleDebouncedMutation(event, key, delay);
+      return;
+    }
+    this.addToQueue(event);
+  }
+
+  private addToQueue(event: UpEvent) {
     this.queue.push(event);
     this._events.addEvent({
       type: SyncQueueEventTypes.MutationEnqueued,
       payload: { queueSize: this.queue.length },
     });
+  }
+
+  private handleDebouncedMutation(event: UpEvent, key: string, delay: number) {
+    if (this.debouncedMutations.has(key)) {
+      clearTimeout(this.debouncedMutations.get(key)?.timer);
+    }
+
+    const timer = setTimeout(() => {
+      this.debouncedMutations.delete(key);
+      this.addToQueue(event);
+    }, delay);
+
+    this.debouncedMutations.set(key, { timer });
   }
 
   async next(fn: (event: UpEvent) => Promise<void>): Promise<void> {

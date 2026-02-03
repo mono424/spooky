@@ -1,5 +1,7 @@
 import { RecordId, SchemaStructure } from '@spooky/query-builder';
 import { Level } from 'pino';
+import { PushEventOptions } from './events/index.js';
+import { UpEvent } from './modules/sync/index.js';
 
 export type { Level } from 'pino';
 
@@ -93,7 +95,7 @@ export interface QueryState {
 
 // Callback types
 export type QueryUpdateCallback = (records: Record<string, any>[]) => void;
-export type MutationCallback = (mutations: MutationEvent[]) => void;
+export type MutationCallback = (mutations: UpEvent[]) => void;
 
 export type MutationEventType = 'create' | 'update' | 'delete';
 
@@ -104,4 +106,15 @@ export interface MutationEvent {
   record_id: RecordId<string>;
   data?: any;
   record?: any;
+  options?: PushEventOptions;
+  createdAt: Date;
+}
+
+export interface UpdateOptions {
+  debounced?: boolean | DebounceOptions;
+}
+
+export interface DebounceOptions {
+  key?: 'recordId' | 'recordId_x_fields';
+  delay?: number;
 }

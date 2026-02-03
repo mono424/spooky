@@ -88,7 +88,7 @@ export function ThreadDetail() {
   const handleContentChange = async (newContent: string) => {
     const threadData = thread();
     if (!threadData || !threadData.id || !isAuthor()) return;
-    await db.update('thread', threadData.id, { content: newContent }, { debounced: true });
+    await db.update('thread', threadData.id, { content: newContent }, { debounced: { delay: 2000, key: 'recordId_x_fields' } });
   };
 
   return (

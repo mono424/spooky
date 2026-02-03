@@ -11,6 +11,10 @@ export type EventTypeMap = Record<
   EventDefinition<any, unknown> | EventDefinition<any, never>
 >;
 
+export interface PushEventOptions {
+  debounced?: { key: string; delay: number };
+}
+
 export type Event<E extends EventTypeMap, T extends EventType<E>> = E[T];
 
 export type EventPayload<E extends EventTypeMap, T extends EventType<E>> = E[T]['payload'];
@@ -46,9 +50,7 @@ export class EventSystem<E extends EventTypeMap> {
     [K in EventType<E>]?: Event<E, K>;
   };
 
-  get eventTypes(): EventTypes<E> {
-    return this.eventTypes;
-  }
+  private debouncedEvents: Map<string, { timer: any; resolve: (val: any) => void }>;
 
   constructor(private _eventTypes: EventTypes<E>) {
     this.buffer = [];
@@ -60,6 +62,11 @@ export class EventSystem<E extends EventTypeMap> {
     );
     this.lastEvents = {};
     this.subscribersTypeMap = new Map();
+    this.debouncedEvents = new Map();
+  }
+
+  get eventTypes(): EventTypes<E> {
+    return this._eventTypes;
   }
 
   subscribe<T extends EventType<E>>(
@@ -106,11 +113,34 @@ export class EventSystem<E extends EventTypeMap> {
     } as unknown as Event<E, T>;
     this.addEvent(event);
   }
+
   /// addEvent method to add an event to the buffer
   /// similiar to emit, but takes a full event object
-  addEvent<T extends EventType<E>>(event: Event<E, T>): void {
+  addEvent<T extends EventType<E>>(event: Event<E, T>, options?: PushEventOptions): void {
+    if (options?.debounced) {
+      this.handleDebouncedEvent(event, options.debounced.key, options.debounced.delay);
+      return;
+    }
     this.buffer.push(event);
     this.scheduleProcessing();
+  }
+
+  private handleDebouncedEvent<T extends EventType<E>>(
+    event: Event<E, T>,
+    key: string,
+    delay: number
+  ): void {
+    if (this.debouncedEvents.has(key)) {
+      clearTimeout(this.debouncedEvents.get(key)?.timer);
+    }
+
+    const timer = setTimeout(() => {
+      this.debouncedEvents.delete(key);
+      this.buffer.push(event);
+      this.scheduleProcessing();
+    }, delay);
+
+    this.debouncedEvents.set(key, { timer, resolve: () => {} });
   }
 
   private scheduleProcessing(): void {

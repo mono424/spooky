@@ -5,6 +5,7 @@ import {
   SpookyQueryResultPromise,
   PersistenceClient,
   MutationEvent,
+  UpdateOptions,
 } from './types.js';
 import {
   LocalDatabaseService,
@@ -133,7 +134,7 @@ export class SpookyClient<S extends SchemaStructure> {
 
       // Enqueue in Sync
       if (mutations.length > 0) {
-        this.sync.enqueueMutation(mutations as any);
+        this.sync.enqueueMutation(mutations);
       }
     });
 
@@ -283,8 +284,8 @@ export class SpookyClient<S extends SchemaStructure> {
     return this.dataModule.create(id, data);
   }
 
-  update(table: string, id: string, data: Record<string, unknown>) {
-    return this.dataModule.update(table, id, data);
+  update(table: string, id: string, data: Record<string, unknown>, options?: UpdateOptions) {
+    return this.dataModule.update(table, id, data, options);
   }
 
   delete(table: string, id: string) {

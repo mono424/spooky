@@ -1,5 +1,10 @@
 import type { SyncedDbConfig } from './types';
-import { SpookyClient, AuthService, type SpookyQueryResultPromise } from '@spooky/core';
+import {
+  SpookyClient,
+  AuthService,
+  type SpookyQueryResultPromise,
+  UpdateOptions,
+} from '@spooky/core';
 
 import {
   GetTable,
@@ -120,10 +125,16 @@ export class SyncedDb<S extends SchemaStructure> {
   async update<TName extends TableNames<S>>(
     tableName: TName,
     recordId: string,
-    payload: Partial<TableModel<GetTable<S, TName>>>
+    payload: Partial<TableModel<GetTable<S, TName>>>,
+    options?: UpdateOptions
   ): Promise<void> {
     if (!this.spooky) throw new Error('SyncedDb not initialized');
-    await this.spooky.update(tableName as string, recordId, payload as Record<string, unknown>);
+    await this.spooky.update(
+      tableName as string,
+      recordId,
+      payload as Record<string, unknown>,
+      options
+    );
   }
 
   /**

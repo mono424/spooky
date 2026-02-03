@@ -1,5 +1,5 @@
 import { LocalDatabaseService, RemoteDatabaseService } from '../../services/database/index.js';
-import { RecordVersionArray } from '../../types.js';
+import { MutationEvent, RecordVersionArray } from '../../types.js';
 import { createSyncEventSystem } from './events/index.js';
 import { Logger } from '../../services/logger/index.js';
 import { DownEvent, DownQueue, UpEvent, UpQueue } from './queue/index.js';
@@ -201,7 +201,7 @@ export class SpookySync<S extends SchemaStructure> {
     return this.syncEngine.syncRecords(diff);
   }
 
-  public async enqueueMutation(mutations: any[]) {
+  public async enqueueMutation(mutations: UpEvent[]) {
     this.scheduler.enqueueMutation(mutations);
   }
 
