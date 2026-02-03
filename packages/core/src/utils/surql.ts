@@ -45,12 +45,17 @@ export const surql = {
     return `UPDATE ONLY $${idVar} MERGE $${dataVar}`;
   },
 
-  updateSet(idVar: string, keyDataVar: ({ key: string; variable: string } | string)[]) {
+  updateSet(
+    idVar: string,
+    keyDataVar: ({ key: string; variable: string } | { statement: string } | string)[]
+  ) {
     return `UPDATE $${idVar} SET ${keyDataVar
       .map((keyDataVar) =>
         typeof keyDataVar === 'string'
           ? `${keyDataVar} = $${keyDataVar}`
-          : `${keyDataVar.key} = $${keyDataVar.variable}`
+          : 'statement' in keyDataVar
+            ? keyDataVar.statement
+            : `${keyDataVar.key} = $${keyDataVar.variable}`
       )
       .join(',')}`;
   },

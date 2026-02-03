@@ -310,6 +310,7 @@ export class DataModule<S extends SchemaStructure> {
         table: tableName,
         op: 'CREATE',
         record: parsedRecord,
+        version: 1,
       },
       true
     );
@@ -352,6 +353,7 @@ export class DataModule<S extends SchemaStructure> {
 
     const query = surql.seal(
       surql.tx([
+        surql.updateSet('id', [{ statement: 'spooky_rv += 1' }]),
         surql.let('updated', surql.updateMerge('id', 'data')),
         surql.createMutation('update', 'mid', 'id', 'data'),
         surql.returnObject([{ key: 'target', variable: 'updated' }]),
@@ -374,6 +376,7 @@ export class DataModule<S extends SchemaStructure> {
         table: table,
         op: 'UPDATE',
         record: parsedRecord,
+        version: target.spooky_rv as number,
       },
       true
     );

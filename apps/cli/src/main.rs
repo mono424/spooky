@@ -162,12 +162,13 @@ fn make_field_nullable(line: &str) -> String {
         // Check if already wrapped in option<> or if type is 'any' (can't be wrapped)
         if type_str.starts_with("option<")
             || type_str.starts_with("OPTION<")
-            || type_str.eq_ignore_ascii_case("any") {
+            || type_str.eq_ignore_ascii_case("any")
+        {
             // Already nullable or is 'any' type, return as-is
             line.to_string()
         } else {
             // Wrap the type in option<>
-            format!("{}option<{}>{}",  before_type, type_str, rest)
+            format!("{}option<{}>{}", before_type, type_str, rest)
         }
     } else {
         // No TYPE found, return as-is
@@ -283,7 +284,16 @@ fn main() -> Result<()> {
         .context("Failed to parse SurrealDB schema")?;
 
     // Filter the raw schema content to remove fields with FOR select WHERE false
-    let filtered_schema_content = filter_schema_for_client(&content, &parser)?;
+    let mut filtered_schema_content = filter_schema_for_client(&content, &parser)?;
+
+    // Append spooky_rv field to every table for local cache setup (client-side only)
+    println!("  + Injecting spooky_rv field for local cache schema");
+    for table_name in parser.tables.keys() {
+        filtered_schema_content.push_str(&format!(
+            "\nDEFINE FIELD spooky_rv ON TABLE {} TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;",
+            table_name
+        ));
+    }
 
     // Choose which content to use based on format
     let raw_schema_content = if matches!(output_format, OutputFormat::Surql) {

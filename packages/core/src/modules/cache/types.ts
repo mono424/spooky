@@ -15,5 +15,5 @@ export interface CacheRecord {
   table: string;
   op: string;
   record: RecordWithId;
-  version?: number;
+  version: number;
 }

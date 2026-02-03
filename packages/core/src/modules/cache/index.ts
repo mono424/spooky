@@ -20,6 +20,7 @@ export * from './types.js';
 export class CacheModule implements StreamUpdateReceiver {
   private logger: Logger;
   private streamUpdateCallback: (update: StreamUpdate) => void;
+  private versionLookups: Record<string, number> = {};
 
   constructor(
     private local: LocalDatabaseService,
@@ -49,6 +50,10 @@ export class CacheModule implements StreamUpdateReceiver {
     this.streamUpdateCallback(update);
   }
 
+  public lookup(recordId: string): number {
+    return this.versionLookups[recordId] ?? 0;
+  }
+
   /**
    * Save a single record to local DB and ingest into DBSP
    * Used by mutations (create/update)
@@ -75,11 +80,12 @@ export class CacheModule implements StreamUpdateReceiver {
 
     try {
       const populatedRecords = records.map((record) => {
+        if (!record.version) throw new Error('Record version is required');
         return {
           ...record,
           record: {
             ...record.record,
-            _spooky_version: record.version,
+            spooky_rv: record.version,
           },
         };
       });
@@ -110,12 +116,9 @@ export class CacheModule implements StreamUpdateReceiver {
 
       // 2. Batch ingest into DBSP
       for (const record of records) {
-        this.streamProcessor.ingest(
-          record.table,
-          record.op,
-          encodeRecordId(record.record.id),
-          record.record
-        );
+        const recordId = encodeRecordId(record.record.id);
+        this.versionLookups[recordId] = record.version;
+        this.streamProcessor.ingest(record.table, record.op, recordId, record.record);
       }
 
       this.logger.debug(
@@ -147,6 +150,7 @@ export class CacheModule implements StreamUpdateReceiver {
       }
 
       // 2. Ingest deletion into DBSP
+      delete this.versionLookups[id];
       await this.streamProcessor.ingest(table, 'DELETE', id, {});
 
       this.logger.debug(
