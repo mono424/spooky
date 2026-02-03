@@ -39,6 +39,7 @@ export class DataModule<S extends SchemaStructure> {
   private activeQueries: Map<QueryHash, QueryState> = new Map();
   private subscriptions: Map<QueryHash, Set<QueryUpdateCallback>> = new Map();
   private mutationCallbacks: Set<MutationCallback> = new Set();
+  private debounceTimers: Map<QueryHash, NodeJS.Timeout> = new Map();
   private logger: Logger;
 
   constructor(
@@ -170,6 +171,23 @@ export class DataModule<S extends SchemaStructure> {
    * Handle stream updates from DBSP (via CacheModule)
    */
   async onStreamUpdate(update: StreamUpdate): Promise<void> {
+    const { queryHash } = update;
+
+    // Clear existing timer if any
+    if (this.debounceTimers.has(queryHash)) {
+      clearTimeout(this.debounceTimers.get(queryHash)!);
+    }
+
+    // Set new timer
+    const timer = setTimeout(async () => {
+      this.debounceTimers.delete(queryHash);
+      await this.processStreamUpdate(update);
+    }, 100); // TODO: Make this adaptable
+
+    this.debounceTimers.set(queryHash, timer);
+  }
+
+  private async processStreamUpdate(update: StreamUpdate): Promise<void> {
     const { queryHash, localArray } = update;
     const queryState = this.activeQueries.get(queryHash);
     if (!queryState) {
@@ -372,6 +390,11 @@ export class DataModule<S extends SchemaStructure> {
       })
     );
 
+    // Replace record in all queries directly
+    // Does not respect sorting or other advanced query features
+    // But is fast for quick typing for example
+    this.replaceRecordInQueries(target);
+
     const parsedRecord = parseParams(tableSchema.columns, target) as RecordWithId;
 
     // Save to cache
@@ -385,20 +408,7 @@ export class DataModule<S extends SchemaStructure> {
       true
     );
 
-    let pushEventOptions: PushEventOptions = {};
-    if (options?.debounced) {
-      const delay = options.debounced !== true ? (options.debounced?.delay ?? 200) : 200;
-      const keyType = options.debounced !== true ? (options.debounced?.key ?? id) : id;
-      const key =
-        keyType === 'recordId_x_fields' ? `${id}::${Object.keys(data).sort().join('#')}` : id;
-
-      pushEventOptions = {
-        debounced: {
-          delay,
-          key,
-        },
-      };
-    }
+    const pushEventOptions = parseUpdateOptions(id, data, options);
 
     // Emit mutation event
     const mutationEvent: UpdateEvent = {
@@ -555,4 +565,44 @@ export class DataModule<S extends SchemaStructure> {
       queryState.ttlTimer = null;
     }
   }
+
+  private async replaceRecordInQueries(record: Record<string, any>): Promise<void> {
+    for (const queryState of this.activeQueries.values()) {
+      this.replaceRecordInQuery(queryState, record);
+    }
+  }
+
+  private replaceRecordInQuery(queryState: QueryState, record: Record<string, any>): void {
+    const index = queryState.records.findIndex((r) => r.id === record.id);
+    if (index !== -1) {
+      queryState.records[index] = record;
+    }
+  }
+}
+
+// ==================== HELPER FUNCTIONS ====================
+
+/**
+ * Parse update options to generate push event options
+ */
+export function parseUpdateOptions(
+  id: string,
+  data: any,
+  options?: UpdateOptions
+): PushEventOptions {
+  let pushEventOptions: PushEventOptions = {};
+  if (options?.debounced) {
+    const delay = options.debounced !== true ? (options.debounced?.delay ?? 200) : 200;
+    const keyType = options.debounced !== true ? (options.debounced?.key ?? id) : id;
+    const key =
+      keyType === 'recordId_x_fields' ? `${id}::${Object.keys(data).sort().join('#')}` : id;
+
+    pushEventOptions = {
+      debounced: {
+        delay,
+        key,
+      },
+    };
+  }
+  return pushEventOptions;
 }

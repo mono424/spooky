@@ -12,6 +12,12 @@ import { CacheModule } from '../cache/index.js';
 import { DataModule } from '../data/index.js';
 import { encodeRecordId, parseDuration, surql } from '../../utils/index.js';
 
+/**
+ * The main synchronization engine for Spooky.
+ * Handles the bidirectional synchronization between the local database and the remote backend.
+ * Uses a queue-based architecture with 'up' (local to remote) and 'down' (remote to local) queues.
+ * @template S The schema structure type.
+ */
 export class SpookySync<S extends SchemaStructure> {
   private clientId: string = '';
   private upQueue: UpQueue;
@@ -46,6 +52,12 @@ export class SpookySync<S extends SchemaStructure> {
     );
   }
 
+  /**
+   * Initializes the synchronization system.
+   * Starts the scheduler and initiates the initial sync cycles.
+   * @param clientId The unique identifier for this client instance.
+   * @throws Error if already initialized.
+   */
   public async init(clientId: string) {
     if (this.isInit) throw new Error('SpookySync is already initialized');
     this.clientId = clientId;
@@ -126,6 +138,10 @@ export class SpookySync<S extends SchemaStructure> {
     await this.syncEngine.syncRecords(diff);
   }
 
+  /**
+   * Enqueues a 'down' event (from remote to local) for processing.
+   * @param event The DownEvent to enqueue.
+   */
   public enqueueDownEvent(event: DownEvent) {
     this.scheduler.enqueueDownEvent(event);
   }
@@ -180,6 +196,11 @@ export class SpookySync<S extends SchemaStructure> {
     }
   }
 
+  /**
+   * Synchronizes a specific query by hash.
+   * Compares local and remote version arrays and fetches differences.
+   * @param hash The hash of the query to sync.
+   */
   public async syncQuery(hash: string) {
     const queryState = this.dataModule.getQueryByHash(hash);
     if (!queryState) {
@@ -201,6 +222,10 @@ export class SpookySync<S extends SchemaStructure> {
     return this.syncEngine.syncRecords(diff);
   }
 
+  /**
+   * Enqueues a list of mutations (up events) to be sent to the remote.
+   * @param mutations Array of UpEvents (create/update/delete) to enqueue.
+   */
   public async enqueueMutation(mutations: UpEvent[]) {
     this.scheduler.enqueueMutation(mutations);
   }
