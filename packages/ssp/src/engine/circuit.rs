@@ -1,5 +1,5 @@
 use super::types::{
-    make_zset_key, BatchDeltas, Delta, FastMap, Operation, RowKey, SpookyValue, ZSet,
+    make_zset_key, BatchDeltas, Delta, FastMap, FastHashSet, Operation, RowKey, SpookyValue, ZSet,
 };
 use super::update::{ViewResultFormat, ViewUpdate};
 use super::view::{QueryPlan, View};
@@ -400,7 +400,7 @@ impl Circuit {
             }
 
             // P2.2: Parallel Delta Computation
-            let results: Vec<(String, ZSet, Vec<SmolStr>)> = self
+            let results: Vec<(String, ZSet, FastHashSet<SmolStr>)> = self
                 .db
                 .tables
                 .par_iter_mut()
@@ -409,7 +409,7 @@ impl Circuit {
                     let entries = by_table.get(&name_smol)?;
 
                     let mut delta = ZSet::default();
-                    let mut content_updates = Vec::new();
+                    let mut content_updates: FastHashSet<SmolStr> = FastHashSet::default();
 
                     for entry in entries {
                         let (zset_key, weight) =
@@ -419,7 +419,7 @@ impl Circuit {
                             *delta.entry(zset_key.clone()).or_insert(0) += weight;
                         }
                         if entry.op.changes_content() {
-                            content_updates.push(zset_key);
+                            content_updates.insert(zset_key);
                         }
                     }
                     delta.retain(|_, w| *w != 0);
@@ -470,7 +470,7 @@ impl Circuit {
                             .content_updates
                             .entry(table_name.to_string())
                             .or_default()
-                            .push(zset_key);
+                            .insert(zset_key);
                         has_changes = true;
                     }
                 }
