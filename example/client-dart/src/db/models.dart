@@ -70,14 +70,14 @@ class BackendApiOutbox {
     int maxRetries;
     String path;
     
-    ///Assert: $value.id = <string> assigned_to.id
+    ///Any type
     dynamic payload;
     int retries;
     
     ///Assert: $value INSIDE ['linear', 'exponential']
     String retryStrategy;
     
-    ///Assert: $value INSIDE ['pending', 'success', 'failed']
+    ///Assert: $value INSIDE ['pending', 'processing', 'success', 'failed']
     String status;
     DateTime? updatedAt;
 
@@ -501,36 +501,26 @@ DEFINE EVENT comment_created ON TABLE comment WHEN \$event = \"CREATE\" THEN
 DEFINE TABLE backend_api_outbox SCHEMAFULL
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
-DEFINE FIELD assigned_to ON TABLE backend_api_outbox TYPE option<record<thread>>
-PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD assigned_to ON TABLE backend_api_outbox TYPE option<record<thread>>;
 
-DEFINE FIELD path ON TABLE backend_api_outbox TYPE option<string>
-PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD path ON TABLE backend_api_outbox TYPE option<string>;
 
-DEFINE FIELD payload ON TABLE backend_api_outbox TYPE option<object>
-ASSERT \$value.id = <string> assigned_to.id
-PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD payload ON TABLE backend_api_outbox TYPE any;
 
-DEFINE FIELD retries ON TABLE backend_api_outbox TYPE option<int> DEFAULT 0
-PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD retries ON TABLE backend_api_outbox TYPE option<int> DEFAULT 0;
 
-DEFINE FIELD max_retries ON TABLE backend_api_outbox TYPE option<int> DEFAULT 3
-PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD max_retries ON TABLE backend_api_outbox TYPE option<int> DEFAULT 3;
 
 DEFINE FIELD retry_strategy ON TABLE backend_api_outbox TYPE option<string> DEFAULT \"linear\"
-ASSERT \$value IN [\"linear\", \"exponential\"]
-PERMISSIONS FOR select, create, update WHERE true;
+ASSERT \$value IN [\"linear\", \"exponential\"];
 
 DEFINE FIELD status ON TABLE backend_api_outbox TYPE option<string> DEFAULT \"pending\"
-ASSERT \$value IN [\"pending\", \"success\", \"failed\"]
-PERMISSIONS FOR select, create, update WHERE true;
+ASSERT \$value IN [\"pending\", \"processing\", \"success\", \"failed\"];
 
 DEFINE FIELD updated_at ON TABLE backend_api_outbox TYPE option<datetime>
-PERMISSIONS FOR select, create, update WHERE true
 VALUE time::now();
 
 DEFINE FIELD created_at ON TABLE backend_api_outbox TYPE option<datetime>
-PERMISSIONS FOR select, create, update WHERE true
 VALUE time::now();
 
 -- ==================================================

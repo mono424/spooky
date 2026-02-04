@@ -31,6 +31,9 @@ const createQuery = ({
       }
       return withAuthor.orderBy('created_at', 'desc').limit(10);
     })
+    .related('backend_api_outboxes', (q) => {
+      return q.where({ path: '/spookify' }).orderBy('created_at', 'desc').limit(1);
+    })
     .one()
     .build();
 };
@@ -144,6 +147,8 @@ export function ThreadDetail() {
     setSpookifySending(false);
   };
 
+  const spookifyJobLoading = () => ["pending", "processing"].includes(thread()?.backend_api_outboxes?.[0]?.status);
+
   return (
     <div class="flex h-full">
       {/* Thread Sidebar */}
@@ -161,7 +166,7 @@ export function ThreadDetail() {
           </button>
           
           <div class="flex items-center gap-6">
-            <SpookButton loading={spookifySending()} loadingLabel="HAUNTING..." onClick={handleSpookify}>
+            <SpookButton loading={spookifySending() || spookifyJobLoading()} loadingLabel="HAUNTING..." onClick={handleSpookify}>
               SPOOKIFY
             </SpookButton>
             <div class="text-[10px] uppercase text-gray-600">

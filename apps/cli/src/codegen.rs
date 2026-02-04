@@ -296,7 +296,7 @@ impl CodeGenerator {
             if let serde_json::Value::Object(defs_obj) = definitions {
                 // Process each table (skip Relationships and RelationTables)
                 for (table_name, table_def) in defs_obj {
-                    if table_name == "Relationships" || table_name == "RelationTables" || table_name == "Access" || table_name.starts_with("_spooky_") || table_name == "backend_api_outbox" {
+                    if table_name == "Relationships" || table_name == "RelationTables" || table_name == "Access" || table_name.starts_with("_spooky_") {
                         continue;
                     }
 
@@ -359,9 +359,6 @@ impl CodeGenerator {
 
         for (table_name, rels) in &table_relationships {
             for (field_name, related_table, cardinality) in rels {
-                if table_name == "backend_api_outbox" || related_table == "backend_api_outbox" {
-                    continue;
-                }
                 tables_lines.push("    {".to_string());
                 tables_lines.push(format!("      from: '{}' as const,", table_name));
                 tables_lines.push(format!("      field: '{}' as const,", field_name));

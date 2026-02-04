@@ -323,7 +323,7 @@ export class DataModule<S extends SchemaStructure> {
 
     const record: Record<string, unknown> = {
       path,
-      payload,
+      payload: payload as Object,
       retries: 0,
       max_retries: options?.max_retries ?? 3,
       retry_strategy: options?.retry_strategy ?? 'linear',
