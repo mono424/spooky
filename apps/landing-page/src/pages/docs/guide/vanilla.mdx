@@ -3,33 +3,229 @@ layout: ../../../layouts/DocsLayout.astro
 title: Vanilla JS / TS
 ---
 
-import Warning from '../../../components/ui/Warning.astro';
-
-<Warning>This guide is currently under construction. 🚧</Warning>
-
-You can use Spooky with plain JavaScript or TypeScript without any framework.
-
 import CodeBlock from '../../../components/ui/CodeBlock.astro';
+
+You can use Spooky with plain JavaScript or TypeScript without any framework. This guide shows how to use the core `SpookyClient` directly.
 
 ## Installation
 
-<CodeBlock code={`npm install @spooky/core`} lang="bash" />
+<CodeBlock code={`npm install @spooky/core surrealdb`} lang="bash" />
 
-## Basic Usage
+## Generate Schema Types
+
+First, generate your schema types from your SurrealDB schema:
+
+<CodeBlock 
+  code={`spooky --input src/schema.surql --output src/schema.gen.ts --format typescript`}
+  lang="bash"
+/>
+
+## Initialize the Client
+
+Create and initialize a `SpookyClient` instance:
+
+<CodeBlock
+  fileName="src/db.ts"
+  lang="typescript"
+  code={`import { SpookyClient, type SpookyConfig } from '@spooky/core';
+import { schema, SURQL_SCHEMA } from './schema.gen';
+
+const config: SpookyConfig<typeof schema> = {
+  logLevel: 'info',
+  schema: schema,
+  schemaSurql: SURQL_SCHEMA,
+  database: {
+    namespace: 'main',
+    database: 'main',
+    endpoint: 'ws://localhost:8000/rpc',
+    store: 'indexeddb', // or 'memory'
+  },
+};
+
+export const client = new SpookyClient<typeof schema>(config);
+
+// Initialize the client
+export async function initDatabase() {
+  await client.init();
+  console.log('Spooky client initialized');
+}`}
+/>
+
+## Querying Data
+
+Use the query builder to fetch data and subscribe to updates:
+
+<CodeBlock
+  lang="typescript"
+  code={`import { client } from './db';
+
+// Build a query
+const query = client.query('thread')
+  .related('author')
+  .orderBy('created_at', 'desc')
+  .limit(10);
+
+// Execute and get the query hash
+const { hash } = await query.build().run();
+
+// Subscribe to query updates
+const unsubscribe = await client.subscribe(
+  hash,
+  (records) => {
+    console.log('Threads updated:', records);
+    renderThreads(records);
+  },
+  { immediate: true } // Get initial results immediately
+);
+
+// Later: unsubscribe when done
+// unsubscribe();
+
+function renderThreads(threads: any[]) {
+  const container = document.getElementById('threads');
+  if (!container) return;
+  
+  container.innerHTML = threads.map(thread => \`
+    <div class="thread">
+      <h3>\${thread.title}</h3>
+      <p>\${thread.content}</p>
+      <small>By \${thread.author?.username || 'Unknown'}</small>
+    </div>
+  \`).join('');
+}`}
+/>
+
+## Authentication
+
+Use the auth service to handle user authentication:
+
+<CodeBlock
+  lang="typescript"
+  code={`import { client } from './db';
+
+// Sign up a new user
+async function signUp(username: string, password: string) {
+  try {
+    await client.auth.signUp('account', { username, password });
+    console.log('Signed up successfully');
+  } catch (error) {
+    console.error('Sign up failed:', error);
+  }
+}
+
+// Sign in
+async function signIn(username: string, password: string) {
+  try {
+    await client.auth.signIn('account', { username, password });
+    console.log('Signed in successfully');
+  } catch (error) {
+    console.error('Sign in failed:', error);
+  }
+}
+
+// Subscribe to auth state changes
+client.auth.subscribe((userId) => {
+  if (userId) {
+    console.log('User logged in:', userId);
+    showAuthenticatedUI();
+  } else {
+    console.log('User logged out');
+    showLoginUI();
+  }
+});
+
+// Sign out
+async function signOut() {
+  await client.auth.signOut();
+}`}
+/>
+
+## Creating and Updating Records
+
+Use the client methods to mutate data:
+
+<CodeBlock
+  lang="typescript"
+  code={`import { client } from './db';
+import { Uuid } from 'surrealdb';
+
+// Create a new thread
+async function createThread(title: string, content: string, authorId: string) {
+  const id = \`thread:\${Uuid.v4().toString().replace(/-/g, '')}\`;
+  
+  await client.create(id, {
+    title,
+    content,
+    author: authorId,
+    active: true,
+  });
+  
+  console.log('Thread created:', id);
+}
+
+// Update a thread
+async function updateThread(threadId: string, title: string) {
+  await client.update('thread', threadId, {
+    title,
+  });
+  
+  console.log('Thread updated');
+}
+
+// Delete a thread
+async function deleteThread(threadId: string) {
+  await client.delete('thread', threadId);
+  console.log('Thread deleted');
+}`}
+/>
+
+## Complete Example
+
+Here's a complete working example:
 
 <CodeBlock
   fileName="src/main.ts"
   lang="typescript"
-  code={`import { SpookyClient } from '@spooky/core';
+  code={`import { client, initDatabase } from './db';
 
-const client = new SpookyClient({
-endpoint: 'ws://localhost:8000',
-});
+async function main() {
+  // Initialize database
+  await initDatabase();
+  
+  // Subscribe to auth state
+  client.auth.subscribe((userId) => {
+    if (userId) {
+      loadThreads();
+    }
+  });
+  
+  // Load and display threads
+  async function loadThreads() {
+    const query = client.query('thread')
+      .related('author')
+      .orderBy('created_at', 'desc')
+      .limit(20);
+    
+    const { hash } = await query.build().run();
+    
+    await client.subscribe(hash, (threads) => {
+      renderThreads(threads);
+    }, { immediate: true });
+  }
+  
+  function renderThreads(threads: any[]) {
+    const container = document.getElementById('threads');
+    if (!container) return;
+    
+    container.innerHTML = threads.map(thread => \`
+      <article>
+        <h2>\${thread.title}</h2>
+        <p>\${thread.content}</p>
+        <footer>By \${thread.author?.username || 'Unknown'}</footer>
+      </article>
+    \`).join('');
+  }
+}
 
-await client.connect();
-
-// Subscribe to live query
-const sub = client.liveQuery('SELECT \* FROM users').subscribe((data) => {
-console.log('Updated users:', data);
-});`}
+main().catch(console.error);`}
 />

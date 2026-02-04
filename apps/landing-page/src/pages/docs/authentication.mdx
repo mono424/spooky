@@ -65,23 +65,39 @@ password: 'secure_password'
 lang="typescript"
 />
 
-### Reacting to Auth State
-
-You can subscribe to authentication state changes to update your UI dynamically.
+### Sign Out
 
 <CodeBlock
-  code={`// Subscribe to auth changes
-db.auth.subscribe((userId) => {
-  if (userId) {
-    console.log('User logged in:', userId);
-  } else {
-    console.log('User logged out');
-  }
-});
+  code={`await db.auth.signOut();`}
+  lang="typescript"
+/>
 
-// Sign out
-await db.auth.signOut();`}
-lang="typescript"
+### Reacting to Auth State
+
+You can subscribe to authentication state changes to update your UI dynamically. The callback receives the user ID when authenticated, or `null` when signed out.
+
+<CodeBlock
+  code={`import { createSignal, onCleanup } from 'solid-js';
+
+function MyComponent() {
+  const [userId, setUserId] = createSignal<string | null>(null);
+  
+  // Subscribe to auth state changes
+  const unsubscribe = db.auth.subscribe((uid) => {
+    setUserId(uid);
+    if (uid) {
+      console.log('User logged in:', uid);
+    } else {
+      console.log('User logged out');
+    }
+  });
+  
+  // Clean up subscription
+  onCleanup(() => unsubscribe());
+  
+  return <div>User ID: {userId() || 'Not logged in'}</div>;
+}`}
+  lang="typescript"
 />
 
 ## Third-Party Providers

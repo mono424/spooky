@@ -3,10 +3,6 @@ layout: ../../layouts/DocsLayout.astro
 title: Installation
 ---
 
-import Warning from '../../components/ui/Warning.astro';
-
-<Warning>This guide is currently under construction. 🚧</Warning>
-
 Getting started with Spooky involves setting up the CLI tool and configuring your project.
 
 ## Prerequisites
@@ -14,8 +10,6 @@ Getting started with Spooky involves setting up the CLI tool and configuring you
 - **Node.js** (v18 or higher)
 - **SurrealDB** (v2.0 or higher)
 - **Rust** (for compiling modules)
-
-import CodeBlock from '../../components/ui/CodeBlock.astro';
 
 import CodeBlock from '../../components/ui/CodeBlock.astro';
 
@@ -43,12 +37,18 @@ services:
     command: start --user root --pass root file://data.db
     ports:
       - "8000:8000"
+    volumes:
+      - ./data:/data
 
-spooky-sidecar:
-image: ghcr.io/spooky-org/sidecar:latest
-environment: - SURREAL_URL=ws://surrealdb:8000 - SURREAL_USER=root - SURREAL_PASS=root # Sidecar runs as a backend daemon
-depends_on: - surrealdb`}
-lang="yaml"
+  spooky-sidecar:
+    image: ghcr.io/spooky-org/sidecar:latest
+    environment:
+      - SURREAL_URL=ws://surrealdb:8000
+      - SURREAL_USER=root
+      - SURREAL_PASS=root
+    depends_on:
+      - surrealdb`}
+  lang="yaml"
 />
 
 Run it with:
