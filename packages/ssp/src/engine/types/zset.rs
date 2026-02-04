@@ -230,7 +230,7 @@ impl ZSetMembershipOps for ZSet {
                 diff.insert(key.clone(), 1);
             }
         }
-        
+
         // Records in self but not in target
         for (key, &weight) in self.iter() {
             if weight > 0 && !target.get(key).map(|&w| w > 0).unwrap_or(false) {
@@ -244,10 +244,10 @@ impl ZSetMembershipOps for ZSet {
     fn membership_diff(&self, target: &ZSet) -> (Vec<SmolStr>, Vec<SmolStr>) {
         let mut diff_set = FastMap::default();
         self.membership_diff_into(target, &mut diff_set);
-        
+
         let mut additions = Vec::new();
         let mut removals = Vec::new();
-        
+
         for (key, weight) in diff_set {
             if weight > 0 {
                 additions.push(key);
@@ -263,7 +263,7 @@ impl ZSetMembershipOps for ZSet {
     fn normalize_to_membership(&mut self) {
         // Remove non-members first
         self.retain(|_, &mut w| w > 0);
-        
+
         // Normalize remaining to 1
         for weight in self.values_mut() {
             if *weight > 1 {
@@ -278,7 +278,7 @@ impl ZSetMembershipOps for ZSet {
 }
 
 #[cfg(test)]
-mod tests {
+mod zset_basic_types_test {
     use super::*;
 
     #[test]
@@ -295,6 +295,93 @@ mod tests {
     #[test]
     fn test_parse_zset_key() {
         assert_eq!(parse_zset_key("user:xyz123"), Some(("user", "xyz123")));
+    }
+
+    #[test]
+    fn test_make_zset_key_inline_optimization() {
+        // SmolStr inlines strings up to 23 bytes (no heap allocation)
+        // Format is "table:id", so we need table.len() + 1 + id.len() <= 23
+
+        // Test case 1: Exactly 23 chars (should be inlined)
+        // "table12345:id12345678" = 10 + 1 + 12 = 23 chars
+        let key_23 = make_zset_key("table12345", "id123dd45678");
+        assert_eq!(key_23.as_str(), "table12345:id123dd45678");
+        assert_eq!(key_23.len(), 23);
+        assert!(!key_23.is_heap_allocated());
+
+        // Test case 2: Under 23 chars (should be inlined)
+        // "user:123" = 4 + 1 + 3 = 8 chars
+        let key_short = make_zset_key("user", "123");
+        assert_eq!(key_short.as_str(), "user:123");
+        assert_eq!(key_short.len(), 8);
+        assert!(!key_short.is_heap_allocated());
+
+        // Test case 3: Minimum size (should be inlined)
+        // "a:b" = 1 + 1 + 1 = 3 chars
+        let key_min = make_zset_key("a", "b");
+        assert_eq!(key_min.as_str(), "a:b");
+        assert_eq!(key_min.len(), 3);
+        assert!(!key_min.is_heap_allocated());
+
+        // Test case 4: Over 23 chars (will be heap allocated)
+        // "verylongtable:verylongid123" = 13 + 1 + 13 = 27 chars
+        let key_long = make_zset_key("verylongtable", "verylongid123");
+        assert_eq!(key_long.as_str(), "verylongtable:verylongid123");
+        assert_eq!(key_long.len(), 27);
+        assert!(key_long.is_heap_allocated());
+
+        // Test case 5: Exactly 24 chars (just over limit, heap allocated)
+        // "table12345:id123456789" = 10 + 1 + 13 = 24 chars
+        let key_24 = make_zset_key("table12345", "id12345678999");
+        assert_eq!(key_24.as_str(), "table12345:id12345678999");
+        assert_eq!(key_24.len(), 24);
+        assert!(key_24.is_heap_allocated());
+
+        // Test case 6: Typical real-world keys (should be inlined)
+        // "user:abc123" = 4 + 1 + 6 = 11 chars
+        let key_typical = make_zset_key("user", "abc123");
+        assert!(!key_typical.is_heap_allocated());
+
+        // "post:xyz789" = 4 + 1 + 6 = 11 chars
+        let key_typical2 = make_zset_key("post", "xyz789");
+        assert!(!key_typical2.is_heap_allocated());
+
+        // "thread:12345678" = 6 + 1 + 8 = 15 chars
+        let key_typical3 = make_zset_key("thread", "12345678");
+        assert!(!key_typical3.is_heap_allocated());
+    }
+
+    #[test]
+    fn test_make_zset_key_inline_boundary() {
+        // Precisely test the 23-byte boundary
+
+        // Build keys of increasing length around the boundary
+        for total_len in 20..=26 {
+            // Split between table and id (accounting for colon)
+            let table_len = 5;
+            let id_len = total_len - table_len - 1; // -1 for colon
+
+            let table: String = "t".repeat(table_len);
+            let id: String = "i".repeat(id_len);
+
+            let key = make_zset_key(&table, &id);
+
+            assert_eq!(key.len(), total_len);
+
+            if total_len <= 23 {
+                assert!(
+                    !key.is_heap_allocated(),
+                    "Key of length {} should be inlined but was heap allocated",
+                    total_len
+                );
+            } else {
+                assert!(
+                    key.is_heap_allocated(),
+                    "Key of length {} should be heap allocated but was inlined",
+                    total_len
+                );
+            }
+        }
     }
 
     fn make_zset(items: &[(&str, i64)]) -> ZSet {
@@ -333,6 +420,11 @@ mod tests {
     fn test_weight_transition_deleted() {
         assert_eq!(WeightTransition::compute(1, 0), WeightTransition::Deleted);
         assert_eq!(WeightTransition::compute(2, -1), WeightTransition::Deleted);
+    }
+
+    #[test]
+    fn test_weight_transition_unchanged() {
+        assert_eq!(WeightTransition::compute(1, 1), WeightTransition::Unchanged);
     }
 
     #[test]

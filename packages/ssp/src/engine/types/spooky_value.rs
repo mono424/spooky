@@ -108,7 +108,7 @@ impl From<SpookyValue> for Value {
 }
 
 #[cfg(test)]
-mod test {
+mod spooky_value_tests {
     use super::*;
 
     #[test]

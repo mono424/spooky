@@ -54,7 +54,7 @@ impl<'de> Deserialize<'de> for Path {
 }
 
 #[cfg(test)]
-mod test {
+mod path_tests {
     use super::*;
 
     #[test]
