@@ -19,25 +19,11 @@ export const docsNav = [
     ],
   },
   {
-    title: 'Developer Documentation',
+    title: 'Reference',
     links: [
-      { text: 'System Overview', href: '/spooky/docs/developer/overview' },
-      { text: 'Auth Service', href: '/spooky/docs/developer/auth_service' },
-      { text: 'Sync Service', href: '/spooky/docs/developer/sync_service' },
-      { text: 'Query Manager', href: '/spooky/docs/developer/query_manager' },
-      { text: 'Mutation Manager', href: '/spooky/docs/developer/mutation_manager' },
-      { text: 'Router Service', href: '/spooky/docs/developer/router_service' },
-      { text: 'DevTools Service', href: '/spooky/docs/developer/devtools_service' },
-      { text: 'StreamProcessorService', href: '/spooky/docs/developer/stream_processor_service' },
-    ],
-  },
-  {
-    title: 'Benchmarking',
-    links: [
-      {
-        text: 'Spooky Stream Processor',
-        href: '/spooky/docs/benchmarking/spooky-stream-processor',
-      },
+      { text: 'Configuration', href: '/spooky/docs/configuration' },
+      { text: 'Deployment', href: '/spooky/docs/deployment' },
+      { text: 'Architecture', href: '/spooky/docs/architecture' },
     ],
   },
 ];
