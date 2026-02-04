@@ -6,7 +6,6 @@ title: Authentication
 import CodeBlock from '../../components/ui/CodeBlock.astro';
 import Warning from '../../components/ui/Warning.astro';
 import Note from '../../components/ui/Note.astro';
-import { authSchemaCode, authSignInCode, authSignUpCode, authStateCode } from './snippets';
 
 Authentication in Spooky is built directly into the sql schema, making it robust, typesafe, and dynamic. Because access control is defined at the database layer, your rules are consistently enforced regardless of how the data is accessed.
 
@@ -14,7 +13,28 @@ Authentication in Spooky is built directly into the sql schema, making it robust
 
 You define authentication using `DEFINE ACCESS`. This allows you to specify exactly how users sign up and sign in, and what permissions they have.
 
-<CodeBlock code={authSchemaCode} lang="sql" />
+<CodeBlock
+  code={`-- Define access scope for accounts
+DEFINE ACCESS account ON DATABASE TYPE RECORD
+  SIGNUP ( 
+    CREATE user 
+    SET username = $username,
+      password = crypto::argon2::generate($password)
+  )
+  SIGNIN (
+    SELECT * FROM user 
+    WHERE username = $username 
+      AND crypto::argon2::compare(password, $password)
+  )
+  DURATION FOR TOKEN 15m, FOR SESSION 30d;
+
+-- Permissions use the $auth variable to check the current user
+DEFINE TABLE user SCHEMAFULL
+PERMISSIONS
+FOR update, delete WHERE id = $auth.id
+FOR select, create WHERE true;`}
+lang="sql"
+/>
 
 ## Client-Side Authentication
 
@@ -22,17 +42,47 @@ Spooky provides a strongly-typed authentication service on the client. It integr
 
 ### Sign In
 
-<CodeBlock code={authSignInCode} lang="typescript" />
+<CodeBlock
+  code={`import { db } from './db';
+
+// The second argument is typesafe based on your SIGNIN definition
+await db.auth.signIn('account', {
+username: 'spooky_user',
+password: 'secure_password'
+});`}
+lang="typescript"
+/>
 
 ### Sign Up
 
-<CodeBlock code={authSignUpCode} lang="typescript" />
+<CodeBlock
+  code={`import { db } from './db';
+
+await db.auth.signUp('account', {
+username: 'new_user',
+password: 'secure_password'
+});`}
+lang="typescript"
+/>
 
 ### Reacting to Auth State
 
 You can subscribe to authentication state changes to update your UI dynamically.
 
-<CodeBlock code={authStateCode} lang="typescript" />
+<CodeBlock
+  code={`// Subscribe to auth changes
+db.auth.subscribe((userId) => {
+  if (userId) {
+    console.log('User logged in:', userId);
+  } else {
+    console.log('User logged out');
+  }
+});
+
+// Sign out
+await db.auth.signOut();`}
+lang="typescript"
+/>
 
 ## Third-Party Providers
 

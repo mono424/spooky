@@ -1,0 +1,44 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: Deployment
+---
+
+import CodeBlock from '../../components/ui/CodeBlock.astro';
+
+Deploying Spooky requires running the **Spooky Sidecar** alongside your SurrealDB instance. The Sidecar acts as the gateway for your frontend clients.
+
+## Architecture
+
+1.  **SurrealDB**: Your persistent data store.
+2.  **Spooky Sidecar**: A backend service that monitors SurrealDB for changes.
+3.  **Client**: Connects directly to SurrealDB.
+
+## Docker Compose
+
+The easiest way to deploy is using Docker Compose.
+
+<CodeBlock
+  code={`version: '3.8'
+services:
+  surrealdb:
+    image: surrealdb/surrealdb:latest
+    command: start --user root --pass root file://data.db
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+
+spooky-sidecar:
+image: ghcr.io/spooky-org/sidecar:latest
+environment: - SURREAL_URL=ws://surrealdb:8000 - SURREAL_USER=root - SURREAL_PASS=root # Optional: Secret for signing JWTs if handling auth manually - JWT_SECRET=super_secret_key # Sidecar essentially acts as a daemon, no need to expose ports to public
+depends_on: - surrealdb`}
+lang="yaml"
+/>
+
+## Environment Variables
+
+| Variable       | Description                   | Default               |
+| :------------- | :---------------------------- | :-------------------- |
+| `SURREAL_URL`  | URL of the SurrealDB instance | `ws://localhost:8000` |
+| `SURREAL_USER` | Root user for SurrealDB       | `root`                |
+| `SURREAL_PASS` | Root password for SurrealDB   | `root`                |

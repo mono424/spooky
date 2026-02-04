@@ -5,7 +5,6 @@ title: Query Data
 
 import CodeBlock from '../../components/ui/CodeBlock.astro';
 import Note from '../../components/ui/Note.astro';
-import { querySimpleCode, queryUnifiedCode, queryTypeSafetyCode, queryHooksCode } from './snippets';
 
 Querying data in Spooky is designed to be intuitive and reactive. The system handles the entire lifecycle of a query, from initialization to registration and liveness updates, ensuring your UI is always consistent with the database state.
 
@@ -19,7 +18,13 @@ Querying data in Spooky is designed to be intuitive and reactive. The system han
 
 The `db.query()` method provides a fluent interface to construct queries. It is fully typesafe based on your schema.
 
-<CodeBlock code={querySimpleCode} lang="typescript" />
+<CodeBlock
+  code={`const users = await db.query('user')
+  .select('*')
+  .filter('age > 18')
+  .all();`}
+  lang="typescript"
+/>
 
 ## Relationships
 
@@ -29,7 +34,15 @@ Spooky makes fetching related data incredibly simple with the `.related()` metho
 
 Whether you are fetching a simple 1:1 link, a 1:N collection, or traversing a complex N:M graph, the syntax remains exactly the same. Spooky uses your schema definition to determine how to fetch the data.
 
-<CodeBlock code={queryUnifiedCode} lang="typescript" />
+<CodeBlock
+  code={`// Fetch posts with their authors (1:1) and comments (1:N)
+const posts = await db.query('post')
+  .select('*')
+  .related('author', (q) => q.select('username', 'avatar'))
+  .related('comments', (q) => q.select('content'))
+  .all();`}
+  lang="typescript"
+/>
 
 <Note>
   **Magic behind the scenes:** You don't need to manually specify graph paths (e.g., `->liked->post`) or join conditions. Spooky inspects your `schema.surql` to understand that `liked` is a relation table connecting users to posts, and generates the correct query automatically.
@@ -44,7 +57,18 @@ When you use `.related()`, the return type of your query is automatically adjust
 - **Without `.related()`**: The field is a `RecordId<"table">`.
 - **With `.related()`**: The field becomes `Fetched<TableType>`.
 
-<CodeBlock code={queryTypeSafetyCode} lang="typescript" />
+- **With `.related()`**: The field becomes `Fetched<TableType>`.
+
+<CodeBlock
+  code={`const post = posts[0];
+
+// ✅ TypeScript knows this is available
+console.log(post.author.username);
+
+// ❌ Error: Property 'email' does not exist on type 'User' (we only selected username/avatar)
+console.log(post.author.email);`}
+lang="typescript"
+/>
 
 This ensures you can never accidentally access a property on a relation that hasn't been fetched. TypeScript will catch the error at compile time.
 
@@ -52,4 +76,21 @@ This ensures you can never accidentally access a property on a relation that has
 
 For reactive applications, Spooky provides hooks that automatically update your component when the data changes.
 
-<CodeBlock code={queryHooksCode} lang="typescript" />
+<CodeBlock
+  code={`import { useQuery } from '@spooky/client-solid';
+
+const UserList = () => {
+// Automatically re-renders when users change
+const users = useQuery(() => db.query('user').select('\*').all());
+
+return (
+
+<ul>
+<For each={users.data}>
+{(user) => <li>{user.username}</li>}
+</For>
+</ul>
+);
+};`}
+lang="typescript"
+/>
