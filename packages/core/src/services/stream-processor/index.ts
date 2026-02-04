@@ -26,6 +26,7 @@ interface QueryPlanConfig {
 export interface StreamUpdate {
   queryHash: string;
   localArray: RecordVersionArray;
+  op?: 'CREATE' | 'UPDATE' | 'DELETE'; // Operation type for conditional debouncing
 }
 
 // Define events map (kept for DevTools compatibility)
@@ -176,7 +177,12 @@ export class StreamProcessorService {
    * Emits 'stream_update' event if materialized views are affected.
    * @param isOptimistic true = local mutation (increment versions), false = remote sync (keep versions)
    */
-  ingest(table: string, op: string, id: string, record: any): WasmStreamUpdate[] {
+  ingest(
+    table: string,
+    op: 'CREATE' | 'UPDATE' | 'DELETE',
+    id: string,
+    record: any
+  ): WasmStreamUpdate[] {
     this.logger.debug(
       {
         table,
@@ -214,6 +220,7 @@ export class StreamProcessorService {
         const updates: StreamUpdate[] = rawUpdates.map((u: WasmStreamUpdate) => ({
           queryHash: u.query_id,
           localArray: u.result_data,
+          op: op,
         }));
         // Direct handler call instead of event
         this.notifyUpdates(updates);

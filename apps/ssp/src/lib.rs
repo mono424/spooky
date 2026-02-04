@@ -218,7 +218,7 @@ pub async fn run_server() -> anyhow::Result<()> {
 
     // Spawn job runner if there are job tables configured
     if !job_config.job_tables.is_empty() {
-        let job_runner = JobRunner::new(job_queue_rx, db.clone());
+        let job_runner = JobRunner::new(job_queue_rx, job_queue_tx.clone(), db.clone());
         tokio::spawn(async move {
             job_runner.run().await;
         });

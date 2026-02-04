@@ -1,4 +1,5 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
+import { logger } from 'hono/logger';
 import { createRoute, z as zOpenApi } from '@hono/zod-openapi';
 import { z } from 'zod';
 import { generateText, Output } from 'ai';
@@ -8,6 +9,8 @@ import { DateTime, RecordId, Surreal } from 'surrealdb';
 const model = anthropic('claude-haiku-4-5');
 
 const app = new OpenAPIHono();
+
+app.use(logger());
 
 const db = new Surreal({
   codecOptions: {
@@ -132,7 +135,7 @@ app.openapi(spookifyRoute, async (c) => {
 
     const resultAI = await generateText({
       model,
-      experimental_output: Output.object({
+      output: Output.object({
         schema: resultSchema as any,
       }),
       prompt: `Spookify the following thread content. Make it sound haunted, eerie, and fit for a ghost story.
@@ -142,11 +145,11 @@ app.openapi(spookifyRoute, async (c) => {
       `,
     });
 
-    if (!resultAI.experimental_output) {
+    if (!resultAI.output) {
       throw new Error('Failed to generate output');
     }
 
-    const { title_suggestion, content_suggestion } = resultAI.experimental_output as z.infer<
+    const { title_suggestion, content_suggestion } = resultAI.output as z.infer<
       typeof resultSchema
     >;
 
@@ -156,6 +159,7 @@ app.openapi(spookifyRoute, async (c) => {
       content_suggestion,
     });
 
+    c.status(200);
     return c.text('ok');
   } catch (e: any) {
     console.error(e);

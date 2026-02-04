@@ -1,4 +1,4 @@
-import { createEffect, createSignal, For, Show } from 'solid-js';
+import { createSignal, For, Show } from 'solid-js';
 import { useNavigate, useParams } from '@solidjs/router';
 import { db } from '../db';
 import { CommentForm } from './CommentForm';

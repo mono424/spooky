@@ -2,7 +2,7 @@ mode: sidecar # "sidecar" or "surrealism"
 backends:
   api:
     type: http
-    baseUrl: http://localhost:3000
+    baseUrl: http://host.docker.internal:3660
     spec: ../api/openapi.yml
     method:
       type: outbox

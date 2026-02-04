@@ -174,20 +174,27 @@ export class DataModule<S extends SchemaStructure> {
    * Handle stream updates from DBSP (via CacheModule)
    */
   async onStreamUpdate(update: StreamUpdate): Promise<void> {
-    const { queryHash } = update;
+    const { queryHash, op } = update;
 
-    // Clear existing timer if any
-    if (this.debounceTimers.has(queryHash)) {
-      clearTimeout(this.debounceTimers.get(queryHash)!);
-    }
+    // Only debounce UPDATE operations
+    // CREATE and DELETE should propagate immediately
+    if (op === 'UPDATE') {
+      // Clear existing timer if any
+      if (this.debounceTimers.has(queryHash)) {
+        clearTimeout(this.debounceTimers.get(queryHash)!);
+      }
 
-    // Set new timer
-    const timer = setTimeout(async () => {
-      this.debounceTimers.delete(queryHash);
+      // Set new timer
+      const timer = setTimeout(async () => {
+        this.debounceTimers.delete(queryHash);
+        await this.processStreamUpdate(update);
+      }, this.streamDebounceTime);
+
+      this.debounceTimers.set(queryHash, timer);
+    } else {
+      // CREATE and DELETE - process immediately
       await this.processStreamUpdate(update);
-    }, this.streamDebounceTime);
-
-    this.debounceTimers.set(queryHash, timer);
+    }
   }
 
   private async processStreamUpdate(update: StreamUpdate): Promise<void> {

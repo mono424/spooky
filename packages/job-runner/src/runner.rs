@@ -11,12 +11,13 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct JobRunner<C: Connection> {
     queue_rx: mpsc::Receiver<JobEntry>,
+    queue_tx: mpsc::Sender<JobEntry>,
     db: Arc<Surreal<C>>,
     http_client: reqwest::Client,
 }
 
 impl<C: Connection> JobRunner<C> {
-    pub fn new(queue_rx: mpsc::Receiver<JobEntry>, db: Arc<Surreal<C>>) -> Self {
+    pub fn new(queue_rx: mpsc::Receiver<JobEntry>, queue_tx: mpsc::Sender<JobEntry>, db: Arc<Surreal<C>>) -> Self {
         let http_client = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .build()
@@ -24,6 +25,7 @@ impl<C: Connection> JobRunner<C> {
 
         Self {
             queue_rx,
+            queue_tx,
             db,
             http_client,
         }
@@ -54,11 +56,19 @@ impl<C: Connection> JobRunner<C> {
 
         debug!(job_id = %job.id, url = %url, "Sending HTTP request");
 
+        // Parse payload if it's a string containing JSON
+        let payload = match &job.payload {
+            serde_json::Value::String(s) => {
+                serde_json::from_str(s).unwrap_or_else(|_| job.payload.clone())
+            }
+            _ => job.payload.clone(),
+        };
+
         // Execute HTTP request
         let result = self
             .http_client
             .post(&url)
-            .json(&job.payload)
+            .json(&payload)
             .send()
             .await;
 
@@ -68,9 +78,12 @@ impl<C: Connection> JobRunner<C> {
                 self.update_status(&job.id, "success").await?;
             }
             Ok(response) => {
+                let status = response.status();
+                let error_body = response.text().await.unwrap_or_else(|_| "Failed to read response body".to_string());
                 warn!(
                     job_id = %job.id,
-                    status = %response.status(),
+                    status = %status,
+                    error_body = %error_body,
                     "Job request failed with non-success status"
                 );
                 self.handle_failure(job).await?;
@@ -99,19 +112,26 @@ impl<C: Connection> JobRunner<C> {
                 job_id = %job.id,
                 retries = job.retries,
                 max_retries = job.max_retries,
-                delay_secs = delay.as_secs(),
+                delay_ms = delay.as_millis(),
                 "Job will be retried"
             );
 
             // Requeue with delay
+            let queue_tx = self.queue_tx.clone();
             let db = self.db.clone();
             let job_id = job.id.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(delay).await;
-                // Note: In a real implementation, we'd need to re-send to the queue
-                // For now, we'll just update the status back to pending
+                
+                // Update status to pending before re-queueing
                 if let Err(e) = update_status_helper(&db, &job_id, "pending").await {
                     error!(job_id = %job_id, error = %e, "Failed to update status for retry");
+                    return;
+                }
+                
+                // Re-queue the job
+                if let Err(e) = queue_tx.send(job).await {
+                    error!(job_id = %job_id, error = %e, "Failed to re-queue job");
                 }
             });
         } else {
@@ -168,13 +188,14 @@ async fn update_status_helper<C: Connection>(
 fn calculate_delay(retries: u32, strategy: &str) -> Duration {
     match strategy {
         "exponential" => {
-            // Exponential backoff: 2^retries seconds (2s, 4s, 8s, 16s...)
-            let secs = 2u64.saturating_pow(retries);
-            Duration::from_secs(secs)
+            // Exponential backoff: 200ms * 2^retries (200ms, 400ms, 800ms, 1.6s...)
+            let base_ms = 200u64;
+            let multiplier = 2u64.saturating_pow(retries);
+            Duration::from_millis(base_ms.saturating_mul(multiplier))
         }
         _ => {
-            // Linear backoff: 5 * (retries + 1) seconds (5s, 10s, 15s...)
-            Duration::from_secs(5 * (retries as u64 + 1))
+            // Linear backoff: 200ms * (retries + 1) (200ms, 400ms, 600ms...)
+            Duration::from_millis(200 * (retries as u64 + 1))
         }
     }
 }
