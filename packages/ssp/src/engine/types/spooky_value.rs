@@ -71,6 +71,30 @@ impl SpookyValue {
     }
 }
 
+impl From<f64> for SpookyValue {
+    fn from(n: f64) -> Self {
+        SpookyValue::Number(n)
+    }
+}
+
+impl From<bool> for SpookyValue {
+    fn from(b: bool) -> Self {
+        SpookyValue::Bool(b)
+    }
+}
+
+impl From<&str> for SpookyValue {
+    fn from(s: &str) -> Self {
+        SpookyValue::Str(SmolStr::from(s))
+    }
+}
+
+impl From<String> for SpookyValue {
+    fn from(s: String) -> Self {
+        SpookyValue::Str(SmolStr::from(s))
+    }
+}
+
 impl From<Value> for SpookyValue {
     fn from(v: Value) -> Self {
         match v {
@@ -105,6 +129,31 @@ impl From<SpookyValue> for Value {
             ),
         }
     }
+}
+
+#[macro_export]
+macro_rules! spooky_obj {
+    // Einstiegspunkt für Objekte
+    ({ $($key:expr => $val:tt),* $(,)? }) => {{
+        let mut map = FastMap::default();
+        $(
+            map.insert(
+                SmolStr::new($key),
+                SpookyValue::from(spooky_obj!(@value $val))
+            );
+        )*
+        SpookyValue::Object(map)
+    }};
+
+    // Rekursion für verschachtelte Objekte
+    (@value { $($inner:tt)* }) => {
+        spooky_obj!({ $($inner)* })
+    };
+
+    // Fallback für alles andere (Literale oder fertige SpookyValues)
+    (@value $val:expr) => {
+        $val
+    };
 }
 
 #[cfg(test)]

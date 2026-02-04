@@ -134,10 +134,10 @@ pub fn extract_number_column<'a>(
     for (key, weight) in zset {
         let val_opt = if let Some((table_name, id)) = parse_zset_key(key) {
             if let Some(t) = db.tables.get(table_name) {
-                 // Try raw ID first, then prefixed ID
-                 t.rows.get(id).or_else(|| {
-                     t.rows.get(format!("{}:{}", table_name, id).as_str())
-                 })
+                // Try raw ID first, then prefixed ID
+                t.rows
+                    .get(id)
+                    .or_else(|| t.rows.get(format!("{}:{}", table_name, id).as_str()))
             } else {
                 None
             }
@@ -319,44 +319,45 @@ impl<'a> NumericFilterConfig<'a> {
 /// Lazy numeric filter for small datasets to avoid allocation overhead of column extraction
 fn filter_numeric_lazy(upstream: &ZSet, config: &NumericFilterConfig, db: &Database) -> ZSet {
     use crate::engine::types::parse_zset_key;
-    
+
     let mut out = FastMap::default();
-    
+
     for (key, weight) in upstream {
         // Parse key
         let (table_name, id) = match parse_zset_key(key) {
-             Some(pair) => pair,
-             None => continue,
+            Some(pair) => pair,
+            None => continue,
         };
-        
+
         let table = match db.tables.get(table_name) {
-             Some(t) => t,
-             None => continue,
+            Some(t) => t,
+            None => continue,
         };
-        
+
         // Get row (using optimized lookup pattern)
-        let row_opt = table.rows.get(id).or_else(|| {
-              table.rows.get(format!("{}:{}", table_name, id).as_str()) 
-        });
-        
+        let row_opt = table
+            .rows
+            .get(id)
+            .or_else(|| table.rows.get(format!("{}:{}", table_name, id).as_str()));
+
         if let Some(row) = row_opt {
-             if let Some(SpookyValue::Number(n)) = resolve_nested_value(Some(row), config.path) {
-                 let pass = match config.op {
+            if let Some(SpookyValue::Number(n)) = resolve_nested_value(Some(row), config.path) {
+                let pass = match config.op {
                     NumericOp::Gt => *n > config.target,
                     NumericOp::Gte => *n >= config.target,
                     NumericOp::Lt => *n < config.target,
                     NumericOp::Lte => *n <= config.target,
                     NumericOp::Eq => (*n - config.target).abs() < f64::EPSILON,
                     NumericOp::Neq => (*n - config.target).abs() > f64::EPSILON,
-                 };
-                 
-                 if pass {
-                     out.insert(key.clone(), *weight);
-                 }
-             }
+                };
+
+                if pass {
+                    out.insert(key.clone(), *weight);
+                }
+            }
         }
     }
-    
+
     out
 }
 
@@ -378,4 +379,165 @@ pub fn apply_numeric_filter(upstream: &ZSet, config: &NumericFilterConfig, db: &
         out.insert(keys[idx].clone(), weights[idx]);
     }
     out
+}
+
+#[cfg(test)]
+mod resolve_nested_value_tests {
+    use super::*;
+    use crate::spooky_obj;
+
+    #[test]
+    fn test_resolve_empty_path() {
+        // Empty path should return the root unchanged
+        let root = SpookyValue::Object({
+            let mut map = FastMap::default();
+            map.insert(
+                SmolStr::new("id"),
+                SpookyValue::Str(SmolStr::new("user:123")),
+            );
+            map.insert(
+                SmolStr::new("name"),
+                SpookyValue::Str(SmolStr::new("Alice")),
+            );
+            map
+        });
+
+        let empty_path = Path::new("");
+
+        let result = resolve_nested_value(Some(&root), &empty_path);
+
+        // Should return the root object itself
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), &root);
+    }
+
+    #[test]
+    fn test_resolve_empty_path_with_primitive() {
+        // Empty path with primitive value
+        let root = SpookyValue::Str(SmolStr::new("hello"));
+        let empty_path = Path::new("");
+
+        let result = resolve_nested_value(Some(&root), &empty_path);
+
+        println!("root: {:?}", result);
+
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().as_str(), Some("hello"));
+    }
+
+    #[test]
+    fn test_resolve_empty_path_with_null() {
+        let root = SpookyValue::Null;
+        let empty_path = Path::new("");
+
+        let result = resolve_nested_value(Some(&root), &empty_path);
+
+        assert!(result.is_some());
+        assert!(result.unwrap().is_null());
+    }
+
+    #[test]
+    fn test_resolve_empty_path_with_none_root() {
+        let empty_path = Path::new("");
+
+        let result = resolve_nested_value(None, &empty_path);
+
+        // None root with empty path should return None
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_resolve_single_level() {
+        let root = SpookyValue::Object({
+            let mut map = FastMap::default();
+            map.insert(SmolStr::new("a"), SpookyValue::Number(1.00));
+            map
+        });
+        let path = Path::new("a");
+        let res = resolve_nested_value(Some(&root), &path);
+        assert!(res.is_some());
+        assert_eq!(res.unwrap().as_f64(), Some(1.0));
+    }
+
+    #[test]
+    fn test_resolve_nested() {
+        let root = SpookyValue::Object({
+            let mut map = FastMap::default();
+            let inner_obj = SpookyValue::Object({
+                let mut inner_map = FastMap::default();
+                inner_map.insert(SmolStr::new("b"), SpookyValue::Number(3.0));
+                inner_map
+            });
+            map.insert(SmolStr::new("a"), inner_obj);
+            map
+        });
+
+        let path = Path::new("a.b");
+        let res = resolve_nested_value(Some(&root), &path);
+        assert!(res.is_some());
+        assert_eq!(res.unwrap().as_f64(), Some(3.0));
+    }
+
+    #[test]
+    fn test_resolve_missing_key() {
+        let root = SpookyValue::Object({
+            let mut map = FastMap::default();
+            map.insert(SmolStr::new("a"), SpookyValue::Number(1.00));
+            map
+        });
+        let path = Path::new("b");
+        let res = resolve_nested_value(Some(&root), &path);
+        assert!(res.is_none());
+
+        let path = Path::new("a.b");
+        let res = resolve_nested_value(Some(&root), &path);
+        assert!(res.is_none());
+    }
+
+    #[test]
+    fn test_resolve_deep_nesting() {
+        // 6 levels deep: a.b.c.d.e.value
+        let root = spooky_obj!({
+            "a" => {
+                "b" => {
+                    "c" => {
+                        "d" => {
+                            "e" => {
+                                "value" => 42.0
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // Test full path resolution
+        let path = Path::new("a.b.c.d.e.value");
+        let result = resolve_nested_value(Some(&root), &path);
+        assert_eq!(result.and_then(|v| v.as_f64()), Some(42.0));
+
+        // Test partial paths at each level
+        let path_1 = Path::new("a");
+        assert!(resolve_nested_value(Some(&root), &path_1).is_some());
+
+        let path_2 = Path::new("a.b");
+        assert!(resolve_nested_value(Some(&root), &path_2).is_some());
+
+        let path_3 = Path::new("a.b.c");
+        assert!(resolve_nested_value(Some(&root), &path_3).is_some());
+
+        let path_4 = Path::new("a.b.c.d");
+        assert!(resolve_nested_value(Some(&root), &path_4).is_some());
+
+        let path_5 = Path::new("a.b.c.d.e");
+        assert!(resolve_nested_value(Some(&root), &path_5).is_some());
+
+        // Test invalid path at deep level
+        let invalid_path = Path::new("a.b.c.d.e.nonexistent");
+        assert!(resolve_nested_value(Some(&root), &invalid_path).is_none());
+
+        // Test wrong path midway
+        let wrong_path = Path::new("level1.b.wrong.d");
+        assert!(resolve_nested_value(Some(&root), &wrong_path).is_none());
+    }
 }
