@@ -1,5 +1,10 @@
 mode: sidecar # "sidecar" or "surrealism"
 backends:
-  - src/api/backend.yml
-
-        
+  api:
+    type: http
+    baseUrl: http://localhost:3000
+    spec: ../api/openapi.yml
+    method:
+      type: outbox
+      table: job
+      schema: ./src/outbox/api.surql

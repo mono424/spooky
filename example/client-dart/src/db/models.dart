@@ -493,7 +493,7 @@ DEFINE EVENT comment_created ON TABLE comment WHEN \$event = \"CREATE\" THEN
   RELATE (\$after.id)->commented_on->(\$after.thread)
 ;
 
--- Backend Schema: \"./src/api/backend.yml\"
+-- Backend Schema: api
 -- ##################################################################
 -- API OUTBOX TABLE
 -- ##################################################################

@@ -7,12 +7,14 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Deserialize)]
 pub struct SpookyConfig {
-    pub backends: Vec<String>,
+    pub backends: BTreeMap<String, BackendConfig>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct BackendConfig {
     pub spec: String,
+    #[serde(rename = "baseUrl")]
+    pub base_url: Option<String>,
     pub method: BackendMethod,
 }
 
@@ -64,55 +66,38 @@ impl BackendProcessor {
 
         let base_dir = config_path.parent().unwrap_or(Path::new("."));
 
-        for backend_rel_path in config.backends {
-            let backend_path = base_dir.join(&backend_rel_path);
-            self.process_backend(&backend_path)?;
+        for (backend_name, backend_config) in config.backends {
+            self.process_backend(&backend_name, &backend_config, base_dir)?;
         }
 
         Ok(())
     }
 
-    fn process_backend(&mut self, backend_path: &Path) -> Result<()> {
-        println!("Processing backend config: {:?}", backend_path);
+    fn process_backend(&mut self, backend_name: &str, backend_config: &BackendConfig, base_dir: &Path) -> Result<()> {
+        println!("Processing backend config: {}", backend_name);
 
-        let backend_str = fs::read_to_string(backend_path)
-            .context(format!("Failed to read backend config: {:?}", backend_path))?;
-
-        let backend_config: BackendConfig =
-            serde_yaml::from_str(&backend_str).context("Failed to parse backend config")?;
-
-        let backend_dir = backend_path.parent().unwrap_or(Path::new("."));
-
-        // 1. Append Schema
-        let schema_path = backend_dir.join(&backend_config.method.schema);
+        // 1. Append Schema - resolve path relative to spooky.yml
+        let schema_path = base_dir.join(&backend_config.method.schema);
         let schema_content = fs::read_to_string(&schema_path)
             .context(format!("Failed to read backend schema: {:?}", schema_path))?;
 
         self.schema_appends.push('\n');
         self.schema_appends
-            .push_str(&format!("-- Backend Schema: {:?}\n", backend_path));
+            .push_str(&format!("-- Backend Schema: {}\n", backend_name));
         self.schema_appends.push_str(&schema_content);
         println!("  + Appended schema from {:?}", schema_path);
 
-        // 2. Parse OpenAPI Spec
-        let spec_path = backend_dir.join(&backend_config.spec);
+        // 2. Parse OpenAPI Spec - resolve path relative to spooky.yml
+        let spec_path = base_dir.join(&backend_config.spec);
         let spec_content = fs::read_to_string(&spec_path)
             .context(format!("Failed to read openapi spec: {:?}", spec_path))?;
 
         let openapi: OpenAPI =
             serde_yaml::from_str(&spec_content).context("Failed to parse openapi spec")?;
 
-        // Extract backend name from directory name (as per requirement "api comes from the folder name")
-        // assuming backend_path is something like ".../api/backend.yml" -> "api"
-        let backend_name = backend_dir
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unknown")
-            .to_string();
-
         let mut backend_def = BackendDefinition {
             routes: BTreeMap::new(),
-            outbox_table: backend_config.method.table,
+            outbox_table: backend_config.method.table.clone(),
         };
 
         for (path, item) in openapi.paths {
@@ -191,7 +176,7 @@ impl BackendProcessor {
             }
         }
 
-        self.backend_definitions.insert(backend_name, backend_def);
+        self.backend_definitions.insert(backend_name.to_string(), backend_def);
         println!("  + Parsed OpenAPI spec from {:?}", spec_path);
 
         Ok(())

@@ -1,6 +1,0 @@
-type: http
-spec: ../../../api/openapi.yml
-method:
-  type: outbox
-  table: jobs
-  schema: ./outbox.surql
