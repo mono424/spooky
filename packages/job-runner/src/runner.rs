@@ -2,6 +2,7 @@ use crate::types::JobEntry;
 use anyhow::{Context, Result};
 use std::sync::Arc;
 use std::time::Duration;
+use serde_json::json;
 use surrealdb::{Connection, Surreal};
 use surrealdb::types::RecordId;
 use tokio::sync::mpsc;
@@ -86,11 +87,25 @@ impl<C: Connection> JobRunner<C> {
                     error_body = %error_body,
                     "Job request failed with non-success status"
                 );
-                self.handle_failure(job).await?;
+                
+                // Create error entry with code and reason
+                let error_entry = json!({
+                    "code": status.as_u16(),
+                    "reason": error_body
+                });
+                
+                self.handle_failure(job, Some(error_entry)).await?;
             }
             Err(e) => {
                 warn!(job_id = %job.id, error = %e, "Job request failed");
-                self.handle_failure(job).await?;
+                
+                // Create error entry for request error
+                let error_entry = json!({
+                    "code": 0,
+                    "reason": e.to_string()
+                });
+                
+                self.handle_failure(job, Some(error_entry)).await?;
             }
         }
 
@@ -98,8 +113,13 @@ impl<C: Connection> JobRunner<C> {
     }
 
     /// Handle job failure - retry or mark as failed
-    async fn handle_failure(&self, mut job: JobEntry) -> Result<()> {
+    async fn handle_failure(&self, mut job: JobEntry, error_entry: Option<serde_json::Value>) -> Result<()> {
         job.retries += 1;
+
+        // Append error to database if provided
+        if let Some(error) = error_entry {
+            self.append_error(&job.id, error).await?;
+        }
 
         if job.retries < job.max_retries {
             // Increment retries in database
@@ -145,6 +165,21 @@ impl<C: Connection> JobRunner<C> {
 
         Ok(())
     }
+    
+    /// Append error to the errors array in database
+    async fn append_error(&self, job_id: &str, error: serde_json::Value) -> Result<()> {
+        let record_id = RecordId::parse_simple(job_id)
+            .context(format!("Invalid job ID: {}", job_id))?;
+
+        self.db
+            .query("UPDATE $id SET errors = array::append(errors, $error), updated_at = time::now()")
+            .bind(("id", record_id))
+            .bind(("error", error))
+            .await
+            .context("Failed to append error")?;
+
+        Ok(())
+    }
 
     /// Update job status in database
     async fn update_status(&self, job_id: &str, status: &str) -> Result<()> {
@@ -157,7 +192,7 @@ impl<C: Connection> JobRunner<C> {
             .context(format!("Invalid job ID: {}", job_id))?;
 
         self.db
-            .query("UPDATE $id SET retries = retries + 1")
+            .query("UPDATE $id SET retries = retries + 1, updated_at = time::now()")
             .bind(("id", record_id))
             .await
             .context("Failed to increment retries")?;
@@ -175,7 +210,7 @@ async fn update_status_helper<C: Connection>(
     let record_id = RecordId::parse_simple(job_id)
         .context(format!("Invalid job ID: {}", job_id))?;
 
-    db.query("UPDATE $id SET status = $status")
+    db.query("UPDATE $id SET status = $status, updated_at = time::now()")
         .bind(("id", record_id))
         .bind(("status", status.to_string()))
         .await

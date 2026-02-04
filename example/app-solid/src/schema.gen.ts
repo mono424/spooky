@@ -27,13 +27,14 @@ export const schema = {
         id: { type: 'string' as const, recordId: true, optional: false },
         assigned_to: { type: 'string' as const, recordId: true, optional: false },
         created_at: { type: 'string' as const, dateTime: true, optional: true },
+        errors: { type: 'string' as const, optional: false },
         max_retries: { type: 'number' as const, optional: false },
         path: { type: 'string' as const, optional: false },
         payload: { type: 'string' as const, optional: false },
         retries: { type: 'number' as const, optional: false },
         retry_strategy: { type: 'string' as const, optional: false },
         status: { type: 'string' as const, optional: false },
-        updated_at: { type: 'string' as const, dateTime: true, optional: true },
+        updated_at: { type: 'string' as const, dateTime: true, optional: false },
       },
       primaryKey: ['id'] as const
     },
@@ -234,27 +235,38 @@ DEFINE EVENT comment_created ON TABLE comment WHEN $event = "CREATE" THEN
 DEFINE TABLE job SCHEMAFULL
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
-DEFINE FIELD assigned_to ON TABLE job TYPE option<record<thread>>;
+DEFINE FIELD assigned_to ON TABLE job TYPE option<record<thread>>
+PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD path ON TABLE job TYPE option<string>;
+DEFINE FIELD path ON TABLE job TYPE option<string>
+PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD payload ON TABLE job TYPE any;
+DEFINE FIELD payload ON TABLE job TYPE any
+PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD retries ON TABLE job TYPE option<int> DEFAULT 0;
+DEFINE FIELD retries ON TABLE job TYPE option<int> DEFAULT ALWAYS 0
+PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD max_retries ON TABLE job TYPE option<int> DEFAULT 3;
+DEFINE FIELD max_retries ON TABLE job TYPE option<int> DEFAULT ALWAYS 3;
 
-DEFINE FIELD retry_strategy ON TABLE job TYPE option<string> DEFAULT "linear"
-ASSERT $value IN ["linear", "exponential"];
+DEFINE FIELD retry_strategy ON TABLE job TYPE option<string> DEFAULT ALWAYS "linear"
+ASSERT $value IN ["linear", "exponential"]
+PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD status ON TABLE job TYPE option<string> DEFAULT "pending"
-ASSERT $value IN ["pending", "processing", "success", "failed"];
+DEFINE FIELD status ON TABLE job TYPE option<string> DEFAULT ALWAYS "pending"
+ASSERT $value IN ["pending", "processing", "success", "failed"]
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD errors ON TABLE job TYPE option<array<object>> DEFAULT ALWAYS []
+PERMISSIONS FOR select, create, update WHERE true;
 
 DEFINE FIELD updated_at ON TABLE job TYPE option<datetime>
-VALUE time::now();
+DEFAULT ALWAYS time::now()
+PERMISSIONS FOR select, create, update WHERE true;
 
 DEFINE FIELD created_at ON TABLE job TYPE option<datetime>
-VALUE time::now();
+VALUE time::now()
+PERMISSIONS FOR select, create, update WHERE true;
 
 -- ==================================================
 -- SPOOKY INCANTATION

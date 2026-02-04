@@ -1,6 +1,6 @@
 import { RecordId } from 'surrealdb';
 import { RemoteDatabaseService } from '../../services/database/index.js';
-import { CacheModule, RecordWithId } from '../cache/index.js';
+import { CacheModule, CacheRecord, RecordWithId } from '../cache/index.js';
 import { RecordVersionDiff } from '../../types.js';
 import { Logger } from '../../services/logger/index.js';
 import { SyncEventTypes, createSyncEventSystem } from './events/index.js';
@@ -62,7 +62,7 @@ export class SyncEngine {
     );
 
     // Prepare batch for cache (which handles both DB and DBSP)
-    const cacheBatch = [];
+    const cacheBatch: CacheRecord[] = [];
 
     for (const { spooky_rv, ...record } of remoteResults) {
       const fullId = encodeRecordId(record.id);
@@ -103,7 +103,7 @@ export class SyncEngine {
       cacheBatch.push({
         table,
         op: isAdded ? 'CREATE' : 'UPDATE',
-        id: fullId,
+        // id: fullId,
         record,
         version: spooky_rv,
       });

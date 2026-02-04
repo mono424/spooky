@@ -24,7 +24,7 @@
     "@opentelemetry/semantic-conventions": "^1.39.0",
     "@spooky/query-builder": "workspace:*",
     "@spooky/ssp-wasm": "workspace:*",
-    "@surrealdb/wasm": "^2.4.0",
+    "@surrealdb/wasm": "^2.6.0",
     "fast-json-patch": "^3.1.1",
     "pino": "^10.1.0",
     "surrealdb": "2.0.0-alpha.15"

@@ -13,7 +13,7 @@ export interface QueryConfig {
 
 export interface CacheRecord {
   table: string;
-  op: string;
+  op: 'CREATE' | 'UPDATE' | 'DELETE';
   record: RecordWithId;
   version: number;
 }

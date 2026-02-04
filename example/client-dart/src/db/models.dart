@@ -122,6 +122,7 @@ class Job {
     ///Record ID of table: thread
     String assignedTo;
     DateTime? createdAt;
+    List<dynamic> errors;
     
     ///Record ID
     String id;
@@ -137,11 +138,12 @@ class Job {
     
     ///Assert: $value INSIDE ['pending', 'processing', 'success', 'failed']
     String status;
-    DateTime? updatedAt;
+    DateTime updatedAt;
 
     Job({
         required this.assignedTo,
         this.createdAt,
+        required this.errors,
         required this.id,
         required this.maxRetries,
         required this.path,
@@ -149,12 +151,13 @@ class Job {
         required this.retries,
         required this.retryStrategy,
         required this.status,
-        this.updatedAt,
+        required this.updatedAt,
     });
 
     factory Job.fromJson(Map<String, dynamic> json) => Job(
         assignedTo: json["assigned_to"],
         createdAt: json["created_at"] == null ? null : DateTime.parse(json["created_at"]),
+        errors: List<dynamic>.from(json["errors"].map((x) => x)),
         id: json["id"],
         maxRetries: json["max_retries"],
         path: json["path"],
@@ -162,12 +165,13 @@ class Job {
         retries: json["retries"],
         retryStrategy: json["retry_strategy"],
         status: json["status"],
-        updatedAt: json["updated_at"] == null ? null : DateTime.parse(json["updated_at"]),
+        updatedAt: DateTime.parse(json["updated_at"]),
     );
 
     Map<String, dynamic> toJson() => {
         "assigned_to": assignedTo,
         "created_at": createdAt?.toIso8601String(),
+        "errors": List<dynamic>.from(errors.map((x) => x)),
         "id": id,
         "max_retries": maxRetries,
         "path": path,
@@ -175,7 +179,7 @@ class Job {
         "retries": retries,
         "retry_strategy": retryStrategy,
         "status": status,
-        "updated_at": updatedAt?.toIso8601String(),
+        "updated_at": updatedAt.toIso8601String(),
     };
 }
 
@@ -501,27 +505,38 @@ DEFINE EVENT comment_created ON TABLE comment WHEN \$event = \"CREATE\" THEN
 DEFINE TABLE job SCHEMAFULL
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
-DEFINE FIELD assigned_to ON TABLE job TYPE option<record<thread>>;
+DEFINE FIELD assigned_to ON TABLE job TYPE option<record<thread>>
+PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD path ON TABLE job TYPE option<string>;
+DEFINE FIELD path ON TABLE job TYPE option<string>
+PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD payload ON TABLE job TYPE any;
+DEFINE FIELD payload ON TABLE job TYPE any
+PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD retries ON TABLE job TYPE option<int> DEFAULT 0;
+DEFINE FIELD retries ON TABLE job TYPE option<int> DEFAULT ALWAYS 0
+PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD max_retries ON TABLE job TYPE option<int> DEFAULT 3;
+DEFINE FIELD max_retries ON TABLE job TYPE option<int> DEFAULT ALWAYS 3;
 
-DEFINE FIELD retry_strategy ON TABLE job TYPE option<string> DEFAULT \"linear\"
-ASSERT \$value IN [\"linear\", \"exponential\"];
+DEFINE FIELD retry_strategy ON TABLE job TYPE option<string> DEFAULT ALWAYS \"linear\"
+ASSERT \$value IN [\"linear\", \"exponential\"]
+PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD status ON TABLE job TYPE option<string> DEFAULT \"pending\"
-ASSERT \$value IN [\"pending\", \"processing\", \"success\", \"failed\"];
+DEFINE FIELD status ON TABLE job TYPE option<string> DEFAULT ALWAYS \"pending\"
+ASSERT \$value IN [\"pending\", \"processing\", \"success\", \"failed\"]
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD errors ON TABLE job TYPE option<array<object>> DEFAULT ALWAYS []
+PERMISSIONS FOR select, create, update WHERE true;
 
 DEFINE FIELD updated_at ON TABLE job TYPE option<datetime>
-VALUE time::now();
+DEFAULT ALWAYS time::now()
+PERMISSIONS FOR select, create, update WHERE true;
 
 DEFINE FIELD created_at ON TABLE job TYPE option<datetime>
-VALUE time::now();
+VALUE time::now()
+PERMISSIONS FOR select, create, update WHERE true;
 
 -- ==================================================
 -- SPOOKY INCANTATION

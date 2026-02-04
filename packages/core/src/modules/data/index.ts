@@ -330,11 +330,9 @@ export class DataModule<S extends SchemaStructure> {
 
     const record: Record<string, unknown> = {
       path,
-      payload: payload as Object,
-      retries: 0,
+      payload: JSON.stringify(payload),
       max_retries: options?.max_retries ?? 3,
       retry_strategy: options?.retry_strategy ?? 'linear',
-      status: 'pending',
     };
 
     if (options?.assignedTo) {
@@ -361,9 +359,13 @@ export class DataModule<S extends SchemaStructure> {
     const params = parseParams(tableSchema.columns, data);
     const mutationId = parseRecordIdString(`_spooky_pending_mutations:${Date.now()}`);
 
+    const dataKeys = Object.keys(params).map((key) => ({ key, variable: `data_${key}` }));
+    const prefixedParams = Object.fromEntries(
+      dataKeys.map(({ key, variable }) => [variable, params[key]])
+    );
     const query = surql.seal(
       surql.tx([
-        surql.let('created', surql.create('id', 'data')),
+        surql.let('created', surql.createSet('id', dataKeys)),
         surql.createMutation('create', 'mid', 'id', 'data'),
         surql.returnObject([{ key: 'target', variable: 'created' }]),
       ])
@@ -372,8 +374,8 @@ export class DataModule<S extends SchemaStructure> {
     const [{ target }] = await withRetry(this.logger, () =>
       this.local.query<[{ target: T }]>(query, {
         id: rid,
-        data: params,
         mid: mutationId,
+        ...prefixedParams,
       })
     );
 

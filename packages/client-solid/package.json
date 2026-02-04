@@ -35,8 +35,8 @@
   "dependencies": {
     "@spooky/query-builder": "workspace:*",
     "@spooky/core": "workspace:*",
-    "@surrealdb/wasm": "^2.4.0",
-    "surrealdb": "2.0.0-alpha.15",
+    "@surrealdb/wasm": "^2.6.0",
+    "surrealdb": "2.0.0-alpha.17",
     "valtio": "^2.1.8"
   },
   "peerDependencies": {
