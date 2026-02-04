@@ -13,8 +13,7 @@ Mutating data in Spooky is performant and secure. Changes are instantly reflecte
 To create a new record, use the `db.create` method. You need to specify the record ID (or let Spooky generate one) and the data.
 
 <CodeBlock
-  code={`import { Uuid } from '@spooky/client-solid';
-import { RecordId } from 'surrealdb';
+  code={`import { Uuid } from 'surrealdb';
 
 // Generate a unique ID
 const genId = Uuid.v4().toString().replace(/-/g, '');
@@ -22,13 +21,12 @@ const threadId = \`thread:\${genId}\`;
 
 // Create the record
 await db.create(threadId, {
-title: 'My New Thread',
-content: 'This is the content of the thread.',
-author: new RecordId('user', 'current_user_id'),
-active: true,
-created_at: new Date(),
+  title: 'My New Thread',
+  content: 'This is the content of the thread.',
+  author: 'user:current_user_id', // Record ID as string
+  active: true,
 });`}
-lang="typescript"
+  lang="typescript"
 />
 
 <Warning>
@@ -38,26 +36,31 @@ lang="typescript"
 
 ## Updating Records
 
-Updating is just as simple using `db.merge` (for partial updates) or `db.update` (for full replacement).
+Use `db.update()` to update existing records. This performs a partial update (merge) by default.
 
 <CodeBlock
-  code={`// Partial update (merge)
-await db.merge('thread:123', {
+  code={`// Partial update
+await db.update('thread', 'thread:123', {
   title: 'Updated Title'
 });
 
-// Full update (replace)
-await db.update('thread:123', {
-id: 'thread:123',
-title: 'Updated Title',
-content: 'New content...',
-// ... must provide all required fields
+// Update with debouncing (useful for real-time typing)
+await db.update('thread', 'thread:123', {
+  content: 'Updated content...'
+}, {
+  debounced: {
+    key: 'recordId_x_fields',
+    delay: 500
+  }
 });`}
-lang="typescript"
+  lang="typescript"
 />
 
 ## Deleting Records
 
-To delete a record, simply call `db.delete`.
+To delete a record, call `db.delete` with the table name and record ID.
 
-<CodeBlock code={`await db.delete('thread:123');`} lang="typescript" />
+<CodeBlock 
+  code={`await db.delete('thread', 'thread:123');`} 
+  lang="typescript" 
+/>

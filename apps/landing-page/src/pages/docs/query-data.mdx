@@ -16,13 +16,19 @@ Querying data in Spooky is designed to be intuitive and reactive. The system han
 
 ## Fluent Query API
 
-The `db.query()` method provides a fluent interface to construct queries. It is fully typesafe based on your schema.
+The `db.query()` method provides a fluent interface to construct queries. It is fully type-safe based on your schema.
 
 <CodeBlock
-  code={`const users = await db.query('user')
-  .select('*')
-  .filter('age > 18')
-  .all();`}
+  code={`// Build a query - returns a query object, not the results
+const query = db.query('user')
+  .where({ age: { $gt: 18 } })
+  .orderBy('created_at', 'desc')
+  .limit(10)
+  .build();
+
+// Execute with useQuery hook (reactive)
+const usersQuery = useQuery(db, () => query);
+const users = usersQuery.data();`}
   lang="typescript"
 />
 
@@ -35,12 +41,21 @@ Spooky makes fetching related data incredibly simple with the `.related()` metho
 Whether you are fetching a simple 1:1 link, a 1:N collection, or traversing a complex N:M graph, the syntax remains exactly the same. Spooky uses your schema definition to determine how to fetch the data.
 
 <CodeBlock
-  code={`// Fetch posts with their authors (1:1) and comments (1:N)
-const posts = await db.query('post')
-  .select('*')
-  .related('author', (q) => q.select('username', 'avatar'))
-  .related('comments', (q) => q.select('content'))
-  .all();`}
+  code={`// Fetch threads with their authors (1:1)
+const threadsQuery = db.query('thread')
+  .related('author')
+  .orderBy('created_at', 'desc')
+  .limit(10)
+  .build();
+
+// Use in a component with useQuery
+const threads = useQuery(db, () => threadsQuery);
+
+// Access related data
+threads.data()?.forEach(thread => {
+  console.log(thread.title);
+  console.log(thread.author?.username); // Automatically typed!
+});`}
   lang="typescript"
 />
 
@@ -54,10 +69,8 @@ One of Spooky's strongest features is its end-to-end type safety.
 
 When you use `.related()`, the return type of your query is automatically adjusted.
 
-- **Without `.related()`**: The field is a `RecordId<"table">`.
-- **With `.related()`**: The field becomes `Fetched<TableType>`.
-
-- **With `.related()`**: The field becomes `Fetched<TableType>`.
+- **Without `.related()`**: The field is a `string` (Record ID).
+- **With `.related()`**: The field becomes the full related object with selected fields.
 
 <CodeBlock
   code={`const post = posts[0];
@@ -78,19 +91,26 @@ For reactive applications, Spooky provides hooks that automatically update your 
 
 <CodeBlock
   code={`import { useQuery } from '@spooky/client-solid';
+import { For } from 'solid-js';
+import { db } from './db';
 
-const UserList = () => {
-// Automatically re-renders when users change
-const users = useQuery(() => db.query('user').select('\*').all());
-
-return (
-
-<ul>
-<For each={users.data}>
-{(user) => <li>{user.username}</li>}
-</For>
-</ul>
-);
-};`}
-lang="typescript"
+function UserList() {
+  // Build query
+  const query = db.query('user')
+    .orderBy('created_at', 'desc')
+    .limit(20)
+    .build();
+  
+  // Hook automatically subscribes to updates
+  const usersResult = useQuery(db, () => query);
+  
+  return (
+    <ul>
+      <For each={usersResult.data() || []}>
+        {(user) => <li>{user.username}</li>}
+      </For>
+    </ul>
+  );
+}`}
+  lang="typescript"
 />

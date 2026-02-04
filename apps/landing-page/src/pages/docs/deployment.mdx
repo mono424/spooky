@@ -28,11 +28,19 @@ services:
     volumes:
       - ./data:/data
 
-spooky-sidecar:
-image: ghcr.io/spooky-org/sidecar:latest
-environment: - SURREAL_URL=ws://surrealdb:8000 - SURREAL_USER=root - SURREAL_PASS=root # Optional: Secret for signing JWTs if handling auth manually - JWT_SECRET=super_secret_key # Sidecar essentially acts as a daemon, no need to expose ports to public
-depends_on: - surrealdb`}
-lang="yaml"
+  spooky-sidecar:
+    image: ghcr.io/spooky-org/sidecar:latest
+    environment:
+      - SURREAL_URL=ws://surrealdb:8000
+      - SURREAL_USER=root
+      - SURREAL_PASS=root
+      # Optional: Secret for signing JWTs if handling auth manually
+      - JWT_SECRET=super_secret_key
+    depends_on:
+      - surrealdb
+    # Sidecar acts as a backend daemon
+    # No need to expose ports to public`}
+  lang="yaml"
 />
 
 ## Environment Variables
