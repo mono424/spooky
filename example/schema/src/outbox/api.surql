@@ -23,8 +23,8 @@ PERMISSIONS
 
 DEFINE FIELD retries ON TABLE job TYPE int DEFAULT ALWAYS 0
 PERMISSIONS
-  FOR select WHERE true
-  FOR create, update WHERE false;
+  FOR create, select WHERE true
+  FOR update WHERE false;
 
 DEFINE FIELD max_retries ON TABLE job TYPE int DEFAULT ALWAYS 3;
 
@@ -37,21 +37,22 @@ PERMISSIONS
 DEFINE FIELD status ON TABLE job TYPE string DEFAULT ALWAYS "pending"
 ASSERT $value IN ["pending", "processing", "success", "failed"]
 PERMISSIONS
-  FOR select WHERE true
-  FOR create, update WHERE false;
+  FOR create, select WHERE true
+  FOR update WHERE false;
 
 DEFINE FIELD errors ON TABLE job TYPE array<object> DEFAULT ALWAYS []
 PERMISSIONS
-  FOR select, create, update WHERE false;
+  FOR create WHERE true
+  FOR select, update WHERE false;
 
 DEFINE FIELD updated_at ON TABLE job TYPE datetime
 DEFAULT ALWAYS time::now()
 PERMISSIONS
-  FOR select WHERE true
-  FOR create, update WHERE false;
+  FOR create, select WHERE true
+  FOR update WHERE false;
 
 DEFINE FIELD created_at ON TABLE job TYPE datetime
 VALUE time::now()
 PERMISSIONS
-  FOR select WHERE true
-  FOR create, update WHERE false;
+  FOR create, select WHERE true
+  FOR update WHERE false;
