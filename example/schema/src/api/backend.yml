@@ -2,5 +2,5 @@ type: http
 spec: ../../../api/openapi.yml
 method:
   type: outbox
-  table: backend_api_outbox
+  table: jobs
   schema: ./outbox.surql

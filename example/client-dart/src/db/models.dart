@@ -16,9 +16,9 @@ class Schema {
     SpookyQuery spookyQuery;
     SpookySchema spookySchema;
     SpookyStreamProcessorState spookyStreamProcessorState;
-    BackendApiOutbox backendApiOutbox;
     Comment comment;
     CommentedOn commentedOn;
+    Job job;
     Thread thread;
     User user;
 
@@ -27,9 +27,9 @@ class Schema {
         required this.spookyQuery,
         required this.spookySchema,
         required this.spookyStreamProcessorState,
-        required this.backendApiOutbox,
         required this.comment,
         required this.commentedOn,
+        required this.job,
         required this.thread,
         required this.user,
     });
@@ -39,9 +39,9 @@ class Schema {
         spookyQuery: SpookyQuery.fromJson(json["_spooky_query"]),
         spookySchema: SpookySchema.fromJson(json["_spooky_schema"]),
         spookyStreamProcessorState: SpookyStreamProcessorState.fromJson(json["_spooky_stream_processor_state"]),
-        backendApiOutbox: BackendApiOutbox.fromJson(json["backend_api_outbox"]),
         comment: Comment.fromJson(json["comment"]),
         commentedOn: CommentedOn.fromJson(json["commented_on"]),
+        job: Job.fromJson(json["job"]),
         thread: Thread.fromJson(json["thread"]),
         user: User.fromJson(json["user"]),
     );
@@ -51,73 +51,11 @@ class Schema {
         "_spooky_query": spookyQuery.toJson(),
         "_spooky_schema": spookySchema.toJson(),
         "_spooky_stream_processor_state": spookyStreamProcessorState.toJson(),
-        "backend_api_outbox": backendApiOutbox.toJson(),
         "comment": comment.toJson(),
         "commented_on": commentedOn.toJson(),
+        "job": job.toJson(),
         "thread": thread.toJson(),
         "user": user.toJson(),
-    };
-}
-
-class BackendApiOutbox {
-    
-    ///Record ID of table: thread
-    String assignedTo;
-    DateTime? createdAt;
-    
-    ///Record ID
-    String id;
-    int maxRetries;
-    String path;
-    
-    ///Any type
-    dynamic payload;
-    int retries;
-    
-    ///Assert: $value INSIDE ['linear', 'exponential']
-    String retryStrategy;
-    
-    ///Assert: $value INSIDE ['pending', 'processing', 'success', 'failed']
-    String status;
-    DateTime? updatedAt;
-
-    BackendApiOutbox({
-        required this.assignedTo,
-        this.createdAt,
-        required this.id,
-        required this.maxRetries,
-        required this.path,
-        required this.payload,
-        required this.retries,
-        required this.retryStrategy,
-        required this.status,
-        this.updatedAt,
-    });
-
-    factory BackendApiOutbox.fromJson(Map<String, dynamic> json) => BackendApiOutbox(
-        assignedTo: json["assigned_to"],
-        createdAt: json["created_at"] == null ? null : DateTime.parse(json["created_at"]),
-        id: json["id"],
-        maxRetries: json["max_retries"],
-        path: json["path"],
-        payload: json["payload"],
-        retries: json["retries"],
-        retryStrategy: json["retry_strategy"],
-        status: json["status"],
-        updatedAt: json["updated_at"] == null ? null : DateTime.parse(json["updated_at"]),
-    );
-
-    Map<String, dynamic> toJson() => {
-        "assigned_to": assignedTo,
-        "created_at": createdAt?.toIso8601String(),
-        "id": id,
-        "max_retries": maxRetries,
-        "path": path,
-        "payload": payload,
-        "retries": retries,
-        "retry_strategy": retryStrategy,
-        "status": status,
-        "updated_at": updatedAt?.toIso8601String(),
     };
 }
 
@@ -176,6 +114,68 @@ class CommentedOn {
 
     Map<String, dynamic> toJson() => {
         "id": id,
+    };
+}
+
+class Job {
+    
+    ///Record ID of table: thread
+    String assignedTo;
+    DateTime? createdAt;
+    
+    ///Record ID
+    String id;
+    int maxRetries;
+    String path;
+    
+    ///Any type
+    dynamic payload;
+    int retries;
+    
+    ///Assert: $value INSIDE ['linear', 'exponential']
+    String retryStrategy;
+    
+    ///Assert: $value INSIDE ['pending', 'processing', 'success', 'failed']
+    String status;
+    DateTime? updatedAt;
+
+    Job({
+        required this.assignedTo,
+        this.createdAt,
+        required this.id,
+        required this.maxRetries,
+        required this.path,
+        required this.payload,
+        required this.retries,
+        required this.retryStrategy,
+        required this.status,
+        this.updatedAt,
+    });
+
+    factory Job.fromJson(Map<String, dynamic> json) => Job(
+        assignedTo: json["assigned_to"],
+        createdAt: json["created_at"] == null ? null : DateTime.parse(json["created_at"]),
+        id: json["id"],
+        maxRetries: json["max_retries"],
+        path: json["path"],
+        payload: json["payload"],
+        retries: json["retries"],
+        retryStrategy: json["retry_strategy"],
+        status: json["status"],
+        updatedAt: json["updated_at"] == null ? null : DateTime.parse(json["updated_at"]),
+    );
+
+    Map<String, dynamic> toJson() => {
+        "assigned_to": assignedTo,
+        "created_at": createdAt?.toIso8601String(),
+        "id": id,
+        "max_retries": maxRetries,
+        "path": path,
+        "payload": payload,
+        "retries": retries,
+        "retry_strategy": retryStrategy,
+        "status": status,
+        "updated_at": updatedAt?.toIso8601String(),
     };
 }
 
@@ -311,9 +311,6 @@ class Thread {
     ///Record ID of table: user
     String author;
     
-    ///Reverse relationship: array of backend_api_outbox records
-    List<String>? backendApiOutboxes;
-    
     ///Reverse relationship: array of comment records
     List<String>? comments;
     
@@ -325,6 +322,9 @@ class Thread {
     ///Record ID
     String id;
     
+    ///Reverse relationship: array of job records
+    List<String>? jobs;
+    
     ///Assert: $value != NONE AND string::len($value) > 0 AND string::len($value) <= 200
     String title;
     String? titleSuggestion;
@@ -332,12 +332,12 @@ class Thread {
     Thread({
         this.active,
         required this.author,
-        this.backendApiOutboxes,
         this.comments,
         required this.content,
         this.contentSuggestion,
         this.createdAt,
         required this.id,
+        this.jobs,
         required this.title,
         this.titleSuggestion,
     });
@@ -345,12 +345,12 @@ class Thread {
     factory Thread.fromJson(Map<String, dynamic> json) => Thread(
         active: json["active"],
         author: json["author"],
-        backendApiOutboxes: json["backend_api_outboxes"] == null ? [] : List<String>.from(json["backend_api_outboxes"]!.map((x) => x)),
         comments: json["comments"] == null ? [] : List<String>.from(json["comments"]!.map((x) => x)),
         content: json["content"],
         contentSuggestion: json["content_suggestion"],
         createdAt: json["created_at"] == null ? null : DateTime.parse(json["created_at"]),
         id: json["id"],
+        jobs: json["jobs"] == null ? [] : List<String>.from(json["jobs"]!.map((x) => x)),
         title: json["title"],
         titleSuggestion: json["title_suggestion"],
     );
@@ -358,12 +358,12 @@ class Thread {
     Map<String, dynamic> toJson() => {
         "active": active,
         "author": author,
-        "backend_api_outboxes": backendApiOutboxes == null ? [] : List<dynamic>.from(backendApiOutboxes!.map((x) => x)),
         "comments": comments == null ? [] : List<dynamic>.from(comments!.map((x) => x)),
         "content": content,
         "content_suggestion": contentSuggestion,
         "created_at": createdAt?.toIso8601String(),
         "id": id,
+        "jobs": jobs == null ? [] : List<dynamic>.from(jobs!.map((x) => x)),
         "title": title,
         "title_suggestion": titleSuggestion,
     };
@@ -498,29 +498,29 @@ DEFINE EVENT comment_created ON TABLE comment WHEN \$event = \"CREATE\" THEN
 -- API OUTBOX TABLE
 -- ##################################################################
 
-DEFINE TABLE backend_api_outbox SCHEMAFULL
+DEFINE TABLE job SCHEMAFULL
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
-DEFINE FIELD assigned_to ON TABLE backend_api_outbox TYPE option<record<thread>>;
+DEFINE FIELD assigned_to ON TABLE job TYPE option<record<thread>>;
 
-DEFINE FIELD path ON TABLE backend_api_outbox TYPE option<string>;
+DEFINE FIELD path ON TABLE job TYPE option<string>;
 
-DEFINE FIELD payload ON TABLE backend_api_outbox TYPE any;
+DEFINE FIELD payload ON TABLE job TYPE any;
 
-DEFINE FIELD retries ON TABLE backend_api_outbox TYPE option<int> DEFAULT 0;
+DEFINE FIELD retries ON TABLE job TYPE option<int> DEFAULT 0;
 
-DEFINE FIELD max_retries ON TABLE backend_api_outbox TYPE option<int> DEFAULT 3;
+DEFINE FIELD max_retries ON TABLE job TYPE option<int> DEFAULT 3;
 
-DEFINE FIELD retry_strategy ON TABLE backend_api_outbox TYPE option<string> DEFAULT \"linear\"
+DEFINE FIELD retry_strategy ON TABLE job TYPE option<string> DEFAULT \"linear\"
 ASSERT \$value IN [\"linear\", \"exponential\"];
 
-DEFINE FIELD status ON TABLE backend_api_outbox TYPE option<string> DEFAULT \"pending\"
+DEFINE FIELD status ON TABLE job TYPE option<string> DEFAULT \"pending\"
 ASSERT \$value IN [\"pending\", \"processing\", \"success\", \"failed\"];
 
-DEFINE FIELD updated_at ON TABLE backend_api_outbox TYPE option<datetime>
+DEFINE FIELD updated_at ON TABLE job TYPE option<datetime>
 VALUE time::now();
 
-DEFINE FIELD created_at ON TABLE backend_api_outbox TYPE option<datetime>
+DEFINE FIELD created_at ON TABLE job TYPE option<datetime>
 VALUE time::now();
 
 -- ==================================================
@@ -603,9 +603,9 @@ DEFINE FIELD spooky_rv ON TABLE _spooky_pending_mutations TYPE int DEFAULT 0 PER
 DEFINE FIELD spooky_rv ON TABLE _spooky_query TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
 DEFINE FIELD spooky_rv ON TABLE _spooky_schema TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
 DEFINE FIELD spooky_rv ON TABLE _spooky_stream_processor_state TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
-DEFINE FIELD spooky_rv ON TABLE backend_api_outbox TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
 DEFINE FIELD spooky_rv ON TABLE comment TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
 DEFINE FIELD spooky_rv ON TABLE commented_on TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
+DEFINE FIELD spooky_rv ON TABLE job TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
 DEFINE FIELD spooky_rv ON TABLE thread TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
 DEFINE FIELD spooky_rv ON TABLE user TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
 
@@ -613,20 +613,6 @@ DEFINE FIELD spooky_rv ON TABLE user TYPE int DEFAULT 0 PERMISSIONS FOR select, 
 -- ==================================================
 -- AUTO-GENERATED SPOOKY EVENTS
 -- ==================================================
-
--- Table: backend_api_outbox Client Mutation
-DEFINE EVENT OVERWRITE _spooky_backend_api_outbox_client_mutation ON TABLE backend_api_outbox
-WHEN \$before != \$after AND \$event != \"DELETE\"
-THEN {
-    -- No-op for now. Client mutation sync logic moved to DBSP.
-};
-
--- Table: backend_api_outbox Client Deletion
-DEFINE EVENT OVERWRITE _spooky_backend_api_outbox_client_delete ON TABLE backend_api_outbox
-WHEN \$event = \"DELETE\"
-THEN {
-    -- No-op for now.
-};
 
 -- Table: comment Client Mutation
 DEFINE EVENT OVERWRITE _spooky_comment_client_mutation ON TABLE comment
@@ -637,6 +623,20 @@ THEN {
 
 -- Table: comment Client Deletion
 DEFINE EVENT OVERWRITE _spooky_comment_client_delete ON TABLE comment
+WHEN \$event = \"DELETE\"
+THEN {
+    -- No-op for now.
+};
+
+-- Table: job Client Mutation
+DEFINE EVENT OVERWRITE _spooky_job_client_mutation ON TABLE job
+WHEN \$before != \$after AND \$event != \"DELETE\"
+THEN {
+    -- No-op for now. Client mutation sync logic moved to DBSP.
+};
+
+-- Table: job Client Deletion
+DEFINE EVENT OVERWRITE _spooky_job_client_delete ON TABLE job
 WHEN \$event = \"DELETE\"
 THEN {
     -- No-op for now.

@@ -31,7 +31,7 @@ const createQuery = ({
       }
       return withAuthor.orderBy('created_at', 'desc').limit(10);
     })
-    .related('backend_api_outboxes', (q) => {
+    .related('jobs', (q) => {
       return q.where({ path: '/spookify' }).orderBy('created_at', 'desc').limit(1);
     })
     .one()
@@ -93,7 +93,12 @@ export function ThreadDetail() {
   const handleContentChange = async (newContent: string) => {
     const threadData = thread();
     if (!threadData || !threadData.id || !isAuthor()) return;
-    await db.update('thread', threadData.id, { content: newContent }, { debounced: { delay: 2000, key: 'recordId_x_fields' } });
+    await db.update(
+      'thread',
+      threadData.id,
+      { content: newContent },
+      { debounced: { delay: 2000, key: 'recordId_x_fields' } }
+    );
   };
 
   const handleAcceptTitle = async (suggestion: string) => {
@@ -102,7 +107,7 @@ export function ThreadDetail() {
 
     await db.update('thread', threadData.id, {
       title: suggestion,
-      title_suggestion: ""
+      title_suggestion: '',
     });
   };
 
@@ -111,7 +116,7 @@ export function ThreadDetail() {
     if (!threadData || !threadData.id || !isAuthor()) return;
 
     await db.update('thread', threadData.id, {
-      title_suggestion: ""
+      title_suggestion: '',
     });
   };
 
@@ -121,7 +126,7 @@ export function ThreadDetail() {
 
     await db.update('thread', threadData.id, {
       content: suggestion,
-      content_suggestion: ""
+      content_suggestion: '',
     });
   };
 
@@ -130,7 +135,7 @@ export function ThreadDetail() {
     if (!threadData || !threadData.id || !isAuthor()) return;
 
     await db.update('thread', threadData.id, {
-      content_suggestion: ""
+      content_suggestion: '',
     });
   };
 
@@ -138,7 +143,7 @@ export function ThreadDetail() {
     setSpookifySending(true);
     const threadData = thread();
     if (!threadData || !threadData.id) return;
-    
+
     try {
       await db.run('api', '/spookify', { id: threadData.id }, { assignedTo: threadData.id });
     } catch (err) {
@@ -147,7 +152,7 @@ export function ThreadDetail() {
     setSpookifySending(false);
   };
 
-  const spookifyJobLoading = () => ["pending", "processing"].includes(thread()?.backend_api_outboxes?.[0]?.status);
+  const spookifyJobLoading = () => ['pending', 'processing'].includes(thread()?.jobs?.[0]?.status);
 
   return (
     <div class="flex h-full">
@@ -164,9 +169,13 @@ export function ThreadDetail() {
           >
             <span>&lt;&lt;</span> RETURN_TO_ROOT
           </button>
-          
+
           <div class="flex items-center gap-6">
-            <SpookButton loading={spookifySending() || spookifyJobLoading()} loadingLabel="HAUNTING..." onClick={handleSpookify}>
+            <SpookButton
+              loading={spookifySending() || spookifyJobLoading()}
+              loadingLabel="HAUNTING..."
+              onClick={handleSpookify}
+            >
               SPOOKIFY
             </SpookButton>
             <div class="text-[10px] uppercase text-gray-600">
@@ -235,18 +244,18 @@ export function ThreadDetail() {
                           &gt; AI_SUGGESTION_DETECTED
                         </label>
                         <div class="flex gap-2">
-                           <button
-                             onMouseDown={() => handleAcceptTitle(threadData().title_suggestion!)}
-                             class="text-[10px] font-bold bg-yellow-500 text-black px-3 py-1 uppercase hover:bg-yellow-400 transition-colors"
-                           >
-                             [ ACCEPT ]
-                           </button>
-                           <button
-                               onMouseDown={() => handleDeclineTitle()}
-                               class="text-[10px] font-bold text-yellow-600 px-3 py-1 uppercase hover:text-yellow-400 transition-colors"
-                           >
-                             [ DECLINE ]
-                           </button>
+                          <button
+                            onMouseDown={() => handleAcceptTitle(threadData().title_suggestion!)}
+                            class="text-[10px] font-bold bg-yellow-500 text-black px-3 py-1 uppercase hover:bg-yellow-400 transition-colors"
+                          >
+                            [ ACCEPT ]
+                          </button>
+                          <button
+                            onMouseDown={() => handleDeclineTitle()}
+                            class="text-[10px] font-bold text-yellow-600 px-3 py-1 uppercase hover:text-yellow-400 transition-colors"
+                          >
+                            [ DECLINE ]
+                          </button>
                         </div>
                       </div>
                       <div class="text-xl font-bold text-yellow-100 uppercase tracking-wide">
@@ -277,18 +286,20 @@ export function ThreadDetail() {
                           &gt; AI_CONTENT_OPTIMIZATION
                         </label>
                         <div class="flex gap-2">
-                           <button
-                             onMouseDown={() => handleAcceptContent(threadData().content_suggestion!)}
-                             class="text-[10px] font-bold bg-yellow-500 text-black px-3 py-1 uppercase hover:bg-yellow-400 transition-colors"
-                           >
-                             [ ACCEPT ]
-                           </button>
-                           <button
-                               onMouseDown={() => handleDeclineContent()}
-                               class="text-[10px] font-bold text-yellow-600 px-3 py-1 uppercase hover:text-yellow-400 transition-colors"
-                           >
-                             [ DECLINE ]
-                           </button>
+                          <button
+                            onMouseDown={() =>
+                              handleAcceptContent(threadData().content_suggestion!)
+                            }
+                            class="text-[10px] font-bold bg-yellow-500 text-black px-3 py-1 uppercase hover:bg-yellow-400 transition-colors"
+                          >
+                            [ ACCEPT ]
+                          </button>
+                          <button
+                            onMouseDown={() => handleDeclineContent()}
+                            class="text-[10px] font-bold text-yellow-600 px-3 py-1 uppercase hover:text-yellow-400 transition-colors"
+                          >
+                            [ DECLINE ]
+                          </button>
                         </div>
                       </div>
                       <div class="text-sm text-yellow-100 whitespace-pre-wrap leading-relaxed border-l-2 border-yellow-500/30 pl-4">

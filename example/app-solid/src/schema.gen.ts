@@ -4,22 +4,6 @@
 export const schema = {
   tables: [
     {
-      name: 'backend_api_outbox' as const,
-      columns: {
-        id: { type: 'string' as const, recordId: true, optional: false },
-        assigned_to: { type: 'string' as const, recordId: true, optional: false },
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
-        max_retries: { type: 'number' as const, optional: false },
-        path: { type: 'string' as const, optional: false },
-        payload: { type: 'string' as const, optional: false },
-        retries: { type: 'number' as const, optional: false },
-        retry_strategy: { type: 'string' as const, optional: false },
-        status: { type: 'string' as const, optional: false },
-        updated_at: { type: 'string' as const, dateTime: true, optional: true },
-      },
-      primaryKey: ['id'] as const
-    },
-    {
       name: 'comment' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
@@ -38,6 +22,22 @@ export const schema = {
       primaryKey: ['id'] as const
     },
     {
+      name: 'job' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
+        assigned_to: { type: 'string' as const, recordId: true, optional: false },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
+        max_retries: { type: 'number' as const, optional: false },
+        path: { type: 'string' as const, optional: false },
+        payload: { type: 'string' as const, optional: false },
+        retries: { type: 'number' as const, optional: false },
+        retry_strategy: { type: 'string' as const, optional: false },
+        status: { type: 'string' as const, optional: false },
+        updated_at: { type: 'string' as const, dateTime: true, optional: true },
+      },
+      primaryKey: ['id'] as const
+    },
+    {
       name: 'thread' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
@@ -48,8 +48,8 @@ export const schema = {
         created_at: { type: 'string' as const, dateTime: true, optional: true },
         title: { type: 'string' as const, optional: false },
         title_suggestion: { type: 'string' as const, optional: true },
-        backend_api_outboxes: { type: 'string' as const, optional: true },
         comments: { type: 'string' as const, optional: true },
+        jobs: { type: 'string' as const, optional: true },
       },
       primaryKey: ['id'] as const
     },
@@ -66,12 +66,6 @@ export const schema = {
   ],
   relationships: [
     {
-      from: 'backend_api_outbox' as const,
-      field: 'assigned_to' as const,
-      to: 'thread' as const,
-      cardinality: 'one' as const
-    },
-    {
       from: 'comment' as const,
       field: 'author' as const,
       to: 'user' as const,
@@ -84,6 +78,12 @@ export const schema = {
       cardinality: 'one' as const
     },
     {
+      from: 'job' as const,
+      field: 'assigned_to' as const,
+      to: 'thread' as const,
+      cardinality: 'one' as const
+    },
+    {
       from: 'thread' as const,
       field: 'author' as const,
       to: 'user' as const,
@@ -91,14 +91,14 @@ export const schema = {
     },
     {
       from: 'thread' as const,
-      field: 'backend_api_outboxes' as const,
-      to: 'backend_api_outbox' as const,
+      field: 'comments' as const,
+      to: 'comment' as const,
       cardinality: 'many' as const
     },
     {
       from: 'thread' as const,
-      field: 'comments' as const,
-      to: 'comment' as const,
+      field: 'jobs' as const,
+      to: 'job' as const,
       cardinality: 'many' as const
     },
     {
@@ -119,7 +119,7 @@ export const schema = {
   },
   backends: {
     "api": {
-      outboxTable: 'backend_api_outbox' as const,
+      outboxTable: 'jobs' as const,
       routes: {
         "/spookify": {
           args: {
@@ -231,29 +231,29 @@ DEFINE EVENT comment_created ON TABLE comment WHEN $event = "CREATE" THEN
 -- API OUTBOX TABLE
 -- ##################################################################
 
-DEFINE TABLE backend_api_outbox SCHEMAFULL
+DEFINE TABLE job SCHEMAFULL
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
-DEFINE FIELD assigned_to ON TABLE backend_api_outbox TYPE option<record<thread>>;
+DEFINE FIELD assigned_to ON TABLE job TYPE option<record<thread>>;
 
-DEFINE FIELD path ON TABLE backend_api_outbox TYPE option<string>;
+DEFINE FIELD path ON TABLE job TYPE option<string>;
 
-DEFINE FIELD payload ON TABLE backend_api_outbox TYPE any;
+DEFINE FIELD payload ON TABLE job TYPE any;
 
-DEFINE FIELD retries ON TABLE backend_api_outbox TYPE option<int> DEFAULT 0;
+DEFINE FIELD retries ON TABLE job TYPE option<int> DEFAULT 0;
 
-DEFINE FIELD max_retries ON TABLE backend_api_outbox TYPE option<int> DEFAULT 3;
+DEFINE FIELD max_retries ON TABLE job TYPE option<int> DEFAULT 3;
 
-DEFINE FIELD retry_strategy ON TABLE backend_api_outbox TYPE option<string> DEFAULT "linear"
+DEFINE FIELD retry_strategy ON TABLE job TYPE option<string> DEFAULT "linear"
 ASSERT $value IN ["linear", "exponential"];
 
-DEFINE FIELD status ON TABLE backend_api_outbox TYPE option<string> DEFAULT "pending"
+DEFINE FIELD status ON TABLE job TYPE option<string> DEFAULT "pending"
 ASSERT $value IN ["pending", "processing", "success", "failed"];
 
-DEFINE FIELD updated_at ON TABLE backend_api_outbox TYPE option<datetime>
+DEFINE FIELD updated_at ON TABLE job TYPE option<datetime>
 VALUE time::now();
 
-DEFINE FIELD created_at ON TABLE backend_api_outbox TYPE option<datetime>
+DEFINE FIELD created_at ON TABLE job TYPE option<datetime>
 VALUE time::now();
 
 -- ==================================================
@@ -336,9 +336,9 @@ DEFINE FIELD spooky_rv ON TABLE _spooky_pending_mutations TYPE int DEFAULT 0 PER
 DEFINE FIELD spooky_rv ON TABLE _spooky_query TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
 DEFINE FIELD spooky_rv ON TABLE _spooky_schema TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
 DEFINE FIELD spooky_rv ON TABLE _spooky_stream_processor_state TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
-DEFINE FIELD spooky_rv ON TABLE backend_api_outbox TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
 DEFINE FIELD spooky_rv ON TABLE comment TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
 DEFINE FIELD spooky_rv ON TABLE commented_on TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
+DEFINE FIELD spooky_rv ON TABLE job TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
 DEFINE FIELD spooky_rv ON TABLE thread TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
 DEFINE FIELD spooky_rv ON TABLE user TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
 
@@ -346,20 +346,6 @@ DEFINE FIELD spooky_rv ON TABLE user TYPE int DEFAULT 0 PERMISSIONS FOR select, 
 -- ==================================================
 -- AUTO-GENERATED SPOOKY EVENTS
 -- ==================================================
-
--- Table: backend_api_outbox Client Mutation
-DEFINE EVENT OVERWRITE _spooky_backend_api_outbox_client_mutation ON TABLE backend_api_outbox
-WHEN $before != $after AND $event != "DELETE"
-THEN {
-    -- No-op for now. Client mutation sync logic moved to DBSP.
-};
-
--- Table: backend_api_outbox Client Deletion
-DEFINE EVENT OVERWRITE _spooky_backend_api_outbox_client_delete ON TABLE backend_api_outbox
-WHEN $event = "DELETE"
-THEN {
-    -- No-op for now.
-};
 
 -- Table: comment Client Mutation
 DEFINE EVENT OVERWRITE _spooky_comment_client_mutation ON TABLE comment
@@ -370,6 +356,20 @@ THEN {
 
 -- Table: comment Client Deletion
 DEFINE EVENT OVERWRITE _spooky_comment_client_delete ON TABLE comment
+WHEN $event = "DELETE"
+THEN {
+    -- No-op for now.
+};
+
+-- Table: job Client Mutation
+DEFINE EVENT OVERWRITE _spooky_job_client_mutation ON TABLE job
+WHEN $before != $after AND $event != "DELETE"
+THEN {
+    -- No-op for now. Client mutation sync logic moved to DBSP.
+};
+
+-- Table: job Client Deletion
+DEFINE EVENT OVERWRITE _spooky_job_client_delete ON TABLE job
 WHEN $event = "DELETE"
 THEN {
     -- No-op for now.
