@@ -16,7 +16,7 @@
 use ssp::engine::circuit::Database;
 use ssp::engine::operators::{Operator, OrderSpec, Predicate, Projection};
 use ssp::engine::types::{
-    BatchDeltas, Delta, FastMap, Path, SpookyValue, ZSet,
+    BatchDeltas, Delta, FastMap, FastHashSet, Path, SpookyValue, ZSet,
     make_zset_key,
 };
 use ssp::engine::update::{DeltaEvent, ViewResultFormat, ViewUpdate};
@@ -925,7 +925,7 @@ mod query3_tests {
         user_table.rows.insert(SmolStr::new("1"), make_user("1", "Alice Updated"));
         
         let mut batch = BatchDeltas::new();
-        batch.content_updates.insert("user".to_string(), vec![SmolStr::new("user:1")]);
+        batch.content_updates.insert("user".to_string(), FastHashSet::from_iter(vec![SmolStr::new("user:1")]));
         
         let result = view.process_batch(&batch, &db);
         
@@ -988,7 +988,7 @@ mod integration_tests {
         user_table.rows.insert(SmolStr::new("1"), make_user("1", "Alice Updated"));
         
         let mut batch = BatchDeltas::new();
-        batch.content_updates.insert("user".to_string(), vec![SmolStr::new("user:1")]);
+        batch.content_updates.insert("user".to_string(), FastHashSet::from_iter(vec![SmolStr::new("user:1")]));
         
         let r1 = view1.process_batch(&batch, &db);
         let r2 = view2.process_batch(&batch, &db);

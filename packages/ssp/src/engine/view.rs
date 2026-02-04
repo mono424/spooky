@@ -140,7 +140,7 @@ impl View {
                     .content_updates
                     .entry(delta.table.to_string())
                     .or_default()
-                    .push(delta.key.clone());
+                    .insert(delta.key.clone()); // HashSet uses insert, not push
             }
 
             return self.process_batch(&batch_deltas, db);
