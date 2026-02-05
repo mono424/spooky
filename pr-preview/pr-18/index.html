@@ -1,0 +1,850 @@
+<!DOCTYPE html><html lang="en"> <head><meta charset="utf-8"><link rel="icon" type="image/svg+xml" href="/spooky/favicon.svg"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="Astro v5.14.5"><meta name="description" content="Spooky Sync - A SurrealDB native Sync Engine"><meta property="og:type" content="website"><meta property="og:url" content="https://mono424.github.io/"><meta property="og:title" content="Spooky Sync: The SurrealDB Native Real-Time Sync Engine"><meta property="og:description" content="Build local-first, offline-ready applications with Spooky Sync. Use the power of SurrealDB to synchronize data instantly across devices."><meta property="og:image" content="https://mono424.github.io/spooky/social_card.png"><meta property="twitter:card" content="summary_large_image"><meta property="twitter:url" content="https://mono424.github.io/"><meta property="twitter:title" content="Spooky Sync: The SurrealDB Native Real-Time Sync Engine"><meta property="twitter:description" content="Build local-first, offline-ready applications with Spooky Sync. Use the power of SurrealDB to synchronize data instantly across devices."><meta property="twitter:image" content="https://mono424.github.io/spooky/social_card.png"><title>SPOOKY SYNC</title><link rel="stylesheet" href="/spooky/pr-preview/pr-18/_astro/index.BMgFu01m.css"></head> <body class="min-h-screen flex flex-col"> <div class="border-b border-white border-dashed p-4 uppercase bg-black"> <nav class="max-w-7xl mx-auto flex justify-between items-center"> <span class="font-bold tracking-widest">[ SPOOKY_SYNC ]</span> <div class="hidden md:block font-mono text-sm"> <style>astro-island,astro-slot,astro-static-slot{display:contents}</style><script>(()=>{var a=(s,i,o)=>{let r=async()=>{await(await s())()},t=typeof i.value=="object"?i.value:void 0,c={rootMargin:t==null?void 0:t.rootMargin},n=new IntersectionObserver(e=>{for(let l of e)if(l.isIntersecting){n.disconnect(),r();break}},c);for(let e of o.children)n.observe(e)};(self.Astro||(self.Astro={})).visible=a;window.dispatchEvent(new Event("astro:visible"));})();</script><script>(()=>{var A=Object.defineProperty;var g=(i,o,a)=>o in i?A(i,o,{enumerable:!0,configurable:!0,writable:!0,value:a}):i[o]=a;var d=(i,o,a)=>g(i,typeof o!="symbol"?o+"":o,a);{let i={0:t=>m(t),1:t=>a(t),2:t=>new RegExp(t),3:t=>new Date(t),4:t=>new Map(a(t)),5:t=>new Set(a(t)),6:t=>BigInt(t),7:t=>new URL(t),8:t=>new Uint8Array(t),9:t=>new Uint16Array(t),10:t=>new Uint32Array(t),11:t=>1/0*t},o=t=>{let[l,e]=t;return l in i?i[l](e):void 0},a=t=>t.map(o),m=t=>typeof t!="object"||t===null?t:Object.fromEntries(Object.entries(t).map(([l,e])=>[l,o(e)]));class y extends HTMLElement{constructor(){super(...arguments);d(this,"Component");d(this,"hydrator");d(this,"hydrate",async()=>{var b;if(!this.hydrator||!this.isConnected)return;let e=(b=this.parentElement)==null?void 0:b.closest("astro-island[ssr]");if(e){e.addEventListener("astro:hydrate",this.hydrate,{once:!0});return}let c=this.querySelectorAll("astro-slot"),n={},h=this.querySelectorAll("template[data-astro-template]");for(let r of h){let s=r.closest(this.tagName);s!=null&&s.isSameNode(this)&&(n[r.getAttribute("data-astro-template")||"default"]=r.innerHTML,r.remove())}for(let r of c){let s=r.closest(this.tagName);s!=null&&s.isSameNode(this)&&(n[r.getAttribute("name")||"default"]=r.innerHTML)}let p;try{p=this.hasAttribute("props")?m(JSON.parse(this.getAttribute("props"))):{}}catch(r){let s=this.getAttribute("component-url")||"<unknown>",v=this.getAttribute("component-export");throw v&&(s+=` (export ${v})`),console.error(`[hydrate] Error parsing props for component ${s}`,this.getAttribute("props"),r),r}let u;await this.hydrator(this)(this.Component,p,n,{client:this.getAttribute("client")}),this.removeAttribute("ssr"),this.dispatchEvent(new CustomEvent("astro:hydrate"))});d(this,"unmount",()=>{this.isConnected||this.dispatchEvent(new CustomEvent("astro:unmount"))})}disconnectedCallback(){document.removeEventListener("astro:after-swap",this.unmount),document.addEventListener("astro:after-swap",this.unmount,{once:!0})}connectedCallback(){if(!this.hasAttribute("await-children")||document.readyState==="interactive"||document.readyState==="complete")this.childrenConnectedCallback();else{let e=()=>{document.removeEventListener("DOMContentLoaded",e),c.disconnect(),this.childrenConnectedCallback()},c=new MutationObserver(()=>{var n;((n=this.lastChild)==null?void 0:n.nodeType)===Node.COMMENT_NODE&&this.lastChild.nodeValue==="astro:end"&&(this.lastChild.remove(),e())});c.observe(this,{childList:!0}),document.addEventListener("DOMContentLoaded",e)}}async childrenConnectedCallback(){let e=this.getAttribute("before-hydration-url");e&&await import(e),this.start()}async start(){let e=JSON.parse(this.getAttribute("opts")),c=this.getAttribute("client");if(Astro[c]===void 0){window.addEventListener(`astro:${c}`,()=>this.start(),{once:!0});return}try{await Astro[c](async()=>{let n=this.getAttribute("renderer-url"),[h,{default:p}]=await Promise.all([import(this.getAttribute("component-url")),n?import(n):()=>()=>{}]),u=this.getAttribute("component-export")||"default";if(!u.includes("."))this.Component=h[u];else{this.Component=h;for(let f of u.split("."))this.Component=this.Component[f]}return this.hydrator=p,this.hydrate},e,this)}catch(n){console.error(`[astro-island] Error hydrating ${this.getAttribute("component-url")}`,n)}}attributeChangedCallback(){this.hydrate()}}d(y,"observedAttributes",["props"]),customElements.get("astro-island")||customElements.define("astro-island",y)}})();</script><astro-island uid="18qKSO" prefix="r6" component-url="/spooky/pr-preview/pr-18/_astro/GitHubStars.D_3bXUaI.js" component-export="default" renderer-url="/spooky/pr-preview/pr-18/_astro/client.BO3uhwzf.js" props="{}" ssr client="visible" opts="{&quot;name&quot;:&quot;GitHubStars&quot;,&quot;value&quot;:true}" await-children><a href="https://github.com/mono424/spooky" target="_blank" rel="noreferrer" class="group inline-flex items-center gap-2 border border-white/20 bg-black px-3 py-1.5 font-mono text-xs font-bold uppercase tracking-wider text-white transition-all hover:bg-white hover:text-black hover:shadow-[4px_4px_0px_0px_rgba(255,255,255,0.5)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"><span class="flex items-center gap-2"><svg viewBox="0 0 24 24" class="fill-current h-3.5 w-3.5" aria-hidden="true"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-3.795-.735-.54-1.38-1.335-1.755-1.335-1.755-1.095-.75.075-.735.075-.735 1.215.09 1.845 1.245 1.845 1.245 1.05 1.785 2.76 1.275 3.435.975.105-.75.405-1.275.735-1.575-2.415-.27-4.95-1.215-4.95-5.43 0-1.185.42-2.16 1.11-2.94-.105-.27-.48-1.395.105-2.94 0 0 .93-.3 3.045 1.125a10.59 10.59 0 0 1 2.76-.375c.945.0.1875.1275 2.76.375 2.115-1.425 3.045-1.125 3.045-1.125.585 1.545.21 2.67.105 2.94 1.185.78 1.11 1.755 1.11 2.94 0 4.23-2.55 5.145-4.965 5.415.42.375.78 1.11.78 2.235 0 1.605-.015 2.895-.015 3.285 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12Z"></path></svg><span>Github</span><span class="text-neutral-600 transition-colors group-hover:text-black/40">|</span><span class="animate-pulse text-neutral-500">...</span></span></a><!--astro:end--></astro-island> </div> </nav> </div> <section id="home" class="min-h-screen flex items-center justify-center relative border-b border-white/10 py-24"> <div class="max-w-5xl mx-auto px-4 text-center"> <script>(()=>{var e=async t=>{await(await t())()};(self.Astro||(self.Astro={})).load=e;window.dispatchEvent(new Event("astro:load"));})();</script><astro-island uid="7vVUW" prefix="r7" component-url="/spooky/pr-preview/pr-18/_astro/AsciiGhost.B_tO-Y4p.js" component-export="AsciiGhost" renderer-url="/spooky/pr-preview/pr-18/_astro/client.BO3uhwzf.js" props="{}" ssr client="load" opts="{&quot;name&quot;:&quot;AsciiGhost&quot;,&quot;value&quot;:true}" await-children><pre class="text-[8px] sm:text-[10px] md:text-xs leading-none font-bold mb-10 whitespace-pre overflow-x-hidden text-center mx-auto text-white tracking-tighter select-none cursor-default overflow-y-hidden"> ▄▄████████▄▄ 
+ ▄██████████████▄ 
+  ████████████████
+  ████  ████  ████
+ ████████████████ 
+ ██████▀  ▀██████ 
+ ██████    ██████ 
+██████▄  ▄██████  
+████████████████  
+████████████████  
+ ██▄ ▀█▄▀ █▀ ▄█▄█ 
+ ▀   █   █   ▀ ▀ </pre><!--astro:end--></astro-island> <h1 class="text-2xl md:text-4xl font-bold mb-6 uppercase tracking-widest">
+[ SPOOKY_SYNC ]
+</h1> <div class="text-left font-mono text-xs md:text-sm max-w-xl mx-auto mb-12 border-2 border-white bg-black shadow-[5px_5px_0px_0px_#eeeeee] relative z-10"> <div class="border-b-2 border-white bg-paper text-black px-3 py-1 font-bold flex justify-between items-center uppercase"> <span>src/queries.ts</span> <span>[ TS ]</span> </div> <div class="p-6 overflow-x-auto bg-black text-gray-300"> <pre><code><span class="text-white font-bold">const</span> thread = <span class="text-white font-bold">await</span> db
+  .query(<span class="text-green-400">"thread"</span>)
+  .where(&#123;
+    id: params.id 
+  &#125;)
+  .related(<span class="text-green-400">"author"</span>)
+  .related(<span class="text-green-400">"comments"</span>, (q) => q
+    .related(<span class="text-green-400">"author"</span>)
+    .orderBy(<span class="text-green-400">"created_at"</span>, <span class="text-green-400">"desc"</span>)
+    .limit(10)
+  )
+  .one();<span class="animate-blink inline-block w-2 h-4 bg-white ml-1 align-middle"></span></code></pre> </div> </div> <div class="flex flex-col sm:flex-row gap-6 justify-center items-center"> <a href="/spooky/docs" class="border-2 border-white bg-white text-black px-12 py-3 hover:bg-black hover:text-white transition-none uppercase font-bold">
+[ VIEW_DOCS ]
+</a> <a href="https://github.com/mono424/spooky" target="_blank" class="border-2 border-white/10 px-8 py-3 hover:bg-white hover:text-black transition-none uppercase font-bold">
+[ VIEW_SOURCE ]
+</a> </div> </div> </section> <section id="features" class="pt-12 pb-24"> <div class="max-w-7xl mx-auto px-4"> <div class="grid grid-cols-1 md:grid-cols-3 gap-6"> <!-- Card 1: Offline Compatibility --> <div class="group relative bg-[#050505] border border-[#222] p-8 hover:bg-[#0a0a0a] transition-colors duration-500 overflow-hidden"> <div class="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-white/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-700"></div> <div class="relative z-10 flex flex-col h-full"> <div class="flex items-start justify-between mb-6"> <div class="text-[10px] font-mono text-gray-600 uppercase tracking-widest border border-[#333] px-2 py-1 rounded">
+01_LOCAL
+</div> <svg class="w-5 h-5 text-gray-600 group-hover:text-white transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor"> <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"></path> </svg> </div> <h3 class="text-lg font-bold uppercase tracking-wider text-gray-200 mb-3 group-hover:text-white transition-colors">
+Offline Compatibility
+</h3> <p class="font-mono text-xs text-gray-500 leading-relaxed mb-8 group-hover:text-gray-400">
+Full read/write capability without network access. Changes are queued locally and
+                synchronized automatically when connectivity returns.
+</p> <div class="mt-auto pt-4 border-t border-[#1a1a1a] flex items-center gap-2 text-[10px] font-mono text-gray-600"> <span class="w-1.5 h-1.5 rounded-full bg-gray-600 group-hover:bg-green-500 transition-colors"></span> <span>STATE: PERSISTED</span> </div> </div> </div> <!-- Card 2: Live Updates --> <div class="group relative bg-[#050505] border border-[#222] p-8 hover:bg-[#0a0a0a] transition-colors duration-500 overflow-hidden"> <div class="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-purple-500/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-700"></div> <div class="relative z-10 flex flex-col h-full"> <div class="flex items-start justify-between mb-6"> <div class="text-[10px] font-mono text-gray-600 uppercase tracking-widest border border-[#333] px-2 py-1 rounded">
+02_SYNC
+</div> <svg class="w-5 h-5 text-gray-600 group-hover:text-purple-400 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor"> <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 10V3L4 14h7v7l9-11h-7z"></path> </svg> </div> <h3 class="text-lg font-bold uppercase tracking-wider text-gray-200 mb-3 group-hover:text-white transition-colors">
+Live Updates
+</h3> <p class="font-mono text-xs text-gray-500 leading-relaxed mb-8 group-hover:text-gray-400">
+Sub-millisecond latency. Data changes propagate instantly to all connected clients
+                via incremental view maintenance.
+</p> <div class="mt-auto pt-4 border-t border-[#1a1a1a] flex items-center gap-2 text-[10px] font-mono text-gray-600"> <span class="w-1.5 h-1.5 rounded-full bg-gray-600 group-hover:bg-purple-500 transition-colors animate-pulse"></span> <span>SOCKET: CONNECTED</span> </div> </div> </div> <!-- Card 3: Developer Experience --> <div class="group relative bg-[#050505] border border-[#222] p-8 hover:bg-[#0a0a0a] transition-colors duration-500 overflow-hidden"> <div class="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-blue-500/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-700"></div> <div class="relative z-10 flex flex-col h-full"> <div class="flex items-start justify-between mb-6"> <div class="text-[10px] font-mono text-gray-600 uppercase tracking-widest border border-[#333] px-2 py-1 rounded">
+03_DX
+</div> <svg class="w-5 h-5 text-gray-600 group-hover:text-blue-400 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor"> <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"></path> </svg> </div> <h3 class="text-lg font-bold uppercase tracking-wider text-gray-200 mb-3 group-hover:text-white transition-colors">
+Developer Experience
+</h3> <p class="font-mono text-xs text-gray-500 leading-relaxed mb-8 group-hover:text-gray-400">
+Schema-first design with end-to-end type safety. Generated TypeScript definitions
+                ensure your code is always correct.
+</p> <div class="mt-auto pt-4 border-t border-[#1a1a1a] flex items-center gap-2 text-[10px] font-mono text-gray-600"> <span class="w-1.5 h-1.5 rounded-full bg-gray-600 group-hover:bg-blue-500 transition-colors"></span> <span>TYPES: STRICT</span> </div> </div> </div> </div> </div> <div class="max-w-7xl mx-auto mt-20 px-4 grid grid-cols-1 lg:grid-cols-2 gap-12 items-center"> <div> <h2 class="text-3xl font-bold mb-6 uppercase decoration-dashed underline underline-offset-8">
+README.md
+</h2> <div class="space-y-4 text-sm md:text-base font-mono"> <p> <span class="font-bold text-green-500">user@spooky:~$</span> less README.md
+</p> <p class="border-l-2 border-white pl-4 py-2">
+Spooky is a production-ready sync engine designed for modern real-time applications.
+              It bypasses traditional REST APIs in favor of direct state synchronization.
+</p> <p class="border-l-2 border-white pl-4 py-2">
+Built on SurrealDB, Spooky provides authentication-agnostic security. It allows you to
+              integrate with any identity provider while maintaining fine-grained access control.
+</p> <div class="mt-8"> <a href="https://github.com/mono424/spooky" target="_blank" class="inline-block border-2 border-white bg-black text-white px-6 py-2 hover:bg-white hover:text-black transition-none uppercase font-bold">
+[ READ_FULL_DOCS ]
+</a> </div> </div> </div> <div class="p-4 flex items-center justify-center bg-black"> <astro-island uid="r5uHj" prefix="r8" component-url="/spooky/pr-preview/pr-18/_astro/ArchitectureDiagram.BSLfoC2R.js" component-export="ArchitectureDiagram" renderer-url="/spooky/pr-preview/pr-18/_astro/client.BO3uhwzf.js" props="{}" ssr client="visible" opts="{&quot;name&quot;:&quot;ArchitectureDiagram&quot;,&quot;value&quot;:true}" await-children><div class="flex justify-center w-full"><div class="font-mono text-[10px] xs:text-xs leading-tight font-bold whitespace-pre overflow-x-auto select-none bg-black p-6 rounded border border-[#333] shadow-2xl inline-block"><div class="text-gray-500 mb-4 border-b border-[#333] pb-2 text-center tracking-widest uppercase">// SYSTEM_ARCHITECTURE_LIVE_VIEW</div><div>      [ <span class="text-blue-400 font-bold bg-blue-900/30">*WRITE*</span>  ]                  [   <span class="text-gray-500">APP B</span>  ]      </div><div>           <span class="text-gray-600">▲</span>                             <span class="text-gray-600">▲</span>            </div><div>           <span class="text-gray-600">│</span>                             <span class="text-gray-600">│</span>            </div><div>           <span class="text-gray-600">▼</span>                             <span class="text-gray-600">▼</span>            </div><div>    <span class="text-gray-600">+--------------+</span>              <span class="text-gray-600">+--------------+</span>    </div><div>    <span class="text-gray-600">|</span>  <span class="text-gray-500">LOCAL DB A</span>  <span class="text-gray-600">|</span>              <span class="text-gray-600">|</span>  <span class="text-gray-500">LOCAL DB B</span>  <span class="text-gray-600">|</span>    </div><div>    <span class="text-gray-600">+--------------+</span>              <span class="text-gray-600">+--------------+</span>    </div><div>           <span class="text-gray-600">▲</span>                             <span class="text-gray-600">▲</span>            </div><div>           <span class="text-gray-600">│</span>                             <span class="text-gray-600">│</span>            </div><div>           <span class="text-gray-600">▼</span>                             <span class="text-gray-600">▼</span>            </div><div>    <span class="text-gray-600">+--------------------------------------------+</span>    </div><div>    <span class="text-gray-600">|</span>             <span class="text-gray-500">REMOTE SURREALDB</span>               <span class="text-gray-600">|</span>    </div><div>    <span class="text-gray-600">|</span>                                            <span class="text-gray-600">|</span>    </div><div>    <span class="text-gray-600">|</span>  <span class="text-gray-600">+----------+</span>            <span class="text-gray-600">+--------------+</span>  <span class="text-gray-600">|</span>    </div><div>    <span class="text-gray-600">|</span>  <span class="text-gray-600">|</span>  <span class="text-gray-500">EVENTS</span>  <span class="text-gray-600">|</span>            <span class="text-gray-600">|</span> <span class="text-gray-500">INCANTATIONS</span> <span class="text-gray-600">|</span>  <span class="text-gray-600">|</span>    </div><div>    <span class="text-gray-600">|</span>  <span class="text-gray-600">+----------+</span>            <span class="text-gray-600">+--------------+</span>  <span class="text-gray-600">|</span>    </div><div>    <span class="text-gray-600">|</span>       <span class="text-gray-600">│</span>                          <span class="text-gray-600">▲</span>         <span class="text-gray-600">|</span>    </div><div>    <span class="text-gray-600">+-------<span class="text-gray-600">│</span>--------------------------<span class="text-gray-600">│</span>---------+</span>    </div><div>            <span class="text-gray-600">│</span>                          <span class="text-gray-600">│</span>              </div><div>            <span class="text-gray-600">▼</span>                          <span class="text-gray-600">│</span>              </div><div>    <span class="text-gray-600">+--------------------------------------------+</span>    </div><div>    <span class="text-gray-600">|</span>           <span class="text-gray-500">SPOOKY STREAM PROCESSOR</span>          <span class="text-gray-600">|</span>    </div><div>    <span class="text-gray-600">+--------------------------------------------+</span>    </div></div></div><!--astro:end--></astro-island> </div> </div> </section> <!-- SECTION 1: SCHEMA & TYPES --> <section class="py-24 relative"> <div class="absolute inset-0 opacity-[0.03] pointer-events-none" style="background-image: linear-gradient(to right, #ffffff 1px, transparent 1px), linear-gradient(to bottom, #ffffff 1px, transparent 1px); background-size: 40px 40px;"></div> <div class="max-w-7xl mx-auto px-4 relative z-10"> <div class="mb-16 text-center border-y border-white/10 pt-6"> <h2 class="text-3xl font-bold uppercase tracking-widest text-white mb-4"> SCHEMA_FIRST </h2> <p class="font-mono text-gray-500 max-w-3xl mx-auto text-sm md:text-base leading-relaxed mb-6"> Your database is your <span class="text-white">source of truth</span>. We introspect your schema to generate <span class="text-purple-400">strict TypeScript definitions</span> automatically. </p> </div> <div class="grid grid-cols-1 lg:grid-cols-12 gap-8"> <div class="lg:col-span-3 space-y-6"> <div class="border border-[#333] bg-[#0a0a0a] rounded-sm p-4 h-full min-h-[400px]"> <div class="text-[10px] uppercase tracking-widest text-gray-500 mb-4 font-bold border-b border-[#222] pb-2">
+Project Explorer
+</div> <div class="font-mono text-sm space-y-1"> <div class="text-gray-400 flex items-center gap-2"> <span class="text-gray-600">▾</span> 📁 apps
+</div> <div class="pl-4 text-gray-500 border-l border-[#222] ml-1"> <div class="py-1 cursor-pointer transition-colors">📁 solid-app</div> <div class="pl-4 border-l border-[#222] ml-1"> <div class="py-1 cursor-pointer transition-colors">📁 src</div> <div class="py-1 text-purple-400 group flex items-center justify-between"> <span>⚡ schema.gen.ts</span> </div> <div class="py-1 text-gray-600">⚙️ package.json</div> </div> <div class="py-1 cursor-pointer transition-colors block">📁 flutter-app</div> </div> <div class="text-gray-400 flex items-center gap-2 mt-2"> <span class="text-gray-600">▾</span> 📁 packages
+</div> <div class="pl-4 border-l border-[#222] ml-1"> <div class="py-1 text-gray-500">📁 schema</div> <div class="pl-4 border-l border-[#222] ml-1"> <div class="py-1 text-green-400 bg-green-900/20 -mx-2 px-2 rounded flex justify-between items-center group cursor-pointer"> <span>⚡ schema.surql</span> </div> <div class="py-1 text-gray-600">⚙️ package.json</div> </div> </div> </div> <div class="mt-8 text-xs text-gray-500 border-t border-[#222] pt-4 leading-relaxed"> <span class="text-green-500 font-bold">TIP:</span> Add a pre-commit hook to automatically
+                update all types on schema change.
+</div> </div> </div> <div class="lg:col-span-9"> <astro-island uid="Z15pFC7" prefix="r9" component-url="/spooky/pr-preview/pr-18/_astro/SchemaGenerator.BvnbKiEd.js" component-export="default" renderer-url="/spooky/pr-preview/pr-18/_astro/client.BO3uhwzf.js" props="{}" ssr client="visible" opts="{&quot;name&quot;:&quot;SchemaGenerator&quot;,&quot;value&quot;:true}" await-children><div class="border border-[#333] bg-[#050505] rounded-sm overflow-hidden shadow-2xl flex flex-col h-full"><div class="bg-[#111] border-b border-[#222] px-4 py-2 flex items-center justify-between"><div class="flex gap-2"><div class="w-3 h-3 rounded-full bg-[#333]"></div><div class="w-3 h-3 rounded-full bg-[#333]"></div></div><div class="flex text-xs font-mono text-gray-500 gap-6"><span class="text-white border-b border-white pb-0.5">Split View</span><span>100%</span></div></div><div class="grid grid-cols-1 md:grid-cols-2 h-full font-mono text-sm relative"><div class="p-6 border-r border-[#222] relative group"><div class="absolute top-0 right-0 bg-green-900/20 text-xs text-green-500 px-2 py-1 border-b border-l border-green-900/30 font-bold">INPUT</div><div class="text-gray-400 leading-relaxed"><div class="cursor-crosshair transition-all duration-300 rounded px-2 -mx-2 hover:bg-white/10 opacity-100"><p><span class="text-purple-400">DEFINE TABLE</span> user<!-- --> <span class="text-purple-400">SCHEMAFULL</span>;</p></div><div class="cursor-crosshair transition-all duration-300 rounded px-2 -mx-2 hover:bg-white/10 opacity-100"><p class="mb-4"><span class="text-purple-400">DEFINE FIELD</span> username<!-- --> <span class="text-purple-400">ON</span> user<!-- --> <span class="text-blue-400">TYPE string</span>;</p></div><div class="cursor-crosshair transition-all duration-300 rounded px-2 -mx-2 hover:bg-white/10 opacity-100"><p><span class="text-purple-400">DEFINE TABLE</span> thread<!-- --> <span class="text-purple-400">SCHEMAFULL</span>;</p></div><div class="cursor-crosshair transition-all duration-300 rounded px-2 -mx-2 hover:bg-white/10 opacity-100"><p><span class="text-purple-400">DEFINE FIELD</span> title<!-- --> <span class="text-purple-400">ON</span> thread<!-- --> <span class="text-blue-400">TYPE string</span>;</p></div><div class="cursor-crosshair transition-all duration-300 rounded px-2 -mx-2 hover:bg-white/10 opacity-100"><div class="relative"><p><span class="text-purple-400">DEFINE FIELD</span> author<!-- --> <span class="text-purple-400">ON</span> thread<!-- --> <span class="text-blue-400">TYPE record&lt;user&gt;</span>;</p></div></div></div></div><div class="hidden md:flex absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 bg-[#222] border border-[#444] rounded-full items-center justify-center z-10 text-green-500 shadow-xl pointer-events-none"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3"></path></svg></div><div class="p-6 bg-[#0a0a0a] relative"><div class="absolute top-0 right-0 bg-purple-900/20 text-xs text-purple-400 px-2 py-1 border-b border-l border-purple-900/30 font-bold">GENERATED</div><div class="text-gray-400 leading-relaxed font-mono text-[10px] md:text-sm overflow-x-auto whitespace-nowrap scrollbar-hide"><p class="text-gray-600 mb-2">// @generated by spooky-cli</p><p><span class="text-purple-400">export const</span> <span class="text-yellow-200">schema</span> = {</p><p class="pl-4"><span class="text-blue-300">tables</span>: [</p><div><div class="transition-all duration-300 rounded px-2 -mx-2 opacity-100"><p class="pl-8">{</p><p class="pl-12"><span class="text-blue-300">name</span>:<!-- --> <span class="text-green-300">&#x27;user&#x27;</span> <span class="text-purple-400">as const</span>,</p><p class="pl-12"><span class="text-blue-300">columns</span>: {</p><p class="pl-16"><span class="text-blue-300">id</span>: {<!-- --> <span class="text-blue-300">type</span>:<!-- --> <span class="text-green-300">&#x27;string&#x27;</span> <span class="text-purple-400">as const</span>,<!-- --> <span class="text-blue-300">recordId</span>:<!-- --> <span class="text-orange-400">true</span>,<!-- --> <span class="text-blue-300">optional</span>:<!-- --> <span class="text-orange-400">false</span> },</p></div><div class="transition-all duration-300 rounded px-2 -mx-2 opacity-100"><p class="pl-16"><span class="text-blue-300">username</span>: {<!-- --> <span class="text-blue-300">type</span>:<!-- --> <span class="text-green-300">&#x27;string&#x27;</span> <span class="text-purple-400">as const</span>,<!-- --> <span class="text-blue-300">optional</span>:<!-- --> <span class="text-orange-400">false</span> },</p></div><div class="transition-all duration-300 rounded px-2 -mx-2 opacity-100"><p class="pl-12">},</p><div class="relative"><p class="pl-12"><span class="text-blue-300">primaryKey</span>: [<span class="text-green-300">&#x27;id&#x27;</span>]<!-- --> <span class="text-purple-400">as const</span>,</p></div><p class="pl-8">},</p></div></div><div><div class="transition-all duration-300 rounded px-2 -mx-2 opacity-100"><p class="pl-8">{</p><p class="pl-12"><span class="text-blue-300">name</span>:<!-- --> <span class="text-green-300">&#x27;thread&#x27;</span> <span class="text-purple-400">as const</span>,</p><p class="pl-12"><span class="text-blue-300">columns</span>: {</p><p class="pl-16"><span class="text-blue-300">id</span>: {<!-- --> <span class="text-blue-300">type</span>:<!-- --> <span class="text-green-300">&#x27;string&#x27;</span> <span class="text-purple-400">as const</span>,<!-- --> <span class="text-blue-300">recordId</span>:<!-- --> <span class="text-orange-400">true</span>,<!-- --> <span class="text-blue-300">optional</span>:<!-- --> <span class="text-orange-400">false</span> },</p></div><div class="transition-all duration-300 rounded px-2 -mx-2 opacity-100"><p class="pl-16"><span class="text-blue-300">title</span>: {<!-- --> <span class="text-blue-300">type</span>:<!-- --> <span class="text-green-300">&#x27;string&#x27;</span> <span class="text-purple-400">as const</span>,<!-- --> <span class="text-blue-300">optional</span>:<!-- --> <span class="text-orange-400">false</span> },</p></div><div class="transition-all duration-300 rounded px-2 -mx-2 opacity-100"><p class="pl-16"><span class="text-blue-300">author</span>: {<!-- --> <span class="text-blue-300">type</span>:<!-- --> <span class="text-green-300">&#x27;string&#x27;</span> <span class="text-purple-400">as const</span>,<!-- --> <span class="text-blue-300">recordId</span>:<!-- --> <span class="text-orange-400">true</span>,<!-- --> <span class="text-blue-300">optional</span>:<!-- --> <span class="text-orange-400">false</span> },</p></div><div class="transition-all duration-300 rounded px-2 -mx-2 opacity-100"><p class="pl-12">},</p><div class="relative"><p class="pl-12"><span class="text-blue-300">primaryKey</span>: [<span class="text-green-300">&#x27;id&#x27;</span>]<!-- --> <span class="text-purple-400">as const</span>,</p></div><p class="pl-8">},</p></div></div><p class="pl-4">],</p><div class="transition-all duration-300 rounded px-2 -mx-2 opacity-100"><p class="pl-4"><span class="text-blue-300">relationships</span>: [</p><p class="pl-8">{</p><p class="pl-12"><span class="text-blue-300">from</span>:<!-- --> <span class="text-green-300">&#x27;thread&#x27;</span> <span class="text-purple-400">as const</span>,</p><p class="pl-12"><span class="text-blue-300">field</span>:<!-- --> <span class="text-green-300">&#x27;author&#x27;</span> <span class="text-purple-400">as const</span>,</p><p class="pl-12"><span class="text-blue-300">to</span>:<!-- --> <span class="text-green-300">&#x27;user&#x27;</span> <span class="text-purple-400">as const</span>,</p><p class="pl-12"><span class="text-blue-300">cardinality</span>:<!-- --> <span class="text-green-300">&#x27;one&#x27;</span> <span class="text-purple-400">as const</span></p><p class="pl-8">},</p><p class="pl-8 text-gray-600">...</p><p class="pl-4">]</p></div><p>};</p></div></div></div></div><!--astro:end--></astro-island> </div> </div> </div> </section> <!-- SECTION 2: REMOTE QUERYING --> <section class="py-24 border-b border-white/10 relative"> <div class="absolute inset-0 opacity-[0.03] pointer-events-none" style="background-image: linear-gradient(to right, #ffffff 1px, transparent 1px), linear-gradient(to bottom, #ffffff 1px, transparent 1px); background-size: 40px 40px;"></div> <div class="max-w-7xl mx-auto px-4 relative z-10"> <div class="mb-16 text-center border-y border-white/10 pt-6"> <h2 class="text-3xl font-bold uppercase tracking-widest text-white mb-4"> DEV_EXPERIENCE </h2> <p class="font-mono text-gray-500 max-w-3xl mx-auto text-sm md:text-base leading-relaxed mb-6"> Spooky is built by <span class="text-white">developers for developers</span> with framework-native queries with <span class="text-blue-400">full reactivity</span> and type safety. </p> </div> <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center"> <div class="order-2 lg:order-1"> <astro-island uid="ZLMjx7" prefix="r10" component-url="/spooky/pr-preview/pr-18/_astro/LiveCodeEditor.kbAdyiEf.js" component-export="LiveCodeEditor" renderer-url="/spooky/pr-preview/pr-18/_astro/client.BO3uhwzf.js" props="{&quot;filename&quot;:[0,&quot;ThreadList.tsx&quot;],&quot;initialCode&quot;:[0,&quot;import { useQuery } from \&quot;@spooky/client-solid\&quot;;\nimport { db } from \&quot;../db\&quot;;\n\nconst ThreadList = () =&gt; {\n  const result = useQuery(db, () =&gt;\n    db.query(\&quot;thread\&quot;)\n      .related(\&quot;comments\&quot;)\n      .orderBy(\&quot;created_at\&quot;, \&quot;desc\&quot;)\n      .limit(10)\n      .build()\n  );\n\n  return (\n    &lt;For each={result.data()}&gt;\n      {(thread) =&gt; (\n        &lt;div&gt;{thread.title} by {thread.author.username}&lt;/div&gt;\n      )}\n    &lt;/For&gt;\n  );\n};&quot;]}" ssr client="visible" opts="{&quot;name&quot;:&quot;LiveCodeEditor&quot;,&quot;value&quot;:true}" await-children><div class="border border-[#333] bg-[#050505] shadow-2xl flex flex-col font-mono text-sm relative overflow-visible group rounded-sm min-h-[420px]"><div class="flex justify-between items-center bg-[#111] border-b border-[#222] px-4 pt-2 text-xs select-none"><div class="flex items-center gap-2"><div class="flex gap-1.5 pb-1"><div class="w-2.5 h-2.5 rounded-full bg-[#333]"></div><div class="w-2.5 h-2.5 rounded-full bg-[#333]"></div><div class="w-2.5 h-2.5 rounded-full bg-[#333]"></div></div><div class="flex items-center gap-2 text-gray-300 bg-[#050505] px-3 py-1 border-t-2 border-green-700 ml-4"><span class="font-bold text-blue-400">TSX</span><span>ThreadList.tsx</span></div></div><div class="text-[10px] font-bold px-2 py-0.5 rounded transition-colors bg-red-900/20 text-red-500">1 ERROR</div></div><div class="relative flex-1 bg-[#050505] overflow-visible min-h-0 font-mono text-sm leading-relaxed"><div class="flex pt-4 "><div class="bg-[#0a0a0a] border-r border-[#222] text-[#444] text-right pr-3 pl-2 select-none w-12 shrink-0">1</div><div class="flex-1 px-4 whitespace-pre-wrap break-words text-gray-300"><span><span class="text-purple-400 font-bold">import</span> <span class="text-gray-500">{</span> <span class="text-blue-400">useQuery</span> <span class="text-gray-500">}</span> <span class="text-purple-400 font-bold">from</span> </span><span class="text-orange-300">"@spooky/client-solid"</span><span><span class="text-gray-500">;</span></span></div></div><div class="flex  "><div class="bg-[#0a0a0a] border-r border-[#222] text-[#444] text-right pr-3 pl-2 select-none w-12 shrink-0">2</div><div class="flex-1 px-4 whitespace-pre-wrap break-words text-gray-300"><span><span class="text-purple-400 font-bold">import</span> <span class="text-gray-500">{</span> <span class="text-blue-400">db</span> <span class="text-gray-500">}</span> <span class="text-purple-400 font-bold">from</span> </span><span class="text-orange-300">"../db"</span><span><span class="text-gray-500">;</span></span></div></div><div class="flex  "><div class="bg-[#0a0a0a] border-r border-[#222] text-[#444] text-right pr-3 pl-2 select-none w-12 shrink-0">3</div><div class="flex-1 px-4 whitespace-pre-wrap break-words text-gray-300"><br/></div></div><div class="flex  "><div class="bg-[#0a0a0a] border-r border-[#222] text-[#444] text-right pr-3 pl-2 select-none w-12 shrink-0">4</div><div class="flex-1 px-4 whitespace-pre-wrap break-words text-gray-300"><span><span class="text-purple-400 font-bold">const</span> <!-- -->ThreadList<!-- --> <!-- -->=<!-- --> <span class="text-gray-500">(</span><span class="text-gray-500">)</span> <span class="text-gray-500">=&gt;</span> <span class="text-gray-500">{</span></span></div></div><div class="flex  "><div class="bg-[#0a0a0a] border-r border-[#222] text-[#444] text-right pr-3 pl-2 select-none w-12 shrink-0">5</div><div class="flex-1 px-4 whitespace-pre-wrap break-words text-gray-300"><span>  <span class="text-purple-400 font-bold">const</span> <!-- -->result<!-- --> <!-- -->=<!-- --> <span class="text-blue-400">useQuery</span><span class="text-gray-500">(</span><span class="text-blue-400">db</span><span class="text-gray-500">,</span> <span class="text-gray-500">(</span><span class="text-gray-500">)</span> <span class="text-gray-500">=&gt;</span></span></div></div><div class="flex  "><div class="bg-[#0a0a0a] border-r border-[#222] text-[#444] text-right pr-3 pl-2 select-none w-12 shrink-0">6</div><div class="flex-1 px-4 whitespace-pre-wrap break-words text-gray-300"><span>    <span class="text-blue-400">db</span><span class="text-gray-500">.</span><span class="text-blue-400">query</span><span class="text-gray-500">(</span></span><span class="text-orange-300 inline-block z-auto relative"><span class="absolute inset-0 -bottom-2 bg-transparent z-10"></span><span class="cursor-help decoration-dotted underline decoration-white/30 underline-offset-4 hover:decoration-white/60 hover:text-white transition-all relative z-20">"thread"</span></span><span><span class="text-gray-500">)</span></span></div></div><div class="flex  "><div class="bg-[#0a0a0a] border-r border-[#222] text-[#444] text-right pr-3 pl-2 select-none w-12 shrink-0">7</div><div class="flex-1 px-4 whitespace-pre-wrap break-words text-gray-300"><span>      <span class="text-gray-500">.</span><span class="text-blue-400">related</span><span class="text-gray-500">(</span></span><span class="text-orange-300 inline-block z-auto relative"><span class="absolute inset-0 -bottom-2 bg-transparent z-10"></span><span class="cursor-pointer border-b border-dashed border-green-500/40 bg-green-500/5 hover:bg-green-500/10 hover:border-green-400 transition-colors rounded-sm px-0.5 relative z-20">"comments"</span></span><span><span class="text-gray-500">)</span></span></div></div><div class="flex  "><div class="bg-[#0a0a0a] border-r border-[#222] text-[#444] text-right pr-3 pl-2 select-none w-12 shrink-0">8</div><div class="flex-1 px-4 whitespace-pre-wrap break-words text-gray-300"><span>      <span class="text-gray-500">.</span><span class="text-blue-400">orderBy</span><span class="text-gray-500">(</span></span><span class="text-orange-300 inline-block z-auto relative"><span class="absolute inset-0 -bottom-2 bg-transparent z-10"></span><span class="cursor-pointer border-b border-dashed border-green-500/40 bg-green-500/5 hover:bg-green-500/10 hover:border-green-400 transition-colors rounded-sm px-0.5 relative z-20">"created_at"</span></span><span><span class="text-gray-500">,</span> </span><span class="text-orange-300 inline-block z-auto relative"><span class="absolute inset-0 -bottom-2 bg-transparent z-10"></span><span class="cursor-pointer border-b border-dashed border-green-500/40 bg-green-500/5 hover:bg-green-500/10 hover:border-green-400 transition-colors rounded-sm px-0.5 relative z-20">"desc"</span></span><span><span class="text-gray-500">)</span></span></div></div><div class="flex  "><div class="bg-[#0a0a0a] border-r border-[#222] text-[#444] text-right pr-3 pl-2 select-none w-12 shrink-0">9</div><div class="flex-1 px-4 whitespace-pre-wrap break-words text-gray-300"><span>      <span class="text-gray-500">.</span><span class="text-blue-400">limit</span><span class="text-gray-500">(</span>10<span class="text-gray-500">)</span></span></div></div><div class="flex  "><div class="bg-[#0a0a0a] border-r border-[#222] text-[#444] text-right pr-3 pl-2 select-none w-12 shrink-0">10</div><div class="flex-1 px-4 whitespace-pre-wrap break-words text-gray-300"><span>      <span class="text-gray-500">.</span><span class="text-blue-400">build</span><span class="text-gray-500">(</span><span class="text-gray-500">)</span></span></div></div><div class="flex  "><div class="bg-[#0a0a0a] border-r border-[#222] text-[#444] text-right pr-3 pl-2 select-none w-12 shrink-0">11</div><div class="flex-1 px-4 whitespace-pre-wrap break-words text-gray-300"><span>  <span class="text-gray-500">)</span><span class="text-gray-500">;</span></span></div></div><div class="flex  "><div class="bg-[#0a0a0a] border-r border-[#222] text-[#444] text-right pr-3 pl-2 select-none w-12 shrink-0">12</div><div class="flex-1 px-4 whitespace-pre-wrap break-words text-gray-300"><br/></div></div><div class="flex  "><div class="bg-[#0a0a0a] border-r border-[#222] text-[#444] text-right pr-3 pl-2 select-none w-12 shrink-0">13</div><div class="flex-1 px-4 whitespace-pre-wrap break-words text-gray-300"><span>  <span class="text-purple-400 font-bold">return</span> <span class="text-gray-500">(</span></span></div></div><div class="flex  "><div class="bg-[#0a0a0a] border-r border-[#222] text-[#444] text-right pr-3 pl-2 select-none w-12 shrink-0">14</div><div class="flex-1 px-4 whitespace-pre-wrap break-words text-gray-300"><span>    <span class="text-yellow-300">&lt;For</span> <!-- -->each=<span class="text-gray-500">{</span>result<span class="text-gray-500">.</span>data<span class="text-gray-500">(</span><span class="text-gray-500">)</span><span class="text-gray-500">}</span><span class="text-gray-500">&gt;</span></span></div></div><div class="flex  "><div class="bg-[#0a0a0a] border-r border-[#222] text-[#444] text-right pr-3 pl-2 select-none w-12 shrink-0">15</div><div class="flex-1 px-4 whitespace-pre-wrap break-words text-gray-300"><span>      <span class="text-gray-500">{</span><span class="text-gray-500">(</span>thread<span class="text-gray-500">)</span> <span class="text-gray-500">=&gt;</span> <span class="text-gray-500">(</span></span></div></div><div class="flex  "><div class="bg-[#0a0a0a] border-r border-[#222] text-[#444] text-right pr-3 pl-2 select-none w-12 shrink-0">16</div><div class="flex-1 px-4 whitespace-pre-wrap break-words text-gray-300"><span>        <span class="text-yellow-300">&lt;div&gt;</span><span class="text-gray-500">{</span>thread<span class="text-gray-500">.</span>title<span class="text-gray-500">}</span> <!-- -->by<!-- --> <span class="text-gray-500">{</span><span class="group relative cursor-pointer inline-block z-auto"><span class="text-gray-300 decoration-wavy underline decoration-red-500 underline-offset-2 relative z-20">thread.author.username</span></span><span class="text-gray-500">}</span><span class="text-yellow-300">&lt;/div&gt;</span></span></div></div><div class="flex  "><div class="bg-[#0a0a0a] border-r border-[#222] text-[#444] text-right pr-3 pl-2 select-none w-12 shrink-0">17</div><div class="flex-1 px-4 whitespace-pre-wrap break-words text-gray-300"><span>      <span class="text-gray-500">)</span><span class="text-gray-500">}</span></span></div></div><div class="flex  "><div class="bg-[#0a0a0a] border-r border-[#222] text-[#444] text-right pr-3 pl-2 select-none w-12 shrink-0">18</div><div class="flex-1 px-4 whitespace-pre-wrap break-words text-gray-300"><span>    <span class="text-yellow-300">&lt;/For&gt;</span></span></div></div><div class="flex  "><div class="bg-[#0a0a0a] border-r border-[#222] text-[#444] text-right pr-3 pl-2 select-none w-12 shrink-0">19</div><div class="flex-1 px-4 whitespace-pre-wrap break-words text-gray-300"><span>  <span class="text-gray-500">)</span><span class="text-gray-500">;</span></span></div></div><div class="flex  pb-4"><div class="bg-[#0a0a0a] border-r border-[#222] text-[#444] text-right pr-3 pl-2 select-none w-12 shrink-0">20</div><div class="flex-1 px-4 whitespace-pre-wrap break-words text-gray-300"><span><span class="text-gray-500">}</span><span class="text-gray-500">;</span></span></div></div></div><div class="border-t px-4 py-1.5 text-[10px] font-bold relative z-10 flex justify-between items-center transition-colors bg-red-900/10 border-red-900/50"><div class="flex gap-4"><span class="flex items-center gap-2 text-gray-500">SPOOKY_SYNC</span></div><div class="flex gap-4 text-gray-500"><span>Ln <!-- -->20<!-- -->, Col <!-- -->2</span><span>UTF-8</span><span>TypeScript Solid.js</span></div></div></div><!--astro:end--></astro-island> </div> <div class="order-1 lg:order-2 font-mono"> <div class="mb-4 relative overflow-hidden group"> <!-- Decorative background glow --> <div class="absolute -right-10 -bottom-10 w-32 h-32 bg-blue-500/5 blur-3xl rounded-full pointer-events-none"></div> <div class="border border-[#222] bg-[#080808] p-5 relative z-10"> <div class="flex items-center gap-3 mb-4"> <div class="w-8 h-8 bg-blue-900/10 border border-blue-500/20 flex items-center justify-center text-blue-500"> <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"> <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path> <path d="M5 3v4"></path> <path d="M9 3v4"></path> <path d="M3 5h4"></path> <path d="M3 9h4"></path> </svg> </div> <div> <div class="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-0.5">
+INTELLISENSE_EVERYWHERE
+</div> <div class="text-sm font-bold text-white uppercase">
+Context-Aware Autocomplete
+</div> </div> </div> <p class="text-xs text-gray-400 font-mono leading-relaxed">
+Context-aware autocomplete knows your schema inside out. It suggests sort fields,
+                  relations, and filter operations appropriate for your current query context.
+</p> </div> </div> <div class="mt-8 relative overflow-hidden group"> <!-- Decorative background glow --> <div class="absolute -right-10 -bottom-10 w-32 h-32 bg-green-500/5 blur-3xl rounded-full pointer-events-none"></div> <div class="border border-[#222] bg-[#080808] p-5 relative z-10"> <div class="flex items-center gap-3 mb-4"> <div class="w-8 h-8 bg-yellow-900/10 border border-yellow-500/20 flex items-center justify-center text-yellow-500"> <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"> <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-1 1.5-2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"></path><path d="M9 18h6"></path><path d="M10 22h4"></path> </svg> </div> <div> <div class="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-0.5">
+TYPESAFETY_EVERYWHERE
+</div> <div class="text-sm font-bold text-white uppercase">Real-Time Feedback</div> </div> </div> <p class="text-xs text-gray-400 font-mono mb-4 leading-relaxed">
+Your queries are continuously validated against your schema. Type mismatches,
+                  invalid fields, and logic errors are detected instantly and highlighted directly
+                  inside the code editor, ensuring your code is correct before execution. Try
+                  yourself and fix the type error on the left.
+</p> </div> </div> </div> </div> </div> <!-- DEVTOOLS SIMULATION SUBSECTION --> <div class="max-w-7xl mx-auto px-4 mt-24"> <div class="flex flex-col lg:flex-row gap-12 items-center"> <!-- DevTools Component (Fixed Width / Main Column) --> <div class="w-full lg:w-2/3 shadow-2xl"> <astro-island uid="Z27Ajv2" prefix="r11" component-url="/spooky/pr-preview/pr-18/_astro/DevToolsSimulation.ByRs8JPa.js" component-export="DevToolsSimulation" renderer-url="/spooky/pr-preview/pr-18/_astro/client.BO3uhwzf.js" props="{}" ssr client="visible" opts="{&quot;name&quot;:&quot;DevToolsSimulation&quot;,&quot;value&quot;:true}" await-children><style>
+.browser-window {
+  width: 100%;
+  height: 450px;
+  background: #1e1e1e;
+  border-radius: 8px;
+  box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #3e3e42;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+.browser-header {
+  background: #2d2d2d;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  border-bottom: 1px solid #1a1a1a;
+}
+
+.window-controls {
+  display: flex;
+  gap: 8px;
+}
+
+.control-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+.control-dot.red { background: #ff5f56; }
+.control-dot.yellow { background: #ffbd2e; }
+.control-dot.green { background: #27c93f; }
+
+.url-bar {
+  flex: 1;
+  background: #1a1a1a;
+  border-radius: 4px;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: #999;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #3e3e42;
+}
+
+.url-bar:hover {
+  background: #252525;
+  border-color: #555;
+  color: #ccc;
+}
+
+.browser-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+}
+
+.app-viewport {
+  flex: 1;
+  background: #111;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.app-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #444;
+}
+
+.devtools-container {
+  height: 250px;
+  border-top: 1px solid #3e3e42;
+  display: flex;
+  flex-direction: column;
+}
+</style><style>
+/* Chrome DevTools Design System - Material Design 3 */
+.devtools-root {
+  /* Base colors - Dark theme (default) */
+  --sys-color-cdt-base-container: #1e1e1e;
+  --sys-color-cdt-base-container-high: #252526;
+  --sys-color-cdt-base-container-highest: #2d2d30;
+
+  /* Surface colors */
+  --sys-color-surface: #252526;
+  --sys-color-surface-container: #2d2d30;
+  --sys-color-surface-container-low: #1e1e1e;
+  --sys-color-surface-container-high: #3e3e42;
+  --sys-color-surface-container-highest: #454545;
+
+  /* On-surface colors */
+  --sys-color-on-surface: #cccccc;
+  --sys-color-on-surface-subtle: #858585;
+  --sys-color-on-surface-variant: #9cdcfe;
+
+  /* Primary colors */
+  --sys-color-primary: #4fc3f7;
+  --sys-color-primary-bright: #61dafb;
+  --sys-color-primary-container: rgba(79, 195, 247, 0.1);
+  --sys-color-on-primary: #ffffff;
+
+  /* State colors */
+  --sys-color-state-hover: rgba(255, 255, 255, 0.06);
+  --sys-color-state-hover-on-subtle: rgba(255, 255, 255, 0.06);
+  --sys-color-state-focus: rgba(255, 255, 255, 0.12);
+  --sys-color-state-pressed: rgba(255, 255, 255, 0.18);
+  --sys-color-state-selected: rgba(79, 195, 247, 0.15);
+  --sys-color-state-disabled: rgba(255, 255, 255, 0.03);
+
+  /* Divider and border */
+  --sys-color-divider: #3e3e42;
+  --sys-color-outline: #3e3e42;
+  --sys-color-outline-variant: #2d2d30;
+
+  /* Status colors */
+  --sys-color-state-on: #4caf50;
+  --sys-color-state-off: #858585;
+  --sys-color-error: #f48fb1;
+  --sys-color-warning: #ffb74d;
+  --sys-color-info: #64b5f6;
+
+  /* Text colors */
+  --sys-color-text-primary: #cccccc;
+  --sys-color-text-secondary: #858585;
+  --sys-color-text-disabled: #5a5a5a;
+
+  /* Typography */
+  --sys-typescale-body-font:
+    'Segoe UI', system-ui, -apple-system, 'SF Pro Display', 'Roboto', sans-serif;
+  --sys-typescale-body-size: 12px;
+  --sys-typescale-body-weight: 400;
+  --sys-typescale-body-line-height: 18px;
+
+  --sys-typescale-label-font:
+    'Segoe UI', system-ui, -apple-system, 'SF Pro Display', 'Roboto', sans-serif;
+  --sys-typescale-label-size: 11px;
+  --sys-typescale-label-weight: 500;
+  --sys-typescale-label-line-height: 16px;
+
+  --sys-typescale-title-font:
+    'Segoe UI', system-ui, -apple-system, 'SF Pro Display', 'Roboto', sans-serif;
+  --sys-typescale-title-size: 13px;
+  --sys-typescale-title-weight: 500;
+  --sys-typescale-title-line-height: 20px;
+
+  --sys-typescale-monospace-font: 'Consolas', 'Monaco', 'Courier New', monospace;
+  --sys-typescale-monospace-size: 11px;
+  --sys-typescale-monospace-line-height: 16px;
+
+  /* Spacing */
+  --sys-spacing-1: 4px;
+  --sys-spacing-2: 8px;
+  --sys-spacing-3: 12px;
+  --sys-spacing-4: 16px;
+  --sys-spacing-5: 20px;
+  --sys-spacing-6: 24px;
+
+  /* Border radius */
+  --sys-radius-xs: 2px;
+  --sys-radius-sm: 4px;
+  --sys-radius-md: 6px;
+  --sys-radius-lg: 8px;
+
+  /* Shadows */
+  --sys-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --sys-shadow-2: 0 2px 4px rgba(0, 0, 0, 0.3);
+  --sys-shadow-3: 0 4px 8px rgba(0, 0, 0, 0.3);
+
+  /* Transitions */
+  --sys-transition-fast: 100ms cubic-bezier(0.4, 0, 0.2, 1);
+  --sys-transition-base: 200ms cubic-bezier(0.4, 0, 0.2, 1);
+  --sys-transition-slow: 300ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  font-family: var(--sys-typescale-body-font);
+  font-size: var(--sys-typescale-body-size);
+  font-weight: var(--sys-typescale-body-weight);
+  line-height: var(--sys-typescale-body-line-height);
+  background: var(--sys-color-cdt-base-container);
+  color: var(--sys-color-on-surface);
+  height: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  text-align: left;
+}
+
+.devtools-root * {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+/* Header/Toolbar */
+.devtools-root .tabs {
+  display: flex;
+  background: var(--sys-color-surface);
+  border-bottom: 1px solid var(--sys-color-divider);
+  flex-shrink: 0;
+}
+
+.devtools-root .toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: var(--sys-spacing-1);
+}
+
+.devtools-root .toolbar-group + .toolbar-group {
+  margin-left: var(--sys-spacing-2);
+  padding-left: var(--sys-spacing-2);
+  border-left: 1px solid var(--sys-color-divider);
+}
+
+.devtools-root .toolbar-group-right {
+  display: flex;
+  align-items: center;
+  gap: var(--sys-spacing-1);
+  margin-left: auto;
+  flex-grow: 1;
+  justify-content: flex-end;
+  padding-right: var(--sys-spacing-2);
+}
+
+/* Buttons */
+.devtools-root .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sys-spacing-1) var(--sys-spacing-2);
+  min-height: 20px;
+  background: transparent;
+  color: var(--sys-color-on-surface);
+  border: none;
+  border-radius: var(--sys-radius-xs);
+  cursor: pointer;
+  font-family: var(--sys-typescale-label-font);
+  font-size: var(--sys-typescale-label-size);
+  font-weight: var(--sys-typescale-label-weight);
+  line-height: var(--sys-typescale-label-line-height);
+  transition: background-color var(--sys-transition-fast);
+  user-select: none;
+}
+
+.devtools-root .btn:hover {
+  background: var(--sys-color-state-hover);
+}
+
+/* Status indicator */
+.devtools-root .status-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sys-spacing-1);
+  padding: var(--sys-spacing-1) var(--sys-spacing-2);
+  font-size: var(--sys-typescale-label-size);
+  line-height: var(--sys-typescale-label-line-height);
+}
+
+.devtools-root .status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.devtools-root .status-dot.active {
+  background: var(--sys-color-state-on);
+  box-shadow: 0 0 4px var(--sys-color-state-on);
+}
+
+/* Tabs */
+.devtools-root .tab-btn {
+  position: relative;
+  padding: var(--sys-spacing-1) var(--sys-spacing-2);
+  background: transparent;
+  color: var(--sys-color-on-surface-subtle);
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  font-family: var(--sys-typescale-label-font);
+  font-size: var(--sys-typescale-label-size);
+  font-weight: var(--sys-typescale-label-weight);
+  line-height: var(--sys-typescale-label-line-height);
+  transition: color var(--sys-transition-fast), background-color var(--sys-transition-fast);
+  user-select: none;
+}
+
+.devtools-root .tab-btn:hover {
+  background: var(--sys-color-state-hover);
+  color: var(--sys-color-on-surface);
+}
+
+.devtools-root .tab-btn.active {
+  color: var(--sys-color-primary-bright);
+  border-bottom-color: var(--sys-color-primary);
+}
+
+/* Content area */
+.devtools-root .content {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--sys-color-cdt-base-container);
+}
+
+.devtools-root .tab-content {
+  display: none;
+  flex: 1;
+  overflow: hidden;
+  flex-direction: column;
+}
+
+.devtools-root .tab-content.active {
+  display: flex;
+}
+
+/* Events tab */
+.devtools-root .events-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.devtools-root .events-header {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--sys-color-divider);
+  flex-shrink: 0;
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+}
+
+.devtools-root .events-header h2 {
+  font-family: var(--sys-typescale-label-font);
+  font-size: var(--sys-typescale-label-size);
+  font-weight: var(--sys-typescale-label-weight);
+  line-height: var(--sys-typescale-label-line-height);
+  color: var(--sys-color-on-surface);
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.devtools-root .events-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.devtools-root .event-item {
+  background: var(--sys-color-surface);
+  border-radius: var(--sys-radius-xs);
+  padding: 6px 8px;
+  margin-bottom: 4px;
+  border-left: 2px solid var(--sys-color-divider);
+  transition: background-color var(--sys-transition-fast), border-color var(--sys-transition-fast);
+}
+
+.devtools-root .event-item:hover {
+  background: var(--sys-color-state-hover-on-subtle);
+}
+
+.devtools-root .event-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--sys-spacing-1);
+}
+
+.devtools-root .event-type {
+  font-family: var(--sys-typescale-label-font);
+  font-size: var(--sys-typescale-label-size);
+  font-weight: var(--sys-typescale-label-weight);
+  color: var(--sys-color-on-surface);
+}
+
+.devtools-root .event-time {
+  font-family: var(--sys-typescale-monospace-font);
+  font-size: var(--sys-typescale-monospace-size);
+  color: var(--sys-color-on-surface-subtle);
+}
+
+.devtools-root .event-payload {
+  background: var(--sys-color-cdt-base-container);
+  border-radius: var(--sys-radius-xs);
+  padding: var(--sys-spacing-2);
+  margin-top: var(--sys-spacing-1);
+  border: 1px solid var(--sys-color-divider);
+  overflow-x: auto;
+}
+
+.devtools-root .event-payload pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-family: var(--sys-typescale-monospace-font);
+  font-size: var(--sys-typescale-monospace-size);
+  line-height: var(--sys-typescale-monospace-line-height);
+  color: var(--sys-color-on-surface-subtle);
+}
+
+/* Queries tab */
+.devtools-root .queries-container {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  height: 100%;
+  overflow: hidden;
+}
+
+.devtools-root .queries-list {
+  border-right: 1px solid var(--sys-color-divider);
+  overflow: hidden;
+  background: var(--sys-color-surface);
+  display: flex;
+  flex-direction: column;
+}
+
+.devtools-root .queries-list-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0;
+  margin: 0;
+}
+
+.devtools-root .queries-header {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--sys-color-divider);
+  background: var(--sys-color-surface);
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+}
+
+.devtools-root .queries-header h2 {
+    font-family: var(--sys-typescale-label-font);
+    font-size: var(--sys-typescale-label-size);
+    font-weight: var(--sys-typescale-label-weight);
+    line-height: var(--sys-typescale-label-line-height);
+    color: var(--sys-color-on-surface);
+    margin: 0;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+.devtools-root .query-item {
+  padding: 4px 8px;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: background-color var(--sys-transition-fast);
+  list-style: none;
+  background: transparent;
+}
+
+.devtools-root .query-item:hover:not(.selected) {
+  background: var(--sys-color-state-hover-on-subtle) !important;
+}
+
+.devtools-root .query-item.selected {
+  background: var(--sys-color-tonal-container, rgba(79, 195, 247, 0.2)) !important;
+}
+
+.devtools-root .query-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--sys-spacing-1);
+}
+
+.devtools-root .query-hash {
+  font-family: var(--sys-typescale-label-font);
+  font-size: var(--sys-typescale-label-size);
+  font-weight: var(--sys-typescale-label-weight);
+  color: var(--sys-color-on-surface);
+}
+
+.devtools-root .query-status {
+  padding: 2px var(--sys-spacing-1);
+  border-radius: var(--sys-radius-xs);
+  font-family: var(--sys-typescale-label-font);
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  line-height: 12px;
+}
+
+.devtools-root .status-active {
+  background: rgba(76, 175, 80, 0.2);
+  color: var(--sys-color-state-on);
+}
+
+.devtools-root .status-idle {
+    background: rgba(133, 133, 133, 0.2);
+    color: #858585;
+}
+
+.devtools-root .query-meta {
+  font-family: var(--sys-typescale-monospace-font);
+  font-size: var(--sys-typescale-monospace-size);
+  color: var(--sys-color-on-surface-subtle);
+  margin-top: var(--sys-spacing-1);
+}
+
+.devtools-root .query-preview {
+  font-family: var(--sys-typescale-monospace-font);
+  font-size: 10px;
+  color: var(--sys-color-on-surface-subtle);
+  margin-top: var(--sys-spacing-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.devtools-root .query-detail {
+  overflow-y: auto;
+  background: var(--sys-color-cdt-base-container);
+  padding: 8px;
+}
+
+.devtools-root .detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--sys-color-divider);
+}
+
+.devtools-root .detail-header h3 {
+  font-family: var(--sys-typescale-title-font);
+  font-size: var(--sys-typescale-title-size);
+  font-weight: var(--sys-typescale-title-weight);
+  color: var(--sys-color-primary-bright);
+}
+
+.devtools-root .detail-section {
+  margin-bottom: 12px;
+}
+
+.devtools-root .detail-label {
+  font-family: var(--sys-typescale-label-font);
+  font-size: 10px;
+  font-weight: var(--sys-typescale-label-weight);
+  color: var(--sys-color-on-surface-subtle);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+
+.devtools-root .detail-value {
+  font-family: var(--sys-typescale-body-font);
+  font-size: var(--sys-typescale-body-size);
+  color: var(--sys-color-on-surface);
+}
+
+.devtools-root .detail-value.mono {
+  font-family: var(--sys-typescale-monospace-font);
+  font-size: var(--sys-typescale-monospace-size);
+  color: var(--sys-color-primary);
+}
+
+.devtools-root .query-code {
+  background: var(--sys-color-cdt-base-container);
+  border-radius: var(--sys-radius-xs);
+  padding: 6px 8px;
+  margin: 0;
+  overflow-x: auto;
+  font-family: var(--sys-typescale-monospace-font);
+  font-size: var(--sys-typescale-monospace-size);
+  line-height: var(--sys-typescale-monospace-line-height);
+  color: var(--sys-color-on-surface);
+  border: 1px solid var(--sys-color-divider);
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+/* Database tab */
+.devtools-root .database-container {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  height: 100%;
+  overflow: hidden;
+}
+
+.devtools-root .database-tables {
+  border-right: 1px solid var(--sys-color-divider);
+  overflow: hidden;
+  background: var(--sys-color-surface);
+  display: flex;
+  flex-direction: column;
+}
+
+.devtools-root .tables-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.devtools-root .table-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 12px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  width: 100%;
+}
+
+.devtools-root .table-item:hover {
+    background: var(--sys-color-state-hover-on-subtle);
+}
+
+.devtools-root .table-item.selected {
+    background: var(--sys-color-tonal-container, rgba(79, 195, 247, 0.2));
+    border-left-color: var(--sys-color-primary);
+}
+
+.devtools-root .table-name {
+    font-family: var(--sys-typescale-monospace-font);
+    font-size: var(--sys-typescale-monospace-size);
+    color: var(--sys-color-on-surface);
+}
+
+.devtools-root .table-count {
+    font-family: var(--sys-typescale-label-font);
+    font-size: 10px;
+    background: var(--sys-color-surface-container-high);
+    padding: 1px 6px;
+    border-radius: 8px;
+    color: var(--sys-color-on-surface-subtle);
+}
+
+.devtools-root .data-grid {
+    flex: 1;
+    overflow: auto;
+    font-family: var(--sys-typescale-monospace-font);
+    font-size: var(--sys-typescale-monospace-size);
+}
+.devtools-root table {
+    width: 100%;
+    border-collapse: collapse;
+}
+.devtools-root th, .devtools-root td {
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--sys-color-divider);
+    text-align: left;
+}
+.devtools-root th {
+    color: var(--sys-color-on-surface-subtle);
+    font-weight: normal;
+    background: var(--sys-color-surface);
+    position: sticky;
+    top: 0;
+}
+.devtools-root td {
+    color: var(--sys-color-on-surface);
+    white-space: nowrap;
+}
+.devtools-root tr:hover td {
+    background: var(--sys-color-state-hover);
+}
+.devtools-root .text-primary { color: var(--sys-color-primary); }
+.devtools-root .text-string { color: #ce9178; }
+.devtools-root .text-number { color: #b5cea8; }
+</style><div class="browser-window"><div class="browser-header"><div class="window-controls"><div class="control-dot red"></div><div class="control-dot yellow"></div><div class="control-dot green"></div></div><div class="url-bar"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg><span>localhost:5173</span></div></div><div class="browser-body"><div class="app-viewport"><div class="app-placeholder"><svg style="opacity:0.05;margin-bottom:20px" width="100" height="100" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"></path><path d="M2 17l10 5 10-5"></path><path d="M2 12l10 5 10-5"></path></svg><h1 style="font-size:24px;font-weight:bold;margin-bottom:8px">My Spooky App</h1><p style="font-size:14px;opacity:0.6">Syncing active...</p></div></div><div class="devtools-container"><div class="devtools-root"><div class="tabs"><div class="toolbar-group"><div class="status-indicator"><span class="status-dot active"></span></div></div><button class="tab-btn active">Events</button><button class="tab-btn ">Queries</button><button class="tab-btn ">Database</button><button class="tab-btn ">Auth</button><div class="toolbar-group-right"><button class="btn">Refresh</button><button class="btn">Clear Events</button></div></div><div class="content"><div class="tab-content active"><div class="events-container"><div class="events-header"><h2>Events History</h2></div><div class="events-list"><div class="event-item"><div class="event-header"><span class="event-type">info</span><span class="event-time">16:02:01<!-- -->.<!-- -->152</span></div><div class="event-payload"><pre>{
+  &quot;msg&quot;: &quot;Spooky Sidecar initialized&quot;
+}</pre></div></div><div class="event-item"><div class="event-header"><span class="event-type">info</span><span class="event-time">16:02:01<!-- -->.<!-- -->340</span></div><div class="event-payload"><pre>{
+  &quot;msg&quot;: &quot;Loading dbsp_worker.wasm... (2.1MB)&quot;
+}</pre></div></div><div class="event-item"><div class="event-header"><span class="event-type">warn</span><span class="event-time">16:02:02<!-- -->.<!-- -->005</span></div><div class="event-payload"><pre>{
+  &quot;msg&quot;: &quot;State rehydration took 115ms&quot;,
+  &quot;hints&quot;: [
+    &quot;optimize-query&quot;
+  ]
+}</pre></div></div><div class="event-item"><div class="event-header"><span class="event-type">info</span><span class="event-time">16:02:05<!-- -->.<!-- -->112</span></div><div class="event-payload"><pre>{
+  &quot;msg&quot;: &quot;Registered incantation \&quot;thread_list_view\&quot;&quot;
+}</pre></div></div></div></div></div><div class="tab-content "><div class="queries-container"><div class="queries-list"><div class="queries-header"><h2>Active Queries</h2></div><div class="queries-list-content"><div class="query-item selected"><div class="query-header"><span class="query-hash">#<!-- -->0x8f2a9c</span><span class="query-status status-active">active</span></div><div class="query-meta">Updates: <!-- -->12<!-- --> | Size: <!-- -->1024<!-- -->B</div><div class="query-preview">SELECT * FROM thread ORDER BY <!-- -->...</div></div><div class="query-item "><div class="query-header"><span class="query-hash">#<!-- -->0x99b1d4</span><span class="query-status status-idle">idle</span></div><div class="query-meta">Updates: <!-- -->5<!-- --> | Size: <!-- -->256<!-- -->B</div><div class="query-preview">SELECT count() FROM notificati<!-- -->...</div></div></div></div><div class="query-detail"><div class="detail-header"><h3>Query #<!-- -->0x8f2a9c</h3><span class="query-status status-active">active</span></div><div class="detail-section"><div class="detail-label">Created</div><div class="detail-value">4:02:05 PM</div></div><div class="detail-section"><div class="detail-label">Update Count</div><div class="detail-value mono">12</div></div><div class="detail-section"><div class="detail-label">Query</div><pre class="query-code">SELECT * FROM thread ORDER BY created_at DESC</pre></div><div class="detail-section"><div class="detail-label">Variables</div><pre class="query-code">{
+  &quot;limit&quot;: 10
+}</pre></div></div></div></div><div class="tab-content "><div class="database-container"><div class="database-tables"><div class="events-header"><h2>Tables</h2></div><div class="tables-list"><div class="table-item "><span class="table-name">user</span><span class="table-count">12</span></div><div class="table-item selected"><span class="table-name">thread</span><span class="table-count">45</span></div><div class="table-item "><span class="table-name">comment</span><span class="table-count">182</span></div></div></div><div class="data-grid"><table><thead><tr><th>id</th><th>title</th><th>author</th><th>created</th></tr></thead><tbody><tr><td class="text-primary">thread:8x92m</td><td class="text-string">&quot;<!-- -->Why Rust is the future<!-- -->&quot;</td><td class="text-primary">user:khadim</td><td class="text-number">2024-05-01</td></tr><tr><td class="text-primary">thread:p09s1</td><td class="text-string">&quot;<!-- -->Local-first architecture<!-- -->&quot;</td><td class="text-primary">user:sarah</td><td class="text-number">2024-05-02</td></tr><tr><td class="text-primary">thread:7d66s</td><td class="text-string">&quot;<!-- -->Spooky vs ElectricSQL<!-- -->&quot;</td><td class="text-primary">user:alex</td><td class="text-number">2024-05-03</td></tr></tbody></table></div></div></div><div class="tab-content "><div class="events-container"><div class="events-header"><h2>Authentication</h2></div><div style="padding:20px;color:#858585;font-family:var(--sys-typescale-body-font)">User authenticated: <span style="color:#4fc3f7">user:khadim</span></div></div></div></div></div></div></div></div><!--astro:end--></astro-island> </div> <!-- Description Sidebar --> <div class="w-full lg:w-1/3"> <div class="mb-6"> <div class="inline-block border border-purple-500/30 bg-purple-900/10 px-3 py-1 rounded text-[10px] font-bold text-purple-400 uppercase tracking-widest mb-4">
+DevTools
+</div> <h3 class="text-2xl font-bold uppercase tracking-widest text-white mb-4">
+Peek Under the Hood
+</h3> <p class="font-mono text-gray-500 text-sm leading-relaxed">
+Stop guessing what your application is doing. Spooky provides a complete suite of
+                tools embedded directly in your browser.
+</p> </div> <div class="space-y-6 font-mono text-xs"> <div class="group"> <h4 class="text-white font-bold mb-1 group-hover:text-blue-400 transition-colors flex items-center gap-2"> <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h6"></path><path d="m12 12 4 10 1.7-4.3L22 16Z"></path></svg>
+> LIVE_INSPECTION
+</h4> <p class="text-gray-600">
+View your local database state in real-time as it changes. No more console.logging
+                  state.
+</p> </div> <div class="group"> <h4 class="text-white font-bold mb-1 group-hover:text-green-400 transition-colors flex items-center gap-2"> <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4"></path><path d="m16.2 7.8 2.9-2.9"></path><path d="M18 12h4"></path><path d="m16.2 16.2 2.9 2.9"></path><path d="M12 18v4"></path><path d="m4.9 19.1 2.9-2.9"></path><path d="M2 12h4"></path><path d="m4.9 4.9 2.9 2.9"></path></svg>
+> QUERY_MONITOR
+</h4> <p class="text-gray-600">
+Track active subscriptions, latency metrics, and data transfer sizes for
+                  optimization.
+</p> </div> <div class="group"> <h4 class="text-white font-bold mb-1 group-hover:text-yellow-400 transition-colors flex items-center gap-2"> <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+> EVENTS_TIMELINE
+</h4> <p class="text-gray-600">
+Track every state change, network request, and incantation registration in a
+                  detailed, chronological timeline.
+</p> </div> </div> </div> </div> </div> </section> <!-- SECTION 3: UNDER THE HOOD --> <section class="py-24 border-b border-white/10 bg-black"> <div class="max-w-7xl mx-auto px-4"> <div class="mb-16 text-center border-y border-white/10 pt-6"> <h2 class="text-3xl font-bold uppercase tracking-widest text-white mb-4"> UNDER_THE_HOOD </h2> <p class="font-mono text-gray-500 max-w-3xl mx-auto text-sm md:text-base leading-relaxed mb-6"> Spooky uses <span class="text-white">Icremental View Maintanence</span> to track client query hashes, known as <span class="text-purple-400 font-bold">Incantations</span>. These are stored in the <code class="bg-[#222] px-1 py-0.5 rounded text-gray-300">_spooky_querys</code> table. Choose your runtime based on your performance needs. </p> </div> <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 max-w-6xl mx-auto mb-24"> <div class="group border border-[#333] bg-[#0a0a0a] hover:border-purple-500/30 transition-colors duration-300 relative overflow-hidden rounded-sm flex flex-col"> <div class="absolute top-0 left-0 bg-[#222] text-[10px] font-bold px-3 py-1 text-gray-400 border-r border-b border-[#333] uppercase tracking-wider">
+Mode_A
+</div> <div class="p-8 pt-12 flex-1 flex flex-col"> <div class="flex justify-between items-baseline mb-6"> <h3 class="text-xl font-bold text-white">Surrealism (WASM)</h3> <span class="text-[10px] font-bold font-mono text-black bg-purple-400 px-2 py-1 rounded-sm uppercase">Local / Testing</span> </div> <div class="w-full flex flex-col gap-4 font-mono mb-8"> <!-- CLIENTS LAYER --> <div class="flex justify-center gap-10 relative z-10"> <div class="flex flex-col items-center gap-1 group/client"> <div class="h-8 w-8 border border-gray-600 rounded bg-[#111] flex items-center justify-center text-gray-400 group-hover/client:border-white group-hover/client:text-white transition-colors"> <span class="text-[10px]">DEV</span> </div> <span class="text-[8px] text-gray-600">Developer</span> <div class="w-[1px] h-full bg-gradient-to-b from-transparent via-gray-700 to-gray-700"></div> </div> <div class="flex flex-col items-center gap-1 group/client"> <div class="h-8 w-8 border border-gray-600 rounded bg-[#111] flex items-center justify-center text-gray-400 group-hover/client:border-white group-hover/client:text-white transition-colors"> <span class="text-[10px]">TEST</span> </div> <span class="text-[8px] text-gray-600">Vitest</span> <div class="w-[1px] h-full bg-gradient-to-b from-transparent via-gray-700 to-gray-700"></div> </div> </div> <!-- INFRASTRUCTURE BOX --> <div class="border border-dashed border-[#333] p-3 rounded bg-[#0f0f0f] relative mt-2"> <div class="absolute -top-2 left-3 bg-[#0f0f0f] px-1 text-[8px] text-gray-500 font-bold uppercase tracking-wider">
+Local Infrastructure
+</div> <div class="flex gap-2"> <!-- SURREALDB CONTAINER --> <div class="flex-1 border border-purple-900/40 bg-purple-900/5 p-2 rounded flex flex-col gap-2 relative overflow-hidden mb-9"> <div class="flex items-center justify-between border-b border-purple-900/20 pb-1 relative z-10"> <span class="text-[9px] font-bold text-purple-400">SURREALDB</span> <span class="h-1.5 w-1.5 rounded-full bg-purple-500 animate-pulse"></span> </div> <!-- EMBEDDED WASM --> <div class="bg-black/50 border border-purple-500/30 p-2 rounded relative z-10"> <div class="flex justify-between items-center mb-1"> <span class="text-[8px] font-bold text-gray-300">Spooky Stream Processor (WASM)</span> <span class="text-[8px] text-orange-400">Ephemeral</span> </div> <div class="h-1 w-full bg-gray-800 rounded overflow-hidden"> <div class="h-full bg-purple-500/50 w-full animate-pulse"></div> </div> </div> </div> </div> </div> </div> <div class="mt-auto"> <p class="text-xs text-gray-500 mb-4 font-mono leading-relaxed">
+The Spooky Stream Processor executes directly within SurrealDB—ideal for <span class="text-gray-300">automated testing scenarios</span>, CI/CD pipelines, and local development.
+</p> <ul class="space-y-2 font-mono text-xs text-gray-500 border-t border-[#222] pt-4"> <li class="flex items-start gap-2"> <span class="text-purple-400">✔</span> Zero setup (runs inside `surreal start`).
+</li> <li class="flex items-start gap-2"> <span class="text-orange-400">⚠</span> <span class="relative group/tooltip cursor-help border-b border-dotted border-gray-600">
+High I/O overhead (State Rehydration).
+<div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 p-3 bg-[#111] border border-[#333] text-[10px] text-gray-400 opacity-0 group-hover/tooltip:opacity-100 transition-opacity pointer-events-none z-50 shadow-xl rounded font-normal normal-case">
+The DBSP processor runs as an embedded WASM function. Since WASM memory is
+                        ephemeral, the entire state must be loaded and saved to the database on
+                        every execution.
+<div class="absolute top-full left-1/2 -translate-x-1/2 -mt-1 border-4 border-transparent border-t-[#333]"></div> </div> </span> </li> </ul> </div> </div> </div> <div class="group border border-[#333] bg-[#0a0a0a] hover:border-green-500/30 transition-colors duration-300 relative overflow-hidden rounded-sm flex flex-col"> <div class="absolute top-0 left-0 bg-[#222] text-[10px] font-bold px-3 py-1 text-gray-400 border-r border-b border-[#333] uppercase tracking-wider">
+Mode_B
+</div> <div class="p-8 pt-12 flex-1 flex flex-col"> <div class="flex justify-between items-baseline mb-6"> <h3 class="text-xl font-bold text-white">Sidecar Daemon</h3> <span class="text-[10px] font-bold font-mono text-black bg-green-500 px-2 py-1 rounded-sm uppercase">Production</span> </div> <div class="w-full flex flex-col gap-4 font-mono mb-8"> <!-- CLIENTS LAYER --> <div class="flex justify-center gap-8 relative z-10"> <div class="flex flex-col items-center gap-1 group/client"> <div class="h-8 w-8 border border-gray-600 rounded bg-[#111] flex items-center justify-center text-gray-400 group-hover/client:border-white group-hover/client:text-white transition-colors"> <span class="text-[10px]">WEB</span> </div> <span class="text-[8px] text-gray-600">React/Solid</span> <div class="w-[1px] h-full bg-gradient-to-b from-transparent via-gray-700 to-gray-700"></div> </div> <div class="flex flex-col items-center gap-1 group/client"> <div class="h-8 w-8 border border-gray-600 rounded bg-[#111] flex items-center justify-center text-gray-400 group-hover/client:border-white group-hover/client:text-white transition-colors"> <span class="text-[10px]">APP</span> </div> <span class="text-[8px] text-gray-600">Flutter/iOS</span> <div class="w-[1px] h-full bg-gradient-to-b from-transparent via-gray-700 to-gray-700"></div> </div> </div> <!-- INFRASTRUCTURE BOX --> <div class="border border-dashed border-[#333] p-3 rounded bg-[#0f0f0f] relative mt-2"> <div class="absolute -top-2 left-3 bg-[#0f0f0f] px-1 text-[8px] text-gray-500 font-bold uppercase tracking-wider">
+Server Infrastructure
+</div> <div class="flex gap-2"> <!-- SURREALDB NODE --> <div class="flex-1 border border-blue-900/40 bg-blue-900/5 p-2 rounded flex flex-col gap-2"> <div class="flex items-center justify-between border-b border-blue-900/20 pb-1"> <span class="text-[9px] font-bold text-blue-400">SURREALDB</span> <span class="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse"></span> </div> <div class="space-y-1"> <div class="bg-blue-900/10 border border-blue-900/20 px-1.5 py-1 rounded text-[8px] text-blue-200/70">
+Tables & Auth
+</div> <div class="bg-blue-900/10 border border-blue-900/20 px-1.5 py-1 rounded text-[8px] text-blue-200/70">
+Live Query Hub
+</div> <div class="bg-blue-900/10 border border-blue-900/20 px-1.5 py-1 rounded text-[8px] text-blue-200/70">
+Event Triggers
+</div> </div> </div> <!-- RPC CONNECT --> <div class="flex flex-col justify-center items-center gap-0.5 text-[8px] text-gray-600 w-8 shrink-0"> <span>RPC</span> <div class="w-full h-[1px] bg-gray-700"></div> <span>SYNC</span> </div> <!-- SIDECAR NODE --> <div class="flex-1 border border-green-900/40 bg-green-900/10 p-2 rounded shadow-[0_0_20px_rgba(22,197,94,0.05)] flex flex-col gap-2"> <div class="flex items-center justify-between border-b border-green-900/20 pb-1"> <span class="text-[9px] font-bold text-green-400">SIDECAR</span> <span class="h-1.5 w-1.5 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.8)]"></span> </div> <div class="space-y-1"> <div class="bg-green-900/20 border border-green-900/30 px-1.5 py-1 rounded text-[8px] text-green-200/80 font-bold flex items-center gap-1"> <span>⚡</span> DBSP Engine
+</div> <div class="bg-green-900/20 border border-green-900/30 px-1.5 py-1 rounded text-[8px] text-green-200/80">
+Incantation Mgr
+</div> <div class="bg-green-900/20 border border-green-900/30 px-1.5 py-1 rounded text-[8px] text-green-200/80">
+In-Memory State
+</div> </div> </div> </div> </div> </div> <div class="mt-auto"> <p class="text-xs text-gray-500 mb-4 font-mono leading-relaxed">
+The Sidecar runs as a separate process. It keeps the DBSP state in <span class="text-gray-300">RAM</span>, eliminating the need to save/load state on every request. It updates the
+                  database via RPC.
+</p> <ul class="space-y-2 font-mono text-xs text-gray-500 border-t border-[#222] pt-4"> <li class="flex items-start gap-2"> <span class="text-green-400">✔</span> High Performance (In-Memory State).
+</li> <li class="flex items-start gap-2"> <span class="text-green-400">✔</span> Scalable for production loads.
+</li> </ul> </div> </div> </div> </div>  </div> <!-- CTA SECTION --> <section class="py-32 border-t border-white/10 bg-black text-center relative overflow-hidden"> <!-- Decorative background glow --> <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-purple-500/10 blur-[100px] rounded-full pointer-events-none"></div> <div class="max-w-4xl mx-auto px-4 relative z-10"> <h2 class="text-4xl md:text-5xl font-bold uppercase tracking-widest mb-8 text-white">
+Ready to Get Spooky?
+</h2> <p class="font-mono text-gray-500 mb-12 max-w-2xl mx-auto leading-relaxed">
+Start building local-first, offline-ready applications today. Dive into the
+            documentation to learn more about the architecture and implementation details.
+</p> <a href="/spooky/docs" class="inline-block border-2 border-white bg-white text-black px-12 py-4 hover:bg-black hover:text-white transition-none uppercase font-bold text-lg tracking-widest">
+[ START_BUILDING ]
+</a> </div> </section> <footer class="py-12 border-t-4 border-white border-double"> <div class="max-w-7xl mx-auto px-4 flex flex-col md:flex-row justify-between items-center"> <div class="mb-4 md:mb-0 text-xs font-mono flex items-center relative"> <img src="/spooky/logo_transparent.svg" alt="Spooky Logo" class="w-4 h-4 mr-2">
+© 2025 SPOOKY
+</div> <div class="space-x-6 text-sm font-mono uppercase"> <a href="#" class="hover:underline px-1 transition-none">[ PRIVACY ]</a> <a href="#" class="hover:underline px-1 transition-none">[ TERMS ]</a> <a href="#" class="hover:underline px-1 transition-none">[ EXIT ]</a> </div> </div> </footer> </section> <script type="module">const r=`
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+      <style>
+        .bg { fill: #FFFFFF; }
+        .ghost { fill: #000000; }
+        .eyes { fill: #FFFFFF; }
+        @media (prefers-color-scheme: dark) {
+          .bg { fill: #000000; }
+          .ghost { fill: #FFFFFF; }
+          .eyes { fill: #000000; }
+        }
+      </style>
+      <path class="ghost" d="M6 10V28L10 24L14 28L18 24L22 28L26 24V10C26 4.47715 21.5228 0 16 0C10.4772 0 6 4.47715 6 10Z"/>
+      <rect class="eyes" x="10" y="8" width="4" height="4"/>
+      <rect class="eyes" x="18" y="8" width="4" height="4"/>
+    </svg>`,t=document.createElement("canvas");t.width=32;t.height=32;const a=t.getContext("2d"),s=new Image;s.src="data:image/svg+xml;base64,"+btoa(r);let e=document.querySelector("link[rel~='icon']");e||(e=document.createElement("link"),e.rel="icon",document.head.appendChild(e));s.onload=function(){let l=performance.now();function n(o){const c=o-l,i=(1-Math.cos(c/3e3*2*Math.PI))*1.5;a?.clearRect(0,0,32,32),a?.drawImage(s,0,i,32,32),e.href=t.toDataURL("image/png"),requestAnimationFrame(n)}requestAnimationFrame(n)};</script> </body> </html>
