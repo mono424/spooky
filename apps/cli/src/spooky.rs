@@ -137,7 +137,7 @@ pub fn generate_spooky_events(
                 }
             }
         }
-        events.push_str("        _spooky_version: (SELECT VALUE version FROM ONLY _spooky_version WHERE record_id = $after.id)\n");
+        events.push_str("        spooky_rv: (SELECT VALUE version FROM ONLY _spooky_version WHERE record_id = $after.id)\n");
         events.push_str("    };\n");
 
         if is_sidecar {

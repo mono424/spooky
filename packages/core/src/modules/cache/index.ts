@@ -114,8 +114,8 @@ export class CacheModule implements StreamUpdateReceiver {
         await this.local.query(query, params);
       }
 
-      // 2. Batch ingest into DBSP
-      for (const record of records) {
+      // 2. Batch ingest into DBSP (use populatedRecords which has spooky_rv set)
+      for (const record of populatedRecords) {
         const recordId = encodeRecordId(record.record.id);
         this.versionLookups[recordId] = record.version;
         this.streamProcessor.ingest(record.table, record.op, recordId, record.record);
