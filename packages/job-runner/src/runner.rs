@@ -66,12 +66,17 @@ impl<C: Connection> JobRunner<C> {
         };
 
         // Execute HTTP request
-        let result = self
+        let mut request = self
             .http_client
             .post(&url)
-            .json(&payload)
-            .send()
-            .await;
+            .json(&payload);
+        
+        // Add authorization header if token is present
+        if let Some(ref token) = job.auth_token {
+            request = request.header("Authorization", format!("Bearer {}", token));
+        }
+        
+        let result = request.send().await;
 
         match result {
             Ok(response) if response.status().is_success() => {

@@ -2,8 +2,11 @@ mode: sidecar # "sidecar" or "surrealism"
 backends:
   api:
     type: http
-    baseUrl: http://host.docker.internal:3660
     spec: ../api/openapi.yml
+    baseUrl: http://host.docker.internal:3660
+    auth:
+      type: token
+      token: THIS_IS_TOP_SECRET
     method:
       type: outbox
       table: job

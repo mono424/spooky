@@ -1,0 +1,422 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: Backend Functions
+---
+
+import CodeBlock from '../../components/ui/CodeBlock.astro';
+import Warning from '../../components/ui/Warning.astro';
+import Note from '../../components/ui/Note.astro';
+
+Backend functions allow you to execute server-side logic from your Spooky application. Currently, Spooky supports backend integration through the **outbox pattern**, where client operations create job records that are processed asynchronously by a backend service.
+
+## How It Works
+
+The outbox pattern decouples your frontend from backend services:
+
+1. Your client calls `db.run()` to create a job record in SurrealDB
+2. A separate job runner service polls for pending jobs
+3. The job runner executes the HTTP request to your backend API
+4. The job status is updated in the database
+5. Your client can query the job status reactively
+
+<Note>
+  Direct backend calls may be supported in future versions. For now, the outbox pattern is the recommended approach for all backend integrations.
+</Note>
+
+## Configuration
+
+Backend functions are configured in your `spooky.yml` file in the schema directory.
+
+<CodeBlock
+  code={`mode: sidecar
+backends:
+  api:
+    type: http
+    baseUrl: http://host.docker.internal:3660
+    spec: ../api/openapi.yml
+    auth:
+      type: token
+      token: THIS_IS_TOP_SECRET
+    method:
+      type: outbox
+      table: job
+      schema: ./src/outbox/api.surql`}
+  lang="yaml"
+/>
+
+### Configuration Fields
+
+- **`type`**: The backend type (currently only `http` is supported)
+- **`baseUrl`**: The base URL of your HTTP backend service
+- **`spec`**: Path to the OpenAPI specification file that defines your API routes
+- **`auth`** (optional): Authentication configuration for the backend
+  - **`type`**: Authentication type (currently only `token` is supported)
+  - **`token`**: The bearer token to include in HTTP requests
+- **`method.type`**: The method for calling the backend (use `outbox` for the outbox pattern)
+- **`method.table`**: The name of the job table in SurrealDB (e.g., `job`)
+- **`method.schema`**: Path to the SurrealQL schema file that defines the job table structure
+
+### Authentication
+
+When you configure an `auth` block in your backend configuration, the job runner will automatically include the token in all HTTP requests to that backend using the `Authorization: Bearer <token>` header.
+
+This is useful for securing your backend APIs and ensuring that only authorized job runners can execute requests.
+
+<CodeBlock
+  code={`# Backend with authentication
+backends:
+  api:
+    type: http
+    baseUrl: https://api.example.com
+    spec: ../api/openapi.yml
+    auth:
+      type: token
+      token: \${API_TOKEN}  # Can use environment variables
+    method:
+      type: outbox
+      table: job
+      schema: ./src/outbox/api.surql`}
+  lang="yaml"
+/>
+
+On your backend server, validate the bearer token in your middleware:
+
+<CodeBlock
+  code={`import { bearerAuth } from 'hono/bearer-auth';
+
+app.use('/*', bearerAuth({
+  token: process.env.API_AUTH_TOKEN
+}));`}
+  lang="typescript"
+/>
+
+## OpenAPI Specification
+
+Your backend routes are defined using an OpenAPI specification. Each path becomes a callable route from your Spooky client.
+
+<CodeBlock
+  code={`openapi: 3.1.0
+info:
+  version: 1.0.0
+  title: example
+paths:
+  /spookify:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id:
+                  type: string
+                  example: thread:kv9b3b...
+              required:
+                - id
+      responses:
+        '200':
+          description: ok
+        '404':
+          description: Thread not found
+        '500':
+          description: Internal server error`}
+  lang="yaml"
+/>
+
+The request body schema defines the parameters that will be validated when you call `db.run()`. In this example, the `/spookify` endpoint requires an `id` parameter.
+
+## Job Table Schema
+
+The job table stores outbox records and tracks their execution status. Here's the required schema:
+
+<CodeBlock
+  code={`DEFINE TABLE job SCHEMAFULL
+  PERMISSIONS
+    FOR select, create, update, delete 
+    WHERE $access = "account" AND assigned_to.author.id = $auth.id;
+
+-- Link to parent record (e.g., thread, user)
+DEFINE FIELD assigned_to ON TABLE job TYPE record<thread>
+  PERMISSIONS
+    FOR create, select WHERE true
+    FOR update WHERE false;
+
+-- API route path
+DEFINE FIELD path ON TABLE job TYPE string
+  PERMISSIONS
+    FOR create, select WHERE true
+    FOR update WHERE false;
+
+-- JSON payload for the request
+DEFINE FIELD payload ON TABLE job TYPE any
+  PERMISSIONS
+    FOR create, select WHERE true
+    FOR update WHERE false;
+
+-- Retry configuration
+DEFINE FIELD retries ON TABLE job TYPE int DEFAULT ALWAYS 0
+  PERMISSIONS
+    FOR create, select WHERE true
+    FOR update WHERE false;
+
+DEFINE FIELD max_retries ON TABLE job TYPE int DEFAULT ALWAYS 3;
+
+DEFINE FIELD retry_strategy ON TABLE job TYPE string DEFAULT ALWAYS "linear"
+  ASSERT $value IN ["linear", "exponential"]
+  PERMISSIONS
+    FOR create, select WHERE true
+    FOR update WHERE false;
+
+-- Job status lifecycle
+DEFINE FIELD status ON TABLE job TYPE string DEFAULT ALWAYS "pending"
+  ASSERT $value IN ["pending", "processing", "success", "failed"]
+  PERMISSIONS
+    FOR create, select WHERE true
+    FOR update WHERE false;
+
+-- Error tracking
+DEFINE FIELD errors ON TABLE job TYPE array<object> DEFAULT ALWAYS []
+  PERMISSIONS
+    FOR create WHERE true
+    FOR select, update WHERE false;
+
+-- Timestamps
+DEFINE FIELD updated_at ON TABLE job TYPE datetime
+  DEFAULT ALWAYS time::now()
+  PERMISSIONS
+    FOR create, select WHERE true
+    FOR update WHERE false;
+
+DEFINE FIELD created_at ON TABLE job TYPE datetime
+  VALUE time::now()
+  PERMISSIONS
+    FOR create, select WHERE true
+    FOR update WHERE false;`}
+  lang="sql"
+/>
+
+### Key Fields
+
+- **`assigned_to`**: Links the job to a parent record (optional, but useful for querying jobs by entity)
+- **`path`**: The API route path from your OpenAPI spec
+- **`payload`**: JSON payload containing the request parameters
+- **`status`**: Current job state: `pending`, `processing`, `success`, or `failed`
+- **`retries`**: Number of retry attempts so far
+- **`max_retries`**: Maximum number of retry attempts before marking as failed
+- **`retry_strategy`**: Retry timing strategy (`linear` or `exponential`)
+- **`errors`**: Array of error objects from failed execution attempts
+
+## Calling Backend Functions
+
+Use the `db.run()` method to create a job and call your backend function:
+
+<CodeBlock
+  code={`// Call a backend function
+await db.run('api', '/spookify', { id: threadData.id }, { 
+  assignedTo: threadData.id 
+});`}
+  lang="typescript"
+/>
+
+### Method Signature
+
+<CodeBlock
+  code={`db.run(
+  backend: string,      // Backend name from spooky.yml
+  path: string,          // Route path from OpenAPI spec
+  payload: object,       // Request parameters
+  options?: {
+    assignedTo?: string,           // Link to parent record
+    max_retries?: number,          // Override default max retries
+    retry_strategy?: 'linear' | 'exponential'  // Override retry strategy
+  }
+)`}
+  lang="typescript"
+/>
+
+### Parameters
+
+- **`backend`**: The name of the backend from your `spooky.yml` (e.g., `'api'`)
+- **`path`**: The API route path (e.g., `'/spookify'`)
+- **`payload`**: An object containing the request parameters defined in your OpenAPI schema
+- **`options`** (optional):
+  - **`assignedTo`**: Record ID to link this job to (useful for querying related jobs)
+  - **`max_retries`**: Override the default maximum retry attempts (default: 3)
+  - **`retry_strategy`**: Override the retry strategy (default: `'linear'`)
+
+<Warning>
+  The `db.run()` method validates the payload against your OpenAPI schema. Missing required parameters will throw an error.
+</Warning>
+
+## Querying Job Status
+
+Jobs are stored as regular SurrealDB records, so you can query them using the query builder. The most common pattern is to use `.related()` to fetch jobs for a specific entity:
+
+<CodeBlock
+  code={`const threadQuery = db.query('thread')
+  .where({ id: 'thread:abc123' })
+  .related('jobs', (q) => {
+    return q
+      .where({ path: '/spookify' })
+      .orderBy('created_at', 'desc')
+      .limit(1);
+  })
+  .one()
+  .build();
+
+const thread = useQuery(db, () => threadQuery);
+
+// Access the job status
+const job = thread()?.jobs?.[0];
+const isProcessing = ['pending', 'processing'].includes(job?.status);`}
+  lang="typescript"
+/>
+
+This pattern is reactive - when the job runner updates the job status in the database, your UI will automatically reflect the changes.
+
+## Complete Example
+
+Here's a complete example of implementing a "spookify" feature that generates AI content:
+
+<CodeBlock
+  code={`import { useQuery } from '@spooky/client-solid';
+import { db } from './db';
+import { createSignal } from 'solid-js';
+
+function ThreadDetail() {
+  const [isSubmitting, setIsSubmitting] = createSignal(false);
+
+  // Query thread with related jobs
+  const threadQuery = db.query('thread')
+    .where({ id: 'thread:abc123' })
+    .related('jobs', (q) => {
+      return q
+        .where({ path: '/spookify' })
+        .orderBy('created_at', 'desc')
+        .limit(1);
+    })
+    .one()
+    .build();
+
+  const thread = useQuery(db, () => threadQuery);
+
+  // Check if job is in progress
+  const isJobRunning = () => {
+    const job = thread()?.jobs?.[0];
+    return ['pending', 'processing'].includes(job?.status);
+  };
+
+  // Trigger backend function
+  const handleSpookify = async () => {
+    setIsSubmitting(true);
+    try {
+      await db.run('api', '/spookify', 
+        { id: thread()?.id },
+        { assignedTo: thread()?.id }
+      );
+    } catch (err) {
+      console.error('Failed to spookify:', err);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div>
+      <h1>{thread()?.title}</h1>
+      <p>{thread()?.content}</p>
+
+      <button 
+        onClick={handleSpookify}
+        disabled={isSubmitting() || isJobRunning()}
+      >
+        {isJobRunning() ? 'Spookifying...' : 'Spookify Thread'}
+      </button>
+
+      {thread()?.jobs?.[0]?.status === 'failed' && (
+        <div class="error">
+          Job failed after {thread()?.jobs?.[0]?.retries} attempts
+        </div>
+      )}
+    </div>
+  );
+}`}
+  lang="typescript"
+/>
+
+## Job Runner Setup
+
+The job runner is a separate service that processes outbox jobs. You can use the example job runner from the Spooky repository or implement your own.
+
+The job runner:
+1. Polls the job table for records with `status = 'pending'`
+2. Updates status to `'processing'`
+3. Makes the HTTP request to your backend
+4. Updates status to `'success'` or `'failed'`
+5. Implements retry logic based on `retry_strategy`
+
+<Note>
+  See the `packages/job-runner` directory in the Spooky repository for a reference implementation in Rust.
+</Note>
+
+## Best Practices
+
+### Use assignedTo for Related Jobs
+
+Always link jobs to their parent entity using `assignedTo`. This makes it easy to query related jobs:
+
+<CodeBlock
+  code={`await db.run('api', '/process-order', 
+  { orderId: order.id },
+  { assignedTo: order.id }  // Link job to order
+);`}
+  lang="typescript"
+/>
+
+### Handle Failed Jobs in Your UI
+
+Check the job status and provide feedback to users:
+
+<CodeBlock
+  code={`const job = thread()?.jobs?.[0];
+
+if (job?.status === 'failed') {
+  return <ErrorMessage>
+    Operation failed after {job.retries} attempts. 
+    Please try again later.
+  </ErrorMessage>;
+}`}
+  lang="typescript"
+/>
+
+### Set Appropriate Retry Policies
+
+For idempotent operations, use higher retry counts. For non-idempotent operations, use lower retry counts or disable retries:
+
+<CodeBlock
+  code={`// Safe to retry multiple times
+await db.run('api', '/generate-content', data, {
+  max_retries: 5,
+  retry_strategy: 'exponential'
+});
+
+// Should not retry
+await db.run('api', '/charge-payment', data, {
+  max_retries: 0
+});`}
+  lang="typescript"
+/>
+
+### Use Permissions to Secure Jobs
+
+The job table should have permissions that prevent users from seeing or modifying other users' jobs:
+
+<CodeBlock
+  code={`DEFINE TABLE job SCHEMAFULL
+  PERMISSIONS
+    FOR select, create, update, delete 
+    WHERE $access = "account" AND assigned_to.author.id = $auth.id;`}
+  lang="sql"
+/>
+
+This ensures users can only access jobs assigned to records they own.

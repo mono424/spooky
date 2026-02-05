@@ -8,6 +8,7 @@ export const docsNav = [
       { text: 'Authentication', href: '/spooky/docs/authentication' },
       { text: 'Query Data', href: '/spooky/docs/query-data' },
       { text: 'Mutate Data', href: '/spooky/docs/mutate-data' },
+      { text: 'Backend Functions', href: '/spooky/docs/backend-functions' },
     ],
   },
   {

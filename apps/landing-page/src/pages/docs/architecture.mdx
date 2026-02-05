@@ -17,7 +17,7 @@ The system is composed of three main parts around a central database:
 
 ```mermaid
 graph TD
-    subgraph Client [Browser / App]
+    subgraph client_app [Client App]
         UI[UI Components]
         LocalDB[(IndexedDB)]
         WASM[Spooky Core]
@@ -26,13 +26,13 @@ graph TD
         WASM <-->|Persist| LocalDB
     end
 
-    subgraph Backend
+    subgraph backend_sys [Backend]
         Sidecar[Spooky Sidecar]
         DB[(SurrealDB)]
     end
 
-    WASM <-->|SurrealQL (WS)| DB
-    Sidecar <-->|Live Query & RPC| DB
+    WASM <-->|"SurrealQL (WS)"| DB
+    Sidecar <-->|"Live Query & RPC"| DB
 ```
 
 ## Why a Sidecar?

@@ -1,0 +1,54 @@
+# .github/workflows/preview.yml
+name: Deploy Landingpage PR previews
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - closed
+
+concurrency: preview-${{ github.ref }}
+
+env:
+  PREVIEW_BRANCH: gh-pages
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile --filter landing-page...
+
+      - name: Build with Astro
+        working-directory: apps/landing-page
+        run: pnpm run build
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/landing-page/dist
+
+      - name: Deploy preview
+        uses: rossjrw/pr-preview-action@v1
+        with:
+          source-dir: apps/landing-page/dist
+          preview-branch: ${{ env.PREVIEW_BRANCH }}
+          qr-code: true

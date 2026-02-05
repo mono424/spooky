@@ -78,7 +78,7 @@ const displayName = languageMap[lang.toLowerCase()] || lang;
     </button>
 
     {/* The Actual Code */}
-    <div class="p-4 text-sm font-mono leading-relaxed overflow-x-auto custom-scrollbar">
+    <div class="code-content p-4 text-sm font-mono leading-relaxed overflow-x-auto custom-scrollbar">
       {
         /* Use 'github-dark' or 'poimandres' for a good dark theme. 
          We wrap it in a div that handles the background color, 
@@ -120,9 +120,28 @@ const displayName = languageMap[lang.toLowerCase()] || lang;
   /* Important: We only override the background-color here.
      We removed the 'color' override so the syntax highlighting shows through.
   */
+  .code-content {
+    white-space: pre !important; /* Preserve all whitespace and indentation */
+  }
+  
   .astro-code {
     background-color: transparent !important;
     overflow-x: visible !important; /* Let parent handle overflow */
+    white-space: pre !important; /* Preserve indentation and whitespace */
+  }
+  
+  .astro-code code {
+    white-space: pre !important; /* Preserve indentation and whitespace in code elements */
+  }
+  
+  .astro-code pre {
+    white-space: pre !important; /* Preserve indentation and whitespace in pre elements */
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  
+  .astro-code span {
+    white-space: pre !important; /* Preserve whitespace in syntax highlighted spans */
   }
 
   /* Custom Scrollbar */

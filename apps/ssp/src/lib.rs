@@ -359,6 +359,7 @@ async fn ingest_handler(
                     let job_entry = JobEntry::from_record(
                         payload.id.clone(),
                         backend_info.base_url.clone(),
+                        backend_info.auth_token.clone(),
                         &payload.record,
                     );
                     

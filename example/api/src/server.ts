@@ -1,5 +1,6 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { logger } from 'hono/logger';
+import { bearerAuth } from 'hono/bearer-auth';
 import { createRoute, z as zOpenApi } from '@hono/zod-openapi';
 import { z } from 'zod';
 import { generateText, Output } from 'ai';
@@ -11,6 +12,14 @@ const model = anthropic('claude-haiku-4-5');
 const app = new OpenAPIHono();
 
 app.use(logger());
+
+// Add bearer token authentication
+app.use(
+  '/*',
+  bearerAuth({
+    token: process.env.API_AUTH_TOKEN || 'THIS_IS_TOP_SECRET',
+  })
+);
 
 const db = new Surreal({
   codecOptions: {
