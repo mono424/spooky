@@ -23,6 +23,9 @@ import {
   SchemaStructure,
   TableModel,
   TableNames,
+  BackendNames,
+  BackendRoutes,
+  RoutePayload,
 } from '@spooky/query-builder';
 
 import { DevToolsService } from './modules/devtools/index.js';
@@ -287,7 +290,10 @@ export class SpookyClient<S extends SchemaStructure> {
     return this.dataModule.subscribe(queryHash, callback, options);
   }
 
-  run(backend: string, path: string, payload: Record<string, unknown>, options?: RunOptions) {
+  run<
+    B extends BackendNames<S>,
+    R extends BackendRoutes<S, B>,
+  >(backend: B, path: R, payload: RoutePayload<S, B, R>, options?: RunOptions) {
     return this.dataModule.run(backend, path, payload, options);
   }
 

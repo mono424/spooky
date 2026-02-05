@@ -152,7 +152,7 @@ export function ThreadDetail() {
     setSpookifySending(false);
   };
 
-  const spookifyJobLoading = () => ['pending', 'processing'].includes(thread()?.jobs?.[0]?.status);
+  const spookifyJobLoading = () => ['pending', 'processing'].includes(thread()?.jobs?.[0]?.status ?? "");
 
   return (
     <div class="flex h-full">

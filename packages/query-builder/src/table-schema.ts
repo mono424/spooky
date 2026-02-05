@@ -149,6 +149,56 @@ export interface HTTPBackendRouteArgsDefinition {
   readonly optional: boolean;
 }
 
+// ============================================================================
+// BACKEND / RUN TYPE HELPERS
+// ============================================================================
+
+/** Extract all backend names from the schema */
+export type BackendNames<S extends SchemaStructure> = keyof S['backends'] & string;
+
+/** Extract all route paths for a specific backend */
+export type BackendRoutes<
+  S extends SchemaStructure,
+  B extends BackendNames<S>,
+> = keyof S['backends'][B]['routes'] & string;
+
+/** Build the typed payload for a specific route */
+export type RoutePayload<
+  S extends SchemaStructure,
+  B extends BackendNames<S>,
+  R extends BackendRoutes<S, B>,
+> = [keyof RouteArgsDef<S, B, R>] extends [never]
+  ? Record<string, never>
+  : Prettify<
+      { [K in RequiredRouteArgKeys<S, B, R>]: TypeNameToTypeMap[RouteArgsDef<S, B, R>[K]['type']] }
+      &
+      { [K in OptionalRouteArgKeys<S, B, R>]?: TypeNameToTypeMap[RouteArgsDef<S, B, R>[K]['type']] }
+    >;
+
+type RouteArgsDef<
+  S extends SchemaStructure,
+  B extends BackendNames<S>,
+  R extends BackendRoutes<S, B>,
+> = S['backends'][B]['routes'][R]['args'];
+
+type RequiredRouteArgKeys<
+  S extends SchemaStructure,
+  B extends BackendNames<S>,
+  R extends BackendRoutes<S, B>,
+> = {
+  [K in keyof RouteArgsDef<S, B, R>]: RouteArgsDef<S, B, R>[K]['optional'] extends true ? never : K;
+}[keyof RouteArgsDef<S, B, R>] & string;
+
+type OptionalRouteArgKeys<
+  S extends SchemaStructure,
+  B extends BackendNames<S>,
+  R extends BackendRoutes<S, B>,
+> = {
+  [K in keyof RouteArgsDef<S, B, R>]: RouteArgsDef<S, B, R>[K]['optional'] extends true ? K : never;
+}[keyof RouteArgsDef<S, B, R>] & string;
+
+type Prettify<T> = { [K in keyof T]: T[K] } & {};
+
 /**
  * Extract a specific table by name from the schema tables array
  */

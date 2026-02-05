@@ -1,5 +1,5 @@
 import { RecordId, Duration } from 'surrealdb';
-import { SchemaStructure, TableNames } from '@spooky/query-builder';
+import { SchemaStructure, TableNames, BackendNames, BackendRoutes, RoutePayload } from '@spooky/query-builder';
 import { LocalDatabaseService } from '../../services/database/index.js';
 import { CacheModule, RecordWithId } from '../cache/index.js';
 import { Logger } from '../../services/logger/index.js';
@@ -303,12 +303,15 @@ export class DataModule<S extends SchemaStructure> {
 
   // ====================      RUN JOBS       ====================
 
-  async run<T extends Record<string, unknown>>(
-    backend: string,
-    path: string,
-    data: T,
+  async run<
+    B extends BackendNames<S>,
+    R extends BackendRoutes<S, B>,
+  >(
+    backend: B,
+    path: R,
+    data: RoutePayload<S, B, R>,
     options?: RunOptions
-  ): Promise<T> {
+  ): Promise<void> {
     const route = this.schema.backends?.[backend]?.routes?.[path];
     if (!route) {
       throw new Error(`Route ${backend}.${path} not found`);
@@ -322,10 +325,10 @@ export class DataModule<S extends SchemaStructure> {
     const payload: Record<string, unknown> = {};
     for (const argName of Object.keys(route.args)) {
       const arg = route.args[argName];
-      if (data[argName] === undefined && arg.optional === false) {
+      if ((data as Record<string, unknown>)[argName] === undefined && arg.optional === false) {
         throw new Error(`Missing required argument ${argName}`);
       }
-      payload[argName] = data[argName];
+      payload[argName] = (data as Record<string, unknown>)[argName];
     }
 
     const record: Record<string, unknown> = {
@@ -340,7 +343,7 @@ export class DataModule<S extends SchemaStructure> {
     }
 
     const recordId = `${tableName}:${generateId()}`;
-    return this.create(recordId, record) as Promise<T>;
+    await this.create(recordId, record);
   }
 
   // ==================== MUTATION MANAGEMENT ====================

@@ -19,6 +19,9 @@ import {
   GetRelationship,
   RelatedFieldMapEntry,
   InnerQuery,
+  BackendNames,
+  BackendRoutes,
+  RoutePayload,
 } from '@spooky/query-builder';
 
 import { RecordId, Uuid, Surreal } from 'surrealdb';
@@ -164,11 +167,14 @@ export class SyncedDb<S extends SchemaStructure> {
   /**
    * Run a backend operation
    */
-  public async run(
-    backend: string,
-    path: string,
-    payload: Record<string, unknown>,
-    options?: RunOptions
+  public async run<
+    B extends BackendNames<S>,
+    R extends BackendRoutes<S, B>,
+  >(
+    backend: B,
+    path: R,
+    payload: RoutePayload<S, B, R>,
+    options?: RunOptions,
   ): Promise<void> {
     if (!this.spooky) throw new Error('SyncedDb not initialized');
     await this.spooky.run(backend, path, payload, options);
