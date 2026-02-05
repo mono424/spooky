@@ -9,6 +9,11 @@ on:
       - synchronize
       - closed
 
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
 concurrency: preview-${{ github.ref }}
 
 env:
