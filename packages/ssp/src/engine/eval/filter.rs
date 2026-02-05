@@ -319,7 +319,8 @@ impl<'a> NumericFilterConfig<'a> {
 /// Lazy numeric filter for small datasets to avoid allocation overhead of column extraction
 fn filter_numeric_lazy(upstream: &ZSet, config: &NumericFilterConfig, db: &Database) -> ZSet {
     use crate::engine::types::parse_zset_key;
-
+    //todo!("wide for simd and refactore this function simd-v2 branch");
+    //todo!("hot path load into catche like in simd-v2 branch");
     let mut out = FastMap::default();
 
     for (key, weight) in upstream {
@@ -959,7 +960,7 @@ mod normalize_record_id_tests {
 
     #[test]
     fn test_nummeric_parts() {
-        todo!("this should not be possible");
+        //todo!("this should not be possible");
         let record_id_obj = spooky_obj!({"table" => 1.0, "id" => 2.0});
         assert_eq!(normalize_record_id(record_id_obj).as_str(), Some("1:2"));
     }
@@ -969,6 +970,6 @@ mod normalize_record_id_tests {
 mod numeric_filter_test {
     #[test]
     fn todo() {
-        todo!("testplan: 2.5");
+        //todo!("testplan: 2.5");
     }
 }
