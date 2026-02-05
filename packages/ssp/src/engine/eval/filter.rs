@@ -387,7 +387,7 @@ mod resolve_nested_value_tests {
     use crate::spooky_obj;
 
     #[test]
-    fn test_resolve_empty_path() {
+    fn test_empty_path() {
         // Empty path should return the root unchanged
         let root = SpookyValue::Object({
             let mut map = FastMap::default();
@@ -412,7 +412,7 @@ mod resolve_nested_value_tests {
     }
 
     #[test]
-    fn test_resolve_empty_path_with_primitive() {
+    fn test_empty_path_with_primitive() {
         // Empty path with primitive value
         let root = SpookyValue::Str(SmolStr::new("hello"));
         let empty_path = Path::new("");
@@ -424,7 +424,7 @@ mod resolve_nested_value_tests {
     }
 
     #[test]
-    fn test_resolve_empty_path_with_null() {
+    fn test_empty_path_with_null() {
         let root = SpookyValue::Null;
         let empty_path = Path::new("");
 
@@ -435,7 +435,7 @@ mod resolve_nested_value_tests {
     }
 
     #[test]
-    fn test_resolve_empty_path_with_none_root() {
+    fn test_empty_path_with_none_root() {
         let empty_path = Path::new("");
 
         let result = resolve_nested_value(None, &empty_path);
@@ -445,7 +445,7 @@ mod resolve_nested_value_tests {
     }
 
     #[test]
-    fn test_resolve_single_level() {
+    fn test_single_level() {
         let root = SpookyValue::Object({
             let mut map = FastMap::default();
             map.insert(SmolStr::new("a"), SpookyValue::Number(1.00));
@@ -458,7 +458,7 @@ mod resolve_nested_value_tests {
     }
 
     #[test]
-    fn test_resolve_nested() {
+    fn test_nested() {
         let root = SpookyValue::Object({
             let mut map = FastMap::default();
             let inner_obj = SpookyValue::Object({
@@ -477,7 +477,7 @@ mod resolve_nested_value_tests {
     }
 
     #[test]
-    fn test_resolve_missing_key() {
+    fn test_missing_key() {
         let root = SpookyValue::Object({
             let mut map = FastMap::default();
             map.insert(SmolStr::new("a"), SpookyValue::Number(1.00));
@@ -493,7 +493,7 @@ mod resolve_nested_value_tests {
     }
 
     #[test]
-    fn test_resolve_deep_nesting() {
+    fn test_deep_nesting() {
         // 6 levels deep: a.b.c.d.e.value
         let root = spooky_obj!({
             "a" => {
@@ -548,7 +548,7 @@ mod compare_spooky_values_tests {
     use std::{cmp::Ordering, f64::NAN};
 
     #[test]
-    fn test_compare_nulls() {
+    fn test_nulls() {
         let null_a = SpookyValue::Null;
         let null_b = SpookyValue::Null;
 
@@ -558,7 +558,7 @@ mod compare_spooky_values_tests {
     }
 
     #[test]
-    fn test_compare_bool() {
+    fn test_bool() {
         let bool_a = SpookyValue::Bool(false);
         let bool_b = SpookyValue::Bool(true);
 
@@ -569,7 +569,7 @@ mod compare_spooky_values_tests {
     }
 
     #[test]
-    fn test_compare_numbers() {
+    fn test_numbers() {
         let num_a = SpookyValue::Number(10.00);
         let num_b = SpookyValue::Number(9.00);
         let num_nan = SpookyValue::Number(NAN);
@@ -582,7 +582,7 @@ mod compare_spooky_values_tests {
     }
 
     #[test]
-    fn test_compare_strings() {
+    fn test_strings() {
         let str_a = SpookyValue::Str(SmolStr::new("A"));
         let str_b = SpookyValue::Str(SmolStr::new("B"));
         let res = compare_spooky_values(Some(&str_a), Some(&str_b));
@@ -592,7 +592,7 @@ mod compare_spooky_values_tests {
     }
 
     #[test]
-    fn test_compare_arrays_by_len() {
+    fn test_arrays_by_len() {
         // Shorter array < Longer array
         let short = SpookyValue::Array(vec![SpookyValue::Number(1.0)]);
         let long = SpookyValue::Array(vec![
@@ -638,254 +638,246 @@ mod compare_spooky_values_tests {
         );
     }
 
-    #[cfg(test)]
-    mod compare_spooky_values_tests {
-        use super::*;
-        use std::cmp::Ordering;
+    #[test]
+    fn test_arrays_by_length() {
+        // Shorter array < Longer array
+        let short = SpookyValue::Array(vec![SpookyValue::Number(1.0)]);
 
-        #[test]
-        fn test_compare_arrays_by_length() {
-            // Shorter array < Longer array
-            let short = SpookyValue::Array(vec![SpookyValue::Number(1.0)]);
+        let long = SpookyValue::Array(vec![
+            SpookyValue::Number(1.0),
+            SpookyValue::Number(2.0),
+            SpookyValue::Number(3.0),
+        ]);
 
-            let long = SpookyValue::Array(vec![
-                SpookyValue::Number(1.0),
-                SpookyValue::Number(2.0),
-                SpookyValue::Number(3.0),
-            ]);
+        assert_eq!(
+            compare_spooky_values(Some(&short), Some(&long)),
+            Ordering::Less
+        );
 
-            assert_eq!(
-                compare_spooky_values(Some(&short), Some(&long)),
-                Ordering::Less
-            );
+        assert_eq!(
+            compare_spooky_values(Some(&long), Some(&short)),
+            Ordering::Greater
+        );
 
-            assert_eq!(
-                compare_spooky_values(Some(&long), Some(&short)),
-                Ordering::Greater
-            );
+        // Empty array is shortest
+        let empty = SpookyValue::Array(vec![]);
 
-            // Empty array is shortest
-            let empty = SpookyValue::Array(vec![]);
+        assert_eq!(
+            compare_spooky_values(Some(&empty), Some(&short)),
+            Ordering::Less
+        );
 
-            assert_eq!(
-                compare_spooky_values(Some(&empty), Some(&short)),
-                Ordering::Less
-            );
+        assert_eq!(
+            compare_spooky_values(Some(&empty), Some(&long)),
+            Ordering::Less
+        );
+    }
 
-            assert_eq!(
-                compare_spooky_values(Some(&empty), Some(&long)),
-                Ordering::Less
-            );
-        }
+    #[test]
+    fn test_arrays_same_length() {
+        // Same length: element-wise comparison
+        let arr_a = SpookyValue::Array(vec![SpookyValue::Number(1.0), SpookyValue::Number(2.0)]);
 
-        #[test]
-        fn test_compare_arrays_same_length() {
-            // Same length: element-wise comparison
-            let arr_a =
-                SpookyValue::Array(vec![SpookyValue::Number(1.0), SpookyValue::Number(2.0)]);
+        let arr_b = SpookyValue::Array(vec![
+            SpookyValue::Number(1.0),
+            SpookyValue::Number(3.0), // 3 > 2
+        ]);
 
-            let arr_b = SpookyValue::Array(vec![
-                SpookyValue::Number(1.0),
-                SpookyValue::Number(3.0), // 3 > 2
-            ]);
+        // arr_a < arr_b because at index 1: 2 < 3
+        assert_eq!(
+            compare_spooky_values(Some(&arr_a), Some(&arr_b)),
+            Ordering::Less
+        );
 
-            // arr_a < arr_b because at index 1: 2 < 3
-            assert_eq!(
-                compare_spooky_values(Some(&arr_a), Some(&arr_b)),
-                Ordering::Less
-            );
+        assert_eq!(
+            compare_spooky_values(Some(&arr_b), Some(&arr_a)),
+            Ordering::Greater
+        );
 
-            assert_eq!(
-                compare_spooky_values(Some(&arr_b), Some(&arr_a)),
-                Ordering::Greater
-            );
+        // Equal arrays
+        let arr_c = SpookyValue::Array(vec![SpookyValue::Number(1.0), SpookyValue::Number(2.0)]);
 
-            // Equal arrays
-            let arr_c =
-                SpookyValue::Array(vec![SpookyValue::Number(1.0), SpookyValue::Number(2.0)]);
+        assert_eq!(
+            compare_spooky_values(Some(&arr_a), Some(&arr_c)),
+            Ordering::Equal
+        );
 
-            assert_eq!(
-                compare_spooky_values(Some(&arr_a), Some(&arr_c)),
-                Ordering::Equal
-            );
+        // First element differs
+        let arr_first_bigger =
+            SpookyValue::Array(vec![SpookyValue::Number(99.0), SpookyValue::Number(1.0)]);
 
-            // First element differs
-            let arr_first_bigger =
-                SpookyValue::Array(vec![SpookyValue::Number(99.0), SpookyValue::Number(1.0)]);
+        assert_eq!(
+            compare_spooky_values(Some(&arr_a), Some(&arr_first_bigger)),
+            Ordering::Less
+        );
 
-            assert_eq!(
-                compare_spooky_values(Some(&arr_a), Some(&arr_first_bigger)),
-                Ordering::Less
-            );
+        // Mixed types in array
+        let arr_mixed_a =
+            SpookyValue::Array(vec![SpookyValue::Bool(false), SpookyValue::Number(1.0)]);
 
-            // Mixed types in array
-            let arr_mixed_a =
-                SpookyValue::Array(vec![SpookyValue::Bool(false), SpookyValue::Number(1.0)]);
+        let arr_mixed_b =
+            SpookyValue::Array(vec![SpookyValue::Bool(true), SpookyValue::Number(1.0)]);
 
-            let arr_mixed_b =
-                SpookyValue::Array(vec![SpookyValue::Bool(true), SpookyValue::Number(1.0)]);
+        // false < true
+        assert_eq!(
+            compare_spooky_values(Some(&arr_mixed_a), Some(&arr_mixed_b)),
+            Ordering::Less
+        );
+    }
 
-            // false < true
-            assert_eq!(
-                compare_spooky_values(Some(&arr_mixed_a), Some(&arr_mixed_b)),
-                Ordering::Less
-            );
-        }
+    #[test]
+    fn tests_objects_by_length() {
+        // 1 key
+        let obj_one_key = SpookyValue::Object({
+            let mut map = FastMap::default();
+            map.insert(SmolStr::new("a"), SpookyValue::Number(1.0));
+            map
+        });
 
-        #[test]
-        fn test_compare_objects_by_length() {
-            // 1 key
-            let obj_one_key = SpookyValue::Object({
-                let mut map = FastMap::default();
-                map.insert(SmolStr::new("a"), SpookyValue::Number(1.0));
-                map
-            });
+        // 3 keys
+        let obj_three_keys = SpookyValue::Object({
+            let mut map = FastMap::default();
+            map.insert(SmolStr::new("a"), SpookyValue::Number(1.0));
+            map.insert(SmolStr::new("b"), SpookyValue::Number(2.0));
+            map.insert(SmolStr::new("c"), SpookyValue::Number(3.0));
+            map
+        });
 
-            // 3 keys
-            let obj_three_keys = SpookyValue::Object({
-                let mut map = FastMap::default();
-                map.insert(SmolStr::new("a"), SpookyValue::Number(1.0));
-                map.insert(SmolStr::new("b"), SpookyValue::Number(2.0));
-                map.insert(SmolStr::new("c"), SpookyValue::Number(3.0));
-                map
-            });
+        // Fewer keys < More keys
+        assert_eq!(
+            compare_spooky_values(Some(&obj_one_key), Some(&obj_three_keys)),
+            Ordering::Less
+        );
 
-            // Fewer keys < More keys
-            assert_eq!(
-                compare_spooky_values(Some(&obj_one_key), Some(&obj_three_keys)),
-                Ordering::Less
-            );
+        assert_eq!(
+            compare_spooky_values(Some(&obj_three_keys), Some(&obj_one_key)),
+            Ordering::Greater
+        );
 
-            assert_eq!(
-                compare_spooky_values(Some(&obj_three_keys), Some(&obj_one_key)),
-                Ordering::Greater
-            );
+        // Same key count = Equal (values don't matter)
+        let obj_same_count = SpookyValue::Object({
+            let mut map = FastMap::default();
+            map.insert(SmolStr::new("x"), SpookyValue::Number(999.0));
+            map
+        });
 
-            // Same key count = Equal (values don't matter)
-            let obj_same_count = SpookyValue::Object({
-                let mut map = FastMap::default();
-                map.insert(SmolStr::new("x"), SpookyValue::Number(999.0));
-                map
-            });
+        assert_eq!(
+            compare_spooky_values(Some(&obj_one_key), Some(&obj_same_count)),
+            Ordering::Equal
+        );
 
-            assert_eq!(
-                compare_spooky_values(Some(&obj_one_key), Some(&obj_same_count)),
-                Ordering::Equal
-            );
+        // Empty object is smallest
+        let obj_empty = SpookyValue::Object(FastMap::default());
 
-            // Empty object is smallest
-            let obj_empty = SpookyValue::Object(FastMap::default());
+        assert_eq!(
+            compare_spooky_values(Some(&obj_empty), Some(&obj_one_key)),
+            Ordering::Less
+        );
 
-            assert_eq!(
-                compare_spooky_values(Some(&obj_empty), Some(&obj_one_key)),
-                Ordering::Less
-            );
+        assert_eq!(
+            compare_spooky_values(Some(&obj_empty), Some(&obj_three_keys)),
+            Ordering::Less
+        );
+    }
 
-            assert_eq!(
-                compare_spooky_values(Some(&obj_empty), Some(&obj_three_keys)),
-                Ordering::Less
-            );
-        }
+    #[test]
+    fn test_different_types() {
+        // Type rank order: Null(0) < Bool(1) < Number(2) < Str(3) < Array(4) < Object(5)
 
-        #[test]
-        fn test_compare_different_types() {
-            // Type rank order: Null(0) < Bool(1) < Number(2) < Str(3) < Array(4) < Object(5)
+        let null = SpookyValue::Null;
+        let bool_val = SpookyValue::Bool(true);
+        let number = SpookyValue::Number(42.0);
+        let string = SpookyValue::Str(SmolStr::new("hello"));
+        let array = SpookyValue::Array(vec![SpookyValue::Number(1.0)]);
+        let object = SpookyValue::Object({
+            let mut map = FastMap::default();
+            map.insert(SmolStr::new("a"), SpookyValue::Number(1.0));
+            map
+        });
 
-            let null = SpookyValue::Null;
-            let bool_val = SpookyValue::Bool(true);
-            let number = SpookyValue::Number(42.0);
-            let string = SpookyValue::Str(SmolStr::new("hello"));
-            let array = SpookyValue::Array(vec![SpookyValue::Number(1.0)]);
-            let object = SpookyValue::Object({
-                let mut map = FastMap::default();
-                map.insert(SmolStr::new("a"), SpookyValue::Number(1.0));
-                map
-            });
+        // Null < everything
+        assert_eq!(
+            compare_spooky_values(Some(&null), Some(&bool_val)),
+            Ordering::Less
+        );
+        assert_eq!(
+            compare_spooky_values(Some(&null), Some(&number)),
+            Ordering::Less
+        );
+        assert_eq!(
+            compare_spooky_values(Some(&null), Some(&string)),
+            Ordering::Less
+        );
 
-            // Null < everything
-            assert_eq!(
-                compare_spooky_values(Some(&null), Some(&bool_val)),
-                Ordering::Less
-            );
-            assert_eq!(
-                compare_spooky_values(Some(&null), Some(&number)),
-                Ordering::Less
-            );
-            assert_eq!(
-                compare_spooky_values(Some(&null), Some(&string)),
-                Ordering::Less
-            );
+        // Bool < Number
+        assert_eq!(
+            compare_spooky_values(Some(&bool_val), Some(&number)),
+            Ordering::Less
+        );
 
-            // Bool < Number
-            assert_eq!(
-                compare_spooky_values(Some(&bool_val), Some(&number)),
-                Ordering::Less
-            );
+        // Number < String
+        assert_eq!(
+            compare_spooky_values(Some(&number), Some(&string)),
+            Ordering::Less
+        );
 
-            // Number < String
-            assert_eq!(
-                compare_spooky_values(Some(&number), Some(&string)),
-                Ordering::Less
-            );
+        // String < Array
+        assert_eq!(
+            compare_spooky_values(Some(&string), Some(&array)),
+            Ordering::Less
+        );
 
-            // String < Array
-            assert_eq!(
-                compare_spooky_values(Some(&string), Some(&array)),
-                Ordering::Less
-            );
+        // Array < Object
+        assert_eq!(
+            compare_spooky_values(Some(&array), Some(&object)),
+            Ordering::Less
+        );
 
-            // Array < Object
-            assert_eq!(
-                compare_spooky_values(Some(&array), Some(&object)),
-                Ordering::Less
-            );
+        // Reverse: Object > everything
+        assert_eq!(
+            compare_spooky_values(Some(&object), Some(&null)),
+            Ordering::Greater
+        );
+        assert_eq!(
+            compare_spooky_values(Some(&object), Some(&array)),
+            Ordering::Greater
+        );
+    }
 
-            // Reverse: Object > everything
-            assert_eq!(
-                compare_spooky_values(Some(&object), Some(&null)),
-                Ordering::Greater
-            );
-            assert_eq!(
-                compare_spooky_values(Some(&object), Some(&array)),
-                Ordering::Greater
-            );
-        }
+    #[test]
+    fn test_none_vs_some() {
+        // None < Some (any value)
+        let null = SpookyValue::Null;
+        let number = SpookyValue::Number(42.0);
+        let string = SpookyValue::Str(SmolStr::new("hello"));
 
-        #[test]
-        fn test_compare_none_vs_some() {
-            // None < Some (any value)
-            let null = SpookyValue::Null;
-            let number = SpookyValue::Number(42.0);
-            let string = SpookyValue::Str(SmolStr::new("hello"));
+        // None < Some(Null)
+        assert_eq!(compare_spooky_values(None, Some(&null)), Ordering::Less);
 
-            // None < Some(Null)
-            assert_eq!(compare_spooky_values(None, Some(&null)), Ordering::Less);
+        // None < Some(Number)
+        assert_eq!(compare_spooky_values(None, Some(&number)), Ordering::Less);
 
-            // None < Some(Number)
-            assert_eq!(compare_spooky_values(None, Some(&number)), Ordering::Less);
+        // None < Some(String)
+        assert_eq!(compare_spooky_values(None, Some(&string)), Ordering::Less);
 
-            // None < Some(String)
-            assert_eq!(compare_spooky_values(None, Some(&string)), Ordering::Less);
+        // Some > None
+        assert_eq!(compare_spooky_values(Some(&null), None), Ordering::Greater);
 
-            // Some > None
-            assert_eq!(compare_spooky_values(Some(&null), None), Ordering::Greater);
+        assert_eq!(
+            compare_spooky_values(Some(&number), None),
+            Ordering::Greater
+        );
+    }
 
-            assert_eq!(
-                compare_spooky_values(Some(&number), None),
-                Ordering::Greater
-            );
-        }
-
-        #[test]
-        fn test_compare_both_none() {
-            // None == None
-            assert_eq!(compare_spooky_values(None, None), Ordering::Equal);
-        }
+    #[test]
+    fn test_both_none() {
+        // None == None
+        assert_eq!(compare_spooky_values(None, None), Ordering::Equal);
     }
 }
 
 #[cfg(test)]
-mod test_spooky_hash {
+mod hash_spooky_value_tests {
     use crate::spooky_obj;
 
     use super::*;
@@ -924,5 +916,59 @@ mod test_spooky_hash {
         assert_eq!(hash_spooky_value(&obj_a), hash_spooky_value(&obj_b));
         assert_ne!(hash_spooky_value(&obj_a), hash_spooky_value(&obj_c));
         assert_ne!(hash_spooky_value(&obj_a), hash_spooky_value(&obj_d));
+    }
+}
+
+#[cfg(test)]
+mod normalize_record_id_tests {
+    use super::*;
+    use crate::spooky_obj;
+
+    #[test]
+    fn test_object_tb_id() {
+        let record_id_obj = spooky_obj!({"tb" => "user", "id" => "123"});
+        assert_eq!(
+            normalize_record_id(record_id_obj).as_str(),
+            Some("user:123")
+        );
+    }
+
+    #[test]
+    fn test_object_table_id() {
+        let record_id_obj = spooky_obj!({"table" => "user", "id" => "123"});
+        assert_eq!(
+            normalize_record_id(record_id_obj).as_str(),
+            Some("user:123")
+        );
+    }
+
+    #[test]
+    fn test_already_string() {
+        let record_id = SpookyValue::Str("user:123".into());
+        assert_eq!(normalize_record_id(record_id).as_str(), Some("user:123"));
+    }
+
+    #[test]
+    fn test_non_record_obj() {
+        let record_id_obj = spooky_obj!({"a" => 1.0, "b" => 2.0});
+        assert_eq!(
+            normalize_record_id(record_id_obj),
+            spooky_obj!({"a" => 1.0, "b" => 2.0})
+        );
+    }
+
+    #[test]
+    fn test_nummeric_parts() {
+        todo!("this should not be possible");
+        let record_id_obj = spooky_obj!({"table" => 1.0, "id" => 2.0});
+        assert_eq!(normalize_record_id(record_id_obj).as_str(), Some("1:2"));
+    }
+}
+
+#[cfg(test)]
+mod numeric_filter_test {
+    #[test]
+    fn todo() {
+        todo!("testplan: 2.5");
     }
 }
