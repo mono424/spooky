@@ -542,7 +542,7 @@ mod resolve_nested_value_tests {
 
 #[cfg(test)]
 mod compare_spooky_values_tests {
-    use crate::spooky_obj;
+    //use crate::spooky_obj;
 
     use super::*;
     use std::{cmp::Ordering, f64::NAN};
@@ -881,5 +881,48 @@ mod compare_spooky_values_tests {
             // None == None
             assert_eq!(compare_spooky_values(None, None), Ordering::Equal);
         }
+    }
+}
+
+#[cfg(test)]
+mod test_spooky_hash {
+    use crate::spooky_obj;
+
+    use super::*;
+
+    #[test]
+    fn test_null_deterministic() {
+        let hash_a = hash_spooky_value(&SpookyValue::Null);
+        let hash_b = hash_spooky_value(&SpookyValue::Null);
+        let hash_diff = hash_spooky_value(&SpookyValue::Number(1.0));
+        assert_eq!(hash_a, hash_b);
+        assert_ne!(hash_a, hash_diff);
+    }
+
+    #[test]
+    fn test_obj_hash() {
+        let obj_a = spooky_obj!({"a" => 1.0});
+        let obj_b = spooky_obj!({"a" => 1.0});
+        let obj_c = spooky_obj!({"b" => 1.0});
+        assert_eq!(hash_spooky_value(&obj_a), hash_spooky_value(&obj_b));
+        assert_ne!(hash_spooky_value(&obj_a), hash_spooky_value(&obj_c));
+    }
+
+    #[test]
+    fn test_obj_diff_value() {
+        let obj_a = spooky_obj!({"a" => 1.0});
+        let obj_b = spooky_obj!({"a" => 2.0});
+        assert_ne!(hash_spooky_value(&obj_a), hash_spooky_value(&obj_b));
+    }
+
+    #[test]
+    fn test_obj_nested_obj() {
+        let obj_a = spooky_obj!({"a" => {"b" => {"c" => 1.0}}});
+        let obj_b = spooky_obj!({"a" => {"b" => {"c" => 1.0}}});
+        let obj_c = spooky_obj!({"a" => {"b" => {"c" => 2.0}}});
+        let obj_d = spooky_obj!({"a" => {"b" => {"d" => 1.0}}});
+        assert_eq!(hash_spooky_value(&obj_a), hash_spooky_value(&obj_b));
+        assert_ne!(hash_spooky_value(&obj_a), hash_spooky_value(&obj_c));
+        assert_ne!(hash_spooky_value(&obj_a), hash_spooky_value(&obj_d));
     }
 }
