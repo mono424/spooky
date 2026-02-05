@@ -15,5 +15,4 @@ export default defineConfig({
     react(),
     mdx(),
   ],
-  build: { assets: 'assets' },
 });
