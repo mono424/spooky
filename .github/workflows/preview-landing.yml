@@ -45,6 +45,8 @@ jobs:
 
       - name: Build with Astro
         working-directory: apps/landing-page
+        env:
+          ASTRO_BASE_PATH: /spooky/pr-preview/pr-${{ github.event.pull_request.number }}
         run: pnpm run build
 
       - name: Upload artifact

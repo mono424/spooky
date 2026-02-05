@@ -7,7 +7,7 @@ import mdx from "@astrojs/mdx";
 // https://astro.build/config
 export default defineConfig({
   site: 'https://mono424.github.io',
-  base: '/spooky',
+  base: process.env.ASTRO_BASE_PATH || '/spooky',
   integrations: [
     tailwind({
       applyBaseStyles: false,
