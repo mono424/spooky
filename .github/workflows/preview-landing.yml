@@ -51,4 +51,5 @@ jobs:
         with:
           source-dir: apps/landing-page/dist
           preview-branch: ${{ env.PREVIEW_BRANCH }}
+          preview-url: ${{ steps.pages.outputs.page_url }}
           qr-code: true
