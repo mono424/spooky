@@ -42,3 +42,4 @@ jobs:
           folder: apps/landing-page/dist
           branch: gh-pages
           clean: true
+          clean-exclude: pr-preview/
