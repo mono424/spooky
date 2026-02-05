@@ -1,4 +1,4 @@
-import { MutationEventType } from '../types.js';
+import { MutationEventType } from '../types';
 
 export const surql = {
   seal(query: string) {

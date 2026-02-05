@@ -1,10 +1,10 @@
 import { RecordId } from 'surrealdb';
-import { RemoteDatabaseService } from '../../services/database/index.js';
-import { CacheModule, CacheRecord, RecordWithId } from '../cache/index.js';
-import { RecordVersionDiff } from '../../types.js';
-import { Logger } from '../../services/logger/index.js';
-import { SyncEventTypes, createSyncEventSystem } from './events/index.js';
-import { encodeRecordId } from '../../utils/index.js';
+import { RemoteDatabaseService } from '../../services/database/index';
+import { CacheModule, CacheRecord, RecordWithId } from '../cache/index';
+import { RecordVersionDiff } from '../../types';
+import { Logger } from '../../services/logger/index';
+import { SyncEventTypes, createSyncEventSystem } from './events/index';
+import { encodeRecordId } from '../../utils/index';
 
 /**
  * SyncEngine handles the core sync operations: fetching remote records,

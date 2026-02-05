@@ -1,10 +1,10 @@
 import { applyDiagnostics, DateTime, Diagnostic, RecordId, Surreal } from 'surrealdb';
 import { createWasmWorkerEngines } from '@surrealdb/wasm';
-import { SpookyConfig } from '../../types.js';
-import { Logger } from '../logger/index.js';
-import { AbstractDatabaseService } from './database.js';
-import { createDatabaseEventSystem, DatabaseEventTypes } from './events/index.js';
-import { encodeRecordId, parseRecordIdString, surql } from '../../utils/index.js';
+import { SpookyConfig } from '../../types';
+import { Logger } from '../logger/index';
+import { AbstractDatabaseService } from './database';
+import { createDatabaseEventSystem, DatabaseEventTypes } from './events/index';
+import { encodeRecordId, parseRecordIdString, surql } from '../../utils/index';
 
 export class LocalDatabaseService extends AbstractDatabaseService {
   private config: SpookyConfig<any>['database'];

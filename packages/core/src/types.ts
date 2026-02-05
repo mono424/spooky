@@ -1,7 +1,7 @@
 import { RecordId, SchemaStructure } from '@spooky/query-builder';
 import { Level } from 'pino';
-import { PushEventOptions } from './events/index.js';
-import { UpEvent } from './modules/sync/index.js';
+import { PushEventOptions } from './events/index';
+import { UpEvent } from './modules/sync/index';
 
 export type { Level } from 'pino';
 

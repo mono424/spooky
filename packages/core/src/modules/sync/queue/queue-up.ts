@@ -1,13 +1,13 @@
 import { RecordId } from 'surrealdb';
-import { LocalDatabaseService } from '../../../services/database/index.js';
+import { LocalDatabaseService } from '../../../services/database/index';
 import {
   createSyncQueueEventSystem,
   SyncQueueEventSystem,
   SyncQueueEventTypes,
-} from '../events/index.js';
-import { parseRecordIdString } from '../../../utils/index.js';
-import { Logger } from '../../../services/logger/index.js';
-import { PushEventOptions } from '../../../events/index.js';
+} from '../events/index';
+import { parseRecordIdString } from '../../../utils/index';
+import { Logger } from '../../../services/logger/index';
+import { PushEventOptions } from '../../../events/index';
 
 export type CreateEvent = {
   type: 'create';

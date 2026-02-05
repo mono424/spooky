@@ -1,10 +1,10 @@
 import init, { SpookyProcessor } from '@spooky/ssp-wasm';
-import { EventDefinition, EventSystem } from '../../events/index.js';
+import { EventDefinition, EventSystem } from '../../events/index';
 import { Logger } from 'pino';
-import { LocalDatabaseService } from '../database/index.js';
-import { WasmProcessor, WasmStreamUpdate } from './wasm-types.js';
+import { LocalDatabaseService } from '../database/index';
+import { WasmProcessor, WasmStreamUpdate } from './wasm-types';
 import { Duration } from 'surrealdb';
-import { PersistenceClient, QueryTimeToLive, RecordVersionArray } from '../../types.js';
+import { PersistenceClient, QueryTimeToLive, RecordVersionArray } from '../../types';
 
 // Simple interface for query plan registration (replaces Incantation class)
 interface QueryPlanConfig {

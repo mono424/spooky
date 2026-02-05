@@ -1,9 +1,9 @@
 import { RecordId, Duration } from 'surrealdb';
 import { SchemaStructure, TableNames, BackendNames, BackendRoutes, RoutePayload } from '@spooky/query-builder';
-import { LocalDatabaseService } from '../../services/database/index.js';
-import { CacheModule, RecordWithId } from '../cache/index.js';
-import { Logger } from '../../services/logger/index.js';
-import { StreamUpdate } from '../../services/stream-processor/index.js';
+import { LocalDatabaseService } from '../../services/database/index';
+import { CacheModule, RecordWithId } from '../cache/index';
+import { Logger } from '../../services/logger/index';
+import { StreamUpdate } from '../../services/stream-processor/index';
 import {
   MutationEvent,
   QueryConfig,
@@ -16,7 +16,7 @@ import {
   QueryConfigRecord,
   UpdateOptions,
   RunOptions,
-} from '../../types.js';
+} from '../../types';
 import {
   parseRecordIdString,
   extractIdPart,
@@ -27,9 +27,9 @@ import {
   parseParams,
   extractTablePart,
   generateId,
-} from '../../utils/index.js';
-import { CreateEvent, DeleteEvent, UpdateEvent } from '../sync/index.js';
-import { PushEventOptions } from '../../events/index.js';
+} from '../../utils/index';
+import { CreateEvent, DeleteEvent, UpdateEvent } from '../sync/index';
+import { PushEventOptions } from '../../events/index';
 
 /**
  * DataModule - Unified query and mutation management
