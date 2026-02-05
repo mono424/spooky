@@ -28,7 +28,8 @@ const currentPath = Astro.url.pathname;
           {group.links.map((link) => {
             const isActive =
               currentPath === link.href ||
-              (link.href !== '/spooky/docs' && currentPath.startsWith(link.href));
+              (link.href !== `${process.env.ASTRO_BASE_PATH}/docs` &&
+                currentPath.startsWith(link.href));
             return (
               <li>
                 <a

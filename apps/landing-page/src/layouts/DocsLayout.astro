@@ -97,7 +97,10 @@ const activeGroup = nav.find((g: any) =>
           <nav
             class="flex items-center text-sm text-text-muted mb-6 overflow-x-auto whitespace-nowrap"
           >
-            <a href="/spooky/docs" class="hover:text-primary transition-colors">Docs</a>
+            <a
+              href={`${process.env.ASTRO_BASE_PATH}/docs`}
+              class="hover:text-primary transition-colors">Docs</a
+            >
             {
               activeGroup && (
                 <>
