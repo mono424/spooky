@@ -419,8 +419,6 @@ mod resolve_nested_value_tests {
 
         let result = resolve_nested_value(Some(&root), &empty_path);
 
-        println!("root: {:?}", result);
-
         assert!(result.is_some());
         assert_eq!(result.unwrap().as_str(), Some("hello"));
     }
@@ -539,5 +537,349 @@ mod resolve_nested_value_tests {
         // Test wrong path midway
         let wrong_path = Path::new("level1.b.wrong.d");
         assert!(resolve_nested_value(Some(&root), &wrong_path).is_none());
+    }
+}
+
+#[cfg(test)]
+mod compare_spooky_values_tests {
+    use crate::spooky_obj;
+
+    use super::*;
+    use std::{cmp::Ordering, f64::NAN};
+
+    #[test]
+    fn test_compare_nulls() {
+        let null_a = SpookyValue::Null;
+        let null_b = SpookyValue::Null;
+
+        let result = compare_spooky_values(Some(&null_a), Some(&null_b));
+
+        assert_eq!(result, Ordering::Equal);
+    }
+
+    #[test]
+    fn test_compare_bool() {
+        let bool_a = SpookyValue::Bool(false);
+        let bool_b = SpookyValue::Bool(true);
+
+        let res = compare_spooky_values(Some(&bool_a), Some(&bool_b));
+        assert_eq!(res, Ordering::Less);
+        let res = compare_spooky_values(Some(&bool_b), Some(&bool_a));
+        assert_eq!(res, Ordering::Greater);
+    }
+
+    #[test]
+    fn test_compare_numbers() {
+        let num_a = SpookyValue::Number(10.00);
+        let num_b = SpookyValue::Number(9.00);
+        let num_nan = SpookyValue::Number(NAN);
+        let res = compare_spooky_values(Some(&num_a), Some(&num_b));
+        assert_eq!(res, Ordering::Greater);
+        let res = compare_spooky_values(Some(&num_b), Some(&num_a));
+        assert_eq!(res, Ordering::Less);
+        let res = compare_spooky_values(Some(&num_nan), Some(&num_a));
+        assert_eq!(res, Ordering::Equal);
+    }
+
+    #[test]
+    fn test_compare_strings() {
+        let str_a = SpookyValue::Str(SmolStr::new("A"));
+        let str_b = SpookyValue::Str(SmolStr::new("B"));
+        let res = compare_spooky_values(Some(&str_a), Some(&str_b));
+        assert_eq!(res, Ordering::Less);
+        let res = compare_spooky_values(Some(&str_a), Some(&str_a));
+        assert_eq!(res, Ordering::Equal);
+    }
+
+    #[test]
+    fn test_compare_arrays_by_len() {
+        // Shorter array < Longer array
+        let short = SpookyValue::Array(vec![SpookyValue::Number(1.0)]);
+        let long = SpookyValue::Array(vec![
+            SpookyValue::Number(1.0),
+            SpookyValue::Number(2.0),
+            SpookyValue::Number(3.0),
+        ]);
+
+        assert_eq!(
+            compare_spooky_values(Some(&short), Some(&long)),
+            Ordering::Less
+        );
+
+        assert_eq!(
+            compare_spooky_values(Some(&long), Some(&short)),
+            Ordering::Greater
+        );
+
+        // Empty array is shortest
+        let empty = SpookyValue::Array(vec![]);
+
+        assert_eq!(
+            compare_spooky_values(Some(&empty), Some(&short)),
+            Ordering::Less
+        );
+
+        assert_eq!(
+            compare_spooky_values(Some(&empty), Some(&long)),
+            Ordering::Less
+        );
+
+        // Same length compares element-wise (covered in other test)
+        let same_len_a =
+            SpookyValue::Array(vec![SpookyValue::Number(1.0), SpookyValue::Number(2.0)]);
+
+        let same_len_b =
+            SpookyValue::Array(vec![SpookyValue::Number(1.0), SpookyValue::Number(2.0)]);
+
+        // Length equal, so falls through to element comparison
+        assert_eq!(
+            compare_spooky_values(Some(&same_len_a), Some(&same_len_b)),
+            Ordering::Equal
+        );
+    }
+
+    #[cfg(test)]
+    mod compare_spooky_values_tests {
+        use super::*;
+        use std::cmp::Ordering;
+
+        #[test]
+        fn test_compare_arrays_by_length() {
+            // Shorter array < Longer array
+            let short = SpookyValue::Array(vec![SpookyValue::Number(1.0)]);
+
+            let long = SpookyValue::Array(vec![
+                SpookyValue::Number(1.0),
+                SpookyValue::Number(2.0),
+                SpookyValue::Number(3.0),
+            ]);
+
+            assert_eq!(
+                compare_spooky_values(Some(&short), Some(&long)),
+                Ordering::Less
+            );
+
+            assert_eq!(
+                compare_spooky_values(Some(&long), Some(&short)),
+                Ordering::Greater
+            );
+
+            // Empty array is shortest
+            let empty = SpookyValue::Array(vec![]);
+
+            assert_eq!(
+                compare_spooky_values(Some(&empty), Some(&short)),
+                Ordering::Less
+            );
+
+            assert_eq!(
+                compare_spooky_values(Some(&empty), Some(&long)),
+                Ordering::Less
+            );
+        }
+
+        #[test]
+        fn test_compare_arrays_same_length() {
+            // Same length: element-wise comparison
+            let arr_a =
+                SpookyValue::Array(vec![SpookyValue::Number(1.0), SpookyValue::Number(2.0)]);
+
+            let arr_b = SpookyValue::Array(vec![
+                SpookyValue::Number(1.0),
+                SpookyValue::Number(3.0), // 3 > 2
+            ]);
+
+            // arr_a < arr_b because at index 1: 2 < 3
+            assert_eq!(
+                compare_spooky_values(Some(&arr_a), Some(&arr_b)),
+                Ordering::Less
+            );
+
+            assert_eq!(
+                compare_spooky_values(Some(&arr_b), Some(&arr_a)),
+                Ordering::Greater
+            );
+
+            // Equal arrays
+            let arr_c =
+                SpookyValue::Array(vec![SpookyValue::Number(1.0), SpookyValue::Number(2.0)]);
+
+            assert_eq!(
+                compare_spooky_values(Some(&arr_a), Some(&arr_c)),
+                Ordering::Equal
+            );
+
+            // First element differs
+            let arr_first_bigger =
+                SpookyValue::Array(vec![SpookyValue::Number(99.0), SpookyValue::Number(1.0)]);
+
+            assert_eq!(
+                compare_spooky_values(Some(&arr_a), Some(&arr_first_bigger)),
+                Ordering::Less
+            );
+
+            // Mixed types in array
+            let arr_mixed_a =
+                SpookyValue::Array(vec![SpookyValue::Bool(false), SpookyValue::Number(1.0)]);
+
+            let arr_mixed_b =
+                SpookyValue::Array(vec![SpookyValue::Bool(true), SpookyValue::Number(1.0)]);
+
+            // false < true
+            assert_eq!(
+                compare_spooky_values(Some(&arr_mixed_a), Some(&arr_mixed_b)),
+                Ordering::Less
+            );
+        }
+
+        #[test]
+        fn test_compare_objects_by_length() {
+            // 1 key
+            let obj_one_key = SpookyValue::Object({
+                let mut map = FastMap::default();
+                map.insert(SmolStr::new("a"), SpookyValue::Number(1.0));
+                map
+            });
+
+            // 3 keys
+            let obj_three_keys = SpookyValue::Object({
+                let mut map = FastMap::default();
+                map.insert(SmolStr::new("a"), SpookyValue::Number(1.0));
+                map.insert(SmolStr::new("b"), SpookyValue::Number(2.0));
+                map.insert(SmolStr::new("c"), SpookyValue::Number(3.0));
+                map
+            });
+
+            // Fewer keys < More keys
+            assert_eq!(
+                compare_spooky_values(Some(&obj_one_key), Some(&obj_three_keys)),
+                Ordering::Less
+            );
+
+            assert_eq!(
+                compare_spooky_values(Some(&obj_three_keys), Some(&obj_one_key)),
+                Ordering::Greater
+            );
+
+            // Same key count = Equal (values don't matter)
+            let obj_same_count = SpookyValue::Object({
+                let mut map = FastMap::default();
+                map.insert(SmolStr::new("x"), SpookyValue::Number(999.0));
+                map
+            });
+
+            assert_eq!(
+                compare_spooky_values(Some(&obj_one_key), Some(&obj_same_count)),
+                Ordering::Equal
+            );
+
+            // Empty object is smallest
+            let obj_empty = SpookyValue::Object(FastMap::default());
+
+            assert_eq!(
+                compare_spooky_values(Some(&obj_empty), Some(&obj_one_key)),
+                Ordering::Less
+            );
+
+            assert_eq!(
+                compare_spooky_values(Some(&obj_empty), Some(&obj_three_keys)),
+                Ordering::Less
+            );
+        }
+
+        #[test]
+        fn test_compare_different_types() {
+            // Type rank order: Null(0) < Bool(1) < Number(2) < Str(3) < Array(4) < Object(5)
+
+            let null = SpookyValue::Null;
+            let bool_val = SpookyValue::Bool(true);
+            let number = SpookyValue::Number(42.0);
+            let string = SpookyValue::Str(SmolStr::new("hello"));
+            let array = SpookyValue::Array(vec![SpookyValue::Number(1.0)]);
+            let object = SpookyValue::Object({
+                let mut map = FastMap::default();
+                map.insert(SmolStr::new("a"), SpookyValue::Number(1.0));
+                map
+            });
+
+            // Null < everything
+            assert_eq!(
+                compare_spooky_values(Some(&null), Some(&bool_val)),
+                Ordering::Less
+            );
+            assert_eq!(
+                compare_spooky_values(Some(&null), Some(&number)),
+                Ordering::Less
+            );
+            assert_eq!(
+                compare_spooky_values(Some(&null), Some(&string)),
+                Ordering::Less
+            );
+
+            // Bool < Number
+            assert_eq!(
+                compare_spooky_values(Some(&bool_val), Some(&number)),
+                Ordering::Less
+            );
+
+            // Number < String
+            assert_eq!(
+                compare_spooky_values(Some(&number), Some(&string)),
+                Ordering::Less
+            );
+
+            // String < Array
+            assert_eq!(
+                compare_spooky_values(Some(&string), Some(&array)),
+                Ordering::Less
+            );
+
+            // Array < Object
+            assert_eq!(
+                compare_spooky_values(Some(&array), Some(&object)),
+                Ordering::Less
+            );
+
+            // Reverse: Object > everything
+            assert_eq!(
+                compare_spooky_values(Some(&object), Some(&null)),
+                Ordering::Greater
+            );
+            assert_eq!(
+                compare_spooky_values(Some(&object), Some(&array)),
+                Ordering::Greater
+            );
+        }
+
+        #[test]
+        fn test_compare_none_vs_some() {
+            // None < Some (any value)
+            let null = SpookyValue::Null;
+            let number = SpookyValue::Number(42.0);
+            let string = SpookyValue::Str(SmolStr::new("hello"));
+
+            // None < Some(Null)
+            assert_eq!(compare_spooky_values(None, Some(&null)), Ordering::Less);
+
+            // None < Some(Number)
+            assert_eq!(compare_spooky_values(None, Some(&number)), Ordering::Less);
+
+            // None < Some(String)
+            assert_eq!(compare_spooky_values(None, Some(&string)), Ordering::Less);
+
+            // Some > None
+            assert_eq!(compare_spooky_values(Some(&null), None), Ordering::Greater);
+
+            assert_eq!(
+                compare_spooky_values(Some(&number), None),
+                Ordering::Greater
+            );
+        }
+
+        #[test]
+        fn test_compare_both_none() {
+            // None == None
+            assert_eq!(compare_spooky_values(None, None), Ordering::Equal);
+        }
     }
 }
