@@ -11,8 +11,6 @@ on:
 
 permissions:
   contents: write
-  pages: write
-  id-token: write
   pull-requests: write
 
 concurrency: preview-${{ github.ref }}
@@ -36,10 +34,6 @@ jobs:
         with:
           node-version: 20
 
-      - name: Setup Pages
-        id: pages
-        uses: actions/configure-pages@v5
-
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile --filter landing-page...
 
@@ -49,15 +43,8 @@ jobs:
           ASTRO_BASE_PATH: /spooky/pr-preview/pr-${{ github.event.pull_request.number }}
         run: pnpm run build
 
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: apps/landing-page/dist
-
       - name: Deploy preview
         uses: rossjrw/pr-preview-action@v1
         with:
           source-dir: apps/landing-page/dist
           preview-branch: ${{ env.PREVIEW_BRANCH }}
-          pages-base-url: ${{ steps.pages.outputs.page_url }}
-          qr-code: true
