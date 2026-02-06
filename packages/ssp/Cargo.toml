@@ -26,6 +26,13 @@ smallvec = "1.15.1"
 indexmap = { version = "2.13.0", features = ["serde"] }
 tracing = "0.1"
 
+[dev-dependencies]
+divan = "0.1.21"
+
+[[bench]]
+name = "memory_bench"
+harness = false
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 mimalloc = "0.1.48"
 

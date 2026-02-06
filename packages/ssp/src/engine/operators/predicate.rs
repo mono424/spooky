@@ -112,7 +112,7 @@ pub fn check_predicate(
 }
 
 #[cfg(test)]
-mod predicate_tests {
+mod check_predicate_tests {
     use super::*;
     use crate::engine::circuit::Database;
     use crate::engine::operators::{Operator, Predicate};
