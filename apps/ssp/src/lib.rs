@@ -35,6 +35,9 @@ pub mod persistence;
 use background_saver::BackgroundSaver;
 use metrics::Metrics;
 
+use job_runner::{JobConfig, JobEntry, JobRunner};
+use tokio::sync::mpsc;
+
 /// Shared database connection wrapped in Arc for zero-copy sharing across tasks
 pub type SharedDb = Arc<Surreal<Client>>;
 
@@ -45,6 +48,8 @@ pub struct AppState {
     pub persistence_path: PathBuf,
     pub saver: Arc<BackgroundSaver>,
     pub metrics: Arc<Metrics>,
+    pub job_config: Arc<JobConfig>,
+    pub job_queue_tx: mpsc::Sender<JobEntry>,
 }
 
 // --- Request/Response DTOs ---
@@ -82,6 +87,7 @@ pub struct Config {
     pub db_pass: String,
     pub db_ns: String,
     pub db_db: String,
+    pub spooky_config_path: PathBuf,
 }
 
 pub fn load_config() -> Config {
@@ -100,6 +106,10 @@ pub fn load_config() -> Config {
         db_pass: std::env::var("SURREALDB_PASS").unwrap_or_else(|_| "root".to_string()),
         db_ns: std::env::var("SURREALDB_NS").unwrap_or_else(|_| "test".to_string()),
         db_db: std::env::var("SURREALDB_DB").unwrap_or_else(|_| "test".to_string()),
+        spooky_config_path: PathBuf::from(
+            std::env::var("SPOOKY_CONFIG_PATH")
+                .unwrap_or_else(|_| "spooky.yml".to_string()),
+        ),
     }
 }
 
@@ -183,12 +193,46 @@ pub async fn run_server() -> anyhow::Result<()> {
         saver_clone.run().await;
     });
 
+    // Load job configuration
+    let job_config = if config.spooky_config_path.exists() {
+        match job_runner::load_config(&config.spooky_config_path) {
+            Ok(cfg) => {
+                info!(
+                    job_tables = cfg.job_tables.len(),
+                    "Loaded job configuration"
+                );
+                Arc::new(cfg)
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to load job config, job runner disabled");
+                Arc::new(JobConfig::default())
+            }
+        }
+    } else {
+        info!("No spooky config found, job runner disabled");
+        Arc::new(JobConfig::default())
+    };
+
+    // Create job queue channel
+    let (job_queue_tx, job_queue_rx) = mpsc::channel::<JobEntry>(100);
+
+    // Spawn job runner if there are job tables configured
+    if !job_config.job_tables.is_empty() {
+        let job_runner = JobRunner::new(job_queue_rx, job_queue_tx.clone(), db.clone());
+        tokio::spawn(async move {
+            job_runner.run().await;
+        });
+        info!("Job runner started");
+    }
+
     let state = AppState {
         db,
         processor: processor_arc,
         persistence_path: config.persistence_path,
         saver: saver.clone(),
         metrics,
+        job_config,
+        job_queue_tx,
     };
 
     let app = create_app(state);
@@ -305,7 +349,34 @@ async fn ingest_handler(
     };
 
     // Prepare record data
-    let (clean_record, _hash) = ssp::service::ingest::prepare(payload.record);
+    let (clean_record, _hash) = ssp::service::ingest::prepare(payload.record.clone());
+
+    // Check if this is a job table and queue the job if pending
+    if let Some(backend_info) = state.job_config.job_tables.get(&payload.table) {
+        if op == Operation::Create {
+            if let Some(status) = payload.record.get("status").and_then(|v| v.as_str()) {
+                if status == "pending" {
+                    let job_entry = JobEntry::from_record(
+                        payload.id.clone(),
+                        backend_info.base_url.clone(),
+                        backend_info.auth_token.clone(),
+                        &payload.record,
+                    );
+                    
+                    debug!(
+                        job_id = %job_entry.id,
+                        path = %job_entry.path,
+                        backend = %backend_info.name,
+                        "Queueing job"
+                    );
+                    
+                    if let Err(e) = state.job_queue_tx.send(job_entry).await {
+                        error!(error = %e, "Failed to queue job");
+                    }
+                }
+            }
+        }
+    }
 
     // Process through circuit
     let updates = {

@@ -22,6 +22,7 @@ export interface SyncgenOptions {
   mode?: string;
   sidecarEndpoint?: string;
   sidecarSecret?: string;
+  config?: string;
 }
 
 function findBinary(): string {
@@ -91,6 +92,10 @@ export async function runSyncgen(options: SyncgenOptions): Promise<string> {
 
   if (options.sidecarSecret) {
     args.push('--sidecar-secret', options.sidecarSecret);
+  }
+
+  if (options.config) {
+    args.push('--config', options.config);
   }
 
   try {

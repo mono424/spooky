@@ -1,17 +1,17 @@
-import { RemoteDatabaseService } from '../../services/database/remote.js';
-import { LocalDatabaseService } from '../../services/database/local.js';
-import { DataModule } from '../data/index.js';
+import { RemoteDatabaseService } from '../../services/database/remote';
+import { LocalDatabaseService } from '../../services/database/local';
+import { DataModule } from '../data/index';
 import {
   SchemaStructure,
   AccessDefinition,
   ColumnSchema,
   TypeNameToTypeMap,
 } from '@spooky/query-builder';
-import { Logger } from '../../services/logger/index.js';
-import { encodeRecordId } from '../../utils/index.js';
-export * from './events/index.js';
-import { AuthEventTypes, createAuthEventSystem } from './events/index.js';
-import { PersistenceClient } from '../../types.js';
+import { Logger } from '../../services/logger/index';
+import { encodeRecordId } from '../../utils/index';
+export * from './events/index';
+import { AuthEventTypes, createAuthEventSystem } from './events/index';
+import { PersistenceClient } from '../../types';
 
 // Helper to pretty print types
 type Prettify<T> = {

@@ -9,11 +9,11 @@
     "dev:example": "pnpm db:reset && pnpm dev",
     "db:reset": "rm -rf .spooky/sidecar_data && mkdir .spooky/sidecar_data && node run.js down -v",
     "build": "pnpm build:ts && pnpm build:dart && pnpm build:surql",
-    "build:ts": "spooky --format typescript --input ./src/schema.surql --output ../app-solid/src/schema.gen.ts",
-    "build:dart": "spooky --format dart --input ./src/schema.surql --output ../client-dart/src/db/models.dart",
+    "build:ts": "spooky --format typescript --input ./src/schema.surql --output ../app-solid/src/schema.gen.ts --config ./spooky.yml",
+    "build:dart": "spooky --format dart --input ./src/schema.surql --output ../client-dart/src/db/models.dart --config ./spooky.yml",
     "build:surql": "pnpm build:remote:surrealism && pnpm build:remote:sidecar",
-    "build:remote:surrealism": "spooky --input ./src/schema.surql --output ./.spooky/remote-surrealism.gen.surql --mode surrealism --modules-dir ../../packages/surrealism-modules",
-    "build:remote:sidecar": "spooky --input ./src/schema.surql --output ./.spooky/remote-sidecar.gen.surql --mode sidecar --sidecar-endpoint http://ssp:8667 --sidecar-secret mysecret --modules-dir ../../packages/surrealism-modules"
+    "build:remote:surrealism": "spooky --input ./src/schema.surql --output ./.spooky/remote-surrealism.gen.surql --mode surrealism --modules-dir ../../packages/surrealism-modules --config ./spooky.yml",
+    "build:remote:sidecar": "spooky --input ./src/schema.surql --output ./.spooky/remote-sidecar.gen.surql --mode sidecar --sidecar-endpoint http://ssp:8667 --sidecar-secret mysecret --modules-dir ../../packages/surrealism-modules --config ./spooky.yml"
   },
   "keywords": [
     "database",

@@ -35,6 +35,7 @@ describe('QueryBuilder Relationship Inference', () => {
         cardinality: 'one',
       },
     ],
+    backends: {},
   } as const;
 
   it('should correctly infer foreign key field for game_database -> games', () => {

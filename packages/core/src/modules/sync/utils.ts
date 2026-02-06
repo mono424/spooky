@@ -1,6 +1,6 @@
 import { RecordId } from 'surrealdb';
-import { RecordVersionArray, RecordVersionDiff } from '../../types.js';
-import { parseRecordIdString, encodeRecordId } from '../../utils/index.js';
+import { RecordVersionArray, RecordVersionDiff } from '../../types';
+import { parseRecordIdString, encodeRecordId } from '../../utils/index';
 
 export class ArraySyncer {
   private localArray: RecordVersionArray;

@@ -18,6 +18,7 @@ class Schema {
     SpookyStreamProcessorState spookyStreamProcessorState;
     Comment comment;
     CommentedOn commentedOn;
+    Job job;
     Thread thread;
     User user;
 
@@ -28,6 +29,7 @@ class Schema {
         required this.spookyStreamProcessorState,
         required this.comment,
         required this.commentedOn,
+        required this.job,
         required this.thread,
         required this.user,
     });
@@ -39,6 +41,7 @@ class Schema {
         spookyStreamProcessorState: SpookyStreamProcessorState.fromJson(json["_spooky_stream_processor_state"]),
         comment: Comment.fromJson(json["comment"]),
         commentedOn: CommentedOn.fromJson(json["commented_on"]),
+        job: Job.fromJson(json["job"]),
         thread: Thread.fromJson(json["thread"]),
         user: User.fromJson(json["user"]),
     );
@@ -50,6 +53,7 @@ class Schema {
         "_spooky_stream_processor_state": spookyStreamProcessorState.toJson(),
         "comment": comment.toJson(),
         "commented_on": commentedOn.toJson(),
+        "job": job.toJson(),
         "thread": thread.toJson(),
         "user": user.toJson(),
     };
@@ -110,6 +114,72 @@ class CommentedOn {
 
     Map<String, dynamic> toJson() => {
         "id": id,
+    };
+}
+
+class Job {
+    
+    ///Record ID of table: thread
+    String assignedTo;
+    DateTime? createdAt;
+    List<dynamic> errors;
+    
+    ///Record ID
+    String id;
+    int maxRetries;
+    String path;
+    
+    ///Any type
+    dynamic payload;
+    int retries;
+    
+    ///Assert: $value INSIDE ['linear', 'exponential']
+    String retryStrategy;
+    
+    ///Assert: $value INSIDE ['pending', 'processing', 'success', 'failed']
+    String status;
+    DateTime updatedAt;
+
+    Job({
+        required this.assignedTo,
+        this.createdAt,
+        required this.errors,
+        required this.id,
+        required this.maxRetries,
+        required this.path,
+        required this.payload,
+        required this.retries,
+        required this.retryStrategy,
+        required this.status,
+        required this.updatedAt,
+    });
+
+    factory Job.fromJson(Map<String, dynamic> json) => Job(
+        assignedTo: json["assigned_to"],
+        createdAt: json["created_at"] == null ? null : DateTime.parse(json["created_at"]),
+        errors: List<dynamic>.from(json["errors"].map((x) => x)),
+        id: json["id"],
+        maxRetries: json["max_retries"],
+        path: json["path"],
+        payload: json["payload"],
+        retries: json["retries"],
+        retryStrategy: json["retry_strategy"],
+        status: json["status"],
+        updatedAt: DateTime.parse(json["updated_at"]),
+    );
+
+    Map<String, dynamic> toJson() => {
+        "assigned_to": assignedTo,
+        "created_at": createdAt?.toIso8601String(),
+        "errors": List<dynamic>.from(errors.map((x) => x)),
+        "id": id,
+        "max_retries": maxRetries,
+        "path": path,
+        "payload": payload,
+        "retries": retries,
+        "retry_strategy": retryStrategy,
+        "status": status,
+        "updated_at": updatedAt.toIso8601String(),
     };
 }
 
@@ -256,6 +326,9 @@ class Thread {
     ///Record ID
     String id;
     
+    ///Reverse relationship: array of job records
+    List<String>? jobs;
+    
     ///Assert: $value != NONE AND string::len($value) > 0 AND string::len($value) <= 200
     String title;
     String? titleSuggestion;
@@ -268,6 +341,7 @@ class Thread {
         this.contentSuggestion,
         this.createdAt,
         required this.id,
+        this.jobs,
         required this.title,
         this.titleSuggestion,
     });
@@ -280,6 +354,7 @@ class Thread {
         contentSuggestion: json["content_suggestion"],
         createdAt: json["created_at"] == null ? null : DateTime.parse(json["created_at"]),
         id: json["id"],
+        jobs: json["jobs"] == null ? [] : List<String>.from(json["jobs"]!.map((x) => x)),
         title: json["title"],
         titleSuggestion: json["title_suggestion"],
     );
@@ -292,6 +367,7 @@ class Thread {
         "content_suggestion": contentSuggestion,
         "created_at": createdAt?.toIso8601String(),
         "id": id,
+        "jobs": jobs == null ? [] : List<dynamic>.from(jobs!.map((x) => x)),
         "title": title,
         "title_suggestion": titleSuggestion,
     };
@@ -420,6 +496,48 @@ PERMISSIONS FOR select, create, update, delete WHERE true;
 DEFINE EVENT comment_created ON TABLE comment WHEN \$event = \"CREATE\" THEN
   RELATE (\$after.id)->commented_on->(\$after.thread)
 ;
+
+-- Backend Schema: api
+-- ##################################################################
+-- API OUTBOX TABLE
+-- ##################################################################
+
+DEFINE TABLE job SCHEMAFULL
+PERMISSIONS FOR select, create, update, delete WHERE true;
+
+DEFINE FIELD assigned_to ON TABLE job TYPE option<record<thread>>
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD path ON TABLE job TYPE option<string>
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD payload ON TABLE job TYPE any
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD retries ON TABLE job TYPE option<int> DEFAULT ALWAYS 0
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD max_retries ON TABLE job TYPE option<int> DEFAULT ALWAYS 3;
+
+DEFINE FIELD retry_strategy ON TABLE job TYPE option<string> DEFAULT ALWAYS \"linear\"
+ASSERT \$value IN [\"linear\", \"exponential\"]
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD status ON TABLE job TYPE option<string> DEFAULT ALWAYS \"pending\"
+ASSERT \$value IN [\"pending\", \"processing\", \"success\", \"failed\"]
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD errors ON TABLE job TYPE option<array<object>> DEFAULT ALWAYS []
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD updated_at ON TABLE job TYPE option<datetime>
+DEFAULT ALWAYS time::now()
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD created_at ON TABLE job TYPE option<datetime>
+VALUE time::now()
+PERMISSIONS FOR select, create, update WHERE true;
+
 -- ==================================================
 -- SPOOKY INCANTATION
 -- The Registry of active Live Queries (Incantations).
@@ -502,6 +620,7 @@ DEFINE FIELD spooky_rv ON TABLE _spooky_schema TYPE int DEFAULT 0 PERMISSIONS FO
 DEFINE FIELD spooky_rv ON TABLE _spooky_stream_processor_state TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
 DEFINE FIELD spooky_rv ON TABLE comment TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
 DEFINE FIELD spooky_rv ON TABLE commented_on TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
+DEFINE FIELD spooky_rv ON TABLE job TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
 DEFINE FIELD spooky_rv ON TABLE thread TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
 DEFINE FIELD spooky_rv ON TABLE user TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
 
@@ -519,6 +638,20 @@ THEN {
 
 -- Table: comment Client Deletion
 DEFINE EVENT OVERWRITE _spooky_comment_client_delete ON TABLE comment
+WHEN \$event = \"DELETE\"
+THEN {
+    -- No-op for now.
+};
+
+-- Table: job Client Mutation
+DEFINE EVENT OVERWRITE _spooky_job_client_mutation ON TABLE job
+WHEN \$before != \$after AND \$event != \"DELETE\"
+THEN {
+    -- No-op for now. Client mutation sync logic moved to DBSP.
+};
+
+-- Table: job Client Deletion
+DEFINE EVENT OVERWRITE _spooky_job_client_delete ON TABLE job
 WHEN \$event = \"DELETE\"
 THEN {
     -- No-op for now.

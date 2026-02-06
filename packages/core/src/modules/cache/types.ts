@@ -1,5 +1,5 @@
 import { RecordId, Duration } from 'surrealdb';
-import { QueryTimeToLive, RecordVersionArray } from '../../types.js';
+import { QueryTimeToLive, RecordVersionArray } from '../../types';
 
 export type RecordWithId = Record<string, any> & { id: RecordId<string> };
 
@@ -13,7 +13,7 @@ export interface QueryConfig {
 
 export interface CacheRecord {
   table: string;
-  op: string;
+  op: 'CREATE' | 'UPDATE' | 'DELETE';
   record: RecordWithId;
   version: number;
 }

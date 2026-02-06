@@ -1,4 +1,4 @@
-import { createEventSystem, EventDefinition, EventSystem } from '../../../events/index.js';
+import { createEventSystem, EventDefinition, EventSystem } from '../../../events/index';
 
 export const DatabaseEventTypes = {
   LocalQuery: 'DATABASE_LOCAL_QUERY',

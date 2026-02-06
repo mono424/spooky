@@ -47,7 +47,7 @@ DEFINE FIELD created_at ON TABLE user TYPE datetime
 VALUE time::now()
 PERMISSIONS
     FOR select WHERE false
-    FOR create WHERE truet
+    FOR create WHERE true
     FOR update WHERE $access = "account" AND id = $auth.id;
 
 -- ##################################################################

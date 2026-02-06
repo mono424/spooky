@@ -1,5 +1,13 @@
 mode: sidecar # "sidecar" or "surrealism"
 backends:
-  - src/backends
-
-        
+  api:
+    type: http
+    spec: ../api/openapi.yml
+    baseUrl: http://host.docker.internal:3660
+    auth:
+      type: token
+      token: THIS_IS_TOP_SECRET
+    method:
+      type: outbox
+      table: job
+      schema: ./src/outbox/api.surql
