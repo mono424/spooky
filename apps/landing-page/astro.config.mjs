@@ -8,6 +8,16 @@ import mdx from '@astrojs/mdx';
 export default defineConfig({
   site: 'https://mono424.github.io',
   base: process.env.ASTRO_BASE_PATH || '/spooky',
+  prefetch: true,
+  markdown: {
+    shikiConfig: {
+      themes: {
+        light: 'github-light',
+        dark: 'github-dark',
+      },
+      wrap: true,
+    },
+  },
   integrations: [
     tailwind({
       applyBaseStyles: false,
