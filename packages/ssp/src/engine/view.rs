@@ -36,6 +36,8 @@ pub struct View {
     pub cache: ZSet,
     pub last_hash: String,
     #[serde(default)]
+    pub has_run: bool,
+    #[serde(default)]
     pub params: Option<SpookyValue>,
     #[serde(default)]
     pub format: ViewResultFormat, // Output format strategy
@@ -67,6 +69,7 @@ impl View {
             plan,
             cache: FastMap::default(),
             last_hash: String::new(),
+            has_run: false,
             params: params.map(SpookyValue::from),
             format: format.unwrap_or_default(),
             has_subqueries_cached,
@@ -191,14 +194,18 @@ impl View {
 
                 let update = build_update(raw_result, self.format);
 
-                // Update last hash
+                // Streaming: early exit, zero allocations
+                if let ViewUpdate::Streaming(_s) = &update {
+                    self.has_run = true;
+                    return Some(update);
+                }
+
+                // Flat/Tree: hash-based change detection
                 let hash = match &update {
                     ViewUpdate::Flat(flat) | ViewUpdate::Tree(flat) => flat.result_hash.clone(),
-                    ViewUpdate::Streaming(_) => {
-                        use super::update::compute_flat_hash;
-                        compute_flat_hash(&result_data)
-                    }
+                    ViewUpdate::Streaming(_) => unreachable!(),
                 };
+                self.has_run = true;
                 self.last_hash = hash;
 
                 Some(update)
@@ -358,7 +365,7 @@ impl View {
         removals: Vec<SmolStr>,
         updates: Vec<SmolStr>,
     ) -> Option<ViewUpdate> {
-        let is_first_run = self.last_hash.is_empty();
+        let is_first_run = !self.has_run;
 
         // For streaming mode, only include changed records
         // For Flat/Tree modes, need all records for hash
@@ -374,7 +381,7 @@ impl View {
             ViewResultFormat::Flat | ViewResultFormat::Tree => self.build_result_data(),
         };
 
-        use super::update::{build_update, compute_flat_hash, RawViewResult, ViewDelta};
+        use super::update::{build_update, RawViewResult, ViewDelta};
 
         let view_delta_struct = if is_first_run {
             None
@@ -386,13 +393,6 @@ impl View {
             })
         };
 
-        // Compute hash if needed (for Streaming) before moving result_data
-        let pre_hash = if matches!(self.format, ViewResultFormat::Streaming) {
-            Some(compute_flat_hash(&result_data))
-        } else {
-            None
-        };
-
         let raw_result = RawViewResult {
             query_id: self.plan.id.clone(),
             records: result_data,
@@ -401,18 +401,23 @@ impl View {
 
         let update = build_update(raw_result, self.format);
 
-        // Hash check
+        // Streaming: early exit, zero allocations
+        if let ViewUpdate::Streaming(s) = &update {
+            if !s.records.is_empty() {
+                self.has_run = true;
+                return Some(update);
+            }
+            return None;
+        }
+
+        // Flat/Tree: hash-based change detection
         let hash = match &update {
             ViewUpdate::Flat(flat) | ViewUpdate::Tree(flat) => flat.result_hash.clone(),
-            ViewUpdate::Streaming(_) => pre_hash.unwrap_or_default(),
+            ViewUpdate::Streaming(_) => unreachable!(),
         };
 
-        let has_changes = match &update {
-            ViewUpdate::Streaming(s) => !s.records.is_empty(),
-            _ => hash != self.last_hash,
-        };
-
-        if has_changes {
+        if hash != self.last_hash {
+            self.has_run = true;
             self.last_hash = hash;
             Some(update)
         } else {
@@ -446,7 +451,7 @@ impl View {
         db: &Database,
     ) -> Option<ViewUpdate> {
         // FIX: FIRST RUN CHECK
-        let is_first_run = self.last_hash.is_empty();
+        let is_first_run = !self.has_run;
 
         tracing::debug!(
             target: "ssp::view::process_batch",
@@ -550,7 +555,7 @@ impl View {
         );
 
         // Delegate formatting to update module (Strategy Pattern)
-        use super::update::{build_update, compute_flat_hash, RawViewResult, ViewDelta};
+        use super::update::{build_update, RawViewResult, ViewDelta};
 
         // FIX: On first run, we should still provide a delta for edge creation!
         // Previously this was None, causing build_update to use raw.records as Created
@@ -576,13 +581,6 @@ impl View {
             })
         };
 
-        // Compute hash if needed (for Streaming) before moving result_data
-        let pre_hash = if matches!(self.format, ViewResultFormat::Streaming) {
-            Some(compute_flat_hash(&result_data))
-        } else {
-            None
-        };
-
         let raw_result = RawViewResult {
             query_id: self.plan.id.clone(),
             records: result_data,
@@ -592,18 +590,23 @@ impl View {
         // Build update using the configured format
         let update = build_update(raw_result, self.format);
 
-        // Extract hash for comparison (depends on format)
+        // Streaming: early exit, zero allocations
+        if let ViewUpdate::Streaming(s) = &update {
+            if !s.records.is_empty() {
+                self.has_run = true;
+                return Some(update);
+            }
+            return None;
+        }
+
+        // Flat/Tree: hash-based change detection
         let hash = match &update {
             ViewUpdate::Flat(flat) | ViewUpdate::Tree(flat) => flat.result_hash.clone(),
-            ViewUpdate::Streaming(_) => pre_hash.unwrap_or_default(),
+            ViewUpdate::Streaming(_) => unreachable!(),
         };
 
-        let has_changes = match &update {
-            ViewUpdate::Streaming(s) => !s.records.is_empty(),
-            _ => hash != self.last_hash,
-        };
-
-        if has_changes {
+        if hash != self.last_hash {
+            self.has_run = true;
             self.last_hash = hash;
             return Some(update);
         }
