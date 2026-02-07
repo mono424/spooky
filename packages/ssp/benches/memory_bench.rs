@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use ssp::engine::circuit::dto::BatchEntry;
 use ssp::engine::circuit::Circuit;
-use ssp::{Operator, QueryPlan, SpookyValue};
+use ssp::{JoinCondition, Operator, Path, Predicate, Projection, QueryPlan, SpookyValue};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
@@ -11,6 +11,12 @@ use std::io::{BufRead, BufReader};
 static ALLOC: AllocProfiler = AllocProfiler::system();
 
 fn main() {
+    eprintln!(">>> STARTING BENCHMARK - FORCE JSON MODE <<<");
+
+    // Variable setzen
+    std::env::set_var("DIVAN_OUTPUT_FORMAT", "json");
+
+    // Divan starten
     divan::main();
 }
 
@@ -346,7 +352,7 @@ fn bench_register_10k(bencher: Bencher) {
                 table: "comment".to_string(),
             }),
             limit: 10 as usize,
-            order_by: Some(vec![]),
+            order_by: None,
         },
     };
 
@@ -357,6 +363,183 @@ fn bench_register_10k(bencher: Bencher) {
         .with_inputs(|| (base_circuit.clone(), plan.clone()))
         .bench_values(|(mut circuit, plan)| {
             circuit.register_view(plan, None, None);
+            black_box(circuit);
+        });
+}
+
+#[divan::bench(sample_count = 1_000, sample_size = 1)]
+fn bench_register_2k4v1ki(bencher: Bencher) {
+    // ======================================================
+    // 1. GLOBAL SETUP (Einmalig ganz am Anfang)
+    // ======================================================
+
+    let initial_data = setup(Some(1_000));
+    let mut base_circuit = Circuit::new();
+    for entry in initial_data {
+        base_circuit.ingest_single(entry);
+    }
+    let plan_1 = QueryPlan {
+        id: "view:1".to_string(),
+        root: Operator::Join {
+            left: Box::new(Operator::Filter {
+                input: Box::new(Operator::Scan {
+                    table: "user".to_string(),
+                }),
+                predicate: Predicate::Eq {
+                    field: Path::new("admin"),
+                    value: serde_json::Value::Bool(true),
+                },
+            }),
+            right: Box::new(Operator::Limit {
+                input: Box::new(Operator::Scan {
+                    table: "comment".to_string(),
+                }),
+                limit: 10,
+                order_by: None,
+            }),
+            on: JoinCondition {
+                left_field: Path::new("id"),
+                right_field: Path::new("author"),
+            },
+        },
+    };
+
+    let plan_2 = QueryPlan {
+        id: "view:2".to_string(),
+        root: Operator::Limit {
+            input: Box::new(Operator::Scan {
+                table: "comment".to_string(),
+            }),
+            limit: 10 as usize,
+            order_by: None,
+        },
+    };
+
+    // Query: SELECT id, title, author FROM thread WHERE active = true LIMIT 20
+    let plan_3 = QueryPlan {
+        id: "view:3".to_string(),
+        root: Operator::Limit {
+            input: Box::new(Operator::Project {
+                input: Box::new(Operator::Filter {
+                    input: Box::new(Operator::Scan {
+                        table: "thread".to_string(),
+                    }),
+                    predicate: Predicate::Eq {
+                        field: Path::new("active"),
+                        value: serde_json::Value::Bool(true),
+                    },
+                }),
+                projections: vec![
+                    Projection::Field {
+                        name: Path::new("id"),
+                    },
+                    Projection::Field {
+                        name: Path::new("title"),
+                    },
+                    Projection::Field {
+                        name: Path::new("author"),
+                    },
+                ],
+            }),
+            limit: 20,
+            order_by: None,
+        },
+    };
+
+    // Query: SELECT * FROM thread
+    //        JOIN comment ON thread.id = comment.thread
+    //        JOIN user ON comment.author = user.id
+    //        WHERE thread.active = true
+    let plan_4 = QueryPlan {
+        id: "view:4".to_string(),
+        root: Operator::Join {
+            left: Box::new(Operator::Join {
+                left: Box::new(Operator::Filter {
+                    input: Box::new(Operator::Scan {
+                        table: "thread".to_string(),
+                    }),
+                    predicate: Predicate::Eq {
+                        field: Path::new("active"),
+                        value: serde_json::Value::Bool(true),
+                    },
+                }),
+                right: Box::new(Operator::Scan {
+                    table: "comment".to_string(),
+                }),
+                on: JoinCondition {
+                    left_field: Path::new("id"),
+                    right_field: Path::new("thread"),
+                },
+            }),
+            right: Box::new(Operator::Scan {
+                table: "user".to_string(),
+            }),
+            on: JoinCondition {
+                left_field: Path::new("author"),
+                right_field: Path::new("id"),
+            },
+        },
+    };
+
+    // Ingest 1k users
+    let users = read_users(Some(1_000));
+    let user_entries: Vec<BatchEntry> = users
+        .iter()
+        .map(|record| {
+            let id = record.id.clone();
+            let json_string = serde_json::to_string(record).unwrap();
+            let data = SpookyValue::Str(SmolStr::new(json_string));
+            BatchEntry::create("user", id, data)
+        })
+        .collect();
+    for entry in user_entries {
+        base_circuit.ingest_single(entry);
+    }
+
+    // Ingest 1k threads
+    let threads = read_threads(Some(10));
+    let thread_entries: Vec<BatchEntry> = threads
+        .iter()
+        .map(|record| {
+            let id = record.id.clone();
+            let json_string = serde_json::to_string(record).unwrap();
+            let data = SpookyValue::Str(SmolStr::new(json_string));
+            BatchEntry::create("thread", id, data)
+        })
+        .collect();
+    for entry in thread_entries {
+        base_circuit.ingest_single(entry);
+    }
+
+    // Register all views on the circuit
+    base_circuit.register_view(plan_1.clone(), None, None);
+    base_circuit.register_view(plan_2.clone(), None, None);
+    base_circuit.register_view(plan_3.clone(), None, None);
+    base_circuit.register_view(plan_4.clone(), None, None);
+
+    // Prepare 1k comments for ingestion
+    let comments = read_comments(Some(10));
+    let comment_entries: Vec<BatchEntry> = comments
+        .iter()
+        .map(|record| {
+            let id = record.id.clone();
+            let json_string = serde_json::to_string(record).unwrap();
+            let data = SpookyValue::Str(SmolStr::new(json_string));
+            BatchEntry::create("comment", id, data)
+        })
+        .collect();
+
+    // ======================================================
+    // 2. INPUT & MESSUNG
+    // ======================================================
+    bencher
+        .with_inputs(|| (base_circuit.clone(), comment_entries.clone()))
+        .bench_values(|(mut circuit, entries)| {
+            for entry in entries {
+                circuit.ingest_single(entry);
+            }
+            // Verhindert Weg-Optimierung
+            //eprintln!("{:#?}", circuit);
             black_box(circuit);
         });
 }

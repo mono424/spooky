@@ -503,7 +503,7 @@ This is the most complex component. Test thoroughly!
 
 ---
 
-### 6.6 View - eval_snapshot (Full Scan)
+### 6.6 View - 'eval_sna'pshot (Full Scan)
 
 **Unit Tests**:
 ```

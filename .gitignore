@@ -11,3 +11,7 @@ dist/
 
 # Vite 
 vite.config.ts.timestamp-*
+packages/ssp/comments.jsonl
+packages/ssp/threads.jsonl
+packages/ssp/users.jsonl
+bench_history
