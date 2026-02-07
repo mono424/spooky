@@ -1,6 +1,6 @@
 use divan::{black_box, AllocProfiler, Bencher};
 use serde::{Deserialize, Serialize};
-use smol_str::SmolStr;
+
 use ssp::engine::circuit::dto::BatchEntry;
 use ssp::engine::circuit::Circuit;
 use ssp::{JoinCondition, Operator, Path, Predicate, Projection, QueryPlan, SpookyValue};
@@ -11,12 +11,6 @@ use std::io::{BufRead, BufReader};
 static ALLOC: AllocProfiler = AllocProfiler::system();
 
 fn main() {
-    eprintln!(">>> STARTING BENCHMARK - FORCE JSON MODE <<<");
-
-    // Variable setzen
-    std::env::set_var("DIVAN_OUTPUT_FORMAT", "json");
-
-    // Divan starten
     divan::main();
 }
 
@@ -117,8 +111,8 @@ fn setup(limit: Option<u32>) -> Vec<BatchEntry> {
         .iter()
         .map(|record| {
             let id = record.id.clone();
-            let json_string = serde_json::to_string(record).unwrap();
-            let data = SpookyValue::Str(SmolStr::new(json_string));
+            let json_value = serde_json::to_value(record).unwrap();
+            let data = SpookyValue::from(json_value);
 
             BatchEntry::create("comment", id, data)
         })
@@ -137,8 +131,8 @@ fn bench_ingest_0(bencher: Bencher) {
         .iter()
         .map(|record| {
             let id = record.id.clone();
-            let json_string = serde_json::to_string(record).unwrap();
-            let data = SpookyValue::Str(SmolStr::new(json_string));
+            let json_value = serde_json::to_value(record).unwrap();
+            let data = SpookyValue::from(json_value);
 
             BatchEntry::new("user", ssp::engine::types::Operation::Create, id, data)
         })
@@ -173,8 +167,8 @@ fn bench_ingest_10k(bencher: Bencher) {
         .iter()
         .map(|record| {
             let id = record.id.clone();
-            let json_string = serde_json::to_string(record).unwrap();
-            let data = SpookyValue::Str(SmolStr::new(json_string));
+            let json_value = serde_json::to_value(record).unwrap();
+            let data = SpookyValue::from(json_value);
             BatchEntry::create("user", id, data)
         })
         .collect();
@@ -212,8 +206,8 @@ fn bench_ingest_100k(bencher: Bencher) {
         .iter()
         .map(|record| {
             let id = record.id.clone();
-            let json_string = serde_json::to_string(record).unwrap();
-            let data = SpookyValue::Str(SmolStr::new(json_string));
+            let json_value = serde_json::to_value(record).unwrap();
+            let data = SpookyValue::from(json_value);
             BatchEntry::create("user", id, data)
         })
         .collect();
@@ -251,8 +245,8 @@ fn bench_ingest_1000k(bencher: Bencher) {
         .iter()
         .map(|record| {
             let id = record.id.clone();
-            let json_string = serde_json::to_string(record).unwrap();
-            let data = SpookyValue::Str(SmolStr::new(json_string));
+            let json_value = serde_json::to_value(record).unwrap();
+            let data = SpookyValue::from(json_value);
             BatchEntry::create("user", id, data)
         })
         .collect();
@@ -373,7 +367,7 @@ fn bench_register_2k4v1ki(bencher: Bencher) {
     // 1. GLOBAL SETUP (Einmalig ganz am Anfang)
     // ======================================================
 
-    let initial_data = setup(Some(1_000));
+    let initial_data = setup(Some(10));
     let mut base_circuit = Circuit::new();
     for entry in initial_data {
         base_circuit.ingest_single(entry);
@@ -482,35 +476,35 @@ fn bench_register_2k4v1ki(bencher: Bencher) {
     };
 
     // Ingest 1k users
-    let users = read_users(Some(1_000));
+    let users = read_users(Some(1000));
     let user_entries: Vec<BatchEntry> = users
         .iter()
         .map(|record| {
             let id = record.id.clone();
-            let json_string = serde_json::to_string(record).unwrap();
-            let data = SpookyValue::Str(SmolStr::new(json_string));
+            let json_value = serde_json::to_value(record).unwrap();
+            let data = SpookyValue::from(json_value);
             BatchEntry::create("user", id, data)
         })
         .collect();
+
     for entry in user_entries {
         base_circuit.ingest_single(entry);
     }
 
     // Ingest 1k threads
-    let threads = read_threads(Some(10));
+    let threads = read_threads(Some(1000));
     let thread_entries: Vec<BatchEntry> = threads
         .iter()
         .map(|record| {
             let id = record.id.clone();
-            let json_string = serde_json::to_string(record).unwrap();
-            let data = SpookyValue::Str(SmolStr::new(json_string));
+            let json_value = serde_json::to_value(record).unwrap();
+            let data = SpookyValue::from(json_value);
             BatchEntry::create("thread", id, data)
         })
         .collect();
     for entry in thread_entries {
         base_circuit.ingest_single(entry);
     }
-
     // Register all views on the circuit
     base_circuit.register_view(plan_1.clone(), None, None);
     base_circuit.register_view(plan_2.clone(), None, None);
@@ -518,13 +512,13 @@ fn bench_register_2k4v1ki(bencher: Bencher) {
     base_circuit.register_view(plan_4.clone(), None, None);
 
     // Prepare 1k comments for ingestion
-    let comments = read_comments(Some(10));
+    let comments = read_comments(Some(100));
     let comment_entries: Vec<BatchEntry> = comments
         .iter()
         .map(|record| {
             let id = record.id.clone();
-            let json_string = serde_json::to_string(record).unwrap();
-            let data = SpookyValue::Str(SmolStr::new(json_string));
+            let json_value = serde_json::to_value(record).unwrap();
+            let data = SpookyValue::from(json_value);
             BatchEntry::create("comment", id, data)
         })
         .collect();

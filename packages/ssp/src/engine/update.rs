@@ -12,11 +12,11 @@ use smol_str::SmolStr;
 #[serde(rename_all = "lowercase")]
 pub enum ViewResultFormat {
     /// Flat list: [id, ...] with hash
-    #[default]
     Flat,
     /// Tree structure (future)
     Tree,
     /// Streaming deltas with events
+    #[default]
     Streaming,
 }
 
