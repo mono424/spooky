@@ -16,11 +16,10 @@ services:
       - DASHBOARD__OTLP__CORS__ALLOWEDORIGINS=http://localhost:3006,http://localhost:3000,http://127.0.0.1:3006,http://127.0.0.1:3000,https://localhost:3006,https://localhost:3000
       - DASHBOARD__OTLP__CORS__ALLOWEDHEADERS=*
     ports:
-      - "18888:18888"
-      - "4317:18889"
-      - "4318:18890"
+      - '18888:18888'
+      - '4317:18889'
+      - '4318:18890'
     restart: unless-stopped
-
 
   surrealdb:
     image: surrealdb/surrealdb:v3.0.0-beta.1
@@ -40,8 +39,8 @@ services:
       # Ziel: Aspire Dashboard
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://aspire-dashboard:18889
       # Reduziert Terminal-Logs (optional, da wir jetzt traces haben)
-      - SURREAL_LOG=info 
-      #- RUST_LOG=debug # Force DEBUG globally to verify ssp package logs appear 
+      - SURREAL_LOG=info
+      #- RUST_LOG=debug # Force DEBUG globally to verify ssp package logs appear
     command:
       - start
       - --bind
@@ -84,8 +83,11 @@ services:
       - SURREALDB_PASS=root
       - SPOOKY_AUTH_SECRET=mysecret
       - SPOOKY_PERSISTENCE_FILE=/data/spooky_state.json
+      # Job Runner Config
+      - SPOOKY_CONFIG_PATH=/config/spooky.yml
     volumes:
       - ./.spooky/sidecar_data:/data
+      - ./spooky.yml:/config/spooky.yml:ro
     depends_on:
       surrealdb:
         condition: service_healthy

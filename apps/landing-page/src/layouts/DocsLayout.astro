@@ -1,4 +1,5 @@
 ---
+import { ClientRouter } from 'astro:transitions';
 import Sidebar from '../components/Sidebar.astro';
 import OnThisPage from '../components/OnThisPage.astro';
 import Header from '../components/Header.astro';
@@ -80,15 +81,16 @@ const activeGroup = nav.find((g: any) =>
       // Also run on initial load if view transitions aren't active or for first render
       renderMermaid();
     </script>
+    <ClientRouter />
   </head>
   <body class="bg-background text-text-main font-sans antialiased selection:bg-primary/20">
-    <Header />
+    <Header transition:persist />
 
     <div class="max-w-[1600px] mx-auto flex w-full min-h-screen">
       <aside
         class="hidden lg:block w-[280px] shrink-0 border-r border-border h-[calc(100vh-64px)] sticky top-16 overflow-y-auto py-8 pl-6 pr-4"
       >
-        <Sidebar />
+        <Sidebar transition:persist />
       </aside>
 
       <main class="flex-1 min-w-0 py-8 px-6 lg:px-12">
@@ -97,7 +99,10 @@ const activeGroup = nav.find((g: any) =>
           <nav
             class="flex items-center text-sm text-text-muted mb-6 overflow-x-auto whitespace-nowrap"
           >
-            <a href="/spooky/docs" class="hover:text-primary transition-colors">Docs</a>
+            <a
+              href={`${process.env.ASTRO_BASE_PATH}/docs`}
+              class="hover:text-primary transition-colors">Docs</a
+            >
             {
               activeGroup && (
                 <>

@@ -1,16 +1,16 @@
-import { LocalDatabaseService, RemoteDatabaseService } from '../../services/database/index.js';
-import { MutationEvent, RecordVersionArray } from '../../types.js';
-import { createSyncEventSystem } from './events/index.js';
-import { Logger } from '../../services/logger/index.js';
-import { DownEvent, DownQueue, UpEvent, UpQueue } from './queue/index.js';
+import { LocalDatabaseService, RemoteDatabaseService } from '../../services/database/index';
+import { MutationEvent, RecordVersionArray } from '../../types';
+import { createSyncEventSystem } from './events/index';
+import { Logger } from '../../services/logger/index';
+import { DownEvent, DownQueue, UpEvent, UpQueue } from './queue/index';
 import { RecordId, Uuid } from 'surrealdb';
-import { ArraySyncer, createDiffFromDbOp } from './utils.js';
-import { SyncEngine } from './engine.js';
-import { SyncScheduler } from './scheduler.js';
+import { ArraySyncer, createDiffFromDbOp } from './utils';
+import { SyncEngine } from './engine';
+import { SyncScheduler } from './scheduler';
 import { SchemaStructure } from '@spooky/query-builder';
-import { CacheModule } from '../cache/index.js';
-import { DataModule } from '../data/index.js';
-import { encodeRecordId, parseDuration, surql } from '../../utils/index.js';
+import { CacheModule } from '../cache/index';
+import { DataModule } from '../data/index';
+import { encodeRecordId, parseDuration, surql } from '../../utils/index';
 
 /**
  * The main synchronization engine for Spooky.
@@ -154,9 +154,14 @@ export class SpookySync<S extends SchemaStructure> {
     console.log('xx1', event);
     switch (event.type) {
       case 'create':
-        await this.remote.query(`CREATE $id CONTENT $data`, {
+        const dataKeys = Object.keys(event.data).map((key) => ({ key, variable: `data_${key}` }));
+        const prefixedParams = Object.fromEntries(
+          dataKeys.map(({ key, variable }) => [variable, event.data[key]])
+        );
+        const query = surql.seal(surql.createSet('id', dataKeys));
+        await this.remote.query(query, {
           id: event.record_id,
-          data: event.data,
+          ...prefixedParams,
         });
         break;
       case 'update':

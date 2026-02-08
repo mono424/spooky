@@ -1,4 +1,4 @@
-import { MutationEventType } from '../types.js';
+import { MutationEventType } from '../types';
 
 export const surql = {
   seal(query: string) {
@@ -37,6 +37,21 @@ export const surql = {
     return `CREATE ONLY $${idVar} CONTENT $${dataVar}`;
   },
 
+  createSet(
+    idVar: string,
+    keyDataVars: ({ key: string; variable: string } | { statement: string } | string)[]
+  ) {
+    return `CREATE ONLY $${idVar} SET ${keyDataVars
+      .map((keyDataVar) =>
+        typeof keyDataVar === 'string'
+          ? `${keyDataVar} = $${keyDataVar}`
+          : 'statement' in keyDataVar
+            ? keyDataVar.statement
+            : `${keyDataVar.key} = $${keyDataVar.variable}`
+      )
+      .join(', ')}`;
+  },
+
   upsert(idVar: string, dataVar: string) {
     return `UPSERT ONLY $${idVar} REPLACE $${dataVar}`;
   },
@@ -57,7 +72,7 @@ export const surql = {
             ? keyDataVar.statement
             : `${keyDataVar.key} = $${keyDataVar.variable}`
       )
-      .join(',')}`;
+      .join(', ')}`;
   },
 
   delete(idVar: string) {

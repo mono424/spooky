@@ -1,3 +1,3 @@
-export * from './types.js';
-export * from './spooky.js';
-export * from './modules/auth/index.js';
+export * from './types';
+export * from './spooky';
+export * from './modules/auth/index';

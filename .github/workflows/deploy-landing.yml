@@ -32,6 +32,8 @@ jobs:
 
       - name: Build with Astro
         working-directory: apps/landing-page
+        env:
+          ASTRO_BASE_PATH: /spooky
         run: pnpm run build
 
       - name: Deploy to GitHub Pages

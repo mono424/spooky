@@ -116,10 +116,10 @@ impl Table {
         }
     }
 
-    //quick fix for version look up
+    /// Look up version from record's spooky_rv field
     pub fn get_record_version(&self, id: &str) -> Option<i64> {
         let sv = self.rows.get(id)?;
-        let version = sv.get("_spooky_version")?.as_f64()?;
+        let version = sv.get("spooky_rv")?.as_f64()?;
         Some(version as i64)
     }
 
@@ -197,7 +197,7 @@ mod tests {
         let record_user1 = LoadRecord::new(
             "user",
             "user:23lk4j233jd",
-            json!({ "status": "spooky", "level": 10, "_spooky_version": 3 }).into(),
+            json!({ "status": "spooky", "level": 10, "spooky_rv": 3 }).into(),
         );
         let mut tb_user = Table::new(SmolStr::from("user"));
         let (zset_key, weight) = tb_user.apply_mutation(

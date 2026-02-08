@@ -56,6 +56,9 @@ export type {
   SchemaToIndexed,
   AccessDefinition,
   TypeNameToTypeMap,
+  BackendNames,
+  BackendRoutes,
+  RoutePayload,
 } from './table-schema';
 
 // Re-export RecordId from surrealdb for convenience

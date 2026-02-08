@@ -1,4 +1,4 @@
-import { DataModule } from './modules/data/index.js';
+import { DataModule } from './modules/data/index';
 import {
   SpookyConfig,
   QueryTimeToLive,
@@ -6,14 +6,15 @@ import {
   PersistenceClient,
   MutationEvent,
   UpdateOptions,
-} from './types.js';
+  RunOptions,
+} from './types';
 import {
   LocalDatabaseService,
   LocalMigrator,
   RemoteDatabaseService,
-} from './services/database/index.js';
+} from './services/database/index';
 import { Surreal } from 'surrealdb';
-import { SpookySync, UpEvent } from './modules/sync/index.js';
+import { SpookySync, UpEvent } from './modules/sync/index';
 import {
   GetTable,
   InnerQuery,
@@ -22,17 +23,20 @@ import {
   SchemaStructure,
   TableModel,
   TableNames,
+  BackendNames,
+  BackendRoutes,
+  RoutePayload,
 } from '@spooky/query-builder';
 
-import { DevToolsService } from './modules/devtools/index.js';
-import { createLogger } from './services/logger/index.js';
-import { AuthService } from './modules/auth/index.js';
-import { StreamProcessorService } from './services/stream-processor/index.js';
-import { EventSystem } from './events/index.js';
-import { CacheModule } from './modules/cache/index.js';
-import { LocalStoragePersistenceClient } from './services/persistence/localstorage.js';
-import { generateId, parseParams } from './utils/index.js';
-import { SurrealDBPersistenceClient } from './services/persistence/surrealdb.js';
+import { DevToolsService } from './modules/devtools/index';
+import { createLogger } from './services/logger/index';
+import { AuthService } from './modules/auth/index';
+import { StreamProcessorService } from './services/stream-processor/index';
+import { EventSystem } from './events/index';
+import { CacheModule } from './modules/cache/index';
+import { LocalStoragePersistenceClient } from './services/persistence/localstorage';
+import { generateId, parseParams } from './utils/index';
+import { SurrealDBPersistenceClient } from './services/persistence/surrealdb';
 
 export class SpookyClient<S extends SchemaStructure> {
   private local: LocalDatabaseService;
@@ -284,6 +288,13 @@ export class SpookyClient<S extends SchemaStructure> {
     options?: { immediate?: boolean }
   ): Promise<() => void> {
     return this.dataModule.subscribe(queryHash, callback, options);
+  }
+
+  run<
+    B extends BackendNames<S>,
+    R extends BackendRoutes<S, B>,
+  >(backend: B, path: R, payload: RoutePayload<S, B, R>, options?: RunOptions) {
+    return this.dataModule.run(backend, path, payload, options);
   }
 
   create(id: string, data: Record<string, unknown>) {

@@ -11,6 +11,7 @@ serde_json = "1.0"
 surrealdb = { git = "https://github.com/surrealdb/surrealdb.git", tag = "v3.0.0-beta.1", features = ["protocol-ws", "protocol-http"] }
 tokio = { version = "1.0", features = ["full"] }
 ssp = { path = "../../packages/ssp" }
+job-runner = { path = "../../packages/job-runner" }
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }

@@ -1,10 +1,10 @@
 import { Surreal, SurrealTransaction } from 'surrealdb';
-import { createLogger, Logger } from '../logger/index.js';
+import { createLogger, Logger } from '../logger/index';
 import {
   DatabaseEventSystem,
   DatabaseEventTypes,
   DatabaseQueryEventPayload,
-} from './events/index.js';
+} from './events/index';
 
 export abstract class AbstractDatabaseService {
   protected client: Surreal;

@@ -1,9 +1,9 @@
 import { RecordId, Duration } from 'surrealdb';
-import { SchemaStructure, TableNames } from '@spooky/query-builder';
-import { LocalDatabaseService } from '../../services/database/index.js';
-import { CacheModule, RecordWithId } from '../cache/index.js';
-import { Logger } from '../../services/logger/index.js';
-import { StreamUpdate } from '../../services/stream-processor/index.js';
+import { SchemaStructure, TableNames, BackendNames, BackendRoutes, RoutePayload } from '@spooky/query-builder';
+import { LocalDatabaseService } from '../../services/database/index';
+import { CacheModule, RecordWithId } from '../cache/index';
+import { Logger } from '../../services/logger/index';
+import { StreamUpdate } from '../../services/stream-processor/index';
 import {
   MutationEvent,
   QueryConfig,
@@ -15,7 +15,8 @@ import {
   RecordVersionArray,
   QueryConfigRecord,
   UpdateOptions,
-} from '../../types.js';
+  RunOptions,
+} from '../../types';
 import {
   parseRecordIdString,
   extractIdPart,
@@ -25,9 +26,10 @@ import {
   surql,
   parseParams,
   extractTablePart,
-} from '../../utils/index.js';
-import { CreateEvent, DeleteEvent, UpdateEvent } from '../sync/index.js';
-import { PushEventOptions } from '../../events/index.js';
+  generateId,
+} from '../../utils/index';
+import { CreateEvent, DeleteEvent, UpdateEvent } from '../sync/index';
+import { PushEventOptions } from '../../events/index';
 
 /**
  * DataModule - Unified query and mutation management
@@ -172,20 +174,27 @@ export class DataModule<S extends SchemaStructure> {
    * Handle stream updates from DBSP (via CacheModule)
    */
   async onStreamUpdate(update: StreamUpdate): Promise<void> {
-    const { queryHash } = update;
+    const { queryHash, op } = update;
 
-    // Clear existing timer if any
-    if (this.debounceTimers.has(queryHash)) {
-      clearTimeout(this.debounceTimers.get(queryHash)!);
-    }
+    // Only debounce UPDATE operations
+    // CREATE and DELETE should propagate immediately
+    if (op === 'UPDATE') {
+      // Clear existing timer if any
+      if (this.debounceTimers.has(queryHash)) {
+        clearTimeout(this.debounceTimers.get(queryHash)!);
+      }
 
-    // Set new timer
-    const timer = setTimeout(async () => {
-      this.debounceTimers.delete(queryHash);
+      // Set new timer
+      const timer = setTimeout(async () => {
+        this.debounceTimers.delete(queryHash);
+        await this.processStreamUpdate(update);
+      }, this.streamDebounceTime);
+
+      this.debounceTimers.set(queryHash, timer);
+    } else {
+      // CREATE and DELETE - process immediately
       await this.processStreamUpdate(update);
-    }, this.streamDebounceTime);
-
-    this.debounceTimers.set(queryHash, timer);
+    }
   }
 
   private async processStreamUpdate(update: StreamUpdate): Promise<void> {
@@ -292,6 +301,51 @@ export class DataModule<S extends SchemaStructure> {
     });
   }
 
+  // ====================      RUN JOBS       ====================
+
+  async run<
+    B extends BackendNames<S>,
+    R extends BackendRoutes<S, B>,
+  >(
+    backend: B,
+    path: R,
+    data: RoutePayload<S, B, R>,
+    options?: RunOptions
+  ): Promise<void> {
+    const route = this.schema.backends?.[backend]?.routes?.[path];
+    if (!route) {
+      throw new Error(`Route ${backend}.${path} not found`);
+    }
+
+    const tableName = this.schema.backends?.[backend]?.outboxTable;
+    if (!tableName) {
+      throw new Error(`Outbox table for backend ${backend} not found`);
+    }
+
+    const payload: Record<string, unknown> = {};
+    for (const argName of Object.keys(route.args)) {
+      const arg = route.args[argName];
+      if ((data as Record<string, unknown>)[argName] === undefined && arg.optional === false) {
+        throw new Error(`Missing required argument ${argName}`);
+      }
+      payload[argName] = (data as Record<string, unknown>)[argName];
+    }
+
+    const record: Record<string, unknown> = {
+      path,
+      payload: JSON.stringify(payload),
+      max_retries: options?.max_retries ?? 3,
+      retry_strategy: options?.retry_strategy ?? 'linear',
+    };
+
+    if (options?.assignedTo) {
+      record.assigned_to = options.assignedTo;
+    }
+
+    const recordId = `${tableName}:${generateId()}`;
+    await this.create(recordId, record);
+  }
+
   // ==================== MUTATION MANAGEMENT ====================
 
   /**
@@ -308,9 +362,13 @@ export class DataModule<S extends SchemaStructure> {
     const params = parseParams(tableSchema.columns, data);
     const mutationId = parseRecordIdString(`_spooky_pending_mutations:${Date.now()}`);
 
+    const dataKeys = Object.keys(params).map((key) => ({ key, variable: `data_${key}` }));
+    const prefixedParams = Object.fromEntries(
+      dataKeys.map(({ key, variable }) => [variable, params[key]])
+    );
     const query = surql.seal(
       surql.tx([
-        surql.let('created', surql.create('id', 'data')),
+        surql.let('created', surql.createSet('id', dataKeys)),
         surql.createMutation('create', 'mid', 'id', 'data'),
         surql.returnObject([{ key: 'target', variable: 'created' }]),
       ])
@@ -319,8 +377,8 @@ export class DataModule<S extends SchemaStructure> {
     const [{ target }] = await withRetry(this.logger, () =>
       this.local.query<[{ target: T }]>(query, {
         id: rid,
-        data: params,
         mid: mutationId,
+        ...prefixedParams,
       })
     );
 
