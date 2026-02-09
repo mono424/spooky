@@ -12,6 +12,10 @@ pub struct SchedulerConfig {
     pub heartbeat_timeout_ms: u64,
     pub bootstrap_chunk_size: usize,
     pub job_tables: Vec<String>,
+    pub replica_db_path: PathBuf,
+    pub replica_keep_versions: u64,
+    pub ingest_host: Option<String>,
+    pub ingest_port: u16,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -57,7 +61,11 @@ impl Default for SchedulerConfig {
             heartbeat_interval_ms: 5000,
             heartbeat_timeout_ms: 15000,
             bootstrap_chunk_size: 1000,
-            job_tables: vec!["job".to_string()],
+            job_tables: vec![],
+            replica_db_path: PathBuf::from("./data/replica.db"),
+            replica_keep_versions: 10,
+            ingest_host: None, // Defaults to 0.0.0.0
+            ingest_port: 9667, // Default ingest HTTP port
         }
     }
 }

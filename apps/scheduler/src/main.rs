@@ -1,26 +1,94 @@
 use anyhow::Result;
-use scheduler::{Scheduler, config::SchedulerConfig, transport::NatsTransport};
+use scheduler::config::SchedulerConfig;
+use scheduler::transport::NatsTransport;
 use std::sync::Arc;
-use tracing_subscriber;
+use tracing::info;
+use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize tracing
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
-        )
+        .with_env_filter(EnvFilter::from_default_env())
         .init();
+
+    info!("Starting Scheduler...");
 
     // Load configuration
     let config = SchedulerConfig::load()?;
-
-    // Create NATS transport
-    let transport = Arc::new(NatsTransport::new(&config.nats).await?);
-
-    // Create and start scheduler
-    let scheduler = Scheduler::new(config, transport);
+    
+    // Initialize transport (NATS)
+    let transport = Arc::new(NatsTransport::new(&config.nats).await?) as Arc<dyn scheduler::transport::Transport>;
+    
+    // Create scheduler
+    let scheduler = scheduler::Scheduler::new(config.clone(), transport.clone())?;
+    
+    // Create shared trackers for state consistency
+    let query_tracker = std::sync::Arc::new(scheduler::query::QueryTracker::new());
+    let job_tracker = std::sync::Arc::new(scheduler::job_scheduler::JobTracker::new());
+    
+    // Create HTTP server with all routers
+    let ingest_router = scheduler::ingest::create_ingest_router(scheduler.ingest_state());
+    
+    let query_state = scheduler::query::QueryState {
+        ssp_pool: std::sync::Arc::new(tokio::sync::RwLock::new(
+            scheduler::router::SspPool::new(config.load_balance.clone())
+        )),
+        transport: std::sync::Arc::clone(&transport),
+        query_tracker: std::sync::Arc::clone(&query_tracker),
+    };
+    let query_router = scheduler::query::create_query_router(query_state.clone());
+    
+    let job_state = scheduler::job_scheduler::JobState {
+        ssp_pool: std::sync::Arc::clone(&query_state.ssp_pool),
+        transport: std::sync::Arc::clone(&transport),
+        job_tracker: std::sync::Arc::clone(&job_tracker),
+    };
+    let job_router = scheduler::job_scheduler::create_job_router(job_state.clone());
+    
+    let metrics_router = scheduler::metrics::create_metrics_router(
+        scheduler.metrics_state(
+            std::sync::Arc::clone(&query_tracker),
+            std::sync::Arc::clone(&job_tracker),
+        )
+    );
+    
+    let app = axum::Router::new()
+        .merge(ingest_router)
+        .merge(query_router)
+        .merge(job_router)
+        .merge(metrics_router);
+    
+    let ingest_addr = format!("{}:{}", 
+        scheduler.config().ingest_host.as_deref().unwrap_or("0.0.0.0"),
+        scheduler.config().ingest_port
+    );
+    
+    // Start background monitors
+    scheduler::metrics::start_query_reassignment_monitor(
+        std::sync::Arc::clone(&query_state.ssp_pool),
+        std::sync::Arc::clone(&query_tracker),
+    ).await;
+    
+    scheduler::job_scheduler::start_job_failover_monitor(
+        std::sync::Arc::clone(&job_state.ssp_pool),
+        std::sync::Arc::clone(&job_tracker),
+        std::sync::Arc::clone(&transport),
+    ).await;
+    
+    info!("Started background monitors for query reassignment and job failover");
+    
+    // Spawn HTTP server
+    let server_handle = tokio::spawn(async move {
+        info!("Starting HTTP server on {}...", ingest_addr);
+        let listener = tokio::net::TcpListener::bind(&ingest_addr)
+            .await
+            .expect("Failed to bind port");
+        
+        axum::serve(listener, app)
+            .await
+            .expect("HTTP server failed");
+    });
     
     // Handle graceful shutdown
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel();
@@ -29,20 +97,24 @@ async fn main() -> Result<()> {
         tokio::signal::ctrl_c()
             .await
             .expect("Failed to listen for ctrl-c");
+        info!("Received shutdown signal");
         let _ = shutdown_tx.send(());
     });
-
-    // Start the scheduler
+    
+    // Start scheduler
+    let scheduler_handle = tokio::spawn(async move {
+        if let Err(e) = scheduler.start().await {
+            eprintln!("Scheduler error: {}", e);
+        }
+    });
+    
+    // Wait for shutdown or error
     tokio::select! {
-        result = scheduler.start() => {
-            if let Err(e) = result {
-                eprintln!("Scheduler error: {}", e);
-                std::process::exit(1);
-            }
-        }
         _ = &mut shutdown_rx => {
-            scheduler.shutdown().await?;
+            info!("Shutting down...");
         }
+        _ = server_handle => info!("HTTP server stopped"),
+        _ = scheduler_handle => info!("Scheduler stopped"),
     }
 
     Ok(())
