@@ -2,55 +2,13 @@
 // src/pages/index.astro
 import '../styles/global.css';
 import { AsciiGhost } from '../components/AsciiGhost';
+import { HeroTerminal } from '../components/HeroTerminal';
 import { ArchitectureDiagram } from '../components/ArchitectureDiagram';
-import { LiveCodeEditor } from '../components/LiveCodeEditor';
-import { MerkleTree, MerkleDashboard } from '../components/MerkleTreeAnimation';
-import SchemaGenerator from '../components/SchemaGenerator';
-import ProjectExplorer from '../components/ProjectExplorer';
 import { SchemaWorkflowEyecatcher } from '../components/SchemaWorkflowEyecatcher';
 import GitHubStars from '../components/GitHubStars';
 import { DXSwiper } from '../components/DXSwiper';
 import SectionHeadline from '../components/SectionHeadline.astro';
 import { basePath } from '../config/nav';
-
-const schemaCode = `DEFINE TABLE user SCHEMAFULL;
-DEFINE FIELD username ON user TYPE string;
-
-DEFINE TABLE thread SCHEMAFULL;
-DEFINE FIELD title ON thread TYPE string;
-DEFINE FIELD author ON thread TYPE record<user>;`;
-
-const generatedCode = `export type User = {
-  id: string;
-  username: string;
-};
-
-export type Thread = {
-  id: string;
-  title: string;
-  author: User | string;
-};`;
-
-const solidQueryCode = `import { useQuery } from "@spooky/client-solid";
-import { db } from "../db";
-
-const ThreadList = () => {
-  const result = useQuery(db, () =>
-    db.query("thread")
-      .related("comments")
-      .orderBy("created_at", "desc")
-      .limit(10)
-      .build()
-  );
-
-  return (
-    <For each={result.data()}>
-      {(thread) => (
-        <div>{thread.title} by {thread.author.username}</div>
-      )}
-    </For>
-  );
-};`;
 ---
 
 <html lang="en">
@@ -120,63 +78,55 @@ const ThreadList = () => {
       id="home"
       class="min-h-screen flex items-center justify-center relative border-b border-white/10 py-24"
     >
-      <div class="max-w-5xl mx-auto px-4 text-center">
-        <div class="animate-fade-in opacity-20">
-          <AsciiGhost client:load />
-        </div>
-
-        <h1 class="text-hero font-bold mb-6 animate-fade-in animation-delay-200">Spooky Sync</h1>
-
-        <p
-          class="text-body-lg text-text-tertiary max-w-2xl mx-auto mb-16 animate-fade-in animation-delay-300"
-        >
-          Imagine your app was real-time, optimistic, offline-ready, and type-safe by default.
-          Spooky is a scalable sync engine for modern local-first applications.
-        </p>
-
-        <div
-          class="flex flex-col sm:flex-row gap-6 justify-center items-center animate-slide-up animation-delay-600 mb-12"
-        >
-          <a
-            href={`${basePath}/docs`}
-            class="group relative px-8 py-3 font-semibold text-lg text-white bg-black/40 border-[2px] border-brand-400/60 rounded-full transition-all duration-300 hover:border-brand-400 hover:bg-brand-500/5 hover:shadow-[0_0_35px_rgba(168,85,247,0.6),0_0_15px_rgba(168,85,247,0.4)] hover:brightness-110"
+      <div class="hero-grid max-w-7xl mx-auto px-8">
+        {/* Left Column - Content */}
+        <div class="flex flex-col justify-center space-y-6">
+          <h1
+            class="text-5xl lg:text-6xl font-bold text-text-primary opacity-0 animate-fade-in animation-delay-200 leading-tight"
           >
-            Get Started
-          </a>
-          <a
-            href="https://github.com/mono424/spooky"
-            target="_blank"
-            class="px-8 py-3 border border-surface-border hover:border-text-tertiary bg-surface hover:bg-surface-elevated text-text-primary font-semibold rounded-xl transition-all duration-200"
-          >
-            View on Github
-          </a>
-        </div>
+            Local-First,<br />Real-Time,<br />By Default
+          </h1>
 
-        <div
-          class="text-left font-mono text-xs md:text-sm max-w-xl mx-auto rounded-xl border border-surface-border bg-surface-elevated shadow-xl relative z-10 transition-all duration-300 hover:shadow-2xl hover:border-brand-500/30 animate-tilt-in animation-delay-400"
-          style="transform-style: preserve-3d;"
-        >
-          <div class="border-b border-surface-border px-4 py-3 flex items-center gap-2">
-            <div class="flex gap-1.5">
-              <div class="w-3 h-3 rounded-full bg-red-500/50"></div>
-              <div class="w-3 h-3 rounded-full bg-yellow-500/50"></div>
-              <div class="w-3 h-3 rounded-full bg-accent-500/50"></div>
-            </div>
-            <span class="text-text-tertiary text-xs ml-2">src/queries.ts</span>
+          <p
+            class="text-lg text-text-tertiary opacity-0 animate-fade-in animation-delay-400 leading-relaxed"
+          >
+            Build local-first applications with real-time sync, offline support, and complete type
+            safety.
+          </p>
+
+          <div
+            class="flex flex-col sm:flex-row gap-4 opacity-0 animate-slide-up animation-delay-600"
+          >
+            <a
+              href={`${basePath}/docs`}
+              class="group relative px-8 py-3 font-semibold text-base text-white bg-black/40 border-[2px] border-brand-400/60 rounded-full transition-all duration-300 hover:border-brand-400 hover:bg-brand-500/5 hover:shadow-[0_0_35px_rgba(168,85,247,0.6),0_0_15px_rgba(168,85,247,0.4)] hover:brightness-110 text-center"
+            >
+              Get Started
+            </a>
+            <a
+              href="https://github.com/mono424/spooky"
+              target="_blank"
+              class="px-8 py-3 border border-surface-border hover:border-text-tertiary bg-surface hover:bg-surface-elevated text-text-primary font-semibold rounded-xl transition-all duration-200 text-center"
+            >
+              View on Github
+            </a>
           </div>
-          <div class="p-6 overflow-x-auto bg-surface text-text-secondary">
-            <pre><code><span class="text-brand-400 font-bold">const</span> thread = <span class="text-brand-400 font-bold">await</span> db
-  .query(<span class="text-accent-400">"thread"</span>)
-  .where(&#123;
-    id: params.id
-  &#125;)
-  .related(<span class="text-accent-400">"author"</span>)
-  .related(<span class="text-accent-400">"comments"</span>, (q) => q
-    .related(<span class="text-accent-400">"author"</span>)
-    .orderBy(<span class="text-accent-400">"created_at"</span>, <span class="text-accent-400">"desc"</span>)
-    .limit(10)
-  )
-  .one();</code></pre>
+        </div>
+
+        {/* Right Column - Terminal Window */}
+        <div class="relative flex items-center justify-center lg:justify-end">
+          {/* Ghost Background */}
+          <div
+            class="absolute top-1/2 left-1/2 -translate-x-[80%] -translate-y-1/2 opacity-0 animate-fade-in-subtle pointer-events-none z-0 scale-[3]"
+          >
+            <AsciiGhost client:load />
+          </div>
+
+          {/* Terminal Window */}
+          <div
+            class="relative z-10 scale-110 translate-x-4 opacity-0 animate-flip-in animation-delay-200"
+          >
+            <HeroTerminal client:load />
           </div>
         </div>
       </div>

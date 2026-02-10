@@ -38,7 +38,8 @@
       "Bash(npx tsc:*)",
       "Bash(open:*)",
       "mcp__ide__getDiagnostics",
-      "WebFetch(domain:vitest.dev)"
+      "WebFetch(domain:vitest.dev)",
+      "WebSearch"
     ],
     "deny": [],
     "ask": []
