@@ -179,33 +179,17 @@
   scroll-behavior: smooth;
   -webkit-overflow-scrolling: touch;
 
-  /* Custom scrollbar */
-  scrollbar-width: thin;
-  scrollbar-color: rgba(138, 89, 255, 0.3) rgba(39, 39, 42, 0.5);
+  /* Hide scrollbar for Firefox */
+  scrollbar-width: none;
 
   /* Center with padding */
   padding-left: max(2rem, calc((100vw - 1280px) / 2));
   padding-right: max(2rem, calc((100vw - 1280px) / 2));
 }
 
-/* Webkit scrollbar styling */
+/* Hide scrollbar for Webkit browsers (Chrome, Safari, Edge) */
 .architecture-scroll-container::-webkit-scrollbar {
-  height: 8px;
-}
-
-.architecture-scroll-container::-webkit-scrollbar-track {
-  background: rgba(39, 39, 42, 0.5);
-  border-radius: 4px;
-}
-
-.architecture-scroll-container::-webkit-scrollbar-thumb {
-  background: rgba(138, 89, 255, 0.3);
-  border-radius: 4px;
-  transition: background 0.2s;
-}
-
-.architecture-scroll-container::-webkit-scrollbar-thumb:hover {
-  background: rgba(138, 89, 255, 0.5);
+  display: none;
 }
 
 /* Box sizing */

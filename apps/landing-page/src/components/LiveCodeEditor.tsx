@@ -394,7 +394,7 @@ export const LiveCodeEditor: React.FC<LiveCodeEditorProps> = ({ initialCode, fil
   const lineCount = code.split('\n').length;
 
   return (
-    <div className="border border-surface-border bg-surface shadow-xl flex flex-col font-mono text-sm relative overflow-visible group rounded-xl min-h-[420px]">
+    <div className="border border-surface-border bg-surface shadow-xl flex flex-col font-mono text-sm relative overflow-visible group rounded-xl min-h-[320px]">
       {/* Header */}
       <div className="flex justify-between items-center bg-surface-elevated border-b border-surface-border px-4 py-3 text-xs select-none rounded-t-xl">
         <div className="flex items-center gap-3">
