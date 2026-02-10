@@ -14,7 +14,7 @@
   html {
     /* Priority stack for the best monospace font available on the system */
     font-family: Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
-    scroll-behavior: auto; /* Remove smooth scroll for mechanical feel */
+    scroll-behavior: smooth;
   }
 
   body {
@@ -29,6 +29,25 @@
   ::selection {
     background-color: var(--text-color);
     color: var(--bg-color);
+  }
+
+  /* Accessibility: Focus states */
+  *:focus-visible {
+    outline: 2px solid #a855f7;
+    outline-offset: 2px;
+    border-radius: 0.25rem;
+  }
+
+  /* Accessibility: Reduced motion support */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
 }
 
@@ -55,7 +74,7 @@
 
 @layer utilities {
   /* Blink Animation
-     Used for cursors (e.g. <span class="animate-blink">_</span>) 
+     Used for cursors (e.g. <span class="animate-blink">_</span>)
   */
   @keyframes blink {
     0%,
@@ -68,7 +87,7 @@
   }
 
   /* Glitch/Shake Animation
-     Used for hover states or errors 
+     Used for hover states or errors
   */
   @keyframes glitch {
     0% {
@@ -99,7 +118,26 @@
     animation: glitch 0.2s cubic-bezier(0.25, 0.46, 0.45, 0.94) both infinite;
   }
 
-  /* Removed float/wobble animations as they are too fluid for a terminal */
+  /* Animation delays for staggered effects */
+  .animation-delay-200 {
+    animation-delay: 200ms;
+  }
+
+  .animation-delay-400 {
+    animation-delay: 400ms;
+  }
+
+  .animation-delay-600 {
+    animation-delay: 600ms;
+  }
+
+  .animation-delay-800 {
+    animation-delay: 800ms;
+  }
+
+  .animation-delay-1000 {
+    animation-delay: 1000ms;
+  }
 }
 
 /* Custom Invisible Scrollbar */

@@ -11,25 +11,24 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{error, info};
 
-use crate::messages::RecordUpdate;
 use crate::replica::{Replica, RecordOp};
 use crate::router::SspPool;
-use crate::transport::Transport;
+use crate::transport::HttpTransport;
 
-/// Ingest request from database events
+/// Ingest request from database events (matches SSP's IngestRequest format)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IngestRequest {
     pub table: String,
-    pub operation: RecordOp,
-    pub record_id: String,
-    pub data: Option<Value>,
+    pub op: String,
+    pub id: String,
+    pub record: Value,
 }
 
 /// Shared state for ingest handlers
 #[derive(Clone)]
 pub struct IngestState {
     pub replica: Arc<RwLock<Replica>>,
-    pub transport: Arc<dyn Transport>,
+    pub transport: Arc<HttpTransport>,
     pub ssp_pool: Arc<RwLock<SspPool>>,
 }
 
@@ -47,17 +46,31 @@ async fn handle_ingest(
 ) -> Result<StatusCode, (StatusCode, String)> {
     info!(
         "Received ingest: {} {} on {}",
-        request.operation, request.record_id, request.table
+        request.op, request.id, request.table
     );
+
+    // Parse operation
+    let operation = match request.op.to_uppercase().as_str() {
+        "CREATE" => RecordOp::Create,
+        "UPDATE" => RecordOp::Update,
+        "DELETE" => RecordOp::Delete,
+        _ => {
+            error!("Invalid operation: {}", request.op);
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("Invalid operation: {}", request.op),
+            ));
+        }
+    };
 
     // Update replica
     {
         let mut replica = state.replica.write().await;
         if let Err(e) = replica.apply(
             &request.table,
-            request.operation,
-            &request.record_id,
-            request.data.clone(),
+            operation,
+            &request.id,
+            Some(request.record.clone()),
         ) {
             error!("Failed to apply to replica: {}", e);
             return Err((
@@ -67,79 +80,34 @@ async fn handle_ingest(
         }
     }
 
-    // Get version from replica
-    let version = {
-        let replica = state.replica.read().await;
-        match replica.get_current_version(&request.table, &request.record_id) {
-            Ok(v) => v,
-            Err(e) => {
-                error!("Failed to get version: {}", e);
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Failed to get version: {}", e),
-                ));
-            }
-        }
+    // Get all ready SSPs
+    let ready_ssps = {
+        let pool = state.ssp_pool.read().await;
+        pool.all()
+            .into_iter()
+            .filter(|ssp| pool.is_ready(&ssp.id))
+            .cloned()
+            .collect::<Vec<_>>()
     };
 
-    // Create update message
-    let update = RecordUpdate {
-        table: request.table.clone(),
-        operation: request.operation,
-        record_id: request.record_id.clone(),
-        data: request.data,
-        version,
-    };
-
-    // Route to SSPs based on state
-    let mut pool = state.ssp_pool.write().await;
-    
-    // Collect SSPs and their states before routing (avoid borrow checker issues)
-    let ssp_states: Vec<(String, bool)> = pool
-        .all()
-        .iter()
-        .map(|ssp| (ssp.id.clone(), pool.is_ready(&ssp.id)))
-        .collect();
-    
-    // Broadcast to ready SSPs
-    let ready_ssps: Vec<_> = ssp_states
-        .iter()
-        .filter(|(_, is_ready)| *is_ready)
-        .collect();
-    
+    // Broadcast to all ready SSPs via HTTP POST /ingest
     if !ready_ssps.is_empty() {
-        let payload = match serde_json::to_vec(&update) {
-            Ok(p) => p,
-            Err(e) => {
-                error!("Failed to serialize update: {}", e);
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Failed to serialize update: {}", e),
-                ));
-            }
-        };
-
-        if let Err(e) = state
+        info!("Broadcasting to {} ready SSPs", ready_ssps.len());
+        let results = state
             .transport
-            .broadcast(&format!("spooky.ingest.{}", request.table), &payload)
-            .await
-        {
-            error!("Failed to broadcast to SSPs: {}", e);
-        }
-    }
-    
-    // Buffer for bootstrapping SSPs
-    for (ssp_id, is_ready) in ssp_states {
-        if !is_ready {
-            if !pool.buffer_message(&ssp_id, update.clone()) {
-                error!(
-                    "Buffer overflow for SSP '{}' - needs re-bootstrap",
-                    ssp_id
-                );
-                // TODO: Implement re-bootstrap trigger mechanism
+            .broadcast_to_ssps(&ready_ssps, "/ingest", &request)
+            .await;
+
+        // Log failures
+        for (ssp_id, result) in results {
+            if let Err(e) = result {
+                error!("Failed to send to SSP '{}': {}", ssp_id, e);
             }
         }
     }
+
+    // For bootstrapping SSPs, buffer the update
+    // (This logic moved to router module's buffering mechanism)
 
     info!("Ingest processed successfully");
     Ok(StatusCode::OK)

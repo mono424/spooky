@@ -3,7 +3,7 @@ import { ClientRouter } from 'astro:transitions';
 import Sidebar from '../components/Sidebar.astro';
 import OnThisPage from '../components/OnThisPage.astro';
 import Header from '../components/Header.astro';
-import { docsNav as nav } from '../config/nav';
+import { basePath, docsNav as nav } from '../config/nav';
 import '../styles/docs.css';
 
 const { frontmatter, headings } = Astro.props;
@@ -99,10 +99,7 @@ const activeGroup = nav.find((g: any) =>
           <nav
             class="flex items-center text-sm text-text-muted mb-6 overflow-x-auto whitespace-nowrap"
           >
-            <a
-              href={`${process.env.ASTRO_BASE_PATH}/docs`}
-              class="hover:text-primary transition-colors">Docs</a
-            >
+            <a href={`${basePath}/docs`} class="hover:text-primary transition-colors">Docs</a>
             {
               activeGroup && (
                 <>
@@ -123,7 +120,7 @@ const activeGroup = nav.find((g: any) =>
       </main>
 
       <aside
-        class="hidden xl:block w-[240px] shrink-0 h-[calc(100vh-64px)] sticky top-16 py-8 pr-6 pl-4"
+        class="hidden xl:block w-[240px] shrink-0 h-[calc(100vh-64px)] sticky top-16 overflow-y-auto py-8 pr-6 pl-4"
       >
         <OnThisPage headings={headings} />
       </aside>

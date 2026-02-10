@@ -59,6 +59,7 @@ impl SspPool {
             // Add new SSP
             let info = SspInfo {
                 id: ssp_id.to_string(),
+                url: String::new(), // URL must be set via registration, not heartbeat
                 connected_at: Instant::now(),
                 last_heartbeat: Instant::now(),
                 query_count: 0,

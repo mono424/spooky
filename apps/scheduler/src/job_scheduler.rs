@@ -13,7 +13,7 @@ use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
 use crate::router::SspPool;
-use crate::transport::Transport;
+use crate::transport::HttpTransport;
 
 /// Job status
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -115,7 +115,7 @@ impl JobTracker {
 #[derive(Clone)]
 pub struct JobState {
     pub ssp_pool: Arc<RwLock<SspPool>>,
-    pub transport: Arc<dyn Transport>,
+    pub transport: Arc<HttpTransport>,
     pub job_tracker: Arc<JobTracker>,
 }
 
@@ -135,10 +135,18 @@ async fn dispatch_job(
     info!("Dispatching job: {}", request.job_id);
 
     // Select SSP for job execution
-    let ssp_id = {
+    let (ssp_id, ssp_url) = {
         let mut pool = state.ssp_pool.write().await;
         match pool.select_for_query() {
-            Some(id) => id,
+            Some(id) => {
+                let ssp = pool.get(&id).ok_or_else(|| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Selected SSP not found in pool".to_string(),
+                    )
+                })?;
+                (id, ssp.url.clone())
+            }
             None => {
                 error!("No ready SSP available for job {}", request.job_id);
                 return Err((
@@ -152,21 +160,10 @@ async fn dispatch_job(
     // Track job assignment
     state.job_tracker.assign(request.job_id.clone(), ssp_id.clone()).await;
 
-    // Send job to SSP
-    let payload = match serde_json::to_vec(&request) {
-        Ok(p) => p,
-        Err(e) => {
-            error!("Failed to serialize job dispatch: {}", e);
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Serialization error: {}", e),
-            ));
-        }
-    };
-
+    // Send job to SSP via HTTP POST /job/dispatch
     if let Err(e) = state
         .transport
-        .send_to(&ssp_id, "job.dispatch", &payload)
+        .post_to_ssp(&ssp_url, "/job/dispatch", &request)
         .await
     {
         error!("Failed to send job to SSP: {}", e);
@@ -225,7 +222,7 @@ async fn handle_job_result(
 pub async fn start_job_failover_monitor(
     ssp_pool: Arc<RwLock<SspPool>>,
     job_tracker: Arc<JobTracker>,
-    _transport: Arc<dyn Transport>,
+    _transport: Arc<HttpTransport>,
 ) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));

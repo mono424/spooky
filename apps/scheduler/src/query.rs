@@ -11,8 +11,8 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{error, info};
 
-use crate::router::SspPool;
-use crate::transport::Transport;
+use crate::router:: SspPool;
+use crate::transport::HttpTransport;
 
 /// Query registration request
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,7 +91,7 @@ impl QueryTracker {
 #[derive(Clone)]
 pub struct QueryState {
     pub ssp_pool: Arc<RwLock<SspPool>>,
-    pub transport: Arc<dyn Transport>,
+    pub transport: Arc<HttpTransport>,
     pub query_tracker: Arc<QueryTracker>,
 }
 
@@ -111,13 +111,22 @@ async fn register_query(
     info!("Registering query: {}", request.query_id);
 
     // Select SSP based on load balancing strategy
-    let ssp_id = {
+    let (ssp_id, ssp_url) = {
         let mut pool = state.ssp_pool.write().await;
         match pool.select_for_query() {
             Some(id) => {
-                // Increment query count for the selected SSP
+                // Get SSP URL before incrementing count
+                let url = pool.get(&id)
+                    .ok_or_else(|| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "Selected SSP not found in pool".to_string(),
+                        )
+                    })?
+                    .url
+                    .clone();
                 pool.increment_query_count(&id);
-                id
+                (id, url)
             }
             None => {
                 error!("No ready SSP available for query {}", request.query_id);
@@ -132,24 +141,15 @@ async fn register_query(
     // Assign query to SSP in tracker
     state.query_tracker.assign(request.query_id.clone(), ssp_id.clone()).await;
 
-    // Send registration to SSP via queue group
-    let payload = match serde_json::to_vec(&request) {
-        Ok(p) => p,
-        Err(e) => {
-            error!("Failed to serialize query registration: {}", e);
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Serialization error: {}", e),
-            ));
-        }
-    };
-
+    // Send registration to SSP via HTTP POST /view/register
     if let Err(e) = state
         .transport
-        .send_to(&ssp_id, "query.register", &payload)
+        .post_to_ssp(&ssp_url, "/view/register", &request)
         .await
     {
         error!("Failed to send query registration to SSP: {}", e);
+        // Remove from tracker on failure
+        state.query_tracker.unassign(&request.query_id).await;
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to send to SSP: {}", e),
@@ -182,32 +182,32 @@ async fn unregister_query(
 ) -> Result<StatusCode, (StatusCode, String)> {
     info!("Unregistering query: {}", request.query_id);
 
-    // Get SSP assignment
-    let ssp_id = match state.query_tracker.get_assignment(&request.query_id).await {
-        Some(id) => id,
-        None => {
-            return Err((
-                StatusCode::NOT_FOUND,
-                format!("Query {} not found", request.query_id),
-            ));
-        }
-    };
+    // Get SSP assignment and URL
+    let (ssp_id, ssp_url) = {
+        let ssp_id = match state.query_tracker.get_assignment(&request.query_id).await {
+            Some(id) => id,
+            None => {
+                return Err((
+                    StatusCode::NOT_FOUND,
+                    format!("Query {} not found", request.query_id),
+                ));
+            }
+        };
 
-    // Send unregistration to SSP
-    let payload = match serde_json::to_vec(&request) {
-        Ok(p) => p,
-        Err(e) => {
-            error!("Failed to serialize query unregistration: {}", e);
-            return Err((
+        let pool = state.ssp_pool.read().await;
+        let ssp = pool.get(&ssp_id).ok_or_else(|| {
+            (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Serialization error: {}", e),
-            ));
-        }
+                "SSP not found in pool".to_string(),
+            )
+        })?;
+        (ssp_id.clone(), ssp.url.clone())
     };
 
+    // Send unregistration to SSP via HTTP POST /view/unregister
     if let Err(e) = state
         .transport
-        .send_to(&ssp_id, "query.unregister", &payload)
+        .post_to_ssp(&ssp_url, "/view/unregister", &request)
         .await
     {
         error!("Failed to send query unregistration to SSP: {}", e);

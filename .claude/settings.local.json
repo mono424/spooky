@@ -27,7 +27,10 @@
       "Bash(cargo install:*)",
       "Bash(~/.cargo/bin/wasm-pack build:*)",
       "Bash(ls:*)",
-      "Bash(xargs ls:*)"
+      "Bash(xargs ls:*)",
+      "Bash(find:*)",
+      "WebFetch(domain:viteplus.dev)",
+      "Bash(npm run build:*)"
     ],
     "deny": [],
     "ask": []

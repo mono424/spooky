@@ -51,19 +51,40 @@ export default {
         paper: "#eeeeee", // Off-white for terminals/sections
         // Docs Theme
         background: '#09090b', // Almost black
-        surface: '#18181b',    // Slightly lighter for hover/borders
+        surface: {
+          DEFAULT: '#0a0a0a',
+          elevated: '#121212',
+          border: '#1a1a1a',
+        },
         text: {
           main: '#f4f4f5',     // High contrast text
           muted: '#a1a1aa',    // Secondary text
         },
         border: '#27272a',     // Subtle borders
+        // Glow variations for accents
+        glow: {
+          purple: 'rgba(168, 85, 247, 0.15)',
+          blue: 'rgba(59, 130, 246, 0.15)',
+          green: 'rgba(34, 197, 94, 0.15)',
+          white: 'rgba(255, 255, 255, 0.3)',
+        },
       },
       fontFamily: {
         sans: ["Inter", "system-ui", "sans-serif"],
       },
+      fontSize: {
+        'hero': ['clamp(2.5rem, 5vw, 4.5rem)', { lineHeight: '1.1', letterSpacing: '-0.02em' }],
+        'section': ['clamp(2rem, 4vw, 3rem)', { lineHeight: '1.2', letterSpacing: '-0.01em' }],
+        'card-title': ['clamp(1.25rem, 2vw, 1.5rem)', { lineHeight: '1.3' }],
+      },
       animation: {
         "fade-in": "fadeIn 0.5s ease-in-out",
+        "fade-in-fast": "fadeIn 0.3s ease-in-out",
         "slide-up": "slideUp 0.5s ease-out",
+        "slide-down": "slideDown 0.5s ease-out",
+        "scale-in": "scaleIn 0.4s ease-out",
+        "glow-pulse": "glowPulse 2s ease-in-out infinite",
+        "gradient": "gradient 8s ease infinite",
         float: "float 3s ease-in-out infinite",
       },
       keyframes: {
@@ -75,10 +96,29 @@ export default {
           "0%": { transform: "translateY(20px)", opacity: "0" },
           "100%": { transform: "translateY(0)", opacity: "1" },
         },
+        slideDown: {
+          "0%": { transform: "translateY(-20px)", opacity: "0" },
+          "100%": { transform: "translateY(0)", opacity: "1" },
+        },
+        scaleIn: {
+          "0%": { transform: "scale(0.95)", opacity: "0" },
+          "100%": { transform: "scale(1)", opacity: "1" },
+        },
+        glowPulse: {
+          "0%, 100%": { opacity: "1" },
+          "50%": { opacity: "0.5" },
+        },
+        gradient: {
+          "0%, 100%": { backgroundPosition: "0% 50%" },
+          "50%": { backgroundPosition: "100% 50%" },
+        },
         float: {
           "0%, 100%": { transform: "translateY(0px)" },
           "50%": { transform: "translateY(-10px)" },
         },
+      },
+      transitionDuration: {
+        '400': '400ms',
       },
       typography: (theme) => ({
         DEFAULT: {

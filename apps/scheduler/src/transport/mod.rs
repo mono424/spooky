@@ -1,25 +1,16 @@
-pub mod nats;
-
-use anyhow::Result;
-use async_trait::async_trait;
-use futures::Stream;
+use anyhow::{Context, Result};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Instant;
-
-pub use nats::NatsTransport;
-
-/// Message received from transport layer
-#[derive(Debug, Clone)]
-pub struct Message {
-    pub subject: String,
-    pub payload: Vec<u8>,
-    pub reply_to: Option<String>,
-}
+use tracing::{debug, warn};
 
 /// Information about a connected SSP
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SspInfo {
     pub id: String,
+    pub url: String,
     #[serde(skip, default = "std::time::Instant::now")]
     pub connected_at: Instant,
     #[serde(skip, default = "std::time::Instant::now")]
@@ -32,24 +23,90 @@ pub struct SspInfo {
     pub memory_usage: Option<f64>,
 }
 
-/// Transport abstraction for communication with SSPs
-#[async_trait]
-pub trait Transport: Send + Sync + 'static {
-    /// Broadcast a message to all connected SSPs
-    async fn broadcast(&self, subject: &str, payload: &[u8]) -> Result<()>;
+/// HTTP-based transport for communicating with SSP sidecars
+#[derive(Clone)]
+pub struct HttpTransport {
+    client: Client,
+}
 
-    /// Send a message to one SSP (round-robin / least-loaded)
-    async fn send_to(&self, ssp_id: &str, subject: &str, payload: &[u8]) -> Result<()>;
+impl HttpTransport {
+    /// Create a new HTTP transport
+    pub fn new() -> Self {
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .expect("Failed to create HTTP client");
 
-    /// Send to one SSP from a queue group (load-balanced)
-    async fn queue_send(&self, subject: &str, payload: &[u8]) -> Result<()>;
+        Self { client }
+    }
 
-    /// Request/reply to a specific SSP
-    async fn request(&self, ssp_id: &str, subject: &str, payload: &[u8]) -> Result<Vec<u8>>;
+    /// POST a JSON payload to a specific SSP endpoint
+    pub async fn post_to_ssp<T: Serialize>(
+        &self,
+        ssp_url: &str,
+        path: &str,
+        payload: &T,
+    ) -> Result<reqwest::Response> {
+        let url = format!("{}{}", ssp_url.trim_end_matches('/'), path);
+        debug!("POST {} -> {}", path, url);
 
-    /// Subscribe to messages from SSPs
-    async fn subscribe(&self, subject: &str) -> Result<Box<dyn Stream<Item = Message> + Send + Unpin>>;
+        let response = self
+            .client
+            .post(&url)
+            .json(payload)
+            .send()
+            .await
+            .with_context(|| format!("Failed to POST to SSP at {}", url))?;
 
-    /// Track connected SSPs
-    async fn connected_ssps(&self) -> Result<Vec<SspInfo>>;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("SSP returned {} for {}: {}", status, url, body);
+        }
+
+        Ok(response)
+    }
+
+    /// Broadcast a JSON payload to all ready SSPs
+    pub async fn broadcast_to_ssps<T: Serialize + std::fmt::Debug>(
+        &self,
+        ssps: &[SspInfo],
+        path: &str,
+        payload: &T,
+    ) -> Vec<(String, Result<()>)> {
+        let mut results = Vec::new();
+
+        for ssp in ssps {
+            let result = self.post_to_ssp(&ssp.url, path, payload).await.map(|_| ());
+            if let Err(ref e) = result {
+                warn!("Failed to broadcast to SSP '{}': {}", ssp.id, e);
+            }
+            results.push((ssp.id.clone(), result));
+        }
+
+        results
+    }
+
+    /// GET from a specific SSP endpoint
+    pub async fn get_from_ssp(&self, ssp_url: &str, path: &str) -> Result<reqwest::Response> {
+        let url = format!("{}{}", ssp_url.trim_end_matches('/'), path);
+        debug!("GET {}", url);
+
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .with_context(|| format!("Failed to GET from SSP at {}", url))?;
+
+        Ok(response)
+    }
+
+    /// Check if an SSP is healthy via GET /health
+    pub async fn check_ssp_health(&self, ssp_url: &str) -> bool {
+        match self.get_from_ssp(ssp_url, "/health").await {
+            Ok(resp) => resp.status().is_success(),
+            Err(_) => false,
+        }
+    }
 }

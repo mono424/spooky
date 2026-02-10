@@ -9,6 +9,7 @@ import SchemaGenerator from '../components/SchemaGenerator';
 import GitHubStars from '../components/GitHubStars';
 import { DevToolsSimulation } from '../components/DevToolsSimulation';
 import SectionHeadline from '../components/SectionHeadline.astro';
+import { basePath } from '../config/nav';
 
 const schemaCode = `DEFINE TABLE user SCHEMAFULL;
 DEFINE FIELD username ON user TYPE string;
@@ -80,9 +81,11 @@ const ThreadList = () => {
     <title>SPOOKY SYNC</title>
   </head>
   <body class="min-h-screen flex flex-col">
-    <div class="border-b border-white border-dashed p-4 uppercase bg-black">
+    <div class="sticky top-0 z-50 border-b border-white border-dashed p-4 uppercase bg-black/80 backdrop-blur-lg transition-all duration-300">
       <nav class="max-w-7xl mx-auto flex justify-between items-center">
-        <span class="font-bold tracking-widest">[ SPOOKY_SYNC ]</span>
+        <a href="#home" class="font-bold tracking-widest transition-all duration-300 hover:text-purple-400 hover:scale-105 cursor-pointer">
+          [ SPOOKY_SYNC ]
+        </a>
         <div class="hidden md:block font-mono text-sm">
           <GitHubStars client:visible />
         </div>
@@ -93,14 +96,16 @@ const ThreadList = () => {
       class="min-h-screen flex items-center justify-center relative border-b border-white/10 py-24"
     >
       <div class="max-w-5xl mx-auto px-4 text-center">
-        <AsciiGhost client:load />
+        <div class="animate-fade-in">
+          <AsciiGhost client:load />
+        </div>
 
-        <h1 class="text-2xl md:text-4xl font-bold mb-6 uppercase tracking-widest">
+        <h1 class="text-hero font-bold mb-6 uppercase tracking-widest animate-fade-in animation-delay-200">
           [ SPOOKY_SYNC ]
         </h1>
 
         <div
-          class="text-left font-mono text-xs md:text-sm max-w-xl mx-auto mb-12 border-2 border-white bg-black shadow-[5px_5px_0px_0px_#eeeeee] relative z-10"
+          class="text-left font-mono text-xs md:text-sm max-w-xl mx-auto mb-12 border-2 border-white bg-black shadow-[5px_5px_0px_0px_#eeeeee] relative z-10 transition-all duration-300 hover:scale-[1.02] hover:shadow-[0_0_30px_rgba(255,255,255,0.2)] animate-scale-in animation-delay-400"
         >
           <div
             class="border-b-2 border-white bg-paper text-black px-3 py-1 font-bold flex justify-between items-center uppercase"
@@ -112,7 +117,7 @@ const ThreadList = () => {
             <pre><code><span class="text-white font-bold">const</span> thread = <span class="text-white font-bold">await</span> db
   .query(<span class="text-green-400">"thread"</span>)
   .where(&#123;
-    id: params.id 
+    id: params.id
   &#125;)
   .related(<span class="text-green-400">"author"</span>)
   .related(<span class="text-green-400">"comments"</span>, (q) => q
@@ -123,17 +128,17 @@ const ThreadList = () => {
   .one();<span class="animate-blink inline-block w-2 h-4 bg-white ml-1 align-middle" /></code></pre>
           </div>
         </div>
-        <div class="flex flex-col sm:flex-row gap-6 justify-center items-center">
+        <div class="flex flex-col sm:flex-row gap-6 justify-center items-center animate-slide-up animation-delay-600">
           <a
-            href={`${process.env.ASTRO_BASE_PATH}/docs`}
-            class="border-2 border-white bg-white text-black px-12 py-3 hover:bg-black hover:text-white transition-none uppercase font-bold"
+            href={`${basePath}/docs`}
+            class="border-2 border-white bg-white text-black px-12 py-3 uppercase font-bold transition-all duration-300 hover:bg-black hover:text-white hover:scale-105 hover:shadow-[0_0_30px_rgba(255,255,255,0.3)]"
           >
             [ VIEW_DOCS ]
           </a>
           <a
             href="https://github.com/mono424/spooky"
             target="_blank"
-            class="border-2 border-white/10 px-8 py-3 hover:bg-white hover:text-black transition-none uppercase font-bold"
+            class="border-2 border-white/10 px-8 py-3 uppercase font-bold transition-all duration-300 hover:bg-white hover:text-black hover:border-white hover:scale-105 hover:shadow-[0_0_20px_rgba(255,255,255,0.2)]"
           >
             [ VIEW_SOURCE ]
           </a>
@@ -143,25 +148,25 @@ const ThreadList = () => {
 
     <section id="features" class="pt-12 pb-24">
       <div class="max-w-7xl mx-auto px-4">
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 lg:gap-8">
           <!-- Card 1: Offline Compatibility -->
           <div
-            class="group relative bg-[#050505] border border-[#222] p-8 hover:bg-[#0a0a0a] transition-colors duration-500 overflow-hidden"
+            class="group relative bg-[#050505] border border-[#222] p-8 hover:bg-[#0a0a0a] hover:border-green-500/30 hover:-translate-y-1 hover:shadow-[0_0_60px_rgba(34,197,94,0.15)] transition-all duration-300 overflow-hidden"
           >
             <div
-              class="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-white/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-700"
+              class="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-green-500/50 to-transparent opacity-0 group-hover:opacity-100 group-hover:animate-glow-pulse transition-opacity duration-700"
             >
             </div>
 
             <div class="relative z-10 flex flex-col h-full">
               <div class="flex items-start justify-between mb-6">
                 <div
-                  class="text-[10px] font-mono text-gray-600 uppercase tracking-widest border border-[#333] px-2 py-1 rounded"
+                  class="text-[10px] font-mono text-gray-600 uppercase tracking-widest border border-[#333] px-2 py-1 rounded group-hover:border-green-500/50 group-hover:text-green-400 transition-all duration-300"
                 >
                   01_LOCAL
                 </div>
                 <svg
-                  class="w-5 h-5 text-gray-600 group-hover:text-white transition-colors"
+                  class="w-5 h-5 text-gray-600 group-hover:text-green-400 transition-all duration-300 group-hover:scale-110 group-hover:rotate-3"
                   fill="none"
                   viewBox="0 0 24 24"
                   stroke="currentColor"
@@ -176,23 +181,23 @@ const ThreadList = () => {
               </div>
 
               <h3
-                class="text-lg font-bold uppercase tracking-wider text-gray-200 mb-3 group-hover:text-white transition-colors"
+                class="text-lg font-bold uppercase tracking-wider text-gray-200 mb-3 group-hover:text-white transition-colors duration-300"
               >
                 Offline Compatibility
               </h3>
 
               <p
-                class="font-mono text-xs text-gray-500 leading-relaxed mb-8 group-hover:text-gray-400"
+                class="font-mono text-xs text-gray-500 leading-relaxed mb-8 group-hover:text-gray-400 transition-colors duration-300"
               >
                 Full read/write capability without network access. Changes are queued locally and
                 synchronized automatically when connectivity returns.
               </p>
 
               <div
-                class="mt-auto pt-4 border-t border-[#1a1a1a] flex items-center gap-2 text-[10px] font-mono text-gray-600"
+                class="mt-auto pt-4 border-t border-[#1a1a1a] flex items-center gap-2 text-[10px] font-mono text-gray-600 group-hover:text-green-400 transition-colors duration-300"
               >
                 <span
-                  class="w-1.5 h-1.5 rounded-full bg-gray-600 group-hover:bg-green-500 transition-colors"
+                  class="w-1.5 h-1.5 rounded-full bg-gray-600 group-hover:bg-green-500 group-hover:animate-glow-pulse transition-colors duration-300"
                 ></span>
                 <span>STATE: PERSISTED</span>
               </div>
@@ -201,22 +206,22 @@ const ThreadList = () => {
 
           <!-- Card 2: Live Updates -->
           <div
-            class="group relative bg-[#050505] border border-[#222] p-8 hover:bg-[#0a0a0a] transition-colors duration-500 overflow-hidden"
+            class="group relative bg-[#050505] border border-[#222] p-8 hover:bg-[#0a0a0a] hover:border-purple-500/30 hover:-translate-y-1 hover:shadow-[0_0_60px_rgba(168,85,247,0.15)] transition-all duration-300 overflow-hidden"
           >
             <div
-              class="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-purple-500/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-700"
+              class="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-purple-500/50 to-transparent opacity-0 group-hover:opacity-100 group-hover:animate-glow-pulse transition-opacity duration-700"
             >
             </div>
 
             <div class="relative z-10 flex flex-col h-full">
               <div class="flex items-start justify-between mb-6">
                 <div
-                  class="text-[10px] font-mono text-gray-600 uppercase tracking-widest border border-[#333] px-2 py-1 rounded"
+                  class="text-[10px] font-mono text-gray-600 uppercase tracking-widest border border-[#333] px-2 py-1 rounded group-hover:border-purple-500/50 group-hover:text-purple-400 transition-all duration-300"
                 >
                   02_SYNC
                 </div>
                 <svg
-                  class="w-5 h-5 text-gray-600 group-hover:text-purple-400 transition-colors"
+                  class="w-5 h-5 text-gray-600 group-hover:text-purple-400 transition-all duration-300 group-hover:scale-110 group-hover:rotate-3"
                   fill="none"
                   viewBox="0 0 24 24"
                   stroke="currentColor"
@@ -230,23 +235,23 @@ const ThreadList = () => {
               </div>
 
               <h3
-                class="text-lg font-bold uppercase tracking-wider text-gray-200 mb-3 group-hover:text-white transition-colors"
+                class="text-lg font-bold uppercase tracking-wider text-gray-200 mb-3 group-hover:text-white transition-colors duration-300"
               >
                 Live Updates
               </h3>
 
               <p
-                class="font-mono text-xs text-gray-500 leading-relaxed mb-8 group-hover:text-gray-400"
+                class="font-mono text-xs text-gray-500 leading-relaxed mb-8 group-hover:text-gray-400 transition-colors duration-300"
               >
                 Sub-millisecond latency. Data changes propagate instantly to all connected clients
                 via incremental view maintenance.
               </p>
 
               <div
-                class="mt-auto pt-4 border-t border-[#1a1a1a] flex items-center gap-2 text-[10px] font-mono text-gray-600"
+                class="mt-auto pt-4 border-t border-[#1a1a1a] flex items-center gap-2 text-[10px] font-mono text-gray-600 group-hover:text-purple-400 transition-colors duration-300"
               >
                 <span
-                  class="w-1.5 h-1.5 rounded-full bg-gray-600 group-hover:bg-purple-500 transition-colors animate-pulse"
+                  class="w-1.5 h-1.5 rounded-full bg-gray-600 group-hover:bg-purple-500 group-hover:animate-glow-pulse transition-colors duration-300"
                 ></span>
                 <span>SOCKET: CONNECTED</span>
               </div>
@@ -255,22 +260,22 @@ const ThreadList = () => {
 
           <!-- Card 3: Developer Experience -->
           <div
-            class="group relative bg-[#050505] border border-[#222] p-8 hover:bg-[#0a0a0a] transition-colors duration-500 overflow-hidden"
+            class="group relative bg-[#050505] border border-[#222] p-8 hover:bg-[#0a0a0a] hover:border-blue-500/30 hover:-translate-y-1 hover:shadow-[0_0_60px_rgba(59,130,246,0.15)] transition-all duration-300 overflow-hidden"
           >
             <div
-              class="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-blue-500/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-700"
+              class="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-blue-500/50 to-transparent opacity-0 group-hover:opacity-100 group-hover:animate-glow-pulse transition-opacity duration-700"
             >
             </div>
 
             <div class="relative z-10 flex flex-col h-full">
               <div class="flex items-start justify-between mb-6">
                 <div
-                  class="text-[10px] font-mono text-gray-600 uppercase tracking-widest border border-[#333] px-2 py-1 rounded"
+                  class="text-[10px] font-mono text-gray-600 uppercase tracking-widest border border-[#333] px-2 py-1 rounded group-hover:border-blue-500/50 group-hover:text-blue-400 transition-all duration-300"
                 >
                   03_DX
                 </div>
                 <svg
-                  class="w-5 h-5 text-gray-600 group-hover:text-blue-400 transition-colors"
+                  class="w-5 h-5 text-gray-600 group-hover:text-blue-400 transition-all duration-300 group-hover:scale-110 group-hover:rotate-3"
                   fill="none"
                   viewBox="0 0 24 24"
                   stroke="currentColor"
@@ -284,23 +289,23 @@ const ThreadList = () => {
               </div>
 
               <h3
-                class="text-lg font-bold uppercase tracking-wider text-gray-200 mb-3 group-hover:text-white transition-colors"
+                class="text-lg font-bold uppercase tracking-wider text-gray-200 mb-3 group-hover:text-white transition-colors duration-300"
               >
                 Developer Experience
               </h3>
 
               <p
-                class="font-mono text-xs text-gray-500 leading-relaxed mb-8 group-hover:text-gray-400"
+                class="font-mono text-xs text-gray-500 leading-relaxed mb-8 group-hover:text-gray-400 transition-colors duration-300"
               >
                 Schema-first design with end-to-end type safety. Generated TypeScript definitions
                 ensure your code is always correct.
               </p>
 
               <div
-                class="mt-auto pt-4 border-t border-[#1a1a1a] flex items-center gap-2 text-[10px] font-mono text-gray-600"
+                class="mt-auto pt-4 border-t border-[#1a1a1a] flex items-center gap-2 text-[10px] font-mono text-gray-600 group-hover:text-blue-400 transition-colors duration-300"
               >
                 <span
-                  class="w-1.5 h-1.5 rounded-full bg-gray-600 group-hover:bg-blue-500 transition-colors"
+                  class="w-1.5 h-1.5 rounded-full bg-gray-600 group-hover:bg-blue-500 group-hover:animate-glow-pulse transition-colors duration-300"
                 ></span>
                 <span>TYPES: STRICT</span>
               </div>
@@ -331,7 +336,7 @@ const ThreadList = () => {
               <a
                 href="https://github.com/mono424/spooky"
                 target="_blank"
-                class="inline-block border-2 border-white bg-black text-white px-6 py-2 hover:bg-white hover:text-black transition-none uppercase font-bold"
+                class="inline-block border-2 border-white bg-black text-white px-6 py-2 uppercase font-bold transition-all duration-300 hover:bg-white hover:text-black hover:scale-105 hover:shadow-[0_0_20px_rgba(255,255,255,0.2)]"
               >
                 [ READ_FULL_DOCS ]
               </a>
@@ -356,6 +361,7 @@ const ThreadList = () => {
       <div class="max-w-7xl mx-auto px-4 relative z-10">
         <SectionHeadline
           title="SCHEMA_FIRST"
+          badge="Type Safety"
           description='Your database is your <span class="text-white">source of truth</span>. We introspect your schema to generate <span class="text-purple-400">strict TypeScript definitions</span> automatically.'
         />
 
@@ -424,6 +430,7 @@ const ThreadList = () => {
       <div class="max-w-7xl mx-auto px-4 relative z-10">
         <SectionHeadline
           title="DEV_EXPERIENCE"
+          badge="Developer Tools"
           description='Spooky is built by <span class="text-white">developers for developers</span> with framework-native queries with <span class="text-blue-400">full reactivity</span> and type safety.'
         />
 
@@ -645,24 +652,30 @@ const ThreadList = () => {
       <div class="max-w-7xl mx-auto px-4">
         <SectionHeadline
           title="UNDER_THE_HOOD"
+          badge="Architecture"
           description='Spooky uses <span class="text-white">Icremental View Maintanence</span> to track client query hashes, known as <span class="text-purple-400 font-bold">Incantations</span>. These are stored in the <code class="bg-[#222] px-1 py-0.5 rounded text-gray-300">_spooky_querys</code> table. Choose your runtime based on your performance needs.'
         />
 
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 max-w-6xl mx-auto mb-24">
           <div
-            class="group border border-[#333] bg-[#0a0a0a] hover:border-purple-500/30 transition-colors duration-300 relative overflow-hidden rounded-sm flex flex-col"
+            class="group border border-[#333] bg-[#0a0a0a] hover:border-purple-500/30 hover:shadow-[0_0_60px_rgba(168,85,247,0.15)] transition-all duration-300 relative overflow-hidden rounded-sm flex flex-col"
           >
+            <!-- Animated gradient background -->
+            <div class="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500">
+              <div class="absolute inset-0 bg-gradient-to-br from-purple-500/5 via-transparent to-transparent animate-gradient bg-[length:200%_200%]"></div>
+            </div>
+
             <div
-              class="absolute top-0 left-0 bg-[#222] text-[10px] font-bold px-3 py-1 text-gray-400 border-r border-b border-[#333] uppercase tracking-wider"
+              class="absolute top-0 left-0 bg-gradient-to-r from-purple-500 to-purple-600 text-[10px] font-bold px-3 py-1 text-white border-r border-b border-purple-400/50 uppercase tracking-wider shadow-[0_0_20px_rgba(168,85,247,0.3)]"
             >
               Mode_A
             </div>
 
-            <div class="p-8 pt-12 flex-1 flex flex-col">
+            <div class="p-8 pt-12 flex-1 flex flex-col relative z-10">
               <div class="flex justify-between items-baseline mb-6">
                 <h3 class="text-xl font-bold text-white">Surrealism (WASM)</h3>
                 <span
-                  class="text-[10px] font-bold font-mono text-black bg-purple-400 px-2 py-1 rounded-sm uppercase"
+                  class="text-[10px] font-bold font-mono bg-gradient-to-r from-purple-500 to-purple-600 text-white px-2 py-1 rounded-sm uppercase shadow-[0_0_15px_rgba(168,85,247,0.5)]"
                   >Local / Testing</span
                 >
               </div>
@@ -744,11 +757,16 @@ const ThreadList = () => {
                   >, CI/CD pipelines, and local development.
                 </p>
                 <ul class="space-y-2 font-mono text-xs text-gray-500 border-t border-[#222] pt-4">
-                  <li class="flex items-start gap-2">
-                    <span class="text-purple-400">✔</span> Zero setup (runs inside `surreal start`).
+                  <li class="flex items-start gap-2 transition-colors duration-300 hover:text-gray-300">
+                    <svg class="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                    </svg>
+                    <span>Zero setup (runs inside `surreal start`).</span>
                   </li>
-                  <li class="flex items-start gap-2">
-                    <span class="text-orange-400">⚠</span>
+                  <li class="flex items-start gap-2 transition-colors duration-300 hover:text-gray-300">
+                    <svg class="w-4 h-4 text-orange-400 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                    </svg>
                     <span
                       class="relative group/tooltip cursor-help border-b border-dotted border-gray-600"
                     >
@@ -772,19 +790,24 @@ const ThreadList = () => {
           </div>
 
           <div
-            class="group border border-[#333] bg-[#0a0a0a] hover:border-green-500/30 transition-colors duration-300 relative overflow-hidden rounded-sm flex flex-col"
+            class="group border border-[#333] bg-[#0a0a0a] hover:border-green-500/30 hover:shadow-[0_0_60px_rgba(34,197,94,0.15)] transition-all duration-300 relative overflow-hidden rounded-sm flex flex-col"
           >
+            <!-- Animated gradient background -->
+            <div class="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500">
+              <div class="absolute inset-0 bg-gradient-to-br from-green-500/5 via-transparent to-transparent animate-gradient bg-[length:200%_200%]"></div>
+            </div>
+
             <div
-              class="absolute top-0 left-0 bg-[#222] text-[10px] font-bold px-3 py-1 text-gray-400 border-r border-b border-[#333] uppercase tracking-wider"
+              class="absolute top-0 left-0 bg-gradient-to-r from-green-500 to-green-600 text-[10px] font-bold px-3 py-1 text-white border-r border-b border-green-400/50 uppercase tracking-wider shadow-[0_0_20px_rgba(34,197,94,0.3)]"
             >
               Mode_B
             </div>
 
-            <div class="p-8 pt-12 flex-1 flex flex-col">
+            <div class="p-8 pt-12 flex-1 flex flex-col relative z-10">
               <div class="flex justify-between items-baseline mb-6">
                 <h3 class="text-xl font-bold text-white">Sidecar Daemon</h3>
                 <span
-                  class="text-[10px] font-bold font-mono text-black bg-green-500 px-2 py-1 rounded-sm uppercase"
+                  class="text-[10px] font-bold font-mono bg-gradient-to-r from-green-500 to-green-600 text-white px-2 py-1 rounded-sm uppercase shadow-[0_0_15px_rgba(34,197,94,0.5)]"
                   >Production</span
                 >
               </div>
@@ -909,11 +932,17 @@ const ThreadList = () => {
                   database via RPC.
                 </p>
                 <ul class="space-y-2 font-mono text-xs text-gray-500 border-t border-[#222] pt-4">
-                  <li class="flex items-start gap-2">
-                    <span class="text-green-400">✔</span> High Performance (In-Memory State).
+                  <li class="flex items-start gap-2 transition-colors duration-300 hover:text-gray-300">
+                    <svg class="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                    </svg>
+                    <span>High Performance (In-Memory State).</span>
                   </li>
-                  <li class="flex items-start gap-2">
-                    <span class="text-green-400">✔</span> Scalable for production loads.
+                  <li class="flex items-start gap-2 transition-colors duration-300 hover:text-gray-300">
+                    <svg class="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                    </svg>
+                    <span>Scalable for production loads.</span>
                   </li>
                 </ul>
               </div>
@@ -957,39 +986,48 @@ const ThreadList = () => {
 
       <!-- CTA SECTION -->
       <section class="py-32 border-t border-white/10 bg-black text-center relative overflow-hidden">
-        <!-- Decorative background glow -->
+        <!-- Animated gradient background -->
+        <div class="absolute inset-0 bg-gradient-to-br from-purple-500/5 via-transparent to-blue-500/5 animate-gradient bg-[length:200%_200%]"></div>
+
+        <!-- Enhanced decorative background glow -->
         <div
-          class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-purple-500/10 blur-[100px] rounded-full pointer-events-none"
+          class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-purple-500/20 blur-[150px] rounded-full pointer-events-none animate-glow-pulse"
         >
         </div>
 
         <div class="max-w-4xl mx-auto px-4 relative z-10">
-          <h2 class="text-4xl md:text-5xl font-bold uppercase tracking-widest mb-8 text-white">
+          <h2 class="text-section md:text-hero font-bold uppercase tracking-widest mb-8 bg-gradient-to-r from-white via-purple-200 to-white bg-clip-text text-transparent">
             Ready to Get Spooky?
           </h2>
-          <p class="font-mono text-gray-500 mb-12 max-w-2xl mx-auto leading-relaxed">
+          <p class="font-mono text-gray-400 text-base mb-12 max-w-2xl mx-auto leading-relaxed">
             Start building local-first, offline-ready applications today. Dive into the
             documentation to learn more about the architecture and implementation details.
           </p>
           <a
-            href={`${process.env.ASTRO_BASE_PATH}/docs`}
-            class="inline-block border-2 border-white bg-white text-black px-12 py-4 hover:bg-black hover:text-white transition-none uppercase font-bold text-lg tracking-widest"
+            href={`${basePath}/docs`}
+            class="inline-flex items-center gap-3 border-2 border-white bg-white text-black px-12 py-4 uppercase font-bold text-lg tracking-widest transition-all duration-300 hover:bg-black hover:text-white hover:scale-105 hover:shadow-[0_0_40px_rgba(255,255,255,0.4)] group"
           >
-            [ START_BUILDING ]
+            <span>[ START_BUILDING ]</span>
+            <svg class="w-5 h-5 transition-transform duration-300 group-hover:translate-x-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
+            </svg>
           </a>
         </div>
       </section>
 
-      <footer class="py-12 border-t-4 border-white border-double">
+      <footer class="py-12 border-t-4 border-white border-double relative">
+        <!-- Subtle glow on border -->
+        <div class="absolute top-0 left-1/2 -translate-x-1/2 w-1/2 h-[1px] bg-gradient-to-r from-transparent via-white/50 to-transparent"></div>
+
         <div class="max-w-7xl mx-auto px-4 flex flex-col md:flex-row justify-between items-center">
           <div class="mb-4 md:mb-0 text-xs font-mono flex items-center relative">
             <img src="/spooky/logo_transparent.svg" alt="Spooky Logo" class="w-4 h-4 mr-2" />
             © 2025 SPOOKY
           </div>
           <div class="space-x-6 text-sm font-mono uppercase">
-            <a href="#" class="hover:underline px-1 transition-none">[ PRIVACY ]</a>
-            <a href="#" class="hover:underline px-1 transition-none">[ TERMS ]</a>
-            <a href="#" class="hover:underline px-1 transition-none">[ EXIT ]</a>
+            <a href="#" class="px-1 transition-all duration-300 hover:text-purple-400 hover:underline underline-offset-4">[ PRIVACY ]</a>
+            <a href="#" class="px-1 transition-all duration-300 hover:text-purple-400 hover:underline underline-offset-4">[ TERMS ]</a>
+            <a href="#" class="px-1 transition-all duration-300 hover:text-purple-400 hover:underline underline-offset-4">[ EXIT ]</a>
           </div>
         </div>
       </footer>

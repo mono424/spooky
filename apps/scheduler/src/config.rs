@@ -4,8 +4,6 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SchedulerConfig {
-    pub transport: String,
-    pub nats: NatsConfig,
     pub db: DbConfig,
     pub load_balance: LoadBalanceStrategy,
     pub heartbeat_interval_ms: u64,
@@ -16,13 +14,6 @@ pub struct SchedulerConfig {
     pub replica_keep_versions: u64,
     pub ingest_host: Option<String>,
     pub ingest_port: u16,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct NatsConfig {
-    pub url: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub credentials: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -45,11 +36,6 @@ pub enum LoadBalanceStrategy {
 impl Default for SchedulerConfig {
     fn default() -> Self {
         Self {
-            transport: "nats".to_string(),
-            nats: NatsConfig {
-                url: "nats://localhost:4222".to_string(),
-                credentials: None,
-            },
             db: DbConfig {
                 url: "ws://localhost:8000".to_string(),
                 namespace: "spooky".to_string(),
@@ -64,8 +50,8 @@ impl Default for SchedulerConfig {
             job_tables: vec![],
             replica_db_path: PathBuf::from("./data/replica.db"),
             replica_keep_versions: 10,
-            ingest_host: None, // Defaults to 0.0.0.0
-            ingest_port: 9667, // Default ingest HTTP port
+            ingest_host: None,
+            ingest_port: 9667,
         }
     }
 }

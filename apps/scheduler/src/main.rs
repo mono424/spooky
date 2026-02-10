@@ -1,6 +1,6 @@
 use anyhow::Result;
 use scheduler::config::SchedulerConfig;
-use scheduler::transport::NatsTransport;
+use scheduler::transport::HttpTransport;
 use std::sync::Arc;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -17,8 +17,8 @@ async fn main() -> Result<()> {
     // Load configuration
     let config = SchedulerConfig::load()?;
     
-    // Initialize transport (NATS)
-    let transport = Arc::new(NatsTransport::new(&config.nats).await?) as Arc<dyn scheduler::transport::Transport>;
+    // Initialize transport (HTTP)
+    let transport = Arc::new(HttpTransport::new());
     
     // Create scheduler
     let scheduler = scheduler::Scheduler::new(config.clone(), transport.clone())?;
@@ -45,7 +45,15 @@ async fn main() -> Result<()> {
         job_tracker: std::sync::Arc::clone(&job_tracker),
     };
     let job_router = scheduler::job_scheduler::create_job_router(job_state.clone());
-    
+
+    let ssp_mgmt_state = scheduler::ssp_management::SspManagementState {
+        ssp_pool: std::sync::Arc::clone(&query_state.ssp_pool),
+        replica: scheduler.replica.clone(),
+        transport: std::sync::Arc::clone(&transport),
+        config: std::sync::Arc::new(config.clone()),
+    };
+    let ssp_router = scheduler::ssp_management::create_ssp_router(ssp_mgmt_state);
+
     let metrics_router = scheduler::metrics::create_metrics_router(
         scheduler.metrics_state(
             std::sync::Arc::clone(&query_tracker),
@@ -57,6 +65,7 @@ async fn main() -> Result<()> {
         .merge(ingest_router)
         .merge(query_router)
         .merge(job_router)
+        .merge(ssp_router)
         .merge(metrics_router);
     
     let ingest_addr = format!("{}:{}", 
