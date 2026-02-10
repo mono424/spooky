@@ -86,7 +86,7 @@ const Icons = {
     </svg>
   ),
   relation: (
-    <svg className="w-3 h-3 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <svg className="w-3 h-3 text-brand-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path
         strokeLinecap="round"
         strokeLinejoin="round"
@@ -206,10 +206,10 @@ const Token: React.FC<TokenProps> = ({ text, className, cleanText, onReplace }) 
       />
 
       {isOpen && (
-        <div className="absolute left-0 top-full mt-1 min-w-[240px] bg-[#1a1a1a] border border-[#333] shadow-[0_8px_32px_rgba(0,0,0,0.8)] rounded-sm font-mono text-xs animate-in fade-in zoom-in-95 duration-100 overflow-hidden pointer-events-auto z-30">
-          <div className="bg-[#111] px-3 py-1.5 text-[10px] text-gray-500 border-b border-[#222] flex justify-between items-center uppercase tracking-wider shrink-0">
-            <span className="font-bold text-gray-400">{context.title}</span>
-            <span className="bg-[#222] px-1 rounded text-[9px]">Tab ↹</span>
+        <div className="absolute left-0 top-full mt-1 min-w-[240px] bg-surface-elevated border border-surface-border shadow-2xl rounded-lg font-mono text-xs animate-in fade-in zoom-in-95 duration-100 overflow-hidden pointer-events-auto z-30">
+          <div className="bg-surface px-3 py-2 text-xs text-text-tertiary border-b border-surface-border flex justify-between items-center shrink-0">
+            <span className="font-semibold text-text-primary">{context.title}</span>
+            <span className="bg-surface-border px-1.5 py-0.5 rounded text-[10px]">Tab ↹</span>
           </div>
 
           <div className="py-1">
@@ -225,17 +225,17 @@ const Token: React.FC<TokenProps> = ({ text, className, cleanText, onReplace }) 
                   }}
                   className={`w-full text-left px-3 py-2 flex justify-between items-center group transition-colors ${
                     isActive
-                      ? 'bg-[#0f2e1a] text-white border-l-2 border-green-500'
-                      : 'text-gray-400 border-l-2 border-transparent hover:bg-[#222] hover:text-gray-200'
+                      ? 'bg-accent-500/10 text-text-primary border-l-2 border-accent-500'
+                      : 'text-text-tertiary border-l-2 border-transparent hover:bg-surface-hover hover:text-text-secondary'
                   }`}
                 >
                   <div className="flex items-center gap-2">
                     <span className="opacity-80 shrink-0">{Icons[opt.kind]}</span>
-                    <span className={isActive ? 'font-bold' : ''}>{opt.label}</span>
+                    <span className={isActive ? 'font-semibold' : ''}>{opt.label}</span>
                   </div>
                   {opt.type && (
                     <span
-                      className={`text-[10px] ml-2 ${isActive ? 'text-green-400' : 'text-gray-600'}`}
+                      className={`text-[10px] ml-2 ${isActive ? 'text-accent-400' : 'text-text-muted'}`}
                     >
                       {opt.type}
                     </span>
@@ -245,8 +245,8 @@ const Token: React.FC<TokenProps> = ({ text, className, cleanText, onReplace }) 
             })}
           </div>
           {context.options.find((o) => o.label === cleanText)?.doc && (
-            <div className="bg-[#111] border-t border-[#222] p-2 text-gray-500 text-[10px] leading-relaxed whitespace-normal break-words">
-              <span className="text-green-600 font-bold">INFO: </span>
+            <div className="bg-surface border-t border-surface-border p-2 text-text-tertiary text-[10px] leading-relaxed whitespace-normal break-words">
+              <span className="text-accent-500 font-semibold">INFO: </span>
               {context.options.find((o) => o.label === cleanText)?.doc}
             </div>
           )}
@@ -271,12 +271,12 @@ const ErrorToken: React.FC<{ text: string }> = ({ text }) => {
         {text}
       </span>
       {isOpen && (
-        <div className="absolute left-0 bottom-full mb-1 w-[300px] bg-[#1a1a1a] border border-red-500/50 shadow-2xl rounded-sm font-mono text-xs z-[100] animate-in fade-in slide-in-from-bottom-1 pointer-events-auto">
+        <div className="absolute left-0 bottom-full mb-1 w-[300px] bg-surface-elevated border border-red-500/50 shadow-2xl rounded-lg font-mono text-xs z-[100] animate-in fade-in slide-in-from-bottom-1 pointer-events-auto">
           <div className="bg-red-500/10 px-3 py-2 border-b border-red-500/20 flex items-center gap-2 text-red-400">
             {Icons.error}
-            <span className="font-bold">Property 'author' does not exist</span>
+            <span className="font-semibold">Property 'author' does not exist</span>
           </div>
-          <div className="p-3 text-gray-400 leading-relaxed whitespace-normal break-words">
+          <div className="p-3 text-text-tertiary leading-relaxed whitespace-normal break-words">
             Type <span className="text-orange-300">Thread</span> has no property{' '}
             <span className="text-white">author</span>. Did you forget to include{' '}
             <span className="bg-[#222] px-1 text-blue-300">.related("author")</span> in your query?
@@ -394,41 +394,41 @@ export const LiveCodeEditor: React.FC<LiveCodeEditorProps> = ({ initialCode, fil
   const lineCount = code.split('\n').length;
 
   return (
-    <div className="border border-[#333] bg-[#050505] shadow-2xl flex flex-col font-mono text-sm relative overflow-visible group rounded-sm min-h-[420px]">
+    <div className="border border-surface-border bg-surface shadow-xl flex flex-col font-mono text-sm relative overflow-visible group rounded-xl min-h-[420px]">
       {/* Header */}
-      <div className="flex justify-between items-center bg-[#111] border-b border-[#222] px-4 pt-2 text-xs select-none">
-        <div className="flex items-center gap-2">
-          <div className="flex gap-1.5 pb-1">
-            <div className="w-2.5 h-2.5 rounded-full bg-[#333]"></div>
-            <div className="w-2.5 h-2.5 rounded-full bg-[#333]"></div>
-            <div className="w-2.5 h-2.5 rounded-full bg-[#333]"></div>
+      <div className="flex justify-between items-center bg-surface-elevated border-b border-surface-border px-4 py-3 text-xs select-none rounded-t-xl">
+        <div className="flex items-center gap-3">
+          <div className="flex gap-1.5">
+            <div className="w-3 h-3 rounded-full bg-red-500/50"></div>
+            <div className="w-3 h-3 rounded-full bg-yellow-500/50"></div>
+            <div className="w-3 h-3 rounded-full bg-accent-500/50"></div>
           </div>
-          <div className="flex items-center gap-2 text-gray-300 bg-[#050505] px-3 py-1 border-t-2 border-green-700 ml-4">
-            <span className="font-bold text-blue-400">TSX</span>
+          <div className="flex items-center gap-2 text-text-tertiary">
+            <span className="font-semibold text-brand-400">TSX</span>
             <span>{filename || 'Untitled'}</span>
           </div>
         </div>
 
         <div
-          className={`text-[10px] font-bold px-2 py-0.5 rounded transition-colors ${currentRelation !== 'author' ? 'bg-red-900/20 text-red-500' : 'text-green-900/0'}`}
+          className={`text-xs font-semibold px-2 py-1 rounded transition-colors ${currentRelation !== 'author' ? 'bg-red-500/10 text-red-400 border border-red-500/30' : 'text-transparent'}`}
         >
-          {currentRelation !== 'author' ? '1 ERROR' : ''}
+          {currentRelation !== 'author' ? '1 Error' : ''}
         </div>
       </div>
 
       {/* Body */}
-      <div className="relative flex-1 bg-[#050505] overflow-visible min-h-0 font-mono text-sm leading-relaxed">
+      <div className="relative flex-1 bg-surface overflow-visible min-h-0 font-mono text-sm leading-relaxed">
         {code.split('\n').map((line, i) => (
           <div
             key={i}
             className={`flex ${i === 0 ? 'pt-4' : ''} ${i === code.split('\n').length - 1 ? 'pb-4' : ''}`}
           >
             {/* Gutter */}
-            <div className="bg-[#0a0a0a] border-r border-[#222] text-[#444] text-right pr-3 pl-2 select-none w-12 shrink-0">
+            <div className="bg-surface-elevated border-r border-surface-border text-text-muted text-right pr-3 pl-2 select-none w-12 shrink-0">
               {i + 1}
             </div>
             {/* Code Line */}
-            <div className="flex-1 px-4 whitespace-pre-wrap break-words text-gray-300">
+            <div className="flex-1 px-4 whitespace-pre-wrap break-words text-text-secondary">
               {line.length === 0 ? <br /> : renderCode(line)}
             </div>
           </div>
@@ -437,7 +437,7 @@ export const LiveCodeEditor: React.FC<LiveCodeEditorProps> = ({ initialCode, fil
 
       {/* Footer */}
       <div
-        className={`border-t px-4 py-1.5 text-[10px] font-bold relative z-10 flex justify-between items-center transition-colors ${currentRelation !== 'author' ? 'bg-red-900/10 border-red-900/50' : 'bg-[#111] border-[#222]'}`}
+        className={`border-t px-4 py-2 text-xs font-semibold relative z-10 flex justify-between items-center transition-colors rounded-b-xl ${currentRelation !== 'author' ? 'bg-red-500/10 border-red-500/30' : 'bg-surface-elevated border-surface-border'}`}
       >
         <div className="flex gap-4">
           <span className="flex items-center gap-2 text-gray-500">SPOOKY_SYNC</span>

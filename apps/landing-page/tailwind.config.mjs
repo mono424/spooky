@@ -4,78 +4,80 @@ export default {
   theme: {
     extend: {
       colors: {
-        primary: {
-          50: "#fef2f4",
-          100: "#fde6e9",
-          200: "#faccd6",
-          300: "#f7a3b4",
-          400: "#f27089",
-          500: "#E94560", // Main accent color
-          600: "#d63852",
-          700: "#b82a43",
-          800: "#99253e",
-          900: "#80223a",
-          950: "#470e1b",
-        },
-        secondary: {
+        // Professional Brand Colors (Purple)
+        brand: {
           50: "#f5f3ff",
           100: "#ede9ff",
           200: "#ddd6ff",
           300: "#c4b5ff",
           400: "#a689ff",
-          500: "#8a59ff",
+          500: "#8a59ff", // Primary brand color
           600: "#7c34f7",
           700: "#6d22e3",
           800: "#5b1dbf",
-          900: "#533483", // Purple accent
+          900: "#533483",
           950: "#2e1054",
         },
-        navy: {
-          50: "#f0f4f8",
-          100: "#dae3ed",
-          200: "#b8cade",
-          300: "#8da9c8",
-          400: "#5e84ae",
-          500: "#426796",
-          600: "#33527d",
-          700: "#2a4165",
-          800: "#263855",
-          900: "#0F3460", // Dark blue
-          950: "#0a1f3d",
+        // Accent Colors (Green)
+        accent: {
+          50: "#f0fdf4",
+          100: "#dcfce7",
+          200: "#bbf7d0",
+          300: "#86efac",
+          400: "#4ade80",
+          500: "#22c55e", // Success/active states
+          600: "#16a34a",
+          700: "#15803d",
+          800: "#166534",
+          900: "#14532d",
+          950: "#052e16",
         },
-        deepNavy: {
-          DEFAULT: "#0a0e1a", // Very dark, almost black
-          light: "#0f1520",
-          dark: "#050810",
+        // Enterprise Colors (Orange)
+        orange: {
+          50: "#fff7ed",
+          100: "#ffedd5",
+          200: "#fed7aa",
+          300: "#fdba74",
+          400: "#fb923c",
+          500: "#f97316", // Primary orange
+          600: "#ea580c",
+          700: "#c2410c",
+          800: "#9a3412",
+          900: "#7c2d12",
+          950: "#431407",
         },
-        paper: "#eeeeee", // Off-white for terminals/sections
-        // Docs Theme
-        background: '#09090b', // Almost black
+        // Background & Surface
+        background: '#09090b',
         surface: {
           DEFAULT: '#0a0a0a',
           elevated: '#121212',
-          border: '#1a1a1a',
+          hover: '#1a1a1a',
+          border: '#27272a',
         },
+        // Text Hierarchy
         text: {
-          main: '#f4f4f5',     // High contrast text
-          muted: '#a1a1aa',    // Secondary text
+          primary: '#ffffff',
+          secondary: '#f4f4f5',
+          tertiary: '#a1a1aa',
+          muted: '#71717a',
         },
-        border: '#27272a',     // Subtle borders
-        // Glow variations for accents
-        glow: {
-          purple: 'rgba(168, 85, 247, 0.15)',
-          blue: 'rgba(59, 130, 246, 0.15)',
-          green: 'rgba(34, 197, 94, 0.15)',
-          white: 'rgba(255, 255, 255, 0.3)',
-        },
+        // Legacy colors for backwards compatibility
+        border: '#27272a',
+        paper: "#eeeeee",
       },
       fontFamily: {
-        sans: ["Inter", "system-ui", "sans-serif"],
+        sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'Helvetica Neue', 'Arial', 'sans-serif'],
+        mono: ['JetBrains Mono', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', 'Courier New', 'monospace'],
       },
       fontSize: {
+        // Hero & Section Headers
         'hero': ['clamp(2.5rem, 5vw, 4.5rem)', { lineHeight: '1.1', letterSpacing: '-0.02em' }],
         'section': ['clamp(2rem, 4vw, 3rem)', { lineHeight: '1.2', letterSpacing: '-0.01em' }],
         'card-title': ['clamp(1.25rem, 2vw, 1.5rem)', { lineHeight: '1.3' }],
+        // Body Text (Professional & Readable)
+        'body-lg': ['1.125rem', { lineHeight: '1.75', letterSpacing: '-0.01em' }], // 18px
+        'body': ['1rem', { lineHeight: '1.625', letterSpacing: '0' }],              // 16px
+        'body-sm': ['0.875rem', { lineHeight: '1.5', letterSpacing: '0' }],        // 14px
       },
       animation: {
         "fade-in": "fadeIn 0.5s ease-in-out",

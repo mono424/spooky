@@ -9,34 +9,27 @@ interface Props {
 const { title, description, badge } = Astro.props;
 ---
 
-<div class="mb-20 text-center relative">
-  <!-- Decorative blur element -->
-  <div class="absolute inset-0 -z-10 opacity-30">
-    <div class="absolute top-0 left-1/2 -translate-x-1/2 w-96 h-96 bg-purple-500/10 blur-[120px]"></div>
-  </div>
+<div class="mb-16 text-center relative">
+  {badge && (
+    <div class="mb-4">
+      <span class="inline-block px-3 py-1.5 text-xs font-medium text-brand-400 bg-brand-500/10 border border-brand-500/30 rounded-lg">
+        {badge}
+      </span>
+    </div>
+  )}
 
-  <div class="border-y border-white/10 pt-6 pb-8">
-    {badge && (
-      <div class="mb-4">
-        <span class="inline-block px-3 py-1 text-[10px] font-mono text-purple-400 border border-purple-500/30 rounded uppercase tracking-widest">
-          {badge}
-        </span>
+  <h2 class="text-section font-bold text-text-primary mb-6">
+    {title}
+  </h2>
+  {
+    description ? (
+      <p class="text-text-tertiary max-w-2xl mx-auto text-body leading-relaxed">
+        <Fragment set:html={description} />
+      </p>
+    ) : (
+      <div class="text-text-tertiary max-w-2xl mx-auto text-body leading-relaxed">
+        <slot />
       </div>
-    )}
-
-    <h2 class="text-section font-bold uppercase tracking-widest text-white mb-6">
-      {title}
-    </h2>
-    {
-      description ? (
-        <p class="font-mono text-gray-400 max-w-2xl mx-auto text-sm md:text-base leading-relaxed">
-          <Fragment set:html={description} />
-        </p>
-      ) : (
-        <div class="font-mono text-gray-400 max-w-2xl mx-auto text-sm md:text-base leading-relaxed">
-          <slot />
-        </div>
-      )
-    }
-  </div>
+    )
+  }
 </div>

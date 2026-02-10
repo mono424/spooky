@@ -7,7 +7,7 @@
 }
 
 body {
-  @apply bg-background text-text-main;
+  @apply bg-background text-text-primary;
 }
 
 /* Custom Scrollbar to match dark theme */

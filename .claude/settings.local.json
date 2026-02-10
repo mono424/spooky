@@ -30,7 +30,14 @@
       "Bash(xargs ls:*)",
       "Bash(find:*)",
       "WebFetch(domain:viteplus.dev)",
-      "Bash(npm run build:*)"
+      "Bash(npm run build:*)",
+      "Bash(lsof:*)",
+      "Bash(pgrep:*)",
+      "Bash(npm run dev:*)",
+      "Bash(npm install:*)",
+      "Bash(npx tsc:*)",
+      "Bash(open:*)",
+      "mcp__ide__getDiagnostics"
     ],
     "deny": [],
     "ask": []
