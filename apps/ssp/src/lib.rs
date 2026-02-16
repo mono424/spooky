@@ -35,6 +35,9 @@ pub mod persistence;
 use background_saver::BackgroundSaver;
 use metrics::Metrics;
 
+use job_runner::{JobConfig, JobEntry, JobRunner};
+use tokio::sync::mpsc;
+
 /// Shared database connection wrapped in Arc for zero-copy sharing across tasks
 pub type SharedDb = Arc<Surreal<Client>>;
 
@@ -45,6 +48,8 @@ pub struct AppState {
     pub persistence_path: PathBuf,
     pub saver: Arc<BackgroundSaver>,
     pub metrics: Arc<Metrics>,
+    pub job_config: Arc<JobConfig>,
+    pub job_queue_tx: mpsc::Sender<JobEntry>,
 }
 
 // --- Request/Response DTOs ---
@@ -71,6 +76,14 @@ pub struct UnregisterViewRequest {
     pub id: String,
 }
 
+#[derive(Deserialize, Debug)]
+pub struct BootstrapChunk {
+    pub chunk_index: usize,
+    pub total_chunks: usize,
+    pub table: String,
+    pub records: Vec<(String, Value)>,
+}
+
 // --- Configuration ---
 
 pub struct Config {
@@ -82,6 +95,10 @@ pub struct Config {
     pub db_pass: String,
     pub db_ns: String,
     pub db_db: String,
+    pub spooky_config_path: PathBuf,
+    pub scheduler_url: Option<String>,
+    pub ssp_id: String,
+    pub heartbeat_interval_ms: u64,
 }
 
 pub fn load_config() -> Config {
@@ -100,6 +117,17 @@ pub fn load_config() -> Config {
         db_pass: std::env::var("SURREALDB_PASS").unwrap_or_else(|_| "root".to_string()),
         db_ns: std::env::var("SURREALDB_NS").unwrap_or_else(|_| "test".to_string()),
         db_db: std::env::var("SURREALDB_DB").unwrap_or_else(|_| "test".to_string()),
+        spooky_config_path: PathBuf::from(
+            std::env::var("SPOOKY_CONFIG_PATH")
+                .unwrap_or_else(|_| "spooky.yml".to_string()),
+        ),
+        scheduler_url: std::env::var("SCHEDULER_URL").ok(),
+        ssp_id: std::env::var("SSP_ID")
+            .unwrap_or_else(|_| format!("ssp-{}", uuid::Uuid::new_v4())),
+        heartbeat_interval_ms: std::env::var("HEARTBEAT_INTERVAL_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(5000),
     }
 }
 
@@ -133,6 +161,7 @@ pub async fn connect_database(config: &Config) -> anyhow::Result<SharedDb> {
 pub fn create_app(state: AppState) -> Router {
     Router::new()
         .route("/ingest", post(ingest_handler))
+        .route("/bootstrap", post(bootstrap_handler))
         .route("/log", post(log_handler))
         .route("/debug/view/:view_id", get(debug_view_handler))
         .route("/view/register", post(register_view_handler))
@@ -183,12 +212,49 @@ pub async fn run_server() -> anyhow::Result<()> {
         saver_clone.run().await;
     });
 
+    // Load job configuration
+    let job_config = if config.spooky_config_path.exists() {
+        match job_runner::load_config(&config.spooky_config_path) {
+            Ok(cfg) => {
+                info!(
+                    job_tables = cfg.job_tables.len(),
+                    "Loaded job configuration"
+                );
+                Arc::new(cfg)
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to load job config, job runner disabled");
+                Arc::new(JobConfig::default())
+            }
+        }
+    } else {
+        info!("No spooky config found, job runner disabled");
+        Arc::new(JobConfig::default())
+    };
+
+    // Create job queue channel
+    let (job_queue_tx, job_queue_rx) = mpsc::channel::<JobEntry>(100);
+
+    // Spawn job runner if there are job tables configured
+    if !job_config.job_tables.is_empty() {
+        let job_runner = JobRunner::new(job_queue_rx, job_queue_tx.clone(), db.clone());
+        tokio::spawn(async move {
+            job_runner.run().await;
+        });
+        info!("Job runner started");
+    }
+
+    // Clone processor_arc for scheduler integration before moving into AppState
+    let processor_for_scheduler = processor_arc.clone();
+
     let state = AppState {
         db,
         processor: processor_arc,
         persistence_path: config.persistence_path,
         saver: saver.clone(),
         metrics,
+        job_config,
+        job_queue_tx,
     };
 
     let app = create_app(state);
@@ -198,6 +264,90 @@ pub async fn run_server() -> anyhow::Result<()> {
         .context("Failed to bind port")?;
 
     info!(addr = %config.listen_addr, "Listening for requests");
+
+    // Register with scheduler if configured
+    if let Some(scheduler_url) = &config.scheduler_url {
+        let ssp_id = config.ssp_id.clone();
+        let listen_addr = config.listen_addr.clone();
+        let scheduler_url_clone = scheduler_url.clone();
+        let processor_clone = processor_for_scheduler.clone();
+        let heartbeat_interval = config.heartbeat_interval_ms;
+
+        // Spawn registration task
+        tokio::spawn(async move {
+            let client = reqwest::Client::new();
+            let registration_url = format!("{}/ssp/register", scheduler_url_clone.trim_end_matches('/'));
+
+            info!("Registering SSP {} with scheduler at {}", ssp_id, scheduler_url_clone);
+
+            let payload = serde_json::json!({
+                "ssp_id": ssp_id,
+                "url": format!("http://{}", listen_addr),
+            });
+
+            match client.post(&registration_url).json(&payload).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    info!("Successfully registered with scheduler");
+                }
+                Ok(resp) => {
+                    error!("Failed to register with scheduler: HTTP {}", resp.status());
+                }
+                Err(e) => {
+                    error!("Failed to connect to scheduler: {}", e);
+                }
+            }
+        });
+
+        // Spawn heartbeat loop
+        let ssp_id = config.ssp_id.clone();
+        let scheduler_url_clone = scheduler_url.clone();
+
+        tokio::spawn(async move {
+            let client = reqwest::Client::new();
+            let heartbeat_url = format!("{}/ssp/heartbeat", scheduler_url_clone.trim_end_matches('/'));
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(heartbeat_interval));
+
+            loop {
+                interval.tick().await;
+
+                let active_queries = {
+                    let circuit = processor_clone.read().await;
+                    circuit.views.len()
+                };
+
+                let payload = serde_json::json!({
+                    "ssp_id": ssp_id,
+                    "timestamp": std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                    "active_queries": active_queries,
+                    "cpu_usage": None::<f64>,
+                    "memory_usage": None::<f64>,
+                });
+
+                match client.post(&heartbeat_url).json(&payload).send().await {
+                    Ok(resp) if resp.status() == StatusCode::NOT_FOUND => {
+                        warn!("Scheduler doesn't recognize us, needs re-registration");
+                    }
+                    Ok(resp) if resp.status() == StatusCode::CONFLICT => {
+                        error!("Buffer overflow detected, need to re-bootstrap");
+                    }
+                    Ok(resp) if !resp.status().is_success() => {
+                        warn!("Heartbeat failed: HTTP {}", resp.status());
+                    }
+                    Ok(_) => {
+                        debug!("Heartbeat sent successfully");
+                    }
+                    Err(e) => {
+                        warn!("Failed to send heartbeat: {}", e);
+                    }
+                }
+            }
+        });
+    } else {
+        info!("No SCHEDULER_URL configured, running in standalone mode");
+    }
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal(saver, meter_provider))
@@ -305,7 +455,34 @@ async fn ingest_handler(
     };
 
     // Prepare record data
-    let (clean_record, _hash) = ssp::service::ingest::prepare(payload.record);
+    let (clean_record, _hash) = ssp::service::ingest::prepare(payload.record.clone());
+
+    // Check if this is a job table and queue the job if pending
+    if let Some(backend_info) = state.job_config.job_tables.get(&payload.table) {
+        if op == Operation::Create {
+            if let Some(status) = payload.record.get("status").and_then(|v| v.as_str()) {
+                if status == "pending" {
+                    let job_entry = JobEntry::from_record(
+                        payload.id.clone(),
+                        backend_info.base_url.clone(),
+                        backend_info.auth_token.clone(),
+                        &payload.record,
+                    );
+                    
+                    debug!(
+                        job_id = %job_entry.id,
+                        path = %job_entry.path,
+                        backend = %backend_info.name,
+                        "Queueing job"
+                    );
+                    
+                    if let Err(e) = state.job_queue_tx.send(job_entry).await {
+                        error!(error = %e, "Failed to queue job");
+                    }
+                }
+            }
+        }
+    }
 
     // Process through circuit
     let updates = {
@@ -389,6 +566,43 @@ async fn log_handler(Json(payload): Json<LogRequest>) -> impl IntoResponse {
         "trace" => tracing::trace!(remote = true, "{}", msg),
         _ => info!(remote = true, "{}", msg),
     }
+
+    StatusCode::OK
+}
+
+/// Bootstrap handler - receives chunks of replica data from scheduler
+#[instrument(skip(state, chunk), fields(chunk_index = chunk.chunk_index, total_chunks = chunk.total_chunks, table = %chunk.table))]
+async fn bootstrap_handler(
+    State(state): State<AppState>,
+    Json(chunk): Json<BootstrapChunk>,
+) -> impl IntoResponse {
+    info!(
+        "Received bootstrap chunk {}/{} for table {}",
+        chunk.chunk_index + 1,
+        chunk.total_chunks,
+        chunk.table
+    );
+
+    // Process each record
+    let mut circuit = state.processor.write().await;
+    for (record_id, record_data) in chunk.records {
+        let entry = BatchEntry::new(
+            &chunk.table,
+            Operation::Create,
+            record_id,
+            record_data.into(),
+        );
+        circuit.ingest_single(entry);
+    }
+    drop(circuit);
+
+    state.saver.trigger_save();
+
+    info!(
+        "Bootstrap chunk {}/{} processed successfully",
+        chunk.chunk_index + 1,
+        chunk.total_chunks
+    );
 
     StatusCode::OK
 }

@@ -1,9 +1,9 @@
-import { LocalDatabaseService, RemoteDatabaseService } from '../../services/database/index.js';
-import { Logger } from '../../services/logger/index.js';
+import { LocalDatabaseService, RemoteDatabaseService } from '../../services/database/index';
+import { Logger } from '../../services/logger/index';
 import { SchemaStructure } from '@spooky/query-builder';
 import { RecordId } from 'surrealdb';
-import { StreamUpdate, StreamUpdateReceiver } from '../../services/stream-processor/index.js';
-import { encodeRecordId } from '../../utils/index.js';
+import { StreamUpdate, StreamUpdateReceiver } from '../../services/stream-processor/index';
+import { encodeRecordId } from '../../utils/index';
 
 // DevTools interfaces (matching extension expectations)
 export interface DevToolsEvent {
@@ -13,9 +13,9 @@ export interface DevToolsEvent {
   payload: any;
 }
 
-import { DataModule } from '../data/index.js';
-import { AuthService } from '../auth/index.js';
-import { AuthEventTypes } from '../auth/events/index.js';
+import { DataModule } from '../data/index';
+import { AuthService } from '../auth/index';
+import { AuthEventTypes } from '../auth/events/index';
 
 export class DevToolsService implements StreamUpdateReceiver {
   private eventsHistory: DevToolsEvent[] = [];

@@ -1,3 +1,4 @@
+mod backend;
 mod codegen;
 mod json_schema;
 mod modules;
@@ -6,13 +7,14 @@ mod setup;
 mod spooky;
 
 use anyhow::{Context, Result};
+use backend::BackendProcessor;
 use clap::{Parser as ClapParser, Subcommand};
 use codegen::{CodeGenerator, OutputFormat};
 use json_schema::JsonSchemaGenerator;
 use parser::SchemaParser;
 use setup::setup_project;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(ClapParser, Debug)]
 #[command(name = "syncgen")]
@@ -29,6 +31,10 @@ struct Args {
     /// Or use --format to override
     #[arg(short, long)]
     output: Option<PathBuf>,
+
+    /// Path to the spooky.yml configuration file
+    #[arg(short, long)]
+    config: Option<PathBuf>,
 
     /// Output format (json, typescript, dart)
     /// If not specified, will be inferred from output file extension
@@ -162,12 +168,13 @@ fn make_field_nullable(line: &str) -> String {
         // Check if already wrapped in option<> or if type is 'any' (can't be wrapped)
         if type_str.starts_with("option<")
             || type_str.starts_with("OPTION<")
-            || type_str.eq_ignore_ascii_case("any") {
+            || type_str.eq_ignore_ascii_case("any")
+        {
             // Already nullable or is 'any' type, return as-is
             line.to_string()
         } else {
             // Wrap the type in option<>
-            format!("{}option<{}>{}",  before_type, type_str, rest)
+            format!("{}option<{}>{}", before_type, type_str, rest)
         }
     } else {
         // No TYPE found, return as-is
@@ -242,6 +249,17 @@ fn main() -> Result<()> {
     let mut content = fs::read_to_string(input_path)
         .context(format!("Failed to read input file: {:?}", input_path))?;
 
+    // Process spooky config/backends
+    let mut backend_processor = BackendProcessor::new();
+    if let Some(config_path) = &args.config {
+        println!("Loading spooky config from {:?}", config_path);
+        backend_processor.process(config_path)?;
+
+        // Append backend schemas to content
+        content.push('\n');
+        content.push_str(&backend_processor.schema_appends);
+    }
+
     // Append embedded meta tables
     let meta_tables = include_str!("meta_tables.surql");
     let meta_tables_remote = include_str!("meta_tables_remote.surql");
@@ -283,7 +301,16 @@ fn main() -> Result<()> {
         .context("Failed to parse SurrealDB schema")?;
 
     // Filter the raw schema content to remove fields with FOR select WHERE false
-    let filtered_schema_content = filter_schema_for_client(&content, &parser)?;
+    let mut filtered_schema_content = filter_schema_for_client(&content, &parser)?;
+
+    // Append spooky_rv field to every table for local cache setup (client-side only)
+    println!("  + Injecting spooky_rv field for local cache schema");
+    for table_name in parser.tables.keys() {
+        filtered_schema_content.push_str(&format!(
+            "\nDEFINE FIELD spooky_rv ON TABLE {} TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;",
+            table_name
+        ));
+    }
 
     // Choose which content to use based on format
     let raw_schema_content = if matches!(output_format, OutputFormat::Surql) {
@@ -383,6 +410,7 @@ fn main() -> Result<()> {
                 "Database",
                 Some(&raw_schema_content),
                 None,
+                Some(&backend_processor.backend_definitions),
             )
             .context("Failed to generate TypeScript code")?;
         let ts_path = output_path.with_extension("ts");
@@ -399,6 +427,7 @@ fn main() -> Result<()> {
                 "Database",
                 Some(&raw_schema_content),
                 None,
+                Some(&backend_processor.backend_definitions),
             )
             .context("Failed to generate Dart code")?;
         let dart_path = output_path.with_extension("dart");
@@ -430,6 +459,7 @@ fn main() -> Result<()> {
                 "Schema",
                 Some(&raw_schema_content),
                 Some(&spooky_events),
+                Some(&backend_processor.backend_definitions),
             )
             .context("Failed to generate output code")?;
 

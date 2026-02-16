@@ -4,17 +4,128 @@
 
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell',
+    'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+/* --- THE BUTTON CORE --- */
+.spookify-button {
+  /* 1. Layout & Sizing (Strictly enforced to prevent resizing) */
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 48px; /* Fixed Height */
+  min-width: 180px; /* Fixed Minimum Width */
+  padding: 0 24px;
+  box-sizing: border-box;
 
-/* Custom utility classes */
-.line-clamp-3 {
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  /* 2. The Colorful Gradient Background */
+  background: linear-gradient(
+    270deg,
+    #059669,
+    /* Emerald */ #7c3aed,
+    /* Violet */ #db2777,
+    /* Pink/Magenta */ #059669 /* Repeat start color for seamless loop */
+  );
+  background-size: 400% 400%; /* Stretch it out for smoothness */
+
+  /* 3. Text & Borders */
+  color: #fff;
+  font-family: monospace; /* Matches your theme */
+  font-weight: 800;
+  font-size: 0.85rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  cursor: pointer;
+  overflow: hidden; /* Clips the loading animation inside */
+  z-index: 1;
+
+  /* 4. The Animation */
+  animation: cosmic-flow 8s ease infinite;
+  transition: all 0.3s ease;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5); /* Readable text on bright colors */
+}
+
+/* Keyframes for the background movement */
+@keyframes cosmic-flow {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+/* --- HOVER STATE --- */
+.spookify-button:hover {
+  border-color: #fff;
+  box-shadow: 0 0 20px rgba(124, 58, 237, 0.5); /* Violet Glow */
+  text-shadow: 0 0 8px rgba(255, 255, 255, 0.8);
+  /* Speed up the gradient slightly on hover */
+  animation-duration: 4s;
+}
+
+/* --- LOADING STATE --- */
+.spookify-button.loading {
+  pointer-events: none;
+  cursor: wait;
+
+  /* Dim the background so the stripes are visible */
+  background: #111;
+  border-color: #333;
+  color: #888;
+  animation: none; /* Stop the colorful flow */
+}
+
+/* The Diagonal Stripes Overlay */
+.spookify-button.loading::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: -1;
+
+  /* Cyberpunk Warning Stripes */
+  background: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 10px,
+    #1f2937 10px,
+    /* Dark Grey */ #1f2937 20px
+  );
+
+  /* Move the stripes */
+  background-size: 200% 200%;
+  animation: stripe-scroll 1s linear infinite;
+}
+
+@keyframes stripe-scroll {
+  0% {
+    background-position: 0% 0%;
+  }
+  100% {
+    background-position: 50px 0%;
+  } /* Move horizontally */
+}
+
+/* Spin the icon when loading */
+.spookify-button.loading .btn-icon {
+  animation: spin 1s linear infinite;
+  color: #fff; /* Keep icon bright */
+}
+
+@keyframes spin {
+  100% {
+    transform: rotate(360deg);
+  }
 }

@@ -27,7 +27,7 @@ export function ThreadSidebar(props: ThreadSidebarProps) {
   };
 
   return (
-    <div class="w-56 border-r border-gray-800 overflow-y-auto h-full flex-shrink-0">
+    <div class="w-56 border-r border-gray-800 overflow-y-auto h-full flex-shrink-0 hidden md:block">
       <div class="sticky top-0 bg-black border-b border-gray-800 px-4 py-3">
         <h3 class="text-[10px] font-bold uppercase text-gray-500 tracking-wider">THREADS</h3>
       </div>

@@ -1,15 +1,15 @@
-import { LocalDatabaseService } from '../../services/database/index.js';
+import { LocalDatabaseService } from '../../services/database/index';
 import {
   StreamProcessorService,
   StreamUpdate,
   StreamUpdateReceiver,
-} from '../../services/stream-processor/index.js';
-import { Logger } from '../../services/logger/index.js';
-import { parseRecordIdString, encodeRecordId, surql } from '../../utils/index.js';
-import { CacheRecord, QueryConfig } from './types.js';
-import { RecordVersionArray } from '../../types.js';
+} from '../../services/stream-processor/index';
+import { Logger } from '../../services/logger/index';
+import { parseRecordIdString, encodeRecordId, surql } from '../../utils/index';
+import { CacheRecord, QueryConfig } from './types';
+import { RecordVersionArray } from '../../types';
 
-export * from './types.js';
+export * from './types';
 
 /**
  * CacheModule - Centralized storage and DBSP ingestion
@@ -20,6 +20,7 @@ export * from './types.js';
 export class CacheModule implements StreamUpdateReceiver {
   private logger: Logger;
   private streamUpdateCallback: (update: StreamUpdate) => void;
+  private versionLookups: Record<string, number> = {};
 
   constructor(
     private local: LocalDatabaseService,
@@ -49,14 +50,15 @@ export class CacheModule implements StreamUpdateReceiver {
     this.streamUpdateCallback(update);
   }
 
+  public lookup(recordId: string): number {
+    return this.versionLookups[recordId] ?? 0;
+  }
+
   /**
    * Save a single record to local DB and ingest into DBSP
    * Used by mutations (create/update)
    */
-  async save(
-    cacheRecord: CacheRecord,
-    skipDbInsert: boolean = false
-  ): Promise<void> {
+  async save(cacheRecord: CacheRecord, skipDbInsert: boolean = false): Promise<void> {
     return this.saveBatch([cacheRecord], skipDbInsert);
   }
 
@@ -65,10 +67,7 @@ export class CacheModule implements StreamUpdateReceiver {
    * More efficient than calling save() multiple times
    * Used by sync operations
    */
-  async saveBatch(
-    records: CacheRecord[],
-    skipDbInsert: boolean = false
-  ): Promise<void> {
+  async saveBatch(records: CacheRecord[], skipDbInsert: boolean = false): Promise<void> {
     if (records.length === 0) return;
 
     this.logger.debug(
@@ -81,11 +80,12 @@ export class CacheModule implements StreamUpdateReceiver {
 
     try {
       const populatedRecords = records.map((record) => {
+        if (!record.version) throw new Error('Record version is required');
         return {
           ...record,
           record: {
             ...record.record,
-            _spooky_version: record.version,
+            spooky_rv: record.version,
           },
         };
       });
@@ -114,14 +114,12 @@ export class CacheModule implements StreamUpdateReceiver {
         await this.local.query(query, params);
       }
 
-      // 2. Batch ingest into DBSP
-      await this.streamProcessor.ingestBatch(
-        records.map((record) => ({
-          table: record.table,
-          op: record.op,
-          record: { ...record.record, id: encodeRecordId(record.record.id) },
-        }))
-      );
+      // 2. Batch ingest into DBSP (use populatedRecords which has spooky_rv set)
+      for (const record of populatedRecords) {
+        const recordId = encodeRecordId(record.record.id);
+        this.versionLookups[recordId] = record.version;
+        this.streamProcessor.ingest(record.table, record.op, recordId, record.record);
+      }
 
       this.logger.debug(
         { count: records.length, Category: 'spooky-client::CacheModule::saveBatch' },
@@ -142,6 +140,7 @@ export class CacheModule implements StreamUpdateReceiver {
   async delete(
     table: string,
     id: string,
+    isOptimistic: boolean = true,
     skipDbDelete: boolean = false
   ): Promise<void> {
     this.logger.debug(
@@ -156,6 +155,7 @@ export class CacheModule implements StreamUpdateReceiver {
       }
 
       // 2. Ingest deletion into DBSP
+      delete this.versionLookups[id];
       await this.streamProcessor.ingest(table, 'DELETE', id, {});
 
       this.logger.debug(

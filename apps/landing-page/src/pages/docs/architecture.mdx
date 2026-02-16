@@ -1,0 +1,295 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: Architecture
+---
+
+import CodeBlock from '../../components/ui/CodeBlock.astro';
+
+Spooky operates on a "Sidecar" architecture to enable its powerful synchronization capabilities.
+
+## High Level Overview
+
+The system is composed of three main parts around a central database:
+
+1.  **The Database**: Standard SurrealDB. The central hub.
+2.  **The Client**: Connects directly to SurrealDB using the standard SurrealQL protocol.
+3.  **The Sidecar**: A background service that monitors the database and performs heavy computational tasks (hashing, integrity).
+
+```mermaid
+graph TD
+    subgraph client_app [Client App]
+        UI[UI Components]
+        LocalDB[(IndexedDB)]
+        WASM[Spooky Core]
+
+        UI <-->|Live Queries| WASM
+        WASM <-->|Persist| LocalDB
+    end
+
+    subgraph backend_sys [Backend]
+        Sidecar[Spooky Sidecar]
+        DB[(SurrealDB)]
+    end
+
+    WASM <-->|"SurrealQL (WS)"| DB
+    Sidecar <-->|"Live Query & RPC"| DB
+```
+
+## Why a Sidecar?
+
+Even though the client connects directly to SurrealDB, the Sidecar is essential for the **Spooky Protocol**:
+
+### 1. Integrity & Hashing
+
+The Sidecar listens to changes in the database and computes the Merkle Tree hashes required for the sync engine to work. It writes these hashes back to the `_spooky_*` system tables.
+
+### 2. Async Processing
+
+It handles tasks that are too heavy for the database functions or the client, ensuring that your application remains snappy while data consistency is guaranteed in the background.
+
+---
+
+## Distributed Architecture
+
+For production deployments, Spooky supports a distributed architecture with multiple SSP instances coordinated by a central Scheduler:
+
+```mermaid
+graph TD
+    subgraph clients [Clients]
+        C1[Client 1]
+        C2[Client 2]
+        C3[Client 3]
+    end
+
+    subgraph backend [Backend Services]
+        DB[(SurrealDB)]
+        Scheduler[Scheduler]
+
+        subgraph ssps [SSP Pool]
+            SSP1[SSP 1]
+            SSP2[SSP 2]
+            SSP3[SSP 3]
+        end
+    end
+
+    C1 <-->|SurrealQL| DB
+    C2 <-->|SurrealQL| DB
+    C3 <-->|SurrealQL| DB
+
+    DB -->|Change Events| Scheduler
+    Scheduler -->|HTTP POST /ingest| SSP1
+    Scheduler -->|HTTP POST /ingest| SSP2
+    Scheduler -->|HTTP POST /ingest| SSP3
+
+    SSP1 -->|HTTP POST /ssp/heartbeat| Scheduler
+    SSP2 -->|HTTP POST /ssp/heartbeat| Scheduler
+    SSP3 -->|HTTP POST /ssp/heartbeat| Scheduler
+
+    SSP1 <-->|Edge Updates| DB
+    SSP2 <-->|Edge Updates| DB
+    SSP3 <-->|Edge Updates| DB
+```
+
+### Components
+
+**Scheduler** (Port 9667 by default)
+- Central coordinator for all SSP instances
+- Maintains replica of database state
+- Distributes data updates to all SSPs via HTTP
+- Manages SSP lifecycle (registration, bootstrap, health monitoring)
+- Assigns queries to SSPs using load balancing strategies
+- See [Scheduler API Reference](/spooky/docs/scheduler-api)
+
+**SSP (Spooky Sidecar Processor)** (Port 8667 by default)
+- Stateful service maintaining materialized views
+- Executes backend functions and jobs
+- Registers with scheduler on startup
+- Receives bootstrap data and live updates
+- Sends periodic heartbeats for health monitoring
+- See [SSP API Reference](/spooky/docs/ssp-api)
+
+---
+
+## SSP Lifecycle
+
+When an SSP starts up with scheduler integration enabled:
+
+```mermaid
+sequenceDiagram
+    participant SSP
+    participant Scheduler
+    participant Replica
+
+    Note over SSP: Startup
+
+    SSP->>Scheduler: POST /ssp/register<br/>{ssp_id, url}
+    Scheduler->>Scheduler: Add to pool<br/>Mark as "bootstrapping"
+    Scheduler-->>SSP: 202 Accepted
+
+    Note over Scheduler: Async Bootstrap
+
+    Scheduler->>Replica: Read all data
+    Replica-->>Scheduler: Records
+
+    loop For each chunk (1000 records)
+        Scheduler->>SSP: POST /bootstrap<br/>{chunk_index, table, records}
+        SSP->>SSP: Ingest records
+        SSP-->>Scheduler: 200 OK
+    end
+
+    Scheduler->>Scheduler: Mark as "ready"<br/>Get buffered messages
+
+    loop Replay buffered messages
+        Scheduler->>SSP: POST /ingest
+        SSP-->>Scheduler: 200 OK
+    end
+
+    Note over SSP,Scheduler: SSP is ready
+
+    loop Every 5 seconds
+        SSP->>Scheduler: POST /ssp/heartbeat<br/>{active_queries, cpu, memory}
+        alt SSP is healthy
+            Scheduler-->>SSP: 200 OK
+        else Buffer overflow
+            Scheduler-->>SSP: 409 Conflict<br/>(re-bootstrap needed)
+        else Not registered
+            Scheduler-->>SSP: 404 Not Found<br/>(re-registration needed)
+        end
+    end
+```
+
+### Bootstrap Process
+
+1. **Registration**: SSP sends its ID and URL to the scheduler
+2. **Bootstrapping**: Scheduler marks SSP as "bootstrapping" and buffers incoming messages
+3. **Data Transfer**: Scheduler sends replica data in chunks (configurable size, default 1000 records)
+4. **Buffer Replay**: Once complete, scheduler marks SSP as "ready" and replays buffered messages
+5. **Live Updates**: SSP now receives real-time updates via `/ingest` endpoint
+
+### Health Monitoring
+
+- SSPs send heartbeats every 5 seconds (configurable)
+- Scheduler marks SSPs as stale after 15 seconds without heartbeat (configurable)
+- Stale SSPs are removed from the pool
+- Queries are reassigned to healthy SSPs
+
+---
+
+## Load Balancing
+
+The scheduler supports multiple load balancing strategies for query assignment:
+
+### Round Robin
+Distributes queries evenly across all SSPs in rotation.
+
+### Least Queries
+Assigns queries to the SSP with the fewest active queries.
+
+### Least Load
+Assigns queries to the SSP with the lowest combined CPU and memory usage.
+
+Configure via `load_balance` in `spooky.yml` or `SPOOKY_SCHEDULER_LOAD_BALANCE` environment variable.
+
+---
+
+## Communication Patterns
+
+### Data Ingestion Flow
+
+```mermaid
+sequenceDiagram
+    participant DB as SurrealDB
+    participant Scheduler
+    participant SSP1
+    participant SSP2
+
+    DB->>Scheduler: Change event<br/>(CREATE/UPDATE/DELETE)
+    Scheduler->>Scheduler: Update replica
+
+    par Broadcast to ready SSPs
+        Scheduler->>SSP1: POST /ingest
+        SSP1->>SSP1: Update views
+        SSP1-->>Scheduler: 200 OK
+    and
+        Scheduler->>SSP2: POST /ingest
+        SSP2->>SSP2: Update views
+        SSP2-->>Scheduler: 200 OK
+    end
+
+    Note over SSP1,SSP2: Views updated in real-time
+```
+
+### Query Registration Flow
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Scheduler
+    participant SSP
+
+    Client->>Scheduler: POST /query/register<br/>{query_id, view_plan}
+    Scheduler->>Scheduler: Select SSP<br/>(load balancing)
+    Scheduler->>SSP: POST /view/register<br/>{plan, metadata}
+    SSP->>SSP: Create view<br/>Materialize results
+    SSP-->>Scheduler: 200 OK + initial results
+    Scheduler-->>Client: {ssp_id, ssp_url}
+
+    Note over Client,SSP: Client connects directly to SSP<br/>for real-time updates
+```
+
+---
+
+## Horizontal Scaling
+
+The distributed architecture supports horizontal scaling:
+
+### Adding SSPs
+
+1. Start a new SSP instance with `SCHEDULER_URL` configured
+2. SSP automatically registers with scheduler
+3. Scheduler bootstraps the SSP with current replica state
+4. New queries are distributed across all healthy SSPs
+
+### Removing SSPs
+
+1. Stop the SSP instance (graceful shutdown)
+2. Scheduler detects missing heartbeats
+3. SSP marked as stale and removed from pool
+4. Active queries reassigned to remaining SSPs
+
+### Failure Recovery
+
+- SSP failures are detected via heartbeat timeout
+- Queries automatically reassigned to healthy SSPs
+- Job execution failures trigger retries on different SSPs
+- Client reconnection handles SSP unavailability
+
+---
+
+## Deployment Modes
+
+### Single SSP (Development)
+
+```yaml
+# No scheduler needed
+SURREALDB_ADDR=localhost:8000
+LISTEN_ADDR=0.0.0.0:8667
+```
+
+Simple setup for development and testing. Client connects directly to SSP.
+
+### Multiple SSPs (Production)
+
+```yaml
+# Scheduler
+SPOOKY_SCHEDULER_INGEST_PORT=9667
+SPOOKY_SCHEDULER_DB_URL=ws://surrealdb:8000
+
+# SSP instances
+SCHEDULER_URL=http://scheduler:9667
+SSP_ID=ssp-01  # Unique per instance
+```
+
+Production setup with high availability and load distribution.
+
+For detailed deployment instructions, see the [Deployment Guide](/spooky/docs/deployment).

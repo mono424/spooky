@@ -1,9 +1,9 @@
 import { RecordId, Duration } from 'surrealdb';
-import { SchemaStructure, TableNames } from '@spooky/query-builder';
-import { LocalDatabaseService } from '../../services/database/index.js';
-import { CacheModule, RecordWithId } from '../cache/index.js';
-import { Logger } from '../../services/logger/index.js';
-import { StreamUpdate } from '../../services/stream-processor/index.js';
+import { SchemaStructure, TableNames, BackendNames, BackendRoutes, RoutePayload } from '@spooky/query-builder';
+import { LocalDatabaseService } from '../../services/database/index';
+import { CacheModule, RecordWithId } from '../cache/index';
+import { Logger } from '../../services/logger/index';
+import { StreamUpdate } from '../../services/stream-processor/index';
 import {
   MutationEvent,
   QueryConfig,
@@ -14,7 +14,9 @@ import {
   MutationCallback,
   RecordVersionArray,
   QueryConfigRecord,
-} from '../../types.js';
+  UpdateOptions,
+  RunOptions,
+} from '../../types';
 import {
   parseRecordIdString,
   extractIdPart,
@@ -24,7 +26,10 @@ import {
   surql,
   parseParams,
   extractTablePart,
-} from '../../utils/index.js';
+  generateId,
+} from '../../utils/index';
+import { CreateEvent, DeleteEvent, UpdateEvent } from '../sync/index';
+import { PushEventOptions } from '../../events/index';
 
 /**
  * DataModule - Unified query and mutation management
@@ -36,13 +41,15 @@ export class DataModule<S extends SchemaStructure> {
   private activeQueries: Map<QueryHash, QueryState> = new Map();
   private subscriptions: Map<QueryHash, Set<QueryUpdateCallback>> = new Map();
   private mutationCallbacks: Set<MutationCallback> = new Set();
+  private debounceTimers: Map<QueryHash, NodeJS.Timeout> = new Map();
   private logger: Logger;
 
   constructor(
     private cache: CacheModule,
     private local: LocalDatabaseService,
     private schema: S,
-    logger: Logger
+    logger: Logger,
+    private streamDebounceTime: number = 100
   ) {
     this.logger = logger.child({ service: 'DataModule' });
   }
@@ -167,6 +174,30 @@ export class DataModule<S extends SchemaStructure> {
    * Handle stream updates from DBSP (via CacheModule)
    */
   async onStreamUpdate(update: StreamUpdate): Promise<void> {
+    const { queryHash, op } = update;
+
+    // Only debounce UPDATE operations
+    // CREATE and DELETE should propagate immediately
+    if (op === 'UPDATE') {
+      // Clear existing timer if any
+      if (this.debounceTimers.has(queryHash)) {
+        clearTimeout(this.debounceTimers.get(queryHash)!);
+      }
+
+      // Set new timer
+      const timer = setTimeout(async () => {
+        this.debounceTimers.delete(queryHash);
+        await this.processStreamUpdate(update);
+      }, this.streamDebounceTime);
+
+      this.debounceTimers.set(queryHash, timer);
+    } else {
+      // CREATE and DELETE - process immediately
+      await this.processStreamUpdate(update);
+    }
+  }
+
+  private async processStreamUpdate(update: StreamUpdate): Promise<void> {
     const { queryHash, localArray } = update;
     const queryState = this.activeQueries.get(queryHash);
     if (!queryState) {
@@ -270,6 +301,51 @@ export class DataModule<S extends SchemaStructure> {
     });
   }
 
+  // ====================      RUN JOBS       ====================
+
+  async run<
+    B extends BackendNames<S>,
+    R extends BackendRoutes<S, B>,
+  >(
+    backend: B,
+    path: R,
+    data: RoutePayload<S, B, R>,
+    options?: RunOptions
+  ): Promise<void> {
+    const route = this.schema.backends?.[backend]?.routes?.[path];
+    if (!route) {
+      throw new Error(`Route ${backend}.${path} not found`);
+    }
+
+    const tableName = this.schema.backends?.[backend]?.outboxTable;
+    if (!tableName) {
+      throw new Error(`Outbox table for backend ${backend} not found`);
+    }
+
+    const payload: Record<string, unknown> = {};
+    for (const argName of Object.keys(route.args)) {
+      const arg = route.args[argName];
+      if ((data as Record<string, unknown>)[argName] === undefined && arg.optional === false) {
+        throw new Error(`Missing required argument ${argName}`);
+      }
+      payload[argName] = (data as Record<string, unknown>)[argName];
+    }
+
+    const record: Record<string, unknown> = {
+      path,
+      payload: JSON.stringify(payload),
+      max_retries: options?.max_retries ?? 3,
+      retry_strategy: options?.retry_strategy ?? 'linear',
+    };
+
+    if (options?.assignedTo) {
+      record.assigned_to = options.assignedTo;
+    }
+
+    const recordId = `${tableName}:${generateId()}`;
+    await this.create(recordId, record);
+  }
+
   // ==================== MUTATION MANAGEMENT ====================
 
   /**
@@ -286,9 +362,13 @@ export class DataModule<S extends SchemaStructure> {
     const params = parseParams(tableSchema.columns, data);
     const mutationId = parseRecordIdString(`_spooky_pending_mutations:${Date.now()}`);
 
+    const dataKeys = Object.keys(params).map((key) => ({ key, variable: `data_${key}` }));
+    const prefixedParams = Object.fromEntries(
+      dataKeys.map(({ key, variable }) => [variable, params[key]])
+    );
     const query = surql.seal(
       surql.tx([
-        surql.let('created', surql.create('id', 'data')),
+        surql.let('created', surql.createSet('id', dataKeys)),
         surql.createMutation('create', 'mid', 'id', 'data'),
         surql.returnObject([{ key: 'target', variable: 'created' }]),
       ])
@@ -297,8 +377,8 @@ export class DataModule<S extends SchemaStructure> {
     const [{ target }] = await withRetry(this.logger, () =>
       this.local.query<[{ target: T }]>(query, {
         id: rid,
-        data: params,
         mid: mutationId,
+        ...prefixedParams,
       })
     );
 
@@ -310,12 +390,13 @@ export class DataModule<S extends SchemaStructure> {
         table: tableName,
         op: 'CREATE',
         record: parsedRecord,
+        version: 1,
       },
       true
     );
 
     // Emit mutation event for sync
-    const mutationEvent: MutationEvent = {
+    const mutationEvent: CreateEvent = {
       type: 'create',
       mutation_id: mutationId,
       record_id: rid,
@@ -338,7 +419,8 @@ export class DataModule<S extends SchemaStructure> {
   async update<T extends Record<string, unknown>>(
     table: string,
     id: string,
-    data: Partial<T>
+    data: Partial<T>,
+    options?: UpdateOptions
   ): Promise<T> {
     const tableName = extractTablePart(id);
     const tableSchema = this.schema.tables.find((t) => t.name === tableName);
@@ -352,6 +434,7 @@ export class DataModule<S extends SchemaStructure> {
 
     const query = surql.seal(
       surql.tx([
+        surql.updateSet('id', [{ statement: 'spooky_rv += 1' }]),
         surql.let('updated', surql.updateMerge('id', 'data')),
         surql.createMutation('update', 'mid', 'id', 'data'),
         surql.returnObject([{ key: 'target', variable: 'updated' }]),
@@ -366,6 +449,11 @@ export class DataModule<S extends SchemaStructure> {
       })
     );
 
+    // Replace record in all queries directly
+    // Does not respect sorting or other advanced query features
+    // But is fast for quick typing for example
+    this.replaceRecordInQueries(target);
+
     const parsedRecord = parseParams(tableSchema.columns, target) as RecordWithId;
 
     // Save to cache
@@ -374,17 +462,21 @@ export class DataModule<S extends SchemaStructure> {
         table: table,
         op: 'UPDATE',
         record: parsedRecord,
+        version: target.spooky_rv as number,
       },
       true
     );
 
+    const pushEventOptions = parseUpdateOptions(id, data, options);
+
     // Emit mutation event
-    const mutationEvent: MutationEvent = {
+    const mutationEvent: UpdateEvent = {
       type: 'update',
       mutation_id: mutationId,
       record_id: rid,
       data: params,
       record: target,
+      options: pushEventOptions,
     };
 
     for (const callback of this.mutationCallbacks) {
@@ -417,7 +509,7 @@ export class DataModule<S extends SchemaStructure> {
     await this.cache.delete(table, id, true);
 
     // Emit mutation event
-    const mutationEvent: MutationEvent = {
+    const mutationEvent: DeleteEvent = {
       type: 'delete',
       mutation_id: mutationId,
       record_id: rid,
@@ -532,4 +624,44 @@ export class DataModule<S extends SchemaStructure> {
       queryState.ttlTimer = null;
     }
   }
+
+  private async replaceRecordInQueries(record: Record<string, any>): Promise<void> {
+    for (const queryState of this.activeQueries.values()) {
+      this.replaceRecordInQuery(queryState, record);
+    }
+  }
+
+  private replaceRecordInQuery(queryState: QueryState, record: Record<string, any>): void {
+    const index = queryState.records.findIndex((r) => r.id === record.id);
+    if (index !== -1) {
+      queryState.records[index] = record;
+    }
+  }
+}
+
+// ==================== HELPER FUNCTIONS ====================
+
+/**
+ * Parse update options to generate push event options
+ */
+export function parseUpdateOptions(
+  id: string,
+  data: any,
+  options?: UpdateOptions
+): PushEventOptions {
+  let pushEventOptions: PushEventOptions = {};
+  if (options?.debounced) {
+    const delay = options.debounced !== true ? (options.debounced?.delay ?? 200) : 200;
+    const keyType = options.debounced !== true ? (options.debounced?.key ?? id) : id;
+    const key =
+      keyType === 'recordId_x_fields' ? `${id}::${Object.keys(data).sort().join('#')}` : id;
+
+    pushEventOptions = {
+      debounced: {
+        delay,
+        key,
+      },
+    };
+  }
+  return pushEventOptions;
 }

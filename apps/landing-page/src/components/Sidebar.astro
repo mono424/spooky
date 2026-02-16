@@ -1,5 +1,5 @@
 ---
-import { docsNav as nav } from '../config/nav';
+import { basePath, docsNav as nav } from '../config/nav';
 
 const currentPath = Astro.url.pathname;
 ---
@@ -28,7 +28,7 @@ const currentPath = Astro.url.pathname;
           {group.links.map((link) => {
             const isActive =
               currentPath === link.href ||
-              (link.href !== '/spooky/docs' && currentPath.startsWith(link.href));
+              (link.href !== `${basePath}/docs` && currentPath.startsWith(link.href));
             return (
               <li>
                 <a

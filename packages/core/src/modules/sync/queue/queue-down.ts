@@ -1,10 +1,10 @@
-import { LocalDatabaseService } from '../../../services/database/index.js';
+import { LocalDatabaseService } from '../../../services/database/index';
 import {
   createSyncQueueEventSystem,
   SyncQueueEventSystem,
   SyncQueueEventTypes,
-} from '../events/index.js';
-import { Logger } from '../../../services/logger/index.js';
+} from '../events/index';
+import { Logger } from '../../../services/logger/index';
 
 export type RegisterEvent = {
   type: 'register';

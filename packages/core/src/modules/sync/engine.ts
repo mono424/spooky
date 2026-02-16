@@ -1,10 +1,10 @@
 import { RecordId } from 'surrealdb';
-import { RemoteDatabaseService } from '../../services/database/index.js';
-import { CacheModule, RecordWithId } from '../cache/index.js';
-import { RecordVersionDiff } from '../../types.js';
-import { Logger } from '../../services/logger/index.js';
-import { SyncEventTypes, createSyncEventSystem } from './events/index.js';
-import { encodeRecordId } from '../../utils/index.js';
+import { RemoteDatabaseService } from '../../services/database/index';
+import { CacheModule, CacheRecord, RecordWithId } from '../cache/index';
+import { RecordVersionDiff } from '../../types';
+import { Logger } from '../../services/logger/index';
+import { SyncEventTypes, createSyncEventSystem } from './events/index';
+import { encodeRecordId } from '../../utils/index';
 
 /**
  * SyncEngine handles the core sync operations: fetching remote records,
@@ -55,16 +55,16 @@ export class SyncEngine {
     }
 
     const [remoteResults] = await this.remote.query<[RecordWithId[]]>(
-      "SELECT *, (SELECT version FROM ONLY _spooky_version WHERE record_id = <record>$parent.id)['version'] as _spookyv FROM $ids",
+      "SELECT *, (SELECT version FROM ONLY _spooky_version WHERE record_id = <record>$parent.id)['version'] as spooky_rv FROM $ids",
       {
         ids: idsToFetch,
       }
     );
 
     // Prepare batch for cache (which handles both DB and DBSP)
-    const cacheBatch = [];
+    const cacheBatch: CacheRecord[] = [];
 
-    for (const { _spookyv, ...record } of remoteResults) {
+    for (const { spooky_rv, ...record } of remoteResults) {
       const fullId = encodeRecordId(record.id);
       const table = record.id.table.toString();
       const isAdded = added.some((item) => encodeRecordId(item.id) === fullId);
@@ -72,11 +72,12 @@ export class SyncEngine {
       const anticipatedVersion = toFetch.find(
         (item) => encodeRecordId(item.id) === fullId
       )?.version;
-      if (anticipatedVersion && _spookyv < anticipatedVersion) {
+
+      if (anticipatedVersion && spooky_rv < anticipatedVersion) {
         this.logger.warn(
           {
             recordId: fullId,
-            version: _spookyv,
+            version: spooky_rv,
             anticipatedVersion,
             Category: 'spooky-client::SyncEngine::syncRecords',
           },
@@ -85,18 +86,32 @@ export class SyncEngine {
         continue;
       }
 
+      const localVersion = this.cache.lookup(fullId);
+      if (localVersion && spooky_rv <= localVersion) {
+        this.logger.info(
+          {
+            recordId: fullId,
+            version: spooky_rv,
+            localVersion,
+            Category: 'spooky-client::SyncEngine::syncRecords',
+          },
+          'Local version is higher than remote version. Skipping record'
+        );
+        continue;
+      }
+      console.log('yy>', fullId, spooky_rv, localVersion);
       cacheBatch.push({
         table,
         op: isAdded ? 'CREATE' : 'UPDATE',
-        id: fullId,
+        // id: fullId,
         record,
-        version: _spookyv,
+        version: spooky_rv,
       });
     }
 
     // Use CacheModule to handle both local DB and DBSP ingestion
     if (cacheBatch.length > 0) {
-      await this.cache.saveBatch(cacheBatch, false); // isOptimistic=false for remote sync
+      await this.cache.saveBatch(cacheBatch);
     }
 
     this.events.emit(SyncEventTypes.RemoteDataIngested, {
@@ -133,7 +148,7 @@ export class SyncEngine {
         );
 
         // Use CacheModule to handle both local DB and DBSP deletion
-        await this.cache.delete(recordId.table.name, recordIdStr, false);
+        await this.cache.delete(recordId.table.name, recordIdStr);
       }
     }
   }

@@ -3,10 +3,6 @@ layout: ../../layouts/DocsLayout.astro
 title: Installation
 ---
 
-import Warning from '../../components/ui/Warning.astro';
-
-<Warning>This guide is currently under construction. 🚧</Warning>
-
 Getting started with Spooky involves setting up the CLI tool and configuring your project.
 
 ## Prerequisites
@@ -17,31 +13,44 @@ Getting started with Spooky involves setting up the CLI tool and configuring you
 
 import CodeBlock from '../../components/ui/CodeBlock.astro';
 
-## Step 1: Install Syncgen
+## Step 1: Install the CLI
 
-`syncgen` is the core CLI tool.
+The Spooky CLI is your primary tool for generating code and managing schemas.
 
-<CodeBlock code={`cargo install syncgen --git https://github.com/mono424/spooky`} lang="bash" />
+<CodeBlock code={`pnpm add -D @spooky/cli`} lang="bash" />
 
-## Step 2: Initialize Project
+## Step 2: Install Client SDKs
 
-Create a new Spooky project structure.
+Install the core client and the bindings for your framework.
+
+<CodeBlock code={`pnpm add @spooky/core @spooky/client-solid`} lang="bash" />
+
+## Step 3: Run Infrastructure
+
+The easiest way to start the Sidecar and SurrealDB is via Docker Compose.
 
 <CodeBlock
-  code={`mkdir my-spooky-app
-cd my-spooky-app
-syncgen init`}
-  lang="bash"
+  code={`version: '3.8'
+services:
+  surrealdb:
+    image: surrealdb/surrealdb:latest
+    command: start --user root --pass root file://data.db
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+
+  spooky-sidecar:
+    image: ghcr.io/spooky-org/sidecar:latest
+    environment:
+      - SURREAL_URL=ws://surrealdb:8000
+      - SURREAL_USER=root
+      - SURREAL_PASS=root
+    depends_on:
+      - surrealdb`}
+  lang="yaml"
 />
 
-This will create the necessary `spooky.json` config and directory structure:
+Run it with:
 
-- `modules/`: Your Rust/DBSP modules.
-- `schema/`: Your `.surql` schema files.
-- `apps/`: Your client applications.
-
-## Step 3: Start Development
-
-Run the development server to watch for changes and recompile modules.
-
-<CodeBlock code={`syncgen dev`} lang="bash" />
+<CodeBlock code={`docker compose up -d`} lang="bash" />

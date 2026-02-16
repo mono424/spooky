@@ -1,0 +1,63 @@
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+/// Record operation type
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordOp {
+    Create,
+    Update,
+    Delete,
+}
+
+impl std::fmt::Display for RecordOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RecordOp::Create => write!(f, "CREATE"),
+            RecordOp::Update => write!(f, "UPDATE"),
+            RecordOp::Delete => write!(f, "DELETE"),
+        }
+    }
+}
+
+/// Record update message broadcast to SSPs
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct RecordUpdate {
+    pub table: String,
+    pub operation: RecordOp,
+    pub record_id: String,
+    pub data: Option<Value>,
+    pub version: u64,
+}
+
+/// SSP heartbeat message
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SspHeartbeat {
+    pub ssp_id: String,
+    pub timestamp: u64,
+    pub active_queries: usize,
+    pub cpu_usage: Option<f64>,
+    pub memory_usage: Option<f64>,
+}
+
+/// Bootstrap request from SSP
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BootstrapRequest {
+    pub ssp_id: String,
+    pub tables: Vec<String>, // Which tables to bootstrap
+}
+
+/// Bootstrap chunk response
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BootstrapChunk {
+    pub chunk_index: usize,
+    pub total_chunks: usize,
+    pub table: String,
+    pub records: Vec<(String, Value)>,
+}
+
+/// Complete bootstrap response
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BootstrapResponse {
+    pub ssp_id: String,
+    pub chunks: Vec<BootstrapChunk>,
+}

@@ -26,7 +26,20 @@
       "Bash(command -v cargo:*)",
       "Bash(cargo install:*)",
       "Bash(~/.cargo/bin/wasm-pack build:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(xargs ls:*)",
+      "Bash(find:*)",
+      "WebFetch(domain:viteplus.dev)",
+      "Bash(npm run build:*)",
+      "Bash(lsof:*)",
+      "Bash(pgrep:*)",
+      "Bash(npm run dev:*)",
+      "Bash(npm install:*)",
+      "Bash(npx tsc:*)",
+      "Bash(open:*)",
+      "mcp__ide__getDiagnostics",
+      "WebFetch(domain:vitest.dev)",
+      "WebSearch"
     ],
     "deny": [],
     "ask": []

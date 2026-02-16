@@ -1,10 +1,10 @@
 import { GetTable, SchemaStructure, TableModel, TableNames } from '@spooky/query-builder';
 import { Uuid, RecordId, Duration } from 'surrealdb';
-import { Logger } from '../services/logger/index.js';
-import { QueryTimeToLive } from '../types.js';
+import { Logger } from '../services/logger/index';
+import { QueryTimeToLive } from '../types';
 
-export * from './surql.js';
-export * from './parser.js';
+export * from './surql';
+export * from './parser';
 
 // ==================== RECORDID UTILITIES ====================
 

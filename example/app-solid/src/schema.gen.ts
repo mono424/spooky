@@ -22,15 +22,35 @@ export const schema = {
       primaryKey: ['id'] as const
     },
     {
+      name: 'job' as const,
+      columns: {
+        id: { type: 'string' as const, recordId: true, optional: false },
+        assigned_to: { type: 'string' as const, recordId: true, optional: false },
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
+        errors: { type: 'string' as const, optional: false },
+        max_retries: { type: 'number' as const, optional: false },
+        path: { type: 'string' as const, optional: false },
+        payload: { type: 'string' as const, optional: false },
+        retries: { type: 'number' as const, optional: false },
+        retry_strategy: { type: 'string' as const, optional: false },
+        status: { type: 'string' as const, optional: false },
+        updated_at: { type: 'string' as const, dateTime: true, optional: false },
+      },
+      primaryKey: ['id'] as const
+    },
+    {
       name: 'thread' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
         active: { type: 'boolean' as const, optional: true },
         author: { type: 'string' as const, recordId: true, optional: false },
         content: { type: 'string' as const, optional: false },
+        content_suggestion: { type: 'string' as const, optional: true },
         created_at: { type: 'string' as const, dateTime: true, optional: true },
         title: { type: 'string' as const, optional: false },
+        title_suggestion: { type: 'string' as const, optional: true },
         comments: { type: 'string' as const, optional: true },
+        jobs: { type: 'string' as const, optional: true },
       },
       primaryKey: ['id'] as const
     },
@@ -59,6 +79,12 @@ export const schema = {
       cardinality: 'one' as const
     },
     {
+      from: 'job' as const,
+      field: 'assigned_to' as const,
+      to: 'thread' as const,
+      cardinality: 'one' as const
+    },
+    {
       from: 'thread' as const,
       field: 'author' as const,
       to: 'user' as const,
@@ -68,6 +94,12 @@ export const schema = {
       from: 'thread' as const,
       field: 'comments' as const,
       to: 'comment' as const,
+      cardinality: 'many' as const
+    },
+    {
+      from: 'thread' as const,
+      field: 'jobs' as const,
+      to: 'job' as const,
       cardinality: 'many' as const
     },
     {
@@ -85,7 +117,22 @@ export const schema = {
   ],
   access: {
     account: {"signIn":{"params":{"password":{"type":"string","optional":false},"username":{"type":"string","optional":false}}},"signup":{"params":{"password":{"type":"string","optional":false},"username":{"type":"string","optional":false}}}},
-  }
+  },
+  backends: {
+    "api": {
+      outboxTable: 'job' as const,
+      routes: {
+        "/spookify": {
+          args: {
+            "id": {
+              type: 'string' as const,
+              optional: false as const
+            },
+          }
+        },
+      }
+    },
+  },
 } as const;
 
 export type SchemaDefinition = typeof schema;
@@ -133,12 +180,15 @@ DEFINE TABLE thread SCHEMAFULL
 PERMISSIONS FOR select, create, update, delete WHERE true
 ;
 
-
 DEFINE FIELD title ON TABLE thread TYPE option<string>
     ASSERT $value != NONE AND string::len($value) > 0 AND string::len($value) <= 200;
 
 DEFINE FIELD content ON TABLE thread TYPE option<string>
     ASSERT $value != NONE AND string::len($value) > 0;
+
+DEFINE FIELD title_suggestion ON TABLE thread TYPE option<string>;
+
+DEFINE FIELD content_suggestion ON TABLE thread TYPE option<string>;
 
 DEFINE FIELD author ON TABLE thread TYPE option<record<user>>; -- @parent
 
@@ -176,6 +226,48 @@ PERMISSIONS FOR select, create, update, delete WHERE true;
 DEFINE EVENT comment_created ON TABLE comment WHEN $event = "CREATE" THEN
   RELATE ($after.id)->commented_on->($after.thread)
 ;
+
+-- Backend Schema: api
+-- ##################################################################
+-- API OUTBOX TABLE
+-- ##################################################################
+
+DEFINE TABLE job SCHEMAFULL
+PERMISSIONS FOR select, create, update, delete WHERE true;
+
+DEFINE FIELD assigned_to ON TABLE job TYPE option<record<thread>>
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD path ON TABLE job TYPE option<string>
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD payload ON TABLE job TYPE any
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD retries ON TABLE job TYPE option<int> DEFAULT ALWAYS 0
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD max_retries ON TABLE job TYPE option<int> DEFAULT ALWAYS 3;
+
+DEFINE FIELD retry_strategy ON TABLE job TYPE option<string> DEFAULT ALWAYS "linear"
+ASSERT $value IN ["linear", "exponential"]
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD status ON TABLE job TYPE option<string> DEFAULT ALWAYS "pending"
+ASSERT $value IN ["pending", "processing", "success", "failed"]
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD errors ON TABLE job TYPE option<array<object>> DEFAULT ALWAYS []
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD updated_at ON TABLE job TYPE option<datetime>
+DEFAULT ALWAYS time::now()
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD created_at ON TABLE job TYPE option<datetime>
+VALUE time::now()
+PERMISSIONS FOR select, create, update WHERE true;
+
 -- ==================================================
 -- SPOOKY INCANTATION
 -- The Registry of active Live Queries (Incantations).
@@ -252,6 +344,15 @@ PERMISSIONS FOR select, create, update WHERE true;
 -- The data payload (for create/update)
 DEFINE FIELD IF NOT EXISTS data ON _spooky_pending_mutations TYPE option<object> FLEXIBLE
 PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD spooky_rv ON TABLE _spooky_pending_mutations TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
+DEFINE FIELD spooky_rv ON TABLE _spooky_query TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
+DEFINE FIELD spooky_rv ON TABLE _spooky_schema TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
+DEFINE FIELD spooky_rv ON TABLE _spooky_stream_processor_state TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
+DEFINE FIELD spooky_rv ON TABLE comment TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
+DEFINE FIELD spooky_rv ON TABLE commented_on TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
+DEFINE FIELD spooky_rv ON TABLE job TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
+DEFINE FIELD spooky_rv ON TABLE thread TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
+DEFINE FIELD spooky_rv ON TABLE user TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;
 
 
 -- ==================================================
@@ -267,6 +368,20 @@ THEN {
 
 -- Table: comment Client Deletion
 DEFINE EVENT OVERWRITE _spooky_comment_client_delete ON TABLE comment
+WHEN $event = "DELETE"
+THEN {
+    -- No-op for now.
+};
+
+-- Table: job Client Mutation
+DEFINE EVENT OVERWRITE _spooky_job_client_mutation ON TABLE job
+WHEN $before != $after AND $event != "DELETE"
+THEN {
+    -- No-op for now. Client mutation sync logic moved to DBSP.
+};
+
+-- Table: job Client Deletion
+DEFINE EVENT OVERWRITE _spooky_job_client_delete ON TABLE job
 WHEN $event = "DELETE"
 THEN {
     -- No-op for now.

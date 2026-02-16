@@ -5,10 +5,10 @@ import {
   Surreal,
   SurrealTransaction,
 } from 'surrealdb';
-import { SpookyConfig } from '../../types.js';
-import { Logger } from '../logger/index.js';
-import { AbstractDatabaseService } from './database.js';
-import { createDatabaseEventSystem, DatabaseEventTypes } from './events/index.js';
+import { SpookyConfig } from '../../types';
+import { Logger } from '../logger/index';
+import { AbstractDatabaseService } from './database';
+import { createDatabaseEventSystem, DatabaseEventTypes } from './events/index';
 
 export class RemoteDatabaseService extends AbstractDatabaseService {
   private config: SpookyConfig<any>['database'];

@@ -1,10 +1,10 @@
 import init, { SpookyProcessor } from '@spooky/ssp-wasm';
-import { EventDefinition, EventSystem } from '../../events/index.js';
+import { EventDefinition, EventSystem } from '../../events/index';
 import { Logger } from 'pino';
-import { LocalDatabaseService } from '../database/index.js';
-import { WasmProcessor, WasmStreamUpdate } from './wasm-types.js';
+import { LocalDatabaseService } from '../database/index';
+import { WasmProcessor, WasmStreamUpdate } from './wasm-types';
 import { Duration } from 'surrealdb';
-import { PersistenceClient, QueryTimeToLive, RecordVersionArray } from '../../types.js';
+import { PersistenceClient, QueryTimeToLive, RecordVersionArray } from '../../types';
 
 // Simple interface for query plan registration (replaces Incantation class)
 interface QueryPlanConfig {
@@ -26,6 +26,7 @@ interface QueryPlanConfig {
 export interface StreamUpdate {
   queryHash: string;
   localArray: RecordVersionArray;
+  op?: 'CREATE' | 'UPDATE' | 'DELETE'; // Operation type for conditional debouncing
 }
 
 // Define events map (kept for DevTools compatibility)
@@ -183,7 +184,7 @@ export class StreamProcessorService {
    */
   ingest(
     table: string,
-    op: string,
+    op: 'CREATE' | 'UPDATE' | 'DELETE',
     id: string,
     record: any
   ): WasmStreamUpdate[] {
@@ -192,9 +193,9 @@ export class StreamProcessorService {
         table,
         op,
         id,
-        Category: 'spooky-client:SPS::ingest',
+        Category: 'spooky-client::StreamProcessorService::ingest',
       },
-      'Ingesting record'
+      'Ingesting into ssp'
     );
 
     if (!this.processor) {
@@ -208,16 +209,23 @@ export class StreamProcessorService {
     try {
       const normalizedRecord = this.normalizeValue(record);
 
-      const rawUpdates = this.processor.ingest_single(table, op, id, normalizedRecord);
+      const rawUpdates = this.processor.ingest(table, op, id, normalizedRecord);
       this.logger.debug(
-        { rawUpdates, Category: 'spooky-client:SPS::ingest' },
-        'ingest result'
+        {
+          table,
+          op,
+          id,
+          rawUpdates: rawUpdates.length,
+          Category: 'spooky-client::StreamProcessorService::ingest',
+        },
+        'Ingesting into ssp done'
       );
 
       if (rawUpdates && Array.isArray(rawUpdates) && rawUpdates.length > 0) {
         const updates: StreamUpdate[] = rawUpdates.map((u: WasmStreamUpdate) => ({
           queryHash: u.query_id,
           localArray: u.result_data,
+          op: op,
         }));
         // Direct handler call instead of event
         this.notifyUpdates(updates);
@@ -226,82 +234,8 @@ export class StreamProcessorService {
       return rawUpdates;
     } catch (e) {
       this.logger.error(
-        { error: e, Category: 'spooky-client:SPS::ingest' },
-        'Error during ingestion'
-      );
-    }
-    return [];
-  }
-
-  /**
-   * Ingest multiple record changes in a single batch.
-   * More efficient than calling ingest() multiple times as it:
-   * 1. Processes all records together in WASM
-   * 2. Emits a SINGLE stream_update event with all results
-   * 3. Saves state only once at the end
-   */
-  ingestBatch(
-    batch: Array<{ table: string; op: string; record: any; version?: number }>
-  ): WasmStreamUpdate[] {
-    if (batch.length === 0) return [];
-
-    this.logger.debug(
-      {
-        batchSize: batch.length,
-        Category: 'spooky-client:SPS::ingestBatch',
-      },
-      'Ingesting batch'
-    );
-
-    if (!this.processor) {
-      this.logger.warn(
-        { Category: 'spooky-client:SPS::ingestBatch' },
-        'Not initialized, skipping batch ingest'
-      );
-      return [];
-    }
-
-    try {
-      const allUpdates: WasmStreamUpdate[] = [];
-
-      // Manually iterate and ingest single records
-      for (const item of batch) {
-        const normalizedRecord = this.normalizeValue(item.record);
-        // We use ingest_single for each item
-        const updates = this.processor.ingest_single(
-          item.table,
-          item.op,
-          item.record.id, // Assuming record.id is available as in previous code
-          normalizedRecord
-        );
-        
-        if (updates && Array.isArray(updates)) {
-            allUpdates.push(...updates);
-        }
-      }
-
-      this.logger.debug(
-        {
-          updateCount: allUpdates.length,
-          Category: 'spooky-client:SPS::ingestBatch',
-        },
-        'batch ingest result'
-      );
-
-      if (allUpdates.length > 0) {
-        const updates: StreamUpdate[] = allUpdates.map((u: WasmStreamUpdate) => ({
-          queryHash: u.query_id,
-          localArray: u.result_data,
-        }));
-        // Direct handler call instead of event
-        this.notifyUpdates(updates);
-      }
-      this.saveState();
-      return allUpdates;
-    } catch (e) {
-      this.logger.error(
-        { error: e, Category: 'spooky-client:SPS::ingestBatch' },
-        'Error during batch ingestion'
+        { error: e, Category: 'spooky-client::StreamProcessorService::ingest' },
+        'Ingesting into ssp failed'
       );
     }
     return [];

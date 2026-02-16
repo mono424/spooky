@@ -5,7 +5,6 @@ title: Mutate Data
 
 import CodeBlock from '../../components/ui/CodeBlock.astro';
 import Warning from '../../components/ui/Warning.astro';
-import { mutateCreateCode, mutateUpdateCode, mutateDeleteCode } from './snippets';
 
 Mutating data in Spooky is performant and secure. Changes are instantly reflected in your local UI (optimistic updates) and synchronized with the server.
 
@@ -13,7 +12,22 @@ Mutating data in Spooky is performant and secure. Changes are instantly reflecte
 
 To create a new record, use the `db.create` method. You need to specify the record ID (or let Spooky generate one) and the data.
 
-<CodeBlock code={mutateCreateCode} lang="typescript" />
+<CodeBlock
+  code={`import { Uuid } from 'surrealdb';
+
+// Generate a unique ID
+const genId = Uuid.v4().toString().replace(/-/g, '');
+const threadId = \`thread:\${genId}\`;
+
+// Create the record
+await db.create(threadId, {
+  title: 'My New Thread',
+  content: 'This is the content of the thread.',
+  author: 'user:current_user_id', // Record ID as string
+  active: true,
+});`}
+  lang="typescript"
+/>
 
 <Warning>
   Ensure you adhere to the `PERMISSIONS` defined in your schema. If a user does not have permission
@@ -22,12 +36,31 @@ To create a new record, use the `db.create` method. You need to specify the reco
 
 ## Updating Records
 
-Updating is just as simple using `db.merge` (for partial updates) or `db.update` (for full replacement).
+Use `db.update()` to update existing records. This performs a partial update (merge) by default.
 
-<CodeBlock code={mutateUpdateCode} lang="typescript" />
+<CodeBlock
+  code={`// Partial update
+await db.update('thread', 'thread:123', {
+  title: 'Updated Title'
+});
+
+// Update with debouncing (useful for real-time typing)
+await db.update('thread', 'thread:123', {
+  content: 'Updated content...'
+}, {
+  debounced: {
+    key: 'recordId_x_fields',
+    delay: 500
+  }
+});`}
+  lang="typescript"
+/>
 
 ## Deleting Records
 
-To delete a record, simply call `db.delete`.
+To delete a record, call `db.delete` with the table name and record ID.
 
-<CodeBlock code={mutateDeleteCode} lang="typescript" />
+<CodeBlock 
+  code={`await db.delete('thread', 'thread:123');`} 
+  lang="typescript" 
+/>

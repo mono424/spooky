@@ -1,0 +1,193 @@
+{
+  "timestamp": "20260207_190153",
+  "git_hash": "c8bd9812-dirty",
+  "benchmarks": [
+    {
+      "name": "bench_ingest_0",
+      "fastest_ns": 24020.0,
+      "slowest_ns": 132900.0,
+      "median_ns": 24480.0,
+      "mean_ns": 25680.0,
+      "samples": 1000,
+      "iters": 1000,
+      "display_unit": "\u00b5s",
+      "alloc": {
+        "max_alloc": {
+          "count": 205,
+          "bytes": 23183.36,
+          "bytes_display": "22.64 KB"
+        },
+        "alloc": {
+          "count": 413,
+          "bytes": 36915.2,
+          "bytes_display": "36.05 KB"
+        },
+        "dealloc": {
+          "count": 514,
+          "bytes": 102502.4,
+          "bytes_display": "100.1 KB"
+        },
+        "grow": {
+          "count": 100,
+          "bytes": 1740.8,
+          "bytes_display": "1.7 KB"
+        }
+      }
+    },
+    {
+      "name": "bench_ingest_10k",
+      "fastest_ns": 650900.0,
+      "slowest_ns": 3409000.0,
+      "median_ns": 746500.0,
+      "mean_ns": 867300.0,
+      "samples": 1000,
+      "iters": 1000,
+      "display_unit": "\u00b5s",
+      "alloc": {
+        "max_alloc": {
+          "count": 204,
+          "bytes": 22712.32,
+          "bytes_display": "22.18 KB"
+        },
+        "alloc": {
+          "count": 412,
+          "bytes": 36444.16,
+          "bytes_display": "35.59 KB"
+        },
+        "dealloc": {
+          "count": 10517,
+          "bytes": 7324303.36,
+          "bytes_display": "6.985 MB"
+        },
+        "grow": {
+          "count": 100,
+          "bytes": 1740.8,
+          "bytes_display": "1.7 KB"
+        }
+      }
+    },
+    {
+      "name": "bench_ingest_100k",
+      "fastest_ns": 12970000.0,
+      "slowest_ns": 50280000.0,
+      "median_ns": 13850000.0,
+      "mean_ns": 14230000.0,
+      "samples": 1000,
+      "iters": 1000,
+      "display_unit": "ms",
+      "alloc": {
+        "max_alloc": {
+          "count": 204,
+          "bytes": 22712.32,
+          "bytes_display": "22.18 KB"
+        },
+        "alloc": {
+          "count": 412,
+          "bytes": 36444.16,
+          "bytes_display": "35.59 KB"
+        },
+        "dealloc": {
+          "count": 100517,
+          "bytes": 68933386.24,
+          "bytes_display": "65.74 MB"
+        },
+        "grow": {
+          "count": 100,
+          "bytes": 1740.8,
+          "bytes_display": "1.7 KB"
+        }
+      }
+    },
+    {
+      "name": "bench_register_0",
+      "fastest_ns": 528.6,
+      "slowest_ns": 19650.0,
+      "median_ns": 570.6,
+      "mean_ns": 631.2,
+      "samples": 1000,
+      "iters": 1000,
+      "display_unit": "ns",
+      "alloc": {
+        "max_alloc": {
+          "count": 9,
+          "bytes": 1515.52,
+          "bytes_display": "1.48 KB"
+        },
+        "alloc": {
+          "count": 14,
+          "bytes": 1764.352,
+          "bytes_display": "1.723 KB"
+        },
+        "dealloc": {
+          "count": 17,
+          "bytes": 1851.392,
+          "bytes_display": "1.808 KB"
+        }
+      }
+    },
+    {
+      "name": "bench_register_1k",
+      "fastest_ns": 2148000.0,
+      "slowest_ns": 3622000.0,
+      "median_ns": 2183000.0,
+      "mean_ns": 2201000.0,
+      "samples": 1000,
+      "iters": 1000,
+      "display_unit": "ms",
+      "alloc": {
+        "max_alloc": {
+          "count": 15,
+          "bytes": 33085.44,
+          "bytes_display": "32.31 KB"
+        },
+        "alloc": {
+          "count": 21492,
+          "bytes": 214220.8,
+          "bytes_display": "209.2 KB"
+        },
+        "dealloc": {
+          "count": 22499,
+          "bytes": 1434451.968,
+          "bytes_display": "1.368 MB"
+        },
+        "grow": {
+          "count": 21466,
+          "bytes": 440012.8,
+          "bytes_display": "429.7 KB"
+        }
+      }
+    },
+    {
+      "name": "bench_register_2k4v1ki",
+      "fastest_ns": 57170000.0,
+      "slowest_ns": 136700000.0,
+      "median_ns": 58780000.0,
+      "mean_ns": 59370000.0,
+      "samples": 1000,
+      "iters": 1000,
+      "display_unit": "ms",
+      "alloc": {
+        "max_alloc": {
+          "count": 1180,
+          "bytes": 211353.6,
+          "bytes_display": "206.4 KB"
+        },
+        "alloc": {
+          "count": 482575,
+          "bytes": 37759221.76,
+          "bytes_display": "36.01 MB"
+        },
+        "dealloc": {
+          "count": 484750,
+          "bytes": 46273658.88,
+          "bytes_display": "44.13 MB"
+        },
+        "grow": {
+          "count": 368765,
+          "bytes": 6912212.992,
+          "bytes_display": "6.592 MB"
+        }
+      }
+    }
+  ]
+}

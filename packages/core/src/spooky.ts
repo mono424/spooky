@@ -1,18 +1,20 @@
-import { DataModule } from './modules/data/index.js';
+import { DataModule } from './modules/data/index';
 import {
   SpookyConfig,
   QueryTimeToLive,
   SpookyQueryResultPromise,
   PersistenceClient,
   MutationEvent,
-} from './types.js';
+  UpdateOptions,
+  RunOptions,
+} from './types';
 import {
   LocalDatabaseService,
   LocalMigrator,
   RemoteDatabaseService,
-} from './services/database/index.js';
+} from './services/database/index';
 import { Surreal } from 'surrealdb';
-import { SpookySync } from './modules/sync/index.js';
+import { SpookySync, UpEvent } from './modules/sync/index';
 import {
   GetTable,
   InnerQuery,
@@ -21,17 +23,20 @@ import {
   SchemaStructure,
   TableModel,
   TableNames,
+  BackendNames,
+  BackendRoutes,
+  RoutePayload,
 } from '@spooky/query-builder';
 
-import { DevToolsService } from './modules/devtools/index.js';
-import { createLogger } from './services/logger/index.js';
-import { AuthService } from './modules/auth/index.js';
-import { StreamProcessorService } from './services/stream-processor/index.js';
-import { EventSystem } from './events/index.js';
-import { CacheModule } from './modules/cache/index.js';
-import { LocalStoragePersistenceClient } from './services/persistence/localstorage.js';
-import { generateId, parseParams } from './utils/index.js';
-import { SurrealDBPersistenceClient } from './services/persistence/surrealdb.js';
+import { DevToolsService } from './modules/devtools/index';
+import { createLogger } from './services/logger/index';
+import { AuthService } from './modules/auth/index';
+import { StreamProcessorService } from './services/stream-processor/index';
+import { EventSystem } from './events/index';
+import { CacheModule } from './modules/cache/index';
+import { LocalStoragePersistenceClient } from './services/persistence/localstorage';
+import { generateId, parseParams } from './utils/index';
+import { SurrealDBPersistenceClient } from './services/persistence/surrealdb';
 
 export class SpookyClient<S extends SchemaStructure> {
   private local: LocalDatabaseService;
@@ -97,7 +102,13 @@ export class SpookyClient<S extends SchemaStructure> {
       logger
     );
 
-    this.dataModule = new DataModule(this.cache, this.local, this.config.schema, logger);
+    this.dataModule = new DataModule(
+      this.cache,
+      this.local,
+      this.config.schema,
+      logger,
+      this.config.streamDebounceTime
+    );
 
     // Initialize Auth
     this.auth = new AuthService(this.config.schema, this.remote, this.persistenceClient, logger);
@@ -127,13 +138,13 @@ export class SpookyClient<S extends SchemaStructure> {
    */
   private setupCallbacks() {
     // Mutation callback for sync
-    this.dataModule.onMutation((mutations: MutationEvent[]) => {
+    this.dataModule.onMutation((mutations: UpEvent[]) => {
       // Notify DevTools
       this.devTools.onMutation(mutations);
 
       // Enqueue in Sync
       if (mutations.length > 0) {
-        this.sync.enqueueMutation(mutations as any);
+        this.sync.enqueueMutation(mutations);
       }
     });
 
@@ -279,12 +290,19 @@ export class SpookyClient<S extends SchemaStructure> {
     return this.dataModule.subscribe(queryHash, callback, options);
   }
 
+  run<
+    B extends BackendNames<S>,
+    R extends BackendRoutes<S, B>,
+  >(backend: B, path: R, payload: RoutePayload<S, B, R>, options?: RunOptions) {
+    return this.dataModule.run(backend, path, payload, options);
+  }
+
   create(id: string, data: Record<string, unknown>) {
     return this.dataModule.create(id, data);
   }
 
-  update(table: string, id: string, data: Record<string, unknown>) {
-    return this.dataModule.update(table, id, data);
+  update(table: string, id: string, data: Record<string, unknown>, options?: UpdateOptions) {
+    return this.dataModule.update(table, id, data, options);
   }
 
   delete(table: string, id: string) {

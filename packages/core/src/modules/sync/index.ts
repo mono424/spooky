@@ -1,3 +1,3 @@
-export * from './events/index.js';
-export * from './sync.js';
-export * from './queue/index.js';
+export * from './events/index';
+export * from './sync';
+export * from './queue/index';

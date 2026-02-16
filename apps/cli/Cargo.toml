@@ -19,4 +19,6 @@ tar = "0.4"
 zstd = "0.13"
 tempfile = "3.10"
 inquire = "0.7"
+serde_yaml = "0.9"
+openapiv3 = "2.0"
 

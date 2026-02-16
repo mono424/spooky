@@ -1,6 +1,7 @@
 -- ##################################################################
 -- SCOPES & AUTHENTICATION
 -- ##################################################################
+
 DEFINE ACCESS account ON DATABASE TYPE RECORD
   SIGNUP ( CREATE user SET username = $username, password = crypto::argon2::generate($password) )
   SIGNIN ( SELECT * FROM user WHERE username = $username AND crypto::argon2::compare(password, $password) )
@@ -60,12 +61,15 @@ DEFINE TABLE thread SCHEMAFULL
     FOR update, delete, create WHERE $access = "account" AND author.id = $auth.id
 ;
 
-
 DEFINE FIELD title ON TABLE thread TYPE string
     ASSERT $value != NONE AND string::len($value) > 0 AND string::len($value) <= 200;
 
 DEFINE FIELD content ON TABLE thread TYPE string
     ASSERT $value != NONE AND string::len($value) > 0;
+
+DEFINE FIELD title_suggestion ON TABLE thread TYPE option<string>;
+
+DEFINE FIELD content_suggestion ON TABLE thread TYPE option<string>;
 
 DEFINE FIELD author ON TABLE thread TYPE record<user>; -- @parent
 

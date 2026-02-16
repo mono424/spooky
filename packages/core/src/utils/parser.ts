@@ -1,5 +1,5 @@
 import { ColumnSchema, RecordId } from '@spooky/query-builder';
-import { parseRecordIdString } from './index.js';
+import { parseRecordIdString } from './index';
 import { DateTime } from 'surrealdb';
 
 export function parseParams(

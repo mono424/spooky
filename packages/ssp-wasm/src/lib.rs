@@ -186,8 +186,6 @@ impl SpookyProcessor {
         Ok(wasm_updates.serialize(&serializer)?)
     }
 
-
-
     /// Register a new materialized view
     pub fn register_view(&mut self, config: JsValue) -> Result<JsValue, JsValue> {
         let config_val: Value = serde_wasm_bindgen::from_value(config)

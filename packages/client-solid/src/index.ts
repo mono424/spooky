@@ -1,5 +1,11 @@
 import type { SyncedDbConfig } from './types';
-import { SpookyClient, AuthService, type SpookyQueryResultPromise } from '@spooky/core';
+import {
+  SpookyClient,
+  AuthService,
+  type SpookyQueryResultPromise,
+  UpdateOptions,
+  RunOptions,
+} from '@spooky/core';
 
 import {
   GetTable,
@@ -13,6 +19,9 @@ import {
   GetRelationship,
   RelatedFieldMapEntry,
   InnerQuery,
+  BackendNames,
+  BackendRoutes,
+  RoutePayload,
 } from '@spooky/query-builder';
 
 import { RecordId, Uuid, Surreal } from 'surrealdb';
@@ -120,10 +129,16 @@ export class SyncedDb<S extends SchemaStructure> {
   async update<TName extends TableNames<S>>(
     tableName: TName,
     recordId: string,
-    payload: Partial<TableModel<GetTable<S, TName>>>
+    payload: Partial<TableModel<GetTable<S, TName>>>,
+    options?: UpdateOptions
   ): Promise<void> {
     if (!this.spooky) throw new Error('SyncedDb not initialized');
-    await this.spooky.update(tableName as string, recordId, payload as Record<string, unknown>);
+    await this.spooky.update(
+      tableName as string,
+      recordId,
+      payload as Record<string, unknown>,
+      options
+    );
   }
 
   /**
@@ -147,6 +162,22 @@ export class SyncedDb<S extends SchemaStructure> {
   ): QueryBuilder<S, TName, SpookyQueryResultPromise, {}, false> {
     if (!this.spooky) throw new Error('SyncedDb not initialized');
     return this.spooky.query(table, {});
+  }
+
+  /**
+   * Run a backend operation
+   */
+  public async run<
+    B extends BackendNames<S>,
+    R extends BackendRoutes<S, B>,
+  >(
+    backend: B,
+    path: R,
+    payload: RoutePayload<S, B, R>,
+    options?: RunOptions,
+  ): Promise<void> {
+    if (!this.spooky) throw new Error('SyncedDb not initialized');
+    await this.spooky.run(backend, path, payload, options);
   }
 
   /**

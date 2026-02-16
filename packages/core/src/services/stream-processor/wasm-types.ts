@@ -1,4 +1,4 @@
-import { RecordVersionArray } from '../../types.js';
+import { RecordVersionArray } from '../../types';
 
 export interface WasmStreamUpdate {
   query_id: string;
@@ -17,18 +17,7 @@ export interface WasmQueryConfig {
 
 // Interface matching the SpookyProcessor class from WASM
 export interface WasmProcessor {
-  ingest_single(
-    table: string,
-    op: string,
-    id: string,
-    record: any
-  ): WasmStreamUpdate[];
-  set_record_version(
-    query_id: string,
-    record_id: string,
-    version: number
-  ): WasmStreamUpdate | undefined;
+  ingest(table: string, op: string, id: string, record: any): WasmStreamUpdate[];
   register_view(config: WasmQueryConfig): WasmStreamUpdate | undefined;
   unregister_view(id: string): void;
-  // Add other methods if needed
 }

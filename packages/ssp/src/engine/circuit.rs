@@ -116,10 +116,10 @@ impl Table {
         }
     }
 
-    //quick fix for version look up
+    /// Look up version from record's spooky_rv field
     pub fn get_record_version(&self, id: &str) -> Option<i64> {
         let sv = self.rows.get(id)?;
-        let version = sv.get("_spooky_version")?.as_f64()?;
+        let version = sv.get("spooky_rv")?.as_f64()?;
         Some(version as i64)
     }
 
@@ -201,9 +201,23 @@ mod tests {
     }
 
     #[test]
-    fn version_check() {
-        let (_, _, tb) = common();
-        let version = tb.get_record_version("user:23lk4j233jd");
+    fn get_version() {
+        let record_user1 = LoadRecord::new(
+            "user",
+            "user:23lk4j233jd",
+            json!({ "status": "spooky", "level": 10, "spooky_rv": 3 }).into(),
+        );
+        let mut tb_user = Table::new(SmolStr::from("user"));
+        let (zset_key, weight) = tb_user.apply_mutation(
+            Operation::Create,
+            SmolStr::from("23lk4j233jd"),
+            record_user1.data,
+        );
+
+        let version = tb_user.get_record_version("23lk4j233jd");
+
+        assert_eq!(zset_key, SmolStr::from("user:23lk4j233jd"));
+        assert_eq!(weight, 1 as i64);
         assert_eq!(version, Some(3));
     }
 
