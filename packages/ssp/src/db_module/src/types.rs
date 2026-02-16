@@ -1,4 +1,48 @@
 use super::spooky_record::{SpookyReadable, SpookyRecord};
+use smol_str::SmolStr;
+
+// ─── Common Types for Database ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Operation {
+    Create,
+    Update,
+    Delete,
+}
+
+impl Operation {
+    pub fn weight(&self) -> i64 {
+        match self {
+            Operation::Create | Operation::Update => 1,
+            Operation::Delete => -1,
+        }
+    }
+
+    pub fn changes_content(&self) -> bool {
+        matches!(self, Operation::Create | Operation::Update)
+    }
+}
+
+pub type ZSet = std::collections::BTreeMap<SmolStr, i64>;
+
+/// Create a ZSet key from table name and record ID
+#[inline]
+pub fn make_zset_key(table: &str, id: &str) -> SmolStr {
+    // Strip any existing table prefix from id
+    let raw_id = id.split_once(':').map(|(_, rest)| rest).unwrap_or(id);
+
+    let combined_len = table.len() + 1 + raw_id.len();
+    if combined_len <= 23 {
+        // SmolStr inline storage optimization
+        let mut buf = String::with_capacity(combined_len);
+        buf.push_str(table);
+        buf.push(':');
+        buf.push_str(raw_id);
+        SmolStr::new(buf)
+    } else {
+        SmolStr::new(format!("{}:{}", table, raw_id))
+    }
+}
 
 // ─── Type Tags ──────────────────────────────────────────────────────────────
 pub const TAG_NULL: u8 = 0;

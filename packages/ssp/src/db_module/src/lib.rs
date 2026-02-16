@@ -1,3 +1,4 @@
+pub mod db;
 pub mod error;
 //pub mod spooky_record;
 //pub mod spooky_record_mut;

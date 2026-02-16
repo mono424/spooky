@@ -15,9 +15,4 @@ smol_str = { version = "0.3.5", features = ["serde"] }
 tempfile = "3.24.0"
 xxhash-rust = {version = "0.8.15", features = ["xxh64", "const_xxh64"] }
 
-[dev-dependencies]
-criterion = { version = "4.3.0", features = ["html_reports"], package = "codspeed-criterion-compat" }
 
-[[bench]]
-name = "spooky_bench"
-harness = false
