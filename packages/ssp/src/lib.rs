@@ -1,8 +1,8 @@
 // src/lib.rs
 
 #[cfg(not(target_arch = "wasm32"))]
-//#[global_allocator]
-//static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 pub mod converter;
 pub mod engine;
 pub mod logging;
