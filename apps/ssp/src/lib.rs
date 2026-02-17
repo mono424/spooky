@@ -802,7 +802,6 @@ async fn health_handler(State(state): State<AppState>) -> impl IntoResponse {
     Json(json!({
         "status": "healthy",
         "views": circuit.views.len(),
-        "tables": circuit.db.tables.len(),
     }))
 }
 
