@@ -5,26 +5,24 @@ use ssp::engine::types::{BatchDeltas, Delta, Operation};
 use ssp::{Operator, Projection, QueryPlan};
 use ssp::engine::update::{DeltaEvent, ViewUpdate, ViewResultFormat};
 use ssp::engine::view::View;
-use ssp::engine::circuit::Database;
+use ssp::db_mod::db::Database;
 
 mod common;
 
 /// Test: When two threads reference the same user, user should have weight 1 (Membership)
 #[test]
 fn test_subquery_membership_idempotency() {
-    let mut db = Database::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::new(tmp.path().join("test.db")).unwrap();
 
     // Create user:1 (Weight = 1)
-    let users = db.ensure_table("user");
-    users.rows.insert(SmolStr::new("user:1"), json!({"id": "user:1", "name": "Alice"}).into());
-    users.zset.insert(SmolStr::new("user:1"), 1);
+    let mut users = db.table("user");
+    users.apply_mutation(Operation::Create, SmolStr::new("user:1"), json!({"id": "user:1", "name": "Alice"}).into());
 
     // Create 2 threads referencing user:1 (Weight = 1 each)
-    let threads = db.ensure_table("thread");
-    threads.rows.insert(SmolStr::new("thread:1"), json!({"id": "thread:1", "author": "user:1"}).into());
-    threads.rows.insert(SmolStr::new("thread:2"), json!({"id": "thread:2", "author": "user:1"}).into());
-    threads.zset.insert(SmolStr::new("thread:1"), 1);
-    threads.zset.insert(SmolStr::new("thread:2"), 1);
+    let mut threads = db.table("thread");
+    threads.apply_mutation(Operation::Create, SmolStr::new("thread:1"), json!({"id": "thread:1", "author": "user:1"}).into());
+    threads.apply_mutation(Operation::Create, SmolStr::new("thread:2"), json!({"id": "thread:2", "author": "user:1"}).into());
 
     // View: SELECT *, (SELECT * FROM user WHERE id=$parent.author) FROM thread
     let plan = QueryPlan {
@@ -74,18 +72,16 @@ fn test_subquery_membership_idempotency() {
 /// Test: When one thread is deleted, user stays in view (weight remains 1)
 #[test]
 fn test_subquery_membership_persistence() {
-    let mut db = Database::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::new(tmp.path().join("test.db")).unwrap();
     
     // Setup initial state: 2 threads -> 1 user
-    let users = db.ensure_table("user");
-    users.rows.insert(SmolStr::new("user:1"), json!({"id": "user:1"}).into());
-    users.zset.insert(SmolStr::new("user:1"), 1);
+    let mut users = db.table("user");
+    users.apply_mutation(Operation::Create, SmolStr::new("user:1"), json!({"id": "user:1"}).into());
 
-    let threads = db.ensure_table("thread");
-    threads.rows.insert(SmolStr::new("thread:1"), json!({"id": "thread:1", "author": "user:1"}).into());
-    threads.rows.insert(SmolStr::new("thread:2"), json!({"id": "thread:2", "author": "user:1"}).into());
-    threads.zset.insert(SmolStr::new("thread:1"), 1);
-    threads.zset.insert(SmolStr::new("thread:2"), 1);
+    let mut threads = db.table("thread");
+    threads.apply_mutation(Operation::Create, SmolStr::new("thread:1"), json!({"id": "thread:1", "author": "user:1"}).into());
+    threads.apply_mutation(Operation::Create, SmolStr::new("thread:2"), json!({"id": "thread:2", "author": "user:1"}).into());
 
     let plan = QueryPlan {
         id: "thread_with_author".to_string(),
@@ -119,9 +115,8 @@ fn test_subquery_membership_persistence() {
     
     // Apply deletion to DB
     {
-        let threads = db.ensure_table("thread");
-        threads.zset.remove("thread:1");
-        threads.rows.remove("thread:1");
+        let mut threads = db.table("thread");
+        threads.apply_mutation(Operation::Delete, SmolStr::new("thread:1"), ssp::engine::types::SpookyValue::Null);
     }
 
     // Process update
@@ -140,17 +135,16 @@ fn test_subquery_membership_persistence() {
 /// Test: When last thread referencing user is deleted, user is removed
 #[test]
 fn test_subquery_weight_to_zero_removal() {
-    let mut db = Database::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::new(tmp.path().join("test.db")).unwrap();
     
     // Setup initial state: 1 thread -> 1 user
     {
-        let users = db.ensure_table("user");
-        users.rows.insert(SmolStr::new("user:1"), json!({"id": "user:1"}).into());
-        users.zset.insert(SmolStr::new("user:1"), 1);
+        let mut users = db.table("user");
+        users.apply_mutation(Operation::Create, SmolStr::new("user:1"), json!({"id": "user:1"}).into());
 
-        let threads = db.ensure_table("thread");
-        threads.rows.insert(SmolStr::new("thread:1"), json!({"id": "thread:1", "author": "user:1"}).into());
-        threads.zset.insert(SmolStr::new("thread:1"), 1);
+        let mut threads = db.table("thread");
+        threads.apply_mutation(Operation::Create, SmolStr::new("thread:1"), json!({"id": "thread:1", "author": "user:1"}).into());
     }
 
     let plan = QueryPlan {
@@ -185,9 +179,8 @@ fn test_subquery_weight_to_zero_removal() {
 
     // Apply deletion to DB
     {
-        let threads = db.ensure_table("thread");
-        threads.zset.remove("thread:1");
-        threads.rows.remove("thread:1");
+        let mut threads = db.table("thread");
+        threads.apply_mutation(Operation::Delete, SmolStr::new("thread:1"), ssp::engine::types::SpookyValue::Null);
     }
 
     let update = view.process_delta(&delta, &db);

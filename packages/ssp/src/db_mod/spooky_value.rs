@@ -124,6 +124,77 @@ impl SpookyNumber {
             }
         }
     }
+
+    #[inline]
+    pub fn to_bits(&self) -> u64 {
+        self.as_f64().to_bits()
+    }
+}
+
+impl std::fmt::Display for SpookyNumber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SpookyNumber::I64(i) => write!(f, "{}", i),
+            SpookyNumber::U64(u) => write!(f, "{}", u),
+            SpookyNumber::F64(v) => write!(f, "{}", v),
+        }
+    }
+}
+
+impl std::ops::Add<f64> for SpookyNumber {
+    type Output = SpookyNumber;
+    fn add(self, rhs: f64) -> Self::Output {
+        SpookyNumber::F64(self.as_f64() + rhs)
+    }
+}
+
+impl std::ops::Sub<f64> for SpookyNumber {
+    type Output = SpookyNumber;
+    fn sub(self, rhs: f64) -> Self::Output {
+        SpookyNumber::F64(self.as_f64() - rhs)
+    }
+}
+
+impl std::ops::Mul<f64> for SpookyNumber {
+    type Output = SpookyNumber;
+    fn mul(self, rhs: f64) -> Self::Output {
+        SpookyNumber::F64(self.as_f64() * rhs)
+    }
+}
+
+impl std::ops::Div<f64> for SpookyNumber {
+    type Output = SpookyNumber;
+    fn div(self, rhs: f64) -> Self::Output {
+        SpookyNumber::F64(self.as_f64() / rhs)
+    }
+}
+
+impl std::ops::Rem<f64> for SpookyNumber {
+    type Output = SpookyNumber;
+    fn rem(self, rhs: f64) -> Self::Output {
+        SpookyNumber::F64(self.as_f64() % rhs)
+    }
+}
+
+impl PartialEq<f64> for SpookyNumber {
+    fn eq(&self, other: &f64) -> bool {
+        self.as_f64() == *other
+    }
+}
+
+impl PartialOrd<f64> for SpookyNumber {
+    fn partial_cmp(&self, other: &f64) -> Option<Ordering> {
+        self.as_f64().partial_cmp(other)
+    }
+}
+impl<'de> serde::Deserialize<'de> for SpookyValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let v = serde_json::Value::deserialize(deserializer)?;
+        Ok(SpookyValue::from(v))
+    }
 }
 
 // ─── SpookyValue ────────────────────────────────────────────────────────────

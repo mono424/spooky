@@ -1,53 +1,7 @@
-use super::spooky_value::SpookyValue;
+use crate::types::SpookyValue;
 use smol_str::SmolStr;
 
-/// Operation type for record mutations
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Operation {
-    Create,
-    Update,
-    Delete,
-}
-
-impl Operation {
-    /// Convert from string representation
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "create" => Some(Operation::Create),
-            "update" => Some(Operation::Update),
-            "delete" => Some(Operation::Delete),
-            _ => None,
-        }
-    }
-
-    /// Get weight for ZSet delta
-    #[inline]
-    pub fn weight(&self) -> i64 {
-        match self {
-            Operation::Create => 1,
-            Operation::Update => 0, // No membership change
-            Operation::Delete => -1,
-        }
-    }
-
-    /// Does this operation change record content?
-    #[inline]
-    pub fn changes_content(&self) -> bool {
-        matches!(self, Operation::Create | Operation::Update)
-    }
-
-    /// Does this operation change set membership?
-    #[inline]
-    pub fn changes_membership(&self) -> bool {
-        matches!(self, Operation::Create | Operation::Delete)
-    }
-
-    /// Is this an addition (Create or Update)?
-    #[inline]
-    pub fn is_additive(&self) -> bool {
-        matches!(self, Operation::Create | Operation::Update)
-    }
-}
+pub use crate::db_mod::types::Operation;
 
 /// A single record to be ingested
 #[derive(Debug, Clone)]

@@ -1,4 +1,5 @@
-use ssp::engine::circuit::{Circuit, Database};
+use ssp::db_mod::db::Database;
+use ssp::engine::circuit::Circuit;
 use ssp::engine::operators::{Operator, Predicate, Projection};
 use ssp::engine::types::{SpookyValue, Path, ZSet};
 use ssp::engine::view::QueryPlan;
@@ -76,16 +77,22 @@ fn test_circuit_v2_ingest() {
 }
 
 #[test]
+#[test]
 fn test_numeric_filter_isolation() {
-    let mut db = Database::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let mut db = Database::new(tmp.path().join("test.db")).unwrap();
     let table_name = "users";
-    let tb = db.ensure_table(table_name);
+    let mut tb = db.table(table_name);
     
     let id = "1";
     let data = SpookyValue::from(json!({ "age": 31 })); // 31 > 30
     
     // Manually setup table state
-    tb.rows.insert(SmolStr::new(id), data);
+    tb.apply_mutation(
+        ssp::engine::types::Operation::Create,
+        SmolStr::new(id),
+        data
+    );
     
     let zset_key = SmolStr::new(format!("{}:{}", table_name, id));
     let mut input_zset = ZSet::default();

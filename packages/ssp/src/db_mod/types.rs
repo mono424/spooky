@@ -1,6 +1,8 @@
 use super::spooky_record::{SpookyReadable, SpookyRecord};
 use smol_str::SmolStr;
 
+pub use super::spooky_value::{SpookyNumber, SpookyValue};
+
 // ─── Common Types for Database ──────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,6 +21,28 @@ impl Operation {
     }
 
     pub fn changes_content(&self) -> bool {
+        matches!(self, Operation::Create | Operation::Update)
+    }
+
+    /// Convert from string representation
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "create" => Some(Operation::Create),
+            "update" => Some(Operation::Update),
+            "delete" => Some(Operation::Delete),
+            _ => None,
+        }
+    }
+
+    /// Does this operation change set membership?
+    #[inline]
+    pub fn changes_membership(&self) -> bool {
+        matches!(self, Operation::Create | Operation::Delete)
+    }
+
+    /// Is this an addition (Create or Update)?
+    #[inline]
+    pub fn is_additive(&self) -> bool {
         matches!(self, Operation::Create | Operation::Update)
     }
 }

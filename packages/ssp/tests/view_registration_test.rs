@@ -30,19 +30,20 @@ fn test_view_registration_after_ingestion() {
     );
 
     // 2. Verify the record is in the database
+    // Verify tables are created
+    let user_table = circuit.db.table("user");
+    assert!(!user_table.get_all_zset().is_empty(), "User table zset should not be empty");
+
+    // The original code had a check for 'thread' table, but it's not created in this test.
+    // Assuming the intent was to check the 'user' table more thoroughly.
+    // assert!(thread_table.get_all_zset().is_empty()); // This line was likely a copy-paste error or for a different test context.
+
     assert!(
-        circuit.db.tables.contains_key("user"),
-        "User table should exist"
-    );
-    let user_table = &circuit.db.tables["user"];
-    assert!(
-        user_table
-            .zset
-            .contains_key(user_id.as_str()),
+        user_table.get_all_zset().contains_key(user_id.as_str()),
         "User should be in zset"
     );
     assert!(
-        user_table.rows.contains_key(user_id.as_str()),
+        user_table.contains_key(user_id.as_str()),
         "User should be in rows"
     );
     println!("[TEST] User found in database zset and rows");
@@ -56,7 +57,7 @@ fn test_view_registration_after_ingestion() {
     };
 
     println!("[TEST] Registering view after ingestion");
-    let initial_update = circuit.register_view(plan, None, None);
+    let initial_update = circuit.register_view(plan, None, Some(ssp::ViewResultFormat::Flat));
 
     // 4. The initial update should contain the user that was already in the database
     assert!(
@@ -133,7 +134,7 @@ fn test_view_registration_after_ingestion_with_filter() {
     };
 
     println!("[TEST] Registering filtered view after ingestion");
-    let initial_update = circuit.register_view(plan, None, None);
+    let initial_update = circuit.register_view(plan, None, Some(ssp::ViewResultFormat::Flat));
 
     // 3. Should only find the active user
     assert!(

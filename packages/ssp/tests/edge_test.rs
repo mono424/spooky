@@ -12,16 +12,18 @@
 //! Run with: cargo test --package ssp --lib -- engine::view::ultimate_tests --nocapture
 
 #![allow(unused)]
-use ssp::engine::circuit::{Circuit, Database, Table};
+use ssp::db_mod::db::{Database, Table};
+use ssp::engine::circuit::Circuit;
 use ssp::engine::operators::{Operator, Predicate, Projection, OrderSpec};
 use ssp::engine::types::{
     BatchDeltas, Delta, FastMap, Path, SpookyValue, ZSet,
-    ZSetMembershipOps,
+    ZSetMembershipOps, Operation,
     make_zset_key, parse_zset_key,
 };
 use ssp::engine::update::{DeltaEvent, ViewResultFormat, ViewUpdate};
 use ssp::engine::view::{QueryPlan, View};
 use smol_str::SmolStr;
+use tempfile;
 
 
 // ============================================================================
@@ -56,39 +58,38 @@ fn make_comment(id: &str, thread_id: &str, author_id: &str, text: &str) -> Spook
     SpookyValue::Object(map)
 }
 
-fn setup_db_with_users(users: &[(&str, &str)]) -> Database {
-    let mut db = Database::new();
-    let table = db.ensure_table("user");
+fn setup_db_with_users(users: &[(&str, &str)]) -> (Database, tempfile::TempDir) {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::new(tmp.path().join("test.db")).unwrap();
+    let mut table = db.table("user");
     
     for (id, name) in users {
-        table.rows.insert(SmolStr::new(*id), make_user(id, name));
-        table.zset.insert(make_zset_key("user", id), 1);
+        table.apply_mutation(Operation::Create, SmolStr::new(*id), make_user(id, name));
     }
     
-    db
+    (db, tmp)
 }
 
 fn setup_db_with_threads_and_users(
     users: &[(&str, &str)],
     threads: &[(&str, &str, &str)], // (id, author_id, title)
-) -> Database {
-    let mut db = Database::new();
+) -> (Database, tempfile::TempDir) {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::new(tmp.path().join("test.db")).unwrap();
     
     // Add users
-    let user_table = db.ensure_table("user");
+    let mut user_table = db.table("user");
     for (id, name) in users {
-        user_table.rows.insert(SmolStr::new(*id), make_user(id, name));
-        user_table.zset.insert(make_zset_key("user", id), 1);
+        user_table.apply_mutation(Operation::Create, SmolStr::new(*id), make_user(id, name));
     }
     
     // Add threads
-    let thread_table = db.ensure_table("thread");
+    let mut thread_table = db.table("thread");
     for (id, author_id, title) in threads {
-        thread_table.rows.insert(SmolStr::new(*id), make_thread(id, author_id, title));
-        thread_table.zset.insert(make_zset_key("thread", id), 1);
+        thread_table.apply_mutation(Operation::Create, SmolStr::new(*id), make_thread(id, author_id, title));
     }
     
-    db
+    (db, tmp)
 }
 
 fn simple_scan_plan(table: &str) -> QueryPlan {
@@ -175,7 +176,7 @@ mod membership_model_tests {
     /// TEST: Cache weights should always be 1 (membership) not accumulated
     #[test]
     fn test_cache_weights_normalized_to_one() {
-        let db = setup_db_with_users(&[("1", "Alice"), ("2", "Bob")]);
+        let (db, _tmp) = setup_db_with_users(&[("1", "Alice"), ("2", "Bob")]);
         let plan = simple_scan_plan("user");
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -191,7 +192,7 @@ mod membership_model_tests {
     /// TEST: Re-adding same record should keep weight at 1, not increment
     #[test]
     fn test_readd_record_keeps_weight_one() {
-        let mut db = setup_db_with_users(&[("1", "Alice")]);
+        let (mut db, _tmp) = setup_db_with_users(&[("1", "Alice")]);
         let plan = simple_scan_plan("user");
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -306,7 +307,7 @@ mod fast_path_tests {
     /// TEST: Fast path and batch path should produce identical results
     #[test]
     fn test_fast_path_batch_path_equivalence() {
-        let db = setup_db_with_users(&[("1", "Alice")]);
+        let (db, _tmp) = setup_db_with_users(&[("1", "Alice")]);
         
         // View 1: Use fast path (simple Scan)
         let plan1 = simple_scan_plan("user");
@@ -345,7 +346,7 @@ mod fast_path_tests {
     /// TEST: Fast path delete should work correctly
     #[test]
     fn test_fast_path_delete() {
-        let db = setup_db_with_users(&[("1", "Alice")]);
+        let (db, _tmp) = setup_db_with_users(&[("1", "Alice")]);
         let plan = simple_scan_plan("user");
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -380,7 +381,7 @@ mod fast_path_tests {
     /// TEST: Fast path filter should correctly filter records
     #[test]
     fn test_fast_path_filter() {
-        let db = setup_db_with_users(&[("1", "Alice"), ("2", "Bob")]);
+        let (db, _tmp) = setup_db_with_users(&[("1", "Alice"), ("2", "Bob")]);
         let plan = filter_by_id_plan("user", "user:1");
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -413,7 +414,7 @@ mod fast_path_tests {
     /// TEST: Fast path should not be used for complex views
     #[test]
     fn test_fast_path_not_used_for_complex_views() {
-        let db = setup_db_with_threads_and_users(
+        let (db, _tmp) = setup_db_with_threads_and_users(
             &[("1", "Alice")],
             &[("1", "1", "Thread 1")],
         );
@@ -444,7 +445,7 @@ mod subquery_tests {
     /// This was the original bug - user was appearing as "Created" multiple times
     #[test]
     fn test_user_referenced_by_multiple_threads_weight_one() {
-        let db = setup_db_with_threads_and_users(
+        let (db, _tmp) = setup_db_with_threads_and_users(
             &[("1", "Alice")],  // 1 user
             &[
                 ("1", "1", "Thread 1"),  // Thread 1 by Alice
@@ -484,7 +485,7 @@ mod subquery_tests {
     /// TEST: Deleting one thread should NOT delete the user (still referenced)
     #[test]
     fn test_delete_one_thread_user_stays() {
-        let mut db = setup_db_with_threads_and_users(
+        let (mut db, _tmp) = setup_db_with_threads_and_users(
             &[("1", "Alice")],
             &[
                 ("1", "1", "Thread 1"),
@@ -502,9 +503,8 @@ mod subquery_tests {
         assert!(view.cache.is_member("thread:2"));
         
         // Delete thread:1 from database
-        let thread_table = db.tables.get_mut("thread").unwrap();
-        thread_table.rows.remove("1");
-        thread_table.zset.remove("thread:1");
+        let mut thread_table = db.table("thread");
+        thread_table.apply_mutation(Operation::Delete, SmolStr::new("1"), SpookyValue::Null);
         
         // Process deletion
         let mut batch = BatchDeltas::new();
@@ -540,7 +540,7 @@ mod subquery_tests {
     /// TEST: Deleting ALL threads should delete the user
     #[test]
     fn test_delete_all_threads_user_removed() {
-        let mut db = setup_db_with_threads_and_users(
+        let (mut db, _tmp) = setup_db_with_threads_and_users(
             &[("1", "Alice")],
             &[("1", "1", "Thread 1")],
         );
@@ -553,9 +553,8 @@ mod subquery_tests {
         assert!(view.cache.is_member("user:1"));
         
         // Delete the only thread
-        let thread_table = db.tables.get_mut("thread").unwrap();
-        thread_table.rows.remove("1");
-        thread_table.zset.remove("thread:1");
+        let mut thread_table = db.table("thread");
+        thread_table.apply_mutation(Operation::Delete, SmolStr::new("1"), SpookyValue::Null);
         
         // Process deletion
         let mut batch = BatchDeltas::new();
@@ -586,7 +585,7 @@ mod subquery_tests {
     /// TEST: Adding new thread with same author should NOT create user again
     #[test]
     fn test_add_thread_same_author_no_duplicate_user() {
-        let mut db = setup_db_with_threads_and_users(
+        let (mut db, _tmp) = setup_db_with_threads_and_users(
             &[("1", "Alice")],
             &[("1", "1", "Thread 1")],
         );
@@ -598,9 +597,8 @@ mod subquery_tests {
         view.process_batch(&BatchDeltas::new(), &db);
         
         // Add new thread with same author
-        let thread_table = db.tables.get_mut("thread").unwrap();
-        thread_table.rows.insert(SmolStr::new("2"), make_thread("2", "1", "Thread 2"));
-        thread_table.zset.insert(SmolStr::new("thread:2"), 1);
+        let mut thread_table = db.table("thread");
+        thread_table.apply_mutation(Operation::Create, SmolStr::new("2"), make_thread("2", "1", "Thread 2"));
         
         // Process addition
         let mut batch = BatchDeltas::new();
@@ -639,7 +637,7 @@ mod content_update_tests {
     /// TEST: Content update should emit Updated event, not Created
     #[test]
     fn test_content_update_emits_updated() {
-        let mut db = setup_db_with_users(&[("1", "Alice")]);
+        let (mut db, _tmp) = setup_db_with_users(&[("1", "Alice")]);
         let plan = simple_scan_plan("user");
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -647,8 +645,8 @@ mod content_update_tests {
         view.process_batch(&BatchDeltas::new(), &db);
         
         // Update user content
-        let user_table = db.tables.get_mut("user").unwrap();
-        user_table.rows.insert(SmolStr::new("1"), make_user("1", "Alice Updated"));
+        let mut user_table = db.table("user");
+        user_table.apply_mutation(Operation::Create, SmolStr::new("1"), make_user("1", "Alice Updated"));
         
         // Process content update (weight=0, content_changed=true)
         let delta = Delta {
@@ -676,7 +674,7 @@ mod content_update_tests {
     /// TEST: Content update for record not in view should be ignored
     #[test]
     fn test_content_update_for_non_member_ignored() {
-        let db = setup_db_with_users(&[("1", "Alice")]);
+        let (db, _tmp) = setup_db_with_users(&[("1", "Alice")]);
         let plan = filter_by_id_plan("user", "user:999"); // Filters to non-existent user
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -700,15 +698,19 @@ mod content_update_tests {
     /// TEST: Content update that makes record no longer match filter should remove it
     #[test]
     fn test_content_update_filter_mismatch_removes() {
-        let mut db = Database::new();
-        let user_table = db.ensure_table("user");
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::new(tmp.path().join("test.db")).unwrap();
+        let mut user_table = db.table("user");
         
         // Add user with status = "active"
         let mut user_data = FastMap::default();
         user_data.insert(SmolStr::new("id"), SpookyValue::Str(SmolStr::new("user:1")));
         user_data.insert(SmolStr::new("status"), SpookyValue::Str(SmolStr::new("active")));
-        user_table.rows.insert(SmolStr::new("1"), SpookyValue::Object(user_data));
-        user_table.zset.insert(SmolStr::new("user:1"), 1);
+        user_table.apply_mutation(
+            Operation::Create,
+            SmolStr::new("1"),
+            SpookyValue::Object(user_data)
+        );
         
         // View: WHERE status = "active"
         let plan = QueryPlan {
@@ -728,11 +730,11 @@ mod content_update_tests {
         assert!(view.cache.is_member("user:1"));
         
         // Update user to status = "inactive"
-        let user_table = db.tables.get_mut("user").unwrap();
+        let mut user_table = db.table("user");
         let mut updated_user = FastMap::default();
         updated_user.insert(SmolStr::new("id"), SpookyValue::Str(SmolStr::new("user:1")));
         updated_user.insert(SmolStr::new("status"), SpookyValue::Str(SmolStr::new("inactive")));
-        user_table.rows.insert(SmolStr::new("1"), SpookyValue::Object(updated_user));
+        user_table.apply_mutation(Operation::Create, SmolStr::new("1"), SpookyValue::Object(updated_user));
         
         // Process content update
         let delta = Delta {
@@ -809,7 +811,7 @@ mod deserialization_tests {
     /// TEST: View should work correctly after deserialization + initialization
     #[test]
     fn test_view_works_after_deserialize() {
-        let db = setup_db_with_users(&[("1", "Alice")]);
+        let (db, _tmp) = setup_db_with_users(&[("1", "Alice")]);
         let plan = simple_scan_plan("user");
         let mut original = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -825,9 +827,8 @@ mod deserialization_tests {
         
         // Add new record
         let mut db2 = db.clone();
-        let user_table = db2.tables.get_mut("user").unwrap();
-        user_table.rows.insert(SmolStr::new("2"), make_user("2", "Bob"));
-        user_table.zset.insert(SmolStr::new("user:2"), 1);
+        let mut user_table = db2.table("user");
+        user_table.apply_mutation(Operation::Create, SmolStr::new("2"), make_user("2", "Bob"));
         
         // Should process correctly
         let delta = Delta {
@@ -846,7 +847,7 @@ mod deserialization_tests {
     /// TEST: Cache should be preserved across serialization
     #[test]
     fn test_cache_preserved_across_serialization() {
-        let db = setup_db_with_users(&[("1", "Alice"), ("2", "Bob")]);
+        let (db, _tmp) = setup_db_with_users(&[("1", "Alice"), ("2", "Bob")]);
         let plan = simple_scan_plan("user");
         let mut original = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -874,7 +875,7 @@ mod first_run_tests {
     /// TEST: First run should emit all records as Created
     #[test]
     fn test_first_run_emits_all_created() {
-        let db = setup_db_with_users(&[("1", "Alice"), ("2", "Bob"), ("3", "Charlie")]);
+        let (db, _tmp) = setup_db_with_users(&[("1", "Alice"), ("2", "Bob"), ("3", "Charlie")]);
         let plan = simple_scan_plan("user");
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -892,7 +893,7 @@ mod first_run_tests {
     /// TEST: Second run with no changes should emit nothing
     #[test]
     fn test_second_run_no_changes() {
-        let db = setup_db_with_users(&[("1", "Alice")]);
+        let (db, _tmp) = setup_db_with_users(&[("1", "Alice")]);
         let plan = simple_scan_plan("user");
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -909,7 +910,7 @@ mod first_run_tests {
     /// TEST: First run with subqueries should emit unique records only
     #[test]
     fn test_first_run_subquery_unique_records() {
-        let db = setup_db_with_threads_and_users(
+        let (db, _tmp) = setup_db_with_threads_and_users(
             &[("1", "Alice")],
             &[
                 ("1", "1", "Thread 1"),
@@ -951,7 +952,7 @@ mod limit_tests {
     /// TEST: Limit should correctly restrict results
     #[test]
     fn test_limit_restricts_results() {
-        let db = setup_db_with_users(&[
+        let (db, _tmp) = setup_db_with_users(&[
             ("1", "Alice"),
             ("2", "Bob"),
             ("3", "Charlie"),
@@ -969,7 +970,7 @@ mod limit_tests {
     /// TEST: Adding record might push another out of limit
     #[test]
     fn test_limit_addition_may_remove_another() {
-        let mut db = setup_db_with_users(&[
+        let (mut db, _tmp) = setup_db_with_users(&[
             ("1", "Alice"),
             ("2", "Bob"),
         ]);
@@ -992,9 +993,8 @@ mod limit_tests {
         view.process_batch(&BatchDeltas::new(), &db);
         
         // Add user:0 (should be first in order)
-        let user_table = db.tables.get_mut("user").unwrap();
-        user_table.rows.insert(SmolStr::new("0"), make_user("0", "Zara"));
-        user_table.zset.insert(SmolStr::new("user:0"), 1);
+        let mut user_table = db.table("user");
+        user_table.apply_mutation(Operation::Create, SmolStr::new("0"), make_user("0", "Zara"));
         
         let mut batch = BatchDeltas::new();
         batch.membership.insert("user".to_string(), make_zset(&[("user:0", 1)]));
@@ -1033,7 +1033,7 @@ mod edge_event_tests {
     /// TEST: Complete lifecycle - Created, Updated, Deleted
     #[test]
     fn test_complete_lifecycle() {
-        let mut db = setup_db_with_users(&[("1", "Alice")]);
+        let (mut db, _tmp) = setup_db_with_users(&[("1", "Alice")]);
         let plan = simple_scan_plan("user");
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -1050,8 +1050,8 @@ mod edge_event_tests {
         assert_eq!(created, 1, "Step 1: Should emit Created");
         
         // 2. UPDATE
-        let user_table = db.tables.get_mut("user").unwrap();
-        user_table.rows.insert(SmolStr::new("1"), make_user("1", "Alice Updated"));
+        let mut user_table = db.table("user");
+        user_table.apply_mutation(Operation::Create, SmolStr::new("1"), make_user("1", "Alice Updated"));
         
         let update_delta = Delta {
             table: SmolStr::new("user"),
@@ -1083,7 +1083,7 @@ mod edge_event_tests {
     /// TEST: Multiple views should each get their own events
     #[test]
     fn test_multiple_views_independent_events() {
-        let db = setup_db_with_users(&[("1", "Alice")]);
+        let (db, _tmp) = setup_db_with_users(&[("1", "Alice")]);
         
         // View 1: All users
         let plan1 = simple_scan_plan("user");
@@ -1110,7 +1110,7 @@ mod edge_event_tests {
     /// TEST: Event IDs should match cache keys format
     #[test]
     fn test_event_ids_format() {
-        let db = setup_db_with_users(&[("1", "Alice")]);
+        let (db, _tmp) = setup_db_with_users(&[("1", "Alice")]);
         let plan = simple_scan_plan("user");
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -1173,14 +1173,15 @@ mod stress_tests {
     /// TEST: Large batch should handle correctly
     #[test]
     fn test_large_batch() {
-        let mut db = Database::new();
-        let user_table = db.ensure_table("user");
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::new(tmp.path().join("test.db")).unwrap();
+        // let user_table = db.ensure_table("user"); // Removed
+        let mut user_table = db.table("user");
         
         // Add 1000 users
         for i in 0..1000 {
             let id = format!("{}", i);
-            user_table.rows.insert(SmolStr::new(&id), make_user(&id, &format!("User {}", i)));
-            user_table.zset.insert(make_zset_key("user", &id), 1);
+            user_table.apply_mutation(Operation::Create, SmolStr::new(&id), make_user(&id, &format!("User {}", i)));
         }
         
         let plan = simple_scan_plan("user");
@@ -1198,7 +1199,8 @@ mod stress_tests {
     /// TEST: Empty database should handle correctly
     #[test]
     fn test_empty_database() {
-        let db = Database::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::new(tmp.path()).unwrap();
         let plan = simple_scan_plan("user");
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -1211,7 +1213,7 @@ mod stress_tests {
     /// TEST: Rapid add/delete cycles
     #[test]
     fn test_rapid_add_delete() {
-        let mut db = setup_db_with_users(&[("1", "Alice")]);
+        let (mut db, _tmp) = setup_db_with_users(&[("1", "Alice")]);
         let plan = simple_scan_plan("user");
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -1242,7 +1244,7 @@ mod stress_tests {
     /// TEST: Concurrent-style batch (add and delete same record)
     #[test]
     fn test_batch_add_and_delete_same_record() {
-        let db = setup_db_with_users(&[("1", "Alice")]);
+        let (db, _tmp) = setup_db_with_users(&[("1", "Alice")]);
         let plan = simple_scan_plan("user");
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -1281,8 +1283,9 @@ mod integration_tests {
     /// 5. view2 unregistered -> edges for view2 deleted
     #[test]
     fn test_your_exact_scenario() {
-        let mut db = Database::new();
-        db.ensure_table("user");
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::new(tmp.path().join("test.db")).unwrap();
+        // db.ensure_table("user"); // Not needed with db.table()
         
         // View 1: SELECT * FROM user WHERE id = 'user:1' LIMIT 1
         let plan1 = filter_by_id_plan("user", "user:1");
@@ -1293,9 +1296,8 @@ mod integration_tests {
         let mut view2 = View::new(plan2, None, Some(ViewResultFormat::Streaming));
         
         // === STEP 1: user:1 signs up ===
-        let user_table = db.tables.get_mut("user").unwrap();
-        user_table.rows.insert(SmolStr::new("1"), make_user("1", "User 1"));
-        user_table.zset.insert(SmolStr::new("user:1"), 1);
+        let mut user_table = db.table("user");
+        user_table.apply_mutation(Operation::Create, SmolStr::new("1"), make_user("1", "User 1"));
         
         let delta1 = Delta {
             table: SmolStr::new("user"),
@@ -1317,9 +1319,8 @@ mod integration_tests {
         assert_eq!(created2, 1, "view2: 1 edge created");
         
         // === STEP 2: user:2 signs up ===
-        let user_table = db.tables.get_mut("user").unwrap();
-        user_table.rows.insert(SmolStr::new("2"), make_user("2", "User 2"));
-        user_table.zset.insert(SmolStr::new("user:2"), 1);
+        let mut user_table = db.table("user");
+        user_table.apply_mutation(Operation::Create, SmolStr::new("2"), make_user("2", "User 2"));
         
         let delta2 = Delta {
             table: SmolStr::new("user"),
@@ -1346,8 +1347,8 @@ mod integration_tests {
         assert_eq!(created, 1, "view2: 1 edge created for user:2");
         
         // === STEP 3: user:1 updates ===
-        let user_table = db.tables.get_mut("user").unwrap();
-        user_table.rows.insert(SmolStr::new("1"), make_user("1", "User 1 Updated"));
+        let mut user_table = db.table("user");
+        user_table.apply_mutation(Operation::Create, SmolStr::new("1"), make_user("1", "User 1 Updated"));
         
         let delta3 = Delta {
             table: SmolStr::new("user"),
@@ -1369,9 +1370,8 @@ mod integration_tests {
         assert_eq!(updated2, 1, "view2: 1 edge updated");
         
         // === STEP 4: user:2 deletes ===
-        let user_table = db.tables.get_mut("user").unwrap();
-        user_table.rows.remove("2");
-        user_table.zset.remove("user:2");
+        let mut user_table = db.table("user");
+        user_table.apply_mutation(Operation::Delete, SmolStr::new("2"), SpookyValue::Null);
         
         let delta4 = Delta {
             table: SmolStr::new("user"),

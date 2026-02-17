@@ -1,15 +1,10 @@
-use super::types::{
-    make_zset_key, BatchDeltas, Delta, FastMap, FastHashSet, Operation, RowKey, SpookyValue, ZSet,
-};
+use super::types::{BatchDeltas, Delta, FastMap, FastHashSet, Operation, SpookyValue};
 use super::update::{ViewResultFormat, ViewUpdate};
 use super::view::{QueryPlan, View};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use smallvec::SmallVec;
 use smol_str::SmolStr;
-
-#[cfg(feature = "parallel")]
-use rayon::prelude::*;
 
 // --- Modules ---
 
@@ -100,194 +95,43 @@ pub mod dto {
 use self::dto::*;
 use self::types::*;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Table {
-    pub name: TableName,
-    pub zset: ZSet,
-    pub rows: FastMap<RowKey, SpookyValue>,
-}
+use crate::db_mod::db::Database;
 
-impl Table {
-    pub fn new(name: TableName) -> Self {
-        Self {
-            name,
-            zset: FastMap::default(),
-            rows: FastMap::default(),
-        }
-    }
+// ... (keep modules)
 
-    /// Look up version from record's spooky_rv field
-    pub fn get_record_version(&self, id: &str) -> Option<i64> {
-        let sv = self.rows.get(id)?;
-        let version = sv.get("spooky_rv")?.as_f64()?;
-        Some(version as i64)
-    }
+// --- Core Implementation ---
 
-    pub fn reserve(&mut self, additional: usize) {
-        self.rows.reserve(additional);
-        self.zset.reserve(additional);
-    }
+// use self::dto::*; // unused
+// use self::types::*; // unused
 
-    pub fn apply_mutation(
-        &mut self,
-        op: Operation,
-        key: SmolStr,
-        data: SpookyValue,
-    ) -> (SmolStr, i64) {
-        let weight = op.weight();
-        match op {
-            Operation::Create | Operation::Update => {
-                self.rows.insert(key.clone(), data);
-            }
-            Operation::Delete => {
-                self.rows.remove(&key);
-            }
-        }
-
-        let zset_key = make_zset_key(&self.name, &key);
-        if weight != 0 {
-            let entry = self.zset.entry(zset_key.clone()).or_insert(0);
-            *entry += weight;
-            if *entry == 0 {
-                self.zset.remove(&zset_key);
-            }
-        }
-        (zset_key, weight)
-    }
-
-    pub fn apply_delta(&mut self, delta: &ZSet) {
-        for (key, weight) in delta {
-            tracing::debug!(target: "ssp::circuit::apply_delta", "key: {}", key);
-            let entry = self.zset.entry(key.clone()).or_insert(0);
-            *entry += weight;
-            if *entry == 0 {
-                self.zset.remove(key);
-            }
-        }
-    }
-}
-
-//cargo test -p ssp --lib engine::circuit::table::apply_mutation
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    fn create_record(tb_name: &str, record_id: &str) -> LoadRecord {
-        LoadRecord::new(
-            tb_name,
-            record_id,
-            json!({ "status": "spooky", "level": 10, "_spooky_version": 3 }).into(),
-        )
-    }
-
-    fn common() -> (SmolStr, i64, Table) {
-        let record_user1 = create_record("user", "user:23lk4j233jd");
-        let mut tb_user = Table::new(SmolStr::from("user"));
-        let (zset_key, weight) = tb_user.apply_mutation(
-            Operation::Create,
-            SmolStr::from("user:23lk4j233jd"),
-            record_user1.data,
-        );
-        return (zset_key, weight, tb_user);
-    }
-
-    #[test]
-    fn apply_mutation_check() {
-        let (zset_key, weight, _) = common();
-
-        assert_eq!(zset_key, SmolStr::from("user:23lk4j233jd"));
-        assert_eq!(weight, 1 as i64);
-    }
-
-    #[test]
-    fn get_version() {
-        let record_user1 = LoadRecord::new(
-            "user",
-            "user:23lk4j233jd",
-            json!({ "status": "spooky", "level": 10, "spooky_rv": 3 }).into(),
-        );
-        let mut tb_user = Table::new(SmolStr::from("user"));
-        let (zset_key, weight) = tb_user.apply_mutation(
-            Operation::Create,
-            SmolStr::from("23lk4j233jd"),
-            record_user1.data,
-        );
-
-        let version = tb_user.get_record_version("23lk4j233jd");
-
-        assert_eq!(zset_key, SmolStr::from("user:23lk4j233jd"));
-        assert_eq!(weight, 1 as i64);
-        assert_eq!(version, Some(3));
-    }
-
-    #[test]
-    fn apply_delta_check() {
-        let mut tb = Table::new(SmolStr::new("user"));
-        let mut zset: ZSet = FastMap::default();
-        zset.entry(SmolStr::new("user:23lk4j233jd")).or_insert(1);
-        zset.entry(SmolStr::new("user:ssdf8sdf")).or_insert(1);
-        tb.apply_delta(&zset);
-
-        let zset_value = tb.zset.get("user:23lk4j233jd").unwrap();
-        assert_eq!(*zset_value, 1 as i64);
-        let zset_value = tb.zset.get("user:ssdf8sdf").unwrap();
-        assert_eq!(*zset_value, 1 as i64);
-        let mut delta_zset: ZSet = FastMap::default();
-        delta_zset.insert(SmolStr::new("user:ssdf8sdf"), 1);
-        tb.apply_delta(&delta_zset);
-        let zset_value = tb.zset.get("user:ssdf8sdf").unwrap();
-        assert_eq!(*zset_value, 2 as i64);
-        let mut delta_zset: ZSet = FastMap::default();
-        delta_zset.insert(SmolStr::new("user:ssdf8sdf"), -2);
-        tb.apply_delta(&delta_zset);
-
-        let zset_value = tb.zset.get("user:ssdf8sdf");
-        assert!(zset_value.is_none());
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
-pub struct Database {
-    // FIX: Reverted keys to String to maintain compatibility with view.rs lookups.
-    // Optimization (SmolStr) is kept for Table internals and DTOs, but Database
-    // map must accept &String lookups from legacy code.
-    pub tables: FastMap<String, Table>,
-}
-
-impl Database {
-    pub fn new() -> Self {
-        Self {
-            tables: FastMap::default(),
-        }
-    }
-
-    pub fn ensure_table(&mut self, name: &str) -> &mut Table {
-        self.tables
-            .entry(name.to_string())
-            .or_insert_with(|| Table::new(SmolStr::new(name)))
-    }
-
-    pub fn get_table(&self, name: &str) -> Option<&Table> {
-        self.tables.get(name)
-    }
+pub fn default_db() -> Database {
+    // Default to ./spooky.db for now
+    Database::new("spooky.db").expect("Failed to open default database")
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Circuit {
+    #[serde(skip, default = "default_db")]
     pub db: Database,
     // Using Vec<View> + manual swap_remove for O(1) removal without external crate deps
     pub views: Vec<View>,
-    #[serde(skip, default)]
+    #[serde(skip)]
     pub dependency_list: FastMap<TableName, DependencyList>,
+    #[serde(skip)]
+    pub _temp_dir: Option<std::sync::Arc<tempfile::TempDir>>,
 }
 
 impl Circuit {
     pub fn new() -> Self {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let db_path = temp_dir.path().join("spooky.db");
+        let db = Database::new(&db_path).expect("failed to create temp db");
+        
         Self {
-            db: Database::new(),
+            db,
             views: Vec::new(),
             dependency_list: FastMap::default(),
+            _temp_dir: Some(std::sync::Arc::new(temp_dir)),
         }
     }
 
@@ -330,7 +174,7 @@ impl Circuit {
     pub fn ingest_single(&mut self, entrie: BatchEntry) -> ViewUpdateList {
         let op = entrie.op;
         let key = SmolStr::new(entrie.id);
-        let (zset_key, _weight) = self.db.ensure_table(entrie.table.as_str()).apply_mutation(
+        let (zset_key, _weight) = self.db.table(entrie.table.as_str()).apply_mutation(
             op,
             key.clone(),
             entrie.data,
@@ -397,106 +241,52 @@ impl Circuit {
             return Vec::new();
         }
 
-        let mut by_table: FastMap<TableName, Vec<BatchEntry>> = FastMap::default();
-        for entry in entries {
-            by_table.entry(entry.table.clone()).or_default().push(entry);
-        }
+        // Prepare batch for DB
+        let db_ops: Vec<_> = entries
+            .into_iter()
+            .map(|e| (e.table, e.op, SmolStr::new(e.id), e.data))
+            .collect();
 
+        // Apply batch
+        let results = self
+            .db
+            .apply_batch(db_ops)
+            .expect("batch application failed");
+
+        // Process results to build deltas
         let mut batch_deltas = BatchDeltas::new();
-        let mut changed_tables: Vec<TableName> = Vec::with_capacity(by_table.len());
+        let mut changed_tables_set = FastHashSet::default();
 
-        // Parallel Storage Phase
-        #[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
-        {
-            // P2.1: Ensure tables exist sequentially
-            for name in by_table.keys() {
-                self.db.ensure_table(name.as_str());
+        for (table, zset_key, weight, content_changed) in results {
+            let table_str = table.to_string();
+            if weight != 0 {
+                *batch_deltas
+                    .membership
+                    .entry(table_str.clone())
+                    .or_default()
+                    .entry(zset_key.clone())
+                    .or_insert(0) += weight;
             }
-
-            // P2.2: Parallel Delta Computation
-            let results: Vec<(String, ZSet, FastHashSet<SmolStr>)> = self
-                .db
-                .tables
-                .par_iter_mut()
-                .filter_map(|(name, table)| {
-                    let name_smol = SmolStr::new(name);
-                    let entries = by_table.get(&name_smol)?;
-
-                    let mut delta = ZSet::default();
-                    let mut content_updates: FastHashSet<SmolStr> = FastHashSet::default();
-
-                    for entry in entries {
-                        let (zset_key, weight) =
-                            table.apply_mutation(entry.op, entry.id.clone(), entry.data.clone());
-                        tracing::debug!(target: "ssp::circut::ingest_batch", "entry id: {}, zset: {}", entry.id, zset_key);
-                        if weight != 0 {
-                            *delta.entry(zset_key.clone()).or_insert(0) += weight;
-                        }
-                        if entry.op.changes_content() {
-                            content_updates.insert(zset_key);
-                        }
-                    }
-                    delta.retain(|_, w| *w != 0);
-
-                    if !delta.is_empty() || !content_updates.is_empty() {
-                        Some((name.clone(), delta, content_updates))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            for (name_str, delta, content_updates) in results {
-                let smol_name = SmolStr::new(&name_str);
-                if !delta.is_empty() {
-                    batch_deltas.membership.insert(name_str.clone(), delta);
-                }
-                if !content_updates.is_empty() {
-                    batch_deltas
-                        .content_updates
-                        .insert(name_str, content_updates);
-                }
-                changed_tables.push(smol_name);
+            if content_changed {
+                batch_deltas
+                    .content_updates
+                    .entry(table_str.clone())
+                    .or_default()
+                    .insert(zset_key);
             }
+            changed_tables_set.insert(table);
         }
 
-        // Sequential Fallback
-        #[cfg(any(target_arch = "wasm32", not(feature = "parallel")))]
-        {
-            for (table_name, table_entries) in by_table {
-                let tb = self.db.ensure_table(table_name.as_str());
+        // Clean up empty deltas
+        batch_deltas.membership.retain(|_, delta| {
+            delta.retain(|_, w| *w != 0);
+            !delta.is_empty()
+        });
+        // Also clean up empty content_updates if any (FastHashSet doesn't need pruning values, just check empty)
+         batch_deltas.content_updates.retain(|_, updates| !updates.is_empty());
 
-                let mut has_changes = false;
-                for entry in table_entries {
-                    let (zset_key, weight) = tb.apply_mutation(entry.op, entry.id, entry.data);
 
-                    if weight != 0 {
-                        let delta = batch_deltas
-                            .membership
-                            .entry(table_name.to_string())
-                            .or_default();
-                        *delta.entry(zset_key.clone()).or_insert(0) += weight;
-                        has_changes = true;
-                    }
-
-                    if entry.op.changes_content() {
-                        batch_deltas
-                            .content_updates
-                            .entry(table_name.to_string())
-                            .or_default()
-                            .insert(zset_key);
-                        has_changes = true;
-                    }
-                }
-
-                if has_changes {
-                    changed_tables.push(table_name);
-                }
-            }
-
-            // Clean up empty deltas
-            batch_deltas.membership.retain(|_, delta| !delta.is_empty());
-        }
+        let changed_tables: Vec<TableName> = changed_tables_set.into_iter().collect();
 
         self.propagate_deltas(&batch_deltas, &changed_tables)
     }
@@ -504,12 +294,14 @@ impl Circuit {
     // --- Ingestion API 3: Init Load ---
 
     pub fn init_load(&mut self, records: impl IntoIterator<Item = LoadRecord>) {
-        for record in records {
-            let tb = self.db.ensure_table(record.table.as_str());
-            tracing::debug!(target: "ssp::circuit::init_load", "table: {}, id: {}", record.table, record.id);
-            let zset_key = make_zset_key(&record.table, &record.id);
-            tb.rows.insert(record.id, record.data);
-            tb.zset.insert(zset_key, 1);
+        let db_ops: Vec<_> = records
+            .into_iter()
+            .map(|r| (r.table, Operation::Create, r.id, r.data))
+            .collect();
+
+        if !db_ops.is_empty() {
+            tracing::debug!(target: "ssp::circuit::init_load", count = db_ops.len(), "Loading records");
+            self.db.apply_batch(db_ops).expect("init_load failed");
         }
     }
 
@@ -517,15 +309,18 @@ impl Circuit {
         &mut self,
         by_table: impl IntoIterator<Item = (TableName, Vec<(SmolStr, SpookyValue)>)>,
     ) {
+        let mut db_ops = Vec::new();
         for (table_name, records) in by_table {
-            let tb = self.db.ensure_table(table_name.as_str());
-            tb.reserve(records.len());
+             // We can reserve here if we want, but apply_batch handles it.
+             // redb doesn't need reserve.
             for (id, data) in records {
-                tracing::debug!(target: "ssp::circuit::init_load_grouped", "table: {}, id: {}", table_name, id);
-                let zset_key = make_zset_key(&table_name, &id);
-                tb.rows.insert(id, data);
-                tb.zset.insert(zset_key, 1);
+                 db_ops.push((table_name.clone(), Operation::Create, id, data));
             }
+        }
+        
+        if !db_ops.is_empty() {
+             tracing::debug!(target: "ssp::circuit::init_load_grouped", count = db_ops.len(), "Loading grouped records");
+             self.db.apply_batch(db_ops).expect("init_load_grouped failed");
         }
     }
 

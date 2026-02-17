@@ -1,19 +1,22 @@
 use smol_str::{self, SmolStr};
 
+#[allow(dead_code)]
 enum FieldType {
     Hot,
     Filter,
     Order,
 }
 
+#[allow(dead_code)]
 struct SpookyFieldSchema {
-    tableName: SmolStr,
-    fieldName: SmolStr,
+    table_name: SmolStr,
+    field_name: SmolStr,
     value: Vec<u8>,
 }
 
+#[allow(dead_code)]
 struct SpookyDBSchema {
-    hotFields: Vec<SpookyFieldSchema>,
-    filterFields: Vec<SpookyFieldSchema>,
-    orderFields: Vec<SpookyFieldSchema>,
+    hot_fields: Vec<SpookyFieldSchema>,
+    filter_fields: Vec<SpookyFieldSchema>,
+    order_fields: Vec<SpookyFieldSchema>,
 }

@@ -84,10 +84,35 @@ pub trait SpookyReadable {
         if n == 0 {
             return Err(RecordError::FieldNotFound);
         }
+        
+        // Helper to check key and adjust entry
+        let check_entry = |idx: usize, mut meta: IndexEntry| -> Result<(usize, IndexEntry), RecordError> {
+             // Read Key Length
+             let buf = self.data_buf();
+             if meta.data_offset + 2 > buf.len() { return Err(RecordError::InvalidBuffer); }
+             let key_len = u16::from_le_bytes([buf[meta.data_offset], buf[meta.data_offset+1]]) as usize;
+             
+             // Check Key Bytes
+             let key_start = meta.data_offset + 2;
+             if key_start + key_len > buf.len() { return Err(RecordError::InvalidBuffer); }
+             
+             let key_bytes = &buf[key_start..key_start + key_len];
+             if key_bytes == name.as_bytes() {
+                 // Match! Adjust entry to point to value
+                 meta.data_offset += 2 + key_len;
+                 meta.data_len -= 2 + key_len;
+                 Ok((idx, meta))
+             } else {
+                 Err(RecordError::FieldNotFound) 
+             }
+        };
+
         if n <= 4 {
-            return self.linear_hash_search(n, hash);
+            let (idx, meta) = self.linear_hash_search(n, hash)?;
+            return check_entry(idx, meta);
         }
-        return self.binary_hash_search(n, hash);
+        let (idx, meta) = self.binary_hash_search(n, hash)?;
+        return check_entry(idx, meta);
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -195,10 +220,43 @@ pub trait SpookyReadable {
         }
     }
 
-    /// Convert to SpookyValue (iterator-based full conversion placeholder).
-    /// Note: Keys are not recoverable from hashes in the current format.
+    /// Convert to SpookyValue (iterator-based full conversion).
     fn to_value(&self) -> SpookyValue {
-        SpookyValue::Null // Placeholder as per parity plan constraint
+        let mut map = crate::types::FastMap::default();
+        let field_count = self.field_count();
+        let buf = self.data_buf();
+
+        for i in 0..field_count {
+            if let Some(meta) = self.read_index(i) {
+                // Read Key
+                let key_len_bytes: [u8; 2] = match buf[meta.data_offset..meta.data_offset + 2].try_into() {
+                    Ok(b) => b,
+                    Err(_) => continue,
+                };
+                let key_len = u16::from_le_bytes(key_len_bytes) as usize;
+                let key_offset = meta.data_offset + 2;
+                let key_str = match std::str::from_utf8(&buf[key_offset..key_offset + key_len]) {
+                    Ok(s) => smol_str::SmolStr::new(s),
+                    Err(_) => continue,
+                };
+
+                // Adjust for Value
+                let value_offset = key_offset + key_len;
+                let value_len = meta.data_len - (2 + key_len);
+                let value_tag = meta.type_tag;
+
+                let field_ref = FieldRef {
+                    name_hash: meta.name_hash,
+                    type_tag: value_tag,
+                    data: &buf[value_offset..value_offset + value_len],
+                };
+
+                if let Some(val) = crate::deserialization::decode_field::<SpookyValue>(field_ref) {
+                    map.insert(key_str, val);
+                }
+            }
+        }
+        SpookyValue::Object(map)
     }
 
     /// Check if a field exists.

@@ -64,8 +64,8 @@ fn transform_single_update(update: ViewUpdate, circuit: &Circuit) -> WasmViewUpd
                     let table_name = rec.id.split(':').next().unwrap_or("");
                     let version = circuit
                         .db
-                        .get_table(table_name)
-                        .and_then(|t| t.get_record_version(&rec.id))
+                        .table(table_name)
+                        .get_record_version(&rec.id)
                         .unwrap_or(1);
 
                     WasmDeltaRecord {

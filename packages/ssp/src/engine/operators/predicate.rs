@@ -1,4 +1,4 @@
-use crate::engine::circuit::Database;
+use crate::db_mod::db::Database;
 use crate::engine::eval::{compare_spooky_values, normalize_record_id, resolve_nested_value};
 use crate::engine::types::Path;
 use crate::engine::types::SpookyValue;
@@ -66,7 +66,7 @@ pub fn check_predicate(
                 return key.starts_with(prefix);
             }
             if let Some(row_val) = view.get_row_value(key, db) {
-                if let Some(val) = resolve_nested_value(Some(row_val), field) {
+                if let Some(val) = resolve_nested_value(Some(&row_val), field) {
                     if let SpookyValue::Str(s) = val {
                         return s.starts_with(prefix);
                     }
@@ -91,7 +91,7 @@ pub fn check_predicate(
             // The previous optimization incorrectly assumed stripped ID == Row ID.
             let actual_val_opt = view
                 .get_row_value(key, db)
-                .and_then(|r| resolve_nested_value(Some(r), field).cloned());
+                .and_then(|r| resolve_nested_value(Some(&r), field).cloned());
 
             if let Some(actual_val) = actual_val_opt {
                 let ord = compare_spooky_values(Some(&actual_val), Some(&target_val));
@@ -114,11 +114,12 @@ pub fn check_predicate(
 #[cfg(test)]
 mod check_predicate_tests {
     use super::*;
-    use crate::engine::circuit::Database;
+    use crate::db_mod::db::Database;
     use crate::engine::operators::{Operator, Predicate};
     use crate::engine::types::{FastMap, Path, SpookyValue};
     use crate::engine::view::{QueryPlan, View};
     use smol_str::SmolStr;
+    use tempfile::NamedTempFile;
 
     // ============================================================================
     // Helper Functions
@@ -137,7 +138,29 @@ mod check_predicate_tests {
 
     /// Create an empty database
     fn create_empty_db() -> Database {
-        Database::new()
+        let tmp = NamedTempFile::new().unwrap();
+        // Leak the tempfile path or keep it alive? 
+        // Database owns the file/handle? RedbDatabase::create takes path.
+        // If NamedTempFile drops, file is deleted.
+        // We can't return NamedTempFile easily without changing signature.
+        // But Database::new opens it.
+        // Once opened, redb holds lock?
+        // Actually, we can just `persist` the tempfile to keep it around?
+        // Or better, change signature to return `(Database, NamedTempFile)`.
+        // But usage sites expect just `Database`.
+        // If we persist, we pollute /tmp.
+        // Ideally we return a wrapper.
+        // For now, let's just leak/persist to avoid complexity or change signature.
+        // Actually, `redb` keeps file open. `NamedTempFile` deletes on drop.
+        // We can use `keep` to not delete on drop, OR change signature.
+        // Let's change signature to make it clean.
+        // But that requires changing all calls `let db = create_empty_db()`.
+        // There are many calls.
+        
+        // Hack: persist it.
+        let (_, path) = tmp.keep().unwrap();
+        // convert file to path...
+        Database::new(&path).unwrap()
     }
 
     /// Create a SpookyValue object from key-value pairs
@@ -156,7 +179,7 @@ mod check_predicate_tests {
 
     /// Shorthand for SpookyValue::Number
     fn spooky_num(n: f64) -> SpookyValue {
-        SpookyValue::Number(n)
+        SpookyValue::from(n)
     }
 
     /// Shorthand for SpookyValue::Bool
@@ -166,10 +189,12 @@ mod check_predicate_tests {
 
     /// Insert a record into the database and return the key
     fn insert_record(db: &mut Database, table: &str, id: &str, data: SpookyValue) -> SmolStr {
-        let key = SmolStr::new(format!("{}:{}", table, id));
-        let tb = db.ensure_table(table);
-        tb.rows.insert(key.clone(), data);
-        tb.zset.insert(key.clone(), 1);
+        let mut tb = db.ensure_table(table);
+        let (key, _) = tb.apply_mutation(
+            crate::types::Operation::Create,
+            SmolStr::new(id),
+            data
+        );
         key
     }
 

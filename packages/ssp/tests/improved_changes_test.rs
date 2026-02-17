@@ -44,25 +44,20 @@ mod operation_tests {
        assert!(Operation::from_str("INVALID_OP").is_none());
     }
 
-    fn matches_op(input: &str, _expected: &str) -> bool {
-        // Helper to verify operation parsing works
-        let mut circuit = setup();
-        let op = match Operation::from_str(input) {
-            Some(op) => op,
-            None => return false,
-        };
-        
-        // Use prefix underscore to suppress unused variable warning
-        let _result = circuit.ingest_batch(
-            vec![BatchEntry::new(
-                "test",
-                op,
-                "test:1",
-                json!({"id": "test:1"}).into()
-            )],
-        );
-        // If parsing worked, the record was ingested
-        circuit.db.tables.contains_key("test")
+    fn matches_op(input: &str, expected: &str) -> bool {
+        match Operation::from_str(input) {
+            Some(op) => {
+                // Verify the parsed op matches expected enum variant name if possible, 
+                // but since we passed string, we just check if it parsed.
+                // The test calls matches_op("CREATE", "CREATE")
+                // We can't easily check if op matches expected string without strict mapping,
+                // but checking is_some() is sufficient for "it parses".
+                // To be stricter:
+                let op_str = format!("{:?}", op).to_uppercase();
+                op_str == expected
+            },
+            None => false,
+        }
     }
 
     /// Test operation weight calculation
@@ -81,16 +76,16 @@ mod operation_tests {
 
         // CREATE adds record (weight +1)
         ingest(&mut circuit, "items", "CREATE", "items:1", json!({"id": "items:1"}));
-        assert!(circuit.db.tables.get("items").unwrap().zset.contains_key("items:1"));
+        assert!(circuit.db.table("items").get_zset_weight("items:1") != 0);
 
         // DELETE removes record (weight -1)
         ingest(&mut circuit, "items", "DELETE", "items:1", json!({}));
-        assert!(!circuit.db.tables.get("items").unwrap().zset.contains_key("items:1"));
+        assert!(circuit.db.table("items").get_zset_weight("items:1") == 0);
 
         // UPDATE keeps record (weight +1, replaces existing)
         ingest(&mut circuit, "items", "CREATE", "items:2", json!({"id": "items:2", "val": 1}));
         ingest(&mut circuit, "items", "UPDATE", "items:2", json!({"id": "items:2", "val": 2}));
-        assert!(circuit.db.tables.get("items").unwrap().rows.contains_key("items:2"));
+        assert!(circuit.db.table("items").contains_key("items:2"));
     }
 }
 
@@ -126,13 +121,13 @@ mod mixed_ops_same_table_tests {
         let updates = circuit.ingest_batch(batch);
 
         // Verify final state
-        let users_table = circuit.db.tables.get("users").unwrap();
+        let users_table = circuit.db.table("users");
         
         // user:1 should exist with updated name
-        assert!(users_table.rows.contains_key("users:1"), "user:1 should exist");
+        assert!(users_table.contains_key("users:1"), "user:1 should exist");
         
         // user:2 should be deleted
-        assert!(!users_table.rows.contains_key("users:2"), "user:2 should be deleted");
+        assert!(!users_table.contains_key("users:2"), "user:2 should be deleted");
 
         // View should have been updated
         assert!(!updates.is_empty(), "Should have view updates");
@@ -166,13 +161,18 @@ mod mixed_ops_same_table_tests {
         circuit.ingest_batch(batch);
 
         // Final value should be counter: 3 (last update wins)
-        let items = circuit.db.tables.get("items").unwrap();
-        let item = items.rows.get("items:1").unwrap();
+        let items = circuit.db.table("items");
+        let item = items.get("items:1").unwrap();
         
         // SpookyValue comparison - check the counter field
         if let SpookyValue::Object(map) = item {
             if let Some(SpookyValue::Number(n)) = map.get("counter") {
-                assert_eq!(*n as i32, 3, "Counter should be 3 after all updates");
+                let val = match n {
+                    ssp::db_mod::spooky_value::SpookyNumber::I64(i) => *i as i32,
+                    ssp::db_mod::spooky_value::SpookyNumber::U64(u) => *u as i32,
+                    ssp::db_mod::spooky_value::SpookyNumber::F64(f) => *f as i32,
+                };
+                assert_eq!(val, 3, "Counter should be 3 after all updates");
             }
         }
 
@@ -201,10 +201,8 @@ mod mixed_ops_same_table_tests {
         circuit.ingest_batch(batch);
 
         // Record should not exist (weight cancels out: +1 - 1 = 0)
-        let table = circuit.db.tables.get("ephemeral");
-        if let Some(t) = table {
-            assert!(!t.zset.contains_key("ephemeral:1"), "Record should not exist in ZSet");
-        }
+        let table = circuit.db.table("ephemeral");
+        assert!(table.get_zset_weight("ephemeral:1") == 0, "Record should not exist in ZSet");
 
         println!("[TEST] ✓ CREATE + DELETE in same batch correctly cancels out");
     }
@@ -244,9 +242,9 @@ mod mixed_tables_tests {
         let updates = circuit.ingest_batch(batch);
 
         // Verify all tables have correct data
-        assert!(circuit.db.tables.get("users").unwrap().rows.len() == 2);
-        assert!(circuit.db.tables.get("posts").unwrap().rows.len() == 1);
-        assert!(circuit.db.tables.get("comments").unwrap().rows.len() == 1);
+        assert!(circuit.db.table("users").len() == 2);
+        assert!(circuit.db.table("posts").len() == 1);
+        assert!(circuit.db.table("comments").len() == 1);
 
         // Should have updates for all three views
         assert!(updates.len() >= 3, "Should have updates for all affected views");
@@ -328,10 +326,10 @@ mod mixed_tables_tests {
         let _updates = circuit.ingest_batch(batch);
 
         // Both books should exist
-        assert!(circuit.db.tables.get("books").unwrap().rows.len() == 2);
+        assert!(circuit.db.table("books").len() == 2);
         
         // Author should have updated name
-        let author = circuit.db.tables.get("authors").unwrap().rows.get("authors:1").unwrap();
+        let author = circuit.db.table("authors").get("authors:1").unwrap();
         if let SpookyValue::Object(map) = author {
             if let Some(SpookyValue::Str(name)) = map.get("name") {
                 assert_eq!(name.as_str(), "Famous Writer");
@@ -451,11 +449,11 @@ mod optimization_tests {
         // Batch should generally be faster (allows amortization)
         // Note: This might not always hold for small batches due to overhead
         assert!(
-            circuit1.db.tables.get("perf").unwrap().rows.len() == NUM_RECORDS,
+            circuit1.db.table("perf").len() == NUM_RECORDS,
             "Individual ingest should have all records"
         );
         assert!(
-            circuit2.db.tables.get("perf").unwrap().rows.len() == NUM_RECORDS,
+            circuit2.db.table("perf").len() == NUM_RECORDS,
             "Batch ingest should have all records"
         );
 
@@ -554,10 +552,8 @@ mod edge_case_tests {
         }
 
         // Record should not exist
-        let table = circuit.db.tables.get("cycle");
-        if let Some(t) = table {
-            assert!(!t.zset.contains_key("cycle:1"));
-        }
+        let table = circuit.db.table("cycle");
+        assert!(table.get_zset_weight("cycle:1") == 0);
 
         println!("[TEST] ✓ Rapid create/delete cycles handled correctly");
     }
@@ -586,7 +582,7 @@ mod edge_case_tests {
 
         // All records should be ingested
         assert_eq!(
-            circuit.db.tables.get("large").unwrap().rows.len(),
+            circuit.db.table("large").len(),
             BATCH_SIZE
         );
 
@@ -615,7 +611,7 @@ mod edge_case_tests {
 
         circuit.ingest_batch(batch);
 
-        assert_eq!(circuit.db.tables.get("unicode").unwrap().rows.len(), 3);
+        assert_eq!(circuit.db.table("unicode").len(), 3);
 
         println!("[TEST] ✓ Unicode and special characters handled correctly");
     }

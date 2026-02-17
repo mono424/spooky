@@ -14,7 +14,9 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use ssp::{
-    engine::circuit::{Circuit, Database, dto::BatchEntry},
+    engine::circuit::Circuit,
+    db_mod::db::Database,
+    engine::circuit::dto::BatchEntry,
     engine::types::Operation,
     engine::update::{DeltaEvent, StreamingUpdate, ViewResultFormat, ViewUpdate},
 };
@@ -918,8 +920,8 @@ pub async fn update_all_edges<C: Connection>(
             let table_name = &record_id_parsed.unwrap().table;
 
             let record_verion = circuit_db
-                .get_table(table_name)
-                .and_then(|t| t.get_record_version(&record.id));
+                .table(table_name)
+                .get_record_version(&record.id);
             println!("Record version: {:?}", record_verion.unwrap());
 
             tracing::debug!(

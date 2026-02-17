@@ -305,26 +305,33 @@ pub fn prepare_buf<V: RecordSerialize>(
     // Collect references & hashes to avoid unnecessary data copies.
     // // Stack-allocated sort buffer — no heap allocation for ≤32 fields
     // //TODO: has to be check if this could be panic in normal sitations
-    let mut entries: ArrayVec<(&V, u64), 32> = ArrayVec::new();
+    let mut entries: ArrayVec<(&SmolStr, &V, u64), 32> = ArrayVec::new();
 
     for (key, value) in map.iter() {
         // Compute the hash for the key
         let hash = xxh64(key.as_bytes(), 0);
         entries
-            .try_push((value, hash))
+            .try_push((key, value, hash))
             .map_err(|_| RecordError::TooManyFields)?;
     }
 
     // Sort for O(log n) lookup in the reader
-    entries.sort_unstable_by_key(|(_, hash)| *hash);
+    entries.sort_unstable_by_key(|(_, _, hash)| *hash);
 
     // Write header (field count)
     buf[0..4].copy_from_slice(&(field_count as u32).to_le_bytes());
 
     // 4. Loop & Write
-    for (i, (value, hash)) in entries.iter().enumerate() {
+    for (i, (key, value, hash)) in entries.iter().enumerate() {
         // A. Append data to value area
         let data_offset = buf.len();
+        
+        // Write Key (Length + Bytes)
+        let key_bytes = key.as_bytes();
+        let key_len = key_bytes.len() as u16;
+        buf.extend_from_slice(&key_len.to_le_bytes());
+        buf.extend_from_slice(key_bytes);
+
         let tag = write_field_into(buf, value)?;
         let data_length = buf.len() - data_offset;
 

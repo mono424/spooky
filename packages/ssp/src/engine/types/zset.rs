@@ -1,11 +1,9 @@
-use rustc_hash::FxHasher;
 use smol_str::SmolStr;
-use std::hash::BuildHasherDefault;
 
 pub type Weight = i64;
 pub type RowKey = SmolStr;
-pub type FastMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<FxHasher>>;
-pub type FastHashSet<T> = std::collections::HashSet<T, BuildHasherDefault<FxHasher>>;
+pub type FastMap<K, V> = std::collections::BTreeMap<K, V>;
+pub type FastHashSet<T> = std::collections::BTreeSet<T>;
 pub type ZSet = FastMap<RowKey, Weight>;
 pub type VersionMap = FastMap<SmolStr, u64>;
 

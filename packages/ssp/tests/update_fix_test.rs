@@ -1,9 +1,11 @@
 use ssp::engine::circuit::dto::{BatchEntry, LoadRecord};
-use ssp::engine::circuit::{Circuit, Database};
+use ssp::db_mod::db::Database;
+use ssp::engine::circuit::Circuit;
 use ssp::engine::operators::{Operator, Predicate, Projection};
 use ssp::engine::types::{Delta, Path};
 use ssp::engine::update::{DeltaEvent, ViewResultFormat, ViewUpdate, compute_flat_hash};
 use ssp::engine::view::{QueryPlan, View};
+use ssp::db_mod::types::Operation;
 use serde_json::json;
 use smol_str::SmolStr;
 use std::time::Instant;
@@ -203,14 +205,12 @@ fn test_fast_path_single_update() {
     view.last_hash = "initial_hash".to_string();
     
     // Setup database
-    let mut db = Database::new();
-    let tb = db.ensure_table("users");
-    tb.rows.insert("users:1".into(), json!({"name": "Alice"}).into());
-    tb.rows.insert("users:2".into(), json!({"name": "Bob"}).into());
-    tb.rows.insert("users:3".into(), json!({"name": "Carol"}).into());
-    tb.zset.insert("users:1".into(), 1);
-    tb.zset.insert("users:2".into(), 1);
-    tb.zset.insert("users:3".into(), 1);
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::new(tmp.path().join("test.db")).unwrap();
+    let mut tb = db.table("users");
+    tb.apply_mutation(Operation::Create, "users:1".into(), json!({"name": "Alice"}).into());
+    tb.apply_mutation(Operation::Create, "users:2".into(), json!({"name": "Bob"}).into());
+    tb.apply_mutation(Operation::Create, "users:3".into(), json!({"name": "Carol"}).into());
     
     // Process content update (weight=0, content_changed=true)
     let delta = Delta {

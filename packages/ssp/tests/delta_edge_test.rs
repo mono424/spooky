@@ -13,16 +13,17 @@
 //!
 //! Run with: cargo test --package ssp --lib -- engine::view::query_delta_tests --nocapture
 
-use ssp::engine::circuit::Database;
+use ssp::db_mod::db::Database;
 use ssp::engine::operators::{Operator, OrderSpec, Predicate, Projection};
 use ssp::engine::types::{
     BatchDeltas, Delta, FastMap, FastHashSet, Path, SpookyValue, ZSet,
-    make_zset_key,
+    make_zset_key, Operation,
 };
 use ssp::engine::update::{DeltaEvent, ViewResultFormat, ViewUpdate};
 use ssp::engine::view::{QueryPlan, View};
 use smol_str::SmolStr;
 use std::collections::HashSet;
+use tempfile;
 
 // ============================================================================
 // TEST HELPERS
@@ -49,22 +50,22 @@ fn make_comment(id: &str, thread_id: &str, author_id: &str, text: &str, created_
     map.insert(SmolStr::new("thread"), SpookyValue::Str(SmolStr::new(format!("thread:{}", thread_id))));
     map.insert(SmolStr::new("author"), SpookyValue::Str(SmolStr::new(format!("user:{}", author_id))));
     map.insert(SmolStr::new("text"), SpookyValue::Str(SmolStr::new(text)));
-    map.insert(SmolStr::new("created_at"), SpookyValue::Number(created_at as f64));
+    map.insert(SmolStr::new("created_at"), SpookyValue::from(created_at as f64));
     SpookyValue::Object(map)
 }
 
-fn setup_full_database() -> Database {
-    let mut db = Database::new();
+fn setup_full_database() -> (Database, tempfile::TempDir) {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::new(tmp.path().join("test.db")).unwrap();
     
     // Users
-    let user_table = db.ensure_table("user");
+    let mut user_table = db.table("user");
     for (id, name) in [("1", "Alice"), ("2", "Bob"), ("3", "Charlie"), ("4", "Diana")] {
-        user_table.rows.insert(SmolStr::new(id), make_user(id, name));
-        user_table.zset.insert(make_zset_key("user", id), 1);
+        user_table.apply_mutation(Operation::Create, SmolStr::new(id), make_user(id, name));
     }
     
     // Threads (with different authors)
-    let thread_table = db.ensure_table("thread");
+    let mut thread_table = db.table("thread");
     let threads = [
         ("1", "1", "Zebra Topic"),      // Alice's thread (Z for desc order test)
         ("2", "1", "Apple Discussion"), // Alice's thread
@@ -72,12 +73,11 @@ fn setup_full_database() -> Database {
         ("4", "3", "Mango Chat"),       // Charlie's thread
     ];
     for (id, author, title) in threads {
-        thread_table.rows.insert(SmolStr::new(id), make_thread(id, author, title));
-        thread_table.zset.insert(make_zset_key("thread", id), 1);
+        thread_table.apply_mutation(Operation::Create, SmolStr::new(id), make_thread(id, author, title));
     }
     
     // Comments on thread:1
-    let comment_table = db.ensure_table("comment");
+    let mut comment_table = db.table("comment");
     let comments = [
         ("1", "1", "2", "First comment", 100),   // Bob comments on thread:1
         ("2", "1", "3", "Second comment", 200),  // Charlie comments on thread:1
@@ -85,11 +85,10 @@ fn setup_full_database() -> Database {
         ("4", "2", "4", "Comment on thread 2", 150), // Diana comments on thread:2
     ];
     for (id, thread_id, author_id, text, created_at) in comments {
-        comment_table.rows.insert(SmolStr::new(id), make_comment(id, thread_id, author_id, text, created_at));
-        comment_table.zset.insert(make_zset_key("comment", id), 1);
+        comment_table.apply_mutation(Operation::Create, SmolStr::new(id), make_comment(id, thread_id, author_id, text, created_at));
     }
     
-    db
+    (db, tmp)
 }
 
 /// Extract delta events from ViewUpdate, returns (id, event_type) pairs
@@ -178,7 +177,7 @@ mod query1_tests {
     /// (4 threads + 3 unique authors - Alice authored 2 threads but should only have 1 edge)
     #[test]
     fn test_query1_initial_load() {
-        let db = setup_full_database();
+        let (db, _tmp) = setup_full_database();
         let plan = build_query1_plan();
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -220,7 +219,7 @@ mod query1_tests {
     /// TEST: Adding a new thread should create edges for thread + author
     #[test]
     fn test_query1_add_thread_new_author() {
-        let mut db = setup_full_database();
+        let (db, _tmp) = setup_full_database();
         let plan = build_query1_plan();
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -228,14 +227,13 @@ mod query1_tests {
         view.process_batch(&BatchDeltas::new(), &db);
         
         // Add new thread by Diana (user:4) who wasn't an author before
-        let thread_table = db.tables.get_mut("thread").unwrap();
-        thread_table.rows.insert(SmolStr::new("5"), make_thread("5", "4", "New Topic"));
-        thread_table.zset.insert(make_zset_key("thread", "5"), 1);
+        let mut thread_table = db.table("thread");
+        thread_table.apply_mutation(Operation::Create, SmolStr::new("5"), make_thread("5", "4", "New Topic"));
         
         let mut batch = BatchDeltas::new();
         batch.membership.insert("thread".to_string(), {
             let mut z = ZSet::default();
-            z.insert(SmolStr::new("thread:5"), 1);
+            z.insert(make_zset_key("thread", "5"), 1);
             z
         });
         
@@ -263,7 +261,7 @@ mod query1_tests {
     /// TEST: Adding a thread by existing author should NOT create duplicate user edge
     #[test]
     fn test_query1_add_thread_existing_author() {
-        let mut db = setup_full_database();
+        let (db, _tmp) = setup_full_database();
         let plan = build_query1_plan();
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -271,14 +269,13 @@ mod query1_tests {
         view.process_batch(&BatchDeltas::new(), &db);
         
         // Add another thread by Alice (user:1) who already has threads
-        let thread_table = db.tables.get_mut("thread").unwrap();
-        thread_table.rows.insert(SmolStr::new("5"), make_thread("5", "1", "Alice's New Topic"));
-        thread_table.zset.insert(make_zset_key("thread", "5"), 1);
+        let mut thread_table = db.table("thread");
+        thread_table.apply_mutation(Operation::Create, SmolStr::new("5"), make_thread("5", "1", "Alice's New Topic"));
         
         let mut batch = BatchDeltas::new();
         batch.membership.insert("thread".to_string(), {
             let mut z = ZSet::default();
-            z.insert(SmolStr::new("thread:5"), 1);
+            z.insert(make_zset_key("thread", "5"), 1);
             z
         });
         
@@ -306,7 +303,7 @@ mod query1_tests {
     /// TEST: Deleting a thread should delete thread edge, but keep author if still referenced
     #[test]
     fn test_query1_delete_thread_author_still_referenced() {
-        let mut db = setup_full_database();
+        let (db, _tmp) = setup_full_database();
         let plan = build_query1_plan();
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -314,9 +311,8 @@ mod query1_tests {
         view.process_batch(&BatchDeltas::new(), &db);
         
         // Delete thread:2 (Alice's second thread, she still has thread:1)
-        let thread_table = db.tables.get_mut("thread").unwrap();
-        thread_table.rows.remove("2");
-        thread_table.zset.remove("thread:2");
+        let mut thread_table = db.table("thread");
+        thread_table.apply_mutation(Operation::Delete, SmolStr::new("2"), SpookyValue::Null);
         
         let mut batch = BatchDeltas::new();
         batch.membership.insert("thread".to_string(), {
@@ -349,7 +345,7 @@ mod query1_tests {
     /// TEST: Deleting the ONLY thread by an author should delete both edges
     #[test]
     fn test_query1_delete_thread_author_no_longer_referenced() {
-        let mut db = setup_full_database();
+        let (db, _tmp) = setup_full_database();
         let plan = build_query1_plan();
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -357,9 +353,8 @@ mod query1_tests {
         view.process_batch(&BatchDeltas::new(), &db);
         
         // Delete thread:3 (Bob's only thread)
-        let thread_table = db.tables.get_mut("thread").unwrap();
-        thread_table.rows.remove("3");
-        thread_table.zset.remove("thread:3");
+        let mut thread_table = db.table("thread");
+        thread_table.apply_mutation(Operation::Delete, SmolStr::new("3"), SpookyValue::Null);
         
         let mut batch = BatchDeltas::new();
         batch.membership.insert("thread".to_string(), {
@@ -392,14 +387,13 @@ mod query1_tests {
     /// TEST: LIMIT should only include top N threads
     #[test]
     fn test_query1_limit_excludes_overflow() {
-        let mut db = setup_full_database();
+        let (db, _tmp) = setup_full_database();
         
         // Add many threads to exceed limit
-        let thread_table = db.tables.get_mut("thread").unwrap();
+        let mut thread_table = db.table("thread");
         for i in 5..=15 {
             let title = format!("Thread {}", i);
-            thread_table.rows.insert(SmolStr::new(&i.to_string()), make_thread(&i.to_string(), "1", &title));
-            thread_table.zset.insert(make_zset_key("thread", &i.to_string()), 1);
+            thread_table.apply_mutation(Operation::Create, SmolStr::new(&i.to_string()), make_thread(&i.to_string(), "1", &title));
         }
         
         let plan = build_query1_plan(); // LIMIT 10
@@ -451,7 +445,7 @@ mod query2_tests {
     /// TEST: View for specific user should only include that user
     #[test]
     fn test_query2_single_user() {
-        let db = setup_full_database();
+        let (db, _tmp) = setup_full_database();
         let plan = build_query2_plan("1"); // Alice
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -474,7 +468,7 @@ mod query2_tests {
     /// TEST: Update to the matching user should emit Updated
     #[test]
     fn test_query2_user_content_update() {
-        let mut db = setup_full_database();
+        let (db, _tmp) = setup_full_database();
         let plan = build_query2_plan("1");
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -482,8 +476,8 @@ mod query2_tests {
         view.process_batch(&BatchDeltas::new(), &db);
         
         // Update Alice's data
-        let user_table = db.tables.get_mut("user").unwrap();
-        user_table.rows.insert(SmolStr::new("1"), make_user("1", "Alice Updated"));
+        let mut user_table = db.table("user");
+        user_table.apply_mutation(Operation::Update, SmolStr::new("1"), make_user("1", "Alice Updated"));
         
         let delta = Delta {
             table: SmolStr::new("user"),
@@ -506,7 +500,7 @@ mod query2_tests {
     /// TEST: Update to different user should not affect this view
     #[test]
     fn test_query2_other_user_update() {
-        let mut db = setup_full_database();
+        let (db, _tmp) = setup_full_database();
         let plan = build_query2_plan("1"); // View for Alice
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -514,8 +508,8 @@ mod query2_tests {
         view.process_batch(&BatchDeltas::new(), &db);
         
         // Update Bob's data
-        let user_table = db.tables.get_mut("user").unwrap();
-        user_table.rows.insert(SmolStr::new("2"), make_user("2", "Bob Updated"));
+        let mut user_table = db.table("user");
+        user_table.apply_mutation(Operation::Update, SmolStr::new("2"), make_user("2", "Bob Updated"));
         
         let delta = Delta {
             table: SmolStr::new("user"),
@@ -533,7 +527,7 @@ mod query2_tests {
     /// TEST: Two views for different users should have independent edges
     #[test]
     fn test_query2_multiple_views_independent() {
-        let db = setup_full_database();
+        let (db, _tmp) = setup_full_database();
         
         let plan1 = build_query2_plan("1"); // Alice
         let plan2 = build_query2_plan("2"); // Bob
@@ -656,7 +650,7 @@ mod query3_tests {
     /// Note: user:1 appears as both thread author and comment author - should be 1 edge!
     #[test]
     fn test_query3_initial_load() {
-        let db = setup_full_database();
+        let (db, _tmp) = setup_full_database();
         let plan = build_query3_plan("1");
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -702,7 +696,7 @@ mod query3_tests {
     /// TEST: Adding a comment should create edges for comment + author (if new)
     #[test]
     fn test_query3_add_comment_new_author() {
-        let mut db = setup_full_database();
+        let (db, _tmp) = setup_full_database();
         let plan = build_query3_plan("1");
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -710,9 +704,8 @@ mod query3_tests {
         view.process_batch(&BatchDeltas::new(), &db);
         
         // Add comment by Diana (user:4) who hasn't commented yet
-        let comment_table = db.tables.get_mut("comment").unwrap();
-        comment_table.rows.insert(SmolStr::new("5"), make_comment("5", "1", "4", "Diana's comment", 400));
-        comment_table.zset.insert(make_zset_key("comment", "5"), 1);
+        let mut comment_table = db.table("comment");
+        comment_table.apply_mutation(Operation::Create, SmolStr::new("5"), make_comment("5", "1", "4", "Diana's comment", 400));
         
         let mut batch = BatchDeltas::new();
         batch.membership.insert("comment".to_string(), {
@@ -744,7 +737,7 @@ mod query3_tests {
     /// TEST: Adding a comment by existing author should NOT duplicate user edge
     #[test]
     fn test_query3_add_comment_existing_author() {
-        let mut db = setup_full_database();
+        let (db, _tmp) = setup_full_database();
         let plan = build_query3_plan("1");
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -752,9 +745,8 @@ mod query3_tests {
         view.process_batch(&BatchDeltas::new(), &db);
         
         // Add another comment by Bob (user:2) who already has a comment
-        let comment_table = db.tables.get_mut("comment").unwrap();
-        comment_table.rows.insert(SmolStr::new("5"), make_comment("5", "1", "2", "Bob's second comment", 400));
-        comment_table.zset.insert(make_zset_key("comment", "5"), 1);
+        let mut comment_table = db.table("comment");
+        comment_table.apply_mutation(Operation::Create, SmolStr::new("5"), make_comment("5", "1", "2", "Bob's second comment", 400));
         
         let mut batch = BatchDeltas::new();
         batch.membership.insert("comment".to_string(), {
@@ -786,7 +778,7 @@ mod query3_tests {
     /// TEST: Deleting a comment should delete comment edge, but keep author if still referenced
     #[test]
     fn test_query3_delete_comment_author_still_referenced() {
-        let mut db = setup_full_database();
+        let (db, _tmp) = setup_full_database();
         let plan = build_query3_plan("1");
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -795,9 +787,8 @@ mod query3_tests {
         
         // Add a second comment by Bob first
         {
-            let comment_table = db.tables.get_mut("comment").unwrap();
-            comment_table.rows.insert(SmolStr::new("5"), make_comment("5", "1", "2", "Bob's second", 400));
-            comment_table.zset.insert(make_zset_key("comment", "5"), 1);
+            let mut comment_table = db.table("comment");
+            comment_table.apply_mutation(Operation::Create, SmolStr::new("5"), make_comment("5", "1", "2", "Bob's second", 400));
         }
         
         let mut batch1 = BatchDeltas::new();
@@ -809,9 +800,8 @@ mod query3_tests {
         view.process_batch(&batch1, &db);
         
         // Now delete comment:1 (Bob's first comment)
-        let comment_table = db.tables.get_mut("comment").unwrap();
-        comment_table.rows.remove("1");
-        comment_table.zset.remove("comment:1");
+        let mut comment_table = db.table("comment");
+        comment_table.apply_mutation(Operation::Delete, SmolStr::new("1"), SpookyValue::Null);
         
         let mut batch2 = BatchDeltas::new();
         batch2.membership.insert("comment".to_string(), {
@@ -843,7 +833,7 @@ mod query3_tests {
     /// TEST: Deleting all comments by an author should remove that author
     #[test]
     fn test_query3_delete_comment_author_no_longer_referenced() {
-        let mut db = setup_full_database();
+        let (db, _tmp) = setup_full_database();
         let plan = build_query3_plan("1");
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -851,9 +841,8 @@ mod query3_tests {
         view.process_batch(&BatchDeltas::new(), &db);
         
         // Delete comment:2 (Charlie's only comment on this thread)
-        let comment_table = db.tables.get_mut("comment").unwrap();
-        comment_table.rows.remove("2");
-        comment_table.zset.remove("comment:2");
+        let mut comment_table = db.table("comment");
+        comment_table.apply_mutation(Operation::Delete, SmolStr::new("2"), SpookyValue::Null);
         
         let mut batch = BatchDeltas::new();
         batch.membership.insert("comment".to_string(), {
@@ -885,7 +874,7 @@ mod query3_tests {
     /// TEST: Verify that deeply nested subquery authors are included
     #[test]
     fn test_query3_nested_subquery_depth() {
-        let db = setup_full_database();
+        let (db, _tmp) = setup_full_database();
         let plan = build_query3_plan("1");
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -913,7 +902,7 @@ mod query3_tests {
     /// TEST: Thread author update should emit Updated (not Created)
     #[test]
     fn test_query3_author_content_update() {
-        let mut db = setup_full_database();
+        let (db, _tmp) = setup_full_database();
         let plan = build_query3_plan("1");
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -921,8 +910,8 @@ mod query3_tests {
         view.process_batch(&BatchDeltas::new(), &db);
         
         // Update Alice (thread author)
-        let user_table = db.tables.get_mut("user").unwrap();
-        user_table.rows.insert(SmolStr::new("1"), make_user("1", "Alice Updated"));
+        let mut user_table = db.table("user");
+        user_table.apply_mutation(Operation::Create, SmolStr::new("1"), make_user("1", "Alice Updated"));
         
         let mut batch = BatchDeltas::new();
         batch.content_updates.insert("user".to_string(), FastHashSet::from_iter(vec![SmolStr::new("user:1")]));
@@ -953,7 +942,7 @@ mod integration_tests {
     /// TEST: Multiple views tracking same data should have independent but consistent edges
     #[test]
     fn test_multiple_views_consistency() {
-        let mut db = setup_full_database();
+        let (db, _tmp) = setup_full_database();
         
         // Query 1: All threads with authors (limited)
         let mut view1 = View::new(build_query1_plan(), None, Some(ViewResultFormat::Streaming));
@@ -984,8 +973,8 @@ mod integration_tests {
         assert_eq!(c3.iter().filter(|id| *id == "user:1").count(), 1);
         
         // Update user:1
-        let user_table = db.tables.get_mut("user").unwrap();
-        user_table.rows.insert(SmolStr::new("1"), make_user("1", "Alice Updated"));
+        let mut user_table = db.table("user");
+        user_table.apply_mutation(Operation::Create, SmolStr::new("1"), make_user("1", "Alice Updated"));
         
         let mut batch = BatchDeltas::new();
         batch.content_updates.insert("user".to_string(), FastHashSet::from_iter(vec![SmolStr::new("user:1")]));
@@ -1005,7 +994,7 @@ mod integration_tests {
     /// TEST: Edge counts should match expected for each query type
     #[test]
     fn test_edge_count_expectations() {
-        let db = setup_full_database();
+        let (db, _tmp) = setup_full_database();
         
         // Query 1: 4 threads + 3 unique authors = 7
         let mut view1 = View::new(build_query1_plan(), None, Some(ViewResultFormat::Streaming));

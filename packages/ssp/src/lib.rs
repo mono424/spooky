@@ -8,11 +8,14 @@ pub mod engine;
 pub mod logging;
 pub mod sanitizer;
 pub mod service;
+pub mod db_mod;
 
 #[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
 pub use rayon::prelude::*;
 
 // Re-export commonly used types for convenience
+pub use engine::types;
+pub use db_mod::{deserialization, error, serialization, spooky_record, spooky_value};
 pub use engine::circuit::Circuit;
 pub use engine::operators::{JoinCondition, Operator, OrderSpec, Predicate, Projection};
 pub use engine::types::{FastMap, Path, RowKey, SpookyValue, VersionMap, Weight, ZSet};

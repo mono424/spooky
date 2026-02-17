@@ -1,4 +1,4 @@
-use super::circuit::Database;
+use crate::db_mod::db::Database;
 use super::eval::{
     apply_numeric_filter, compare_spooky_values, hash_spooky_value, resolve_nested_value,
     NumericFilterConfig,
@@ -643,7 +643,7 @@ impl View {
             // Recursively evaluate into accumulator
             self.evaluate_subqueries_for_parent_into(
                 &self.plan.root,
-                parent_data,
+                &parent_data,
                 db,
                 &mut subquery_additions,
             );
@@ -696,7 +696,7 @@ impl View {
                             // Recursively expand nested subqueries
                             if let Some(record) = self.get_row_value(key, db) {
                                 self.evaluate_subqueries_for_parent_into(
-                                    operator, record, db, results,
+                                    operator, &record, db, results,
                                 );
                             }
                         }
@@ -991,12 +991,8 @@ impl View {
 
         match op {
             Operator::Scan { table } => {
-                if let Some(tb) = db.tables.get(table) {
-                    // Zero-copy borrow for scan operations
-                    Cow::Borrowed(&tb.zset)
-                } else {
-                    Cow::Owned(FastMap::default())
-                }
+                // Return Owned ZSet from db
+                Cow::Owned(db.table(table).get_all_zset())
             }
             Operator::Filter { input, predicate } => {
                 let upstream = self.eval_snapshot(input, db, context);
@@ -1031,8 +1027,9 @@ impl View {
                         let row_b = self.get_row_value(b.0.as_str(), db);
 
                         for ord in orders {
-                            let val_a = resolve_nested_value(row_a, &ord.field);
-                            let val_b = resolve_nested_value(row_b, &ord.field);
+                            // row_a is Option<SpookyValue>
+                            let val_a = resolve_nested_value(row_a.as_ref(), &ord.field);
+                            let val_b = resolve_nested_value(row_b.as_ref(), &ord.field);
 
                             let cmp = compare_spooky_values(val_a, val_b);
                             if cmp != Ordering::Equal {
@@ -1066,17 +1063,22 @@ impl View {
 
                 // 1. BUILD PHASE: Build Index for the RIGHT side
                 // Map: Hash of Join-Field -> List of (Key, Weight, FieldValue)
-                let mut right_index: FastMap<u64, Vec<(&SmolStr, &i64, &SpookyValue)>> =
-                    FastMap::default();
+                // Note: FieldValue comes from row. Value must live long enough.
+                // Since row is dropped, we must CLONE the field value for the index?
+                // SpookyValue is cloneable and relatively cheap (SmolStr/Numbers).
+
+                type RightIndexEntry<'b> = (&'b SmolStr, &'b i64, SpookyValue);
+                let mut right_index: FastMap<u64, Vec<RightIndexEntry>> = FastMap::default();
 
                 for (r_key, r_weight) in s_right.as_ref() {
                     if let Some(r_val) = self.get_row_value(r_key.as_str(), db) {
-                        if let Some(r_field) = resolve_nested_value(Some(r_val), &on.right_field) {
+                        if let Some(r_field) = resolve_nested_value(Some(&r_val), &on.right_field) {
                             let hash = hash_spooky_value(r_field);
+                            // We must clone r_field because r_val is dropped
                             right_index
                                 .entry(hash)
                                 .or_default()
-                                .push((r_key, r_weight, r_field));
+                                .push((r_key, r_weight, r_field.clone()));
                         }
                     }
                 }
@@ -1084,14 +1086,14 @@ impl View {
                 // 2. PROBE PHASE: Iterate Left and lookup Right (O(1))
                 for (l_key, l_weight) in s_left.as_ref() {
                     if let Some(l_val) = self.get_row_value(l_key.as_str(), db) {
-                        if let Some(l_field) = resolve_nested_value(Some(l_val), &on.left_field) {
+                        if let Some(l_field) = resolve_nested_value(Some(&l_val), &on.left_field) {
                             let hash = hash_spooky_value(l_field);
 
                             // Hash Lookup + Verification
                             if let Some(matches) = right_index.get(&hash) {
                                 for (_r_key, r_weight, r_field) in matches {
                                     // Verify actual equality!
-                                    if compare_spooky_values(Some(l_field), Some(*r_field))
+                                    if compare_spooky_values(Some(l_field), Some(r_field))
                                         == Ordering::Equal
                                     {
                                         let w = l_weight * *r_weight;
@@ -1108,40 +1110,18 @@ impl View {
     }
 
     /// Get row value from database by ZSet key
-    ///
-    /// OPTIMIZATION: Avoid allocation by trying raw ID first.
-    /// If your DB consistently uses one format, simplify this.
+    /// Returns owned SpookyValue because redb deserializes new instances.
     #[inline]
-    pub fn get_row_value<'a>(&self, key: &str, db: &'a Database) -> Option<&'a SpookyValue> {
-        let (table_name, id) = parse_zset_key(key)?;
-        let table = db.tables.get(table_name)?;
-
-        // Fast path: Try raw ID (most common case)
-        if let Some(row) = table.rows.get(id) {
-            return Some(row);
-        }
-
-        // Slow path: Try with table prefix
-        // TODO: Normalize row key format at ingestion to eliminate this branch
-        // For now, use a static buffer pattern to reduce allocations
-
-        // Check if the key format matches "table:id" where id doesn't have prefix
-        // If so, the row might be stored with the full key
-        if !id.contains(':') {
-            // ID doesn't have prefix, try reconstructing
-            // This allocation is unavoidable without changing ingestion
-            let prefixed = format!("{}:{}", table_name, id);
-            return table.rows.get(prefixed.as_str());
-        }
-
-        None
+    pub fn get_row_value(&self, key: &str, db: &Database) -> Option<SpookyValue> {
+        let (table_name, _) = parse_zset_key(key)?;
+        db.table(table_name).get(key)
     }
 }
 
-//unity test in weight_correction_test.rs
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn test_first_run_emits_additions() {
@@ -1155,10 +1135,16 @@ mod tests {
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
 
         // Setup: Create database with one record
-        let mut db = Database::new();
-        let table = db.ensure_table("users");
-        table.rows.insert(SmolStr::new("1"), SpookyValue::Null);
-        table.zset.insert(SmolStr::new("users:1"), 1);
+        let tmp = NamedTempFile::new().unwrap();
+        let db = Database::new(tmp.path()).unwrap();
+        let mut table = db.table("users");
+        table.apply_mutation(
+            crate::engine::types::Operation::Create,
+            "1".into(),
+            serde_json::json!({"id": "users:1", "name": "Alice"}).into(),
+        );
+        // table.zset.insert(SmolStr::new("users:1"), 1); // This is internal, apply_mutation handles it
+
 
         // Act: Process empty batch (simulates first run on registration)
         let result = view.process_batch(&BatchDeltas::new(), &db);
