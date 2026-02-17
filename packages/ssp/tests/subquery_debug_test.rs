@@ -4,6 +4,7 @@ mod common;
 use common::*;
 use serde_json::json;
 use ssp::{Operator, Path, Predicate, Projection, QueryPlan};
+use ssp::engine::update::ViewResultFormat;
 
 /// Debug test for subquery projection children population.
 /// Tests: SELECT *, (SELECT * FROM author WHERE id = $parent.author)[0] as author_data FROM thread
@@ -56,7 +57,7 @@ fn test_subquery_projection_children() {
     };
 
     // 3. Register view
-    let update = circuit.register_view(plan, None, None);
+    let update = circuit.register_view(plan, None, Some(ViewResultFormat::Flat));
     assert!(update.is_some(), "Expected view update");
 
     let view_update = update.unwrap();

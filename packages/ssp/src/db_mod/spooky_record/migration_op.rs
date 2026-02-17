@@ -23,6 +23,13 @@ impl SpookyRecordMut {
         }
 
         let mut new_bytes = Vec::new();
+        let key_bytes = name.as_bytes();
+        if key_bytes.len() > u16::MAX as usize {
+             return Err(RecordError::InvalidBuffer);
+        }
+        new_bytes.extend_from_slice(&(key_bytes.len() as u16).to_le_bytes());
+        new_bytes.extend_from_slice(key_bytes);
+
         let new_tag = write_field_into(&mut new_bytes, value)?;
         let insert_pos = self.find_insert_pos(hash);
         let old_n = self.field_count as usize;

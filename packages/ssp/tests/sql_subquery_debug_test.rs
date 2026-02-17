@@ -5,6 +5,7 @@ use common::*;
 use serde_json::json;
 use ssp::converter::convert_surql_to_dbsp;
 use ssp::Operator;
+use ssp::engine::update::ViewResultFormat;
 
 /// Debug the SQL conversion for the TypeScript test SQL
 #[test]
@@ -95,7 +96,7 @@ fn test_subquery_via_sql_full_flow() {
     println!("{:#?}", data.plan.root);
 
     // 3. Register the view
-    let update = circuit.register_view(data.plan, data.safe_params, None);
+    let update = circuit.register_view(data.plan, data.safe_params, Some(ViewResultFormat::Flat));
     assert!(update.is_some(), "Expected view update");
 
     let view_update = update.unwrap();

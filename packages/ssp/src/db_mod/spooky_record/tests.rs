@@ -856,13 +856,13 @@ mod spooky_record_tests {
     // ═══════════════════════════════════════════════════════════════════════
 
     #[test]
-    fn test_to_value_returns_null_placeholder() {
+    fn test_to_value_returns_object() {
         let original = make_test_record();
         let (buf, fc) = from_spooky(&original).unwrap();
         let record = SpookyRecord::new(&buf, fc);
 
-        // Current implementation is a placeholder
-        assert_eq!(record.to_value(), SpookyValue::Null);
+        // Should return the original object
+        assert_eq!(record.to_value(), original);
     }
 
     // ═══════════════════════════════════════════════════════════════════════

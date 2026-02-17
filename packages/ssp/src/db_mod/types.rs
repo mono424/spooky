@@ -15,7 +15,8 @@ pub enum Operation {
 impl Operation {
     pub fn weight(&self) -> i64 {
         match self {
-            Operation::Create | Operation::Update => 1,
+            Operation::Create => 1,
+            Operation::Update => 0,
             Operation::Delete => -1,
         }
     }

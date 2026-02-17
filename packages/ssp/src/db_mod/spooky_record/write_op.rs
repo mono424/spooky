@@ -166,7 +166,7 @@ impl SpookyRecordMut {
             // Splice path
             let delta = new_bytes.len() as isize - meta.data_len as isize;
             self.splice_data(meta.data_offset, meta.data_len, new_bytes);
-            self.write_index_length(pos, new_bytes.len());
+            self.write_index_length(pos, new_bytes.len() + 2 + name.len());
             self.fixup_offsets_after_splice(pos, meta.data_offset, delta);
             self.generation += 1; // Layout changed
         }
@@ -221,7 +221,7 @@ impl SpookyRecordMut {
             // Splice path
             let delta = new_bytes.len() as isize - meta.data_len as isize;
             self.splice_data(meta.data_offset, meta.data_len, &new_bytes);
-            self.write_index_length(pos, new_bytes.len());
+            self.write_index_length(pos, new_bytes.len() + 2 + name.len());
             self.write_index_tag(pos, new_tag);
             self.fixup_offsets_after_splice(pos, meta.data_offset, delta);
             self.generation += 1; // Layout changed

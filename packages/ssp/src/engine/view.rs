@@ -1113,8 +1113,8 @@ impl View {
     /// Returns owned SpookyValue because redb deserializes new instances.
     #[inline]
     pub fn get_row_value(&self, key: &str, db: &Database) -> Option<SpookyValue> {
-        let (table_name, _) = parse_zset_key(key)?;
-        db.table(table_name).get(key)
+        let (table_name, parsed_id) = parse_zset_key(key)?;
+        db.table(table_name).get(parsed_id)
     }
 }
 

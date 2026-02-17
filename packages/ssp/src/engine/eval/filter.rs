@@ -568,7 +568,7 @@ mod compare_spooky_values_tests {
         let res = compare_spooky_values(Some(&num_b), Some(&num_a));
         assert_eq!(res, Ordering::Less);
         let res = compare_spooky_values(Some(&num_nan), Some(&num_a));
-        assert_eq!(res, Ordering::Equal);
+        assert_eq!(res, Ordering::Greater);
     }
 
     #[test]

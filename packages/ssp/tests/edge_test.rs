@@ -1200,7 +1200,8 @@ mod stress_tests {
     #[test]
     fn test_empty_database() {
         let tmp = tempfile::tempdir().unwrap();
-        let db = Database::new(tmp.path()).unwrap();
+        let db_path = tmp.path().join("db.redb");
+        let db = Database::new(&db_path).unwrap();
         let plan = simple_scan_plan("user");
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
         

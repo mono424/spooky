@@ -29,9 +29,10 @@ impl Table {
     }
 
     pub fn get_record_version(&self, id: &str) -> Option<i64> {
+        let raw_id = id.split_once(':').map(|(_, rest)| rest).unwrap_or(id);
         let read_txn = self.db.begin_read().ok()?;
         let table = read_txn.open_table(TABLE_VERSIONS).ok()?;
-        let val = table.get(&(self.name.as_str(), id)).ok()??;
+        let val = table.get(&(self.name.as_str(), raw_id)).ok()??;
         Some(val.value() as i64)
     }
 
@@ -47,7 +48,11 @@ impl Table {
     ) -> (SmolStr, i64) {
         let weight = op.weight();
         let zset_key = crate::types::make_zset_key(&self.name, &key);
-        self.apply_mutation_impl(op, key, data, weight, zset_key)
+        
+        // Ensure we store with the raw ID (matching get_row_value logic)
+        let (_, raw_id) = crate::types::parse_zset_key(&zset_key).expect("valid zset key");
+        
+        self.apply_mutation_impl(op, SmolStr::new(raw_id), data, weight, zset_key)
     }
 
     fn apply_mutation_impl(
@@ -118,9 +123,10 @@ impl Table {
         write_txn.commit().unwrap();
     }
     pub fn get(&self, id: &str) -> Option<SpookyValue> {
+        let raw_id = id.split_once(':').map(|(_, rest)| rest).unwrap_or(id);
         let read_txn = self.db.begin_read().ok()?;
         let table = read_txn.open_table(TABLE_RECORDS).ok()?;
-        let val = table.get(&(self.name.as_str(), id)).ok()??;
+        let val = table.get(&(self.name.as_str(), raw_id)).ok()??;
         let bytes = val.value();
         // Deserialize
         let (buf, count) = crate::serialization::from_bytes(bytes).ok()?;
@@ -274,6 +280,9 @@ impl Database {
                 // We assume make_zset_key is available in crate::types as used elsewhere
                 let zset_key = crate::types::make_zset_key(&table_name, &key);
                 let content_changed = op.changes_content();
+                
+                // Ensure we store with the raw ID
+                let (_, raw_id) = crate::types::parse_zset_key(&zset_key).expect("valid zset key");
 
                 // 1. Records
                 // Serialize data
@@ -283,18 +292,19 @@ impl Database {
                 match op {
                     Operation::Create | Operation::Update => {
                         let (buf, _) = crate::serialization::from_spooky(&data).expect("serialization failed");
-                        records_table.insert(&(table_name.as_str(), key.as_str()), buf.as_slice())?;
+                        records_table.insert(&(table_name.as_str(), raw_id), buf.as_slice())?;
                         
                         // Extract version if present
                         if let Some(v) = data.get("spooky_rv").and_then(|v| v.as_f64()) {
-                            versions_table.insert(&(table_name.as_str(), key.as_str()), v as u64)?;
+                            versions_table.insert(&(table_name.as_str(), raw_id), v as u64)?;
                         }
                     }
                     Operation::Delete => {
-                        records_table.remove(&(table_name.as_str(), key.as_str()))?;
-                        versions_table.remove(&(table_name.as_str(), key.as_str()))?;
+                        records_table.remove(&(table_name.as_str(), raw_id))?;
+                        versions_table.remove(&(table_name.as_str(), raw_id))?;
                     }
                 }
+
 
                 // 2. ZSet
                 if weight != 0 {
