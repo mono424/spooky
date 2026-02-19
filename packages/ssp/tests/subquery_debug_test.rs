@@ -63,30 +63,32 @@ fn test_subquery_projection_children() {
     println!("=== View Update ===");
     println!("query_id: {}", view_update.query_id());
     println!("result_data: {:?}", view_update.result_data());
-    println!("result_hash: {}", match &view_update { ssp::ViewUpdate::Flat(f) | ssp::ViewUpdate::Tree(f) => &f.result_hash, _ => panic!("Expected Flat update") });
+    println!("result_hash: {}", match &view_update {
+        ssp::engine::update::ViewUpdate::Flat(f) | ssp::engine::update::ViewUpdate::Tree(f) => &f.result_hash,
+        ssp::engine::update::ViewUpdate::Streaming(_) => "streaming_no_hash",
+    });
 
     // 4. Verify result contains BOTH the thread AND the author (from subquery)
-    assert!(!view_update.result_data().is_empty(), "Expected results");
+    // Streaming updates return DeltaRecords, not a simple list of IDs via result_data()
+    let result_ids: Vec<String> = match &view_update {
+        ssp::engine::update::ViewUpdate::Streaming(s) => s.records.iter().map(|r| r.id.to_string()).collect(),
+        _ => view_update.result_data().iter().map(|s| s.to_string()).collect(),
+    };
 
-    // Extract IDs from result_data
-    let result_ids: Vec<&str> = view_update
-        .result_data()
-        .iter()
-        .map(|id| id.as_str())
-        .collect();
+    assert!(!result_ids.is_empty(), "Expected results");
 
     assert!(
-        result_ids.contains(&thread_id.as_str()),
+        result_ids.contains(&thread_id),
         "Expected thread ID in result"
     );
     assert!(
-        result_ids.contains(&author_id.as_str()),
+        result_ids.contains(&author_id),
         "Expected author ID from subquery in result"
     );
 
     // 5. Verify we have both IDs (thread + author = 2 records)
     assert_eq!(
-        view_update.result_data().len(),
+        result_ids.len(),
         2,
         "Expected 2 records (thread + author from subquery)"
     );

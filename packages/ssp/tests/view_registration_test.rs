@@ -70,9 +70,14 @@ fn test_view_registration_after_ingestion() {
         update.result_data()
     );
 
-    assert_eq!(update.result_data().len(), 1, "Should find 1 user");
+    let result_ids: Vec<String> = match &update {
+        ssp::engine::update::ViewUpdate::Streaming(s) => s.records.iter().map(|r| r.id.to_string()).collect(),
+        _ => update.result_data().iter().map(|s| s.to_string()).collect(),
+    };
+
+    assert_eq!(result_ids.len(), 1, "Should find 1 user");
     assert_eq!(
-        update.result_data()[0], user_id,
+        result_ids[0], user_id,
         "Should find the correct user"
     );
     // assert!(update.result_data()[0].1 > 0, "Version should be positive"); // Version not in result data anymore
@@ -147,9 +152,14 @@ fn test_view_registration_after_ingestion_with_filter() {
         update.result_data()
     );
 
-    assert_eq!(update.result_data().len(), 1, "Should find 1 active user");
+    let result_ids: Vec<String> = match &update {
+        ssp::engine::update::ViewUpdate::Streaming(s) => s.records.iter().map(|r| r.id.to_string()).collect(),
+        _ => update.result_data().iter().map(|s| s.to_string()).collect(),
+    };
+
+    assert_eq!(result_ids.len(), 1, "Should find 1 active user");
     assert_eq!(
-        update.result_data()[0], user1_id,
+        result_ids[0], user1_id,
         "Should find alice (active user)"
     );
 
