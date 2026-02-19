@@ -2,6 +2,7 @@ mod common;
 
 use common::{*, ViewUpdateExt};
 use serde_json::json;
+use ssp::engine::update::ViewUpdate;
 
 /// Test to reproduce the bug where creating a comment did not trigger an update
 /// for the thread view because the thread record itself didn't change.
@@ -39,11 +40,15 @@ fn test_comment_creation_updates_thread_view() {
         .expect("Initial view update failed");
 
     // Verify initial state (0 comments)
-    let initial_result = &update.result_data();
-    println!("Initial Result: {:?}", initial_result);
-    // Should have 1 result (the thread)
-    // Actually result_data is Vec<(id, hash)>
-    assert!(!initial_result.is_empty());
+    // Verify initial state (1 record: the thread)
+    // Streaming updates return DeltaRecords, not a simple list of IDs via result_data()
+    let initial_ids: Vec<String> = match &update {
+        ViewUpdate::Streaming(s) => s.records.iter().map(|r| r.id.to_string()).collect(),
+        _ => update.result_data().iter().map(|s| s.to_string()).collect(),
+    };
+    
+    println!("Initial Result IDs: {:?}", initial_ids);
+    assert!(!initial_ids.is_empty(), "Initial update should contain records");
 
     // 3. Create Comment
     println!("\n--- Creating Comment ---");

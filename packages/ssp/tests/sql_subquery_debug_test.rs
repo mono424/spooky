@@ -104,21 +104,21 @@ fn test_subquery_via_sql_full_flow() {
     println!("result_data: {:?}", view_update.result_data());
 
     // Flat array includes both thread AND author (from subquery)
-    let result_ids: Vec<&str> = view_update
-        .result_data()
-        .iter()
-        .map(|id| id.as_str())
-        .collect();
+    // Streaming updates return DeltaRecords, not a simple list of IDs via result_data()
+    let result_ids: Vec<String> = match &view_update {
+        ssp::engine::update::ViewUpdate::Streaming(s) => s.records.iter().map(|r| r.id.to_string()).collect(),
+        _ => view_update.result_data().iter().map(|s| s.to_string()).collect(),
+    };
     assert!(
-        result_ids.contains(&thread_id.as_str()),
+        result_ids.contains(&thread_id),
         "Should contain thread ID"
     );
     assert!(
-        result_ids.contains(&author_id.as_str()),
+        result_ids.contains(&author_id),
         "Should contain author ID from subquery"
     );
     assert_eq!(
-        view_update.result_data().len(),
+        result_ids.len(),
         2,
         "Should have 2 records (thread + author)"
     );
