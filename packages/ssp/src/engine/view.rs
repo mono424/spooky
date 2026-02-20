@@ -592,8 +592,8 @@ impl View {
 
         // Streaming: early exit, zero allocations
         if let ViewUpdate::Streaming(s) = &update {
+            self.has_run = true;
             if !s.records.is_empty() {
-                self.has_run = true;
                 return Some(update);
             }
             return None;
@@ -992,8 +992,12 @@ impl View {
         match op {
             Operator::Scan { table } => {
                 if let Some(zset) = db.get_table_zset(table) {
-                    // Zero-copy borrow for scan operations
-                    Cow::Borrowed(zset)
+                    // Create prefixed keys map for compatibility with deltas which use full ZSet keys
+                    let mut prefixed = FastMap::default();
+                    for (k, v) in zset {
+                        prefixed.insert(crate::engine::types::make_zset_key(table, k), *v);
+                    }
+                    Cow::Owned(prefixed)
                 } else {
                     Cow::Owned(FastMap::default())
                 }

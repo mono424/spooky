@@ -83,6 +83,7 @@ fn test_circuit_v2_ingest() {
     );
     
     let updates2 = circuit.ingest_single(record_update);
+    println!("UPDATES2: {:#?}", updates2);
     assert_eq!(updates2.len(), 1, "Expected 1 update for age 31");
 }
 
@@ -96,7 +97,7 @@ fn test_numeric_filter_isolation() {
     let data = SpookyValue::from(json!({ "age": 31 })); // 31 > 30
     
     // Manually setup table state
-    insert_record(&mut db, "tb", &(SmolStr::new(id)).to_string(), data);
+    insert_record(&mut db, table_name, id, data);
     
     let zset_key = SmolStr::new(format!("{}:{}", table_name, id));
     let mut input_zset = ZSet::default();
