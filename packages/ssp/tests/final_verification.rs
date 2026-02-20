@@ -9,7 +9,7 @@ fn create_simple_plan(view_id: &str) -> QueryPlan {
 
 #[test]
 fn test_backward_compat_register_view() {
-    let mut circuit = Circuit::new();
+    let mut circuit = Circuit::new(std::env::temp_dir().join(format!("ssp_test_db_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()))).unwrap();
     let plan = create_simple_plan("view1");
     // Should compile with 3 arguments (backward compatibility)
     let _ = circuit.register_view(plan, None, Some(ViewResultFormat::Flat));
@@ -20,7 +20,7 @@ fn test_backward_compat_register_view() {
 
 #[test]
 fn test_build_materialized_performance() {
-    let mut circuit = Circuit::new();
+    let mut circuit = Circuit::new(std::env::temp_dir().join(format!("ssp_test_db_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()))).unwrap();
     // Register materialized view
     let plan = create_simple_plan("perf_view");
     circuit.register_view(plan, None, Some(ViewResultFormat::Flat));

@@ -62,7 +62,7 @@ mod operation_tests {
             )],
         );
         // If parsing worked, the record was ingested
-        circuit.db.tables.contains_key("test")
+        circuit.get_db().table_exists("test")
     }
 
     /// Test operation weight calculation
@@ -81,16 +81,16 @@ mod operation_tests {
 
         // CREATE adds record (weight +1)
         ingest(&mut circuit, "items", "CREATE", "items:1", json!({"id": "items:1"}));
-        assert!(circuit.db.tables.get("items").unwrap().zset.contains_key("items:1"));
+        assert!((circuit.get_db().get_zset_weight("items", "items:1") > 0));
 
         // DELETE removes record (weight -1)
         ingest(&mut circuit, "items", "DELETE", "items:1", json!({}));
-        assert!(!circuit.db.tables.get("items").unwrap().zset.contains_key("items:1"));
+        assert!(!(circuit.get_db().get_zset_weight("items", "items:1") > 0));
 
         // UPDATE keeps record (weight +1, replaces existing)
         ingest(&mut circuit, "items", "CREATE", "items:2", json!({"id": "items:2", "val": 1}));
         ingest(&mut circuit, "items", "UPDATE", "items:2", json!({"id": "items:2", "val": 2}));
-        assert!(circuit.db.tables.get("items").unwrap().rows.contains_key("items:2"));
+        assert!((circuit.get_db().get_zset_weight("items", "items:2") > 0));
     }
 }
 
@@ -126,13 +126,13 @@ mod mixed_ops_same_table_tests {
         let updates = circuit.ingest_batch(batch);
 
         // Verify final state
-        let users_table = circuit.db.tables.get("users").unwrap();
+        /* removed var */
         
         // user:1 should exist with updated name
-        assert!(users_table.rows.contains_key("users:1"), "user:1 should exist");
+        assert!((circuit.get_db().get_zset_weight("users", "users:1") > 0), "user:1 should exist");
         
         // user:2 should be deleted
-        assert!(!users_table.rows.contains_key("users:2"), "user:2 should be deleted");
+        assert!(!(circuit.get_db().get_zset_weight("users", "users:2") > 0), "user:2 should be deleted");
 
         // View should have been updated
         assert!(!updates.is_empty(), "Should have view updates");
@@ -166,13 +166,14 @@ mod mixed_ops_same_table_tests {
         circuit.ingest_batch(batch);
 
         // Final value should be counter: 3 (last update wins)
-        let items = circuit.db.tables.get("items").unwrap();
-        let item = items.rows.get("items:1").unwrap();
+        /* removed var */
+        let bytes = circuit.get_db().get_record_typed("items", "items:1", &["counter"]).unwrap();
+        let item = bytes;
         
         // SpookyValue comparison - check the counter field
-        if let SpookyValue::Object(map) = item {
+        if let Some(SpookyValue::Object(map)) = item {
             if let Some(SpookyValue::Number(n)) = map.get("counter") {
-                assert_eq!(*n as i32, 3, "Counter should be 3 after all updates");
+                assert_eq!(n, &spooky_db_module::spooky_value::SpookyNumber::F64(3.0), "Counter should be 3");
             }
         }
 
@@ -201,11 +202,8 @@ mod mixed_ops_same_table_tests {
         circuit.ingest_batch(batch);
 
         // Record should not exist (weight cancels out: +1 - 1 = 0)
-        let table = circuit.db.tables.get("ephemeral");
-        if let Some(t) = table {
-            assert!(!t.zset.contains_key("ephemeral:1"), "Record should not exist in ZSet");
-        }
-
+        assert!(!(circuit.get_db().get_zset_weight("ephemeral", "ephemeral:1") > 0), "Record should not exist in ZSet");
+        assert!(!circuit.get_db().table_exists("ephemeral"));
         println!("[TEST] ✓ CREATE + DELETE in same batch correctly cancels out");
     }
 }
@@ -244,9 +242,9 @@ mod mixed_tables_tests {
         let updates = circuit.ingest_batch(batch);
 
         // Verify all tables have correct data
-        assert!(circuit.db.tables.get("users").unwrap().rows.len() == 2);
-        assert!(circuit.db.tables.get("posts").unwrap().rows.len() == 1);
-        assert!(circuit.db.tables.get("comments").unwrap().rows.len() == 1);
+        assert!(circuit.get_db().table_len("users") == 2);
+        assert!(circuit.get_db().table_len("posts") == 1);
+        assert!(circuit.get_db().table_len("comments") == 1);
 
         // Should have updates for all three views
         assert!(updates.len() >= 3, "Should have updates for all affected views");
@@ -328,16 +326,20 @@ mod mixed_tables_tests {
         let _updates = circuit.ingest_batch(batch);
 
         // Both books should exist
-        assert!(circuit.db.tables.get("books").unwrap().rows.len() == 2);
+        assert!(circuit.get_db().table_len("books") == 2);
         
-        // Author should have updated name
-        let author = circuit.db.tables.get("authors").unwrap().rows.get("authors:1").unwrap();
-        if let SpookyValue::Object(map) = author {
+        // Author        // Verify the data by reading the authors table. Let's just ask for "name".
+        let author = circuit.get_db().get_record_typed("authors", "authors:1", &["name"]).unwrap();
+        
+        if let Some(SpookyValue::Object(map)) = author {
             if let Some(SpookyValue::Str(name)) = map.get("name") {
-                assert_eq!(name.as_str(), "Famous Writer");
+                assert_eq!(name.as_str(), "Famous Writer", "Name should be Famous Writer");
+            } else {
+                panic!("Name not found or not a string");
             }
+        } else {
+            panic!("Author should be an object");
         }
-
         println!("[TEST] ✓ Interleaved multi-table operations work correctly");
     }
 }
@@ -451,11 +453,11 @@ mod optimization_tests {
         // Batch should generally be faster (allows amortization)
         // Note: This might not always hold for small batches due to overhead
         assert!(
-            circuit1.db.tables.get("perf").unwrap().rows.len() == NUM_RECORDS,
+            circuit1.get_db().table_len("perf") == NUM_RECORDS,
             "Individual ingest should have all records"
         );
         assert!(
-            circuit2.db.tables.get("perf").unwrap().rows.len() == NUM_RECORDS,
+            circuit2.get_db().table_len("perf") == NUM_RECORDS,
             "Batch ingest should have all records"
         );
 
@@ -554,11 +556,8 @@ mod edge_case_tests {
         }
 
         // Record should not exist
-        let table = circuit.db.tables.get("cycle");
-        if let Some(t) = table {
-            assert!(!t.zset.contains_key("cycle:1"));
-        }
-
+        assert!(!(circuit.get_db().get_zset_weight("cycle", "cycle:1") > 0));
+        assert!(!circuit.get_db().table_exists("cycle"));
         println!("[TEST] ✓ Rapid create/delete cycles handled correctly");
     }
 
@@ -586,7 +585,7 @@ mod edge_case_tests {
 
         // All records should be ingested
         assert_eq!(
-            circuit.db.tables.get("large").unwrap().rows.len(),
+            circuit.get_db().table_len("large"),
             BATCH_SIZE
         );
 
@@ -615,7 +614,7 @@ mod edge_case_tests {
 
         circuit.ingest_batch(batch);
 
-        assert_eq!(circuit.db.tables.get("unicode").unwrap().rows.len(), 3);
+        assert_eq!(circuit.get_db().table_len("unicode"), 3);
 
         println!("[TEST] ✓ Unicode and special characters handled correctly");
     }

@@ -31,18 +31,16 @@ fn test_view_registration_after_ingestion() {
 
     // 2. Verify the record is in the database
     assert!(
-        circuit.db.tables.contains_key("user"),
+        circuit.get_db().table_exists("user"),
         "User table should exist"
     );
-    let user_table = &circuit.db.tables["user"];
+    let user_table = circuit.get_db();
     assert!(
-        user_table
-            .zset
-            .contains_key(user_id.as_str()),
+        circuit.get_db().get_zset_weight("user", user_id.as_str()) > 0,
         "User should be in zset"
     );
     assert!(
-        user_table.rows.contains_key(user_id.as_str()),
+        circuit.get_db().get_zset_weight("user", user_id.as_str()) > 0,
         "User should be in rows"
     );
     println!("[TEST] User found in database zset and rows");

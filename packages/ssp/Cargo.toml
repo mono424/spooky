@@ -25,6 +25,7 @@ rayon = { version = "1.8", optional = true }
 smallvec = "1.15.1"
 indexmap = { version = "2.13.0", features = ["serde"] }
 tracing = "0.1"
+spooky_db_module = { path = "src/db_module" }
 
 [dev-dependencies]
 divan = "0.1.21"

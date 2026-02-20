@@ -1,4 +1,4 @@
-use crate::engine::circuit::Database;
+use spooky_db_module::db::SpookyDb;
 use crate::engine::eval::{compare_spooky_values, normalize_record_id, resolve_nested_value};
 use crate::engine::types::Path;
 use crate::engine::types::SpookyValue;
@@ -48,7 +48,7 @@ pub fn check_predicate(
     view: &View,
     pred: &Predicate,
     key: &str,
-    db: &Database,
+    db: &SpookyDb,
     context: Option<&SpookyValue>,
 ) -> bool {
     // Helper to get actual SpookyValue for comparison from the Predicate (which stores Value)
@@ -65,8 +65,12 @@ pub fn check_predicate(
             if field.0.len() == 1 && field.0[0] == "id" {
                 return key.starts_with(prefix);
             }
-            if let Some(row_val) = view.get_row_value(key, db) {
-                if let Some(val) = resolve_nested_value(Some(row_val), field) {
+            let mut field_names = Vec::new();
+            if !field.is_empty() {
+                field_names.push(field.segments()[0].as_str());
+            }
+            if let Some(row_val) = view.get_row_value(key, db, &field_names) {
+                if let Some(val) = resolve_nested_value(Some(&row_val), field) {
                     if let SpookyValue::Str(s) = val {
                         return s.starts_with(prefix);
                     }
@@ -89,9 +93,13 @@ pub fn check_predicate(
             // FIX: Look up actual value from row even for "id", to ensure we match
             // the canonical ID stored in the DB (which might be "table:id").
             // The previous optimization incorrectly assumed stripped ID == Row ID.
+            let mut field_names = Vec::new();
+            if !field.is_empty() {
+                field_names.push(field.segments()[0].as_str());
+            }
             let actual_val_opt = view
-                .get_row_value(key, db)
-                .and_then(|r| resolve_nested_value(Some(r), field).cloned());
+                .get_row_value(key, db, &field_names)
+                .and_then(|r| resolve_nested_value(Some(&r), field).cloned());
 
             if let Some(actual_val) = actual_val_opt {
                 let ord = compare_spooky_values(Some(&actual_val), Some(&target_val));
@@ -112,11 +120,10 @@ pub fn check_predicate(
 }
 
 #[cfg(test)]
-mod check_predicate_tests {
+mod tests {
     use super::*;
-    use crate::engine::circuit::Database;
     use crate::engine::operators::{Operator, Predicate};
-    use crate::engine::types::{FastMap, Path, SpookyValue};
+    use crate::engine::types::{FastMap, Path, SpookyValue, Operation};
     use crate::engine::view::{QueryPlan, View};
     use smol_str::SmolStr;
 
@@ -136,13 +143,15 @@ mod check_predicate_tests {
     }
 
     /// Create an empty database
-    fn create_empty_db() -> Database {
-        Database::new()
+    fn create_empty_db() -> SpookyDb {
+        let db_path = std::env::temp_dir().join(format!("ssp_test_db_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let mut db = SpookyDb::new(db_path).unwrap();
+        db
     }
 
     /// Create a SpookyValue object from key-value pairs
     fn spooky_object(fields: Vec<(&str, SpookyValue)>) -> SpookyValue {
-        let mut map = FastMap::default();
+        let mut map = std::collections::BTreeMap::new();
         for (key, value) in fields {
             map.insert(SmolStr::new(key), value);
         }
@@ -156,7 +165,7 @@ mod check_predicate_tests {
 
     /// Shorthand for SpookyValue::Number
     fn spooky_num(n: f64) -> SpookyValue {
-        SpookyValue::Number(n)
+        SpookyValue::from(n)
     }
 
     /// Shorthand for SpookyValue::Bool
@@ -165,12 +174,19 @@ mod check_predicate_tests {
     }
 
     /// Insert a record into the database and return the key
-    fn insert_record(db: &mut Database, table: &str, id: &str, data: SpookyValue) -> SmolStr {
-        let key = SmolStr::new(format!("{}:{}", table, id));
-        let tb = db.ensure_table(table);
-        tb.rows.insert(key.clone(), data);
-        tb.zset.insert(key.clone(), 1);
-        key
+    fn insert_record(db: &mut SpookyDb, table: &str, id: &str, data: SpookyValue) -> SmolStr {
+        use spooky_db_module::serialization::from_spooky;
+        let obj_data = match data {
+            SpookyValue::Object(_) => data,
+            _ => {
+                let mut m = std::collections::BTreeMap::new();
+                m.insert(SmolStr::new("value"), data);
+                SpookyValue::Object(m)
+            }
+        };
+        let (bytes, _) = from_spooky(&obj_data).unwrap();
+        db.apply_mutation(table, spooky_db_module::db::Operation::Create, id, Some(&bytes), Some(1)).unwrap();
+        SmolStr::new(format!("{}:{}", table, id))
     }
 
     /// Create a standard test user record
@@ -205,7 +221,7 @@ mod check_predicate_tests {
     }
 
     /// Setup a database with multiple test users
-    fn setup_test_db_with_users() -> (Database, Vec<SmolStr>) {
+    fn setup_test_db_with_users() -> (SpookyDb, Vec<SmolStr>) {
         let mut db = create_empty_db();
         let mut keys = Vec::new();
 
@@ -238,7 +254,7 @@ mod check_predicate_tests {
     }
 
     /// Setup a database with nested records
-    fn setup_test_db_with_nested() -> (Database, Vec<SmolStr>) {
+    fn setup_test_db_with_nested() -> (SpookyDb, Vec<SmolStr>) {
         let mut db = create_empty_db();
         let mut keys = Vec::new();
 
@@ -265,7 +281,7 @@ mod check_predicate_tests {
     }
 
     /// Helper to check predicate and return bool
-    fn check(view: &View, pred: &Predicate, key: &SmolStr, db: &Database) -> bool {
+    fn check(view: &View, pred: &Predicate, key: &SmolStr, db: &SpookyDb) -> bool {
         check_predicate(view, pred, key, db, None)
     }
 
@@ -274,7 +290,7 @@ mod check_predicate_tests {
         view: &View,
         pred: &Predicate,
         key: &SmolStr,
-        db: &Database,
+        db: &SpookyDb,
         ctx: &SpookyValue,
     ) -> bool {
         check_predicate(view, pred, key, db, Some(ctx))

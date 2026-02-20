@@ -1,5 +1,16 @@
 use ssp::engine::circuit::dto::{BatchEntry, LoadRecord};
-use ssp::engine::circuit::{Circuit, Database};
+use ssp::engine::circuit::Circuit;
+use spooky_db_module::db::SpookyDb;
+
+fn insert_record(db: &mut spooky_db_module::db::SpookyDb, table: &str, id: &str, record: ssp::engine::types::SpookyValue) {
+    let bytes = spooky_db_module::serialization::from_spooky(&record).unwrap();
+    db.apply_mutation(table, spooky_db_module::db::Operation::Create, id, Some(&bytes.0), None).unwrap();
+}
+
+fn delete_record(db: &mut spooky_db_module::db::SpookyDb, table: &str, id: &str) {
+    db.apply_mutation(table, spooky_db_module::db::Operation::Delete, id, None, None).unwrap();
+}
+
 use ssp::engine::operators::{Operator, Predicate, Projection};
 use ssp::engine::types::{Delta, Path};
 use ssp::engine::update::{DeltaEvent, ViewResultFormat, ViewUpdate, compute_flat_hash};
@@ -11,7 +22,7 @@ use std::time::Instant;
 #[test]
 fn test_streaming_single_update_only_sends_changed() {
     // Test that streaming mode only sends the updated record
-    let mut circuit = Circuit::new();
+    let mut circuit = Circuit::new(std::env::temp_dir().join(ulid::Ulid::new().to_string())).unwrap();
     
     // Load 10 records FIRST
     let records: Vec<_> = (1..=10)
@@ -44,7 +55,7 @@ fn test_streaming_single_update_only_sends_changed() {
 #[test]
 fn test_flat_mode_sends_all_records() {
     // Test that Flat mode still sends all records (needed for hash)
-    let mut circuit = Circuit::new();
+    let mut circuit = Circuit::new(std::env::temp_dir().join(ulid::Ulid::new().to_string())).unwrap();
     
     // Load 5 records
     let records: Vec<_> = (1..=5)
@@ -75,7 +86,7 @@ fn test_flat_mode_sends_all_records() {
 #[test]
 fn test_streaming_multiple_updates() {
     // Test updating multiple records at once
-    let mut circuit = Circuit::new();
+    let mut circuit = Circuit::new(std::env::temp_dir().join(ulid::Ulid::new().to_string())).unwrap();
     
     // Load records
     circuit.init_load(vec![
@@ -108,7 +119,7 @@ fn test_streaming_multiple_updates() {
 #[test]
 fn test_streaming_mixed_operations() {
     // Test mix of create, update, delete in one batch
-    let mut circuit = Circuit::new();
+    let mut circuit = Circuit::new(std::env::temp_dir().join(ulid::Ulid::new().to_string())).unwrap();
     
     // Initial load
     circuit.init_load(vec![
@@ -147,7 +158,7 @@ fn test_streaming_mixed_operations() {
 #[ignore = "Fails due to dependency/filter issue unrelated to core fix"]
 fn test_streaming_update_filtered_record() {
     // Test updating a record in a filtered view
-    let mut circuit = Circuit::new();
+    let mut circuit = Circuit::new(std::env::temp_dir().join(ulid::Ulid::new().to_string())).unwrap();
     
     // Load records (only 2 are active)
     circuit.init_load(vec![
@@ -203,15 +214,11 @@ fn test_fast_path_single_update() {
     view.last_hash = "initial_hash".to_string();
     
     // Setup database
-    let mut db = Database::new();
-    let tb = db.ensure_table("users");
-    tb.rows.insert("users:1".into(), json!({"name": "Alice"}).into());
-    tb.rows.insert("users:2".into(), json!({"name": "Bob"}).into());
-    tb.rows.insert("users:3".into(), json!({"name": "Carol"}).into());
-    tb.zset.insert("users:1".into(), 1);
-    tb.zset.insert("users:2".into(), 1);
-    tb.zset.insert("users:3".into(), 1);
-    
+    let mut db = SpookyDb::new(std::env::temp_dir().join(ulid::Ulid::new().to_string())).unwrap();
+    // removed var tb
+    insert_record(&mut db, "users", &"users:1".to_string(), json!({"name": "Alice"}).into());
+    insert_record(&mut db, "users", &"users:2".to_string(), json!({"name": "Bob"}).into());
+    insert_record(&mut db, "users", &"users:3".to_string(), json!({"name": "Carol"}).into());
     // Process content update (weight=0, content_changed=true)
     let delta = Delta {
         table: "users".into(),
@@ -235,7 +242,7 @@ fn test_fast_path_single_update() {
 #[test]
 fn test_hash_computation_unchanged() {
     // Verify hash computation still works correctly
-    let mut circuit = Circuit::new();
+    let mut circuit = Circuit::new(std::env::temp_dir().join(ulid::Ulid::new().to_string())).unwrap();
     
     let plan = QueryPlan {
         id: "test".to_string(),
@@ -292,7 +299,7 @@ fn test_hash_computation_unchanged() {
 
 #[test]
 fn test_large_view_single_update_performance() {
-    let mut circuit = Circuit::new();
+    let mut circuit = Circuit::new(std::env::temp_dir().join(ulid::Ulid::new().to_string())).unwrap();
     
     // Load 1000 records
     let records: Vec<_> = (1..=1000)
@@ -328,7 +335,7 @@ fn test_large_view_single_update_performance() {
 #[test]
 fn test_subquery_view_update() {
     // Test that subquery views also only send changed records
-    let mut circuit = Circuit::new();
+    let mut circuit = Circuit::new(std::env::temp_dir().join(ulid::Ulid::new().to_string())).unwrap();
     
     // Load data
     circuit.init_load(vec![

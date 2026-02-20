@@ -7,8 +7,8 @@ use ssp::{JoinCondition, Operator, Path, Predicate, Projection, QueryPlan, Spook
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
-#[global_allocator]
-static ALLOC: AllocProfiler = AllocProfiler::system();
+// #[global_allocator]
+// static ALLOC: AllocProfiler = AllocProfiler::system();
 
 fn main() {
     divan::main();
@@ -124,6 +124,28 @@ fn setup(limit: Option<u32>) -> Vec<BatchEntry> {
 // 3. Der Benchmark
 // --------------------------------------------------------------------------
 
+
+fn setup_base_circuit(num_records: usize) -> ssp::engine::circuit::Circuit {
+    let mut circuit = ssp::engine::circuit::Circuit::new(std::env::temp_dir().join(ulid::Ulid::new().to_string())).unwrap();
+    let records = (0..num_records)
+        .map(|i| {
+            let mut data = std::collections::BTreeMap::new();
+            data.insert(smol_str::SmolStr::new("id"), ssp::engine::types::SpookyValue::Str(smol_str::SmolStr::new(format!("user:{}", i))));
+            data.insert(smol_str::SmolStr::new("type"), ssp::engine::types::SpookyValue::Str(smol_str::SmolStr::new("user")));
+            data.insert(smol_str::SmolStr::new("score"), ssp::engine::types::SpookyValue::from(i as f64));
+            
+            ssp::engine::circuit::dto::LoadRecord {
+                table: "perf".to_string().into(),
+                id: format!("user:{}", i).into(),
+                data: ssp::engine::types::SpookyValue::Object(data),
+                
+            }
+        })
+        .collect::<Vec<_>>();
+    circuit.init_load(records);
+    circuit
+}
+
 #[divan::bench(sample_count = 1_000, sample_size = 1)]
 fn bench_ingest_0(bencher: Bencher) {
     let records = read_users(Some(100));
@@ -138,7 +160,7 @@ fn bench_ingest_0(bencher: Bencher) {
         })
         .collect();
     bencher
-        .with_inputs(|| (Circuit::new(), new_entries.clone()))
+        .with_inputs(|| (Circuit::new(std::env::temp_dir().join(format!("ssp_test_db_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()))).unwrap(), new_entries.clone()))
         .bench_values(|(mut circuit, entries)| {
             for entry in entries {
                 circuit.ingest_single(entry);
@@ -156,7 +178,7 @@ fn bench_ingest_10k(bencher: Bencher) {
 
     // A) Den "schweren" Basis-Circuit mit 10.000 Items bauen
     let initial_data = setup(Some(10_000));
-    let mut base_circuit = Circuit::new();
+    let mut base_circuit = Circuit::new(std::env::temp_dir().join(format!("ssp_test_db_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()))).unwrap();
     for entry in initial_data {
         base_circuit.ingest_single(entry);
     }
@@ -177,7 +199,7 @@ fn bench_ingest_10k(bencher: Bencher) {
     // 2. INPUT & MESSUNG
     // ======================================================
     bencher
-        .with_inputs(|| (base_circuit.clone(), new_entries.clone()))
+        .with_inputs(|| (setup_base_circuit(1000), new_entries.clone()))
         .bench_values(|(mut circuit, entries)| {
             for entry in entries {
                 circuit.ingest_single(entry);
@@ -195,7 +217,7 @@ fn bench_ingest_100k(bencher: Bencher) {
 
     // A) Den "schweren" Basis-Circuit mit 10.000 Items bauen
     let initial_data = setup(Some(100_000));
-    let mut base_circuit = Circuit::new();
+    let mut base_circuit = Circuit::new(std::env::temp_dir().join(format!("ssp_test_db_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()))).unwrap();
     for entry in initial_data {
         base_circuit.ingest_single(entry);
     }
@@ -216,7 +238,7 @@ fn bench_ingest_100k(bencher: Bencher) {
     // 2. INPUT & MESSUNG
     // ======================================================
     bencher
-        .with_inputs(|| (base_circuit.clone(), new_entries.clone()))
+        .with_inputs(|| (setup_base_circuit(1000), new_entries.clone()))
         .bench_values(|(mut circuit, entries)| {
             for entry in entries {
                 circuit.ingest_single(entry);
@@ -234,7 +256,7 @@ fn bench_ingest_1000k(bencher: Bencher) {
 
     // A) Den "schweren" Basis-Circuit mit 10.000 Items bauen
     let initial_data = setup(Some(1_000_000));
-    let mut base_circuit = Circuit::new();
+    let mut base_circuit = Circuit::new(std::env::temp_dir().join(format!("ssp_test_db_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()))).unwrap();
     for entry in initial_data {
         base_circuit.ingest_single(entry);
     }
@@ -255,7 +277,7 @@ fn bench_ingest_1000k(bencher: Bencher) {
     // 2. INPUT & MESSUNG
     // ======================================================
     bencher
-        .with_inputs(|| (base_circuit.clone(), new_entries.clone()))
+        .with_inputs(|| (setup_base_circuit(1000), new_entries.clone()))
         .bench_values(|(mut circuit, entries)| {
             for entry in entries {
                 circuit.ingest_single(entry);
@@ -271,7 +293,7 @@ fn bench_register_0(bencher: Bencher) {
     // 1. GLOBAL SETUP (Einmalig ganz am Anfang)
     // ======================================================
 
-    let base_circuit = Circuit::new();
+    let base_circuit = Circuit::new(std::env::temp_dir().join(format!("ssp_test_db_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()))).unwrap();
     let plan = QueryPlan {
         id: "view:1".to_string(),
         root: Operator::Limit {
@@ -287,7 +309,7 @@ fn bench_register_0(bencher: Bencher) {
     // 2. INPUT & MESSUNG
     // ======================================================
     bencher
-        .with_inputs(|| (base_circuit.clone(), plan.clone()))
+        .with_inputs(|| (setup_base_circuit(1000), plan.clone()))
         .bench_values(|(mut circuit, plan)| {
             circuit.register_view(plan, None, None);
             black_box(circuit);
@@ -301,7 +323,7 @@ fn bench_register_1k(bencher: Bencher) {
     // ======================================================
 
     let initial_data = setup(Some(1_000));
-    let mut base_circuit = Circuit::new();
+    let mut base_circuit = Circuit::new(std::env::temp_dir().join(format!("ssp_test_db_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()))).unwrap();
     for entry in initial_data {
         base_circuit.ingest_single(entry);
     }
@@ -320,7 +342,7 @@ fn bench_register_1k(bencher: Bencher) {
     // 2. INPUT & MESSUNG
     // ======================================================
     bencher
-        .with_inputs(|| (base_circuit.clone(), plan.clone()))
+        .with_inputs(|| (setup_base_circuit(1000), plan.clone()))
         .bench_values(|(mut circuit, plan)| {
             circuit.register_view(plan, None, None);
             black_box(circuit);
@@ -335,7 +357,7 @@ fn bench_register_10k(bencher: Bencher) {
     // ======================================================
 
     let initial_data = setup(Some(10_000));
-    let mut base_circuit = Circuit::new();
+    let mut base_circuit = Circuit::new(std::env::temp_dir().join(format!("ssp_test_db_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()))).unwrap();
     for entry in initial_data {
         base_circuit.ingest_single(entry);
     }
@@ -354,7 +376,7 @@ fn bench_register_10k(bencher: Bencher) {
     // 2. INPUT & MESSUNG
     // ======================================================
     bencher
-        .with_inputs(|| (base_circuit.clone(), plan.clone()))
+        .with_inputs(|| (setup_base_circuit(1000), plan.clone()))
         .bench_values(|(mut circuit, plan)| {
             circuit.register_view(plan, None, None);
             black_box(circuit);
@@ -368,7 +390,7 @@ fn bench_register_2k4v1ki(bencher: Bencher) {
     // ======================================================
 
     let initial_data = setup(Some(10));
-    let mut base_circuit = Circuit::new();
+    let mut base_circuit = Circuit::new(std::env::temp_dir().join(format!("ssp_test_db_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()))).unwrap();
     for entry in initial_data {
         base_circuit.ingest_single(entry);
     }
@@ -527,7 +549,7 @@ fn bench_register_2k4v1ki(bencher: Bencher) {
     // 2. INPUT & MESSUNG
     // ======================================================
     bencher
-        .with_inputs(|| (base_circuit.clone(), comment_entries.clone()))
+        .with_inputs(|| (setup_base_circuit(1000), comment_entries.clone()))
         .bench_values(|(mut circuit, entries)| {
             for entry in entries {
                 circuit.ingest_single(entry);

@@ -12,7 +12,18 @@
 //! Run with: cargo test --package ssp --lib -- engine::view::ultimate_tests --nocapture
 
 #![allow(unused)]
-use ssp::engine::circuit::{Circuit, Database, Table};
+use ssp::engine::circuit::Circuit;
+use spooky_db_module::db::SpookyDb;
+
+fn insert_record(db: &mut spooky_db_module::db::SpookyDb, table: &str, id: &str, record: ssp::engine::types::SpookyValue) {
+    let bytes = spooky_db_module::serialization::from_spooky(&record).unwrap();
+    db.apply_mutation(table, spooky_db_module::db::Operation::Create, id, Some(&bytes.0), None).unwrap();
+}
+
+fn delete_record(db: &mut spooky_db_module::db::SpookyDb, table: &str, id: &str) {
+    db.apply_mutation(table, spooky_db_module::db::Operation::Delete, id, None, None).unwrap();
+}
+
 use ssp::engine::operators::{Operator, Predicate, Projection, OrderSpec};
 use ssp::engine::types::{
     BatchDeltas, Delta, FastMap, Path, SpookyValue, ZSet,
@@ -33,14 +44,14 @@ fn make_zset(items: &[(&str, i64)]) -> ZSet {
 }
 
 fn make_user(id: &str, name: &str) -> SpookyValue {
-    let mut map = FastMap::default();
+    let mut map = std::collections::BTreeMap::new();
     map.insert(SmolStr::new("id"), SpookyValue::Str(SmolStr::new(format!("user:{}", id))));
     map.insert(SmolStr::new("name"), SpookyValue::Str(SmolStr::new(name)));
     SpookyValue::Object(map)
 }
 
 fn make_thread(id: &str, author_id: &str, title: &str) -> SpookyValue {
-    let mut map = FastMap::default();
+    let mut map = std::collections::BTreeMap::new();
     map.insert(SmolStr::new("id"), SpookyValue::Str(SmolStr::new(format!("thread:{}", id))));
     map.insert(SmolStr::new("author"), SpookyValue::Str(SmolStr::new(format!("user:{}", author_id))));
     map.insert(SmolStr::new("title"), SpookyValue::Str(SmolStr::new(title)));
@@ -48,7 +59,7 @@ fn make_thread(id: &str, author_id: &str, title: &str) -> SpookyValue {
 }
 
 fn make_comment(id: &str, thread_id: &str, author_id: &str, text: &str) -> SpookyValue {
-    let mut map = FastMap::default();
+    let mut map = std::collections::BTreeMap::new();
     map.insert(SmolStr::new("id"), SpookyValue::Str(SmolStr::new(format!("comment:{}", id))));
     map.insert(SmolStr::new("thread"), SpookyValue::Str(SmolStr::new(format!("thread:{}", thread_id))));
     map.insert(SmolStr::new("author"), SpookyValue::Str(SmolStr::new(format!("user:{}", author_id))));
@@ -56,14 +67,13 @@ fn make_comment(id: &str, thread_id: &str, author_id: &str, text: &str) -> Spook
     SpookyValue::Object(map)
 }
 
-fn setup_db_with_users(users: &[(&str, &str)]) -> Database {
-    let mut db = Database::new();
-    let table = db.ensure_table("user");
+fn setup_db_with_users(users: &[(&str, &str)]) -> SpookyDb {
+    let mut db = SpookyDb::new(std::env::temp_dir().join(ulid::Ulid::new().to_string())).unwrap();
+    // removed var table
     
     for (id, name) in users {
-        table.rows.insert(SmolStr::new(*id), make_user(id, name));
-        table.zset.insert(make_zset_key("user", id), 1);
-    }
+        insert_record(&mut db, "user", &(SmolStr::new(*id)).to_string(), make_user(id, name));
+        }
     
     db
 }
@@ -71,22 +81,20 @@ fn setup_db_with_users(users: &[(&str, &str)]) -> Database {
 fn setup_db_with_threads_and_users(
     users: &[(&str, &str)],
     threads: &[(&str, &str, &str)], // (id, author_id, title)
-) -> Database {
-    let mut db = Database::new();
+) -> SpookyDb {
+    let mut db = SpookyDb::new(std::env::temp_dir().join(ulid::Ulid::new().to_string())).unwrap();
     
     // Add users
-    let user_table = db.ensure_table("user");
+    // removed var user_table
     for (id, name) in users {
-        user_table.rows.insert(SmolStr::new(*id), make_user(id, name));
-        user_table.zset.insert(make_zset_key("user", id), 1);
-    }
+        insert_record(&mut db, "user", &(SmolStr::new(*id)).to_string(), make_user(id, name));
+        }
     
     // Add threads
-    let thread_table = db.ensure_table("thread");
+    // removed var thread_table
     for (id, author_id, title) in threads {
-        thread_table.rows.insert(SmolStr::new(*id), make_thread(id, author_id, title));
-        thread_table.zset.insert(make_zset_key("thread", id), 1);
-    }
+        insert_record(&mut db, "thread", &(SmolStr::new(*id)).to_string(), make_thread(id, author_id, title));
+        }
     
     db
 }
@@ -502,10 +510,8 @@ mod subquery_tests {
         assert!(view.cache.is_member("thread:2"));
         
         // Delete thread:1 from database
-        let thread_table = db.tables.get_mut("thread").unwrap();
-        thread_table.rows.remove("1");
-        thread_table.zset.remove("thread:1");
-        
+        // removed var thread_table
+        delete_record(&mut db, "thread", &("1").to_string());
         // Process deletion
         let mut batch = BatchDeltas::new();
         batch.membership.insert("thread".to_string(), make_zset(&[("thread:1", -1)]));
@@ -553,10 +559,8 @@ mod subquery_tests {
         assert!(view.cache.is_member("user:1"));
         
         // Delete the only thread
-        let thread_table = db.tables.get_mut("thread").unwrap();
-        thread_table.rows.remove("1");
-        thread_table.zset.remove("thread:1");
-        
+        // removed var thread_table
+        delete_record(&mut db, "thread", &("1").to_string());
         // Process deletion
         let mut batch = BatchDeltas::new();
         batch.membership.insert("thread".to_string(), make_zset(&[("thread:1", -1)]));
@@ -598,10 +602,8 @@ mod subquery_tests {
         view.process_batch(&BatchDeltas::new(), &db);
         
         // Add new thread with same author
-        let thread_table = db.tables.get_mut("thread").unwrap();
-        thread_table.rows.insert(SmolStr::new("2"), make_thread("2", "1", "Thread 2"));
-        thread_table.zset.insert(SmolStr::new("thread:2"), 1);
-        
+        // removed var thread_table
+        insert_record(&mut db, "thread", &(SmolStr::new("2")).to_string(), make_thread("2", "1", "Thread 2"));
         // Process addition
         let mut batch = BatchDeltas::new();
         batch.membership.insert("thread".to_string(), make_zset(&[("thread:2", 1)]));
@@ -647,8 +649,8 @@ mod content_update_tests {
         view.process_batch(&BatchDeltas::new(), &db);
         
         // Update user content
-        let user_table = db.tables.get_mut("user").unwrap();
-        user_table.rows.insert(SmolStr::new("1"), make_user("1", "Alice Updated"));
+        // removed var user_table
+        insert_record(&mut db, "user", &(SmolStr::new("1")).to_string(), make_user("1", "Alice Updated"));
         
         // Process content update (weight=0, content_changed=true)
         let delta = Delta {
@@ -700,16 +702,14 @@ mod content_update_tests {
     /// TEST: Content update that makes record no longer match filter should remove it
     #[test]
     fn test_content_update_filter_mismatch_removes() {
-        let mut db = Database::new();
-        let user_table = db.ensure_table("user");
+        let mut db = SpookyDb::new(std::env::temp_dir().join(ulid::Ulid::new().to_string())).unwrap();
+        // removed var user_table
         
         // Add user with status = "active"
-        let mut user_data = FastMap::default();
+        let mut user_data = std::collections::BTreeMap::new();
         user_data.insert(SmolStr::new("id"), SpookyValue::Str(SmolStr::new("user:1")));
         user_data.insert(SmolStr::new("status"), SpookyValue::Str(SmolStr::new("active")));
-        user_table.rows.insert(SmolStr::new("1"), SpookyValue::Object(user_data));
-        user_table.zset.insert(SmolStr::new("user:1"), 1);
-        
+        insert_record(&mut db, "user", &(SmolStr::new("1")).to_string(), SpookyValue::Object(user_data));
         // View: WHERE status = "active"
         let plan = QueryPlan {
             id: "active_users".to_string(),
@@ -728,11 +728,11 @@ mod content_update_tests {
         assert!(view.cache.is_member("user:1"));
         
         // Update user to status = "inactive"
-        let user_table = db.tables.get_mut("user").unwrap();
-        let mut updated_user = FastMap::default();
+        // removed var user_table
+        let mut updated_user = std::collections::BTreeMap::new();
         updated_user.insert(SmolStr::new("id"), SpookyValue::Str(SmolStr::new("user:1")));
         updated_user.insert(SmolStr::new("status"), SpookyValue::Str(SmolStr::new("inactive")));
-        user_table.rows.insert(SmolStr::new("1"), SpookyValue::Object(updated_user));
+        insert_record(&mut db, "user", &(SmolStr::new("1")).to_string(), SpookyValue::Object(updated_user));
         
         // Process content update
         let delta = Delta {
@@ -809,7 +809,7 @@ mod deserialization_tests {
     /// TEST: View should work correctly after deserialization + initialization
     #[test]
     fn test_view_works_after_deserialize() {
-        let db = setup_db_with_users(&[("1", "Alice")]);
+        let mut db = setup_db_with_users(&[("1", "Alice")]);
         let plan = simple_scan_plan("user");
         let mut original = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -824,11 +824,9 @@ mod deserialization_tests {
         loaded.initialize_after_deserialize();
         
         // Add new record
-        let mut db2 = db.clone();
-        let user_table = db2.tables.get_mut("user").unwrap();
-        user_table.rows.insert(SmolStr::new("2"), make_user("2", "Bob"));
-        user_table.zset.insert(SmolStr::new("user:2"), 1);
-        
+        let mut db2 = spooky_db_module::db::SpookyDb::new(std::env::temp_dir().join(ulid::Ulid::new().to_string())).unwrap();
+        /* removed var */
+        insert_record(&mut db2, "user", &(SmolStr::new("2")).to_string(), make_user("2", "Bob"));
         // Should process correctly
         let delta = Delta {
             table: SmolStr::new("user"),
@@ -992,10 +990,8 @@ mod limit_tests {
         view.process_batch(&BatchDeltas::new(), &db);
         
         // Add user:0 (should be first in order)
-        let user_table = db.tables.get_mut("user").unwrap();
-        user_table.rows.insert(SmolStr::new("0"), make_user("0", "Zara"));
-        user_table.zset.insert(SmolStr::new("user:0"), 1);
-        
+        // removed var user_table
+        insert_record(&mut db, "user", &(SmolStr::new("0")).to_string(), make_user("0", "Zara"));
         let mut batch = BatchDeltas::new();
         batch.membership.insert("user".to_string(), make_zset(&[("user:0", 1)]));
         let result = view.process_batch(&batch, &db);
@@ -1050,8 +1046,8 @@ mod edge_event_tests {
         assert_eq!(created, 1, "Step 1: Should emit Created");
         
         // 2. UPDATE
-        let user_table = db.tables.get_mut("user").unwrap();
-        user_table.rows.insert(SmolStr::new("1"), make_user("1", "Alice Updated"));
+        // removed var user_table
+        insert_record(&mut db, "user", &(SmolStr::new("1")).to_string(), make_user("1", "Alice Updated"));
         
         let update_delta = Delta {
             table: SmolStr::new("user"),
@@ -1173,15 +1169,14 @@ mod stress_tests {
     /// TEST: Large batch should handle correctly
     #[test]
     fn test_large_batch() {
-        let mut db = Database::new();
-        let user_table = db.ensure_table("user");
+        let mut db = SpookyDb::new(std::env::temp_dir().join(ulid::Ulid::new().to_string())).unwrap();
+        // removed var user_table
         
         // Add 1000 users
         for i in 0..1000 {
             let id = format!("{}", i);
-            user_table.rows.insert(SmolStr::new(&id), make_user(&id, &format!("User {}", i)));
-            user_table.zset.insert(make_zset_key("user", &id), 1);
-        }
+            insert_record(&mut db, "user", &(SmolStr::new(&id)).to_string(), make_user(&id, &format!("User {}", i)));
+            }
         
         let plan = simple_scan_plan("user");
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
@@ -1198,7 +1193,7 @@ mod stress_tests {
     /// TEST: Empty database should handle correctly
     #[test]
     fn test_empty_database() {
-        let db = Database::new();
+        let db = SpookyDb::new(std::env::temp_dir().join(ulid::Ulid::new().to_string())).unwrap();
         let plan = simple_scan_plan("user");
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
         
@@ -1281,7 +1276,7 @@ mod integration_tests {
     /// 5. view2 unregistered -> edges for view2 deleted
     #[test]
     fn test_your_exact_scenario() {
-        let mut db = Database::new();
+        let mut db = SpookyDb::new(std::env::temp_dir().join(ulid::Ulid::new().to_string())).unwrap();
         db.ensure_table("user");
         
         // View 1: SELECT * FROM user WHERE id = 'user:1' LIMIT 1
@@ -1293,10 +1288,8 @@ mod integration_tests {
         let mut view2 = View::new(plan2, None, Some(ViewResultFormat::Streaming));
         
         // === STEP 1: user:1 signs up ===
-        let user_table = db.tables.get_mut("user").unwrap();
-        user_table.rows.insert(SmolStr::new("1"), make_user("1", "User 1"));
-        user_table.zset.insert(SmolStr::new("user:1"), 1);
-        
+        // removed var user_table
+        insert_record(&mut db, "user", &(SmolStr::new("1")).to_string(), make_user("1", "User 1"));
         let delta1 = Delta {
             table: SmolStr::new("user"),
             key: SmolStr::new("user:1"),
@@ -1317,10 +1310,8 @@ mod integration_tests {
         assert_eq!(created2, 1, "view2: 1 edge created");
         
         // === STEP 2: user:2 signs up ===
-        let user_table = db.tables.get_mut("user").unwrap();
-        user_table.rows.insert(SmolStr::new("2"), make_user("2", "User 2"));
-        user_table.zset.insert(SmolStr::new("user:2"), 1);
-        
+        // removed var user_table
+        insert_record(&mut db, "user", &(SmolStr::new("2")).to_string(), make_user("2", "User 2"));
         let delta2 = Delta {
             table: SmolStr::new("user"),
             key: SmolStr::new("user:2"),
@@ -1346,8 +1337,8 @@ mod integration_tests {
         assert_eq!(created, 1, "view2: 1 edge created for user:2");
         
         // === STEP 3: user:1 updates ===
-        let user_table = db.tables.get_mut("user").unwrap();
-        user_table.rows.insert(SmolStr::new("1"), make_user("1", "User 1 Updated"));
+        // removed var user_table
+        insert_record(&mut db, "user", &(SmolStr::new("1")).to_string(), make_user("1", "User 1 Updated"));
         
         let delta3 = Delta {
             table: SmolStr::new("user"),
@@ -1369,10 +1360,8 @@ mod integration_tests {
         assert_eq!(updated2, 1, "view2: 1 edge updated");
         
         // === STEP 4: user:2 deletes ===
-        let user_table = db.tables.get_mut("user").unwrap();
-        user_table.rows.remove("2");
-        user_table.zset.remove("user:2");
-        
+        // removed var user_table
+        delete_record(&mut db, "user", &("2").to_string());
         let delta4 = Delta {
             table: SmolStr::new("user"),
             key: SmolStr::new("user:2"),

@@ -1,4 +1,4 @@
-use super::circuit::Database;
+use spooky_db_module::db::SpookyDb;
 use super::eval::{
     apply_numeric_filter, compare_spooky_values, hash_spooky_value, resolve_nested_value,
     NumericFilterConfig,
@@ -113,7 +113,7 @@ impl View {
     }
 
     /// Process a delta for this view - optimized fast path for simple views
-    pub fn process_delta(&mut self, delta: &Delta, db: &Database) -> Option<ViewUpdate> {
+    pub fn process_delta(&mut self, delta: &Delta, db: &SpookyDb) -> Option<ViewUpdate> {
         // Fast check: Does this view even care about this table?
         if !self
             .referenced_tables_cached
@@ -159,7 +159,7 @@ impl View {
     }
 
     /// Handle content-only update (no membership change)
-    fn process_content_update(&mut self, delta: &Delta, db: &Database) -> Option<ViewUpdate> {
+    fn process_content_update(&mut self, delta: &Delta, db: &SpookyDb) -> Option<ViewUpdate> {
         let is_in_cache = self.cache.contains_key(&delta.key);
         let matches_filter = self.record_matches_view(&delta.key, db);
 
@@ -232,7 +232,7 @@ impl View {
     /// Check if a record matches this view's filters
     /// OPTIMIZATION: Avoid format! allocations using parse_zset_key
     #[inline]
-    fn record_matches_view(&self, key: &SmolStr, db: &Database) -> bool {
+    fn record_matches_view(&self, key: &SmolStr, db: &SpookyDb) -> bool {
         match &self.plan.root {
             Operator::Scan { table } => parse_zset_key(key)
                 .map(|(t, _)| t == table)
@@ -287,7 +287,7 @@ impl View {
 
     /// Try fast single-record processing for simple views (Scan, Filter)
     /// Returns Some(result) if fast path was taken, None if fallback needed
-    fn try_fast_single(&mut self, delta: &Delta, db: &Database) -> Option<Option<ViewUpdate>> {
+    fn try_fast_single(&mut self, delta: &Delta, db: &SpookyDb) -> Option<Option<ViewUpdate>> {
         // Optimization: Early check using pre-computed flags
         if !self.is_simple_scan && !self.is_simple_filter {
             return None;
@@ -448,7 +448,7 @@ impl View {
     pub fn process_batch(
         &mut self,
         batch_deltas: &BatchDeltas,
-        db: &Database,
+        db: &SpookyDb,
     ) -> Option<ViewUpdate> {
         // FIX: FIRST RUN CHECK
         let is_first_run = !self.has_run;
@@ -618,7 +618,7 @@ impl View {
     ///
     /// MEMBERSHIP MODEL: After expansion, all weights are normalized to 1.
     /// OPTIMIZATION: Uses shared accumulator to avoid allocations per parent.
-    fn expand_with_subqueries(&self, target_set: &mut ZSet, db: &Database) {
+    fn expand_with_subqueries(&self, target_set: &mut ZSet, db: &SpookyDb) {
         if !self.has_subqueries() {
             return;
         }
@@ -635,7 +635,7 @@ impl View {
         for (parent_key, _parent_weight) in parent_records {
             // Note: We ignore parent_weight for membership model
 
-            let parent_data = match self.get_row_value(&parent_key, db) {
+            let parent_data = match self.get_row_value(&parent_key, db, &[]) {
                 Some(data) => data,
                 None => continue,
             };
@@ -643,7 +643,7 @@ impl View {
             // Recursively evaluate into accumulator
             self.evaluate_subqueries_for_parent_into(
                 &self.plan.root,
-                parent_data,
+                &parent_data,
                 db,
                 &mut subquery_additions,
             );
@@ -671,7 +671,7 @@ impl View {
         &self,
         op: &Operator,
         parent_context: &SpookyValue,
-        db: &Database,
+        db: &SpookyDb,
         results: &mut ZSet,
     ) {
         match op {
@@ -694,9 +694,9 @@ impl View {
                             *results.entry(key.clone()).or_insert(0) += *weight;
 
                             // Recursively expand nested subqueries
-                            if let Some(record) = self.get_row_value(key, db) {
+                            if let Some(record) = self.get_row_value(key, db, &[]) {
                                 self.evaluate_subqueries_for_parent_into(
-                                    operator, record, db, results,
+                                    operator, &record, db, results,
                                 );
                             }
                         }
@@ -723,7 +723,7 @@ impl View {
     fn compute_view_delta(
         &mut self,
         deltas: &FastMap<String, ZSet>,
-        db: &Database,
+        db: &SpookyDb,
         is_first_run: bool,
     ) -> ZSet {
         if is_first_run {
@@ -760,7 +760,7 @@ impl View {
     }
 
     /// Compute full diff using membership semantics
-    fn compute_full_diff(&self, db: &Database) -> ZSet {
+    fn compute_full_diff(&self, db: &SpookyDb) -> ZSet {
         use crate::engine::types::ZSetMembershipOps;
 
         // Compute target state
@@ -933,7 +933,7 @@ impl View {
         &self,
         op: &Operator,
         deltas: &FastMap<String, ZSet>,
-        db: &Database,
+        db: &SpookyDb,
         context: Option<&SpookyValue>,
     ) -> Option<ZSet> {
         match op {
@@ -984,16 +984,16 @@ impl View {
     fn eval_snapshot<'a>(
         &self,
         op: &Operator,
-        db: &'a Database,
+        db: &'a SpookyDb,
         context: Option<&SpookyValue>,
     ) -> std::borrow::Cow<'a, ZSet> {
         use std::borrow::Cow;
 
         match op {
             Operator::Scan { table } => {
-                if let Some(tb) = db.tables.get(table) {
+                if let Some(zset) = db.get_table_zset(table) {
                     // Zero-copy borrow for scan operations
-                    Cow::Borrowed(&tb.zset)
+                    Cow::Borrowed(zset)
                 } else {
                     Cow::Owned(FastMap::default())
                 }
@@ -1027,12 +1027,18 @@ impl View {
 
                 if let Some(orders) = order_by {
                     items.sort_by(|a, b| {
-                        let row_a = self.get_row_value(a.0.as_str(), db);
-                        let row_b = self.get_row_value(b.0.as_str(), db);
+                        let mut field_names = Vec::new();
+                        for ord in orders {
+                            if !ord.field.is_empty() {
+                                field_names.push(ord.field.segments()[0].as_str());
+                            }
+                        }
+                        let row_a = self.get_row_value(a.0.as_str(), db, &field_names);
+                        let row_b = self.get_row_value(b.0.as_str(), db, &field_names);
 
                         for ord in orders {
-                            let val_a = resolve_nested_value(row_a, &ord.field);
-                            let val_b = resolve_nested_value(row_b, &ord.field);
+                            let val_a = resolve_nested_value(row_a.as_ref(), &ord.field);
+                            let val_b = resolve_nested_value(row_b.as_ref(), &ord.field);
 
                             let cmp = compare_spooky_values(val_a, val_b);
                             if cmp != Ordering::Equal {
@@ -1066,32 +1072,42 @@ impl View {
 
                 // 1. BUILD PHASE: Build Index for the RIGHT side
                 // Map: Hash of Join-Field -> List of (Key, Weight, FieldValue)
-                let mut right_index: FastMap<u64, Vec<(&SmolStr, &i64, &SpookyValue)>> =
+                let mut right_index: FastMap<u64, Vec<(&SmolStr, &i64, SpookyValue)>> =
                     FastMap::default();
 
+                let mut right_field_names = Vec::new();
+                if !on.right_field.is_empty() {
+                    right_field_names.push(on.right_field.segments()[0].as_str());
+                }
+
                 for (r_key, r_weight) in s_right.as_ref() {
-                    if let Some(r_val) = self.get_row_value(r_key.as_str(), db) {
-                        if let Some(r_field) = resolve_nested_value(Some(r_val), &on.right_field) {
+                    if let Some(r_val) = self.get_row_value(r_key.as_str(), db, &right_field_names) {
+                        if let Some(r_field) = resolve_nested_value(Some(&r_val), &on.right_field) {
                             let hash = hash_spooky_value(r_field);
                             right_index
                                 .entry(hash)
                                 .or_default()
-                                .push((r_key, r_weight, r_field));
+                                .push((r_key, r_weight, r_field.clone()));
                         }
                     }
                 }
 
+                let mut left_field_names = Vec::new();
+                if !on.left_field.is_empty() {
+                    left_field_names.push(on.left_field.segments()[0].as_str());
+                }
+
                 // 2. PROBE PHASE: Iterate Left and lookup Right (O(1))
                 for (l_key, l_weight) in s_left.as_ref() {
-                    if let Some(l_val) = self.get_row_value(l_key.as_str(), db) {
-                        if let Some(l_field) = resolve_nested_value(Some(l_val), &on.left_field) {
+                    if let Some(l_val) = self.get_row_value(l_key.as_str(), db, &left_field_names) {
+                        if let Some(l_field) = resolve_nested_value(Some(&l_val), &on.left_field) {
                             let hash = hash_spooky_value(l_field);
 
                             // Hash Lookup + Verification
                             if let Some(matches) = right_index.get(&hash) {
                                 for (_r_key, r_weight, r_field) in matches {
                                     // Verify actual equality!
-                                    if compare_spooky_values(Some(l_field), Some(*r_field))
+                                    if compare_spooky_values(Some(l_field), Some(r_field))
                                         == Ordering::Equal
                                     {
                                         let w = l_weight * *r_weight;
@@ -1112,29 +1128,9 @@ impl View {
     /// OPTIMIZATION: Avoid allocation by trying raw ID first.
     /// If your DB consistently uses one format, simplify this.
     #[inline]
-    pub fn get_row_value<'a>(&self, key: &str, db: &'a Database) -> Option<&'a SpookyValue> {
+    pub fn get_row_value(&self, key: &str, db: &SpookyDb, fields: &[&str]) -> Option<SpookyValue> {
         let (table_name, id) = parse_zset_key(key)?;
-        let table = db.tables.get(table_name)?;
-
-        // Fast path: Try raw ID (most common case)
-        if let Some(row) = table.rows.get(id) {
-            return Some(row);
-        }
-
-        // Slow path: Try with table prefix
-        // TODO: Normalize row key format at ingestion to eliminate this branch
-        // For now, use a static buffer pattern to reduce allocations
-
-        // Check if the key format matches "table:id" where id doesn't have prefix
-        // If so, the row might be stored with the full key
-        if !id.contains(':') {
-            // ID doesn't have prefix, try reconstructing
-            // This allocation is unavoidable without changing ingestion
-            let prefixed = format!("{}:{}", table_name, id);
-            return table.rows.get(prefixed.as_str());
-        }
-
-        None
+        db.get_record_typed(table_name, id, fields).ok().flatten()
     }
 }
 
@@ -1142,6 +1138,7 @@ impl View {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use spooky_db_module::db::Operation;
 
     #[test]
     fn test_first_run_emits_additions() {
@@ -1155,10 +1152,10 @@ mod tests {
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
 
         // Setup: Create database with one record
-        let mut db = Database::new();
-        let table = db.ensure_table("users");
-        table.rows.insert(SmolStr::new("1"), SpookyValue::Null);
-        table.zset.insert(SmolStr::new("users:1"), 1);
+        let db_path = std::env::temp_dir().join(format!("ssp_test_db_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let mut db = SpookyDb::new(db_path).unwrap();
+        // Since we test raw table updates via DB, wait - tests need to use apply_mutation!
+        db.apply_mutation("users", Operation::Create, "1", None, Some(1)).unwrap();
 
         // Act: Process empty batch (simulates first run on registration)
         let result = view.process_batch(&BatchDeltas::new(), &db);

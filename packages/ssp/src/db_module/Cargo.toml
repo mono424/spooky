@@ -3,6 +3,9 @@ name = "spooky_db_module"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+path = "lib.rs"
+
 [dependencies]
 arrayvec = "0.7.6"
 cbor4ii = { version = "1.2.2", features = ["use_alloc", "serde1", "use_std"] }

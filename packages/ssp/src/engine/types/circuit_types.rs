@@ -1,4 +1,4 @@
-use super::spooky_value::SpookyValue;
+use super::SpookyValue;
 use smol_str::SmolStr;
 
 /// Operation type for record mutations

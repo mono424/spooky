@@ -13,7 +13,17 @@
 //!
 //! Run with: cargo test --package ssp --lib -- engine::view::query_delta_tests --nocapture
 
-use ssp::engine::circuit::Database;
+use spooky_db_module::db::SpookyDb;
+
+fn insert_record(db: &mut spooky_db_module::db::SpookyDb, table: &str, id: &str, record: ssp::engine::types::SpookyValue) {
+    let bytes = spooky_db_module::serialization::from_spooky(&record).unwrap();
+    db.apply_mutation(table, spooky_db_module::db::Operation::Create, id, Some(&bytes.0), None).unwrap();
+}
+
+fn delete_record(db: &mut spooky_db_module::db::SpookyDb, table: &str, id: &str) {
+    db.apply_mutation(table, spooky_db_module::db::Operation::Delete, id, None, None).unwrap();
+}
+
 use ssp::engine::operators::{Operator, OrderSpec, Predicate, Projection};
 use ssp::engine::types::{
     BatchDeltas, Delta, FastMap, FastHashSet, Path, SpookyValue, ZSet,
@@ -29,14 +39,14 @@ use std::collections::HashSet;
 // ============================================================================
 
 fn make_user(id: &str, name: &str) -> SpookyValue {
-    let mut map = FastMap::default();
+    let mut map = std::collections::BTreeMap::new();
     map.insert(SmolStr::new("id"), SpookyValue::Str(SmolStr::new(format!("user:{}", id))));
     map.insert(SmolStr::new("name"), SpookyValue::Str(SmolStr::new(name)));
     SpookyValue::Object(map)
 }
 
 fn make_thread(id: &str, author_id: &str, title: &str) -> SpookyValue {
-    let mut map = FastMap::default();
+    let mut map = std::collections::BTreeMap::new();
     map.insert(SmolStr::new("id"), SpookyValue::Str(SmolStr::new(format!("thread:{}", id))));
     map.insert(SmolStr::new("author"), SpookyValue::Str(SmolStr::new(format!("user:{}", author_id))));
     map.insert(SmolStr::new("title"), SpookyValue::Str(SmolStr::new(title)));
@@ -44,27 +54,26 @@ fn make_thread(id: &str, author_id: &str, title: &str) -> SpookyValue {
 }
 
 fn make_comment(id: &str, thread_id: &str, author_id: &str, text: &str, created_at: i64) -> SpookyValue {
-    let mut map = FastMap::default();
+    let mut map = std::collections::BTreeMap::new();
     map.insert(SmolStr::new("id"), SpookyValue::Str(SmolStr::new(format!("comment:{}", id))));
     map.insert(SmolStr::new("thread"), SpookyValue::Str(SmolStr::new(format!("thread:{}", thread_id))));
     map.insert(SmolStr::new("author"), SpookyValue::Str(SmolStr::new(format!("user:{}", author_id))));
     map.insert(SmolStr::new("text"), SpookyValue::Str(SmolStr::new(text)));
-    map.insert(SmolStr::new("created_at"), SpookyValue::Number(created_at as f64));
+    map.insert(SmolStr::new("created_at"), SpookyValue::from(created_at as f64));
     SpookyValue::Object(map)
 }
 
-fn setup_full_database() -> Database {
-    let mut db = Database::new();
+fn setup_full_database() -> SpookyDb {
+    let mut db = SpookyDb::new(std::env::temp_dir().join(ulid::Ulid::new().to_string())).unwrap();
     
     // Users
-    let user_table = db.ensure_table("user");
+    // removed var user_table
     for (id, name) in [("1", "Alice"), ("2", "Bob"), ("3", "Charlie"), ("4", "Diana")] {
-        user_table.rows.insert(SmolStr::new(id), make_user(id, name));
-        user_table.zset.insert(make_zset_key("user", id), 1);
-    }
+        insert_record(&mut db, "user", &(SmolStr::new(id)).to_string(), make_user(id, name));
+        }
     
     // Threads (with different authors)
-    let thread_table = db.ensure_table("thread");
+    // removed var thread_table
     let threads = [
         ("1", "1", "Zebra Topic"),      // Alice's thread (Z for desc order test)
         ("2", "1", "Apple Discussion"), // Alice's thread
@@ -72,12 +81,11 @@ fn setup_full_database() -> Database {
         ("4", "3", "Mango Chat"),       // Charlie's thread
     ];
     for (id, author, title) in threads {
-        thread_table.rows.insert(SmolStr::new(id), make_thread(id, author, title));
-        thread_table.zset.insert(make_zset_key("thread", id), 1);
-    }
+        insert_record(&mut db, "thread", &(SmolStr::new(id)).to_string(), make_thread(id, author, title));
+        }
     
     // Comments on thread:1
-    let comment_table = db.ensure_table("comment");
+    // removed var comment_table
     let comments = [
         ("1", "1", "2", "First comment", 100),   // Bob comments on thread:1
         ("2", "1", "3", "Second comment", 200),  // Charlie comments on thread:1
@@ -85,9 +93,8 @@ fn setup_full_database() -> Database {
         ("4", "2", "4", "Comment on thread 2", 150), // Diana comments on thread:2
     ];
     for (id, thread_id, author_id, text, created_at) in comments {
-        comment_table.rows.insert(SmolStr::new(id), make_comment(id, thread_id, author_id, text, created_at));
-        comment_table.zset.insert(make_zset_key("comment", id), 1);
-    }
+        insert_record(&mut db, "comment", &(SmolStr::new(id)).to_string(), make_comment(id, thread_id, author_id, text, created_at));
+        }
     
     db
 }
@@ -228,10 +235,8 @@ mod query1_tests {
         view.process_batch(&BatchDeltas::new(), &db);
         
         // Add new thread by Diana (user:4) who wasn't an author before
-        let thread_table = db.tables.get_mut("thread").unwrap();
-        thread_table.rows.insert(SmolStr::new("5"), make_thread("5", "4", "New Topic"));
-        thread_table.zset.insert(make_zset_key("thread", "5"), 1);
-        
+        // removed var thread_table
+        insert_record(&mut db, "thread", &(SmolStr::new("5")).to_string(), make_thread("5", "4", "New Topic"));
         let mut batch = BatchDeltas::new();
         batch.membership.insert("thread".to_string(), {
             let mut z = ZSet::default();
@@ -271,10 +276,8 @@ mod query1_tests {
         view.process_batch(&BatchDeltas::new(), &db);
         
         // Add another thread by Alice (user:1) who already has threads
-        let thread_table = db.tables.get_mut("thread").unwrap();
-        thread_table.rows.insert(SmolStr::new("5"), make_thread("5", "1", "Alice's New Topic"));
-        thread_table.zset.insert(make_zset_key("thread", "5"), 1);
-        
+        // removed var thread_table
+        insert_record(&mut db, "thread", &(SmolStr::new("5")).to_string(), make_thread("5", "1", "Alice's New Topic"));
         let mut batch = BatchDeltas::new();
         batch.membership.insert("thread".to_string(), {
             let mut z = ZSet::default();
@@ -314,10 +317,8 @@ mod query1_tests {
         view.process_batch(&BatchDeltas::new(), &db);
         
         // Delete thread:2 (Alice's second thread, she still has thread:1)
-        let thread_table = db.tables.get_mut("thread").unwrap();
-        thread_table.rows.remove("2");
-        thread_table.zset.remove("thread:2");
-        
+        // removed var thread_table
+        delete_record(&mut db, "thread", &("2").to_string());
         let mut batch = BatchDeltas::new();
         batch.membership.insert("thread".to_string(), {
             let mut z = ZSet::default();
@@ -357,10 +358,8 @@ mod query1_tests {
         view.process_batch(&BatchDeltas::new(), &db);
         
         // Delete thread:3 (Bob's only thread)
-        let thread_table = db.tables.get_mut("thread").unwrap();
-        thread_table.rows.remove("3");
-        thread_table.zset.remove("thread:3");
-        
+        // removed var thread_table
+        delete_record(&mut db, "thread", &("3").to_string());
         let mut batch = BatchDeltas::new();
         batch.membership.insert("thread".to_string(), {
             let mut z = ZSet::default();
@@ -395,12 +394,11 @@ mod query1_tests {
         let mut db = setup_full_database();
         
         // Add many threads to exceed limit
-        let thread_table = db.tables.get_mut("thread").unwrap();
+        // removed var thread_table
         for i in 5..=15 {
             let title = format!("Thread {}", i);
-            thread_table.rows.insert(SmolStr::new(&i.to_string()), make_thread(&i.to_string(), "1", &title));
-            thread_table.zset.insert(make_zset_key("thread", &i.to_string()), 1);
-        }
+            insert_record(&mut db, "thread", &(SmolStr::new(&i.to_string())).to_string(), make_thread(&i.to_string(), "1", &title));
+            }
         
         let plan = build_query1_plan(); // LIMIT 10
         let mut view = View::new(plan, None, Some(ViewResultFormat::Streaming));
@@ -482,8 +480,8 @@ mod query2_tests {
         view.process_batch(&BatchDeltas::new(), &db);
         
         // Update Alice's data
-        let user_table = db.tables.get_mut("user").unwrap();
-        user_table.rows.insert(SmolStr::new("1"), make_user("1", "Alice Updated"));
+        // removed var user_table
+        insert_record(&mut db, "user", &(SmolStr::new("1")).to_string(), make_user("1", "Alice Updated"));
         
         let delta = Delta {
             table: SmolStr::new("user"),
@@ -514,8 +512,8 @@ mod query2_tests {
         view.process_batch(&BatchDeltas::new(), &db);
         
         // Update Bob's data
-        let user_table = db.tables.get_mut("user").unwrap();
-        user_table.rows.insert(SmolStr::new("2"), make_user("2", "Bob Updated"));
+        // removed var user_table
+        insert_record(&mut db, "user", &(SmolStr::new("2")).to_string(), make_user("2", "Bob Updated"));
         
         let delta = Delta {
             table: SmolStr::new("user"),
@@ -710,10 +708,8 @@ mod query3_tests {
         view.process_batch(&BatchDeltas::new(), &db);
         
         // Add comment by Diana (user:4) who hasn't commented yet
-        let comment_table = db.tables.get_mut("comment").unwrap();
-        comment_table.rows.insert(SmolStr::new("5"), make_comment("5", "1", "4", "Diana's comment", 400));
-        comment_table.zset.insert(make_zset_key("comment", "5"), 1);
-        
+        // removed var comment_table
+        insert_record(&mut db, "comment", &(SmolStr::new("5")).to_string(), make_comment("5", "1", "4", "Diana's comment", 400));
         let mut batch = BatchDeltas::new();
         batch.membership.insert("comment".to_string(), {
             let mut z = ZSet::default();
@@ -752,10 +748,8 @@ mod query3_tests {
         view.process_batch(&BatchDeltas::new(), &db);
         
         // Add another comment by Bob (user:2) who already has a comment
-        let comment_table = db.tables.get_mut("comment").unwrap();
-        comment_table.rows.insert(SmolStr::new("5"), make_comment("5", "1", "2", "Bob's second comment", 400));
-        comment_table.zset.insert(make_zset_key("comment", "5"), 1);
-        
+        // removed var comment_table
+        insert_record(&mut db, "comment", &(SmolStr::new("5")).to_string(), make_comment("5", "1", "2", "Bob's second comment", 400));
         let mut batch = BatchDeltas::new();
         batch.membership.insert("comment".to_string(), {
             let mut z = ZSet::default();
@@ -795,10 +789,9 @@ mod query3_tests {
         
         // Add a second comment by Bob first
         {
-            let comment_table = db.tables.get_mut("comment").unwrap();
-            comment_table.rows.insert(SmolStr::new("5"), make_comment("5", "1", "2", "Bob's second", 400));
-            comment_table.zset.insert(make_zset_key("comment", "5"), 1);
-        }
+            // removed var comment_table
+            insert_record(&mut db, "comment", &(SmolStr::new("5")).to_string(), make_comment("5", "1", "2", "Bob's second", 400));
+            }
         
         let mut batch1 = BatchDeltas::new();
         batch1.membership.insert("comment".to_string(), {
@@ -809,10 +802,8 @@ mod query3_tests {
         view.process_batch(&batch1, &db);
         
         // Now delete comment:1 (Bob's first comment)
-        let comment_table = db.tables.get_mut("comment").unwrap();
-        comment_table.rows.remove("1");
-        comment_table.zset.remove("comment:1");
-        
+        // removed var comment_table
+        delete_record(&mut db, "comment", &("1").to_string());
         let mut batch2 = BatchDeltas::new();
         batch2.membership.insert("comment".to_string(), {
             let mut z = ZSet::default();
@@ -851,10 +842,8 @@ mod query3_tests {
         view.process_batch(&BatchDeltas::new(), &db);
         
         // Delete comment:2 (Charlie's only comment on this thread)
-        let comment_table = db.tables.get_mut("comment").unwrap();
-        comment_table.rows.remove("2");
-        comment_table.zset.remove("comment:2");
-        
+        // removed var comment_table
+        delete_record(&mut db, "comment", &("2").to_string());
         let mut batch = BatchDeltas::new();
         batch.membership.insert("comment".to_string(), {
             let mut z = ZSet::default();
@@ -921,8 +910,8 @@ mod query3_tests {
         view.process_batch(&BatchDeltas::new(), &db);
         
         // Update Alice (thread author)
-        let user_table = db.tables.get_mut("user").unwrap();
-        user_table.rows.insert(SmolStr::new("1"), make_user("1", "Alice Updated"));
+        // removed var user_table
+        insert_record(&mut db, "user", &(SmolStr::new("1")).to_string(), make_user("1", "Alice Updated"));
         
         let mut batch = BatchDeltas::new();
         batch.content_updates.insert("user".to_string(), FastHashSet::from_iter(vec![SmolStr::new("user:1")]));
@@ -984,8 +973,8 @@ mod integration_tests {
         assert_eq!(c3.iter().filter(|id| *id == "user:1").count(), 1);
         
         // Update user:1
-        let user_table = db.tables.get_mut("user").unwrap();
-        user_table.rows.insert(SmolStr::new("1"), make_user("1", "Alice Updated"));
+        // removed var user_table
+        insert_record(&mut db, "user", &(SmolStr::new("1")).to_string(), make_user("1", "Alice Updated"));
         
         let mut batch = BatchDeltas::new();
         batch.content_updates.insert("user".to_string(), FastHashSet::from_iter(vec![SmolStr::new("user:1")]));

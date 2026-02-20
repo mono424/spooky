@@ -7,7 +7,7 @@ use serde_json::json;
 
 #[test]
 fn test_dependency_graph_optimization() {
-    let mut circuit = Circuit::new();
+    let mut circuit = Circuit::new(std::env::temp_dir().join(format!("ssp_test_db_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()))).unwrap();
 
     // 1. Create a View dependent on "users" table
     let plan = QueryPlan {

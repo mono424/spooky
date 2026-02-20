@@ -1,3 +1,4 @@
+use serde::{Deserialize, Deserializer};
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 use smol_str::SmolStr;
 use std::cmp::Ordering;
@@ -370,6 +371,16 @@ impl Serialize for SpookyValue {
     }
 }
 
+impl<'de> Deserialize<'de> for SpookyValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(SpookyValue::from(value))
+    }
+}
+
 // ─── From impls ─────────────────────────────────────────────────────────────
 
 impl From<f64> for SpookyValue {
@@ -553,14 +564,14 @@ impl From<SpookyValue> for serde_json::Value {
 #[macro_export]
 macro_rules! spooky_obj {
     ({ $($key:expr => $val:tt),* $(,)? }) => {{
-        let mut map = FastMap::default();
+        let mut map = std::collections::BTreeMap::new();
         $(
             map.insert(
-                SmolStr::new($key),
-                SpookyValue::from(spooky_obj!(@value $val))
+                smol_str::SmolStr::new($key),
+                $crate::spooky_value::SpookyValue::from(spooky_obj!(@value $val))
             );
         )*
-        SpookyValue::Object(map)
+        $crate::spooky_value::SpookyValue::Object(map)
     }};
 
     (@value { $($inner:tt)* }) => {

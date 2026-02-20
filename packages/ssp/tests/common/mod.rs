@@ -36,7 +36,7 @@ impl ViewUpdateExt for ViewUpdate {
 
 /// Create a new Circuit instance for benchmarking
 pub fn setup() -> Circuit {
-    Circuit::new()
+    Circuit::new(std::env::temp_dir().join(format!("ssp_test_db_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()))).unwrap()
 }
 
 /// Generate a unique ID using ULID (matches sync engine pattern)

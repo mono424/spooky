@@ -127,7 +127,7 @@ fn benchmark_streaming_vs_flat_single_update() {
     for format in [ViewResultFormat::Flat, ViewResultFormat::Streaming] {
         let format_name = format!("{:?}", format);
         // Clean circuit for fair comparison
-        let mut circuit_run = circuit.clone(); 
+        let mut circuit_run = ssp::engine::circuit::Circuit::new(std::env::temp_dir().join(ulid::Ulid::new().to_string())).unwrap(); 
         
         // Register view (load cache)
         circuit_run.register_view(plan.clone(), None, Some(format));

@@ -1,4 +1,4 @@
-use crate::engine::circuit::Database;
+use spooky_db_module::db::SpookyDb;
 use crate::engine::types::{FastMap, Path, SpookyValue, ZSet};
 use rustc_hash::FxHasher;
 use smol_str::SmolStr;
@@ -94,7 +94,7 @@ fn hash_value_recursive(v: &SpookyValue, hasher: &mut FxHasher) {
         }
         SpookyValue::Number(n) => {
             hasher.write_u8(2);
-            hasher.write_u64(n.to_bits());
+            hasher.write_u64(n.as_f64().to_bits());
         }
         SpookyValue::Str(s) => {
             hasher.write_u8(3);
@@ -123,7 +123,7 @@ fn hash_value_recursive(v: &SpookyValue, hasher: &mut FxHasher) {
 pub fn extract_number_column<'a>(
     zset: &'a ZSet,
     path: &Path,
-    db: &Database,
+    db: &SpookyDb,
 ) -> (Vec<&'a SmolStr>, Vec<i64>, Vec<f64>) {
     use crate::engine::types::parse_zset_key;
 
@@ -133,21 +133,19 @@ pub fn extract_number_column<'a>(
 
     for (key, weight) in zset {
         let val_opt = if let Some((table_name, id)) = parse_zset_key(key) {
-            if let Some(t) = db.tables.get(table_name) {
-                // Try raw ID first, then prefixed ID
-                t.rows
-                    .get(id)
-                    .or_else(|| t.rows.get(format!("{}:{}", table_name, id).as_str()))
+            let field_names = if path.is_empty() {
+                vec![]
             } else {
-                None
-            }
+                vec![path.segments()[0].as_str()]
+            };
+            db.get_record_typed(table_name, id, &field_names).ok().flatten()
         } else {
             None
         };
 
         let num_val = if let Some(row_val) = val_opt {
-            if let Some(SpookyValue::Number(n)) = resolve_nested_value(Some(row_val), path) {
-                *n
+            if let Some(SpookyValue::Number(n)) = resolve_nested_value(Some(&row_val), path) {
+                n.as_f64()
             } else {
                 f64::NAN
             }
@@ -239,12 +237,12 @@ pub fn normalize_record_id(val: SpookyValue) -> SpookyValue {
         ) {
             let table_str = match table_val {
                 SpookyValue::Str(s) => s.to_string(),
-                SpookyValue::Number(n) => n.to_string(),
+                SpookyValue::Number(n) => n.as_f64().to_string(),
                 _ => return val,
             };
             let id_str = match id_val {
                 SpookyValue::Str(s) => s.to_string(),
-                SpookyValue::Number(n) => n.to_string(),
+                SpookyValue::Number(n) => n.as_f64().to_string(),
                 _ => return val,
             };
             return SpookyValue::Str(SmolStr::new(format!("{}:{}", table_str, id_str)));
@@ -317,7 +315,7 @@ impl<'a> NumericFilterConfig<'a> {
 /// Apply SIMD-optimized numeric filter to a ZSet.
 /// Uses extract_number_column and filter_f64_batch for vectorized filtering.
 /// Lazy numeric filter for small datasets to avoid allocation overhead of column extraction
-fn filter_numeric_lazy(upstream: &ZSet, config: &NumericFilterConfig, db: &Database) -> ZSet {
+fn filter_numeric_lazy(upstream: &ZSet, config: &NumericFilterConfig, db: &SpookyDb) -> ZSet {
     use crate::engine::types::parse_zset_key;
     //todo!("wide for simd and refactore this function simd-v2 branch");
     //todo!("hot path load into catche like in simd-v2 branch");
@@ -330,26 +328,23 @@ fn filter_numeric_lazy(upstream: &ZSet, config: &NumericFilterConfig, db: &Datab
             None => continue,
         };
 
-        let table = match db.tables.get(table_name) {
-            Some(t) => t,
-            None => continue,
+        let field_names = if config.path.is_empty() {
+            vec![]
+        } else {
+            vec![config.path.segments()[0].as_str()]
         };
 
-        // Get row (using optimized lookup pattern)
-        let row_opt = table
-            .rows
-            .get(id)
-            .or_else(|| table.rows.get(format!("{}:{}", table_name, id).as_str()));
+        let row_opt = db.get_record_typed(table_name, id, &field_names).ok().flatten();
 
         if let Some(row) = row_opt {
-            if let Some(SpookyValue::Number(n)) = resolve_nested_value(Some(row), config.path) {
+            if let Some(SpookyValue::Number(n)) = resolve_nested_value(Some(&row), config.path) {
                 let pass = match config.op {
-                    NumericOp::Gt => *n > config.target,
-                    NumericOp::Gte => *n >= config.target,
-                    NumericOp::Lt => *n < config.target,
-                    NumericOp::Lte => *n <= config.target,
-                    NumericOp::Eq => (*n - config.target).abs() < f64::EPSILON,
-                    NumericOp::Neq => (*n - config.target).abs() > f64::EPSILON,
+                    NumericOp::Gt => n.as_f64() > config.target,
+                    NumericOp::Gte => n.as_f64() >= config.target,
+                    NumericOp::Lt => n.as_f64() < config.target,
+                    NumericOp::Lte => n.as_f64() <= config.target,
+                    NumericOp::Eq => (n.as_f64() - config.target).abs() < f64::EPSILON,
+                    NumericOp::Neq => (n.as_f64() - config.target).abs() > f64::EPSILON,
                 };
 
                 if pass {
@@ -366,7 +361,7 @@ fn filter_numeric_lazy(upstream: &ZSet, config: &NumericFilterConfig, db: &Datab
 /// Uses extract_number_column and filter_f64_batch for vectorized filtering.
 /// Automatically switches to lazy evaluation for small datasets.
 #[inline]
-pub fn apply_numeric_filter(upstream: &ZSet, config: &NumericFilterConfig, db: &Database) -> ZSet {
+pub fn apply_numeric_filter(upstream: &ZSet, config: &NumericFilterConfig, db: &SpookyDb) -> ZSet {
     // Optimization: Lazy filter for small N to avoid column allocation overhead
     if upstream.len() < 64 {
         return filter_numeric_lazy(upstream, config, db);
@@ -385,13 +380,13 @@ pub fn apply_numeric_filter(upstream: &ZSet, config: &NumericFilterConfig, db: &
 #[cfg(test)]
 mod resolve_nested_value_tests {
     use super::*;
-    use crate::spooky_obj;
+    use spooky_db_module::spooky_obj;
 
     #[test]
     fn test_empty_path() {
         // Empty path should return the root unchanged
         let root = SpookyValue::Object({
-            let mut map = FastMap::default();
+            let mut map = std::collections::BTreeMap::new();
             map.insert(
                 SmolStr::new("id"),
                 SpookyValue::Str(SmolStr::new("user:123")),
@@ -448,8 +443,8 @@ mod resolve_nested_value_tests {
     #[test]
     fn test_single_level() {
         let root = SpookyValue::Object({
-            let mut map = FastMap::default();
-            map.insert(SmolStr::new("a"), SpookyValue::Number(1.00));
+            let mut map = std::collections::BTreeMap::new();
+            map.insert(SmolStr::new("a"), SpookyValue::from(1.00f64));
             map
         });
         let path = Path::new("a");
@@ -461,10 +456,10 @@ mod resolve_nested_value_tests {
     #[test]
     fn test_nested() {
         let root = SpookyValue::Object({
-            let mut map = FastMap::default();
+            let mut map = std::collections::BTreeMap::new();
             let inner_obj = SpookyValue::Object({
-                let mut inner_map = FastMap::default();
-                inner_map.insert(SmolStr::new("b"), SpookyValue::Number(3.0));
+                let mut inner_map = std::collections::BTreeMap::new();
+                inner_map.insert(SmolStr::new("b"), SpookyValue::from(3.0f64));
                 inner_map
             });
             map.insert(SmolStr::new("a"), inner_obj);
@@ -480,8 +475,8 @@ mod resolve_nested_value_tests {
     #[test]
     fn test_missing_key() {
         let root = SpookyValue::Object({
-            let mut map = FastMap::default();
-            map.insert(SmolStr::new("a"), SpookyValue::Number(1.00));
+            let mut map = std::collections::BTreeMap::new();
+            map.insert(SmolStr::new("a"), SpookyValue::from(1.00f64));
             map
         });
         let path = Path::new("b");
@@ -543,7 +538,7 @@ mod resolve_nested_value_tests {
 
 #[cfg(test)]
 mod compare_spooky_values_tests {
-    //use crate::spooky_obj;
+    //use spooky_db_module::spooky_obj;
 
     use super::*;
     use std::{cmp::Ordering, f64::NAN};
@@ -571,9 +566,9 @@ mod compare_spooky_values_tests {
 
     #[test]
     fn test_numbers() {
-        let num_a = SpookyValue::Number(10.00);
-        let num_b = SpookyValue::Number(9.00);
-        let num_nan = SpookyValue::Number(NAN);
+        let num_a = SpookyValue::from(10.00f64);
+        let num_b = SpookyValue::from(9.00f64);
+        let num_nan = SpookyValue::from(NAN);
         let res = compare_spooky_values(Some(&num_a), Some(&num_b));
         assert_eq!(res, Ordering::Greater);
         let res = compare_spooky_values(Some(&num_b), Some(&num_a));
@@ -595,11 +590,11 @@ mod compare_spooky_values_tests {
     #[test]
     fn test_arrays_by_len() {
         // Shorter array < Longer array
-        let short = SpookyValue::Array(vec![SpookyValue::Number(1.0)]);
+        let short = SpookyValue::Array(vec![SpookyValue::from(1.0f64)]);
         let long = SpookyValue::Array(vec![
-            SpookyValue::Number(1.0),
-            SpookyValue::Number(2.0),
-            SpookyValue::Number(3.0),
+            SpookyValue::from(1.0f64),
+            SpookyValue::from(2.0f64),
+            SpookyValue::from(3.0f64),
         ]);
 
         assert_eq!(
@@ -627,10 +622,10 @@ mod compare_spooky_values_tests {
 
         // Same length compares element-wise (covered in other test)
         let same_len_a =
-            SpookyValue::Array(vec![SpookyValue::Number(1.0), SpookyValue::Number(2.0)]);
+            SpookyValue::Array(vec![SpookyValue::from(1.0f64), SpookyValue::from(2.0f64)]);
 
         let same_len_b =
-            SpookyValue::Array(vec![SpookyValue::Number(1.0), SpookyValue::Number(2.0)]);
+            SpookyValue::Array(vec![SpookyValue::from(1.0f64), SpookyValue::from(2.0f64)]);
 
         // Length equal, so falls through to element comparison
         assert_eq!(
@@ -642,12 +637,12 @@ mod compare_spooky_values_tests {
     #[test]
     fn test_arrays_by_length() {
         // Shorter array < Longer array
-        let short = SpookyValue::Array(vec![SpookyValue::Number(1.0)]);
+        let short = SpookyValue::Array(vec![SpookyValue::from(1.0f64)]);
 
         let long = SpookyValue::Array(vec![
-            SpookyValue::Number(1.0),
-            SpookyValue::Number(2.0),
-            SpookyValue::Number(3.0),
+            SpookyValue::from(1.0f64),
+            SpookyValue::from(2.0f64),
+            SpookyValue::from(3.0f64),
         ]);
 
         assert_eq!(
@@ -677,11 +672,11 @@ mod compare_spooky_values_tests {
     #[test]
     fn test_arrays_same_length() {
         // Same length: element-wise comparison
-        let arr_a = SpookyValue::Array(vec![SpookyValue::Number(1.0), SpookyValue::Number(2.0)]);
+        let arr_a = SpookyValue::Array(vec![SpookyValue::from(1.0f64), SpookyValue::from(2.0f64)]);
 
         let arr_b = SpookyValue::Array(vec![
-            SpookyValue::Number(1.0),
-            SpookyValue::Number(3.0), // 3 > 2
+            SpookyValue::from(1.0f64),
+            SpookyValue::from(3.0f64), // 3 > 2
         ]);
 
         // arr_a < arr_b because at index 1: 2 < 3
@@ -696,7 +691,7 @@ mod compare_spooky_values_tests {
         );
 
         // Equal arrays
-        let arr_c = SpookyValue::Array(vec![SpookyValue::Number(1.0), SpookyValue::Number(2.0)]);
+        let arr_c = SpookyValue::Array(vec![SpookyValue::from(1.0f64), SpookyValue::from(2.0f64)]);
 
         assert_eq!(
             compare_spooky_values(Some(&arr_a), Some(&arr_c)),
@@ -705,7 +700,7 @@ mod compare_spooky_values_tests {
 
         // First element differs
         let arr_first_bigger =
-            SpookyValue::Array(vec![SpookyValue::Number(99.0), SpookyValue::Number(1.0)]);
+            SpookyValue::Array(vec![SpookyValue::from(99.0f64), SpookyValue::from(1.0f64)]);
 
         assert_eq!(
             compare_spooky_values(Some(&arr_a), Some(&arr_first_bigger)),
@@ -714,10 +709,10 @@ mod compare_spooky_values_tests {
 
         // Mixed types in array
         let arr_mixed_a =
-            SpookyValue::Array(vec![SpookyValue::Bool(false), SpookyValue::Number(1.0)]);
+            SpookyValue::Array(vec![SpookyValue::Bool(false), SpookyValue::from(1.0f64)]);
 
         let arr_mixed_b =
-            SpookyValue::Array(vec![SpookyValue::Bool(true), SpookyValue::Number(1.0)]);
+            SpookyValue::Array(vec![SpookyValue::Bool(true), SpookyValue::from(1.0f64)]);
 
         // false < true
         assert_eq!(
@@ -730,17 +725,17 @@ mod compare_spooky_values_tests {
     fn tests_objects_by_length() {
         // 1 key
         let obj_one_key = SpookyValue::Object({
-            let mut map = FastMap::default();
-            map.insert(SmolStr::new("a"), SpookyValue::Number(1.0));
+            let mut map = std::collections::BTreeMap::new();
+            map.insert(SmolStr::new("a"), SpookyValue::from(1.0f64));
             map
         });
 
         // 3 keys
         let obj_three_keys = SpookyValue::Object({
-            let mut map = FastMap::default();
-            map.insert(SmolStr::new("a"), SpookyValue::Number(1.0));
-            map.insert(SmolStr::new("b"), SpookyValue::Number(2.0));
-            map.insert(SmolStr::new("c"), SpookyValue::Number(3.0));
+            let mut map = std::collections::BTreeMap::new();
+            map.insert(SmolStr::new("a"), SpookyValue::from(1.0f64));
+            map.insert(SmolStr::new("b"), SpookyValue::from(2.0f64));
+            map.insert(SmolStr::new("c"), SpookyValue::from(3.0f64));
             map
         });
 
@@ -757,8 +752,8 @@ mod compare_spooky_values_tests {
 
         // Same key count = Equal (values don't matter)
         let obj_same_count = SpookyValue::Object({
-            let mut map = FastMap::default();
-            map.insert(SmolStr::new("x"), SpookyValue::Number(999.0));
+            let mut map = std::collections::BTreeMap::new();
+            map.insert(SmolStr::new("x"), SpookyValue::from(999.0f64));
             map
         });
 
@@ -768,7 +763,7 @@ mod compare_spooky_values_tests {
         );
 
         // Empty object is smallest
-        let obj_empty = SpookyValue::Object(FastMap::default());
+        let obj_empty = SpookyValue::Object(std::collections::BTreeMap::new());
 
         assert_eq!(
             compare_spooky_values(Some(&obj_empty), Some(&obj_one_key)),
@@ -787,12 +782,12 @@ mod compare_spooky_values_tests {
 
         let null = SpookyValue::Null;
         let bool_val = SpookyValue::Bool(true);
-        let number = SpookyValue::Number(42.0);
+        let number = SpookyValue::from(42.0f64);
         let string = SpookyValue::Str(SmolStr::new("hello"));
-        let array = SpookyValue::Array(vec![SpookyValue::Number(1.0)]);
+        let array = SpookyValue::Array(vec![SpookyValue::from(1.0f64)]);
         let object = SpookyValue::Object({
-            let mut map = FastMap::default();
-            map.insert(SmolStr::new("a"), SpookyValue::Number(1.0));
+            let mut map = std::collections::BTreeMap::new();
+            map.insert(SmolStr::new("a"), SpookyValue::from(1.0f64));
             map
         });
 
@@ -849,7 +844,7 @@ mod compare_spooky_values_tests {
     fn test_none_vs_some() {
         // None < Some (any value)
         let null = SpookyValue::Null;
-        let number = SpookyValue::Number(42.0);
+        let number = SpookyValue::from(42.0f64);
         let string = SpookyValue::Str(SmolStr::new("hello"));
 
         // None < Some(Null)
@@ -879,7 +874,7 @@ mod compare_spooky_values_tests {
 
 #[cfg(test)]
 mod hash_spooky_value_tests {
-    use crate::spooky_obj;
+    use spooky_db_module::spooky_obj;
 
     use super::*;
 
@@ -887,7 +882,7 @@ mod hash_spooky_value_tests {
     fn test_null_deterministic() {
         let hash_a = hash_spooky_value(&SpookyValue::Null);
         let hash_b = hash_spooky_value(&SpookyValue::Null);
-        let hash_diff = hash_spooky_value(&SpookyValue::Number(1.0));
+        let hash_diff = hash_spooky_value(&SpookyValue::from(1.0f64));
         assert_eq!(hash_a, hash_b);
         assert_ne!(hash_a, hash_diff);
     }
@@ -923,7 +918,7 @@ mod hash_spooky_value_tests {
 #[cfg(test)]
 mod normalize_record_id_tests {
     use super::*;
-    use crate::spooky_obj;
+    use spooky_db_module::spooky_obj;
 
     #[test]
     fn test_object_tb_id() {

@@ -1,4 +1,15 @@
-use ssp::engine::circuit::{Circuit, Database};
+use ssp::engine::circuit::Circuit;
+use spooky_db_module::db::SpookyDb;
+
+fn insert_record(db: &mut spooky_db_module::db::SpookyDb, table: &str, id: &str, record: ssp::engine::types::SpookyValue) {
+    let bytes = spooky_db_module::serialization::from_spooky(&record).unwrap();
+    db.apply_mutation(table, spooky_db_module::db::Operation::Create, id, Some(&bytes.0), None).unwrap();
+}
+
+fn delete_record(db: &mut spooky_db_module::db::SpookyDb, table: &str, id: &str) {
+    db.apply_mutation(table, spooky_db_module::db::Operation::Delete, id, None, None).unwrap();
+}
+
 use ssp::engine::operators::{Operator, Predicate, Projection};
 use ssp::engine::types::{SpookyValue, Path, ZSet};
 use ssp::engine::view::QueryPlan;
@@ -10,7 +21,7 @@ use smol_str::SmolStr;
 // The main integration test
 #[test]
 fn test_circuit_v2_ingest() {
-    let mut circuit = Circuit::new();
+    let mut circuit = Circuit::new(std::env::temp_dir().join(ulid::Ulid::new().to_string())).unwrap();
 
     // 1. Register a view: SELECT name, age FROM users WHERE age > 30
     let plan = QueryPlan {
@@ -77,7 +88,7 @@ fn test_circuit_v2_ingest() {
 
 #[test]
 fn test_numeric_filter_isolation() {
-    let mut db = Database::new();
+    let mut db = SpookyDb::new(std::env::temp_dir().join(ulid::Ulid::new().to_string())).unwrap();
     let table_name = "users";
     let tb = db.ensure_table(table_name);
     
@@ -85,7 +96,7 @@ fn test_numeric_filter_isolation() {
     let data = SpookyValue::from(json!({ "age": 31 })); // 31 > 30
     
     // Manually setup table state
-    tb.rows.insert(SmolStr::new(id), data);
+    insert_record(&mut db, "tb", &(SmolStr::new(id)).to_string(), data);
     
     let zset_key = SmolStr::new(format!("{}:{}", table_name, id));
     let mut input_zset = ZSet::default();
