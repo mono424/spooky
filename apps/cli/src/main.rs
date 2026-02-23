@@ -1,20 +1,23 @@
 mod backend;
 mod codegen;
 mod json_schema;
+mod migrate;
 mod modules;
 mod parser;
 mod setup;
 mod spooky;
+mod surreal_client;
 
 use anyhow::{Context, Result};
 use backend::BackendProcessor;
-use clap::{Parser as ClapParser, Subcommand};
+use clap::{Args as ClapArgs, Parser as ClapParser, Subcommand};
 use codegen::{CodeGenerator, OutputFormat};
 use json_schema::JsonSchemaGenerator;
 use parser::SchemaParser;
 use setup::setup_project;
 use std::fs;
 use std::path::{Path, PathBuf};
+use surreal_client::SurrealClient;
 
 #[derive(ClapParser, Debug)]
 #[command(name = "syncgen")]
@@ -78,6 +81,80 @@ struct Args {
 enum Commands {
     /// Setup a new Spooky project
     Setup,
+    /// Database migration management
+    Migrate {
+        #[command(subcommand)]
+        action: MigrateCommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum MigrateCommands {
+    /// Create a new migration
+    Create {
+        /// Name for the migration (e.g. "add_user_avatar")
+        name: String,
+        /// Path to .surql schema file to pre-populate up.surql
+        #[arg(long)]
+        schema: Option<PathBuf>,
+        /// Migrations directory
+        #[arg(long, default_value = "migrations")]
+        migrations_dir: PathBuf,
+    },
+    /// Apply all pending migrations
+    Apply {
+        #[command(flatten)]
+        conn: ConnectionArgs,
+        /// Migrations directory
+        #[arg(long, default_value = "migrations")]
+        migrations_dir: PathBuf,
+    },
+    /// Rollback the last N applied migrations
+    Rollback {
+        #[command(flatten)]
+        conn: ConnectionArgs,
+        /// Number of migrations to rollback
+        #[arg(long, default_value_t = 1)]
+        steps: usize,
+        /// Migrations directory
+        #[arg(long, default_value = "migrations")]
+        migrations_dir: PathBuf,
+    },
+    /// Show migration status
+    Status {
+        #[command(flatten)]
+        conn: ConnectionArgs,
+        /// Migrations directory
+        #[arg(long, default_value = "migrations")]
+        migrations_dir: PathBuf,
+    },
+    /// Rollback all applied migrations
+    Reset {
+        #[command(flatten)]
+        conn: ConnectionArgs,
+        /// Migrations directory
+        #[arg(long, default_value = "migrations")]
+        migrations_dir: PathBuf,
+    },
+}
+
+#[derive(ClapArgs, Debug)]
+struct ConnectionArgs {
+    /// SurrealDB URL
+    #[arg(long, env = "SURREAL_URL", default_value = "http://localhost:8000")]
+    url: String,
+    /// SurrealDB namespace
+    #[arg(long, env = "SURREAL_NS", default_value = "main")]
+    namespace: String,
+    /// SurrealDB database
+    #[arg(long, env = "SURREAL_DB", default_value = "main")]
+    database: String,
+    /// SurrealDB username
+    #[arg(long, env = "SURREAL_USER", default_value = "root")]
+    username: String,
+    /// SurrealDB password
+    #[arg(long, env = "SURREAL_PASS", default_value = "root")]
+    password: String,
 }
 
 /// Filter schema content to remove field definitions with FOR select WHERE false
@@ -208,11 +285,76 @@ fn extract_table_and_field_name(line: &str) -> Option<(String, String)> {
     }
 }
 
+fn handle_migrate(action: MigrateCommands) -> Result<()> {
+    match action {
+        MigrateCommands::Create {
+            name,
+            schema,
+            migrations_dir,
+        } => migrate::create(&migrations_dir, &name, schema.as_deref()),
+        MigrateCommands::Apply {
+            conn,
+            migrations_dir,
+        } => {
+            let client = SurrealClient::new(
+                &conn.url,
+                &conn.namespace,
+                &conn.database,
+                &conn.username,
+                &conn.password,
+            );
+            migrate::apply(&client, &migrations_dir)
+        }
+        MigrateCommands::Rollback {
+            conn,
+            steps,
+            migrations_dir,
+        } => {
+            let client = SurrealClient::new(
+                &conn.url,
+                &conn.namespace,
+                &conn.database,
+                &conn.username,
+                &conn.password,
+            );
+            migrate::rollback(&client, &migrations_dir, steps)
+        }
+        MigrateCommands::Status {
+            conn,
+            migrations_dir,
+        } => {
+            let client = SurrealClient::new(
+                &conn.url,
+                &conn.namespace,
+                &conn.database,
+                &conn.username,
+                &conn.password,
+            );
+            migrate::status(&client, &migrations_dir)
+        }
+        MigrateCommands::Reset {
+            conn,
+            migrations_dir,
+        } => {
+            let client = SurrealClient::new(
+                &conn.url,
+                &conn.namespace,
+                &conn.database,
+                &conn.username,
+                &conn.password,
+            );
+            migrate::reset(&client, &migrations_dir)
+        }
+    }
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    if let Some(Commands::Setup) = args.command {
-        return setup_project();
+    match args.command {
+        Some(Commands::Setup) => return setup_project(),
+        Some(Commands::Migrate { action }) => return handle_migrate(action),
+        None => {} // fall through to legacy codegen mode
     }
 
     // Legacy mode validation
