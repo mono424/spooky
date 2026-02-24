@@ -14,3 +14,8 @@ vite.config.ts.timestamp-*
 
 # Env
 .env.local
+
+# Playwright
+test-results/
+playwright-report/
+blob-report/

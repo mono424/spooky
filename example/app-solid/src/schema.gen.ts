@@ -146,6 +146,7 @@ export const SURQL_SCHEMA = `-- ################################################
 -- SCOPES & AUTHENTICATION
 -- ##################################################################
 
+
 DEFINE FUNCTION fn::polyfill::createAccount($username: string, $password: string) {
   IF string::len($username) <= 3 { THROW "Username must be longer than 3 characters" };
   IF string::len($password) == 0 { THROW "Password cannot be empty" };

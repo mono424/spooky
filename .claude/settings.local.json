@@ -46,7 +46,8 @@
       "Bash(grep:*)",
       "Bash(wasm-pack build:*)",
       "Bash(npm test:*)",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "Bash(chmod:*)"
     ],
     "deny": [],
     "ask": []
