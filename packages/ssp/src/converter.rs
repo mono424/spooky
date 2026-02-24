@@ -334,8 +334,8 @@ fn wrap_conditions(input_op: Value, predicate: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::operators::Operator;
-    use crate::engine::operators::Projection;
+    use crate::operator::plan::OperatorPlan as Operator;
+    use crate::operator::plan::Projection;
 
     #[test]
     fn test_parse_failing_subquery() {

@@ -109,4 +109,20 @@ impl HttpTransport {
             Err(_) => false,
         }
     }
+
+    /// Check SSP health and return its status string (e.g. "bootstrapping", "ready", "failed")
+    pub async fn check_ssp_health_status(&self, ssp_url: &str) -> Option<String> {
+        match self.get_from_ssp(ssp_url, "/health").await {
+            Ok(resp) => {
+                if let Ok(body) = resp.json::<serde_json::Value>().await {
+                    body.get("status")
+                        .and_then(|s| s.as_str())
+                        .map(|s| s.to_string())
+                } else {
+                    None
+                }
+            }
+            Err(_) => None,
+        }
+    }
 }

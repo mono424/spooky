@@ -8,9 +8,11 @@ use tracing::warn;
 /// SSP initialization state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SspState {
-    /// SSP is bootstrapping (not ready to receive live updates)
+    /// SSP is bootstrapping from the snapshot proxy
     Bootstrapping,
-    /// SSP is ready and receiving live updates
+    /// SSP reported ready, scheduler is replaying missed events
+    Replaying,
+    /// SSP is fully caught up and receiving live updates
     Ready,
 }
 
@@ -19,21 +21,24 @@ pub struct SspPool {
     ssps: HashMap<String, SspInfo>,
     ssp_states: HashMap<String, SspState>,
     message_buffers: HashMap<String, VecDeque<RecordUpdate>>,
+    /// Per-SSP snapshot_seq recorded at registration time
+    ssp_snapshot_seqs: HashMap<String, u64>,
     strategy: LoadBalanceStrategy,
     round_robin_index: usize,
     max_buffer_size: usize,
 }
 
 impl SspPool {
-    /// Create a new SSP pool
-    pub fn new(strategy: LoadBalanceStrategy) -> Self {
+    /// Create a new SSP pool with configurable buffer size
+    pub fn new(strategy: LoadBalanceStrategy, max_buffer_size: usize) -> Self {
         Self {
             ssps: HashMap::new(),
             ssp_states: HashMap::new(),
             message_buffers: HashMap::new(),
+            ssp_snapshot_seqs: HashMap::new(),
             strategy,
             round_robin_index: 0,
-            max_buffer_size: 1000, // Max buffered messages per SSP
+            max_buffer_size,
         }
     }
 
@@ -74,32 +79,32 @@ impl SspPool {
     /// Buffer a message for an SSP that's not ready yet
     /// Returns true if buffered successfully, false if buffer overflow requires re-bootstrap
     pub fn buffer_message(&mut self, ssp_id: &str, message: RecordUpdate) -> bool {
-        // Check if SSP is bootstrapping
-        if let Some(SspState::Bootstrapping) = self.ssp_states.get(ssp_id) {
-            let buffer = self
-                .message_buffers
-                .entry(ssp_id.to_string())
-                .or_insert_with(VecDeque::new);
+        // Buffer for SSPs that are bootstrapping or replaying
+        match self.ssp_states.get(ssp_id) {
+            Some(SspState::Bootstrapping) | Some(SspState::Replaying) => {
+                let buffer = self
+                    .message_buffers
+                    .entry(ssp_id.to_string())
+                    .or_insert_with(VecDeque::new);
 
-            // Check if buffer would overflow
-            if buffer.len() >= self.max_buffer_size {
-                // Buffer overflow - SSP is too slow or bootstrap is taking too long
-                // Clear the buffer and mark as needing re-bootstrap
-                warn!(
-                    "Buffer overflow for SSP '{}' ({} messages). SSP needs to re-bootstrap.",
-                    ssp_id,
-                    buffer.len()
-                );
-                buffer.clear();
-                // SSP will need to re-bootstrap to get consistent state
-                return false;
+                // Check if buffer would overflow
+                if buffer.len() >= self.max_buffer_size {
+                    warn!(
+                        "Buffer overflow for SSP '{}' ({} messages). SSP needs to re-bootstrap.",
+                        ssp_id,
+                        buffer.len()
+                    );
+                    buffer.clear();
+                    return false;
+                }
+
+                buffer.push_back(message);
+                true
             }
-
-            buffer.push_back(message);
-            true
-        } else {
-            // SSP is ready or doesn't exist, no buffering needed
-            true
+            _ => {
+                // SSP is ready or doesn't exist, no buffering needed
+                true
+            }
         }
     }
 
@@ -108,12 +113,16 @@ impl SspPool {
         self.message_buffers
             .get(ssp_id)
             .map(|buf| {
-                buf.is_empty() && self.ssp_states.get(ssp_id) == Some(&SspState::Bootstrapping)
+                buf.is_empty()
+                    && matches!(
+                        self.ssp_states.get(ssp_id),
+                        Some(SspState::Bootstrapping) | Some(SspState::Replaying)
+                    )
             })
             .unwrap_or(false)
     }
 
-    /// Mark SSP as ready and get buffered messages
+    /// Mark SSP as ready and return any remaining buffered messages
     pub fn mark_ready(&mut self, ssp_id: &str) -> Vec<RecordUpdate> {
         self.ssp_states.insert(ssp_id.to_string(), SspState::Ready);
 
@@ -128,6 +137,30 @@ impl SspPool {
     pub fn mark_bootstrapping(&mut self, ssp_id: &str) {
         self.ssp_states
             .insert(ssp_id.to_string(), SspState::Bootstrapping);
+    }
+
+    /// Mark SSP as replaying (SSP is ready, scheduler replaying missed events)
+    pub fn mark_replaying(&mut self, ssp_id: &str) {
+        self.ssp_states
+            .insert(ssp_id.to_string(), SspState::Replaying);
+    }
+
+    /// Drain buffered messages for an SSP without changing its state
+    pub fn drain_buffer(&mut self, ssp_id: &str) -> Vec<RecordUpdate> {
+        self.message_buffers
+            .get_mut(ssp_id)
+            .map(|buf| buf.drain(..).collect())
+            .unwrap_or_default()
+    }
+
+    /// Record the snapshot_seq at which this SSP was registered
+    pub fn set_bootstrap_seq(&mut self, ssp_id: &str, seq: u64) {
+        self.ssp_snapshot_seqs.insert(ssp_id.to_string(), seq);
+    }
+
+    /// Get the snapshot_seq recorded when this SSP registered
+    pub fn get_bootstrap_seq(&self, ssp_id: &str) -> Option<u64> {
+        self.ssp_snapshot_seqs.get(ssp_id).copied()
     }
 
     /// Check if SSP is ready to receive updates
@@ -145,6 +178,9 @@ impl SspPool {
 
     /// Remove an SSP
     pub fn remove(&mut self, ssp_id: &str) -> Option<SspInfo> {
+        self.ssp_states.remove(ssp_id);
+        self.message_buffers.remove(ssp_id);
+        self.ssp_snapshot_seqs.remove(ssp_id);
         self.ssps.remove(ssp_id)
     }
 
@@ -234,5 +270,12 @@ impl SspPool {
     /// Count of connected SSPs
     pub fn count(&self) -> usize {
         self.ssps.len()
+    }
+
+    /// Check if any SSP is currently bootstrapping or replaying
+    pub fn has_active_bootstrap(&self) -> bool {
+        self.ssp_states
+            .values()
+            .any(|s| matches!(s, SspState::Bootstrapping | SspState::Replaying))
     }
 }

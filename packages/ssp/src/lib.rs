@@ -5,18 +5,15 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 pub mod converter;
-pub mod engine;
 pub mod sanitizer;
-pub mod logging;
 pub mod service;
+
+// DBSP-theoretic module structure
+pub mod algebra;
+pub mod types;
+pub mod operator;
+pub mod circuit;
+pub mod eval;
 
 #[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
 pub use rayon::prelude::*;
-
-// Re-export commonly used types for convenience
-pub use engine::circuit::Circuit;
-pub use engine::view::QueryPlan;
-pub use engine::update::{MaterializedViewUpdate, ViewResultFormat, ViewUpdate};
-pub use engine::types::{FastMap, Path, RowKey, SpookyValue, VersionMap, Weight, ZSet};
-pub use engine::operators::{JoinCondition, Operator, OrderSpec, Predicate, Projection};
-

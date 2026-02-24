@@ -39,7 +39,14 @@
       "Bash(open:*)",
       "mcp__ide__getDiagnostics",
       "WebFetch(domain:vitest.dev)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(cargo check:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(xargs -I {} bash -c 'echo \"\"=== {} ===\"\" && grep -A 10 \"\"\\\\[dev-dependencies\\\\]\"\" {} 2>/dev/null || echo \"\"No dev-dependencies\"\"')",
+      "Bash(grep:*)",
+      "Bash(wasm-pack build:*)",
+      "Bash(npm test:*)",
+      "Bash(wc:*)"
     ],
     "deny": [],
     "ask": []

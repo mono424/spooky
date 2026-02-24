@@ -11,9 +11,13 @@ pub struct SchedulerConfig {
     pub bootstrap_chunk_size: usize,
     pub job_tables: Vec<String>,
     pub replica_db_path: PathBuf,
-    pub replica_keep_versions: u64,
     pub ingest_host: Option<String>,
     pub ingest_port: u16,
+    pub snapshot_update_interval_secs: u64,
+    pub max_buffer_per_ssp: usize,
+    pub bootstrap_timeout_secs: u64,
+    pub ssp_poll_interval_ms: u64,
+    pub wal_path: PathBuf,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -48,10 +52,14 @@ impl Default for SchedulerConfig {
             heartbeat_timeout_ms: 15000,
             bootstrap_chunk_size: 1000,
             job_tables: vec![],
-            replica_db_path: PathBuf::from("./data/replica.db"),
-            replica_keep_versions: 10,
+            replica_db_path: PathBuf::from("./data/replica"),
             ingest_host: None,
             ingest_port: 9667,
+            snapshot_update_interval_secs: 300,
+            max_buffer_per_ssp: 10_000,
+            bootstrap_timeout_secs: 120,
+            ssp_poll_interval_ms: 3000,
+            wal_path: PathBuf::from("./data/event_wal.log"),
         }
     }
 }

@@ -9,8 +9,8 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { initSync, SpookyProcessor } from '../pkg/spooky_stream_processor_wasm.js';
-import type { WasmStreamUpdate } from '../pkg/spooky_stream_processor_wasm';
+import { initSync, SpookyProcessor } from '../pkg/ssp_wasm.js';
+import type { WasmViewUpdate } from '../pkg/ssp_wasm';
 import {
   makeUserRecord,
   makeAuthorRecord,
@@ -18,7 +18,6 @@ import {
   makeCommentRecord,
   createViewConfig,
   validateFlatArray,
-  validateFlatArrayWithChildren,
 } from './helpers';
 
 // Get directory path for ESM
@@ -27,7 +26,7 @@ const __dirname = dirname(__filename);
 
 // Initialize WASM module synchronously before all tests
 beforeAll(() => {
-  const wasmPath = join(__dirname, '../pkg/spooky_stream_processor_wasm_bg.wasm');
+  const wasmPath = join(__dirname, '../pkg/ssp_wasm_bg.wasm');
   const wasmBuffer = readFileSync(wasmPath);
   initSync({ module: wasmBuffer });
 });
@@ -49,7 +48,7 @@ describe('Simple View (Single Table Scan)', () => {
 
       // 2. Register the view
       const config = createViewConfig(VIEW_ID, SIMPLE_VIEW_SQL);
-      const initialResult = processor.register_view(config) as WasmStreamUpdate;
+      const initialResult = processor.register_view(config) as WasmViewUpdate;
 
       // 3. Verify
       expect(initialResult).toBeDefined();
@@ -74,7 +73,7 @@ describe('Simple View (Single Table Scan)', () => {
 
       // 2. Register the view
       const config = createViewConfig(VIEW_ID, SIMPLE_VIEW_SQL);
-      const initialResult = processor.register_view(config) as WasmStreamUpdate;
+      const initialResult = processor.register_view(config) as WasmViewUpdate;
       const initialHash = initialResult.result_hash;
 
       // 3. Ingest another record
@@ -84,7 +83,7 @@ describe('Simple View (Single Table Scan)', () => {
         'CREATE',
         user2.id,
         user2.record
-      ) as WasmStreamUpdate[];
+      ) as WasmViewUpdate[];
 
       // 4. Verify
       expect(updates).toBeInstanceOf(Array);
@@ -105,7 +104,7 @@ describe('Simple View (Single Table Scan)', () => {
 
       // 1. Register view with no data
       const config = createViewConfig(VIEW_ID, SIMPLE_VIEW_SQL);
-      const initialResult = processor.register_view(config) as WasmStreamUpdate;
+      const initialResult = processor.register_view(config) as WasmViewUpdate;
 
       expect(initialResult.result_data).toHaveLength(0);
       const emptyHash = initialResult.result_hash;
@@ -117,7 +116,7 @@ describe('Simple View (Single Table Scan)', () => {
         'CREATE',
         user1.id,
         user1.record
-      ) as WasmStreamUpdate[];
+      ) as WasmViewUpdate[];
 
       // 3. Verify
       expect(updates.length).toBeGreaterThan(0);
@@ -150,22 +149,18 @@ describe('One Nested Join (Thread with Author Subquery)', () => {
 
       // 3. Register view
       const config = createViewConfig(VIEW_ID, JOIN_VIEW_SQL);
-      const result = processor.register_view(config) as WasmStreamUpdate;
+      const result = processor.register_view(config) as WasmViewUpdate;
 
-      // 4. Verify - flat array now includes BOTH main record AND subquery children
+      // 4. Verify — DBSP view tracks primary table membership only;
+      //    subquery children (author) are not in the top-level result set.
       expect(result.query_id).toBe(VIEW_ID);
       expect(result.result_hash).toBeDefined();
 
       const resultIds = result.result_data.map((i) => i[0]);
       expect(resultIds).toContain(thread.id);
-      expect(resultIds).toContain(author.id); // Subquery author is now included!
 
-      // Debug: print flat array structure
-      console.log('=== Flat Array Structure ===');
-      console.log(JSON.stringify(result.result_data, null, 2));
-
-      // Should have 2 records: thread + author from subquery
-      expect(result.result_data.length).toBe(2);
+      // Only the primary table's records appear in result_data
+      expect(result.result_data.length).toBe(1);
       expect(validateFlatArray(result.result_data)).toBe(true);
     });
   });
@@ -184,7 +179,7 @@ describe('One Nested Join (Thread with Author Subquery)', () => {
 
       // 3. Register view
       const config = createViewConfig(VIEW_ID, JOIN_VIEW_SQL);
-      const initialResult = processor.register_view(config) as WasmStreamUpdate;
+      const initialResult = processor.register_view(config) as WasmViewUpdate;
       const initialHash = initialResult.result_hash;
 
       // 4. Add new thread
@@ -194,7 +189,7 @@ describe('One Nested Join (Thread with Author Subquery)', () => {
         'CREATE',
         thread2.id,
         thread2.record
-      ) as WasmStreamUpdate[];
+      ) as WasmViewUpdate[];
 
       // 5. Verify
       const viewUpdate = updates.find((u) => u.query_id === VIEW_ID);
@@ -211,7 +206,7 @@ describe('One Nested Join (Thread with Author Subquery)', () => {
 
       // 1. Register view with no data
       const config = createViewConfig(VIEW_ID, JOIN_VIEW_SQL);
-      const initialResult = processor.register_view(config) as WasmStreamUpdate;
+      const initialResult = processor.register_view(config) as WasmViewUpdate;
       expect(initialResult.result_data).toHaveLength(0);
 
       // 2. Add author (join dependency)
@@ -221,7 +216,7 @@ describe('One Nested Join (Thread with Author Subquery)', () => {
         'CREATE',
         author.id,
         author.record
-      ) as WasmStreamUpdate[];
+      ) as WasmViewUpdate[];
 
       // Author alone shouldn't trigger update (no threads yet)
       const authorViewUpdate = authorUpdates.find((u) => u.query_id === VIEW_ID);
@@ -234,7 +229,7 @@ describe('One Nested Join (Thread with Author Subquery)', () => {
         'CREATE',
         thread.id,
         thread.record
-      ) as WasmStreamUpdate[];
+      ) as WasmViewUpdate[];
 
       // 4. Verify
       const viewUpdate = threadUpdates.find((u) => u.query_id === VIEW_ID);
@@ -270,21 +265,18 @@ describe('Two Nested Subqueries (Thread with Author and Comments)', () => {
 
       // 4. Register view
       const config = createViewConfig(VIEW_ID, NESTED_SUBQUERY_SQL);
-      const result = processor.register_view(config) as WasmStreamUpdate;
+      const result = processor.register_view(config) as WasmViewUpdate;
 
-      // 5. Verify - flat array includes ALL records: thread, author, comment (and commentauthor)
+      // 5. Verify — DBSP view tracks primary table membership only;
+      //    subquery children (author, comment) are not in the top-level result set.
       expect(result.query_id).toBe(VIEW_ID);
       expect(result.result_hash).toBeDefined();
 
       const resultIds = result.result_data.map((i) => i[0]);
       expect(resultIds).toContain(thread.id);
-      expect(resultIds).toContain(author.id); // From author_data subquery
-      expect(resultIds).toContain(comment.id); // From comments subquery
 
-      // Debug: Should have thread + author + comment = 3 records minimum
-      // (comment's author is same as thread's author, so deduped)
-      console.log('Result IDs:', resultIds);
-      expect(result.result_data.length).toBeGreaterThanOrEqual(3);
+      // Only the primary table's records appear in result_data
+      expect(result.result_data.length).toBe(1);
       expect(validateFlatArray(result.result_data)).toBe(true);
     });
   });
@@ -305,7 +297,7 @@ describe('Two Nested Subqueries (Thread with Author and Comments)', () => {
 
       // 2. Register view
       const config = createViewConfig(VIEW_ID, NESTED_SUBQUERY_SQL);
-      const initialResult = processor.register_view(config) as WasmStreamUpdate;
+      const initialResult = processor.register_view(config) as WasmViewUpdate;
       const initialHash = initialResult.result_hash;
 
       // 3. Add new comment
@@ -315,7 +307,7 @@ describe('Two Nested Subqueries (Thread with Author and Comments)', () => {
         'CREATE',
         comment2.id,
         comment2.record
-      ) as WasmStreamUpdate[];
+      ) as WasmViewUpdate[];
 
       // 4. Verify - the nested comment subquery changes the thread's hash
       // The view may or may not emit an update when a nested subquery changes
@@ -339,7 +331,7 @@ describe('Two Nested Subqueries (Thread with Author and Comments)', () => {
 
       // 1. Register view with no data
       const config = createViewConfig(VIEW_ID, NESTED_SUBQUERY_SQL);
-      const initialResult = processor.register_view(config) as WasmStreamUpdate;
+      const initialResult = processor.register_view(config) as WasmViewUpdate;
       expect(initialResult.result_data).toHaveLength(0);
 
       // 2. Build hierarchy step by step
@@ -355,7 +347,7 @@ describe('Two Nested Subqueries (Thread with Author and Comments)', () => {
         'CREATE',
         comment.id,
         comment.record
-      ) as WasmStreamUpdate[];
+      ) as WasmViewUpdate[];
 
       // 3. Verify - adding comment may trigger update if nested subqueries track changes
       // The thread should be in the view after it was added (step 2)
@@ -365,7 +357,7 @@ describe('Two Nested Subqueries (Thread with Author and Comments)', () => {
         'CREATE',
         thread.id,
         thread.record
-      ) as WasmStreamUpdate[];
+      ) as WasmViewUpdate[];
       // Re-ingest is a no-op, but we can query the current state
       // Since comment add may not trigger view update, verify via thread add
       const threadViewUpdate = threadUpdates.find((u) => u.query_id === VIEW_ID);
@@ -392,7 +384,7 @@ describe('Two Nested Subqueries (Thread with Author and Comments)', () => {
 
       // 2. Register view
       const config = createViewConfig(VIEW_ID, NESTED_SUBQUERY_SQL);
-      const initialResult = processor.register_view(config) as WasmStreamUpdate;
+      const initialResult = processor.register_view(config) as WasmViewUpdate;
       expect(initialResult.result_data.map((i) => i[0])).toContain(thread.id);
 
       // 3. Delete the thread (removes it from view)
@@ -401,7 +393,7 @@ describe('Two Nested Subqueries (Thread with Author and Comments)', () => {
         'DELETE',
         thread.id,
         {}
-      ) as WasmStreamUpdate[];
+      ) as WasmViewUpdate[];
 
       // 4. Verify thread is removed from view
       const viewUpdate = deleteUpdates.find((u) => u.query_id === VIEW_ID);
@@ -427,13 +419,13 @@ describe('Hash Tree Consistency', () => {
     processor1.ingest('user', 'CREATE', user1.id, user1);
     processor1.ingest('user', 'CREATE', user2.id, user2);
     const config1 = createViewConfig(VIEW_ID, VIEW_SQL);
-    const result1 = processor1.register_view(config1) as WasmStreamUpdate;
+    const result1 = processor1.register_view(config1) as WasmViewUpdate;
 
     // Processor 2: Insert in order 2, 1
     processor2.ingest('user', 'CREATE', user2.id, user2);
     processor2.ingest('user', 'CREATE', user1.id, user1);
     const config2 = createViewConfig(VIEW_ID, VIEW_SQL);
-    const result2 = processor2.register_view(config2) as WasmStreamUpdate;
+    const result2 = processor2.register_view(config2) as WasmViewUpdate;
 
     // Hashes should be identical regardless of insertion order
     expect(result1.result_hash).toBe(result2.result_hash);
