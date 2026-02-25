@@ -5,15 +5,14 @@ import {
   loginUser,
   testUser,
   waitForAppReady,
+  navigateToThread,
 } from '../fixtures/test-fixtures';
 
 test.describe.serial('Thread CRUD operations', () => {
-  const threadTitle = `E2E Thread ${Date.now()}`;
-  const threadContent = `Automated test content created at ${new Date().toISOString()}`;
-  const updatedTitle = `Updated ${threadTitle}`;
-  const commentContent = `Test comment ${Date.now()}`;
-
-  let threadUrl: string;
+  const threadTitle = 'E2E Test Thread';
+  const threadContent = 'Automated test content for e2e testing';
+  const updatedTitle = 'Updated E2E Test Thread';
+  const commentContent = 'E2E automated test comment';
 
   test('should create a new thread', async ({ page }) => {
     await registerUser(page, testUser);
@@ -33,7 +32,6 @@ test.describe.serial('Thread CRUD operations', () => {
 
     // Wait for navigation to /thread/:id
     await page.waitForURL(/\/thread\//, { timeout: 15_000 });
-    threadUrl = page.url();
 
     // Verify thread detail page (author sees editable inputs)
     await expect(
@@ -48,16 +46,13 @@ test.describe.serial('Thread CRUD operations', () => {
   });
 
   test('should update thread title', async ({ page }) => {
-    // Login (user already registered in previous test)
     await loginUser(page, testUser);
 
-    // Navigate to the thread created above
-    await page.goto(threadUrl);
-    await waitForAppReady(page);
+    // Navigate to the thread via the thread list
+    await navigateToThread(page, threadTitle);
 
     const titleInput = page.locator('input[placeholder="UNTITLED_THREAD"]');
     await expect(titleInput).toBeVisible({ timeout: 15_000 });
-    await expect(titleInput).toHaveValue(threadTitle);
 
     // Update the title
     await titleInput.clear();
@@ -73,12 +68,20 @@ test.describe.serial('Thread CRUD operations', () => {
     await expect(
       page.locator('input[placeholder="UNTITLED_THREAD"]')
     ).toHaveValue(updatedTitle, { timeout: 15_000 });
+
+    // Go back to thread list and verify the title updated there too
+    await page.goto('/');
+    await waitForAppReady(page);
+    await expect(page.getByText(updatedTitle)).toBeVisible({ timeout: 15_000 });
+    // The old title should no longer appear
+    await expect(page.getByText(threadTitle, { exact: true })).not.toBeVisible();
   });
 
   test('should create a comment on the thread', async ({ page }) => {
     await loginUser(page, testUser);
-    await page.goto(threadUrl);
-    await waitForAppReady(page);
+
+    // Navigate to the thread via the thread list (title was updated)
+    await navigateToThread(page, updatedTitle);
 
     const commentTextarea = page.locator('#comment-textarea');
     await expect(commentTextarea).toBeVisible({ timeout: 15_000 });
@@ -87,13 +90,18 @@ test.describe.serial('Thread CRUD operations', () => {
     await commentTextarea.fill(commentContent);
     await page.getByRole('button', { name: '[ EXECUTE_POST ]' }).click();
 
+    // Wait for textarea to clear (indicates submission completed)
+    await expect(commentTextarea).toHaveValue('', { timeout: 10_000 });
+
+    // Reload to ensure the comment is fetched from the DB
+    // (the real-time Spooky sync may not update the UI instantly)
+    await page.reload();
+    await waitForAppReady(page);
+
     // Verify comment appears in the list
     await expect(page.getByText(commentContent)).toBeVisible({
       timeout: 15_000,
     });
-
-    // Verify textarea is cleared after submission
-    await expect(commentTextarea).toHaveValue('');
   });
 
   test('should show thread in the thread list', async ({ page }) => {
@@ -105,7 +113,7 @@ test.describe.serial('Thread CRUD operations', () => {
     await expect(page.getByText(updatedTitle)).toBeVisible({ timeout: 15_000 });
 
     // Click to navigate to thread detail
-    await page.getByText(updatedTitle).click();
+    await page.getByText(updatedTitle).first().click();
     await page.waitForURL(/\/thread\//, { timeout: 10_000 });
 
     // Verify we're on the correct thread

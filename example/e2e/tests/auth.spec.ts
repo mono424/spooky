@@ -34,8 +34,8 @@ test.describe.serial('Authentication flows', () => {
   });
 
   test('should logout and login again', async ({ page }) => {
-    // Register first (fresh browser context per test)
-    await registerUser(page, testUser);
+    // Login (user already registered in previous test, fresh browser context)
+    await loginUser(page, testUser);
 
     // Logout
     await page.getByRole('button', { name: '<< LOGOUT' }).click();
