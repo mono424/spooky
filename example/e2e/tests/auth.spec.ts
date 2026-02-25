@@ -24,13 +24,25 @@ test.describe.serial('Authentication flows', () => {
   test('should register a new user', async ({ page }) => {
     await registerUser(page, testUser);
 
-    // Authenticated view shows the thread list
+    // --- Local check: authenticated view shows the thread list ---
     await expect(
       page.getByRole('button', { name: '[ + WRITE_NEW ]' })
     ).toBeVisible();
 
     // Landing page is gone
     await expect(page.getByText('Welcome to Thread App')).not.toBeVisible();
+
+    // --- Persistence check: reload and verify session survived ---
+    await page.reload();
+    await waitForAppReady(page);
+
+    await expect(
+      page.getByText(`USER: ${testUser.username}`, { exact: false })
+    ).toBeVisible({ timeout: 15_000 });
+
+    await expect(
+      page.getByRole('button', { name: '[ + WRITE_NEW ]' })
+    ).toBeVisible();
   });
 
   test('should logout and login again', async ({ page }) => {
@@ -45,6 +57,19 @@ test.describe.serial('Authentication flows', () => {
 
     // Login with same credentials
     await loginUser(page, testUser);
+
+    // --- Local check: authenticated view is restored ---
+    await expect(
+      page.getByRole('button', { name: '[ + WRITE_NEW ]' })
+    ).toBeVisible();
+
+    // --- Persistence check: reload and verify session survived ---
+    await page.reload();
+    await waitForAppReady(page);
+
+    await expect(
+      page.getByText(`USER: ${testUser.username}`, { exact: false })
+    ).toBeVisible({ timeout: 15_000 });
 
     await expect(
       page.getByRole('button', { name: '[ + WRITE_NEW ]' })

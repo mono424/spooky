@@ -61,6 +61,15 @@ pub struct OrderSpec {
     pub direction: String,
 }
 
+/// Foreign key linking a subquery's child records to their parent.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct SubqueryParentKey {
+    /// Field on the child record that references the parent (e.g., "thread").
+    pub child_field: String,
+    /// Field on the parent record being referenced (e.g., "id").
+    pub parent_field: String,
+}
+
 /// Projection specification.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "type", rename_all = "lowercase")]
@@ -73,7 +82,12 @@ pub enum Projection {
         #[serde(default)]
         alias: Option<String>,
     },
-    Subquery { alias: String, plan: Box<OperatorPlan> },
+    Subquery {
+        alias: String,
+        plan: Box<OperatorPlan>,
+        #[serde(default)]
+        parent_key: Option<SubqueryParentKey>,
+    },
 }
 
 impl OperatorPlan {
@@ -116,6 +130,49 @@ impl OperatorPlan {
         let mut seen = std::collections::HashSet::new();
         tables.retain(|t| seen.insert(t.clone()));
         tables
+    }
+
+    /// Get metadata about subquery projections: (alias, table_name, parent_key).
+    pub fn subquery_projection_info(&self) -> Vec<(String, String, Option<SubqueryParentKey>)> {
+        let mut result = Vec::new();
+        self.collect_subquery_projection_info(&mut result);
+        result
+    }
+
+    fn collect_subquery_projection_info(
+        &self,
+        result: &mut Vec<(String, String, Option<SubqueryParentKey>)>,
+    ) {
+        match self {
+            OperatorPlan::Scan { .. } => {}
+            OperatorPlan::Filter { input, .. } | OperatorPlan::Limit { input, .. } => {
+                input.collect_subquery_projection_info(result);
+            }
+            OperatorPlan::Project { input, projections } => {
+                input.collect_subquery_projection_info(result);
+                for proj in projections {
+                    if let Projection::Subquery {
+                        alias,
+                        plan,
+                        parent_key,
+                    } = proj
+                    {
+                        let tables = plan.referenced_tables();
+                        if let Some(table) = tables.first() {
+                            result.push((
+                                alias.clone(),
+                                table.clone(),
+                                parent_key.clone(),
+                            ));
+                        }
+                    }
+                }
+            }
+            OperatorPlan::Join { left, right, .. } => {
+                left.collect_subquery_projection_info(result);
+                right.collect_subquery_projection_info(result);
+            }
+        }
     }
 
     fn collect_subquery_tables(&self, tables: &mut Vec<String>) {

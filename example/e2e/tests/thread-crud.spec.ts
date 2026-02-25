@@ -33,12 +33,24 @@ test.describe.serial('Thread CRUD operations', () => {
     // Wait for navigation to /thread/:id
     await page.waitForURL(/\/thread\//, { timeout: 15_000 });
 
-    // Verify thread detail page (author sees editable inputs)
+    // --- Local check: verify thread detail page shows immediately ---
     await expect(
       page.locator('input[placeholder="UNTITLED_THREAD"]')
     ).toHaveValue(threadTitle, { timeout: 15_000 });
 
     await expect(page.getByText('MODE: READ_WRITE')).toBeVisible();
+
+    await expect(
+      page.getByText(`AUTHOR: ${testUser.username}`, { exact: false })
+    ).toBeVisible();
+
+    // --- Persistence check: reload and verify data survived ---
+    await page.reload();
+    await waitForAppReady(page);
+
+    await expect(
+      page.locator('input[placeholder="UNTITLED_THREAD"]')
+    ).toHaveValue(threadTitle, { timeout: 15_000 });
 
     await expect(
       page.getByText(`AUTHOR: ${testUser.username}`, { exact: false })
@@ -58,10 +70,13 @@ test.describe.serial('Thread CRUD operations', () => {
     await titleInput.clear();
     await titleInput.fill(updatedTitle);
 
+    // --- Local check: verify the input shows new value immediately ---
+    await expect(titleInput).toHaveValue(updatedTitle);
+
     // Wait for debounced save to flush
     await page.waitForTimeout(3000);
 
-    // Reload to verify persistence
+    // --- Persistence check: reload and verify data survived ---
     await page.reload();
     await waitForAppReady(page);
 
@@ -93,12 +108,13 @@ test.describe.serial('Thread CRUD operations', () => {
     // Wait for textarea to clear (indicates submission completed)
     await expect(commentTextarea).toHaveValue('', { timeout: 10_000 });
 
-    // Wait for the comment to appear locally (local-first write)
+    // --- Local check: comment appears immediately (local-first write) ---
     await expect(page.getByText(commentContent)).toBeVisible({
       timeout: 15_000,
     });
 
-    // Reload to verify the comment was persisted to the remote DB
+    // --- Persistence check: reload and verify comment survived ---
+    await page.waitForTimeout(3000);
     await page.reload();
     await waitForAppReady(page);
 
@@ -112,7 +128,7 @@ test.describe.serial('Thread CRUD operations', () => {
     await page.goto('/');
     await waitForAppReady(page);
 
-    // Thread list should show the updated title
+    // --- Local check: thread list shows the updated title ---
     await expect(page.getByText(updatedTitle)).toBeVisible({ timeout: 15_000 });
 
     // Click to navigate to thread detail
@@ -120,6 +136,14 @@ test.describe.serial('Thread CRUD operations', () => {
     await page.waitForURL(/\/thread\//, { timeout: 10_000 });
 
     // Verify we're on the correct thread
+    await expect(
+      page.locator('input[placeholder="UNTITLED_THREAD"]')
+    ).toHaveValue(updatedTitle, { timeout: 15_000 });
+
+    // --- Persistence check: reload and verify detail page survives ---
+    await page.reload();
+    await waitForAppReady(page);
+
     await expect(
       page.locator('input[placeholder="UNTITLED_THREAD"]')
     ).toHaveValue(updatedTitle, { timeout: 15_000 });

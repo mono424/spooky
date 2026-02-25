@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use ssp::circuit::{Circuit, Record, ViewDelta, Change, ChangeSet, Operation};
+use ssp::circuit::{Circuit, Record, ViewDelta, Change, ChangeSet, Operation, SubqueryOp};
 use ssp::circuit::view::OutputFormat;
 use surrealdb::engine::remote::ws::{Client, Ws};
 use surrealdb::opt::auth::Root;
@@ -202,6 +202,7 @@ pub fn create_app(state: AppState) -> Router {
         .route("/ingest", post(ingest_handler))
         .route("/log", post(log_handler))
         .route("/debug/view/:view_id", get(debug_view_handler))
+        .route("/debug/deps", get(debug_deps_handler))
         .route("/view/register", post(register_view_handler))
         .route("/view/unregister", post(unregister_view_handler))
         .route("/reset", post(reset_handler))
@@ -989,10 +990,27 @@ async fn debug_view_handler(
             "last_hash": view.last_hash,
             "format": format!("{:?}", view.format),
             "cache": cache_summary,
+            "subquery_tables": view.subquery_tables,
+            "referenced_tables": view.referenced_tables,
+            "content_generation": view.content_generation,
+            "subquery_cache": view.subquery_cache.iter()
+                .map(|(k, (pk, alias))| json!({"key": k, "parent_key": pk, "alias": alias}))
+                .collect::<Vec<_>>(),
         }))
     } else {
         Json(json!({ "error": "View not found" }))
     }
+}
+
+/// Debug dependency map handler
+async fn debug_deps_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let circuit = state.processor.read().await;
+    let deps = circuit.dependency_map_dump();
+    Json(json!({
+        "dependency_map": deps,
+        "tables_in_store": circuit.table_names(),
+        "view_count": circuit.view_count(),
+    }))
 }
 
 /// Version handler
@@ -1119,6 +1137,54 @@ pub async fn update_all_edges<C: Connection>(
                 "DELETE ${1}->_spooky_list_ref WHERE out = {0}",
                 id, binding_name
             ));
+        }
+
+        // Process subquery items (child records linked to parents via parent/parent_rel)
+        // These are processed AFTER main records so parent list_ref entries exist in the same tx.
+        for item in &delta.subquery_items {
+            if parse_record_id(&item.id).is_none() {
+                error!(
+                    target: "ssp::edges",
+                    record_id = %item.id,
+                    view_id = %delta.query_id,
+                    "Invalid subquery record ID format - skipping"
+                );
+                continue;
+            }
+
+            match item.op {
+                SubqueryOp::Add => {
+                    let version = circuit.store.get_record_version_by_key(&item.id).unwrap_or(1);
+                    created_count += 1;
+                    all_statements.push(format!(
+                        "RELATE ${binding}->_spooky_list_ref->{id} SET \
+                         version = {version}, \
+                         clientId = (SELECT VALUE clientId FROM ${binding} LIMIT 1)[0], \
+                         parent = (SELECT VALUE id FROM _spooky_list_ref WHERE in = ${binding} AND out = {parent} LIMIT 1)[0], \
+                         parent_rel = '{alias}'",
+                        binding = binding_name,
+                        id = item.id,
+                        version = version,
+                        parent = item.parent_key,
+                        alias = item.alias,
+                    ));
+                }
+                SubqueryOp::Update => {
+                    let version = circuit.store.get_record_version_by_key(&item.id).unwrap_or(1);
+                    updated_count += 1;
+                    all_statements.push(format!(
+                        "UPDATE _spooky_list_ref SET version = {version} WHERE in = ${binding} AND out = {id}",
+                        binding = binding_name, id = item.id, version = version
+                    ));
+                }
+                SubqueryOp::Remove => {
+                    deleted_count += 1;
+                    all_statements.push(format!(
+                        "DELETE ${binding}->_spooky_list_ref WHERE out = {id}",
+                        binding = binding_name, id = item.id
+                    ));
+                }
+            }
         }
     }
 

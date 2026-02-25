@@ -36,6 +36,9 @@ pub struct View {
     pub subquery_tables: Vec<String>,
     /// Monotonic counter bumped on subquery content changes, included in hash.
     pub content_generation: u64,
+    /// Subquery record tracking: child_key → (parent_key, alias).
+    /// Tracks which subquery records are visible through parent records in the view.
+    pub subquery_cache: HashMap<String, (String, String)>,
 }
 
 impl View {
@@ -57,6 +60,7 @@ impl View {
             referenced_tables,
             subquery_tables,
             content_generation: 0,
+            subquery_cache: HashMap::new(),
         }
     }
 

@@ -6,6 +6,27 @@ use crate::operator::QueryPlan;
 use crate::types::{make_key, SpookyValue};
 use std::collections::HashMap;
 
+/// Operation type for a subquery record delta.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SubqueryOp {
+    Add,
+    Update,
+    Remove,
+}
+
+/// A single subquery record change to be reflected in `_spooky_list_ref`.
+#[derive(Debug, Clone)]
+pub struct SubqueryDeltaItem {
+    /// The subquery record key (e.g., "comment:abc123").
+    pub id: String,
+    /// The parent data record key (e.g., "thread:xyz789").
+    pub parent_key: String,
+    /// The relationship alias (e.g., "comments").
+    pub alias: String,
+    /// The operation: add, update, or remove.
+    pub op: SubqueryOp,
+}
+
 /// Output from a materialized view after a step.
 #[derive(Debug, Clone)]
 pub struct ViewDelta {
@@ -20,6 +41,8 @@ pub struct ViewDelta {
     pub records: Vec<String>,
     /// Hash of the current view state.
     pub result_hash: String,
+    /// Subquery record changes (additions/updates/removals for child records).
+    pub subquery_items: Vec<SubqueryDeltaItem>,
 }
 
 /// The DBSP incremental computation circuit.
@@ -35,6 +58,102 @@ pub struct Circuit {
     views: HashMap<String, View>,
     /// Routing: table_name → [query_id].
     dependency_map: HashMap<String, Vec<String>>,
+}
+
+/// Compute the full set of subquery records visible through the current view.
+///
+/// Returns: child_key → (parent_key, alias)
+/// This operates as a side-channel alongside the main Z-set pipeline.
+fn compute_current_subquery_set(
+    store: &Store,
+    view: &View,
+) -> HashMap<String, (String, String)> {
+    let mut result = HashMap::new();
+
+    let subquery_infos = view.plan.root.subquery_projection_info();
+
+    for (alias, subquery_table, parent_key_opt) in &subquery_infos {
+        let parent_key = match parent_key_opt {
+            Some(pk) => pk,
+            None => continue, // No parent_key → can't track child-to-parent linkage
+        };
+
+        let collection = match store.get_collection(subquery_table) {
+            Some(c) => c,
+            None => continue,
+        };
+
+        // For each row in the subquery table, check if its FK points to a parent in the view
+        for (raw_id, row_data) in &collection.rows {
+            let fk_value = match row_data.get(&parent_key.child_field).and_then(|v| v.as_str()) {
+                Some(v) => v,
+                None => continue,
+            };
+
+            // The FK value should be a record ID like "thread:xyz" which matches the view cache key format
+            let parent_cache_key = fk_value.to_string();
+
+            if view.cache.contains_key(&parent_cache_key) {
+                let child_key = make_key(subquery_table, raw_id);
+                result.insert(child_key, (parent_cache_key, alias.clone()));
+            }
+        }
+    }
+
+    result
+}
+
+/// Diff two subquery sets and produce delta items.
+fn diff_subquery_sets(
+    old: &HashMap<String, (String, String)>,
+    new: &HashMap<String, (String, String)>,
+    store: &Store,
+) -> Vec<SubqueryDeltaItem> {
+    let mut items = Vec::new();
+
+    // Additions: in new but not old
+    for (key, (parent_key, alias)) in new {
+        if !old.contains_key(key) {
+            items.push(SubqueryDeltaItem {
+                id: key.clone(),
+                parent_key: parent_key.clone(),
+                alias: alias.clone(),
+                op: SubqueryOp::Add,
+            });
+        }
+    }
+
+    // Removals: in old but not new
+    for (key, (parent_key, alias)) in old {
+        if !new.contains_key(key) {
+            items.push(SubqueryDeltaItem {
+                id: key.clone(),
+                parent_key: parent_key.clone(),
+                alias: alias.clone(),
+                op: SubqueryOp::Remove,
+            });
+        }
+    }
+
+    // Updates: in both, check if version changed
+    for (key, (parent_key, alias)) in new {
+        if old.contains_key(key) {
+            // Check if the record version changed
+            let old_version = store.get_record_version_by_key(key);
+            // We always emit an update for records that exist in both sets
+            // when there's any change to subquery tables (the caller determines when to recompute)
+            if old_version.is_some() {
+                items.push(SubqueryDeltaItem {
+                    id: key.clone(),
+                    parent_key: parent_key.clone(),
+                    alias: alias.clone(),
+                    op: SubqueryOp::Update,
+                });
+            }
+        }
+    }
+
+    items
 }
 
 impl Circuit {
@@ -233,6 +352,19 @@ impl Circuit {
         view.apply_delta(&view_output);
         view.last_hash = view.compute_hash();
 
+        // Compute initial subquery record set
+        let new_subquery_set = compute_current_subquery_set(&self.store, view);
+        let subquery_items: Vec<SubqueryDeltaItem> = new_subquery_set
+            .iter()
+            .map(|(key, (parent_key, alias))| SubqueryDeltaItem {
+                id: key.clone(),
+                parent_key: parent_key.clone(),
+                alias: alias.clone(),
+                op: SubqueryOp::Add,
+            })
+            .collect();
+        view.subquery_cache = new_subquery_set;
+
         let records: Vec<String> = view.cache.keys().cloned().collect();
 
         Some(ViewDelta {
@@ -242,6 +374,7 @@ impl Circuit {
             updates: vec![],
             records,
             result_hash: view.last_hash.clone(),
+            subquery_items,
         })
     }
 
@@ -348,6 +481,20 @@ impl Circuit {
         if new_hash != view.last_hash {
             view.last_hash = new_hash.clone();
         }
+
+        // Compute subquery record diffs when relevant tables changed
+        let has_subquery_table_changes = view.subquery_tables.iter().any(|t| {
+            table_deltas.contains_key(t) || content_updates.contains_key(t)
+        });
+        let subquery_items = if has_membership_changes || has_subquery_table_changes {
+            let new_subquery_set = compute_current_subquery_set(&self.store, view);
+            let items = diff_subquery_sets(&view.subquery_cache, &new_subquery_set, &self.store);
+            view.subquery_cache = new_subquery_set;
+            items
+        } else {
+            vec![]
+        };
+
         let records: Vec<String> = view.cache.keys().cloned().collect();
 
         Some(ViewDelta {
@@ -357,6 +504,7 @@ impl Circuit {
             updates,
             records,
             result_hash: view.last_hash.clone(),
+            subquery_items,
         })
     }
 }
@@ -382,6 +530,8 @@ struct QueryState {
     cache: ZSet,
     last_hash: String,
     content_generation: u64,
+    #[serde(default)]
+    subquery_cache: HashMap<String, (String, String)>,
 }
 
 impl Circuit {
@@ -400,6 +550,7 @@ impl Circuit {
                 cache: view.cache.clone(),
                 last_hash: view.last_hash.clone(),
                 content_generation: view.content_generation,
+                subquery_cache: view.subquery_cache.clone(),
             })
             .collect();
 
@@ -444,6 +595,7 @@ impl Circuit {
             view.cache = qs.cache;
             view.last_hash = qs.last_hash;
             view.content_generation = qs.content_generation;
+            view.subquery_cache = qs.subquery_cache;
 
             circuit.graphs.insert(query_id.clone(), graph);
             circuit.views.insert(query_id.clone(), view);
@@ -476,6 +628,11 @@ impl Circuit {
     /// Names of all tables in the store.
     pub fn table_names(&self) -> Vec<String> {
         self.store.collections.keys().cloned().collect()
+    }
+
+    /// Dependency map: table → [query_ids] for debugging.
+    pub fn dependency_map_dump(&self) -> &HashMap<String, Vec<String>> {
+        &self.dependency_map
     }
 }
 
@@ -626,6 +783,7 @@ mod tests {
                         plan: Box::new(OperatorPlan::Scan {
                             table: child_table.to_string(),
                         }),
+                        parent_key: None,
                     },
                 ],
             },
@@ -776,5 +934,191 @@ mod tests {
         // Should have both: membership addition (new thread) AND content update (root's subquery changed)
         assert!(d.additions.contains(&"thread:child".to_string()));
         assert!(d.updates.contains(&"thread:root".to_string()));
+    }
+
+    // ── Subquery item tracking tests ─────────────────────────────
+
+    use crate::operator::plan::SubqueryParentKey;
+    use crate::operator::predicate::Predicate;
+
+    /// Helper: build a query with a subquery projection that has parent_key set.
+    /// SELECT *, (SELECT * FROM child_table WHERE child_fk = $parent.id) AS alias FROM parent_table
+    fn subquery_query_with_parent_key(
+        id: &str,
+        parent_table: &str,
+        child_table: &str,
+        alias: &str,
+        child_field: &str,
+    ) -> QueryPlan {
+        QueryPlan {
+            id: id.to_string(),
+            root: OperatorPlan::Project {
+                input: Box::new(OperatorPlan::Scan {
+                    table: parent_table.to_string(),
+                }),
+                projections: vec![
+                    Projection::All,
+                    Projection::Subquery {
+                        alias: alias.to_string(),
+                        plan: Box::new(OperatorPlan::Filter {
+                            input: Box::new(OperatorPlan::Scan {
+                                table: child_table.to_string(),
+                            }),
+                            predicate: Predicate::Eq {
+                                field: crate::types::Path::new(child_field),
+                                value: json!({"$param": "parent.id"}),
+                            },
+                        }),
+                        parent_key: Some(SubqueryParentKey {
+                            child_field: child_field.to_string(),
+                            parent_field: "id".to_string(),
+                        }),
+                    },
+                ],
+            },
+        }
+    }
+
+    #[test]
+    fn initial_snapshot_includes_subquery_items() {
+        let mut circuit = Circuit::new();
+
+        // Load parent + child records
+        circuit.load(vec![
+            Record::new("thread", "thread:1", json!({"title": "Hello"})),
+            Record::new("comment", "comment:1", json!({"text": "hi", "thread": "thread:1"})),
+            Record::new("comment", "comment:2", json!({"text": "yo", "thread": "thread:1"})),
+        ]);
+
+        let delta = circuit.add_query(
+            subquery_query_with_parent_key("q1", "thread", "comment", "comments", "thread"),
+            None,
+            None,
+        );
+
+        assert!(delta.is_some());
+        let d = delta.unwrap();
+        assert_eq!(d.additions.len(), 1); // thread:1
+        assert_eq!(d.subquery_items.len(), 2); // comment:1, comment:2
+        assert!(d.subquery_items.iter().all(|item| item.op == SubqueryOp::Add));
+        assert!(d.subquery_items.iter().all(|item| item.parent_key == "thread:1"));
+        assert!(d.subquery_items.iter().all(|item| item.alias == "comments"));
+    }
+
+    #[test]
+    fn step_adds_subquery_items_for_new_child() {
+        let mut circuit = Circuit::new();
+
+        circuit.load(vec![
+            Record::new("thread", "thread:1", json!({"title": "Hello"})),
+        ]);
+
+        circuit.add_query(
+            subquery_query_with_parent_key("q1", "thread", "comment", "comments", "thread"),
+            None,
+            None,
+        );
+
+        // Create a comment linked to thread:1
+        let deltas = circuit.step(ChangeSet {
+            changes: vec![Change::create(
+                "comment",
+                "comment:1",
+                json!({"text": "hi", "thread": "thread:1"}),
+            )],
+        });
+
+        assert_eq!(deltas.len(), 1);
+        let d = &deltas[0];
+        let adds: Vec<_> = d.subquery_items.iter().filter(|i| i.op == SubqueryOp::Add).collect();
+        assert_eq!(adds.len(), 1);
+        assert_eq!(adds[0].id, "comment:1");
+        assert_eq!(adds[0].parent_key, "thread:1");
+        assert_eq!(adds[0].alias, "comments");
+    }
+
+    #[test]
+    fn step_removes_subquery_items_when_child_deleted() {
+        let mut circuit = Circuit::new();
+
+        circuit.load(vec![
+            Record::new("thread", "thread:1", json!({"title": "Hello"})),
+            Record::new("comment", "comment:1", json!({"text": "hi", "thread": "thread:1"})),
+        ]);
+
+        circuit.add_query(
+            subquery_query_with_parent_key("q1", "thread", "comment", "comments", "thread"),
+            None,
+            None,
+        );
+
+        // Delete the comment
+        let deltas = circuit.step(ChangeSet {
+            changes: vec![Change::delete("comment", "comment:1")],
+        });
+
+        assert_eq!(deltas.len(), 1);
+        let d = &deltas[0];
+        let removes: Vec<_> = d.subquery_items.iter().filter(|i| i.op == SubqueryOp::Remove).collect();
+        assert_eq!(removes.len(), 1);
+        assert_eq!(removes[0].id, "comment:1");
+    }
+
+    #[test]
+    fn step_removes_subquery_items_when_parent_removed() {
+        let mut circuit = Circuit::new();
+
+        circuit.load(vec![
+            Record::new("thread", "thread:1", json!({"title": "Hello"})),
+            Record::new("comment", "comment:1", json!({"text": "hi", "thread": "thread:1"})),
+        ]);
+
+        circuit.add_query(
+            subquery_query_with_parent_key("q1", "thread", "comment", "comments", "thread"),
+            None,
+            None,
+        );
+
+        // Delete the parent thread — all child subquery items should be removed
+        let deltas = circuit.step(ChangeSet {
+            changes: vec![Change::delete("thread", "thread:1")],
+        });
+
+        assert_eq!(deltas.len(), 1);
+        let d = &deltas[0];
+        assert!(d.removals.contains(&"thread:1".to_string()));
+        let removes: Vec<_> = d.subquery_items.iter().filter(|i| i.op == SubqueryOp::Remove).collect();
+        assert_eq!(removes.len(), 1);
+        assert_eq!(removes[0].id, "comment:1");
+    }
+
+    #[test]
+    fn no_subquery_items_for_unrelated_child() {
+        let mut circuit = Circuit::new();
+
+        circuit.load(vec![
+            Record::new("thread", "thread:1", json!({"title": "Hello"})),
+        ]);
+
+        circuit.add_query(
+            subquery_query_with_parent_key("q1", "thread", "comment", "comments", "thread"),
+            None,
+            None,
+        );
+
+        // Create a comment linked to a non-existent thread
+        let deltas = circuit.step(ChangeSet {
+            changes: vec![Change::create(
+                "comment",
+                "comment:1",
+                json!({"text": "hi", "thread": "thread:999"}),
+            )],
+        });
+
+        // Should still emit delta (subquery table change bumps content_generation)
+        // but NO subquery items since parent not in view
+        assert_eq!(deltas.len(), 1);
+        let adds: Vec<_> = deltas[0].subquery_items.iter().filter(|i| i.op == SubqueryOp::Add).collect();
+        assert!(adds.is_empty());
     }
 }

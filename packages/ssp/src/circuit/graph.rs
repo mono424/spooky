@@ -641,6 +641,7 @@ mod tests {
                 Projection::Subquery {
                     alias: "posts".to_string(),
                     plan: Box::new(scan("posts")),
+                    parent_key: None,
                 },
             ],
         };
@@ -702,6 +703,7 @@ mod tests {
             projections: vec![Projection::Subquery {
                 alias: "posts".to_string(),
                 plan: Box::new(scan("posts")),
+                parent_key: None,
             }],
         };
         let tables = plan.referenced_tables();
@@ -733,6 +735,7 @@ mod tests {
                 Projection::Subquery {
                     alias: "comments".to_string(),
                     plan: Box::new(scan("comment")),
+                    parent_key: None,
                 },
             ],
         };
@@ -749,6 +752,7 @@ mod tests {
                 Projection::Subquery {
                     alias: "children".to_string(),
                     plan: Box::new(scan("thread")),
+                    parent_key: None,
                 },
             ],
         };
@@ -768,6 +772,7 @@ mod tests {
                 Projection::Subquery {
                     alias: "author".to_string(),
                     plan: Box::new(scan("author")),
+                    parent_key: None,
                 },
             ],
         };
@@ -778,6 +783,7 @@ mod tests {
                 Projection::Subquery {
                     alias: "comments".to_string(),
                     plan: Box::new(inner_subquery),
+                    parent_key: None,
                 },
             ],
         };
