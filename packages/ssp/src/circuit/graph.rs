@@ -709,6 +709,84 @@ mod tests {
     }
 
     // ═══════════════════════════════════════════════════════════════════
+    // 11b. subquery_tables (OperatorPlan method)
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn subquery_tables_empty_for_simple_scan() {
+        let plan = scan("users");
+        assert!(plan.subquery_tables().is_empty());
+    }
+
+    #[test]
+    fn subquery_tables_empty_for_join() {
+        let plan = join(scan("users"), scan("posts"), "id", "author");
+        assert!(plan.subquery_tables().is_empty());
+    }
+
+    #[test]
+    fn subquery_tables_returns_subquery_referenced_tables() {
+        let plan = OperatorPlan::Project {
+            input: Box::new(scan("thread")),
+            projections: vec![
+                Projection::All,
+                Projection::Subquery {
+                    alias: "comments".to_string(),
+                    plan: Box::new(scan("comment")),
+                },
+            ],
+        };
+        assert_eq!(plan.subquery_tables(), vec!["comment"]);
+    }
+
+    #[test]
+    fn subquery_tables_overlapping_with_primary() {
+        // Self-referencing: SELECT *, (SELECT * FROM thread WHERE parent=$parent.id) FROM thread
+        let plan = OperatorPlan::Project {
+            input: Box::new(scan("thread")),
+            projections: vec![
+                Projection::All,
+                Projection::Subquery {
+                    alias: "children".to_string(),
+                    plan: Box::new(scan("thread")),
+                },
+            ],
+        };
+        // "thread" appears in both primary and subquery — subquery_tables includes it
+        assert_eq!(plan.subquery_tables(), vec!["thread"]);
+        // referenced_tables also includes it (deduplicated)
+        assert_eq!(plan.referenced_tables(), vec!["thread"]);
+    }
+
+    #[test]
+    fn subquery_tables_nested_subquery() {
+        // SELECT *, (SELECT *, (SELECT * FROM author) AS a FROM comment) AS comments FROM thread
+        let inner_subquery = OperatorPlan::Project {
+            input: Box::new(scan("comment")),
+            projections: vec![
+                Projection::All,
+                Projection::Subquery {
+                    alias: "author".to_string(),
+                    plan: Box::new(scan("author")),
+                },
+            ],
+        };
+        let plan = OperatorPlan::Project {
+            input: Box::new(scan("thread")),
+            projections: vec![
+                Projection::All,
+                Projection::Subquery {
+                    alias: "comments".to_string(),
+                    plan: Box::new(inner_subquery),
+                },
+            ],
+        };
+        let mut sq = plan.subquery_tables();
+        sq.sort();
+        assert_eq!(sq, vec!["author", "comment"]);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
     // 12. Topo order invariant: universal validation
     // ═══════════════════════════════════════════════════════════════════
 

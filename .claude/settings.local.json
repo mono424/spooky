@@ -47,7 +47,8 @@
       "Bash(wasm-pack build:*)",
       "Bash(npm test:*)",
       "Bash(wc:*)",
-      "Bash(chmod:*)"
+      "Bash(chmod:*)",
+      "Bash(npx playwright test --reporter=list)"
     ],
     "deny": [],
     "ask": []

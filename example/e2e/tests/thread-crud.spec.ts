@@ -93,12 +93,15 @@ test.describe.serial('Thread CRUD operations', () => {
     // Wait for textarea to clear (indicates submission completed)
     await expect(commentTextarea).toHaveValue('', { timeout: 10_000 });
 
-    // Reload to ensure the comment is fetched from the DB
-    // (the real-time Spooky sync may not update the UI instantly)
+    // Wait for the comment to appear locally (local-first write)
+    await expect(page.getByText(commentContent)).toBeVisible({
+      timeout: 15_000,
+    });
+
+    // Reload to verify the comment was persisted to the remote DB
     await page.reload();
     await waitForAppReady(page);
 
-    // Verify comment appears in the list
     await expect(page.getByText(commentContent)).toBeVisible({
       timeout: 15_000,
     });

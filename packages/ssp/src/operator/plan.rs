@@ -107,4 +107,36 @@ impl OperatorPlan {
             }
         }
     }
+
+    /// Collect table names referenced only inside `Projection::Subquery` plans.
+    /// This set may overlap with primary (main-pipeline) tables.
+    pub fn subquery_tables(&self) -> Vec<String> {
+        let mut tables = Vec::new();
+        self.collect_subquery_tables(&mut tables);
+        let mut seen = std::collections::HashSet::new();
+        tables.retain(|t| seen.insert(t.clone()));
+        tables
+    }
+
+    fn collect_subquery_tables(&self, tables: &mut Vec<String>) {
+        match self {
+            OperatorPlan::Scan { .. } => {}
+            OperatorPlan::Filter { input, .. } | OperatorPlan::Limit { input, .. } => {
+                input.collect_subquery_tables(tables);
+            }
+            OperatorPlan::Project { input, projections } => {
+                input.collect_subquery_tables(tables);
+                for proj in projections {
+                    if let Projection::Subquery { plan, .. } = proj {
+                        // Collect ALL tables referenced within the subquery plan
+                        plan.collect_tables(tables);
+                    }
+                }
+            }
+            OperatorPlan::Join { left, right, .. } => {
+                left.collect_subquery_tables(tables);
+                right.collect_subquery_tables(tables);
+            }
+        }
+    }
 }

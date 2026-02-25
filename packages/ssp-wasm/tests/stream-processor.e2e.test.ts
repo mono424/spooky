@@ -309,19 +309,11 @@ describe('Two Nested Subqueries (Thread with Author and Comments)', () => {
         comment2.record
       ) as WasmViewUpdate[];
 
-      // 4. Verify - the nested comment subquery changes the thread's hash
-      // The view may or may not emit an update when a nested subquery changes
-      // depending on implementation. Check if we get an update and verify thread is in result.
+      // 4. Verify - subquery table changes must emit a view update
       const viewUpdate = updates.find((u) => u.query_id === VIEW_ID);
-      if (viewUpdate) {
-        // If update is emitted, verify thread is still in results
-        expect(viewUpdate.result_data.map((i) => i[0])).toContain(thread.id);
-        // Hash should change since nested comments changed
-        expect(viewUpdate.result_hash).not.toBe(initialHash);
-      } else {
-        // Some implementations may not emit updates for nested subquery changes
-        // This is acceptable behavior - just skip this assertion
-      }
+      expect(viewUpdate).toBeDefined();
+      expect(viewUpdate!.result_data.map((i) => i[0])).toContain(thread.id);
+      expect(viewUpdate!.result_hash).not.toBe(initialHash);
     });
   });
 

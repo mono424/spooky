@@ -10,5 +10,5 @@
     "resolveJsonModule": true,
     "noEmit": true
   },
-  "include": ["tests", "fixtures", "scripts", "playwright.config.ts"]
+  "include": ["tests", "fixtures", "scripts", "playwright.config.ts", "db-cleanup.ts"]
 }

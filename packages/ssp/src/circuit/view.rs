@@ -32,6 +32,10 @@ pub struct View {
     pub params: Option<SpookyValue>,
     /// Table names this query depends on.
     pub referenced_tables: Vec<String>,
+    /// Tables referenced inside subquery projections (may overlap with primary tables).
+    pub subquery_tables: Vec<String>,
+    /// Monotonic counter bumped on subquery content changes, included in hash.
+    pub content_generation: u64,
 }
 
 impl View {
@@ -42,6 +46,7 @@ impl View {
         params: Option<SpookyValue>,
         referenced_tables: Vec<String>,
     ) -> Self {
+        let subquery_tables = plan.root.subquery_tables();
         Self {
             query_id,
             plan,
@@ -50,6 +55,8 @@ impl View {
             format,
             params,
             referenced_tables,
+            subquery_tables,
+            content_generation: 0,
         }
     }
 
@@ -69,6 +76,7 @@ impl View {
     }
 
     /// Compute a hash of the current cache state for change detection.
+    /// Includes `content_generation` so the hash changes when subquery data changes.
     pub fn compute_hash(&self) -> String {
         let mut keys: Vec<&String> = self.cache.keys().collect();
         keys.sort();
@@ -77,6 +85,12 @@ impl View {
         for key in &keys {
             key.hash(&mut hasher);
         }
+        self.content_generation.hash(&mut hasher);
         format!("{:016x}", hasher.finish())
+    }
+
+    /// Bump the content generation counter (called when subquery data changes).
+    pub fn bump_content_generation(&mut self) {
+        self.content_generation += 1;
     }
 }

@@ -291,12 +291,28 @@ impl Circuit {
 
         // Identify content-only updates: keys in the view cache whose data changed
         // but membership didn't (Operation::Update with weight 0).
-        let updates: Vec<String> = content_updates
+        let mut updates: Vec<String> = content_updates
             .iter()
             .flat_map(|(_, keys)| keys.iter())
             .filter(|key| view.cache.contains_key(*key) && !view_delta.contains_key(*key))
             .cloned()
             .collect();
+
+        // Detect subquery table changes: if any table referenced in a subquery
+        // projection had changes, all cached parent records need re-fetching.
+        if !view.subquery_tables.is_empty() {
+            let has_subquery_changes = view.subquery_tables.iter().any(|t| {
+                table_deltas.contains_key(t) || content_updates.contains_key(t)
+            });
+            if has_subquery_changes {
+                view.bump_content_generation();
+                for key in view.cache.keys() {
+                    if !updates.contains(key) {
+                        updates.push(key.clone());
+                    }
+                }
+            }
+        }
 
         let has_membership_changes = !view_delta.is_empty();
         let has_content_updates = !updates.is_empty();
@@ -365,6 +381,7 @@ struct QueryState {
     format: OutputFormat,
     cache: ZSet,
     last_hash: String,
+    content_generation: u64,
 }
 
 impl Circuit {
@@ -382,6 +399,7 @@ impl Circuit {
                 format: view.format,
                 cache: view.cache.clone(),
                 last_hash: view.last_hash.clone(),
+                content_generation: view.content_generation,
             })
             .collect();
 
@@ -425,6 +443,7 @@ impl Circuit {
             );
             view.cache = qs.cache;
             view.last_hash = qs.last_hash;
+            view.content_generation = qs.content_generation;
 
             circuit.graphs.insert(query_id.clone(), graph);
             circuit.views.insert(query_id.clone(), view);
@@ -470,7 +489,7 @@ impl Default for Circuit {
 mod tests {
     use super::*;
     use crate::algebra::ZSetOps;
-    use crate::operator::plan::OperatorPlan;
+    use crate::operator::plan::{OperatorPlan, Projection};
     use crate::circuit::store::Change;
     use serde_json::json;
 
@@ -587,5 +606,175 @@ mod tests {
         let fresh_view = fresh.get_view("q1").unwrap();
 
         assert_eq!(view.cache, fresh_view.cache);
+    }
+
+    // ── Subquery change detection tests ─────────────────────────────
+
+    /// Helper: build a query with a subquery projection.
+    /// SELECT * , (SELECT * FROM child_table) AS children FROM parent_table
+    fn subquery_query(id: &str, parent_table: &str, child_table: &str) -> QueryPlan {
+        QueryPlan {
+            id: id.to_string(),
+            root: OperatorPlan::Project {
+                input: Box::new(OperatorPlan::Scan {
+                    table: parent_table.to_string(),
+                }),
+                projections: vec![
+                    Projection::All,
+                    Projection::Subquery {
+                        alias: "children".to_string(),
+                        plan: Box::new(OperatorPlan::Scan {
+                            table: child_table.to_string(),
+                        }),
+                    },
+                ],
+            },
+        }
+    }
+
+    #[test]
+    fn subquery_table_create_emits_content_update() {
+        let mut circuit = Circuit::new();
+
+        // Load a parent record
+        circuit.load(vec![Record::new(
+            "thread",
+            "thread:1",
+            json!({"title": "Hello"}),
+        )]);
+
+        // Register a query with a subquery on "comment"
+        let delta = circuit.add_query(subquery_query("q1", "thread", "comment"), None, None);
+        assert!(delta.is_some());
+        let initial_hash = delta.unwrap().result_hash;
+
+        // Create a comment (subquery table change)
+        let deltas = circuit.step(ChangeSet {
+            changes: vec![Change::create(
+                "comment",
+                "comment:1",
+                json!({"text": "hi", "thread": "thread:1"}),
+            )],
+        });
+
+        // Must emit a ViewDelta with content updates
+        assert_eq!(deltas.len(), 1);
+        let d = &deltas[0];
+        assert_eq!(d.query_id, "q1");
+        assert!(d.additions.is_empty(), "no membership additions");
+        assert!(d.removals.is_empty(), "no membership removals");
+        assert!(d.updates.contains(&"thread:1".to_string()), "parent record is content-updated");
+        assert_ne!(d.result_hash, initial_hash, "hash must change");
+    }
+
+    #[test]
+    fn subquery_table_delete_emits_content_update() {
+        let mut circuit = Circuit::new();
+
+        circuit.load(vec![
+            Record::new("thread", "thread:1", json!({"title": "Hello"})),
+            Record::new("comment", "comment:1", json!({"text": "hi"})),
+        ]);
+
+        circuit.add_query(subquery_query("q1", "thread", "comment"), None, None);
+
+        // Delete the comment
+        let deltas = circuit.step(ChangeSet {
+            changes: vec![Change::delete("comment", "comment:1")],
+        });
+
+        assert_eq!(deltas.len(), 1);
+        assert!(deltas[0].updates.contains(&"thread:1".to_string()));
+    }
+
+    #[test]
+    fn subquery_table_update_emits_content_update() {
+        let mut circuit = Circuit::new();
+
+        circuit.load(vec![
+            Record::new("thread", "thread:1", json!({"title": "Hello"})),
+            Record::new("comment", "comment:1", json!({"text": "hi"})),
+        ]);
+
+        circuit.add_query(subquery_query("q1", "thread", "comment"), None, None);
+
+        // Update the comment (Operation::Update has weight 0)
+        let deltas = circuit.step(ChangeSet {
+            changes: vec![Change::update(
+                "comment",
+                "comment:1",
+                json!({"text": "updated"}),
+            )],
+        });
+
+        assert_eq!(deltas.len(), 1);
+        assert!(deltas[0].updates.contains(&"thread:1".to_string()));
+    }
+
+    #[test]
+    fn no_subquery_means_no_spurious_updates() {
+        let mut circuit = Circuit::new();
+
+        circuit.load(vec![Record::new(
+            "thread",
+            "thread:1",
+            json!({"title": "Hello"}),
+        )]);
+
+        // Simple scan query — no subqueries
+        circuit.add_query(scan_query("q1", "thread"), None, None);
+
+        // Change to an unrelated table should not affect this query
+        let deltas = circuit.step(ChangeSet {
+            changes: vec![Change::create("comment", "comment:1", json!({"text": "hi"}))],
+        });
+
+        assert!(deltas.is_empty());
+    }
+
+    #[test]
+    fn empty_view_cache_no_update_on_subquery_change() {
+        let mut circuit = Circuit::new();
+
+        // Register query but load NO parent records
+        circuit.add_query(subquery_query("q1", "thread", "comment"), None, None);
+
+        // Create a comment — no parent records to update
+        let deltas = circuit.step(ChangeSet {
+            changes: vec![Change::create("comment", "comment:1", json!({"text": "hi"}))],
+        });
+
+        assert!(deltas.is_empty());
+    }
+
+    #[test]
+    fn self_referencing_subquery_detects_changes() {
+        let mut circuit = Circuit::new();
+
+        circuit.load(vec![Record::new(
+            "thread",
+            "thread:root",
+            json!({"title": "Root", "is_root": true}),
+        )]);
+
+        // Query: SELECT *, (SELECT * FROM thread WHERE ...) AS children FROM thread
+        // "thread" is both primary AND subquery table
+        circuit.add_query(subquery_query("q1", "thread", "thread"), None, None);
+
+        // Create a child thread — this is both a membership change (new thread in Scan)
+        // AND a subquery table change
+        let deltas = circuit.step(ChangeSet {
+            changes: vec![Change::create(
+                "thread",
+                "thread:child",
+                json!({"title": "Child", "parent": "thread:root"}),
+            )],
+        });
+
+        assert_eq!(deltas.len(), 1);
+        let d = &deltas[0];
+        // Should have both: membership addition (new thread) AND content update (root's subquery changed)
+        assert!(d.additions.contains(&"thread:child".to_string()));
+        assert!(d.updates.contains(&"thread:root".to_string()));
     }
 }

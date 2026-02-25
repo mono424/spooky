@@ -43,8 +43,13 @@ export default defineConfig({
 
   projects: [
     {
+      name: 'setup',
+      testMatch: 'db-setup.spec.ts',
+    },
+    {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
+      dependencies: ['setup'],
     },
   ],
 });
