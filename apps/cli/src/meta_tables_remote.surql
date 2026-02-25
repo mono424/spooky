@@ -46,6 +46,12 @@ DEFINE FIELD version ON TABLE _spooky_list_ref TYPE int
 DEFINE FIELD updatedAt ON TABLE _spooky_list_ref TYPE datetime VALUE time::now() READONLY
     PERMISSIONS FOR select, create, update WHERE true;
 
+DEFINE FIELD parent ON TABLE _spooky_list_ref TYPE option<record<_spooky_list_ref>>
+    PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD parent_rel ON TABLE _spooky_list_ref TYPE option<string>
+    PERMISSIONS FOR select, create, update WHERE true;
+
 -- ==================================================
 -- SPOOKY STREAM PROCESSOR STATE
 -- Stores the local state of the stream processor (DBSP)

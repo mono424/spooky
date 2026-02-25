@@ -3,7 +3,7 @@
  * Mirrors the patterns from packages/spooky-stream-processor/tests/common/mod.rs
  */
 
-import type { WasmIncantationConfig } from '../pkg/spooky_stream_processor_wasm';
+import type { WasmViewConfig } from '../pkg/ssp_wasm';
 
 let counter = 0;
 
@@ -91,10 +91,10 @@ export function createViewConfig(
   id: string,
   sql: string,
   params?: Record<string, unknown>
-): WasmIncantationConfig {
+): WasmViewConfig {
   return {
     id,
-    sql,
+    surql: sql,
     params,
     clientId: 'test-client',
     ttl: '3600s',
@@ -102,10 +102,6 @@ export function createViewConfig(
   };
 }
 
-/**
- * Validate that a hash tree has the expected structure.
- * Optionally validates that specific record IDs are present.
- */
 /**
  * Validate that a flat array result has the expected structure.
  * Optionally validates that specific record IDs are present.
@@ -134,29 +130,44 @@ export function validateFlatArray(resultData: unknown, expectedIds?: string[]): 
 }
 
 /**
- * Check if a string is a valid hash format (64-char lowercase hex for blake3)
+ * Create a product record (for WHERE clause and ORDER BY tests)
  */
-function isValidHashFormat(hash: string): boolean {
-  return /^[a-f0-9]{64}$/.test(hash);
+export function makeProductRecord(
+  name: string,
+  price: number,
+  category: string
+): { id: string; record: Record<string, unknown> } {
+  const idRaw = generateId();
+  const id = `product:${idRaw}`;
+  const record = {
+    id,
+    name,
+    price,
+    category,
+    type: 'product',
+  };
+  return { id, record };
 }
 
 /**
- * Legacy validator for Views with Subqueries - Now effectively same as validateFlatArray
- * since subqueries are flattened/ignored in the output.
+ * Create a user record with numeric fields (for filtering/ordering tests)
  */
-export function validateFlatArrayWithChildren(
-  resultData: unknown,
-  expectedIds?: string[],
-  expectedChildKeys?: string[]
-): boolean {
-  // Just validate flat array structure
-  return validateFlatArray(resultData, expectedIds);
+export function makeUserRecordExtended(
+  username: string,
+  email: string,
+  age: number,
+  level: number
+): { id: string; record: Record<string, unknown> } {
+  const idRaw = generateId();
+  const id = `user:${idRaw}`;
+  const record = {
+    id,
+    username,
+    email,
+    age,
+    level,
+    type: 'user',
+  };
+  return { id, record };
 }
 
-/**
- * Extract table name from a record ID (e.g., "user:123" -> "user")
- */
-export function getTableFromId(id: string): string {
-  const colonIndex = id.indexOf(':');
-  return colonIndex > 0 ? id.substring(0, colonIndex) : id;
-}

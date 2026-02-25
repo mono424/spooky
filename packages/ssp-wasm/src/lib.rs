@@ -1,10 +1,8 @@
 use serde::Serialize;
-use serde_json::Value; // Keep Value import
-use ssp::engine::circuit::dto::BatchEntry;
-use ssp::engine::eval::normalize_record_id;
-use ssp::engine::types::Operation;
-use ssp::engine::types::SpookyValue;
-use ssp::{Circuit, ViewUpdate};
+use serde_json::Value;
+use ssp::circuit::{Change, ChangeSet, Circuit, Operation, ViewDelta};
+use ssp::eval::normalize_record_id;
+use ssp::types::SpookyValue;
 use wasm_bindgen::prelude::*;
 
 /// Version from Cargo.toml
@@ -21,113 +19,91 @@ pub struct SpookyProcessor {
     circuit: Circuit,
 }
 
-/// Custom DTO for WASM output with [[record-id, version], ...] format
-/// Custom DTO for WASM output with [[record-id, version], ...] format
+/// Per-record delta info (id + version).
+#[derive(Serialize)]
+struct WasmDeltaRecord(String, i64);
+
+/// Granular delta: which records were added, removed, or content-updated.
+#[derive(Serialize)]
+struct WasmDelta {
+    additions: Vec<WasmDeltaRecord>,
+    removals: Vec<String>,
+    updates: Vec<WasmDeltaRecord>,
+}
+
+/// Custom DTO for WASM output.
 #[derive(Serialize)]
 struct WasmViewUpdate {
     query_id: String,
     result_hash: String,
     result_data: Vec<(String, i64)>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    delta: Option<WasmStreamingUpdate>,
+    delta: WasmDelta,
 }
 
-#[derive(Serialize)]
-struct WasmStreamingUpdate {
-    view_id: String,
-    records: Vec<WasmDeltaRecord>,
-}
-
-#[derive(Serialize)]
-struct WasmDeltaRecord {
-    id: String,
-    event: ssp::engine::update::DeltaEvent,
-    version: i64,
-}
-
-/// Transform ViewUpdate to WasmViewUpdate with versions extracted from circuit database
-fn transform_updates(updates: &[ViewUpdate], circuit: &Circuit) -> Vec<WasmViewUpdate> {
-    updates
+/// Transform a Vec<ViewDelta> to Vec<WasmViewUpdate> with versions from the store.
+fn transform_deltas(deltas: &[ViewDelta], circuit: &Circuit) -> Vec<WasmViewUpdate> {
+    deltas
         .iter()
-        .map(|update| transform_single_update(update.clone(), circuit))
+        .map(|d| transform_single_delta(d, circuit))
         .collect()
 }
 
-/// Transform a single ViewUpdate
-fn transform_single_update(update: ViewUpdate, circuit: &Circuit) -> WasmViewUpdate {
-    match update {
-        ViewUpdate::Flat(m) | ViewUpdate::Tree(m) => {
-            let result_data: Vec<(String, i64)> = m
-                .result_data
-                .iter()
-                .map(|id| {
-                    let table_name = id.split(':').next().unwrap_or("");
-                    let version = circuit
-                        .db
-                        .get_table(table_name)
-                        .and_then(|t| t.get_record_version(id))
-                        .unwrap_or(1);
-                    (id.to_string(), version)
-                })
-                .collect();
+/// Resolve version for a key from the store (defaults to 1).
+fn version_for(circuit: &Circuit, key: &str) -> i64 {
+    circuit.store.get_record_version_by_key(key).unwrap_or(1)
+}
 
-            WasmViewUpdate {
-                query_id: m.query_id.clone(),
-                result_hash: m.result_hash.clone(),
-                result_data,
-                delta: None,
-            }
-        }
-        ViewUpdate::Streaming(s) => {
-            let records: Vec<WasmDeltaRecord> = s
-                .records
-                .iter()
-                .map(|rec| {
-                    let table_name = rec.id.split(':').next().unwrap_or("");
-                    let version = circuit
-                        .db
-                        .get_table(table_name)
-                        .and_then(|t| t.get_record_version(&rec.id))
-                        .unwrap_or(1);
+/// Transform a single ViewDelta to WasmViewUpdate.
+fn transform_single_delta(delta: &ViewDelta, circuit: &Circuit) -> WasmViewUpdate {
+    let result_data: Vec<(String, i64)> = delta
+        .records
+        .iter()
+        .map(|key| (key.clone(), version_for(circuit, key)))
+        .collect();
 
-                    WasmDeltaRecord {
-                        id: rec.id.to_string(),
-                        event: rec.event.clone(),
-                        version,
-                    }
-                })
-                .collect();
+    let additions: Vec<WasmDeltaRecord> = delta
+        .additions
+        .iter()
+        .map(|key| WasmDeltaRecord(key.clone(), version_for(circuit, key)))
+        .collect();
 
-            WasmViewUpdate {
-                query_id: s.view_id.clone(),
-                result_hash: String::new(),
-                result_data: vec![],
-                delta: Some(WasmStreamingUpdate {
-                    view_id: s.view_id.clone(),
-                    records,
-                }),
-            }
-        }
+    let removals: Vec<String> = delta.removals.clone();
+
+    let updates: Vec<WasmDeltaRecord> = delta
+        .updates
+        .iter()
+        .map(|key| WasmDeltaRecord(key.clone(), version_for(circuit, key)))
+        .collect();
+
+    WasmViewUpdate {
+        query_id: delta.query_id.clone(),
+        result_hash: delta.result_hash.clone(),
+        result_data,
+        delta: WasmDelta {
+            additions,
+            removals,
+            updates,
+        },
     }
 }
 
 // This is appended to the generated .d.ts file
 #[wasm_bindgen(typescript_custom_section)]
 const TS_APPEND_CONTENT: &'static str = r#"
-export interface WasmStreamUpdate {
+export interface WasmViewUpdate {
   query_id: string;
   result_hash: string;
   result_data: [string, number][];
-  delta?: {
-    view_id: string;
-    records: { id: string; event: any; version: number }[];
+  delta: {
+    additions: [string, number][];
+    removals: string[];
+    updates: [string, number][];
   };
 }
 
-
-export interface WasmIncantationConfig {
+export interface WasmViewConfig {
   id: string;
-  sql: string;
+  surql: string;
   params?: Record<string, any>;
   clientId: string;
   ttl: string;
@@ -164,10 +140,11 @@ impl SpookyProcessor {
         let record: Value = serde_wasm_bindgen::from_value(record)
             .map_err(|e| JsValue::from_str(&format!("Failed to parse record: {}", e)))?;
 
-        // internal preparation (hash calc)
-        let (clean_record, _hash) = ssp::service::ingest::prepare(record);
+        // Normalize the record and convert to new SpookyValue
+        let clean_record = ssp::sanitizer::normalize_record(record);
+        let clean_sv: SpookyValue = clean_record.into();
 
-        let record_id = clean_record
+        let record_id = clean_sv
             .get("id")
             .cloned()
             .map(normalize_record_id)
@@ -176,26 +153,27 @@ impl SpookyProcessor {
                 _ => None,
             })
             .unwrap_or_else(|| {
-                tracing::warn!(
-                    target: "ssp::ingest",
-                    table = table,
-                    "Could not extract record ID from clean_record"
-                );
-                // This fallback should rarely/never happen now
-                format!("{}:{}", table, id)
+                // Fallback: extract raw id from the passed `id` param,
+                // stripping the table prefix if present (e.g. "thread:abc" → "abc").
+                ssp::types::raw_id(&id).to_string()
             });
 
         let op_enum = Operation::from_str(&op).unwrap_or(Operation::Create);
 
-        // Convert clean_record (Value) to SpookyValue
-        let data: SpookyValue = clean_record.into();
+        let change = match op_enum {
+            Operation::Create => Change::create(&table, &record_id, clean_sv),
+            Operation::Update => Change::update(&table, &record_id, clean_sv),
+            Operation::Delete => Change::delete(&table, &record_id),
+        };
 
-        let entry = BatchEntry::new(&table, op_enum, record_id, data);
+        let changeset = ChangeSet {
+            changes: vec![change],
+        };
 
-        let updates = self.circuit.ingest_single(entry);
+        let deltas = self.circuit.step(changeset);
 
         // Transform to include versions
-        let wasm_updates = transform_updates(&updates, &self.circuit);
+        let wasm_updates = transform_deltas(&deltas, &self.circuit);
 
         let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
         Ok(wasm_updates.serialize(&serializer)?)
@@ -206,20 +184,27 @@ impl SpookyProcessor {
         let config_val: Value = serde_wasm_bindgen::from_value(config)
             .map_err(|e| JsValue::from_str(&format!("Failed to parse config: {}", e)))?;
 
-        let data = ssp::service::view::prepare_registration(config_val)
+        let data = ssp::service::view::prepare_registration_dbsp(config_val)
             .map_err(|e| JsValue::from_str(&format!("Registration failed: {}", e)))?;
 
         let plan_id = data.plan.id.clone();
-        let initial_update = self
+        let initial_delta = self
             .circuit
-            .register_view(data.plan, data.safe_params, data.format);
+            .add_query(data.plan, data.safe_params, data.format);
 
-        // If None, return default empty result
-        let result = initial_update
-            .unwrap_or_else(|| ViewUpdate::Flat(ssp::service::view::default_result(&plan_id)));
-
-        // Transform to include versions
-        let wasm_result = transform_single_update(result, &self.circuit);
+        let wasm_result = match initial_delta {
+            Some(ref delta) => transform_single_delta(delta, &self.circuit),
+            None => WasmViewUpdate {
+                query_id: plan_id,
+                result_hash: String::new(),
+                result_data: vec![],
+                delta: WasmDelta {
+                    additions: vec![],
+                    removals: vec![],
+                    updates: vec![],
+                },
+            },
+        };
 
         let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
         Ok(wasm_result.serialize(&serializer)?)
@@ -227,24 +212,22 @@ impl SpookyProcessor {
 
     /// Unregister a view by ID
     pub fn unregister_view(&mut self, id: String) {
-        self.circuit.unregister_view(&id);
+        self.circuit.remove_query(&id);
     }
 
     /// Save the current circuit state as a JSON string
     pub fn save_state(&self) -> Result<String, JsValue> {
-        serde_json::to_string(&self.circuit)
+        self.circuit
+            .save()
             .map_err(|e| JsValue::from_str(&format!("Failed to serialize state: {}", e)))
     }
 
     /// Load circuit state from a JSON string
     pub fn load_state(&mut self, state: String) -> Result<(), JsValue> {
-        let circuit: Circuit = serde_json::from_str(&state)
+        let circuit = Circuit::restore(&state)
             .map_err(|e| JsValue::from_str(&format!("Failed to deserialize state: {}", e)))?;
 
-        // The circuit needs to rebuild dependency graph after deserialization
         self.circuit = circuit;
-        self.circuit.rebuild_dependency_list();
-
         Ok(())
     }
 }

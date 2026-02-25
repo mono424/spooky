@@ -7,17 +7,14 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use ssp::{
-    engine::circuit::{Circuit, dto::BatchEntry},
-    engine::types::Operation,
-    engine::update::{DeltaEvent, StreamingUpdate, ViewResultFormat, ViewUpdate},
-};
+use ssp::circuit::{Circuit, Record, ViewDelta, Change, ChangeSet, Operation, SubqueryOp};
+use ssp::circuit::view::OutputFormat;
 use surrealdb::engine::remote::ws::{Client, Ws};
 use surrealdb::opt::auth::Root;
 use surrealdb::types::RecordId;
@@ -27,12 +24,9 @@ use tracing::field::Empty;
 use tracing::{Span, debug, error, info, instrument, warn};
 
 // Expose modules for use in main.rs and tests
-pub mod background_saver;
 pub mod metrics;
 pub mod open_telemetry;
-pub mod persistence;
 
-use background_saver::BackgroundSaver;
 use metrics::Metrics;
 
 use job_runner::{JobConfig, JobEntry, JobRunner};
@@ -41,12 +35,29 @@ use tokio::sync::mpsc;
 /// Shared database connection wrapped in Arc for zero-copy sharing across tasks
 pub type SharedDb = Arc<Surreal<Client>>;
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SspStatus {
+    Bootstrapping,
+    Ready,
+    Failed,
+}
+
+#[derive(Serialize)]
+pub struct SspError {
+    pub code: &'static str,
+    pub message: String,
+}
+
+pub mod error_codes {
+    pub const NOT_READY: &str = "SSP_NOT_READY";
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub db: SharedDb,
     pub processor: Arc<RwLock<Circuit>>,
-    pub persistence_path: PathBuf,
-    pub saver: Arc<BackgroundSaver>,
+    pub status: Arc<RwLock<SspStatus>>,
     pub metrics: Arc<Metrics>,
     pub job_config: Arc<JobConfig>,
     pub job_queue_tx: mpsc::Sender<JobEntry>,
@@ -76,20 +87,10 @@ pub struct UnregisterViewRequest {
     pub id: String,
 }
 
-#[derive(Deserialize, Debug)]
-pub struct BootstrapChunk {
-    pub chunk_index: usize,
-    pub total_chunks: usize,
-    pub table: String,
-    pub records: Vec<(String, Value)>,
-}
-
 // --- Configuration ---
 
 pub struct Config {
-    pub persistence_path: PathBuf,
     pub listen_addr: String,
-    pub debounce_ms: u64,
     pub db_addr: String,
     pub db_user: String,
     pub db_pass: String,
@@ -103,15 +104,7 @@ pub struct Config {
 
 pub fn load_config() -> Config {
     Config {
-        persistence_path: PathBuf::from(
-            std::env::var("SPOOKY_PERSISTENCE_FILE")
-                .unwrap_or_else(|_| "data/spooky_state.json".to_string()),
-        ),
         listen_addr: std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:8667".to_string()),
-        debounce_ms: std::env::var("SAVE_DEBOUNCE_MS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(2000),
         db_addr: std::env::var("SURREALDB_ADDR").unwrap_or_else(|_| "127.0.0.1:8000".to_string()),
         db_user: std::env::var("SURREALDB_USER").unwrap_or_else(|_| "root".to_string()),
         db_pass: std::env::var("SURREALDB_PASS").unwrap_or_else(|_| "root".to_string()),
@@ -128,6 +121,52 @@ pub fn load_config() -> Config {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(5000),
+    }
+}
+
+// --- Bootstrap Source ---
+
+/// Abstraction for database access during bootstrap.
+/// In standalone mode, bootstraps directly from SurrealDB.
+/// In cluster mode, bootstraps from the scheduler's HTTP proxy.
+pub enum BootstrapSource {
+    /// Direct SurrealDB connection (standalone mode)
+    Direct(SharedDb),
+    /// HTTP proxy to scheduler's snapshot DB (cluster mode)
+    Proxy {
+        client: reqwest::Client,
+        proxy_url: String,
+    },
+}
+
+impl BootstrapSource {
+    async fn query(&self, surql: &str) -> anyhow::Result<Value> {
+        match self {
+            BootstrapSource::Direct(db) => {
+                let mut response = db.query(surql).await
+                    .with_context(|| format!("Query failed: {}", surql))?;
+                let val: surrealdb::types::Value = response.take(0)
+                    .context("Failed to parse query response")?;
+                Ok(serde_json::to_value(&val).unwrap_or_default())
+            }
+            BootstrapSource::Proxy { client, proxy_url } => {
+                let url = format!("{}/query", proxy_url);
+                let resp = client
+                    .post(&url)
+                    .json(&json!({"query": surql}))
+                    .send()
+                    .await
+                    .with_context(|| format!("Proxy query failed: {}", surql))?;
+
+                if !resp.status().is_success() {
+                    let status = resp.status();
+                    let body = resp.text().await.unwrap_or_default();
+                    anyhow::bail!("Proxy returned {}: {}", status, body);
+                }
+
+                resp.json().await.context("Failed to parse proxy response")
+            }
+        }
     }
 }
 
@@ -161,13 +200,12 @@ pub async fn connect_database(config: &Config) -> anyhow::Result<SharedDb> {
 pub fn create_app(state: AppState) -> Router {
     Router::new()
         .route("/ingest", post(ingest_handler))
-        .route("/bootstrap", post(bootstrap_handler))
         .route("/log", post(log_handler))
         .route("/debug/view/:view_id", get(debug_view_handler))
+        .route("/debug/deps", get(debug_deps_handler))
         .route("/view/register", post(register_view_handler))
         .route("/view/unregister", post(unregister_view_handler))
         .route("/reset", post(reset_handler))
-        .route("/save", post(save_handler))
         .route("/health", get(health_handler))
         .route("/version", get(version_handler))
         .layer(middleware::from_fn(auth_middleware))
@@ -190,27 +228,9 @@ pub async fn run_server() -> anyhow::Result<()> {
     let config = load_config();
     let db = connect_database(&config).await?;
 
-    // Load or initialize Circuit
-    let processor = persistence::load_circuit(&config.persistence_path);
-    let processor_arc = Arc::new(RwLock::new(processor));
-
-    // Record initial view count metric
-    {
-        let guard = processor_arc.read().await;
-        metrics.view_count.add(guard.views.len() as i64, &[]);
-    }
-
-    // Initialize background saver
-    let saver = Arc::new(BackgroundSaver::new(
-        config.persistence_path.clone(),
-        processor_arc.clone(),
-        config.debounce_ms,
-    ));
-
-    let saver_clone = saver.clone();
-    tokio::spawn(async move {
-        saver_clone.run().await;
-    });
+    // Start with an empty circuit — self-bootstrap will populate it
+    let processor_arc = Arc::new(RwLock::new(Circuit::new()));
+    let status = Arc::new(RwLock::new(SspStatus::Bootstrapping));
 
     // Load job configuration
     let job_config = if config.spooky_config_path.exists() {
@@ -244,15 +264,14 @@ pub async fn run_server() -> anyhow::Result<()> {
         info!("Job runner started");
     }
 
-    // Clone processor_arc for scheduler integration before moving into AppState
+    // Clone for scheduler integration
     let processor_for_scheduler = processor_arc.clone();
 
     let state = AppState {
-        db,
-        processor: processor_arc,
-        persistence_path: config.persistence_path,
-        saver: saver.clone(),
-        metrics,
+        db: db.clone(),
+        processor: processor_arc.clone(),
+        status: status.clone(),
+        metrics: metrics.clone(),
         job_config,
         job_queue_tx,
     };
@@ -265,42 +284,81 @@ pub async fn run_server() -> anyhow::Result<()> {
 
     info!(addr = %config.listen_addr, "Listening for requests");
 
-    // Register with scheduler if configured
-    if let Some(scheduler_url) = &config.scheduler_url {
+    // Spawn self-bootstrap task (runs while server is already accepting /health requests)
+    {
+        let db = db.clone();
+        let processor = processor_arc.clone();
+        let status = status.clone();
+        let metrics = metrics.clone();
+        let scheduler_url = config.scheduler_url.clone();
         let ssp_id = config.ssp_id.clone();
         let listen_addr = config.listen_addr.clone();
-        let scheduler_url_clone = scheduler_url.clone();
-        let processor_clone = processor_for_scheduler.clone();
-        let heartbeat_interval = config.heartbeat_interval_ms;
 
-        // Spawn registration task
         tokio::spawn(async move {
-            let client = reqwest::Client::new();
-            let registration_url = format!("{}/ssp/register", scheduler_url_clone.trim_end_matches('/'));
+            // Choose bootstrap source based on mode
+            let source = if let Some(ref scheduler_url) = scheduler_url {
+                // Cluster mode: register with scheduler, then bootstrap from proxy
+                let client = reqwest::Client::new();
+                let scheduler_base = scheduler_url.trim_end_matches('/');
 
-            info!("Registering SSP {} with scheduler at {}", ssp_id, scheduler_url_clone);
+                let registration_url = format!("{}/ssp/register", scheduler_base);
+                info!("Registering SSP {} with scheduler at {}", ssp_id, scheduler_base);
 
-            let payload = serde_json::json!({
-                "ssp_id": ssp_id,
-                "url": format!("http://{}", listen_addr),
-            });
+                let payload = json!({
+                    "ssp_id": ssp_id,
+                    "url": format!("http://{}", listen_addr),
+                });
 
-            match client.post(&registration_url).json(&payload).send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    info!("Successfully registered with scheduler");
+                match client.post(&registration_url).json(&payload).send().await {
+                    Ok(resp) if resp.status().is_success() => {
+                        info!("Successfully registered with scheduler");
+                    }
+                    Ok(resp) => {
+                        error!("Failed to register with scheduler: HTTP {}", resp.status());
+                        *status.write().await = SspStatus::Failed;
+                        return;
+                    }
+                    Err(e) => {
+                        error!("Failed to connect to scheduler: {}", e);
+                        *status.write().await = SspStatus::Failed;
+                        return;
+                    }
                 }
-                Ok(resp) => {
-                    error!("Failed to register with scheduler: HTTP {}", resp.status());
+
+                let proxy_url = format!("{}/proxy", scheduler_base);
+                info!("Bootstrapping from scheduler proxy at {}", proxy_url);
+                BootstrapSource::Proxy { client, proxy_url }
+            } else {
+                // Standalone mode: bootstrap directly from DB
+                info!("Standalone mode: bootstrapping from SurrealDB");
+                BootstrapSource::Direct(db)
+            };
+
+            match self_bootstrap(&source, &processor).await {
+                Ok(()) => {
+                    let guard = processor.read().await;
+                    metrics.view_count.add(guard.view_count() as i64, &[]);
+                    info!(
+                        tables = guard.table_names().len(),
+                        views = guard.view_count(),
+                        "Bootstrap complete"
+                    );
+                    *status.write().await = SspStatus::Ready;
                 }
                 Err(e) => {
-                    error!("Failed to connect to scheduler: {}", e);
+                    error!(error = %e, "Bootstrap failed");
+                    *status.write().await = SspStatus::Failed;
                 }
             }
         });
+    }
 
-        // Spawn heartbeat loop
+    // Spawn heartbeat loop if scheduler configured
+    if let Some(scheduler_url) = &config.scheduler_url {
         let ssp_id = config.ssp_id.clone();
         let scheduler_url_clone = scheduler_url.clone();
+        let heartbeat_interval = config.heartbeat_interval_ms;
+        let processor_clone = processor_for_scheduler.clone();
 
         tokio::spawn(async move {
             let client = reqwest::Client::new();
@@ -312,10 +370,10 @@ pub async fn run_server() -> anyhow::Result<()> {
 
                 let active_queries = {
                     let circuit = processor_clone.read().await;
-                    circuit.views.len()
+                    circuit.view_count()
                 };
 
-                let payload = serde_json::json!({
+                let payload = json!({
                     "ssp_id": ssp_id,
                     "timestamp": std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
@@ -350,7 +408,7 @@ pub async fn run_server() -> anyhow::Result<()> {
     }
 
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal(saver, meter_provider))
+        .with_graceful_shutdown(shutdown_signal(meter_provider))
         .await
         .context("Server error")?;
 
@@ -360,7 +418,6 @@ pub async fn run_server() -> anyhow::Result<()> {
 }
 
 async fn shutdown_signal(
-    saver: Arc<BackgroundSaver>,
     meter_provider: opentelemetry_sdk::metrics::SdkMeterProvider,
 ) {
     let ctrl_c = async {
@@ -386,12 +443,147 @@ async fn shutdown_signal(
     }
 
     info!("Signal received, starting graceful shutdown");
-    saver.signal_shutdown();
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     if let Err(e) = meter_provider.shutdown() {
         error!(error = %e, "Failed to shutdown meter provider");
     }
+}
+
+// --- Self-Bootstrap ---
+
+/// Bootstrap the circuit by loading all table data and view definitions.
+/// Works with either a direct SurrealDB connection or the scheduler's HTTP proxy.
+async fn self_bootstrap(
+    source: &BootstrapSource,
+    processor: &Arc<RwLock<Circuit>>,
+) -> anyhow::Result<()> {
+    info!("Starting self-bootstrap");
+
+    // Step 1: Discover tables via INFO FOR DB
+    let info_json = source.query("INFO FOR DB").await
+        .context("Failed to query INFO FOR DB")?;
+
+    let tables: Vec<String> = match info_json.get("tables") {
+        Some(Value::Object(tables_map)) => tables_map
+            .keys()
+            .filter(|name| !name.starts_with("_spooky_"))
+            .cloned()
+            .collect(),
+        _ => {
+            info!("No tables found in database");
+            vec![]
+        }
+    };
+
+    info!(count = tables.len(), "Discovered tables: {:?}", tables);
+
+    // Step 2: Load all table data
+    for table in &tables {
+        let result = source.query(&format!("SELECT * FROM {}", table)).await
+            .with_context(|| format!("Failed to query table {}", table))?;
+
+        let rows: Vec<Value> = match result {
+            Value::Array(arr) => arr,
+            _ => vec![],
+        };
+        let record_count = rows.len();
+
+        let records: Vec<Record> = rows
+            .into_iter()
+            .filter_map(|row| {
+                let id = row.get("id")?.as_str()?.to_string();
+                Some(Record::new(table, &id, row))
+            })
+            .collect();
+
+        {
+            let mut circuit = processor.write().await;
+            circuit.load(records);
+        }
+
+        info!(table = %table, records = record_count, "Loaded table data");
+    }
+
+    // Step 3: Re-register views from _spooky_query
+    let result = source.query("SELECT * FROM _spooky_query").await
+        .context("Failed to query _spooky_query")?;
+
+    let views: Vec<Value> = match result {
+        Value::Array(arr) => arr,
+        _ => vec![],
+    };
+    info!(count = views.len(), "Found persisted views");
+
+    for view_row in views {
+        let view_id = match view_row.get("id") {
+            Some(Value::String(s)) => s.clone(),
+            Some(v) => v.to_string().trim_matches('"').to_string(),
+            None => {
+                warn!("Skipping view with missing id");
+                continue;
+            }
+        };
+
+        // Strip the table prefix if present (e.g. "_spooky_query:abc" -> "abc")
+        let raw_id = view_id
+            .strip_prefix("_spooky_query:")
+            .unwrap_or(&view_id)
+            .to_string();
+
+        let surql = match view_row.get("surql").and_then(|v| v.as_str()) {
+            Some(s) => s.to_string(),
+            None => {
+                warn!(view_id = %raw_id, "Skipping view with missing surql");
+                continue;
+            }
+        };
+
+        let client_id = view_row
+            .get("clientId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let ttl = view_row
+            .get("ttl")
+            .and_then(|v| v.as_str())
+            .unwrap_or("30m")
+            .to_string();
+        let last_active_at = view_row
+            .get("lastActiveAt")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let params = view_row
+            .get("params")
+            .cloned()
+            .unwrap_or(json!({}));
+
+        let payload = json!({
+            "id": raw_id,
+            "surql": surql,
+            "clientId": client_id,
+            "ttl": ttl,
+            "lastActiveAt": last_active_at,
+            "params": params,
+        });
+
+        match ssp::service::view::prepare_registration_dbsp(payload) {
+            Ok(data) => {
+                let mut circuit = processor.write().await;
+                circuit.add_query(
+                    data.plan,
+                    data.safe_params,
+                    Some(OutputFormat::Streaming),
+                );
+                info!(view_id = %raw_id, "Re-registered view");
+            }
+            Err(e) => {
+                warn!(view_id = %raw_id, error = %e, "Failed to re-register view");
+            }
+        }
+    }
+
+    Ok(())
 }
 
 // --- Middleware ---
@@ -425,7 +617,20 @@ async fn auth_middleware(req: Request, next: Next) -> Response {
 async fn ingest_handler(
     State(state): State<AppState>,
     body: axum::body::Bytes,
-) -> impl IntoResponse {
+) -> Response {
+    // Gate: reject if not ready
+    let status = *state.status.read().await;
+    if status != SspStatus::Ready {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(SspError {
+                code: error_codes::NOT_READY,
+                message: format!("SSP is in {:?} state", status),
+            }),
+        )
+            .into_response();
+    }
+
     let start = std::time::Instant::now();
     let span = Span::current();
 
@@ -437,7 +642,7 @@ async fn ingest_handler(
         Ok(p) => p,
         Err(e) => {
             error!(error = %e, "Invalid JSON payload");
-            return StatusCode::BAD_REQUEST;
+            return StatusCode::BAD_REQUEST.into_response();
         }
     };
 
@@ -450,12 +655,12 @@ async fn ingest_handler(
         Some(op) => op,
         None => {
             warn!(op = %payload.op, "Invalid operation type");
-            return StatusCode::BAD_REQUEST;
+            return StatusCode::BAD_REQUEST.into_response();
         }
     };
 
     // Prepare record data
-    let (clean_record, _hash) = ssp::service::ingest::prepare(payload.record.clone());
+    let clean = ssp::sanitizer::normalize_record(payload.record.clone());
 
     // Check if this is a job table and queue the job if pending
     if let Some(backend_info) = state.job_config.job_tables.get(&payload.table) {
@@ -468,14 +673,14 @@ async fn ingest_handler(
                         backend_info.auth_token.clone(),
                         &payload.record,
                     );
-                    
+
                     debug!(
                         job_id = %job_entry.id,
                         path = %job_entry.path,
                         backend = %backend_info.name,
                         "Queueing job"
                     );
-                    
+
                     if let Err(e) = state.job_queue_tx.send(job_entry).await {
                         error!(error = %e, "Failed to queue job");
                     }
@@ -485,10 +690,14 @@ async fn ingest_handler(
     }
 
     // Process through circuit
-    let updates = {
+    let change = match op {
+        Operation::Create => Change::create(&payload.table, &payload.id, clean),
+        Operation::Update => Change::update(&payload.table, &payload.id, clean),
+        Operation::Delete => Change::delete(&payload.table, &payload.id),
+    };
+    let deltas = {
         let mut circuit = state.processor.write().await;
-        let entry = BatchEntry::new(&payload.table, op, payload.id, clean_record.into());
-        circuit.ingest_single(entry)
+        circuit.step(ChangeSet { changes: vec![change] })
     };
 
     // Record metrics
@@ -499,55 +708,26 @@ async fn ingest_handler(
             opentelemetry::KeyValue::new("op", payload.op.clone()),
         ],
     );
-    span.record("views_affected", updates.len());
+    span.record("views_affected", deltas.len());
 
-    // Trigger background save
-    state.saver.trigger_save();
-
-    // Extract streaming updates for edge creation
-    let streaming_updates: Vec<&StreamingUpdate> = updates
-        .iter()
-        .filter_map(|u| match u {
-            ViewUpdate::Streaming(s) => Some(s),
-            _ => None,
-        })
-        .collect();
-
-    if !streaming_updates.is_empty() {
-        // DIAGNOSTIC LOGGING - Remove after debugging
-        #[cfg(debug_assertions)]
-        {
-            warn!(
-                target: "ssp::debug::ingest",
-                total_views = streaming_updates.len(),
-                "Processing streaming updates"
-            );
-
-            for (idx, update) in streaming_updates.iter().enumerate() {
-                warn!(
-                    target: "ssp::debug::ingest",
-                    view_idx = idx,
-                    view_id = %update.view_id,
-                    records_count = update.records.len(),
-                    records_sample = ?update.records.iter().take(3).map(|r| &r.id).collect::<Vec<_>>(),
-                    "View update details"
-                );
-            }
-        }
-
-        let edge_count: usize = streaming_updates.iter().map(|s| s.records.len()).sum();
+    if !deltas.is_empty() {
+        let edge_count: usize = deltas
+            .iter()
+            .map(|d| d.additions.len() + d.updates.len() + d.removals.len())
+            .sum();
         span.record("edges_updated", edge_count);
 
         // Update edges in database
+        let delta_refs: Vec<&ViewDelta> = deltas.iter().collect();
         let circuit = state.processor.read().await;
-        update_all_edges(&state.db, &streaming_updates, &state.metrics, &circuit).await;
+        update_all_edges(&state.db, &delta_refs, &state.metrics, &circuit).await;
     }
 
     // Record duration
     let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
     state.metrics.ingest_duration.record(duration_ms, &[]);
 
-    StatusCode::OK
+    StatusCode::OK.into_response()
 }
 
 /// Log handler - receives logs from client and forwards to tracing
@@ -570,53 +750,29 @@ async fn log_handler(Json(payload): Json<LogRequest>) -> impl IntoResponse {
     StatusCode::OK
 }
 
-/// Bootstrap handler - receives chunks of replica data from scheduler
-#[instrument(skip(state, chunk), fields(chunk_index = chunk.chunk_index, total_chunks = chunk.total_chunks, table = %chunk.table))]
-async fn bootstrap_handler(
-    State(state): State<AppState>,
-    Json(chunk): Json<BootstrapChunk>,
-) -> impl IntoResponse {
-    info!(
-        "Received bootstrap chunk {}/{} for table {}",
-        chunk.chunk_index + 1,
-        chunk.total_chunks,
-        chunk.table
-    );
-
-    // Process each record
-    let mut circuit = state.processor.write().await;
-    for (record_id, record_data) in chunk.records {
-        let entry = BatchEntry::new(
-            &chunk.table,
-            Operation::Create,
-            record_id,
-            record_data.into(),
-        );
-        circuit.ingest_single(entry);
-    }
-    drop(circuit);
-
-    state.saver.trigger_save();
-
-    info!(
-        "Bootstrap chunk {}/{} processed successfully",
-        chunk.chunk_index + 1,
-        chunk.total_chunks
-    );
-
-    StatusCode::OK
-}
-
 /// Register view handler - creates a new view and initializes edges
 #[instrument(skip(state), fields(view_id = Empty))]
 async fn register_view_handler(
     State(state): State<AppState>,
     Json(payload): Json<Value>,
-) -> impl IntoResponse {
+) -> Response {
+    // Gate: reject if not ready
+    let status = *state.status.read().await;
+    if status != SspStatus::Ready {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(SspError {
+                code: error_codes::NOT_READY,
+                message: format!("SSP is in {:?} state", status),
+            }),
+        )
+            .into_response();
+    }
+
     let span = Span::current();
 
     // Parse and validate registration data
-    let data = match ssp::service::view::prepare_registration(payload) {
+    let data = match ssp::service::view::prepare_registration_dbsp(payload) {
         Ok(d) => d,
         Err(e) => {
             error!(error = %e, "Invalid view registration payload");
@@ -637,7 +793,7 @@ async fn register_view_handler(
     // Check if view exists and clean up old edges
     let view_existed = {
         let circuit = state.processor.read().await;
-        circuit.views.iter().any(|v| v.plan.id == data.plan.id)
+        circuit.get_view(&data.plan.id).is_some()
     };
 
     if view_existed {
@@ -655,13 +811,11 @@ async fn register_view_handler(
     // Register view with Streaming format
     let update = {
         let mut circuit = state.processor.write().await;
-        let res = circuit.register_view(
+        circuit.add_query(
             data.plan.clone(),
             data.safe_params,
-            Some(ViewResultFormat::Streaming),
-        );
-        state.saver.trigger_save();
-        res
+            Some(OutputFormat::Streaming),
+        )
     };
 
     state.metrics.view_count.add(1, &[]);
@@ -716,10 +870,10 @@ async fn register_view_handler(
     }
 
     // Create initial edges
-    if let Some(ViewUpdate::Streaming(s)) = &update {
+    if let Some(ref delta) = update {
         debug!(incantation_id);
         let circuit = state.processor.read().await;
-        update_incantation_edges(&state.db, s, &state.metrics, &circuit).await;
+        update_incantation_edges(&state.db, delta, &state.metrics, &circuit).await;
     }
 
     StatusCode::OK.into_response()
@@ -730,14 +884,26 @@ async fn register_view_handler(
 async fn unregister_view_handler(
     State(state): State<AppState>,
     Json(payload): Json<UnregisterViewRequest>,
-) -> impl IntoResponse {
+) -> Response {
+    // Gate: reject if not ready
+    let status = *state.status.read().await;
+    if status != SspStatus::Ready {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(SspError {
+                code: error_codes::NOT_READY,
+                message: format!("SSP is in {:?} state", status),
+            }),
+        )
+            .into_response();
+    }
+
     debug!("Unregistering view: {}", payload.id);
 
     // Remove from circuit
     {
         let mut circuit = state.processor.write().await;
-        circuit.unregister_view(&payload.id);
-        state.saver.trigger_save();
+        circuit.remove_query(&payload.id);
     }
 
     state.metrics.view_count.add(-1, &[]);
@@ -757,7 +923,7 @@ async fn unregister_view_handler(
         }
     }
 
-    StatusCode::OK
+    StatusCode::OK.into_response()
 }
 
 /// Reset handler - clears all circuit state and edges
@@ -766,12 +932,8 @@ async fn reset_handler(State(state): State<AppState>) -> impl IntoResponse {
 
     let old_view_count = {
         let mut circuit = state.processor.write().await;
-        let count = circuit.views.len();
+        let count = circuit.view_count();
         *circuit = Circuit::new();
-        if state.persistence_path.exists() {
-            let _ = std::fs::remove_file(&state.persistence_path);
-        }
-        state.saver.trigger_save();
         count
     };
 
@@ -785,21 +947,27 @@ async fn reset_handler(State(state): State<AppState>) -> impl IntoResponse {
     StatusCode::OK
 }
 
-/// Force save handler - triggers immediate persistence
-async fn save_handler(State(state): State<AppState>) -> impl IntoResponse {
-    info!("Force saving state");
-    state.saver.trigger_save();
-    StatusCode::OK
-}
-
 /// Health check handler
-async fn health_handler(State(state): State<AppState>) -> impl IntoResponse {
+async fn health_handler(State(state): State<AppState>) -> Response {
+    let status = *state.status.read().await;
     let circuit = state.processor.read().await;
-    Json(json!({
-        "status": "healthy",
-        "views": circuit.views.len(),
-        "tables": circuit.db.tables.len(),
-    }))
+    let http_status = match status {
+        SspStatus::Ready => StatusCode::OK,
+        _ => StatusCode::SERVICE_UNAVAILABLE,
+    };
+    (
+        http_status,
+        Json(json!({
+            "status": match status {
+                SspStatus::Bootstrapping => "bootstrapping",
+                SspStatus::Ready => "ready",
+                SspStatus::Failed => "failed",
+            },
+            "views": circuit.view_count(),
+            "tables": circuit.table_names().len(),
+        })),
+    )
+        .into_response()
 }
 
 /// Debug view handler - returns cache state for a specific view
@@ -809,7 +977,7 @@ async fn debug_view_handler(
 ) -> impl IntoResponse {
     let circuit = state.processor.read().await;
 
-    if let Some(view) = circuit.views.iter().find(|v| v.plan.id == view_id) {
+    if let Some(view) = circuit.get_view(&view_id) {
         let cache_summary: Vec<_> = view
             .cache
             .iter()
@@ -820,12 +988,29 @@ async fn debug_view_handler(
             "view_id": view_id,
             "cache_size": view.cache.len(),
             "last_hash": view.last_hash,
-            "format": view.format,
+            "format": format!("{:?}", view.format),
             "cache": cache_summary,
+            "subquery_tables": view.subquery_tables,
+            "referenced_tables": view.referenced_tables,
+            "content_generation": view.content_generation,
+            "subquery_cache": view.subquery_cache.iter()
+                .map(|(k, (pk, alias))| json!({"key": k, "parent_key": pk, "alias": alias}))
+                .collect::<Vec<_>>(),
         }))
     } else {
         Json(json!({ "error": "View not found" }))
     }
+}
+
+/// Debug dependency map handler
+async fn debug_deps_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let circuit = state.processor.read().await;
+    let deps = circuit.dependency_map_dump();
+    Json(json!({
+        "dependency_map": deps,
+        "tables_in_store": circuit.table_names(),
+        "view_count": circuit.view_count(),
+    }))
 }
 
 /// Version handler
@@ -858,14 +1043,14 @@ fn format_incantation_id(id: &str) -> String {
 /// significantly reducing database round-trips.
 ///
 /// Example: 3 views × 1 record each = 1 transaction instead of 3
-#[instrument(skip(db, updates, metrics), fields(total_operations = Empty))]
+#[instrument(skip(db, deltas, metrics, circuit), fields(total_operations = Empty))]
 pub async fn update_all_edges<C: Connection>(
     db: &Surreal<C>,
-    updates: &[&StreamingUpdate],
+    deltas: &[&ViewDelta],
     metrics: &Metrics,
     circuit: &Circuit,
 ) {
-    if updates.is_empty() {
+    if deltas.is_empty() {
         return;
     }
 
@@ -873,17 +1058,16 @@ pub async fn update_all_edges<C: Connection>(
     let mut all_statements: Vec<String> = Vec::new();
     let mut bindings: Vec<(String, RecordId)> = Vec::new();
 
-    let mut created_count = 0;
-    let mut updated_count = 0;
-    let mut deleted_count = 0;
+    let mut created_count: u64 = 0;
+    let mut updated_count: u64 = 0;
+    let mut deleted_count: u64 = 0;
 
-    // Build SQL statements for each view's updates
-    for (idx, update) in updates.iter().enumerate() {
-        if update.records.is_empty() {
+    for (idx, delta) in deltas.iter().enumerate() {
+        if delta.additions.is_empty() && delta.updates.is_empty() && delta.removals.is_empty() {
             continue;
         }
 
-        let incantation_id = format_incantation_id(&update.view_id);
+        let incantation_id = format_incantation_id(&delta.query_id);
 
         let Some(from_id) = parse_record_id(&incantation_id) else {
             error!(
@@ -896,65 +1080,111 @@ pub async fn update_all_edges<C: Connection>(
         let binding_name = format!("from{}", idx);
         bindings.push((binding_name.clone(), from_id));
 
-        // Process each record in the update
-        for record in &update.records {
-            if parse_record_id(&record.id).is_none() {
+        // Process additions (Created)
+        for id in &delta.additions {
+            if parse_record_id(id).is_none() {
                 error!(
                     target: "ssp::edges",
-                    record_id = %record.id,
-                    view_id = %update.view_id,
-                    event = ?record.event,
-                    "Invalid record ID format - skipping edge operation"
+                    record_id = %id,
+                    view_id = %delta.query_id,
+                    "Invalid record ID format - skipping edge create"
                 );
                 continue;
             }
 
-            let record_id_parsed = parse_record_id(&record.id);
-            if record_id_parsed.is_none() {
+            let version = circuit.store.get_record_version_by_key(id).unwrap_or(1);
+            created_count += 1;
+            all_statements.push(format!(
+                "RELATE ${1}->_spooky_list_ref->{0} SET version = {2}, clientId = (SELECT VALUE clientId FROM ${1} LIMIT 1)[0]",
+                id, binding_name, version
+            ));
+        }
+
+        // Process updates (Updated)
+        for id in &delta.updates {
+            if parse_record_id(id).is_none() {
+                error!(
+                    target: "ssp::edges",
+                    record_id = %id,
+                    view_id = %delta.query_id,
+                    "Invalid record ID format - skipping edge update"
+                );
                 continue;
             }
-            let table_name = &record_id_parsed.unwrap().table;
 
-            let record_verion = circuit
-                .db
-                .get_table(table_name)
-                .and_then(|t| t.get_record_version(&record.id));
-            println!("Record version: {:?}", record_verion.unwrap());
+            let version = circuit.store.get_record_version_by_key(id).unwrap_or(1);
+            updated_count += 1;
+            all_statements.push(format!(
+                "UPDATE _spooky_list_ref SET version = {2} WHERE in = ${0} AND out = {1}",
+                binding_name, id, version
+            ));
+        }
 
-            tracing::debug!(
-                target: "ssp::edges",
-                record_version = record_verion,
-            );
+        // Process removals (Deleted)
+        for id in &delta.removals {
+            if parse_record_id(id).is_none() {
+                error!(
+                    target: "ssp::edges",
+                    record_id = %id,
+                    view_id = %delta.query_id,
+                    "Invalid record ID format - skipping edge delete"
+                );
+                continue;
+            }
 
-            let stmt = match record.event {
-                DeltaEvent::Created => {
+            deleted_count += 1;
+            all_statements.push(format!(
+                "DELETE ${1}->_spooky_list_ref WHERE out = {0}",
+                id, binding_name
+            ));
+        }
+
+        // Process subquery items (child records linked to parents via parent/parent_rel)
+        // These are processed AFTER main records so parent list_ref entries exist in the same tx.
+        for item in &delta.subquery_items {
+            if parse_record_id(&item.id).is_none() {
+                error!(
+                    target: "ssp::edges",
+                    record_id = %item.id,
+                    view_id = %delta.query_id,
+                    "Invalid subquery record ID format - skipping"
+                );
+                continue;
+            }
+
+            match item.op {
+                SubqueryOp::Add => {
+                    let version = circuit.store.get_record_version_by_key(&item.id).unwrap_or(1);
                     created_count += 1;
-                    format!(
-                        "RELATE ${1}->_spooky_list_ref->{0} SET version = {2}, clientId = (SELECT VALUE clientId FROM ${1} LIMIT 1)[0]",
-                        record.id,
-                        binding_name,
-                        record_verion.unwrap_or(1)
-                    )
+                    all_statements.push(format!(
+                        "RELATE ${binding}->_spooky_list_ref->{id} SET \
+                         version = {version}, \
+                         clientId = (SELECT VALUE clientId FROM ${binding} LIMIT 1)[0], \
+                         parent = (SELECT VALUE id FROM _spooky_list_ref WHERE in = ${binding} AND out = {parent} LIMIT 1)[0], \
+                         parent_rel = '{alias}'",
+                        binding = binding_name,
+                        id = item.id,
+                        version = version,
+                        parent = item.parent_key,
+                        alias = item.alias,
+                    ));
                 }
-                DeltaEvent::Updated => {
+                SubqueryOp::Update => {
+                    let version = circuit.store.get_record_version_by_key(&item.id).unwrap_or(1);
                     updated_count += 1;
-                    format!(
-                        "UPDATE _spooky_list_ref SET version = {2} WHERE in = ${0} AND out = {1}",
-                        binding_name,
-                        record.id,
-                        record_verion.unwrap_or(1)
-                    )
+                    all_statements.push(format!(
+                        "UPDATE _spooky_list_ref SET version = {version} WHERE in = ${binding} AND out = {id}",
+                        binding = binding_name, id = item.id, version = version
+                    ));
                 }
-                DeltaEvent::Deleted => {
+                SubqueryOp::Remove => {
                     deleted_count += 1;
-                    format!(
-                        "DELETE ${1}->_spooky_list_ref WHERE out = {0}",
-                        record.id, binding_name
-                    )
+                    all_statements.push(format!(
+                        "DELETE ${binding}->_spooky_list_ref WHERE out = {id}",
+                        binding = binding_name, id = item.id
+                    ));
                 }
-            };
-
-            all_statements.push(stmt);
+            }
         }
     }
 
@@ -982,7 +1212,7 @@ pub async fn update_all_edges<C: Connection>(
         created = created_count,
         updated = updated_count,
         deleted = deleted_count,
-        views = updates.len(),
+        views = deltas.len(),
         "Processing edge operations"
     );
 
@@ -1032,9 +1262,9 @@ pub async fn update_all_edges<C: Connection>(
 /// Update edges for a single view (convenience wrapper for register_view_handler)
 async fn update_incantation_edges<C: Connection>(
     db: &Surreal<C>,
-    update: &StreamingUpdate,
+    delta: &ViewDelta,
     metrics: &Metrics,
     circuit: &Circuit,
 ) {
-    update_all_edges(db, &[update], metrics, circuit).await;
+    update_all_edges(db, &[delta], metrics, circuit).await;
 }

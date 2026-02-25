@@ -5,22 +5,30 @@ use axum::{
     routing::post,
     Json, Router,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::config::SchedulerConfig;
-use crate::messages::{BootstrapChunk, SspHeartbeat};
+use crate::messages::{BufferedEvent, SspHeartbeat};
 use crate::replica::Replica;
 use crate::router::SspPool;
 use crate::transport::{HttpTransport, SspInfo};
+use crate::SchedulerStatus;
 
 /// SSP registration request
 #[derive(Debug, Deserialize)]
 pub struct SspRegistration {
     pub ssp_id: String,
     pub url: String,
+}
+
+/// SSP registration response
+#[derive(Debug, Serialize)]
+pub struct RegistrationResponse {
+    pub snapshot_seq: u64,
 }
 
 /// Shared state for SSP management handlers
@@ -30,6 +38,8 @@ pub struct SspManagementState {
     pub replica: Arc<RwLock<Replica>>,
     pub transport: Arc<HttpTransport>,
     pub config: Arc<SchedulerConfig>,
+    pub status: Arc<RwLock<SchedulerStatus>>,
+    pub event_buffer: Arc<RwLock<VecDeque<BufferedEvent>>>,
 }
 
 /// Create SSP management router
@@ -40,11 +50,11 @@ pub fn create_ssp_router(state: SspManagementState) -> Router {
         .with_state(state)
 }
 
-/// Handle SSP registration
+/// Handle SSP registration — freezes snapshot, returns snapshot_seq, spawns poll task
 async fn handle_register(
     State(state): State<SspManagementState>,
     Json(request): Json<SspRegistration>,
-) -> Result<StatusCode, (StatusCode, String)> {
+) -> Result<(StatusCode, Json<RegistrationResponse>), (StatusCode, String)> {
     info!("SSP registration: {} at {}", request.ssp_id, request.url);
 
     // Validate ssp_id (non-empty)
@@ -62,6 +72,27 @@ async fn handle_register(
         ));
     }
 
+    // Check scheduler is not Cloning
+    {
+        let scheduler_status = *state.status.read().await;
+        if scheduler_status == SchedulerStatus::Cloning {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Scheduler is still cloning database".to_string(),
+            ));
+        }
+    }
+
+    // Get snapshot_seq from replica
+    let snapshot_seq = {
+        let replica = state.replica.read().await;
+        replica.snapshot_seq()
+    };
+
+    // Freeze snapshot
+    *state.status.write().await = SchedulerStatus::SnapshotFrozen;
+    info!(snapshot_seq, "Snapshot frozen for SSP bootstrap");
+
     // Create SspInfo
     let ssp_info = SspInfo {
         id: request.ssp_id.clone(),
@@ -74,32 +105,54 @@ async fn handle_register(
         memory_usage: None,
     };
 
-    // Add to pool and mark as bootstrapping
+    // Add to pool, mark as bootstrapping, record snapshot_seq
     {
         let mut pool = state.ssp_pool.write().await;
         pool.upsert(ssp_info);
         pool.mark_bootstrapping(&request.ssp_id);
+        pool.set_bootstrap_seq(&request.ssp_id, snapshot_seq);
     }
 
-    // Spawn async task to handle bootstrap (non-blocking)
+    // Spawn polling + replay task
     let ssp_id = request.ssp_id.clone();
     let ssp_url = request.url.clone();
-    let replica = state.replica.clone();
     let ssp_pool = state.ssp_pool.clone();
     let transport = state.transport.clone();
+    let event_buffer = state.event_buffer.clone();
+    let scheduler_status = state.status.clone();
     let config = state.config.clone();
 
     tokio::spawn(async move {
-        if let Err(e) = bootstrap_ssp(ssp_id.clone(), ssp_url, replica, ssp_pool.clone(), transport, config).await {
-            error!("Bootstrap failed for SSP '{}': {}", ssp_id, e);
-            // Remove SSP on bootstrap failure
+        if let Err(e) = poll_and_replay_ssp(
+            ssp_id.clone(),
+            ssp_url,
+            snapshot_seq,
+            ssp_pool.clone(),
+            transport,
+            event_buffer,
+            scheduler_status,
+            config,
+        )
+        .await
+        {
+            error!("Bootstrap/replay failed for SSP '{}': {}", ssp_id, e);
             let mut pool = ssp_pool.write().await;
             pool.remove(&ssp_id);
+
+            // Check if snapshot can be unfrozen
+            if !pool.has_active_bootstrap() {
+                drop(pool);
+                // Note: we can't unfreeze here since we don't have scheduler_status
+                // The periodic snapshot updater will handle it
+            }
         }
     });
 
-    info!("SSP registration accepted, bootstrap starting");
-    Ok(StatusCode::ACCEPTED)
+    info!("SSP registration accepted, polling for bootstrap completion");
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(RegistrationResponse { snapshot_seq }),
+    ))
 }
 
 /// Handle SSP heartbeat
@@ -149,83 +202,192 @@ async fn handle_heartbeat(
     Ok(StatusCode::OK)
 }
 
-/// Bootstrap an SSP with replica data
-async fn bootstrap_ssp(
+/// Poll SSP health until ready, then replay missed events
+async fn poll_and_replay_ssp(
     ssp_id: String,
     ssp_url: String,
-    replica: Arc<RwLock<Replica>>,
+    snapshot_seq: u64,
     ssp_pool: Arc<RwLock<SspPool>>,
     transport: Arc<HttpTransport>,
+    event_buffer: Arc<RwLock<VecDeque<BufferedEvent>>>,
+    scheduler_status: Arc<RwLock<SchedulerStatus>>,
     config: Arc<SchedulerConfig>,
 ) -> Result<()> {
-    info!("Starting bootstrap for SSP: {}", ssp_id);
+    let poll_interval = std::time::Duration::from_millis(config.ssp_poll_interval_ms);
+    let timeout = std::time::Duration::from_secs(config.bootstrap_timeout_secs);
+    let start = std::time::Instant::now();
 
-    // Read replica data and chunk it
-    let chunks = {
-        let replica = replica.read().await;
-        replica.iter_chunks(config.bootstrap_chunk_size)?
-    };
+    info!(
+        ssp_id = %ssp_id,
+        snapshot_seq,
+        "Polling SSP health, waiting for bootstrap completion"
+    );
 
-    let total_chunks = chunks.len();
-    info!("Sending {} bootstrap chunks to SSP '{}'", total_chunks, ssp_id);
+    // Phase 1: Poll SSP health until it reports Ready
+    loop {
+        if start.elapsed() > timeout {
+            anyhow::bail!(
+                "Bootstrap timeout ({:?}) exceeded for SSP '{}'",
+                timeout,
+                ssp_id
+            );
+        }
 
-    // Send each chunk to SSP
-    for (chunk_index, chunk) in chunks.into_iter().enumerate() {
-        let bootstrap_chunk = BootstrapChunk {
-            chunk_index,
-            total_chunks,
-            table: chunk.table,
-            records: chunk.records,
-        };
+        tokio::time::sleep(poll_interval).await;
 
-        transport
-            .post_to_ssp(&ssp_url, "/bootstrap", &bootstrap_chunk)
-            .await?;
-
-        info!(
-            "Sent bootstrap chunk {}/{} to SSP '{}'",
-            chunk_index + 1,
-            total_chunks,
-            ssp_id
-        );
+        match transport.check_ssp_health_status(&ssp_url).await {
+            Some(status) if status == "ready" => {
+                info!("SSP '{}' reports ready, starting event replay", ssp_id);
+                break;
+            }
+            Some(status) if status == "failed" => {
+                anyhow::bail!("SSP '{}' reported bootstrap failure", ssp_id);
+            }
+            Some(status) => {
+                debug!("SSP '{}' status: {}", ssp_id, status);
+            }
+            None => {
+                warn!("Cannot reach SSP '{}', retrying...", ssp_id);
+            }
+        }
     }
 
-    info!("Bootstrap complete for {}, marking as ready", ssp_id);
-
-    // Mark SSP as ready and get buffered messages
-    let buffered_messages = {
+    // Phase 2: Mark SSP as Replaying (ingest will buffer per-SSP during replay)
+    {
         let mut pool = ssp_pool.write().await;
-        pool.mark_ready(&ssp_id)
+        pool.mark_replaying(&ssp_id);
+    }
+
+    // Phase 3: Collect and replay events from global buffer
+    let events_to_replay: Vec<BufferedEvent> = {
+        let buffer = event_buffer.read().await;
+        buffer
+            .iter()
+            .filter(|e| e.seq > snapshot_seq)
+            .cloned()
+            .collect()
     };
 
-    // Replay buffered messages
-    if !buffered_messages.is_empty() {
+    if !events_to_replay.is_empty() {
         info!(
-            "Replaying {} buffered messages to SSP '{}'",
-            buffered_messages.len(),
-            ssp_id
+            "Replaying {} events to SSP '{}' (seq > {})",
+            events_to_replay.len(),
+            ssp_id,
+            snapshot_seq
         );
 
-        for message in buffered_messages {
-            // Convert RecordUpdate to IngestRequest format
+        for event in &events_to_replay {
             let ingest_payload = serde_json::json!({
-                "table": message.table,
-                "op": message.operation.to_string(),
-                "id": message.record_id,
-                "record": message.data.unwrap_or(serde_json::json!({}))
+                "table": event.update.table,
+                "op": event.update.operation.to_string(),
+                "id": event.update.record_id,
+                "record": event.update.data.clone().unwrap_or(serde_json::json!({}))
             });
 
             if let Err(e) = transport.post_to_ssp(&ssp_url, "/ingest", &ingest_payload).await {
                 warn!(
-                    "Failed to replay buffered message to SSP '{}': {}",
-                    ssp_id, e
+                    "Failed to replay event seq={} to SSP '{}': {}",
+                    event.seq, ssp_id, e
                 );
             }
         }
 
-        info!("Buffered messages replayed to SSP '{}'", ssp_id);
+        info!(
+            "Replayed {} global buffer events to SSP '{}'",
+            events_to_replay.len(),
+            ssp_id
+        );
     }
 
-    info!("SSP '{}' is now ready", ssp_id);
+    // Phase 4: Drain and replay per-SSP buffered events (accumulated during replay)
+    loop {
+        let buffered = {
+            let mut pool = ssp_pool.write().await;
+            pool.drain_buffer(&ssp_id)
+        };
+
+        if buffered.is_empty() {
+            break;
+        }
+
+        info!(
+            "Replaying {} per-SSP buffered events to SSP '{}'",
+            buffered.len(),
+            ssp_id
+        );
+
+        for message in &buffered {
+            let ingest_payload = serde_json::json!({
+                "table": message.table,
+                "op": message.operation.to_string(),
+                "id": message.record_id,
+                "record": message.data.clone().unwrap_or(serde_json::json!({}))
+            });
+
+            if let Err(e) = transport.post_to_ssp(&ssp_url, "/ingest", &ingest_payload).await {
+                warn!(
+                    "Failed to replay buffered event to SSP '{}': {}",
+                    ssp_id, e
+                );
+            }
+        }
+    }
+
+    // Phase 5: Mark SSP as Ready (atomic with final buffer drain)
+    {
+        let mut pool = ssp_pool.write().await;
+        let remaining = pool.mark_ready(&ssp_id);
+
+        // Replay any events that snuck in between last drain and mark_ready
+        if !remaining.is_empty() {
+            info!(
+                "Replaying {} final buffered events to SSP '{}'",
+                remaining.len(),
+                ssp_id
+            );
+            for message in &remaining {
+                let ingest_payload = serde_json::json!({
+                    "table": message.table,
+                    "op": message.operation.to_string(),
+                    "id": message.record_id,
+                    "record": message.data.clone().unwrap_or(serde_json::json!({}))
+                });
+
+                // Drop pool lock before making HTTP call
+                drop(pool);
+
+                if let Err(e) = transport
+                    .post_to_ssp(&ssp_url, "/ingest", &ingest_payload)
+                    .await
+                {
+                    warn!(
+                        "Failed to replay final event to SSP '{}': {}",
+                        ssp_id, e
+                    );
+                }
+
+                // Re-acquire for next iteration (but mark_ready already called)
+                pool = ssp_pool.write().await;
+            }
+        }
+    }
+
+    // Phase 6: Unfreeze snapshot if no other SSPs are bootstrapping/replaying
+    {
+        let has_active = {
+            let pool = ssp_pool.read().await;
+            pool.has_active_bootstrap()
+        };
+
+        if !has_active {
+            let mut status = scheduler_status.write().await;
+            if *status == SchedulerStatus::SnapshotFrozen {
+                *status = SchedulerStatus::Ready;
+                info!("Snapshot unfrozen: all SSPs caught up");
+            }
+        }
+    }
+
+    info!("SSP '{}' is now fully caught up and ready", ssp_id);
     Ok(())
 }

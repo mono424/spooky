@@ -21,7 +21,7 @@ async fn main() -> Result<()> {
     let transport = Arc::new(HttpTransport::new());
     
     // Create scheduler
-    let scheduler = scheduler::Scheduler::new(config.clone(), transport.clone())?;
+    let scheduler = scheduler::Scheduler::new(config.clone(), transport.clone()).await?;
     
     // Create shared trackers for state consistency
     let query_tracker = std::sync::Arc::new(scheduler::query::QueryTracker::new());
@@ -32,7 +32,7 @@ async fn main() -> Result<()> {
     
     let query_state = scheduler::query::QueryState {
         ssp_pool: std::sync::Arc::new(tokio::sync::RwLock::new(
-            scheduler::router::SspPool::new(config.load_balance.clone())
+            scheduler::router::SspPool::new(config.load_balance.clone(), config.max_buffer_per_ssp)
         )),
         transport: std::sync::Arc::clone(&transport),
         query_tracker: std::sync::Arc::clone(&query_tracker),
@@ -51,8 +51,12 @@ async fn main() -> Result<()> {
         replica: scheduler.replica.clone(),
         transport: std::sync::Arc::clone(&transport),
         config: std::sync::Arc::new(config.clone()),
+        status: scheduler.status.clone(),
+        event_buffer: scheduler.event_buffer.clone(),
     };
     let ssp_router = scheduler::ssp_management::create_ssp_router(ssp_mgmt_state);
+
+    let proxy_router = scheduler::proxy::create_proxy_router(scheduler.proxy_state());
 
     let metrics_router = scheduler::metrics::create_metrics_router(
         scheduler.metrics_state(
@@ -66,6 +70,7 @@ async fn main() -> Result<()> {
         .merge(query_router)
         .merge(job_router)
         .merge(ssp_router)
+        .merge(proxy_router)
         .merge(metrics_router);
     
     let ingest_addr = format!("{}:{}", 

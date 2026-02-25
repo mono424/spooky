@@ -61,3 +61,14 @@ pub struct BootstrapResponse {
     pub ssp_id: String,
     pub chunks: Vec<BootstrapChunk>,
 }
+
+/// A buffered ingest event with ordering metadata
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BufferedEvent {
+    /// Monotonically increasing sequence number assigned by the scheduler
+    pub seq: u64,
+    /// The original record update
+    pub update: RecordUpdate,
+    /// Unix timestamp when this event was received
+    pub received_at: u64,
+}

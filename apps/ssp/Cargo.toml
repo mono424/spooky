@@ -23,12 +23,5 @@ opentelemetry_sdk = { version = "0.27", features = ["rt-tokio", "logs"] }
 opentelemetry-appender-tracing = "0.27"
 
 dotenvy = "0.15.7"
-blake3 = "1.8.2"
-env = "1.0.1"
 reqwest = { version = "0.12", features = ["json"] }
 uuid = { version = "1.0", features = ["v4"] }
-
-[dev-dependencies]
-tower = { version = "0.4", features = ["util"] }
-http-body-util = "0.1"
-mime = "0.3"
