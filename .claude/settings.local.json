@@ -59,7 +59,9 @@
       "Bash(npx playwright test:*)",
       "Bash(docker compose:*)",
       "Bash(1:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(xargs:*)",
+      "Bash(TEST_SURREALDB_ADDR=\"127.0.0.1:8666\" cargo test:*)"
     ],
     "deny": [],
     "ask": []
