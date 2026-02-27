@@ -1,5 +1,5 @@
 -- ==================================================
--- SIDECAR (HTTP) IMPLEMENTATION
+-- SINGLENODE / CLUSTER (HTTP) IMPLEMENTATION
 -- ==================================================
 
 DEFINE FUNCTION fn::query::register($config: object) {
@@ -17,6 +17,21 @@ DEFINE FUNCTION fn::query::register($config: object) {
         format: <string>($config.format OR 'flat')
     };
 
-    -- Call Sidecar via HTTP
-    http::post('{{SIDECAR_ENDPOINT}}/view/register', $module_config, { "Authorization": "Bearer {{SIDECAR_SECRET}}" });
+    -- Call SSP via HTTP
+    http::post('{{ENDPOINT}}/view/register', $module_config, { "Authorization": "Bearer {{SECRET}}" });
 };
+
+DEFINE API "/spooky"
+    FOR get
+    THEN {
+        LET $info = http::get('{{ENDPOINT}}/info', {
+            "Authorization": "Bearer {{SECRET}}"
+        });
+        RETURN {
+            status: 200,
+            body: <string>$info,
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        };
+    };

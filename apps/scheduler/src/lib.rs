@@ -146,6 +146,8 @@ impl Scheduler {
             query_tracker,
             job_tracker,
             start_time: self.start_time,
+            scheduler_id: self.config.scheduler_id.clone(),
+            status: Arc::clone(&self.status),
         }
     }
 

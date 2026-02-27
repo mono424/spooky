@@ -74,7 +74,7 @@ services:
       # --- OTLP KONFIGURATION ---
       # Ziel für Rust Tracing
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://aspire-dashboard:18889
-      - OTEL_SERVICE_NAME=spooky-sidecar
+      - OTEL_SERVICE_NAME=spooky-ssp
       # DB Connection
       - SURREALDB_ADDR=surrealdb:8000/rpc
       - SURREALDB_NS=main
@@ -86,7 +86,7 @@ services:
       # Job Runner Config
       - SPOOKY_CONFIG_PATH=/config/spooky.yml
     volumes:
-      - ./.spooky/sidecar_data:/data
+      - ./.spooky/ssp_data:/data
       - ./spooky.yml:/config/spooky.yml:ro
     depends_on:
       surrealdb:
@@ -103,7 +103,7 @@ services:
       surrealdb:
         condition: service_healthy
     volumes:
-      - ./.spooky/remote-sidecar.gen.surql:/remote.gen.surql:ro
+      - ./.spooky/remote-singlenode.gen.surql:/remote.gen.surql:ro
       - ./migrate.sh:/migrate.sh:ro
     command: ['sh', '/migrate.sh']
     restart: 'no'

@@ -18,6 +18,8 @@ pub struct SchedulerConfig {
     pub bootstrap_timeout_secs: u64,
     pub ssp_poll_interval_ms: u64,
     pub wal_path: PathBuf,
+    #[serde(skip)]
+    pub scheduler_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -60,6 +62,7 @@ impl Default for SchedulerConfig {
             bootstrap_timeout_secs: 120,
             ssp_poll_interval_ms: 3000,
             wal_path: PathBuf::from("./data/event_wal.log"),
+            scheduler_id: String::new(),
         }
     }
 }
@@ -78,7 +81,10 @@ impl SchedulerConfig {
             builder.add_source(config::Environment::with_prefix("SPOOKY_SCHEDULER").separator("_"));
 
         let config = builder.build()?;
-        let scheduler_config: SchedulerConfig = config.try_deserialize()?;
+        let mut scheduler_config: SchedulerConfig = config.try_deserialize()?;
+
+        scheduler_config.scheduler_id = std::env::var("SCHEDULER_ID")
+            .unwrap_or_else(|_| format!("scheduler-{}", uuid::Uuid::new_v4()));
 
         Ok(scheduler_config)
     }

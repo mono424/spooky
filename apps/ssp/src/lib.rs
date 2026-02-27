@@ -61,6 +61,7 @@ pub struct AppState {
     pub metrics: Arc<Metrics>,
     pub job_config: Arc<JobConfig>,
     pub job_queue_tx: mpsc::Sender<JobEntry>,
+    pub ssp_id: String,
 }
 
 // --- Request/Response DTOs ---
@@ -207,6 +208,7 @@ pub fn create_app(state: AppState) -> Router {
         .route("/view/unregister", post(unregister_view_handler))
         .route("/reset", post(reset_handler))
         .route("/health", get(health_handler))
+        .route("/info", get(info_handler))
         .route("/version", get(version_handler))
         .layer(middleware::from_fn(auth_middleware))
         .with_state(state)
@@ -274,6 +276,7 @@ pub async fn run_server() -> anyhow::Result<()> {
         metrics: metrics.clone(),
         job_config,
         job_queue_tx,
+        ssp_id: config.ssp_id.clone(),
     };
 
     let app = create_app(state);
@@ -965,24 +968,35 @@ async fn reset_handler(State(state): State<AppState>) -> impl IntoResponse {
 /// Health check handler
 async fn health_handler(State(state): State<AppState>) -> Response {
     let status = *state.status.read().await;
-    let circuit = state.processor.read().await;
     let http_status = match status {
         SspStatus::Ready => StatusCode::OK,
         _ => StatusCode::SERVICE_UNAVAILABLE,
     };
-    (
-        http_status,
-        Json(json!({
-            "status": match status {
-                SspStatus::Bootstrapping => "bootstrapping",
-                SspStatus::Ready => "ready",
-                SspStatus::Failed => "failed",
-            },
+    let status_str = match status {
+        SspStatus::Bootstrapping => "bootstrapping",
+        SspStatus::Ready => "ready",
+        SspStatus::Failed => "failed",
+    };
+    (http_status, Json(json!({ "status": status_str }))).into_response()
+}
+
+/// Info handler — returns entity list with identity and status
+async fn info_handler(State(state): State<AppState>) -> Json<Value> {
+    let status = *state.status.read().await;
+    let circuit = state.processor.read().await;
+    let status_str = match status {
+        SspStatus::Bootstrapping => "bootstrapping",
+        SspStatus::Ready => "ready",
+        SspStatus::Failed => "failed",
+    };
+    Json(json!([
+        {
+            "entity": "ssp",
+            "id": state.ssp_id,
+            "status": status_str,
             "views": circuit.view_count(),
-            "tables": circuit.table_names().len(),
-        })),
-    )
-        .into_response()
+        }
+    ]))
 }
 
 /// Debug view handler - returns cache state for a specific view

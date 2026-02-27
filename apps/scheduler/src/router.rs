@@ -168,6 +168,11 @@ impl SspPool {
         matches!(self.ssp_states.get(ssp_id), Some(SspState::Ready))
     }
 
+    /// Get the current state of an SSP
+    pub fn get_state(&self, ssp_id: &str) -> Option<&SspState> {
+        self.ssp_states.get(ssp_id)
+    }
+
     /// Get buffer size for an SSP
     pub fn buffer_size(&self, ssp_id: &str) -> usize {
         self.message_buffers

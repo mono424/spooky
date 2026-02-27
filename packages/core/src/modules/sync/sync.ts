@@ -37,12 +37,13 @@ export class SpookySync<S extends SchemaStructure> {
     private remote: RemoteDatabaseService,
     private cache: CacheModule,
     private dataModule: DataModule<S>,
+    private schema: S,
     logger: Logger
   ) {
     this.logger = logger.child({ service: 'SpookySync' });
     this.upQueue = new UpQueue(this.local, this.logger);
     this.downQueue = new DownQueue(this.local, this.logger);
-    this.syncEngine = new SyncEngine(this.remote, this.cache, this.logger);
+    this.syncEngine = new SyncEngine(this.remote, this.cache, this.schema, this.logger);
     this.scheduler = new SyncScheduler(
       this.upQueue,
       this.downQueue,

@@ -6,7 +6,7 @@ export const surql = {
   },
 
   tx(queries: string[]) {
-    return `BEGIN TRANSACTION;${queries.join(';')};COMMIT TRANSACTION`;
+    return `BEGIN TRANSACTION;\n${queries.join(';')};\nCOMMIT TRANSACTION`;
   },
 
   selectById(idVar: string, returnValues: string[]) {

@@ -7,7 +7,8 @@ use tracing::info;
 
 use crate::job_scheduler::JobTracker;
 use crate::query::QueryTracker;
-use crate::router::SspPool;
+use crate::router::{SspPool, SspState};
+use crate::SchedulerStatus;
 
 /// Metrics snapshot
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,6 +43,8 @@ pub struct MetricsState {
     pub query_tracker: Arc<QueryTracker>,
     pub job_tracker: Arc<JobTracker>,
     pub start_time: std::time::Instant,
+    pub scheduler_id: String,
+    pub status: Arc<RwLock<SchedulerStatus>>,
 }
 
 /// Create metrics router
@@ -49,6 +52,7 @@ pub fn create_metrics_router(state: MetricsState) -> Router {
     Router::new()
         .route("/metrics", get(get_metrics))
         .route("/health", get(health_check))
+        .route("/info", get(info_handler))
         .with_state(state)
 }
 
@@ -104,7 +108,7 @@ async fn get_metrics(
 /// Health check
 async fn health_check(
     State(state): State<MetricsState>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+) -> (StatusCode, Json<serde_json::Value>) {
     let pool = state.ssp_pool.read().await;
     let ready_ssps = pool
         .all()
@@ -113,16 +117,45 @@ async fn health_check(
         .count();
 
     if ready_ssps > 0 {
-        Ok(Json(serde_json::json!({
-            "status": "healthy",
-            "ready_ssps": ready_ssps,
-        })))
+        (StatusCode::OK, Json(serde_json::json!({ "status": "healthy" })))
     } else {
-        Err((
-            StatusCode::SERVICE_UNAVAILABLE,
-            "No ready SSPs available".to_string(),
-        ))
+        (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({ "status": "unavailable" })))
     }
+}
+
+/// Info handler — returns entity list with identity and status
+async fn info_handler(
+    State(state): State<MetricsState>,
+) -> Json<serde_json::Value> {
+    let scheduler_status = match *state.status.read().await {
+        SchedulerStatus::Cloning => "cloning",
+        SchedulerStatus::Ready => "ready",
+        SchedulerStatus::SnapshotFrozen => "frozen",
+        SchedulerStatus::SnapshotUpdating => "updating",
+    };
+
+    let mut entities = vec![serde_json::json!({
+        "entity": "scheduler",
+        "id": state.scheduler_id,
+        "status": scheduler_status,
+    })];
+
+    let pool = state.ssp_pool.read().await;
+    for ssp in pool.all() {
+        let ssp_status = match pool.get_state(&ssp.id) {
+            Some(SspState::Bootstrapping) => "bootstrapping",
+            Some(SspState::Replaying) => "replaying",
+            Some(SspState::Ready) => "ready",
+            None => "unknown",
+        };
+        entities.push(serde_json::json!({
+            "entity": "ssp",
+            "id": ssp.id,
+            "status": ssp_status,
+        }));
+    }
+
+    Json(serde_json::Value::Array(entities))
 }
 
 /// Start query reassignment monitor

@@ -23,11 +23,11 @@ program
   .option('--modules-dir <path>', 'Directory containing Surrealism modules to compile and bundle')
   .option(
     '--mode <mode>',
-    'Generation mode: "surrealism" (embedded WASM) or "sidecar" (HTTP calls)',
-    'surrealism'
+    'Generation mode: "singlenode" (HTTP to single SSP), "cluster" (HTTP to scheduler), or "surrealism" (embedded WASM)',
+    'singlenode'
   )
-  .option('--sidecar-endpoint <url>', 'Spooky Sidecar Endpoint URL')
-  .option('--sidecar-secret <secret>', 'Spooky Sidecar Auth Secret')
+  .option('--endpoint <url>', 'SSP/Scheduler Endpoint URL')
+  .option('--secret <secret>', 'SSP/Scheduler Auth Secret')
   .option('--config <path>', 'Path to spooky.yml configuration file')
   .parse(process.argv);
 
@@ -51,8 +51,8 @@ async function main() {
       append: options.append,
       modulesDir: options.modulesDir,
       mode: options.mode,
-      sidecarEndpoint: options.sidecarEndpoint,
-      sidecarSecret: options.sidecarSecret,
+      endpoint: options.endpoint,
+      secret: options.secret,
       config: options.config,
     });
 

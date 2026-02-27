@@ -1,4 +1,4 @@
-mode: sidecar # "sidecar" or "surrealism"
+mode: cluster # "singlenode", "cluster", or "surrealism"
 backends:
   api:
     type: http

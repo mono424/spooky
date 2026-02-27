@@ -64,17 +64,17 @@ struct Args {
     #[arg(long, default_value = "../../packages/surrealism-modules")]
     modules_dir: PathBuf,
 
-    /// Generation mode: "surrealism" (embedded WASM) or "sidecar" (HTTP calls)
-    #[arg(long, default_value = "surrealism")]
+    /// Generation mode: "singlenode" (HTTP to single SSP), "cluster" (HTTP to scheduler), or "surrealism" (embedded WASM)
+    #[arg(long, default_value = "singlenode")]
     mode: String,
 
-    /// Spooky Sidecar Endpoint URL (required if mode is "sidecar")
+    /// SSP/Scheduler Endpoint URL (used in "singlenode" and "cluster" modes)
     #[arg(long)]
-    sidecar_endpoint: Option<String>,
+    endpoint: Option<String>,
 
-    /// Spooky Sidecar Auth Secret (required if mode is "sidecar")
+    /// SSP/Scheduler Auth Secret (used in "singlenode" and "cluster" modes)
     #[arg(long)]
-    sidecar_secret: Option<String>,
+    secret: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -357,6 +357,12 @@ fn main() -> Result<()> {
         None => {} // fall through to legacy codegen mode
     }
 
+    // Surrealism mode is not supported yet
+    if args.mode == "surrealism" {
+        eprintln!("Warning: Surrealism mode is not supported yet.");
+        std::process::exit(1);
+    }
+
     // Legacy mode validation
     let input_path = args
         .input
@@ -406,7 +412,7 @@ fn main() -> Result<()> {
     let meta_tables = include_str!("meta_tables.surql");
     let meta_tables_remote = include_str!("meta_tables_remote.surql");
     let functions_remote = include_str!("functions_remote.surql");
-    let functions_remote_sidecar = include_str!("functions_remote_sidecar.surql");
+    let functions_remote_singlenode = include_str!("functions_remote_singlenode.surql");
     let functions_remote_surrealism = include_str!("functions_remote_surrealism.surql");
     let meta_tables_client = include_str!("meta_tables_client.surql");
 
@@ -461,22 +467,27 @@ fn main() -> Result<()> {
         c.push_str(functions_remote);
         println!("  + Appended functions_remote.surql (common)");
 
-        if args.mode == "sidecar" {
-            println!("  → Sidecar mode detected: Using sidecar specific remote functions");
+        if args.mode == "singlenode" || args.mode == "cluster" {
+            let default_endpoint = if args.mode == "cluster" {
+                "http://localhost:9667"
+            } else {
+                "http://localhost:8667"
+            };
+            println!("  → {} mode detected: Using HTTP remote functions", args.mode);
             let endpoint = args
-                .sidecar_endpoint
+                .endpoint
                 .as_deref()
-                .unwrap_or("http://localhost:8667");
-            let secret = args.sidecar_secret.as_deref().unwrap_or("");
+                .unwrap_or(default_endpoint);
+            let secret = args.secret.as_deref().unwrap_or("");
 
-            // Inject variables into sidecar template
-            let mut sidecar_fn = functions_remote_sidecar.to_string();
-            sidecar_fn = sidecar_fn.replace("{{SIDECAR_ENDPOINT}}", endpoint);
-            sidecar_fn = sidecar_fn.replace("{{SIDECAR_SECRET}}", secret);
+            // Inject variables into singlenode template
+            let mut singlenode_fn = functions_remote_singlenode.to_string();
+            singlenode_fn = singlenode_fn.replace("{{ENDPOINT}}", endpoint);
+            singlenode_fn = singlenode_fn.replace("{{SECRET}}", secret);
 
             c.push('\n');
-            c.push_str(&sidecar_fn);
-            println!("  + Appended functions_remote_sidecar.surql (injected)");
+            c.push_str(&singlenode_fn);
+            println!("  + Appended functions_remote_singlenode.surql (injected)");
 
             // Replace unregister_view (still needed as it's in meta_tables_remote.surql)
             // We need to match the exact string from meta_tables_remote.surql
@@ -588,8 +599,8 @@ fn main() -> Result<()> {
             &content,
             is_client,
             &args.mode,
-            args.sidecar_endpoint.as_deref(),
-            args.sidecar_secret.as_deref(),
+            args.endpoint.as_deref(),
+            args.secret.as_deref(),
         );
 
         // Generate code

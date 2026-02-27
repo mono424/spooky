@@ -98,8 +98,8 @@ pub struct QueryState {
 /// Create query router
 pub fn create_query_router(state: QueryState) -> Router {
     Router::new()
-        .route("/query/register", post(register_query))
-        .route("/query/unregister", post(unregister_query))
+        .route("/view/register", post(register_query))
+        .route("/view/unregister", post(unregister_query))
         .with_state(state)
 }
 

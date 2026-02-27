@@ -9,20 +9,27 @@ const args = process.argv.slice(2);
 const configPath = path.join(__dirname, 'spooky.yml');
 
 // Default mode
-let mode = 'surrealism';
+let mode = 'singlenode';
 
 // Try to read mode from spooky.yml
 if (fs.existsSync(configPath)) {
   const content = fs.readFileSync(configPath, 'utf8');
-  // Simple check for "mode: sidecar"
-  if (content.match(/^mode:\s*"?sidecar"?/m)) {
-    mode = 'sidecar';
+  if (content.match(/^mode:\s*"?cluster"?/m)) {
+    mode = 'cluster';
+  } else if (content.match(/^mode:\s*"?surrealism"?/m)) {
+    mode = 'surrealism';
+  } else if (content.match(/^mode:\s*"?singlenode"?/m)) {
+    mode = 'singlenode';
   }
 }
 
 // Determine compose file
-const composeFile =
-  mode === 'sidecar' ? 'docker-compose.sidecar.yml' : 'docker-compose.surrealism.yml';
+const composeFiles = {
+  singlenode: 'docker-compose.singlenode.yml',
+  cluster: 'docker-compose.cluster.yml',
+  surrealism: 'docker-compose.surrealism.yml',
+};
+const composeFile = composeFiles[mode] || 'docker-compose.singlenode.yml';
 console.log(`[box] Loading configuration from spooky.yml`);
 console.log(`[box] Mode: ${mode}`);
 console.log(`[box] Using: ${composeFile}`);

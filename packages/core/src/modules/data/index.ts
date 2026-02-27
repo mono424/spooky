@@ -1,5 +1,11 @@
 import { RecordId, Duration } from 'surrealdb';
-import { SchemaStructure, TableNames, BackendNames, BackendRoutes, RoutePayload } from '@spooky/query-builder';
+import {
+  SchemaStructure,
+  TableNames,
+  BackendNames,
+  BackendRoutes,
+  RoutePayload,
+} from '@spooky/query-builder';
 import { LocalDatabaseService } from '../../services/database/index';
 import { CacheModule, RecordWithId } from '../cache/index';
 import { Logger } from '../../services/logger/index';
@@ -303,10 +309,7 @@ export class DataModule<S extends SchemaStructure> {
 
   // ====================      RUN JOBS       ====================
 
-  async run<
-    B extends BackendNames<S>,
-    R extends BackendRoutes<S, B>,
-  >(
+  async run<B extends BackendNames<S>, R extends BackendRoutes<S, B>>(
     backend: B,
     path: R,
     data: RoutePayload<S, B, R>,
@@ -368,14 +371,13 @@ export class DataModule<S extends SchemaStructure> {
     );
     const query = surql.seal(
       surql.tx([
-        surql.let('created', surql.createSet('id', dataKeys)),
+        surql.createSet('id', dataKeys),
         surql.createMutation('create', 'mid', 'id', 'data'),
-        surql.returnObject([{ key: 'target', variable: 'created' }]),
       ])
     );
 
-    const [{ target }] = await withRetry(this.logger, () =>
-      this.local.query<[{ target: T }]>(query, {
+    const [_, target] = await withRetry(this.logger, () =>
+      this.local.query<[null, T, any, null]>(query, {
         id: rid,
         mid: mutationId,
         ...prefixedParams,

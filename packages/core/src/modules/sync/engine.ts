@@ -1,10 +1,12 @@
 import { RecordId } from 'surrealdb';
+import { SchemaStructure } from '@spooky/query-builder';
 import { RemoteDatabaseService } from '../../services/database/index';
 import { CacheModule, CacheRecord, RecordWithId } from '../cache/index';
 import { RecordVersionDiff } from '../../types';
 import { Logger } from '../../services/logger/index';
 import { SyncEventTypes, createSyncEventSystem } from './events/index';
 import { encodeRecordId } from '../../utils/index';
+import { cleanRecord } from '../../utils/parser';
 
 /**
  * SyncEngine handles the core sync operations: fetching remote records,
@@ -19,6 +21,7 @@ export class SyncEngine {
   constructor(
     private remote: RemoteDatabaseService,
     private cache: CacheModule,
+    private schema: SchemaStructure,
     logger: Logger
   ) {
     this.logger = logger.child({ service: 'SpookySync:SyncEngine' });
@@ -55,16 +58,25 @@ export class SyncEngine {
     }
 
     const [remoteResults] = await this.remote.query<[RecordWithId[]]>(
-      "SELECT *, (SELECT version FROM ONLY _spooky_version WHERE record_id = <record>$parent.id)['version'] as spooky_rv FROM $ids",
-      {
-        ids: idsToFetch,
-      }
+      "SELECT (SELECT * FROM ONLY <record>$parent.id) AS record, (SELECT version FROM ONLY _spooky_version WHERE record_id = <record>$parent.id)['version'] as spooky_rv FROM $idsToFetch",
+      { idsToFetch }
     );
-
+    console.log('remoteResults>', remoteResults);
     // Prepare batch for cache (which handles both DB and DBSP)
     const cacheBatch: CacheRecord[] = [];
 
-    for (const { spooky_rv, ...record } of remoteResults) {
+    for (const { spooky_rv, record } of remoteResults) {
+      if (!record?.id) {
+        this.logger.warn(
+          {
+            record,
+            idsToFetch,
+            Category: 'spooky-client::SyncEngine::syncRecords',
+          },
+          'Remote record has no id. Skipping record'
+        );
+        continue;
+      }
       const fullId = encodeRecordId(record.id);
       const table = record.id.table.toString();
       const isAdded = added.some((item) => encodeRecordId(item.id) === fullId);
@@ -99,12 +111,15 @@ export class SyncEngine {
         );
         continue;
       }
-      console.log('yy>', fullId, spooky_rv, localVersion);
+      const tableSchema = this.schema.tables.find((t) => t.name === table);
+      const cleanedRecord = tableSchema
+        ? cleanRecord(tableSchema.columns, record)
+        : record;
+
       cacheBatch.push({
         table,
         op: isAdded ? 'CREATE' : 'UPDATE',
-        // id: fullId,
-        record,
+        record: cleanedRecord as RecordWithId,
         version: spooky_rv,
       });
     }
