@@ -5,6 +5,7 @@ import {
   DatabaseEventTypes,
   DatabaseQueryEventPayload,
 } from './events/index';
+import { SealedQuery } from '../../utils/surql';
 
 export abstract class AbstractDatabaseService {
   protected client: Surreal;
@@ -93,6 +94,11 @@ export abstract class AbstractDatabaseService {
           // Ignore queue errors to keep the chain alive; the specific promise was rejected above.
         });
     });
+  }
+
+  async execute<T>(query: SealedQuery<T>, vars?: Record<string, unknown>): Promise<T> {
+    const raw = await this.query<unknown[]>(query.sql, vars);
+    return query.extract(raw);
   }
 
   async close(): Promise<void> {

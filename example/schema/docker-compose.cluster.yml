@@ -54,7 +54,7 @@ services:
       surrealdb:
         condition: service_healthy
     volumes:
-      - ./.spooky/remote-sidecar.gen.surql:/remote.gen.surql:ro
+      - ./.spooky/remote-cluster.gen.surql:/remote.gen.surql:ro
       - ./migrate.sh:/migrate.sh:ro
     command: ['sh', '/migrate.sh']
     restart: 'no'
@@ -96,7 +96,7 @@ services:
     environment:
       - RUST_LOG=info,ssp=debug
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://aspire-dashboard:18889
-      - OTEL_SERVICE_NAME=spooky-sidecar
+      - OTEL_SERVICE_NAME=spooky-ssp
       - SURREALDB_ADDR=surrealdb:8000/rpc
       - SURREALDB_NS=main
       - SURREALDB_DB=main

@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
 pub struct SchedulerConfig {
     pub db: DbConfig,
     pub load_balance: LoadBalanceStrategy,

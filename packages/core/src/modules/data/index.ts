@@ -369,15 +369,16 @@ export class DataModule<S extends SchemaStructure> {
     const prefixedParams = Object.fromEntries(
       dataKeys.map(({ key, variable }) => [variable, params[key]])
     );
-    const query = surql.seal(
+    const query = surql.seal<T>(
       surql.tx([
         surql.createSet('id', dataKeys),
         surql.createMutation('create', 'mid', 'id', 'data'),
-      ])
+      ]),
+      { resultIndex: 0 }
     );
 
-    const [_, target] = await withRetry(this.logger, () =>
-      this.local.query<[null, T, any, null]>(query, {
+    const target = await withRetry(this.logger, () =>
+      this.local.execute(query, {
         id: rid,
         mid: mutationId,
         ...prefixedParams,
@@ -434,7 +435,7 @@ export class DataModule<S extends SchemaStructure> {
     const params = parseParams(tableSchema.columns, data);
     const mutationId = parseRecordIdString(`_spooky_pending_mutations:${Date.now()}`);
 
-    const query = surql.seal(
+    const query = surql.seal<{ target: T }>(
       surql.tx([
         surql.updateSet('id', [{ statement: 'spooky_rv += 1' }]),
         surql.let('updated', surql.updateMerge('id', 'data')),
@@ -443,8 +444,8 @@ export class DataModule<S extends SchemaStructure> {
       ])
     );
 
-    const [{ target }] = await withRetry(this.logger, () =>
-      this.local.query<[{ target: T }]>(query, {
+    const { target } = await withRetry(this.logger, () =>
+      this.local.execute(query, {
         id: rid,
         mid: mutationId,
         data: params,
@@ -503,11 +504,11 @@ export class DataModule<S extends SchemaStructure> {
     const rid = parseRecordIdString(id);
     const mutationId = parseRecordIdString(`_spooky_pending_mutations:${Date.now()}`);
 
-    const query = surql.seal(
+    const query = surql.seal<void>(
       surql.tx([surql.delete('id'), surql.createMutation('delete', 'mid', 'id')])
     );
 
-    await withRetry(this.logger, () => this.local.query(query, { id: rid, mid: mutationId }));
+    await withRetry(this.logger, () => this.local.execute(query, { id: rid, mid: mutationId }));
     await this.cache.delete(table, id, true);
 
     // Emit mutation event

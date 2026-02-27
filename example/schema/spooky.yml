@@ -1,4 +1,4 @@
-mode: cluster # "singlenode", "cluster", or "surrealism"
+mode: singlenode # "singlenode", "cluster", or "surrealism"
 backends:
   api:
     type: http
