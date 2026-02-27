@@ -61,7 +61,17 @@
       "Bash(1:*)",
       "Bash(python3:*)",
       "Bash(xargs:*)",
-      "Bash(TEST_SURREALDB_ADDR=\"127.0.0.1:8666\" cargo test:*)"
+      "Bash(TEST_SURREALDB_ADDR=\"127.0.0.1:8666\" cargo test:*)",
+      "WebFetch(domain:registry.npmjs.org)",
+      "WebFetch(domain:crates.io)",
+      "WebFetch(domain:hub.docker.com)",
+      "Bash(docker run:*)",
+      "WebFetch(domain:surrealdb.com)",
+      "Bash(rustup target:*)",
+      "Bash(cargo run:*)",
+      "Bash(/Users/khadim/dev/spooky/apps/cli/target/debug/spooky:*)",
+      "Bash(docker exec:*)",
+      "Bash(apps/cli/target/debug/spooky:*)"
     ],
     "deny": [],
     "ask": []

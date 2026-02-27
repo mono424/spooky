@@ -3,9 +3,9 @@ use std::io::{Read, Write};
 
 fn main() -> std::io::Result<()> {
     // Relative paths from tools/compress
-    let wasm_path = "../../packages/surrealism-modules/dbsp_module/target/wasm32-wasip1/debug/dbsp_module.wasm";
-    let tar_path = "dbsp_module.tar";
-    let output_path = "../../tests/.spooky/dbsp_module.surli"; 
+    let wasm_path = "../../packages/surrealism-modules/ssp_module/target/wasm32-wasip1/debug/ssp_module.wasm";
+    let tar_path = "ssp_module.tar";
+    let output_path = "../../tests/.spooky/ssp_module.surli";
 
     println!("Creating tarball from: {}", wasm_path);
     
@@ -14,7 +14,7 @@ fn main() -> std::io::Result<()> {
     std::fs::copy(wasm_path, local_wasm)?;
 
     // Also copy surrealism.toml
-    let toml_path = "../../packages/surrealism-modules/dbsp_module/surrealism.toml";
+    let toml_path = "../../packages/surrealism-modules/ssp_module/surrealism.toml";
     std::fs::copy(toml_path, "surrealism.toml")?;
 
     let status = std::process::Command::new("tar")

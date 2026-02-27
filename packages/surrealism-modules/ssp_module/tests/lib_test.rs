@@ -1,4 +1,4 @@
-use dbsp_module::{Circuit, QueryPlan, Operator, Predicate};
+use ssp_module::{Circuit, QueryPlan, Operator, Predicate};
 use std::collections::HashMap;
 
 #[test]

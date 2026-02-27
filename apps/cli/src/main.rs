@@ -449,7 +449,7 @@ fn main() -> Result<()> {
     println!("  + Injecting spooky_rv field for local cache schema");
     for table_name in parser.tables.keys() {
         filtered_schema_content.push_str(&format!(
-            "\nDEFINE FIELD spooky_rv ON TABLE {} TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;",
+            "\nDEFINE FIELD spooky_rv ON TABLE {} TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;",
             table_name
         ));
     }

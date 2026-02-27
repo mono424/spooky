@@ -1,4 +1,4 @@
-use dbsp_module::{converter, Operator, Predicate, Projection};
+use ssp_module::{converter, Operator, Predicate, Projection};
 use serde_json::json;
 
 #[test]

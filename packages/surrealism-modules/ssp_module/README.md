@@ -1,6 +1,6 @@
-# DBSP Incremental View Module
+# SSP Incremental View Module
 
-**Package**: `spooky/dbsp_module`
+**Package**: `spooky/ssp_module`
 **Version**: `0.1.0`
 
 This module implements a **stateless, in-memory Incremental View Maintenance (IVM)** engine for SurrealDB using WebAssembly (WASM). It is inspired by the principles of **DBSP (Digital Bitstream Signal Processing)**, treating database changes as a stream of signals (deltas) that flow through a circuit of views to update materialized results efficiently.

@@ -187,8 +187,8 @@ impl Scheduler {
         ).await?;
 
         db.signin(surrealdb::opt::auth::Root {
-            username: &self.config.db.username,
-            password: &self.config.db.password,
+            username: self.config.db.username.clone(),
+            password: self.config.db.password.clone(),
         }).await?;
 
         db.use_ns(&self.config.db.namespace)

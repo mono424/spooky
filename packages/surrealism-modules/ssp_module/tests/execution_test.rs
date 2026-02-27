@@ -1,4 +1,4 @@
-use dbsp_module::{Circuit, Operator, QueryPlan, JoinCondition, MaterializedViewUpdate};
+use ssp_module::{Circuit, Operator, QueryPlan, JoinCondition, MaterializedViewUpdate};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 

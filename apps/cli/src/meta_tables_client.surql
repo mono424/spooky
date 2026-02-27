@@ -59,12 +59,12 @@ DEFINE TABLE _spooky_pending_mutations SCHEMAFULL
 DEFINE FIELD IF NOT EXISTS id ON _spooky_pending_mutations TYPE string;
 
 DEFINE FIELD IF NOT EXISTS mutationType ON _spooky_pending_mutations TYPE string
-    PERMISSIONS FOR select, create, update, delete WHERE true;
+    PERMISSIONS FOR select, create, update WHERE true;
 
 -- The target record ID (for update/delete) - maps to 'id' in the event object
 DEFINE FIELD IF NOT EXISTS recordId ON _spooky_pending_mutations TYPE option<record>
-    PERMISSIONS FOR select, create, update, delete WHERE true;
+    PERMISSIONS FOR select, create, update WHERE true;
 
 -- The data payload (for create/update)
 DEFINE FIELD IF NOT EXISTS data ON _spooky_pending_mutations TYPE option<object> FLEXIBLE
-    PERMISSIONS FOR select, create, update, delete WHERE true;
+    PERMISSIONS FOR select, create, update WHERE true;

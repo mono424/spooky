@@ -2,8 +2,8 @@ use std::fs::File;
 use std::io::{Read, Write};
 
 fn main() -> std::io::Result<()> {
-    let input_path = "target/wasm32-wasip1/debug/dbsp_module.wasm";
-    let output_path = "../../../tests/.spooky/dbsp_module.surli"; // Write directly to tests folder
+    let input_path = "target/wasm32-wasip1/debug/ssp_module.wasm";
+    let output_path = "../../../tests/.spooky/ssp_module.surli"; // Write directly to tests folder
 
     let mut input_file = File::open(input_path)?;
     let mut buffer = Vec::new();

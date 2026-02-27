@@ -304,9 +304,24 @@ pub async fn run_server() -> anyhow::Result<()> {
                 let registration_url = format!("{}/ssp/register", scheduler_base);
                 info!("Registering SSP {} with scheduler at {}", ssp_id, scheduler_base);
 
+                // Derive a routable registration URL. If listen_addr binds to
+                // a wildcard (0.0.0.0), use the container hostname instead so
+                // the scheduler can route back via Docker DNS.
+                let registration_host = {
+                    let (host, port) = listen_addr.rsplit_once(':').unwrap_or(("0.0.0.0", "8667"));
+                    if host == "0.0.0.0" || host == "127.0.0.1" {
+                        let hostname = hostname::get()
+                            .map(|h| h.to_string_lossy().into_owned())
+                            .unwrap_or_else(|_| host.to_string());
+                        format!("{}:{}", hostname, port)
+                    } else {
+                        listen_addr.clone()
+                    }
+                };
+
                 let payload = json!({
                     "ssp_id": ssp_id,
-                    "url": format!("http://{}", listen_addr),
+                    "url": format!("http://{}", registration_host),
                 });
 
                 match client.post(&registration_url).json(&payload).send().await {
