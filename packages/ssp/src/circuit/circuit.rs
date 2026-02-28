@@ -72,10 +72,14 @@ fn compute_current_subquery_set(
 
     let subquery_infos = view.plan.root.subquery_projection_info();
 
-    for (alias, subquery_table, parent_key_opt) in &subquery_infos {
+    // Pass 1: Root-level subqueries (parent_table = None) — parent is in view.cache
+    for (alias, subquery_table, parent_key_opt, parent_table) in &subquery_infos {
+        if parent_table.is_some() {
+            continue;
+        }
         let parent_key = match parent_key_opt {
             Some(pk) => pk,
-            None => continue, // No parent_key → can't track child-to-parent linkage
+            None => continue,
         };
 
         let collection = match store.get_collection(subquery_table) {
@@ -83,19 +87,64 @@ fn compute_current_subquery_set(
             None => continue,
         };
 
-        // For each row in the subquery table, check if its FK points to a parent in the view
         for (raw_id, row_data) in &collection.rows {
             let fk_value = match row_data.get(&parent_key.child_field).and_then(|v| v.as_str()) {
                 Some(v) => v,
                 None => continue,
             };
 
-            // The FK value should be a record ID like "thread:xyz" which matches the view cache key format
-            let parent_cache_key = fk_value.to_string();
-
-            if view.cache.contains_key(&parent_cache_key) {
+            if view.cache.contains_key(fk_value) {
                 let child_key = make_key(subquery_table, raw_id);
-                result.insert(child_key, (parent_cache_key, alias.clone()));
+                result.insert(child_key, (fk_value.to_string(), alias.clone()));
+            }
+        }
+    }
+
+    // Pass 2: Nested subqueries (parent_table = Some) — parent is a subquery item
+    for (alias, subquery_table, parent_key_opt, parent_table_opt) in &subquery_infos {
+        let pt = match parent_table_opt {
+            Some(pt) => pt,
+            None => continue,
+        };
+        let parent_key = match parent_key_opt {
+            Some(pk) => pk,
+            None => continue,
+        };
+
+        let collection = match store.get_collection(subquery_table) {
+            Some(c) => c,
+            None => continue,
+        };
+        let parent_coll = match store.get_collection(pt) {
+            Some(c) => c,
+            None => continue,
+        };
+
+        // Build index: parent's parent_field value → parent full key
+        // Only for parent rows already in the result set (level-1 items)
+        let mut parent_field_index: HashMap<String, String> = HashMap::new();
+        for (parent_raw_id, parent_row_data) in &parent_coll.rows {
+            let parent_full_key = make_key(pt, parent_raw_id);
+            if result.contains_key(&parent_full_key) {
+                if let Some(val) = parent_row_data
+                    .get(&parent_key.parent_field)
+                    .and_then(|v| v.as_str())
+                {
+                    parent_field_index.insert(val.to_string(), parent_full_key);
+                }
+            }
+        }
+
+        // For each child row, check if child.child_field matches a parent's field value
+        for (raw_id, row_data) in &collection.rows {
+            let child_value =
+                match row_data.get(&parent_key.child_field).and_then(|v| v.as_str()) {
+                    Some(v) => v,
+                    None => continue,
+                };
+            if let Some(parent_full_key) = parent_field_index.get(child_value) {
+                let child_key = make_key(subquery_table, raw_id);
+                result.insert(child_key, (parent_full_key.clone(), alias.clone()));
             }
         }
     }
@@ -1120,5 +1169,145 @@ mod tests {
         assert_eq!(deltas.len(), 1);
         let adds: Vec<_> = deltas[0].subquery_items.iter().filter(|i| i.op == SubqueryOp::Add).collect();
         assert!(adds.is_empty());
+    }
+
+    // ── Nested subquery tracking tests ─────────────────────────────
+
+    /// Helper: build a query with a nested subquery projection.
+    /// SELECT *, (SELECT *, (SELECT * FROM grandchild_table WHERE id=$parent.gc_field LIMIT 1)[0] AS gc_alias
+    ///   FROM child_table WHERE child_fk=$parent.id) AS child_alias FROM parent_table
+    fn nested_subquery_query(
+        id: &str,
+        parent_table: &str,
+        child_table: &str,
+        child_alias: &str,
+        child_fk: &str,
+        grandchild_table: &str,
+        grandchild_alias: &str,
+        grandchild_fk_child: &str,
+        grandchild_fk_parent: &str,
+    ) -> QueryPlan {
+        QueryPlan {
+            id: id.to_string(),
+            root: OperatorPlan::Project {
+                input: Box::new(OperatorPlan::Scan {
+                    table: parent_table.to_string(),
+                }),
+                projections: vec![
+                    Projection::All,
+                    Projection::Subquery {
+                        alias: child_alias.to_string(),
+                        plan: Box::new(OperatorPlan::Project {
+                            input: Box::new(OperatorPlan::Filter {
+                                input: Box::new(OperatorPlan::Scan {
+                                    table: child_table.to_string(),
+                                }),
+                                predicate: Predicate::Eq {
+                                    field: crate::types::Path::new(child_fk),
+                                    value: json!({"$param": "parent.id"}),
+                                },
+                            }),
+                            projections: vec![
+                                Projection::All,
+                                Projection::Subquery {
+                                    alias: grandchild_alias.to_string(),
+                                    plan: Box::new(OperatorPlan::Limit {
+                                        input: Box::new(OperatorPlan::Filter {
+                                            input: Box::new(OperatorPlan::Scan {
+                                                table: grandchild_table.to_string(),
+                                            }),
+                                            predicate: Predicate::Eq {
+                                                field: crate::types::Path::new(grandchild_fk_child),
+                                                value: json!({"$param": "parent.id"}),
+                                            },
+                                        }),
+                                        limit: 1,
+                                        order_by: None,
+                                    }),
+                                    parent_key: Some(SubqueryParentKey {
+                                        child_field: grandchild_fk_child.to_string(),
+                                        parent_field: grandchild_fk_parent.to_string(),
+                                    }),
+                                },
+                            ],
+                        }),
+                        parent_key: Some(SubqueryParentKey {
+                            child_field: child_fk.to_string(),
+                            parent_field: "id".to_string(),
+                        }),
+                    },
+                ],
+            },
+        }
+    }
+
+    #[test]
+    fn nested_subquery_items_tracked_on_initial_snapshot() {
+        let mut circuit = Circuit::new();
+
+        // thread → comment → user (comment.author references user.id)
+        circuit.load(vec![
+            Record::new("thread", "thread:1", json!({"title": "Hello"})),
+            Record::new("comment", "comment:1", json!({"text": "hi", "thread": "thread:1", "author": "user:alice"})),
+            Record::new("user", "user:alice", json!({"name": "Alice", "id": "user:alice"})),
+        ]);
+
+        let delta = circuit.add_query(
+            nested_subquery_query(
+                "q1", "thread", "comment", "comments", "thread",
+                "user", "author", "id", "author",
+            ),
+            None,
+            None,
+        );
+
+        assert!(delta.is_some());
+        let d = delta.unwrap();
+        // Should have thread:1 in additions
+        assert_eq!(d.additions.len(), 1);
+        // Should track comment:1 (level-1) and user:alice (level-2) as subquery items
+        let adds: Vec<_> = d.subquery_items.iter().filter(|i| i.op == SubqueryOp::Add).collect();
+        assert!(adds.iter().any(|i| i.id == "comment:1" && i.alias == "comments"));
+        assert!(adds.iter().any(|i| i.id == "user:alice" && i.alias == "author"));
+    }
+
+    #[test]
+    fn nested_subquery_items_added_on_step() {
+        let mut circuit = Circuit::new();
+
+        circuit.load(vec![
+            Record::new("thread", "thread:1", json!({"title": "Hello"})),
+        ]);
+
+        circuit.add_query(
+            nested_subquery_query(
+                "q1", "thread", "comment", "comments", "thread",
+                "user", "author", "id", "author",
+            ),
+            None,
+            None,
+        );
+
+        // First add a comment with an author reference
+        circuit.step(ChangeSet {
+            changes: vec![Change::create(
+                "comment",
+                "comment:1",
+                json!({"text": "hi", "thread": "thread:1", "author": "user:alice"}),
+            )],
+        });
+
+        // Then add the user record
+        let deltas = circuit.step(ChangeSet {
+            changes: vec![Change::create(
+                "user",
+                "user:alice",
+                json!({"name": "Alice", "id": "user:alice"}),
+            )],
+        });
+
+        assert_eq!(deltas.len(), 1);
+        let adds: Vec<_> = deltas[0].subquery_items.iter().filter(|i| i.op == SubqueryOp::Add).collect();
+        assert!(adds.iter().any(|i| i.id == "user:alice" && i.alias == "author"));
     }
 }

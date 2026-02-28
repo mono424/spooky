@@ -71,7 +71,8 @@
       "Bash(cargo run:*)",
       "Bash(/Users/khadim/dev/spooky/apps/cli/target/debug/spooky:*)",
       "Bash(docker exec:*)",
-      "Bash(apps/cli/target/debug/spooky:*)"
+      "Bash(apps/cli/target/debug/spooky:*)",
+      "Bash(git stash:*)"
     ],
     "deny": [],
     "ask": []

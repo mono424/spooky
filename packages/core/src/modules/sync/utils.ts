@@ -136,14 +136,17 @@ export function createDiffFromDbOp(
   version: number,
   versions?: RecordVersionArray
 ): RecordVersionDiff {
-  const old = versions?.find((record) => record[0] === encodeRecordId(recordId));
+  // Version guard: skip stale CREATE/UPDATE, but always process DELETE
+  if (op !== 'DELETE') {
+    const old = versions?.find((record) => record[0] === encodeRecordId(recordId));
 
-  if (old && old[1] >= version) {
-    return {
-      added: [],
-      updated: [],
-      removed: [],
-    };
+    if (old && old[1] >= version) {
+      return {
+        added: [],
+        updated: [],
+        removed: [],
+      };
+    }
   }
 
   if (op === 'CREATE') {

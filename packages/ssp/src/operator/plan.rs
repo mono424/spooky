@@ -132,24 +132,27 @@ impl OperatorPlan {
         tables
     }
 
-    /// Get metadata about subquery projections: (alias, table_name, parent_key).
-    pub fn subquery_projection_info(&self) -> Vec<(String, String, Option<SubqueryParentKey>)> {
+    /// Get metadata about subquery projections: (alias, table_name, parent_key, parent_table).
+    /// `parent_table` is `None` for root-level subqueries (parent is in view.cache)
+    /// and `Some(table)` for nested subqueries (parent is itself a subquery item).
+    pub fn subquery_projection_info(&self) -> Vec<(String, String, Option<SubqueryParentKey>, Option<String>)> {
         let mut result = Vec::new();
-        self.collect_subquery_projection_info(&mut result);
+        self.collect_subquery_projection_info(&mut result, None);
         result
     }
 
     fn collect_subquery_projection_info(
         &self,
-        result: &mut Vec<(String, String, Option<SubqueryParentKey>)>,
+        result: &mut Vec<(String, String, Option<SubqueryParentKey>, Option<String>)>,
+        parent_table: Option<String>,
     ) {
         match self {
             OperatorPlan::Scan { .. } => {}
             OperatorPlan::Filter { input, .. } | OperatorPlan::Limit { input, .. } => {
-                input.collect_subquery_projection_info(result);
+                input.collect_subquery_projection_info(result, parent_table);
             }
             OperatorPlan::Project { input, projections } => {
-                input.collect_subquery_projection_info(result);
+                input.collect_subquery_projection_info(result, parent_table.clone());
                 for proj in projections {
                     if let Projection::Subquery {
                         alias,
@@ -163,14 +166,17 @@ impl OperatorPlan {
                                 alias.clone(),
                                 table.clone(),
                                 parent_key.clone(),
+                                parent_table.clone(),
                             ));
+                            // Recurse into nested subquery plan
+                            plan.collect_subquery_projection_info(result, Some(table.clone()));
                         }
                     }
                 }
             }
             OperatorPlan::Join { left, right, .. } => {
-                left.collect_subquery_projection_info(result);
-                right.collect_subquery_projection_info(result);
+                left.collect_subquery_projection_info(result, parent_table.clone());
+                right.collect_subquery_projection_info(result, parent_table);
             }
         }
     }

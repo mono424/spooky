@@ -91,6 +91,7 @@ pub struct Config {
     pub ssp_id: String,
     pub heartbeat_interval_ms: u64,
     pub advertise_addr: Option<String>,
+    pub ttl_cleanup_interval_secs: u64,
 }
 
 pub fn load_config() -> Config {
@@ -113,6 +114,10 @@ pub fn load_config() -> Config {
             .and_then(|s| s.parse().ok())
             .unwrap_or(5000),
         advertise_addr: std::env::var("ADVERTISE_ADDR").ok(),
+        ttl_cleanup_interval_secs: std::env::var("TTL_CLEANUP_INTERVAL_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(60),
     }
 }
 
@@ -421,6 +426,33 @@ pub async fn run_server() -> anyhow::Result<()> {
         });
     } else {
         info!("No SCHEDULER_URL configured, running in standalone mode");
+    }
+
+    // Spawn TTL cleanup loop
+    {
+        let db = db.clone();
+        let processor = processor_arc.clone();
+        let status = status.clone();
+        let metrics = metrics.clone();
+        let interval_secs = config.ttl_cleanup_interval_secs;
+
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(
+                std::time::Duration::from_secs(interval_secs),
+            );
+
+            loop {
+                interval.tick().await;
+
+                // Only sweep when SSP is ready (bootstrapped)
+                if *status.read().await != SspStatus::Ready {
+                    continue;
+                }
+
+                ttl_cleanup_sweep(&db, &processor, &metrics).await;
+            }
+        });
+        info!(interval_secs = config.ttl_cleanup_interval_secs, "TTL cleanup loop started");
     }
 
     axum::serve(listener, app)
@@ -1060,6 +1092,109 @@ async fn version_handler() -> impl IntoResponse {
         "version": env!("CARGO_PKG_VERSION"),
         "mode": "streaming"
     }))
+}
+
+// --- TTL Cleanup ---
+
+/// Clean up a single expired query. Uses conditional DELETE to guard against race conditions
+/// where a client heartbeats between the sweep check and the actual delete.
+async fn cleanup_expired_query(
+    db: &SharedDb,
+    processor: &Arc<RwLock<Circuit>>,
+    metrics: &Arc<Metrics>,
+    query_id: &str,
+) {
+    let incantation_id = format_incantation_id(query_id);
+    let Some(record_id) = parse_record_id(&incantation_id) else {
+        error!(query_id = %query_id, "TTL cleanup: invalid record ID");
+        return;
+    };
+
+    // Conditional delete — only if TTL is STILL expired (guards against heartbeat race)
+    match db
+        .query("DELETE $id WHERE lastActiveAt + ttl < time::now() RETURN BEFORE")
+        .bind(("id", record_id.clone()))
+        .await
+    {
+        Ok(mut response) => {
+            let deleted: Vec<Value> = response.take(0).unwrap_or_default();
+            if deleted.is_empty() {
+                debug!(query_id = %query_id, "TTL cleanup: query refreshed, skipping");
+                return;
+            }
+        }
+        Err(e) => {
+            error!(query_id = %query_id, error = %e, "TTL cleanup: delete failed");
+            return;
+        }
+    }
+
+    // Delete associated list_ref edges
+    if let Err(e) = db
+        .query("DELETE $id->_spooky_list_ref")
+        .bind(("id", parse_record_id(&incantation_id).unwrap()))
+        .await
+    {
+        error!(query_id = %query_id, error = %e, "TTL cleanup: edge delete failed");
+    }
+
+    // Remove from circuit (in-memory)
+    {
+        let mut circuit = processor.write().await;
+        circuit.remove_query(query_id);
+    }
+    metrics.view_count.add(-1, &[]);
+    metrics.ttl_cleanup_count.add(1, &[]);
+    info!(query_id = %query_id, "TTL cleanup: query expired and removed");
+}
+
+/// Perform one sweep — query SurrealDB for all expired queries and clean each one up.
+async fn ttl_cleanup_sweep(
+    db: &SharedDb,
+    processor: &Arc<RwLock<Circuit>>,
+    metrics: &Arc<Metrics>,
+) -> usize {
+    let view_ids: Vec<String> = {
+        let circuit = processor.read().await;
+        circuit.view_ids()
+    };
+
+    if view_ids.is_empty() {
+        return 0;
+    }
+
+    let expired_ids: Vec<String> = match db
+        .query("SELECT VALUE id FROM _spooky_query WHERE lastActiveAt + ttl < time::now()")
+        .await
+    {
+        Ok(mut response) => response.take(0).unwrap_or_default(),
+        Err(e) => {
+            error!("TTL cleanup: query failed: {}", e);
+            return 0;
+        }
+    };
+
+    // Only clean up queries that are in OUR circuit
+    let to_cleanup: Vec<String> = expired_ids
+        .into_iter()
+        .filter_map(|id| {
+            let raw = id
+                .strip_prefix("_spooky_query:")
+                .unwrap_or(&id)
+                .to_string();
+            if view_ids.contains(&raw) { Some(raw) } else { None }
+        })
+        .collect();
+
+    let count = to_cleanup.len();
+    for query_id in to_cleanup {
+        cleanup_expired_query(db, processor, metrics, &query_id).await;
+    }
+
+    if count > 0 {
+        info!(count = count, "TTL cleanup sweep completed");
+    }
+    count
 }
 
 // --- Helper Functions ---
