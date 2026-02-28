@@ -72,7 +72,10 @@
       "Bash(/Users/khadim/dev/spooky/apps/cli/target/debug/spooky:*)",
       "Bash(docker exec:*)",
       "Bash(apps/cli/target/debug/spooky:*)",
-      "Bash(git stash:*)"
+      "Bash(git stash:*)",
+      "Bash(cargo:*)",
+      "Bash(npx turbo:*)",
+      "Bash(npx wasm-pack:*)"
     ],
     "deny": [],
     "ask": []

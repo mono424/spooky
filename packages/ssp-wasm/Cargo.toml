@@ -15,6 +15,7 @@ serde_json = "1.0"
 serde-wasm-bindgen = "0.6"
 ssp = { path = "../ssp" }
 js-sys = "0.3"
-getrandom = { version = "0.2", features = ["js"] }
+getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
+getrandom = { version = "0.3", features = ["wasm_js"] }
 web-sys = { version = "0.3", features = ["console"] }
 tracing = "0.1.44"
