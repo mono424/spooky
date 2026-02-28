@@ -24,7 +24,6 @@ pub trait MigrationDB {
     fn execute(&self, query: &str) -> Result<Vec<SurrealResponse>>;
     fn get_applied_migrations(&self) -> Result<Vec<AppliedMigration>>;
     fn record_migration(&self, version: &str, name: &str, checksum: &str) -> Result<()>;
-    fn remove_migration(&self, version: &str) -> Result<()>;
 }
 
 pub struct SurrealClient {
@@ -124,15 +123,6 @@ impl MigrationDB for SurrealClient {
         Ok(())
     }
 
-    fn remove_migration(&self, version: &str) -> Result<()> {
-        let query = format!(
-            "DELETE _spooky_migrations WHERE version = '{}';",
-            version
-        );
-        self.execute(&query)
-            .context("Failed to remove migration record")?;
-        Ok(())
-    }
 }
 
 #[cfg(test)]

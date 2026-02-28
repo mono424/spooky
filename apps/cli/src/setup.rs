@@ -174,11 +174,6 @@ PERMISSIONS
         schema_path.join("run.js"),
         include_str!("../../../example/schema/run.js"),
     )?;
-     write_file(
-        schema_path.join("migrate.sh"),
-        include_str!("../../../example/schema/migrate.sh"),
-    )?;
-    
     // Helper to write docker-compose files. 
     // They reference local Dockerfiles in the example. 
     // For a standalone project setup via pnpx, we should probably use published images.

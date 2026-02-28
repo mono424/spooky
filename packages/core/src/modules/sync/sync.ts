@@ -1,6 +1,6 @@
 import { LocalDatabaseService, RemoteDatabaseService } from '../../services/database/index';
 import { MutationEvent, RecordVersionArray } from '../../types';
-import { createSyncEventSystem } from './events/index';
+import { createSyncEventSystem, SyncEventTypes } from './events/index';
 import { Logger } from '../../services/logger/index';
 import { DownEvent, DownQueue, UpEvent, UpQueue } from './queue/index';
 import { RecordId, Uuid } from 'surrealdb';
@@ -10,7 +10,7 @@ import { SyncScheduler } from './scheduler';
 import { SchemaStructure } from '@spooky/query-builder';
 import { CacheModule } from '../cache/index';
 import { DataModule } from '../data/index';
-import { encodeRecordId, parseDuration, surql } from '../../utils/index';
+import { encodeRecordId, extractTablePart, parseDuration, surql } from '../../utils/index';
 
 /**
  * The main synchronization engine for Spooky.
@@ -49,7 +49,8 @@ export class SpookySync<S extends SchemaStructure> {
       this.downQueue,
       this.processUpEvent.bind(this),
       this.processDownEvent.bind(this),
-      this.logger
+      this.logger,
+      this.handleRollback.bind(this)
     );
   }
 
@@ -180,6 +181,59 @@ export class SpookySync<S extends SchemaStructure> {
         );
         return;
     }
+  }
+
+  private async handleRollback(event: UpEvent, error: Error): Promise<void> {
+    const recordId = encodeRecordId(event.record_id);
+    const tableName =
+      event.type === 'create' && event.tableName
+        ? event.tableName
+        : extractTablePart(recordId);
+
+    this.logger.warn(
+      {
+        type: event.type,
+        recordId,
+        tableName,
+        error: error.message,
+        Category: 'spooky-client::SpookySync::handleRollback',
+      },
+      'Rolling back failed mutation'
+    );
+
+    switch (event.type) {
+      case 'create':
+        await this.dataModule.rollbackCreate(event.record_id, tableName);
+        break;
+      case 'update':
+        if (event.beforeRecord) {
+          await this.dataModule.rollbackUpdate(event.record_id, tableName, event.beforeRecord);
+        } else {
+          this.logger.warn(
+            {
+              recordId,
+              Category: 'spooky-client::SpookySync::handleRollback',
+            },
+            'Cannot rollback update: no beforeRecord available. Down-sync will reconcile.'
+          );
+        }
+        break;
+      case 'delete':
+        this.logger.warn(
+          {
+            recordId,
+            Category: 'spooky-client::SpookySync::handleRollback',
+          },
+          'Delete rollback not implemented. Down-sync will reconcile.'
+        );
+        break;
+    }
+
+    this.events.emit(SyncEventTypes.MutationRolledBack, {
+      eventType: event.type,
+      recordId,
+      error: error.message,
+    });
   }
 
   private async processDownEvent(event: DownEvent) {

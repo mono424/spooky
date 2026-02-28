@@ -81,23 +81,6 @@ export class SyncEngine {
       const table = record.id.table.toString();
       const isAdded = added.some((item) => encodeRecordId(item.id) === fullId);
 
-      const anticipatedVersion = toFetch.find(
-        (item) => encodeRecordId(item.id) === fullId
-      )?.version;
-
-      if (anticipatedVersion && spooky_rv < anticipatedVersion) {
-        this.logger.warn(
-          {
-            recordId: fullId,
-            version: spooky_rv,
-            anticipatedVersion,
-            Category: 'spooky-client::SyncEngine::syncRecords',
-          },
-          'Received outdated record version. Skipping record'
-        );
-        continue;
-      }
-
       const localVersion = this.cache.lookup(fullId);
       if (localVersion && spooky_rv <= localVersion) {
         this.logger.info(

@@ -93,17 +93,4 @@ services:
         condition: service_healthy
       aspire-dashboard:
         condition: service_started
-      schema-migration:
-        condition: service_completed_successfully
     restart: unless-stopped
-
-  schema-migration:
-    image: curlimages/curl:latest
-    depends_on:
-      surrealdb:
-        condition: service_healthy
-    volumes:
-      - ./.spooky/remote-singlenode.gen.surql:/remote.gen.surql:ro
-      - ./migrate.sh:/migrate.sh:ro
-    command: ['sh', '/migrate.sh']
-    restart: 'no'

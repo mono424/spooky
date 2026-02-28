@@ -32,14 +32,3 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
-
-  schema-migration:
-    image: curlimages/curl:latest
-    depends_on:
-      surrealdb:
-        condition: service_healthy
-    volumes:
-      - ./.spooky/remote-surrealism.gen.surql:/remote.gen.surql:ro
-      - ./migrate.sh:/migrate.sh:ro
-    command: ['sh', '/migrate.sh']
-    restart: 'no'

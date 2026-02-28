@@ -72,17 +72,6 @@ services:
       retries: 5
     restart: unless-stopped
 
-  schema-migration:
-    image: curlimages/curl:latest
-    depends_on:
-      surrealdb:
-        condition: service_healthy
-    volumes:
-      - ./.spooky/remote-cluster.gen.surql:/remote.gen.surql:ro
-      - ./migrate.sh:/migrate.sh:ro
-    command: ['sh', '/migrate.sh']
-    restart: 'no'
-
   scheduler:
     build:
       context: ../../
@@ -102,8 +91,8 @@ services:
     volumes:
       - scheduler-data:/data
     depends_on:
-      schema-migration:
-        condition: service_completed_successfully
+      surrealdb:
+        condition: service_healthy
     healthcheck:
       test: ['CMD-SHELL', 'curl -sf http://localhost:9667/metrics || exit 1']
       interval: 10s

@@ -94,7 +94,7 @@ enum MigrateCommands {
     Create {
         /// Name for the migration (e.g. "add_user_avatar")
         name: String,
-        /// Path to .surql schema file to pre-populate up.surql
+        /// Path to .surql schema file to pre-populate the migration
         #[arg(long)]
         schema: Option<PathBuf>,
         /// Migrations directory
@@ -109,27 +109,8 @@ enum MigrateCommands {
         #[arg(long, default_value = "migrations")]
         migrations_dir: PathBuf,
     },
-    /// Rollback the last N applied migrations
-    Rollback {
-        #[command(flatten)]
-        conn: ConnectionArgs,
-        /// Number of migrations to rollback
-        #[arg(long, default_value_t = 1)]
-        steps: usize,
-        /// Migrations directory
-        #[arg(long, default_value = "migrations")]
-        migrations_dir: PathBuf,
-    },
     /// Show migration status
     Status {
-        #[command(flatten)]
-        conn: ConnectionArgs,
-        /// Migrations directory
-        #[arg(long, default_value = "migrations")]
-        migrations_dir: PathBuf,
-    },
-    /// Rollback all applied migrations
-    Reset {
         #[command(flatten)]
         conn: ConnectionArgs,
         /// Migrations directory
@@ -305,20 +286,6 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
             );
             migrate::apply(&client, &migrations_dir)
         }
-        MigrateCommands::Rollback {
-            conn,
-            steps,
-            migrations_dir,
-        } => {
-            let client = SurrealClient::new(
-                &conn.url,
-                &conn.namespace,
-                &conn.database,
-                &conn.username,
-                &conn.password,
-            );
-            migrate::rollback(&client, &migrations_dir, steps)
-        }
         MigrateCommands::Status {
             conn,
             migrations_dir,
@@ -331,19 +298,6 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
                 &conn.password,
             );
             migrate::status(&client, &migrations_dir)
-        }
-        MigrateCommands::Reset {
-            conn,
-            migrations_dir,
-        } => {
-            let client = SurrealClient::new(
-                &conn.url,
-                &conn.namespace,
-                &conn.database,
-                &conn.username,
-                &conn.password,
-            );
-            migrate::reset(&client, &migrations_dir)
         }
     }
 }

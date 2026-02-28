@@ -45,7 +45,8 @@ export interface SurqlHelper {
     t: MutationEventType,
     mutationIdVar: string,
     recordIdVar: string,
-    dataVar?: string
+    dataVar?: string,
+    beforeRecordVar?: string
   ): string;
   returnObject(entries: { key: string; variable: string }[]): string;
 }
@@ -157,13 +158,19 @@ export const surql: SurqlHelper = {
     t: MutationEventType,
     mutationIdVar: string,
     recordIdVar: string,
-    dataVar?: string
+    dataVar?: string,
+    beforeRecordVar?: string
   ) {
     switch (t) {
       case 'create':
         return `CREATE ONLY $${mutationIdVar} SET mutationType = 'create', recordId = $${recordIdVar}`;
-      case 'update':
-        return `CREATE ONLY $${mutationIdVar} SET mutationType = 'update', recordId = $${recordIdVar}, data = $${dataVar}`;
+      case 'update': {
+        let stmt = `CREATE ONLY $${mutationIdVar} SET mutationType = 'update', recordId = $${recordIdVar}, data = $${dataVar}`;
+        if (beforeRecordVar) {
+          stmt += `, beforeRecord = $${beforeRecordVar}`;
+        }
+        return stmt;
+      }
       case 'delete':
         return `CREATE ONLY $${mutationIdVar} SET mutationType = 'delete', recordId = $${recordIdVar}`;
     }

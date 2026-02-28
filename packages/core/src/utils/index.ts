@@ -5,6 +5,7 @@ import { QueryTimeToLive } from '../types';
 
 export * from './surql';
 export * from './parser';
+export * from './error-classification';
 
 // ==================== RECORDID UTILITIES ====================
 

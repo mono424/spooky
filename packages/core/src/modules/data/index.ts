@@ -405,6 +405,7 @@ export class DataModule<S extends SchemaStructure> {
       record_id: rid,
       data: params,
       record: target,
+      tableName,
     };
 
     for (const callback of this.mutationCallbacks) {
@@ -434,6 +435,11 @@ export class DataModule<S extends SchemaStructure> {
     const rid = parseRecordIdString(id);
     const params = parseParams(tableSchema.columns, data);
     const mutationId = parseRecordIdString(`_spooky_pending_mutations:${Date.now()}`);
+
+    // Capture current record state before mutation for rollback support
+    const [beforeRecord] = await withRetry(this.logger, () =>
+      this.local.query<[Record<string, any>]>('SELECT * FROM ONLY $id', { id: rid })
+    );
 
     const query = surql.seal<{ target: T }>(
       surql.tx([
@@ -479,6 +485,7 @@ export class DataModule<S extends SchemaStructure> {
       record_id: rid,
       data: params,
       record: target,
+      beforeRecord: beforeRecord || undefined,
       options: pushEventOptions,
     };
 
@@ -523,6 +530,106 @@ export class DataModule<S extends SchemaStructure> {
     }
 
     this.logger.debug({ id, Category: 'spooky-client::DataModule::delete' }, 'Record deleted');
+  }
+
+  // ==================== ROLLBACK METHODS ====================
+
+  /**
+   * Rollback a failed optimistic create by deleting the record locally
+   */
+  async rollbackCreate(recordId: RecordId, tableName: string): Promise<void> {
+    const id = encodeRecordId(recordId);
+
+    try {
+      await withRetry(this.logger, () =>
+        this.local.query('DELETE $id', { id: recordId })
+      );
+      await this.cache.delete(tableName, id, true);
+      this.removeRecordFromQueries(recordId);
+
+      this.logger.info(
+        { id, tableName, Category: 'spooky-client::DataModule::rollbackCreate' },
+        'Rolled back optimistic create'
+      );
+    } catch (err) {
+      this.logger.error(
+        { err, id, tableName, Category: 'spooky-client::DataModule::rollbackCreate' },
+        'Failed to rollback create'
+      );
+    }
+  }
+
+  /**
+   * Rollback a failed optimistic update by restoring the previous record state
+   */
+  async rollbackUpdate(
+    recordId: RecordId,
+    tableName: string,
+    beforeRecord: Record<string, unknown>
+  ): Promise<void> {
+    const id = encodeRecordId(recordId);
+
+    try {
+      const { id: _recordId, ...content } = beforeRecord;
+      await withRetry(this.logger, () =>
+        this.local.query(surql.seal(surql.upsert('id', 'content')), {
+          id: recordId,
+          content,
+        })
+      );
+
+      const tableSchema = this.schema.tables.find((t) => t.name === tableName);
+      const parsedRecord = tableSchema
+        ? (parseParams(tableSchema.columns, beforeRecord) as RecordWithId)
+        : (beforeRecord as RecordWithId);
+
+      await this.cache.save(
+        {
+          table: tableName,
+          op: 'UPDATE',
+          record: parsedRecord,
+          version: (beforeRecord.spooky_rv as number) || 1,
+        },
+        true
+      );
+
+      // Replace in active queries for immediate UI update
+      await this.replaceRecordInQueries(beforeRecord);
+
+      this.logger.info(
+        { id, tableName, Category: 'spooky-client::DataModule::rollbackUpdate' },
+        'Rolled back optimistic update'
+      );
+    } catch (err) {
+      this.logger.error(
+        { err, id, tableName, Category: 'spooky-client::DataModule::rollbackUpdate' },
+        'Failed to rollback update'
+      );
+    }
+  }
+
+  /**
+   * Remove a record from all active query states and notify subscribers
+   */
+  private removeRecordFromQueries(recordId: RecordId): void {
+    const encodedId = encodeRecordId(recordId);
+
+    for (const [queryHash, queryState] of this.activeQueries.entries()) {
+      const index = queryState.records.findIndex((r) => {
+        const rId = r.id instanceof RecordId ? encodeRecordId(r.id) : String(r.id);
+        return rId === encodedId;
+      });
+
+      if (index !== -1) {
+        queryState.records.splice(index, 1);
+        const subscribers = this.subscriptions.get(queryHash);
+        if (subscribers) {
+          for (const callback of subscribers) {
+            callback(queryState.records);
+          }
+        }
+      }
+    }
   }
 
   // ==================== PRIVATE HELPERS ====================

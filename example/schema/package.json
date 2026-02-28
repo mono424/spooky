@@ -14,7 +14,10 @@
     "build:surql": "pnpm build:remote:singlenode && pnpm build:remote:cluster",
     "build:remote:surrealism": "spooky --input ./src/schema.surql --output ./.spooky/remote-surrealism.gen.surql --mode surrealism --modules-dir ../../packages/surrealism-modules --config ./spooky.yml",
     "build:remote:singlenode": "spooky --input ./src/schema.surql --output ./.spooky/remote-singlenode.gen.surql --mode singlenode --endpoint http://ssp:8667 --secret mysecret --config ./spooky.yml",
-    "build:remote:cluster": "spooky --input ./src/schema.surql --output ./.spooky/remote-cluster.gen.surql --mode cluster --endpoint http://scheduler:9667 --config ./spooky.yml"
+    "build:remote:cluster": "spooky --input ./src/schema.surql --output ./.spooky/remote-cluster.gen.surql --mode cluster --endpoint http://scheduler:9667 --config ./spooky.yml",
+    "migrate:create": "../../apps/cli/target/release/spooky migrate create",
+    "migrate:apply": "../../apps/cli/target/release/spooky migrate apply --url http://localhost:8666 --migrations-dir migrations",
+    "migrate:status": "../../apps/cli/target/release/spooky migrate status --url http://localhost:8666 --migrations-dir migrations"
   },
   "keywords": [
     "database",
