@@ -19,7 +19,7 @@ async function getContainer() {
   const modulesDir = path.resolve(__dirname, '../../tests/.spooky');
 
   try {
-    container = await new GenericContainer('surrealdb/surrealdb:v3.0.0-alpha.17-dev')
+    container = await new GenericContainer('surrealdb/surrealdb:v3.0.0')
       .withExposedPorts(8000)
       .withEnvironment({
         SURREAL_BUCKET_FOLDER_ALLOWLIST: '/modules',
@@ -28,8 +28,8 @@ async function getContainer() {
       .withBindMounts([
         { source: path.join(modulesDir, 'xor_module.surli'), target: '/modules/xor_module.surli' },
         {
-          source: path.join(modulesDir, 'dbsp_module.surli'),
-          target: '/modules/dbsp_module.surli',
+          source: path.join(modulesDir, 'ssp_module.surli'),
+          target: '/modules/ssp_module.surli',
         },
       ])
       .withUser('root')

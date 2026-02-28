@@ -1,0 +1,126 @@
+x-ssp-common: &ssp-common
+  build:
+    context: ../../
+    dockerfile: apps/ssp/Dockerfile
+  environment: &ssp-env
+    RUST_LOG: "info,ssp=debug"
+    OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
+    OTEL_SERVICE_NAME: "spooky-ssp"
+    SURREALDB_ADDR: "surrealdb:8000/rpc"
+    SURREALDB_NS: "main"
+    SURREALDB_DB: "main"
+    SURREALDB_USER: "root"
+    SURREALDB_PASS: "root"
+    SPOOKY_AUTH_SECRET: "mysecret"
+    SPOOKY_PERSISTENCE_FILE: "/data/spooky_state.json"
+    SPOOKY_CONFIG_PATH: "/config/spooky.yml"
+    SCHEDULER_URL: "http://scheduler:9667"
+  volumes:
+    - ./spooky.yml:/config/spooky.yml:ro
+  depends_on:
+    scheduler:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  aspire-dashboard:
+    image: mcr.microsoft.com/dotnet/aspire-dashboard:latest
+    profiles:
+      - observability
+    container_name: aspire-dashboard
+    environment:
+      - DOTNET_DASHBOARD_UNSECURED_ALLOW_ANONYMOUS=true
+      - DOTNET_DASHBOARD_OTLP_AUTH_MODE=Unsecured
+      - ASPNETCORE_ENVIRONMENT=Development
+      - DOTNET_DASHBOARD_OTLP_CORS_ALLOWED_ORIGINS=http://localhost:3006,http://localhost:3000,http://127.0.0.1:3006,http://127.0.0.1:3000,https://localhost:3006,https://localhost:3000
+      - DOTNET_DASHBOARD_OTLP_CORS_ALLOWED_HEADERS=*
+      - DASHBOARD__OTLP__CORS__ALLOWEDORIGINS=http://localhost:3006,http://localhost:3000,http://127.0.0.1:3006,http://127.0.0.1:3000,https://localhost:3006,https://localhost:3000
+      - DASHBOARD__OTLP__CORS__ALLOWEDHEADERS=*
+    ports:
+      - '18888:18888'
+      - '4317:18889'
+      - '4318:18890'
+    restart: unless-stopped
+
+  surrealdb:
+    image: surrealdb/surrealdb:v3.0.0
+    ports:
+      - '8666:8000'
+    environment:
+      - SURREAL_USER=root
+      - SURREAL_PASS=root
+      - SURREAL_CAPS_ALLOW_EXPERIMENTAL=surrealism,files
+      - SURREAL_BUCKET_FOLDER_ALLOWLIST=/modules
+      - SURREAL_LOG=info
+    command:
+      - start
+      - --bind
+      - 0.0.0.0:8000
+      - --allow-all
+      - --user
+      - root
+      - --pass
+      - root
+      - memory
+    volumes:
+      - ./.spooky/xor_module.surli:/modules/xor_module.surli:ro
+      - ./.spooky/ssp_module.surli:/modules/ssp_module.surli:ro
+    healthcheck:
+      test: ['CMD', '/surreal', 'is-ready', '--endpoint', 'http://localhost:8000']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  scheduler:
+    build:
+      context: ../../
+      dockerfile: apps/scheduler/Dockerfile
+    ports:
+      - '9667:9667'
+    environment:
+      - RUST_LOG=info,scheduler=debug
+      - SPOOKY_SCHEDULER_DB_URL=surrealdb:8000/rpc
+      - SPOOKY_SCHEDULER_DB_NAMESPACE=main
+      - SPOOKY_SCHEDULER_DB_DATABASE=main
+      - SPOOKY_SCHEDULER_DB_USERNAME=root
+      - SPOOKY_SCHEDULER_DB_PASSWORD=root
+      - SPOOKY_SCHEDULER_REPLICA_DB_PATH=/data/replica
+      - SPOOKY_SCHEDULER_WAL_PATH=/data/event_wal.log
+      - SPOOKY_AUTH_SECRET=mysecret
+    volumes:
+      - scheduler-data:/data
+    depends_on:
+      surrealdb:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -sf http://localhost:9667/metrics || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  ssp-1:
+    <<: *ssp-common
+    environment:
+      <<: *ssp-env
+      SSP_ID: "ssp-1"
+      ADVERTISE_ADDR: "ssp-1:8667"
+
+  ssp-2:
+    <<: *ssp-common
+    environment:
+      <<: *ssp-env
+      SSP_ID: "ssp-2"
+      ADVERTISE_ADDR: "ssp-2:8667"
+
+  ssp-3:
+    <<: *ssp-common
+    environment:
+      <<: *ssp-env
+      SSP_ID: "ssp-3"
+      ADVERTISE_ADDR: "ssp-3:8667"
+
+volumes:
+  scheduler-data:

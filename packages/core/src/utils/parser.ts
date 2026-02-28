@@ -2,6 +2,19 @@ import { ColumnSchema, RecordId } from '@spooky/query-builder';
 import { parseRecordIdString } from './index';
 import { DateTime } from 'surrealdb';
 
+export function cleanRecord(
+  tableSchema: Record<string, ColumnSchema>,
+  record: Record<string, any>
+): Record<string, any> {
+  const cleaned: Record<string, any> = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (key === 'id' || key in tableSchema) {
+      cleaned[key] = value;
+    }
+  }
+  return cleaned;
+}
+
 export function parseParams(
   tableSchema: Record<string, ColumnSchema>,
   params: Record<string, any>

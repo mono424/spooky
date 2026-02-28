@@ -1,0 +1,219 @@
+use anyhow::Result;
+use axum::{
+    extract::State,
+    http::StatusCode,
+    routing::post,
+    Json, Router,
+};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use tracing::{error, info};
+
+use crate::router::SspPool;
+use crate::transport::HttpTransport;
+use ssp_protocol::{ViewRegisterRequest, ViewUnregisterRequest};
+
+/// Query assignment response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryAssignment {
+    pub query_id: String,
+    pub ssp_id: String,
+    pub assigned_at: u64,
+}
+
+/// Query tracker state
+#[derive(Clone)]
+pub struct QueryTracker {
+    /// Map query_id -> ssp_id
+    assignments: Arc<RwLock<HashMap<String, String>>>,
+}
+
+impl QueryTracker {
+    pub fn new() -> Self {
+        Self {
+            assignments: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    /// Assign a query to an SSP
+    pub async fn assign(&self, query_id: String, ssp_id: String) {
+        let mut assignments = self.assignments.write().await;
+        assignments.insert(query_id, ssp_id);
+    }
+
+    /// Get SSP assigned to a query
+    pub async fn get_assignment(&self, query_id: &str) -> Option<String> {
+        let assignments = self.assignments.read().await;
+        assignments.get(query_id).cloned()
+    }
+
+    /// Unassign a query (when client disconnects)
+    pub async fn unassign(&self, query_id: &str) {
+        let mut assignments = self.assignments.write().await;
+        assignments.remove(query_id);
+    }
+
+    /// Unassign all queries from an SSP (when SSP disconnects)
+    pub async fn unassign_ssp(&self, ssp_id: &str) -> Vec<String> {
+        let mut assignments = self.assignments.write().await;
+        let removed: Vec<String> = assignments
+            .iter()
+            .filter(|(_, sid)| *sid == ssp_id)
+            .map(|(qid, _)| qid.clone())
+            .collect();
+        
+        for qid in &removed {
+            assignments.remove(qid);
+        }
+        
+        removed
+    }
+
+    /// Get all assignments
+    pub async fn all(&self) -> HashMap<String, String> {
+        let assignments = self.assignments.read().await;
+        assignments.clone()
+    }
+}
+
+/// Shared state for query handlers
+#[derive(Clone)]
+pub struct QueryState {
+    pub ssp_pool: Arc<RwLock<SspPool>>,
+    pub transport: Arc<HttpTransport>,
+    pub query_tracker: Arc<QueryTracker>,
+}
+
+/// Create query router
+pub fn create_query_router(state: QueryState) -> Router {
+    Router::new()
+        .route("/view/register", post(register_query))
+        .route("/view/unregister", post(unregister_query))
+        .with_state(state)
+}
+
+/// Handle query registration
+async fn register_query(
+    State(state): State<QueryState>,
+    Json(request): Json<ViewRegisterRequest>,
+) -> Result<Json<QueryAssignment>, (StatusCode, String)> {
+    let query_id = request.id.clone();
+    info!("Registering query: {}", query_id);
+
+    // Select SSP based on load balancing strategy
+    let (ssp_id, ssp_url) = {
+        let mut pool = state.ssp_pool.write().await;
+        match pool.select_for_query() {
+            Some(id) => {
+                // Get SSP URL before incrementing count
+                let url = pool.get(&id)
+                    .ok_or_else(|| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "Selected SSP not found in pool".to_string(),
+                        )
+                    })?
+                    .url
+                    .clone();
+                pool.increment_query_count(&id);
+                (id, url)
+            }
+            None => {
+                error!("No ready SSP available for query {}", query_id);
+                return Err((
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "No SSP available".to_string(),
+                ));
+            }
+        }
+    };
+
+    // Assign query to SSP in tracker
+    state.query_tracker.assign(query_id.clone(), ssp_id.clone()).await;
+
+    // Send registration to SSP via HTTP POST /view/register
+    if let Err(e) = state
+        .transport
+        .post_to_ssp(&ssp_url, "/view/register", &request)
+        .await
+    {
+        error!("Failed to send query registration to SSP: {}", e);
+        // Remove from tracker on failure
+        state.query_tracker.unassign(&query_id).await;
+        // Decrement query count on failure
+        {
+            let mut pool = state.ssp_pool.write().await;
+            pool.decrement_query_count(&ssp_id);
+        }
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to send to SSP: {}", e),
+        ));
+    }
+
+    let assignment = QueryAssignment {
+        query_id: query_id.clone(),
+        ssp_id,
+        assigned_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
+    };
+
+    info!("Assigned query {} to SSP {}", assignment.query_id, assignment.ssp_id);
+    Ok(Json(assignment))
+}
+
+/// Handle query unregistration
+async fn unregister_query(
+    State(state): State<QueryState>,
+    Json(request): Json<ViewUnregisterRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let query_id = &request.id;
+    info!("Unregistering query: {}", query_id);
+
+    // Get SSP assignment and URL
+    let (ssp_id, ssp_url) = {
+        let ssp_id = match state.query_tracker.get_assignment(query_id).await {
+            Some(id) => id,
+            None => {
+                return Err((
+                    StatusCode::NOT_FOUND,
+                    format!("Query {} not found", query_id),
+                ));
+            }
+        };
+
+        let pool = state.ssp_pool.read().await;
+        let ssp = pool.get(&ssp_id).ok_or_else(|| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "SSP not found in pool".to_string(),
+            )
+        })?;
+        (ssp_id.clone(), ssp.url.clone())
+    };
+
+    // Send unregistration to SSP via HTTP POST /view/unregister
+    if let Err(e) = state
+        .transport
+        .post_to_ssp(&ssp_url, "/view/unregister", &request)
+        .await
+    {
+        error!("Failed to send query unregistration to SSP: {}", e);
+    }
+
+    // Decrement query count
+    {
+        let mut pool = state.ssp_pool.write().await;
+        pool.decrement_query_count(&ssp_id);
+    }
+
+    // Unassign from tracker
+    state.query_tracker.unassign(query_id).await;
+
+    info!("Unregistered query {}", query_id);
+    Ok(StatusCode::OK)
+}

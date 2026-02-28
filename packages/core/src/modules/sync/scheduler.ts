@@ -1,5 +1,5 @@
 import { Logger } from '../../services/logger/index';
-import { UpQueue, DownQueue, DownEvent, UpEvent } from './queue/index';
+import { UpQueue, DownQueue, DownEvent, UpEvent, RollbackCallback } from './queue/index';
 import { SyncQueueEventTypes } from './events/index';
 
 /**
@@ -15,7 +15,8 @@ export class SyncScheduler {
     private downQueue: DownQueue,
     private onProcessUp: (event: UpEvent) => Promise<void>,
     private onProcessDown: (event: DownEvent) => Promise<void>,
-    private logger: Logger
+    private logger: Logger,
+    private onRollback?: RollbackCallback
   ) {}
 
   async init() {
@@ -51,7 +52,7 @@ export class SyncScheduler {
     this.isSyncingUp = true;
     try {
       while (this.upQueue.size > 0) {
-        await this.upQueue.next(this.onProcessUp);
+        await this.upQueue.next(this.onProcessUp, this.onRollback);
       }
     } finally {
       this.isSyncingUp = false;

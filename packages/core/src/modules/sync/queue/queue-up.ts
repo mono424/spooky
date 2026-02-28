@@ -5,7 +5,7 @@ import {
   SyncQueueEventSystem,
   SyncQueueEventTypes,
 } from '../events/index';
-import { parseRecordIdString } from '../../../utils/index';
+import { parseRecordIdString, extractTablePart, classifySyncError } from '../../../utils/index';
 import { Logger } from '../../../services/logger/index';
 import { PushEventOptions } from '../../../events/index';
 
@@ -15,6 +15,7 @@ export type CreateEvent = {
   record_id: RecordId;
   data: Record<string, unknown>;
   record?: Record<string, unknown>;
+  tableName?: string;
   options?: PushEventOptions;
 };
 
@@ -24,6 +25,7 @@ export type UpdateEvent = {
   record_id: RecordId;
   data: Record<string, unknown>;
   record?: Record<string, unknown>;
+  beforeRecord?: Record<string, unknown>;
   options?: PushEventOptions;
 };
 
@@ -36,11 +38,13 @@ export type DeleteEvent = {
 
 export type UpEvent = CreateEvent | UpdateEvent | DeleteEvent;
 
+export type RollbackCallback = (event: UpEvent, error: Error) => Promise<void>;
+
 export class UpQueue {
   private queue: UpEvent[] = [];
   private _events: SyncQueueEventSystem;
   private logger: Logger;
-  private debouncedMutations: Map<string, { timer: any }>;
+  private debouncedMutations: Map<string, { timer: any; firstBeforeRecord?: Record<string, unknown> }>;
 
   get events(): SyncQueueEventSystem {
     return this._events;
@@ -77,30 +81,70 @@ export class UpQueue {
   }
 
   private handleDebouncedMutation(event: UpEvent, key: string, delay: number) {
-    if (this.debouncedMutations.has(key)) {
-      clearTimeout(this.debouncedMutations.get(key)?.timer);
+    const existing = this.debouncedMutations.get(key);
+    let firstBeforeRecord: Record<string, unknown> | undefined;
+
+    if (existing) {
+      clearTimeout(existing.timer);
+      // Preserve the beforeRecord from the first event in the debounce sequence
+      firstBeforeRecord = existing.firstBeforeRecord;
+    } else if (event.type === 'update') {
+      firstBeforeRecord = event.beforeRecord;
     }
 
     const timer = setTimeout(() => {
       this.debouncedMutations.delete(key);
+      // Attach the first beforeRecord to the final debounced event
+      if (firstBeforeRecord && event.type === 'update') {
+        event.beforeRecord = firstBeforeRecord;
+      }
       this.addToQueue(event);
     }, delay);
 
-    this.debouncedMutations.set(key, { timer });
+    this.debouncedMutations.set(key, { timer, firstBeforeRecord });
   }
 
-  async next(fn: (event: UpEvent) => Promise<void>): Promise<void> {
+  async next(fn: (event: UpEvent) => Promise<void>, onRollback?: RollbackCallback): Promise<void> {
     const event = this.queue.shift();
     if (event) {
       try {
         await fn(event);
       } catch (error) {
+        const errorType = classifySyncError(error);
+
+        if (errorType === 'network') {
+          this.logger.error(
+            { error, event, Category: 'spooky-client::UpQueue::next' },
+            'Network error processing mutation, re-queuing'
+          );
+          this.queue.unshift(event);
+          throw error;
+        }
+
+        // Application error — rollback instead of re-queuing
         this.logger.error(
           { error, event, Category: 'spooky-client::UpQueue::next' },
-          'Failed to process mutation'
+          'Application error processing mutation, rolling back'
         );
-        this.queue.unshift(event);
-        throw error;
+        try {
+          await this.removeEventFromDatabase(event.mutation_id);
+        } catch (removeError) {
+          this.logger.error(
+            { error: removeError, event, Category: 'spooky-client::UpQueue::next' },
+            'Failed to remove rolled-back mutation from database'
+          );
+        }
+        if (onRollback) {
+          try {
+            await onRollback(event, error instanceof Error ? error : new Error(String(error)));
+          } catch (rollbackError) {
+            this.logger.error(
+              { error: rollbackError, event, Category: 'spooky-client::UpQueue::next' },
+              'Rollback handler failed'
+            );
+          }
+        }
+        return;
       }
       try {
         await this.removeEventFromDatabase(event.mutation_id);
@@ -132,6 +176,7 @@ export class UpQueue {
                 mutation_id: parseRecordIdString(r.id),
                 record_id: parseRecordIdString(r.recordId),
                 data: r.data,
+                tableName: extractTablePart(r.recordId),
               };
             case 'update':
               return {
@@ -139,6 +184,7 @@ export class UpQueue {
                 mutation_id: parseRecordIdString(r.id),
                 record_id: parseRecordIdString(r.recordId),
                 data: r.data,
+                beforeRecord: r.beforeRecord,
               };
             case 'delete':
               return {

@@ -1,5 +1,11 @@
 import { RecordId, Duration } from 'surrealdb';
-import { SchemaStructure, TableNames, BackendNames, BackendRoutes, RoutePayload } from '@spooky/query-builder';
+import {
+  SchemaStructure,
+  TableNames,
+  BackendNames,
+  BackendRoutes,
+  RoutePayload,
+} from '@spooky/query-builder';
 import { LocalDatabaseService } from '../../services/database/index';
 import { CacheModule, RecordWithId } from '../cache/index';
 import { Logger } from '../../services/logger/index';
@@ -303,10 +309,7 @@ export class DataModule<S extends SchemaStructure> {
 
   // ====================      RUN JOBS       ====================
 
-  async run<
-    B extends BackendNames<S>,
-    R extends BackendRoutes<S, B>,
-  >(
+  async run<B extends BackendNames<S>, R extends BackendRoutes<S, B>>(
     backend: B,
     path: R,
     data: RoutePayload<S, B, R>,
@@ -366,16 +369,16 @@ export class DataModule<S extends SchemaStructure> {
     const prefixedParams = Object.fromEntries(
       dataKeys.map(({ key, variable }) => [variable, params[key]])
     );
-    const query = surql.seal(
+    const query = surql.seal<T>(
       surql.tx([
-        surql.let('created', surql.createSet('id', dataKeys)),
+        surql.createSet('id', dataKeys),
         surql.createMutation('create', 'mid', 'id', 'data'),
-        surql.returnObject([{ key: 'target', variable: 'created' }]),
-      ])
+      ]),
+      { resultIndex: 0 }
     );
 
-    const [{ target }] = await withRetry(this.logger, () =>
-      this.local.query<[{ target: T }]>(query, {
+    const target = await withRetry(this.logger, () =>
+      this.local.execute(query, {
         id: rid,
         mid: mutationId,
         ...prefixedParams,
@@ -402,6 +405,7 @@ export class DataModule<S extends SchemaStructure> {
       record_id: rid,
       data: params,
       record: target,
+      tableName,
     };
 
     for (const callback of this.mutationCallbacks) {
@@ -432,7 +436,12 @@ export class DataModule<S extends SchemaStructure> {
     const params = parseParams(tableSchema.columns, data);
     const mutationId = parseRecordIdString(`_spooky_pending_mutations:${Date.now()}`);
 
-    const query = surql.seal(
+    // Capture current record state before mutation for rollback support
+    const [beforeRecord] = await withRetry(this.logger, () =>
+      this.local.query<[Record<string, any>]>('SELECT * FROM ONLY $id', { id: rid })
+    );
+
+    const query = surql.seal<{ target: T }>(
       surql.tx([
         surql.updateSet('id', [{ statement: 'spooky_rv += 1' }]),
         surql.let('updated', surql.updateMerge('id', 'data')),
@@ -441,8 +450,8 @@ export class DataModule<S extends SchemaStructure> {
       ])
     );
 
-    const [{ target }] = await withRetry(this.logger, () =>
-      this.local.query<[{ target: T }]>(query, {
+    const { target } = await withRetry(this.logger, () =>
+      this.local.execute(query, {
         id: rid,
         mid: mutationId,
         data: params,
@@ -476,6 +485,7 @@ export class DataModule<S extends SchemaStructure> {
       record_id: rid,
       data: params,
       record: target,
+      beforeRecord: beforeRecord || undefined,
       options: pushEventOptions,
     };
 
@@ -501,11 +511,11 @@ export class DataModule<S extends SchemaStructure> {
     const rid = parseRecordIdString(id);
     const mutationId = parseRecordIdString(`_spooky_pending_mutations:${Date.now()}`);
 
-    const query = surql.seal(
+    const query = surql.seal<void>(
       surql.tx([surql.delete('id'), surql.createMutation('delete', 'mid', 'id')])
     );
 
-    await withRetry(this.logger, () => this.local.query(query, { id: rid, mid: mutationId }));
+    await withRetry(this.logger, () => this.local.execute(query, { id: rid, mid: mutationId }));
     await this.cache.delete(table, id, true);
 
     // Emit mutation event
@@ -520,6 +530,106 @@ export class DataModule<S extends SchemaStructure> {
     }
 
     this.logger.debug({ id, Category: 'spooky-client::DataModule::delete' }, 'Record deleted');
+  }
+
+  // ==================== ROLLBACK METHODS ====================
+
+  /**
+   * Rollback a failed optimistic create by deleting the record locally
+   */
+  async rollbackCreate(recordId: RecordId, tableName: string): Promise<void> {
+    const id = encodeRecordId(recordId);
+
+    try {
+      await withRetry(this.logger, () =>
+        this.local.query('DELETE $id', { id: recordId })
+      );
+      await this.cache.delete(tableName, id, true);
+      this.removeRecordFromQueries(recordId);
+
+      this.logger.info(
+        { id, tableName, Category: 'spooky-client::DataModule::rollbackCreate' },
+        'Rolled back optimistic create'
+      );
+    } catch (err) {
+      this.logger.error(
+        { err, id, tableName, Category: 'spooky-client::DataModule::rollbackCreate' },
+        'Failed to rollback create'
+      );
+    }
+  }
+
+  /**
+   * Rollback a failed optimistic update by restoring the previous record state
+   */
+  async rollbackUpdate(
+    recordId: RecordId,
+    tableName: string,
+    beforeRecord: Record<string, unknown>
+  ): Promise<void> {
+    const id = encodeRecordId(recordId);
+
+    try {
+      const { id: _recordId, ...content } = beforeRecord;
+      await withRetry(this.logger, () =>
+        this.local.query(surql.seal(surql.upsert('id', 'content')), {
+          id: recordId,
+          content,
+        })
+      );
+
+      const tableSchema = this.schema.tables.find((t) => t.name === tableName);
+      const parsedRecord = tableSchema
+        ? (parseParams(tableSchema.columns, beforeRecord) as RecordWithId)
+        : (beforeRecord as RecordWithId);
+
+      await this.cache.save(
+        {
+          table: tableName,
+          op: 'UPDATE',
+          record: parsedRecord,
+          version: (beforeRecord.spooky_rv as number) || 1,
+        },
+        true
+      );
+
+      // Replace in active queries for immediate UI update
+      await this.replaceRecordInQueries(beforeRecord);
+
+      this.logger.info(
+        { id, tableName, Category: 'spooky-client::DataModule::rollbackUpdate' },
+        'Rolled back optimistic update'
+      );
+    } catch (err) {
+      this.logger.error(
+        { err, id, tableName, Category: 'spooky-client::DataModule::rollbackUpdate' },
+        'Failed to rollback update'
+      );
+    }
+  }
+
+  /**
+   * Remove a record from all active query states and notify subscribers
+   */
+  private removeRecordFromQueries(recordId: RecordId): void {
+    const encodedId = encodeRecordId(recordId);
+
+    for (const [queryHash, queryState] of this.activeQueries.entries()) {
+      const index = queryState.records.findIndex((r) => {
+        const rId = r.id instanceof RecordId ? encodeRecordId(r.id) : String(r.id);
+        return rId === encodedId;
+      });
+
+      if (index !== -1) {
+        queryState.records.splice(index, 1);
+        const subscribers = this.subscriptions.get(queryHash);
+        if (subscribers) {
+          for (const callback of subscribers) {
+            callback(queryState.records);
+          }
+        }
+      }
+    }
   }
 
   // ==================== PRIVATE HELPERS ====================

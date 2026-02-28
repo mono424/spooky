@@ -20,3 +20,17 @@ DEFINE FUNCTION fn::query::register($config: object) {
     -- Call DBSP module directly
     mod::dbsp::register_view($module_config);
 };
+
+DEFINE API "/spooky"
+    FOR get
+    THEN {
+        RETURN {
+            status: 200,
+            body: {
+                type: "surrealism",
+                status: "ready",
+                scheduler: false,
+                ssp_instances: 0
+            }
+        };
+    };

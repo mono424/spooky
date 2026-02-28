@@ -15,6 +15,7 @@ pub struct Metrics {
     pub ingest_duration: opentelemetry::metrics::Histogram<f64>,
     pub view_count: opentelemetry::metrics::UpDownCounter<i64>,
     pub edge_operations: opentelemetry::metrics::Counter<u64>,
+    pub ttl_cleanup_count: opentelemetry::metrics::Counter<u64>,
 
     // Internal tracking for rate calculation
     ingest_total: Arc<AtomicU64>,
@@ -79,6 +80,10 @@ impl Metrics {
             edge_operations: meter
                 .u64_counter("ssp_edge_operations_total")
                 .with_description("Total edge operations by type")
+                .build(),
+            ttl_cleanup_count: meter
+                .u64_counter("ssp_ttl_cleanup_total")
+                .with_description("Total queries removed by TTL expiry")
                 .build(),
             ingest_total,
         }

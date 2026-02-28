@@ -181,6 +181,53 @@ fn parse_order_clause(input: &str) -> IResult<&str, Vec<Value>> {
 
 // --- SELECT PROJECTION ---
 
+/// Walk a predicate JSON tree to find $parent.* references.
+/// Returns (child_field, parent_field) if found.
+fn extract_parent_key_from_predicate(predicate: &Value) -> Option<(String, String)> {
+    let obj = predicate.as_object()?;
+    let pred_type = obj.get("type")?.as_str()?;
+
+    match pred_type {
+        "and" | "or" => {
+            // Recurse into nested predicates, return first match
+            let preds = obj.get("predicates")?.as_array()?;
+            for p in preds {
+                if let Some(result) = extract_parent_key_from_predicate(p) {
+                    return Some(result);
+                }
+            }
+            None
+        }
+        // Leaf predicate: check if value is { "$param": "parent.*" }
+        _ => {
+            let child_field = obj.get("field")?.as_str()?;
+            let value = obj.get("value")?;
+            let param = value.get("$param")?.as_str()?;
+            let parent_field = param.strip_prefix("parent.")?;
+            Some((child_field.to_string(), parent_field.to_string()))
+        }
+    }
+}
+
+/// Walk a plan JSON tree to find the filter predicate and extract $parent.* references.
+fn extract_parent_key(plan: &Value) -> Option<Value> {
+    let obj = plan.as_object()?;
+    let op = obj.get("op")?.as_str()?;
+
+    match op {
+        "filter" => {
+            let predicate = obj.get("predicate")?;
+            let (child_field, parent_field) = extract_parent_key_from_predicate(predicate)?;
+            Some(json!({ "child_field": child_field, "parent_field": parent_field }))
+        }
+        "limit" | "project" => {
+            let input = obj.get("input")?;
+            extract_parent_key(input)
+        }
+        _ => None,
+    }
+}
+
 fn parse_subquery_projection(input: &str) -> IResult<&str, Value> {
     // (SELECT ... ) [optional_index] AS alias
     let (input, sub_plan) = delimited(ws(char('(')), parse_full_query, ws(char(')')))(input)?;
@@ -195,10 +242,15 @@ fn parse_subquery_projection(input: &str) -> IResult<&str, Value> {
     let (input, _) = ws(tag_no_case("AS"))(input)?;
     let (input, alias) = ws(parse_identifier)(input)?;
 
-    Ok((
-        input,
-        json!({ "type": "subquery", "alias": alias, "plan": sub_plan }),
-    ))
+    let mut result = json!({ "type": "subquery", "alias": alias, "plan": sub_plan });
+    if let Some(parent_key) = extract_parent_key(&sub_plan) {
+        result
+            .as_object_mut()
+            .unwrap()
+            .insert("parent_key".to_string(), parent_key);
+    }
+
+    Ok((input, result))
 }
 
 fn parse_field_projection(input: &str) -> IResult<&str, Value> {
@@ -334,8 +386,8 @@ fn wrap_conditions(input_op: Value, predicate: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::operators::Operator;
-    use crate::engine::operators::Projection;
+    use crate::operator::plan::OperatorPlan as Operator;
+    use crate::operator::plan::Projection;
 
     #[test]
     fn test_parse_failing_subquery() {
@@ -379,6 +431,69 @@ mod tests {
                 }
             }
             _ => panic!("Expected Limit operator at top level"),
+        }
+    }
+
+    #[test]
+    fn test_subquery_extracts_parent_key() {
+        let sql = "SELECT *, (SELECT * FROM comment WHERE thread=$parent.id) AS comments FROM thread";
+        let result = convert_surql_to_dbsp(sql).expect("Failed to parse SQL");
+
+        let operator: Operator = serde_json::from_value(result).expect("Failed to deserialize");
+        match operator {
+            Operator::Project { projections, .. } => {
+                let subquery = projections.iter().find(|p| matches!(p, Projection::Subquery { .. }));
+                assert!(subquery.is_some(), "Expected subquery projection");
+                if let Projection::Subquery { alias, parent_key, .. } = subquery.unwrap() {
+                    assert_eq!(alias, "comments");
+                    assert!(parent_key.is_some(), "Expected parent_key to be extracted");
+                    let pk = parent_key.as_ref().unwrap();
+                    assert_eq!(pk.child_field, "thread");
+                    assert_eq!(pk.parent_field, "id");
+                }
+            }
+            _ => panic!("Expected Project operator at top level"),
+        }
+    }
+
+    #[test]
+    fn test_subquery_extracts_reverse_parent_key() {
+        // WHERE id = $parent.author — reverse direction
+        let sql = "SELECT *, (SELECT * FROM user WHERE id=$parent.author LIMIT 1)[0] AS author FROM thread";
+        let result = convert_surql_to_dbsp(sql).expect("Failed to parse SQL");
+
+        let operator: Operator = serde_json::from_value(result).expect("Failed to deserialize");
+        match operator {
+            Operator::Project { projections, .. } => {
+                let subquery = projections.iter().find(|p| matches!(p, Projection::Subquery { .. }));
+                assert!(subquery.is_some(), "Expected subquery projection");
+                if let Projection::Subquery { parent_key, .. } = subquery.unwrap() {
+                    assert!(parent_key.is_some(), "Expected parent_key");
+                    let pk = parent_key.as_ref().unwrap();
+                    assert_eq!(pk.child_field, "id");
+                    assert_eq!(pk.parent_field, "author");
+                }
+            }
+            _ => panic!("Expected Project operator at top level"),
+        }
+    }
+
+    #[test]
+    fn test_subquery_without_parent_ref_has_no_parent_key() {
+        // No $parent reference → no parent_key
+        let sql = "SELECT *, (SELECT * FROM comment WHERE active=true) AS comments FROM thread";
+        let result = convert_surql_to_dbsp(sql).expect("Failed to parse SQL");
+
+        let operator: Operator = serde_json::from_value(result).expect("Failed to deserialize");
+        match operator {
+            Operator::Project { projections, .. } => {
+                let subquery = projections.iter().find(|p| matches!(p, Projection::Subquery { .. }));
+                assert!(subquery.is_some());
+                if let Projection::Subquery { parent_key, .. } = subquery.unwrap() {
+                    assert!(parent_key.is_none(), "Expected no parent_key when no $parent ref");
+                }
+            }
+            _ => panic!("Expected Project operator at top level"),
         }
     }
 }

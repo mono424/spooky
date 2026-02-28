@@ -147,15 +147,14 @@ PERMISSIONS
     "start": "node run.js up -d",
     "stop": "node run.js down",
     "dev": "pnpm build && node run.js up --build --force-recreate",
-    "db:reset": "rm -rf .spooky/sidecar_data && mkdir .spooky/sidecar_data && node run.js down -v",
+    "db:reset": "rm -rf .spooky/ssp_data && mkdir .spooky/ssp_data && node run.js down -v",
     "build": "pnpm build:ts && pnpm build:surql",
     "build:ts": "syncgen --format typescript --input ./src/schema.surql --output ../../apps/web/src/schema.gen.ts",
-    "build:surql": "pnpm build:remote:surrealism",
-    "build:remote:surrealism": "syncgen --input ./src/schema.surql --output ./.spooky/remote-surrealism.gen.surql --mode surrealism --modules-dir ../../node_modules/surrealism-modules"
+    "build:surql": "pnpm build:remote:singlenode",
+    "build:remote:singlenode": "syncgen --input ./src/schema.surql --output ./.spooky/remote-singlenode.gen.surql --mode singlenode"
   },
   "devDependencies": {
-    "syncgen": "workspace:*",
-    "surrealism-modules": "workspace:*" 
+    "syncgen": "workspace:*"
   }
 }
 "#, 
@@ -175,11 +174,6 @@ PERMISSIONS
         schema_path.join("run.js"),
         include_str!("../../../example/schema/run.js"),
     )?;
-     write_file(
-        schema_path.join("migrate.sh"),
-        include_str!("../../../example/schema/migrate.sh"),
-    )?;
-    
     // Helper to write docker-compose files. 
     // They reference local Dockerfiles in the example. 
     // For a standalone project setup via pnpx, we should probably use published images.
@@ -206,8 +200,8 @@ PERMISSIONS
     // But `../../` won't exist. 
     // I will act safe and copy it but let the user know they might need to adjust the image.
     write_file(
-        schema_path.join("docker-compose.sidecar.yml"),
-        include_str!("../../../example/schema/docker-compose.sidecar.yml"),
+        schema_path.join("docker-compose.singlenode.yml"),
+        include_str!("../../../example/schema/docker-compose.singlenode.yml"),
     )?;
 
 

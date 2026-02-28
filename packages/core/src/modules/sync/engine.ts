@@ -1,10 +1,12 @@
 import { RecordId } from 'surrealdb';
+import { SchemaStructure } from '@spooky/query-builder';
 import { RemoteDatabaseService } from '../../services/database/index';
 import { CacheModule, CacheRecord, RecordWithId } from '../cache/index';
 import { RecordVersionDiff } from '../../types';
 import { Logger } from '../../services/logger/index';
 import { SyncEventTypes, createSyncEventSystem } from './events/index';
 import { encodeRecordId } from '../../utils/index';
+import { cleanRecord } from '../../utils/parser';
 
 /**
  * SyncEngine handles the core sync operations: fetching remote records,
@@ -19,6 +21,7 @@ export class SyncEngine {
   constructor(
     private remote: RemoteDatabaseService,
     private cache: CacheModule,
+    private schema: SchemaStructure,
     logger: Logger
   ) {
     this.logger = logger.child({ service: 'SpookySync:SyncEngine' });
@@ -55,36 +58,28 @@ export class SyncEngine {
     }
 
     const [remoteResults] = await this.remote.query<[RecordWithId[]]>(
-      "SELECT *, (SELECT version FROM ONLY _spooky_version WHERE record_id = <record>$parent.id)['version'] as spooky_rv FROM $ids",
-      {
-        ids: idsToFetch,
-      }
+      "SELECT (SELECT * FROM ONLY <record>$parent.id) AS record, (SELECT version FROM ONLY _spooky_version WHERE record_id = <record>$parent.id)['version'] as spooky_rv FROM $idsToFetch",
+      { idsToFetch }
     );
-
+    console.log('remoteResults>', remoteResults);
     // Prepare batch for cache (which handles both DB and DBSP)
     const cacheBatch: CacheRecord[] = [];
 
-    for (const { spooky_rv, ...record } of remoteResults) {
-      const fullId = encodeRecordId(record.id);
-      const table = record.id.table.toString();
-      const isAdded = added.some((item) => encodeRecordId(item.id) === fullId);
-
-      const anticipatedVersion = toFetch.find(
-        (item) => encodeRecordId(item.id) === fullId
-      )?.version;
-
-      if (anticipatedVersion && spooky_rv < anticipatedVersion) {
+    for (const { spooky_rv, record } of remoteResults) {
+      if (!record?.id) {
         this.logger.warn(
           {
-            recordId: fullId,
-            version: spooky_rv,
-            anticipatedVersion,
+            record,
+            idsToFetch,
             Category: 'spooky-client::SyncEngine::syncRecords',
           },
-          'Received outdated record version. Skipping record'
+          'Remote record has no id. Skipping record'
         );
         continue;
       }
+      const fullId = encodeRecordId(record.id);
+      const table = record.id.table.toString();
+      const isAdded = added.some((item) => encodeRecordId(item.id) === fullId);
 
       const localVersion = this.cache.lookup(fullId);
       if (localVersion && spooky_rv <= localVersion) {
@@ -99,12 +94,15 @@ export class SyncEngine {
         );
         continue;
       }
-      console.log('yy>', fullId, spooky_rv, localVersion);
+      const tableSchema = this.schema.tables.find((t) => t.name === table);
+      const cleanedRecord = tableSchema
+        ? cleanRecord(tableSchema.columns, record)
+        : record;
+
       cacheBatch.push({
         table,
         op: isAdded ? 'CREATE' : 'UPDATE',
-        // id: fullId,
-        record,
+        record: cleanedRecord as RecordWithId,
         version: spooky_rv,
       });
     }
@@ -131,10 +129,20 @@ export class SyncEngine {
       'Checking removed records'
     );
 
-    const [existingRemote] = await this.remote.query<[{ id: string }[]]>('SELECT id FROM $ids', {
-      ids: removed,
-    });
-    const existingRemoteIds = new Set(existingRemote.map((r) => r.id));
+    let existingRemoteIds = new Set<string>();
+    try {
+      const [existingRemote] = await this.remote.query<[{ id: RecordId }[]]>('SELECT id FROM $ids', {
+        ids: removed,
+      });
+      existingRemoteIds = new Set(existingRemote.map((r) => encodeRecordId(r.id)));
+    } catch {
+      // If remote check fails (e.g., SurrealDB parameter serialization issue),
+      // proceed with deletion — the caller has already determined these should be removed
+      this.logger.debug(
+        { Category: 'spooky-client::SyncEngine::handleRemovedRecords' },
+        'Remote existence check failed, proceeding with deletion'
+      );
+    }
 
     for (const recordId of removed) {
       const recordIdStr = encodeRecordId(recordId);

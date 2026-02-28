@@ -1,0 +1,25 @@
+[package]
+name = "scheduler"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+surrealdb = { version = "3.0.0", features = ["kv-rocksdb", "protocol-ws"] }
+reqwest = { version = "0.12", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+async-trait = "0.1"
+futures = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+config = "0.14"
+anyhow = "1"
+axum = "0.7"
+uuid = { version = "1", features = ["v4"] }
+ssp-protocol = { path = "../../packages/ssp-protocol" }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+tempfile = "3"

@@ -1,8 +1,9 @@
+/* Professional Typography - Google Fonts */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-/* Removed Google Fonts import to rely on system Monospace for raw performance */
 
 @layer base {
   :root {
@@ -12,15 +13,15 @@
   }
 
   html {
-    /* Priority stack for the best monospace font available on the system */
-    font-family: Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
-    scroll-behavior: auto; /* Remove smooth scroll for mechanical feel */
+    /* Professional font stack with Inter as primary */
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+    scroll-behavior: smooth;
   }
 
   body {
     @apply bg-black text-white;
-    /* Disable font smoothing for crisp, pixelated edges */
-    -webkit-font-smoothing: none;
+    /* Enable font smoothing for professional appearance */
+    -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     overflow-x: hidden;
   }
@@ -30,76 +31,207 @@
     background-color: var(--text-color);
     color: var(--bg-color);
   }
+
+  /* Accessibility: Focus states */
+  *:focus-visible {
+    outline: 2px solid #a855f7;
+    outline-offset: 2px;
+    border-radius: 0.25rem;
+  }
+
+  /* Accessibility: Reduced motion support */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
 }
 
 @layer components {
-  /* Replaces the old .gradient-text */
+  /* Professional gradient text */
   .gradient-text {
     @apply text-white underline decoration-2 decoration-white underline-offset-4;
   }
 
-  /* Replaces .glass-effect with a terminal box style */
+  /* Glass effect for cards and containers */
   .glass-effect {
-    @apply bg-black border-2 border-white shadow-none backdrop-blur-none;
+    @apply bg-black/50 backdrop-blur-md border border-white/10;
   }
 
-  /* Utility for buttons and cards */
-  .ascii-box {
-    @apply border-2 border-white bg-black text-white transition-none;
-  }
-
-  .ascii-box:hover {
-    @apply bg-white text-black cursor-pointer;
+  /* Monospace font utility - use ONLY for code blocks */
+  .font-mono {
+    font-family: 'JetBrains Mono', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', 'Courier New', monospace;
   }
 }
 
 @layer utilities {
-  /* Blink Animation
-     Used for cursors (e.g. <span class="animate-blink">_</span>) 
-  */
-  @keyframes blink {
-    0%,
+  /* 3D Tilt Animation for code block */
+  @keyframes tilt-in {
+    0% {
+      transform: perspective(1000px) rotateX(25deg);
+      opacity: 0;
+    }
+    100% {
+      transform: perspective(1000px) rotateX(0deg);
+      opacity: 1;
+    }
+  }
+
+  .animate-tilt-in {
+    animation: tilt-in 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+    transform-style: preserve-3d;
+  }
+
+  /* Fade In Animation */
+  @keyframes fade-in {
+    0% {
+      opacity: 0;
+    }
     100% {
       opacity: 1;
     }
-    50% {
-      opacity: 0;
-    }
   }
 
-  /* Glitch/Shake Animation
-     Used for hover states or errors 
-  */
-  @keyframes glitch {
+  .animate-fade-in {
+    animation: fade-in 0.8s ease-out forwards;
+  }
+
+  /* Fade In to 20% Opacity with White to Gray */
+  @keyframes fade-in-subtle {
     0% {
-      transform: translate(0);
+      opacity: 0;
+      filter: brightness(4);
     }
-    20% {
-      transform: translate(-2px, 2px);
-    }
-    40% {
-      transform: translate(-2px, -2px);
-    }
-    60% {
-      transform: translate(2px, 2px);
-    }
-    80% {
-      transform: translate(2px, -2px);
+    30% {
+      opacity: 0.3;
+      filter: brightness(3.5);
     }
     100% {
-      transform: translate(0);
+      opacity: 0.2;
+      filter: brightness(0.8);
     }
   }
 
-  .animate-blink {
-    animation: blink 1s step-end infinite;
+  .animate-fade-in-subtle {
+    animation: fade-in-subtle 0.6s ease-out forwards;
+    will-change: opacity, filter;
+    backface-visibility: hidden;
   }
 
-  .animate-glitch {
-    animation: glitch 0.2s cubic-bezier(0.25, 0.46, 0.45, 0.94) both infinite;
+  /* Slide Up Animation */
+  @keyframes slide-up {
+    0% {
+      opacity: 0;
+      transform: translateY(20px);
+    }
+    100% {
+      opacity: 1;
+      transform: translateY(0);
+    }
   }
 
-  /* Removed float/wobble animations as they are too fluid for a terminal */
+  .animate-slide-up {
+    animation: slide-up 0.8s ease-out forwards;
+  }
+
+  /* Gradient Pulse Animation for HeroTerminal */
+  @keyframes gradient-pulse {
+    0%, 100% {
+      transform: scale(1) rotate(0deg);
+      opacity: 0.8;
+    }
+    50% {
+      transform: scale(1.1) rotate(3deg);
+      opacity: 0.6;
+    }
+  }
+
+  .terminal-gradient {
+    animation: gradient-pulse 4s ease-in-out infinite;
+  }
+
+  /* Flip In Animation */
+  @keyframes flip-in {
+    0% {
+      transform: perspective(1000px) rotateY(-20deg);
+      opacity: 0;
+    }
+    100% {
+      transform: perspective(1000px) rotateY(0deg);
+      opacity: 1;
+    }
+  }
+
+  .animate-flip-in {
+    animation: flip-in 1.2s ease-out forwards;
+    transform-style: preserve-3d;
+  }
+
+  /* Hero Grid Layout */
+  .hero-grid {
+    @apply grid items-center gap-8;
+    grid-template-columns: 1fr;
+  }
+
+  @media (min-width: 768px) {
+    .hero-grid {
+      grid-template-columns: 1fr;
+      gap: 3rem;
+    }
+  }
+
+  @media (min-width: 1024px) {
+    .hero-grid {
+      grid-template-columns: 1fr 1fr;
+      gap: 3rem;
+      align-items: center;
+    }
+  }
+
+  @media (min-width: 1280px) {
+    .hero-grid {
+      grid-template-columns: 1fr 1.1fr;
+      gap: 4rem;
+    }
+  }
+
+  /* Professional animation delays for staggered effects */
+  .animation-delay-200 {
+    animation-delay: 200ms;
+  }
+
+  .animation-delay-400 {
+    animation-delay: 400ms;
+  }
+
+  .animation-delay-600 {
+    animation-delay: 600ms;
+  }
+
+  .animation-delay-800 {
+    animation-delay: 800ms;
+  }
+
+  .animation-delay-1000 {
+    animation-delay: 1000ms;
+  }
+
+  .animation-delay-1200 {
+    animation-delay: 1200ms;
+  }
+
+  .animation-delay-1600 {
+    animation-delay: 1600ms;
+  }
+
+  .animation-delay-2000 {
+    animation-delay: 2000ms;
+  }
 }
 
 /* Custom Invisible Scrollbar */
@@ -115,4 +247,241 @@
 
 ::-webkit-scrollbar-thumb {
   background: transparent;
+}
+
+/* DX Swiper Styles */
+.swiper-container {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+}
+
+.swiper-track {
+  display: flex;
+  transition: transform 400ms ease-in-out;
+  will-change: transform;
+}
+
+.swiper-slide {
+  min-width: 100%;
+  width: 100%;
+  flex-shrink: 0;
+}
+
+.swiper-arrow {
+  @apply w-12 h-12 rounded-full bg-surface-elevated border border-surface-border
+         text-text-tertiary hover:text-text-primary hover:border-brand-500/50
+         hover:bg-brand-500/10 transition-all duration-200
+         flex items-center justify-center
+         disabled:opacity-30 disabled:cursor-not-allowed;
+}
+
+.swiper-dots {
+  @apply flex items-center gap-3;
+}
+
+.swiper-dot {
+  @apply h-3 rounded-full bg-surface-border transition-all duration-200
+         hover:bg-brand-500/50 cursor-pointer;
+  width: 12px;
+}
+
+.swiper-dot[aria-current="true"] {
+  @apply bg-brand-500;
+  width: 32px;
+}
+
+/* Architecture Boxes Horizontal Scroll */
+.architecture-scroll-wrapper {
+  @apply w-full overflow-hidden mb-24;
+  position: relative;
+}
+
+.architecture-scroll-container {
+  @apply flex gap-8 pb-6;
+  overflow-x: auto;
+  overflow-y: visible;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+
+  /* Hide scrollbar for Firefox */
+  scrollbar-width: none;
+
+  /* Center with padding */
+  padding-left: max(2rem, calc((100vw - 1280px) / 2));
+  padding-right: max(2rem, calc((100vw - 1280px) / 2));
+}
+
+/* Hide scrollbar for Webkit browsers (Chrome, Safari, Edge) */
+.architecture-scroll-container::-webkit-scrollbar {
+  display: none;
+}
+
+/* Box sizing */
+.architecture-box {
+  min-width: 480px;
+  width: 480px;
+  flex-shrink: 0;
+}
+
+.architecture-box-wide {
+  min-width: 720px;
+  width: 720px;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .architecture-box {
+    min-width: 90vw;
+    width: 90vw;
+  }
+
+  .architecture-box-wide {
+    min-width: 95vw;
+    width: 95vw;
+  }
+
+  .architecture-scroll-container {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+}
+
+/* Fade gradient on right edge */
+.architecture-scroll-wrapper::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 24px;
+  width: 100px;
+  background: linear-gradient(to left, rgba(9, 9, 11, 1) 0%, rgba(9, 9, 11, 0) 100%);
+  pointer-events: none;
+}
+
+/* Touch gesture visual feedback */
+@media (max-width: 768px) {
+  .swiper-arrow {
+    @apply w-12 h-12; /* Ensure 48px minimum touch target */
+  }
+}
+
+/* Screen reader only utility */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* Schema Workflow Eyecatcher Animations */
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+details[open] .expanded-content {
+  animation: slideDown 0.3s ease-out;
+}
+
+.tab-panel {
+  animation: fadeIn 0.2s ease-in;
+}
+
+/* Animate-in utility classes (Tailwind-style) */
+@keyframes in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-in {
+  animation: in 0.3s ease-out;
+}
+
+.fade-in {
+  animation: fadeIn 0.2s ease-in;
+}
+
+.slide-in-from-top-1 {
+  animation: slideInFromTop 0.15s ease-out;
+}
+
+@keyframes slideInFromTop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.slide-in-from-bottom-1 {
+  animation: slideInFromBottom 0.15s ease-out;
+}
+
+@keyframes slideInFromBottom {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.zoom-in-95 {
+  animation: zoomIn 0.1s ease-out;
+}
+
+@keyframes zoomIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Duration utilities */
+.duration-100 {
+  animation-duration: 100ms;
+}
+
+.duration-150 {
+  animation-duration: 150ms;
+}
+
+.duration-200 {
+  animation-duration: 200ms;
 }

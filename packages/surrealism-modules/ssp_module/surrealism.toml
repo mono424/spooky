@@ -1,0 +1,6 @@
+[package]
+name = "ssp_module"
+organisation = "spooky"
+version = "0.1.0"
+description = "Incremental View Maintenance for SurrealDB"
+authors = ["Spooky Authors"]

@@ -75,8 +75,9 @@ impl CodeGenerator {
                     schema.push_str("DEFINE BUCKET IF NOT EXISTS modules BACKEND \"file:/modules\";\n\n");
                     schema.push_str("-- Define the XOR module\n");
                     schema.push_str("DEFINE MODULE mod::xor AS f\"modules:/xor_module.surli\";\n\n");
-                    schema.push_str("-- Define the DBSP module\n");
-                    schema.push_str("DEFINE MODULE mod::dbsp AS f\"modules:/dbsp_module.surli\";\n\n");
+                    // TODO: re-enable when ssp API stabilizes
+                    // schema.push_str("-- Define the SSP module\n");
+                    // schema.push_str("DEFINE MODULE mod::ssp AS f\"modules:/ssp_module.surli\";\n\n");
                 }
 
                 // Add the main schema content

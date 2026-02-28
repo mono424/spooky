@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 const BROWSER_CSS = `
 .browser-window {
   width: 100%;
-  height: 450px;
+  height: 550px;
   background: #1e1e1e;
   border-radius: 8px;
   box-shadow: 0 20px 50px rgba(0,0,0,0.5);
@@ -83,7 +83,7 @@ const BROWSER_CSS = `
 }
 
 .devtools-container {
-  height: 250px;
+  height: 320px;
   border-top: 1px solid #3e3e42;
   display: flex;
   flex-direction: column;
@@ -751,8 +751,74 @@ const MOCK_THREAD_DATA = [
 export const DevToolsSimulation = () => {
   const [activeTab, setActiveTab] = useState('events');
   const [selectedQueryHash, setSelectedQueryHash] = useState('0x8f2a9c');
+  const [touchStart, setTouchStart] = useState(0);
+  const [touchEnd, setTouchEnd] = useState(0);
 
+  const tabs = ['events', 'queries', 'database', 'auth'];
   const selectedQuery = MOCK_QUERIES.find((q) => q.queryHash === selectedQueryHash);
+
+  // Handle swipe gestures
+  const handleTouchStart = (e: React.TouchEvent) => {
+    setTouchStart(e.targetTouches[0].clientX);
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    setTouchEnd(e.targetTouches[0].clientX);
+  };
+
+  const handleTouchEnd = () => {
+    if (!touchStart || !touchEnd) return;
+
+    const distance = touchStart - touchEnd;
+    const isLeftSwipe = distance > 50;
+    const isRightSwipe = distance < -50;
+
+    const currentIndex = tabs.indexOf(activeTab);
+
+    if (isLeftSwipe && currentIndex < tabs.length - 1) {
+      setActiveTab(tabs[currentIndex + 1]);
+    }
+
+    if (isRightSwipe && currentIndex > 0) {
+      setActiveTab(tabs[currentIndex - 1]);
+    }
+
+    setTouchStart(0);
+    setTouchEnd(0);
+  };
+
+  // Handle mouse/trackpad swipe
+  const [mouseStart, setMouseStart] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+
+  const handlePointerDown = (e: React.PointerEvent) => {
+    setMouseStart(e.clientX);
+    setIsDragging(true);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent) => {
+    if (!isDragging) return;
+  };
+
+  const handlePointerUp = (e: React.PointerEvent) => {
+    if (!isDragging) return;
+
+    const distance = mouseStart - e.clientX;
+    const isLeftSwipe = distance > 80;
+    const isRightSwipe = distance < -80;
+
+    const currentIndex = tabs.indexOf(activeTab);
+
+    if (isLeftSwipe && currentIndex < tabs.length - 1) {
+      setActiveTab(tabs[currentIndex + 1]);
+    }
+
+    if (isRightSwipe && currentIndex > 0) {
+      setActiveTab(tabs[currentIndex - 1]);
+    }
+
+    setIsDragging(false);
+  };
 
   return (
     <>
@@ -820,7 +886,7 @@ export const DevToolsSimulation = () => {
                     <span className="status-dot active" />
                   </div>
                 </div>
-                {['events', 'queries', 'database', 'auth'].map((tab) => (
+                {tabs.map((tab) => (
                   <button
                     key={tab}
                     className={`tab-btn ${activeTab === tab ? 'active' : ''}`}
@@ -836,7 +902,16 @@ export const DevToolsSimulation = () => {
               </div>
 
               {/* Content Area */}
-              <div className="content">
+              <div
+                className="content"
+                onTouchStart={handleTouchStart}
+                onTouchMove={handleTouchMove}
+                onTouchEnd={handleTouchEnd}
+                onPointerDown={handlePointerDown}
+                onPointerMove={handlePointerMove}
+                onPointerUp={handlePointerUp}
+                style={{ touchAction: 'pan-y', cursor: isDragging ? 'grabbing' : 'grab' }}
+              >
                 {/* EVENTS TAB */}
                 <div className={`tab-content ${activeTab === 'events' ? 'active' : ''}`}>
                   <div className="events-container">

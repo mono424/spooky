@@ -114,7 +114,7 @@ export class SpookyClient<S extends SchemaStructure> {
     this.auth = new AuthService(this.config.schema, this.remote, this.persistenceClient, logger);
 
     // Initialize Sync
-    this.sync = new SpookySync(this.local, this.remote, this.cache, this.dataModule, this.logger);
+    this.sync = new SpookySync(this.local, this.remote, this.cache, this.dataModule, this.config.schema, this.logger);
 
     // Initialize DevTools
     this.devTools = new DevToolsService(

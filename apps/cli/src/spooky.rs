@@ -11,8 +11,8 @@ pub fn generate_spooky_events(
     raw_content: &str,
     is_client: bool,
     mode: &str,
-    sidecar_endpoint: Option<&str>,
-    sidecar_secret: Option<&str>,
+    endpoint: Option<&str>,
+    secret: Option<&str>,
 ) -> String {
     // 2. Generate Events
     let mut events = String::from("\n-- ==================================================\n-- AUTO-GENERATED SPOOKY EVENTS\n-- ==================================================\n\n");
@@ -72,7 +72,7 @@ pub fn generate_spooky_events(
 
     // Remote Logic: DBSP Ingest (Surrealism) OR Sidecar HTTP Call
 
-    let is_sidecar = mode == "sidecar";
+    let is_http = mode == "singlenode" || mode == "cluster";
 
     // Sort table names for deterministic output
     let mut sorted_table_names: Vec<_> = tables.keys().collect();
@@ -140,10 +140,10 @@ pub fn generate_spooky_events(
         events.push_str("        spooky_rv: (SELECT VALUE version FROM ONLY _spooky_version WHERE record_id = $after.id)\n");
         events.push_str("    };\n");
 
-        if is_sidecar {
-            let endpoint = sidecar_endpoint.unwrap_or("http://localhost:8667");
-            let secret = sidecar_secret.unwrap_or("");
-            let url = format!("{}/ingest", endpoint);
+        if is_http {
+            let ep = endpoint.unwrap_or("http://localhost:8667");
+            let sec = secret.unwrap_or("");
+            let url = format!("{}/ingest", ep);
 
             events.push_str("    LET $payload = {\n");
             events.push_str(&format!("        table: '{}',\n", table_name));
@@ -155,7 +155,7 @@ pub fn generate_spooky_events(
 
             events.push_str(&format!(
                 "    http::post('{}', $payload, {{ \"Authorization\": \"Bearer {}\" }});\n",
-                url, secret
+                url, sec
             ));
         } else {
             // Surrealism / WASM Mode
@@ -206,10 +206,10 @@ pub fn generate_spooky_events(
         }
         events.push_str("    };\n");
 
-        if is_sidecar {
-            let endpoint = sidecar_endpoint.unwrap_or("http://localhost:8667");
-            let secret = sidecar_secret.unwrap_or("");
-            let url = format!("{}/ingest", endpoint);
+        if is_http {
+            let ep = endpoint.unwrap_or("http://localhost:8667");
+            let sec = secret.unwrap_or("");
+            let url = format!("{}/ingest", ep);
 
             events.push_str("    LET $payload = {\n");
             events.push_str(&format!("        table: '{}',\n", table_name));
@@ -221,7 +221,7 @@ pub fn generate_spooky_events(
 
             events.push_str(&format!(
                 "    http::post('{}', $payload, {{ \"Authorization\": \"Bearer {}\" }});\n",
-                url, secret
+                url, sec
             ));
         } else {
             events.push_str(&format!("    mod::dbsp::ingest('{}', \"DELETE\", <string>($before.id OR \"\"), $plain_before);\n", table_name));

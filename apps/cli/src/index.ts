@@ -20,8 +20,8 @@ export interface SyncgenOptions {
   append?: string;
   modulesDir?: string;
   mode?: string;
-  sidecarEndpoint?: string;
-  sidecarSecret?: string;
+  endpoint?: string;
+  secret?: string;
   config?: string;
 }
 
@@ -86,12 +86,12 @@ export async function runSyncgen(options: SyncgenOptions): Promise<string> {
     args.push('--mode', options.mode);
   }
 
-  if (options.sidecarEndpoint) {
-    args.push('--sidecar-endpoint', options.sidecarEndpoint);
+  if (options.endpoint) {
+    args.push('--endpoint', options.endpoint);
   }
 
-  if (options.sidecarSecret) {
-    args.push('--sidecar-secret', options.sidecarSecret);
+  if (options.secret) {
+    args.push('--secret', options.secret);
   }
 
   if (options.config) {

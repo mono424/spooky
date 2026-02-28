@@ -91,7 +91,7 @@ export class CacheModule implements StreamUpdateReceiver {
       });
 
       if (!skipDbInsert) {
-        const query = surql.seal(
+        const query = surql.seal<void>(
           surql.tx(
             populatedRecords.map((_, i) => {
               return surql.upsert(`id${i}`, `content${i}`);
@@ -111,7 +111,7 @@ export class CacheModule implements StreamUpdateReceiver {
           {} as Record<string, any>
         );
 
-        await this.local.query(query, params);
+        await this.local.execute(query, params);
       }
 
       // 2. Batch ingest into DBSP (use populatedRecords which has spooky_rv set)

@@ -29,6 +29,7 @@ export function createSyncQueueEventSystem(): SyncQueueEventSystem {
 export const SyncEventTypes = {
   QueryUpdated: 'SYNC_QUERY_UPDATED',
   RemoteDataIngested: 'SYNC_REMOTE_DATA_INGESTED',
+  MutationRolledBack: 'SYNC_MUTATION_ROLLED_BACK',
 } as const;
 
 export type SyncEventTypeMap = {
@@ -49,10 +50,22 @@ export type SyncEventTypeMap = {
       records: Record<string, any>[];
     }
   >;
+  [SyncEventTypes.MutationRolledBack]: EventDefinition<
+    typeof SyncEventTypes.MutationRolledBack,
+    {
+      eventType: string;
+      recordId: string;
+      error: string;
+    }
+  >;
 };
 
 export type SyncEventSystem = EventSystem<SyncEventTypeMap>;
 
 export function createSyncEventSystem(): SyncEventSystem {
-  return createEventSystem([SyncEventTypes.QueryUpdated, SyncEventTypes.RemoteDataIngested]);
+  return createEventSystem([
+    SyncEventTypes.QueryUpdated,
+    SyncEventTypes.RemoteDataIngested,
+    SyncEventTypes.MutationRolledBack,
+  ]);
 }

@@ -21,7 +21,7 @@ const { headings = [] } = Astro.props;
           <a
             href={`#${h.slug}`}
             class:list={[
-              'block text-text-muted hover:text-primary transition-colors line-clamp-1 border-l-2 border-transparent -ml-[1px]',
+              'block text-text-muted hover:text-primary transition-colors truncate border-l-2 border-transparent -ml-[1px]',
               {
                 'pl-4': h.depth === 2,
                 'pl-6': h.depth === 3,

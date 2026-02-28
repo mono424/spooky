@@ -1,0 +1,183 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: Migrations
+---
+
+import CodeBlock from '../../components/ui/CodeBlock.astro';
+
+Spooky includes a built-in migration system for managing incremental, version-controlled changes to your SurrealDB schema. Instead of applying your full schema on every deploy, migrations let you evolve your database safely over time.
+
+## Creating a Migration
+
+Use the `create` subcommand to scaffold a new migration file:
+
+<CodeBlock code={`spooky migrate create "add_user_avatar"`} lang="bash" />
+
+This creates a timestamped `.surql` file in your `migrations` directory.
+
+### Options
+
+| Flag | Description |
+|------|-------------|
+| `--schema <path>` | Pre-populate the migration with an existing `.surql` schema file |
+| `--migrations-dir <path>` | Directory to store migrations (default: `migrations`) |
+
+## Migration File Format
+
+Migration files follow a strict naming convention:
+
+<CodeBlock code={`{YYYYMMDDHHmmss}_{name}.surql`} lang="text" />
+
+For example:
+
+<CodeBlock
+  code={`migrations/
+  20240101120000_bootstrap_schema.surql
+  20240215093000_add_user_avatar.surql
+  20240301140000_create_indexes.surql`}
+  lang="text"
+/>
+
+Each file contains the SurrealQL statements for that migration:
+
+<CodeBlock
+  code={`-- Migration: add_user_avatar
+-- Created: 2024-02-15T09:30:00Z
+
+DEFINE FIELD avatar ON TABLE user TYPE option<string>;
+DEFINE FIELD avatar_updated_at ON TABLE user TYPE option<datetime>;`}
+  lang="sql"
+/>
+
+The name is automatically sanitized — spaces and hyphens become underscores, and special characters are stripped.
+
+## Applying Migrations
+
+Run all pending migrations against your database:
+
+<CodeBlock code={`spooky migrate apply`} lang="bash" />
+
+Migrations execute in version order (by timestamp). Each applied migration is recorded in a `_spooky_migrations` tracking table with its version, name, and SHA-256 checksum.
+
+### Connection Flags
+
+<CodeBlock
+  code={`spooky migrate apply \\
+  --url http://localhost:8000 \\
+  --namespace myapp \\
+  --database production \\
+  --username admin \\
+  --password secret`}
+  lang="bash"
+/>
+
+All connection flags can also be set via environment variables (see below).
+
+## Checking Status
+
+View which migrations have been applied and which are still pending:
+
+<CodeBlock code={`spooky migrate status`} lang="bash" />
+
+Example output:
+
+<CodeBlock
+  code={`[applied]  20240101120000_bootstrap_schema
+[applied]  20240215093000_add_user_avatar
+[pending]  20240301140000_create_indexes`}
+  lang="text"
+/>
+
+The status command also detects drift — if a migration file was modified after it was applied, you'll see:
+
+<CodeBlock code={`[DRIFT]    20240215093000_add_user_avatar`} lang="text" />
+
+The `status` command accepts the same connection flags and `--migrations-dir` option as `apply`.
+
+## Environment Variables
+
+Connection details can be configured through environment variables instead of CLI flags:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SURREAL_URL` | `http://localhost:8000` | SurrealDB server endpoint |
+| `SURREAL_NS` | `main` | SurrealDB namespace |
+| `SURREAL_DB` | `main` | SurrealDB database |
+| `SURREAL_USER` | `root` | Authentication username |
+| `SURREAL_PASS` | `root` | Authentication password |
+
+CLI flags take precedence over environment variables when both are provided.
+
+## Safety Features
+
+The migration system includes several safeguards to prevent data loss:
+
+- **SHA-256 checksums** — Every migration file is hashed when applied. If a file is modified after application, the checksum mismatch is detected and further applies are blocked.
+- **Drift detection** — The `status` command flags any applied migration whose file has changed on disk, making it easy to catch accidental edits.
+- **Immutability** — Once a migration has been applied, its file should never be modified. If you need to make changes, create a new migration instead.
+- **Ordered execution** — Migrations always run in chronological order based on their timestamp prefix.
+
+If a checksum mismatch is detected during `apply`, you'll see an error like:
+
+<CodeBlock
+  code={`ERROR: Checksum mismatch for migration 20240215093000_add_user_avatar
+  Expected: a1b2c3...
+  Found:    d4e5f6...
+
+The migration file has been modified after it was applied. This is dangerous.
+If intentional, manually update the checksum in _spooky_migrations.`}
+  lang="text"
+/>
+
+## Bootstrapping from Schema
+
+If you have an existing `.surql` schema file and want to start using migrations, use the `--schema` flag to create an initial migration pre-populated with your schema:
+
+<CodeBlock code={`spooky migrate create "bootstrap_schema" --schema ./schema.surql`} lang="bash" />
+
+This generates a migration file containing your full schema with a warning comment at the top:
+
+<CodeBlock
+  code={`-- Migration: bootstrap_schema
+-- Created: 2024-01-01T12:00:00Z
+--
+-- WARNING: This file was pre-populated with the full schema.
+-- Edit this to contain ONLY the incremental changes for this migration.
+
+DEFINE TABLE user SCHEMAFULL
+  PERMISSIONS
+    FOR select, create WHERE true
+    FOR update, delete WHERE id = $auth.id;
+
+DEFINE FIELD username ON TABLE user TYPE string;
+-- ... rest of your schema`}
+  lang="sql"
+/>
+
+For the very first migration this is typically fine as-is — the full schema *is* the incremental change from an empty database.
+
+## CI/CD Integration
+
+Run migrations as part of your deploy pipeline to keep your database in sync:
+
+<CodeBlock
+  code={`#!/bin/bash
+set -e
+
+export SURREAL_URL="https://db.example.com"
+export SURREAL_NS="production"
+export SURREAL_DB="myapp"
+export SURREAL_USER="\$DB_USER"
+export SURREAL_PASS="\$DB_PASS"
+
+# Check for drift before deploying
+spooky migrate status
+
+# Apply any pending migrations
+spooky migrate apply
+
+echo "Migrations applied successfully"`}
+  lang="bash"
+/>
+
+Running `status` before `apply` lets you catch drift or unexpected state before making changes to your production database.

@@ -7,13 +7,17 @@
     "stop": "node run.js down",
     "dev": "pnpm build && node run.js up --build --force-recreate",
     "dev:example": "pnpm db:reset && pnpm dev",
-    "db:reset": "rm -rf .spooky/sidecar_data && mkdir .spooky/sidecar_data && node run.js down -v",
+    "db:reset": "rm -rf .spooky/ssp_data && mkdir .spooky/ssp_data && node run.js down -v",
     "build": "pnpm build:ts && pnpm build:dart && pnpm build:surql",
     "build:ts": "spooky --format typescript --input ./src/schema.surql --output ../app-solid/src/schema.gen.ts --config ./spooky.yml",
     "build:dart": "spooky --format dart --input ./src/schema.surql --output ../client-dart/src/db/models.dart --config ./spooky.yml",
-    "build:surql": "pnpm build:remote:surrealism && pnpm build:remote:sidecar",
+    "build:surql": "pnpm build:remote:singlenode && pnpm build:remote:cluster",
     "build:remote:surrealism": "spooky --input ./src/schema.surql --output ./.spooky/remote-surrealism.gen.surql --mode surrealism --modules-dir ../../packages/surrealism-modules --config ./spooky.yml",
-    "build:remote:sidecar": "spooky --input ./src/schema.surql --output ./.spooky/remote-sidecar.gen.surql --mode sidecar --sidecar-endpoint http://ssp:8667 --sidecar-secret mysecret --modules-dir ../../packages/surrealism-modules --config ./spooky.yml"
+    "build:remote:singlenode": "spooky --input ./src/schema.surql --output ./.spooky/remote-singlenode.gen.surql --mode singlenode --endpoint http://ssp:8667 --secret mysecret --config ./spooky.yml",
+    "build:remote:cluster": "spooky --input ./src/schema.surql --output ./.spooky/remote-cluster.gen.surql --mode cluster --endpoint http://scheduler:9667 --config ./spooky.yml",
+    "migrate:create": "../../apps/cli/target/release/spooky migrate create",
+    "migrate:apply": "../../apps/cli/target/release/spooky migrate apply --url http://localhost:8666 --migrations-dir migrations",
+    "migrate:status": "../../apps/cli/target/release/spooky migrate status --url http://localhost:8666 --migrations-dir migrations"
   },
   "keywords": [
     "database",

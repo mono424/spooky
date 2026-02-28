@@ -1,20 +1,23 @@
 mod backend;
 mod codegen;
 mod json_schema;
+mod migrate;
 mod modules;
 mod parser;
 mod setup;
 mod spooky;
+mod surreal_client;
 
 use anyhow::{Context, Result};
 use backend::BackendProcessor;
-use clap::{Parser as ClapParser, Subcommand};
+use clap::{Args as ClapArgs, Parser as ClapParser, Subcommand};
 use codegen::{CodeGenerator, OutputFormat};
 use json_schema::JsonSchemaGenerator;
 use parser::SchemaParser;
 use setup::setup_project;
 use std::fs;
 use std::path::{Path, PathBuf};
+use surreal_client::SurrealClient;
 
 #[derive(ClapParser, Debug)]
 #[command(name = "syncgen")]
@@ -61,23 +64,78 @@ struct Args {
     #[arg(long, default_value = "../../packages/surrealism-modules")]
     modules_dir: PathBuf,
 
-    /// Generation mode: "surrealism" (embedded WASM) or "sidecar" (HTTP calls)
-    #[arg(long, default_value = "surrealism")]
+    /// Generation mode: "singlenode" (HTTP to single SSP), "cluster" (HTTP to scheduler), or "surrealism" (embedded WASM)
+    #[arg(long, default_value = "singlenode")]
     mode: String,
 
-    /// Spooky Sidecar Endpoint URL (required if mode is "sidecar")
+    /// SSP/Scheduler Endpoint URL (used in "singlenode" and "cluster" modes)
     #[arg(long)]
-    sidecar_endpoint: Option<String>,
+    endpoint: Option<String>,
 
-    /// Spooky Sidecar Auth Secret (required if mode is "sidecar")
+    /// SSP/Scheduler Auth Secret (used in "singlenode" and "cluster" modes)
     #[arg(long)]
-    sidecar_secret: Option<String>,
+    secret: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
 enum Commands {
     /// Setup a new Spooky project
     Setup,
+    /// Database migration management
+    Migrate {
+        #[command(subcommand)]
+        action: MigrateCommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum MigrateCommands {
+    /// Create a new migration
+    Create {
+        /// Name for the migration (e.g. "add_user_avatar")
+        name: String,
+        /// Path to .surql schema file to pre-populate the migration
+        #[arg(long)]
+        schema: Option<PathBuf>,
+        /// Migrations directory
+        #[arg(long, default_value = "migrations")]
+        migrations_dir: PathBuf,
+    },
+    /// Apply all pending migrations
+    Apply {
+        #[command(flatten)]
+        conn: ConnectionArgs,
+        /// Migrations directory
+        #[arg(long, default_value = "migrations")]
+        migrations_dir: PathBuf,
+    },
+    /// Show migration status
+    Status {
+        #[command(flatten)]
+        conn: ConnectionArgs,
+        /// Migrations directory
+        #[arg(long, default_value = "migrations")]
+        migrations_dir: PathBuf,
+    },
+}
+
+#[derive(ClapArgs, Debug)]
+struct ConnectionArgs {
+    /// SurrealDB URL
+    #[arg(long, env = "SURREAL_URL", default_value = "http://localhost:8000")]
+    url: String,
+    /// SurrealDB namespace
+    #[arg(long, env = "SURREAL_NS", default_value = "main")]
+    namespace: String,
+    /// SurrealDB database
+    #[arg(long, env = "SURREAL_DB", default_value = "main")]
+    database: String,
+    /// SurrealDB username
+    #[arg(long, env = "SURREAL_USER", default_value = "root")]
+    username: String,
+    /// SurrealDB password
+    #[arg(long, env = "SURREAL_PASS", default_value = "root")]
+    password: String,
 }
 
 /// Filter schema content to remove field definitions with FOR select WHERE false
@@ -208,11 +266,55 @@ fn extract_table_and_field_name(line: &str) -> Option<(String, String)> {
     }
 }
 
+fn handle_migrate(action: MigrateCommands) -> Result<()> {
+    match action {
+        MigrateCommands::Create {
+            name,
+            schema,
+            migrations_dir,
+        } => migrate::create(&migrations_dir, &name, schema.as_deref()),
+        MigrateCommands::Apply {
+            conn,
+            migrations_dir,
+        } => {
+            let client = SurrealClient::new(
+                &conn.url,
+                &conn.namespace,
+                &conn.database,
+                &conn.username,
+                &conn.password,
+            );
+            migrate::apply(&client, &migrations_dir)
+        }
+        MigrateCommands::Status {
+            conn,
+            migrations_dir,
+        } => {
+            let client = SurrealClient::new(
+                &conn.url,
+                &conn.namespace,
+                &conn.database,
+                &conn.username,
+                &conn.password,
+            );
+            migrate::status(&client, &migrations_dir)
+        }
+    }
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    if let Some(Commands::Setup) = args.command {
-        return setup_project();
+    match args.command {
+        Some(Commands::Setup) => return setup_project(),
+        Some(Commands::Migrate { action }) => return handle_migrate(action),
+        None => {} // fall through to legacy codegen mode
+    }
+
+    // Surrealism mode is not supported yet
+    if args.mode == "surrealism" {
+        eprintln!("Warning: Surrealism mode is not supported yet.");
+        std::process::exit(1);
     }
 
     // Legacy mode validation
@@ -264,7 +366,7 @@ fn main() -> Result<()> {
     let meta_tables = include_str!("meta_tables.surql");
     let meta_tables_remote = include_str!("meta_tables_remote.surql");
     let functions_remote = include_str!("functions_remote.surql");
-    let functions_remote_sidecar = include_str!("functions_remote_sidecar.surql");
+    let functions_remote_singlenode = include_str!("functions_remote_singlenode.surql");
     let functions_remote_surrealism = include_str!("functions_remote_surrealism.surql");
     let meta_tables_client = include_str!("meta_tables_client.surql");
 
@@ -307,7 +409,7 @@ fn main() -> Result<()> {
     println!("  + Injecting spooky_rv field for local cache schema");
     for table_name in parser.tables.keys() {
         filtered_schema_content.push_str(&format!(
-            "\nDEFINE FIELD spooky_rv ON TABLE {} TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update, delete WHERE true;",
+            "\nDEFINE FIELD spooky_rv ON TABLE {} TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;",
             table_name
         ));
     }
@@ -319,22 +421,27 @@ fn main() -> Result<()> {
         c.push_str(functions_remote);
         println!("  + Appended functions_remote.surql (common)");
 
-        if args.mode == "sidecar" {
-            println!("  → Sidecar mode detected: Using sidecar specific remote functions");
+        if args.mode == "singlenode" || args.mode == "cluster" {
+            let default_endpoint = if args.mode == "cluster" {
+                "http://localhost:9667"
+            } else {
+                "http://localhost:8667"
+            };
+            println!("  → {} mode detected: Using HTTP remote functions", args.mode);
             let endpoint = args
-                .sidecar_endpoint
+                .endpoint
                 .as_deref()
-                .unwrap_or("http://localhost:8667");
-            let secret = args.sidecar_secret.as_deref().unwrap_or("");
+                .unwrap_or(default_endpoint);
+            let secret = args.secret.as_deref().unwrap_or("");
 
-            // Inject variables into sidecar template
-            let mut sidecar_fn = functions_remote_sidecar.to_string();
-            sidecar_fn = sidecar_fn.replace("{{SIDECAR_ENDPOINT}}", endpoint);
-            sidecar_fn = sidecar_fn.replace("{{SIDECAR_SECRET}}", secret);
+            // Inject variables into singlenode template
+            let mut singlenode_fn = functions_remote_singlenode.to_string();
+            singlenode_fn = singlenode_fn.replace("{{ENDPOINT}}", endpoint);
+            singlenode_fn = singlenode_fn.replace("{{SECRET}}", secret);
 
             c.push('\n');
-            c.push_str(&sidecar_fn);
-            println!("  + Appended functions_remote_sidecar.surql (injected)");
+            c.push_str(&singlenode_fn);
+            println!("  + Appended functions_remote_singlenode.surql (injected)");
 
             // Replace unregister_view (still needed as it's in meta_tables_remote.surql)
             // We need to match the exact string from meta_tables_remote.surql
@@ -446,8 +553,8 @@ fn main() -> Result<()> {
             &content,
             is_client,
             &args.mode,
-            args.sidecar_endpoint.as_deref(),
-            args.sidecar_secret.as_deref(),
+            args.endpoint.as_deref(),
+            args.secret.as_deref(),
         );
 
         // Generate code
