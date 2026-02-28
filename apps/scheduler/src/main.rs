@@ -31,9 +31,7 @@ async fn main() -> Result<()> {
     let ingest_router = scheduler::ingest::create_ingest_router(scheduler.ingest_state());
     
     let query_state = scheduler::query::QueryState {
-        ssp_pool: std::sync::Arc::new(tokio::sync::RwLock::new(
-            scheduler::router::SspPool::new(config.load_balance.clone(), config.max_buffer_per_ssp)
-        )),
+        ssp_pool: std::sync::Arc::clone(&scheduler.ssp_pool),
         transport: std::sync::Arc::clone(&transport),
         query_tracker: std::sync::Arc::clone(&query_tracker),
     };

@@ -30,7 +30,7 @@ pub struct SchedulerMetrics {
 pub struct SspMetrics {
     pub id: String,
     pub query_count: usize,
-    pub active_jobs: usize,
+    pub views: usize,
     pub cpu_usage: Option<f64>,
     pub memory_usage: Option<f64>,
     pub last_heartbeat_seconds_ago: u64,
@@ -83,7 +83,7 @@ async fn get_metrics(
             SspMetrics {
                 id: ssp.id.clone(),
                 query_count: ssp.query_count,
-                active_jobs: ssp.active_jobs,
+                views: ssp.views,
                 cpu_usage: ssp.cpu_usage,
                 memory_usage: ssp.memory_usage,
                 last_heartbeat_seconds_ago,
@@ -134,13 +134,16 @@ async fn info_handler(
         SchedulerStatus::SnapshotUpdating => "updating",
     };
 
+    let pool = state.ssp_pool.read().await;
+    let total_views: usize = pool.all().iter().map(|ssp| ssp.views).sum();
+
     let mut entities = vec![serde_json::json!({
         "entity": "scheduler",
         "id": state.scheduler_id,
         "status": scheduler_status,
+        "views": total_views,
     })];
 
-    let pool = state.ssp_pool.read().await;
     for ssp in pool.all() {
         let ssp_status = match pool.get_state(&ssp.id) {
             Some(SspState::Bootstrapping) => "bootstrapping",
@@ -152,6 +155,7 @@ async fn info_handler(
             "entity": "ssp",
             "id": ssp.id,
             "status": ssp_status,
+            "views": ssp.views,
         }));
     }
 

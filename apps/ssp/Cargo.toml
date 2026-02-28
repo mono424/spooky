@@ -12,6 +12,7 @@ surrealdb = { version = "3.0.0", features = ["protocol-ws", "protocol-http"] }
 tokio = { version = "1.0", features = ["full"] }
 ssp = { path = "../../packages/ssp" }
 job-runner = { path = "../../packages/job-runner" }
+ssp-protocol = { path = "../../packages/ssp-protocol" }
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }

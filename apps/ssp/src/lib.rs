@@ -75,18 +75,7 @@ pub struct LogRequest {
     data: Option<Value>,
 }
 
-#[derive(Deserialize, Debug)]
-pub struct IngestRequest {
-    pub table: String,
-    pub op: String,
-    pub id: String,
-    pub record: Value,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct UnregisterViewRequest {
-    pub id: String,
-}
+use ssp_protocol::{IngestRequest, ViewUnregisterRequest};
 
 // --- Configuration ---
 
@@ -101,6 +90,7 @@ pub struct Config {
     pub scheduler_url: Option<String>,
     pub ssp_id: String,
     pub heartbeat_interval_ms: u64,
+    pub advertise_addr: Option<String>,
 }
 
 pub fn load_config() -> Config {
@@ -122,6 +112,7 @@ pub fn load_config() -> Config {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(5000),
+        advertise_addr: std::env::var("ADVERTISE_ADDR").ok(),
     }
 }
 
@@ -199,7 +190,8 @@ pub async fn connect_database(config: &Config) -> anyhow::Result<SharedDb> {
 // --- Router Setup ---
 
 pub fn create_app(state: AppState) -> Router {
-    Router::new()
+    // Authenticated routes — require Bearer token
+    let authenticated = Router::new()
         .route("/ingest", post(ingest_handler))
         .route("/log", post(log_handler))
         .route("/debug/view/:view_id", get(debug_view_handler))
@@ -207,11 +199,15 @@ pub fn create_app(state: AppState) -> Router {
         .route("/view/register", post(register_view_handler))
         .route("/view/unregister", post(unregister_view_handler))
         .route("/reset", post(reset_handler))
+        .layer(middleware::from_fn(auth_middleware));
+
+    // Public routes — no auth required (health checks, info, version)
+    let public = Router::new()
         .route("/health", get(health_handler))
         .route("/info", get(info_handler))
-        .route("/version", get(version_handler))
-        .layer(middleware::from_fn(auth_middleware))
-        .with_state(state)
+        .route("/version", get(version_handler));
+
+    authenticated.merge(public).with_state(state)
 }
 
 // --- Server Lifecycle ---
@@ -296,6 +292,7 @@ pub async fn run_server() -> anyhow::Result<()> {
         let scheduler_url = config.scheduler_url.clone();
         let ssp_id = config.ssp_id.clone();
         let listen_addr = config.listen_addr.clone();
+        let advertise_addr = config.advertise_addr.clone();
 
         tokio::spawn(async move {
             // Choose bootstrap source based on mode
@@ -307,10 +304,11 @@ pub async fn run_server() -> anyhow::Result<()> {
                 let registration_url = format!("{}/ssp/register", scheduler_base);
                 info!("Registering SSP {} with scheduler at {}", ssp_id, scheduler_base);
 
-                // Derive a routable registration URL. If listen_addr binds to
-                // a wildcard (0.0.0.0), use the container hostname instead so
-                // the scheduler can route back via Docker DNS.
-                let registration_host = {
+                // Derive a routable registration URL.
+                // Priority: ADVERTISE_ADDR env var > hostname detection > listen_addr
+                let registration_host = if let Some(ref addr) = advertise_addr {
+                    addr.clone()
+                } else {
                     let (host, port) = listen_addr.rsplit_once(':').unwrap_or(("0.0.0.0", "8667"));
                     if host == "0.0.0.0" || host == "127.0.0.1" {
                         let hostname = hostname::get()
@@ -322,10 +320,10 @@ pub async fn run_server() -> anyhow::Result<()> {
                     }
                 };
 
-                let payload = json!({
-                    "ssp_id": ssp_id,
-                    "url": format!("http://{}", registration_host),
-                });
+                let payload = ssp_protocol::SspRegistration {
+                    ssp_id: ssp_id.clone(),
+                    url: format!("http://{}", registration_host),
+                };
 
                 match client.post(&registration_url).json(&payload).send().await {
                     Ok(resp) if resp.status().is_success() => {
@@ -386,21 +384,21 @@ pub async fn run_server() -> anyhow::Result<()> {
             loop {
                 interval.tick().await;
 
-                let active_queries = {
+                let views = {
                     let circuit = processor_clone.read().await;
                     circuit.view_count()
                 };
 
-                let payload = json!({
-                    "ssp_id": ssp_id,
-                    "timestamp": std::time::SystemTime::now()
+                let payload = ssp_protocol::SspHeartbeat {
+                    ssp_id: ssp_id.clone(),
+                    timestamp: std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap()
                         .as_secs(),
-                    "active_queries": active_queries,
-                    "cpu_usage": None::<f64>,
-                    "memory_usage": None::<f64>,
-                });
+                    views,
+                    cpu_usage: None,
+                    memory_usage: None,
+                };
 
                 match client.post(&heartbeat_url).json(&payload).send().await {
                     Ok(resp) if resp.status() == StatusCode::NOT_FOUND => {
@@ -818,8 +816,22 @@ async fn register_view_handler(
         info!(
             target: "ssp::edges",
             view_id = %incantation_id,
-            "View already existed - skipping registration"
+            "View already existed - updating metadata only"
         );
+
+        // Still update the _spooky_query record for fresh clientId/lastActiveAt
+        let client_id = data.metadata.get("clientId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let last_active_at = data.metadata.get("lastActiveAt").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+        let query = "UPDATE <record>$id SET clientId = <string>$clientId, lastActiveAt = <datetime>$lastActiveAt";
+        if let Err(e) = state.db.query(query)
+            .bind(("id", incantation_id.clone()))
+            .bind(("clientId", client_id))
+            .bind(("lastActiveAt", last_active_at))
+            .await
+        {
+            error!("Failed to update incantation metadata: {}", e);
+        }
 
         return StatusCode::OK.into_response();
     }
@@ -901,7 +913,7 @@ async fn register_view_handler(
 #[instrument(skip(state), fields(view_id = %payload.id))]
 async fn unregister_view_handler(
     State(state): State<AppState>,
-    Json(payload): Json<UnregisterViewRequest>,
+    Json(payload): Json<ViewUnregisterRequest>,
 ) -> Response {
     // Gate: reject if not ready
     let status = *state.status.read().await;

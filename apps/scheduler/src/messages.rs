@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub use ssp_protocol::SspHeartbeat;
+
 /// Record operation type
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecordOp {
@@ -27,16 +29,6 @@ pub struct RecordUpdate {
     pub record_id: String,
     pub data: Option<Value>,
     pub version: u64,
-}
-
-/// SSP heartbeat message
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct SspHeartbeat {
-    pub ssp_id: String,
-    pub timestamp: u64,
-    pub active_queries: usize,
-    pub cpu_usage: Option<f64>,
-    pub memory_usage: Option<f64>,
 }
 
 /// Bootstrap request from SSP

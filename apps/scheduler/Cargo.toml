@@ -17,6 +17,7 @@ config = "0.14"
 anyhow = "1"
 axum = "0.7"
 uuid = { version = "1", features = ["v4"] }
+ssp-protocol = { path = "../../packages/ssp-protocol" }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

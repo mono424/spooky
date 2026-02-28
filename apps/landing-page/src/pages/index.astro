@@ -369,155 +369,6 @@ import { basePath } from '../config/nav';
         <div class="architecture-scroll-wrapper">
           <div class="architecture-scroll-container">
             <div
-              class="group border border-surface-border bg-surface hover:border-brand-500/30 hover:shadow-xl transition-all duration-300 relative overflow-hidden rounded-2xl flex flex-col architecture-box"
-            >
-              <!-- Gradient header banner -->
-              <div class="h-1.5 w-full bg-gradient-to-r from-brand-500 to-brand-600"></div>
-
-              <div class="p-8 flex-1 flex flex-col relative z-10">
-                <div class="flex justify-between items-baseline mb-6">
-                  <h3 class="text-xl font-bold text-text-primary">Surrealism (WASM)</h3>
-                  <span
-                    class="text-xs font-medium bg-brand-500/10 border border-brand-500/30 text-brand-400 px-3 py-1 rounded-lg"
-                    >Local / Testing</span
-                  >
-                </div>
-
-                <div class="w-full flex flex-col gap-4 font-mono mb-8">
-                  <!-- CLIENTS LAYER -->
-                  <div class="flex justify-center gap-10 relative z-10">
-                    <div class="flex flex-col items-center gap-1 group/client">
-                      <div
-                        class="h-8 w-8 border border-gray-600 rounded bg-surface-elevated flex items-center justify-center text-gray-400 group-hover/client:border-white group-hover/client:text-white transition-colors"
-                      >
-                        <span class="text-[10px]">DEV</span>
-                      </div>
-                      <span class="text-[8px] text-gray-600">Developer</span>
-                      <div
-                        class="w-[1px] h-full bg-gradient-to-b from-transparent via-gray-700 to-gray-700"
-                      >
-                      </div>
-                    </div>
-                    <div class="flex flex-col items-center gap-1 group/client">
-                      <div
-                        class="h-8 w-8 border border-gray-600 rounded bg-surface-elevated flex items-center justify-center text-gray-400 group-hover/client:border-white group-hover/client:text-white transition-colors"
-                      >
-                        <span class="text-[10px]">TEST</span>
-                      </div>
-                      <span class="text-[8px] text-gray-600">Vitest</span>
-                      <div
-                        class="w-[1px] h-full bg-gradient-to-b from-transparent via-gray-700 to-gray-700"
-                      >
-                      </div>
-                    </div>
-                  </div>
-
-                  <!-- INFRASTRUCTURE BOX -->
-                  <div
-                    class="border border-dashed border-surface-border p-3 rounded bg-surface-elevated relative mt-2"
-                  >
-                    <div
-                      class="absolute -top-2 left-3 bg-surface px-1 text-[8px] text-gray-500 font-bold uppercase tracking-wider"
-                    >
-                      Local Infrastructure
-                    </div>
-
-                    <div class="flex gap-2">
-                      <!-- SURREALDB CONTAINER -->
-                      <div
-                        class="flex-1 border border-brand-900/40 bg-brand-900/5 p-2 rounded flex flex-col gap-2 relative overflow-hidden mb-9"
-                      >
-                        <div
-                          class="flex items-center justify-between border-b border-brand-900/20 pb-1 relative z-10"
-                        >
-                          <span class="text-[9px] font-bold text-brand-400">SURREALDB</span>
-                          <span class="h-1.5 w-1.5 rounded-full bg-brand-500 animate-pulse"></span>
-                        </div>
-
-                        <!-- EMBEDDED WASM -->
-                        <div
-                          class="bg-black/50 border border-brand-500/30 p-2 rounded relative z-10"
-                        >
-                          <div class="flex justify-between items-center mb-1">
-                            <span class="text-[8px] font-bold text-gray-300"
-                              >Spooky Stream Processor (WASM)</span
-                            >
-                            <span class="text-[8px] text-orange-400">Ephemeral</span>
-                          </div>
-                          <div class="h-1 w-full bg-gray-800 rounded overflow-hidden">
-                            <div class="h-full bg-brand-500/50 w-full animate-pulse"></div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div class="mt-auto">
-                  <p class="text-xs text-gray-500 mb-4 font-mono leading-relaxed">
-                    The Spooky Stream Processor executes directly within SurrealDB—ideal for <span
-                      class="text-gray-300">automated testing scenarios</span
-                    >, CI/CD pipelines, and local development.
-                  </p>
-                  <ul
-                    class="space-y-2 font-mono text-xs text-gray-500 border-t border-surface-border pt-4"
-                  >
-                    <li
-                      class="flex items-start gap-2 transition-colors duration-300 hover:text-gray-300"
-                    >
-                      <svg
-                        class="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                      >
-                        <path
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          stroke-width="2"
-                          d="M5 13l4 4L19 7"></path>
-                      </svg>
-                      <span>Zero setup (runs inside `surreal start`).</span>
-                    </li>
-                    <li
-                      class="flex items-start gap-2 transition-colors duration-300 hover:text-gray-300"
-                    >
-                      <svg
-                        class="w-4 h-4 text-orange-400 mt-0.5 flex-shrink-0"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                      >
-                        <path
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          stroke-width="2"
-                          d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-                        ></path>
-                      </svg>
-                      <span
-                        class="relative group/tooltip cursor-help border-b border-dotted border-gray-600"
-                      >
-                        High I/O overhead (State Rehydration).
-                        <div
-                          class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 p-3 bg-surface-elevated border border-surface-border text-[10px] text-gray-400 opacity-0 group-hover/tooltip:opacity-100 transition-opacity pointer-events-none z-50 shadow-xl rounded font-normal normal-case"
-                        >
-                          The DBSP processor runs as an embedded WASM function. Since WASM memory is
-                          ephemeral, the entire state must be loaded and saved to the database on
-                          every execution.
-                          <div
-                            class="absolute top-full left-1/2 -translate-x-1/2 -mt-1 border-4 border-transparent border-t-[#333]"
-                          >
-                          </div>
-                        </div>
-                      </span>
-                    </li>
-                  </ul>
-                </div>
-              </div>
-            </div>
-
-            <div
               class="group border border-surface-border bg-surface hover:border-accent-500/30 hover:shadow-xl transition-all duration-300 relative overflow-hidden rounded-2xl flex flex-col architecture-box"
             >
               <!-- Gradient header banner -->
@@ -528,7 +379,7 @@ import { basePath } from '../config/nav';
                   <h3 class="text-xl font-bold text-text-primary">SSP Singlenode</h3>
                   <span
                     class="text-xs font-medium bg-accent-500/10 border border-accent-500/30 text-accent-400 px-3 py-1 rounded-lg"
-                    >Production</span
+                    >Development</span
                   >
                 </div>
 
@@ -705,7 +556,7 @@ import { basePath } from '../config/nav';
                   <h3 class="text-xl font-bold text-text-primary">SSP Cluster</h3>
                   <span
                     class="text-xs font-medium bg-orange-500/10 border border-orange-500/30 text-orange-400 px-3 py-1 rounded-lg"
-                    >Enterprise</span
+                    >Production</span
                   >
                 </div>
 
@@ -993,6 +844,155 @@ import { basePath } from '../config/nav';
                           d="M5 13l4 4L19 7"></path>
                       </svg>
                       <span>Intelligent Query Routing & Load Balancing.</span>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            <div
+              class="group border border-surface-border bg-surface opacity-60 transition-all duration-300 relative overflow-hidden rounded-2xl flex flex-col architecture-box"
+            >
+              <!-- Gradient header banner -->
+              <div class="h-1.5 w-full bg-gradient-to-r from-gray-500 to-gray-600"></div>
+
+              <div class="p-8 flex-1 flex flex-col relative z-10">
+                <div class="flex justify-between items-baseline mb-6">
+                  <h3 class="text-xl font-bold text-text-primary">Surrealism (WASM)</h3>
+                  <span
+                    class="text-xs font-medium bg-gray-500/10 border border-gray-500/30 text-gray-400 px-3 py-1 rounded-lg"
+                    >Coming Soon</span
+                  >
+                </div>
+
+                <div class="w-full flex flex-col gap-4 font-mono mb-8">
+                  <!-- CLIENTS LAYER -->
+                  <div class="flex justify-center gap-10 relative z-10">
+                    <div class="flex flex-col items-center gap-1 group/client">
+                      <div
+                        class="h-8 w-8 border border-gray-600 rounded bg-surface-elevated flex items-center justify-center text-gray-400 group-hover/client:border-white group-hover/client:text-white transition-colors"
+                      >
+                        <span class="text-[10px]">DEV</span>
+                      </div>
+                      <span class="text-[8px] text-gray-600">Developer</span>
+                      <div
+                        class="w-[1px] h-full bg-gradient-to-b from-transparent via-gray-700 to-gray-700"
+                      >
+                      </div>
+                    </div>
+                    <div class="flex flex-col items-center gap-1 group/client">
+                      <div
+                        class="h-8 w-8 border border-gray-600 rounded bg-surface-elevated flex items-center justify-center text-gray-400 group-hover/client:border-white group-hover/client:text-white transition-colors"
+                      >
+                        <span class="text-[10px]">TEST</span>
+                      </div>
+                      <span class="text-[8px] text-gray-600">Vitest</span>
+                      <div
+                        class="w-[1px] h-full bg-gradient-to-b from-transparent via-gray-700 to-gray-700"
+                      >
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- INFRASTRUCTURE BOX -->
+                  <div
+                    class="border border-dashed border-surface-border p-3 rounded bg-surface-elevated relative mt-2"
+                  >
+                    <div
+                      class="absolute -top-2 left-3 bg-surface px-1 text-[8px] text-gray-500 font-bold uppercase tracking-wider"
+                    >
+                      Local Infrastructure
+                    </div>
+
+                    <div class="flex gap-2">
+                      <!-- SURREALDB CONTAINER -->
+                      <div
+                        class="flex-1 border border-brand-900/40 bg-brand-900/5 p-2 rounded flex flex-col gap-2 relative overflow-hidden mb-9"
+                      >
+                        <div
+                          class="flex items-center justify-between border-b border-brand-900/20 pb-1 relative z-10"
+                        >
+                          <span class="text-[9px] font-bold text-brand-400">SURREALDB</span>
+                          <span class="h-1.5 w-1.5 rounded-full bg-brand-500 animate-pulse"></span>
+                        </div>
+
+                        <!-- EMBEDDED WASM -->
+                        <div
+                          class="bg-black/50 border border-brand-500/30 p-2 rounded relative z-10"
+                        >
+                          <div class="flex justify-between items-center mb-1">
+                            <span class="text-[8px] font-bold text-gray-300"
+                              >Spooky Stream Processor (WASM)</span
+                            >
+                            <span class="text-[8px] text-orange-400">Ephemeral</span>
+                          </div>
+                          <div class="h-1 w-full bg-gray-800 rounded overflow-hidden">
+                            <div class="h-full bg-brand-500/50 w-full animate-pulse"></div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="mt-auto">
+                  <p class="text-xs text-gray-500 mb-4 font-mono leading-relaxed">
+                    The Spooky Stream Processor executes directly within SurrealDB—ideal for <span
+                      class="text-gray-300">automated testing scenarios</span
+                    >, CI/CD pipelines, and local development.
+                  </p>
+                  <ul
+                    class="space-y-2 font-mono text-xs text-gray-500 border-t border-surface-border pt-4"
+                  >
+                    <li
+                      class="flex items-start gap-2 transition-colors duration-300 hover:text-gray-300"
+                    >
+                      <svg
+                        class="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width="2"
+                          d="M5 13l4 4L19 7"></path>
+                      </svg>
+                      <span>Zero setup (runs inside `surreal start`).</span>
+                    </li>
+                    <li
+                      class="flex items-start gap-2 transition-colors duration-300 hover:text-gray-300"
+                    >
+                      <svg
+                        class="w-4 h-4 text-orange-400 mt-0.5 flex-shrink-0"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width="2"
+                          d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                        ></path>
+                      </svg>
+                      <span
+                        class="relative group/tooltip cursor-help border-b border-dotted border-gray-600"
+                      >
+                        High I/O overhead (State Rehydration).
+                        <div
+                          class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 p-3 bg-surface-elevated border border-surface-border text-[10px] text-gray-400 opacity-0 group-hover/tooltip:opacity-100 transition-opacity pointer-events-none z-50 shadow-xl rounded font-normal normal-case"
+                        >
+                          The DBSP processor runs as an embedded WASM function. Since WASM memory is
+                          ephemeral, the entire state must be loaded and saved to the database on
+                          every execution.
+                          <div
+                            class="absolute top-full left-1/2 -translate-x-1/2 -mt-1 border-4 border-transparent border-t-[#333]"
+                          >
+                          </div>
+                        </div>
+                      </span>
                     </li>
                   </ul>
                 </div>

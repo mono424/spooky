@@ -11,18 +11,9 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{error, info};
 
-use crate::router:: SspPool;
+use crate::router::SspPool;
 use crate::transport::HttpTransport;
-
-/// Query registration request
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QueryRegistration {
-    pub query_id: String,
-    pub client_id: String,
-    pub tables: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub priority: Option<u8>,
-}
+use ssp_protocol::{ViewRegisterRequest, ViewUnregisterRequest};
 
 /// Query assignment response
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -106,9 +97,10 @@ pub fn create_query_router(state: QueryState) -> Router {
 /// Handle query registration
 async fn register_query(
     State(state): State<QueryState>,
-    Json(request): Json<QueryRegistration>,
+    Json(request): Json<ViewRegisterRequest>,
 ) -> Result<Json<QueryAssignment>, (StatusCode, String)> {
-    info!("Registering query: {}", request.query_id);
+    let query_id = request.id.clone();
+    info!("Registering query: {}", query_id);
 
     // Select SSP based on load balancing strategy
     let (ssp_id, ssp_url) = {
@@ -129,7 +121,7 @@ async fn register_query(
                 (id, url)
             }
             None => {
-                error!("No ready SSP available for query {}", request.query_id);
+                error!("No ready SSP available for query {}", query_id);
                 return Err((
                     StatusCode::SERVICE_UNAVAILABLE,
                     "No SSP available".to_string(),
@@ -139,7 +131,7 @@ async fn register_query(
     };
 
     // Assign query to SSP in tracker
-    state.query_tracker.assign(request.query_id.clone(), ssp_id.clone()).await;
+    state.query_tracker.assign(query_id.clone(), ssp_id.clone()).await;
 
     // Send registration to SSP via HTTP POST /view/register
     if let Err(e) = state
@@ -149,7 +141,12 @@ async fn register_query(
     {
         error!("Failed to send query registration to SSP: {}", e);
         // Remove from tracker on failure
-        state.query_tracker.unassign(&request.query_id).await;
+        state.query_tracker.unassign(&query_id).await;
+        // Decrement query count on failure
+        {
+            let mut pool = state.ssp_pool.write().await;
+            pool.decrement_query_count(&ssp_id);
+        }
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to send to SSP: {}", e),
@@ -157,7 +154,7 @@ async fn register_query(
     }
 
     let assignment = QueryAssignment {
-        query_id: request.query_id,
+        query_id: query_id.clone(),
         ssp_id,
         assigned_at: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -169,27 +166,22 @@ async fn register_query(
     Ok(Json(assignment))
 }
 
-/// Unregister query request
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QueryUnregistration {
-    pub query_id: String,
-}
-
 /// Handle query unregistration
 async fn unregister_query(
     State(state): State<QueryState>,
-    Json(request): Json<QueryUnregistration>,
+    Json(request): Json<ViewUnregisterRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    info!("Unregistering query: {}", request.query_id);
+    let query_id = &request.id;
+    info!("Unregistering query: {}", query_id);
 
     // Get SSP assignment and URL
     let (ssp_id, ssp_url) = {
-        let ssp_id = match state.query_tracker.get_assignment(&request.query_id).await {
+        let ssp_id = match state.query_tracker.get_assignment(query_id).await {
             Some(id) => id,
             None => {
                 return Err((
                     StatusCode::NOT_FOUND,
-                    format!("Query {} not found", request.query_id),
+                    format!("Query {} not found", query_id),
                 ));
             }
         };
@@ -220,8 +212,8 @@ async fn unregister_query(
     }
 
     // Unassign from tracker
-    state.query_tracker.unassign(&request.query_id).await;
+    state.query_tracker.unassign(query_id).await;
 
-    info!("Unregistered query {}", request.query_id);
+    info!("Unregistered query {}", query_id);
     Ok(StatusCode::OK)
 }

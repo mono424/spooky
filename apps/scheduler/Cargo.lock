@@ -3907,6 +3907,7 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "ssp-protocol",
  "surrealdb",
  "tempfile",
  "tokio",
@@ -4223,6 +4224,14 @@ checksum = "d91ed6c858b01f942cd56b37a94b3e0a1798290327d1236e4d9cf4eaca44d29d"
 dependencies = [
  "base64ct",
  "der",
+]
+
+[[package]]
+name = "ssp-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

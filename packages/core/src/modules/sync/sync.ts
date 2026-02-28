@@ -77,10 +77,7 @@ export class SpookySync<S extends SchemaStructure> {
     );
 
     const [queryUuid] = await this.remote.query<[Uuid]>(
-      'LIVE SELECT * FROM _spooky_list_ref WHERE clientId = $clientId',
-      {
-        clientId: this.clientId,
-      }
+      'LIVE SELECT * FROM _spooky_list_ref'
     );
 
     (await this.remote.getClient().liveOf(queryUuid)).subscribe((message) => {

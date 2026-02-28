@@ -5,8 +5,6 @@ use axum::{
     routing::post,
     Json, Router,
 };
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -20,15 +18,7 @@ use crate::router::SspPool;
 use crate::transport::HttpTransport;
 use crate::wal::EventWal;
 use crate::SchedulerStatus;
-
-/// Ingest request from database events (matches SSP's IngestRequest format)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IngestRequest {
-    pub table: String,
-    pub op: String,
-    pub id: String,
-    pub record: Value,
-}
+use ssp_protocol::IngestRequest;
 
 /// Shared state for ingest handlers
 #[derive(Clone)]

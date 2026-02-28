@@ -297,7 +297,7 @@ impl Scheduler {
                         ).await {
                             error!(
                                 seq = event.seq,
-                                error = %e,
+                                error = ?e,
                                 "Failed to apply event to snapshot"
                             );
                         }

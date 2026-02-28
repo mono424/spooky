@@ -51,13 +51,13 @@ impl SspPool {
     pub fn update_ssp(
         &mut self,
         ssp_id: &str,
-        active_queries: usize,
+        views: usize,
         cpu_usage: Option<f64>,
         memory_usage: Option<f64>,
     ) {
         if let Some(ssp) = self.ssps.get_mut(ssp_id) {
             ssp.last_heartbeat = Instant::now();
-            ssp.active_jobs = active_queries;
+            ssp.views = views;
             ssp.cpu_usage = cpu_usage;
             ssp.memory_usage = memory_usage;
         } else {
@@ -68,7 +68,7 @@ impl SspPool {
                 connected_at: Instant::now(),
                 last_heartbeat: Instant::now(),
                 query_count: 0,
-                active_jobs: active_queries,
+                views,
                 cpu_usage,
                 memory_usage,
             };

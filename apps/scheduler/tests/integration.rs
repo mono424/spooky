@@ -90,6 +90,7 @@ impl TestHarness {
             bootstrap_timeout_secs: 5,
             ssp_poll_interval_ms: 100,
             wal_path,
+            scheduler_id: "test-scheduler".to_string(),
         };
 
         Self {
@@ -167,6 +168,8 @@ impl TestHarness {
             query_tracker: Arc::clone(&self.query_tracker),
             job_tracker: Arc::clone(&self.job_tracker),
             start_time: std::time::Instant::now(),
+            scheduler_id: "test-scheduler".to_string(),
+            status: Arc::clone(&self.status),
         };
         metrics::create_metrics_router(state)
     }
@@ -188,7 +191,7 @@ impl TestHarness {
             connected_at: std::time::Instant::now(),
             last_heartbeat: std::time::Instant::now(),
             query_count: 0,
-            active_jobs: 0,
+            views: 0,
             cpu_usage: None,
             memory_usage: None,
         };
@@ -205,7 +208,7 @@ impl TestHarness {
             connected_at: std::time::Instant::now(),
             last_heartbeat: std::time::Instant::now(),
             query_count: 0,
-            active_jobs: 0,
+            views: 0,
             cpu_usage: None,
             memory_usage: None,
         };
@@ -548,7 +551,7 @@ mod ssp_management_tests {
         json!({
             "ssp_id": ssp_id,
             "timestamp": 1000,
-            "active_queries": 5,
+            "views": 5,
             "cpu_usage": 45.0,
             "memory_usage": 60.0
         })
@@ -710,7 +713,7 @@ mod ssp_management_tests {
 
         let pool = h.ssp_pool.read().await;
         let ssp = pool.get("ssp-1").unwrap();
-        assert_eq!(ssp.active_jobs, 5);
+        assert_eq!(ssp.views, 5);
         assert_eq!(ssp.cpu_usage, Some(45.0));
         assert_eq!(ssp.memory_usage, Some(60.0));
     }
@@ -838,11 +841,11 @@ mod query_tests {
 
         let (status, _) = post_json(
             app,
-            "/query/register",
+            "/view/register",
             &json!({
-                "query_id": "q1",
-                "client_id": "c1",
-                "tables": ["user"]
+                "id": "q1",
+                "surql": "SELECT * FROM user",
+                "clientId": "c1"
             }),
         )
         .await;
@@ -858,11 +861,11 @@ mod query_tests {
         let app = h.query_router();
         let (status, _) = post_json(
             app,
-            "/query/register",
+            "/view/register",
             &json!({
-                "query_id": "q1",
-                "client_id": "c1",
-                "tables": ["user"]
+                "id": "q1",
+                "surql": "SELECT * FROM user",
+                "clientId": "c1"
             }),
         )
         .await;
@@ -881,11 +884,11 @@ mod query_tests {
         let app = h.query_router();
         let (status, body) = post_json(
             app,
-            "/query/register",
+            "/view/register",
             &json!({
-                "query_id": "q1",
-                "client_id": "c1",
-                "tables": ["user"]
+                "id": "q1",
+                "surql": "SELECT * FROM user",
+                "clientId": "c1"
             }),
         )
         .await;
@@ -905,8 +908,8 @@ mod query_tests {
 
         let (status, _) = post_json(
             app,
-            "/query/unregister",
-            &json!({"query_id": "nonexistent"}),
+            "/view/unregister",
+            &json!({"id": "nonexistent"}),
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
@@ -1205,13 +1208,13 @@ mod bootstrap_protocol_tests {
             ),
             (
                 "POST",
-                "/query/register",
-                json!({"query_id": "q1", "client_id": "c1", "tables": ["user"]}),
+                "/view/register",
+                json!({"id": "q1", "surql": "SELECT * FROM user", "clientId": "c1"}),
             ),
             (
                 "POST",
-                "/query/unregister",
-                json!({"query_id": "q-pre"}),
+                "/view/unregister",
+                json!({"id": "q-pre"}),
             ),
             (
                 "POST",

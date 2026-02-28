@@ -16,7 +16,7 @@ pub struct SspInfo {
     #[serde(skip, default = "std::time::Instant::now")]
     pub last_heartbeat: Instant,
     pub query_count: usize,
-    pub active_jobs: usize,
+    pub views: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cpu_usage: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -27,6 +27,7 @@ pub struct SspInfo {
 #[derive(Clone)]
 pub struct HttpTransport {
     client: Client,
+    ssp_auth_secret: Option<String>,
 }
 
 impl HttpTransport {
@@ -37,7 +38,9 @@ impl HttpTransport {
             .build()
             .expect("Failed to create HTTP client");
 
-        Self { client }
+        let ssp_auth_secret = std::env::var("SPOOKY_AUTH_SECRET").ok();
+
+        Self { client, ssp_auth_secret }
     }
 
     /// POST a JSON payload to a specific SSP endpoint
@@ -50,10 +53,12 @@ impl HttpTransport {
         let url = format!("{}{}", ssp_url.trim_end_matches('/'), path);
         debug!("POST {} -> {}", path, url);
 
-        let response = self
-            .client
-            .post(&url)
-            .json(payload)
+        let mut request = self.client.post(&url).json(payload);
+        if let Some(ref secret) = self.ssp_auth_secret {
+            request = request.bearer_auth(secret);
+        }
+
+        let response = request
             .send()
             .await
             .with_context(|| format!("Failed to POST to SSP at {}", url))?;

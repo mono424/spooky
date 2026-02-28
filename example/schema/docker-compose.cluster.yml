@@ -1,3 +1,27 @@
+x-ssp-common: &ssp-common
+  build:
+    context: ../../
+    dockerfile: apps/ssp/Dockerfile
+  environment: &ssp-env
+    RUST_LOG: "info,ssp=debug"
+    OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
+    OTEL_SERVICE_NAME: "spooky-ssp"
+    SURREALDB_ADDR: "surrealdb:8000/rpc"
+    SURREALDB_NS: "main"
+    SURREALDB_DB: "main"
+    SURREALDB_USER: "root"
+    SURREALDB_PASS: "root"
+    SPOOKY_AUTH_SECRET: "mysecret"
+    SPOOKY_PERSISTENCE_FILE: "/data/spooky_state.json"
+    SPOOKY_CONFIG_PATH: "/config/spooky.yml"
+    SCHEDULER_URL: "http://scheduler:9667"
+  volumes:
+    - ./spooky.yml:/config/spooky.yml:ro
+  depends_on:
+    scheduler:
+      condition: service_healthy
+  restart: unless-stopped
+
 services:
   aspire-dashboard:
     image: mcr.microsoft.com/dotnet/aspire-dashboard:latest
@@ -67,13 +91,14 @@ services:
       - '9667:9667'
     environment:
       - RUST_LOG=info,scheduler=debug
-      - SPOOKY_SCHEDULER_DB_URL=ws://surrealdb:8000
+      - SPOOKY_SCHEDULER_DB_URL=surrealdb:8000/rpc
       - SPOOKY_SCHEDULER_DB_NAMESPACE=main
       - SPOOKY_SCHEDULER_DB_DATABASE=main
       - SPOOKY_SCHEDULER_DB_USERNAME=root
       - SPOOKY_SCHEDULER_DB_PASSWORD=root
       - SPOOKY_SCHEDULER_REPLICA_DB_PATH=/data/replica
       - SPOOKY_SCHEDULER_WAL_PATH=/data/event_wal.log
+      - SPOOKY_AUTH_SECRET=mysecret
     volumes:
       - scheduler-data:/data
     depends_on:
@@ -87,31 +112,26 @@ services:
       start_period: 30s
     restart: unless-stopped
 
-  ssp:
-    build:
-      context: ../../
-      dockerfile: apps/ssp/Dockerfile
-    deploy:
-      replicas: 3
+  ssp-1:
+    <<: *ssp-common
     environment:
-      - RUST_LOG=info,ssp=debug
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://aspire-dashboard:18889
-      - OTEL_SERVICE_NAME=spooky-ssp
-      - SURREALDB_ADDR=surrealdb:8000/rpc
-      - SURREALDB_NS=main
-      - SURREALDB_DB=main
-      - SURREALDB_USER=root
-      - SURREALDB_PASS=root
-      - SPOOKY_AUTH_SECRET=mysecret
-      - SPOOKY_PERSISTENCE_FILE=/data/spooky_state.json
-      - SPOOKY_CONFIG_PATH=/config/spooky.yml
-      - SCHEDULER_URL=http://scheduler:9667
-    volumes:
-      - ./spooky.yml:/config/spooky.yml:ro
-    depends_on:
-      scheduler:
-        condition: service_healthy
-    restart: unless-stopped
+      <<: *ssp-env
+      SSP_ID: "ssp-1"
+      ADVERTISE_ADDR: "ssp-1:8667"
+
+  ssp-2:
+    <<: *ssp-common
+    environment:
+      <<: *ssp-env
+      SSP_ID: "ssp-2"
+      ADVERTISE_ADDR: "ssp-2:8667"
+
+  ssp-3:
+    <<: *ssp-common
+    environment:
+      <<: *ssp-env
+      SSP_ID: "ssp-3"
+      ADVERTISE_ADDR: "ssp-3:8667"
 
 volumes:
   scheduler-data:

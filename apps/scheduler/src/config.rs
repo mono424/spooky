@@ -44,7 +44,7 @@ impl Default for SchedulerConfig {
     fn default() -> Self {
         Self {
             db: DbConfig {
-                url: "ws://localhost:8000".to_string(),
+                url: "localhost:8000/rpc".to_string(),
                 namespace: "spooky".to_string(),
                 database: "spooky".to_string(),
                 username: "root".to_string(),

@@ -16,6 +16,7 @@ WORKDIR /usr/src/app
 
 # Planner stage
 FROM chef as planner
+COPY packages/ssp-protocol packages/ssp-protocol
 COPY apps/scheduler apps/scheduler
 WORKDIR /usr/src/app/apps/scheduler
 RUN cargo chef prepare --recipe-path recipe.json
@@ -23,6 +24,7 @@ RUN cargo chef prepare --recipe-path recipe.json
 # Cacher stage
 FROM chef as cacher
 WORKDIR /usr/src/app
+COPY packages/ssp-protocol packages/ssp-protocol
 COPY --from=planner /usr/src/app/apps/scheduler/recipe.json apps/scheduler/recipe.json
 WORKDIR /usr/src/app/apps/scheduler
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
@@ -31,6 +33,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 # Builder stage
 FROM chef as builder
+COPY packages/ssp-protocol packages/ssp-protocol
 COPY apps/scheduler apps/scheduler
 COPY --from=cacher /usr/src/app/apps/scheduler/target apps/scheduler/target
 COPY --from=cacher /usr/local/cargo /usr/local/cargo
@@ -44,6 +47,7 @@ FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y \
     ca-certificates \
+    curl \
     libssl3 \
     && rm -rf /var/lib/apt/lists/*
 

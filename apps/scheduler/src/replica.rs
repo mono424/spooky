@@ -8,6 +8,18 @@ use tracing::{debug, info};
 // Re-export RecordOp from messages to avoid duplication
 pub use crate::messages::RecordOp;
 
+/// Build a full SurrealDB thing ID, handling both `"table:id"` and bare `"id"` formats.
+/// SurrealDB event triggers send IDs that already include the table prefix (e.g. `"user:abc"`),
+/// so we must avoid doubling it into `"user:user:abc"`.
+fn build_thing_id(table: &str, id: &str) -> String {
+    let prefix = format!("{}:", table);
+    if id.starts_with(&prefix) {
+        id.to_string()
+    } else {
+        format!("{}:{}", table, id)
+    }
+}
+
 /// Chunk of replica data for bootstrap
 #[derive(Debug, Clone)]
 pub struct ReplicaChunk {
@@ -127,13 +139,14 @@ impl Replica {
             for record in records {
                 if let Some(id) = record.get("id") {
                     let id_str = id.to_string().trim_matches('"').to_string();
+                    let thing_id = build_thing_id(table_name, &id_str);
                     // Use CREATE with the full record data
                     if let Err(e) = self.db
-                        .query(format!("CREATE {}:{} CONTENT $data", table_name, id_str))
+                        .query(format!("CREATE {} CONTENT $data", thing_id))
                         .bind(("data", record))
                         .await
                     {
-                        debug!("Failed to insert {}:{}: {}", table_name, id_str, e);
+                        debug!("Failed to insert {}: {}", thing_id, e);
                     }
                 }
             }
@@ -173,34 +186,35 @@ impl Replica {
 
     /// Apply a single record event to the snapshot
     pub async fn apply(&self, table: &str, op: RecordOp, id: &str, record: Option<Value>) -> Result<()> {
+        let thing_id = build_thing_id(table, id);
         match op {
             RecordOp::Create => {
                 if let Some(data) = record {
                     self.db
-                        .query(format!("CREATE {}:{} CONTENT $data", table, id))
+                        .query(format!("CREATE {} CONTENT $data", thing_id))
                         .bind(("data", data))
                         .await
-                        .with_context(|| format!("Failed to CREATE {}:{}", table, id))?;
+                        .with_context(|| format!("Failed to CREATE {}", thing_id))?;
                 }
             }
             RecordOp::Update => {
                 if let Some(data) = record {
                     self.db
-                        .query(format!("UPDATE {}:{} MERGE $data", table, id))
+                        .query(format!("UPDATE {} MERGE $data", thing_id))
                         .bind(("data", data))
                         .await
-                        .with_context(|| format!("Failed to UPDATE {}:{}", table, id))?;
+                        .with_context(|| format!("Failed to UPDATE {}", thing_id))?;
                 }
             }
             RecordOp::Delete => {
                 self.db
-                    .query(format!("DELETE {}:{}", table, id))
+                    .query(format!("DELETE {}", thing_id))
                     .await
-                    .with_context(|| format!("Failed to DELETE {}:{}", table, id))?;
+                    .with_context(|| format!("Failed to DELETE {}", thing_id))?;
             }
         }
 
-        debug!("Applied {:?} for {}:{}", op, table, id);
+        debug!("Applied {:?} for {}", op, thing_id);
         Ok(())
     }
 

@@ -5,7 +5,6 @@ use axum::{
     routing::post,
     Json, Router,
 };
-use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -17,19 +16,7 @@ use crate::replica::Replica;
 use crate::router::SspPool;
 use crate::transport::{HttpTransport, SspInfo};
 use crate::SchedulerStatus;
-
-/// SSP registration request
-#[derive(Debug, Deserialize)]
-pub struct SspRegistration {
-    pub ssp_id: String,
-    pub url: String,
-}
-
-/// SSP registration response
-#[derive(Debug, Serialize)]
-pub struct RegistrationResponse {
-    pub snapshot_seq: u64,
-}
+use ssp_protocol::{SspRegistration, SspRegistrationResponse};
 
 /// Shared state for SSP management handlers
 #[derive(Clone)]
@@ -54,7 +41,7 @@ pub fn create_ssp_router(state: SspManagementState) -> Router {
 async fn handle_register(
     State(state): State<SspManagementState>,
     Json(request): Json<SspRegistration>,
-) -> Result<(StatusCode, Json<RegistrationResponse>), (StatusCode, String)> {
+) -> Result<(StatusCode, Json<SspRegistrationResponse>), (StatusCode, String)> {
     info!("SSP registration: {} at {}", request.ssp_id, request.url);
 
     // Validate ssp_id (non-empty)
@@ -100,7 +87,7 @@ async fn handle_register(
         connected_at: std::time::Instant::now(),
         last_heartbeat: std::time::Instant::now(),
         query_count: 0,
-        active_jobs: 0,
+        views: 0,
         cpu_usage: None,
         memory_usage: None,
     };
@@ -151,7 +138,7 @@ async fn handle_register(
     info!("SSP registration accepted, polling for bootstrap completion");
     Ok((
         StatusCode::ACCEPTED,
-        Json(RegistrationResponse { snapshot_seq }),
+        Json(SspRegistrationResponse { snapshot_seq }),
     ))
 }
 
@@ -179,7 +166,7 @@ async fn handle_heartbeat(
         let mut pool = state.ssp_pool.write().await;
         pool.update_ssp(
             &heartbeat.ssp_id,
-            heartbeat.active_queries,
+            heartbeat.views,
             heartbeat.cpu_usage,
             heartbeat.memory_usage,
         );
