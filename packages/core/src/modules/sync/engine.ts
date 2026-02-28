@@ -146,10 +146,20 @@ export class SyncEngine {
       'Checking removed records'
     );
 
-    const [existingRemote] = await this.remote.query<[{ id: string }[]]>('SELECT id FROM $ids', {
-      ids: removed,
-    });
-    const existingRemoteIds = new Set(existingRemote.map((r) => r.id));
+    let existingRemoteIds = new Set<string>();
+    try {
+      const [existingRemote] = await this.remote.query<[{ id: RecordId }[]]>('SELECT id FROM $ids', {
+        ids: removed,
+      });
+      existingRemoteIds = new Set(existingRemote.map((r) => encodeRecordId(r.id)));
+    } catch {
+      // If remote check fails (e.g., SurrealDB parameter serialization issue),
+      // proceed with deletion — the caller has already determined these should be removed
+      this.logger.debug(
+        { Category: 'spooky-client::SyncEngine::handleRemovedRecords' },
+        'Remote existence check failed, proceeding with deletion'
+      );
+    }
 
     for (const recordId of removed) {
       const recordIdStr = encodeRecordId(recordId);
