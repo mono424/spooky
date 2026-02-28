@@ -62,24 +62,30 @@ function runCommand(cmd, args, opts = {}) {
 function waitForHealth(url, retries, intervalMs) {
   return new Promise((resolve, reject) => {
     let attempt = 0;
+    let done = false;
     const check = () => {
+      if (done) return;
       attempt++;
       const req = http.get(url, (res) => {
+        if (done) return;
         if (res.statusCode === 200) {
+          done = true;
           console.log(`[box] SurrealDB is ready.`);
           resolve();
         } else {
           retry();
         }
       });
-      req.on('error', () => retry());
+      req.on('error', () => { if (!done) retry(); });
       req.setTimeout(5000, () => {
         req.destroy();
-        retry();
+        // Don't call retry() here — destroy() emits 'error' which handles it
       });
     };
     const retry = () => {
+      if (done) return;
       if (attempt >= retries) {
+        done = true;
         reject(new Error(`SurrealDB did not become ready after ${retries} attempts.`));
       } else {
         console.log(`[box] Waiting for SurrealDB... (${attempt}/${retries})`);
@@ -98,7 +104,8 @@ const subcommand = args[0]; // e.g. "up", "down", "stop", "logs"
 async function main() {
   // For non-"up" commands, pass through directly
   if (subcommand !== 'up') {
-    await runCommand('docker', ['compose', '-f', composeFile, ...args]);
+    const orphanFlag = (subcommand === 'down') ? ['--remove-orphans'] : [];
+    await runCommand('docker', ['compose', '-f', composeFile, subcommand, ...orphanFlag, ...args.slice(1)]);
     return;
   }
 
@@ -113,9 +120,10 @@ async function main() {
 
   const infraServices = INFRA_SERVICES[mode] || INFRA_SERVICES.singlenode;
 
-  // 2. Phase 1: Start infrastructure only (with all original flags)
+  // 2. Phase 1: Start infrastructure only (always detached so we can proceed to health check)
+  const upFlags = args.slice(1).filter((a) => a !== '-d');
   console.log(`\n[box] Phase 1: Starting infrastructure (${infraServices.join(', ')})...`);
-  await runCommand('docker', ['compose', '-f', composeFile, ...args, ...infraServices]);
+  await runCommand('docker', ['compose', '-f', composeFile, 'up', '-d', '--remove-orphans', ...upFlags, ...infraServices]);
 
   // 3. Phase 2: Wait for SurrealDB to be healthy
   console.log(`\n[box] Phase 2: Waiting for SurrealDB health...`);
@@ -132,7 +140,7 @@ async function main() {
   // 5. Phase 4: Start remaining services (without --force-recreate to avoid wiping DB)
   console.log(`\n[box] Phase 4: Starting remaining services...`);
   const phase4Args = args.filter((a) => a !== '--force-recreate');
-  await runCommand('docker', ['compose', '-f', composeFile, ...phase4Args]);
+  await runCommand('docker', ['compose', '-f', composeFile, 'up', '--remove-orphans', ...phase4Args.slice(1)]);
 }
 
 main().catch((err) => {
