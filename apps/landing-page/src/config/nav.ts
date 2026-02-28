@@ -6,6 +6,7 @@ export const docsNav = [
       { text: 'Introduction', href: `${basePath}/docs` },
       { text: 'Installation', href: `${basePath}/docs/install` },
       { text: 'Schema', href: `${basePath}/docs/schema` },
+      { text: 'Migrations', href: `${basePath}/docs/migrations` },
       { text: 'Authentication', href: `${basePath}/docs/authentication` },
       { text: 'Query Data', href: `${basePath}/docs/query-data` },
       { text: 'Mutate Data', href: `${basePath}/docs/mutate-data` },

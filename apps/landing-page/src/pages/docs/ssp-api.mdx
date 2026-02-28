@@ -15,7 +15,7 @@ Configure via: `LISTEN_ADDR` environment variable
 
 ## Authentication
 
-All endpoints (except `/health` and `/version`) require authentication via the `Authorization` header:
+All endpoints (except `/health`, `/version`, and `/info`) require authentication via the `Authorization` header:
 
 ```
 Authorization: Bearer <SPOOKY_AUTH_SECRET>
@@ -57,6 +57,7 @@ Process a single record update and propagate changes to affected views.
 - `200 OK` - Record ingested and views updated
 - `400 Bad Request` - Invalid operation or malformed request
 - `401 Unauthorized` - Missing or invalid authentication
+- `503 Service Unavailable` - SSP is not in Ready state (`SSP_NOT_READY`)
 
 **Example:**
 

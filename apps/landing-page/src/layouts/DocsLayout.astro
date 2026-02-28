@@ -83,7 +83,11 @@ const activeGroup = nav.find((g: any) =>
     </script>
     <ClientRouter />
   </head>
-  <body class="bg-background text-text-main font-sans antialiased selection:bg-primary/20">
+  <body
+    transition:name="root"
+    transition:animate="slide"
+    class="bg-background text-text-main font-sans antialiased selection:bg-primary/20"
+  >
     <Header transition:persist />
 
     <div class="max-w-[1600px] mx-auto flex w-full min-h-screen">
