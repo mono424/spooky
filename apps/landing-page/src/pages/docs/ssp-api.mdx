@@ -81,58 +81,22 @@ If the ingested table is configured as a job table and the record has `status: "
 
 ## Bootstrap
 
-### POST /bootstrap
+When running in scheduler mode, the SSP bootstraps itself using a **proxy-based pull** pattern rather than receiving pushed chunks:
 
-Receive bootstrap data chunks from the scheduler during initial SSP registration.
+1. SSP registers with the scheduler via `POST /ssp/register`
+2. Scheduler freezes its snapshot replica and returns `snapshot_seq`
+3. SSP connects to the scheduler's proxy endpoints (`POST /proxy/query`, `/proxy/signin`, `/proxy/use`) as if they were a SurrealDB instance
+4. SSP executes its own SurrealQL queries to pull the data it needs
+5. Once bootstrapped, SSP reports healthy via `GET /health` (returns `{"status": "ready"}`)
+6. Scheduler detects readiness, replays buffered events, then promotes SSP to `Ready`
 
-**Authentication:** Required
-
-**Request Body:**
-
-```json
-{
-  "chunk_index": 0,
-  "total_chunks": 5,
-  "table": "users",
-  "records": [
-    ["user:1", {"name": "Alice", "email": "alice@example.com"}],
-    ["user:2", {"name": "Bob", "email": "bob@example.com"}]
-  ]
-}
-```
-
-**Fields:**
-- `chunk_index` (number, required) - Zero-based chunk index
-- `total_chunks` (number, required) - Total number of chunks
-- `table` (string, required) - Table name for these records
-- `records` (array, required) - Array of `[record_id, record_data]` tuples
-
-**Response:**
-- `200 OK` - Chunk processed successfully
-- `401 Unauthorized` - Missing or invalid authentication
-
-**Example:**
-
-```bash
-curl -X POST http://localhost:8667/bootstrap \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer your-secret-token" \
-  -d '{
-    "chunk_index": 0,
-    "total_chunks": 1,
-    "table": "users",
-    "records": [
-      ["user:alice", {"name": "Alice"}],
-      ["user:bob", {"name": "Bob"}]
-    ]
-  }'
-```
+This approach is more efficient than chunk pushing because the SSP only fetches the data it actually needs, and the scheduler doesn't need to know the SSP's data requirements.
 
 **Notes:**
-- Bootstrap is called by the scheduler during SSP registration
-- The SSP processes each chunk sequentially
-- After all chunks are received, the SSP is marked as "ready" by the scheduler
-- Buffered messages are then replayed to bring the SSP fully up to date
+- During bootstrap, the SSP's `/health` endpoint returns `{"status": "bootstrapping"}`
+- The scheduler polls `/health` every `ssp_poll_interval_ms` (default: 3 seconds)
+- Bootstrap must complete within `bootstrap_timeout_secs` (default: 120 seconds)
+- If the scheduler's per-SSP message buffer overflows (max 10,000), the SSP must re-bootstrap
 
 ---
 
@@ -584,9 +548,10 @@ When `SCHEDULER_URL` is set:
 ### Bootstrap Failures
 
 1. Check scheduler logs for bootstrap errors
-2. Verify SSP `/bootstrap` endpoint is accessible
-3. Check database connectivity from scheduler
-4. Increase `bootstrap_chunk_size` if chunks are too large
+2. Verify SSP `/health` endpoint is accessible from the scheduler
+3. Verify the scheduler's proxy endpoints (`/proxy/query`) are reachable from the SSP
+4. Check database connectivity from scheduler
+5. Increase `bootstrap_timeout_secs` if bootstrap is timing out
 
 ### High Memory Usage
 

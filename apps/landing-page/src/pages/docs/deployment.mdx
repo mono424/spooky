@@ -5,17 +5,18 @@ title: Deployment
 
 import CodeBlock from '../../components/ui/CodeBlock.astro';
 
-Deploying Spooky requires running the **Spooky Sidecar** alongside your SurrealDB instance. The Sidecar acts as the gateway for your frontend clients.
+Deploying Spooky requires running the **Spooky Sidecar (SSP)** alongside your SurrealDB instance. For production deployments, the **Scheduler** coordinates multiple SSP instances.
 
 ## Architecture
 
 1.  **SurrealDB**: Your persistent data store.
-2.  **Spooky Sidecar**: A backend service that monitors SurrealDB for changes.
-3.  **Client**: Connects directly to SurrealDB.
+2.  **Spooky SSP (Sidecar)**: A backend service that monitors SurrealDB for changes and maintains materialized views.
+3.  **Scheduler** *(optional)*: Central coordinator for distributed deployments with multiple SSPs. Maintains a RocksDB snapshot replica and WAL.
+4.  **Client**: Connects directly to SurrealDB.
 
-## Docker Compose
+## Single Node (Development)
 
-The easiest way to deploy is using Docker Compose.
+The simplest setup for development and testing. No scheduler needed.
 
 <CodeBlock
   code={`version: '3.8'
@@ -28,25 +29,142 @@ services:
     volumes:
       - ./data:/data
 
-  spooky-sidecar:
+  spooky-ssp:
     image: ghcr.io/spooky-org/sidecar:latest
     environment:
-      - SURREAL_URL=ws://surrealdb:8000
-      - SURREAL_USER=root
-      - SURREAL_PASS=root
-      # Optional: Secret for signing JWTs if handling auth manually
-      - JWT_SECRET=super_secret_key
+      - SURREALDB_ADDR=surrealdb:8000
+      - SURREALDB_USER=root
+      - SURREALDB_PASS=root
+      - SURREALDB_NS=test
+      - SURREALDB_DB=test
+      - LISTEN_ADDR=0.0.0.0:8667
+      - SPOOKY_AUTH_SECRET=your-secret-token
+    ports:
+      - "8667:8667"
     depends_on:
-      - surrealdb
-    # Sidecar acts as a backend daemon
-    # No need to expose ports to public`}
+      - surrealdb`}
   lang="yaml"
 />
 
+## Distributed (Production)
+
+For production with high availability and horizontal scaling, use a Scheduler with multiple SSP instances.
+
+<CodeBlock
+  code={`version: '3.8'
+services:
+  surrealdb:
+    image: surrealdb/surrealdb:latest
+    command: start --user root --pass root file://data.db
+    ports:
+      - "8000:8000"
+    volumes:
+      - surreal-data:/data
+
+  scheduler:
+    image: ghcr.io/spooky-org/scheduler:latest
+    environment:
+      - SPOOKY_SCHEDULER_DB_URL=surrealdb:8000/rpc
+      - SPOOKY_SCHEDULER_DB_NAMESPACE=test
+      - SPOOKY_SCHEDULER_DB_DATABASE=test
+      - SPOOKY_SCHEDULER_DB_USERNAME=root
+      - SPOOKY_SCHEDULER_DB_PASSWORD=root
+      - SPOOKY_SCHEDULER_INGEST_HOST=0.0.0.0
+      - SPOOKY_SCHEDULER_INGEST_PORT=9667
+      - SPOOKY_SCHEDULER_REPLICA_DB_PATH=./data/replica
+      - SPOOKY_SCHEDULER_WAL_PATH=./data/event_wal.log
+      - SPOOKY_SCHEDULER_LOAD_BALANCE=least_queries
+    ports:
+      - "9667:9667"
+    volumes:
+      - scheduler-data:/app/data
+    depends_on:
+      - surrealdb
+
+  ssp-1:
+    image: ghcr.io/spooky-org/sidecar:latest
+    environment:
+      - SSP_ID=ssp-01
+      - SURREALDB_ADDR=surrealdb:8000
+      - SURREALDB_USER=root
+      - SURREALDB_PASS=root
+      - SURREALDB_NS=test
+      - SURREALDB_DB=test
+      - LISTEN_ADDR=0.0.0.0:8667
+      - SPOOKY_AUTH_SECRET=your-secret-token
+      - SCHEDULER_URL=http://scheduler:9667
+      - HEARTBEAT_INTERVAL_MS=5000
+    ports:
+      - "8667:8667"
+    depends_on:
+      - surrealdb
+      - scheduler
+
+  ssp-2:
+    image: ghcr.io/spooky-org/sidecar:latest
+    environment:
+      - SSP_ID=ssp-02
+      - SURREALDB_ADDR=surrealdb:8000
+      - SURREALDB_USER=root
+      - SURREALDB_PASS=root
+      - SURREALDB_NS=test
+      - SURREALDB_DB=test
+      - LISTEN_ADDR=0.0.0.0:8667
+      - SPOOKY_AUTH_SECRET=your-secret-token
+      - SCHEDULER_URL=http://scheduler:9667
+      - HEARTBEAT_INTERVAL_MS=5000
+    ports:
+      - "8668:8667"
+    depends_on:
+      - surrealdb
+      - scheduler
+
+volumes:
+  surreal-data:
+  scheduler-data:`}
+  lang="yaml"
+/>
+
+---
+
 ## Environment Variables
 
-| Variable       | Description                   | Default               |
-| :------------- | :---------------------------- | :-------------------- |
-| `SURREAL_URL`  | URL of the SurrealDB instance | `ws://localhost:8000` |
-| `SURREAL_USER` | Root user for SurrealDB       | `root`                |
-| `SURREAL_PASS` | Root password for SurrealDB   | `root`                |
+### SSP (Sidecar)
+
+| Variable | Description | Default |
+| :--- | :--- | :--- |
+| `LISTEN_ADDR` | Address and port for the SSP HTTP server | `0.0.0.0:8667` |
+| `SPOOKY_AUTH_SECRET` | Bearer token for authenticating SSP API requests | *(required)* |
+| `SURREALDB_ADDR` | SurrealDB host and port | `127.0.0.1:8000` |
+| `SURREALDB_USER` | SurrealDB username | `root` |
+| `SURREALDB_PASS` | SurrealDB password | `root` |
+| `SURREALDB_NS` | SurrealDB namespace | `test` |
+| `SURREALDB_DB` | SurrealDB database | `test` |
+| `SCHEDULER_URL` | Scheduler URL (enables distributed mode) | *(unset)* |
+| `SSP_ID` | Unique SSP identifier | `ssp-<uuid>` |
+| `ADVERTISE_ADDR` | Externally reachable address for this SSP | *(unset)* |
+| `HEARTBEAT_INTERVAL_MS` | Heartbeat interval in ms | `5000` |
+| `SPOOKY_CONFIG_PATH` | Path to `spooky.yml` for job config | `spooky.yml` |
+| `TTL_CLEANUP_INTERVAL_SECS` | View TTL cleanup interval | `60` |
+
+### Scheduler
+
+| Variable | Description | Default |
+| :--- | :--- | :--- |
+| `SCHEDULER_ID` | Unique scheduler identifier | `scheduler-<uuid>` |
+| `SPOOKY_SCHEDULER_INGEST_HOST` | HTTP server bind host | `0.0.0.0` |
+| `SPOOKY_SCHEDULER_INGEST_PORT` | HTTP server bind port | `9667` |
+| `SPOOKY_SCHEDULER_DB_URL` | SurrealDB connection URL | `localhost:8000/rpc` |
+| `SPOOKY_SCHEDULER_DB_NAMESPACE` | SurrealDB namespace | `spooky` |
+| `SPOOKY_SCHEDULER_DB_DATABASE` | SurrealDB database | `spooky` |
+| `SPOOKY_SCHEDULER_DB_USERNAME` | SurrealDB username | `root` |
+| `SPOOKY_SCHEDULER_DB_PASSWORD` | SurrealDB password | `root` |
+| `SPOOKY_SCHEDULER_REPLICA_DB_PATH` | RocksDB snapshot replica path | `./data/replica` |
+| `SPOOKY_SCHEDULER_WAL_PATH` | Write-ahead log path | `./data/event_wal.log` |
+| `SPOOKY_SCHEDULER_LOAD_BALANCE` | Load balancing strategy | `least_queries` |
+| `SPOOKY_SCHEDULER_HEARTBEAT_INTERVAL_MS` | Expected heartbeat interval | `5000` |
+| `SPOOKY_SCHEDULER_HEARTBEAT_TIMEOUT_MS` | Heartbeat timeout before stale | `15000` |
+| `SPOOKY_SCHEDULER_BOOTSTRAP_TIMEOUT_SECS` | Bootstrap timeout | `120` |
+| `SPOOKY_SCHEDULER_SSP_POLL_INTERVAL_MS` | SSP health poll interval during bootstrap | `3000` |
+| `SPOOKY_SCHEDULER_MAX_BUFFER_PER_SSP` | Max buffered messages per SSP | `10000` |
+| `SPOOKY_SCHEDULER_SNAPSHOT_UPDATE_INTERVAL_SECS` | Snapshot update interval | `300` |

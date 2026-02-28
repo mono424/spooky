@@ -510,8 +510,14 @@ job_tables:
 - `SPOOKY_SCHEDULER_HEARTBEAT_INTERVAL_MS` - Heartbeat interval
 - `SPOOKY_SCHEDULER_HEARTBEAT_TIMEOUT_MS` - Heartbeat timeout
 - `SPOOKY_SCHEDULER_BOOTSTRAP_CHUNK_SIZE` - Bootstrap chunk size
+- `SPOOKY_SCHEDULER_BOOTSTRAP_TIMEOUT_SECS` - Bootstrap timeout (default: `120`)
 - `SPOOKY_SCHEDULER_INGEST_HOST` - HTTP server host
 - `SPOOKY_SCHEDULER_INGEST_PORT` - HTTP server port
+- `SPOOKY_SCHEDULER_REPLICA_DB_PATH` - RocksDB snapshot replica path (default: `./data/replica`)
+- `SPOOKY_SCHEDULER_WAL_PATH` - Write-ahead log path (default: `./data/event_wal.log`)
+- `SPOOKY_SCHEDULER_SSP_POLL_INTERVAL_MS` - SSP health poll interval during bootstrap (default: `3000`)
+- `SPOOKY_SCHEDULER_MAX_BUFFER_PER_SSP` - Max buffered messages per SSP (default: `10000`)
+- `SPOOKY_SCHEDULER_SNAPSHOT_UPDATE_INTERVAL_SECS` - Snapshot update interval (default: `300`)
 
 ---
 

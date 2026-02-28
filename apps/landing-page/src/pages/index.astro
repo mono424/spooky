@@ -671,6 +671,16 @@ import { basePath } from '../config/nav';
                           <div
                             class="bg-purple-900/20 border border-purple-900/30 px-1.5 py-0.5 rounded text-[8px] text-purple-200/80"
                           >
+                            Snapshot Replica
+                          </div>
+                          <div
+                            class="bg-purple-900/20 border border-purple-900/30 px-1.5 py-0.5 rounded text-[8px] text-purple-200/80"
+                          >
+                            WAL
+                          </div>
+                          <div
+                            class="bg-purple-900/20 border border-purple-900/30 px-1.5 py-0.5 rounded text-[8px] text-purple-200/80"
+                          >
                             Load Balancer
                           </div>
                           <div
@@ -786,7 +796,8 @@ import { basePath } from '../config/nav';
 
                 <div class="mt-auto">
                   <p class="text-xs text-gray-500 mb-4 font-mono leading-relaxed">
-                    The Scheduler distributes Incantations across multiple SSP instances. Automatic
+                    The Scheduler distributes Incantations across multiple SSP instances using a persistent
+                    RocksDB snapshot replica and WAL for crash recovery. Automatic
                     load balancing and health monitoring ensure <span class="text-gray-300"
                       >zero-downtime deployment</span
                     > and horizontal scalability for enterprise workloads.
