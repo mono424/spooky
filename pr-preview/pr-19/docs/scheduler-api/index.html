@@ -398,8 +398,14 @@
 <li><code>SPOOKY_SCHEDULER_HEARTBEAT_INTERVAL_MS</code> - Heartbeat interval</li>
 <li><code>SPOOKY_SCHEDULER_HEARTBEAT_TIMEOUT_MS</code> - Heartbeat timeout</li>
 <li><code>SPOOKY_SCHEDULER_BOOTSTRAP_CHUNK_SIZE</code> - Bootstrap chunk size</li>
+<li><code>SPOOKY_SCHEDULER_BOOTSTRAP_TIMEOUT_SECS</code> - Bootstrap timeout (default: <code>120</code>)</li>
 <li><code>SPOOKY_SCHEDULER_INGEST_HOST</code> - HTTP server host</li>
 <li><code>SPOOKY_SCHEDULER_INGEST_PORT</code> - HTTP server port</li>
+<li><code>SPOOKY_SCHEDULER_REPLICA_DB_PATH</code> - RocksDB snapshot replica path (default: <code>./data/replica</code>)</li>
+<li><code>SPOOKY_SCHEDULER_WAL_PATH</code> - Write-ahead log path (default: <code>./data/event_wal.log</code>)</li>
+<li><code>SPOOKY_SCHEDULER_SSP_POLL_INTERVAL_MS</code> - SSP health poll interval during bootstrap (default: <code>3000</code>)</li>
+<li><code>SPOOKY_SCHEDULER_MAX_BUFFER_PER_SSP</code> - Max buffered messages per SSP (default: <code>10000</code>)</li>
+<li><code>SPOOKY_SCHEDULER_SNAPSHOT_UPDATE_INTERVAL_SECS</code> - Snapshot update interval (default: <code>300</code>)</li>
 </ul>
 <hr/>
 <h2 id="error-handling">Error Handling</h2>
