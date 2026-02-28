@@ -63,7 +63,12 @@ graph TD
 
     subgraph backend [Backend Services]
         DB[(SurrealDB)]
-        Scheduler[Scheduler]
+
+        subgraph sched [Scheduler]
+            Scheduler[Scheduler Core]
+            Replica[(Snapshot Replica<br/>RocksDB)]
+            WAL[WAL]
+        end
 
         subgraph ssps [SSP Pool]
             SSP1[SSP 1]
@@ -77,13 +82,16 @@ graph TD
     C3 <-->|SurrealQL| DB
 
     DB -->|Change Events| Scheduler
+    Scheduler -->|Persist| Replica
+    Scheduler -->|Append| WAL
     Scheduler -->|HTTP POST /ingest| SSP1
     Scheduler -->|HTTP POST /ingest| SSP2
     Scheduler -->|HTTP POST /ingest| SSP3
 
-    SSP1 -->|HTTP POST /ssp/heartbeat| Scheduler
-    SSP2 -->|HTTP POST /ssp/heartbeat| Scheduler
-    SSP3 -->|HTTP POST /ssp/heartbeat| Scheduler
+    SSP1 -.->|POST /proxy/query| Scheduler
+    SSP1 -->|POST /ssp/heartbeat| Scheduler
+    SSP2 -->|POST /ssp/heartbeat| Scheduler
+    SSP3 -->|POST /ssp/heartbeat| Scheduler
 
     SSP1 <-->|Edge Updates| DB
     SSP2 <-->|Edge Updates| DB
@@ -94,9 +102,11 @@ graph TD
 
 **Scheduler** (Port 9667 by default)
 - Central coordinator for all SSP instances
-- Maintains replica of database state
+- Maintains a persistent **Snapshot Replica** (RocksDB-backed embedded SurrealDB) of database state
+- Writes all events to a **Write-Ahead Log (WAL)** for crash recovery
 - Distributes data updates to all SSPs via HTTP
-- Manages SSP lifecycle (registration, bootstrap, health monitoring)
+- Exposes **proxy endpoints** (`/proxy/query`, `/proxy/signin`, `/proxy/use`) so SSPs can self-bootstrap by querying the snapshot directly
+- Manages SSP lifecycle: `Bootstrapping` → `Replaying` → `Ready`
 - Assigns queries to SSPs using load balancing strategies
 - See [Scheduler API Reference](/spooky/docs/scheduler-api)
 
@@ -104,8 +114,8 @@ graph TD
 - Stateful service maintaining materialized views
 - Executes backend functions and jobs
 - Registers with scheduler on startup
-- Receives bootstrap data and live updates
-- Sends periodic heartbeats for health monitoring
+- Self-bootstraps by querying the scheduler's proxy endpoints (no chunk push needed)
+- Sends periodic heartbeats with `views` count for health monitoring
 - See [SSP API Reference](/spooky/docs/ssp-api)
 
 ---
@@ -118,36 +128,45 @@ When an SSP starts up with scheduler integration enabled:
 sequenceDiagram
     participant SSP
     participant Scheduler
-    participant Replica
+    participant Replica as Snapshot Replica (RocksDB)
 
     Note over SSP: Startup
 
     SSP->>Scheduler: POST /ssp/register<br/>{ssp_id, url}
-    Scheduler->>Scheduler: Add to pool<br/>Mark as "bootstrapping"
-    Scheduler-->>SSP: 202 Accepted
+    Scheduler->>Scheduler: Freeze snapshot<br/>Mark SSP as "Bootstrapping"
+    Scheduler-->>SSP: 202 Accepted<br/>{snapshot_seq}
 
-    Note over Scheduler: Async Bootstrap
+    Note over SSP: Self-Bootstrap via Proxy
 
-    Scheduler->>Replica: Read all data
-    Replica-->>Scheduler: Records
+    SSP->>Scheduler: POST /proxy/query<br/>(SurrealQL queries)
+    Scheduler->>Replica: Execute query
+    Replica-->>Scheduler: Results
+    Scheduler-->>SSP: Query results
 
-    loop For each chunk (1000 records)
-        Scheduler->>SSP: POST /bootstrap<br/>{chunk_index, table, records}
-        SSP->>SSP: Ingest records
-        SSP-->>Scheduler: 200 OK
+    Note over SSP: SSP loads data locally
+
+    loop Scheduler polls SSP health
+        Scheduler->>SSP: GET /health
+        alt SSP still bootstrapping
+            SSP-->>Scheduler: {status: "bootstrapping"}
+        else SSP ready
+            SSP-->>Scheduler: {status: "ok"}
+        end
     end
 
-    Scheduler->>Scheduler: Mark as "ready"<br/>Get buffered messages
+    Scheduler->>Scheduler: Mark SSP as "Replaying"<br/>Unfreeze snapshot
 
-    loop Replay buffered messages
+    loop Replay buffered events (seq > snapshot_seq)
         Scheduler->>SSP: POST /ingest
         SSP-->>Scheduler: 200 OK
     end
 
-    Note over SSP,Scheduler: SSP is ready
+    Scheduler->>Scheduler: Mark SSP as "Ready"
+
+    Note over SSP,Scheduler: SSP receives live updates
 
     loop Every 5 seconds
-        SSP->>Scheduler: POST /ssp/heartbeat<br/>{active_queries, cpu, memory}
+        SSP->>Scheduler: POST /ssp/heartbeat<br/>{views, cpu, memory}
         alt SSP is healthy
             Scheduler-->>SSP: 200 OK
         else Buffer overflow
@@ -161,16 +180,19 @@ sequenceDiagram
 ### Bootstrap Process
 
 1. **Registration**: SSP sends its ID and URL to the scheduler
-2. **Bootstrapping**: Scheduler marks SSP as "bootstrapping" and buffers incoming messages
-3. **Data Transfer**: Scheduler sends replica data in chunks (configurable size, default 1000 records)
-4. **Buffer Replay**: Once complete, scheduler marks SSP as "ready" and replays buffered messages
-5. **Live Updates**: SSP now receives real-time updates via `/ingest` endpoint
+2. **Freeze**: Scheduler freezes the snapshot replica and marks SSP as `Bootstrapping`
+3. **Proxy Query**: SSP self-bootstraps by querying the scheduler's `POST /proxy/query` endpoint (executes SurrealQL against the frozen snapshot)
+4. **Health Poll**: Scheduler polls the SSP's `GET /health` endpoint every `ssp_poll_interval_ms` (default 3s) until the SSP reports ready
+5. **Unfreeze & Replay**: Scheduler unfreezes the snapshot, marks SSP as `Replaying`, and replays all buffered events with `seq > snapshot_seq`
+6. **Ready**: Once replay completes, scheduler marks SSP as `Ready`
+7. **Live Updates**: SSP now receives real-time updates via `/ingest` endpoint
 
 ### Health Monitoring
 
-- SSPs send heartbeats every 5 seconds (configurable)
+- SSPs send heartbeats every 5 seconds (configurable) with `views` count, CPU, and memory usage
 - Scheduler marks SSPs as stale after 15 seconds without heartbeat (configurable)
 - Stale SSPs are removed from the pool
+- Maximum buffer size per SSP: 10,000 messages (configurable via `max_buffer_per_ssp`)
 - Queries are reassigned to healthy SSPs
 
 ---
@@ -283,7 +305,9 @@ Simple setup for development and testing. Client connects directly to SSP.
 ```yaml
 # Scheduler
 SPOOKY_SCHEDULER_INGEST_PORT=9667
-SPOOKY_SCHEDULER_DB_URL=ws://surrealdb:8000
+SPOOKY_SCHEDULER_DB_URL=surrealdb:8000/rpc
+SPOOKY_SCHEDULER_REPLICA_DB_PATH=./data/replica
+SPOOKY_SCHEDULER_WAL_PATH=./data/event_wal.log
 
 # SSP instances
 SCHEDULER_URL=http://scheduler:9667

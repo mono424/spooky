@@ -51,6 +51,7 @@ Ingest a record change from the database. This endpoint receives database events
 - `200 OK` - Successfully ingested and broadcast to SSPs
 - `400 Bad Request` - Invalid operation or malformed request
 - `500 Internal Server Error` - Failed to apply to replica or broadcast
+- `503 Service Unavailable` - Scheduler is in `Cloning` state
 
 **Example:**
 
@@ -67,34 +68,87 @@ curl -X POST http://localhost:9667/ingest \
 
 ---
 
-## Query Management
+## Proxy Endpoints
 
-### POST /query/register
+SSPs use these endpoints during bootstrap to query the scheduler's snapshot replica directly, instead of receiving pushed chunks.
 
-Register a new query with the scheduler. The scheduler will assign it to an SSP using the configured load balancing strategy.
+### POST /proxy/query
+
+Execute a SurrealQL query against the scheduler's frozen snapshot replica. SSPs use this to self-bootstrap by pulling the data they need.
 
 **Request Body:**
 
 ```json
 {
-  "query_id": "query-123",
-  "view_plan": {
-    "id": "users_view",
-    "tables": ["users"],
-    "filter": {}
-  },
-  "metadata": {
-    "user_id": "client-456"
-  }
+  "query": "SELECT * FROM users"
 }
 ```
 
 **Response:**
-- `200 OK` - Query registered successfully
+- `200 OK` - Query results from the snapshot replica
+- `400 Bad Request` - Invalid query
+- `500 Internal Server Error` - Query execution failed
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:9667/proxy/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "SELECT * FROM users"}'
+```
+
+### POST /proxy/signin
+
+No-op endpoint for SurrealDB client compatibility during SSP bootstrap. Returns success without performing authentication.
+
+**Response:**
+- `200 OK` - Always succeeds
+
+### POST /proxy/use
+
+No-op endpoint for SurrealDB client compatibility during SSP bootstrap. Returns success without changing namespace/database context.
+
+**Response:**
+- `200 OK` - Always succeeds
+
+---
+
+## View Management
+
+### POST /view/register
+
+Register a new view (live query) with the scheduler. The scheduler will assign it to an SSP using the configured load balancing strategy.
+
+**Request Body:**
+
+```json
+{
+  "id": "incantation:abc123",
+  "surql": "SELECT * FROM users WHERE active = true",
+  "clientId": "client-456",
+  "ttl": "30s",
+  "params": null,
+  "lastActiveAt": "2024-01-01T00:00:00Z",
+  "format": null
+}
+```
+
+**Fields:**
+- `id` (string, required) - Unique view identifier (e.g. `incantation:abc123`)
+- `surql` (string, required) - SurrealQL query to materialize
+- `clientId` (string, required) - Client identifier
+- `ttl` (string, required) - Time-to-live for the view (e.g. `"30s"`)
+- `params` (object, optional) - Query parameters
+- `lastActiveAt` (string, optional) - ISO 8601 timestamp of last activity
+- `format` (string, optional) - Response format
+
+**Response:**
+- `200 OK` - View registered and assigned to an SSP
   ```json
   {
+    "query_id": "incantation:abc123",
     "ssp_id": "ssp-primary-01",
-    "ssp_url": "http://localhost:8667"
+    "assigned_at": 1707654321
   }
   ```
 - `503 Service Unavailable` - No SSPs available
@@ -102,30 +156,31 @@ Register a new query with the scheduler. The scheduler will assign it to an SSP 
 **Example:**
 
 ```bash
-curl -X POST http://localhost:9667/query/register \
+curl -X POST http://localhost:9667/view/register \
   -H "Content-Type: application/json" \
   -d '{
-    "query_id": "query-123",
-    "view_plan": {"id": "users_view", "tables": ["users"]},
-    "metadata": {"user_id": "client-456"}
+    "id": "incantation:abc123",
+    "surql": "SELECT * FROM users WHERE active = true",
+    "clientId": "client-456",
+    "ttl": "30s"
   }'
 ```
 
-### POST /query/unregister
+### POST /view/unregister
 
-Unregister a query from its assigned SSP.
+Unregister a view from its assigned SSP.
 
 **Request Body:**
 
 ```json
 {
-  "query_id": "query-123"
+  "id": "incantation:abc123"
 }
 ```
 
 **Response:**
-- `200 OK` - Query unregistered successfully
-- `404 Not Found` - Query not found
+- `200 OK` - View unregistered successfully
+- `404 Not Found` - View not found
 
 ---
 
@@ -150,15 +205,18 @@ Register a new SSP sidecar with the scheduler. The scheduler will immediately ma
 
 **Response:**
 - `202 Accepted` - Registration accepted, bootstrap starting
+  ```json
+  { "snapshot_seq": 123 }
+  ```
 - `400 Bad Request` - Invalid SSP ID (empty) or invalid URL format
 
 **Flow:**
 1. SSP sends registration request
 2. Scheduler validates and adds SSP to pool
 3. Scheduler marks SSP as "bootstrapping"
-4. Scheduler spawns async task to send bootstrap chunks
-5. Once bootstrap completes, scheduler marks SSP as "ready"
-6. Buffered messages are replayed to SSP
+4. SSP bootstraps itself from the scheduler's `/proxy/query` endpoint
+5. Scheduler polls SSP `/health` until it reports `ready`
+6. Once ready, scheduler replays buffered events to SSP
 
 **Example:**
 
@@ -181,7 +239,7 @@ Send a heartbeat from an SSP to maintain health status.
 {
   "ssp_id": "ssp-primary-01",
   "timestamp": 1707654321,
-  "active_queries": 5,
+  "views": 5,
   "cpu_usage": 45.2,
   "memory_usage": 512.5
 }
@@ -190,7 +248,7 @@ Send a heartbeat from an SSP to maintain health status.
 **Fields:**
 - `ssp_id` (string, required) - SSP identifier
 - `timestamp` (number, required) - Unix timestamp in seconds
-- `active_queries` (number, required) - Number of active queries/views
+- `views` (number, required) - Number of active views
 - `cpu_usage` (number, optional) - CPU usage percentage
 - `memory_usage` (number, optional) - Memory usage in MB
 
@@ -207,7 +265,7 @@ curl -X POST http://localhost:9667/ssp/heartbeat \
   -d '{
     "ssp_id": "ssp-primary-01",
     "timestamp": 1707654321,
-    "active_queries": 5,
+    "views": 5,
     "cpu_usage": 45.2,
     "memory_usage": 512.5
   }'
@@ -217,9 +275,9 @@ curl -X POST http://localhost:9667/ssp/heartbeat \
 
 ## Job Scheduling
 
-### POST /job/schedule
+### POST /job/dispatch
 
-Schedule a job to be executed on an SSP.
+Dispatch a job to be executed on an SSP.
 
 **Request Body:**
 
@@ -227,18 +285,45 @@ Schedule a job to be executed on an SSP.
 {
   "job_id": "job:123",
   "table": "job",
-  "record": {
-    "id": "job:123",
-    "status": "pending",
+  "payload": {
     "path": "/api/process",
     "body": {"data": "value"}
   }
 }
 ```
 
+**Fields:**
+- `job_id` (string, required) - Job record ID
+- `table` (string, required) - Job table name
+- `payload` (object, required) - Job payload data
+
 **Response:**
-- `200 OK` - Job scheduled successfully
+- `200 OK` - Job dispatched, returns the assigned SSP ID string
 - `503 Service Unavailable` - No SSPs available
+
+### POST /job/result
+
+Report job execution results from an SSP back to the scheduler.
+
+**Request Body:**
+
+```json
+{
+  "job_id": "job:123",
+  "status": "completed",
+  "result": {"output": "processed"},
+  "error": null
+}
+```
+
+**Fields:**
+- `job_id` (string, required) - Job record ID
+- `status` (string, required) - Job status: `pending`, `running`, `completed`, or `failed`
+- `result` (object, optional) - Job result data
+- `error` (string, optional) - Error message if failed
+
+**Response:**
+- `200 OK` - Result recorded
 
 ---
 
@@ -253,40 +338,22 @@ Get scheduler metrics and SSP pool status.
 ```json
 {
   "scheduler": {
-    "uptime_seconds": 3600,
-    "replica_records": 1000,
-    "replica_tables": 3
-  },
-  "ssp_pool": {
     "total_ssps": 2,
     "ready_ssps": 2,
-    "bootstrapping_ssps": 0
+    "total_queries": 10,
+    "running_jobs": 3,
+    "uptime_seconds": 3600
   },
   "ssps": [
     {
       "id": "ssp-primary-01",
-      "url": "http://localhost:8667",
-      "state": "ready",
       "query_count": 5,
-      "active_jobs": 2,
-      "connected_seconds": 3550,
-      "last_heartbeat_seconds": 2
+      "views": 3,
+      "cpu_usage": 45.2,
+      "memory_usage": 512.5,
+      "last_heartbeat_seconds_ago": 2
     }
-  ],
-  "queries": {
-    "total": 10,
-    "by_ssp": {
-      "ssp-primary-01": 5,
-      "ssp-primary-02": 5
-    }
-  },
-  "jobs": {
-    "total": 3,
-    "by_ssp": {
-      "ssp-primary-01": 2,
-      "ssp-primary-02": 1
-    }
-  }
+  ]
 }
 ```
 
@@ -296,50 +363,92 @@ Get scheduler metrics and SSP pool status.
 curl http://localhost:9667/metrics
 ```
 
+### GET /health
+
+Health check endpoint.
+
+**Response:**
+- `200 OK` - At least one SSP is ready
+  ```json
+  {"status": "healthy"}
+  ```
+- `503 Service Unavailable` - No SSPs are ready
+  ```json
+  {"status": "unavailable"}
+  ```
+
+**Example:**
+
+```bash
+curl http://localhost:9667/health
+```
+
+### GET /info
+
+Get entity information for the scheduler and all registered SSPs.
+
+**Response:**
+- `200 OK` - Entity list
+  ```json
+  [
+    { "entity": "scheduler", "id": "scheduler-abc", "status": "ready", "views": 8 },
+    { "entity": "ssp", "id": "ssp-01", "status": "ready", "views": 3 }
+  ]
+  ```
+
+**Example:**
+
+```bash
+curl http://localhost:9667/info
+```
+
 ---
 
 ## Bootstrap Flow
 
-When an SSP registers, the following bootstrap process occurs:
+When an SSP registers, the following poll-based bootstrap process occurs:
 
 ```mermaid
 sequenceDiagram
     participant SSP
     participant Scheduler
-    participant Replica
 
     SSP->>Scheduler: POST /ssp/register
     Scheduler->>Scheduler: Validate & Add to Pool
     Scheduler->>Scheduler: Mark as Bootstrapping
-    Scheduler-->>SSP: 202 Accepted
+    Scheduler-->>SSP: 202 Accepted {snapshot_seq}
 
-    Note over Scheduler: Async Bootstrap Task
+    Note over SSP: SSP bootstraps itself
+    SSP->>Scheduler: GET /proxy/query (fetch data)
+    Scheduler-->>SSP: Query results
 
-    Scheduler->>Replica: Read all data
-    Replica-->>Scheduler: Return data
-    Scheduler->>Scheduler: Chunk data (1000 records/chunk)
-
-    loop For each chunk
-        Scheduler->>SSP: POST /bootstrap (chunk)
-        SSP->>SSP: Ingest records
-        SSP-->>Scheduler: 200 OK
+    loop Poll until ready (every ssp_poll_interval_ms)
+        Scheduler->>SSP: GET /health
+        SSP-->>Scheduler: {"status": "bootstrapping"}
     end
 
+    Scheduler->>SSP: GET /health
+    SSP-->>Scheduler: {"status": "ready"}
     Scheduler->>Scheduler: Mark as Ready
-    Scheduler->>Scheduler: Get buffered messages
 
-    loop For each buffered message
+    loop Replay buffered events
         Scheduler->>SSP: POST /ingest
         SSP-->>Scheduler: 200 OK
     end
 
     Note over Scheduler,SSP: SSP is now ready for live updates
+
+    loop Every 5 seconds
+        SSP->>Scheduler: POST /ssp/heartbeat
+        Scheduler-->>SSP: 200 OK
+    end
 ```
 
 ### Message Buffering
 
 While an SSP is bootstrapping, the scheduler buffers incoming messages:
-- Maximum buffer size: 1000 messages per SSP
+- Maximum buffer size: 10,000 messages per SSP (configurable via `max_buffer_per_ssp`)
+- Buffer exists both globally (event_buffer) and per-SSP
 - If buffer overflows: SSP marked for re-bootstrap, buffer cleared
 - Heartbeat returns `409 Conflict` when buffer overflow occurs
 
@@ -352,7 +461,7 @@ Configure the scheduler via `spooky.yml` or environment variables:
 ```yaml
 # Database connection
 db:
-  url: "ws://localhost:8000"
+  url: "localhost:8000/rpc"
   namespace: "spooky"
   database: "spooky"
   username: "root"
@@ -367,14 +476,24 @@ heartbeat_timeout_ms: 15000
 
 # Bootstrap configuration
 bootstrap_chunk_size: 1000
+bootstrap_timeout_secs: 120
 
 # Replica storage
-replica_db_path: "./data/replica.db"
-replica_keep_versions: 10
+replica_db_path: "./data/replica"
+
+# WAL (Write-Ahead Log)
+wal_path: "./data/event_wal.log"
 
 # Server configuration
 ingest_host: "0.0.0.0"
 ingest_port: 9667
+
+# SSP polling and buffering
+ssp_poll_interval_ms: 3000
+max_buffer_per_ssp: 10000
+
+# Snapshot update interval (seconds)
+snapshot_update_interval_secs: 300
 
 # Job tables (tables that trigger job execution)
 job_tables:
@@ -383,7 +502,8 @@ job_tables:
 
 **Environment Variables:**
 
-- `SPOOKY_SCHEDULER_DB_URL` - Database WebSocket URL
+- `SCHEDULER_ID` - Unique scheduler identifier (defaults to `scheduler-<uuid>`)
+- `SPOOKY_SCHEDULER_DB_URL` - Database URL (default: `localhost:8000/rpc`)
 - `SPOOKY_SCHEDULER_DB_NAMESPACE` - Database namespace
 - `SPOOKY_SCHEDULER_DB_DATABASE` - Database name
 - `SPOOKY_SCHEDULER_LOAD_BALANCE` - Load balance strategy

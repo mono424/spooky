@@ -148,40 +148,30 @@ Register a new view (live query) with the SSP.
 
 ```json
 {
-  "plan": {
-    "id": "users_view",
-    "tables": ["users"],
-    "edges": [],
-    "filter": {}
-  },
-  "metadata": {
-    "id": "incantation:123",
-    "user_id": "client-456"
-  }
+  "id": "incantation:abc123",
+  "surql": "SELECT * FROM users WHERE active = true",
+  "clientId": "client-456",
+  "ttl": "30s",
+  "params": null,
+  "lastActiveAt": "2024-01-01T00:00:00Z",
+  "format": null
 }
 ```
 
 **Fields:**
-- `plan` (object, required) - View execution plan
-  - `id` (string) - Unique view identifier
-  - `tables` (array) - Tables involved in the view
-  - `edges` (array) - Edge definitions for joins
-  - `filter` (object) - Filter conditions
-- `metadata` (object, optional) - Additional metadata
+- `id` (string, required) - Unique view identifier (e.g. `incantation:abc123`)
+- `surql` (string, required) - SurrealQL query to materialize
+- `clientId` (string, required) - Client identifier
+- `ttl` (string, required) - Time-to-live for the view (e.g. `"30s"`)
+- `params` (object, optional) - Query parameters
+- `lastActiveAt` (string, optional) - ISO 8601 timestamp of last activity
+- `format` (string, optional) - Response format
 
 **Response:**
 - `200 OK` - View registered, initial results returned
-  ```json
-  {
-    "view_id": "users_view",
-    "records": [
-      {"id": "user:alice", "name": "Alice"},
-      {"id": "user:bob", "name": "Bob"}
-    ]
-  }
-  ```
 - `400 Bad Request` - Invalid view registration payload
 - `401 Unauthorized` - Missing or invalid authentication
+- `503 Service Unavailable` - SSP is not in Ready state (`SSP_NOT_READY`)
 
 **Example:**
 
@@ -190,11 +180,10 @@ curl -X POST http://localhost:8667/view/register \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer your-secret-token" \
   -d '{
-    "plan": {
-      "id": "users_view",
-      "tables": ["users"]
-    },
-    "metadata": {"id": "incantation:123"}
+    "id": "incantation:abc123",
+    "surql": "SELECT * FROM users WHERE active = true",
+    "clientId": "client-456",
+    "ttl": "30s"
   }'
 ```
 
@@ -229,27 +218,6 @@ curl -X POST http://localhost:8667/view/unregister \
 
 ## State Management
 
-### POST /save
-
-Manually trigger a state save to disk.
-
-**Authentication:** Required
-
-**Response:**
-- `200 OK` - State saved successfully
-- `401 Unauthorized` - Missing or invalid authentication
-
-**Example:**
-
-```bash
-curl -X POST http://localhost:8667/save \
-  -H "Authorization: Bearer your-secret-token"
-```
-
-**Notes:**
-- The SSP automatically saves state periodically (configurable debounce)
-- Manual saves are useful before shutting down or for testing
-
 ### POST /reset
 
 Reset all SSP state (clear all views and data).
@@ -278,10 +246,16 @@ curl -X POST http://localhost:8667/reset \
 Health check endpoint (no authentication required).
 
 **Response:**
-- `200 OK` - Service is healthy
+- `200 OK` - SSP is ready
   ```json
-  {"status": "ok"}
+  {"status": "ready"}
   ```
+- `503 Service Unavailable` - SSP is not ready
+  ```json
+  {"status": "bootstrapping"}
+  ```
+
+Possible status values: `"bootstrapping"`, `"ready"`, `"failed"`.
 
 **Example:**
 
@@ -298,7 +272,7 @@ Get SSP version information (no authentication required).
   ```json
   {
     "version": "0.1.0",
-    "build": "debug"
+    "mode": "streaming"
   }
   ```
 
@@ -306,6 +280,22 @@ Get SSP version information (no authentication required).
 
 ```bash
 curl http://localhost:8667/version
+```
+
+### GET /info
+
+Get entity information for this SSP (no authentication required).
+
+**Response:**
+- `200 OK` - Entity list
+  ```json
+  [{ "entity": "ssp", "id": "ssp-primary-01", "status": "ready", "views": 5 }]
+  ```
+
+**Example:**
+
+```bash
+curl http://localhost:8667/info
 ```
 
 ### GET /debug/view/:view_id
@@ -322,11 +312,14 @@ Get detailed information about a specific view for debugging.
   ```json
   {
     "view_id": "users_view",
-    "record_count": 10,
-    "tables": ["users"],
-    "records": [
-      {"id": "user:alice", "name": "Alice"}
-    ]
+    "cache_size": 10,
+    "last_hash": "abc123",
+    "format": null,
+    "cache": [...],
+    "subquery_tables": ["users"],
+    "referenced_tables": ["users"],
+    "content_generation": 5,
+    "subquery_cache": {}
   }
   ```
 - `404 Not Found` - View not found
@@ -336,6 +329,30 @@ Get detailed information about a specific view for debugging.
 
 ```bash
 curl http://localhost:8667/debug/view/users_view \
+  -H "Authorization: Bearer your-secret-token"
+```
+
+### GET /debug/deps
+
+Get dependency map for all views.
+
+**Authentication:** Required
+
+**Response:**
+- `200 OK` - Dependency information
+  ```json
+  {
+    "dependency_map": {},
+    "tables_in_store": ["users", "posts"],
+    "view_count": 5
+  }
+  ```
+- `401 Unauthorized` - Missing or invalid authentication
+
+**Example:**
+
+```bash
+curl http://localhost:8667/debug/deps \
   -H "Authorization: Bearer your-secret-token"
 ```
 
@@ -398,19 +415,22 @@ sequenceDiagram
     SSP->>Scheduler: POST /ssp/register
     Note right of SSP: Send ssp_id and url
 
-    Scheduler-->>SSP: 202 Accepted
+    Scheduler-->>SSP: 202 Accepted {snapshot_seq}
     Note left of Scheduler: Mark as bootstrapping
 
-    loop Bootstrap chunks
-        Scheduler->>SSP: POST /bootstrap (chunk N/M)
-        SSP->>SSP: Ingest records
-        SSP-->>Scheduler: 200 OK
+    SSP->>Scheduler: GET /proxy/query
+    Note right of SSP: Bootstrap from scheduler
+    Scheduler-->>SSP: Query results
+
+    loop Scheduler polls SSP
+        Scheduler->>SSP: GET /health
+        SSP-->>Scheduler: {"status": "ready"}
     end
 
     Note left of Scheduler: Mark as ready
 
-    loop Buffered messages
-        Scheduler->>SSP: POST /ingest (replay)
+    loop Replay buffered events
+        Scheduler->>SSP: POST /ingest
         SSP-->>Scheduler: 200 OK
     end
 
@@ -433,7 +453,7 @@ The SSP sends periodic heartbeats to the scheduler:
 {
   "ssp_id": "ssp-primary-01",
   "timestamp": 1707654321,
-  "active_queries": 5,
+  "views": 5,
   "cpu_usage": 45.2,
   "memory_usage": 512.5
 }
@@ -460,10 +480,6 @@ LISTEN_ADDR=0.0.0.0:8667
 # Authentication
 SPOOKY_AUTH_SECRET=your-secret-token
 
-# State persistence
-SPOOKY_PERSISTENCE_FILE=data/spooky_state.json
-SAVE_DEBOUNCE_MS=2000
-
 # Database connection
 SURREALDB_ADDR=127.0.0.1:8000
 SURREALDB_USER=root
@@ -473,6 +489,9 @@ SURREALDB_DB=test
 
 # Job configuration
 SPOOKY_CONFIG_PATH=spooky.yml
+
+# TTL cleanup interval (seconds, default: 60)
+TTL_CLEANUP_INTERVAL_SECS=60
 ```
 
 ### Scheduler Integration
@@ -481,8 +500,11 @@ SPOOKY_CONFIG_PATH=spooky.yml
 # Scheduler URL (optional - enables scheduler integration)
 SCHEDULER_URL=http://localhost:9667
 
-# SSP identification
+# SSP identification (defaults to ssp-<uuid> if not set)
 SSP_ID=ssp-primary-01
+
+# Externally reachable address for this SSP (optional)
+ADVERTISE_ADDR=http://ssp-01.example.com:8667
 
 # Heartbeat configuration
 HEARTBEAT_INTERVAL_MS=5000
@@ -536,9 +558,8 @@ When `SCHEDULER_URL` is set:
 
 ### State Persistence
 
-- State is automatically saved with debouncing (default: 2 seconds)
+- State is automatically saved with debouncing
 - On startup, state is loaded from disk
-- Manual saves can be triggered via `/save` endpoint
 
 ### Memory Management
 
