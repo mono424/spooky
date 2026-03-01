@@ -3,12 +3,17 @@ import { RecordVersionArray } from '../../../types';
 
 export const SyncQueueEventTypes = {
   MutationEnqueued: 'MUTATION_ENQUEUED',
+  MutationDequeued: 'MUTATION_DEQUEUED',
   QueryItemEnqueued: 'QUERY_ITEM_ENQUEUED',
 } as const;
 
 export type SyncQueueEventTypeMap = {
   [SyncQueueEventTypes.MutationEnqueued]: EventDefinition<
     typeof SyncQueueEventTypes.MutationEnqueued,
+    { queueSize: number }
+  >;
+  [SyncQueueEventTypes.MutationDequeued]: EventDefinition<
+    typeof SyncQueueEventTypes.MutationDequeued,
     { queueSize: number }
   >;
   [SyncQueueEventTypes.QueryItemEnqueued]: EventDefinition<
@@ -23,6 +28,7 @@ export function createSyncQueueEventSystem(): SyncQueueEventSystem {
   return createEventSystem([
     SyncQueueEventTypes.QueryItemEnqueued,
     SyncQueueEventTypes.MutationEnqueued,
+    SyncQueueEventTypes.MutationDequeued,
   ]);
 }
 

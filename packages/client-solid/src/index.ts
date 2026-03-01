@@ -28,6 +28,8 @@ import { RecordId, Uuid, Surreal } from 'surrealdb';
 export { RecordId, Uuid };
 export type { Model, GenericModel, GenericSchema, ModelPayload } from './lib/models';
 export { useQuery } from './lib/use-query';
+export { SpookyProvider, type SpookyProviderProps } from './lib/SpookyProvider';
+export { useDb } from './lib/context';
 
 // export { AuthEventTypes } from "@spooky/core"; // TODO: Verify if AuthEventTypes exists in core
 export type {};
@@ -46,10 +48,6 @@ export type {
   TableNames,
   QueryResult,
 } from '@spooky/query-builder';
-
-export interface SyncedDbContext<S extends SyncedDb<SchemaStructure>> {
-  db: S;
-}
 
 export type RelationshipField<
   Schema extends SchemaStructure,
@@ -97,6 +95,7 @@ export type WithRelatedMany<Field extends string, RelatedFields extends RelatedF
 export class SyncedDb<S extends SchemaStructure> {
   private config: SyncedDbConfig<S>;
   private spooky: SpookyClient<S> | null = null;
+  private _initialized = false;
 
   constructor(config: SyncedDbConfig<S>) {
     this.config = config;
@@ -111,8 +110,10 @@ export class SyncedDb<S extends SchemaStructure> {
    * Initialize the spooky-ts instance
    */
   async init(): Promise<void> {
+    if (this._initialized) return;
     this.spooky = new SpookyClient<S>(this.config);
     await this.spooky.init();
+    this._initialized = true;
   }
 
   /**
@@ -237,6 +238,16 @@ export class SyncedDb<S extends SchemaStructure> {
   get auth(): AuthService<S> {
     if (!this.spooky) throw new Error('SyncedDb not initialized');
     return this.spooky.auth;
+  }
+
+  get pendingMutationCount(): number {
+    if (!this.spooky) throw new Error('SyncedDb not initialized');
+    return this.spooky.pendingMutationCount;
+  }
+
+  subscribeToPendingMutations(cb: (count: number) => void): () => void {
+    if (!this.spooky) throw new Error('SyncedDb not initialized');
+    return this.spooky.subscribeToPendingMutations(cb);
   }
 }
 

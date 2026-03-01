@@ -1,15 +1,16 @@
 import { For, createSignal } from 'solid-js';
 import { useNavigate } from '@solidjs/router';
-import { db } from '../db';
-import { useQuery } from '@spooky/client-solid';
+import { useQuery, useDb } from '@spooky/client-solid';
+import { schema } from '../schema.gen';
 
 export function ThreadList() {
+  const db = useDb<typeof schema>();
   const navigate = useNavigate();
 
   /* const [filter, setFilter] = createSignal(""); */
   const [sort, setSort] = createSignal('desc'); // 'desc' | 'asc'
 
-  const threadsResult = useQuery(db, () => {
+  const threadsResult = useQuery(() => {
     let q = db.query('thread').related('author');
     q = q.orderBy('title', sort() as 'asc' | 'desc');
     return q.limit(10).build();

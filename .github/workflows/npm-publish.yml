@@ -1,0 +1,150 @@
+name: npm Publish
+
+on:
+  push:
+    tags:
+      - "spooky/v*"
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      is_canary: ${{ steps.meta.outputs.is_canary }}
+      npm_tag: ${{ steps.meta.outputs.npm_tag }}
+    steps:
+      - name: Extract version from tag
+        id: meta
+        run: |
+          TAG="${GITHUB_REF#refs/tags/spooky/v}"
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
+          if echo "$TAG" | grep -q "canary"; then
+            echo "is_canary=true" >> "$GITHUB_OUTPUT"
+            echo "npm_tag=canary" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_canary=false" >> "$GITHUB_OUTPUT"
+            echo "npm_tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+  publish-packages:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 1. Build and publish @spooky-sync/query-builder
+      - name: Set version — query-builder
+        run: jq '.version = "${{ needs.prepare.outputs.version }}"' packages/query-builder/package.json > tmp.json && mv tmp.json packages/query-builder/package.json
+
+      - name: Build query-builder
+        run: pnpm --filter @spooky-sync/query-builder build
+
+      - name: Publish query-builder
+        run: pnpm --filter @spooky-sync/query-builder publish --access public --tag ${{ needs.prepare.outputs.npm_tag }} --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # 2. Build @spooky-sync/ssp-wasm (private — not published)
+      - name: Build ssp-wasm
+        run: pnpm --filter @spooky-sync/ssp-wasm build
+
+      # 3. Build and publish @spooky-sync/core
+      - name: Set version — core
+        run: jq '.version = "${{ needs.prepare.outputs.version }}"' packages/core/package.json > tmp.json && mv tmp.json packages/core/package.json
+
+      - name: Build core
+        run: pnpm --filter @spooky-sync/core build
+
+      - name: Publish core
+        run: pnpm --filter @spooky-sync/core publish --access public --tag ${{ needs.prepare.outputs.npm_tag }} --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # 4. Build and publish @spooky-sync/client-solid
+      - name: Set version — client-solid
+        run: jq '.version = "${{ needs.prepare.outputs.version }}"' packages/client-solid/package.json > tmp.json && mv tmp.json packages/client-solid/package.json
+
+      - name: Build client-solid
+        run: pnpm --filter @spooky-sync/client-solid build
+
+      - name: Publish client-solid
+        run: pnpm --filter @spooky-sync/client-solid publish --access public --tag ${{ needs.prepare.outputs.npm_tag }} --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-cli:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/cli
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Set version — cli
+        run: jq '.version = "${{ needs.prepare.outputs.version }}"' apps/cli/package.json > tmp.json && mv tmp.json apps/cli/package.json
+
+      - name: Build Rust binary
+        run: pnpm --filter spooky-cli build:rust
+
+      - name: Build JS bundle
+        run: pnpm --filter spooky-cli build:vite
+
+      - name: Build type declarations
+        run: pnpm --filter spooky-cli build:types
+
+      - name: Publish CLI
+        run: pnpm --filter spooky-cli publish --access public --tag ${{ needs.prepare.outputs.npm_tag }} --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

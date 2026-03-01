@@ -1,4 +1,4 @@
-import { SyncedDb, SyncedDbConfig } from '@spooky/client-solid';
+import { SyncedDbConfig } from '@spooky/client-solid';
 import { schema, SURQL_SCHEMA } from './schema.gen';
 
 // Database configuration
@@ -13,28 +13,5 @@ export const dbConfig: SyncedDbConfig<typeof schema> = {
     endpoint: 'ws://localhost:8666/rpc',
     store: 'memory',
     persistenceClient: 'localstorage',
-    // auth: { ... } // If needed later
   },
 };
-
-export const db = new SyncedDb<typeof schema>(dbConfig);
-
-// Initialize the database
-let initializationPromise: Promise<void> | null = null;
-
-export function initDatabase(): Promise<void> {
-  if (initializationPromise) return initializationPromise;
-
-  initializationPromise = (async () => {
-    try {
-      await db.init();
-    } catch (error) {
-      initializationPromise = null; // Allow retrying if it failed
-      throw error;
-    }
-  })();
-
-  return initializationPromise;
-}
-
-// Database instance is already exported above

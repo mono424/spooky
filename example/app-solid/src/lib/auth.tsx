@@ -1,7 +1,6 @@
 import { createContext, useContext, createSignal, JSX, Show, onCleanup } from 'solid-js';
-import { db } from '../db';
 import { schema } from '../schema.gen';
-import { type GetTable, type TableModel, useQuery } from '@spooky/client-solid';
+import { type GetTable, type TableModel, useQuery, useDb } from '@spooky/client-solid';
 
 type User = TableModel<GetTable<typeof schema, 'user'>>;
 
@@ -17,6 +16,7 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType>();
 
 export function AuthProvider(props: { children: JSX.Element }) {
+  const db = useDb<typeof schema>();
   const [userId, setUserId] = createSignal<string | null>(null);
   const [isInitializing, setIsInitializing] = createSignal(true);
 
@@ -30,7 +30,6 @@ export function AuthProvider(props: { children: JSX.Element }) {
 
   // Only run query after auth is initialized and userId is available
   const userQuery = useQuery(
-    db,
     () => {
       const currentUserId = userId();
       if (!currentUserId) {

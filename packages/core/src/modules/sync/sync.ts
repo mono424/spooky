@@ -1,6 +1,6 @@
 import { LocalDatabaseService, RemoteDatabaseService } from '../../services/database/index';
 import { MutationEvent, RecordVersionArray } from '../../types';
-import { createSyncEventSystem, SyncEventTypes } from './events/index';
+import { createSyncEventSystem, SyncEventTypes, SyncQueueEventTypes } from './events/index';
 import { Logger } from '../../services/logger/index';
 import { DownEvent, DownQueue, UpEvent, UpQueue } from './queue/index';
 import { RecordId, Uuid } from 'surrealdb';
@@ -30,6 +30,25 @@ export class SpookySync<S extends SchemaStructure> {
 
   get isSyncing() {
     return this.scheduler.isSyncing;
+  }
+
+  get pendingMutationCount(): number {
+    return this.upQueue.size;
+  }
+
+  subscribeToPendingMutations(cb: (count: number) => void): () => void {
+    const id1 = this.upQueue.events.subscribe(
+      SyncQueueEventTypes.MutationEnqueued,
+      (event) => cb(event.payload.queueSize)
+    );
+    const id2 = this.upQueue.events.subscribe(
+      SyncQueueEventTypes.MutationDequeued,
+      (event) => cb(event.payload.queueSize)
+    );
+    return () => {
+      this.upQueue.events.unsubscribe(id1);
+      this.upQueue.events.unsubscribe(id2);
+    };
   }
 
   constructor(

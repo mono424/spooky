@@ -710,9 +710,10 @@ async fn ingest_handler(
     // Prepare record data
     let clean = ssp::sanitizer::normalize_record(payload.record.clone());
 
-    // Check if this is a job table and queue the job if pending
+    // Check if this is a job table and queue the job if pending (only on assigned SSP)
     if let Some(backend_info) = state.job_config.job_tables.get(&payload.table) {
-        if op == Operation::Create {
+        let is_assigned = payload.job_assignee.as_deref() == Some(&state.ssp_id);
+        if is_assigned && op == Operation::Create {
             if let Some(status) = payload.record.get("status").and_then(|v| v.as_str()) {
                 if status == "pending" {
                     let job_entry = JobEntry::from_record(

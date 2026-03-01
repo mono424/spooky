@@ -113,6 +113,16 @@ async fn handle_ingest(
         buffer.push_back(buffered_event.clone());
     }
 
+    // Select one SSP for job execution (round-robin)
+    let job_assignee = {
+        let mut pool = state.ssp_pool.write().await;
+        pool.select_for_query()
+    };
+
+    // Set assignee on request before broadcast
+    let mut request = request;
+    request.job_assignee = job_assignee;
+
     // Get all ready SSPs and broadcast
     let ready_ssps = {
         let pool = state.ssp_pool.read().await;

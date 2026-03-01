@@ -1,9 +1,9 @@
 import { createSignal, Show } from 'solid-js';
 import { useNavigate } from '@solidjs/router';
-import { db } from '../db';
 import { useAuth } from '../lib/auth';
-import { Uuid } from '@spooky/client-solid';
+import { Uuid, useDb } from '@spooky/client-solid';
 import { RecordId } from 'surrealdb';
+import { schema } from '../schema.gen';
 
 interface CreateThreadDialogProps {
   isOpen: boolean;
@@ -11,6 +11,7 @@ interface CreateThreadDialogProps {
 }
 
 export function CreateThreadDialog(props: CreateThreadDialogProps) {
+  const db = useDb<typeof schema>();
   const navigate = useNavigate();
   const auth = useAuth();
   const [title, setTitle] = createSignal('');

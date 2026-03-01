@@ -1,23 +1,26 @@
 import { createSignal, For, Show } from 'solid-js';
 import { useNavigate, useParams } from '@solidjs/router';
-import { db } from '../db';
 import { CommentForm } from './CommentForm';
-import { useQuery } from '@spooky/client-solid';
+import { useQuery, useDb, SyncedDb } from '@spooky/client-solid';
 import { useAuth } from '../lib/auth';
 import { CommentBox } from './CommentBox';
 import { ThreadSidebar } from './ThreadSidebar';
 import { isInputActive, useKeyboard } from '../lib/keyboard';
 import SpookButton from './SpookButton';
+import { schema } from '../schema.gen';
 
-const createQuery = ({
-  threadId,
-  commentFilter,
-  userId,
-}: {
-  threadId: string;
-  commentFilter: 'all' | 'mine';
-  userId: string;
-}) => {
+const createQuery = (
+  db: SyncedDb<typeof schema>,
+  {
+    threadId,
+    commentFilter,
+    userId,
+  }: {
+    threadId: string;
+    commentFilter: 'all' | 'mine';
+    userId: string;
+  }
+) => {
   return db
     .query('thread')
     .where({
@@ -39,14 +42,15 @@ const createQuery = ({
 };
 
 export function ThreadDetail() {
+  const db = useDb<typeof schema>();
   const auth = useAuth();
   const params = useParams();
   const navigate = useNavigate();
   const [commentFilter, setCommentFilter] = createSignal<'all' | 'mine'>('all');
   const [spookifySending, setSpookifySending] = createSignal(false);
 
-  const threadResult = useQuery(db, () =>
-    createQuery({
+  const threadResult = useQuery(() =>
+    createQuery(db, {
       threadId: params.id,
       commentFilter: commentFilter(),
       userId: auth.user()?.id ?? '',

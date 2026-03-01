@@ -144,6 +144,10 @@ export class UpQueue {
             );
           }
         }
+        this._events.addEvent({
+          type: SyncQueueEventTypes.MutationDequeued,
+          payload: { queueSize: this.queue.length },
+        });
         return;
       }
       try {
@@ -154,6 +158,10 @@ export class UpQueue {
           'Failed to remove mutation from database after successful processing'
         );
       }
+      this._events.addEvent({
+        type: SyncQueueEventTypes.MutationDequeued,
+        payload: { queueSize: this.queue.length },
+      });
     }
   }
 

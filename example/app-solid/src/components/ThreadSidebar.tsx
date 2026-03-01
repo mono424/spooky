@@ -1,16 +1,17 @@
 import { For } from 'solid-js';
 import { useNavigate } from '@solidjs/router';
-import { db } from '../db';
-import { useQuery } from '@spooky/client-solid';
+import { useQuery, useDb } from '@spooky/client-solid';
+import { schema } from '../schema.gen';
 
 interface ThreadSidebarProps {
   activeThreadId?: string;
 }
 
 export function ThreadSidebar(props: ThreadSidebarProps) {
+  const db = useDb<typeof schema>();
   const navigate = useNavigate();
 
-  const threadsResult = useQuery(db, () => {
+  const threadsResult = useQuery(() => {
     return db.query('thread').orderBy('title', 'asc').limit(20).build();
   });
 

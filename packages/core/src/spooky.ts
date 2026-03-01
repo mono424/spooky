@@ -61,6 +61,14 @@ export class SpookyClient<S extends SchemaStructure> {
     return this.local.getClient();
   }
 
+  get pendingMutationCount(): number {
+    return this.sync.pendingMutationCount;
+  }
+
+  subscribeToPendingMutations(cb: (count: number) => void): () => void {
+    return this.sync.subscribeToPendingMutations(cb);
+  }
+
   constructor(private config: SpookyConfig<S>) {
     const logger = createLogger(config.logLevel ?? 'info', config.otelEndpoint);
     this.logger = logger.child({ service: 'SpookyClient' });

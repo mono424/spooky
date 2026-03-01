@@ -1,7 +1,7 @@
 import { Accessor, createSignal } from 'solid-js';
-import { db } from '../db';
 import { useAuth } from '../lib/auth';
-import { RecordId, Uuid } from '@spooky/client-solid';
+import { RecordId, Uuid, useDb } from '@spooky/client-solid';
+import { schema } from '../schema.gen';
 
 interface CommentFormProps {
   thread: Accessor<{ id: string }>;
@@ -9,6 +9,7 @@ interface CommentFormProps {
 }
 
 export function CommentForm(props: CommentFormProps) {
+  const db = useDb<typeof schema>();
   const auth = useAuth();
   const [content, setContent] = createSignal('');
   const [isLoading, setIsLoading] = createSignal(false);

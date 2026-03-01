@@ -1,8 +1,10 @@
 import { Router, Route } from '@solidjs/router';
-import { createSignal, Show, onMount, createEffect } from 'solid-js';
+import { createSignal, Show, createEffect } from 'solid-js';
+import { SpookyProvider } from '@spooky/client-solid';
 import { AuthProvider, useAuth } from './lib/auth';
-import { initDatabase } from './db';
+import { dbConfig } from './db';
 import { AuthDialog } from './components/AuthDialog';
+import { PendingMutationsIndicator } from './components/PendingMutationsIndicator';
 import { useKeyboard, useShortcutsHelp } from './lib/keyboard';
 import { ShortcutsHelp } from './components/ShortcutsHelp';
 import { useNavigate } from '@solidjs/router';
@@ -149,26 +151,16 @@ function Layout(props: any) {
         onClose={() => setShowAuthDialog(false)}
         initialMode={authMode()} // Pass the mode here
       />
+
+      <PendingMutationsIndicator />
     </div>
   );
 }
 
 export default function App() {
-  const [isDbReady, setIsDbReady] = createSignal(false);
-
-  onMount(async () => {
-    try {
-      await initDatabase();
-      setIsDbReady(true);
-    } catch (error) {
-      console.error('Failed to initialize database:', error);
-      setIsDbReady(true);
-    }
-  });
-
   return (
-    <Show
-      when={isDbReady()}
+    <SpookyProvider
+      config={dbConfig}
       fallback={
         <div class="min-h-screen bg-black text-white font-mono flex flex-col items-center justify-center">
           <pre class="mb-4 text-xs animate-pulse">[ SYSTEM BOOT ]</pre>
@@ -177,6 +169,7 @@ export default function App() {
           </div>
         </div>
       }
+      onError={(error) => console.error('Failed to initialize database:', error)}
     >
       <AuthProvider>
         <Router root={Layout}>
@@ -185,6 +178,6 @@ export default function App() {
           <Route path="/create-thread" component={CreateThreadPage} />
         </Router>
       </AuthProvider>
-    </Show>
+    </SpookyProvider>
   );
 }

@@ -9,6 +9,8 @@ pub struct IngestRequest {
     pub op: String,
     pub id: String,
     pub record: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_assignee: Option<String>,
 }
 
 // --- View API (camelCase wire format via serde rename) ---

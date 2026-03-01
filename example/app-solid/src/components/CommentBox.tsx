@@ -1,15 +1,15 @@
 import { Show } from 'solid-js';
 import { useAuth } from '../lib/auth';
 import { SchemaDefinition } from '../schema.gen';
-import { GetTable, TableModel } from '@spooky/client-solid';
-import { db } from '../db';
+import { GetTable, TableModel, useDb } from '@spooky/client-solid';
+import { schema } from '../schema.gen';
 
 type AugmentedComment = Omit<TableModel<GetTable<SchemaDefinition, 'comment'>>, 'author'> & {
   author?: TableModel<GetTable<SchemaDefinition, 'user'>>;
 };
 
 export function CommentBox(props: { comment: AugmentedComment }) {
-  const spooky = db.getSpooky();
+  const db = useDb<typeof schema>();
   const auth = useAuth();
 
   const isAdmin = () => {
@@ -18,7 +18,7 @@ export function CommentBox(props: { comment: AugmentedComment }) {
 
   const handleDelete = () => {
     if (confirm('CONFIRM_DELETION: Proceed with erasing this log entry?')) {
-      spooky.delete('comment', props.comment.id);
+      db.delete('comment', props.comment.id);
     }
   };
 

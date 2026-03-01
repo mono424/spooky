@@ -1,7 +1,6 @@
 import { createSignal, Show, createEffect } from 'solid-js';
 import { useAuth } from '../lib/auth';
 import { useKeyboard } from '../lib/keyboard';
-import { db } from '../db';
 
 interface AuthDialogProps {
   isOpen: boolean;
