@@ -11,7 +11,7 @@ This guide walks you through building a reactive app with SolidJS and Spooky.
 
 Install the required dependencies:
 
-<CodeBlock code={`npm install @spooky/client-solid surrealdb`} lang="bash" />
+<CodeBlock code={`npm install @spooky-sync/client-solid surrealdb`} lang="bash" />
 
 ## 2. Generate Schema Types
 
@@ -32,7 +32,7 @@ Create a `db.ts` file to configure and export your database instance:
 <CodeBlock
   fileName="src/db.ts"
   lang="typescript"
-  code={`import { SyncedDb, type SyncedDbConfig } from '@spooky/client-solid';
+  code={`import { SyncedDb, type SyncedDbConfig } from '@spooky-sync/client-solid';
 import { schema, SURQL_SCHEMA } from './schema.gen';
 
 export const dbConfig: SyncedDbConfig<typeof schema> = {
@@ -110,7 +110,7 @@ Use the `useQuery` hook to create reactive queries that automatically update:
   fileName="src/components/ThreadList.tsx"
   lang="tsx"
   code={`import { For } from 'solid-js';
-import { useQuery } from '@spooky/client-solid';
+import { useQuery } from '@spooky-sync/client-solid';
 import { db } from '../db';
 
 export function ThreadList() {
@@ -157,7 +157,7 @@ Create an auth context to manage user authentication state:
   fileName="src/lib/auth.tsx"
   lang="tsx"
   code={`import { createContext, useContext, createSignal, onCleanup, type JSX } from 'solid-js';
-import { useQuery } from '@spooky/client-solid';
+import { useQuery } from '@spooky-sync/client-solid';
 import { db } from '../db';
 
 interface AuthContextType {

@@ -9,7 +9,7 @@ You can use Spooky with plain JavaScript or TypeScript without any framework. Th
 
 ## Installation
 
-<CodeBlock code={`npm install @spooky/core surrealdb`} lang="bash" />
+<CodeBlock code={`npm install @spooky-sync/core surrealdb`} lang="bash" />
 
 ## Generate Schema Types
 
@@ -27,7 +27,7 @@ Create and initialize a `SpookyClient` instance:
 <CodeBlock
   fileName="src/db.ts"
   lang="typescript"
-  code={`import { SpookyClient, type SpookyConfig } from '@spooky/core';
+  code={`import { SpookyClient, type SpookyConfig } from '@spooky-sync/core';
 import { schema, SURQL_SCHEMA } from './schema.gen';
 
 const config: SpookyConfig<typeof schema> = {

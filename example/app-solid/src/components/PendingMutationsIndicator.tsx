@@ -15,7 +15,6 @@ export function PendingMutationsIndicator() {
         clearTimeout(hideTimeout);
         setVisible(true);
       } else {
-        // Delay hiding so the "0" state can animate out
         hideTimeout = setTimeout(() => setVisible(false), 400);
       }
     });
@@ -32,8 +31,8 @@ export function PendingMutationsIndicator() {
         class={`pending-mutations-pill ${count() === 0 ? 'pending-mutations-exit' : ''}`}
       >
         <span class="pending-mutations-dot" />
-        <span class="text-xs font-bold uppercase tracking-wider">
-          {count()} unsynced
+        <span class="text-xs font-medium tracking-wide">
+          {count()} pending
         </span>
       </div>
     </Show>

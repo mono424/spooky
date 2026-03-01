@@ -1,14 +1,15 @@
-import { For, createSignal } from 'solid-js';
+import { For, createSignal, createEffect } from 'solid-js';
 import { useNavigate } from '@solidjs/router';
 import { useQuery, useDb } from '@spooky-sync/client-solid';
+import { useKeyboard } from '../lib/keyboard';
 import { schema } from '../schema.gen';
 
 export function ThreadList() {
   const db = useDb<typeof schema>();
   const navigate = useNavigate();
 
-  /* const [filter, setFilter] = createSignal(""); */
-  const [sort, setSort] = createSignal('desc'); // 'desc' | 'asc'
+  const [sort, setSort] = createSignal('desc');
+  const [selectedIndex, setSelectedIndex] = createSignal(-1);
 
   const threadsResult = useQuery(() => {
     let q = db.query('thread').related('author');
@@ -18,111 +19,128 @@ export function ThreadList() {
 
   const threads = () => threadsResult.data() || [];
 
+  // Reset selection when threads change
+  createEffect(() => {
+    threads();
+    setSelectedIndex(-1);
+  });
+
   const handleThreadClick = (threadId: string) => {
     navigate(`/thread/${threadId}`);
   };
 
-  return (
-    <div class="w-full font-mono">
-      {/* Action Bar: 
-        Minimalist style to blend with the main Layout header. 
-        Removed the heavy bottom border and large H1.
-      */}
-      <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 pt-2 gap-4">
-        <div class="text-xs sm:text-sm text-gray-500 font-mono uppercase tracking-wider flex items-center gap-4 w-full sm:w-auto">
-          <div>
-            <span class="text-green-500 font-bold mr-2">root@spooky:~/threads$</span>
-            <span class="animate-pulse">_</span>
-          </div>
+  // Scroll the selected thread card into view
+  const scrollSelectedIntoView = (index: number) => {
+    const el = document.querySelector(`[data-thread-index="${index}"]`);
+    el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  };
 
-          {/* Sort Toggle */}
+  useKeyboard({
+    j: () => {
+      const len = threads().length;
+      if (len === 0) return;
+      const next = Math.min(selectedIndex() + 1, len - 1);
+      setSelectedIndex(next);
+      scrollSelectedIntoView(next);
+    },
+    k: () => {
+      const len = threads().length;
+      if (len === 0) return;
+      const prev = Math.max(selectedIndex() - 1, 0);
+      setSelectedIndex(prev);
+      scrollSelectedIntoView(prev);
+    },
+    Enter: () => {
+      const idx = selectedIndex();
+      const list = threads();
+      if (idx >= 0 && idx < list.length) {
+        handleThreadClick(list[idx].id.split(':')[1]);
+      }
+    },
+  });
+
+  return (
+    <div class="w-full">
+      {/* Action Bar */}
+      <div class="flex justify-between items-center mb-6 pt-2">
+        <h1 class="text-xl font-semibold tracking-tight">Feed</h1>
+
+        <div class="flex items-center gap-3">
           <select
             value={sort()}
             onInput={(e) => setSort(e.currentTarget.value)}
-            class="bg-black text-gray-400 border border-gray-800 text-[10px] px-2 py-1 outline-none focus:border-green-500 uppercase cursor-pointer"
+            class="bg-surface text-zinc-400 border border-white/[0.06] text-sm px-3 py-1.5 rounded-lg outline-none focus:border-accent/50 cursor-pointer transition-colors duration-150"
           >
             <option value="desc">Newest</option>
             <option value="asc">Oldest</option>
           </select>
-        </div>
 
-        <button
-          onMouseDown={() => navigate('/create-thread')}
-          class="bg-white text-black border-2 border-white px-4 py-2 uppercase font-bold text-xs hover:bg-black hover:text-white transition-none whitespace-nowrap self-end sm:self-auto"
-        >
-          [ + WRITE_NEW ]
-        </button>
+          <button
+            onMouseDown={() => navigate('/create-thread')}
+            class="inline-flex items-center gap-2 bg-accent hover:bg-accent-hover text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors duration-150"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+            </svg>
+            New thread
+          </button>
+        </div>
       </div>
 
-      {/* List Section */}
-      <div class="space-y-4">
+      {/* Thread List */}
+      <div class="space-y-3">
         <For
           each={threads()}
           fallback={
-            <div class="border-2 border-dashed border-gray-800 p-12 text-center opacity-50">
-              <pre class="text-xs mb-4 text-gray-500 whitespace-pre leading-none font-mono">
-                {`
-   _______
--  /   ___  \\  -
--  |  /   \\  |  -
--  |  |   |  |  -
--  |  \\___/  |  -
--  \\________/  -
-              `}
-              </pre>
-              <div class="uppercase tracking-widest text-xs font-bold">
-                &lt; NULL_RESPONSE /&gt;
-              </div>
-              <p class="text-[10px] mt-2">Directory is empty. Execute write command.</p>
+            <div class="bg-surface/50 rounded-xl border border-white/[0.06] py-16 text-center">
+              <p class="text-zinc-500 text-sm">No threads yet</p>
+              <p class="text-zinc-600 text-xs mt-1">Create the first one to get started.</p>
             </div>
           }
         >
-          {(thread) => (
+          {(thread, index) => (
             <div
+              data-thread-index={index()}
               onMouseDown={() => handleThreadClick(thread.id.split(':')[1])}
-              class="border border-white/40 p-5 cursor-pointer hover:border-white hover:bg-white/5 transition-none group relative block"
+              onMouseEnter={() => setSelectedIndex(index())}
+              class={`border rounded-xl p-5 cursor-pointer transition-colors duration-150 group ${
+                selectedIndex() === index()
+                  ? 'bg-surface border-accent/40 ring-1 ring-accent/20'
+                  : 'bg-surface/40 hover:bg-surface border-white/[0.06]'
+              }`}
             >
-              {/* ASCII Corner markers that appear on hover */}
-              <div class="hidden group-hover:block absolute -top-3 -left-2 text-white text-[10px]">
-                +
-              </div>
-              <div class="hidden group-hover:block absolute -top-3 -right-2 text-white text-[10px]">
-                +
-              </div>
-              <div class="hidden group-hover:block absolute -bottom-3 -left-2 text-white text-[10px]">
-                +
-              </div>
-              <div class="hidden group-hover:block absolute -bottom-3 -right-2 text-white text-[10px]">
-                +
-              </div>
-
-              <div class="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2 mb-2">
-                <h2 class="text-lg font-bold uppercase tracking-wide group-hover:text-green-400">
-                  {thread.title}
-                </h2>
-                <div class="text-[10px] text-gray-500 border border-gray-800 px-2 py-1 bg-black">
-                  ID: {thread.id.split(':')[1].slice(0, 8)}
+              <div class="flex items-start gap-4">
+                {/* Avatar */}
+                <div class="w-10 h-10 rounded-full bg-accent/15 text-accent flex items-center justify-center text-sm font-semibold flex-shrink-0 mt-0.5">
+                  {(thread.author?.username || '?').charAt(0).toUpperCase()}
                 </div>
-              </div>
 
-              <p class="text-sm text-gray-400 mb-4 font-mono line-clamp-2 leading-relaxed pl-2 border-l-2 border-gray-800 group-hover:border-white group-hover:text-gray-300">
-                {thread.content}
-              </p>
+                <div class="flex-1 min-w-0">
+                  {/* Author + time */}
+                  <div class="flex items-center gap-2 mb-1">
+                    <span class="text-sm font-medium text-zinc-300">
+                      {thread.author?.username || 'Anonymous'}
+                    </span>
+                    <span class="text-zinc-700">&middot;</span>
+                    <span class="text-xs text-zinc-600">
+                      {new Date(thread.created_at ?? 0).toLocaleDateString(undefined, {
+                        month: 'short',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </span>
+                  </div>
 
-              <div class="flex justify-between items-center text-[10px] uppercase text-gray-600 font-bold tracking-wider">
-                <div class="flex items-center gap-2">
-                  <span>USR:</span>
-                  <span class="text-gray-400 group-hover:text-white">
-                    {thread.author?.username || 'ANON'}
-                  </span>
-                </div>
-                <div>
-                  {new Date(thread.created_at ?? 0).toLocaleDateString(undefined, {
-                    month: 'short',
-                    day: '2-digit',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })}
+                  {/* Title */}
+                  <h2 class="text-[15px] font-semibold text-white group-hover:text-accent transition-colors duration-150 mb-1.5">
+                    {thread.title}
+                  </h2>
+
+                  {/* Content preview */}
+                  <p class="text-sm text-zinc-500 line-clamp-2 leading-relaxed">
+                    {thread.content}
+                  </p>
                 </div>
               </div>
             </div>

@@ -32,7 +32,6 @@ export function CreateThreadDialog(props: CreateThreadDialogProps) {
         throw new Error('You must be logged in to create a thread');
       }
 
-      // Generate a record ID before creating
       const genId = Uuid.v4().toString().replace(/-/g, '');
       const threadId = `thread:${genId}`;
       await db.create(threadId, {
@@ -61,53 +60,35 @@ export function CreateThreadDialog(props: CreateThreadDialogProps) {
 
   return (
     <Show when={props.isOpen}>
-      {/* Styles for animation and scrollbar */}
-      <style>{`
-        @keyframes terminal-boot {
-          0% { opacity: 0; transform: scale(0.95) translateY(10px); }
-          100% { opacity: 1; transform: scale(1) translateY(0); }
-        }
-        .animate-terminal {
-          animation: terminal-boot 0.2s cubic-bezier(0, 0, 0.2, 1) forwards;
-        }
-        
-        /* Custom Scrollbar for the textarea/modal */
-        ::-webkit-scrollbar { width: 8px; }
-        ::-webkit-scrollbar-track { background: #000; border-left: 1px solid #333; }
-        ::-webkit-scrollbar-thumb { background: #fff; border: 2px solid #000; }
-        ::-webkit-scrollbar-thumb:hover { background: #ccc; }
-      `}</style>
-
-      <div class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
-        <div class="animate-terminal bg-black border-2 border-white w-full max-w-3xl flex flex-col shadow-[8px_8px_0px_0px_rgba(255,255,255,1)] max-h-[90vh]">
+      <div class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4" onMouseDown={handleClose}>
+        <div
+          class="animate-slide-up bg-surface border border-white/[0.06] rounded-xl w-full max-w-2xl shadow-2xl max-h-[90vh] flex flex-col"
+          onMouseDown={(e) => e.stopPropagation()}
+        >
           {/* Header */}
-          <div class="flex justify-between items-stretch border-b-2 border-white h-12 flex-shrink-0">
-            <div class="flex items-center px-4 border-r-2 border-white bg-white text-black font-bold uppercase tracking-widest text-sm">
-              [WRITE]
-            </div>
-            <div class="flex-grow flex items-center px-4 font-mono text-sm uppercase tracking-wider overflow-hidden whitespace-nowrap text-ellipsis">
-              NEW_THREAD_BUFFER
-            </div>
+          <div class="flex justify-between items-center px-6 pt-6 pb-2 flex-shrink-0">
+            <h2 class="text-lg font-semibold">New thread</h2>
             <button
               onMouseDown={handleClose}
-              class="px-5 hover:bg-white hover:text-black border-l-2 border-white font-bold transition-none text-lg flex items-center justify-center"
+              class="text-zinc-500 hover:text-white transition-colors duration-150 p-1"
               aria-label="Close"
             >
-              ✕
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
             </button>
           </div>
 
-          {/* Scrollable Content Area */}
-          <div class="p-6 sm:p-8 overflow-y-auto">
-            <form onSubmit={handleSubmit} class="space-y-6">
-              {/* Title Input */}
-              <div class="space-y-2">
-                <div class="flex justify-between items-end">
-                  <label for="title" class="text-xs uppercase font-bold tracking-wider">
-                    &gt; Subject_Line:
+          {/* Content */}
+          <div class="px-6 pb-6 pt-4 overflow-y-auto">
+            <form onSubmit={handleSubmit} class="space-y-4">
+              <div>
+                <div class="flex justify-between items-end mb-1.5">
+                  <label for="title" class="text-sm font-medium text-zinc-400">
+                    Title
                   </label>
-                  <span class="text-[10px] text-gray-500 font-mono">
-                    CHARS: {title().length}/200
+                  <span class="text-xs text-zinc-600">
+                    {title().length}/200
                   </span>
                 </div>
                 <input
@@ -117,59 +98,47 @@ export function CreateThreadDialog(props: CreateThreadDialogProps) {
                   onInput={(e) => setTitle(e.currentTarget.value)}
                   required
                   maxlength="200"
-                  class="w-full bg-black border-2 border-white px-4 py-3 text-white focus:outline-none focus:bg-white focus:text-black transition-none placeholder-gray-700 font-mono text-sm rounded-none"
-                  placeholder="Enter subject..."
+                  class="w-full bg-zinc-950 border border-white/[0.06] rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-accent/50 transition-colors duration-150 placeholder-zinc-600 text-sm"
+                  placeholder="Enter a title"
                   autocomplete="off"
                 />
               </div>
 
-              {/* Content Textarea */}
-              <div class="space-y-2 flex-grow">
-                <label for="content" class="block text-xs uppercase font-bold tracking-wider">
-                  &gt; Body_Content:
+              <div>
+                <label for="content" class="block text-sm font-medium text-zinc-400 mb-1.5">
+                  Content
                 </label>
-                <div class="relative">
-                  <textarea
-                    id="content"
-                    value={content()}
-                    onInput={(e) => setContent(e.currentTarget.value)}
-                    required
-                    rows="12"
-                    class="w-full bg-black border-2 border-white p-4 text-white focus:outline-none focus:shadow-[4px_4px_0px_0px_rgba(255,255,255,1)] transition-none placeholder-gray-800 font-mono text-sm rounded-none resize-none leading-relaxed block"
-                    placeholder="Begin transmission..."
-                  />
-                  {/* Blinking cursor decoration in bottom right corner if empty-ish */}
-                  <div class="absolute bottom-2 right-4 pointer-events-none text-xs text-gray-600">
-                    <span class="animate-pulse">█</span>
-                  </div>
-                </div>
+                <textarea
+                  id="content"
+                  value={content()}
+                  onInput={(e) => setContent(e.currentTarget.value)}
+                  required
+                  rows="10"
+                  class="w-full bg-zinc-950 border border-white/[0.06] rounded-lg p-4 text-white focus:outline-none focus:border-accent/50 transition-colors duration-150 placeholder-zinc-600 text-sm resize-none leading-relaxed block"
+                  placeholder="What's on your mind?"
+                />
               </div>
 
               <Show when={error()}>
-                <div class="border border-red-500 text-red-500 p-3 text-xs font-mono uppercase bg-red-900/10">
-                  <span class="font-bold">! WRITE_ERROR:</span> {error()}
+                <div class="bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 p-3 text-sm">
+                  {error()}
                 </div>
               </Show>
 
-              {/* Action Buttons */}
-              <div class="flex flex-col-reverse sm:flex-row justify-end gap-4 pt-2">
+              <div class="flex justify-end gap-3 pt-2">
                 <button
                   type="button"
                   onMouseDown={handleClose}
-                  class="px-6 py-3 border-2 border-transparent text-gray-500 hover:text-white uppercase font-bold text-xs tracking-wider hover:underline decoration-white underline-offset-4 transition-none"
+                  class="px-5 py-2.5 text-sm text-zinc-400 hover:text-white transition-colors duration-150"
                 >
-                  [ ABORT ]
+                  Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={isLoading() || !title().trim() || !content().trim()}
-                  class="bg-white text-black border-2 border-white px-8 py-3 uppercase font-bold hover:bg-black hover:text-white transition-none disabled:opacity-50 disabled:cursor-not-allowed text-sm tracking-widest"
+                  class="bg-accent hover:bg-accent-hover text-white px-6 py-2.5 rounded-lg font-medium transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
                 >
-                  {isLoading() ? (
-                    <span class="animate-pulse">TRANSMITTING...</span>
-                  ) : (
-                    '[ PUBLISH_THREAD ]'
-                  )}
+                  {isLoading() ? 'Publishing...' : 'Publish'}
                 </button>
               </div>
             </form>

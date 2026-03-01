@@ -14,20 +14,11 @@ import Home from './routes/index';
 import ThreadPage from './routes/thread/[id]';
 import CreateThreadPage from './routes/create-thread';
 
-// Defined outside component to preserve whitespace exactly
-const THREADS_ASCII = `
-████████╗██╗  ██╗██████╗ ███████╗ █████╗ ██████╗ ███████╗
-╚══██╔══╝██║  ██║██╔══██╗██╔════╝██╔══██╗██╔══██╗██╔════╝
-   ██║   ███████║██████╔╝█████╗  ███████║██║  ██║███████╗
-   ██║   ██╔══██║██╔══██╗██╔══╝  ██╔══██║██║  ██║╚════██║
-   ██║   ██║  ██║██║  ██║███████╗██║  ██║██████╔╝███████║
-   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═════╝ ╚══════╝
-`;
-
 function Layout(props: any) {
   const auth = useAuth();
+  const navigate = useNavigate();
+  const { toggle: toggleHelp } = useShortcutsHelp();
   const [showAuthDialog, setShowAuthDialog] = createSignal(false);
-  // Add state to track which mode to open the dialog in
   const [authMode, setAuthMode] = createSignal<'signin' | 'signup'>('signin');
 
   createEffect(() => {
@@ -36,53 +27,63 @@ function Layout(props: any) {
     }
   });
 
-  // Helper to open specific mode
+  useKeyboard({
+    '?': () => toggleHelp(),
+    'c': () => navigate('/create-thread'),
+    'g h': () => navigate('/'),
+  });
+
   const openAuth = (mode: 'signin' | 'signup') => {
     setAuthMode(mode);
     setShowAuthDialog(true);
   };
 
+  const userInitial = () => {
+    const name = auth.user()?.username;
+    return name ? name.charAt(0).toUpperCase() : '?';
+  };
+
   return (
-    <div class="min-h-screen bg-black text-white font-mono selection:bg-white selection:text-black flex flex-col">
+    <div class="min-h-screen bg-zinc-950 text-white font-sans selection:bg-accent/30 selection:text-white flex flex-col">
       {/* Header */}
-      <header class="bg-black border-b-2 border-white sticky top-0 z-50">
-        <div class="max-w-4xl mx-auto px-4 py-4">
-          <div class="flex justify-between items-center">
-            <div class="flex items-center gap-2">
-              <span class="animate-pulse text-white font-bold">&gt;</span>
-              <h1 class="text-xl font-bold tracking-widest uppercase">[ THREAD_APP ]</h1>
-            </div>
+      <header class="bg-zinc-950/80 backdrop-blur-md border-b border-white/[0.06] sticky top-0 z-50 h-14">
+        <div class="max-w-5xl mx-auto px-6 h-full">
+          <div class="flex justify-between items-center h-full">
+            <span class="text-lg font-semibold tracking-tight">threads</span>
 
             <Show
               when={auth.userId()}
               fallback={
-                <div class="flex space-x-4">
-                  {/* Header Login Button */}
+                <div class="flex items-center gap-3">
                   <button
                     onMouseDown={() => openAuth('signin')}
-                    class="hidden sm:block text-sm uppercase font-bold hover:underline decoration-white underline-offset-4"
+                    class="text-sm text-zinc-400 hover:text-white transition-colors duration-150"
                   >
-                    Login
+                    Sign in
                   </button>
-                  {/* Header Register Button */}
                   <button
                     onMouseDown={() => openAuth('signup')}
-                    class="border-2 border-white px-4 py-1 uppercase font-bold text-sm hover:bg-white hover:text-black transition-none"
+                    class="bg-accent hover:bg-accent-hover text-white text-sm font-medium px-4 py-1.5 rounded-lg transition-colors duration-150"
                   >
-                    [ REGISTER ]
+                    Sign up
                   </button>
                 </div>
               }
             >
-              <div class="flex items-center space-x-6 text-sm">
-                <span class="text-gray-400 uppercase hidden sm:inline">
-                  USER: <span class="text-white">{auth.user()?.username ?? 'GUEST'}</span>
-                </span>
+              <div class="flex items-center gap-3">
+                <div class="flex items-center gap-2">
+                  <div class="w-7 h-7 rounded-full bg-accent/20 text-accent flex items-center justify-center text-xs font-semibold">
+                    {userInitial()}
+                  </div>
+                  <span class="text-sm text-zinc-300 hidden sm:inline">
+                    {auth.user()?.username}
+                  </span>
+                </div>
                 <button
                   onMouseDown={auth.signOut}
-                  class="hover:underline decoration-white underline-offset-4 uppercase"
+                  class="text-sm text-zinc-500 hover:text-white transition-colors duration-150"
                 >
-                  &lt;&lt; LOGOUT
+                  Sign out
                 </button>
               </div>
             </Show>
@@ -95,64 +96,54 @@ function Layout(props: any) {
         <Show
           when={auth.userId()}
           fallback={
-            <div class="max-w-4xl mx-auto p-4 h-full flex items-center justify-center min-h-[80vh]">
-              <div class="text-center w-full">
-                {/* ASCII BOOK LOGO */}
-                <div class="flex justify-center mb-10">
-                  <pre class="text-[8px] sm:text-[10px] md:text-xs leading-none font-bold whitespace-pre text-white tracking-tight text-center">
-                    {THREADS_ASCII}
-                  </pre>
+            <div class="h-full flex items-center justify-center min-h-[80vh] px-6">
+              <div class="text-center w-full max-w-sm">
+                {/* Logo mark */}
+                <div class="w-14 h-14 rounded-2xl bg-accent/10 border border-accent/20 flex items-center justify-center mx-auto mb-6">
+                  <svg class="w-7 h-7 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 01.865-.501 48.172 48.172 0 003.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
+                  </svg>
                 </div>
 
-                <div class="border-2 border-white p-8 max-w-lg mx-auto relative">
-                  <div class="absolute -top-3 left-4 bg-black px-2 uppercase font-bold text-sm border-x border-white">
-                    System Message
-                  </div>
+                <h2 class="text-3xl font-semibold mb-2 tracking-tight">
+                  Welcome to Threads
+                </h2>
+                <p class="text-zinc-400 text-sm mb-8 max-w-xs mx-auto">
+                  A modern place for conversations. Sign in to join the discussion.
+                </p>
 
-                  <h2 class="text-2xl font-bold mb-6 uppercase tracking-widest">
-                    Welcome to Thread App
-                  </h2>
-
-                  <p class="text-gray-400 mb-8 border-l-2 border-white pl-4 text-left font-mono text-sm">
-                    &gt; Access restricted.
-                    <br />
-                    &gt; Authentication required.
-                    <br />
-                    &gt; Please initialize session to continue.
-                  </p>
-
-                  <div class="flex flex-col gap-4">
-                    {/* Hero Login Button */}
-                    <button
-                      onMouseDown={() => openAuth('signin')}
-                      class="w-full border-2 border-white bg-white text-black px-6 py-4 uppercase font-bold hover:bg-black hover:text-white hover:border-white transition-none"
-                    >
-                      [ INITIALIZE_SESSION ]
-                    </button>
-                  </div>
+                <div class="flex flex-col gap-3">
+                  <button
+                    onMouseDown={() => openAuth('signin')}
+                    class="w-full bg-accent hover:bg-accent-hover text-white px-6 py-3 rounded-lg font-medium transition-colors duration-150"
+                  >
+                    Sign in
+                  </button>
+                  <button
+                    onMouseDown={() => openAuth('signup')}
+                    class="w-full bg-surface hover:bg-surface-hover text-zinc-300 border border-white/[0.06] px-6 py-3 rounded-lg font-medium transition-colors duration-150"
+                  >
+                    Create account
+                  </button>
                 </div>
               </div>
             </div>
           }
         >
-          <div class="max-w-4xl mx-auto p-4 border-x border-dashed border-white/20 min-h-screen">
+          <div class="max-w-5xl mx-auto px-6 py-4 min-h-screen">
             {props.children}
           </div>
         </Show>
       </main>
 
-      <footer class="border-t border-white py-2 px-4 text-xs uppercase text-gray-500 flex justify-between bg-black">
-        <span>Status: ONLINE</span>
-        <span>v1.0.0_BUILD_FINAL</span>
-      </footer>
-
       <AuthDialog
         isOpen={showAuthDialog()}
         onClose={() => setShowAuthDialog(false)}
-        initialMode={authMode()} // Pass the mode here
+        initialMode={authMode()}
       />
 
       <PendingMutationsIndicator />
+      <ShortcutsHelp />
     </div>
   );
 }
@@ -162,11 +153,12 @@ export default function App() {
     <SpookyProvider
       config={dbConfig}
       fallback={
-        <div class="min-h-screen bg-black text-white font-mono flex flex-col items-center justify-center">
-          <pre class="mb-4 text-xs animate-pulse">[ SYSTEM BOOT ]</pre>
-          <div class="text-xl font-bold uppercase tracking-widest">
-            &gt; Initializing Database...<span class="animate-pulse">_</span>
-          </div>
+        <div class="min-h-screen bg-zinc-950 text-white font-sans flex flex-col items-center justify-center gap-3">
+          <svg class="animate-spin h-5 w-5 text-accent" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+          <span class="text-sm text-zinc-400">Connecting...</span>
         </div>
       }
       onError={(error) => console.error('Failed to initialize database:', error)}

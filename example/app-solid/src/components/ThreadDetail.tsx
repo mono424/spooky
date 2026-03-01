@@ -58,17 +58,34 @@ export function ThreadDetail() {
   );
   const thread = () => threadResult.data() || null;
 
+  // Query all threads for j/k navigation between threads
+  const allThreadsResult = useQuery(() => {
+    return db.query('thread').orderBy('title', 'asc').limit(20).build();
+  });
+  const allThreads = () => allThreadsResult.data() || [];
+
   const handleBack = () => {
     navigate('/');
   };
 
+  const navigateToAdjacentThread = (direction: 1 | -1) => {
+    const list = allThreads();
+    if (list.length === 0) return;
+    const currentIdx = list.findIndex((t) => t.id.split(':')[1] === params.id);
+    if (currentIdx === -1) return;
+    const nextIdx = currentIdx + direction;
+    if (nextIdx < 0 || nextIdx >= list.length) return;
+    navigate(`/thread/${list[nextIdx].id.split(':')[1]}`);
+  };
+
   useKeyboard({
+    j: () => navigateToAdjacentThread(1),
+    k: () => navigateToAdjacentThread(-1),
     r: (e) => {
       e.preventDefault();
       const textarea = document.querySelector('#comment-textarea') as HTMLTextAreaElement;
       textarea?.focus();
     },
-    // We can use Escape here because we want it to work even if nothing is focused to go back
     Escape: () => {
       if (isInputActive()) {
         (document.activeElement as HTMLElement).blur();
@@ -78,7 +95,6 @@ export function ThreadDetail() {
     },
   });
 
-  // Check if current user is the author
   const isAuthor = () => {
     const threadData = thread();
     const currentUser = auth.user();
@@ -86,14 +102,12 @@ export function ThreadDetail() {
     return threadData.author.id === currentUser.id;
   };
 
-  // Auto-save title changes
   const handleTitleChange = async (newTitle: string) => {
     const threadData = thread();
     if (!threadData || !threadData.id || !isAuthor()) return;
     await db.update('thread', threadData.id, { title: newTitle }, { debounced: true });
   };
 
-  // Auto-save content changes
   const handleContentChange = async (newContent: string) => {
     const threadData = thread();
     if (!threadData || !threadData.id || !isAuthor()) return;
@@ -108,46 +122,31 @@ export function ThreadDetail() {
   const handleAcceptTitle = async (suggestion: string) => {
     const threadData = thread();
     if (!threadData || !threadData.id || !isAuthor()) return;
-
-    await db.update('thread', threadData.id, {
-      title: suggestion,
-      title_suggestion: '',
-    });
+    await db.update('thread', threadData.id, { title: suggestion, title_suggestion: '' });
   };
 
   const handleDeclineTitle = async () => {
     const threadData = thread();
     if (!threadData || !threadData.id || !isAuthor()) return;
-
-    await db.update('thread', threadData.id, {
-      title_suggestion: '',
-    });
+    await db.update('thread', threadData.id, { title_suggestion: '' });
   };
 
   const handleAcceptContent = async (suggestion: string) => {
     const threadData = thread();
     if (!threadData || !threadData.id || !isAuthor()) return;
-
-    await db.update('thread', threadData.id, {
-      content: suggestion,
-      content_suggestion: '',
-    });
+    await db.update('thread', threadData.id, { content: suggestion, content_suggestion: '' });
   };
 
   const handleDeclineContent = async () => {
     const threadData = thread();
     if (!threadData || !threadData.id || !isAuthor()) return;
-
-    await db.update('thread', threadData.id, {
-      content_suggestion: '',
-    });
+    await db.update('thread', threadData.id, { content_suggestion: '' });
   };
 
   const handleSpookify = async () => {
     setSpookifySending(true);
     const threadData = thread();
     if (!threadData || !threadData.id) return;
-
     try {
       await db.run('api', '/spookify', { id: threadData.id }, { assignedTo: threadData.id });
     } catch (err) {
@@ -160,235 +159,222 @@ export function ThreadDetail() {
     ['pending', 'processing'].includes(thread()?.jobs?.[0]?.status ?? '');
 
   return (
-    <div class="flex h-full">
-      {/* Thread Sidebar */}
-      <ThreadSidebar activeThreadId={params.id} />
+    <div class="fixed inset-0 top-14 z-40 bg-zinc-950">
+      <div class="max-w-5xl mx-auto h-full flex">
+        <ThreadSidebar activeThreadId={params.id} />
 
-      {/* Main Content */}
-      <div class="flex-1 max-w-4xl mx-auto p-4 font-mono w-full">
-        {/* Navigation Bar */}
-        <div class="flex justify-between items-center mb-6 border-b border-gray-800 pb-2">
-          <button
-            onMouseDown={handleBack}
-            class="text-xs uppercase font-bold text-gray-400 hover:text-white hover:underline decoration-white underline-offset-4 flex items-center gap-2 transition-none"
-          >
-            <span>&lt;&lt;</span> RETURN_TO_ROOT
-          </button>
-
-          <div class="flex items-center gap-6">
-            <SpookButton
-              loading={spookifySending() || spookifyJobLoading()}
-              loadingLabel="HAUNTING..."
-              onClick={handleSpookify}
-            >
-              SPOOKIFY
-            </SpookButton>
-            <div class="text-[10px] uppercase text-gray-600">
-              MODE: {isAuthor() ? 'READ_WRITE' : 'READ_ONLY'}
-            </div>
-          </div>
-        </div>
-
+        <div class="flex-1 overflow-y-auto">
+        <div class="max-w-3xl mx-auto w-full px-6 py-6">
         <Show
           when={thread()}
           fallback={
-            <div class="border-2 border-dashed border-red-900/50 p-12 text-center">
-              <div class="text-red-500 font-bold uppercase tracking-widest mb-2">
-                ! ERROR_404: FILE_NOT_FOUND
-              </div>
-              <div class="text-xs text-gray-500">
-                The requested thread ID does not exist in the database.
-              </div>
+            <div class="bg-surface/50 rounded-xl border border-white/[0.06] p-12 text-center">
+              <p class="text-zinc-400 font-medium mb-1">Thread not found</p>
+              <p class="text-sm text-zinc-600">
+                This thread may have been deleted or doesn't exist.
+              </p>
             </div>
           }
         >
           {(threadData) => (
             <div class="space-y-8">
-              {/* Thread Content Wrapper */}
-              <div
-                class={`border-2 p-6 relative bg-black ${isAuthor() ? 'border-white' : 'border-gray-700'}`}
-              >
-                {/* Decorative Header */}
-                <div
-                  class={`absolute -top-3 left-4 bg-black px-2 text-xs font-bold uppercase border-x ${isAuthor() ? 'border-white' : 'border-gray-700'}`}
-                >
-                  {isAuthor() ? 'FILE_EDITOR' : 'FILE_VIEWER'}
+              {/* ───── Thread Article ───── */}
+              <article>
+                {/* Author header */}
+                <div class="flex items-center gap-3 mb-5">
+                  <div class="w-10 h-10 rounded-full bg-accent/15 text-accent flex items-center justify-center text-sm font-semibold flex-shrink-0">
+                    {(threadData().author?.username || '?').charAt(0).toUpperCase()}
+                  </div>
+                  <div>
+                    <div class="text-sm font-medium text-zinc-200">
+                      {threadData().author?.username || 'Unknown'}
+                    </div>
+                    <div class="text-xs text-zinc-600">
+                      {new Date(threadData().created_at ?? 0).toLocaleDateString(undefined, {
+                        month: 'long',
+                        day: 'numeric',
+                        year: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </div>
+                  </div>
+                  <Show when={isAuthor()}>
+                    <span class="ml-auto text-[11px] text-zinc-600 bg-surface border border-white/[0.06] rounded-full px-2.5 py-0.5">
+                      Author
+                    </span>
+                  </Show>
                 </div>
 
-                <Show
-                  when={isAuthor()}
-                  fallback={
-                    <>
-                      {/* Read-Only Title */}
-                      <div class="mb-6">
-                        <label class="block text-[10px] text-gray-600 uppercase font-bold mb-1">
-                          &gt; SUBJECT_LINE
-                        </label>
-                        <h1 class="text-2xl font-bold w-full text-gray-400 uppercase tracking-wide">
-                          {threadData().title || 'UNTITLED_THREAD'}
+                {/* Title + Content card */}
+                <div class="bg-surface/40 rounded-xl border border-white/[0.06] p-6">
+                  <Show
+                    when={isAuthor()}
+                    fallback={
+                      <>
+                        <h1 class="text-2xl font-semibold mb-4 leading-tight">
+                          {threadData().title || 'Untitled'}
                         </h1>
-                      </div>
-
-                      {/* Read-Only Content */}
-                      <div class="mb-6">
-                        <label class="block text-[10px] text-gray-600 uppercase font-bold mb-1">
-                          &gt; DATA_CONTENT
-                        </label>
-                        <div class="w-full text-gray-400 whitespace-pre-wrap border-l-2 border-gray-700 pl-4 min-h-[150px] leading-relaxed">
-                          {threadData().content || 'No content data...'}
+                        <div class="text-[15px] text-zinc-400 whitespace-pre-wrap leading-relaxed min-h-[80px]">
+                          {threadData().content || 'No content yet...'}
                         </div>
-                      </div>
-                    </>
-                  }
-                >
-                  {/* Title Suggestion */}
-                  <Show when={threadData().title_suggestion}>
-                    <div class="mb-6 border border-yellow-500/30 bg-yellow-900/10 p-4">
-                      <div class="flex justify-between items-start mb-2">
-                        <label class="text-[10px] text-yellow-500 uppercase font-bold tracking-wider">
-                          &gt; AI_SUGGESTION_DETECTED
-                        </label>
-                        <div class="flex gap-2">
-                          <button
-                            onMouseDown={() => handleAcceptTitle(threadData().title_suggestion!)}
-                            class="text-[10px] font-bold bg-yellow-500 text-black px-3 py-1 uppercase hover:bg-yellow-400 transition-colors"
-                          >
-                            [ ACCEPT ]
-                          </button>
-                          <button
-                            onMouseDown={() => handleDeclineTitle()}
-                            class="text-[10px] font-bold text-yellow-600 px-3 py-1 uppercase hover:text-yellow-400 transition-colors"
-                          >
-                            [ DECLINE ]
-                          </button>
+                      </>
+                    }
+                  >
+                    {/* Title Suggestion */}
+                    <Show when={threadData().title_suggestion}>
+                      <div class="mb-4 bg-accent/5 border border-accent/20 rounded-lg p-4">
+                        <div class="flex justify-between items-start mb-2">
+                          <span class="text-xs font-medium text-accent flex items-center gap-1.5">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                            </svg>
+                            AI title suggestion
+                          </span>
+                          <div class="flex gap-2">
+                            <button
+                              onMouseDown={() => handleAcceptTitle(threadData().title_suggestion!)}
+                              class="text-xs font-medium bg-accent hover:bg-accent-hover text-white px-3 py-1 rounded-md transition-colors duration-150"
+                            >
+                              Accept
+                            </button>
+                            <button
+                              onMouseDown={() => handleDeclineTitle()}
+                              class="text-xs font-medium text-zinc-500 hover:text-white px-3 py-1 transition-colors duration-150"
+                            >
+                              Dismiss
+                            </button>
+                          </div>
                         </div>
+                        <div class="text-lg font-semibold text-white">{threadData().title_suggestion}</div>
                       </div>
-                      <div class="text-xl font-bold text-yellow-100 uppercase tracking-wide">
-                        {threadData().title_suggestion}
-                      </div>
-                    </div>
-                  </Show>
+                    </Show>
 
-                  {/* Editable Title */}
-                  <div class="mb-6 group">
-                    <label class="block text-[10px] text-gray-500 uppercase font-bold mb-1 group-focus-within:text-white">
-                      &gt; SUBJECT_LINE
-                    </label>
+                    {/* Editable Title */}
                     <input
                       type="text"
                       value={threadData().title}
                       onInput={(e) => handleTitleChange(e.currentTarget.value)}
-                      class="text-2xl font-bold w-full bg-black border-b-2 border-transparent focus:border-white outline-none text-white placeholder-gray-700 uppercase tracking-wide transition-none rounded-none"
-                      placeholder="UNTITLED_THREAD"
+                      class="text-2xl font-semibold w-full bg-transparent border-none outline-none text-white placeholder-zinc-700 mb-4 leading-tight"
+                      placeholder="Untitled"
                     />
-                  </div>
 
-                  {/* Content Suggestion */}
-                  <Show when={threadData().content_suggestion}>
-                    <div class="mb-6 border border-yellow-500/30 bg-yellow-900/10 p-4">
-                      <div class="flex justify-between items-start mb-2">
-                        <label class="text-[10px] text-yellow-500 uppercase font-bold tracking-wider">
-                          &gt; AI_CONTENT_OPTIMIZATION
-                        </label>
-                        <div class="flex gap-2">
-                          <button
-                            onMouseDown={() =>
-                              handleAcceptContent(threadData().content_suggestion!)
-                            }
-                            class="text-[10px] font-bold bg-yellow-500 text-black px-3 py-1 uppercase hover:bg-yellow-400 transition-colors"
-                          >
-                            [ ACCEPT ]
-                          </button>
-                          <button
-                            onMouseDown={() => handleDeclineContent()}
-                            class="text-[10px] font-bold text-yellow-600 px-3 py-1 uppercase hover:text-yellow-400 transition-colors"
-                          >
-                            [ DECLINE ]
-                          </button>
+                    {/* Content Suggestion */}
+                    <Show when={threadData().content_suggestion}>
+                      <div class="mb-4 bg-accent/5 border border-accent/20 rounded-lg p-4">
+                        <div class="flex justify-between items-start mb-2">
+                          <span class="text-xs font-medium text-accent flex items-center gap-1.5">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                            </svg>
+                            AI content suggestion
+                          </span>
+                          <div class="flex gap-2">
+                            <button
+                              onMouseDown={() => handleAcceptContent(threadData().content_suggestion!)}
+                              class="text-xs font-medium bg-accent hover:bg-accent-hover text-white px-3 py-1 rounded-md transition-colors duration-150"
+                            >
+                              Accept
+                            </button>
+                            <button
+                              onMouseDown={() => handleDeclineContent()}
+                              class="text-xs font-medium text-zinc-500 hover:text-white px-3 py-1 transition-colors duration-150"
+                            >
+                              Dismiss
+                            </button>
+                          </div>
+                        </div>
+                        <div class="text-sm text-zinc-300 whitespace-pre-wrap leading-relaxed">
+                          {threadData().content_suggestion}
                         </div>
                       </div>
-                      <div class="text-sm text-yellow-100 whitespace-pre-wrap leading-relaxed border-l-2 border-yellow-500/30 pl-4">
-                        {threadData().content_suggestion}
-                      </div>
-                    </div>
-                  </Show>
+                    </Show>
 
-                  {/* Editable Content */}
-                  <div class="mb-6 group">
-                    <label class="block text-[10px] text-gray-500 uppercase font-bold mb-1 group-focus-within:text-white">
-                      &gt; DATA_CONTENT
-                    </label>
+                    {/* Editable Content */}
                     <textarea
                       value={threadData().content}
                       onInput={(e) => handleContentChange(e.currentTarget.value)}
-                      class="w-full bg-black text-gray-300 focus:text-white whitespace-pre-wrap border-l-2 border-gray-800 focus:border-white outline-none pl-4 resize-none min-h-[150px] leading-relaxed transition-none rounded-none"
-                      placeholder="No content data..."
+                      class="w-full bg-transparent text-[15px] text-zinc-300 focus:text-white whitespace-pre-wrap outline-none resize-none min-h-[120px] leading-relaxed"
+                      placeholder="Write something..."
                     />
-                  </div>
-                </Show>
-
-                {/* Metadata Footer */}
-                <div class="flex justify-between items-center text-[10px] uppercase text-gray-500 border-t border-dashed border-gray-700 pt-3 font-bold tracking-wider">
-                  <div class="flex gap-4">
-                    <span>
-                      AUTHOR:{' '}
-                      <span class="text-white">{threadData().author?.username || 'UNKNOWN'}</span>
-                    </span>
-                    <span>ID: {threadData().id?.slice(0, 8)}</span>
-                  </div>
-                  <span>DATE: {new Date(threadData().created_at ?? 0).toLocaleDateString()}</span>
+                  </Show>
                 </div>
-              </div>
 
-              {/* Comments Section */}
-              <div class="space-y-6">
-                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b-2 border-white pb-2">
-                  <h2 class="text-xl font-bold uppercase tracking-widest flex items-center gap-2">
-                    <span>//</span> ATTACHED_LOGS{' '}
-                    <span class="text-xs align-top">({threadData().comments?.length || 0})</span>
+                {/* Actions row beneath the card */}
+                <div class="flex items-center justify-between mt-3 px-1">
+                  <div class="flex items-center gap-4">
+                    <button
+                      onMouseDown={() => {
+                        const textarea = document.querySelector('#comment-textarea') as HTMLTextAreaElement;
+                        textarea?.focus();
+                      }}
+                      class="inline-flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-300 transition-colors duration-150"
+                    >
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 20.25c4.97 0 9-3.694 9-8.25s-4.03-8.25-9-8.25S3 7.444 3 12c0 2.104.859 4.023 2.273 5.48.432.447.74 1.04.586 1.641a4.483 4.483 0 01-.923 1.785A5.969 5.969 0 006 21c1.282 0 2.47-.402 3.445-1.087.81.22 1.668.337 2.555.337z" />
+                      </svg>
+                      {threadData().comments?.length || 0}
+                    </button>
+                  </div>
+
+                  <SpookButton
+                    loading={spookifySending() || spookifyJobLoading()}
+                    loadingLabel="Processing..."
+                    onClick={handleSpookify}
+                  >
+                    Spookify
+                  </SpookButton>
+                </div>
+              </article>
+
+              {/* ───── Replies Section ───── */}
+              <div>
+                <div class="flex items-center justify-between mb-4 pb-3 border-b border-white/[0.06]">
+                  <h2 class="text-base font-semibold">
+                    Replies
+                    <span class="text-zinc-600 font-normal text-sm ml-1.5">
+                      {threadData().comments?.length || 0}
+                    </span>
                   </h2>
 
                   <Show when={auth.user()}>
-                    <div class="flex text-xs font-bold">
+                    <div class="flex text-xs bg-surface rounded-lg border border-white/[0.06] overflow-hidden">
                       <button
                         onMouseDown={() => setCommentFilter('all')}
-                        class={`px-3 py-1 border-2 border-r-0 border-white uppercase transition-none ${
+                        class={`px-3 py-1.5 transition-colors duration-150 ${
                           commentFilter() === 'all'
-                            ? 'bg-white text-black'
-                            : 'bg-black text-white hover:bg-gray-900'
+                            ? 'bg-surface-hover text-white'
+                            : 'text-zinc-500 hover:text-zinc-300'
                         }`}
                       >
-                        [ ALL_LOGS ]
+                        All
                       </button>
                       <button
                         onMouseDown={() => setCommentFilter('mine')}
-                        class={`px-3 py-1 border-2 border-white uppercase transition-none ${
+                        class={`px-3 py-1.5 transition-colors duration-150 ${
                           commentFilter() === 'mine'
-                            ? 'bg-white text-black'
-                            : 'bg-black text-white hover:bg-gray-900'
+                            ? 'bg-surface-hover text-white'
+                            : 'text-zinc-500 hover:text-zinc-300'
                         }`}
                       >
-                        [ MY_LOGS ]
+                        Mine
                       </button>
                     </div>
                   </Show>
                 </div>
 
-                {/* Comment Form */}
-                <div class="bg-black border border-gray-800 p-4 hover:border-white transition-colors">
-                  <div class="text-[10px] uppercase text-gray-500 mb-2 font-bold">
-                    &gt; APPEND_NEW_ENTRY
-                  </div>
+                {/* Comment form */}
+                <div class="mb-6">
                   <CommentForm thread={threadData} />
                 </div>
 
-                {/* Comments List */}
-                <div class="space-y-4 pl-4 border-l border-dashed border-gray-800">
+                {/* Comments list */}
+                <div class="space-y-1">
                   <For
                     each={threadData().comments ?? []}
                     fallback={
-                      <div class="text-left py-4 text-gray-600 text-xs font-mono uppercase">
-                        &gt; NULL_DATA: No logs found. Be the first to append.
+                      <div class="py-10 text-center text-sm text-zinc-600">
+                        No replies yet. Be the first to respond.
                       </div>
                     }
                   >
@@ -399,6 +385,8 @@ export function ThreadDetail() {
             </div>
           )}
         </Show>
+      </div>
+      </div>
       </div>
     </div>
   );

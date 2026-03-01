@@ -19,7 +19,7 @@ export const HeroTerminal: React.FC = () => {
       <div className="terminal-content relative z-10 bg-surface/50 hover:bg-surface/95 backdrop-blur-sm p-6 transition-all duration-300">
         <pre className="font-mono text-sm text-text-secondary leading-relaxed whitespace-pre-wrap break-words">
           <code>
-            <span className="text-purple-400 font-bold">import</span> {'{'} useQuery {'}'} <span className="text-purple-400 font-bold">from</span> <span className="text-accent-400">&quot;@spooky/client-react&quot;</span>;
+            <span className="text-purple-400 font-bold">import</span> {'{'} useQuery {'}'} <span className="text-purple-400 font-bold">from</span> <span className="text-accent-400">&quot;@spooky-sync/client-solid&quot;</span>;
             {'\n'}<span className="text-purple-400 font-bold">import</span> {'{'} db {'}'} <span className="text-purple-400 font-bold">from</span> <span className="text-accent-400">&quot;../db&quot;</span>;
             {'\n'}
             {'\n'}<span className="text-brand-400 font-bold">const</span> <span className="text-yellow-400">ThreadList</span> = () =&gt; {'{'}
@@ -29,13 +29,16 @@ export const HeroTerminal: React.FC = () => {
             {'\n'}      .<span className="text-yellow-400">related</span>(<span className="text-accent-400">&quot;comments&quot;</span>)
             {'\n'}      .<span className="text-yellow-400">orderBy</span>(<span className="text-accent-400">&quot;created_at&quot;</span>, <span className="text-accent-400">&quot;desc&quot;</span>)
             {'\n'}      .<span className="text-yellow-400">limit</span>(<span className="text-green-400">10</span>)
+            {'\n'}      .<span className="text-yellow-400">build</span>()
             {'\n'}  );
             {'\n'}
-            {'\n'}  <span className="text-purple-400 font-bold">return</span> result.data.<span className="text-yellow-400">map</span>(thread =&gt; (
-            {'\n'}    <span className="text-gray-500">&lt;</span><span className="text-blue-400">div</span> <span className="text-yellow-400">key</span>=<span className="text-gray-500">{'{'}</span>thread.id<span className="text-gray-500">{'}'}</span><span className="text-gray-500">&gt;</span>
-            {'\n'}      <span className="text-gray-500">{'{'}</span>thread.title<span className="text-gray-500">{'}'}</span>
-            {'\n'}    <span className="text-gray-500">&lt;/</span><span className="text-blue-400">div</span><span className="text-gray-500">&gt;</span>
-            {'\n'}  ));
+            {'\n'}  <span className="text-purple-400 font-bold">return</span> (
+            {'\n'}    <span className="text-gray-500">&lt;</span><span className="text-blue-400">For</span> <span className="text-yellow-400">each</span>=<span className="text-gray-500">{'{'}</span>result.<span className="text-yellow-400">data</span>()<span className="text-gray-500">{'}'}</span><span className="text-gray-500">&gt;</span>
+            {'\n'}      <span className="text-gray-500">{'{'}</span>(thread) =&gt; (
+            {'\n'}        <span className="text-gray-500">&lt;</span><span className="text-blue-400">div</span><span className="text-gray-500">&gt;</span><span className="text-gray-500">{'{'}</span>thread.title<span className="text-gray-500">{'}'}</span><span className="text-gray-500">&lt;/</span><span className="text-blue-400">div</span><span className="text-gray-500">&gt;</span>
+            {'\n'}      ){'}'}
+            {'\n'}    <span className="text-gray-500">&lt;/</span><span className="text-blue-400">For</span><span className="text-gray-500">&gt;</span>
+            {'\n'}  );
             {'\n'}{'}'};
           </code>
         </pre>

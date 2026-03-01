@@ -419,7 +419,7 @@ import { basePath } from '../config/nav';
                     <div
                       class="absolute -top-2 left-3 bg-surface px-1 text-[8px] text-gray-500 font-bold uppercase tracking-wider"
                     >
-                      Server Infrastructure
+                      Local Environment
                     </div>
 
                     <div class="flex gap-2">
@@ -435,18 +435,21 @@ import { basePath } from '../config/nav';
                         </div>
                         <div class="space-y-1">
                           <div
-                            class="bg-blue-900/10 border border-blue-900/20 px-1.5 py-1 rounded text-[8px] text-blue-200/70"
+                            class="bg-blue-900/10 border border-blue-900/20 px-1.5 py-1 rounded text-[8px] text-blue-200/70 flex items-center gap-1"
                           >
+                            <svg class="w-2.5 h-2.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
                             Tables & Auth
                           </div>
                           <div
-                            class="bg-blue-900/10 border border-blue-900/20 px-1.5 py-1 rounded text-[8px] text-blue-200/70"
+                            class="bg-blue-900/10 border border-blue-900/20 px-1.5 py-1 rounded text-[8px] text-blue-200/70 flex items-center gap-1"
                           >
+                            <svg class="w-2.5 h-2.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/></svg>
                             Live Query Hub
                           </div>
                           <div
-                            class="bg-blue-900/10 border border-blue-900/20 px-1.5 py-1 rounded text-[8px] text-blue-200/70"
+                            class="bg-blue-900/10 border border-blue-900/20 px-1.5 py-1 rounded text-[8px] text-blue-200/70 flex items-center gap-1"
                           >
+                            <svg class="w-2.5 h-2.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
                             Event Triggers
                           </div>
                         </div>
@@ -477,16 +480,19 @@ import { basePath } from '../config/nav';
                           <div
                             class="bg-green-900/20 border border-green-900/30 px-1.5 py-1 rounded text-[8px] text-green-200/80 font-bold flex items-center gap-1"
                           >
-                            <span>⚡</span> DBSP Engine
+                            <svg class="w-2.5 h-2.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/></svg>
+                            DBSP Engine
                           </div>
                           <div
-                            class="bg-green-900/20 border border-green-900/30 px-1.5 py-1 rounded text-[8px] text-green-200/80"
+                            class="bg-green-900/20 border border-green-900/30 px-1.5 py-1 rounded text-[8px] text-green-200/80 flex items-center gap-1"
                           >
-                            Incantation Mgr
+                            <svg class="w-2.5 h-2.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+                            Job Runner
                           </div>
                           <div
-                            class="bg-green-900/20 border border-green-900/30 px-1.5 py-1 rounded text-[8px] text-green-200/80"
+                            class="bg-green-900/20 border border-green-900/30 px-1.5 py-1 rounded text-[8px] text-green-200/80 flex items-center gap-1"
                           >
+                            <svg class="w-2.5 h-2.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="12" x2="2" y2="12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><line x1="6" y1="16" x2="6.01" y2="16"/><line x1="10" y1="16" x2="10.01" y2="16"/></svg>
                             In-Memory State
                           </div>
                         </div>
@@ -608,14 +614,14 @@ import { basePath } from '../config/nav';
                     <div
                       class="absolute -top-2 left-3 bg-surface px-1 text-[8px] text-gray-500 font-bold uppercase tracking-wider"
                     >
-                      Enterprise Infrastructure
+                      Server Infrastructure
                     </div>
 
-                    <div class="flex gap-2">
+                    <div class="flex gap-2 justify-center items-center">
                       <!-- SURREALDB NODE -->
                       <div
-                        class="flex-1 border border-blue-900/40 bg-blue-900/5 p-2 rounded flex flex-col gap-2"
-                        style="max-width: 160px;"
+                        class="border border-blue-900/40 bg-blue-900/5 p-2 rounded flex flex-col gap-2"
+                        style="width: 150px; flex-shrink: 0;"
                       >
                         <div
                           class="flex items-center justify-between border-b border-blue-900/20 pb-1"
@@ -625,18 +631,21 @@ import { basePath } from '../config/nav';
                         </div>
                         <div class="space-y-1">
                           <div
-                            class="bg-blue-900/10 border border-blue-900/20 px-1.5 py-1 rounded text-[8px] text-blue-200/70"
+                            class="bg-blue-900/10 border border-blue-900/20 px-1.5 py-1 rounded text-[8px] text-blue-200/70 flex items-center gap-1"
                           >
+                            <svg class="w-2.5 h-2.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
                             Tables & Auth
                           </div>
                           <div
-                            class="bg-blue-900/10 border border-blue-900/20 px-1.5 py-1 rounded text-[8px] text-blue-200/70"
+                            class="bg-blue-900/10 border border-blue-900/20 px-1.5 py-1 rounded text-[8px] text-blue-200/70 flex items-center gap-1"
                           >
+                            <svg class="w-2.5 h-2.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/></svg>
                             Live Query Hub
                           </div>
                           <div
-                            class="bg-blue-900/10 border border-blue-900/20 px-1.5 py-1 rounded text-[8px] text-blue-200/70"
+                            class="bg-blue-900/10 border border-blue-900/20 px-1.5 py-1 rounded text-[8px] text-blue-200/70 flex items-center gap-1"
                           >
+                            <svg class="w-2.5 h-2.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
                             Event Triggers
                           </div>
                         </div>
@@ -656,8 +665,8 @@ import { basePath } from '../config/nav';
 
                       <!-- SCHEDULER -->
                       <div
-                        class="flex-1 border border-purple-900/40 bg-purple-900/10 p-2 rounded shadow-[0_0_20px_rgba(168,137,255,0.05)] flex flex-col gap-2"
-                        style="max-width: 180px;"
+                        class="border border-purple-900/40 bg-purple-900/10 p-2 rounded shadow-[0_0_20px_rgba(168,137,255,0.05)] flex flex-col gap-2"
+                        style="width: 170px; flex-shrink: 0;"
                       >
                         <div
                           class="flex items-center justify-between border-b border-purple-900/20 pb-1"
@@ -669,29 +678,34 @@ import { basePath } from '../config/nav';
                         </div>
                         <div class="space-y-1">
                           <div
-                            class="bg-purple-900/20 border border-purple-900/30 px-1.5 py-0.5 rounded text-[8px] text-purple-200/80"
+                            class="bg-purple-900/20 border border-purple-900/30 px-1.5 py-0.5 rounded text-[8px] text-purple-200/80 flex items-center gap-1"
                           >
+                            <svg class="w-2.5 h-2.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                             Snapshot Replica
                           </div>
                           <div
-                            class="bg-purple-900/20 border border-purple-900/30 px-1.5 py-0.5 rounded text-[8px] text-purple-200/80"
+                            class="bg-purple-900/20 border border-purple-900/30 px-1.5 py-0.5 rounded text-[8px] text-purple-200/80 flex items-center gap-1"
                           >
+                            <svg class="w-2.5 h-2.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 21h12a2 2 0 0 0 2-2v-2H10v2a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v3h4"/><path d="M19 17V5a2 2 0 0 0-2-2H4"/><path d="M15 8h-5"/><path d="M15 12h-5"/></svg>
                             WAL
                           </div>
                           <div
-                            class="bg-purple-900/20 border border-purple-900/30 px-1.5 py-0.5 rounded text-[8px] text-purple-200/80"
+                            class="bg-purple-900/20 border border-purple-900/30 px-1.5 py-0.5 rounded text-[8px] text-purple-200/80 flex items-center gap-1"
                           >
+                            <svg class="w-2.5 h-2.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"/><path d="m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"/><path d="M7 21h10"/><path d="M12 3v18"/><path d="M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2"/></svg>
                             Load Balancer
                           </div>
                           <div
-                            class="bg-purple-900/20 border border-purple-900/30 px-1.5 py-0.5 rounded text-[8px] text-purple-200/80"
+                            class="bg-purple-900/20 border border-purple-900/30 px-1.5 py-0.5 rounded text-[8px] text-purple-200/80 flex items-center gap-1"
                           >
+                            <svg class="w-2.5 h-2.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/><path d="M3.22 12H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27"/></svg>
                             Health Monitor
                           </div>
                           <div
-                            class="bg-purple-900/20 border border-purple-900/30 px-1.5 py-0.5 rounded text-[8px] text-purple-200/80"
+                            class="bg-purple-900/20 border border-purple-900/30 px-1.5 py-0.5 rounded text-[8px] text-purple-200/80 flex items-center gap-1"
                           >
-                            Query Router
+                            <svg class="w-2.5 h-2.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 7.5V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3.5"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h5"/><path d="M17.5 17.5 16 16.3V14"/><circle cx="16" cy="16" r="6"/></svg>
+                            Job Scheduler
                           </div>
                         </div>
                       </div>
@@ -750,12 +764,13 @@ import { basePath } from '../config/nav';
                       </div>
 
                       <!-- MULTIPLE SSP SIDECARS -->
-                      <div class="flex-1 flex flex-col gap-1.5" style="max-width: 200px;">
+                      <div class="flex flex-col gap-1.5" style="width: 180px; flex-shrink: 0;">
                         <!-- SSP-1 -->
                         <div
                           class="border border-green-900/40 bg-green-900/10 p-1.5 rounded shadow-[0_0_10px_rgba(22,197,94,0.03)] flex items-center justify-between"
                         >
-                          <div class="flex items-center gap-2">
+                          <div class="flex items-center gap-1.5">
+                            <svg class="w-2.5 h-2.5 flex-shrink-0 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
                             <span class="text-[9px] font-bold text-green-400">SSP-1</span>
                             <span
                               class="h-1 w-1 rounded-full bg-green-500 shadow-[0_0_4px_rgba(34,197,94,0.8)]"
@@ -768,7 +783,8 @@ import { basePath } from '../config/nav';
                         <div
                           class="border border-green-900/40 bg-green-900/10 p-1.5 rounded shadow-[0_0_10px_rgba(22,197,94,0.03)] flex items-center justify-between"
                         >
-                          <div class="flex items-center gap-2">
+                          <div class="flex items-center gap-1.5">
+                            <svg class="w-2.5 h-2.5 flex-shrink-0 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
                             <span class="text-[9px] font-bold text-green-400">SSP-2</span>
                             <span
                               class="h-1 w-1 rounded-full bg-green-500 shadow-[0_0_4px_rgba(34,197,94,0.8)]"
@@ -779,15 +795,16 @@ import { basePath } from '../config/nav';
 
                         <!-- SSP-3 -->
                         <div
-                          class="border border-green-900/40 bg-green-900/10 p-1.5 rounded shadow-[0_0_10px_rgba(22,197,94,0.03)] flex items-center justify-between"
+                          class="border border-yellow-900/40 bg-yellow-900/10 p-1.5 rounded shadow-[0_0_10px_rgba(234,179,8,0.03)] flex items-center justify-between"
                         >
-                          <div class="flex items-center gap-2">
-                            <span class="text-[9px] font-bold text-green-400">SSP-3</span>
+                          <div class="flex items-center gap-1.5">
+                            <svg class="w-2.5 h-2.5 flex-shrink-0 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+                            <span class="text-[9px] font-bold text-yellow-400">SSP-3</span>
                             <span
-                              class="h-1 w-1 rounded-full bg-green-500 shadow-[0_0_4px_rgba(34,197,94,0.8)]"
+                              class="h-1 w-1 rounded-full bg-yellow-500 shadow-[0_0_4px_rgba(234,179,8,0.8)] animate-pulse"
                             ></span>
                           </div>
-                          <span class="text-[8px] text-green-300/70">Active</span>
+                          <span class="text-[8px] text-yellow-300/70">Bootstrapping</span>
                         </div>
                       </div>
                     </div>
@@ -912,7 +929,7 @@ import { basePath } from '../config/nav';
                     <div
                       class="absolute -top-2 left-3 bg-surface px-1 text-[8px] text-gray-500 font-bold uppercase tracking-wider"
                     >
-                      Local Infrastructure
+                        Test Environment
                     </div>
 
                     <div class="flex gap-2">
@@ -932,8 +949,8 @@ import { basePath } from '../config/nav';
                           class="bg-black/50 border border-brand-500/30 p-2 rounded relative z-10"
                         >
                           <div class="flex justify-between items-center mb-1">
-                            <span class="text-[8px] font-bold text-gray-300"
-                              >Spooky Stream Processor (WASM)</span
+                            <span class="text-[8px] font-bold text-gray-300 flex items-center gap-1"
+                              ><svg class="w-2.5 h-2.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/></svg>Spooky Stream Processor (WASM)</span
                             >
                             <span class="text-[8px] text-orange-400">Ephemeral</span>
                           </div>

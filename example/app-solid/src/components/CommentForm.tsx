@@ -13,6 +13,12 @@ export function CommentForm(props: CommentFormProps) {
   const auth = useAuth();
   const [content, setContent] = createSignal('');
   const [isLoading, setIsLoading] = createSignal(false);
+  const [isFocused, setIsFocused] = createSignal(false);
+
+  const userInitial = () => {
+    const name = auth.user()?.username;
+    return name ? name.charAt(0).toUpperCase() : '?';
+  };
 
   const handleSubmit = async (e: Event) => {
     e.preventDefault();
@@ -25,7 +31,6 @@ export function CommentForm(props: CommentFormProps) {
         throw new Error('You must be logged in to post a comment');
       }
 
-      // Generate a record ID before creating
       const commentId = new RecordId('comment', Uuid.v4().toString().replace(/-/g, ''));
 
       await db.create(commentId.toString(), {
@@ -46,44 +51,42 @@ export function CommentForm(props: CommentFormProps) {
   };
 
   return (
-    <form onSubmit={handleSubmit} class="w-full font-mono group">
-      <div class="relative">
-        {/* Terminal Prompt Indicator */}
-        <div class="absolute top-3 left-3 text-gray-500 select-none group-focus-within:text-white transition-none font-bold">
-          &gt;
+    <form onSubmit={handleSubmit} class="w-full">
+      <div class="flex gap-3">
+        {/* User avatar */}
+        <div class="w-8 h-8 rounded-full bg-accent/15 text-accent flex items-center justify-center text-xs font-semibold flex-shrink-0 mt-1">
+          {userInitial()}
         </div>
 
-        <textarea
-          id="comment-textarea"
-          value={content()}
-          onInput={(e) => setContent(e.currentTarget.value)}
-          placeholder="INPUT_COMMENT_DATA..."
-          rows="3"
-          class="w-full bg-black text-white pl-8 pr-4 py-3 border-2 border-gray-800 focus:border-white outline-none resize-none rounded-none placeholder-gray-800 text-sm leading-relaxed block transition-none"
-          required
-        />
+        <div class="flex-1">
+          <textarea
+            id="comment-textarea"
+            value={content()}
+            onInput={(e) => setContent(e.currentTarget.value)}
+            onFocus={() => setIsFocused(true)}
+            onBlur={() => setIsFocused(false)}
+            placeholder="Write a reply..."
+            rows={isFocused() || content().length > 0 ? '3' : '1'}
+            class="w-full bg-surface text-white px-4 py-2.5 border border-white/[0.06] focus:border-accent/40 outline-none resize-none rounded-xl placeholder-zinc-600 text-sm leading-relaxed block transition-all duration-150"
+            required
+          />
 
-        {/* Decorative corner accent */}
-        <div class="absolute bottom-0 right-0 w-3 h-3 border-b-2 border-r-2 border-gray-800 group-focus-within:border-white pointer-events-none transition-none"></div>
-      </div>
+          {(isFocused() || content().length > 0) && (
+            <div class="flex justify-between items-center mt-2">
+              <span class="text-xs text-zinc-600">
+                {content().length > 0 ? `${content().length} characters` : ''}
+              </span>
 
-      <div class="flex justify-between items-center mt-3">
-        {/* Character count / status */}
-        <div class="text-[10px] text-gray-600 uppercase tracking-widest">
-          {content().length > 0 ? (
-            <span class="text-white">BUFFER: {content().length} CHARS</span>
-          ) : (
-            <span>STATUS: IDLE</span>
+              <button
+                type="submit"
+                disabled={isLoading() || !content().trim()}
+                class="bg-accent hover:bg-accent-hover text-white px-4 py-1.5 rounded-lg text-sm font-medium transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isLoading() ? 'Posting...' : 'Reply'}
+              </button>
+            </div>
           )}
         </div>
-
-        <button
-          type="submit"
-          disabled={isLoading() || !content().trim()}
-          class="bg-black text-white border-2 border-white px-6 py-2 uppercase font-bold text-xs hover:bg-white hover:text-black transition-none disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-black disabled:hover:text-white tracking-wider"
-        >
-          {isLoading() ? <span class="animate-pulse">TRANSMITTING...</span> : '[ EXECUTE_POST ]'}
-        </button>
       </div>
     </form>
   );

@@ -62,58 +62,32 @@ export function AuthDialog(props: AuthDialogProps) {
 
   return (
     <Show when={props.isOpen}>
-      <style>{`
-        /* 1. Animation for the modal */
-        @keyframes terminal-boot {
-          0% { opacity: 0; transform: scale(0.9) translateY(20px); }
-          100% { opacity: 1; transform: scale(1) translateY(0); }
-        }
-        .animate-terminal {
-          animation: terminal-boot 0.2s cubic-bezier(0, 0, 0.2, 1) forwards;
-        }
-
-        /* 2. CHROME AUTOFILL FIX */
-        /* Forces the background to be black using a shadow, and text to be white */
-        input:-webkit-autofill,
-        input:-webkit-autofill:hover, 
-        input:-webkit-autofill:focus, 
-        input:-webkit-autofill:active {
-            -webkit-box-shadow: 0 0 0 30px black inset !important;
-            -webkit-text-fill-color: white !important;
-            caret-color: white;
-            transition: background-color 5000s ease-in-out 0s;
-        }
-      `}</style>
-
-      <div class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
-        {/* Main Modal Container */}
-        <div class="animate-terminal bg-black border-2 border-white w-full max-w-md relative shadow-[8px_8px_0px_0px_rgba(255,255,255,1)] flex flex-col">
+      <div class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4" onMouseDown={handleClose}>
+        <div
+          class="animate-slide-up bg-surface border border-white/[0.06] rounded-xl w-full max-w-md shadow-2xl"
+          onMouseDown={(e) => e.stopPropagation()}
+        >
           {/* Header */}
-          <div class="flex justify-between items-stretch border-b-2 border-white h-12">
-            <div class="flex items-center px-4 border-r-2 border-white bg-white text-black font-bold uppercase tracking-widest text-sm">
-              [KEY]
-            </div>
-            <div class="flex-grow flex items-center px-4 font-mono text-sm uppercase tracking-wider">
-              {isSignUp() ? 'INIT_REGISTRATION' : 'AUTH_SEQUENCE'}
-            </div>
+          <div class="flex justify-between items-center px-6 pt-6 pb-2">
+            <h2 class="text-lg font-semibold">
+              {isSignUp() ? 'Create account' : 'Sign in'}
+            </h2>
             <button
               onMouseDown={handleClose}
-              class="px-5 hover:bg-white hover:text-black border-l-2 border-white font-bold transition-none text-lg flex items-center justify-center"
+              class="text-zinc-500 hover:text-white transition-colors duration-150 p-1"
               aria-label="Close"
             >
-              ✕
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
             </button>
           </div>
 
-          {/* Content Wrapper */}
-          <div class="p-8">
-            <form onSubmit={handleSubmit} class="space-y-6">
-              {/* Username Input */}
-              <div class="relative group">
-                <label
-                  for="username"
-                  class="absolute -top-2.5 left-2 bg-black px-2 text-[10px] uppercase font-bold tracking-wider border border-white group-focus-within:border-white z-10"
-                >
+          {/* Form */}
+          <div class="px-6 pb-6 pt-4">
+            <form onSubmit={handleSubmit} class="space-y-4">
+              <div>
+                <label for="username" class="block text-sm font-medium text-zinc-400 mb-1.5">
                   Username
                 </label>
                 <input
@@ -122,18 +96,14 @@ export function AuthDialog(props: AuthDialogProps) {
                   value={username()}
                   onInput={(e) => setUsername(e.currentTarget.value)}
                   required
-                  class="w-full bg-black border-2 border-white px-4 py-3 text-white focus:outline-none focus:shadow-[4px_4px_0px_0px_rgba(255,255,255,1)] transition-none placeholder-gray-700 font-mono text-sm"
-                  placeholder="enter_id..."
+                  class="w-full bg-zinc-950 border border-white/[0.06] rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-accent/50 transition-colors duration-150 placeholder-zinc-600 text-sm"
+                  placeholder="Enter username"
                   autocomplete="username"
                 />
               </div>
 
-              {/* Password Input */}
-              <div class="relative group">
-                <label
-                  for="password"
-                  class="absolute -top-2.5 left-2 bg-black px-2 text-[10px] uppercase font-bold tracking-wider border border-white z-10"
-                >
+              <div>
+                <label for="password" class="block text-sm font-medium text-zinc-400 mb-1.5">
                   Password
                 </label>
                 <input
@@ -142,44 +112,34 @@ export function AuthDialog(props: AuthDialogProps) {
                   value={password()}
                   onInput={(e) => setPassword(e.currentTarget.value)}
                   required
-                  class="w-full bg-black border-2 border-white px-4 py-3 text-white focus:outline-none focus:shadow-[4px_4px_0px_0px_rgba(255,255,255,1)] transition-none placeholder-gray-700 font-mono text-sm"
-                  placeholder="********"
+                  class="w-full bg-zinc-950 border border-white/[0.06] rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-accent/50 transition-colors duration-150 placeholder-zinc-600 text-sm"
+                  placeholder="Enter password"
                   autocomplete={isSignUp() ? 'new-password' : 'current-password'}
                 />
               </div>
 
               <Show when={error()}>
-                <div class="border border-red-500 text-red-500 p-3 text-xs font-mono uppercase">
-                  <span class="font-bold">! CRITICAL_ERROR:</span> {error()}
+                <div class="bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 p-3 text-sm">
+                  {error()}
                 </div>
               </Show>
 
-              {/* Submit Button */}
               <button
                 type="submit"
                 disabled={isLoading()}
-                class="w-full bg-white text-black border-2 border-white py-3 px-4 uppercase font-bold hover:bg-black hover:text-white hover:border-white transition-none disabled:opacity-50 disabled:cursor-not-allowed text-sm tracking-widest mt-2"
+                class="w-full bg-accent hover:bg-accent-hover text-white py-2.5 px-4 rounded-lg font-medium transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
               >
-                {isLoading() ? (
-                  <span class="animate-pulse">PROCESSING...</span>
-                ) : isSignUp() ? (
-                  '[ EXECUTE_SIGN_UP ]'
-                ) : (
-                  '[ EXECUTE_LOGIN ]'
-                )}
+                {isLoading() ? 'Loading...' : isSignUp() ? 'Create account' : 'Sign in'}
               </button>
             </form>
 
-            {/* Toggle Link */}
-            <div class="mt-8 text-center flex items-center justify-center gap-2 text-xs uppercase text-gray-400">
-              <span>&gt;</span>
+            <div class="mt-6 text-center text-sm text-zinc-500">
               <button
                 onMouseDown={() => setIsSignUp(!isSignUp())}
-                class="hover:text-white hover:underline decoration-white underline-offset-4 transition-none"
+                class="hover:text-white transition-colors duration-150"
               >
-                {isSignUp() ? 'Access_Existing_Account' : 'Create_New_Identifier'}
+                {isSignUp() ? 'Already have an account? Sign in' : "Don't have an account? Sign up"}
               </button>
-              <span class="animate-blink">_</span>
             </div>
           </div>
         </div>

@@ -28,37 +28,53 @@ export function ThreadSidebar(props: ThreadSidebarProps) {
   };
 
   return (
-    <div class="w-56 border-r border-gray-800 overflow-y-auto h-full flex-shrink-0 hidden md:block">
-      <div class="sticky top-0 bg-black border-b border-gray-800 px-4 py-3">
-        <h3 class="text-[10px] font-bold uppercase text-gray-500 tracking-wider">THREADS</h3>
-      </div>
+    <aside class="w-60 flex-shrink-0 hidden md:block h-full border-r border-white/[0.06]">
+      <div class="flex flex-col h-full">
+        {/* Header */}
+        <div class="px-4 py-3 border-b border-white/[0.06]">
+          <h3 class="text-xs font-medium text-zinc-500 tracking-wide">Threads</h3>
+        </div>
 
-      <div class="py-2">
-        <For
-          each={threads()}
-          fallback={
-            <div class="px-4 py-8 text-center">
-              <div class="text-[10px] text-gray-600 uppercase">NO_THREADS</div>
-            </div>
-          }
-        >
-          {(thread) => (
-            <button
-              onMouseDown={() => handleThreadClick(thread.id)}
-              class={`w-full text-left px-4 py-2 text-xs uppercase font-mono transition-none border-l-2 ${
-                isActive(thread.id)
-                  ? 'border-white text-white bg-white/5'
-                  : 'border-transparent text-gray-500 hover:text-gray-300 hover:border-gray-700'
-              }`}
-            >
-              <div class="truncate">
-                {isActive(thread.id) && <span class="mr-1">&gt;</span>}
-                {thread.title || 'UNTITLED'}
+        {/* Thread list */}
+        <nav class="flex-1 min-h-0 overflow-y-auto py-2">
+          <For
+            each={threads()}
+            fallback={
+              <div class="px-4 py-8 text-center">
+                <div class="text-xs text-zinc-600">No threads</div>
               </div>
-            </button>
-          )}
-        </For>
+            }
+          >
+            {(thread) => (
+              <button
+                onMouseDown={() => handleThreadClick(thread.id)}
+                class={`w-full text-left px-4 py-2.5 text-sm transition-colors duration-150 border-l-2 ${
+                  isActive(thread.id)
+                    ? 'border-accent text-white bg-accent/5'
+                    : 'border-transparent text-zinc-500 hover:text-zinc-300 hover:bg-surface/50'
+                }`}
+              >
+                <div class="truncate">
+                  {thread.title || 'Untitled'}
+                </div>
+              </button>
+            )}
+          </For>
+        </nav>
+
+        {/* Footer — back link */}
+        <div class="px-4 py-3 border-t border-white/[0.06]">
+          <button
+            onMouseDown={() => navigate('/')}
+            class="inline-flex items-center gap-1.5 text-xs text-zinc-600 hover:text-zinc-300 transition-colors duration-150 w-full"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+            </svg>
+            Back to feed
+          </button>
+        </div>
       </div>
-    </div>
+    </aside>
   );
 }

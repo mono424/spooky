@@ -83,7 +83,8 @@
       "WebFetch(domain:philna.sh)",
       "Bash(npm whoami:*)",
       "Bash(npm publish:*)",
-      "Bash(git:*)"
+      "Bash(git:*)",
+      "Bash(done)"
     ],
     "deny": [],
     "ask": []
