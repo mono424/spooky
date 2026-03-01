@@ -30,8 +30,32 @@ jobs:
             echo "npm_tag=latest" >> "$GITHUB_OUTPUT"
           fi
 
-  publish-packages:
+  validate-versions:
     needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate versions match tag
+        run: node scripts/check-version.mjs ${{ needs.prepare.outputs.version }}
+
+  publish-packages:
+    needs: [prepare, validate-versions]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -104,7 +128,7 @@ jobs:
         run: npm publish --access public --tag ${{ needs.prepare.outputs.npm_tag }}
 
   publish-cli:
-    needs: prepare
+    needs: [prepare, validate-versions]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

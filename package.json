@@ -1,6 +1,6 @@
 {
   "name": "spooky",
-  "version": "0.0.0-canary.1",
+  "version": "0.0.1-canary.1",
   "private": true,
   "description": "Spooky monorepo",
   "scripts": {
@@ -11,7 +11,9 @@
     "test": "pnpm -r test",
     "lint": "pnpm -r lint",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,yml,yaml}\"",
-    "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,yml,yaml}\""
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,yml,yaml}\"",
+    "version:bump": "node scripts/bump-version.mjs",
+    "version:check": "node scripts/check-version.mjs"
   },
   "keywords": [],
   "author": "",
