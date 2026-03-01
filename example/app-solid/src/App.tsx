@@ -1,4 +1,4 @@
-import { Router, Route } from '@solidjs/router';
+import { Router, Route, A } from '@solidjs/router';
 import { createSignal, Show, createEffect } from 'solid-js';
 import { SpookyProvider } from '@spooky-sync/client-solid';
 import { AuthProvider, useAuth } from './lib/auth';
@@ -13,6 +13,7 @@ import { useNavigate } from '@solidjs/router';
 import Home from './routes/index';
 import ThreadPage from './routes/thread/[id]';
 import CreateThreadPage from './routes/create-thread';
+import ProfilePage from './routes/profile';
 
 function Layout(props: any) {
   const auth = useAuth();
@@ -71,14 +72,14 @@ function Layout(props: any) {
               }
             >
               <div class="flex items-center gap-3">
-                <div class="flex items-center gap-2">
+                <A href="/profile" class="flex items-center gap-2 hover:opacity-80 transition-opacity duration-150">
                   <div class="w-7 h-7 rounded-full bg-accent/20 text-accent flex items-center justify-center text-xs font-semibold">
                     {userInitial()}
                   </div>
                   <span class="text-sm text-zinc-300 hidden sm:inline">
                     {auth.user()?.username}
                   </span>
-                </div>
+                </A>
                 <button
                   onMouseDown={auth.signOut}
                   class="text-sm text-zinc-500 hover:text-white transition-colors duration-150"
@@ -168,6 +169,7 @@ export default function App() {
           <Route path="/" component={Home} />
           <Route path="/thread/:id" component={ThreadPage} />
           <Route path="/create-thread" component={CreateThreadPage} />
+          <Route path="/profile" component={ProfilePage} />
         </Router>
       </AuthProvider>
     </SpookyProvider>

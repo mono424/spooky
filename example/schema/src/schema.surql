@@ -1,4 +1,10 @@
 -- ##################################################################
+-- BUCKETS
+-- ##################################################################
+
+DEFINE BUCKET IF NOT EXISTS profile_pictures BACKEND "memory";
+
+-- ##################################################################
 -- SCOPES & AUTHENTICATION
 -- ##################################################################
 
@@ -39,6 +45,11 @@ PERMISSIONS
     FOR select WHERE false
     FOR create WHERE true
     FOR update WHERE $access = "account" AND id = $auth.id;
+
+DEFINE FIELD profile_picture ON TABLE user TYPE option<string>
+PERMISSIONS
+    FOR select WHERE true
+    FOR create, update WHERE $access = "account" AND id = $auth.id;
 
 -- ##################################################################
 -- THREAD TABLE

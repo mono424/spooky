@@ -233,6 +233,17 @@ impl JsonSchemaGenerator {
             );
         }
 
+        // Add Buckets definitions (names only)
+        let bucket_names: Vec<Value> = parser.buckets.keys()
+            .map(|name| Value::String(name.clone()))
+            .collect();
+        if !bucket_names.is_empty() {
+            definitions.insert("Buckets".to_string(), json!({
+                "type": "array",
+                "const": bucket_names
+            }));
+        }
+
         for (table_name, table_schema) in &parser.tables {
             // Get reverse relationships for this table
             let reverse_rels = relationships.get(table_name).and_then(|rels| {

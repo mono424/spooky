@@ -56,6 +56,7 @@ export type {
   SchemaToIndexed,
   AccessDefinition,
   TypeNameToTypeMap,
+  BucketNames,
   BackendNames,
   BackendRoutes,
   RoutePayload,

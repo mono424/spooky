@@ -133,6 +133,7 @@ export interface SchemaStructure {
   }[];
   readonly backends: Record<string, HTTPOutboxBackendDefinition>;
   readonly access?: Record<string, AccessDefinition>;
+  readonly buckets?: readonly string[];
 }
 
 export interface HTTPOutboxBackendDefinition {
@@ -152,6 +153,11 @@ export interface HTTPBackendRouteArgsDefinition {
 // ============================================================================
 // BACKEND / RUN TYPE HELPERS
 // ============================================================================
+
+/** Extract all bucket names from the schema */
+export type BucketNames<S extends SchemaStructure> = S['buckets'] extends readonly string[]
+  ? S['buckets'][number]
+  : never;
 
 /** Extract all backend names from the schema */
 export type BackendNames<S extends SchemaStructure> = keyof S['backends'] & string;
