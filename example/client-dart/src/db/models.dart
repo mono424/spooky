@@ -420,7 +420,6 @@ const String SURQL_SCHEMA = "-- ################################################
 -- BUCKETS
 -- ##################################################################
 
-DEFINE BUCKET IF NOT EXISTS profile_pictures BACKEND \"memory\";
 
 -- ##################################################################
 -- SCOPES & AUTHENTICATION

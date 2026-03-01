@@ -951,6 +951,12 @@ impl CodeGenerator {
             // "DEFINE TABLE foo -- comment" -> "DEFINE TABLE foo". Matches.
             // So using `trimmed` (clean) is better.
 
+            // Handle DEFINE BUCKET removal (buckets are server-side only)
+            if trimmed.to_uppercase().starts_with("DEFINE BUCKET") {
+                i += 1;
+                continue;
+            }
+
             // Handle DEFINE ACCESS removal
             if trimmed.to_uppercase().starts_with("DEFINE ACCESS") {
                 in_define_access = true;

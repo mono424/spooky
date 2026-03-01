@@ -150,7 +150,6 @@ export const SURQL_SCHEMA = `-- ################################################
 -- BUCKETS
 -- ##################################################################
 
-DEFINE BUCKET IF NOT EXISTS profile_pictures BACKEND "memory";
 
 -- ##################################################################
 -- SCOPES & AUTHENTICATION
