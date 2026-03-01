@@ -121,6 +121,46 @@ pub fn load_config() -> Config {
     }
 }
 
+// --- Scheduler Registration Helper ---
+
+/// Build the SSP registration payload and POST it to the scheduler.
+/// Returns `Ok(())` on success or an error on failure.
+async fn register_with_scheduler(
+    client: &reqwest::Client,
+    scheduler_url: &str,
+    ssp_id: &str,
+    listen_addr: &str,
+    advertise_addr: Option<&str>,
+) -> Result<(), String> {
+    let scheduler_base = scheduler_url.trim_end_matches('/');
+    let registration_url = format!("{}/ssp/register", scheduler_base);
+
+    let registration_host = if let Some(addr) = advertise_addr {
+        addr.to_string()
+    } else {
+        let (host, port) = listen_addr.rsplit_once(':').unwrap_or(("0.0.0.0", "8667"));
+        if host == "0.0.0.0" || host == "127.0.0.1" {
+            let hostname = hostname::get()
+                .map(|h| h.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| host.to_string());
+            format!("{}:{}", hostname, port)
+        } else {
+            listen_addr.to_string()
+        }
+    };
+
+    let payload = ssp_protocol::SspRegistration {
+        ssp_id: ssp_id.to_string(),
+        url: format!("http://{}", registration_host),
+    };
+
+    match client.post(&registration_url).json(&payload).send().await {
+        Ok(resp) if resp.status().is_success() => Ok(()),
+        Ok(resp) => Err(format!("HTTP {}", resp.status())),
+        Err(e) => Err(format!("{}", e)),
+    }
+}
+
 // --- Bootstrap Source ---
 
 /// Abstraction for database access during bootstrap.
@@ -306,41 +346,20 @@ pub async fn run_server() -> anyhow::Result<()> {
                 let client = reqwest::Client::new();
                 let scheduler_base = scheduler_url.trim_end_matches('/');
 
-                let registration_url = format!("{}/ssp/register", scheduler_base);
                 info!("Registering SSP {} with scheduler at {}", ssp_id, scheduler_base);
 
-                // Derive a routable registration URL.
-                // Priority: ADVERTISE_ADDR env var > hostname detection > listen_addr
-                let registration_host = if let Some(ref addr) = advertise_addr {
-                    addr.clone()
-                } else {
-                    let (host, port) = listen_addr.rsplit_once(':').unwrap_or(("0.0.0.0", "8667"));
-                    if host == "0.0.0.0" || host == "127.0.0.1" {
-                        let hostname = hostname::get()
-                            .map(|h| h.to_string_lossy().into_owned())
-                            .unwrap_or_else(|_| host.to_string());
-                        format!("{}:{}", hostname, port)
-                    } else {
-                        listen_addr.clone()
-                    }
-                };
-
-                let payload = ssp_protocol::SspRegistration {
-                    ssp_id: ssp_id.clone(),
-                    url: format!("http://{}", registration_host),
-                };
-
-                match client.post(&registration_url).json(&payload).send().await {
-                    Ok(resp) if resp.status().is_success() => {
+                match register_with_scheduler(
+                    &client,
+                    scheduler_url,
+                    &ssp_id,
+                    &listen_addr,
+                    advertise_addr.as_deref(),
+                ).await {
+                    Ok(()) => {
                         info!("Successfully registered with scheduler");
                     }
-                    Ok(resp) => {
-                        error!("Failed to register with scheduler: HTTP {}", resp.status());
-                        *status.write().await = SspStatus::Failed;
-                        return;
-                    }
                     Err(e) => {
-                        error!("Failed to connect to scheduler: {}", e);
+                        error!("Failed to register with scheduler: {}", e);
                         *status.write().await = SspStatus::Failed;
                         return;
                     }
@@ -380,6 +399,8 @@ pub async fn run_server() -> anyhow::Result<()> {
         let scheduler_url_clone = scheduler_url.clone();
         let heartbeat_interval = config.heartbeat_interval_ms;
         let processor_clone = processor_for_scheduler.clone();
+        let listen_addr = config.listen_addr.clone();
+        let advertise_addr = config.advertise_addr.clone();
 
         tokio::spawn(async move {
             let client = reqwest::Client::new();
@@ -407,7 +428,21 @@ pub async fn run_server() -> anyhow::Result<()> {
 
                 match client.post(&heartbeat_url).json(&payload).send().await {
                     Ok(resp) if resp.status() == StatusCode::NOT_FOUND => {
-                        warn!("Scheduler doesn't recognize us, needs re-registration");
+                        warn!("Scheduler doesn't recognize us, attempting re-registration");
+                        match register_with_scheduler(
+                            &client,
+                            &scheduler_url_clone,
+                            &ssp_id,
+                            &listen_addr,
+                            advertise_addr.as_deref(),
+                        ).await {
+                            Ok(()) => {
+                                info!("Successfully re-registered with scheduler");
+                            }
+                            Err(e) => {
+                                error!("Re-registration failed: {}", e);
+                            }
+                        }
                     }
                     Ok(resp) if resp.status() == StatusCode::CONFLICT => {
                         error!("Buffer overflow detected, need to re-bootstrap");

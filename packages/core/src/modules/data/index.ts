@@ -5,7 +5,7 @@ import {
   BackendNames,
   BackendRoutes,
   RoutePayload,
-} from '@spooky/query-builder';
+} from '@spooky-sync/query-builder';
 import { LocalDatabaseService } from '../../services/database/index';
 import { CacheModule, RecordWithId } from '../cache/index';
 import { Logger } from '../../services/logger/index';

@@ -1,7 +1,7 @@
 import { createSignal, Show } from 'solid-js';
 import { useNavigate } from '@solidjs/router';
 import { useAuth } from '../lib/auth';
-import { Uuid, useDb } from '@spooky/client-solid';
+import { Uuid, useDb } from '@spooky-sync/client-solid';
 import { RecordId } from 'surrealdb';
 import { schema } from '../schema.gen';
 

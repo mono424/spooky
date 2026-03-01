@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write  # Required for OIDC trusted publishing
 
 jobs:
   prepare:
@@ -44,9 +45,12 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           registry-url: https://registry.npmjs.org
           cache: pnpm
+
+      - name: Upgrade npm for OIDC support
+        run: npm install -g npm@11
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -70,9 +74,8 @@ jobs:
         run: pnpm --filter @spooky-sync/query-builder build
 
       - name: Publish query-builder
-        run: pnpm --filter @spooky-sync/query-builder publish --access public --tag ${{ needs.prepare.outputs.npm_tag }} --no-git-checks
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        working-directory: packages/query-builder
+        run: npm publish --access public --tag ${{ needs.prepare.outputs.npm_tag }}
 
       # 2. Build @spooky-sync/ssp-wasm (private — not published)
       - name: Build ssp-wasm
@@ -86,9 +89,8 @@ jobs:
         run: pnpm --filter @spooky-sync/core build
 
       - name: Publish core
-        run: pnpm --filter @spooky-sync/core publish --access public --tag ${{ needs.prepare.outputs.npm_tag }} --no-git-checks
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        working-directory: packages/core
+        run: npm publish --access public --tag ${{ needs.prepare.outputs.npm_tag }}
 
       # 4. Build and publish @spooky-sync/client-solid
       - name: Set version — client-solid
@@ -98,9 +100,8 @@ jobs:
         run: pnpm --filter @spooky-sync/client-solid build
 
       - name: Publish client-solid
-        run: pnpm --filter @spooky-sync/client-solid publish --access public --tag ${{ needs.prepare.outputs.npm_tag }} --no-git-checks
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        working-directory: packages/client-solid
+        run: npm publish --access public --tag ${{ needs.prepare.outputs.npm_tag }}
 
   publish-cli:
     needs: prepare
@@ -117,9 +118,12 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           registry-url: https://registry.npmjs.org
           cache: pnpm
+
+      - name: Upgrade npm for OIDC support
+        run: npm install -g npm@11
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -136,15 +140,14 @@ jobs:
         run: jq '.version = "${{ needs.prepare.outputs.version }}"' apps/cli/package.json > tmp.json && mv tmp.json apps/cli/package.json
 
       - name: Build Rust binary
-        run: pnpm --filter spooky-cli build:rust
+        run: pnpm --filter @spooky-sync/cli build:rust
 
       - name: Build JS bundle
-        run: pnpm --filter spooky-cli build:vite
+        run: pnpm --filter @spooky-sync/cli build:vite
 
       - name: Build type declarations
-        run: pnpm --filter spooky-cli build:types
+        run: pnpm --filter @spooky-sync/cli build:types
 
       - name: Publish CLI
-        run: pnpm --filter spooky-cli publish --access public --tag ${{ needs.prepare.outputs.npm_tag }} --no-git-checks
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        working-directory: apps/cli
+        run: npm publish --access public --tag ${{ needs.prepare.outputs.npm_tag }}

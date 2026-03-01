@@ -1,6 +1,6 @@
 import { Router, Route } from '@solidjs/router';
 import { createSignal, Show, createEffect } from 'solid-js';
-import { SpookyProvider } from '@spooky/client-solid';
+import { SpookyProvider } from '@spooky-sync/client-solid';
 import { AuthProvider, useAuth } from './lib/auth';
 import { dbConfig } from './db';
 import { AuthDialog } from './components/AuthDialog';

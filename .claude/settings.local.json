@@ -76,7 +76,14 @@
       "Bash(cargo:*)",
       "Bash(npx turbo:*)",
       "Bash(npx wasm-pack:*)",
-      "Bash(git remote:*)"
+      "Bash(git remote:*)",
+      "WebFetch(domain:developer.chrome.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:docs.npmjs.com)",
+      "WebFetch(domain:philna.sh)",
+      "Bash(npm whoami:*)",
+      "Bash(npm publish:*)",
+      "Bash(git:*)"
     ],
     "deny": [],
     "ask": []

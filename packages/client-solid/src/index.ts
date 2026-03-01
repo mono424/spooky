@@ -5,7 +5,7 @@ import {
   type SpookyQueryResultPromise,
   UpdateOptions,
   RunOptions,
-} from '@spooky/core';
+} from '@spooky-sync/core';
 
 import {
   GetTable,
@@ -22,7 +22,7 @@ import {
   BackendNames,
   BackendRoutes,
   RoutePayload,
-} from '@spooky/query-builder';
+} from '@spooky-sync/query-builder';
 
 import { RecordId, Uuid, Surreal } from 'surrealdb';
 export { RecordId, Uuid };
@@ -31,7 +31,7 @@ export { useQuery } from './lib/use-query';
 export { SpookyProvider, type SpookyProviderProps } from './lib/SpookyProvider';
 export { useDb } from './lib/context';
 
-// export { AuthEventTypes } from "@spooky/core"; // TODO: Verify if AuthEventTypes exists in core
+// export { AuthEventTypes } from "@spooky-sync/core"; // TODO: Verify if AuthEventTypes exists in core
 export type {};
 
 // Re-export query builder types for convenience
@@ -47,7 +47,7 @@ export type {
   TableModel,
   TableNames,
   QueryResult,
-} from '@spooky/query-builder';
+} from '@spooky-sync/query-builder';
 
 export type RelationshipField<
   Schema extends SchemaStructure,

@@ -199,43 +199,52 @@ impl SspPool {
         self.ssps.values().collect()
     }
 
-    /// Select the best SSP for a new query based on load balancing strategy
+    /// Select the best SSP for a new query based on load balancing strategy.
+    /// Only considers SSPs that are in the `Ready` state.
     pub fn select_for_query(&mut self) -> Option<String> {
-        if self.ssps.is_empty() {
+        let ready_ids: Vec<String> = self
+            .ssps
+            .keys()
+            .filter(|id| matches!(self.ssp_states.get(*id), Some(SspState::Ready)))
+            .cloned()
+            .collect();
+
+        if ready_ids.is_empty() {
             return None;
         }
 
         match self.strategy {
-            LoadBalanceStrategy::RoundRobin => self.select_round_robin(),
-            LoadBalanceStrategy::LeastQueries => self.select_least_queries(),
-            LoadBalanceStrategy::LeastLoad => self.select_least_load(),
+            LoadBalanceStrategy::RoundRobin => self.select_round_robin(&ready_ids),
+            LoadBalanceStrategy::LeastQueries => self.select_least_queries(&ready_ids),
+            LoadBalanceStrategy::LeastLoad => self.select_least_load(&ready_ids),
         }
     }
 
     /// Select SSP using round-robin
-    fn select_round_robin(&mut self) -> Option<String> {
-        let ssps: Vec<_> = self.ssps.keys().cloned().collect();
-        if ssps.is_empty() {
+    fn select_round_robin(&mut self, ready_ids: &[String]) -> Option<String> {
+        if ready_ids.is_empty() {
             return None;
         }
 
-        let selected = ssps[self.round_robin_index % ssps.len()].clone();
+        let selected = ready_ids[self.round_robin_index % ready_ids.len()].clone();
         self.round_robin_index += 1;
         Some(selected)
     }
 
     /// Select SSP with fewest queries
-    fn select_least_queries(&self) -> Option<String> {
-        self.ssps
+    fn select_least_queries(&self, ready_ids: &[String]) -> Option<String> {
+        ready_ids
             .iter()
+            .filter_map(|id| self.ssps.get(id).map(|info| (id, info)))
             .min_by_key(|(_, info)| info.query_count)
             .map(|(id, _)| id.clone())
     }
 
     /// Select SSP with least load (CPU + memory)
-    fn select_least_load(&self) -> Option<String> {
-        self.ssps
+    fn select_least_load(&self, ready_ids: &[String]) -> Option<String> {
+        ready_ids
             .iter()
+            .filter_map(|id| self.ssps.get(id).map(|info| (id, info)))
             .min_by(|(_, a), (_, b)| {
                 let load_a = a.cpu_usage.unwrap_or(0.0) + a.memory_usage.unwrap_or(0.0);
                 let load_b = b.cpu_usage.unwrap_or(0.0) + b.memory_usage.unwrap_or(0.0);

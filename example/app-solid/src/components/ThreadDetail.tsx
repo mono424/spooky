@@ -1,7 +1,7 @@
 import { createSignal, For, Show } from 'solid-js';
 import { useNavigate, useParams } from '@solidjs/router';
 import { CommentForm } from './CommentForm';
-import { useQuery, useDb, SyncedDb } from '@spooky/client-solid';
+import { useQuery, useDb, SyncedDb } from '@spooky-sync/client-solid';
 import { useAuth } from '../lib/auth';
 import { CommentBox } from './CommentBox';
 import { ThreadSidebar } from './ThreadSidebar';

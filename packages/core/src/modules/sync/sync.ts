@@ -7,7 +7,7 @@ import { RecordId, Uuid } from 'surrealdb';
 import { ArraySyncer, createDiffFromDbOp } from './utils';
 import { SyncEngine } from './engine';
 import { SyncScheduler } from './scheduler';
-import { SchemaStructure } from '@spooky/query-builder';
+import { SchemaStructure } from '@spooky-sync/query-builder';
 import { CacheModule } from '../cache/index';
 import { DataModule } from '../data/index';
 import { encodeRecordId, extractTablePart, parseDuration, surql } from '../../utils/index';

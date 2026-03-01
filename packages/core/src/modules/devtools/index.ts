@@ -1,6 +1,6 @@
 import { LocalDatabaseService, RemoteDatabaseService } from '../../services/database/index';
 import { Logger } from '../../services/logger/index';
-import { SchemaStructure } from '@spooky/query-builder';
+import { SchemaStructure } from '@spooky-sync/query-builder';
 import { RecordId } from 'surrealdb';
 import { StreamUpdate, StreamUpdateReceiver } from '../../services/stream-processor/index';
 import { encodeRecordId } from '../../utils/index';

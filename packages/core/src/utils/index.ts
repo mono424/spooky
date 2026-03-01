@@ -1,4 +1,4 @@
-import { GetTable, SchemaStructure, TableModel, TableNames } from '@spooky/query-builder';
+import { GetTable, SchemaStructure, TableModel, TableNames } from '@spooky-sync/query-builder';
 import { Uuid, RecordId, Duration } from 'surrealdb';
 import { Logger } from '../services/logger/index';
 import { QueryTimeToLive } from '../types';

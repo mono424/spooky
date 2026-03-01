@@ -1,7 +1,7 @@
 import React from 'react';
 import { LiveCodeEditor } from './LiveCodeEditor';
 
-const solidQueryCode = `import { useQuery } from "@spooky/client-solid";
+const solidQueryCode = `import { useQuery } from "@spooky-sync/client-solid";
 import { db } from "../db";
 
 const ThreadList = () => {

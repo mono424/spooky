@@ -1,4 +1,4 @@
-import { SyncedDbConfig } from '@spooky/client-solid';
+import { SyncedDbConfig } from '@spooky-sync/client-solid';
 import { schema, SURQL_SCHEMA } from './schema.gen';
 
 // Database configuration

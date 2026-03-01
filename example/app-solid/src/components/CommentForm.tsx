@@ -1,6 +1,6 @@
 import { Accessor, createSignal } from 'solid-js';
 import { useAuth } from '../lib/auth';
-import { RecordId, Uuid, useDb } from '@spooky/client-solid';
+import { RecordId, Uuid, useDb } from '@spooky-sync/client-solid';
 import { schema } from '../schema.gen';
 
 interface CommentFormProps {

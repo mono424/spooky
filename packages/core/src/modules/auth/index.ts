@@ -6,7 +6,7 @@ import {
   AccessDefinition,
   ColumnSchema,
   TypeNameToTypeMap,
-} from '@spooky/query-builder';
+} from '@spooky-sync/query-builder';
 import { Logger } from '../../services/logger/index';
 import { encodeRecordId } from '../../utils/index';
 export * from './events/index';

@@ -1,4 +1,4 @@
-import { RecordId, SchemaStructure } from '@spooky/query-builder';
+import { RecordId, SchemaStructure } from '@spooky-sync/query-builder';
 import { Level } from 'pino';
 import { PushEventOptions } from './events/index';
 import { UpEvent } from './modules/sync/index';

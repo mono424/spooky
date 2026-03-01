@@ -18,8 +18,8 @@
     "emitDeclarationOnly": false,
     "outDir": "./dist",
     "paths": {
-      "@spooky/query-builder": ["../query-builder/src/index.ts"],
-      "@spooky/core": ["../core/src/index.ts"]
+      "@spooky-sync/query-builder": ["../query-builder/src/index.ts"],
+      "@spooky-sync/core": ["../core/src/index.ts"]
     }
   },
   "include": ["src/**/*"],

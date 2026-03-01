@@ -182,7 +182,7 @@ importers:
       '@solidjs/router':
         specifier: ^0.10.2
         version: 0.10.10(solid-js@1.9.9)
-      '@spooky/client-solid':
+      '@spooky-sync/client-solid':
         specifier: workspace:*
         version: link:../../packages/client-solid
       '@tanstack/solid-query':
@@ -228,16 +228,16 @@ importers:
 
   example/schema:
     devDependencies:
-      spooky-cli:
+      '@spooky-sync/cli':
         specifier: workspace:*
         version: link:../../apps/cli
 
   packages/client-solid:
     dependencies:
-      '@spooky/core':
+      '@spooky-sync/core':
         specifier: workspace:*
         version: link:../core
-      '@spooky/query-builder':
+      '@spooky-sync/query-builder':
         specifier: workspace:*
         version: link:../query-builder
       '@surrealdb/wasm':
@@ -283,10 +283,10 @@ importers:
       '@opentelemetry/semantic-conventions':
         specifier: ^1.39.0
         version: 1.39.0
-      '@spooky/query-builder':
+      '@spooky-sync/query-builder':
         specifier: workspace:*
         version: link:../query-builder
-      '@spooky/ssp-wasm':
+      '@spooky-sync/ssp-wasm':
         specifier: workspace:*
         version: link:../ssp-wasm
       '@surrealdb/wasm':
@@ -348,6 +348,9 @@ importers:
 
   tests:
     devDependencies:
+      '@spooky-sync/cli':
+        specifier: workspace:*
+        version: link:../apps/cli
       '@types/jest':
         specifier: ^29.5.12
         version: 29.5.14
@@ -357,9 +360,6 @@ importers:
       jest:
         specifier: ^29.7.0
         version: 29.7.0(@types/node@20.19.22)(node-notifier@10.0.1)
-      spooky-cli:
-        specifier: workspace:*
-        version: link:../apps/cli
       surrealdb:
         specifier: 2.0.0
         version: 2.0.0(tslib@2.8.1)(typescript@5.9.3)

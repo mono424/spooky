@@ -1,6 +1,6 @@
 {
   "name": "@example/schema",
-  "version": "1.0.0",
+  "version": "0.0.0-canary.1",
   "description": "Database schema and types for SurrealDB",
   "scripts": {
     "start": "node run.js up -d",
@@ -28,6 +28,6 @@
   "license": "MIT",
   "packageManager": "pnpm@9.0.0",
   "devDependencies": {
-    "spooky-cli": "workspace:*"
+    "@spooky-sync/cli": "workspace:*"
   }
 }

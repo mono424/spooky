@@ -1,6 +1,6 @@
 import { For, createSignal } from 'solid-js';
 import { useNavigate } from '@solidjs/router';
-import { useQuery, useDb } from '@spooky/client-solid';
+import { useQuery, useDb } from '@spooky-sync/client-solid';
 import { schema } from '../schema.gen';
 
 export function ThreadList() {

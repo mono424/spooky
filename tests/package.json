@@ -1,6 +1,6 @@
 {
-  "name": "@spooky/tests",
-  "version": "0.0.0",
+  "name": "@spooky-sync/tests",
+  "version": "0.0.0-canary.1",
   "private": true,
   "scripts": {
     "test": "jest --runInBand",
@@ -10,7 +10,7 @@
     "generate:remote": "spooky --input ../example/schema/src/schema.surql --output .spooky/schema.gen.surql --modules-dir ../packages/surrealism-modules"
   },
   "devDependencies": {
-    "spooky-cli": "workspace:*",
+    "@spooky-sync/cli": "workspace:*",
     "@types/jest": "^29.5.12",
     "@types/node": "^20.11.24",
     "jest": "^29.7.0",

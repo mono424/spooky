@@ -4,10 +4,10 @@ import {
   SchemaStructure,
   TableNames,
   QueryResult,
-} from '@spooky/query-builder';
+} from '@spooky-sync/query-builder';
 import { createEffect, createSignal, onCleanup, useContext } from 'solid-js';
 import { SyncedDb } from '..';
-import { SpookyQueryResultPromise } from '@spooky/core';
+import { SpookyQueryResultPromise } from '@spooky-sync/core';
 import { SpookyContext } from './context';
 
 type QueryArg<

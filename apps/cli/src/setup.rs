@@ -258,7 +258,7 @@ export default defineConfig({
   },
   "dependencies": {
     "solid-js": "^1.8.7",
-    "@spooky/client-solid": "workspace:*" 
+    "@spooky-sync/client-solid": "workspace:*" 
   },
   "devDependencies": {
     "vite": "^5.0.0",

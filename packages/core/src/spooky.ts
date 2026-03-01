@@ -26,7 +26,7 @@ import {
   BackendNames,
   BackendRoutes,
   RoutePayload,
-} from '@spooky/query-builder';
+} from '@spooky-sync/query-builder';
 
 import { DevToolsService } from './modules/devtools/index';
 import { createLogger } from './services/logger/index';

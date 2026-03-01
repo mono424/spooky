@@ -1,5 +1,5 @@
 import { createSignal, onMount, onCleanup, Show } from 'solid-js';
-import { useDb } from '@spooky/client-solid';
+import { useDb } from '@spooky-sync/client-solid';
 
 export function PendingMutationsIndicator() {
   const db = useDb();

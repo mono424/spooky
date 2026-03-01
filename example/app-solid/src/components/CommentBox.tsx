@@ -1,7 +1,7 @@
 import { Show } from 'solid-js';
 import { useAuth } from '../lib/auth';
 import { SchemaDefinition } from '../schema.gen';
-import { GetTable, TableModel, useDb } from '@spooky/client-solid';
+import { GetTable, TableModel, useDb } from '@spooky-sync/client-solid';
 import { schema } from '../schema.gen';
 
 type AugmentedComment = Omit<TableModel<GetTable<SchemaDefinition, 'comment'>>, 'author'> & {

@@ -1,5 +1,5 @@
 import { RecordId } from 'surrealdb';
-import { SchemaStructure } from '@spooky/query-builder';
+import { SchemaStructure } from '@spooky-sync/query-builder';
 import { RemoteDatabaseService } from '../../services/database/index';
 import { CacheModule, CacheRecord, RecordWithId } from '../cache/index';
 import { RecordVersionDiff } from '../../types';

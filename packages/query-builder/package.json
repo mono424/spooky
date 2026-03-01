@@ -1,6 +1,6 @@
 {
-  "name": "@spooky/query-builder",
-  "version": "1.0.0",
+  "name": "@spooky-sync/query-builder",
+  "version": "0.0.0-canary.1",
   "description": "Type-safe query builder for SurrealDB with relationship support",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -28,6 +28,14 @@
   ],
   "author": "",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mono424/spooky.git",
+    "directory": "packages/query-builder"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "packageManager": "pnpm@9.0.0",
   "dependencies": {
     "surrealdb": "2.0.0"
