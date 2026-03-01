@@ -70,11 +70,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          registry-url: https://registry.npmjs.org
           cache: pnpm
 
       - name: Upgrade npm for OIDC support
-        run: npm install -g npm@11
+        run: npm install -g npm@latest
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -99,7 +98,7 @@ jobs:
 
       - name: Publish query-builder
         working-directory: packages/query-builder
-        run: npm publish --access public --tag ${{ needs.prepare.outputs.npm_tag }}
+        run: npm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
 
       # 2. Build @spooky-sync/ssp-wasm (private — not published)
       - name: Build ssp-wasm
@@ -114,7 +113,7 @@ jobs:
 
       - name: Publish core
         working-directory: packages/core
-        run: npm publish --access public --tag ${{ needs.prepare.outputs.npm_tag }}
+        run: npm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
 
       # 4. Build and publish @spooky-sync/client-solid
       - name: Set version — client-solid
@@ -125,7 +124,7 @@ jobs:
 
       - name: Publish client-solid
         working-directory: packages/client-solid
-        run: npm publish --access public --tag ${{ needs.prepare.outputs.npm_tag }}
+        run: npm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
 
   publish-cli:
     needs: [prepare, validate-versions]
@@ -143,11 +142,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          registry-url: https://registry.npmjs.org
           cache: pnpm
 
       - name: Upgrade npm for OIDC support
-        run: npm install -g npm@11
+        run: npm install -g npm@latest
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -174,4 +172,4 @@ jobs:
 
       - name: Publish CLI
         working-directory: apps/cli
-        run: npm publish --access public --tag ${{ needs.prepare.outputs.npm_tag }}
+        run: npm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
