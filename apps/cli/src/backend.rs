@@ -5,23 +5,37 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct SpookyConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
     #[serde(default)]
     pub backends: BTreeMap<String, BackendConfig>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub buckets: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct BackendConfig {
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub backend_type: Option<String>,
     pub spec: String,
-    #[serde(rename = "baseUrl")]
+    #[serde(rename = "baseUrl", skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth: Option<AuthConfig>,
     pub method: BackendMethod,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
+pub struct AuthConfig {
+    #[serde(rename = "type")]
+    pub auth_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub struct BackendMethod {
     #[serde(rename = "type")]
     pub method_type: String,

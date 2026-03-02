@@ -1,4 +1,6 @@
+mod add_api;
 mod backend;
+mod bucket;
 mod codegen;
 mod json_schema;
 mod migrate;
@@ -85,6 +87,92 @@ enum Commands {
     Migrate {
         #[command(subcommand)]
         action: MigrateCommands,
+    },
+    /// Bucket management
+    Bucket {
+        #[command(subcommand)]
+        action: BucketCommands,
+    },
+    /// Add resources to a Spooky project
+    Add {
+        #[command(subcommand)]
+        action: AddCommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum BucketCommands {
+    /// Add a new storage bucket
+    Add {
+        /// Bucket name (snake_case, e.g. user_avatars)
+        #[arg(long)]
+        name: Option<String>,
+
+        /// Preset type: avatars, images, documents, video, audio, custom
+        #[arg(long)]
+        preset: Option<String>,
+
+        /// Max file size (e.g. 5mb, 500kb, 1gb)
+        #[arg(long)]
+        max_size: Option<String>,
+
+        /// Allowed file extensions, comma-separated (e.g. jpg,png,gif)
+        #[arg(long)]
+        extensions: Option<String>,
+
+        /// Storage backend
+        #[arg(long, default_value = "memory")]
+        backend: String,
+
+        /// Enable per-user path isolation
+        #[arg(long)]
+        path_prefix_auth: Option<bool>,
+
+        /// Path to spooky.yml config file
+        #[arg(long, default_value = "spooky.yml")]
+        config: PathBuf,
+
+        /// Directory for bucket .surql files
+        #[arg(long, default_value = "src/buckets")]
+        buckets_dir: PathBuf,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum AddCommands {
+    /// Add an API backend
+    Api {
+        /// Path to OpenAPI spec file
+        #[arg(long)]
+        spec: Option<String>,
+
+        /// Backend name (key in spooky.yml)
+        #[arg(long)]
+        name: Option<String>,
+
+        /// API base URL
+        #[arg(long)]
+        base_url: Option<String>,
+
+        /// Auth type (e.g. "token")
+        #[arg(long)]
+        auth_type: Option<String>,
+
+        /// Auth token
+        #[arg(long)]
+        auth_token: Option<String>,
+
+        /// Outbox table name
+        #[arg(long)]
+        table: Option<String>,
+
+        /// Path for generated .surql schema file
+        #[arg(long)]
+        schema_path: Option<String>,
+
+        /// Path to spooky.yml config file
+        #[arg(long, default_value = "spooky.yml")]
+        config: PathBuf,
     },
 }
 
@@ -302,12 +390,53 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
     }
 }
 
+fn handle_add(action: AddCommands) -> Result<()> {
+    match action {
+        AddCommands::Api {
+            spec,
+            name,
+            base_url,
+            auth_type,
+            auth_token,
+            table,
+            schema_path,
+            config,
+        } => add_api::add_api(spec, name, base_url, auth_type, auth_token, table, schema_path, config),
+    }
+}
+
+fn handle_bucket(action: BucketCommands) -> Result<()> {
+    match action {
+        BucketCommands::Add {
+            name,
+            preset,
+            max_size,
+            extensions,
+            backend,
+            path_prefix_auth,
+            config,
+            buckets_dir,
+        } => bucket::add(
+            name,
+            preset,
+            max_size,
+            extensions,
+            backend,
+            path_prefix_auth,
+            config,
+            buckets_dir,
+        ),
+    }
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
 
     match args.command {
         Some(Commands::Setup) => return setup_project(),
         Some(Commands::Migrate { action }) => return handle_migrate(action),
+        Some(Commands::Bucket { action }) => return handle_bucket(action),
+        Some(Commands::Add { action }) => return handle_add(action),
         None => {} // fall through to legacy codegen mode
     }
 
