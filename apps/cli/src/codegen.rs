@@ -391,15 +391,36 @@ impl CodeGenerator {
 
         tables_lines.push("  },".to_string());
 
-        // Build buckets array
+        // Build buckets array (objects with constraints)
         tables_lines.push("  buckets: [".to_string());
         if let Some(definitions) = schema.get("definitions") {
             if let Some(buckets) = definitions.get("Buckets") {
                 if let Some(const_val) = buckets.get("const") {
                     if let serde_json::Value::Array(arr) = const_val {
-                        for name in arr {
-                            if let serde_json::Value::String(s) = name {
-                                tables_lines.push(format!("    '{}' as const,", s));
+                        for bucket in arr {
+                            if let serde_json::Value::Object(obj) = bucket {
+                                tables_lines.push("    {".to_string());
+                                if let Some(serde_json::Value::String(name)) = obj.get("name") {
+                                    tables_lines.push(format!("      name: '{}' as const,", name));
+                                }
+                                if let Some(max_size) = obj.get("maxSize") {
+                                    tables_lines.push(format!("      maxSize: {},", max_size));
+                                }
+                                if let Some(serde_json::Value::Array(exts)) = obj.get("allowedExtensions") {
+                                    let ext_strs: Vec<String> = exts.iter()
+                                        .filter_map(|e| e.as_str().map(|s| format!("'{}'", s)))
+                                        .collect();
+                                    tables_lines.push(format!("      allowedExtensions: [{}] as const,", ext_strs.join(", ")));
+                                }
+                                if let Some(serde_json::Value::Bool(auth)) = obj.get("pathPrefixAuth") {
+                                    tables_lines.push(format!("      pathPrefixAuth: {},", auth));
+                                }
+                                tables_lines.push("    },".to_string());
+                            } else if let serde_json::Value::String(s) = bucket {
+                                // Backwards compat: plain string bucket
+                                tables_lines.push("    {".to_string());
+                                tables_lines.push(format!("      name: '{}' as const,", s));
+                                tables_lines.push("    },".to_string());
                             }
                         }
                     }
@@ -952,8 +973,20 @@ impl CodeGenerator {
             // So using `trimmed` (clean) is better.
 
             // Handle DEFINE BUCKET removal (buckets are server-side only)
+            // Skip from DEFINE BUCKET to the terminating semicolon (multi-line)
             if trimmed.to_uppercase().starts_with("DEFINE BUCKET") {
-                i += 1;
+                while i < lines.len() {
+                    let bucket_clean = if let Some(idx) = lines[i].find("--") {
+                        &lines[i][..idx]
+                    } else {
+                        lines[i]
+                    };
+                    if bucket_clean.contains(';') {
+                        i += 1;
+                        break;
+                    }
+                    i += 1;
+                }
                 continue;
             }
 

@@ -3,6 +3,7 @@ import { useNavigate } from '@solidjs/router';
 import { useQuery, useDb } from '@spooky-sync/client-solid';
 import { useKeyboard } from '../lib/keyboard';
 import { schema } from '../schema.gen';
+import { ProfilePicture } from './ProfilePicture';
 
 export function ThreadList() {
   const db = useDb<typeof schema>();
@@ -111,9 +112,11 @@ export function ThreadList() {
             >
               <div class="flex items-start gap-4">
                 {/* Avatar */}
-                <div class="w-10 h-10 rounded-full bg-accent/15 text-accent flex items-center justify-center text-sm font-semibold flex-shrink-0 mt-0.5">
-                  {(thread.author?.username || '?').charAt(0).toUpperCase()}
-                </div>
+                <ProfilePicture
+                  src={() => thread.author?.profile_picture}
+                  username={() => thread.author?.username}
+                  size="md"
+                />
 
                 <div class="flex-1 min-w-0">
                   {/* Author + time */}

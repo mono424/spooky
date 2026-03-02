@@ -57,6 +57,8 @@ export type {
   AccessDefinition,
   TypeNameToTypeMap,
   BucketNames,
+  BucketConfig,
+  BucketDefinitionSchema,
   BackendNames,
   BackendRoutes,
   RoutePayload,

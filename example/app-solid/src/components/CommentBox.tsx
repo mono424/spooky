@@ -3,6 +3,7 @@ import { useAuth } from '../lib/auth';
 import { SchemaDefinition } from '../schema.gen';
 import { GetTable, TableModel, useDb } from '@spooky-sync/client-solid';
 import { schema } from '../schema.gen';
+import { ProfilePicture } from './ProfilePicture';
 
 type AugmentedComment = Omit<TableModel<GetTable<SchemaDefinition, 'comment'>>, 'author'> & {
   author?: TableModel<GetTable<SchemaDefinition, 'user'>>;
@@ -22,17 +23,14 @@ export function CommentBox(props: { comment: AugmentedComment }) {
     }
   };
 
-  const authorInitial = () => {
-    const name = props.comment.author?.username;
-    return name ? name.charAt(0).toUpperCase() : '?';
-  };
-
   return (
     <div class="group flex gap-3 py-4 hover:bg-surface/20 -mx-2 px-2 rounded-xl transition-colors duration-150">
       {/* Avatar */}
-      <div class="w-8 h-8 rounded-full bg-accent/15 text-accent flex items-center justify-center text-xs font-semibold flex-shrink-0 mt-0.5">
-        {authorInitial()}
-      </div>
+      <ProfilePicture
+        src={() => props.comment.author?.profile_picture}
+        username={() => props.comment.author?.username}
+        size="sm"
+      />
 
       <div class="flex-1 min-w-0">
         {/* Name + time + actions */}

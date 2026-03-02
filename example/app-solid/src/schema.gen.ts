@@ -120,7 +120,11 @@ export const schema = {
     account: {"signIn":{"params":{"password":{"type":"string","optional":false},"username":{"type":"string","optional":false}}},"signup":{"params":{"password":{"type":"string","optional":false},"username":{"type":"string","optional":false}}}},
   },
   buckets: [
-    'profile_pictures' as const,
+    {
+      name: 'profile_pictures' as const,
+      maxSize: 5242880,
+      allowedExtensions: ['jpg', 'jpeg', 'png', 'gif'] as const,
+    },
   ],
   backends: {
     "api": {
@@ -147,11 +151,6 @@ export type SchemaDefinition = typeof schema;
  * This constant contains the raw .surql schema file content.
  */
 export const SURQL_SCHEMA = `-- ##################################################################
--- BUCKETS
--- ##################################################################
-
-
--- ##################################################################
 -- SCOPES & AUTHENTICATION
 -- ##################################################################
 

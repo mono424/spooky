@@ -1,6 +1,6 @@
-import { createSignal, createEffect, onCleanup, Show } from 'solid-js';
+import { createSignal, createEffect, Show } from 'solid-js';
 import { useAuth } from '../lib/auth';
-import { useDb } from '@spooky-sync/client-solid';
+import { useDb, useFileUpload, useDownloadFile } from '@spooky-sync/client-solid';
 import { schema } from '../schema.gen';
 
 export function ProfileEdit() {
@@ -14,9 +14,11 @@ export function ProfileEdit() {
   const [success, setSuccess] = createSignal('');
 
   // Profile picture state
-  const [profilePicUrl, setProfilePicUrl] = createSignal<string | null>(null);
-  const [isUploading, setIsUploading] = createSignal(false);
-  const [uploadError, setUploadError] = createSignal('');
+  const fileUpload = useFileUpload<typeof schema>('profile_pictures');
+  const { url: profilePicUrl } = useDownloadFile<typeof schema>(
+    'profile_pictures',
+    () => auth.user()?.profile_picture,
+  );
 
   let fileInputRef!: HTMLInputElement;
 
@@ -26,40 +28,6 @@ export function ProfileEdit() {
     if (user?.username) {
       setUsername(user.username);
     }
-  });
-
-  // Load profile picture when profile_picture field changes
-  createEffect(() => {
-    const user = auth.user();
-    const path = user?.profile_picture;
-
-    if (!path) {
-      setProfilePicUrl(null);
-      return;
-    }
-
-    let revoked = false;
-    let objectUrl: string | null = null;
-
-    (async () => {
-      try {
-        const content = await db.bucket('profile_pictures').get(path);
-        if (revoked) return;
-        if (content) {
-          objectUrl = URL.createObjectURL(new Blob([content as BlobPart]));
-          setProfilePicUrl(objectUrl);
-        }
-      } catch (err) {
-        console.error('Failed to load profile picture:', err);
-      }
-    })();
-
-    onCleanup(() => {
-      revoked = true;
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl);
-      }
-    });
   });
 
   const userInitial = () => {
@@ -83,7 +51,7 @@ export function ProfileEdit() {
       const user = auth.user();
       if (!user) throw new Error('Not signed in');
 
-      await db.update(user.id, { username: trimmed });
+      await db.update('user', user.id, { username: trimmed });
       setSuccess('Username updated successfully.');
     } catch (err) {
       console.error('Failed to update username:', err);
@@ -100,35 +68,21 @@ export function ProfileEdit() {
 
     // Reset input so the same file can be re-selected
     input.value = '';
+    fileUpload.clearError();
 
-    setUploadError('');
+    const user = auth.user();
+    if (!user) return;
 
-    if (!file.type.startsWith('image/')) {
-      setUploadError('Please select an image file.');
-      return;
-    }
+    const ext = file.name.split('.').pop() || 'png';
+    const path = `${crypto.randomUUID()}.${ext}`;
+    const oldPath = user.profile_picture;
 
-    if (file.size > 5 * 1024 * 1024) {
-      setUploadError('Image must be under 5 MB.');
-      return;
-    }
-
-    setIsUploading(true);
-    try {
-      const user = auth.user();
-      if (!user) throw new Error('Not signed in');
-
-      const rawId = user.id.toString().split(':')[1];
-      const ext = file.name.split('.').pop() || 'png';
-      const path = `${rawId}/avatar.${ext}`;
-
-      await db.bucket('profile_pictures').put(path, file);
-      await db.update(user.id, { profile_picture: path });
-    } catch (err) {
-      console.error('Failed to upload profile picture:', err);
-      setUploadError(err instanceof Error ? err.message : 'Failed to upload picture');
-    } finally {
-      setIsUploading(false);
+    await fileUpload.upload(path, file);
+    if (!fileUpload.error()) {
+      await db.update('user', user.id, { profile_picture: path });
+      if (oldPath) {
+        await fileUpload.remove(oldPath);
+      }
     }
   };
 
@@ -158,10 +112,10 @@ export function ProfileEdit() {
             <button
               type="button"
               onMouseDown={() => fileInputRef.click()}
-              disabled={isUploading()}
+              disabled={fileUpload.isUploading()}
               class="bg-accent hover:bg-accent-hover text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {isUploading() ? 'Uploading...' : 'Change picture'}
+              {fileUpload.isUploading() ? 'Uploading...' : 'Change picture'}
             </button>
             <p class="text-xs text-zinc-500">JPG, PNG or GIF. Max 5 MB.</p>
           </div>
@@ -173,9 +127,9 @@ export function ProfileEdit() {
             onChange={handleFileSelect}
           />
         </div>
-        <Show when={uploadError()}>
+        <Show when={fileUpload.error()}>
           <div class="mt-4 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 p-3 text-sm">
-            {uploadError()}
+            {fileUpload.error()?.message}
           </div>
         </Show>
       </div>

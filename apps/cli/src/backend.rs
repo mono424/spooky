@@ -7,7 +7,10 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Deserialize)]
 pub struct SpookyConfig {
+    #[serde(default)]
     pub backends: BTreeMap<String, BackendConfig>,
+    #[serde(default)]
+    pub buckets: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -47,6 +50,7 @@ pub struct BackendDefinition {
 pub struct BackendProcessor {
     pub schema_appends: String,
     pub backend_definitions: BTreeMap<String, BackendDefinition>,
+    pub bucket_schema: String,
 }
 
 impl BackendProcessor {
@@ -54,6 +58,7 @@ impl BackendProcessor {
         Self {
             schema_appends: String::new(),
             backend_definitions: BTreeMap::new(),
+            bucket_schema: String::new(),
         }
     }
 
@@ -68,6 +73,15 @@ impl BackendProcessor {
 
         for (backend_name, backend_config) in config.backends {
             self.process_backend(&backend_name, &backend_config, base_dir)?;
+        }
+
+        for path_str in &config.buckets {
+            let bucket_path = base_dir.join(path_str);
+            let bucket_content = fs::read_to_string(&bucket_path)
+                .context(format!("Failed to read bucket file: {:?}", bucket_path))?;
+            self.bucket_schema.push('\n');
+            self.bucket_schema.push_str(&bucket_content);
+            println!("  + Loaded bucket schema from {:?}", bucket_path);
         }
 
         Ok(())

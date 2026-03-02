@@ -39,7 +39,7 @@ import { LocalStoragePersistenceClient } from './services/persistence/localstora
 import { generateId, parseParams } from './utils/index';
 import { SurrealDBPersistenceClient } from './services/persistence/surrealdb';
 
-class BucketHandle {
+export class BucketHandle {
   constructor(private bucketName: string, private remote: RemoteDatabaseService) {}
 
   async put(path: string, content: string | Uint8Array | Blob): Promise<void> {

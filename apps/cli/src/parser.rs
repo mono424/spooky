@@ -37,6 +37,9 @@ pub struct AccessDefinition {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BucketDefinition {
     pub name: String,
+    pub max_size: Option<u64>,
+    pub allowed_extensions: Vec<String>,
+    pub path_prefix_auth: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -191,17 +194,66 @@ impl SchemaParser {
         result.join("\n")
     }
 
-    /// Extract bucket names from the schema content using regex
-    fn extract_buckets(&mut self, content: &str) {
-        let re = Regex::new(r"(?i)DEFINE\s+BUCKET\s+(?:OVERWRITE\s+|IF\s+NOT\s+EXISTS\s+)?(\w+)")
-            .unwrap();
+    /// Extract bucket definitions from the schema content, including PERMISSIONS constraints
+    pub fn extract_buckets(&mut self, content: &str) {
+        let name_re =
+            Regex::new(r"(?i)DEFINE\s+BUCKET\s+(?:OVERWRITE\s+|IF\s+NOT\s+EXISTS\s+)?(\w+)")
+                .unwrap();
 
-        for cap in re.captures_iter(content) {
+        // Find each DEFINE BUCKET statement and capture from start to terminating ';'
+        let block_re = Regex::new(
+            r"(?is)DEFINE\s+BUCKET\s+(?:OVERWRITE\s+|IF\s+NOT\s+EXISTS\s+)?(\w+)([^;]*);",
+        )
+        .unwrap();
+
+        let max_size_re =
+            Regex::new(r"file::head\(\$file\)\.size\s*<=?\s*(\d+)").unwrap();
+        let ext_re =
+            Regex::new(r"string::ends_with\(file::key\(\$file\),\s*'\.(\w+)'\)").unwrap();
+        let auth_re =
+            Regex::new(r"string::starts_with\(file::key\(\$file\),.*\$auth").unwrap();
+
+        for cap in block_re.captures_iter(content) {
             let name = cap[1].to_string();
+            let body = &cap[2];
+
+            let max_size = max_size_re
+                .captures(body)
+                .and_then(|c| c[1].parse::<u64>().ok());
+
+            let allowed_extensions: Vec<String> = ext_re
+                .captures_iter(body)
+                .map(|c| c[1].to_string())
+                .collect();
+
+            let path_prefix_auth = auth_re.is_match(body);
+
             self.buckets.insert(
                 name.clone(),
-                BucketDefinition { name },
+                BucketDefinition {
+                    name,
+                    max_size,
+                    allowed_extensions,
+                    path_prefix_auth,
+                },
             );
+        }
+
+        // Fallback: also match single-line DEFINE BUCKET without PERMISSIONS
+        // (the block_re above already handles this, but keep for robustness)
+        for cap in name_re.captures_iter(content) {
+            let name = cap[1].to_string();
+            if !self.buckets.contains_key(&name) {
+                self.buckets.insert(
+                    name.clone(),
+                    BucketDefinition {
+                        name,
+                        max_size: None,
+                        allowed_extensions: Vec::new(),
+                        path_prefix_auth: false,
+                    },
+                );
+            }
         }
     }
 

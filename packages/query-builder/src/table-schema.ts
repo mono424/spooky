@@ -113,6 +113,17 @@ export interface AccessDefinition {
 }
 
 // ============================================================================
+// BUCKET SCHEMA HELPERS
+// ============================================================================
+
+export interface BucketDefinitionSchema {
+  readonly name: string;
+  readonly maxSize?: number;
+  readonly allowedExtensions?: readonly string[];
+  readonly pathPrefixAuth?: boolean;
+}
+
+// ============================================================================
 // ARRAY-BASED SCHEMA TYPE HELPERS
 // ============================================================================
 
@@ -133,7 +144,7 @@ export interface SchemaStructure {
   }[];
   readonly backends: Record<string, HTTPOutboxBackendDefinition>;
   readonly access?: Record<string, AccessDefinition>;
-  readonly buckets?: readonly string[];
+  readonly buckets?: readonly BucketDefinitionSchema[];
 }
 
 export interface HTTPOutboxBackendDefinition {
@@ -155,9 +166,16 @@ export interface HTTPBackendRouteArgsDefinition {
 // ============================================================================
 
 /** Extract all bucket names from the schema */
-export type BucketNames<S extends SchemaStructure> = S['buckets'] extends readonly string[]
-  ? S['buckets'][number]
-  : never;
+export type BucketNames<S extends SchemaStructure> =
+  S['buckets'] extends readonly BucketDefinitionSchema[]
+    ? S['buckets'][number]['name']
+    : never;
+
+/** Look up a bucket's config by name */
+export type BucketConfig<S extends SchemaStructure, B extends BucketNames<S>> =
+  S['buckets'] extends readonly BucketDefinitionSchema[]
+    ? Extract<S['buckets'][number], { name: B }>
+    : never;
 
 /** Extract all backend names from the schema */
 export type BackendNames<S extends SchemaStructure> = keyof S['backends'] & string;

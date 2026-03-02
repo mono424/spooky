@@ -402,6 +402,11 @@ fn main() -> Result<()> {
         .parse_file(&content)
         .context("Failed to parse SurrealDB schema")?;
 
+    // Extract buckets from separate bucket files (if any)
+    if !backend_processor.bucket_schema.is_empty() {
+        parser.extract_buckets(&backend_processor.bucket_schema);
+    }
+
     // Filter the raw schema content to remove fields with FOR select WHERE false
     let mut filtered_schema_content = filter_schema_for_client(&content, &parser)?;
 
@@ -417,6 +422,12 @@ fn main() -> Result<()> {
     // Choose which content to use based on format
     let raw_schema_content = if matches!(output_format, OutputFormat::Surql) {
         let mut c = content.clone();
+        // Append bucket definitions to remote schema (they belong in the DB, not the client)
+        if !backend_processor.bucket_schema.is_empty() {
+            c.push('\n');
+            c.push_str(&backend_processor.bucket_schema);
+            println!("  + Appended bucket schema to remote output");
+        }
         c.push('\n');
         c.push_str(functions_remote);
         println!("  + Appended functions_remote.surql (common)");

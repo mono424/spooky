@@ -2,6 +2,7 @@ import { Accessor, createSignal } from 'solid-js';
 import { useAuth } from '../lib/auth';
 import { RecordId, Uuid, useDb } from '@spooky-sync/client-solid';
 import { schema } from '../schema.gen';
+import { ProfilePicture } from './ProfilePicture';
 
 interface CommentFormProps {
   thread: Accessor<{ id: string }>;
@@ -14,11 +15,6 @@ export function CommentForm(props: CommentFormProps) {
   const [content, setContent] = createSignal('');
   const [isLoading, setIsLoading] = createSignal(false);
   const [isFocused, setIsFocused] = createSignal(false);
-
-  const userInitial = () => {
-    const name = auth.user()?.username;
-    return name ? name.charAt(0).toUpperCase() : '?';
-  };
 
   const handleSubmit = async (e: Event) => {
     e.preventDefault();
@@ -54,9 +50,11 @@ export function CommentForm(props: CommentFormProps) {
     <form onSubmit={handleSubmit} class="w-full">
       <div class="flex gap-3">
         {/* User avatar */}
-        <div class="w-8 h-8 rounded-full bg-accent/15 text-accent flex items-center justify-center text-xs font-semibold flex-shrink-0 mt-1">
-          {userInitial()}
-        </div>
+        <ProfilePicture
+          src={() => auth.user()?.profile_picture}
+          username={() => auth.user()?.username}
+          size="sm"
+        />
 
         <div class="flex-1">
           <textarea

@@ -233,14 +233,28 @@ impl JsonSchemaGenerator {
             );
         }
 
-        // Add Buckets definitions (names only)
-        let bucket_names: Vec<Value> = parser.buckets.keys()
-            .map(|name| Value::String(name.clone()))
+        // Add Buckets definitions (objects with constraints)
+        let bucket_objects: Vec<Value> = parser.buckets.values()
+            .map(|bucket| {
+                let mut obj = serde_json::Map::new();
+                obj.insert("name".to_string(), Value::String(bucket.name.clone()));
+                if let Some(max_size) = bucket.max_size {
+                    obj.insert("maxSize".to_string(), json!(max_size));
+                }
+                if !bucket.allowed_extensions.is_empty() {
+                    obj.insert("allowedExtensions".to_string(),
+                        Value::Array(bucket.allowed_extensions.iter().map(|e| Value::String(e.clone())).collect()));
+                }
+                if bucket.path_prefix_auth {
+                    obj.insert("pathPrefixAuth".to_string(), Value::Bool(true));
+                }
+                Value::Object(obj)
+            })
             .collect();
-        if !bucket_names.is_empty() {
+        if !bucket_objects.is_empty() {
             definitions.insert("Buckets".to_string(), json!({
                 "type": "array",
-                "const": bucket_names
+                "const": bucket_objects
             }));
         }
 

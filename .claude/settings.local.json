@@ -84,7 +84,8 @@
       "Bash(npm whoami:*)",
       "Bash(npm publish:*)",
       "Bash(git:*)",
-      "Bash(done)"
+      "Bash(done)",
+      "Bash(../../apps/cli/target/debug/spooky:*)"
     ],
     "deny": [],
     "ask": []

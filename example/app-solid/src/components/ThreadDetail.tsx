@@ -8,6 +8,7 @@ import { ThreadSidebar } from './ThreadSidebar';
 import { isInputActive, useKeyboard } from '../lib/keyboard';
 import SpookButton from './SpookButton';
 import { schema } from '../schema.gen';
+import { ProfilePicture } from './ProfilePicture';
 
 const createQuery = (
   db: SyncedDb<typeof schema>,
@@ -182,9 +183,11 @@ export function ThreadDetail() {
               <article>
                 {/* Author header */}
                 <div class="flex items-center gap-3 mb-5">
-                  <div class="w-10 h-10 rounded-full bg-accent/15 text-accent flex items-center justify-center text-sm font-semibold flex-shrink-0">
-                    {(threadData().author?.username || '?').charAt(0).toUpperCase()}
-                  </div>
+                  <ProfilePicture
+                    src={() => threadData().author?.profile_picture}
+                    username={() => threadData().author?.username}
+                    size="md"
+                  />
                   <div>
                     <div class="text-sm font-medium text-zinc-200">
                       {threadData().author?.username || 'Unknown'}
