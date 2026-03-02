@@ -417,11 +417,6 @@ class User {
 /// The complete SurrealDB schema definition.
 /// This constant contains the raw .surql schema file content.
 const String SURQL_SCHEMA = "-- ##################################################################
--- BUCKETS
--- ##################################################################
-
-
--- ##################################################################
 -- SCOPES & AUTHENTICATION
 -- ##################################################################
 
