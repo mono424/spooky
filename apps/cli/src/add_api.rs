@@ -122,6 +122,8 @@ pub fn add_api(
     } else {
         SpookyConfig {
             mode: None,
+            surrealdb: None,
+            version: None,
             backends: std::collections::BTreeMap::new(),
             buckets: Vec::new(),
         }

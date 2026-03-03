@@ -6,14 +6,12 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crate::backend::SpookyConfig;
+use crate::backend::{SpookyConfig, ResolvedVersions};
 use crate::migrate;
 use crate::surreal_client::SurrealClient;
 
 const PREFIX: &str = "[spooky dev]";
 
-const SURREAL_IMAGE: &str = "surrealdb/surrealdb:v3.0.0";
-const SSP_IMAGE: &str = "mono424/spooky-ssp:latest";
 const NETWORK_NAME: &str = "spooky-dev-net";
 const SURREAL_CONTAINER: &str = "spooky-dev-surrealdb";
 const SSP_CONTAINER: &str = "spooky-dev-ssp";
@@ -39,8 +37,10 @@ pub fn run() -> Result<()> {
 
     println!("{} Starting development environment...", PREFIX);
 
-    // Read mode from spooky.yml
-    let mode = read_mode("spooky.yml");
+    // Read config from spooky.yml
+    let config = read_config("spooky.yml");
+    let mode = config.mode.clone().unwrap_or_else(|| "singlenode".to_string());
+    let versions = ResolvedVersions::from_config(&config);
     println!("{} Mode: {}", PREFIX, mode);
 
     // Check for compose files
@@ -50,34 +50,50 @@ pub fn run() -> Result<()> {
         run_compose_mode(&compose_file, &mode, &stop)
     } else {
         println!("{} No compose file found — using direct Docker mode", PREFIX);
-        run_direct_mode(&mode, &stop)
+        run_direct_mode(&mode, &versions, &stop)
     }
 }
 
 // ── Config reading ──────────────────────────────────────────────────────────
 
-fn read_mode(config_path: &str) -> String {
+fn default_config() -> SpookyConfig {
+    SpookyConfig {
+        mode: Some("singlenode".to_string()),
+        surrealdb: None,
+        version: None,
+        backends: Default::default(),
+        buckets: Default::default(),
+    }
+}
+
+fn read_config(config_path: &str) -> SpookyConfig {
     let path = Path::new(config_path);
     if !path.exists() {
-        return "singlenode".to_string();
+        return default_config();
     }
 
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
-        Err(_) => return "singlenode".to_string(),
+        Err(_) => return default_config(),
     };
 
-    let config: SpookyConfig = match serde_yaml::from_str(&content) {
+    match serde_yaml::from_str(&content) {
         Ok(c) => c,
-        Err(_) => return "singlenode".to_string(),
-    };
-
-    config.mode.unwrap_or_else(|| "singlenode".to_string())
+        Err(_) => default_config(),
+    }
 }
 
 // ── Direct Docker mode ──────────────────────────────────────────────────────
 
-fn run_direct_mode(_mode: &str, stop: &Arc<AtomicBool>) -> Result<()> {
+fn run_direct_mode(_mode: &str, versions: &ResolvedVersions, stop: &Arc<AtomicBool>) -> Result<()> {
+    let surreal_image = versions.surrealdb_image();
+    let ssp_image = versions.ssp_image();
+
+    // Clean up any stale resources from a previous run
+    let _ = docker(&["rm", "-f", SURREAL_CONTAINER]);
+    let _ = docker(&["rm", "-f", SSP_CONTAINER]);
+    let _ = docker(&["network", "rm", NETWORK_NAME]);
+
     // Phase 1: Create Docker network
     println!("\n{} Phase 1: Creating Docker network...", PREFIX);
     docker(&["network", "create", NETWORK_NAME])?;
@@ -93,7 +109,7 @@ fn run_direct_mode(_mode: &str, stop: &Arc<AtomicBool>) -> Result<()> {
         "-e", "SURREAL_USER=root",
         "-e", "SURREAL_PASS=root",
         "-e", "SURREAL_LOG=info",
-        SURREAL_IMAGE,
+        &surreal_image,
         "start",
         "--bind", "0.0.0.0:8000",
         "--allow-all",
@@ -141,6 +157,7 @@ fn run_direct_mode(_mode: &str, stop: &Arc<AtomicBool>) -> Result<()> {
 
     let mut ssp_args = vec![
         "run", "-d",
+        "--platform", "linux/amd64",
         "--name", SSP_CONTAINER,
         "--network", NETWORK_NAME,
         "-p", &port_mapping,
@@ -159,7 +176,7 @@ fn run_direct_mode(_mode: &str, stop: &Arc<AtomicBool>) -> Result<()> {
         ssp_args.extend(["-v", &config_mount_str]);
     }
     ssp_args.extend(["-v", &data_mount_str]);
-    ssp_args.push(SSP_IMAGE);
+    ssp_args.push(&ssp_image);
 
     docker(&ssp_args)?;
 

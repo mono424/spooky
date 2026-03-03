@@ -4,6 +4,8 @@ use inquire::Text;
 use std::fs;
 use std::path::Path;
 
+use crate::backend::ResolvedVersions;
+
 // ---------------------------------------------------------------------------
 // Constants – large string literals extracted for readability
 // ---------------------------------------------------------------------------
@@ -219,7 +221,7 @@ const DOCKER_COMPOSE_SINGLENODE: &str = r#"services:
     restart: unless-stopped
 
   surrealdb:
-    image: surrealdb/surrealdb:v3.0.0
+    image: {{SURREALDB_IMAGE}}
     ports:
       - '8666:8000'
     environment:
@@ -246,7 +248,7 @@ const DOCKER_COMPOSE_SINGLENODE: &str = r#"services:
     restart: unless-stopped
 
   ssp:
-    image: mono424/spooky-ssp:latest
+    image: {{SSP_IMAGE}}
     ports:
       - '8667:8667'
     environment:
@@ -273,7 +275,7 @@ const DOCKER_COMPOSE_SINGLENODE: &str = r#"services:
 "#;
 
 const DOCKER_COMPOSE_CLUSTER: &str = r#"x-ssp-common: &ssp-common
-  image: mono424/spooky-ssp:latest
+  image: {{SSP_IMAGE}}
   environment: &ssp-env
     RUST_LOG: "info,ssp=debug"
     OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
@@ -311,7 +313,7 @@ services:
     restart: unless-stopped
 
   surrealdb:
-    image: surrealdb/surrealdb:v3.0.0
+    image: {{SURREALDB_IMAGE}}
     ports:
       - '8666:8000'
     environment:
@@ -336,7 +338,7 @@ services:
     restart: unless-stopped
 
   scheduler:
-    image: mono424/spooky-scheduler:latest
+    image: {{SCHEDULER_IMAGE}}
     ports:
       - '9667:9667'
     environment:
@@ -562,14 +564,22 @@ fn write_schema_package(
     // run.js
     write_file(schema_path.join("run.js"), RUN_JS)?;
 
-    // Docker compose files
+    // Docker compose files — substitute default image versions
+    let defaults = ResolvedVersions::default();
+    let singlenode = DOCKER_COMPOSE_SINGLENODE
+        .replace("{{SURREALDB_IMAGE}}", &defaults.surrealdb_image())
+        .replace("{{SSP_IMAGE}}", &defaults.ssp_image());
+    let cluster = DOCKER_COMPOSE_CLUSTER
+        .replace("{{SURREALDB_IMAGE}}", &defaults.surrealdb_image())
+        .replace("{{SSP_IMAGE}}", &defaults.ssp_image())
+        .replace("{{SCHEDULER_IMAGE}}", &defaults.scheduler_image());
     write_file(
         schema_path.join("docker-compose.singlenode.yml"),
-        DOCKER_COMPOSE_SINGLENODE,
+        &singlenode,
     )?;
     write_file(
         schema_path.join("docker-compose.cluster.yml"),
-        DOCKER_COMPOSE_CLUSTER,
+        &cluster,
     )?;
     write_file(
         schema_path.join("docker-compose.surrealism.yml"),
