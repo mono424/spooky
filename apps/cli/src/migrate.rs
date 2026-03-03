@@ -119,6 +119,7 @@ pub fn create(migrations_dir: &Path, name: &str, schema_path: Option<&Path>) -> 
 
 /// Apply all pending migrations in order.
 pub fn apply(client: &dyn MigrationDB, migrations_dir: &Path) -> Result<()> {
+    client.ensure_ns_db().context("Failed to ensure namespace/database exist")?;
     client.ping().context("Cannot connect to SurrealDB")?;
     client.ensure_migration_table()?;
 
@@ -297,6 +298,10 @@ mod tests {
 
     impl MigrationDB for MockDB {
         fn ping(&self) -> Result<()> {
+            Ok(())
+        }
+
+        fn ensure_ns_db(&self) -> Result<()> {
             Ok(())
         }
 

@@ -1,0 +1,12 @@
+{
+  "name": "@spooky-sync/cli-linux-arm64",
+  "version": "0.0.1-canary.1",
+  "description": "Linux ARM64 binary for @spooky-sync/cli",
+  "license": "MIT",
+  "os": ["linux"],
+  "cpu": ["arm64"],
+  "files": ["spooky"],
+  "publishConfig": {
+    "access": "public"
+  }
+}

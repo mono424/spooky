@@ -2,6 +2,7 @@ mod add_api;
 mod backend;
 mod bucket;
 mod codegen;
+mod dev;
 mod json_schema;
 mod migrate;
 mod modules;
@@ -93,11 +94,13 @@ enum Commands {
         #[command(subcommand)]
         action: BucketCommands,
     },
-    /// Add resources to a Spooky project
-    Add {
+    /// API backend management
+    Api {
         #[command(subcommand)]
-        action: AddCommands,
+        action: ApiCommands,
     },
+    /// Start a local development environment
+    Dev,
 }
 
 #[derive(Subcommand, Debug)]
@@ -139,9 +142,9 @@ enum BucketCommands {
 }
 
 #[derive(Subcommand, Debug)]
-enum AddCommands {
+enum ApiCommands {
     /// Add an API backend
-    Api {
+    Add {
         /// Path to OpenAPI spec file
         #[arg(long)]
         spec: Option<String>,
@@ -390,9 +393,9 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
     }
 }
 
-fn handle_add(action: AddCommands) -> Result<()> {
+fn handle_api(action: ApiCommands) -> Result<()> {
     match action {
-        AddCommands::Api {
+        ApiCommands::Add {
             spec,
             name,
             base_url,
@@ -436,7 +439,8 @@ fn main() -> Result<()> {
         Some(Commands::Setup) => return setup_project(),
         Some(Commands::Migrate { action }) => return handle_migrate(action),
         Some(Commands::Bucket { action }) => return handle_bucket(action),
-        Some(Commands::Add { action }) => return handle_add(action),
+        Some(Commands::Api { action }) => return handle_api(action),
+        Some(Commands::Dev) => return dev::run(),
         None => {} // fall through to legacy codegen mode
     }
 

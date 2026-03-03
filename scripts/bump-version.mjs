@@ -6,6 +6,14 @@ const ROOT = resolve(import.meta.dirname, "..");
 const MANIFEST_PATH = join(ROOT, "apps/devtools/manifest.json");
 const EXCLUDE = ["packages/ssp-wasm/pkg"];
 
+const CLI_PLATFORM_PACKAGES = [
+  "cli-linux-x64",
+  "cli-linux-arm64",
+  "cli-darwin-x64",
+  "cli-darwin-arm64",
+  "cli-win32-x64",
+];
+
 // ── helpers ──────────────────────────────────────────────────────────
 
 function die(msg) {
@@ -73,6 +81,39 @@ for (const dir of dirs) {
   pkg.version = version;
   writeJson(pkgPath, pkg);
   updated.push(`  ${rel}: ${oldVersion} -> ${version}`);
+}
+
+// Bump CLI platform packages
+for (const name of CLI_PLATFORM_PACKAGES) {
+  const pkgPath = join(ROOT, "apps/cli/npm", name, "package.json");
+  const pkg = readJson(pkgPath);
+  const rel = pkgPath.replace(ROOT + "/", "");
+
+  if (pkg.version === version) {
+    skipped.push(rel);
+  } else {
+    const oldVersion = pkg.version;
+    pkg.version = version;
+    writeJson(pkgPath, pkg);
+    updated.push(`  ${rel}: ${oldVersion} -> ${version}`);
+  }
+}
+
+// Bump optionalDependencies in CLI package.json
+const cliPkgPath = join(ROOT, "apps/cli/package.json");
+const cliPkg = readJson(cliPkgPath);
+if (cliPkg.optionalDependencies) {
+  let cliUpdated = false;
+  for (const dep of Object.keys(cliPkg.optionalDependencies)) {
+    if (cliPkg.optionalDependencies[dep] !== version) {
+      cliPkg.optionalDependencies[dep] = version;
+      cliUpdated = true;
+    }
+  }
+  if (cliUpdated) {
+    writeJson(cliPkgPath, cliPkg);
+    updated.push(`  apps/cli/package.json: optionalDependencies -> ${version}`);
+  }
 }
 
 // Bump Chrome manifest

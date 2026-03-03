@@ -20,6 +20,7 @@ pub struct AppliedMigration {
 /// This enables testing with a mock implementation.
 pub trait MigrationDB {
     fn ping(&self) -> Result<()>;
+    fn ensure_ns_db(&self) -> Result<()>;
     fn ensure_migration_table(&self) -> Result<()>;
     fn execute(&self, query: &str) -> Result<Vec<SurrealResponse>>;
     fn get_applied_migrations(&self) -> Result<Vec<AppliedMigration>>;
@@ -56,6 +57,35 @@ impl SurrealClient {
 }
 
 impl MigrationDB for SurrealClient {
+    fn ensure_ns_db(&self) -> Result<()> {
+        let query = format!(
+            "DEFINE NAMESPACE IF NOT EXISTS {}; USE NS {}; DEFINE DATABASE IF NOT EXISTS {};",
+            self.namespace, self.namespace, self.database
+        );
+        let resp = ureq::post(&format!("{}/sql", self.url))
+            .set("Accept", "application/json")
+            .set("Authorization", &self.auth_header)
+            .send_string(&query)
+            .context("Failed to create namespace/database")?;
+
+        let body: Vec<SurrealResponse> = resp
+            .into_json()
+            .context("Failed to parse SurrealDB response")?;
+
+        for r in &body {
+            if r.status == "ERR" {
+                let msg = r
+                    .result
+                    .as_ref()
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Unknown error");
+                bail!("SurrealDB error creating ns/db: {}", msg);
+            }
+        }
+
+        Ok(())
+    }
+
     fn execute(&self, query: &str) -> Result<Vec<SurrealResponse>> {
         let resp = ureq::post(&format!("{}/sql", self.url))
             .set("Accept", "application/json")

@@ -84,15 +84,65 @@ import { basePath } from '../config/nav';
           <h1
             class="text-5xl lg:text-6xl font-bold text-text-primary opacity-0 animate-fade-in animation-delay-200 leading-tight"
           >
-            Local-First,<br />Real-Time,<br />By Default
+            Focus on Product.<br /><span class="text-brand-400">We Handle Sync.</span>
           </h1>
 
           <p
-            class="text-lg text-text-tertiary opacity-0 animate-fade-in animation-delay-400 leading-relaxed"
+            class="text-lg text-text-tertiary opacity-0 animate-fade-in animation-delay-400 leading-relaxed max-w-lg"
           >
-            Build local-first applications with real-time sync, offline support, and complete type
-            safety.
+            Ship your app with real-time sync, offline support, and full type safety. No extra work required.
           </p>
+
+          {/* CLI Install Command */}
+          <div
+            class="flex items-center gap-3 px-4 py-3 rounded-lg bg-[#0c0c0e] border border-surface-border font-mono text-sm opacity-0 animate-fade-in animation-delay-500 w-fit"
+          >
+            <span class="text-text-tertiary select-none">$</span>
+            <code class="text-text-primary">npx @spooky-sync/cli init</code>
+            <button
+              class="hero-copy-btn ml-auto p-1.5 rounded-md text-text-tertiary hover:text-text-primary transition-colors duration-200"
+              aria-label="Copy install command"
+            >
+              <svg class="hero-copy-icon w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+                ></path>
+              </svg>
+              <svg
+                class="hero-check-icon w-4 h-4 hidden text-green-400"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+              </svg>
+            </button>
+          </div>
+
+          <script>
+            const heroCopyBtn = document.querySelector('.hero-copy-btn');
+            if (heroCopyBtn) {
+              heroCopyBtn.addEventListener('click', async () => {
+                const copyIcon = heroCopyBtn.querySelector('.hero-copy-icon');
+                const checkIcon = heroCopyBtn.querySelector('.hero-check-icon');
+                if (!copyIcon || !checkIcon) return;
+                try {
+                  await navigator.clipboard.writeText('npx @spooky-sync/cli init');
+                  copyIcon.classList.add('hidden');
+                  checkIcon.classList.remove('hidden');
+                  setTimeout(() => {
+                    copyIcon.classList.remove('hidden');
+                    checkIcon.classList.add('hidden');
+                  }, 2000);
+                } catch (err) {
+                  console.error('Failed to copy!', err);
+                }
+              });
+            }
+          </script>
 
           <div
             class="flex flex-col sm:flex-row gap-4 opacity-0 animate-slide-up animation-delay-600"
