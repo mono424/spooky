@@ -1,9 +1,42 @@
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatementKey {
     pub kind: String,
     pub identity: String,
+}
+
+/// Priority order so DEFINE TABLE comes before DEFINE FIELD/INDEX/EVENT on the same table.
+fn kind_priority(kind: &str) -> u8 {
+    match kind {
+        "NAMESPACE" => 0,
+        "DATABASE" => 1,
+        "FUNCTION" => 2,
+        "ANALYZER" => 3,
+        "PARAM" => 4,
+        "ACCESS" => 5,
+        "API" => 6,
+        "BUCKET" => 7,
+        "TABLE" => 8,
+        "FIELD" => 9,
+        "INDEX" => 10,
+        "EVENT" => 11,
+        _ => 12,
+    }
+}
+
+impl PartialOrd for StatementKey {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for StatementKey {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        kind_priority(&self.kind)
+            .cmp(&kind_priority(&other.kind))
+            .then_with(|| self.identity.cmp(&other.identity))
+    }
 }
 
 pub struct SchemaDiff {

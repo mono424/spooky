@@ -112,6 +112,36 @@ impl SurrealClient {
         Ok(body)
     }
 
+    /// Drop and recreate the database (used to recover from stale migration state in dev).
+    pub fn reset_database(&self) -> Result<()> {
+        let query = format!(
+            "USE NS {}; REMOVE DATABASE {};",
+            self.namespace, self.database
+        );
+        let resp = ureq::post(&format!("{}/sql", self.url))
+            .set("Accept", "application/json")
+            .set("Authorization", &self.auth_header)
+            .send_string(&query)
+            .context("Failed to remove database")?;
+
+        let body: Vec<SurrealResponse> = resp
+            .into_json()
+            .context("Failed to parse SurrealDB response")?;
+
+        for r in &body {
+            if r.status == "ERR" {
+                let msg = r
+                    .result
+                    .as_ref()
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Unknown error");
+                bail!("SurrealDB error removing database: {}", msg);
+            }
+        }
+
+        self.ensure_ns_db()
+    }
+
     /// Ensure namespace and database exist (usable outside the MigrationDB trait).
     pub fn ensure_ns_db(&self) -> Result<()> {
         let query = format!(

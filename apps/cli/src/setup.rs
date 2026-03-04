@@ -62,6 +62,7 @@ const RUN_JS: &str = r#"const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const http = require('http');
+const readline = require('readline');
 
 // --- Configuration ---
 const HEALTH_URL = 'http://localhost:8666/health';
@@ -160,6 +161,50 @@ function waitForHealth(url, retries, intervalMs) {
   });
 }
 
+function confirm(question) {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => {
+    rl.question(`${question} [Y/n] `, (answer) => {
+      rl.close();
+      resolve(!answer || answer.toLowerCase().startsWith('y'));
+    });
+  });
+}
+
+function resetDatabase(baseUrl) {
+  return new Promise((resolve, reject) => {
+    const url = new URL('/sql', baseUrl);
+    const body = 'USE NS main; REMOVE DATABASE main; DEFINE NAMESPACE IF NOT EXISTS main; USE NS main; DEFINE DATABASE IF NOT EXISTS main;';
+    const auth = 'Basic ' + Buffer.from('root:root').toString('base64');
+    const opts = {
+      method: 'POST',
+      hostname: url.hostname,
+      port: url.port,
+      path: url.pathname,
+      headers: {
+        'Accept': 'application/json',
+        'Authorization': auth,
+        'Content-Type': 'text/plain',
+      },
+    };
+    const req = http.request(opts, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        if (res.statusCode === 200) {
+          console.log('[box] Database reset successfully.');
+          resolve();
+        } else {
+          reject(new Error(`Database reset failed (HTTP ${res.statusCode}): ${data}`));
+        }
+      });
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
 // --- Main ---
 
 const args = process.argv.slice(2);
@@ -186,13 +231,28 @@ async function main() {
   console.log(`\n[box] Phase 2: Waiting for SurrealDB health...`);
   await waitForHealth(HEALTH_URL, MAX_RETRIES, RETRY_INTERVAL_MS);
 
-  // 3. Phase 3: Run migrations via spooky CLI
+  // 3. Phase 3: Run migrations via spooky CLI (with auto-reset on failure)
   console.log(`\n[box] Phase 3: Applying migrations...`);
-  await runSpooky([
-    'migrate', 'apply',
-    '--url', 'http://localhost:8666',
-    '--migrations-dir', MIGRATIONS_DIR,
-  ]);
+  try {
+    await runSpooky([
+      'migrate', 'apply',
+      '--url', 'http://localhost:8666',
+      '--migrations-dir', MIGRATIONS_DIR,
+    ]);
+  } catch (e) {
+    console.log(`[box] Migration failed: ${e.message}`);
+    const yes = await confirm('[box] Reset database and retry migrations?');
+    if (!yes) {
+      throw e;
+    }
+    console.log(`[box] Resetting database and retrying...`);
+    await resetDatabase('http://localhost:8666');
+    await runSpooky([
+      'migrate', 'apply',
+      '--url', 'http://localhost:8666',
+      '--migrations-dir', MIGRATIONS_DIR,
+    ]);
+  }
 
   // 4. Phase 4: Start remaining services (without --force-recreate to avoid wiping DB)
   console.log(`\n[box] Phase 4: Starting remaining services...`);

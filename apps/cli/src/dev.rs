@@ -338,7 +338,22 @@ fn apply_migrations(port: u16) -> Result<()> {
         "root",
     );
 
-    migrate::apply(&client, migrations_dir)
+    match migrate::apply(&client, migrations_dir) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            println!("{} Migration failed: {}", PREFIX, e);
+            let confirm = inquire::Confirm::new("Reset database and retry migrations?")
+                .with_default(true)
+                .prompt()
+                .unwrap_or(false);
+            if !confirm {
+                bail!("Migration failed: {}", e);
+            }
+            println!("{} Resetting database and retrying...", PREFIX);
+            client.reset_database()?;
+            migrate::apply(&client, migrations_dir)
+        }
+    }
 }
 
 // ── Docker helpers ──────────────────────────────────────────────────────────
