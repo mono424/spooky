@@ -56,6 +56,93 @@ impl SurrealClient {
     }
 }
 
+impl SurrealClient {
+    /// Returns the result of INFO FOR DB as a JSON value.
+    pub fn info_for_db(&self) -> Result<serde_json::Value> {
+        let responses = self
+            .execute_query("INFO FOR DB;")
+            .context("Failed to execute INFO FOR DB")?;
+        let result = responses
+            .into_iter()
+            .next()
+            .and_then(|r| r.result)
+            .unwrap_or(serde_json::Value::Null);
+        Ok(result)
+    }
+
+    /// Returns the result of INFO FOR TABLE <name> as a JSON value.
+    pub fn info_for_table(&self, table: &str) -> Result<serde_json::Value> {
+        let query = format!("INFO FOR TABLE {};", table);
+        let responses = self
+            .execute_query(&query)
+            .context(format!("Failed to execute INFO FOR TABLE {}", table))?;
+        let result = responses
+            .into_iter()
+            .next()
+            .and_then(|r| r.result)
+            .unwrap_or(serde_json::Value::Null);
+        Ok(result)
+    }
+
+    /// Internal execute that returns parsed responses (shared by trait impl and info methods).
+    fn execute_query(&self, query: &str) -> Result<Vec<SurrealResponse>> {
+        let resp = ureq::post(&format!("{}/sql", self.url))
+            .set("Accept", "application/json")
+            .set("surreal-ns", &self.namespace)
+            .set("surreal-db", &self.database)
+            .set("Authorization", &self.auth_header)
+            .send_string(query)
+            .context("Failed to connect to SurrealDB")?;
+
+        let body: Vec<SurrealResponse> = resp
+            .into_json()
+            .context("Failed to parse SurrealDB response")?;
+
+        for r in &body {
+            if r.status == "ERR" {
+                let msg = r
+                    .result
+                    .as_ref()
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Unknown error");
+                bail!("SurrealDB error: {}", msg);
+            }
+        }
+
+        Ok(body)
+    }
+
+    /// Ensure namespace and database exist (usable outside the MigrationDB trait).
+    pub fn ensure_ns_db(&self) -> Result<()> {
+        let query = format!(
+            "DEFINE NAMESPACE IF NOT EXISTS {}; USE NS {}; DEFINE DATABASE IF NOT EXISTS {};",
+            self.namespace, self.namespace, self.database
+        );
+        let resp = ureq::post(&format!("{}/sql", self.url))
+            .set("Accept", "application/json")
+            .set("Authorization", &self.auth_header)
+            .send_string(&query)
+            .context("Failed to create namespace/database")?;
+
+        let body: Vec<SurrealResponse> = resp
+            .into_json()
+            .context("Failed to parse SurrealDB response")?;
+
+        for r in &body {
+            if r.status == "ERR" {
+                let msg = r
+                    .result
+                    .as_ref()
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Unknown error");
+                bail!("SurrealDB error creating ns/db: {}", msg);
+            }
+        }
+
+        Ok(())
+    }
+}
+
 impl MigrationDB for SurrealClient {
     fn ensure_ns_db(&self) -> Result<()> {
         let query = format!(
@@ -87,30 +174,7 @@ impl MigrationDB for SurrealClient {
     }
 
     fn execute(&self, query: &str) -> Result<Vec<SurrealResponse>> {
-        let resp = ureq::post(&format!("{}/sql", self.url))
-            .set("Accept", "application/json")
-            .set("surreal-ns", &self.namespace)
-            .set("surreal-db", &self.database)
-            .set("Authorization", &self.auth_header)
-            .send_string(query)
-            .context("Failed to connect to SurrealDB")?;
-
-        let body: Vec<SurrealResponse> = resp
-            .into_json()
-            .context("Failed to parse SurrealDB response")?;
-
-        for r in &body {
-            if r.status == "ERR" {
-                let msg = r
-                    .result
-                    .as_ref()
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("Unknown error");
-                bail!("SurrealDB error: {}", msg);
-            }
-        }
-
-        Ok(body)
+        self.execute_query(query)
     }
 
     fn ping(&self) -> Result<()> {
