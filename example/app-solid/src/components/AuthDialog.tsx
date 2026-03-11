@@ -1,6 +1,7 @@
 import { createSignal, Show, createEffect } from 'solid-js';
 import { useAuth } from '../lib/auth';
-import { useKeyboard } from '../lib/keyboard';
+import { createHotkey } from '../lib/keyboard';
+import { Tooltip } from './Tooltip';
 
 interface AuthDialogProps {
   isOpen: boolean;
@@ -25,13 +26,7 @@ export function AuthDialog(props: AuthDialogProps) {
     }
   });
 
-  useKeyboard({
-    Escape: () => {
-      if (props.isOpen) {
-        props.onClose();
-      }
-    },
-  });
+  createHotkey('Escape', () => props.onClose(), () => ({ enabled: props.isOpen, ignoreInputs: false }));
 
   const handleSubmit = async (e: Event) => {
     e.preventDefault();
@@ -72,15 +67,17 @@ export function AuthDialog(props: AuthDialogProps) {
             <h2 class="text-lg font-semibold">
               {isSignUp() ? 'Create account' : 'Sign in'}
             </h2>
-            <button
-              onMouseDown={handleClose}
-              class="text-zinc-500 hover:text-white transition-colors duration-150 p-1"
-              aria-label="Close"
-            >
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
+            <Tooltip text="Close" kbd="Esc">
+              <button
+                onMouseDown={handleClose}
+                class="text-zinc-500 hover:text-white transition-colors duration-150 p-1"
+                aria-label="Close"
+              >
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </Tooltip>
           </div>
 
           {/* Form */}
@@ -96,7 +93,7 @@ export function AuthDialog(props: AuthDialogProps) {
                   value={username()}
                   onInput={(e) => setUsername(e.currentTarget.value)}
                   required
-                  class="w-full bg-zinc-950 border border-white/[0.06] rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-accent/50 transition-colors duration-150 placeholder-zinc-600 text-sm"
+                  class="w-full bg-zinc-950 border border-white/[0.06] rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-zinc-600 transition-colors duration-150 placeholder-zinc-600 text-sm"
                   placeholder="Enter username"
                   autocomplete="username"
                 />
@@ -112,7 +109,7 @@ export function AuthDialog(props: AuthDialogProps) {
                   value={password()}
                   onInput={(e) => setPassword(e.currentTarget.value)}
                   required
-                  class="w-full bg-zinc-950 border border-white/[0.06] rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-accent/50 transition-colors duration-150 placeholder-zinc-600 text-sm"
+                  class="w-full bg-zinc-950 border border-white/[0.06] rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-zinc-600 transition-colors duration-150 placeholder-zinc-600 text-sm"
                   placeholder="Enter password"
                   autocomplete={isSignUp() ? 'new-password' : 'current-password'}
                 />
@@ -127,7 +124,7 @@ export function AuthDialog(props: AuthDialogProps) {
               <button
                 type="submit"
                 disabled={isLoading()}
-                class="w-full bg-accent hover:bg-accent-hover text-white py-2.5 px-4 rounded-lg font-medium transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                class="w-full bg-surface hover:bg-surface-hover border border-white/[0.06] text-zinc-300 hover:text-white py-2.5 px-4 rounded-lg font-medium transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
               >
                 {isLoading() ? 'Loading...' : isSignUp() ? 'Create account' : 'Sign in'}
               </button>

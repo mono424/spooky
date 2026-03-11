@@ -1,19 +1,39 @@
-import { For, createSignal, createEffect } from 'solid-js';
+import { For, Show, createSignal, createEffect, onCleanup } from 'solid-js';
 import { useNavigate } from '@solidjs/router';
 import { useQuery, useDb } from '@spooky-sync/client-solid';
-import { useKeyboard } from '../lib/keyboard';
+import { createHotkey } from '../lib/keyboard';
 import { schema } from '../schema.gen';
+import { ProfilePicture } from './ProfilePicture';
+import { ArrowDownAZ, ArrowUpZA, CalendarArrowDown, CalendarArrowUp, Plus } from 'lucide-solid';
+import { Tooltip } from './Tooltip';
 
 export function ThreadList() {
   const db = useDb<typeof schema>();
   const navigate = useNavigate();
 
-  const [sort, setSort] = createSignal('desc');
+  const [sort, setSort] = createSignal('a-z');
+  const [sortOpen, setSortOpen] = createSignal(false);
   const [selectedIndex, setSelectedIndex] = createSignal(-1);
+
+  // Close sort menu on outside click
+  const handleClickOutside = (e: MouseEvent) => {
+    const target = e.target as HTMLElement;
+    if (!target.closest('[data-sort-menu]')) setSortOpen(false);
+  };
+  document.addEventListener('mousedown', handleClickOutside);
+  onCleanup(() => document.removeEventListener('mousedown', handleClickOutside));
 
   const threadsResult = useQuery(() => {
     let q = db.query('thread').related('author');
-    q = q.orderBy('title', sort() as 'asc' | 'desc');
+    if (sort() === 'a-z') {
+      q = q.orderBy('title', 'asc');
+    } else if (sort() === 'z-a') {
+      q = q.orderBy('title', 'desc');
+    } else if (sort() === 'newest') {
+      q = q.orderBy('created_at', 'desc');
+    } else {
+      q = q.orderBy('created_at', 'asc');
+    }
     return q.limit(10).build();
   });
 
@@ -35,55 +55,93 @@ export function ThreadList() {
     el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   };
 
-  useKeyboard({
-    j: () => {
-      const len = threads().length;
-      if (len === 0) return;
-      const next = Math.min(selectedIndex() + 1, len - 1);
-      setSelectedIndex(next);
-      scrollSelectedIntoView(next);
-    },
-    k: () => {
-      const len = threads().length;
-      if (len === 0) return;
-      const prev = Math.max(selectedIndex() - 1, 0);
-      setSelectedIndex(prev);
-      scrollSelectedIntoView(prev);
-    },
-    Enter: () => {
-      const idx = selectedIndex();
-      const list = threads();
-      if (idx >= 0 && idx < list.length) {
-        handleThreadClick(list[idx].id.split(':')[1]);
-      }
-    },
+  createHotkey('J', () => {
+    const len = threads().length;
+    if (len === 0) return;
+    const next = Math.min(selectedIndex() + 1, len - 1);
+    setSelectedIndex(next);
+    scrollSelectedIntoView(next);
+  });
+  createHotkey('K', () => {
+    const len = threads().length;
+    if (len === 0) return;
+    const prev = Math.max(selectedIndex() - 1, 0);
+    setSelectedIndex(prev);
+    scrollSelectedIntoView(prev);
+  });
+  createHotkey('Enter', () => {
+    const idx = selectedIndex();
+    const list = threads();
+    if (idx >= 0 && idx < list.length) {
+      handleThreadClick(list[idx].id.split(':')[1]);
+    }
   });
 
   return (
     <div class="w-full">
       {/* Action Bar */}
-      <div class="flex justify-between items-center mb-6 pt-2">
-        <h1 class="text-xl font-semibold tracking-tight">Feed</h1>
-
-        <div class="flex items-center gap-3">
-          <select
-            value={sort()}
-            onInput={(e) => setSort(e.currentTarget.value)}
-            class="bg-surface text-zinc-400 border border-white/[0.06] text-sm px-3 py-1.5 rounded-lg outline-none focus:border-accent/50 cursor-pointer transition-colors duration-150"
-          >
-            <option value="desc">Newest</option>
-            <option value="asc">Oldest</option>
-          </select>
-
+      <div class="flex items-center mb-6 pt-2">
+        <Tooltip text="New thread" kbd="c">
           <button
             onMouseDown={() => navigate('/create-thread')}
-            class="inline-flex items-center gap-2 bg-accent hover:bg-accent-hover text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors duration-150"
+            class="inline-flex items-center gap-1.5 bg-surface hover:bg-surface-hover border border-white/[0.06] text-zinc-300 hover:text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors duration-150"
           >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-            </svg>
+            <Plus size={14} />
             New thread
           </button>
+        </Tooltip>
+
+        {/* Sort menu */}
+        <div class="relative ml-auto" data-sort-menu>
+          <Tooltip text="Sort" position="bottom">
+          <button
+            onMouseDown={() => setSortOpen(!sortOpen())}
+            class="inline-flex items-center justify-center w-8 h-8 text-zinc-500 hover:text-white rounded-lg transition-colors duration-150"
+          >
+            {sort() === 'a-z' ? (
+              <ArrowDownAZ size={16} />
+            ) : sort() === 'z-a' ? (
+              <ArrowUpZA size={16} />
+            ) : sort() === 'newest' ? (
+              <CalendarArrowDown size={16} />
+            ) : (
+              <CalendarArrowUp size={16} />
+            )}
+          </button>
+          </Tooltip>
+
+          <Show when={sortOpen()}>
+            <div class="absolute right-0 mt-1.5 w-44 bg-surface border border-white/[0.06] rounded-lg shadow-2xl z-50 py-1 animate-fade-in">
+              <button
+                onMouseDown={() => { setSort('a-z'); setSortOpen(false); }}
+                class={`w-full flex items-center gap-2.5 px-3 py-2 text-sm transition-colors duration-150 ${sort() === 'a-z' ? 'text-white bg-surface-hover' : 'text-zinc-400 hover:text-white hover:bg-surface-hover'}`}
+              >
+                <ArrowDownAZ size={16} />
+                A to Z
+              </button>
+              <button
+                onMouseDown={() => { setSort('z-a'); setSortOpen(false); }}
+                class={`w-full flex items-center gap-2.5 px-3 py-2 text-sm transition-colors duration-150 ${sort() === 'z-a' ? 'text-white bg-surface-hover' : 'text-zinc-400 hover:text-white hover:bg-surface-hover'}`}
+              >
+                <ArrowUpZA size={16} />
+                Z to A
+              </button>
+              <button
+                onMouseDown={() => { setSort('newest'); setSortOpen(false); }}
+                class={`w-full flex items-center gap-2.5 px-3 py-2 text-sm transition-colors duration-150 ${sort() === 'newest' ? 'text-white bg-surface-hover' : 'text-zinc-400 hover:text-white hover:bg-surface-hover'}`}
+              >
+                <CalendarArrowDown size={16} />
+                Newest
+              </button>
+              <button
+                onMouseDown={() => { setSort('oldest'); setSortOpen(false); }}
+                class={`w-full flex items-center gap-2.5 px-3 py-2 text-sm transition-colors duration-150 ${sort() === 'oldest' ? 'text-white bg-surface-hover' : 'text-zinc-400 hover:text-white hover:bg-surface-hover'}`}
+              >
+                <CalendarArrowUp size={16} />
+                Oldest
+              </button>
+            </div>
+          </Show>
         </div>
       </div>
 
@@ -92,10 +150,16 @@ export function ThreadList() {
         <For
           each={threads()}
           fallback={
-            <div class="bg-surface/50 rounded-xl border border-white/[0.06] py-16 text-center">
-              <p class="text-zinc-500 text-sm">No threads yet</p>
-              <p class="text-zinc-600 text-xs mt-1">Create the first one to get started.</p>
-            </div>
+            <Show when={!threadsResult.isLoading()} fallback={
+              <div class="bg-surface/50 rounded-xl border border-white/[0.06] py-16 text-center">
+                <p class="text-zinc-500 text-sm">Loading threads...</p>
+              </div>
+            }>
+              <div class="bg-surface/50 rounded-xl border border-white/[0.06] py-16 text-center">
+                <p class="text-zinc-500 text-sm">No threads yet</p>
+                <p class="text-zinc-600 text-xs mt-1">Create the first one to get started.</p>
+              </div>
+            </Show>
           }
         >
           {(thread, index) => (
@@ -105,15 +169,17 @@ export function ThreadList() {
               onMouseEnter={() => setSelectedIndex(index())}
               class={`border rounded-xl p-5 cursor-pointer transition-colors duration-150 group ${
                 selectedIndex() === index()
-                  ? 'bg-surface border-accent/40 ring-1 ring-accent/20'
+                  ? 'bg-surface border-zinc-600 ring-1 ring-zinc-700'
                   : 'bg-surface/40 hover:bg-surface border-white/[0.06]'
               }`}
             >
               <div class="flex items-start gap-4">
                 {/* Avatar */}
-                <div class="w-10 h-10 rounded-full bg-accent/15 text-accent flex items-center justify-center text-sm font-semibold flex-shrink-0 mt-0.5">
-                  {(thread.author?.username || '?').charAt(0).toUpperCase()}
-                </div>
+                <ProfilePicture
+                  src={() => thread.author?.profile_picture}
+                  username={() => thread.author?.username}
+                  size="md"
+                />
 
                 <div class="flex-1 min-w-0">
                   {/* Author + time */}
@@ -133,7 +199,7 @@ export function ThreadList() {
                   </div>
 
                   {/* Title */}
-                  <h2 class="text-[15px] font-semibold text-white group-hover:text-accent transition-colors duration-150 mb-1.5">
+                  <h2 class="text-[15px] font-semibold text-white group-hover:text-zinc-300 transition-colors duration-150 mb-1.5">
                     {thread.title}
                   </h2>
 

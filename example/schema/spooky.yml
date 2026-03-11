@@ -1,4 +1,6 @@
 mode: cluster # "singlenode", "cluster", or "surrealism"
+buckets:
+  - ./src/buckets/profile.surql
 backends:
   api:
     type: http

@@ -58,6 +58,7 @@ export const schema = {
       name: 'user' as const,
       columns: {
         id: { type: 'string' as const, recordId: true, optional: false },
+        profile_picture: { type: 'string' as const, optional: true },
         username: { type: 'string' as const, optional: false },
         comments: { type: 'string' as const, optional: true },
         threads: { type: 'string' as const, optional: true },
@@ -118,6 +119,13 @@ export const schema = {
   access: {
     account: {"signIn":{"params":{"password":{"type":"string","optional":false},"username":{"type":"string","optional":false}}},"signup":{"params":{"password":{"type":"string","optional":false},"username":{"type":"string","optional":false}}}},
   },
+  buckets: [
+    {
+      name: 'profile_pictures' as const,
+      maxSize: 5242880,
+      allowedExtensions: ['jpg', 'jpeg', 'png', 'gif'] as const,
+    },
+  ],
   backends: {
     "api": {
       outboxTable: 'job' as const,
@@ -161,6 +169,9 @@ PERMISSIONS FOR select, create, update WHERE true;
 DEFINE INDEX unique_username ON TABLE user FIELDS username UNIQUE;
 
 
+
+DEFINE FIELD profile_picture ON TABLE user TYPE option<string>
+PERMISSIONS FOR select, create, update WHERE true;
 
 -- ##################################################################
 -- THREAD TABLE

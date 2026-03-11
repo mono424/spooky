@@ -45,6 +45,7 @@ import { PushEventOptions } from '../../events/index';
  */
 export class DataModule<S extends SchemaStructure> {
   private activeQueries: Map<QueryHash, QueryState> = new Map();
+  private pendingQueries: Map<QueryHash, Promise<QueryHash>> = new Map();
   private subscriptions: Map<QueryHash, Set<QueryUpdateCallback>> = new Map();
   private mutationCallbacks: Set<MutationCallback> = new Set();
   private debounceTimers: Map<QueryHash, NodeJS.Timeout> = new Map();
@@ -91,44 +92,29 @@ export class DataModule<S extends SchemaStructure> {
       return hash;
     }
 
+    // Another call is already creating this query — wait for it
+    if (this.pendingQueries.has(hash)) {
+      this.logger.debug(
+        { hash, Category: 'spooky-client::DataModule::query' },
+        'Query Initialization: pending, waiting for existing creation'
+      );
+      await this.pendingQueries.get(hash);
+      return hash;
+    }
+
     this.logger.debug(
       { hash, Category: 'spooky-client::DataModule::query' },
       'Query Initialization: not found, creating new query'
     );
-    const queryState = await this.createNewQuery<T>({
-      recordId,
-      surql: surqlString,
-      params,
-      ttl,
-      tableName,
-    });
 
-    const { localArray } = this.cache.registerQuery({
-      queryHash: hash,
-      surql: surqlString,
-      params,
-      ttl: new Duration(ttl),
-      lastActiveAt: new Date(),
-    });
-
-    await withRetry(this.logger, () =>
-      this.local.query(surql.seal(surql.updateSet('id', ['localArray'])), {
-        id: recordId,
-        localArray,
-      })
-    );
-
-    this.activeQueries.set(hash, queryState);
-    this.startTTLHeartbeat(queryState);
-    this.logger.debug(
-      {
-        hash,
-        tableName,
-        recordCount: queryState.records.length,
-        Category: 'spooky-client::DataModule::query',
-      },
-      'Query registered'
-    );
+    // Create the query and track the pending promise
+    const promise = this.createAndRegisterQuery<T>(hash, recordId, surqlString, params, ttl, tableName);
+    this.pendingQueries.set(hash, promise);
+    try {
+      await promise;
+    } finally {
+      this.pendingQueries.delete(hash);
+    }
 
     return hash;
   }
@@ -222,13 +208,26 @@ export class DataModule<S extends SchemaStructure> {
       );
 
       // Update state
-      queryState.records = records || [];
+      const newRecords = records || [];
       queryState.config.localArray = localArray;
-      queryState.updateCount++;
       await this.local.query(surql.seal(surql.updateSet('id', ['localArray'])), {
         id: queryState.config.id,
         localArray,
       });
+
+      // Skip notification if records haven't changed
+      const prevJson = JSON.stringify(queryState.records);
+      const newJson = JSON.stringify(newRecords);
+      queryState.records = newRecords;
+      if (prevJson === newJson) {
+        this.logger.debug(
+          { queryHash, Category: 'spooky-client::DataModule::onStreamUpdate' },
+          'Query records unchanged, skipping notification'
+        );
+        return;
+      }
+
+      queryState.updateCount++;
 
       // Notify subscribers
       const subscribers = this.subscriptions.get(queryHash);
@@ -305,6 +304,36 @@ export class DataModule<S extends SchemaStructure> {
       id: queryState.config.id,
       remoteArray,
     });
+  }
+
+  /**
+   * Called after a query's initial sync completes.
+   * Ensures subscribers are notified even if no stream updates fired (e.g. empty result set).
+   */
+  async notifyQuerySynced(queryHash: string): Promise<void> {
+    const queryState = this.activeQueries.get(queryHash);
+    if (!queryState) return;
+
+    // Re-query local DB for latest data
+    const [records] = await this.local.query<[Record<string, any>[]]>(
+      queryState.config.surql,
+      queryState.config.params
+    );
+    const newRecords = records || [];
+    const changed = JSON.stringify(queryState.records) !== JSON.stringify(newRecords);
+    queryState.records = newRecords;
+
+    // Notify if data changed OR if this is the first sync (updateCount === 0)
+    // The latter handles "query truly has no results" so UI can stop loading
+    if (changed || queryState.updateCount === 0) {
+      queryState.updateCount++;
+      const subscribers = this.subscriptions.get(queryHash);
+      if (subscribers) {
+        for (const callback of subscribers) {
+          callback(queryState.records);
+        }
+      }
+    }
   }
 
   // ====================      RUN JOBS       ====================
@@ -458,10 +487,19 @@ export class DataModule<S extends SchemaStructure> {
       })
     );
 
-    // Replace record in all queries directly
-    // Does not respect sorting or other advanced query features
-    // But is fast for quick typing for example
-    this.replaceRecordInQueries(target);
+    // Build a partial record with only the fields the user actually changed
+    // This avoids overwriting rich relation objects (e.g. author: {id, name, ...})
+    // with flat RecordIds from the UPDATE...MERGE result
+    const updatedFields: Record<string, any> = { id: target.id };
+    for (const key of Object.keys(data)) {
+      if (key in target) {
+        updatedFields[key] = (target as Record<string, any>)[key];
+      }
+    }
+    if ('spooky_rv' in (target as Record<string, any>)) {
+      updatedFields.spooky_rv = (target as Record<string, any>).spooky_rv;
+    }
+    this.replaceRecordInQueries(updatedFields);
 
     const parsedRecord = parseParams(tableSchema.columns, target) as RecordWithId;
 
@@ -634,6 +672,52 @@ export class DataModule<S extends SchemaStructure> {
 
   // ==================== PRIVATE HELPERS ====================
 
+  private async createAndRegisterQuery<T extends TableNames<S>>(
+    hash: QueryHash,
+    recordId: RecordId,
+    surqlString: string,
+    params: Record<string, any>,
+    ttl: QueryTimeToLive,
+    tableName: T
+  ): Promise<QueryHash> {
+    const queryState = await this.createNewQuery<T>({
+      recordId,
+      surql: surqlString,
+      params,
+      ttl,
+      tableName,
+    });
+
+    const { localArray } = this.cache.registerQuery({
+      queryHash: hash,
+      surql: surqlString,
+      params,
+      ttl: new Duration(ttl),
+      lastActiveAt: new Date(),
+    });
+
+    await withRetry(this.logger, () =>
+      this.local.query(surql.seal(surql.updateSet('id', ['localArray'])), {
+        id: recordId,
+        localArray,
+      })
+    );
+
+    this.activeQueries.set(hash, queryState);
+    this.startTTLHeartbeat(queryState);
+    this.logger.debug(
+      {
+        hash,
+        tableName,
+        recordCount: queryState.records.length,
+        Category: 'spooky-client::DataModule::query',
+      },
+      'Query registered'
+    );
+
+    return hash;
+  }
+
   private async createNewQuery<T extends TableNames<S>>({
     recordId,
     surql: surqlString,
@@ -736,15 +820,18 @@ export class DataModule<S extends SchemaStructure> {
   }
 
   private async replaceRecordInQueries(record: Record<string, any>): Promise<void> {
-    for (const queryState of this.activeQueries.values()) {
-      this.replaceRecordInQuery(queryState, record);
-    }
-  }
-
-  private replaceRecordInQuery(queryState: QueryState, record: Record<string, any>): void {
-    const index = queryState.records.findIndex((r) => r.id === record.id);
-    if (index !== -1) {
-      queryState.records[index] = record;
+    for (const [queryHash, queryState] of this.activeQueries.entries()) {
+      const index = queryState.records.findIndex((r) => r.id === record.id);
+      if (index !== -1) {
+        queryState.records[index] = { ...queryState.records[index], ...record };
+        // Notify subscribers so UI updates immediately
+        const subscribers = this.subscriptions.get(queryHash);
+        if (subscribers) {
+          for (const callback of subscribers) {
+            callback(queryState.records);
+          }
+        }
+      }
     }
   }
 }

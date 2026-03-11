@@ -2,6 +2,7 @@ import type { SyncedDbConfig } from './types';
 import {
   SpookyClient,
   AuthService,
+  BucketHandle,
   type SpookyQueryResultPromise,
   UpdateOptions,
   RunOptions,
@@ -22,12 +23,16 @@ import {
   BackendNames,
   BackendRoutes,
   RoutePayload,
+  BucketNames,
+  BucketDefinitionSchema,
 } from '@spooky-sync/query-builder';
 
 import { RecordId, Uuid, Surreal } from 'surrealdb';
 export { RecordId, Uuid };
 export type { Model, GenericModel, GenericSchema, ModelPayload } from './lib/models';
 export { useQuery } from './lib/use-query';
+export { useFileUpload, type FileUploadResult } from './lib/use-file-upload';
+export { useDownloadFile, type UseDownloadFileOptions, type UseDownloadFileResult } from './lib/use-download-file';
 export { SpookyProvider, type SpookyProviderProps } from './lib/SpookyProvider';
 export { useDb } from './lib/context';
 
@@ -248,6 +253,15 @@ export class SyncedDb<S extends SchemaStructure> {
   subscribeToPendingMutations(cb: (count: number) => void): () => void {
     if (!this.spooky) throw new Error('SyncedDb not initialized');
     return this.spooky.subscribeToPendingMutations(cb);
+  }
+
+  bucket<B extends BucketNames<S>>(name: B): BucketHandle {
+    if (!this.spooky) throw new Error('SyncedDb not initialized');
+    return this.spooky.bucket(name);
+  }
+
+  getBucketConfig(name: string): BucketDefinitionSchema | undefined {
+    return this.config.schema.buckets?.find((b) => b.name === name);
   }
 }
 

@@ -108,12 +108,19 @@ export function useQuery<
     const { hash } = await query.run();
     setError(undefined);
 
+    let isFirstCall = true;
     const unsub = await spooky.subscribe(
       hash,
       (e) => {
         const data = (query.isOne ? e[0] : e) as TData;
         setData(() => data);
-        setIsFetched(true);
+        // The first (immediate) callback with no data likely means the local DB
+        // hasn't synced yet — don't mark as fetched so UI shows loading state
+        const hasData = query.isOne ? data != null : (e as any[]).length > 0;
+        if (!isFirstCall || hasData) {
+          setIsFetched(true);
+        }
+        isFirstCall = false;
       },
       { immediate: true }
     );
@@ -149,7 +156,7 @@ export function useQuery<
 
     // Cleanup
     onCleanup(() => {
-      unsubscribe?.();
+      unsubscribe()?.();
     });
   });
 

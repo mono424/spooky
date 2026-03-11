@@ -297,7 +297,7 @@ impl CodeGenerator {
             if let serde_json::Value::Object(defs_obj) = definitions {
                 // Process each table (skip Relationships and RelationTables)
                 for (table_name, table_def) in defs_obj {
-                    if table_name == "Relationships" || table_name == "RelationTables" || table_name == "Access" || table_name.starts_with("_spooky_") {
+                    if table_name == "Relationships" || table_name == "RelationTables" || table_name == "Access" || table_name == "Buckets" || table_name.starts_with("_spooky_") {
                         continue;
                     }
 
@@ -390,6 +390,44 @@ impl CodeGenerator {
 
 
         tables_lines.push("  },".to_string());
+
+        // Build buckets array (objects with constraints)
+        tables_lines.push("  buckets: [".to_string());
+        if let Some(definitions) = schema.get("definitions") {
+            if let Some(buckets) = definitions.get("Buckets") {
+                if let Some(const_val) = buckets.get("const") {
+                    if let serde_json::Value::Array(arr) = const_val {
+                        for bucket in arr {
+                            if let serde_json::Value::Object(obj) = bucket {
+                                tables_lines.push("    {".to_string());
+                                if let Some(serde_json::Value::String(name)) = obj.get("name") {
+                                    tables_lines.push(format!("      name: '{}' as const,", name));
+                                }
+                                if let Some(max_size) = obj.get("maxSize") {
+                                    tables_lines.push(format!("      maxSize: {},", max_size));
+                                }
+                                if let Some(serde_json::Value::Array(exts)) = obj.get("allowedExtensions") {
+                                    let ext_strs: Vec<String> = exts.iter()
+                                        .filter_map(|e| e.as_str().map(|s| format!("'{}'", s)))
+                                        .collect();
+                                    tables_lines.push(format!("      allowedExtensions: [{}] as const,", ext_strs.join(", ")));
+                                }
+                                if let Some(serde_json::Value::Bool(auth)) = obj.get("pathPrefixAuth") {
+                                    tables_lines.push(format!("      pathPrefixAuth: {},", auth));
+                                }
+                                tables_lines.push("    },".to_string());
+                            } else if let serde_json::Value::String(s) = bucket {
+                                // Backwards compat: plain string bucket
+                                tables_lines.push("    {".to_string());
+                                tables_lines.push(format!("      name: '{}' as const,", s));
+                                tables_lines.push("    },".to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        tables_lines.push("  ],".to_string());
 
         if let Some(backends) = backend_definitions {
             tables_lines.push("  backends: {".to_string());
@@ -488,7 +526,7 @@ impl CodeGenerator {
         if let Some(defs) = schema.get("definitions") {
             if let serde_json::Value::Object(defs_obj) = defs {
                 for (table_name, table_def) in defs_obj {
-                    if table_name == "Relationships" || table_name == "RelationTables" || table_name.starts_with("_spooky_") {
+                    if table_name == "Relationships" || table_name == "RelationTables" || table_name == "Buckets" || table_name.starts_with("_spooky_") {
                         continue;
                     }
 
@@ -579,7 +617,7 @@ impl CodeGenerator {
                         if let serde_json::Value::Object(defs_obj) = defs {
                             println!("Processing definitions, found {} tables", defs_obj.len());
                             for (table_name, table_def) in defs_obj {
-                                if table_name == "Relationships" || table_name.starts_with("_spooky_") {
+                                if table_name == "Relationships" || table_name == "Buckets" || table_name.starts_with("_spooky_") {
                                     continue;
                                 }
                                 // Check if this table has any record fields
@@ -933,6 +971,24 @@ impl CodeGenerator {
             // Actually, matching "DEFINE TABLE" should use stripped line?
             // "DEFINE TABLE foo -- comment" -> "DEFINE TABLE foo". Matches.
             // So using `trimmed` (clean) is better.
+
+            // Handle DEFINE BUCKET removal (buckets are server-side only)
+            // Skip from DEFINE BUCKET to the terminating semicolon (multi-line)
+            if trimmed.to_uppercase().starts_with("DEFINE BUCKET") {
+                while i < lines.len() {
+                    let bucket_clean = if let Some(idx) = lines[i].find("--") {
+                        &lines[i][..idx]
+                    } else {
+                        lines[i]
+                    };
+                    if bucket_clean.contains(';') {
+                        i += 1;
+                        break;
+                    }
+                    i += 1;
+                }
+                continue;
+            }
 
             // Handle DEFINE ACCESS removal
             if trimmed.to_uppercase().starts_with("DEFINE ACCESS") {

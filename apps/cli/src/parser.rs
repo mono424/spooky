@@ -35,6 +35,14 @@ pub struct AccessDefinition {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BucketDefinition {
+    pub name: String,
+    pub max_size: Option<u64>,
+    pub allowed_extensions: Vec<String>,
+    pub path_prefix_auth: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FieldDefinition {
     #[allow(dead_code)]
     pub name: String,
@@ -64,6 +72,7 @@ pub enum FieldType {
 pub struct SchemaParser {
     pub tables: BTreeMap<String, TableSchema>,
     pub access: BTreeMap<String, AccessDefinition>,
+    pub buckets: BTreeMap<String, BucketDefinition>,
 }
 
 impl SchemaParser {
@@ -71,13 +80,19 @@ impl SchemaParser {
         Self {
             tables: BTreeMap::new(),
             access: BTreeMap::new(),
+            buckets: BTreeMap::new(),
         }
     }
 
     pub fn parse_file(&mut self, content: &str) -> Result<()> {
+        // Extract bucket names from the original content before stripping
+        self.extract_buckets(content);
+
         // Pre-process the content to remove EVENT definitions
         // Events may contain syntax that the parser doesn't fully support yet
         let processed_content = Self::remove_events(content);
+        // Remove DEFINE BUCKET statements (not supported by surrealdb-core 2.x)
+        let processed_content = Self::remove_buckets(&processed_content);
         // Workaround for parser not supporting FOR ALL
         let processed_content =
             processed_content.replace("FOR ALL", "FOR select, create, update, delete");
@@ -148,6 +163,98 @@ impl SchemaParser {
         }
 
         result.join("\n")
+    }
+
+    /// Remove DEFINE BUCKET statements from the schema content
+    /// surrealdb-core 2.x does not support DEFINE BUCKET, so we strip them before parsing
+    fn remove_buckets(content: &str) -> String {
+        let lines: Vec<&str> = content.lines().collect();
+        let mut result = Vec::new();
+        let mut i = 0;
+
+        while i < lines.len() {
+            let line = lines[i];
+
+            if line.trim_start().starts_with("DEFINE BUCKET") {
+                // Skip lines until we find the closing semicolon
+                while i < lines.len() {
+                    if lines[i].contains(';') {
+                        i += 1;
+                        break;
+                    }
+                    i += 1;
+                }
+                continue;
+            }
+
+            result.push(line);
+            i += 1;
+        }
+
+        result.join("\n")
+    }
+
+    /// Extract bucket definitions from the schema content, including PERMISSIONS constraints
+    pub fn extract_buckets(&mut self, content: &str) {
+        let name_re =
+            Regex::new(r"(?i)DEFINE\s+BUCKET\s+(?:OVERWRITE\s+|IF\s+NOT\s+EXISTS\s+)?(\w+)")
+                .unwrap();
+
+        // Find each DEFINE BUCKET statement and capture from start to terminating ';'
+        let block_re = Regex::new(
+            r"(?is)DEFINE\s+BUCKET\s+(?:OVERWRITE\s+|IF\s+NOT\s+EXISTS\s+)?(\w+)([^;]*);",
+        )
+        .unwrap();
+
+        let max_size_re =
+            Regex::new(r"file::head\(\$file\)\.size\s*<=?\s*(\d+)").unwrap();
+        let ext_re =
+            Regex::new(r"string::ends_with\(file::key\(\$file\),\s*'\.(\w+)'\)").unwrap();
+        let auth_re =
+            Regex::new(r"string::starts_with\(file::key\(\$file\),.*\$auth").unwrap();
+
+        for cap in block_re.captures_iter(content) {
+            let name = cap[1].to_string();
+            let body = &cap[2];
+
+            let max_size = max_size_re
+                .captures(body)
+                .and_then(|c| c[1].parse::<u64>().ok());
+
+            let allowed_extensions: Vec<String> = ext_re
+                .captures_iter(body)
+                .map(|c| c[1].to_string())
+                .collect();
+
+            let path_prefix_auth = auth_re.is_match(body);
+
+            self.buckets.insert(
+                name.clone(),
+                BucketDefinition {
+                    name,
+                    max_size,
+                    allowed_extensions,
+                    path_prefix_auth,
+                },
+            );
+        }
+
+        // Fallback: also match single-line DEFINE BUCKET without PERMISSIONS
+        // (the block_re above already handles this, but keep for robustness)
+        for cap in name_re.captures_iter(content) {
+            let name = cap[1].to_string();
+            if !self.buckets.contains_key(&name) {
+                self.buckets.insert(
+                    name.clone(),
+                    BucketDefinition {
+                        name,
+                        max_size: None,
+                        allowed_extensions: Vec::new(),
+                        path_prefix_auth: false,
+                    },
+                );
+            }
+        }
     }
 
     fn process_statements(&mut self, statements: surrealdb_core::sql::Statements) -> Result<()> {

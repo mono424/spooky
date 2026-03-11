@@ -1,6 +1,6 @@
 {
   "name": "@spooky-sync/cli",
-  "version": "0.0.1-canary.1",
+  "version": "0.0.1-canary.2",
   "description": "Generate TypeScript/Dart types from SurrealDB schema files",
   "type": "module",
   "main": "./dist/syncgen.cjs",
@@ -17,15 +17,15 @@
     }
   },
   "files": [
-    "dist",
-    "target/release/spooky"
+    "dist"
   ],
   "scripts": {
     "dev": "vite",
     "build:rust": "cargo build --release",
     "build:vite": "vite build",
     "build:types": "tsc --emitDeclarationOnly --declaration --declarationDir dist",
-    "build": "npm run build:rust && npm run build:vite && npm run build:types",
+    "build:js": "npm run build:vite && npm run build:types",
+    "build": "npm run build:rust && npm run build:js",
     "preview": "vite preview",
     "test": "vitest",
     "lint": "eslint src",
@@ -48,8 +48,12 @@
   "publishConfig": {
     "access": "public"
   },
-  "dependencies": {
-    "commander": "^12.0.0"
+  "optionalDependencies": {
+    "@spooky-sync/cli-darwin-arm64": "0.0.1-canary.2",
+    "@spooky-sync/cli-darwin-x64": "0.0.1-canary.2",
+    "@spooky-sync/cli-linux-arm64": "0.0.1-canary.2",
+    "@spooky-sync/cli-linux-x64": "0.0.1-canary.2",
+    "@spooky-sync/cli-win32-x64": "0.0.1-canary.2"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

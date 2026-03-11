@@ -1,0 +1,246 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: File Buckets
+---
+
+import CodeBlock from '../../components/ui/CodeBlock.astro';
+import Warning from '../../components/ui/Warning.astro';
+import Note from '../../components/ui/Note.astro';
+
+<Warning title="Experimental">
+  File Buckets are an experimental feature. The API surface may change in future releases. Currently only the **memory** backend is supported — files are not persisted across server restarts.
+</Warning>
+
+Buckets provide a type-safe file storage abstraction for uploading, downloading, and managing files in your Spooky application. They integrate directly with your SurrealDB schema for permission control and with the Spooky CLI for guided setup.
+
+## Defining a Bucket
+
+Buckets are defined in SurrealQL using the `DEFINE BUCKET` statement. Create a `.surql` file in your `src/buckets/` directory:
+
+<CodeBlock
+  code={`DEFINE BUCKET IF NOT EXISTS profile_pictures BACKEND "memory"
+  PERMISSIONS WHERE
+    $action NOT IN ['put']
+    OR (
+      file::head($file).size <= 5242880
+      AND (
+        string::ends_with(file::key($file), '.jpg')
+        OR string::ends_with(file::key($file), '.jpeg')
+        OR string::ends_with(file::key($file), '.png')
+        OR string::ends_with(file::key($file), '.gif')
+      )
+    );`}
+  lang="sql"
+/>
+
+### Permission Variables
+
+- **`$action`** — The operation type: `'put'`, `'get'`, or `'delete'`
+- **`file::head($file).size`** — The file size in bytes
+- **`file::key($file)`** — The file path/key
+
+This example allows unrestricted reads and deletes, but restricts uploads to images under 5MB.
+
+## Configuration
+
+Reference your bucket files in `spooky.yml`:
+
+<CodeBlock
+  code={`mode: sidecar
+buckets:
+  - ./src/buckets/profile.surql`}
+  lang="yaml"
+/>
+
+After adding or modifying a bucket, regenerate your types by running `spooky` so the bucket names and config are available in your generated schema.
+
+## CLI: Adding a Bucket
+
+The fastest way to add a bucket is with the CLI:
+
+<CodeBlock
+  code={`spooky bucket add`}
+  lang="bash"
+/>
+
+This walks you through an interactive setup with presets for common use cases:
+
+| Preset | Extensions | Max Size | Path Isolation |
+|---|---|---|---|
+| **Avatars** | jpg, jpeg, png, gif, webp | 2 MB | Yes |
+| **Images** | jpg, jpeg, png, gif, webp, svg | 10 MB | No |
+| **Documents** | pdf, doc, docx, txt, csv, xlsx | 25 MB | No |
+| **Video** | mp4, webm, mov, avi | 100 MB | No |
+| **Audio** | mp3, wav, ogg, flac, aac | 50 MB | No |
+| **Custom** | You choose | You choose | You choose |
+
+The CLI generates the `.surql` file and updates your `spooky.yml` automatically.
+
+## Generated Schema
+
+After running `spooky`, your generated schema includes bucket metadata for type-safe access:
+
+<CodeBlock
+  code={`export const schema = {
+  // ...tables, relationships, etc.
+  buckets: [
+    {
+      name: 'profile_pictures' as const,
+      maxSize: 5242880,
+      allowedExtensions: ['jpg', 'jpeg', 'png', 'gif'] as const,
+    },
+  ],
+} as const;`}
+  lang="typescript"
+/>
+
+Bucket names are extracted as a union type, so `db.bucket('...')` only accepts valid bucket names from your schema.
+
+## Core API
+
+Access a bucket from your `SpookyClient` or `SyncedDb` instance:
+
+<CodeBlock
+  code={`const bucket = db.bucket('profile_pictures');
+
+// Upload a file
+await bucket.put('avatars/user1.jpg', fileBytes);
+
+// Download a file
+const data = await bucket.get('avatars/user1.jpg');
+
+// Check if a file exists
+const exists = await bucket.exists('avatars/user1.jpg');
+
+// Delete a file
+await bucket.delete('avatars/user1.jpg');
+
+// List files by prefix
+const files = await bucket.list('avatars/');
+
+// Get file metadata
+const meta = await bucket.head('avatars/user1.jpg');
+
+// Copy a file
+await bucket.copy('avatars/user1.jpg', 'backups/user1.jpg');
+
+// Rename a file
+await bucket.rename('avatars/old.jpg', 'avatars/new.jpg');`}
+  lang="typescript"
+/>
+
+## SolidJS Hooks
+
+### useFileUpload
+
+Upload files with built-in validation against your bucket configuration (max size, allowed extensions):
+
+<CodeBlock
+  code={`import { useFileUpload } from '@spooky-sync/client-solid';
+
+function AvatarUpload() {
+  const { upload, isUploading, error, clearError } = useFileUpload('profile_pictures');
+
+  const handleFile = async (e: Event) => {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+
+    await upload(\`avatars/\${userId}.jpg\`, file);
+  };
+
+  return (
+    <div>
+      <input type="file" accept="image/*" onChange={handleFile} />
+      {isUploading() && <span>Uploading...</span>}
+      {error() && <span>{error()!.message}</span>}
+    </div>
+  );
+}`}
+  lang="typescript"
+/>
+
+The hook validates file size and extension **before** attempting the upload, providing instant feedback.
+
+#### API
+
+<CodeBlock
+  code={`const {
+  isUploading: Accessor<boolean>,
+  error: Accessor<Error | null>,
+  clearError: () => void,
+  upload: (path: string, file: File | Blob) => Promise<void>,
+  download: (path: string) => Promise<string | null>,
+  remove: (path: string) => Promise<void>,
+  exists: (path: string) => Promise<boolean>,
+} = useFileUpload(bucketName);`}
+  lang="typescript"
+/>
+
+### useDownloadFile
+
+Reactively download and cache files as blob URLs:
+
+<CodeBlock
+  code={`import { useDownloadFile } from '@spooky-sync/client-solid';
+
+function ProfilePicture(props: { path: string | null }) {
+  const { url, isLoading, error } = useDownloadFile(
+    'profile_pictures',
+    () => props.path
+  );
+
+  return (
+    <div>
+      {isLoading() && <span>Loading...</span>}
+      {url() && <img src={url()!} alt="Profile" />}
+      {error() && <span>Failed to load image</span>}
+    </div>
+  );
+}`}
+  lang="typescript"
+/>
+
+Features:
+- **Caching** — Downloaded files are cached with reference counting. Disable with `{ cache: false }`.
+- **Deduplication** — Concurrent downloads for the same path are deduplicated.
+- **Auto-cleanup** — Blob URLs are revoked when the component unmounts or the path changes.
+- **Reactivity** — Automatically re-fetches when the path accessor changes.
+
+#### API
+
+<CodeBlock
+  code={`const {
+  url: Accessor<string | null>,
+  isLoading: Accessor<boolean>,
+  error: Accessor<Error | null>,
+  refetch: () => void,
+} = useDownloadFile(bucketName, pathAccessor, options?);
+
+// Options
+interface UseDownloadFileOptions {
+  cache?: boolean;  // default: true
+}`}
+  lang="typescript"
+/>
+
+## Per-User Path Isolation
+
+When enabled (via the `pathPrefixAuth` option in the CLI), file paths are automatically prefixed with the authenticated user's ID. This ensures users can only access their own files.
+
+<CodeBlock
+  code={`// With path isolation enabled, uploading to "avatar.jpg"
+// actually stores the file at "<user_id>/avatar.jpg"
+await upload('avatar.jpg', file);`}
+  lang="typescript"
+/>
+
+<Note>
+  Per-user path isolation is enforced at the database level. The path prefix is applied transparently — your application code uses simple paths.
+</Note>
+
+## Current Limitations
+
+- **Memory backend only** — Files are stored in memory and not persisted across restarts. Additional storage backends (S3, filesystem, etc.) are planned.
+- **No streaming** — Files are uploaded and downloaded as complete blobs. No chunked upload or progress tracking yet.
+- **No transactions** — Bucket operations do not participate in database transactions.
+- **Unbounded cache** — The `useDownloadFile` cache has no maximum size limit.

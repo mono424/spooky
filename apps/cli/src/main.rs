@@ -1,9 +1,15 @@
+mod add_api;
 mod backend;
+mod bucket;
 mod codegen;
+mod dev;
 mod json_schema;
 mod migrate;
 mod modules;
 mod parser;
+mod schema_builder;
+mod schema_diff;
+mod schema_extract;
 mod setup;
 mod spooky;
 mod surreal_client;
@@ -86,20 +92,141 @@ enum Commands {
         #[command(subcommand)]
         action: MigrateCommands,
     },
+    /// Bucket management
+    Bucket {
+        #[command(subcommand)]
+        action: BucketCommands,
+    },
+    /// API backend management
+    Api {
+        #[command(subcommand)]
+        action: ApiCommands,
+    },
+    /// Start a local development environment
+    Dev,
+}
+
+#[derive(Subcommand, Debug)]
+enum BucketCommands {
+    /// Add a new storage bucket
+    Add {
+        /// Bucket name (snake_case, e.g. user_avatars)
+        #[arg(long)]
+        name: Option<String>,
+
+        /// Preset type: avatars, images, documents, video, audio, custom
+        #[arg(long)]
+        preset: Option<String>,
+
+        /// Max file size (e.g. 5mb, 500kb, 1gb)
+        #[arg(long)]
+        max_size: Option<String>,
+
+        /// Allowed file extensions, comma-separated (e.g. jpg,png,gif)
+        #[arg(long)]
+        extensions: Option<String>,
+
+        /// Storage backend
+        #[arg(long, default_value = "memory")]
+        backend: String,
+
+        /// Enable per-user path isolation
+        #[arg(long)]
+        path_prefix_auth: Option<bool>,
+
+        /// Path to spooky.yml config file
+        #[arg(long, default_value = "spooky.yml")]
+        config: PathBuf,
+
+        /// Directory for bucket .surql files
+        #[arg(long, default_value = "src/buckets")]
+        buckets_dir: PathBuf,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ApiCommands {
+    /// Add an API backend
+    Add {
+        /// Path to OpenAPI spec file
+        #[arg(long)]
+        spec: Option<String>,
+
+        /// Backend name (key in spooky.yml)
+        #[arg(long)]
+        name: Option<String>,
+
+        /// API base URL
+        #[arg(long)]
+        base_url: Option<String>,
+
+        /// Auth type (e.g. "token")
+        #[arg(long)]
+        auth_type: Option<String>,
+
+        /// Auth token
+        #[arg(long)]
+        auth_token: Option<String>,
+
+        /// Outbox table name
+        #[arg(long)]
+        table: Option<String>,
+
+        /// Path for generated .surql schema file
+        #[arg(long)]
+        schema_path: Option<String>,
+
+        /// Path to spooky.yml config file
+        #[arg(long, default_value = "spooky.yml")]
+        config: PathBuf,
+    },
 }
 
 #[derive(Subcommand, Debug)]
 enum MigrateCommands {
-    /// Create a new migration
+    /// Create a new migration (auto-generates diff from schema changes)
     Create {
         /// Name for the migration (e.g. "add_user_avatar")
         name: String,
-        /// Path to .surql schema file to pre-populate the migration
+        /// Path to .surql schema file to pre-populate the migration (legacy mode)
         #[arg(long)]
         schema: Option<PathBuf>,
         /// Migrations directory
         #[arg(long, default_value = "migrations")]
         migrations_dir: PathBuf,
+        /// Path to the input .surql schema file (for auto-diff)
+        #[arg(long, default_value = "src/schema.surql")]
+        input: PathBuf,
+        /// Path to spooky.yml config file
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Generation mode: singlenode, cluster, surrealism
+        #[arg(long, default_value = "singlenode")]
+        mode: String,
+        /// SSP/Scheduler endpoint URL
+        #[arg(long)]
+        endpoint: Option<String>,
+        /// SSP/Scheduler auth secret
+        #[arg(long)]
+        secret: Option<String>,
+        /// SurrealDB URL for live DB schema extraction (skips ephemeral DB)
+        #[arg(long)]
+        url: Option<String>,
+        /// SurrealDB namespace (used with --url)
+        #[arg(long, default_value = "main")]
+        namespace: String,
+        /// SurrealDB database (used with --url)
+        #[arg(long, default_value = "main")]
+        database: String,
+        /// SurrealDB username (used with --url)
+        #[arg(long, default_value = "root")]
+        username: String,
+        /// SurrealDB password (used with --url)
+        #[arg(long, default_value = "root")]
+        password: String,
+        /// Skip auto-diff and create an empty migration template
+        #[arg(long)]
+        empty: bool,
     },
     /// Apply all pending migrations
     Apply {
@@ -272,7 +399,50 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
             name,
             schema,
             migrations_dir,
-        } => migrate::create(&migrations_dir, &name, schema.as_deref()),
+            input,
+            config,
+            mode,
+            endpoint,
+            secret,
+            url,
+            namespace,
+            database,
+            username,
+            password,
+            empty,
+        } => {
+            if empty {
+                // Legacy: empty template or schema dump
+                migrate::create(&migrations_dir, &name, schema.as_deref(), None, None)
+            } else {
+                // Auto-diff mode
+                let builder_config = schema_builder::SchemaBuilderConfig {
+                    input_path: input,
+                    config_path: config,
+                    mode,
+                    endpoint,
+                    secret,
+                };
+
+                let conn = url.as_ref().map(|u| {
+                    (
+                        u.as_str(),
+                        namespace.as_str(),
+                        database.as_str(),
+                        username.as_str(),
+                        password.as_str(),
+                    )
+                });
+
+                migrate::create(
+                    &migrations_dir,
+                    &name,
+                    schema.as_deref(),
+                    Some(&builder_config),
+                    conn,
+                )
+            }
+        }
         MigrateCommands::Apply {
             conn,
             migrations_dir,
@@ -302,12 +472,54 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
     }
 }
 
+fn handle_api(action: ApiCommands) -> Result<()> {
+    match action {
+        ApiCommands::Add {
+            spec,
+            name,
+            base_url,
+            auth_type,
+            auth_token,
+            table,
+            schema_path,
+            config,
+        } => add_api::add_api(spec, name, base_url, auth_type, auth_token, table, schema_path, config),
+    }
+}
+
+fn handle_bucket(action: BucketCommands) -> Result<()> {
+    match action {
+        BucketCommands::Add {
+            name,
+            preset,
+            max_size,
+            extensions,
+            backend,
+            path_prefix_auth,
+            config,
+            buckets_dir,
+        } => bucket::add(
+            name,
+            preset,
+            max_size,
+            extensions,
+            backend,
+            path_prefix_auth,
+            config,
+            buckets_dir,
+        ),
+    }
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
 
     match args.command {
         Some(Commands::Setup) => return setup_project(),
         Some(Commands::Migrate { action }) => return handle_migrate(action),
+        Some(Commands::Bucket { action }) => return handle_bucket(action),
+        Some(Commands::Api { action }) => return handle_api(action),
+        Some(Commands::Dev) => return dev::run(),
         None => {} // fall through to legacy codegen mode
     }
 
@@ -365,9 +577,6 @@ fn main() -> Result<()> {
     // Append embedded meta tables
     let meta_tables = include_str!("meta_tables.surql");
     let meta_tables_remote = include_str!("meta_tables_remote.surql");
-    let functions_remote = include_str!("functions_remote.surql");
-    let functions_remote_singlenode = include_str!("functions_remote_singlenode.surql");
-    let functions_remote_surrealism = include_str!("functions_remote_surrealism.surql");
     let meta_tables_client = include_str!("meta_tables_client.surql");
 
     // Include base meta tables
@@ -402,6 +611,11 @@ fn main() -> Result<()> {
         .parse_file(&content)
         .context("Failed to parse SurrealDB schema")?;
 
+    // Extract buckets from separate bucket files (if any)
+    if !backend_processor.bucket_schema.is_empty() {
+        parser.extract_buckets(&backend_processor.bucket_schema);
+    }
+
     // Filter the raw schema content to remove fields with FOR select WHERE false
     let mut filtered_schema_content = filter_schema_for_client(&content, &parser)?;
 
@@ -416,46 +630,15 @@ fn main() -> Result<()> {
 
     // Choose which content to use based on format
     let raw_schema_content = if matches!(output_format, OutputFormat::Surql) {
-        let mut c = content.clone();
-        c.push('\n');
-        c.push_str(functions_remote);
-        println!("  + Appended functions_remote.surql (common)");
-
-        if args.mode == "singlenode" || args.mode == "cluster" {
-            let default_endpoint = if args.mode == "cluster" {
-                "http://localhost:9667"
-            } else {
-                "http://localhost:8667"
-            };
-            println!("  → {} mode detected: Using HTTP remote functions", args.mode);
-            let endpoint = args
-                .endpoint
-                .as_deref()
-                .unwrap_or(default_endpoint);
-            let secret = args.secret.as_deref().unwrap_or("");
-
-            // Inject variables into singlenode template
-            let mut singlenode_fn = functions_remote_singlenode.to_string();
-            singlenode_fn = singlenode_fn.replace("{{ENDPOINT}}", endpoint);
-            singlenode_fn = singlenode_fn.replace("{{SECRET}}", secret);
-
-            c.push('\n');
-            c.push_str(&singlenode_fn);
-            println!("  + Appended functions_remote_singlenode.surql (injected)");
-
-            // Replace unregister_view (still needed as it's in meta_tables_remote.surql)
-            // We need to match the exact string from meta_tables_remote.surql
-            let unregister_call = "let $result = mod::dbsp::unregister_view(<string>$before.id);";
-            let unregister_http = format!(
-                "let $payload = {{ id: <string>$before.id }};\n    let $result = http::post('{}/view/unregister', $payload, {{ \"Authorization\": \"Bearer {}\" }});",
-                endpoint, secret
-            );
-            c = c.replace(unregister_call, &unregister_http);
-        } else {
-            c.push('\n');
-            c.push_str(functions_remote_surrealism);
-            println!("  + Appended functions_remote_surrealism.surql");
-        }
+        let builder_config = schema_builder::SchemaBuilderConfig {
+            input_path: input_path.clone(),
+            config_path: args.config.clone(),
+            mode: args.mode.clone(),
+            endpoint: args.endpoint.clone(),
+            secret: args.secret.clone(),
+        };
+        let c = schema_builder::build_server_schema(&builder_config)?;
+        println!("  + Built server schema via schema_builder");
         c
     } else {
         filtered_schema_content.clone()

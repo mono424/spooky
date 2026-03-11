@@ -380,6 +380,7 @@ class User {
     
     ///Record ID
     String id;
+    String? profilePicture;
     
     ///Reverse relationship: array of thread records
     List<String>? threads;
@@ -390,6 +391,7 @@ class User {
     User({
         this.comments,
         required this.id,
+        this.profilePicture,
         this.threads,
         required this.username,
     });
@@ -397,6 +399,7 @@ class User {
     factory User.fromJson(Map<String, dynamic> json) => User(
         comments: json["comments"] == null ? [] : List<String>.from(json["comments"]!.map((x) => x)),
         id: json["id"],
+        profilePicture: json["profile_picture"],
         threads: json["threads"] == null ? [] : List<String>.from(json["threads"]!.map((x) => x)),
         username: json["username"],
     );
@@ -404,6 +407,7 @@ class User {
     Map<String, dynamic> toJson() => {
         "comments": comments == null ? [] : List<dynamic>.from(comments!.map((x) => x)),
         "id": id,
+        "profile_picture": profilePicture,
         "threads": threads == null ? [] : List<dynamic>.from(threads!.map((x) => x)),
         "username": username,
     };
@@ -431,6 +435,9 @@ PERMISSIONS FOR select, create, update WHERE true;
 DEFINE INDEX unique_username ON TABLE user FIELDS username UNIQUE;
 
 
+
+DEFINE FIELD profile_picture ON TABLE user TYPE option<string>
+PERMISSIONS FOR select, create, update WHERE true;
 
 -- ##################################################################
 -- THREAD TABLE

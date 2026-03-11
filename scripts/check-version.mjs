@@ -5,6 +5,14 @@ import { join, resolve } from "node:path";
 const ROOT = resolve(import.meta.dirname, "..");
 const EXCLUDE = ["packages/ssp-wasm/pkg"];
 
+const CLI_PLATFORM_PACKAGES = [
+  "cli-linux-x64",
+  "cli-linux-arm64",
+  "cli-darwin-x64",
+  "cli-darwin-arm64",
+  "cli-win32-x64",
+];
+
 function readJson(path) {
   return JSON.parse(readFileSync(path, "utf-8"));
 }
@@ -41,6 +49,28 @@ for (const dir of dirs) {
   }
 }
 
+// Check CLI platform packages
+for (const name of CLI_PLATFORM_PACKAGES) {
+  const pkgPath = join(ROOT, "apps/cli/npm", name, "package.json");
+  const pkg = readJson(pkgPath);
+  const rel = pkgPath.replace(ROOT + "/", "");
+
+  if (pkg.version !== expected) {
+    mismatches.push({ file: rel, actual: pkg.version });
+  }
+}
+
+// Check CLI optionalDependencies
+const cliPkgPath = join(ROOT, "apps/cli/package.json");
+const cliPkg = readJson(cliPkgPath);
+if (cliPkg.optionalDependencies) {
+  for (const [dep, ver] of Object.entries(cliPkg.optionalDependencies)) {
+    if (ver !== expected) {
+      mismatches.push({ file: `apps/cli/package.json optionalDependencies.${dep}`, actual: ver });
+    }
+  }
+}
+
 if (mismatches.length > 0) {
   console.error(`Version mismatch! Expected ${expected} but found:\n`);
   for (const m of mismatches) {
@@ -50,4 +80,4 @@ if (mismatches.length > 0) {
   process.exit(1);
 }
 
-console.log(`All ${dirs.length} workspace packages are at ${expected}`);
+console.log(`All ${dirs.length} workspace packages + ${CLI_PLATFORM_PACKAGES.length} platform packages are at ${expected}`);

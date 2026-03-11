@@ -126,8 +126,115 @@ jobs:
         working-directory: packages/client-solid
         run: npm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
 
-  publish-cli:
+  build-cli-binaries:
     needs: [prepare, validate-versions]
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            package: cli-linux-x64
+            binary: spooky
+            cross: false
+          - runner: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            package: cli-linux-arm64
+            binary: spooky
+            cross: true
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+            package: cli-darwin-arm64
+            binary: spooky
+            cross: false
+          - runner: macos-latest
+            target: x86_64-apple-darwin
+            package: cli-darwin-x64
+            binary: spooky
+            cross: false
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            package: cli-win32-x64
+            binary: spooky.exe
+            cross: false
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/cli
+
+      - name: Install cross (Linux ARM64)
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build binary (cross)
+        if: matrix.cross
+        working-directory: apps/cli
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Build binary (native)
+        if: "!matrix.cross"
+        working-directory: apps/cli
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Copy binary to package directory
+        shell: bash
+        run: cp apps/cli/target/${{ matrix.target }}/release/${{ matrix.binary }} apps/cli/npm/${{ matrix.package }}/${{ matrix.binary }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.package }}
+          path: apps/cli/npm/${{ matrix.package }}/${{ matrix.binary }}
+
+  publish-cli-platform-packages:
+    needs: [prepare, build-cli-binaries]
+    strategy:
+      matrix:
+        package:
+          - cli-linux-x64
+          - cli-linux-arm64
+          - cli-darwin-x64
+          - cli-darwin-arm64
+          - cli-win32-x64
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Upgrade npm for OIDC support
+        run: npm install -g npm@latest
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.package }}
+          path: apps/cli/npm/${{ matrix.package }}
+
+      - name: Set version
+        run: |
+          cd apps/cli/npm/${{ matrix.package }}
+          jq '.version = "${{ needs.prepare.outputs.version }}"' package.json > tmp.json && mv tmp.json package.json
+
+      - name: Publish platform package
+        working-directory: apps/cli/npm/${{ matrix.package }}
+        run: npm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
+
+  publish-cli:
+    needs: [prepare, publish-cli-platform-packages]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -147,22 +254,17 @@ jobs:
       - name: Upgrade npm for OIDC support
         run: npm install -g npm@latest
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: apps/cli
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Set version — cli
-        run: jq '.version = "${{ needs.prepare.outputs.version }}"' apps/cli/package.json > tmp.json && mv tmp.json apps/cli/package.json
-
-      - name: Build Rust binary
-        run: pnpm --filter @spooky-sync/cli build:rust
+      - name: Set version and optionalDependencies
+        run: |
+          cd apps/cli
+          VERSION="${{ needs.prepare.outputs.version }}"
+          jq --arg v "$VERSION" '
+            .version = $v |
+            .optionalDependencies = (.optionalDependencies | to_entries | map(.value = $v) | from_entries)
+          ' package.json > tmp.json && mv tmp.json package.json
 
       - name: Build JS bundle
         run: pnpm --filter @spooky-sync/cli build:vite

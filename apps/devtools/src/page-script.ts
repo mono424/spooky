@@ -121,6 +121,187 @@
     setTimeout(checkForSpooky, 2000);
   }
 
+  // Listen for GET_TABLE_DATA requests from content script
+  window.addEventListener('SPOOKY_GET_TABLE_DATA', async (event: any) => {
+    const { requestId, tableName } = event.detail;
+    const spooky = (window as any).__SPOOKY__;
+
+    if (!spooky?.getTableData) {
+      window.postMessage(
+        {
+          type: 'SPOOKY_BRIDGE_RESPONSE',
+          source: 'spooky-devtools-page',
+          requestId,
+          success: false,
+          error: 'Spooky not found or getTableData not supported',
+        },
+        '*'
+      );
+      return;
+    }
+
+    try {
+      const data = await spooky.getTableData(tableName);
+      window.postMessage(
+        {
+          type: 'SPOOKY_BRIDGE_RESPONSE',
+          source: 'spooky-devtools-page',
+          requestId,
+          success: true,
+          data,
+        },
+        '*'
+      );
+    } catch (err: any) {
+      window.postMessage(
+        {
+          type: 'SPOOKY_BRIDGE_RESPONSE',
+          source: 'spooky-devtools-page',
+          requestId,
+          success: false,
+          error: err.message || String(err),
+        },
+        '*'
+      );
+    }
+  });
+
+  // Listen for UPDATE_TABLE_ROW requests from content script
+  window.addEventListener('SPOOKY_UPDATE_TABLE_ROW', async (event: any) => {
+    const { requestId, tableName, recordId, updates } = event.detail;
+    const spooky = (window as any).__SPOOKY__;
+
+    if (!spooky?.updateTableRow) {
+      window.postMessage(
+        {
+          type: 'SPOOKY_BRIDGE_RESPONSE',
+          source: 'spooky-devtools-page',
+          requestId,
+          success: false,
+          error: 'Spooky not found or updateTableRow not supported',
+        },
+        '*'
+      );
+      return;
+    }
+
+    try {
+      const result = await spooky.updateTableRow(tableName, recordId, updates);
+      window.postMessage(
+        {
+          type: 'SPOOKY_BRIDGE_RESPONSE',
+          source: 'spooky-devtools-page',
+          requestId,
+          success: result.success !== false,
+          data: result,
+          error: result.error,
+        },
+        '*'
+      );
+    } catch (err: any) {
+      window.postMessage(
+        {
+          type: 'SPOOKY_BRIDGE_RESPONSE',
+          source: 'spooky-devtools-page',
+          requestId,
+          success: false,
+          error: err.message || String(err),
+        },
+        '*'
+      );
+    }
+  });
+
+  // Listen for DELETE_TABLE_ROW requests from content script
+  window.addEventListener('SPOOKY_DELETE_TABLE_ROW', async (event: any) => {
+    const { requestId, tableName, recordId } = event.detail;
+    const spooky = (window as any).__SPOOKY__;
+
+    if (!spooky?.deleteTableRow) {
+      window.postMessage(
+        {
+          type: 'SPOOKY_BRIDGE_RESPONSE',
+          source: 'spooky-devtools-page',
+          requestId,
+          success: false,
+          error: 'Spooky not found or deleteTableRow not supported',
+        },
+        '*'
+      );
+      return;
+    }
+
+    try {
+      const result = await spooky.deleteTableRow(tableName, recordId);
+      window.postMessage(
+        {
+          type: 'SPOOKY_BRIDGE_RESPONSE',
+          source: 'spooky-devtools-page',
+          requestId,
+          success: result.success !== false,
+          data: result,
+          error: result.error,
+        },
+        '*'
+      );
+    } catch (err: any) {
+      window.postMessage(
+        {
+          type: 'SPOOKY_BRIDGE_RESPONSE',
+          source: 'spooky-devtools-page',
+          requestId,
+          success: false,
+          error: err.message || String(err),
+        },
+        '*'
+      );
+    }
+  });
+
+  // Listen for CLEAR_HISTORY requests from content script
+  window.addEventListener('SPOOKY_CLEAR_HISTORY', (event: any) => {
+    const { requestId } = event.detail;
+    const spooky = (window as any).__SPOOKY__;
+
+    if (!spooky?.clearHistory) {
+      window.postMessage(
+        {
+          type: 'SPOOKY_BRIDGE_RESPONSE',
+          source: 'spooky-devtools-page',
+          requestId,
+          success: false,
+          error: 'Spooky not found or clearHistory not supported',
+        },
+        '*'
+      );
+      return;
+    }
+
+    try {
+      spooky.clearHistory();
+      window.postMessage(
+        {
+          type: 'SPOOKY_BRIDGE_RESPONSE',
+          source: 'spooky-devtools-page',
+          requestId,
+          success: true,
+        },
+        '*'
+      );
+    } catch (err: any) {
+      window.postMessage(
+        {
+          type: 'SPOOKY_BRIDGE_RESPONSE',
+          source: 'spooky-devtools-page',
+          requestId,
+          success: false,
+          error: err.message || String(err),
+        },
+        '*'
+      );
+    }
+  });
+
   // Also listen for custom event in case Spooky loads later
   window.addEventListener('spooky:init', () => {
     checkForSpooky();

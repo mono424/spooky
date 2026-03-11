@@ -5,9 +5,11 @@ import { useQuery, useDb, SyncedDb } from '@spooky-sync/client-solid';
 import { useAuth } from '../lib/auth';
 import { CommentBox } from './CommentBox';
 import { ThreadSidebar } from './ThreadSidebar';
-import { isInputActive, useKeyboard } from '../lib/keyboard';
+import { createHotkey, isInputActive } from '../lib/keyboard';
 import SpookButton from './SpookButton';
 import { schema } from '../schema.gen';
+import { ProfilePicture } from './ProfilePicture';
+import { Tooltip } from './Tooltip';
 
 const createQuery = (
   db: SyncedDb<typeof schema>,
@@ -78,22 +80,19 @@ export function ThreadDetail() {
     navigate(`/thread/${list[nextIdx].id.split(':')[1]}`);
   };
 
-  useKeyboard({
-    j: () => navigateToAdjacentThread(1),
-    k: () => navigateToAdjacentThread(-1),
-    r: (e) => {
-      e.preventDefault();
-      const textarea = document.querySelector('#comment-textarea') as HTMLTextAreaElement;
-      textarea?.focus();
-    },
-    Escape: () => {
-      if (isInputActive()) {
-        (document.activeElement as HTMLElement).blur();
-      } else {
-        handleBack();
-      }
-    },
+  createHotkey('J', () => navigateToAdjacentThread(1));
+  createHotkey('K', () => navigateToAdjacentThread(-1));
+  createHotkey('R', () => {
+    const textarea = document.querySelector('#comment-textarea') as HTMLTextAreaElement;
+    textarea?.focus();
   });
+  createHotkey('Escape', () => {
+    if (isInputActive()) {
+      (document.activeElement as HTMLElement).blur();
+    } else {
+      handleBack();
+    }
+  }, { ignoreInputs: false });
 
   const isAuthor = () => {
     const threadData = thread();
@@ -161,19 +160,30 @@ export function ThreadDetail() {
   return (
     <div class="fixed inset-0 top-14 z-40 bg-zinc-950">
       <div class="max-w-5xl mx-auto h-full flex">
-        <ThreadSidebar activeThreadId={params.id} />
+        <ThreadSidebar
+          activeThreadId={params.id}
+          onNavigate={navigateToAdjacentThread}
+          threads={allThreads()}
+          isLoading={allThreadsResult.isLoading()}
+        />
 
         <div class="flex-1 overflow-y-auto">
         <div class="max-w-3xl mx-auto w-full px-6 py-6">
         <Show
           when={thread()}
           fallback={
-            <div class="bg-surface/50 rounded-xl border border-white/[0.06] p-12 text-center">
-              <p class="text-zinc-400 font-medium mb-1">Thread not found</p>
-              <p class="text-sm text-zinc-600">
-                This thread may have been deleted or doesn't exist.
-              </p>
-            </div>
+            <Show when={!threadResult.isLoading()} fallback={
+              <div class="bg-surface/50 rounded-xl border border-white/[0.06] p-12 text-center">
+                <p class="text-zinc-400 font-medium mb-1">Loading thread...</p>
+              </div>
+            }>
+              <div class="bg-surface/50 rounded-xl border border-white/[0.06] p-12 text-center">
+                <p class="text-zinc-400 font-medium mb-1">Thread not found</p>
+                <p class="text-sm text-zinc-600">
+                  This thread may have been deleted or doesn't exist.
+                </p>
+              </div>
+            </Show>
           }
         >
           {(threadData) => (
@@ -182,9 +192,11 @@ export function ThreadDetail() {
               <article>
                 {/* Author header */}
                 <div class="flex items-center gap-3 mb-5">
-                  <div class="w-10 h-10 rounded-full bg-accent/15 text-accent flex items-center justify-center text-sm font-semibold flex-shrink-0">
-                    {(threadData().author?.username || '?').charAt(0).toUpperCase()}
-                  </div>
+                  <ProfilePicture
+                    src={() => threadData().author?.profile_picture}
+                    username={() => threadData().author?.username}
+                    size="md"
+                  />
                   <div>
                     <div class="text-sm font-medium text-zinc-200">
                       {threadData().author?.username || 'Unknown'}
@@ -223,9 +235,9 @@ export function ThreadDetail() {
                   >
                     {/* Title Suggestion */}
                     <Show when={threadData().title_suggestion}>
-                      <div class="mb-4 bg-accent/5 border border-accent/20 rounded-lg p-4">
+                      <div class="mb-4 bg-zinc-800/50 border border-white/[0.06] rounded-lg p-4">
                         <div class="flex justify-between items-start mb-2">
-                          <span class="text-xs font-medium text-accent flex items-center gap-1.5">
+                          <span class="text-xs font-medium text-zinc-400 flex items-center gap-1.5">
                             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
                             </svg>
@@ -234,7 +246,7 @@ export function ThreadDetail() {
                           <div class="flex gap-2">
                             <button
                               onMouseDown={() => handleAcceptTitle(threadData().title_suggestion!)}
-                              class="text-xs font-medium bg-accent hover:bg-accent-hover text-white px-3 py-1 rounded-md transition-colors duration-150"
+                              class="text-xs font-medium bg-surface hover:bg-surface-hover border border-white/[0.06] text-zinc-300 hover:text-white px-3 py-1 rounded-md transition-colors duration-150"
                             >
                               Accept
                             </button>
@@ -261,9 +273,9 @@ export function ThreadDetail() {
 
                     {/* Content Suggestion */}
                     <Show when={threadData().content_suggestion}>
-                      <div class="mb-4 bg-accent/5 border border-accent/20 rounded-lg p-4">
+                      <div class="mb-4 bg-zinc-800/50 border border-white/[0.06] rounded-lg p-4">
                         <div class="flex justify-between items-start mb-2">
-                          <span class="text-xs font-medium text-accent flex items-center gap-1.5">
+                          <span class="text-xs font-medium text-zinc-400 flex items-center gap-1.5">
                             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
                             </svg>
@@ -272,7 +284,7 @@ export function ThreadDetail() {
                           <div class="flex gap-2">
                             <button
                               onMouseDown={() => handleAcceptContent(threadData().content_suggestion!)}
-                              class="text-xs font-medium bg-accent hover:bg-accent-hover text-white px-3 py-1 rounded-md transition-colors duration-150"
+                              class="text-xs font-medium bg-surface hover:bg-surface-hover border border-white/[0.06] text-zinc-300 hover:text-white px-3 py-1 rounded-md transition-colors duration-150"
                             >
                               Accept
                             </button>
@@ -303,18 +315,20 @@ export function ThreadDetail() {
                 {/* Actions row beneath the card */}
                 <div class="flex items-center justify-between mt-3 px-1">
                   <div class="flex items-center gap-4">
-                    <button
-                      onMouseDown={() => {
-                        const textarea = document.querySelector('#comment-textarea') as HTMLTextAreaElement;
-                        textarea?.focus();
-                      }}
-                      class="inline-flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-300 transition-colors duration-150"
-                    >
-                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 20.25c4.97 0 9-3.694 9-8.25s-4.03-8.25-9-8.25S3 7.444 3 12c0 2.104.859 4.023 2.273 5.48.432.447.74 1.04.586 1.641a4.483 4.483 0 01-.923 1.785A5.969 5.969 0 006 21c1.282 0 2.47-.402 3.445-1.087.81.22 1.668.337 2.555.337z" />
-                      </svg>
-                      {threadData().comments?.length || 0}
-                    </button>
+                    <Tooltip text="Reply" kbd="r">
+                      <button
+                        onMouseDown={() => {
+                          const textarea = document.querySelector('#comment-textarea') as HTMLTextAreaElement;
+                          textarea?.focus();
+                        }}
+                        class="inline-flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-300 transition-colors duration-150"
+                      >
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 20.25c4.97 0 9-3.694 9-8.25s-4.03-8.25-9-8.25S3 7.444 3 12c0 2.104.859 4.023 2.273 5.48.432.447.74 1.04.586 1.641a4.483 4.483 0 01-.923 1.785A5.969 5.969 0 006 21c1.282 0 2.47-.402 3.445-1.087.81.22 1.668.337 2.555.337z" />
+                        </svg>
+                        {threadData().comments?.length || 0}
+                      </button>
+                    </Tooltip>
                   </div>
 
                   <SpookButton

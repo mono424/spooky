@@ -6,6 +6,7 @@ export function PendingMutationsIndicator() {
   const [count, setCount] = createSignal(db.pendingMutationCount);
   const [visible, setVisible] = createSignal(count() > 0);
 
+  let showTimeout: ReturnType<typeof setTimeout> | undefined;
   let hideTimeout: ReturnType<typeof setTimeout> | undefined;
 
   onMount(() => {
@@ -13,8 +14,9 @@ export function PendingMutationsIndicator() {
       setCount(newCount);
       if (newCount > 0) {
         clearTimeout(hideTimeout);
-        setVisible(true);
+        showTimeout = setTimeout(() => setVisible(true), 400);
       } else {
+        clearTimeout(showTimeout);
         hideTimeout = setTimeout(() => setVisible(false), 400);
       }
     });
@@ -22,18 +24,15 @@ export function PendingMutationsIndicator() {
     onCleanup(() => {
       unsub();
       clearTimeout(hideTimeout);
+      clearTimeout(showTimeout);
     });
   });
 
   return (
     <Show when={visible()}>
-      <div
-        class={`pending-mutations-pill ${count() === 0 ? 'pending-mutations-exit' : ''}`}
-      >
+      <div class={`pending-mutations-pill ${count() === 0 ? 'pending-mutations-exit' : ''}`}>
         <span class="pending-mutations-dot" />
-        <span class="text-xs font-medium tracking-wide">
-          {count()} pending
-        </span>
+        <span class="text-xs font-medium tracking-wide">{count()} pending</span>
       </div>
     </Show>
   );

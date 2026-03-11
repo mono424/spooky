@@ -314,6 +314,9 @@ export class SpookySync<S extends SchemaStructure> {
       );
       await this.createRemoteQuery(queryHash);
       await this.syncQuery(queryHash);
+      // Always notify after sync completes — handles empty result sets
+      // where no stream updates fire but the UI needs to stop loading
+      await this.dataModule.notifyQuerySynced(queryHash);
     } catch (e) {
       this.logger.error(
         { err: e, Category: 'spooky-client::SpookySync::registerQuery' },

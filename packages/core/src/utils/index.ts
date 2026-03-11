@@ -130,6 +130,13 @@ export function parseDuration(duration: QueryTimeToLive | Duration): number {
   }
 }
 
+// ==================== FILE UTILITIES ====================
+
+export async function fileToUint8Array(file: File | Blob): Promise<Uint8Array> {
+  const buffer = await file.arrayBuffer();
+  return new Uint8Array(buffer);
+}
+
 // ==================== DATABASE UTILITIES ====================
 
 /**

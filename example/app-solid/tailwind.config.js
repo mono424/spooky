@@ -9,8 +9,8 @@ export default {
           hover: '#27272A',
         },
         accent: {
-          DEFAULT: '#8B5CF6',
-          hover: '#7C3AED',
+          DEFAULT: '#A1A1AA',
+          hover: '#D4D4D8',
         },
       },
       fontFamily: {

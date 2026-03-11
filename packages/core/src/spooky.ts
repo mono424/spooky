@@ -23,6 +23,7 @@ import {
   SchemaStructure,
   TableModel,
   TableNames,
+  BucketNames,
   BackendNames,
   BackendRoutes,
   RoutePayload,
@@ -37,6 +38,47 @@ import { CacheModule } from './modules/cache/index';
 import { LocalStoragePersistenceClient } from './services/persistence/localstorage';
 import { generateId, parseParams } from './utils/index';
 import { SurrealDBPersistenceClient } from './services/persistence/surrealdb';
+
+export class BucketHandle {
+  constructor(private bucketName: string, private remote: RemoteDatabaseService) {}
+
+  async put(path: string, content: string | Uint8Array | Blob): Promise<void> {
+    await this.remote.query(`RETURN f"${this.bucketName}:/${path}".put($content);`, { content });
+  }
+
+  async get(path: string): Promise<unknown> {
+    const [result] = await this.remote.query<[unknown]>(`RETURN f"${this.bucketName}:/${path}".get();`);
+    return result;
+  }
+
+  async delete(path: string): Promise<void> {
+    await this.remote.query(`RETURN f"${this.bucketName}:/${path}".delete();`);
+  }
+
+  async exists(path: string): Promise<boolean> {
+    const [result] = await this.remote.query<[boolean]>(`RETURN f"${this.bucketName}:/${path}".exists();`);
+    return result;
+  }
+
+  async head(path: string): Promise<Record<string, unknown>> {
+    const [result] = await this.remote.query<[Record<string, unknown>]>(`RETURN f"${this.bucketName}:/${path}".head();`);
+    return result;
+  }
+
+  async copy(sourcePath: string, targetPath: string): Promise<void> {
+    await this.remote.query(`RETURN f"${this.bucketName}:/${sourcePath}".copy($target);`, { target: targetPath });
+  }
+
+  async rename(sourcePath: string, targetPath: string): Promise<void> {
+    await this.remote.query(`RETURN f"${this.bucketName}:/${sourcePath}".rename($target);`, { target: targetPath });
+  }
+
+  async list(prefix?: string): Promise<string[]> {
+    const p = prefix ?? '';
+    const [result] = await this.remote.query<[string[]]>(`RETURN f"${this.bucketName}:/${p}".list();`);
+    return result;
+  }
+}
 
 export class SpookyClient<S extends SchemaStructure> {
   private local: LocalDatabaseService;
@@ -303,6 +345,10 @@ export class SpookyClient<S extends SchemaStructure> {
     R extends BackendRoutes<S, B>,
   >(backend: B, path: R, payload: RoutePayload<S, B, R>, options?: RunOptions) {
     return this.dataModule.run(backend, path, payload, options);
+  }
+
+  bucket<B extends BucketNames<S>>(name: B): BucketHandle {
+    return new BucketHandle(name, this.remote);
   }
 
   create(id: string, data: Record<string, unknown>) {

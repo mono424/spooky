@@ -70,6 +70,30 @@ chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
         detail: message.payload,
       })
     );
+  } else if (message.type === 'GET_TABLE_DATA') {
+    window.dispatchEvent(
+      new CustomEvent('SPOOKY_GET_TABLE_DATA', {
+        detail: message.payload,
+      })
+    );
+  } else if (message.type === 'UPDATE_TABLE_ROW') {
+    window.dispatchEvent(
+      new CustomEvent('SPOOKY_UPDATE_TABLE_ROW', {
+        detail: message.payload,
+      })
+    );
+  } else if (message.type === 'DELETE_TABLE_ROW') {
+    window.dispatchEvent(
+      new CustomEvent('SPOOKY_DELETE_TABLE_ROW', {
+        detail: message.payload,
+      })
+    );
+  } else if (message.type === 'CLEAR_HISTORY') {
+    window.dispatchEvent(
+      new CustomEvent('SPOOKY_CLEAR_HISTORY', {
+        detail: message.payload,
+      })
+    );
   }
   // Return true to indicate we may send a response asynchronously
   return true;

@@ -1,14 +1,8 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { resolve, dirname } from 'path';
-import { existsSync } from 'fs';
-import { platform } from 'os';
-import { fileURLToPath } from 'url';
+import { findBinary } from './resolve-binary.js';
 
 const execFileAsync = promisify(execFile);
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
 
 export interface SyncgenOptions {
   input: string;
@@ -23,30 +17,6 @@ export interface SyncgenOptions {
   endpoint?: string;
   secret?: string;
   config?: string;
-}
-
-function findBinary(): string {
-  // Possible locations for the binary
-  const binaryName = platform() === 'win32' ? 'spooky.exe' : 'spooky';
-
-  const possiblePaths = [
-    // Development/Source build location (from dist/index.js -> ../target/release)
-    resolve(__dirname, '../target/release', binaryName),
-    // Distributed package location (relative to dist/index.js -> ../bin)
-    resolve(__dirname, '..', binaryName),
-    // Installation root
-    resolve(process.cwd(), binaryName),
-  ];
-
-  for (const path of possiblePaths) {
-    if (existsSync(path)) {
-      return path;
-    }
-  }
-
-  throw new Error(
-    `Could not find syncgen binary. Checked paths:\n${possiblePaths.map((p) => ` - ${p}`).join('\n')}\nPlease ensure it is built or installed.`
-  );
 }
 
 export async function runSyncgen(options: SyncgenOptions): Promise<string> {

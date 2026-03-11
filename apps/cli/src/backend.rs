@@ -5,20 +5,109 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct SpookyConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    /// SurrealDB image version (e.g. "v3.0.0"). Separate from spooky service versions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub surrealdb: Option<String>,
+    /// Spooky service versions — either a string (sets both ssp & scheduler)
+    /// or an object `{ ssp: "...", scheduler: "..." }` for individual control.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<VersionConfig>,
+    #[serde(default)]
     pub backends: BTreeMap<String, BackendConfig>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub buckets: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+/// Either a plain string (applies to both ssp & scheduler)
+/// or an object with individual fields.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(untagged)]
+pub enum VersionConfig {
+    All(String),
+    Individual {
+        #[serde(default)]
+        ssp: Option<String>,
+        #[serde(default)]
+        scheduler: Option<String>,
+    },
+}
+
+const DEFAULT_SURREALDB_VERSION: &str = "v3.0.0";
+const DEFAULT_SSP_VERSION: &str = "latest";
+const DEFAULT_SCHEDULER_VERSION: &str = "latest";
+
+/// Resolved version config with all defaults applied.
+#[derive(Debug, Clone)]
+pub struct ResolvedVersions {
+    pub surrealdb: String,
+    pub ssp: String,
+    pub scheduler: String,
+}
+
+impl Default for ResolvedVersions {
+    fn default() -> Self {
+        Self {
+            surrealdb: DEFAULT_SURREALDB_VERSION.to_string(),
+            ssp: DEFAULT_SSP_VERSION.to_string(),
+            scheduler: DEFAULT_SCHEDULER_VERSION.to_string(),
+        }
+    }
+}
+
+impl ResolvedVersions {
+    /// Resolve versions:
+    /// - `surrealdb`: from top-level `surrealdb` field, else default
+    /// - `version: "tag"` → sets both ssp & scheduler to "tag"
+    /// - `version: { ssp: "...", scheduler: "..." }` → individual control, defaults for missing
+    pub fn from_config(config: &SpookyConfig) -> Self {
+        let surrealdb = config.surrealdb.clone()
+            .unwrap_or_else(|| DEFAULT_SURREALDB_VERSION.to_string());
+
+        let (ssp, scheduler) = match &config.version {
+            Some(VersionConfig::All(v)) => (v.clone(), v.clone()),
+            Some(VersionConfig::Individual { ssp, scheduler }) => (
+                ssp.clone().unwrap_or_else(|| DEFAULT_SSP_VERSION.to_string()),
+                scheduler.clone().unwrap_or_else(|| DEFAULT_SCHEDULER_VERSION.to_string()),
+            ),
+            None => (
+                DEFAULT_SSP_VERSION.to_string(),
+                DEFAULT_SCHEDULER_VERSION.to_string(),
+            ),
+        };
+
+        Self { surrealdb, ssp, scheduler }
+    }
+
+    pub fn surrealdb_image(&self) -> String { format!("surrealdb/surrealdb:{}", self.surrealdb) }
+    pub fn ssp_image(&self) -> String { format!("mono424/spooky-ssp:{}", self.ssp) }
+    pub fn scheduler_image(&self) -> String { format!("mono424/spooky-scheduler:{}", self.scheduler) }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub struct BackendConfig {
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub backend_type: Option<String>,
     pub spec: String,
-    #[serde(rename = "baseUrl")]
+    #[serde(rename = "baseUrl", skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth: Option<AuthConfig>,
     pub method: BackendMethod,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
+pub struct AuthConfig {
+    #[serde(rename = "type")]
+    pub auth_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub struct BackendMethod {
     #[serde(rename = "type")]
     pub method_type: String,
@@ -47,6 +136,7 @@ pub struct BackendDefinition {
 pub struct BackendProcessor {
     pub schema_appends: String,
     pub backend_definitions: BTreeMap<String, BackendDefinition>,
+    pub bucket_schema: String,
 }
 
 impl BackendProcessor {
@@ -54,6 +144,7 @@ impl BackendProcessor {
         Self {
             schema_appends: String::new(),
             backend_definitions: BTreeMap::new(),
+            bucket_schema: String::new(),
         }
     }
 
@@ -68,6 +159,15 @@ impl BackendProcessor {
 
         for (backend_name, backend_config) in config.backends {
             self.process_backend(&backend_name, &backend_config, base_dir)?;
+        }
+
+        for path_str in &config.buckets {
+            let bucket_path = base_dir.join(path_str);
+            let bucket_content = fs::read_to_string(&bucket_path)
+                .context(format!("Failed to read bucket file: {:?}", bucket_path))?;
+            self.bucket_schema.push('\n');
+            self.bucket_schema.push_str(&bucket_content);
+            println!("  + Loaded bucket schema from {:?}", bucket_path);
         }
 
         Ok(())

@@ -70,8 +70,8 @@ input:-webkit-autofill:active {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #8B5CF6;
-  box-shadow: 0 0 6px #8B5CF6;
+  background: #A1A1AA;
+  box-shadow: 0 0 6px #A1A1AA;
   animation: dot-pulse 1.5s ease-in-out infinite;
 }
 
@@ -94,6 +94,17 @@ input:-webkit-autofill:active {
   100% {
     opacity: 0;
     transform: translateY(16px) scale(0.9);
+  }
+}
+
+@keyframes tooltip-enter {
+  0% {
+    opacity: 0;
+    transform: translateX(-50%) translateY(4px) scale(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0) scale(1);
   }
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "@example/app-solid",
-  "version": "0.0.1-canary.1",
+  "version": "0.0.1-canary.2",
   "description": "Solid.js Thread Application with Authentication",
   "type": "module",
   "scripts": {
@@ -13,7 +13,9 @@
   "dependencies": {
     "@solidjs/router": "^0.10.2",
     "@spooky-sync/client-solid": "workspace:*",
+    "@tanstack/solid-hotkeys": "^0.4.1",
     "@tanstack/solid-query": "^5.90.10",
+    "lucide-solid": "^0.577.0",
     "solid-js": "^1.8.7",
     "solid-valtio": "^0.2.2"
   },
