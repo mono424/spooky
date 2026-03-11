@@ -169,12 +169,18 @@ export function ThreadDetail() {
         <Show
           when={thread()}
           fallback={
-            <div class="bg-surface/50 rounded-xl border border-white/[0.06] p-12 text-center">
-              <p class="text-zinc-400 font-medium mb-1">Thread not found</p>
-              <p class="text-sm text-zinc-600">
-                This thread may have been deleted or doesn't exist.
-              </p>
-            </div>
+            <Show when={!threadResult.isLoading()} fallback={
+              <div class="bg-surface/50 rounded-xl border border-white/[0.06] p-12 text-center">
+                <p class="text-zinc-400 font-medium mb-1">Loading thread...</p>
+              </div>
+            }>
+              <div class="bg-surface/50 rounded-xl border border-white/[0.06] p-12 text-center">
+                <p class="text-zinc-400 font-medium mb-1">Thread not found</p>
+                <p class="text-sm text-zinc-600">
+                  This thread may have been deleted or doesn't exist.
+                </p>
+              </div>
+            </Show>
           }
         >
           {(threadData) => (

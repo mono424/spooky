@@ -51,7 +51,14 @@ function Layout(props: any) {
       <header class="bg-zinc-950/80 backdrop-blur-md border-b border-white/[0.06] sticky top-0 z-50 h-14">
         <div class="max-w-5xl mx-auto px-6 h-full">
           <div class="flex justify-between items-center h-full">
-            <span class="text-lg font-semibold tracking-tight">threads</span>
+            <a
+              href="/"
+              onClick={(e) => { e.preventDefault(); navigate('/'); }}
+              class="text-xl tracking-tighter hover:opacity-80 transition-opacity duration-150 cursor-pointer lowercase"
+              style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; letter-spacing: -0.04em;"
+            >
+              threads.
+            </a>
 
             <Show
               when={auth.userId()}

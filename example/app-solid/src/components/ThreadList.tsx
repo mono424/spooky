@@ -1,4 +1,4 @@
-import { For, createSignal, createEffect } from 'solid-js';
+import { For, Show, createSignal, createEffect } from 'solid-js';
 import { useNavigate } from '@solidjs/router';
 import { useQuery, useDb } from '@spooky-sync/client-solid';
 import { useKeyboard } from '../lib/keyboard';
@@ -93,10 +93,16 @@ export function ThreadList() {
         <For
           each={threads()}
           fallback={
-            <div class="bg-surface/50 rounded-xl border border-white/[0.06] py-16 text-center">
-              <p class="text-zinc-500 text-sm">No threads yet</p>
-              <p class="text-zinc-600 text-xs mt-1">Create the first one to get started.</p>
-            </div>
+            <Show when={!threadsResult.isLoading()} fallback={
+              <div class="bg-surface/50 rounded-xl border border-white/[0.06] py-16 text-center">
+                <p class="text-zinc-500 text-sm">Loading threads...</p>
+              </div>
+            }>
+              <div class="bg-surface/50 rounded-xl border border-white/[0.06] py-16 text-center">
+                <p class="text-zinc-500 text-sm">No threads yet</p>
+                <p class="text-zinc-600 text-xs mt-1">Create the first one to get started.</p>
+              </div>
+            </Show>
           }
         >
           {(thread, index) => (

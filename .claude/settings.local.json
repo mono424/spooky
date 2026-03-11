@@ -87,7 +87,11 @@
       "Bash(done)",
       "Bash(../../apps/cli/target/debug/spooky:*)",
       "Bash(/Users/khadim/dev/spooky/apps/cli/target/release/spooky migrate:*)",
-      "Bash(rm:*)"
+      "Bash(rm:*)",
+      "Bash(ls packages/core/node_modules/.bin/tsc 2>/dev/null && packages/core/node_modules/.bin/tsc --noEmit -p packages/core/tsconfig.json 2>&1 | tail -20 || echo \"tsc not found in core, trying root\" && ls node_modules/.bin/tsc 2>/dev/null && node_modules/.bin/tsc --noEmit -p packages/core/tsconfig.json 2>&1 | tail -20)",
+      "Bash(packages/core/node_modules/.bin/tsc --noEmit -p packages/core/tsconfig.json 2>&1 | grep -v utils.test)",
+      "Bash(ls packages/client-solid/node_modules/.bin/tsc 2>/dev/null && packages/client-solid/node_modules/.bin/tsc --noEmit -p packages/client-solid/tsconfig.json 2>&1 | tail -10 || echo \"no local tsc\")",
+      "Bash(git log:*)"
     ],
     "deny": [],
     "ask": []
