@@ -23,9 +23,6 @@
       "run_at": "document_start"
     }
   ],
-  "permissions": [
-    "tabs"
-  ],
   "host_permissions": [
     "<all_urls>"
   ],
