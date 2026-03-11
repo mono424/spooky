@@ -608,7 +608,7 @@ fn write_schema_package(
         "Empty" => "-- Empty Schema\n".to_string(),
         "Minimal (User + Auth)" => MINIMAL_SCHEMA.to_string(),
         "Example (User + Threads + Comments)" => {
-            include_str!("../../../example/schema/src/schema.surql").to_string()
+            include_str!("example_schema.surql").to_string()
         }
         _ => "-- Empty Schema\n".to_string(),
     };
@@ -643,7 +643,7 @@ fn write_schema_package(
     )?;
     write_file(
         schema_path.join("docker-compose.surrealism.yml"),
-        include_str!("../../../example/schema/docker-compose.surrealism.yml"),
+        include_str!("docker-compose.surrealism.yml"),
     )?;
 
     // .gitignore (only when nested inside a monorepo — root .gitignore is written by caller)
