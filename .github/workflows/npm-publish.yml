@@ -263,7 +263,13 @@ jobs:
           VERSION="${{ needs.prepare.outputs.version }}"
           jq --arg v "$VERSION" '
             .version = $v |
-            .optionalDependencies = (.optionalDependencies | to_entries | map(.value = $v) | from_entries)
+            .optionalDependencies = {
+              "@spooky-sync/cli-darwin-arm64": $v,
+              "@spooky-sync/cli-darwin-x64": $v,
+              "@spooky-sync/cli-linux-arm64": $v,
+              "@spooky-sync/cli-linux-x64": $v,
+              "@spooky-sync/cli-win32-x64": $v
+            }
           ' package.json > tmp.json && mv tmp.json package.json
 
       - name: Build JS bundle
