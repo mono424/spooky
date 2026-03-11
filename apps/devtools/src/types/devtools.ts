@@ -87,7 +87,7 @@ export interface SpookyTableDataResponse {
 
 // UI State Types
 
-export type TabType = 'events' | 'queries' | 'database' | 'auth';
+export type TabType = 'events' | 'queries' | 'database' | 'auth' | 'mcp';
 
 export interface UIState {
   activeTab: TabType;

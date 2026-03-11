@@ -5,7 +5,7 @@ import { AuthProvider, useAuth } from './lib/auth';
 import { dbConfig } from './db';
 import { AuthDialog } from './components/AuthDialog';
 import { PendingMutationsIndicator } from './components/PendingMutationsIndicator';
-import { useKeyboard, useShortcutsHelp } from './lib/keyboard';
+import { createHotkey, createHotkeySequence, useShortcutsHelp } from './lib/keyboard';
 import { ShortcutsHelp } from './components/ShortcutsHelp';
 import { useNavigate } from '@solidjs/router';
 
@@ -15,6 +15,7 @@ import ThreadPage from './routes/thread/[id]';
 import CreateThreadPage from './routes/create-thread';
 import ProfilePage from './routes/profile';
 import { ProfilePicture } from './components/ProfilePicture';
+import { Tooltip } from './components/Tooltip';
 
 function Layout(props: any) {
   const auth = useAuth();
@@ -29,11 +30,10 @@ function Layout(props: any) {
     }
   });
 
-  useKeyboard({
-    '?': () => toggleHelp(),
-    c: () => navigate('/create-thread'),
-    'g h': () => navigate('/'),
-  });
+  createHotkey({ key: '/', shift: true }, () => toggleHelp());
+  createHotkey('C', () => navigate('/create-thread'));
+  createHotkeySequence(['G', 'H'], () => navigate('/'));
+  createHotkeySequence(['G', 'P'], () => navigate('/profile'));
 
   const openAuth = (mode: 'signin' | 'signup') => {
     setAuthMode(mode);
@@ -46,19 +46,21 @@ function Layout(props: any) {
   };
 
   return (
-    <div class="min-h-screen bg-zinc-950 text-white font-sans selection:bg-accent/30 selection:text-white flex flex-col">
+    <div class="min-h-screen bg-zinc-950 text-white font-sans selection:bg-zinc-700 selection:text-white flex flex-col">
       {/* Header */}
       <header class="bg-zinc-950/80 backdrop-blur-md border-b border-white/[0.06] sticky top-0 z-50 h-14">
         <div class="max-w-5xl mx-auto px-6 h-full">
           <div class="flex justify-between items-center h-full">
-            <a
-              href="/"
-              onClick={(e) => { e.preventDefault(); navigate('/'); }}
-              class="text-xl tracking-tighter hover:opacity-80 transition-opacity duration-150 cursor-pointer lowercase"
-              style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; letter-spacing: -0.04em;"
-            >
-              threads.
-            </a>
+            <Tooltip text="Go home" kbd="g h">
+              <a
+                href="/"
+                onClick={(e) => { e.preventDefault(); navigate('/'); }}
+                class="text-xl tracking-tighter hover:opacity-80 transition-opacity duration-150 cursor-pointer lowercase"
+                style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; letter-spacing: -0.04em;"
+              >
+                threads.
+              </a>
+            </Tooltip>
 
             <Show
               when={auth.userId()}
@@ -72,7 +74,7 @@ function Layout(props: any) {
                   </button>
                   <button
                     onMouseDown={() => openAuth('signup')}
-                    class="bg-accent hover:bg-accent-hover text-white text-sm font-medium px-4 py-1.5 rounded-lg transition-colors duration-150"
+                    class="bg-surface hover:bg-surface-hover border border-white/[0.06] text-zinc-300 hover:text-white text-sm font-medium px-4 py-1.5 rounded-lg transition-colors duration-150"
                   >
                     Sign up
                   </button>
@@ -109,9 +111,9 @@ function Layout(props: any) {
             <div class="h-full flex items-center justify-center min-h-[80vh] px-6">
               <div class="text-center w-full max-w-sm">
                 {/* Logo mark */}
-                <div class="w-14 h-14 rounded-2xl bg-accent/10 border border-accent/20 flex items-center justify-center mx-auto mb-6">
+                <div class="w-14 h-14 rounded-2xl bg-zinc-800 border border-white/[0.06] flex items-center justify-center mx-auto mb-6">
                   <svg
-                    class="w-7 h-7 text-accent"
+                    class="w-7 h-7 text-zinc-400"
                     fill="none"
                     stroke="currentColor"
                     viewBox="0 0 24 24"
@@ -133,7 +135,7 @@ function Layout(props: any) {
                 <div class="flex flex-col gap-3">
                   <button
                     onMouseDown={() => openAuth('signin')}
-                    class="w-full bg-accent hover:bg-accent-hover text-white px-6 py-3 rounded-lg font-medium transition-colors duration-150"
+                    class="w-full bg-surface hover:bg-surface-hover border border-white/[0.06] text-zinc-300 hover:text-white px-6 py-3 rounded-lg font-medium transition-colors duration-150"
                   >
                     Sign in
                   </button>
@@ -171,7 +173,7 @@ export default function App() {
       fallback={
         <div class="min-h-screen bg-zinc-950 text-white font-sans flex flex-col items-center justify-center gap-3">
           <svg
-            class="animate-spin h-5 w-5 text-accent"
+            class="animate-spin h-5 w-5 text-zinc-400"
             xmlns="http://www.w3.org/2000/svg"
             fill="none"
             viewBox="0 0 24 24"

@@ -1,11 +1,24 @@
 import { createSignal, createEffect, Show } from 'solid-js';
+import { useNavigate } from '@solidjs/router';
 import { useAuth } from '../lib/auth';
 import { useDb, useFileUpload, useDownloadFile } from '@spooky-sync/client-solid';
 import { schema } from '../schema.gen';
+import { createHotkey, createHotkeySequence, isInputActive } from '../lib/keyboard';
+import { Tooltip } from './Tooltip';
 
 export function ProfileEdit() {
   const db = useDb<typeof schema>();
   const auth = useAuth();
+  const navigate = useNavigate();
+
+  createHotkeySequence(['G', 'H'], () => navigate('/'));
+  createHotkey('Escape', () => {
+    if (isInputActive()) {
+      (document.activeElement as HTMLElement).blur();
+    } else {
+      navigate('/');
+    }
+  }, { ignoreInputs: false });
 
   // Username form state
   const [username, setUsername] = createSignal('');
@@ -88,7 +101,19 @@ export function ProfileEdit() {
 
   return (
     <div class="max-w-lg mx-auto py-8 space-y-6">
-      <h1 class="text-2xl font-semibold tracking-tight">Edit profile</h1>
+      <div class="flex items-center gap-3">
+        <Tooltip text="Go home" kbd="Esc">
+          <button
+            onMouseDown={() => navigate('/')}
+            class="inline-flex items-center justify-center w-8 h-8 text-zinc-500 hover:text-white rounded-lg transition-colors duration-150"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+            </svg>
+          </button>
+        </Tooltip>
+        <h1 class="text-2xl font-semibold tracking-tight">Edit profile</h1>
+      </div>
 
       {/* Profile Picture Card */}
       <div class="bg-surface border border-white/[0.06] rounded-xl p-6">
@@ -97,7 +122,7 @@ export function ProfileEdit() {
           <Show
             when={profilePicUrl()}
             fallback={
-              <div class="w-20 h-20 rounded-full bg-accent/20 text-accent flex items-center justify-center text-2xl font-semibold flex-shrink-0">
+              <div class="w-20 h-20 rounded-full bg-zinc-800 text-zinc-400 flex items-center justify-center text-2xl font-semibold flex-shrink-0">
                 {userInitial()}
               </div>
             }
@@ -113,7 +138,7 @@ export function ProfileEdit() {
               type="button"
               onMouseDown={() => fileInputRef.click()}
               disabled={fileUpload.isUploading()}
-              class="bg-accent hover:bg-accent-hover text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
+              class="bg-surface hover:bg-surface-hover border border-white/[0.06] text-zinc-300 hover:text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {fileUpload.isUploading() ? 'Uploading...' : 'Change picture'}
             </button>
@@ -147,7 +172,7 @@ export function ProfileEdit() {
                 setError('');
                 setSuccess('');
               }}
-              class="w-full bg-zinc-950 border border-white/[0.06] rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-accent/50 transition-colors duration-150 placeholder-zinc-600 text-sm"
+              class="w-full bg-zinc-950 border border-white/[0.06] rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-zinc-600 transition-colors duration-150 placeholder-zinc-600 text-sm"
               placeholder="Enter username"
             />
             <p class="mt-1.5 text-xs text-zinc-500">Must be longer than 3 characters.</p>
@@ -169,7 +194,7 @@ export function ProfileEdit() {
             <button
               type="submit"
               disabled={isLoading() || !username().trim()}
-              class="bg-accent hover:bg-accent-hover text-white text-sm font-medium px-5 py-2.5 rounded-lg transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
+              class="bg-surface hover:bg-surface-hover border border-white/[0.06] text-zinc-300 hover:text-white text-sm font-medium px-5 py-2.5 rounded-lg transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isLoading() ? 'Saving...' : 'Save changes'}
             </button>

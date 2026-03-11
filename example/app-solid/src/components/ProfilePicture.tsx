@@ -25,7 +25,7 @@ export function ProfilePicture(props: {
     <Show
       when={profilePicUrl()}
       fallback={
-        <div class={`${classes()} rounded-full bg-accent/15 text-accent flex items-center justify-center font-semibold flex-shrink-0`}>
+        <div class={`${classes()} rounded-full bg-zinc-800 text-zinc-400 flex items-center justify-center font-semibold flex-shrink-0`}>
           {userInitial()}
         </div>
       }

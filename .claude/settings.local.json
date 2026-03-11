@@ -91,7 +91,21 @@
       "Bash(ls packages/core/node_modules/.bin/tsc 2>/dev/null && packages/core/node_modules/.bin/tsc --noEmit -p packages/core/tsconfig.json 2>&1 | tail -20 || echo \"tsc not found in core, trying root\" && ls node_modules/.bin/tsc 2>/dev/null && node_modules/.bin/tsc --noEmit -p packages/core/tsconfig.json 2>&1 | tail -20)",
       "Bash(packages/core/node_modules/.bin/tsc --noEmit -p packages/core/tsconfig.json 2>&1 | grep -v utils.test)",
       "Bash(ls packages/client-solid/node_modules/.bin/tsc 2>/dev/null && packages/client-solid/node_modules/.bin/tsc --noEmit -p packages/client-solid/tsconfig.json 2>&1 | tail -10 || echo \"no local tsc\")",
-      "Bash(git log:*)"
+      "Bash(git log:*)",
+      "Bash(grep -r \"@anthropic-ai/sdk\\\\|\"@modelcontextprotocol\\\\|mcp\\\\|MCP\" /Users/khadim/dev/spooky --include=\"*.json\" --include=\"*.ts\" --include=\"*.tsx\" 2>/dev/null | grep -v node_modules | grep -v dist | head -20)",
+      "WebFetch(domain:tanstack.com)",
+      "WebFetch(domain:www.npmjs.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(kill 13614 2>/dev/null; sleep 1)",
+      "Bash(printf '{\"\"\"\"jsonrpc\"\"\"\":\"\"\"\"2.0\"\"\"\",\"\"\"\"id\"\"\"\":1,\"\"\"\"method\"\"\"\":\"\"\"\"initialize\"\"\"\",\"\"\"\"params\"\"\"\":{\"\"\"\"protocolVersion\"\"\"\":\"\"\"\"2024-11-05\"\"\"\",\"\"\"\"capabilities\"\"\"\":{},\"\"\"\"clientInfo\"\"\"\":{\"\"\"\"name\"\"\"\":\"\"\"\"test\"\"\"\",\"\"\"\"version\"\"\"\":\"\"\"\"1.0.0\"\"\"\"}}}\\\\n{\"\"\"\"jsonrpc\"\"\"\":\"\"\"\"2.0\"\"\"\",\"\"\"\"method\"\"\"\":\"\"\"\"notifications/initialized\"\"\"\"}\\\\n{\"\"\"\"jsonrpc\"\"\"\":\"\"\"\"2.0\"\"\"\",\"\"\"\"id\"\"\"\":2,\"\"\"\"method\"\"\"\":\"\"\"\"tools/list\"\"\"\",\"\"\"\"params\"\"\"\":{}}\\\\n')",
+      "Bash(printf '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test\",\"version\":\"1.0.0\"}}}\\\\n{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\\\\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"list_connections\",\"arguments\":{}}}\\\\n' | timeout 5 node /Users/khadim/dev/spooky/apps/devtools-mcp/dist/index.js 2>/dev/null || true)",
+      "Bash(printf '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test\",\"version\":\"1.0.0\"}}}\\\\n{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\\\\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"get_state\",\"arguments\":{}}}\\\\n' | timeout 5 node /Users/khadim/dev/spooky/apps/devtools-mcp/dist/index.js 2>/dev/null || true)",
+      "Bash(printf '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test\",\"version\":\"1.0.0\"}}}\\\\n{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\\\\n{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"resources/list\",\"params\":{}}\\\\n' | timeout 5 node /Users/khadim/dev/spooky/apps/devtools-mcp/dist/index.js 2>/dev/null || true)",
+      "mcp__spooky-devtools__list_connections",
+      "Bash(ls -la /Users/khadim/dev/spooky/node_modules/.pnpm/rolldown@1.0.0-rc.3/node_modules/@rolldown/binding-darwin-arm64/ 2>&1 | head -5 && echo \"---\" && file /Users/khadim/dev/spooky/node_modules/.pnpm/rolldown@1.0.0-rc.3/node_modules/@rolldown/binding-darwin-arm64/*.node 2>/dev/null || echo \"checking alternate path...\" && find /Users/khadim/dev/spooky/node_modules/.pnpm -name \"*.darwin-arm64.node\" 2>/dev/null | head -5)",
+      "mcp__spooky-devtools__list_tables",
+      "mcp__spooky-devtools__get_state",
+      "mcp__spooky-devtools__get_active_queries"
     ],
     "deny": [],
     "ask": []

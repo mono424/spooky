@@ -3,6 +3,7 @@ import { useAuth } from '../lib/auth';
 import { RecordId, Uuid, useDb } from '@spooky-sync/client-solid';
 import { schema } from '../schema.gen';
 import { ProfilePicture } from './ProfilePicture';
+import { Tooltip } from './Tooltip';
 
 interface CommentFormProps {
   thread: Accessor<{ id: string }>;
@@ -63,9 +64,15 @@ export function CommentForm(props: CommentFormProps) {
             onInput={(e) => setContent(e.currentTarget.value)}
             onFocus={() => setIsFocused(true)}
             onBlur={() => setIsFocused(false)}
-            placeholder="Write a reply..."
+            onKeyDown={(e) => {
+              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                e.preventDefault();
+                if (content().trim() && !isLoading()) handleSubmit(e);
+              }
+            }}
+            placeholder="Write a comment... (Tap r to focus)"
             rows={isFocused() || content().length > 0 ? '3' : '1'}
-            class="w-full bg-surface text-white px-4 py-2.5 border border-white/[0.06] focus:border-accent/40 outline-none resize-none rounded-xl placeholder-zinc-600 text-sm leading-relaxed block transition-all duration-150"
+            class="w-full bg-surface text-white px-4 py-2.5 border border-white/[0.06] focus:border-zinc-600 outline-none resize-none rounded-xl placeholder-zinc-600 text-sm leading-relaxed block transition-all duration-150"
             required
           />
 
@@ -75,13 +82,15 @@ export function CommentForm(props: CommentFormProps) {
                 {content().length > 0 ? `${content().length} characters` : ''}
               </span>
 
-              <button
-                type="submit"
-                disabled={isLoading() || !content().trim()}
-                class="bg-accent hover:bg-accent-hover text-white px-4 py-1.5 rounded-lg text-sm font-medium transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isLoading() ? 'Posting...' : 'Reply'}
-              </button>
+              <Tooltip text="Reply" kbd={`${navigator.platform.includes('Mac') ? '\u2318' : 'Ctrl'}+\u21B5`} position="top">
+                <button
+                  type="submit"
+                  disabled={isLoading() || !content().trim()}
+                  class="bg-surface hover:bg-surface-hover border border-white/[0.06] text-zinc-300 hover:text-white px-4 py-1.5 rounded-lg text-sm font-medium transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isLoading() ? 'Posting...' : 'Reply'}
+                </button>
+              </Tooltip>
             </div>
           )}
         </div>

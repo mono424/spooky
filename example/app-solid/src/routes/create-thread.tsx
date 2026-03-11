@@ -12,7 +12,11 @@ export default function CreateThreadPage() {
 
   const handleClose = () => {
     setShowDialog(false);
-    navigate('/');
+    if (window.history.length > 1) {
+      window.history.back();
+    } else {
+      navigate('/');
+    }
   };
 
   return <CreateThreadDialog isOpen={showDialog()} onClose={handleClose} />;

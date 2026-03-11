@@ -45,6 +45,7 @@ import { PushEventOptions } from '../../events/index';
  */
 export class DataModule<S extends SchemaStructure> {
   private activeQueries: Map<QueryHash, QueryState> = new Map();
+  private pendingQueries: Map<QueryHash, Promise<QueryHash>> = new Map();
   private subscriptions: Map<QueryHash, Set<QueryUpdateCallback>> = new Map();
   private mutationCallbacks: Set<MutationCallback> = new Set();
   private debounceTimers: Map<QueryHash, NodeJS.Timeout> = new Map();
@@ -91,44 +92,29 @@ export class DataModule<S extends SchemaStructure> {
       return hash;
     }
 
+    // Another call is already creating this query — wait for it
+    if (this.pendingQueries.has(hash)) {
+      this.logger.debug(
+        { hash, Category: 'spooky-client::DataModule::query' },
+        'Query Initialization: pending, waiting for existing creation'
+      );
+      await this.pendingQueries.get(hash);
+      return hash;
+    }
+
     this.logger.debug(
       { hash, Category: 'spooky-client::DataModule::query' },
       'Query Initialization: not found, creating new query'
     );
-    const queryState = await this.createNewQuery<T>({
-      recordId,
-      surql: surqlString,
-      params,
-      ttl,
-      tableName,
-    });
 
-    const { localArray } = this.cache.registerQuery({
-      queryHash: hash,
-      surql: surqlString,
-      params,
-      ttl: new Duration(ttl),
-      lastActiveAt: new Date(),
-    });
-
-    await withRetry(this.logger, () =>
-      this.local.query(surql.seal(surql.updateSet('id', ['localArray'])), {
-        id: recordId,
-        localArray,
-      })
-    );
-
-    this.activeQueries.set(hash, queryState);
-    this.startTTLHeartbeat(queryState);
-    this.logger.debug(
-      {
-        hash,
-        tableName,
-        recordCount: queryState.records.length,
-        Category: 'spooky-client::DataModule::query',
-      },
-      'Query registered'
-    );
+    // Create the query and track the pending promise
+    const promise = this.createAndRegisterQuery<T>(hash, recordId, surqlString, params, ttl, tableName);
+    this.pendingQueries.set(hash, promise);
+    try {
+      await promise;
+    } finally {
+      this.pendingQueries.delete(hash);
+    }
 
     return hash;
   }
@@ -685,6 +671,52 @@ export class DataModule<S extends SchemaStructure> {
   }
 
   // ==================== PRIVATE HELPERS ====================
+
+  private async createAndRegisterQuery<T extends TableNames<S>>(
+    hash: QueryHash,
+    recordId: RecordId,
+    surqlString: string,
+    params: Record<string, any>,
+    ttl: QueryTimeToLive,
+    tableName: T
+  ): Promise<QueryHash> {
+    const queryState = await this.createNewQuery<T>({
+      recordId,
+      surql: surqlString,
+      params,
+      ttl,
+      tableName,
+    });
+
+    const { localArray } = this.cache.registerQuery({
+      queryHash: hash,
+      surql: surqlString,
+      params,
+      ttl: new Duration(ttl),
+      lastActiveAt: new Date(),
+    });
+
+    await withRetry(this.logger, () =>
+      this.local.query(surql.seal(surql.updateSet('id', ['localArray'])), {
+        id: recordId,
+        localArray,
+      })
+    );
+
+    this.activeQueries.set(hash, queryState);
+    this.startTTLHeartbeat(queryState);
+    this.logger.debug(
+      {
+        hash,
+        tableName,
+        recordCount: queryState.records.length,
+        Category: 'spooky-client::DataModule::query',
+      },
+      'Query registered'
+    );
+
+    return hash;
+  }
 
   private async createNewQuery<T extends TableNames<S>>({
     recordId,

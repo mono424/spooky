@@ -6,6 +6,7 @@ import { EventsTab } from './components/events/EventsTab';
 import { QueriesTab } from './components/queries/QueriesTab';
 import { DatabaseTab } from './components/database/DatabaseTab';
 import { AuthTab } from './components/auth/AuthTab';
+import { McpTab } from './components/mcp/McpTab';
 
 function AppContent() {
   const { activeTab } = useDevTools();
@@ -37,6 +38,12 @@ function AppContent() {
         <div class="tab-content" classList={{ active: activeTab() === 'auth' }}>
           <Show when={activeTab() === 'auth'}>
             <AuthTab />
+          </Show>
+        </div>
+
+        <div class="tab-content" classList={{ active: activeTab() === 'mcp' }}>
+          <Show when={activeTab() === 'mcp'}>
+            <McpTab />
           </Show>
         </div>
       </div>

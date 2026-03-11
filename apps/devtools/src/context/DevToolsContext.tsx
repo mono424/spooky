@@ -17,6 +17,12 @@ import { useChromeConnection } from '../hooks/useChromeConnection';
 import { useRunInHostPage } from '../hooks/useRunInHostPage';
 import { adaptBackendState } from '../utils/state-adapter';
 
+interface McpStatus {
+  enabled: boolean;
+  connected: boolean;
+  port: number;
+}
+
 interface DevToolsContextValue {
   // State
   state: DevToolsState;
@@ -24,6 +30,8 @@ interface DevToolsContextValue {
   selectedQueryHash: () => number | null;
   selectedTable: () => string | null;
   isSpookyAvailable: () => boolean;
+  mcpStatus: () => McpStatus;
+  setMcpEnabled: (enabled: boolean) => void;
 
   // Actions
   setActiveTab: (tab: TabType) => void;
@@ -61,13 +69,15 @@ export const DevToolsProvider: ParentComponent = (props) => {
   const [selectedQueryHash, setSelectedQueryHash] = createSignal<number | null>(null);
   const [selectedTable, setSelectedTable] = createSignal<string | null>(null);
   const [isSpookyAvailable, setIsSpookyAvailable] = createSignal(false);
+  const [mcpStatus, setMcpStatus] = createSignal<McpStatus>({ enabled: false, connected: false, port: 9315 });
 
   // Custom hooks
-  const { requestState } = useChromeConnection({
+  const { requestState, sendMessage } = useChromeConnection({
     onMessage: handleMessage,
     onConnect: () => {
       console.log('[DevTools] Chrome connection established');
       checkSpooky();
+      sendMessage({ type: 'GET_MCP_STATUS' });
     },
     onDisconnect: () => {
       console.log('[DevTools] Chrome connection lost');
@@ -147,6 +157,14 @@ export const DevToolsProvider: ParentComponent = (props) => {
             msg.requestId
           );
         }
+        break;
+
+      case 'MCP_STATUS':
+        setMcpStatus({
+          enabled: (message as any).enabled ?? false,
+          connected: (message as any).connected ?? false,
+          port: (message as any).port ?? 9315,
+        });
         break;
 
       case 'PAGE_RELOADED':
@@ -471,12 +489,18 @@ export const DevToolsProvider: ParentComponent = (props) => {
     }
   };
 
+  function setMcpEnabledAction(enabled: boolean) {
+    sendMessage({ type: 'SET_MCP_ENABLED', enabled } as any);
+  }
+
   const contextValue: DevToolsContextValue = {
     state,
     activeTab,
     selectedQueryHash,
     selectedTable,
     isSpookyAvailable,
+    mcpStatus,
+    setMcpEnabled: setMcpEnabledAction,
     setActiveTab,
     setSelectedQueryHash,
     setSelectedTable,
