@@ -60,12 +60,12 @@ const ThreadList = () => {
 
 ## Packages
 
-| Package | Description |
-|---------|-------------|
-| [`@spooky-sync/core`](https://www.npmjs.com/package/@spooky-sync/core) | Core client SDK — sync engine, caching, reactivity |
-| [`@spooky-sync/client-solid`](https://www.npmjs.com/package/@spooky-sync/client-solid) | SolidJS bindings (`useQuery`, etc.) |
-| [`@spooky-sync/query-builder`](https://www.npmjs.com/package/@spooky-sync/query-builder) | Type-safe query builder |
-| [`@spooky-sync/cli`](https://www.npmjs.com/package/@spooky-sync/cli) | CLI for schema generation |
+| Package                                                                                  | Description                                        |
+| ---------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| [`@spooky-sync/core`](https://www.npmjs.com/package/@spooky-sync/core)                   | Core client SDK — sync engine, caching, reactivity |
+| [`@spooky-sync/client-solid`](https://www.npmjs.com/package/@spooky-sync/client-solid)   | SolidJS bindings (`useQuery`, etc.)                |
+| [`@spooky-sync/query-builder`](https://www.npmjs.com/package/@spooky-sync/query-builder) | Type-safe query builder                            |
+| [`@spooky-sync/cli`](https://www.npmjs.com/package/@spooky-sync/cli)                     | CLI for schema generation                          |
 
 ## Example App
 
@@ -85,7 +85,7 @@ Contributions are welcome! This is a monorepo — see the individual package dir
 
 ## License
 
-[ISC](LICENSE)
+[MIT](LICENSE)
 
 ---
 
