@@ -99,7 +99,14 @@ jobs:
 
       - name: Publish query-builder
         working-directory: packages/query-builder
-        run: npm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
+        run: |
+          PACKAGE_NAME=$(jq -r .name package.json)
+          if npm view "$PACKAGE_NAME" --json 2>/dev/null | jq -e .name > /dev/null 2>&1; then
+            npm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
+          else
+            echo "Package $PACKAGE_NAME does not exist on npm yet — publishing without provenance to create it"
+            npm publish --access public --tag ${{ needs.prepare.outputs.npm_tag }}
+          fi
 
       # 2. Build @spooky-sync/ssp-wasm (private — not published)
       - name: Build ssp-wasm
@@ -114,7 +121,14 @@ jobs:
 
       - name: Publish core
         working-directory: packages/core
-        run: npm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
+        run: |
+          PACKAGE_NAME=$(jq -r .name package.json)
+          if npm view "$PACKAGE_NAME" --json 2>/dev/null | jq -e .name > /dev/null 2>&1; then
+            npm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
+          else
+            echo "Package $PACKAGE_NAME does not exist on npm yet — publishing without provenance to create it"
+            npm publish --access public --tag ${{ needs.prepare.outputs.npm_tag }}
+          fi
 
       # 4. Build and publish @spooky-sync/client-solid
       - name: Set version — client-solid
@@ -125,7 +139,14 @@ jobs:
 
       - name: Publish client-solid
         working-directory: packages/client-solid
-        run: npm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
+        run: |
+          PACKAGE_NAME=$(jq -r .name package.json)
+          if npm view "$PACKAGE_NAME" --json 2>/dev/null | jq -e .name > /dev/null 2>&1; then
+            npm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
+          else
+            echo "Package $PACKAGE_NAME does not exist on npm yet — publishing without provenance to create it"
+            npm publish --access public --tag ${{ needs.prepare.outputs.npm_tag }}
+          fi
 
   build-cli-binaries:
     needs: [prepare, validate-versions]
@@ -233,7 +254,14 @@ jobs:
 
       - name: Publish platform package
         working-directory: apps/cli/npm/${{ matrix.package }}
-        run: npm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
+        run: |
+          PACKAGE_NAME=$(jq -r .name package.json)
+          if npm view "$PACKAGE_NAME" --json 2>/dev/null | jq -e .name > /dev/null 2>&1; then
+            npm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
+          else
+            echo "Package $PACKAGE_NAME does not exist on npm yet — publishing without provenance to create it"
+            npm publish --access public --tag ${{ needs.prepare.outputs.npm_tag }}
+          fi
 
   publish-cli:
     needs: [prepare, publish-cli-platform-packages]
@@ -283,4 +311,11 @@ jobs:
 
       - name: Publish CLI
         working-directory: apps/cli
-        run: npm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
+        run: |
+          PACKAGE_NAME=$(jq -r .name package.json)
+          if npm view "$PACKAGE_NAME" --json 2>/dev/null | jq -e .name > /dev/null 2>&1; then
+            npm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
+          else
+            echo "Package $PACKAGE_NAME does not exist on npm yet — publishing without provenance to create it"
+            npm publish --access public --tag ${{ needs.prepare.outputs.npm_tag }}
+          fi

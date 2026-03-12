@@ -1,6 +1,6 @@
 {
   "name": "@spooky-sync/devtools-mcp",
-  "version": "0.0.1-canary.7",
+  "version": "0.0.1-canary.8",
   "private": true,
   "type": "module",
   "bin": {
