@@ -1,6 +1,6 @@
 {
   "name": "@example/schema",
-  "version": "0.0.1-canary.9",
+  "version": "0.0.1-canary.10",
   "description": "Database schema and types for SurrealDB",
   "scripts": {
     "start": "node run.js up -d",
