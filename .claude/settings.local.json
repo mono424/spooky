@@ -105,7 +105,9 @@
       "Bash(ls -la /Users/khadim/dev/spooky/node_modules/.pnpm/rolldown@1.0.0-rc.3/node_modules/@rolldown/binding-darwin-arm64/ 2>&1 | head -5 && echo \"---\" && file /Users/khadim/dev/spooky/node_modules/.pnpm/rolldown@1.0.0-rc.3/node_modules/@rolldown/binding-darwin-arm64/*.node 2>/dev/null || echo \"checking alternate path...\" && find /Users/khadim/dev/spooky/node_modules/.pnpm -name \"*.darwin-arm64.node\" 2>/dev/null | head -5)",
       "mcp__spooky-devtools__list_tables",
       "mcp__spooky-devtools__get_state",
-      "mcp__spooky-devtools__get_active_queries"
+      "mcp__spooky-devtools__get_active_queries",
+      "Bash(find /Users/khadim/dev/spooky -maxdepth 4 \\\\\\( -name \".npmrc\" -o -name \"publish*\" \\\\\\) -type f 2>/dev/null | grep -v node_modules)",
+      "Bash(npm view:*)"
     ],
     "deny": [],
     "ask": []
