@@ -1,6 +1,6 @@
 {
   "name": "@spooky-sync/cli-linux-x64",
-  "version": "0.0.1-canary.10",
+  "version": "0.0.1-canary.11",
   "description": "Linux x64 binary for @spooky-sync/cli",
   "license": "MIT",
   "os": [
@@ -12,6 +12,10 @@
   "files": [
     "spooky"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mono424/spooky.git"
+  },
   "publishConfig": {
     "access": "public"
   }
