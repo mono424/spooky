@@ -10,8 +10,8 @@ export default {
           100: "#ede9ff",
           200: "#ddd6ff",
           300: "#c4b5ff",
-          400: "#a689ff",
-          500: "#8a59ff", // Primary brand color
+          400: "#9b8aff",
+          500: "#7c6aef", // Primary brand color
           600: "#7c34f7",
           700: "#6d22e3",
           800: "#5b1dbf",
@@ -60,6 +60,7 @@ export default {
           secondary: '#f4f4f5',
           tertiary: '#a1a1aa',
           muted: '#71717a',
+          quaternary: '#52525b',
         },
         // Legacy colors for backwards compatibility
         border: '#27272a',
@@ -71,8 +72,9 @@ export default {
       },
       fontSize: {
         // Hero & Section Headers
-        'hero': ['clamp(2.5rem, 5vw, 4.5rem)', { lineHeight: '1.1', letterSpacing: '-0.02em' }],
-        'section': ['clamp(2rem, 4vw, 3rem)', { lineHeight: '1.2', letterSpacing: '-0.01em' }],
+        'hero': ['clamp(2.5rem, 5vw, 4.5rem)', { lineHeight: '1.1', letterSpacing: '-0.03em' }],
+        'section': ['clamp(2rem, 4vw, 3rem)', { lineHeight: '1.2', letterSpacing: '-0.02em' }],
+        'subtitle': ['1.25rem', { lineHeight: '1.6', letterSpacing: '-0.01em' }],
         'card-title': ['clamp(1.25rem, 2vw, 1.5rem)', { lineHeight: '1.3' }],
         // Body Text (Professional & Readable)
         'body-lg': ['1.125rem', { lineHeight: '1.75', letterSpacing: '-0.01em' }], // 18px
@@ -84,10 +86,7 @@ export default {
         "fade-in-fast": "fadeIn 0.3s ease-in-out",
         "slide-up": "slideUp 0.5s ease-out",
         "slide-down": "slideDown 0.5s ease-out",
-        "scale-in": "scaleIn 0.4s ease-out",
-        "glow-pulse": "glowPulse 2s ease-in-out infinite",
-        "gradient": "gradient 8s ease infinite",
-        float: "float 3s ease-in-out infinite",
+        "fade-up": "fadeUp 0.6s cubic-bezier(0.16, 1, 0.3, 1)",
       },
       keyframes: {
         fadeIn: {
@@ -102,21 +101,9 @@ export default {
           "0%": { transform: "translateY(-20px)", opacity: "0" },
           "100%": { transform: "translateY(0)", opacity: "1" },
         },
-        scaleIn: {
-          "0%": { transform: "scale(0.95)", opacity: "0" },
-          "100%": { transform: "scale(1)", opacity: "1" },
-        },
-        glowPulse: {
-          "0%, 100%": { opacity: "1" },
-          "50%": { opacity: "0.5" },
-        },
-        gradient: {
-          "0%, 100%": { backgroundPosition: "0% 50%" },
-          "50%": { backgroundPosition: "100% 50%" },
-        },
-        float: {
-          "0%, 100%": { transform: "translateY(0px)" },
-          "50%": { transform: "translateY(-10px)" },
+        fadeUp: {
+          "0%": { opacity: "0", transform: "translateY(8px)" },
+          "100%": { opacity: "1", transform: "translateY(0)" },
         },
       },
       transitionDuration: {

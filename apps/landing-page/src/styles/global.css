@@ -55,12 +55,7 @@
 @layer components {
   /* Professional gradient text */
   .gradient-text {
-    @apply text-white underline decoration-2 decoration-white underline-offset-4;
-  }
-
-  /* Glass effect for cards and containers */
-  .glass-effect {
-    @apply bg-black/50 backdrop-blur-md border border-white/10;
+    @apply text-white;
   }
 
   /* Monospace font utility - use ONLY for code blocks */
@@ -70,30 +65,15 @@
 }
 
 @layer utilities {
-  /* 3D Tilt Animation for code block */
-  @keyframes tilt-in {
-    0% {
-      transform: perspective(1000px) rotateX(25deg);
-      opacity: 0;
-    }
-    100% {
-      transform: perspective(1000px) rotateX(0deg);
-      opacity: 1;
-    }
-  }
-
-  .animate-tilt-in {
-    animation: tilt-in 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
-    transform-style: preserve-3d;
-  }
-
-  /* Fade In Animation */
+  /* Fade In Animation (with subtle upward movement) */
   @keyframes fade-in {
     0% {
       opacity: 0;
+      transform: translateY(8px);
     }
     100% {
       opacity: 1;
+      transform: translateY(0);
     }
   }
 
@@ -123,38 +103,6 @@
     backface-visibility: hidden;
   }
 
-  /* Slide Up Animation */
-  @keyframes slide-up {
-    0% {
-      opacity: 0;
-      transform: translateY(20px);
-    }
-    100% {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
-
-  .animate-slide-up {
-    animation: slide-up 0.8s ease-out forwards;
-  }
-
-  /* Gradient Pulse Animation for HeroTerminal */
-  @keyframes gradient-pulse {
-    0%, 100% {
-      transform: scale(1) rotate(0deg);
-      opacity: 0.8;
-    }
-    50% {
-      transform: scale(1.1) rotate(3deg);
-      opacity: 0.6;
-    }
-  }
-
-  .terminal-gradient {
-    animation: gradient-pulse 4s ease-in-out infinite;
-  }
-
   /* Flip In Animation */
   @keyframes flip-in {
     0% {
@@ -170,6 +118,22 @@
   .animate-flip-in {
     animation: flip-in 1.2s ease-out forwards;
     transform-style: preserve-3d;
+  }
+
+  /* Slide Up Animation */
+  @keyframes slide-up {
+    0% {
+      opacity: 0;
+      transform: translateY(20px);
+    }
+    100% {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .animate-slide-up {
+    animation: slide-up 0.8s ease-out forwards;
   }
 
   /* Hero Grid Layout */
@@ -270,8 +234,8 @@
 
 .swiper-arrow {
   @apply w-12 h-12 rounded-full bg-surface-elevated border border-surface-border
-         text-text-tertiary hover:text-text-primary hover:border-brand-500/50
-         hover:bg-brand-500/10 transition-all duration-200
+         text-text-tertiary hover:text-text-primary hover:border-white/20
+         hover:bg-white/5 transition-all duration-200
          flex items-center justify-center
          disabled:opacity-30 disabled:cursor-not-allowed;
 }
@@ -281,13 +245,13 @@
 }
 
 .swiper-dot {
-  @apply h-3 rounded-full bg-surface-border transition-all duration-200
-         hover:bg-brand-500/50 cursor-pointer;
+  @apply h-3 rounded-full bg-white/20 transition-all duration-200
+         hover:bg-white/40 cursor-pointer;
   width: 12px;
 }
 
 .swiper-dot[aria-current="true"] {
-  @apply bg-brand-500;
+  @apply bg-white;
   width: 32px;
 }
 
@@ -455,21 +419,6 @@ details[open] .expanded-content {
   to {
     opacity: 1;
     transform: translateY(0);
-  }
-}
-
-.zoom-in-95 {
-  animation: zoomIn 0.1s ease-out;
-}
-
-@keyframes zoomIn {
-  from {
-    opacity: 0;
-    transform: scale(0.95);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
   }
 }
 
