@@ -269,7 +269,7 @@ export const LanguageOutputTabs: React.FC = () => {
       </div>
 
       {/* Code Panel */}
-      <div className="bg-surface p-6 min-h-[300px] overflow-x-auto">
+      <div className="bg-surface p-6 h-[280px] overflow-auto">
         <div key={activeTab} className="animate-in fade-in duration-200">
           {renderCode(codeExamples[activeTab], activeTab)}
         </div>

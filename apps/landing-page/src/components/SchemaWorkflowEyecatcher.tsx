@@ -1,76 +1,128 @@
 import React from 'react';
 import { SchemaFilePreview } from './SchemaFilePreview';
-import { GeneratedOutputGrid } from './GeneratedOutputGrid';
-import { TerminalCommand } from './TerminalCommand';
 import { LanguageOutputTabs } from './LanguageOutputTabs';
 
 export const SchemaWorkflowEyecatcher: React.FC = () => {
   return (
-    <details className="schema-details mt-12 max-w-7xl mx-auto border border-surface-border/30 rounded-2xl bg-surface/50 backdrop-blur-sm overflow-hidden transition-all duration-400 shadow-lg shadow-black/20">
-      <summary className="list-none cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 p-6 lg:p-8 hover:bg-surface/80 transition-colors">
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-start">
+      {/* Left: Schema file + arrow + generated output tabs */}
+      <div className="order-2 lg:order-1 space-y-3">
+        <SchemaFilePreview />
 
-        {/* Collapsed State */}
-        <div className="flex flex-col lg:flex-row gap-8 lg:gap-12 items-center">
-          {/* Left: Schema Preview */}
-          <div className="w-full lg:w-1/3 flex-shrink-0">
-            <SchemaFilePreview />
+        {/* Arrow indicating transformation */}
+        <div className="flex items-center justify-center py-1">
+          <div className="relative">
+            <div className="absolute inset-0 bg-brand-500/20 blur-lg rounded-full animate-pulse"></div>
+            <svg
+              className="w-6 h-6 text-brand-500 relative z-10"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M19 14l-7 7m0 0l-7-7m7 7V3"
+              />
+            </svg>
           </div>
+        </div>
 
-          {/* Center: Animated Arrow */}
-          <div className="flex-shrink-0">
-            <div className="relative">
-              <div className="absolute inset-0 bg-brand-500/20 blur-xl rounded-full animate-pulse"></div>
+        <LanguageOutputTabs />
+      </div>
+
+      {/* Right: Description sidebar */}
+      <div className="order-1 lg:order-2 space-y-8">
+        <div>
+          <div className="inline-block border border-brand-500/30 bg-brand-500/10 px-3 py-1.5 rounded-lg text-xs font-medium text-brand-400 mb-4">
+            Type Safety
+          </div>
+          <h3 className="text-2xl font-bold text-text-primary mb-4">Schema-First Development</h3>
+          <p className="text-text-tertiary text-body leading-relaxed">
+            Define your database schema once in SurrealDB, and let Spooky generate type-safe
+            clients for all your targets. One source of truth for your entire stack.
+          </p>
+        </div>
+
+        <div className="space-y-6">
+          {/* Multi-Target Codegen */}
+          <div className="group">
+            <h4 className="text-text-primary font-semibold mb-2 group-hover:text-brand-400 transition-colors flex items-center gap-2">
               <svg
-                className="w-10 h-10 text-brand-500 relative z-10 rotate-90 lg:rotate-0 transition-transform duration-300"
-                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+                width="16"
+                height="16"
                 viewBox="0 0 24 24"
+                fill="none"
                 stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
               >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M13 7l5 5m0 0l-5 5m5-5H6"
-                />
+                <path d="m18 16 4-4-4-4" />
+                <path d="m6 8-4 4 4 4" />
+                <path d="m14.5 4-5 16" />
               </svg>
-            </div>
+              Multi-Target Codegen
+            </h4>
+            <p className="text-text-tertiary leading-relaxed">
+              Generate TypeScript, Dart, and Zod clients from a single schema definition. Every
+              target stays in sync automatically.
+            </p>
           </div>
 
-          {/* Right: Generated Outputs */}
-          <div className="w-full lg:flex-1">
-            <GeneratedOutputGrid />
+          {/* End-to-End Type Safety */}
+          <div className="group">
+            <h4 className="text-text-primary font-semibold mb-2 group-hover:text-accent-400 transition-colors flex items-center gap-2">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10" />
+                <path d="m9 12 2 2 4-4" />
+              </svg>
+              End-to-End Type Safety
+            </h4>
+            <p className="text-text-tertiary leading-relaxed">
+              Types flow from your database schema to your application code. Catch errors at compile
+              time, not in production.
+            </p>
           </div>
-        </div>
 
-        {/* Expand CTA */}
-        <div className="mt-8 pt-6 border-t border-surface-border/50 flex items-center justify-center gap-2 text-base text-text-tertiary hover:text-text-primary transition-colors">
-          <span>Click to see generation in action</span>
-          <svg
-            className="w-5 h-5 transition-transform duration-300"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M19 9l-7 7-7-7"
-            />
-          </svg>
-        </div>
-      </summary>
-
-      {/* Expanded State */}
-      <div className="expanded-content border-t border-surface-border/50 bg-surface/30 p-6 lg:p-8">
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-12 items-start">
-          {/* Left: Terminal Command */}
-          <TerminalCommand />
-
-          {/* Right: Language Output Tabs */}
-          <LanguageOutputTabs />
+          {/* CLI Integration */}
+          <div className="group">
+            <h4 className="text-text-primary font-semibold mb-2 group-hover:text-brand-400 transition-colors flex items-center gap-2">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <polyline points="4 17 10 11 4 5" />
+                <line x1="12" x2="20" y1="19" y2="19" />
+              </svg>
+              CLI Integration
+            </h4>
+            <p className="text-text-tertiary leading-relaxed">
+              Run <code className="bg-surface px-1.5 py-0.5 rounded text-text-secondary font-mono text-sm">spooky generate</code> to
+              regenerate clients whenever your schema changes. Fits right into your workflow.
+            </p>
+          </div>
         </div>
       </div>
-    </details>
+    </div>
   );
 };

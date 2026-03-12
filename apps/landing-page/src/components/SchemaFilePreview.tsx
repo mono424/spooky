@@ -2,11 +2,11 @@ import React from 'react';
 
 export const SchemaFilePreview: React.FC = () => {
   return (
-    <div className="bg-surface/50 backdrop-blur-sm border border-surface-border rounded-xl p-6 lg:p-8">
+    <div className="bg-surface/50 backdrop-blur-sm border border-surface-border rounded-xl p-4 lg:p-5">
       {/* File Header */}
-      <div className="flex items-center gap-2 mb-4 text-sm text-text-tertiary">
+      <div className="flex items-center gap-2 mb-3 text-xs text-text-tertiary">
         <svg
-          className="w-4 h-4 text-accent-400"
+          className="w-3.5 h-3.5 text-accent-400"
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
@@ -22,7 +22,7 @@ export const SchemaFilePreview: React.FC = () => {
       </div>
 
       {/* Code Block */}
-      <div className="font-mono text-xs lg:text-sm leading-relaxed space-y-2">
+      <div className="font-mono text-xs leading-relaxed space-y-1">
         {/* User Table */}
         <div>
           <span className="text-purple-400 font-bold">DEFINE TABLE</span>{' '}
@@ -34,9 +34,7 @@ export const SchemaFilePreview: React.FC = () => {
           <span className="text-purple-400 font-bold">DEFINE FIELD</span>{' '}
           <span className="text-text-primary">username</span>{' '}
           <span className="text-purple-400 font-bold">ON</span>{' '}
-          <span className="text-text-primary">user</span>
-        </div>
-        <div className="pl-4">
+          <span className="text-text-primary">user</span>{' '}
           <span className="text-purple-400 font-bold">TYPE</span>{' '}
           <span className="text-blue-400">string</span>
           <span className="text-gray-500">;</span>
@@ -45,16 +43,13 @@ export const SchemaFilePreview: React.FC = () => {
           <span className="text-purple-400 font-bold">DEFINE FIELD</span>{' '}
           <span className="text-text-primary">email</span>{' '}
           <span className="text-purple-400 font-bold">ON</span>{' '}
-          <span className="text-text-primary">user</span>
-        </div>
-        <div className="pl-4">
+          <span className="text-text-primary">user</span>{' '}
           <span className="text-purple-400 font-bold">TYPE</span>{' '}
           <span className="text-blue-400">string</span>
           <span className="text-gray-500">;</span>
         </div>
 
-        {/* Spacing */}
-        <div className="h-2"></div>
+        <div className="h-1"></div>
 
         {/* Thread Table */}
         <div>
@@ -67,9 +62,7 @@ export const SchemaFilePreview: React.FC = () => {
           <span className="text-purple-400 font-bold">DEFINE FIELD</span>{' '}
           <span className="text-text-primary">title</span>{' '}
           <span className="text-purple-400 font-bold">ON</span>{' '}
-          <span className="text-text-primary">thread</span>
-        </div>
-        <div className="pl-4">
+          <span className="text-text-primary">thread</span>{' '}
           <span className="text-purple-400 font-bold">TYPE</span>{' '}
           <span className="text-blue-400">string</span>
           <span className="text-gray-500">;</span>
@@ -78,9 +71,7 @@ export const SchemaFilePreview: React.FC = () => {
           <span className="text-purple-400 font-bold">DEFINE FIELD</span>{' '}
           <span className="text-text-primary">author</span>{' '}
           <span className="text-purple-400 font-bold">ON</span>{' '}
-          <span className="text-text-primary">thread</span>
-        </div>
-        <div className="pl-4">
+          <span className="text-text-primary">thread</span>{' '}
           <span className="text-purple-400 font-bold">TYPE</span>{' '}
           <span className="text-accent-400">record&lt;user&gt;</span>
           <span className="text-gray-500">;</span>

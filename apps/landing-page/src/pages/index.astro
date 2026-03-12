@@ -4,7 +4,6 @@ import '../styles/global.css';
 import { AsciiGhost } from '../components/AsciiGhost';
 import { HeroTerminal } from '../components/HeroTerminal';
 import { ArchitectureDiagram } from '../components/ArchitectureDiagram';
-import { SchemaWorkflowEyecatcher } from '../components/SchemaWorkflowEyecatcher';
 import GitHubStars from '../components/GitHubStars';
 import { DXSwiper } from '../components/DXSwiper';
 import SectionHeadline from '../components/SectionHeadline.astro';
@@ -60,7 +59,7 @@ import { basePath } from '../config/nav';
               Features
             </a>
             <a
-              href="/docs"
+              href={`${basePath}/docs`}
               class="text-text-tertiary hover:text-text-primary transition-colors duration-200"
             >
               Docs
@@ -361,32 +360,13 @@ import { basePath } from '../config/nav';
       </div>
     </section>
 
-    <!-- Schema-First Development Section -->
-    <section class="py-16 border-t border-surface-border/50 relative">
-      <!-- Visual variety background -->
-      <div
-        class="absolute inset-0 bg-gradient-to-b from-surface/20 to-transparent pointer-events-none"
-      >
-      </div>
-
-      <div class="max-w-7xl mx-auto px-4 relative z-10">
-        <SectionHeadline
-          title="Schema-First Development"
-          badge="Type Safety"
-          description="Define your database schema once in SurrealDB, and let Spooky generate type-safe clients for all your targets—TypeScript, Dart, Zod, and more. One source of truth for your entire stack."
-        />
-
-        <SchemaWorkflowEyecatcher client:visible />
-      </div>
-    </section>
-
     <!-- Developer Experience Section with Swiper -->
     <section class="py-32 border-t border-surface-border/50">
       <div class="max-w-7xl mx-auto px-4 relative z-10">
         <SectionHeadline
           title="Exceptional DX"
           badge="Developer Tools"
-          description='Spooky is built by <span class="text-text-primary">developers for developers</span> with framework-native queries with <span class="text-brand-400">full reactivity</span> and type safety.'
+          description='From <span class="text-text-primary">schema-first codegen</span> to <span class="text-brand-400">fully reactive</span> framework-native queries — Spooky gives you type safety across your entire stack, built by <span class="text-text-primary">developers for developers</span>.'
         />
 
         <DXSwiper client:visible />

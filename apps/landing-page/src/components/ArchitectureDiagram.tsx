@@ -1,41 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
-export const ArchitectureDiagram = () => {
-  const [frame, setFrame] = useState(0);
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setFrame((f) => (f + 1) % 40); // 40 ticks per cycle
-    }, 150);
-    return () => clearInterval(timer);
-  }, []);
-
-  // Helpers to insert character at specific index in a string
+// ---------- Back Slice: ASCII Architecture Animation ----------
+const ArchitectureBackSlice = ({ animFrame }: { animFrame: number }) => {
   const replaceAt = (str: string, index: number, replacement: string) => {
     return str.substring(0, index) + replacement + str.substring(index + replacement.length);
   };
-
-  const WIDTH = 62;
-  // Template with 62 chars width (including newline generally, but we'll use array of strings)
-  /*
-      [ CLIENT A ]                  [ CLIENT B ]
-           |                             |
-           |                             |
-           v                             v
-    +--------------+              +--------------+
-    |  LOCAL DB A  |              |  LOCAL DB B  |
-    +--------------+              +--------------+
-           |                             |
-           |                             |
-           v                             v
-    +--------------------------------------------+
-    |             REMOTE SURREALDB               |
-    |                                            |
-    |  +--------------+      +----------------+  |
-    |  | INCANTATIONS |<-----|  DBSP MODULE   |  |
-    |  +--------------+      +----------------+  |
-    +--------------------------------------------+
-  */
 
   const baseLines = [
     '      [   APP A  ]                  [   APP B  ]      ', // 0
@@ -54,7 +23,7 @@ export const ArchitectureDiagram = () => {
     '    |  +----------+            +--------------+  |    ', // 13
     '    |  |  EVENTS  |            | INCANTATIONS |  |    ', // 14
     '    |  +----------+            +--------------+  |    ', // 15
-    '    |       │                          ▲         |    ', // 16 (DEEP ARROWS)
+    '    |       │                          ▲         |    ', // 16
     '    +-------│--------------------------│---------+    ', // 17
     '            │                          │              ', // 18
     '            ▼                          │              ', // 19
@@ -63,126 +32,90 @@ export const ArchitectureDiagram = () => {
     '    +--------------------------------------------+    ', // 22
   ];
 
-  // Animation Logic
+  const frame = animFrame;
   const lines = [...baseLines];
-
-  // Animation State
   const activeModules = new Set<string>();
 
-  // START: App A Update
   if (frame >= 0 && frame < 4) {
     activeModules.add('APP A');
     lines[0] = replaceAt(lines[0], 8, '*WRITE* ');
   }
 
-  // App A -> Local A
   if (frame >= 2 && frame < 6) {
     activeModules.add('APP A');
     const pos = frame - 2;
     if (pos < 3) lines[1 + pos] = replaceAt(lines[1 + pos], 11, '●');
   }
 
-  // Flash Local DB A
   if (frame >= 5 && frame < 8) {
     lines[5] = replaceAt(lines[5], 6, ' PROCESSING ');
     activeModules.add('LOCAL DB A');
     activeModules.add('APP A');
   }
 
-  // Local A -> Remote
   if (frame >= 8 && frame < 12) {
     activeModules.add('LOCAL DB A');
     const pos = frame - 8;
-    // Animate down to Remote
     if (pos < 3) lines[7 + pos] = replaceAt(lines[7 + pos], 11, '●');
   }
 
-  // Remote -> Events (Internal)
   if (frame >= 11 && frame < 15) {
     activeModules.add('REMOTE SURREALDB');
     activeModules.add('EVENTS');
   }
 
-  // Events -> Processor (External Down)
   if (frame >= 14 && frame < 20) {
     activeModules.add('REMOTE SURREALDB');
     activeModules.add('EVENTS');
     activeModules.add('SPOOKY STREAM PROCESSOR');
     const pos = frame - 14;
-    // Animate vertically down from Events (approx col 12)
-    // Path: 16 (inside), 17 (border), 18, 19 -> 20 (Processor Top)
-    // pos 0 -> 16
     if (pos < 4) lines[16 + pos] = replaceAt(lines[16 + pos], 12, '●');
   }
 
-  // Processor Process
   if (frame >= 18 && frame < 22) {
     activeModules.add('SPOOKY STREAM PROCESSOR');
-    // Full width overwrite: 44 chars between the pipes
-    // "COMPUTING..." is 12 chars. (44-12)/2 = 16.
     lines[21] = replaceAt(lines[21], 5, '                COMPUTING...                ');
   }
 
-  // Processor -> Incantations (External Up)
   if (frame >= 21 && frame < 27) {
     activeModules.add('SPOOKY STREAM PROCESSOR');
     activeModules.add('INCANTATIONS');
     activeModules.add('REMOTE SURREALDB');
-    // Up from 20/19 to 16
-    // Path: 19, 18, 17, 16
-    // Arrow is at index 39 (centered under INCANTATIONS)
     const pos = frame - 21;
     if (pos < 4) lines[19 - pos] = replaceAt(lines[19 - pos], 39, '●');
   }
 
-  // Incantations -> Local B (Remote Up)
   if (frame >= 26 && frame < 30) {
     activeModules.add('REMOTE SURREALDB');
     activeModules.add('INCANTATIONS');
     const pos = frame - 26;
-    // Up from 10 to 7
     if (pos < 3) lines[9 - pos] = replaceAt(lines[9 - pos], 41, '●');
   }
 
-  // Flash Local DB B
   if (frame >= 29 && frame < 33) {
     lines[5] = replaceAt(lines[5], 36, ' UPDATING.. ');
     activeModules.add('LOCAL DB B');
   }
 
-  // Local B -> App B
   if (frame >= 32 && frame < 36) {
     const pos = frame - 32;
-    // Up from 4 to 1
     if (pos < 3) lines[3 - pos] = replaceAt(lines[3 - pos], 41, '●');
     activeModules.add('LOCAL DB B');
   }
 
-  // Flash App B
   if (frame >= 35 && frame < 39) {
     lines[0] = replaceAt(lines[0], 38, '*UPDATE*');
     activeModules.add('APP B');
   }
 
-  // Helper to colorize the output
   const processLine = (line: string) => {
-    // 1. ESCAPE
     const escaped = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-    // 2. COLORIZE
     let processed = escaped
-      // Structure (Box borders) - robust regex for any non-space content
       .replace(/(\+[^ ]+\+)/g, '<span class="text-gray-600">$1</span>')
-      // Vertical lines
       .replace(/(\|)/g, '<span class="text-gray-600">$1</span>')
       .replace(/(│)/g, '<span class="text-gray-600">$1</span>')
-
-      // Arrows
-      .replace(/(▼|▲)/g, (match) => {
-        return `<span class="text-gray-600">${match}</span>`;
-      })
-
-      // Statuses
+      .replace(/(▼|▲)/g, '<span class="text-gray-600">$&</span>')
       .replace(/PROCESSING/g, '<span class="text-yellow-400 animate-pulse">PROCESSING</span>')
       .replace(/COMPUTING.../g, '<span class="text-green-400 animate-pulse">COMPUTING...</span>')
       .replace(/UPDATING../g, '<span class="text-green-400 animate-pulse">UPDATING..</span>')
@@ -191,11 +124,8 @@ export const ArchitectureDiagram = () => {
         '<span class="text-green-400 font-bold bg-green-900/30">*UPDATE*</span>'
       )
       .replace(/\*WRITE\*/g, '<span class="text-blue-400 font-bold bg-blue-900/30">*WRITE*</span>')
-
-      // The Dot (Data Packet)
       .replace(/●/g, '<span class="text-blue-400 font-bold inline-block text-center">●</span>');
 
-    // CONDITIONAL HIGHLIGHTING
     if (activeModules.has('APP A'))
       processed = processed.replace(/APP A/g, '<span class="text-blue-400 font-bold">APP A</span>');
     else processed = processed.replace(/APP A/g, '<span class="text-gray-500">APP A</span>');
@@ -264,14 +194,242 @@ export const ArchitectureDiagram = () => {
   };
 
   return (
-    <div className="flex justify-center w-full">
-      <div className="font-mono text-[10px] xs:text-xs leading-tight font-bold whitespace-pre overflow-x-auto select-none bg-black p-6 rounded border border-[#333] shadow-2xl inline-block">
-        <div className="text-gray-500 mb-4 border-b border-[#333] pb-2 text-center tracking-widest uppercase">
-          // SYSTEM_ARCHITECTURE_LIVE_VIEW
+    <div className="font-mono text-[10px] xs:text-xs leading-tight font-bold whitespace-pre overflow-x-auto select-none bg-black p-6 rounded border border-[#333] shadow-2xl inline-block">
+      <div className="text-gray-500 mb-4 border-b border-[#333] pb-2 text-center tracking-widest uppercase">
+        // SYSTEM_ARCHITECTURE_LIVE_VIEW
+      </div>
+      {lines.map((l, i) => (
+        <div key={i} dangerouslySetInnerHTML={{ __html: processLine(l) }} />
+      ))}
+    </div>
+  );
+};
+
+// ---------- Funny task pool ----------
+const TASK_POOL = [
+  'Deploy to production on Friday',
+  'Fix bug that fixes itself',
+  'Mass delete everything',
+  'Refactor the refactoring',
+  'Add AI to the AI',
+  'Update the update script',
+  'Delete node_modules again',
+  'Rewrite it in Rust',
+  'Blame the intern',
+  'Google the error message',
+  'Add blockchain somewhere',
+  'Undo last undo',
+  'Make it pop more',
+  'Turn it off and on again',
+  'Pretend to understand regex',
+  'Ship it and pray',
+  'Rename everything to final_v2',
+  'Close 47 browser tabs',
+  'Ask ChatGPT to explain',
+  'Push directly to main',
+  'Ignore the tech debt',
+  'Add more console.logs',
+  'Read the documentation lol',
+  'Meetings about meetings',
+  'Cache invalidation',
+  'Center the div',
+  'Fix CSS on Safari',
+  'Migrate to the new new thing',
+  'Write tests (maybe later)',
+  'Convince PM scope is too big',
+];
+
+type TaskItem = { id: number; text: string };
+
+const ROW_HEIGHT = 40; // px per task row
+const VISIBLE_COUNT = 3;
+const TIME_LABELS = ['2m ago', '5m ago', '12m ago'];
+
+const TaskRow = ({ task, isNew, time }: { task: TaskItem; isNew?: boolean; time: string }) => (
+  <div
+    className="flex items-center justify-between px-4 border-b border-[#222]"
+    style={{
+      height: `${ROW_HEIGHT}px`,
+      background: isNew ? 'rgba(5, 46, 22, 0.4)' : 'transparent',
+    }}
+  >
+    <div className="flex items-center gap-2.5 min-w-0">
+      {isNew ? (
+        <span className="w-4 h-4 rounded border border-[#555] flex-shrink-0" />
+      ) : (
+        <span className="w-4 h-4 rounded border border-[#555] flex-shrink-0 flex items-center justify-center bg-[#111]">
+          <span className="text-green-400 text-[10px] leading-none">&#10003;</span>
+        </span>
+      )}
+      <span className={isNew ? 'text-green-400 font-medium truncate' : 'text-gray-400 line-through truncate'}>
+        {task.text}
+      </span>
+    </div>
+    <span className={`text-xs flex-shrink-0 ml-2 ${isNew ? 'text-green-500/70' : 'text-gray-600'}`}>
+      {time}
+    </span>
+  </div>
+);
+
+// ---------- Front Slice: Task List Mockup ----------
+const FrontAppMockup = ({ animFrame, cycle }: { animFrame: number; cycle: number }) => {
+  // The stack is the source of truth. Newest task at index 0.
+  const [stack, setStack] = useState<TaskItem[]>([
+    { id: 2, text: TASK_POOL[2] },
+    { id: 1, text: TASK_POOL[1] },
+    { id: 0, text: TASK_POOL[0] },
+  ]);
+  // Whether the slide transition is enabled (disabled during snap-back)
+  const [animate, setAnimate] = useState(true);
+  const committedCycleRef = useRef(0);
+
+  const isSliding = animFrame >= 35;
+
+  // When a new cycle starts (animFrame wraps to 0), commit the task that
+  // just slid in. We snap the wrapper back to its resting position instantly
+  // (no transition) so the newly committed row stays in place visually.
+  useEffect(() => {
+    if (cycle > committedCycleRef.current) {
+      committedCycleRef.current = cycle;
+      const newId = 2 + cycle;
+      const poolIdx = newId % TASK_POOL.length;
+      // 1. Disable transition so the snap-back is instant
+      setAnimate(false);
+      // 2. Push the task into the stack
+      setStack((prev) => [{ id: newId, text: TASK_POOL[poolIdx] }, ...prev]);
+    }
+  }, [cycle]);
+
+  // Re-enable transitions one frame after the snap-back
+  useEffect(() => {
+    if (!animate) {
+      const raf = requestAnimationFrame(() => {
+        setAnimate(true);
+      });
+      return () => cancelAnimationFrame(raf);
+    }
+  }, [animate]);
+
+  // The next task that will slide in (not yet in stack)
+  const pendingId = 2 + cycle + 1;
+  const pendingPoolIdx = pendingId % TASK_POOL.length;
+  const pendingTask: TaskItem = { id: pendingId, text: TASK_POOL[pendingPoolIdx] };
+
+  // We render: [pending, stack[0], stack[1], stack[2], stack[3]]
+  // Container clips to VISIBLE_COUNT rows.
+  // Resting state: wrapper is at translateY(-ROW_HEIGHT) hiding the pending row above.
+  // Sliding state: wrapper moves to translateY(0), pushing the pending row into view
+  // and the bottom row out below the clip.
+  const renderItems = [pendingTask, ...stack.slice(0, VISIBLE_COUNT)];
+
+  return (
+    <div className="bg-black border border-[#333] rounded shadow-2xl text-sm w-full max-w-[380px] font-sans select-none">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-[#333]">
+        <span className="text-white font-semibold text-base">Tasks</span>
+        <button className="text-xs text-gray-400 border border-[#444] rounded px-2 py-0.5 hover:border-gray-500 transition-colors">
+          + Add Task
+        </button>
+      </div>
+
+      {/* Task list — fixed height clip */}
+      <div className="overflow-hidden" style={{ height: `${VISIBLE_COUNT * ROW_HEIGHT}px` }}>
+        <div
+          style={{
+            transform: `translateY(${isSliding ? 0 : -ROW_HEIGHT}px)`,
+            transition: animate ? 'transform 600ms cubic-bezier(0.4, 0, 0.2, 1)' : 'none',
+          }}
+        >
+          {renderItems.map((task, i) => (
+            <TaskRow
+              key={task.id}
+              task={task}
+              isNew={i === 0 && isSliding}
+              time={i === 0 ? 'just now' : TIME_LABELS[i - 1] ?? '20m+'}
+            />
+          ))}
         </div>
-        {lines.map((l, i) => (
-          <div key={i} dangerouslySetInnerHTML={{ __html: processLine(l) }} />
-        ))}
+      </div>
+
+      {/* Footer */}
+      <div className="flex items-center justify-between px-4 py-2 border-t border-[#333] text-xs text-gray-500">
+        <span>
+          <span
+            className={`inline-block w-1.5 h-1.5 rounded-full mr-1.5 ${isSliding ? 'bg-green-400 animate-pulse' : 'bg-green-600'}`}
+          />
+          synced &middot; {stack.length + (isSliding ? 1 : 0)} tasks
+        </span>
+        <span className="text-green-600">connected</span>
+      </div>
+    </div>
+  );
+};
+
+// ---------- Parent: 3D Scene ----------
+export const ArchitectureDiagram = () => {
+  const [frame, setFrame] = useState(0);
+  const [hovered, setHovered] = useState(false);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setFrame((f) => f + 1);
+    }, 150);
+    return () => clearInterval(timer);
+  }, []);
+
+  const animFrame = frame % 40;
+  const cycle = Math.floor(frame / 40);
+
+  return (
+    <div className="flex justify-center w-full">
+      {/* Desktop: 3D layered view */}
+      <div
+        className="relative w-full max-w-4xl hidden lg:block"
+        style={{ perspective: '1200px' }}
+      >
+        <div
+          className="relative"
+          style={{ transformStyle: 'preserve-3d' }}
+        >
+          {/* Back Slice: Architecture diagram */}
+          <div
+            className="absolute top-0 right-0 flex justify-center w-full transition-all duration-500 ease-out"
+            style={{
+              transform: hovered
+                ? 'rotateY(-2deg) rotateX(1deg) translateZ(20px)'
+                : 'rotateY(-8deg) rotateX(3deg) translateZ(-60px)',
+              opacity: hovered ? 1 : 0.85,
+              top: hovered ? '0px' : '-20px',
+              right: hovered ? '0px' : '-10px',
+              zIndex: hovered ? 20 : 0,
+            }}
+            onMouseEnter={() => setHovered(true)}
+            onMouseLeave={() => setHovered(false)}
+          >
+            <ArchitectureBackSlice animFrame={animFrame} />
+          </div>
+
+          {/* Front Slice: App mockup */}
+          <div
+            className="relative z-10 pl-8 transition-all duration-500 ease-out"
+            style={{
+              transform: hovered
+                ? 'rotateY(-8deg) rotateX(3deg) translateZ(-40px) scale(0.95)'
+                : 'rotateY(-8deg) rotateX(3deg) translateZ(40px)',
+              opacity: hovered ? 0.6 : 1,
+              width: '85%',
+              zIndex: hovered ? 0 : 10,
+            }}
+          >
+            <FrontAppMockup animFrame={animFrame} cycle={cycle} />
+          </div>
+        </div>
+      </div>
+
+      {/* Mobile: stacked layout without 3D */}
+      <div className="lg:hidden flex flex-col items-center gap-6 w-full">
+        <FrontAppMockup animFrame={animFrame} cycle={cycle} />
+        <ArchitectureBackSlice animFrame={animFrame} />
       </div>
     </div>
   );

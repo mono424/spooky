@@ -107,7 +107,9 @@
       "mcp__spooky-devtools__get_state",
       "mcp__spooky-devtools__get_active_queries",
       "Bash(find /Users/khadim/dev/spooky -maxdepth 4 \\\\\\( -name \".npmrc\" -o -name \"publish*\" \\\\\\) -type f 2>/dev/null | grep -v node_modules)",
-      "Bash(npm view:*)"
+      "Bash(npm view:*)",
+      "Bash(cd /Users/khadim/dev/spooky/apps/landing-page && npx astro check 2>&1 | tail -30)",
+      "Bash(npx astro:*)"
     ],
     "deny": [],
     "ask": []

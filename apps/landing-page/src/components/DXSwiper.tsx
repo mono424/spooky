@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { SchemaWorkflowEyecatcher } from './SchemaWorkflowEyecatcher';
 import { DXPane1 } from './DXPane1';
 import { DXPane2 } from './DXPane2';
 
@@ -8,7 +9,7 @@ export const DXSwiper: React.FC = () => {
   const [startX, setStartX] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
 
-  const totalPanes = 2;
+  const totalPanes = 3;
 
   // Navigation handlers
   const handleNext = useCallback(() => {
@@ -128,7 +129,7 @@ export const DXSwiper: React.FC = () => {
             willChange: 'transform',
           }}
         >
-          {/* Pane 1: Code Editor & Features */}
+          {/* Pane 0: Code Editor & Features */}
           <div
             className="swiper-slide"
             style={{
@@ -141,7 +142,7 @@ export const DXSwiper: React.FC = () => {
             <DXPane1 />
           </div>
 
-          {/* Pane 2: DevTools Simulation */}
+          {/* Pane 1: Schema-First Development */}
           <div
             className="swiper-slide"
             style={{
@@ -150,6 +151,19 @@ export const DXSwiper: React.FC = () => {
               flexShrink: 0,
             }}
             aria-hidden={currentPane !== 1}
+          >
+            <SchemaWorkflowEyecatcher />
+          </div>
+
+          {/* Pane 2: DevTools Simulation */}
+          <div
+            className="swiper-slide"
+            style={{
+              minWidth: '100%',
+              width: '100%',
+              flexShrink: 0,
+            }}
+            aria-hidden={currentPane !== 2}
           >
             <DXPane2 />
           </div>
