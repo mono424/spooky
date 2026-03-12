@@ -71,6 +71,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+          registry-url: https://registry.npmjs.org
 
       - name: Upgrade npm for OIDC support
         run: npm install -g npm@latest
@@ -214,6 +215,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          registry-url: https://registry.npmjs.org
 
       - name: Upgrade npm for OIDC support
         run: npm install -g npm@latest
@@ -250,6 +252,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+          registry-url: https://registry.npmjs.org
 
       - name: Upgrade npm for OIDC support
         run: npm install -g npm@latest
