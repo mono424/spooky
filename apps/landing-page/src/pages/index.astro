@@ -38,12 +38,11 @@ import { basePath } from '../config/nav';
       content="Build local-first, offline-ready applications with Spooky Sync. Use the power of SurrealDB to synchronize data instantly across devices."
     />
     <meta property="twitter:image" content={new URL('/spooky/social_card.png', Astro.site)} />
+    <link rel="help" type="text/markdown" href="/spooky/llm.txt" title="LLM Info" />
     <title>SPOOKY SYNC</title>
   </head>
   <body class="min-h-screen flex flex-col">
-    <div
-      class="sticky top-0 z-50 border-b border-white/5 p-4 bg-black transition-all duration-300"
-    >
+    <div class="sticky top-0 z-50 border-b border-white/5 p-4 bg-black transition-all duration-300">
       <nav class="max-w-7xl mx-auto flex justify-between items-center gap-8">
         <a
           href="#home"
@@ -101,7 +100,8 @@ import { basePath } from '../config/nav';
           <p
             class="text-lg text-text-muted opacity-0 animate-fade-in animation-delay-400 leading-relaxed max-w-lg"
           >
-            Ship your app with real-time sync, offline support, and full type safety. No extra work required.
+            Ship your app with real-time sync, offline support, and full type safety. No extra work
+            required.
           </p>
 
           {/* CLI Install Command */}
@@ -109,12 +109,17 @@ import { basePath } from '../config/nav';
             class="flex items-center gap-3 px-4 py-3 rounded-md bg-surface border border-white/10 font-mono text-sm opacity-0 animate-fade-in animation-delay-500 w-fit"
           >
             <span class="text-text-tertiary select-none">$</span>
-            <code class="text-text-primary">npx @spooky-sync/cli init</code>
+            <code class="text-text-primary">npx @spooky-sync/cli@canary create</code>
             <button
               class="hero-copy-btn ml-auto p-1.5 rounded-md text-text-tertiary hover:text-text-primary transition-colors duration-200"
               aria-label="Copy install command"
             >
-              <svg class="hero-copy-icon w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg
+                class="hero-copy-icon w-4 h-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
                 <path
                   stroke-linecap="round"
                   stroke-linejoin="round"
@@ -128,7 +133,11 @@ import { basePath } from '../config/nav';
                 viewBox="0 0 24 24"
                 stroke="currentColor"
               >
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M5 13l4 4L19 7"></path>
               </svg>
             </button>
           </div>
@@ -141,7 +150,7 @@ import { basePath } from '../config/nav';
                 const checkIcon = heroCopyBtn.querySelector('.hero-check-icon');
                 if (!copyIcon || !checkIcon) return;
                 try {
-                  await navigator.clipboard.writeText('npx @spooky-sync/cli init');
+                  await navigator.clipboard.writeText('npx @spooky-sync/cli@canary create');
                   copyIcon.classList.add('hidden');
                   checkIcon.classList.remove('hidden');
                   setTimeout(() => {
@@ -264,72 +273,68 @@ import { basePath } from '../config/nav';
       </div>
     </section>
 
-
-
-            <!-- CTA SECTION -->
-      <section
-        class="py-32 border-t border-white/5 bg-black text-center relative overflow-hidden"
-      >
-        <div class="max-w-4xl mx-auto px-4 relative z-10">
-          <h2 class="text-section md:text-hero font-semibold mb-8 text-text-primary">
-            Ready to build something amazing?
-          </h2>
-          <p class="text-text-tertiary text-body-lg mb-12 max-w-2xl mx-auto leading-relaxed">
-            Start building local-first, offline-ready applications today. Dive into the
-            documentation to learn more about the architecture and implementation details.
-          </p>
-          <a
-            href={`${basePath}/docs`}
-            class="inline-flex items-center gap-3 bg-white text-black px-8 py-3 font-medium text-lg rounded-lg transition-colors duration-150 hover:bg-white/90 group"
+    <!-- CTA SECTION -->
+    <section class="py-32 border-t border-white/5 bg-black text-center relative overflow-hidden">
+      <div class="max-w-4xl mx-auto px-4 relative z-10">
+        <h2 class="text-section md:text-hero font-semibold mb-8 text-text-primary">
+          Ready to build something amazing?
+        </h2>
+        <p class="text-text-tertiary text-body-lg mb-12 max-w-2xl mx-auto leading-relaxed">
+          Start building local-first, offline-ready applications today. Dive into the documentation
+          to learn more about the architecture and implementation details.
+        </p>
+        <a
+          href={`${basePath}/docs`}
+          class="inline-flex items-center gap-3 bg-white text-black px-8 py-3 font-medium text-lg rounded-lg transition-colors duration-150 hover:bg-white/90 group"
+        >
+          <span>Get Started</span>
+          <svg
+            class="w-5 h-5 transition-transform duration-200 group-hover:translate-x-1"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
           >
-            <span>Get Started</span>
-            <svg
-              class="w-5 h-5 transition-transform duration-200 group-hover:translate-x-1"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
-            </svg>
-          </a>
-        </div>
-      </section>
-
-      <footer class="py-12 border-t border-white/5 relative">
-        <div class="max-w-7xl mx-auto px-4 flex flex-col md:flex-row justify-between items-center">
-          <div class="mb-4 md:mb-0 text-sm text-text-tertiary flex items-center relative">
-            <img src="/spooky/logo_transparent.svg" alt="Spooky Logo" class="w-4 h-4 mr-2" />
-            © 2026 Spooky Sync
-          </div>
-          <div class="space-x-6 text-sm">
-            <a
-              href="#"
-              class="text-text-tertiary hover:text-text-primary transition-colors duration-200"
-              >Privacy</a
-            >
-            <a
-              href="#"
-              class="text-text-tertiary hover:text-text-primary transition-colors duration-200"
-              >Terms</a
-            >
-            <a
-              href="https://github.com/mono424/spooky"
-              target="_blank"
-              class="text-text-tertiary hover:text-text-primary transition-colors duration-200"
-              >GitHub</a
-            >
-          </div>
-        </div>
-      </footer>
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
+          </svg>
+        </a>
+      </div>
     </section>
 
-    <script>
-      // 1. Define the Ghost SVG (Static version, we animate the position manually)
-      const ghostSVG = `
+    <footer class="py-12 border-t border-white/5 relative">
+      <div class="max-w-7xl mx-auto px-4 flex flex-col md:flex-row justify-between items-center">
+        <div class="mb-4 md:mb-0 text-sm text-text-tertiary flex items-center relative">
+          <img src="/spooky/logo_transparent.svg" alt="Spooky Logo" class="w-4 h-4 mr-2" />
+          © 2026 Spooky Sync
+        </div>
+        <div class="space-x-6 text-sm">
+          <a
+            href="#"
+            class="text-text-tertiary hover:text-text-primary transition-colors duration-200"
+            >Privacy</a
+          >
+          <a
+            href="#"
+            class="text-text-tertiary hover:text-text-primary transition-colors duration-200"
+            >Terms</a
+          >
+          <a
+            href="https://github.com/mono424/spooky"
+            target="_blank"
+            class="text-text-tertiary hover:text-text-primary transition-colors duration-200"
+            >GitHub</a
+          >
+        </div>
+      </div>
+    </footer>
+  </body>
+
+  <script>
+    // 1. Define the Ghost SVG (Static version, we animate the position manually)
+    const ghostSVG = `
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
       <style>
         .bg { fill: #FFFFFF; }
@@ -346,148 +351,146 @@ import { basePath } from '../config/nav';
       <rect class="eyes" x="18" y="8" width="4" height="4"/>
     </svg>`;
 
-      // 2. Setup the Canvas and Image
-      const canvas = document.createElement('canvas');
-      canvas.width = 32;
-      canvas.height = 32;
-      const ctx = canvas.getContext('2d');
+    // 2. Setup the Canvas and Image
+    const canvas = document.createElement('canvas');
+    canvas.width = 32;
+    canvas.height = 32;
+    const ctx = canvas.getContext('2d');
 
-      const img = new Image();
-      // Encode SVG so it can be used as an image source
-      img.src = 'data:image/svg+xml;base64,' + btoa(ghostSVG);
+    const img = new Image();
+    // Encode SVG so it can be used as an image source
+    img.src = 'data:image/svg+xml;base64,' + btoa(ghostSVG);
 
-      // 3. Find (or create) the favicon link tag
-      let link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
-      if (!link) {
-        link = document.createElement('link');
-        link.rel = 'icon';
-        document.head.appendChild(link);
-      }
+    // 3. Find (or create) the favicon link tag
+    let link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'icon';
+      document.head.appendChild(link);
+    }
 
-      // 4. The Animation Loop
-      img.onload = function () {
-        let start = performance.now();
+    // 4. The Animation Loop
+    img.onload = function () {
+      let start = performance.now();
 
-        function step(timestamp: number) {
-          // Calculate the "float" (Sine wave)
-          const elapsed = timestamp - start;
-          // Speed: 3000ms (3s) for full loop
-          // Movement: Moves between 0px and 3px down
-          const yOffset = (1 - Math.cos((elapsed / 3000) * 2 * Math.PI)) * 1.5;
+      function step(timestamp: number) {
+        // Calculate the "float" (Sine wave)
+        const elapsed = timestamp - start;
+        // Speed: 3000ms (3s) for full loop
+        // Movement: Moves between 0px and 3px down
+        const yOffset = (1 - Math.cos((elapsed / 3000) * 2 * Math.PI)) * 1.5;
 
-          // Clear and Draw
-          ctx?.clearRect(0, 0, 32, 32);
-          // Draw image at the new Y position
-          ctx?.drawImage(img, 0, yOffset, 32, 32);
+        // Clear and Draw
+        ctx?.clearRect(0, 0, 32, 32);
+        // Draw image at the new Y position
+        ctx?.drawImage(img, 0, yOffset, 32, 32);
 
-          // Update the browser favicon
-          link.href = canvas.toDataURL('image/png');
+        // Update the browser favicon
+        link.href = canvas.toDataURL('image/png');
 
-          // Repeat
-          requestAnimationFrame(step);
-        }
+        // Repeat
         requestAnimationFrame(step);
-      };
-    </script>
-
-    <style>
-      /* Remove default details marker */
-      details > summary {
-        list-style: none;
       }
-      details > summary::-webkit-details-marker {
-        display: none;
-      }
+      requestAnimationFrame(step);
+    };
+  </script>
 
-      /* Smooth container transition */
-      .schema-details {
-        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-      }
+  <style>
+    /* Remove default details marker */
+    details > summary {
+      list-style: none;
+    }
+    details > summary::-webkit-details-marker {
+      display: none;
+    }
 
-      .schema-details[open] {
-        background-color: rgba(10, 10, 10, 0.9);
-      }
+    /* Smooth container transition */
+    .schema-details {
+      transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    }
 
-      /* Enhanced preview hover */
-      .schema-details summary {
-        transition: background-color 0.3s ease;
-      }
+    .schema-details[open] {
+      background-color: rgba(10, 10, 10, 0.9);
+    }
 
-      .schema-details summary:hover {
-        background-color: rgba(255, 255, 255, 0.07);
-      }
+    /* Enhanced preview hover */
+    .schema-details summary {
+      transition: background-color 0.3s ease;
+    }
 
-      .schema-details summary:hover .arrow-closed {
-        transform: translateX(2px);
-      }
+    .schema-details summary:hover {
+      background-color: rgba(255, 255, 255, 0.07);
+    }
 
-      .schema-details summary:hover .arrow-closed.rotate-90 {
-        transform: translateX(2px) rotate(90deg);
-      }
+    .schema-details summary:hover .arrow-closed {
+      transform: translateX(2px);
+    }
 
-      /* Arrow icon states with smooth transitions */
-      .schema-details .arrow-closed {
-        display: block;
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-      }
+    .schema-details summary:hover .arrow-closed.rotate-90 {
+      transform: translateX(2px) rotate(90deg);
+    }
 
-      .schema-details .arrow-open {
-        display: none;
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-      }
+    /* Arrow icon states with smooth transitions */
+    .schema-details .arrow-closed {
+      display: block;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
 
-      .schema-details[open] .arrow-closed {
-        display: none;
-      }
+    .schema-details .arrow-open {
+      display: none;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
 
-      .schema-details[open] .arrow-open {
-        display: block;
-      }
+    .schema-details[open] .arrow-closed {
+      display: none;
+    }
 
-      /* Chevron rotation with smooth easing */
-      .schema-details .chevron {
-        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-      }
+    .schema-details[open] .arrow-open {
+      display: block;
+    }
 
-      .schema-details[open] .chevron {
-        transform: rotate(180deg);
-      }
+    /* Chevron rotation with smooth easing */
+    .schema-details .chevron {
+      transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
 
-      /* Change text on expand/collapse */
-      .schema-details .expand-text::before {
-        content: 'Click to explore live schema generation';
-      }
+    .schema-details[open] .chevron {
+      transform: rotate(180deg);
+    }
 
-      .schema-details[open] .expand-text::before {
-        content: 'Click to collapse';
-      }
+    /* Change text on expand/collapse */
+    .schema-details .expand-text::before {
+      content: 'Click to explore live schema generation';
+    }
 
-      .schema-details .expand-text {
-        font-size: 0;
-      }
+    .schema-details[open] .expand-text::before {
+      content: 'Click to collapse';
+    }
 
-      .schema-details .expand-text::before {
-        font-size: 1rem;
-      }
+    .schema-details .expand-text {
+      font-size: 0;
+    }
 
-      /* Professional expand animation */
-      @keyframes expand-in {
-        from {
-          opacity: 0;
-          transform: translateY(-8px);
-          max-height: 0;
-        }
-        to {
-          opacity: 1;
-          transform: translateY(0);
-          max-height: 2000px;
-        }
-      }
+    .schema-details .expand-text::before {
+      font-size: 1rem;
+    }
 
-      .schema-details[open] .expanded-content {
-        animation: expand-in 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+    /* Professional expand animation */
+    @keyframes expand-in {
+      from {
+        opacity: 0;
+        transform: translateY(-8px);
+        max-height: 0;
       }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+        max-height: 2000px;
+      }
+    }
 
-    </style>
-  </body>
+    .schema-details[open] .expanded-content {
+      animation: expand-in 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+  </style>
 </html>

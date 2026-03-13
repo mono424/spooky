@@ -18,6 +18,7 @@ import {
   Zap, // wave
   TriangleAlert, // warning
   Save, // save
+  Bot, // bot
 } from 'lucide-react';
 
 const { name, class: className } = Astro.props;
@@ -38,6 +39,7 @@ const iconMap = {
   wave: Zap,
   warning: TriangleAlert,
   save: Save,
+  bot: Bot,
 };
 
 const LucideIcon = iconMap[name] || Wrench;
