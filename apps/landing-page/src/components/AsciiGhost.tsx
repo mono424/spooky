@@ -35,27 +35,19 @@ export const AsciiGhost = () => {
 
   useEffect(() => {
     const interval = setInterval(() => {
-      // Increment phase for the wave
       setPhase((p) => p + 0.5);
 
-      // Random blink
       if (Math.random() > 0.95) {
         setBlink(true);
         setTimeout(() => setBlink(false), 200);
       }
-    }, 100); // 10Hz update for smooth animation
+    }, 100);
     return () => clearInterval(interval);
   }, []);
 
   const renderedRows = RAW_GHOST.map((row, index) => {
-    // Calculate sine wave offset based on row index and time phase
-    // Frequency = 0.5 (how tight the wave is)
-    // Phase = time offset
     const waveValue = Math.sin(index * 0.6 + phase);
-
-    // Use the eyes-closed row if blinking and on index 3
     const content = blink && index === 3 ? EYES_CLOSED : row;
-
     return shiftLine(content, waveValue);
   });
 

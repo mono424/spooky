@@ -120,54 +120,48 @@ function DrawerContent() {
             Server Infrastructure
           </div>
 
-          <div className="flex gap-2 justify-center items-center flex-wrap">
-            {/* SurrealDB */}
-            <div className="border border-white/[0.06] bg-white/[0.02] p-2 rounded flex flex-col gap-2" style={{ width: 150, flexShrink: 0 }}>
-              <div className="flex items-center justify-between border-b border-white/[0.06] pb-1">
-                <span className="text-[9px] font-bold text-gray-400">SURREALDB</span>
-                <span className="h-1.5 w-1.5 rounded-full bg-gray-500" />
+          <div className="flex flex-col gap-4">
+            {/* Top row: SurrealDB — RPC — Scheduler */}
+            <div className="flex gap-2 justify-center items-stretch">
+              {/* SurrealDB */}
+              <div className="border border-white/[0.06] bg-white/[0.02] p-2 rounded flex flex-col gap-2 flex-1 min-w-0">
+                <div className="flex items-center justify-between border-b border-white/[0.06] pb-1">
+                  <span className="text-[9px] font-bold text-gray-400">SURREALDB</span>
+                  <span className="h-1.5 w-1.5 rounded-full bg-gray-500" />
+                </div>
+                <div className="space-y-1">
+                  {['Tables & Auth', 'Live Query Hub', 'Event Triggers'].map((item) => (
+                    <div key={item} className="bg-white/[0.03] border border-white/[0.05] px-1.5 py-1 rounded text-[8px] text-gray-400">
+                      {item}
+                    </div>
+                  ))}
+                </div>
               </div>
-              <div className="space-y-1">
-                {['Tables & Auth', 'Live Query Hub', 'Event Triggers'].map((item) => (
-                  <div key={item} className="bg-white/[0.03] border border-white/[0.05] px-1.5 py-1 rounded text-[8px] text-gray-400">
-                    {item}
-                  </div>
-                ))}
+
+              {/* RPC */}
+              <div className="flex flex-col justify-center items-center gap-0.5 text-[8px] text-gray-600/60 w-8 shrink-0">
+                <span>RPC</span>
+                <div className="w-full h-[1px] bg-white/[0.06]" />
+              </div>
+
+              {/* Scheduler */}
+              <div className="border border-white/[0.06] bg-white/[0.02] p-2 rounded flex flex-col gap-2 flex-1 min-w-0">
+                <div className="flex items-center justify-between border-b border-white/[0.06] pb-1">
+                  <span className="text-[9px] font-bold text-gray-400">SCHEDULER</span>
+                  <span className="h-1.5 w-1.5 rounded-full bg-gray-500" />
+                </div>
+                <div className="space-y-1">
+                  {['Snapshot Replica', 'WAL', 'Load Balancer', 'Health Monitor', 'Job Scheduler'].map((item) => (
+                    <div key={item} className="bg-white/[0.03] border border-white/[0.05] px-1.5 py-0.5 rounded text-[8px] text-gray-400">
+                      {item}
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
 
-            {/* RPC */}
-            <div className="flex flex-col justify-center items-center gap-0.5 text-[8px] text-gray-600/60 w-8 shrink-0">
-              <span>RPC</span>
-              <div className="w-full h-[1px] bg-white/[0.06]" />
-            </div>
-
-            {/* Scheduler */}
-            <div className="border border-white/[0.06] bg-white/[0.02] p-2 rounded flex flex-col gap-2" style={{ width: 170, flexShrink: 0 }}>
-              <div className="flex items-center justify-between border-b border-white/[0.06] pb-1">
-                <span className="text-[9px] font-bold text-gray-400">SCHEDULER</span>
-                <span className="h-1.5 w-1.5 rounded-full bg-gray-500" />
-              </div>
-              <div className="space-y-1">
-                {['Snapshot Replica', 'WAL', 'Load Balancer', 'Health Monitor', 'Job Scheduler'].map((item) => (
-                  <div key={item} className="bg-white/[0.03] border border-white/[0.05] px-1.5 py-0.5 rounded text-[8px] text-gray-400">
-                    {item}
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Arrows */}
-            <div className="flex flex-col justify-center items-center gap-0.5 text-gray-700 w-6 shrink-0">
-              {[0, 1, 2].map((i) => (
-                <svg key={i} className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
-                </svg>
-              ))}
-            </div>
-
-            {/* SSP Instances */}
-            <div className="flex flex-col gap-1.5" style={{ width: 180, flexShrink: 0 }}>
+            {/* Bottom row: SSP Instances */}
+            <div className="flex flex-col gap-1.5">
               {[
                 { name: 'SSP-1', status: 'Active' },
                 { name: 'SSP-2', status: 'Active' },

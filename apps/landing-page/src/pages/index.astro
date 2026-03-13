@@ -80,7 +80,16 @@ import { basePath } from '../config/nav';
       id="home"
       class="min-h-[70vh] max-h-[800px] flex items-center justify-center relative py-24"
     >
-      <div class="hero-grid max-w-7xl mx-auto px-8">
+      {/* Ghost Background - centered behind entire hero */}
+      <div
+        class="absolute inset-0 flex items-center justify-center pointer-events-none z-0 opacity-0 animate-fade-in-subtle"
+      >
+        <div class="scale-[3]">
+          <AsciiGhost client:load />
+        </div>
+      </div>
+
+      <div class="hero-grid max-w-7xl mx-auto px-8 relative z-10">
         {/* Left Column - Content */}
         <div class="flex flex-col justify-center space-y-6">
           <h1
@@ -167,14 +176,6 @@ import { basePath } from '../config/nav';
 
         {/* Right Column - Terminal Window */}
         <div class="relative flex items-center justify-center lg:justify-end">
-          {/* Ghost Background */}
-          <div
-            class="absolute top-1/2 left-1/2 -translate-x-[80%] -translate-y-1/2 opacity-0 animate-fade-in-subtle pointer-events-none z-0 scale-[3]"
-          >
-            <AsciiGhost client:load />
-          </div>
-
-          {/* Terminal Window */}
           <div
             class="relative z-10 scale-110 translate-x-4 opacity-0 animate-flip-in animation-delay-200"
           >
