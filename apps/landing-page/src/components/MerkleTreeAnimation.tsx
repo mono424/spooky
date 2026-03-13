@@ -119,11 +119,11 @@ export const MerkleDashboard = () => {
     <div className="w-full font-mono select-none h-auto">
       {/* Merged Dashboard Card - Subtler Style */}
       <div className="border border-white/10 bg-white/[0.02] pl-6 py-4 relative flex flex-col gap-8 min-w-0">
-        {/* SECTION 1: ACTIVE INCANTATION */}
+        {/* SECTION 1: ACTIVE QUERY */}
         <div className="flex flex-col justify-between">
           <div className="flex justify-between items-start mb-4">
             <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest whitespace-nowrap">
-              Active Incantation
+              Active Query
             </span>
             <div className="flex items-center gap-2 px-4">
               <div className="w-1.5 h-1.5 rounded-full bg-green-500/50 animate-pulse"></div>
@@ -133,7 +133,7 @@ export const MerkleDashboard = () => {
           <div className="space-y-6">
             <div>
               <div className="text-[9px] font-bold text-gray-700 uppercase tracking-wider mb-1">
-                INCANTATION_ID
+                QUERY_ID
               </div>
               <div className="text-sm text-gray-400 font-mono tracking-wide break-all">
                 inc_8f7a2d9c1e
@@ -155,7 +155,7 @@ export const MerkleDashboard = () => {
         {/* SECTION 2: SURQL CODE (Merged) */}
         <div className="flex-1 flex flex-col min-w-0 border-t border-white/5 pt-6">
           <pre className="text-[10px] md:text-xs text-gray-500 font-mono leading-relaxed whitespace-pre-wrap break-words">
-            <span className="text-purple-400">CREATE</span> incantation{' '}
+            <span className="text-purple-400">CREATE</span> query{' '}
             <span className="text-yellow-600">CONTENT</span> &#123;{'\n'}
             {'  '}
             <span className="text-blue-400/70">query</span>:{' '}

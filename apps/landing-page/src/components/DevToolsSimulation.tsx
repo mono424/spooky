@@ -693,7 +693,7 @@ const MOCK_EVENTS = [
   {
     type: 'info',
     timestamp: 1715011325112,
-    data: { msg: 'Registered incantation "thread_list_view"' },
+    data: { msg: 'Registered query "thread_list_view"' },
   },
 ];
 

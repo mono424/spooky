@@ -99,7 +99,7 @@ export const DXPane2: React.FC = () => {
               Events Timeline
             </h4>
             <p className="text-text-tertiary leading-relaxed">
-              Track every state change, network request, and incantation registration in a
+              Track every state change, network request, and query registration in a
               detailed, chronological timeline.
             </p>
           </div>

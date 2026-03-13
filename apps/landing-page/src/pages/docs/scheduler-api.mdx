@@ -123,7 +123,7 @@ Register a new view (live query) with the scheduler. The scheduler will assign i
 
 ```json
 {
-  "id": "incantation:abc123",
+  "id": "query:abc123",
   "surql": "SELECT * FROM users WHERE active = true",
   "clientId": "client-456",
   "ttl": "30s",
@@ -134,7 +134,7 @@ Register a new view (live query) with the scheduler. The scheduler will assign i
 ```
 
 **Fields:**
-- `id` (string, required) - Unique view identifier (e.g. `incantation:abc123`)
+- `id` (string, required) - Unique view identifier (e.g. `query:abc123`)
 - `surql` (string, required) - SurrealQL query to materialize
 - `clientId` (string, required) - Client identifier
 - `ttl` (string, required) - Time-to-live for the view (e.g. `"30s"`)
@@ -146,7 +146,7 @@ Register a new view (live query) with the scheduler. The scheduler will assign i
 - `200 OK` - View registered and assigned to an SSP
   ```json
   {
-    "query_id": "incantation:abc123",
+    "query_id": "query:abc123",
     "ssp_id": "ssp-primary-01",
     "assigned_at": 1707654321
   }
@@ -159,7 +159,7 @@ Register a new view (live query) with the scheduler. The scheduler will assign i
 curl -X POST http://localhost:9667/view/register \
   -H "Content-Type: application/json" \
   -d '{
-    "id": "incantation:abc123",
+    "id": "query:abc123",
     "surql": "SELECT * FROM users WHERE active = true",
     "clientId": "client-456",
     "ttl": "30s"
@@ -174,7 +174,7 @@ Unregister a view from its assigned SSP.
 
 ```json
 {
-  "id": "incantation:abc123"
+  "id": "query:abc123"
 }
 ```
 

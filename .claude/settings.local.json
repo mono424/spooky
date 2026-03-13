@@ -109,7 +109,8 @@
       "Bash(find /Users/khadim/dev/spooky -maxdepth 4 \\\\\\( -name \".npmrc\" -o -name \"publish*\" \\\\\\) -type f 2>/dev/null | grep -v node_modules)",
       "Bash(npm view:*)",
       "Bash(cd /Users/khadim/dev/spooky/apps/landing-page && npx astro check 2>&1 | tail -30)",
-      "Bash(npx astro:*)"
+      "Bash(npx astro:*)",
+      "Bash(cd /Users/khadim/dev/spooky/apps/landing-page/src/pages && head -n 361 index.astro > index.astro.tmp && echo '' >> index.astro.tmp && echo '      </div>' >> index.astro.tmp && echo '    </section>' >> index.astro.tmp && tail -n +1049 index.astro >> index.astro.tmp && mv index.astro.tmp index.astro)"
     ],
     "deny": [],
     "ask": []

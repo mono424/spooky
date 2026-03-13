@@ -21,7 +21,7 @@ const ArchitectureBackSlice = ({ animFrame }: { animFrame: number }) => {
     '    |             REMOTE SURREALDB               |    ', // 11
     '    |                                            |    ', // 12
     '    |  +----------+            +--------------+  |    ', // 13
-    '    |  |  EVENTS  |            | INCANTATIONS |  |    ', // 14
+    '    |  |  EVENTS  |            |   QUERIES    |  |    ', // 14
     '    |  +----------+            +--------------+  |    ', // 15
     '    |       │                          ▲         |    ', // 16
     '    +-------│--------------------------│---------+    ', // 17
@@ -79,7 +79,7 @@ const ArchitectureBackSlice = ({ animFrame }: { animFrame: number }) => {
 
   if (frame >= 21 && frame < 27) {
     activeModules.add('SPOOKY STREAM PROCESSOR');
-    activeModules.add('INCANTATIONS');
+    activeModules.add('QUERIES');
     activeModules.add('REMOTE SURREALDB');
     const pos = frame - 21;
     if (pos < 4) lines[19 - pos] = replaceAt(lines[19 - pos], 39, '●');
@@ -87,7 +87,7 @@ const ArchitectureBackSlice = ({ animFrame }: { animFrame: number }) => {
 
   if (frame >= 26 && frame < 30) {
     activeModules.add('REMOTE SURREALDB');
-    activeModules.add('INCANTATIONS');
+    activeModules.add('QUERIES');
     const pos = frame - 26;
     if (pos < 3) lines[9 - pos] = replaceAt(lines[9 - pos], 41, '●');
   }
@@ -168,15 +168,15 @@ const ArchitectureBackSlice = ({ animFrame }: { animFrame: number }) => {
       );
     else processed = processed.replace(/EVENTS/g, '<span class="text-gray-500">EVENTS</span>');
 
-    if (activeModules.has('INCANTATIONS'))
+    if (activeModules.has('QUERIES'))
       processed = processed.replace(
-        /INCANTATIONS/g,
-        '<span class="text-pink-500 font-bold">INCANTATIONS</span>'
+        /QUERIES/g,
+        '<span class="text-pink-500 font-bold">QUERIES</span>'
       );
     else
       processed = processed.replace(
-        /INCANTATIONS/g,
-        '<span class="text-gray-500">INCANTATIONS</span>'
+        /QUERIES/g,
+        '<span class="text-gray-500">QUERIES</span>'
       );
 
     if (activeModules.has('SPOOKY STREAM PROCESSOR'))
