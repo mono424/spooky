@@ -1,0 +1,37 @@
+# Spooky Sync
+
+> A reactive, local-first sync framework for SurrealDB.
+
+Spooky Sync lets you build offline-ready, real-time applications using SurrealDB as both local and remote database. It handles bidirectional sync, conflict resolution, authentication, schema migrations, and file storage — so you can focus on your product.
+
+## Documentation
+
+### Getting Started
+
+- [Introduction](https://mono424.github.io/spooky/docs)
+- [Installation](https://mono424.github.io/spooky/docs/install)
+- [Schema](https://mono424.github.io/spooky/docs/schema)
+- [Migrations](https://mono424.github.io/spooky/docs/migrations)
+- [Authentication](https://mono424.github.io/spooky/docs/authentication)
+- [Query Data](https://mono424.github.io/spooky/docs/query-data)
+- [Mutate Data](https://mono424.github.io/spooky/docs/mutate-data)
+- [Backend Functions](https://mono424.github.io/spooky/docs/backend-functions)
+- [File Buckets](https://mono424.github.io/spooky/docs/buckets)
+
+### Framework Guides
+
+- [SolidJS](https://mono424.github.io/spooky/docs/guide/solid)
+- [Flutter](https://mono424.github.io/spooky/docs/guide/flutter)
+- [Vanilla JS / TS](https://mono424.github.io/spooky/docs/guide/vanilla)
+
+### Reference
+
+- [Configuration](https://mono424.github.io/spooky/docs/configuration)
+- [Deployment](https://mono424.github.io/spooky/docs/deployment)
+- [Architecture](https://mono424.github.io/spooky/docs/architecture)
+- [Scheduler API](https://mono424.github.io/spooky/docs/scheduler-api)
+- [SSP API](https://mono424.github.io/spooky/docs/ssp-api)
+
+## Source Code
+
+- [GitHub Repository](https://github.com/mono424/spooky)
