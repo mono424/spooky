@@ -113,7 +113,8 @@
       "Bash(cd /Users/khadim/dev/spooky/apps/landing-page/src/pages && head -n 361 index.astro > index.astro.tmp && echo '' >> index.astro.tmp && echo '      </div>' >> index.astro.tmp && echo '    </section>' >> index.astro.tmp && tail -n +1049 index.astro >> index.astro.tmp && mv index.astro.tmp index.astro)",
       "Bash(which wasm-pack:*)",
       "Bash(curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh 2>&1)",
-      "Bash(npm pack:*)"
+      "Bash(npm pack:*)",
+      "Bash(tree:*)"
     ],
     "deny": [],
     "ask": []

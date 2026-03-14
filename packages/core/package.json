@@ -24,12 +24,21 @@
   "publishConfig": {
     "access": "public"
   },
-  "dependencies": {
+  "peerDependencies": {
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/exporter-logs-otlp-proto": "^0.211.0",
     "@opentelemetry/resources": "^2.6.0",
     "@opentelemetry/sdk-logs": "^0.211.0",
-    "@opentelemetry/semantic-conventions": "^1.39.0",
+    "@opentelemetry/semantic-conventions": "^1.39.0"
+  },
+  "peerDependenciesMeta": {
+    "@opentelemetry/api": { "optional": true },
+    "@opentelemetry/exporter-logs-otlp-proto": { "optional": true },
+    "@opentelemetry/resources": { "optional": true },
+    "@opentelemetry/sdk-logs": { "optional": true },
+    "@opentelemetry/semantic-conventions": { "optional": true }
+  },
+  "dependencies": {
     "@spooky-sync/query-builder": "workspace:*",
     "@spooky-sync/ssp-wasm": "workspace:*",
     "@surrealdb/wasm": "^3.0.0",
