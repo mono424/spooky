@@ -20,7 +20,7 @@ use std::time::{Duration, SystemTime};
 // Version
 // ---------------------------------------------------------------------------
 
-const VERSION: &str = "0.0.1-canary.14";
+const VERSION: &str = "0.0.1-canary.15";
 
 // ---------------------------------------------------------------------------
 // Ghost art (matches AsciiGhost.tsx)
