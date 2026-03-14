@@ -15,11 +15,12 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 
 
+
 // ---------------------------------------------------------------------------
 // Version
 // ---------------------------------------------------------------------------
 
-const VERSION: &str = "0.0.1-canary.13";
+const VERSION: &str = "0.0.1-canary.14";
 
 // ---------------------------------------------------------------------------
 // Ghost art (matches AsciiGhost.tsx)
@@ -401,6 +402,37 @@ pub fn create_project() -> Result<()> {
         match install_result {
             Ok(status) if status.success() => {
                 println!("  \x1b[32m\u{2713}\x1b[0m Dependencies installed");
+
+                // Run spooky generate and migration:create for full projects
+                if !is_schema_only {
+                    println!("\n  Running spooky generate...");
+                    match Command::new("spooky")
+                        .args(["generate"])
+                        .current_dir(&schema_path)
+                        .status()
+                    {
+                        Ok(s) if s.success() => {
+                            println!("  \x1b[32m\u{2713}\x1b[0m Schema types generated");
+                        }
+                        _ => {
+                            println!("  \x1b[33m!\x1b[0m Could not run spooky generate (is spooky installed?)");
+                        }
+                    }
+
+                    println!("  Creating initial migration...");
+                    match Command::new("spooky")
+                        .args(["migration:create", "initial"])
+                        .current_dir(&schema_path)
+                        .status()
+                    {
+                        Ok(s) if s.success() => {
+                            println!("  \x1b[32m\u{2713}\x1b[0m Initial migration created");
+                        }
+                        _ => {
+                            println!("  \x1b[33m!\x1b[0m Could not create initial migration");
+                        }
+                    }
+                }
             }
             _ => {
                 println!("  \x1b[33m!\x1b[0m Could not install dependencies (is pnpm installed?)");
@@ -411,11 +443,14 @@ pub fn create_project() -> Result<()> {
     // --- Next steps ---
     println!("\n  \x1b[2mNext steps:\x1b[0m");
 
+    println!("  \x1b[1mcd {}\x1b[0m", project_name);
+
     if !do_install {
-        println!("  \x1b[1mcd {}\x1b[0m", project_name);
         println!("  \x1b[1mpnpm install\x1b[0m");
-    } else {
-        println!("  \x1b[1mcd {}\x1b[0m", project_name);
+        if !is_schema_only {
+            println!("  \x1b[1mcd packages/schema && spooky generate\x1b[0m   \x1b[2m# generate schema types\x1b[0m");
+            println!("  \x1b[1mspooky migration:create initial\x1b[0m   \x1b[2m# create initial migration\x1b[0m");
+        }
     }
 
     if is_schema_only {

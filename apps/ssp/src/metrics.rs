@@ -95,27 +95,28 @@ impl Metrics {
 }
 
 pub fn init_metrics() -> Result<(SdkMeterProvider, Metrics), anyhow::Error> {
-    let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
-        .unwrap_or_else(|_| "http://localhost:18888".to_string());
+    let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok();
 
     let service_name = std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "ssp".to_string());
 
     let resource = Resource::new(vec![KeyValue::new("service.name", service_name)]);
 
-    let exporter = opentelemetry_otlp::MetricExporter::builder()
-        .with_tonic()
-        .with_endpoint(&endpoint)
-        .build()?;
+    let mut builder = MeterProviderBuilder::default().with_resource(resource);
 
-    let reader = PeriodicReader::builder(exporter, opentelemetry_sdk::runtime::Tokio)
-        .with_interval(Duration::from_secs(15))
-        .build();
+    if let Some(endpoint) = endpoint {
+        let exporter = opentelemetry_otlp::MetricExporter::builder()
+            .with_tonic()
+            .with_endpoint(&endpoint)
+            .build()?;
 
-    let provider = MeterProviderBuilder::default()
-        .with_resource(resource)
-        .with_reader(reader)
-        .build();
+        let reader = PeriodicReader::builder(exporter, opentelemetry_sdk::runtime::Tokio)
+            .with_interval(Duration::from_secs(15))
+            .build();
 
+        builder = builder.with_reader(reader);
+    }
+
+    let provider = builder.build();
     let metrics = Metrics::new(&provider);
 
     Ok((provider, metrics))

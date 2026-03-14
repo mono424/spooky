@@ -38,6 +38,7 @@ import { CacheModule } from './modules/cache/index';
 import { LocalStoragePersistenceClient } from './services/persistence/localstorage';
 import { generateId, parseParams } from './utils/index';
 import { SurrealDBPersistenceClient } from './services/persistence/surrealdb';
+import { ResilientPersistenceClient } from './services/persistence/resilient';
 
 export class BucketHandle {
   constructor(private bucketName: string, private remote: RemoteDatabaseService) {}
@@ -133,6 +134,8 @@ export class SpookyClient<S extends SchemaStructure> {
     } else {
       this.persistenceClient = config.persistenceClient;
     }
+
+    this.persistenceClient = new ResilientPersistenceClient(this.persistenceClient, logger);
 
     this.streamProcessor = new StreamProcessorService(
       new EventSystem(['stream_update']),
