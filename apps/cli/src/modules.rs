@@ -65,7 +65,7 @@ pub fn compile_modules(modules_dir: &Path, output_dir: &Path) -> Result<()> {
 
                 // Should be only one wasm file usually
                 for wasm_path in wasm_files {
-                    let file_name = wasm_path.file_name().unwrap().to_string_lossy();
+                    let _file_name = wasm_path.file_name().unwrap().to_string_lossy();
                     // Output file name: module_name.surli
                     // OR should we respect the filename? Let's use the package name/module name.
                     // The user's output shows `xor_module.surli`.

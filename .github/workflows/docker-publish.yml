@@ -53,7 +53,9 @@ jobs:
         id: tags
         run: |
           TAGS="${{ matrix.image }}:${{ needs.prepare.outputs.version }}"
-          if [ "${{ needs.prepare.outputs.is_canary }}" = "false" ]; then
+          if [ "${{ needs.prepare.outputs.is_canary }}" = "true" ]; then
+            TAGS="$TAGS,${{ matrix.image }}:canary"
+          else
             TAGS="$TAGS,${{ matrix.image }}:latest"
           fi
           echo "tags=$TAGS" >> "$GITHUB_OUTPUT"

@@ -23,7 +23,7 @@ PERMISSIONS
     FOR select WHERE true
     FOR create WHERE true
     FOR update WHERE $access = "account" AND id = $auth.id;
-    
+
 DEFINE INDEX unique_username ON TABLE user FIELDS username UNIQUE;
 
 DEFINE FIELD password ON TABLE user TYPE string

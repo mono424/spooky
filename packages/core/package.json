@@ -1,6 +1,6 @@
 {
   "name": "@spooky-sync/core",
-  "version": "0.0.1-canary.11",
+  "version": "0.0.1-canary.12",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -27,7 +27,7 @@
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/exporter-logs-otlp-proto": "^0.211.0",
-    "@opentelemetry/resources": "^2.5.0",
+    "@opentelemetry/resources": "^2.6.0",
     "@opentelemetry/sdk-logs": "^0.211.0",
     "@opentelemetry/semantic-conventions": "^1.39.0",
     "@spooky-sync/query-builder": "workspace:*",

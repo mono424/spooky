@@ -73,9 +73,6 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
-      - name: Upgrade npm for OIDC support
-        run: npm install -g npm@latest
-
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -99,11 +96,21 @@ jobs:
 
       - name: Publish query-builder
         working-directory: packages/query-builder
-        run: npm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
+        run: pnpm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }} --no-git-checks
 
-      # 2. Build @spooky-sync/ssp-wasm (private — not published)
+      # 2. Build and publish @spooky-sync/ssp-wasm
+      - name: Set version — ssp-wasm
+        run: jq '.version = "${{ needs.prepare.outputs.version }}"' packages/ssp-wasm/package.json > tmp.json && mv tmp.json packages/ssp-wasm/package.json
+
       - name: Build ssp-wasm
         run: pnpm --filter @spooky-sync/ssp-wasm build
+
+      - name: Remove wasm-pack gitignore (prevents npm from including pkg/)
+        run: rm -f packages/ssp-wasm/pkg/.gitignore
+
+      - name: Publish ssp-wasm
+        working-directory: packages/ssp-wasm
+        run: pnpm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }} --no-git-checks
 
       # 3. Build and publish @spooky-sync/core
       - name: Set version — core
@@ -114,7 +121,7 @@ jobs:
 
       - name: Publish core
         working-directory: packages/core
-        run: npm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
+        run: pnpm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }} --no-git-checks
 
       # 4. Build and publish @spooky-sync/client-solid
       - name: Set version — client-solid
@@ -125,7 +132,7 @@ jobs:
 
       - name: Publish client-solid
         working-directory: packages/client-solid
-        run: npm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
+        run: pnpm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }} --no-git-checks
 
   build-cli-binaries:
     needs: [prepare, validate-versions]
@@ -226,6 +233,10 @@ jobs:
           name: ${{ matrix.package }}
           path: apps/cli/npm/${{ matrix.package }}
 
+      - name: Set executable permission
+        if: ${{ matrix.package != 'cli-win32-x64' }}
+        run: chmod +x apps/cli/npm/${{ matrix.package }}/spooky
+
       - name: Set version
         run: |
           cd apps/cli/npm/${{ matrix.package }}
@@ -254,9 +265,6 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
-      - name: Upgrade npm for OIDC support
-        run: npm install -g npm@latest
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -283,4 +291,4 @@ jobs:
 
       - name: Publish CLI
         working-directory: apps/cli
-        run: npm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
+        run: pnpm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }} --no-git-checks

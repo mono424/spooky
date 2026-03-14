@@ -3,7 +3,30 @@ use openapiv3::OpenAPI;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(untagged)]
+pub enum SchemaInput {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl SchemaInput {
+    pub fn paths(&self) -> Vec<&str> {
+        match self {
+            SchemaInput::Single(s) => vec![s.as_str()],
+            SchemaInput::Multiple(v) => v.iter().map(|s| s.as_str()).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct ClientTypeConfig {
+    pub format: String,
+    pub output: String,
+    pub schema: SchemaInput,
+}
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SpookyConfig {
@@ -20,6 +43,8 @@ pub struct SpookyConfig {
     pub backends: BTreeMap<String, BackendConfig>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub buckets: Vec<String>,
+    #[serde(default, rename = "clientTypes", skip_serializing_if = "Vec::is_empty")]
+    pub client_types: Vec<ClientTypeConfig>,
 }
 
 /// Either a plain string (applies to both ssp & scheduler)
@@ -37,11 +62,12 @@ pub enum VersionConfig {
 }
 
 const DEFAULT_SURREALDB_VERSION: &str = "v3.0.0";
-const DEFAULT_SSP_VERSION: &str = "latest";
-const DEFAULT_SCHEDULER_VERSION: &str = "latest";
+const DEFAULT_SSP_VERSION: &str = "canary";
+const DEFAULT_SCHEDULER_VERSION: &str = "canary";
 
 /// Resolved version config with all defaults applied.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ResolvedVersions {
     pub surrealdb: String,
     pub ssp: String,
@@ -84,6 +110,7 @@ impl ResolvedVersions {
 
     pub fn surrealdb_image(&self) -> String { format!("surrealdb/surrealdb:{}", self.surrealdb) }
     pub fn ssp_image(&self) -> String { format!("mono424/spooky-ssp:{}", self.ssp) }
+    #[allow(dead_code)]
     pub fn scheduler_image(&self) -> String { format!("mono424/spooky-scheduler:{}", self.scheduler) }
 }
 

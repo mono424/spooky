@@ -3,7 +3,6 @@ use anyhow::{Context, Result};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
-use surrealdb_core::dbs::capabilities::ExperimentalTarget;
 use surrealdb_core::dbs::Capabilities;
 use surrealdb_core::sql::statements::DefineStatement;
 use surrealdb_core::sql::Statement;

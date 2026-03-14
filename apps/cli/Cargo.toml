@@ -25,4 +25,5 @@ ureq = { version = "2.9", features = ["json"] }
 sha2 = "0.10"
 base64 = "0.22"
 ctrlc = { version = "3.4", features = ["termination"] }
+crossterm = "0.28"
 

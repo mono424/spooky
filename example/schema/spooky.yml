@@ -1,6 +1,13 @@
 mode: cluster # "singlenode", "cluster", or "surrealism"
 buckets:
   - ./src/buckets/profile.surql
+clientTypes:
+  - format: typescript
+    output: ../app-solid/src/schema.gen.ts
+    schema: ./src/schema.surql
+  - format: dart
+    output: ../client-dart/src/db/models.dart
+    schema: ./src/schema.surql
 backends:
   api:
     type: http

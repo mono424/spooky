@@ -1,0 +1,26 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: #09090B;
+  color: #fff;
+}
+
+* {
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0 30px #18181B inset !important;
+  -webkit-text-fill-color: white !important;
+  caret-color: white;
+  transition: background-color 5000s ease-in-out 0s;
+}

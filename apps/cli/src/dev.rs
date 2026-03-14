@@ -63,6 +63,7 @@ fn default_config() -> SpookyConfig {
         version: None,
         backends: Default::default(),
         buckets: Default::default(),
+        client_types: Default::default(),
     }
 }
 

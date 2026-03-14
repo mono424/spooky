@@ -1,12 +1,19 @@
 {
   "name": "@spooky-sync/ssp-wasm",
-  "version": "0.0.1-canary.11",
-  "private": true,
+  "version": "0.0.1-canary.12",
   "main": "pkg/ssp_wasm.js",
   "types": "pkg/ssp_wasm.d.ts",
   "files": [
     "pkg"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mono424/spooky.git",
+    "directory": "packages/ssp-wasm"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "wasm-pack build --target web --out-dir pkg",
     "test": "vitest run",

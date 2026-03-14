@@ -1,0 +1,21 @@
+{
+  "name": "{{PROJECT_NAME}}",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm dev:schema & pnpm dev:app",
+    "dev:schema": "pnpm --filter @{{PROJECT_NAME}}/schema dev",
+    "dev:app": "pnpm --filter @{{PROJECT_NAME}}/app dev",
+    "build": "pnpm --filter @{{PROJECT_NAME}}/schema build && pnpm --filter @{{PROJECT_NAME}}/app build",
+    "generate": "pnpm --filter @{{PROJECT_NAME}}/schema build",
+    "migrate:create": "pnpm --filter @{{PROJECT_NAME}}/schema migrate:create",
+    "migrate:apply": "pnpm --filter @{{PROJECT_NAME}}/schema migrate:apply",
+    "migrate:status": "pnpm --filter @{{PROJECT_NAME}}/schema migrate:status"
+  },
+  "pnpm": {
+    "overrides": {
+      "@spooky-sync/query-builder": "{{VERSION}}",
+      "@spooky-sync/core": "{{VERSION}}",
+      "@spooky-sync/ssp-wasm": "{{VERSION}}"
+    }
+  }
+}

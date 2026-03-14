@@ -47,6 +47,7 @@ impl CodeGenerator {
         Self::new(format, include_header, true) // Default to true for backward compat
     }
 
+    #[allow(dead_code)]
     pub fn generate(&self, json_schema_content: &str, _top_level_name: &str) -> Result<String> {
         self.generate_with_schema(json_schema_content, _top_level_name, None, None, None)
     }
@@ -183,6 +184,7 @@ impl CodeGenerator {
         Ok(code)
     }
 
+    #[allow(dead_code)]
     fn remove_top_level_schema_interface(&self, content: String) -> String {
         let lines: Vec<&str> = content.lines().collect();
         let mut result = Vec::new();
@@ -262,6 +264,7 @@ impl CodeGenerator {
         result.join("\n")
     }
 
+    #[allow(dead_code)]
     fn add_index_signature_to_interfaces(&self, content: String) -> String {
         // NOTE: This function is now used to REMOVE index signatures, not add them.
         // Index signatures like [property: string]: any are intentionally removed
@@ -590,6 +593,7 @@ impl CodeGenerator {
         Ok(table_relationships)
     }
 
+    #[allow(dead_code)]
     fn add_relationships_interface(&self, content: &str, json_schema_content: &str) -> Result<String> {
         // Parse JSON schema to extract relationships
         let schema: serde_json::Value = serde_json::from_str(json_schema_content)
@@ -762,6 +766,7 @@ impl CodeGenerator {
         Ok(content.to_string())
     }
 
+    #[allow(dead_code)]
     fn update_interface_relationships(&self, content: &str, table_relationships: &std::collections::BTreeMap<String, Vec<(String, String, String)>>) -> Result<String> {
         let lines: Vec<&str> = content.lines().collect();
         let mut result = Vec::new();
@@ -967,7 +972,7 @@ impl CodeGenerator {
                 // BUT if I skip empty lines here, I lose them. I should proceed.
             }
 
-            let full_trimmed = line.trim(); // For checks that might need full line? 
+            let _full_trimmed = line.trim();
             // Actually, matching "DEFINE TABLE" should use stripped line?
             // "DEFINE TABLE foo -- comment" -> "DEFINE TABLE foo". Matches.
             // So using `trimmed` (clean) is better.

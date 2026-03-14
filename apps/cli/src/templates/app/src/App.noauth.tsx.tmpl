@@ -1,0 +1,36 @@
+import { SpookyProvider } from '@spooky-sync/client-solid';
+import { dbConfig } from './db';
+
+export default function App() {
+  return (
+    <SpookyProvider
+      config={dbConfig}
+      fallback={
+        <div class="min-h-screen bg-zinc-950 flex items-center justify-center">
+          <div class="text-zinc-400 text-sm">Connecting...</div>
+        </div>
+      }
+      onError={(error) => console.error('Failed to initialize database:', error)}
+    >
+      <div class="min-h-screen bg-zinc-950">
+        <header class="border-b border-white/[0.06] h-14">
+          <div class="max-w-3xl mx-auto px-6 h-full flex items-center">
+            <h1 class="text-lg font-semibold text-white tracking-tight">{{PROJECT_NAME}}</h1>
+          </div>
+        </header>
+
+        <main class="max-w-3xl mx-auto px-6 py-8">
+          <div class="bg-zinc-900 border border-white/[0.06] rounded-xl p-6">
+            <h2 class="text-lg font-medium text-white mb-2">Welcome to Spooky!</h2>
+            <p class="text-zinc-400 text-sm">
+              Your app is connected and ready to sync. Add tables to your schema and start building.
+            </p>
+            <p class="text-zinc-500 text-sm mt-4">
+              Edit <code class="text-zinc-300 bg-zinc-800 px-1.5 py-0.5 rounded text-xs">src/App.tsx</code> to start building your app.
+            </p>
+          </div>
+        </main>
+      </div>
+    </SpookyProvider>
+  );
+}

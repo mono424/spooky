@@ -10,17 +10,17 @@ mod parser;
 mod schema_builder;
 mod schema_diff;
 mod schema_extract;
-mod setup;
+mod create;
 mod spooky;
 mod surreal_client;
 
 use anyhow::{Context, Result};
-use backend::BackendProcessor;
+use backend::{BackendProcessor, SpookyConfig};
 use clap::{Args as ClapArgs, Parser as ClapParser, Subcommand};
 use codegen::{CodeGenerator, OutputFormat};
 use json_schema::JsonSchemaGenerator;
 use parser::SchemaParser;
-use setup::setup_project;
+use create::create_project;
 use std::fs;
 use std::path::{Path, PathBuf};
 use surreal_client::SurrealClient;
@@ -85,7 +85,10 @@ struct Args {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Setup a new Spooky project
+    /// Create a new Spooky project
+    Create,
+    /// Alias for 'create' (backward compat)
+    #[command(hide = true)]
     Setup,
     /// Database migration management
     Migrate {
@@ -104,6 +107,19 @@ enum Commands {
     },
     /// Start a local development environment
     Dev,
+    /// Generate client types from spooky.yml
+    Generate {
+        /// Path to spooky.yml config file
+        #[arg(short, long, default_value = "spooky.yml")]
+        config: PathBuf,
+    },
+    /// Alias for 'generate'
+    #[command(hide = true)]
+    Gen {
+        /// Path to spooky.yml config file
+        #[arg(short, long, default_value = "spooky.yml")]
+        config: PathBuf,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -511,15 +527,309 @@ fn handle_bucket(action: BucketCommands) -> Result<()> {
     }
 }
 
+fn run_codegen(
+    input_path: &Path,
+    append_paths: &[PathBuf],
+    output_path: &Path,
+    output_format: OutputFormat,
+    config_path: Option<&Path>,
+    backend_processor: &BackendProcessor,
+    no_header: bool,
+    mode: &str,
+    endpoint: Option<&str>,
+    secret: Option<&str>,
+    modules_dir: &Path,
+    generate_all: bool,
+) -> Result<()> {
+    // Read the input file
+    let mut content = fs::read_to_string(input_path)
+        .context(format!("Failed to read input file: {:?}", input_path))?;
+
+    // Append backend schemas to content
+    if !backend_processor.schema_appends.is_empty() {
+        content.push('\n');
+        content.push_str(&backend_processor.schema_appends);
+    }
+
+    // Append embedded meta tables
+    let meta_tables = include_str!("meta_tables.surql");
+    let meta_tables_remote = include_str!("meta_tables_remote.surql");
+    let meta_tables_client = include_str!("meta_tables_client.surql");
+
+    content.push('\n');
+    content.push_str(meta_tables);
+    println!("  + Appended base meta_tables.surql");
+
+    if matches!(output_format, OutputFormat::Surql) {
+        content.push('\n');
+        content.push_str(meta_tables_remote);
+        println!("  + Appended meta_tables_remote.surql");
+    } else {
+        content.push('\n');
+        content.push_str(meta_tables_client);
+        println!("  + Appended meta_tables_client.surql");
+    }
+
+    // Append extra files if specified
+    for append_path in append_paths {
+        let append_content = fs::read_to_string(append_path)
+            .context(format!("Failed to read append file: {:?}", append_path))?;
+        content.push('\n');
+        content.push_str(&append_content);
+        println!("  + Appended schema from {:?}", append_path);
+    }
+
+    // Parse the schema
+    let mut parser = SchemaParser::new();
+    parser
+        .parse_file(&content)
+        .context("Failed to parse SurrealDB schema")?;
+
+    // Extract buckets from separate bucket files (if any)
+    if !backend_processor.bucket_schema.is_empty() {
+        parser.extract_buckets(&backend_processor.bucket_schema);
+    }
+
+    // Filter the raw schema content to remove fields with FOR select WHERE false
+    let mut filtered_schema_content = filter_schema_for_client(&content, &parser)?;
+
+    // Append spooky_rv field to every table for local cache setup (client-side only)
+    println!("  + Injecting spooky_rv field for local cache schema");
+    for table_name in parser.tables.keys() {
+        filtered_schema_content.push_str(&format!(
+            "\nDEFINE FIELD spooky_rv ON TABLE {} TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;",
+            table_name
+        ));
+    }
+
+    // Choose which content to use based on format
+    let raw_schema_content = if matches!(output_format, OutputFormat::Surql) {
+        let builder_config = schema_builder::SchemaBuilderConfig {
+            input_path: input_path.to_path_buf(),
+            config_path: config_path.map(|p| p.to_path_buf()),
+            mode: mode.to_string(),
+            endpoint: endpoint.map(|s| s.to_string()),
+            secret: secret.map(|s| s.to_string()),
+        };
+        let c = schema_builder::build_server_schema(&builder_config)?;
+        println!("  + Built server schema via schema_builder");
+        c
+    } else {
+        filtered_schema_content.clone()
+    };
+
+    println!(
+        "Successfully parsed {} table(s) from {:?}",
+        parser.tables.len(),
+        input_path
+    );
+
+    for (table_name, table_schema) in &parser.tables {
+        println!(
+            "  - {}: {} field(s), schemafull: {}",
+            table_name,
+            table_schema.fields.len(),
+            table_schema.schemafull
+        );
+    }
+
+    // Generate JSON Schema
+    let generator = JsonSchemaGenerator::new();
+    let json_schema = generator.generate(&parser);
+
+    let json_schema_string = serde_json::to_string_pretty(&json_schema)
+        .context("Failed to serialize JSON Schema")?;
+
+    fn ensure_directory_exists(path: &std::path::Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() && !parent.exists() {
+                fs::create_dir_all(parent)
+                    .context(format!("Failed to create directory: {:?}", parent))?;
+            }
+        }
+        Ok(())
+    }
+
+    if generate_all {
+        println!("\nGenerating all formats...");
+
+        let json_path = output_path.with_extension("json");
+        ensure_directory_exists(&json_path)?;
+        fs::write(&json_path, &json_schema_string)
+            .context(format!("Failed to write JSON Schema file: {:?}", json_path))?;
+        println!("  ✓ JSON Schema: {:?}", json_path);
+
+        let ts_gen = CodeGenerator::new_with_header(OutputFormat::Typescript, !no_header);
+        let ts_code = ts_gen
+            .generate_with_schema(
+                &json_schema_string,
+                "Database",
+                Some(&raw_schema_content),
+                None,
+                Some(&backend_processor.backend_definitions),
+            )
+            .context("Failed to generate TypeScript code")?;
+        let ts_path = output_path.with_extension("ts");
+        ensure_directory_exists(&ts_path)?;
+        fs::write(&ts_path, ts_code)
+            .context(format!("Failed to write TypeScript file: {:?}", ts_path))?;
+        println!("  ✓ TypeScript: {:?}", ts_path);
+
+        let dart_gen = CodeGenerator::new_with_header(OutputFormat::Dart, !no_header);
+        let dart_code = dart_gen
+            .generate_with_schema(
+                &json_schema_string,
+                "Database",
+                Some(&raw_schema_content),
+                None,
+                Some(&backend_processor.backend_definitions),
+            )
+            .context("Failed to generate Dart code")?;
+        let dart_path = output_path.with_extension("dart");
+        ensure_directory_exists(&dart_path)?;
+        fs::write(&dart_path, dart_code)
+            .context(format!("Failed to write Dart file: {:?}", dart_path))?;
+        println!("  ✓ Dart: {:?}", dart_path);
+
+        println!("\nSuccessfully generated all formats!");
+    } else {
+        let is_client = !matches!(output_format, OutputFormat::Surql);
+        let spooky_events = spooky::generate_spooky_events(
+            &parser.tables,
+            &content,
+            is_client,
+            mode,
+            endpoint,
+            secret,
+        );
+
+        let include_modules = mode == "surrealism";
+        let generator = CodeGenerator::new(output_format, !no_header, include_modules);
+        let output_content = generator
+            .generate_with_schema(
+                &json_schema_string,
+                "Schema",
+                Some(&raw_schema_content),
+                Some(&spooky_events),
+                Some(&backend_processor.backend_definitions),
+            )
+            .context("Failed to generate output code")?;
+
+        ensure_directory_exists(output_path)?;
+        fs::write(output_path, output_content)
+            .context(format!("Failed to write output file: {:?}", output_path))?;
+
+        let format_name = match output_format {
+            OutputFormat::JsonSchema => "JSON Schema",
+            OutputFormat::Typescript => "TypeScript",
+            OutputFormat::Dart => "Dart",
+            OutputFormat::Surql => "sql",
+        };
+
+        if matches!(output_format, OutputFormat::Surql) && mode == "surrealism" {
+            if let Some(output_dir) = output_path.parent() {
+                println!("\nProcessing Surrealism Modules...");
+                if let Err(e) = modules::compile_modules(modules_dir, output_dir) {
+                    eprintln!("Warning: Failed to compile modules: {}", e);
+                }
+            }
+        }
+
+        println!(
+            "\nSuccessfully generated {} at {:?}",
+            format_name, output_path
+        );
+    }
+
+    Ok(())
+}
+
+fn handle_generate(config_path: &Path) -> Result<()> {
+    let config_str = fs::read_to_string(config_path)
+        .context(format!("Failed to read config file: {:?}", config_path))?;
+    let config: SpookyConfig =
+        serde_yaml::from_str(&config_str).context("Failed to parse spooky config")?;
+
+    if config.client_types.is_empty() {
+        anyhow::bail!(
+            "No clientTypes entries found in {:?}. Add at least one entry to generate.",
+            config_path
+        );
+    }
+
+    let base_dir = config_path.parent().unwrap_or(Path::new("."));
+
+    // Process backends once
+    let mut backend_processor = BackendProcessor::new();
+    backend_processor.process(config_path)?;
+
+    for (i, ct) in config.client_types.iter().enumerate() {
+        println!(
+            "\n[{}/{}] Generating {} → {}",
+            i + 1,
+            config.client_types.len(),
+            ct.format,
+            ct.output
+        );
+
+        let output_format = match ct.format.to_lowercase().as_str() {
+            "json" => OutputFormat::JsonSchema,
+            "typescript" | "ts" => OutputFormat::Typescript,
+            "dart" => OutputFormat::Dart,
+            "surql" => OutputFormat::Surql,
+            _ => {
+                anyhow::bail!(
+                    "Unknown format '{}' in clientTypes[{}]. Supported: json, typescript, dart, surql",
+                    ct.format,
+                    i
+                );
+            }
+        };
+
+        let schema_paths = ct.schema.paths();
+        if schema_paths.is_empty() {
+            anyhow::bail!("clientTypes[{}] has no schema paths", i);
+        }
+
+        let input_path = base_dir.join(schema_paths[0]);
+        let append_paths: Vec<PathBuf> = schema_paths[1..]
+            .iter()
+            .map(|p| base_dir.join(p))
+            .collect();
+        let output_path = base_dir.join(&ct.output);
+
+        run_codegen(
+            &input_path,
+            &append_paths,
+            &output_path,
+            output_format,
+            Some(config_path),
+            &backend_processor,
+            false,
+            "singlenode",
+            None,
+            None,
+            Path::new("../../packages/surrealism-modules"),
+            false,
+        )?;
+    }
+
+    println!("\nAll clientTypes generated successfully.");
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
 
     match args.command {
-        Some(Commands::Setup) => return setup_project(),
+        Some(Commands::Create) | Some(Commands::Setup) => return create_project(),
         Some(Commands::Migrate { action }) => return handle_migrate(action),
         Some(Commands::Bucket { action }) => return handle_bucket(action),
         Some(Commands::Api { action }) => return handle_api(action),
         Some(Commands::Dev) => return dev::run(),
+        Some(Commands::Generate { config }) | Some(Commands::Gen { config }) => {
+            return handle_generate(&config);
+        }
         None => {} // fall through to legacy codegen mode
     }
 
@@ -559,230 +869,27 @@ fn main() -> Result<()> {
             .unwrap_or(OutputFormat::JsonSchema)
     };
 
-    // Read the input file
-    let mut content = fs::read_to_string(input_path)
-        .context(format!("Failed to read input file: {:?}", input_path))?;
-
     // Process spooky config/backends
     let mut backend_processor = BackendProcessor::new();
     if let Some(config_path) = &args.config {
         println!("Loading spooky config from {:?}", config_path);
         backend_processor.process(config_path)?;
-
-        // Append backend schemas to content
-        content.push('\n');
-        content.push_str(&backend_processor.schema_appends);
     }
 
-    // Append embedded meta tables
-    let meta_tables = include_str!("meta_tables.surql");
-    let meta_tables_remote = include_str!("meta_tables_remote.surql");
-    let meta_tables_client = include_str!("meta_tables_client.surql");
+    let append_paths: Vec<PathBuf> = args.append.iter().cloned().collect();
 
-    // Include base meta tables
-    content.push('\n');
-    content.push_str(meta_tables);
-    println!("  + Appended base meta_tables.surql");
-
-    // Include format-specific meta tables
-    if matches!(output_format, OutputFormat::Surql) {
-        content.push('\n');
-        content.push_str(meta_tables_remote);
-        println!("  + Appended meta_tables_remote.surql");
-    } else {
-        content.push('\n');
-        content.push_str(meta_tables_client);
-        println!("  + Appended meta_tables_client.surql");
-    }
-
-    // Append extra file if specified
-    if let Some(append_path) = &args.append {
-        let append_content = fs::read_to_string(append_path)
-            .context(format!("Failed to read append file: {:?}", append_path))?;
-
-        content.push('\n');
-        content.push_str(&append_content);
-        println!("  + Appended schema from {:?}", append_path);
-    }
-
-    // Parse the schema
-    let mut parser = SchemaParser::new();
-    parser
-        .parse_file(&content)
-        .context("Failed to parse SurrealDB schema")?;
-
-    // Extract buckets from separate bucket files (if any)
-    if !backend_processor.bucket_schema.is_empty() {
-        parser.extract_buckets(&backend_processor.bucket_schema);
-    }
-
-    // Filter the raw schema content to remove fields with FOR select WHERE false
-    let mut filtered_schema_content = filter_schema_for_client(&content, &parser)?;
-
-    // Append spooky_rv field to every table for local cache setup (client-side only)
-    println!("  + Injecting spooky_rv field for local cache schema");
-    for table_name in parser.tables.keys() {
-        filtered_schema_content.push_str(&format!(
-            "\nDEFINE FIELD spooky_rv ON TABLE {} TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;",
-            table_name
-        ));
-    }
-
-    // Choose which content to use based on format
-    let raw_schema_content = if matches!(output_format, OutputFormat::Surql) {
-        let builder_config = schema_builder::SchemaBuilderConfig {
-            input_path: input_path.clone(),
-            config_path: args.config.clone(),
-            mode: args.mode.clone(),
-            endpoint: args.endpoint.clone(),
-            secret: args.secret.clone(),
-        };
-        let c = schema_builder::build_server_schema(&builder_config)?;
-        println!("  + Built server schema via schema_builder");
-        c
-    } else {
-        filtered_schema_content.clone()
-    };
-
-    println!(
-        "Successfully parsed {} table(s) from {:?}",
-        parser.tables.len(),
-        input_path
-    );
-
-    // List parsed tables
-    for (table_name, table_schema) in &parser.tables {
-        println!(
-            "  - {}: {} field(s), schemafull: {}",
-            table_name,
-            table_schema.fields.len(),
-            table_schema.schemafull
-        );
-    }
-
-    // Generate JSON Schema
-    let generator = JsonSchemaGenerator::new();
-    let json_schema = generator.generate(&parser);
-
-    // Serialize to JSON
-    let json_schema_string = if args.pretty {
-        serde_json::to_string_pretty(&json_schema).context("Failed to serialize JSON Schema")?
-    } else {
-        serde_json::to_string(&json_schema).context("Failed to serialize JSON Schema")?
-    };
-
-    fn ensure_directory_exists(path: &std::path::Path) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() && !parent.exists() {
-                fs::create_dir_all(parent)
-                    .context(format!("Failed to create directory: {:?}", parent))?;
-            }
-        }
-        Ok(())
-    }
-
-    if args.all {
-        // Generate all formats
-        println!("\nGenerating all formats...");
-
-        // Write JSON Schema
-        let json_path = output_path.with_extension("json");
-        ensure_directory_exists(&json_path)?;
-        fs::write(&json_path, &json_schema_string)
-            .context(format!("Failed to write JSON Schema file: {:?}", json_path))?;
-        println!("  ✓ JSON Schema: {:?}", json_path);
-
-        // Generate TypeScript
-        let ts_gen = CodeGenerator::new_with_header(OutputFormat::Typescript, !args.no_header);
-        let ts_code = ts_gen
-            .generate_with_schema(
-                &json_schema_string,
-                "Database",
-                Some(&raw_schema_content),
-                None,
-                Some(&backend_processor.backend_definitions),
-            )
-            .context("Failed to generate TypeScript code")?;
-        let ts_path = output_path.with_extension("ts");
-        ensure_directory_exists(&ts_path)?;
-        fs::write(&ts_path, ts_code)
-            .context(format!("Failed to write TypeScript file: {:?}", ts_path))?;
-        println!("  ✓ TypeScript: {:?}", ts_path);
-
-        // Generate Dart
-        let dart_gen = CodeGenerator::new_with_header(OutputFormat::Dart, !args.no_header);
-        let dart_code = dart_gen
-            .generate_with_schema(
-                &json_schema_string,
-                "Database",
-                Some(&raw_schema_content),
-                None,
-                Some(&backend_processor.backend_definitions),
-            )
-            .context("Failed to generate Dart code")?;
-        let dart_path = output_path.with_extension("dart");
-        ensure_directory_exists(&dart_path)?;
-        fs::write(&dart_path, dart_code)
-            .context(format!("Failed to write Dart file: {:?}", dart_path))?;
-        println!("  ✓ Dart: {:?}", dart_path);
-
-        println!("\nSuccessfully generated all formats!");
-    } else {
-        // Generate single format
-        // Generate spooky events
-        let is_client = !matches!(output_format, OutputFormat::Surql);
-        let spooky_events = spooky::generate_spooky_events(
-            &parser.tables,
-            &content,
-            is_client,
-            &args.mode,
-            args.endpoint.as_deref(),
-            args.secret.as_deref(),
-        );
-
-        // Generate code
-        let include_modules = args.mode == "surrealism";
-        let generator = CodeGenerator::new(output_format, !args.no_header, include_modules);
-        let output_content = generator
-            .generate_with_schema(
-                &json_schema_string,
-                "Schema",
-                Some(&raw_schema_content),
-                Some(&spooky_events),
-                Some(&backend_processor.backend_definitions),
-            )
-            .context("Failed to generate output code")?;
-
-        ensure_directory_exists(output_path)?;
-        fs::write(output_path, output_content)
-            .context(format!("Failed to write output file: {:?}", output_path))?;
-
-        let format_name = match output_format {
-            OutputFormat::JsonSchema => "JSON Schema",
-            OutputFormat::Typescript => "TypeScript",
-            OutputFormat::Dart => "Dart",
-            OutputFormat::Surql => "sql",
-        };
-
-        if matches!(output_format, OutputFormat::Surql) && args.mode == "surrealism" {
-            // Compile and bundle modules
-            // Output dir is the directory containing args.output
-            if let Some(output_dir) = output_path.parent() {
-                println!("\nProcessing Surrealism Modules...");
-                if let Err(e) = modules::compile_modules(&args.modules_dir, output_dir) {
-                    eprintln!("Warning: Failed to compile modules: {}", e);
-                    // Don't fail the whole build for this? Or should we?
-                    // User said "compile and add", implies part of the process.
-                    // But if directory doesn't exist, we skip.
-                }
-            }
-        }
-
-        println!(
-            "\nSuccessfully generated {} at {:?}",
-            format_name, output_path
-        );
-    }
-
-    Ok(())
+    run_codegen(
+        input_path,
+        &append_paths,
+        output_path,
+        output_format,
+        args.config.as_deref(),
+        &backend_processor,
+        args.no_header,
+        &args.mode,
+        args.endpoint.as_deref(),
+        args.secret.as_deref(),
+        &args.modules_dir,
+        args.all,
+    )
 }

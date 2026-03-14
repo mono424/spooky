@@ -1,5 +1,4 @@
 use crate::parser::{FieldType, TableSchema};
-use regex::Regex;
 use std::collections::BTreeMap;
 
 /// Generate Spooky events for data hashing and graph synchronization
@@ -8,7 +7,7 @@ use std::collections::BTreeMap;
 /// Generate Spooky events for data hashing and graph synchronization
 pub fn generate_spooky_events(
     tables: &BTreeMap<String, TableSchema>,
-    raw_content: &str,
+    _raw_content: &str,
     is_client: bool,
     mode: &str,
     endpoint: Option<&str>,
