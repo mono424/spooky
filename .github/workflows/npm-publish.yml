@@ -84,6 +84,9 @@ jobs:
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
+      - name: Upgrade npm for OIDC support
+        run: npm install -g npm@latest
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -96,7 +99,7 @@ jobs:
 
       - name: Publish query-builder
         working-directory: packages/query-builder
-        run: pnpm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }} --no-git-checks
+        run: npm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
 
       # 2. Build and publish @spooky-sync/ssp-wasm
       - name: Set version — ssp-wasm
@@ -110,7 +113,7 @@ jobs:
 
       - name: Publish ssp-wasm
         working-directory: packages/ssp-wasm
-        run: pnpm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }} --no-git-checks
+        run: npm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
 
       # 3. Build and publish @spooky-sync/core
       - name: Set version — core
@@ -121,7 +124,7 @@ jobs:
 
       - name: Publish core
         working-directory: packages/core
-        run: pnpm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }} --no-git-checks
+        run: npm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
 
       # 4. Build and publish @spooky-sync/client-solid
       - name: Set version — client-solid
@@ -132,7 +135,7 @@ jobs:
 
       - name: Publish client-solid
         working-directory: packages/client-solid
-        run: pnpm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }} --no-git-checks
+        run: npm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
 
   build-cli-binaries:
     needs: [prepare, validate-versions]
@@ -265,6 +268,9 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
+      - name: Upgrade npm for OIDC support
+        run: npm install -g npm@latest
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -291,4 +297,4 @@ jobs:
 
       - name: Publish CLI
         working-directory: apps/cli
-        run: pnpm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }} --no-git-checks
+        run: npm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
