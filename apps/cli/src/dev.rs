@@ -1,13 +1,15 @@
 use anyhow::{bail, Context, Result};
 use std::path::Path;
+use std::io::IsTerminal;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crate::backend::{SpookyConfig, ResolvedVersions};
+use crate::backend::{self, ResolvedVersions, DEFAULT_CONFIG_PATH};
 use crate::migrate;
+use crate::schema_builder;
 use crate::surreal_client::{MigrationDB, SurrealClient};
 
 const PREFIX: &str = "[spooky dev]";
@@ -29,7 +31,7 @@ const INFRA_SERVICES_SURREALISM: &[&str] = &["surrealdb"];
 
 // ── Public entry point ──────────────────────────────────────────────────────
 
-pub fn run() -> Result<()> {
+pub fn run(skip_migrations: bool, auto_apply_migrations: bool) -> Result<()> {
     let stop = Arc::new(AtomicBool::new(false));
     let stop_clone = stop.clone();
     ctrlc::set_handler(move || {
@@ -40,55 +42,28 @@ pub fn run() -> Result<()> {
     println!("{} Starting development environment...", PREFIX);
 
     // Read config from spooky.yml
-    let config = read_config("spooky.yml");
+    let config = backend::load_config(Path::new(DEFAULT_CONFIG_PATH));
     let mode = config.mode.clone().unwrap_or_else(|| "singlenode".to_string());
     let versions = ResolvedVersions::from_config(&config);
+    let resolved = config.resolved_schema();
+    let migrations_path = resolved.migrations.to_string_lossy().to_string();
+    let migrations_path = migrations_path.as_str();
     println!("{} Mode: {}", PREFIX, mode);
 
     // Check for compose files
     let compose_file = format!("docker-compose.{}.yml", mode);
     if Path::new(&compose_file).exists() {
         println!("{} Found compose file: {}", PREFIX, compose_file);
-        run_compose_mode(&compose_file, &mode, &stop)
+        run_compose_mode(&compose_file, &mode, &stop, skip_migrations, auto_apply_migrations, migrations_path)
     } else {
         println!("{} No compose file found — using direct Docker mode", PREFIX);
-        run_direct_mode(&mode, &versions, &stop)
-    }
-}
-
-// ── Config reading ──────────────────────────────────────────────────────────
-
-fn default_config() -> SpookyConfig {
-    SpookyConfig {
-        mode: Some("singlenode".to_string()),
-        surrealdb: None,
-        version: None,
-        backends: Default::default(),
-        buckets: Default::default(),
-        client_types: Default::default(),
-    }
-}
-
-fn read_config(config_path: &str) -> SpookyConfig {
-    let path = Path::new(config_path);
-    if !path.exists() {
-        return default_config();
-    }
-
-    let content = match std::fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(_) => return default_config(),
-    };
-
-    match serde_yaml::from_str(&content) {
-        Ok(c) => c,
-        Err(_) => default_config(),
+        run_direct_mode(&mode, &versions, &stop, skip_migrations, auto_apply_migrations, migrations_path)
     }
 }
 
 // ── Direct Docker mode ──────────────────────────────────────────────────────
 
-fn run_direct_mode(mode: &str, versions: &ResolvedVersions, stop: &Arc<AtomicBool>) -> Result<()> {
+fn run_direct_mode(mode: &str, versions: &ResolvedVersions, stop: &Arc<AtomicBool>, skip_migrations: bool, auto_apply_migrations: bool, migrations_path: &str) -> Result<()> {
     let surreal_image = versions.surrealdb_image();
     let ssp_image = versions.ssp_image();
 
@@ -136,16 +111,20 @@ fn run_direct_mode(mode: &str, versions: &ResolvedVersions, stop: &Arc<AtomicBoo
     }
 
     // Phase 4: Apply migrations
-    println!("{} Phase 4: Applying migrations...", PREFIX);
-    apply_migrations(SURREAL_PORT)?;
+    if skip_migrations {
+        println!("{} Phase 4: Skipping migrations (--skip-migrations).", PREFIX);
+    } else {
+        println!("{} Phase 4: Applying migrations...", PREFIX);
+        apply_migrations(SURREAL_PORT, auto_apply_migrations, migrations_path)?;
+    }
 
     if stop.load(Ordering::SeqCst) {
         return cleanup_direct(stop);
     }
 
-    // Phase 4b: Patch endpoint functions for Docker networking
-    println!("{} Phase 4b: Patching endpoint functions...", PREFIX);
-    patch_endpoints(SURREAL_PORT, mode)?;
+    // Phase 4b: Apply remote functions with Docker-internal endpoints
+    println!("{} Phase 4b: Applying remote functions...", PREFIX);
+    apply_remote_functions(SURREAL_PORT, mode)?;
 
     if stop.load(Ordering::SeqCst) {
         return cleanup_direct(stop);
@@ -254,12 +233,16 @@ fn run_direct_mode(mode: &str, versions: &ResolvedVersions, stop: &Arc<AtomicBoo
     let surreal_log = spawn_log_tail(SURREAL_CONTAINER, "surrealdb");
     let ssp_log = spawn_log_tail(SSP_CONTAINER, "ssp");
 
+    // Start the app dev server
+    let app_dev = spawn_pnpm_dev_app();
+
     // Wait for Ctrl+C
     while !stop.load(Ordering::SeqCst) {
         thread::sleep(Duration::from_millis(250));
     }
 
-    // Stop log tailers
+    // Stop log tailers and app dev server
+    drop(app_dev);
     drop(surreal_log);
     drop(ssp_log);
     drop(scheduler_log);
@@ -284,7 +267,7 @@ fn cleanup_direct(_stop: &Arc<AtomicBool>) -> Result<()> {
 
 // ── Compose mode ────────────────────────────────────────────────────────────
 
-fn run_compose_mode(compose_file: &str, mode: &str, stop: &Arc<AtomicBool>) -> Result<()> {
+fn run_compose_mode(compose_file: &str, mode: &str, stop: &Arc<AtomicBool>, skip_migrations: bool, auto_apply_migrations: bool, migrations_path: &str) -> Result<()> {
     let infra_services: &[&str] = match mode {
         "cluster" => INFRA_SERVICES_CLUSTER,
         "surrealism" => INFRA_SERVICES_SURREALISM,
@@ -323,8 +306,20 @@ fn run_compose_mode(compose_file: &str, mode: &str, stop: &Arc<AtomicBool>) -> R
     }
 
     // Phase 3: Apply migrations
-    println!("\n{} Phase 3: Applying migrations...", PREFIX);
-    apply_migrations(SURREAL_PORT)?;
+    if skip_migrations {
+        println!("\n{} Phase 3: Skipping migrations (--skip-migrations).", PREFIX);
+    } else {
+        println!("\n{} Phase 3: Applying migrations...", PREFIX);
+        apply_migrations(SURREAL_PORT, auto_apply_migrations, migrations_path)?;
+    }
+
+    if stop.load(Ordering::SeqCst) {
+        return cleanup_compose(compose_file);
+    }
+
+    // Phase 3b: Apply remote functions with Docker-internal endpoints
+    println!("{} Phase 3b: Applying remote functions...", PREFIX);
+    apply_remote_functions(SURREAL_PORT, mode)?;
 
     if stop.load(Ordering::SeqCst) {
         return cleanup_compose(compose_file);
@@ -334,10 +329,15 @@ fn run_compose_mode(compose_file: &str, mode: &str, stop: &Arc<AtomicBool>) -> R
     println!("\n{} Phase 4: Starting remaining services...", PREFIX);
     println!("{} Press Ctrl+C to stop.\n", PREFIX);
 
+    // Start the app dev server
+    let app_dev = spawn_pnpm_dev_app();
+
     let status = Command::new("docker")
         .args(["compose", "-f", compose_file, "up", "--remove-orphans"])
         .status()
         .context("Failed to run docker compose up")?;
+
+    drop(app_dev);
 
     if !status.success() && !stop.load(Ordering::SeqCst) {
         bail!("docker compose up exited with status {}", status);
@@ -389,10 +389,10 @@ fn wait_for_health(
 
 // ── Migration helper ────────────────────────────────────────────────────────
 
-fn apply_migrations(port: u16) -> Result<()> {
-    let migrations_dir = Path::new("migrations");
+fn apply_migrations(port: u16, auto_apply: bool, migrations_path: &str) -> Result<()> {
+    let migrations_dir = Path::new(migrations_path);
     if !migrations_dir.exists() {
-        println!("{} No migrations/ directory found, skipping.", PREFIX);
+        println!("{} No {}/ directory found, skipping.", PREFIX, migrations_path);
         return Ok(());
     }
 
@@ -427,45 +427,78 @@ fn apply_migrations(port: u16) -> Result<()> {
         println!("  - {}_{}", m.version, m.name);
     }
 
-    let confirm = inquire::Confirm::new(&format!(
-        "Apply {} pending migration(s)?",
-        pending.len()
-    ))
-    .with_default(true)
-    .prompt()
-    .unwrap_or(false);
+    if auto_apply {
+        println!("{} Auto-applying migrations (--apply-migrations).", PREFIX);
+    } else if !std::io::stdin().is_terminal() {
+        println!("{} Non-TTY detected, auto-applying migrations.", PREFIX);
+    } else {
+        let options = vec![
+            "Apply migrations",
+            "Skip migrations (continue without applying)",
+            "Quit",
+        ];
+        let choice = inquire::Select::new(
+            &format!("{} pending migration(s) found. What would you like to do?", pending.len()),
+            options,
+        )
+        .prompt()
+        .unwrap_or("Quit");
 
-    if !confirm {
-        bail!(
-            "Cannot continue without applying migrations. \
-             Run 'spooky migrate apply' manually or re-run 'spooky dev'."
-        );
+        match choice {
+            "Apply migrations" => {}
+            "Skip migrations (continue without applying)" => {
+                println!("{} Skipping migrations. Dev server will start without applying pending migrations.", PREFIX);
+                return Ok(());
+            }
+            _ => bail!("User chose to quit."),
+        }
     }
 
     match migrate::apply(&client, migrations_dir) {
         Ok(()) => Ok(()),
         Err(e) => {
             println!("{} Migration failed: {}", PREFIX, e);
-            let confirm = inquire::Confirm::new("Reset database and retry migrations?")
-                .with_default(true)
+            if auto_apply || !std::io::stdin().is_terminal() {
+                println!("{} Auto-resetting database and retrying migrations.", PREFIX);
+                println!("{} Resetting database and retrying...", PREFIX);
+                client.reset_database()?;
+                migrate::apply(&client, migrations_dir)
+            } else {
+                let options = vec![
+                    "Reset database and retry",
+                    "Skip migrations (continue without applying)",
+                    "Quit",
+                ];
+                let choice = inquire::Select::new(
+                    "Migration failed. What would you like to do?",
+                    options,
+                )
                 .prompt()
-                .unwrap_or(false);
-            if !confirm {
-                bail!("Migration failed: {}", e);
+                .unwrap_or("Quit");
+
+                match choice {
+                    "Reset database and retry" => {
+                        println!("{} Resetting database and retrying...", PREFIX);
+                        client.reset_database()?;
+                        migrate::apply(&client, migrations_dir)
+                    }
+                    "Skip migrations (continue without applying)" => {
+                        println!("{} Skipping migrations. Dev server will start without applying pending migrations.", PREFIX);
+                        Ok(())
+                    }
+                    _ => bail!("User chose to quit."),
+                }
             }
-            println!("{} Resetting database and retrying...", PREFIX);
-            client.reset_database()?;
-            migrate::apply(&client, migrations_dir)
         }
     }
 }
 
-// ── Endpoint patching ────────────────────────────────────────────────────
+// ── Remote functions helper ─────────────────────────────────────────────────
 
-/// Re-apply the remote functions with Docker-internal endpoints so that
+/// Apply the remote functions with Docker-internal endpoints so that
 /// SurrealDB (running inside the Docker network) can reach the SSP/scheduler
 /// via container names instead of `localhost`.
-fn patch_endpoints(surreal_port: u16, mode: &str) -> Result<()> {
+fn apply_remote_functions(surreal_port: u16, mode: &str) -> Result<()> {
     let endpoint = if mode == "cluster" {
         format!("http://scheduler:{}", SCHEDULER_PORT)
     } else {
@@ -473,18 +506,7 @@ fn patch_endpoints(surreal_port: u16, mode: &str) -> Result<()> {
     };
     let secret = "mysecret";
 
-    let template = include_str!("functions_remote_singlenode.surql");
-    let mut patched = template.to_string();
-    patched = patched.replace("{{ENDPOINT}}", &endpoint);
-    patched = patched.replace("{{SECRET}}", secret);
-
-    // Also patch the unregister_view event (same replacement as schema_builder)
-    let unregister_call = "let $result = mod::dbsp::unregister_view(<string>$before.id);";
-    let unregister_http = format!(
-        "let $payload = {{ id: <string>$before.id }};\n    let $result = http::post('{}/view/unregister', $payload, {{ \"Authorization\": \"Bearer {}\" }});",
-        endpoint, secret
-    );
-    patched = patched.replace(unregister_call, &unregister_http);
+    let functions_sql = schema_builder::build_remote_functions_schema(mode, &endpoint, secret);
 
     let client = SurrealClient::new(
         &format!("http://localhost:{}", surreal_port),
@@ -494,8 +516,8 @@ fn patch_endpoints(surreal_port: u16, mode: &str) -> Result<()> {
         "root",
     );
 
-    client.execute(&patched).context("Failed to patch endpoint functions")?;
-    println!("{} Endpoints patched → {}", PREFIX, endpoint);
+    client.execute(&functions_sql).context("Failed to apply remote functions")?;
+    println!("{} Remote functions applied → {}", PREFIX, endpoint);
     Ok(())
 }
 
@@ -524,6 +546,23 @@ impl Drop for LogTailGuard {
         if let Some(ref mut child) = self.0 {
             let _ = child.kill();
             let _ = child.wait();
+        }
+    }
+}
+
+fn spawn_pnpm_dev_app() -> LogTailGuard {
+    println!("{} Starting app dev server (pnpm dev:app)...", PREFIX);
+    let child = Command::new("pnpm")
+        .args(["dev:app"])
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .spawn();
+
+    match child {
+        Ok(c) => LogTailGuard(Some(c)),
+        Err(e) => {
+            eprintln!("{} Warning: Could not start pnpm dev:app: {}", PREFIX, e);
+            LogTailGuard(None)
         }
     }
 }

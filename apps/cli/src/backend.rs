@@ -3,20 +3,53 @@ use openapiv3::OpenAPI;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+pub const DEFAULT_SCHEMA_PATH: &str = "src/schema.surql";
+pub const DEFAULT_MIGRATIONS_DIR: &str = "migrations";
+pub const DEFAULT_BUCKETS_DIR: &str = "src/buckets";
+pub const DEFAULT_CONFIG_PATH: &str = "spooky.yml";
+
+/// Schema config: either a directory string (sub-paths derived by convention)
+/// or an object with explicit overrides.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(untagged)]
-pub enum SchemaInput {
-    Single(String),
-    Multiple(Vec<String>),
+pub enum SchemaConfig {
+    Dir(String),
+    Explicit {
+        schema: Option<String>,
+        migrations: Option<String>,
+        #[serde(rename = "bucketsDir")]
+        buckets_dir: Option<String>,
+    },
 }
 
-impl SchemaInput {
-    pub fn paths(&self) -> Vec<&str> {
-        match self {
-            SchemaInput::Single(s) => vec![s.as_str()],
-            SchemaInput::Multiple(v) => v.iter().map(|s| s.as_str()).collect(),
+/// Resolved schema paths with all defaults applied.
+#[derive(Debug, Clone)]
+pub struct ResolvedSchema {
+    pub schema: PathBuf,
+    pub migrations: PathBuf,
+    pub buckets_dir: PathBuf,
+}
+
+impl ResolvedSchema {
+    pub fn from_config(config: &Option<SchemaConfig>) -> Self {
+        match config {
+            Some(SchemaConfig::Dir(dir)) => Self {
+                schema: PathBuf::from(dir).join(DEFAULT_SCHEMA_PATH),
+                migrations: PathBuf::from(dir).join(DEFAULT_MIGRATIONS_DIR),
+                buckets_dir: PathBuf::from(dir).join(DEFAULT_BUCKETS_DIR),
+            },
+            Some(SchemaConfig::Explicit { schema, migrations, buckets_dir }) => Self {
+                schema: PathBuf::from(schema.as_deref().unwrap_or(DEFAULT_SCHEMA_PATH)),
+                migrations: PathBuf::from(migrations.as_deref().unwrap_or(DEFAULT_MIGRATIONS_DIR)),
+                buckets_dir: PathBuf::from(buckets_dir.as_deref().unwrap_or(DEFAULT_BUCKETS_DIR)),
+            },
+            None => Self {
+                schema: PathBuf::from(DEFAULT_SCHEMA_PATH),
+                migrations: PathBuf::from(DEFAULT_MIGRATIONS_DIR),
+                buckets_dir: PathBuf::from(DEFAULT_BUCKETS_DIR),
+            },
         }
     }
 }
@@ -25,7 +58,6 @@ impl SchemaInput {
 pub struct ClientTypeConfig {
     pub format: String,
     pub output: String,
-    pub schema: SchemaInput,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -39,12 +71,20 @@ pub struct SpookyConfig {
     /// or an object `{ ssp: "...", scheduler: "..." }` for individual control.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<VersionConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<SchemaConfig>,
     #[serde(default)]
     pub backends: BTreeMap<String, BackendConfig>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub buckets: Vec<String>,
     #[serde(default, rename = "clientTypes", skip_serializing_if = "Vec::is_empty")]
     pub client_types: Vec<ClientTypeConfig>,
+}
+
+impl SpookyConfig {
+    pub fn resolved_schema(&self) -> ResolvedSchema {
+        ResolvedSchema::from_config(&self.schema)
+    }
 }
 
 /// Either a plain string (applies to both ssp & scheduler)
@@ -158,6 +198,36 @@ pub struct BackendRoute {
 pub struct BackendDefinition {
     pub routes: BTreeMap<String, BackendRoute>,
     pub outbox_table: Option<String>,
+}
+
+/// Load and parse a SpookyConfig from the given path.
+/// Returns a default config if the file doesn't exist or can't be parsed.
+pub fn load_config(path: &Path) -> SpookyConfig {
+    if !path.exists() {
+        return default_config();
+    }
+
+    let content = match fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return default_config(),
+    };
+
+    match serde_yaml::from_str(&content) {
+        Ok(c) => c,
+        Err(_) => default_config(),
+    }
+}
+
+fn default_config() -> SpookyConfig {
+    SpookyConfig {
+        mode: Some("singlenode".to_string()),
+        surrealdb: None,
+        version: None,
+        schema: None,
+        backends: Default::default(),
+        buckets: Default::default(),
+        client_types: Default::default(),
+    }
 }
 
 pub struct BackendProcessor {

@@ -124,6 +124,7 @@ pub fn add_api(
             mode: None,
             surrealdb: None,
             version: None,
+            schema: None,
             backends: std::collections::BTreeMap::new(),
             buckets: Vec::new(),
             client_types: Vec::new(),

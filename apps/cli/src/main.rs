@@ -15,7 +15,7 @@ mod spooky;
 mod surreal_client;
 
 use anyhow::{Context, Result};
-use backend::{BackendProcessor, SpookyConfig};
+use backend::{BackendProcessor, SpookyConfig, DEFAULT_CONFIG_PATH};
 use clap::{Args as ClapArgs, Parser as ClapParser, Subcommand};
 use codegen::{CodeGenerator, OutputFormat};
 use json_schema::JsonSchemaGenerator;
@@ -106,19 +106,26 @@ enum Commands {
         action: ApiCommands,
     },
     /// Start a local development environment
-    Dev,
+    Dev {
+        /// Skip migration check entirely
+        #[arg(long)]
+        skip_migrations: bool,
+        /// Auto-apply pending migrations without prompting
+        #[arg(long)]
+        apply_migrations: bool,
+    },
     /// Generate client types from spooky.yml
     Generate {
         /// Path to spooky.yml config file
-        #[arg(short, long, default_value = "spooky.yml")]
-        config: PathBuf,
+        #[arg(short, long)]
+        config: Option<PathBuf>,
     },
     /// Alias for 'generate'
     #[command(hide = true)]
     Gen {
         /// Path to spooky.yml config file
-        #[arg(short, long, default_value = "spooky.yml")]
-        config: PathBuf,
+        #[arg(short, long)]
+        config: Option<PathBuf>,
     },
 }
 
@@ -151,12 +158,12 @@ enum BucketCommands {
         path_prefix_auth: Option<bool>,
 
         /// Path to spooky.yml config file
-        #[arg(long, default_value = "spooky.yml")]
-        config: PathBuf,
+        #[arg(long)]
+        config: Option<PathBuf>,
 
         /// Directory for bucket .surql files
-        #[arg(long, default_value = "src/buckets")]
-        buckets_dir: PathBuf,
+        #[arg(long)]
+        buckets_dir: Option<PathBuf>,
     },
 }
 
@@ -193,8 +200,8 @@ enum ApiCommands {
         schema_path: Option<String>,
 
         /// Path to spooky.yml config file
-        #[arg(long, default_value = "spooky.yml")]
-        config: PathBuf,
+        #[arg(long)]
+        config: Option<PathBuf>,
     },
 }
 
@@ -208,11 +215,11 @@ enum MigrateCommands {
         #[arg(long)]
         schema: Option<PathBuf>,
         /// Migrations directory
-        #[arg(long, default_value = "migrations")]
-        migrations_dir: PathBuf,
+        #[arg(long)]
+        migrations_dir: Option<PathBuf>,
         /// Path to the input .surql schema file (for auto-diff)
-        #[arg(long, default_value = "src/schema.surql")]
-        input: PathBuf,
+        #[arg(long)]
+        input: Option<PathBuf>,
         /// Path to spooky.yml config file
         #[arg(long)]
         config: Option<PathBuf>,
@@ -249,16 +256,16 @@ enum MigrateCommands {
         #[command(flatten)]
         conn: ConnectionArgs,
         /// Migrations directory
-        #[arg(long, default_value = "migrations")]
-        migrations_dir: PathBuf,
+        #[arg(long)]
+        migrations_dir: Option<PathBuf>,
     },
     /// Show migration status
     Status {
         #[command(flatten)]
         conn: ConnectionArgs,
         /// Migrations directory
-        #[arg(long, default_value = "migrations")]
-        migrations_dir: PathBuf,
+        #[arg(long)]
+        migrations_dir: Option<PathBuf>,
     },
 }
 
@@ -427,17 +434,26 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
             password,
             empty,
         } => {
+            // Load config to resolve paths
+            let config_file = config.clone().unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
+            let spooky_config = backend::load_config(&config_file);
+            let resolved = spooky_config.resolved_schema();
+
+            let resolved_input = input.unwrap_or(resolved.schema);
+            let resolved_migrations = migrations_dir.unwrap_or(resolved.migrations);
+
             if empty {
                 // Legacy: empty template or schema dump
-                migrate::create(&migrations_dir, &name, schema.as_deref(), None, None)
+                migrate::create(&resolved_migrations, &name, schema.as_deref(), None, None)
             } else {
                 // Auto-diff mode
                 let builder_config = schema_builder::SchemaBuilderConfig {
-                    input_path: input,
+                    input_path: resolved_input,
                     config_path: config,
                     mode,
                     endpoint,
                     secret,
+                    include_functions: false,
                 };
 
                 let conn = url.as_ref().map(|u| {
@@ -451,7 +467,7 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
                 });
 
                 migrate::create(
-                    &migrations_dir,
+                    &resolved_migrations,
                     &name,
                     schema.as_deref(),
                     Some(&builder_config),
@@ -463,6 +479,10 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
             conn,
             migrations_dir,
         } => {
+            // Load config to resolve migrations dir
+            let spooky_config = backend::load_config(Path::new(DEFAULT_CONFIG_PATH));
+            let resolved_migrations = migrations_dir.unwrap_or(spooky_config.resolved_schema().migrations);
+
             let client = SurrealClient::new(
                 &conn.url,
                 &conn.namespace,
@@ -470,12 +490,16 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
                 &conn.username,
                 &conn.password,
             );
-            migrate::apply(&client, &migrations_dir)
+            migrate::apply(&client, &resolved_migrations)
         }
         MigrateCommands::Status {
             conn,
             migrations_dir,
         } => {
+            // Load config to resolve migrations dir
+            let spooky_config = backend::load_config(Path::new(DEFAULT_CONFIG_PATH));
+            let resolved_migrations = migrations_dir.unwrap_or(spooky_config.resolved_schema().migrations);
+
             let client = SurrealClient::new(
                 &conn.url,
                 &conn.namespace,
@@ -483,7 +507,7 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
                 &conn.username,
                 &conn.password,
             );
-            migrate::status(&client, &migrations_dir)
+            migrate::status(&client, &resolved_migrations)
         }
     }
 }
@@ -499,7 +523,10 @@ fn handle_api(action: ApiCommands) -> Result<()> {
             table,
             schema_path,
             config,
-        } => add_api::add_api(spec, name, base_url, auth_type, auth_token, table, schema_path, config),
+        } => {
+            let resolved_config = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
+            add_api::add_api(spec, name, base_url, auth_type, auth_token, table, schema_path, resolved_config)
+        }
     }
 }
 
@@ -514,16 +541,22 @@ fn handle_bucket(action: BucketCommands) -> Result<()> {
             path_prefix_auth,
             config,
             buckets_dir,
-        } => bucket::add(
-            name,
-            preset,
-            max_size,
-            extensions,
-            backend,
-            path_prefix_auth,
-            config,
-            buckets_dir,
-        ),
+        } => {
+            let resolved_config = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
+            let spooky_config = backend::load_config(&resolved_config);
+            let resolved_buckets = buckets_dir.unwrap_or(spooky_config.resolved_schema().buckets_dir);
+
+            bucket::add(
+                name,
+                preset,
+                max_size,
+                extensions,
+                backend,
+                path_prefix_auth,
+                resolved_config,
+                resolved_buckets,
+            )
+        }
     }
 }
 
@@ -610,6 +643,7 @@ fn run_codegen(
             mode: mode.to_string(),
             endpoint: endpoint.map(|s| s.to_string()),
             secret: secret.map(|s| s.to_string()),
+            include_functions: true,
         };
         let c = schema_builder::build_server_schema(&builder_config)?;
         println!("  + Built server schema via schema_builder");
@@ -758,6 +792,7 @@ fn handle_generate(config_path: &Path) -> Result<()> {
     }
 
     let base_dir = config_path.parent().unwrap_or(Path::new("."));
+    let resolved = config.resolved_schema();
 
     // Process backends once
     let mut backend_processor = BackendProcessor::new();
@@ -786,16 +821,8 @@ fn handle_generate(config_path: &Path) -> Result<()> {
             }
         };
 
-        let schema_paths = ct.schema.paths();
-        if schema_paths.is_empty() {
-            anyhow::bail!("clientTypes[{}] has no schema paths", i);
-        }
-
-        let input_path = base_dir.join(schema_paths[0]);
-        let append_paths: Vec<PathBuf> = schema_paths[1..]
-            .iter()
-            .map(|p| base_dir.join(p))
-            .collect();
+        let input_path = base_dir.join(&resolved.schema);
+        let append_paths: Vec<PathBuf> = Vec::new();
         let output_path = base_dir.join(&ct.output);
 
         run_codegen(
@@ -826,9 +853,12 @@ fn main() -> Result<()> {
         Some(Commands::Migrate { action }) => return handle_migrate(action),
         Some(Commands::Bucket { action }) => return handle_bucket(action),
         Some(Commands::Api { action }) => return handle_api(action),
-        Some(Commands::Dev) => return dev::run(),
+        Some(Commands::Dev { skip_migrations, apply_migrations }) => {
+            return dev::run(skip_migrations, apply_migrations);
+        }
         Some(Commands::Generate { config }) | Some(Commands::Gen { config }) => {
-            return handle_generate(&config);
+            let resolved_config = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
+            return handle_generate(&resolved_config);
         }
         None => {} // fall through to legacy codegen mode
     }

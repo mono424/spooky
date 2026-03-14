@@ -2,14 +2,16 @@
   "name": "{{PROJECT_NAME}}",
   "private": true,
   "scripts": {
-    "dev": "pnpm dev:schema & pnpm dev:app",
-    "dev:schema": "pnpm --filter @{{PROJECT_NAME}}/schema dev",
+    "dev": "spooky dev",
     "dev:app": "pnpm --filter @{{PROJECT_NAME}}/app dev",
-    "build": "pnpm --filter @{{PROJECT_NAME}}/schema build && pnpm --filter @{{PROJECT_NAME}}/app build",
-    "generate": "pnpm --filter @{{PROJECT_NAME}}/schema build",
-    "migrate:create": "pnpm --filter @{{PROJECT_NAME}}/schema migrate:create",
-    "migrate:apply": "pnpm --filter @{{PROJECT_NAME}}/schema migrate:apply",
-    "migrate:status": "pnpm --filter @{{PROJECT_NAME}}/schema migrate:status"
+    "build": "spooky generate && pnpm --filter @{{PROJECT_NAME}}/app build",
+    "generate": "spooky generate",
+    "migrate:create": "spooky migrate create",
+    "migrate:apply": "spooky migrate apply --url http://localhost:8666",
+    "migrate:status": "spooky migrate status --url http://localhost:8666"
+  },
+  "devDependencies": {
+    "@spooky-sync/cli": "{{VERSION}}"
   },
   "pnpm": {
     "overrides": {

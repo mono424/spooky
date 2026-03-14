@@ -1,13 +1,6 @@
 {
   "name": "{{PACKAGE_NAME}}",
   "version": "1.0.0",
-  "scripts": {
-    "dev": "spooky dev",
-    "migrate:create": "spooky migrate create",
-    "migrate:apply": "spooky migrate apply --url http://localhost:8666 --migrations-dir migrations",
-    "migrate:status": "spooky migrate status --url http://localhost:8666 --migrations-dir migrations"{{BUILD_SCRIPT}}
-  },
-  "devDependencies": {
-    "@spooky-sync/cli": "{{VERSION}}"
-  }
+  "scripts": {{{SCRIPTS}}
+  }{{DEV_DEPENDENCIES}}
 }
