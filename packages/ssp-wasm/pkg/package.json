@@ -1,0 +1,17 @@
+{
+  "name": "ssp-wasm",
+  "type": "module",
+  "description": "WASM bindings for ssp",
+  "version": "0.1.0",
+  "license": "MIT",
+  "files": [
+    "ssp_wasm_bg.wasm",
+    "ssp_wasm.js",
+    "ssp_wasm.d.ts"
+  ],
+  "main": "ssp_wasm.js",
+  "types": "ssp_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
