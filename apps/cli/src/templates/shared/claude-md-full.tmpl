@@ -1,0 +1,58 @@
+# {{PROJECT_NAME}}
+
+A real-time, offline-first app powered by **Spooky** — SolidJS + TypeScript + Tailwind CSS + SurrealDB.
+
+## Project Structure
+
+```
+{{PROJECT_NAME}}/
+├── apps/app/              # SolidJS frontend
+│   ├── src/
+│   │   ├── App.tsx        # Root component
+│   │   ├── db.ts          # Spooky DB client setup
+│   │   ├── schema.gen.ts  # Auto-generated types (DO NOT EDIT)
+│   │   └── ...
+│   └── vite.config.ts
+├── packages/schema/       # SurrealDB schema
+│   ├── src/schema.surql   # Schema definition (SurrealQL)
+│   └── migrations/        # Generated migrations
+├── spooky.yml             # Spooky configuration
+└── pnpm-workspace.yaml
+```
+
+## Key Commands
+
+```bash
+pnpm dev                        # Start Spooky dev server + Vite app
+pnpm generate                   # Regenerate TypeScript types from schema
+pnpm migrate:create <name>      # Create a new migration from schema changes
+pnpm migrate:apply              # Apply pending migrations
+pnpm migrate:status             # Check migration status
+```
+
+## Schema Workflow
+
+1. Edit `packages/schema/src/schema.surql`
+2. Run `pnpm generate` to regenerate `apps/app/src/schema.gen.ts`
+3. Run `pnpm migrate:create <name>` to create a migration
+4. Run `pnpm migrate:apply` to apply it
+
+## MCP DevTools
+
+This project is configured with the **Spooky DevTools MCP server** (`.claude/settings.local.json`). When the browser extension is connected, you have access to:
+
+- **get_state** — inspect the live client-side database state
+- **run_query** — execute SurrealQL queries against the local DB
+- **get_table_data** / **list_tables** — browse table contents
+- **get_auth_state** — check current auth status
+- **get_events** — view real-time sync events
+- **get_active_queries** — see live query subscriptions
+
+Use these tools to debug and inspect the app while it's running in the browser.
+
+## Important Notes
+
+- This is a **pnpm monorepo** — always use `pnpm` (not npm/yarn)
+- SurrealDB runs on `http://localhost:8666` during development
+- `schema.gen.ts` is **auto-generated** — never edit it directly; modify `schema.surql` and run `pnpm generate`
+- Schema files use **SurrealQL** (`.surql`), not SQL

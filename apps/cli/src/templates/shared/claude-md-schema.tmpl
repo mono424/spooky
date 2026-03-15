@@ -1,0 +1,39 @@
+# {{PROJECT_NAME}}
+
+A SurrealDB schema package powered by **Spooky** — schema-driven, with typed code generation and migrations.
+
+## Project Structure
+
+```
+{{PROJECT_NAME}}/
+├── src/
+│   ├── schema.surql       # Schema definition (SurrealQL)
+│   ├── buckets/           # Bucket definitions
+│   └── outbox/            # Outbox definitions
+├── migrations/            # Generated migrations
+└── spooky.yml             # Spooky configuration
+```
+
+## Key Commands
+
+```bash
+pnpm dev                        # Start Spooky dev server (watches schema)
+pnpm migrate:create <name>      # Create a new migration from schema changes
+pnpm migrate:apply              # Apply pending migrations
+pnpm migrate:status             # Check migration status
+```
+
+## Schema Workflow
+
+1. Edit `src/schema.surql`
+2. Run `pnpm migrate:create <name>` to create a migration
+3. Run `pnpm migrate:apply` to apply it
+
+## MCP DevTools
+
+This project includes a `.claude/settings.local.json` for the Spooky DevTools MCP server. When integrated into an app with the browser extension, you can use tools like `run_query`, `get_table_data`, and `get_state` to inspect the live database.
+
+## Important Notes
+
+- Schema files use **SurrealQL** (`.surql`), not SQL
+- SurrealDB runs on `http://localhost:8666` during development

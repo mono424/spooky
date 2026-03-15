@@ -74,6 +74,11 @@ mod templates {
     pub const PNPM_WORKSPACE: &str = include_str!("templates/shared/pnpm-workspace.yaml.tmpl");
     pub const SCHEMA_PACKAGE_JSON: &str = include_str!("templates/shared/schema-package.json.tmpl");
     pub const SPOOKY_YML: &str = include_str!("templates/shared/spooky.yml.tmpl");
+
+    // AI setup templates
+    pub const CLAUDE_MD_FULL: &str = include_str!("templates/shared/claude-md-full.tmpl");
+    pub const CLAUDE_MD_SCHEMA: &str = include_str!("templates/shared/claude-md-schema.tmpl");
+    pub const CLAUDE_SETTINGS_JSON: &str = include_str!("templates/shared/claude-settings.json.tmpl");
 }
 
 // ---------------------------------------------------------------------------
@@ -369,6 +374,19 @@ pub fn create_project() -> Result<()> {
         write_app_package(root_path, &project_name, has_auth)?;
     }
 
+    // --- Write AI setup files ---
+    write_file(
+        root_path.join("CLAUDE.md"),
+        &render(
+            if is_schema_only { templates::CLAUDE_MD_SCHEMA } else { templates::CLAUDE_MD_FULL },
+            &[("PROJECT_NAME", &project_name)],
+        ),
+    )?;
+    write_file(
+        root_path.join(".claude/settings.local.json"),
+        templates::CLAUDE_SETTINGS_JSON,
+    )?;
+
     println!(
         "\n  \x1b[32m\u{2713}\x1b[0m Project \x1b[1m{}\x1b[0m created",
         project_name
@@ -484,6 +502,13 @@ pub fn create_project() -> Result<()> {
             "  \x1b[1mpnpm dev\x1b[0m   \x1b[2m# start Spooky dev server + app\x1b[0m"
         );
     }
+
+    println!(
+        "\n  \x1b[2mAI: CLAUDE.md and .claude/ configured. Install the Spooky DevTools\x1b[0m"
+    );
+    println!(
+        "  \x1b[2mbrowser extension for live MCP debugging access.\x1b[0m"
+    );
 
     println!();
     Ok(())
