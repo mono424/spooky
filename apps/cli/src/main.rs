@@ -29,6 +29,10 @@ use surreal_client::SurrealClient;
 #[command(name = "syncgen")]
 #[command(about = "Generate types from SurrealDB schema files", long_about = None)]
 struct Args {
+    /// Path to the project directory (defaults to current directory)
+    #[arg(long)]
+    path: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Option<Commands>,
 
@@ -449,7 +453,7 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
                 // Auto-diff mode
                 let builder_config = schema_builder::SchemaBuilderConfig {
                     input_path: resolved_input,
-                    config_path: config,
+                    config_path: Some(config_file),
                     mode,
                     endpoint,
                     secret,
@@ -847,6 +851,11 @@ fn handle_generate(config_path: &Path) -> Result<()> {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+
+    if let Some(ref project_path) = args.path {
+        std::env::set_current_dir(project_path)
+            .context(format!("Failed to set project directory: {:?}", project_path))?;
+    }
 
     match args.command {
         Some(Commands::Create) | Some(Commands::Setup) => return create_project(),

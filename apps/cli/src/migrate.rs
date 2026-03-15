@@ -111,20 +111,25 @@ pub fn create(
     if let Some(config) = builder_config {
         // 1. Build new schema
         println!("Building target schema...");
-        let new_schema = crate::schema_builder::build_server_schema(config)?;
+        let new_schema_sql = crate::schema_builder::build_server_schema(config)?;
 
-        // 2. Get old schema
+        // 2. Get old and new schemas (both normalized through SurrealDB)
         println!("Extracting current schema...");
         let existing_migrations = scan_migrations(migrations_dir)?;
-        let old_schema = if let Some((url, ns, db, user, pass)) = conn {
+        let (old_schema, new_schema) = if let Some((url, ns, db, user, pass)) = conn {
+            // Live DB: extract old from live, normalize new through ephemeral
             let client = SurrealClient::new(url, ns, db, user, pass);
-            schema_extract::extract_schema_from_db(&client)?
+            let old = schema_extract::extract_schema_from_db(&client)?;
+            let new = schema_extract::normalize_schema_via_ephemeral_db(&new_schema_sql)?;
+            (old, new)
         } else if existing_migrations.is_empty() {
-            // No prior migrations → old schema is empty (initial migration)
+            // No prior migrations → old schema is empty, normalize new through ephemeral
             println!("  No existing migrations found — generating initial migration.");
-            String::new()
+            let new = schema_extract::normalize_schema_via_ephemeral_db(&new_schema_sql)?;
+            (String::new(), new)
         } else {
-            schema_extract::extract_schema_via_ephemeral_db(migrations_dir)?
+            // Standard case: both old and new normalized through ephemeral
+            schema_extract::extract_old_and_new_schemas(migrations_dir, &new_schema_sql)?
         };
 
         // 3. Diff

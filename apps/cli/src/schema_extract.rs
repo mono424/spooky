@@ -1,12 +1,12 @@
 use anyhow::{bail, Context, Result};
 use std::net::TcpListener;
 use std::path::Path;
-use std::process::{Child, Command};
+use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
 use crate::migrate;
-use crate::surreal_client::SurrealClient;
+use crate::surreal_client::{MigrationDB, SurrealClient};
 
 /// Extract the full schema from a running SurrealDB as DEFINE statements.
 ///
@@ -26,6 +26,10 @@ pub fn extract_schema_from_db(client: &SurrealClient) -> Result<String> {
         for (section, values) in obj {
             if let Some(inner_obj) = values.as_object() {
                 for (name, define_stmt) in inner_obj {
+                    // Skip internal migration tracking table
+                    if section == "tables" && name == "_spooky_migrations" {
+                        continue;
+                    }
                     if let Some(stmt_str) = define_stmt.as_str() {
                         statements.push(ensure_semicolon(stmt_str));
                     }
@@ -40,9 +44,15 @@ pub fn extract_schema_from_db(client: &SurrealClient) -> Result<String> {
         for table_name in &table_names {
             let table_info = client.info_for_table(table_name)?;
             if let Some(table_obj) = table_info.as_object() {
-                for (_section, values) in table_obj {
+                for (section, values) in table_obj {
                     if let Some(inner_obj) = values.as_object() {
-                        for (_name, define_stmt) in inner_obj {
+                        for (name, define_stmt) in inner_obj {
+                            // Skip auto-generated array element sub-fields (e.g. `field.*`).
+                            // SurrealDB auto-creates these when defining an array-typed field,
+                            // so re-defining them in a migration causes "already exists" errors.
+                            if section == "fields" && name.ends_with(".*") {
+                                continue;
+                            }
                             if let Some(stmt_str) = define_stmt.as_str() {
                                 statements.push(ensure_semicolon(stmt_str));
                             }
@@ -56,46 +66,6 @@ pub fn extract_schema_from_db(client: &SurrealClient) -> Result<String> {
     Ok(statements.join("\n"))
 }
 
-/// Spin up an ephemeral in-memory SurrealDB, apply existing migrations, then extract the schema.
-pub fn extract_schema_via_ephemeral_db(migrations_dir: &Path) -> Result<String> {
-    // Find a free port
-    let port = find_free_port()?;
-
-    // Start ephemeral SurrealDB
-    let mut child = start_ephemeral_surreal(port)?;
-
-    // Ensure we clean up the child process
-    let result = (|| -> Result<String> {
-        // Wait for health
-        wait_for_surreal_health(port)?;
-
-        // Create client
-        let client = SurrealClient::new(
-            &format!("http://127.0.0.1:{}", port),
-            "main",
-            "main",
-            "root",
-            "root",
-        );
-
-        // Ensure namespace and database exist
-        client.ensure_ns_db()?;
-
-        // Apply existing migrations
-        if migrations_dir.exists() {
-            migrate::apply(&client, migrations_dir)?;
-        }
-
-        // Extract schema
-        extract_schema_from_db(&client)
-    })();
-
-    // Always kill the child process
-    let _ = child.kill();
-    let _ = child.wait();
-
-    result
-}
 
 fn find_free_port() -> Result<u16> {
     let listener =
@@ -105,29 +75,49 @@ fn find_free_port() -> Result<u16> {
     Ok(port)
 }
 
-fn start_ephemeral_surreal(port: u16) -> Result<Child> {
-    let child = Command::new("surreal")
+const SURREALDB_IMAGE: &str = "surrealdb/surrealdb:v3.0.0";
+
+fn start_ephemeral_surreal_docker(port: u16) -> Result<String> {
+    let container_name = format!("spooky-migrate-ephemeral-{}", port);
+
+    Command::new("docker")
         .args([
+            "run",
+            "-d",
+            "--rm",
+            "--name",
+            &container_name,
+            "-p",
+            &format!("{}:8000", port),
+            SURREALDB_IMAGE,
             "start",
-            "memory",
             "--bind",
-            &format!("127.0.0.1:{}", port),
+            "0.0.0.0:8000",
             "--user",
             "root",
             "--pass",
             "root",
             "--allow-all",
-            "--no-banner",
         ])
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .context(
-            "Failed to start SurrealDB. Is the 'surreal' binary installed?\n\
-             Install it from https://surrealdb.com/install or provide --url to use a live database.",
-        )?;
+            "Failed to start SurrealDB via Docker. Is Docker installed and running?\n\
+             Install Docker from https://docs.docker.com/get-docker/ or provide --url to use a live database.",
+        )?
+        .wait_with_output()
+        .context("Failed to wait for Docker container to start")?;
 
-    Ok(child)
+    Ok(container_name)
+}
+
+fn stop_ephemeral_surreal_docker(container_name: &str) {
+    let _ = Command::new("docker")
+        .args(["rm", "-f", container_name])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
 }
 
 fn wait_for_surreal_health(port: u16) -> Result<()> {
@@ -160,6 +150,83 @@ fn ensure_semicolon(stmt: &str) -> String {
     } else {
         format!("{};", trimmed)
     }
+}
+
+/// Normalize a schema SQL string through an ephemeral SurrealDB instance.
+///
+/// Applies the given SQL to a fresh database, then extracts the schema back
+/// in SurrealDB's canonical format. This ensures consistent formatting for diffing.
+pub fn normalize_schema_via_ephemeral_db(schema_sql: &str) -> Result<String> {
+    let port = find_free_port()?;
+    let container_name = start_ephemeral_surreal_docker(port)?;
+
+    let result = (|| -> Result<String> {
+        wait_for_surreal_health(port)?;
+
+        let client = SurrealClient::new(
+            &format!("http://127.0.0.1:{}", port),
+            "main",
+            "main",
+            "root",
+            "root",
+        );
+        client.ensure_ns_db()?;
+        client.execute(schema_sql)?;
+
+        extract_schema_from_db(&client)
+    })();
+
+    stop_ephemeral_surreal_docker(&container_name);
+    result
+}
+
+/// Extract both old and new schemas through a single ephemeral SurrealDB container.
+///
+/// 1. Creates two databases: `old` and `new`
+/// 2. Applies existing migrations to `old`, extracts schema
+/// 3. Applies the built new schema SQL to `new`, extracts schema
+/// 4. Returns `(old_schema, new_schema)` both in canonical format
+pub fn extract_old_and_new_schemas(
+    migrations_dir: &Path,
+    new_schema_sql: &str,
+) -> Result<(String, String)> {
+    let port = find_free_port()?;
+    let container_name = start_ephemeral_surreal_docker(port)?;
+
+    let result = (|| -> Result<(String, String)> {
+        wait_for_surreal_health(port)?;
+
+        // --- Old schema (from migrations) ---
+        let old_client = SurrealClient::new(
+            &format!("http://127.0.0.1:{}", port),
+            "main",
+            "old",
+            "root",
+            "root",
+        );
+        old_client.ensure_ns_db()?;
+        if migrations_dir.exists() {
+            migrate::apply(&old_client, migrations_dir)?;
+        }
+        let old_schema = extract_schema_from_db(&old_client)?;
+
+        // --- New schema (from built schema) ---
+        let new_client = SurrealClient::new(
+            &format!("http://127.0.0.1:{}", port),
+            "main",
+            "new",
+            "root",
+            "root",
+        );
+        new_client.ensure_ns_db()?;
+        new_client.execute(new_schema_sql)?;
+        let new_schema = extract_schema_from_db(&new_client)?;
+
+        Ok((old_schema, new_schema))
+    })();
+
+    stop_ephemeral_surreal_docker(&container_name);
+    result
 }
 
 #[cfg(test)]

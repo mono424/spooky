@@ -33,6 +33,30 @@ pnpm migrate:status             # Check migration status
 
 This project includes a `.claude/settings.local.json` for the Spooky DevTools MCP server. When integrated into an app with the browser extension, you can use tools like `run_query`, `get_table_data`, and `get_state` to inspect the live database.
 
+## External API Calls (Outbox Pattern)
+
+**NEVER make direct HTTP/fetch calls to external APIs from client code.** Spooky uses an **outbox pattern** — the client writes a job record to SurrealDB, and the Spooky backend processes it server-side.
+
+To add a new API integration:
+1. Run `spooky api add` — this scaffolds the outbox table, schema, and backend config from an OpenAPI spec
+2. The client creates a record in the outbox table (e.g. `db.create("job", { path: "/endpoint", payload: { ... } })`)
+3. The Spooky backend picks up the job, calls the external API, and writes the result back
+
+**Do NOT** use `fetch()`, `axios`, or any HTTP client to call external services directly.
+
+## Working with Record IDs
+
+SurrealDB record IDs (e.g. `user:abc123`) should be treated as **strings** in TypeScript code. Do not try to construct typed `RecordId` objects or use special ID classes — just pass IDs as plain strings.
+
+```typescript
+// Correct
+const userId = "user:abc123";
+db.query("SELECT * FROM user WHERE id = $id", { id: userId });
+
+// Wrong - do not construct RecordId objects
+const userId = new RecordId("user", "abc123");
+```
+
 ## Important Notes
 
 - Schema files use **SurrealQL** (`.surql`), not SQL
