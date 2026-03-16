@@ -3,9 +3,12 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::backend::BackendProcessor;
+use crate::parser::SchemaParser;
 use crate::schema_builder::SchemaBuilderConfig;
 use crate::schema_diff;
 use crate::schema_extract;
+use crate::spooky::generate_spooky_events;
 use crate::surreal_client::{MigrationDB, SurrealClient};
 
 /// A migration discovered on the filesystem.
@@ -261,8 +264,14 @@ pub fn apply(client: &dyn MigrationDB, migrations_dir: &Path) -> Result<()> {
             migration.version, migration.name
         );
 
+        // Wrap in a transaction so partial failures roll back cleanly
+        let transactional_sql = format!(
+            "BEGIN TRANSACTION;\n{}\nCOMMIT TRANSACTION;",
+            sql
+        );
+
         client
-            .execute(&sql)
+            .execute(&transactional_sql)
             .context(format!(
                 "Failed to apply migration {}_{}",
                 migration.version, migration.name
@@ -329,6 +338,128 @@ pub fn status(client: &dyn MigrationDB, migrations_dir: &Path) -> Result<()> {
     }
 
     println!();
+    Ok(())
+}
+
+/// Inject `OVERWRITE` into `DEFINE` statements that don't already have it,
+/// so the SQL is idempotent (safe to re-run against an existing DB).
+///
+/// Transforms:  `DEFINE TABLE foo`  → `DEFINE TABLE OVERWRITE foo`
+/// Leaves alone: `DEFINE TABLE OVERWRITE foo` (already has it)
+///               `DEFINE EVENT OVERWRITE ...` (already has it, e.g. from generate_spooky_events)
+fn make_defines_overwrite(sql: &str) -> String {
+    // Patterns: DEFINE TABLE, DEFINE FIELD, DEFINE EVENT, DEFINE INDEX
+    // We insert OVERWRITE after the keyword when it's not already present.
+    let mut result = sql.to_string();
+    for keyword in &["TABLE", "FIELD", "EVENT", "INDEX"] {
+        // Match "DEFINE <KEYWORD> " but NOT "DEFINE <KEYWORD> OVERWRITE "
+        let pattern = format!("DEFINE {} ", keyword);
+        let with_overwrite = format!("DEFINE {} OVERWRITE ", keyword);
+        // Replace all, but skip those that already have OVERWRITE
+        result = result.replace(&with_overwrite, &format!("__PLACEHOLDER_{}__", keyword));
+        result = result.replace(&pattern, &with_overwrite);
+        result = result.replace(&format!("__PLACEHOLDER_{}__", keyword), &with_overwrite);
+    }
+    result
+}
+
+/// Apply internal Spooky schema (meta tables + per-table events) after user migrations.
+///
+/// This is idempotent — all statements use `DEFINE ... OVERWRITE` or `DEFINE ... SCHEMALESS`.
+/// Not tracked in `_spooky_migrations`.
+pub fn apply_internal_schema(
+    client: &dyn MigrationDB,
+    schema_input_path: &Path,
+    config_path: Option<&Path>,
+    mode: &str,
+    endpoint: Option<&str>,
+    secret: Option<&str>,
+) -> Result<()> {
+    println!("\n── Applying internal Spooky schema ─────────────────────");
+
+    // 1. Read source schema + process backends
+    let mut content = fs::read_to_string(schema_input_path).context(format!(
+        "Failed to read schema file: {:?}",
+        schema_input_path
+    ))?;
+
+    let mut backend_processor = BackendProcessor::new();
+    if let Some(cp) = config_path {
+        if cp.exists() {
+            backend_processor.process(cp)?;
+            content.push('\n');
+            content.push_str(&backend_processor.schema_appends);
+        }
+    }
+
+    // 2. Parse schema to get table map
+    let mut parser = SchemaParser::new();
+    parser
+        .parse_file(&content)
+        .context("Failed to parse schema for internal schema generation")?;
+
+    println!(
+        "  Discovered {} user table(s): {}",
+        parser.tables.len(),
+        parser
+            .tables
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
+    // 3. Build internal SQL
+    let mut internal_sql = String::new();
+
+    // 3a. Meta tables (remote)
+    println!("  + Applying meta tables (remote)...");
+    let mut meta_tables_remote = include_str!("meta_tables_remote.surql").to_string();
+
+    // Replace unregister_view for singlenode/cluster mode
+    if mode == "singlenode" || mode == "cluster" {
+        let default_endpoint = if mode == "cluster" {
+            "http://localhost:9667"
+        } else {
+            "http://localhost:8667"
+        };
+        let ep = endpoint.unwrap_or(default_endpoint);
+        let sec = secret.unwrap_or("");
+
+        let unregister_call = "let $result = mod::dbsp::unregister_view(<string>$before.id);";
+        let unregister_http = format!(
+            "let $payload = {{ id: <string>$before.id }};\n    let $result = http::post('{}/view/unregister', $payload, {{ \"Authorization\": \"Bearer {}\" }});",
+            ep, sec
+        );
+        meta_tables_remote = meta_tables_remote.replace(unregister_call, &unregister_http);
+    }
+
+    // Make all DEFINE statements idempotent by injecting OVERWRITE
+    meta_tables_remote = make_defines_overwrite(&meta_tables_remote);
+
+    internal_sql.push_str(&meta_tables_remote);
+    internal_sql.push('\n');
+
+    // 3b. Per-table spooky events (mutation + delete for versioning & ingest)
+    println!("  + Generating per-table events...");
+    let spooky_events = generate_spooky_events(
+        &parser.tables,
+        &content,
+        false, // is_client = false (server-side events)
+        mode,
+        endpoint,
+        secret,
+    );
+    internal_sql.push_str(&spooky_events);
+
+    // 4. Execute against DB
+    println!("  + Executing internal schema ({} bytes)...", internal_sql.len());
+    client
+        .execute(&internal_sql)
+        .context("Failed to apply internal Spooky schema")?;
+
+    println!("  Internal Spooky schema applied successfully.");
+    println!("────────────────────────────────────────────────────────\n");
     Ok(())
 }
 

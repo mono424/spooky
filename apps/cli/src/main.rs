@@ -262,6 +262,18 @@ enum MigrateCommands {
         /// Migrations directory
         #[arg(long)]
         migrations_dir: Option<PathBuf>,
+        /// Path to spooky.yml config file
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Generation mode: singlenode, cluster, surrealism
+        #[arg(long, default_value = "singlenode")]
+        mode: String,
+        /// SSP/Scheduler endpoint URL
+        #[arg(long)]
+        endpoint: Option<String>,
+        /// SSP/Scheduler auth secret
+        #[arg(long)]
+        secret: Option<String>,
     },
     /// Show migration status
     Status {
@@ -482,10 +494,16 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
         MigrateCommands::Apply {
             conn,
             migrations_dir,
+            config,
+            mode,
+            endpoint,
+            secret,
         } => {
-            // Load config to resolve migrations dir
-            let spooky_config = backend::load_config(Path::new(DEFAULT_CONFIG_PATH));
-            let resolved_migrations = migrations_dir.unwrap_or(spooky_config.resolved_schema().migrations);
+            // Load config to resolve paths
+            let config_file = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
+            let spooky_config = backend::load_config(&config_file);
+            let resolved = spooky_config.resolved_schema();
+            let resolved_migrations = migrations_dir.unwrap_or(resolved.migrations);
 
             let client = SurrealClient::new(
                 &conn.url,
@@ -494,7 +512,24 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
                 &conn.username,
                 &conn.password,
             );
-            migrate::apply(&client, &resolved_migrations)
+
+            // Apply user migrations
+            migrate::apply(&client, &resolved_migrations)?;
+
+            // Apply internal Spooky schema (meta tables + events)
+            let config_path_ref = if config_file.exists() {
+                Some(config_file.as_path())
+            } else {
+                None
+            };
+            migrate::apply_internal_schema(
+                &client,
+                &resolved.schema,
+                config_path_ref,
+                &mode,
+                endpoint.as_deref(),
+                secret.as_deref(),
+            )
         }
         MigrateCommands::Status {
             conn,

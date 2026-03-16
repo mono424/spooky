@@ -34,6 +34,10 @@ backends:
     type: http
     baseUrl: http://host.docker.internal:3660
     spec: ../api/openapi.yml
+    dev:
+      type: npm
+      script: dev
+      workdir: ../api
     auth:
       type: token
       token: THIS_IS_TOP_SECRET
@@ -55,6 +59,7 @@ backends:
 - **`method.type`**: The method for calling the backend (use `outbox` for the outbox pattern)
 - **`method.table`**: The name of the job table in SurrealDB (e.g., `job`)
 - **`method.schema`**: Path to the SurrealQL schema file that defines the job table structure
+- **`dev`** (optional): A dev server command that `spooky dev` will spawn alongside infrastructure (see [Dev Server](#dev-server) below)
 
 ### Authentication
 
@@ -357,6 +362,82 @@ The job runner:
 
 <Note>
   See the `packages/job-runner` directory in the Spooky repository for a reference implementation in Rust.
+</Note>
+
+## Dev Server
+
+Each backend in `spooky.yml` can declare an optional `dev` field. When you run `spooky dev`, these commands are spawned alongside the rest of the infrastructure (SurrealDB, SSP, scheduler), so you don't need to start backend services in separate terminals.
+
+### String Form
+
+The simplest option is a raw shell command:
+
+<CodeBlock
+  code={`backends:
+  api:
+    dev: "node server.js"
+    # ...other fields...`}
+  lang="yaml"
+/>
+
+This runs the command from the project root using `sh -c`.
+
+### npm Type
+
+Run an npm/pnpm script:
+
+<CodeBlock
+  code={`backends:
+  api:
+    dev:
+      type: npm
+      script: dev           # runs \`pnpm run dev\`
+      workdir: ../api       # optional: directory to run from (relative to spooky.yml)
+    # ...other fields...`}
+  lang="yaml"
+/>
+
+### Docker Type
+
+Build and run a Dockerfile:
+
+<CodeBlock
+  code={`backends:
+  worker:
+    dev:
+      type: docker
+      file: Dockerfile.dev   # Dockerfile to build
+      workdir: ../worker     # optional: build context directory
+      port: "3000:3000"      # optional: port mapping
+      env:                   # optional: environment variables
+        - NODE_ENV=development
+    # ...other fields...`}
+  lang="yaml"
+/>
+
+### uv Type (Python)
+
+Run a Python script via [uv](https://docs.astral.sh/uv/):
+
+<CodeBlock
+  code={`backends:
+  ml-service:
+    dev:
+      type: uv
+      script: server.py      # runs \`uv run server.py\`
+      workdir: ../ml-service  # optional: directory to run from (relative to spooky.yml)
+    # ...other fields...`}
+  lang="yaml"
+/>
+
+This uses `uv run` to execute the script inside the project's virtual environment, automatically installing dependencies from `pyproject.toml` if needed.
+
+### workdir
+
+All forms support an optional `workdir` field that is resolved relative to the project root (the directory containing `spooky.yml`). If omitted, commands run from the project root.
+
+<Note>
+  Backend dev processes are automatically stopped when you press Ctrl+C to shut down `spooky dev`.
 </Note>
 
 ## Best Practices

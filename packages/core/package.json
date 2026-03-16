@@ -21,6 +21,12 @@
     "url": "https://github.com/mono424/spooky.git",
     "directory": "packages/core"
   },
+  "keywords": [
+    "surrealdb",
+    "local-first",
+    "sync",
+    "tanstack-intent"
+  ],
   "publishConfig": {
     "access": "public"
   },

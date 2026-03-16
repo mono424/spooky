@@ -50,8 +50,9 @@ services:
       - root
       - --pass
       - root
-      - memory
+      - surrealkv:/data
     volumes:
+      - ./.spooky/surrealdb_data:/data
       - ./.spooky/xor_module.surli:/modules/xor_module.surli:ro
       - ./.spooky/ssp_module.surli:/modules/ssp_module.surli:ro
     depends_on:

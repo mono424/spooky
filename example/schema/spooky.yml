@@ -13,6 +13,10 @@ backends:
     type: http
     spec: ../api/openapi.yml
     baseUrl: http://host.docker.internal:3660
+    dev:
+      type: npm
+      script: dev
+      workdir: ../api
     auth:
       type: token
       token: THIS_IS_TOP_SECRET

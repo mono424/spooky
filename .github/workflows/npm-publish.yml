@@ -54,6 +54,9 @@ jobs:
       - name: Validate versions match tag
         run: node scripts/check-version.mjs ${{ needs.prepare.outputs.version }}
 
+      - name: Validate agent skills
+        run: pnpm run skills:validate
+
   publish-packages:
     needs: [prepare, validate-versions]
     runs-on: ubuntu-latest

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crate::backend::{self, ResolvedVersions, DEFAULT_CONFIG_PATH};
+use crate::backend::{self, BackendDevConfig, BackendDevTypedConfig, ResolvedVersions, SpookyConfig, DEFAULT_CONFIG_PATH};
 use crate::migrate;
 use crate::schema_builder;
 use crate::surreal_client::{MigrationDB, SurrealClient};
@@ -54,16 +54,16 @@ pub fn run(skip_migrations: bool, auto_apply_migrations: bool) -> Result<()> {
     let compose_file = format!("docker-compose.{}.yml", mode);
     if Path::new(&compose_file).exists() {
         println!("{} Found compose file: {}", PREFIX, compose_file);
-        run_compose_mode(&compose_file, &mode, &stop, skip_migrations, auto_apply_migrations, migrations_path)
+        run_compose_mode(&compose_file, &mode, &config, &stop, skip_migrations, auto_apply_migrations, migrations_path)
     } else {
         println!("{} No compose file found — using direct Docker mode", PREFIX);
-        run_direct_mode(&mode, &versions, &stop, skip_migrations, auto_apply_migrations, migrations_path)
+        run_direct_mode(&mode, &versions, &config, &stop, skip_migrations, auto_apply_migrations, migrations_path)
     }
 }
 
 // ── Direct Docker mode ──────────────────────────────────────────────────────
 
-fn run_direct_mode(mode: &str, versions: &ResolvedVersions, stop: &Arc<AtomicBool>, skip_migrations: bool, auto_apply_migrations: bool, migrations_path: &str) -> Result<()> {
+fn run_direct_mode(mode: &str, versions: &ResolvedVersions, config: &SpookyConfig, stop: &Arc<AtomicBool>, skip_migrations: bool, auto_apply_migrations: bool, migrations_path: &str) -> Result<()> {
     let surreal_image = versions.surrealdb_image();
     let ssp_image = versions.ssp_image();
 
@@ -79,12 +79,19 @@ fn run_direct_mode(mode: &str, versions: &ResolvedVersions, stop: &Arc<AtomicBoo
 
     // Phase 2: Start SurrealDB
     println!("{} Phase 2: Starting SurrealDB...", PREFIX);
+    let surreal_data_dir = std::env::current_dir()
+        .context("Failed to get current directory")?
+        .join(".spooky/surrealdb_data");
+    std::fs::create_dir_all(&surreal_data_dir).ok();
+    let surreal_data_mount = format!("{}:/data", surreal_data_dir.display());
+
     docker(&[
         "run", "-d",
         "--name", SURREAL_CONTAINER,
         "--network", NETWORK_NAME,
         "--network-alias", "surrealdb",
         "-p", &format!("{}:8000", SURREAL_PORT),
+        "-v", &surreal_data_mount,
         "-e", "SURREAL_USER=root",
         "-e", "SURREAL_PASS=root",
         "-e", "SURREAL_LOG=info",
@@ -94,7 +101,7 @@ fn run_direct_mode(mode: &str, versions: &ResolvedVersions, stop: &Arc<AtomicBoo
         "--allow-all",
         "--user", "root",
         "--pass", "root",
-        "memory",
+        "surrealkv:/data",
     ])?;
 
     // Phase 3: Wait for health
@@ -117,6 +124,14 @@ fn run_direct_mode(mode: &str, versions: &ResolvedVersions, stop: &Arc<AtomicBoo
         println!("{} Phase 4: Applying migrations...", PREFIX);
         apply_migrations(SURREAL_PORT, auto_apply_migrations, migrations_path)?;
     }
+
+    if stop.load(Ordering::SeqCst) {
+        return cleanup_direct(stop);
+    }
+
+    // Phase 4a: Apply internal Spooky schema (meta tables + events)
+    println!("{} Phase 4a: Applying internal Spooky schema...", PREFIX);
+    apply_internal_spooky_schema(SURREAL_PORT, mode)?;
 
     if stop.load(Ordering::SeqCst) {
         return cleanup_direct(stop);
@@ -236,12 +251,17 @@ fn run_direct_mode(mode: &str, versions: &ResolvedVersions, stop: &Arc<AtomicBoo
     // Start the app dev server
     let app_dev = spawn_pnpm_dev_app();
 
+    // Start backend dev commands
+    let project_dir = std::env::current_dir().context("Failed to get current directory")?;
+    let backend_devs = spawn_backend_dev_commands(config, &project_dir);
+
     // Wait for Ctrl+C
     while !stop.load(Ordering::SeqCst) {
         thread::sleep(Duration::from_millis(250));
     }
 
-    // Stop log tailers and app dev server
+    // Stop backend dev commands, log tailers, and app dev server
+    drop(backend_devs);
     drop(app_dev);
     drop(surreal_log);
     drop(ssp_log);
@@ -267,7 +287,7 @@ fn cleanup_direct(_stop: &Arc<AtomicBool>) -> Result<()> {
 
 // ── Compose mode ────────────────────────────────────────────────────────────
 
-fn run_compose_mode(compose_file: &str, mode: &str, stop: &Arc<AtomicBool>, skip_migrations: bool, auto_apply_migrations: bool, migrations_path: &str) -> Result<()> {
+fn run_compose_mode(compose_file: &str, mode: &str, config: &SpookyConfig, stop: &Arc<AtomicBool>, skip_migrations: bool, auto_apply_migrations: bool, migrations_path: &str) -> Result<()> {
     let infra_services: &[&str] = match mode {
         "cluster" => INFRA_SERVICES_CLUSTER,
         "surrealism" => INFRA_SERVICES_SURREALISM,
@@ -317,6 +337,14 @@ fn run_compose_mode(compose_file: &str, mode: &str, stop: &Arc<AtomicBool>, skip
         return cleanup_compose(compose_file);
     }
 
+    // Phase 3a: Apply internal Spooky schema (meta tables + events)
+    println!("{} Phase 3a: Applying internal Spooky schema...", PREFIX);
+    apply_internal_spooky_schema(SURREAL_PORT, mode)?;
+
+    if stop.load(Ordering::SeqCst) {
+        return cleanup_compose(compose_file);
+    }
+
     // Phase 3b: Apply remote functions with Docker-internal endpoints
     println!("{} Phase 3b: Applying remote functions...", PREFIX);
     apply_remote_functions(SURREAL_PORT, mode)?;
@@ -332,11 +360,16 @@ fn run_compose_mode(compose_file: &str, mode: &str, stop: &Arc<AtomicBool>, skip
     // Start the app dev server
     let app_dev = spawn_pnpm_dev_app();
 
+    // Start backend dev commands
+    let project_dir = std::env::current_dir().context("Failed to get current directory")?;
+    let backend_devs = spawn_backend_dev_commands(config, &project_dir);
+
     let status = Command::new("docker")
         .args(["compose", "-f", compose_file, "up", "--remove-orphans"])
         .status()
         .context("Failed to run docker compose up")?;
 
+    drop(backend_devs);
     drop(app_dev);
 
     if !status.success() && !stop.load(Ordering::SeqCst) {
@@ -457,7 +490,7 @@ fn apply_migrations(port: u16, auto_apply: bool, migrations_path: &str) -> Resul
     match migrate::apply(&client, migrations_dir) {
         Ok(()) => Ok(()),
         Err(e) => {
-            println!("{} Migration failed: {}", PREFIX, e);
+            println!("{} Migration failed: {:#}", PREFIX, e);
             if auto_apply || !std::io::stdin().is_terminal() {
                 println!("{} Auto-resetting database and retrying migrations.", PREFIX);
                 println!("{} Resetting database and retrying...", PREFIX);
@@ -562,6 +595,204 @@ fn spawn_pnpm_dev_app() -> LogTailGuard {
         Ok(c) => LogTailGuard(Some(c)),
         Err(e) => {
             eprintln!("{} Warning: Could not start pnpm dev:app: {}", PREFIX, e);
+            LogTailGuard(None)
+        }
+    }
+}
+
+/// Apply the internal Spooky schema (meta tables + per-table events) so that
+/// record versioning and DBSP ingest work after migrations are applied.
+fn apply_internal_spooky_schema(surreal_port: u16, mode: &str) -> Result<()> {
+    let config = backend::load_config(Path::new(DEFAULT_CONFIG_PATH));
+    let resolved = config.resolved_schema();
+
+    if !resolved.schema.exists() {
+        println!("{} No schema file found at {:?}, skipping internal schema.", PREFIX, resolved.schema);
+        return Ok(());
+    }
+
+    let endpoint = if mode == "cluster" {
+        format!("http://scheduler:{}", SCHEDULER_PORT)
+    } else {
+        format!("http://ssp:{}", SSP_PORT)
+    };
+    let secret = "mysecret";
+
+    let config_path = Path::new(DEFAULT_CONFIG_PATH);
+    let config_path_ref = if config_path.exists() {
+        Some(config_path)
+    } else {
+        None
+    };
+
+    let client = SurrealClient::new(
+        &format!("http://localhost:{}", surreal_port),
+        "main",
+        "main",
+        "root",
+        "root",
+    );
+
+    migrate::apply_internal_schema(
+        &client,
+        &resolved.schema,
+        config_path_ref,
+        mode,
+        Some(&endpoint),
+        Some(secret),
+    )
+}
+
+// ── Backend dev command helpers ──────────────────────────────────────────────
+
+fn spawn_backend_dev_commands(config: &SpookyConfig, project_dir: &Path) -> Vec<LogTailGuard> {
+    let mut guards = Vec::new();
+    for (name, backend) in &config.backends {
+        let dev_config = match &backend.dev {
+            Some(cfg) => cfg,
+            None => continue,
+        };
+        let label = format!("backend:{}", name);
+        match dev_config {
+            BackendDevConfig::Command(cmd) => {
+                println!("{} Starting backend '{}': {}", PREFIX, name, cmd);
+                guards.push(spawn_shell_command(cmd, project_dir, &label));
+            }
+            BackendDevConfig::Typed(BackendDevTypedConfig::Npm { script, workdir }) => {
+                let cwd = resolve_workdir(project_dir, workdir.as_deref());
+                println!("{} Starting backend '{}': pnpm run {}", PREFIX, name, script);
+                guards.push(spawn_pnpm_script(script, &cwd, &label));
+            }
+            BackendDevConfig::Typed(BackendDevTypedConfig::Docker { file, workdir, port, env }) => {
+                let cwd = resolve_workdir(project_dir, workdir.as_deref());
+                println!("{} Starting backend '{}': docker build -f {}", PREFIX, name, file);
+                guards.push(spawn_docker_dev(file, port.as_deref(), env, &cwd, name));
+            }
+            BackendDevConfig::Typed(BackendDevTypedConfig::Uv { script, workdir }) => {
+                let cwd = resolve_workdir(project_dir, workdir.as_deref());
+                println!("{} Starting backend '{}': uv run {}", PREFIX, name, script);
+                guards.push(spawn_uv_script(script, &cwd, &label));
+            }
+        }
+    }
+    guards
+}
+
+fn resolve_workdir(project_dir: &Path, workdir: Option<&str>) -> std::path::PathBuf {
+    match workdir {
+        Some(dir) => project_dir.join(dir),
+        None => project_dir.to_path_buf(),
+    }
+}
+
+fn spawn_shell_command(cmd: &str, cwd: &Path, label: &str) -> LogTailGuard {
+    let child = Command::new("sh")
+        .args(["-c", cmd])
+        .current_dir(cwd)
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .spawn();
+
+    match child {
+        Ok(c) => LogTailGuard(Some(c)),
+        Err(e) => {
+            eprintln!("{} Warning: Could not start {}: {}", PREFIX, label, e);
+            LogTailGuard(None)
+        }
+    }
+}
+
+fn spawn_pnpm_script(script: &str, cwd: &Path, label: &str) -> LogTailGuard {
+    let child = Command::new("pnpm")
+        .args(["run", script])
+        .current_dir(cwd)
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .spawn();
+
+    match child {
+        Ok(c) => LogTailGuard(Some(c)),
+        Err(e) => {
+            eprintln!("{} Warning: Could not start {}: {}", PREFIX, label, e);
+            LogTailGuard(None)
+        }
+    }
+}
+
+fn spawn_uv_script(script: &str, cwd: &Path, label: &str) -> LogTailGuard {
+    let child = Command::new("uv")
+        .args(["run", script])
+        .current_dir(cwd)
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .spawn();
+
+    match child {
+        Ok(c) => LogTailGuard(Some(c)),
+        Err(e) => {
+            eprintln!("{} Warning: Could not start {}: {}", PREFIX, label, e);
+            LogTailGuard(None)
+        }
+    }
+}
+
+fn spawn_docker_dev(file: &str, port: Option<&str>, env: &[String], cwd: &Path, name: &str) -> LogTailGuard {
+    let tag = format!("spooky-dev-{}", name);
+    let container_name = format!("spooky-dev-backend-{}", name);
+
+    // Build the image
+    let build_status = Command::new("docker")
+        .args(["build", "-f", file, "-t", &tag, "."])
+        .current_dir(cwd)
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .status();
+
+    match build_status {
+        Ok(s) if s.success() => {}
+        Ok(s) => {
+            eprintln!("{} Warning: docker build for '{}' exited with {}", PREFIX, name, s);
+            return LogTailGuard(None);
+        }
+        Err(e) => {
+            eprintln!("{} Warning: Could not run docker build for '{}': {}", PREFIX, name, e);
+            return LogTailGuard(None);
+        }
+    }
+
+    // Remove any stale container with the same name
+    let _ = Command::new("docker").args(["rm", "-f", &container_name]).output();
+
+    // Run the container
+    let mut args = vec![
+        "run".to_string(), "--rm".to_string(),
+        "--name".to_string(), container_name,
+        "--network".to_string(), NETWORK_NAME.to_string(),
+    ];
+
+    if let Some(p) = port {
+        args.push("-p".to_string());
+        args.push(p.to_string());
+    }
+
+    for e in env {
+        args.push("-e".to_string());
+        args.push(e.to_string());
+    }
+
+    args.push(tag);
+
+    let child = Command::new("docker")
+        .args(&args)
+        .current_dir(cwd)
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .spawn();
+
+    match child {
+        Ok(c) => LogTailGuard(Some(c)),
+        Err(e) => {
+            eprintln!("{} Warning: Could not start docker run for '{}': {}", PREFIX, name, e);
             LogTailGuard(None)
         }
     }

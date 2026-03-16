@@ -2,7 +2,7 @@
 -- SURREALISM (WASM) IMPLEMENTATION
 -- ==================================================
 
-DEFINE FUNCTION fn::query::register($config: object) {
+DEFINE FUNCTION OVERWRITE fn::query::register($config: object) {
     IF $config.clientId == NONE THEN {
         THROW 'Missing client id';
     } END;
@@ -21,7 +21,7 @@ DEFINE FUNCTION fn::query::register($config: object) {
     mod::dbsp::register_view($module_config);
 };
 
-DEFINE API "/spooky"
+DEFINE API OVERWRITE "/spooky"
     FOR get
     THEN {
         RETURN {

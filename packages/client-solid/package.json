@@ -27,7 +27,8 @@
     "database",
     "browser",
     "offline",
-    "sync"
+    "sync",
+    "tanstack-intent"
   ],
   "author": "",
   "license": "MIT",

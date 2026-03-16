@@ -8,6 +8,9 @@ importers:
 
   .:
     devDependencies:
+      '@tanstack/intent':
+        specifier: ^0.0.21
+        version: 0.0.21
       prettier:
         specifier: ^3.7.4
         version: 3.7.4
@@ -2088,6 +2091,10 @@ packages:
   '@tanstack/hotkeys@0.4.1':
     resolution: {integrity: sha512-EGHqcdKP2jzy0dEkahA3ABtEXohMqPlU3Ac04sBQjgesJqr9xWuesJotOfWPh3P68kQQg8krNAtFTydIN3+WSw==}
     engines: {node: '>=18'}
+
+  '@tanstack/intent@0.0.21':
+    resolution: {integrity: sha512-LhiHCCFIlA6Jg01DbSDnBJ080QFYqH7h9Ggk2Q9rMZGVGCKb+3hsm3kgjQTM8lHqF3D1VUWcAXDuRBOtWKozNQ==}
+    hasBin: true
 
   '@tanstack/query-core@5.90.7':
     resolution: {integrity: sha512-6PN65csiuTNfBMXqQUxQhCNdtm1rV+9kC9YwWAIKcaxAauq3Wu7p18j3gQY3YIBJU70jT/wzCCZ2uqto/vQgiQ==}
@@ -8439,6 +8446,10 @@ snapshots:
   '@tanstack/hotkeys@0.4.1':
     dependencies:
       '@tanstack/store': 0.9.2
+
+  '@tanstack/intent@0.0.21':
+    dependencies:
+      yaml: 2.8.1
 
   '@tanstack/query-core@5.90.7': {}
 

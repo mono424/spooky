@@ -115,7 +115,9 @@
       "Bash(curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh 2>&1)",
       "Bash(npm pack:*)",
       "Bash(tree:*)",
-      "Bash(mdfind:*)"
+      "Bash(mdfind:*)",
+      "Bash(docker rm:*)",
+      "Bash(npx:*)"
     ],
     "deny": [],
     "ask": []

@@ -154,6 +154,42 @@ impl ResolvedVersions {
     pub fn scheduler_image(&self) -> String { format!("mono424/spooky-scheduler:{}", self.scheduler) }
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(untagged)]
+pub enum BackendDevConfig {
+    /// Raw shell command string, e.g. "node server.js"
+    Command(String),
+    /// Typed object form with type discriminator
+    Typed(BackendDevTypedConfig),
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(tag = "type")]
+pub enum BackendDevTypedConfig {
+    #[serde(rename = "npm")]
+    Npm {
+        script: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workdir: Option<String>,
+    },
+    #[serde(rename = "docker")]
+    Docker {
+        file: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workdir: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        port: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        env: Vec<String>,
+    },
+    #[serde(rename = "uv")]
+    Uv {
+        script: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workdir: Option<String>,
+    },
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct BackendConfig {
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
@@ -164,6 +200,8 @@ pub struct BackendConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth: Option<AuthConfig>,
     pub method: BackendMethod,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dev: Option<BackendDevConfig>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

@@ -3,24 +3,23 @@
 -- The Registry of active Live Queries (Incantations).
 -- ==================================================
 
-DEFINE TABLE _spooky_query SCHEMALESS
+DEFINE TABLE OVERWRITE _spooky_query SCHEMALESS
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- The raw query string (for re-hydration/debugging)
--- The raw query string (for re-hydration/debugging)
-DEFINE FIELD surql ON TABLE _spooky_query TYPE option<string>
+DEFINE FIELD OVERWRITE surql ON TABLE _spooky_query TYPE option<string>
     PERMISSIONS FOR select, create, update WHERE true;
 
--- The raw query string (for re-hydration/debugging)
-DEFINE FIELD clientId ON TABLE _spooky_query TYPE option<string>
+-- The client id
+DEFINE FIELD OVERWRITE clientId ON TABLE _spooky_query TYPE option<string>
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- For garbage collection (Heartbeat)
-DEFINE FIELD lastActiveAt ON TABLE _spooky_query TYPE datetime DEFAULT time::now()
+DEFINE FIELD OVERWRITE lastActiveAt ON TABLE _spooky_query TYPE datetime DEFAULT time::now()
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- How long this Incantation stays alive without activity
-DEFINE FIELD ttl ON TABLE _spooky_query TYPE duration
+DEFINE FIELD OVERWRITE ttl ON TABLE _spooky_query TYPE duration
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- ==================================================
@@ -28,28 +27,28 @@ DEFINE FIELD ttl ON TABLE _spooky_query TYPE duration
 -- The current list of results for a query/incantation
 -- ==================================================
 
-DEFINE TABLE _spooky_list_ref SCHEMALESS
+DEFINE TABLE OVERWRITE _spooky_list_ref SCHEMALESS
     PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD in ON TABLE _spooky_list_ref TYPE record
+DEFINE FIELD OVERWRITE in ON TABLE _spooky_list_ref TYPE record
     PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD out ON TABLE _spooky_list_ref TYPE record
+DEFINE FIELD OVERWRITE out ON TABLE _spooky_list_ref TYPE record
     PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD clientId ON TABLE _spooky_list_ref TYPE string
+DEFINE FIELD OVERWRITE clientId ON TABLE _spooky_list_ref TYPE string
     PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD version ON TABLE _spooky_list_ref TYPE int
+DEFINE FIELD OVERWRITE version ON TABLE _spooky_list_ref TYPE int
     PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD updatedAt ON TABLE _spooky_list_ref TYPE datetime VALUE time::now() READONLY
+DEFINE FIELD OVERWRITE updatedAt ON TABLE _spooky_list_ref TYPE datetime VALUE time::now() READONLY
     PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD parent ON TABLE _spooky_list_ref TYPE option<record<_spooky_list_ref>>
+DEFINE FIELD OVERWRITE parent ON TABLE _spooky_list_ref TYPE option<record<_spooky_list_ref>>
     PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD parent_rel ON TABLE _spooky_list_ref TYPE option<string>
+DEFINE FIELD OVERWRITE parent_rel ON TABLE _spooky_list_ref TYPE option<string>
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- ==================================================
@@ -58,11 +57,10 @@ DEFINE FIELD parent_rel ON TABLE _spooky_list_ref TYPE option<string>
 -- ==================================================
 
 -- Remote-only meta tables (not synced to client)
-DEFINE TABLE _spooky_module_state SCHEMALESS PERMISSIONS FULL;
+DEFINE TABLE OVERWRITE _spooky_module_state SCHEMALESS PERMISSIONS FULL;
 
 -- Unregister from DBSP on deletion
--- Unregister from DBSP on deletion
-DEFINE EVENT _spooky_dbsp_cleanup ON TABLE _spooky_query WHEN $event = "DELETE" THEN {
+DEFINE EVENT OVERWRITE _spooky_dbsp_cleanup ON TABLE _spooky_query WHEN $event = "DELETE" THEN {
     let $result = mod::dbsp::unregister_view(<string>$before.id);
 };
 
@@ -73,8 +71,8 @@ DEFINE EVENT _spooky_dbsp_cleanup ON TABLE _spooky_query WHEN $event = "DELETE" 
 -- SPOOKY VERSION
 -- Tracks the version of every record for sync.
 -- ==================================================
-DEFINE TABLE _spooky_version SCHEMALESS
+DEFINE TABLE OVERWRITE _spooky_version SCHEMALESS
     PERMISSIONS FOR select WHERE true;
-DEFINE FIELD record_id ON TABLE _spooky_version TYPE record;
-DEFINE FIELD version ON TABLE _spooky_version TYPE int;
-DEFINE INDEX idx_record_id ON TABLE _spooky_version COLUMNS record_id UNIQUE;
+DEFINE FIELD OVERWRITE record_id ON TABLE _spooky_version TYPE record;
+DEFINE FIELD OVERWRITE version ON TABLE _spooky_version TYPE int;
+DEFINE INDEX OVERWRITE idx_record_id ON TABLE _spooky_version COLUMNS record_id UNIQUE;

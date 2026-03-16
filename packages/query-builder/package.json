@@ -24,7 +24,8 @@
     "surrealdb",
     "query-builder",
     "typescript",
-    "type-safe"
+    "type-safe",
+    "tanstack-intent"
   ],
   "author": "",
   "license": "MIT",

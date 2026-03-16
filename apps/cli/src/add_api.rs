@@ -274,6 +274,7 @@ pub fn add_api(
             schema: schema_output_str.clone(),
             table: Some(table_name.clone()),
         },
+        dev: None,
     };
 
     spooky_config.backends.insert(backend_name.clone(), new_backend);

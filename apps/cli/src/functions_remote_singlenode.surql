@@ -2,7 +2,7 @@
 -- SINGLENODE / CLUSTER (HTTP) IMPLEMENTATION
 -- ==================================================
 
-DEFINE FUNCTION fn::query::register($config: object) {
+DEFINE FUNCTION OVERWRITE fn::query::register($config: object) {
     IF $config.clientId == NONE THEN {
         THROW 'Missing client id';
     } END;
@@ -21,7 +21,7 @@ DEFINE FUNCTION fn::query::register($config: object) {
     http::post('{{ENDPOINT}}/view/register', $module_config, { "Authorization": "Bearer {{SECRET}}" });
 };
 
-DEFINE API "/spooky"
+DEFINE API OVERWRITE "/spooky"
     FOR get
     THEN {
         LET $info = http::get('{{ENDPOINT}}/info', {
