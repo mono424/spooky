@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
+use std::io::{BufRead, BufReader, IsTerminal};
 use std::path::Path;
-use std::io::IsTerminal;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -583,21 +583,15 @@ impl Drop for LogTailGuard {
     }
 }
 
-fn spawn_pnpm_dev_app() -> LogTailGuard {
-    println!("{} Starting app dev server (pnpm dev:app)...", PREFIX);
-    let child = Command::new("pnpm")
-        .args(["dev:app"])
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
-        .spawn();
+const APP_COLOR: &str = "\x1b[97m"; // bright white
 
-    match child {
-        Ok(c) => LogTailGuard(Some(c)),
-        Err(e) => {
-            eprintln!("{} Warning: Could not start pnpm dev:app: {}", PREFIX, e);
-            LogTailGuard(None)
-        }
-    }
+fn spawn_pnpm_dev_app() -> LogTailGuard {
+    let prefix = format!("{}[app]{}", APP_COLOR, ANSI_RESET);
+    println!("{} Starting: pnpm dev:app", prefix);
+    spawn_prefixed(
+        Command::new("pnpm").args(["dev:app"]),
+        &prefix,
+    )
 }
 
 /// Apply the internal Spooky schema (meta tables + per-table events) so that
@@ -645,33 +639,62 @@ fn apply_internal_spooky_schema(surreal_port: u16, mode: &str) -> Result<()> {
 
 // ── Backend dev command helpers ──────────────────────────────────────────────
 
+/// ANSI color codes cycled across backends for distinguishable output.
+const BACKEND_COLORS: &[&str] = &[
+    "\x1b[36m",  // cyan
+    "\x1b[33m",  // yellow
+    "\x1b[35m",  // magenta
+    "\x1b[32m",  // green
+    "\x1b[34m",  // blue
+    "\x1b[91m",  // bright red
+    "\x1b[96m",  // bright cyan
+    "\x1b[93m",  // bright yellow
+    "\x1b[95m",  // bright magenta
+    "\x1b[92m",  // bright green
+];
+const ANSI_RESET: &str = "\x1b[0m";
+
 fn spawn_backend_dev_commands(config: &SpookyConfig, project_dir: &Path) -> Vec<LogTailGuard> {
     let mut guards = Vec::new();
+    let mut color_idx = 0;
     for (name, backend) in &config.backends {
         let dev_config = match &backend.dev {
             Some(cfg) => cfg,
             None => continue,
         };
-        let label = format!("backend:{}", name);
+        let color = BACKEND_COLORS[color_idx % BACKEND_COLORS.len()];
+        color_idx += 1;
+        let prefix = format!("{}[backend.{}.dev]{}", color, name, ANSI_RESET);
         match dev_config {
             BackendDevConfig::Command(cmd) => {
-                println!("{} Starting backend '{}': {}", PREFIX, name, cmd);
-                guards.push(spawn_shell_command(cmd, project_dir, &label));
+                println!("{} Starting: {}", prefix, cmd);
+                guards.push(spawn_prefixed(
+                    Command::new("sh").args(["-c", cmd]).current_dir(project_dir),
+                    &prefix,
+                ));
             }
-            BackendDevConfig::Typed(BackendDevTypedConfig::Npm { script, workdir }) => {
+            BackendDevConfig::Typed(BackendDevTypedConfig::Npm { script, workdir, env_file }) => {
                 let cwd = resolve_workdir(project_dir, workdir.as_deref());
-                println!("{} Starting backend '{}': pnpm run {}", PREFIX, name, script);
-                guards.push(spawn_pnpm_script(script, &cwd, &label));
+                let envs = load_env_file(env_file.as_deref(), project_dir, &prefix);
+                println!("{} Starting: pnpm run {}", prefix, script);
+                guards.push(spawn_prefixed(
+                    Command::new("pnpm").args(["run", script]).current_dir(cwd).envs(envs),
+                    &prefix,
+                ));
             }
-            BackendDevConfig::Typed(BackendDevTypedConfig::Docker { file, workdir, port, env }) => {
+            BackendDevConfig::Typed(BackendDevTypedConfig::Docker { file, workdir, port, env, env_file }) => {
                 let cwd = resolve_workdir(project_dir, workdir.as_deref());
-                println!("{} Starting backend '{}': docker build -f {}", PREFIX, name, file);
-                guards.push(spawn_docker_dev(file, port.as_deref(), env, &cwd, name));
+                println!("{} Building: docker build -f {}", prefix, file);
+                guards.push(spawn_docker_dev(file, port.as_deref(), env, env_file.as_deref(), &cwd, name, &prefix, project_dir));
             }
-            BackendDevConfig::Typed(BackendDevTypedConfig::Uv { script, workdir }) => {
+            BackendDevConfig::Typed(BackendDevTypedConfig::Uv { script, workdir, env_file }) => {
                 let cwd = resolve_workdir(project_dir, workdir.as_deref());
-                println!("{} Starting backend '{}': uv run {}", PREFIX, name, script);
-                guards.push(spawn_uv_script(script, &cwd, &label));
+                let envs = load_env_file(env_file.as_deref(), project_dir, &prefix);
+                println!("{} Starting: uv run {}", prefix, script);
+                guards.push(spawn_prefixed(
+                    Command::new("uv").args(["run", script]).current_dir(cwd).envs(envs),
+                    &prefix,
+                ));
             }
         }
     }
@@ -685,77 +708,103 @@ fn resolve_workdir(project_dir: &Path, workdir: Option<&str>) -> std::path::Path
     }
 }
 
-fn spawn_shell_command(cmd: &str, cwd: &Path, label: &str) -> LogTailGuard {
-    let child = Command::new("sh")
-        .args(["-c", cmd])
-        .current_dir(cwd)
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
+/// Parse a dotenv-style file into key-value pairs.
+/// Resolves the path relative to `project_dir`. Skips blank lines and `#` comments.
+fn load_env_file(env_file: Option<&str>, project_dir: &Path, prefix: &str) -> Vec<(String, String)> {
+    let path = match env_file {
+        Some(p) => project_dir.join(p),
+        None => return Vec::new(),
+    };
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("{} Warning: Could not read env-file {:?}: {}", prefix, path, e);
+            return Vec::new();
+        }
+    };
+    println!("{} Loaded env-file: {}", prefix, path.display());
+    content
+        .lines()
+        .filter(|l| {
+            let trimmed = l.trim();
+            !trimmed.is_empty() && !trimmed.starts_with('#')
+        })
+        .filter_map(|l| {
+            let (key, value) = l.split_once('=')?;
+            Some((key.trim().to_string(), value.trim().to_string()))
+        })
+        .collect()
+}
+
+/// Spawn a command with its stdout/stderr prefixed line-by-line.
+fn spawn_prefixed(cmd: &mut Command, prefix: &str) -> LogTailGuard {
+    let child = cmd
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .spawn();
 
     match child {
-        Ok(c) => LogTailGuard(Some(c)),
+        Ok(mut c) => {
+            if let Some(stdout) = c.stdout.take() {
+                let p = prefix.to_string();
+                thread::spawn(move || {
+                    let reader = BufReader::new(stdout);
+                    for line in reader.lines() {
+                        match line {
+                            Ok(l) => println!("{} {}", p, l),
+                            Err(_) => break,
+                        }
+                    }
+                });
+            }
+            if let Some(stderr) = c.stderr.take() {
+                let p = prefix.to_string();
+                thread::spawn(move || {
+                    let reader = BufReader::new(stderr);
+                    for line in reader.lines() {
+                        match line {
+                            Ok(l) => eprintln!("{} {}", p, l),
+                            Err(_) => break,
+                        }
+                    }
+                });
+            }
+            LogTailGuard(Some(c))
+        }
         Err(e) => {
-            eprintln!("{} Warning: Could not start {}: {}", PREFIX, label, e);
+            eprintln!("{} Warning: Could not start process: {}", prefix, e);
             LogTailGuard(None)
         }
     }
 }
 
-fn spawn_pnpm_script(script: &str, cwd: &Path, label: &str) -> LogTailGuard {
-    let child = Command::new("pnpm")
-        .args(["run", script])
-        .current_dir(cwd)
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
-        .spawn();
-
-    match child {
-        Ok(c) => LogTailGuard(Some(c)),
-        Err(e) => {
-            eprintln!("{} Warning: Could not start {}: {}", PREFIX, label, e);
-            LogTailGuard(None)
-        }
-    }
-}
-
-fn spawn_uv_script(script: &str, cwd: &Path, label: &str) -> LogTailGuard {
-    let child = Command::new("uv")
-        .args(["run", script])
-        .current_dir(cwd)
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
-        .spawn();
-
-    match child {
-        Ok(c) => LogTailGuard(Some(c)),
-        Err(e) => {
-            eprintln!("{} Warning: Could not start {}: {}", PREFIX, label, e);
-            LogTailGuard(None)
-        }
-    }
-}
-
-fn spawn_docker_dev(file: &str, port: Option<&str>, env: &[String], cwd: &Path, name: &str) -> LogTailGuard {
+fn spawn_docker_dev(file: &str, port: Option<&str>, env: &[String], env_file: Option<&str>, cwd: &Path, name: &str, prefix: &str, project_dir: &Path) -> LogTailGuard {
     let tag = format!("spooky-dev-{}", name);
     let container_name = format!("spooky-dev-backend-{}", name);
 
-    // Build the image
-    let build_status = Command::new("docker")
+    // Build the image (blocking, with prefixed output)
+    let build_result = Command::new("docker")
         .args(["build", "-f", file, "-t", &tag, "."])
         .current_dir(cwd)
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
-        .status();
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output();
 
-    match build_status {
-        Ok(s) if s.success() => {}
-        Ok(s) => {
-            eprintln!("{} Warning: docker build for '{}' exited with {}", PREFIX, name, s);
-            return LogTailGuard(None);
+    match build_result {
+        Ok(output) => {
+            for line in String::from_utf8_lossy(&output.stdout).lines() {
+                println!("{} {}", prefix, line);
+            }
+            for line in String::from_utf8_lossy(&output.stderr).lines() {
+                eprintln!("{} {}", prefix, line);
+            }
+            if !output.status.success() {
+                eprintln!("{} Warning: docker build exited with {}", prefix, output.status);
+                return LogTailGuard(None);
+            }
         }
         Err(e) => {
-            eprintln!("{} Warning: Could not run docker build for '{}': {}", PREFIX, name, e);
+            eprintln!("{} Warning: Could not run docker build: {}", prefix, e);
             return LogTailGuard(None);
         }
     }
@@ -775,6 +824,18 @@ fn spawn_docker_dev(file: &str, port: Option<&str>, env: &[String], cwd: &Path, 
         args.push(p.to_string());
     }
 
+    // Pass env-file as --env-file to docker (resolved relative to project root)
+    if let Some(ef) = env_file {
+        let resolved = project_dir.join(ef);
+        if resolved.exists() {
+            args.push("--env-file".to_string());
+            args.push(resolved.to_string_lossy().to_string());
+            println!("{} Loaded env-file: {}", prefix, resolved.display());
+        } else {
+            eprintln!("{} Warning: Could not read env-file {:?}", prefix, resolved);
+        }
+    }
+
     for e in env {
         args.push("-e".to_string());
         args.push(e.to_string());
@@ -782,34 +843,30 @@ fn spawn_docker_dev(file: &str, port: Option<&str>, env: &[String], cwd: &Path, 
 
     args.push(tag);
 
-    let child = Command::new("docker")
-        .args(&args)
-        .current_dir(cwd)
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
-        .spawn();
+    spawn_prefixed(
+        Command::new("docker").args(&args).current_dir(cwd),
+        prefix,
+    )
+}
 
-    match child {
-        Ok(c) => LogTailGuard(Some(c)),
-        Err(e) => {
-            eprintln!("{} Warning: Could not start docker run for '{}': {}", PREFIX, name, e);
-            LogTailGuard(None)
-        }
-    }
+/// Fixed colors for infrastructure services.
+const INFRA_COLORS: &[(&str, &str)] = &[
+    ("surrealdb",  "\x1b[38;5;208m"), // orange
+    ("ssp",        "\x1b[38;5;75m"),  // light blue
+    ("scheduler",  "\x1b[38;5;213m"), // pink
+];
+
+fn infra_color(label: &str) -> &'static str {
+    INFRA_COLORS.iter()
+        .find(|(name, _)| *name == label)
+        .map(|(_, color)| *color)
+        .unwrap_or("\x1b[37m")
 }
 
 fn spawn_log_tail(container: &str, label: &str) -> LogTailGuard {
-    let child = Command::new("docker")
-        .args(["logs", "-f", "--tail", "50", container])
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
-        .spawn();
-
-    match child {
-        Ok(c) => LogTailGuard(Some(c)),
-        Err(e) => {
-            eprintln!("{} Warning: Could not tail {} logs: {}", PREFIX, label, e);
-            LogTailGuard(None)
-        }
-    }
+    let prefix = format!("{}[{}]{}", infra_color(label), label, ANSI_RESET);
+    spawn_prefixed(
+        Command::new("docker").args(["logs", "-f", "--tail", "50", container]),
+        &prefix,
+    )
 }

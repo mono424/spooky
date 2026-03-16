@@ -171,6 +171,8 @@ pub enum BackendDevTypedConfig {
         script: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         workdir: Option<String>,
+        #[serde(default, rename = "env-file", skip_serializing_if = "Option::is_none")]
+        env_file: Option<String>,
     },
     #[serde(rename = "docker")]
     Docker {
@@ -181,12 +183,16 @@ pub enum BackendDevTypedConfig {
         port: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         env: Vec<String>,
+        #[serde(default, rename = "env-file", skip_serializing_if = "Option::is_none")]
+        env_file: Option<String>,
     },
     #[serde(rename = "uv")]
     Uv {
         script: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         workdir: Option<String>,
+        #[serde(default, rename = "env-file", skip_serializing_if = "Option::is_none")]
+        env_file: Option<String>,
     },
 }
 

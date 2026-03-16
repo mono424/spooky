@@ -368,6 +368,8 @@ The job runner:
 
 Each backend in `spooky.yml` can declare an optional `dev` field. When you run `spooky dev`, these commands are spawned alongside the rest of the infrastructure (SurrealDB, SSP, scheduler), so you don't need to start backend services in separate terminals.
 
+Each backend gets a unique color in the terminal and its output is prefixed with `[backend.<name>.dev]`, making it easy to distinguish logs from different services.
+
 ### String Form
 
 The simplest option is a raw shell command:
@@ -432,9 +434,27 @@ Run a Python script via [uv](https://docs.astral.sh/uv/):
 
 This uses `uv run` to execute the script inside the project's virtual environment, automatically installing dependencies from `pyproject.toml` if needed.
 
+### env-file
+
+All typed forms support an optional `env-file` field that loads environment variables from a dotenv-style file (one `KEY=VALUE` per line, `#` comments and blank lines are ignored). The path is resolved relative to the project root.
+
+<CodeBlock
+  code={`backends:
+  api:
+    dev:
+      type: npm
+      script: dev
+      env-file: .env.development   # loaded into the process environment
+      workdir: ../api
+    # ...other fields...`}
+  lang="yaml"
+/>
+
+For the `docker` type, the file is passed directly via Docker's `--env-file` flag. For all other types (`npm`, `uv`), the variables are parsed and injected into the spawned process environment.
+
 ### workdir
 
-All forms support an optional `workdir` field that is resolved relative to the project root (the directory containing `spooky.yml`). If omitted, commands run from the project root.
+All typed forms support an optional `workdir` field that is resolved relative to the project root (the directory containing `spooky.yml`). If omitted, commands run from the project root.
 
 <Note>
   Backend dev processes are automatically stopped when you press Ctrl+C to shut down `spooky dev`.
