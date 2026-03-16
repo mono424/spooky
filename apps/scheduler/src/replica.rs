@@ -3,7 +3,7 @@ use serde_json::Value;
 use std::path::PathBuf;
 use surrealdb::engine::local::RocksDb;
 use surrealdb::Surreal;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 // Re-export RecordOp from messages to avoid duplication
 pub use crate::messages::RecordOp;
@@ -128,10 +128,16 @@ impl Replica {
         for table_name in &tables {
             info!("Ingesting table '{}' from remote...", table_name);
 
-            let records: Vec<Value> = remote_db
+            let records: Vec<Value> = match remote_db
                 .select(table_name.as_str())
                 .await
-                .with_context(|| format!("Failed to select from remote table '{}'", table_name))?;
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!("Skipping table '{}': failed to select: {}", table_name, e);
+                    continue;
+                }
+            };
 
             let count = records.len();
 

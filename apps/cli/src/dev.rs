@@ -111,6 +111,7 @@ fn run_direct_mode(mode: &str, versions: &ResolvedVersions, config: &SpookyConfi
         HEALTH_MAX_RETRIES,
         HEALTH_RETRY_INTERVAL,
         stop,
+        "SurrealDB",
     )?;
 
     if stop.load(Ordering::SeqCst) {
@@ -145,8 +146,52 @@ fn run_direct_mode(mode: &str, versions: &ResolvedVersions, config: &SpookyConfi
         return cleanup_direct(stop);
     }
 
-    // Phase 5: Start SSP
-    println!("{} Phase 5: Starting SSP...", PREFIX);
+    // Phase 5 (cluster only): Start scheduler before SSP so SSP can register
+    let scheduler_log;
+    if mode == "cluster" {
+        let scheduler_image = versions.scheduler_image();
+        let scheduler_port_mapping = format!("{}:9667", SCHEDULER_PORT);
+
+        println!("{} Phase 5: Starting scheduler...", PREFIX);
+        docker(&[
+            "run", "-d",
+            "--platform", "linux/amd64",
+            "--name", SCHEDULER_CONTAINER,
+            "--network", NETWORK_NAME,
+            "--network-alias", "scheduler",
+            "-p", &scheduler_port_mapping,
+            "-e", "RUST_LOG=info",
+            "-e", "SPOOKY_SCHEDULER_DB_URL=surrealdb:8000/rpc",
+            "-e", "SPOOKY_SCHEDULER_DB_NAMESPACE=main",
+            "-e", "SPOOKY_SCHEDULER_DB_DATABASE=main",
+            "-e", "SPOOKY_SCHEDULER_DB_USERNAME=root",
+            "-e", "SPOOKY_SCHEDULER_DB_PASSWORD=root",
+            "-e", "SPOOKY_SCHEDULER_REPLICA_DB_PATH=/data/replica",
+            "-e", "SPOOKY_SCHEDULER_WAL_PATH=/data/event_wal.log",
+            "-e", "SPOOKY_AUTH_SECRET=mysecret",
+            &scheduler_image,
+        ])?;
+
+        println!("{} Waiting for scheduler health...", PREFIX);
+        wait_for_health(
+            &format!("http://localhost:{}/metrics", SCHEDULER_PORT),
+            HEALTH_MAX_RETRIES,
+            HEALTH_RETRY_INTERVAL,
+            stop,
+            "Scheduler",
+        )?;
+
+        scheduler_log = Some(spawn_log_tail(SCHEDULER_CONTAINER, "scheduler"));
+    } else {
+        scheduler_log = None;
+    }
+
+    if stop.load(Ordering::SeqCst) {
+        return cleanup_direct(stop);
+    }
+
+    // Phase 6: Start SSP
+    println!("{} Phase 6: Starting SSP...", PREFIX);
     let config_mount = std::env::current_dir()
         .context("Failed to get current directory")?
         .join("spooky.yml");
@@ -195,45 +240,6 @@ fn run_direct_mode(mode: &str, versions: &ResolvedVersions, config: &SpookyConfi
     ssp_args.push(&ssp_image);
 
     docker(&ssp_args)?;
-
-    // Phase 6 (cluster only): Start scheduler
-    let scheduler_log;
-    if mode == "cluster" {
-        let scheduler_image = versions.scheduler_image();
-        let scheduler_port_mapping = format!("{}:9667", SCHEDULER_PORT);
-
-        println!("{} Phase 6: Starting scheduler...", PREFIX);
-        docker(&[
-            "run", "-d",
-            "--platform", "linux/amd64",
-            "--name", SCHEDULER_CONTAINER,
-            "--network", NETWORK_NAME,
-            "--network-alias", "scheduler",
-            "-p", &scheduler_port_mapping,
-            "-e", "RUST_LOG=info",
-            "-e", "SPOOKY_SCHEDULER_DB_URL=surrealdb:8000/rpc",
-            "-e", "SPOOKY_SCHEDULER_DB_NAMESPACE=main",
-            "-e", "SPOOKY_SCHEDULER_DB_DATABASE=main",
-            "-e", "SPOOKY_SCHEDULER_DB_USERNAME=root",
-            "-e", "SPOOKY_SCHEDULER_DB_PASSWORD=root",
-            "-e", "SPOOKY_SCHEDULER_REPLICA_DB_PATH=/data/replica",
-            "-e", "SPOOKY_SCHEDULER_WAL_PATH=/data/event_wal.log",
-            "-e", "SPOOKY_AUTH_SECRET=mysecret",
-            &scheduler_image,
-        ])?;
-
-        println!("{} Waiting for scheduler health...", PREFIX);
-        wait_for_health(
-            &format!("http://localhost:{}/metrics", SCHEDULER_PORT),
-            HEALTH_MAX_RETRIES,
-            HEALTH_RETRY_INTERVAL,
-            stop,
-        )?;
-
-        scheduler_log = Some(spawn_log_tail(SCHEDULER_CONTAINER, "scheduler"));
-    } else {
-        scheduler_log = None;
-    }
 
     // Ready!
     println!("\n{} Development environment ready!", PREFIX);
@@ -319,6 +325,7 @@ fn run_compose_mode(compose_file: &str, mode: &str, config: &SpookyConfig, stop:
         HEALTH_MAX_RETRIES,
         HEALTH_RETRY_INTERVAL,
         stop,
+        "SurrealDB",
     )?;
 
     if stop.load(Ordering::SeqCst) {
@@ -393,31 +400,84 @@ fn wait_for_health(
     max_retries: u32,
     interval: Duration,
     stop: &Arc<AtomicBool>,
+    service_name: &str,
 ) -> Result<()> {
+    // Try to infer container name from service name for liveness checks
+    let container_name = match service_name {
+        "SurrealDB" => Some(SURREAL_CONTAINER),
+        "Scheduler" => Some(SCHEDULER_CONTAINER),
+        "SSP" => Some(SSP_CONTAINER),
+        _ => None,
+    };
+
     for attempt in 1..=max_retries {
         if stop.load(Ordering::SeqCst) {
-            bail!("Interrupted while waiting for SurrealDB");
+            bail!("Interrupted while waiting for {}", service_name);
+        }
+
+        // Check if the container is still running (fail fast on crash)
+        if let Some(name) = container_name {
+            if !is_container_running(name) {
+                // Print last logs to help diagnose
+                let _ = print_container_logs(name, 20);
+                bail!("{} container '{}' exited unexpectedly. Check logs above.", service_name, name);
+            }
         }
 
         match ureq::get(url).timeout(Duration::from_secs(5)).call() {
             Ok(resp) if resp.status() == 200 => {
-                println!("{} SurrealDB is ready.", PREFIX);
+                println!("{} {} is ready.", PREFIX, service_name);
                 return Ok(());
             }
             _ => {
                 println!(
-                    "{} Waiting for SurrealDB... ({}/{})",
-                    PREFIX, attempt, max_retries
+                    "{} Waiting for {}... ({}/{})",
+                    PREFIX, service_name, attempt, max_retries
                 );
                 thread::sleep(interval);
             }
         }
     }
 
+    // Print logs on timeout to help diagnose
+    if let Some(name) = container_name {
+        let _ = print_container_logs(name, 30);
+    }
+
     bail!(
-        "SurrealDB did not become ready after {} attempts",
-        max_retries
+        "{} did not become ready after {} attempts",
+        service_name, max_retries
     );
+}
+
+/// Check if a Docker container is currently running
+fn is_container_running(name: &str) -> bool {
+    Command::new("docker")
+        .args(["inspect", "-f", "{{.State.Running}}", name])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "true")
+        .unwrap_or(false)
+}
+
+/// Print the last N lines of a container's logs
+fn print_container_logs(name: &str, tail: u32) -> Result<()> {
+    let output = Command::new("docker")
+        .args(["logs", "--tail", &tail.to_string(), name])
+        .output()
+        .context("Failed to get container logs")?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    println!("\n{} --- Last {} log lines from {} ---", PREFIX, tail, name);
+    if !stdout.is_empty() {
+        print!("{}", stdout);
+    }
+    if !stderr.is_empty() {
+        eprint!("{}", stderr);
+    }
+    println!("{} --- End of {} logs ---\n", PREFIX, name);
+    Ok(())
 }
 
 // ── Migration helper ────────────────────────────────────────────────────────
