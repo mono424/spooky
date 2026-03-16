@@ -44,9 +44,9 @@ The `SyncedDbConfig` (or `SpookyConfig`) object allows you to customize the beha
   /** Persistence client: 'surrealdb' (default), 'localstorage', or custom */
   persistenceClient?: 'surrealdb' | 'localstorage' | PersistenceClient;
   
-  /** OpenTelemetry collector endpoint for telemetry data */
-  otelEndpoint?: string;
-  
+  /** A pino browser transmit object for forwarding logs (e.g. via @spooky-sync/core/otel) */
+  otelTransmit?: PinoTransmit;
+
   /** Debounce time in milliseconds for stream updates (default: 100ms) */
   streamDebounceTime?: number;
 }`}
@@ -58,6 +58,8 @@ The `SyncedDbConfig` (or `SpookyConfig`) object allows you to customize the beha
 <CodeBlock
   code={`import { SyncedDb, type SyncedDbConfig } from '@spooky-sync/client-solid';
 import { schema, SURQL_SCHEMA } from './schema.gen';
+
+import { createOtelTransmit } from '@spooky-sync/core/otel';
 
 const dbConfig: SyncedDbConfig<typeof schema> = {
   logLevel: 'info',
@@ -71,8 +73,8 @@ const dbConfig: SyncedDbConfig<typeof schema> = {
   },
   // Optional: custom client ID
   clientId: 'my-app-client',
-  // Optional: OpenTelemetry endpoint
-  otelEndpoint: '/v1/logs',
+  // Optional: forward logs to OpenTelemetry
+  otelTransmit: createOtelTransmit('http://localhost:4318/v1/logs'),
 };
 
 export const db = new SyncedDb<typeof schema>(dbConfig);`}

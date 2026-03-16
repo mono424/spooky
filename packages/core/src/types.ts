@@ -1,9 +1,14 @@
 import { RecordId, SchemaStructure } from '@spooky-sync/query-builder';
-import { Level } from 'pino';
+import { Level, type LoggerOptions } from 'pino';
 import { PushEventOptions } from './events/index';
 import { UpEvent } from './modules/sync/index';
 
 export type { Level } from 'pino';
+
+/**
+ * A pino browser transmit object for forwarding logs to an external sink (e.g. OpenTelemetry).
+ */
+export type PinoTransmit = NonNullable<NonNullable<LoggerOptions['browser']>['transmit']>;
 
 /**
  * The type of storage backend to use for the local database.
@@ -107,8 +112,8 @@ export interface SpookyConfig<S extends SchemaStructure> {
    * Can be a custom implementation, 'surrealdb' (default), or 'localstorage'.
    */
   persistenceClient?: PersistenceClient | 'surrealdb' | 'localstorage';
-  /** OpenTelemetry collector endpoint for telemetry data. */
-  otelEndpoint?: string;
+  /** A pino browser transmit object for forwarding logs (e.g. via @spooky-sync/core/otel). */
+  otelTransmit?: PinoTransmit;
   /**
    * Debounce time in milliseconds for stream updates.
    * Defaults to 100ms.

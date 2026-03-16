@@ -62,6 +62,7 @@ pub struct AppState {
     pub job_config: Arc<JobConfig>,
     pub job_queue_tx: mpsc::Sender<JobEntry>,
     pub ssp_id: String,
+    pub scheduler_url: Option<String>,
 }
 
 // --- Request/Response DTOs ---
@@ -318,6 +319,7 @@ pub async fn run_server() -> anyhow::Result<()> {
         job_config,
         job_queue_tx,
         ssp_id: config.ssp_id.clone(),
+        scheduler_url: config.scheduler_url.clone(),
     };
 
     let app = create_app(state);
@@ -747,7 +749,10 @@ async fn ingest_handler(
 
     // Check if this is a job table and queue the job if pending (only on assigned SSP)
     if let Some(backend_info) = state.job_config.job_tables.get(&payload.table) {
-        let is_assigned = payload.job_assignee.as_deref() == Some(&state.ssp_id);
+        // In singlenode mode (no scheduler), this SSP handles all jobs.
+        // In cluster mode, only process jobs assigned to this SSP.
+        let is_standalone = state.scheduler_url.is_none();
+        let is_assigned = is_standalone || payload.job_assignee.as_deref() == Some(&state.ssp_id);
         if is_assigned && op == Operation::Create {
             if let Some(status) = payload.record.get("status").and_then(|v| v.as_str()) {
                 if status == "pending" {

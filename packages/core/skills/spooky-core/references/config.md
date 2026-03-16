@@ -29,8 +29,8 @@ interface SpookyConfig<S extends SchemaStructure> {
    * - Custom: Provide an object implementing PersistenceClient
    */
   persistenceClient?: PersistenceClient | 'surrealdb' | 'localstorage';
-  /** OpenTelemetry collector endpoint */
-  otelEndpoint?: string;
+  /** A pino browser transmit object for forwarding logs (e.g. via @spooky-sync/core/otel) */
+  otelTransmit?: PinoTransmit;
   /** Debounce time in ms for stream updates (default: 100) */
   streamDebounceTime?: number;
 }
