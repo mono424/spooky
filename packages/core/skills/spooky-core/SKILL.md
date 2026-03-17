@@ -159,20 +159,96 @@ Buckets must be defined in the schema under the `buckets` array.
 
 ## Backend Runs (HTTP Outbox)
 
-Backend runs let you trigger server-side operations via an outbox pattern. The payload is queued locally and synced to the server.
+Backend runs let you trigger server-side HTTP operations via an **outbox pattern**. When you call `db.run()`, it creates a job record in a local outbox table. That record syncs to remote SurrealDB, where the Spooky Sync Platform (SSP) picks it up and calls your backend HTTP API. The result status is written back to the job record and syncs to the client reactively.
+
+### `db.run()` Signature
 
 ```typescript
-await client.run('email', '/send', {
-  to: 'alice@example.com',
-  subject: 'Hello',
-  body: 'World',
-}, {
-  max_retries: 3,
-  retry_strategy: 'exponential',
+db.run<B extends BackendNames<S>, R extends BackendRoutes<S, B>>(
+  backend: B,        // Backend name from spooky.yml (e.g., 'api')
+  route: R,          // Route path from OpenAPI spec (e.g., '/spookify')
+  payload: RoutePayload<S, B, R>,  // Typed args for the route
+  options?: RunOptions
+): Promise<void>
+```
+
+All parameters are type-safe — `backend`, `route`, and `payload` are inferred from the generated schema.
+
+### RunOptions
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `assignedTo` | `string` | `undefined` | Record ID to link the job to an entity (e.g., `'thread:abc'`) |
+| `max_retries` | `number` | `3` | Maximum retry attempts on failure |
+| `retry_strategy` | `'linear' \| 'exponential'` | `'linear'` | Backoff strategy between retries |
+
+### Entity Linking via `assignedTo`
+
+The `assignedTo` option is how you link a job to an entity. Passing a record ID:
+
+- Sets the `assigned_to` field on the job record (typed as `record<thread>` etc. in the outbox schema)
+- Enables **permission scoping** — e.g., `WHERE assigned_to.author.id = $auth.id` restricts job visibility to the entity's owner
+- Allows **querying jobs via relationships** — use `.related('jobs')` on the parent entity to reactively track job status
+
+### Full Example
+
+**1. Configure the backend in `spooky.yml`:**
+
+```yaml
+backends:
+  api:
+    type: http
+    spec: ../api/openapi.yml
+    baseUrl: http://host.docker.internal:3660
+    auth:
+      type: token
+      token: MY_SECRET
+    method:
+      type: outbox
+      table: job
+      schema: ./src/outbox/api.surql
+```
+
+**2. Define the outbox table in SurrealQL** (`src/outbox/api.surql`):
+
+```sql
+DEFINE TABLE job SCHEMAFULL
+PERMISSIONS
+  FOR select, create, update, delete
+  WHERE $access = "account" AND assigned_to.author.id = $auth.id;
+
+DEFINE FIELD assigned_to ON TABLE job TYPE record<thread>;
+DEFINE FIELD path ON TABLE job TYPE string;
+DEFINE FIELD payload ON TABLE job TYPE any;
+DEFINE FIELD retries ON TABLE job TYPE int DEFAULT ALWAYS 0;
+DEFINE FIELD max_retries ON TABLE job TYPE int DEFAULT ALWAYS 3;
+DEFINE FIELD retry_strategy ON TABLE job TYPE string DEFAULT ALWAYS "linear"
+  ASSERT $value IN ["linear", "exponential"];
+DEFINE FIELD status ON TABLE job TYPE string DEFAULT ALWAYS "pending"
+  ASSERT $value IN ["pending", "processing", "success", "failed"];
+DEFINE FIELD errors ON TABLE job TYPE array<object> DEFAULT ALWAYS [];
+DEFINE FIELD created_at ON TABLE job TYPE datetime VALUE time::now();
+```
+
+**3. Run `spooky generate`** — this produces the typed `backends` block in `schema.gen.ts`.
+
+**4. Call `db.run()` with entity linking:**
+
+```typescript
+// Trigger the /spookify backend route, linked to a thread
+await client.run('api', '/spookify', { id: threadId }, {
+  assignedTo: threadId,  // Links job to the thread entity
 });
 ```
 
-Backends and routes are defined in the schema under `backends`.
+### How It Works Under the Hood
+
+When you call `db.run('api', '/spookify', payload, options)`:
+
+1. Validates the route exists in the schema and all required args are present
+2. Creates a record in the outbox table (`job`) with fields: `path`, `payload` (JSON-stringified), `max_retries`, `retry_strategy`, and optionally `assigned_to`
+3. The record is created via the standard `client.create()` path — optimistic, synced to remote
+4. SSP detects the new job, calls your backend HTTP API, and updates the job's `status` field (`pending` → `processing` → `success`/`failed`)
 
 ## Common Pitfalls
 

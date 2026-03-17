@@ -42,6 +42,7 @@ pub struct ViewUnregisterRequest {
 pub struct SspRegistration {
     pub ssp_id: String,
     pub url: String,
+    pub version: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,4 +57,5 @@ pub struct SspHeartbeat {
     pub views: usize,
     pub cpu_usage: Option<f64>,
     pub memory_usage: Option<f64>,
+    pub version: String,
 }

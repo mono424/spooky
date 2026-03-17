@@ -9,7 +9,9 @@ use std::time::Duration;
 
 use crate::backend::{self, BackendDevConfig, BackendDevTypedConfig, ResolvedVersions, SpookyConfig, DEFAULT_CONFIG_PATH};
 use crate::migrate;
-use crate::schema_builder;
+use crate::schema_builder::{self, SchemaBuilderConfig};
+use crate::schema_diff;
+use crate::schema_extract;
 use crate::surreal_client::{MigrationDB, SurrealClient};
 
 const PREFIX: &str = "[spooky dev]";
@@ -50,6 +52,12 @@ pub fn run(skip_migrations: bool, auto_apply_migrations: bool) -> Result<()> {
     let migrations_path = migrations_path.as_str();
     println!("{} Mode: {}", PREFIX, mode);
 
+    // Check for schema drift before starting infrastructure
+    if !skip_migrations {
+        println!("{} Checking for schema drift...", PREFIX);
+        check_schema_drift(&config)?;
+    }
+
     // Check for compose files
     let compose_file = format!("docker-compose.{}.yml", mode);
     if Path::new(&compose_file).exists() {
@@ -59,6 +67,108 @@ pub fn run(skip_migrations: bool, auto_apply_migrations: bool) -> Result<()> {
         println!("{} No compose file found — using direct Docker mode", PREFIX);
         run_direct_mode(&mode, &versions, &config, &stop, skip_migrations, auto_apply_migrations, migrations_path)
     }
+}
+
+// ── Schema drift detection ──────────────────────────────────────────────────
+
+fn check_schema_drift(config: &SpookyConfig) -> Result<()> {
+    let resolved = config.resolved_schema();
+    let schema_path = &resolved.schema;
+    let migrations_dir = &resolved.migrations;
+
+    // No schema file → nothing to check
+    if !schema_path.exists() {
+        println!("{} No schema file found, skipping drift check.", PREFIX);
+        return Ok(());
+    }
+
+    // Build the desired schema from source files
+    let config_path = Path::new(DEFAULT_CONFIG_PATH);
+    let builder_config = SchemaBuilderConfig {
+        input_path: schema_path.clone(),
+        config_path: if config_path.exists() { Some(config_path.to_path_buf()) } else { None },
+        mode: config.mode.clone().unwrap_or_else(|| "singlenode".to_string()),
+        endpoint: None,
+        secret: None,
+        include_functions: false,
+    };
+
+    let new_schema_sql = schema_builder::build_server_schema(&builder_config)
+        .context("Failed to build schema from source files")?;
+
+    // Extract old (from migrations) and new (from source) schemas via ephemeral DB
+    let (old_schema, new_schema) = schema_extract::extract_old_and_new_schemas(
+        migrations_dir,
+        &new_schema_sql,
+    )
+    .context("Failed to extract schemas for drift comparison")?;
+
+    // Diff
+    let diff = schema_diff::diff_schemas(&old_schema, &new_schema);
+
+    if diff.is_empty() {
+        println!("{} Schema is in sync.", PREFIX);
+        return Ok(());
+    }
+
+    // Drift detected — show summary
+    println!(
+        "{} Schema drift detected: {} addition(s), {} removal(s), {} modification(s)",
+        PREFIX,
+        diff.added.len(),
+        diff.removed.len(),
+        diff.modified.len(),
+    );
+
+    // Non-TTY: warn and continue (matches existing pattern in apply_migrations)
+    if !std::io::stdin().is_terminal() {
+        println!(
+            "{} Non-TTY detected, continuing with schema drift. Run `spooky migrate create` to generate a migration.",
+            PREFIX,
+        );
+        return Ok(());
+    }
+
+    // Interactive prompt
+    let options = vec![
+        "Generate migration",
+        "Continue anyway",
+        "Abort",
+    ];
+    let choice = inquire::Select::new(
+        "Schema drift detected. What would you like to do?",
+        options,
+    )
+    .prompt()
+    .unwrap_or("Abort");
+
+    match choice {
+        "Generate migration" => {
+            let name = inquire::Text::new("Migration name:")
+                .prompt()
+                .context("Failed to read migration name")?;
+
+            migrate::create(
+                migrations_dir,
+                &name,
+                None,
+                Some(&builder_config),
+                None,
+            )
+            .context("Failed to create migration")?;
+
+            println!("{} Migration created. It will be applied in the next step.", PREFIX);
+        }
+        "Continue anyway" => {
+            println!(
+                "{} Continuing with schema drift. Run `spooky migrate create` to generate a migration later.",
+                PREFIX,
+            );
+        }
+        _ => bail!("User chose to abort due to schema drift."),
+    }
+
+    Ok(())
 }
 
 // ── Direct Docker mode ──────────────────────────────────────────────────────

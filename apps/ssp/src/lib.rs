@@ -153,6 +153,7 @@ async fn register_with_scheduler(
     let payload = ssp_protocol::SspRegistration {
         ssp_id: ssp_id.to_string(),
         url: format!("http://{}", registration_host),
+        version: env!("CARGO_PKG_VERSION").to_string(),
     };
 
     match client.post(&registration_url).json(&payload).send().await {
@@ -267,7 +268,7 @@ pub async fn run_server() -> anyhow::Result<()> {
         metrics::init_metrics().context("Failed to initialize metrics")?;
     let metrics = Arc::new(metrics);
 
-    info!("Starting SSP sidecar (streaming mode)...");
+    info!("\n ____  ____  ____\n/ ___)/ ___)(  _ \\\n\\___ \\\\___ \\ ) __/\n(____/(____/(__)    v{}\n\nSpooky Sync Provider — streaming mode", env!("CARGO_PKG_VERSION"));
 
     let config = load_config();
     let db = connect_database(&config).await?;
@@ -426,6 +427,7 @@ pub async fn run_server() -> anyhow::Result<()> {
                     views,
                     cpu_usage: None,
                     memory_usage: None,
+                    version: env!("CARGO_PKG_VERSION").to_string(),
                 };
 
                 match client.post(&heartbeat_url).json(&payload).send().await {
@@ -1080,6 +1082,7 @@ async fn info_handler(State(state): State<AppState>) -> Json<Value> {
             "id": state.ssp_id,
             "status": status_str,
             "views": circuit.view_count(),
+            "version": env!("CARGO_PKG_VERSION"),
         }
     ]))
 }

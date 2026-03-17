@@ -84,6 +84,7 @@ async fn handle_register(
     let ssp_info = SspInfo {
         id: request.ssp_id.clone(),
         url: request.url.clone(),
+        version: request.version.clone(),
         connected_at: std::time::Instant::now(),
         last_heartbeat: std::time::Instant::now(),
         query_count: 0,
@@ -169,6 +170,7 @@ async fn handle_heartbeat(
             heartbeat.views,
             heartbeat.cpu_usage,
             heartbeat.memory_usage,
+            heartbeat.version.clone(),
         );
     }
 

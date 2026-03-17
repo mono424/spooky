@@ -117,7 +117,8 @@
       "Bash(tree:*)",
       "Bash(mdfind:*)",
       "Bash(docker rm:*)",
-      "Bash(npx:*)"
+      "Bash(npx:*)",
+      "Bash(find /Users/khadim/dev/spooky -maxdepth 3 -type f \\\\\\(-name *.sh -o -name Makefile \\\\\\) ! -path */node_modules/*)"
     ],
     "deny": [],
     "ask": []

@@ -200,10 +200,57 @@ const { url, isLoading } = useDownloadFile('avatars', () => user()?.avatarPath);
 
 ## Backend Runs
 
+Use `db.run()` to trigger server-side operations via the outbox pattern. See the `spooky-core` skill for full details on `db.run()` and how it works.
+
+### Basic Usage
+
 ```tsx
 const db = useDb();
-await db.run('email', '/send', { to: 'alice@example.com', subject: 'Hi', body: 'Hello' });
+await db.run('api', '/spookify', { id: threadId });
 ```
+
+### Entity Linking with `assignedTo`
+
+Pass `assignedTo` to link the job to an entity. This enables permission scoping and lets you query job status via relationships:
+
+```tsx
+const db = useDb();
+
+// Trigger backend run linked to a thread
+await db.run('api', '/spookify', { id: threadData.id }, {
+  assignedTo: threadData.id,  // Links the job record to this thread
+});
+```
+
+### Tracking Job Status Reactively
+
+Use `.related()` to include jobs in your query, then reactively track their status:
+
+```tsx
+// Query a thread with its latest spookify job
+const threadResult = useQuery(() =>
+  db.query('thread')
+    .where({ id: `thread:${threadId}` })
+    .related('jobs', (q) =>
+      q.where({ path: '/spookify' }).orderBy('created_at', 'desc').limit(1)
+    )
+    .one()
+    .build()
+);
+
+const thread = () => threadResult.data();
+
+// Check if a job is in progress
+const isJobLoading = () =>
+  ['pending', 'processing'].includes(thread()?.jobs?.[0]?.status ?? '');
+
+// Use in UI
+<Show when={isJobLoading()}>
+  <span>Processing...</span>
+</Show>
+```
+
+The job's `status` field transitions through: `pending` → `processing` → `success` | `failed`. Since the job record syncs reactively, your UI updates automatically as the backend processes the job.
 
 ## Key Re-exports
 

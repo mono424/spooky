@@ -11,6 +11,7 @@ use tracing::{debug, warn};
 pub struct SspInfo {
     pub id: String,
     pub url: String,
+    pub version: String,
     #[serde(skip, default = "std::time::Instant::now")]
     pub connected_at: Instant,
     #[serde(skip, default = "std::time::Instant::now")]

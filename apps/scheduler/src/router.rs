@@ -54,17 +54,20 @@ impl SspPool {
         views: usize,
         cpu_usage: Option<f64>,
         memory_usage: Option<f64>,
+        version: String,
     ) {
         if let Some(ssp) = self.ssps.get_mut(ssp_id) {
             ssp.last_heartbeat = Instant::now();
             ssp.views = views;
             ssp.cpu_usage = cpu_usage;
             ssp.memory_usage = memory_usage;
+            ssp.version = version;
         } else {
             // Add new SSP
             let info = SspInfo {
                 id: ssp_id.to_string(),
                 url: String::new(), // URL must be set via registration, not heartbeat
+                version,
                 connected_at: Instant::now(),
                 last_heartbeat: Instant::now(),
                 query_count: 0,

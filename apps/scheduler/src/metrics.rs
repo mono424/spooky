@@ -142,6 +142,7 @@ async fn info_handler(
         "id": state.scheduler_id,
         "status": scheduler_status,
         "views": total_views,
+        "version": env!("CARGO_PKG_VERSION"),
     })];
 
     for ssp in pool.all() {
@@ -156,6 +157,7 @@ async fn info_handler(
             "id": ssp.id,
             "status": ssp_status,
             "views": ssp.views,
+            "version": ssp.version,
         }));
     }
 
