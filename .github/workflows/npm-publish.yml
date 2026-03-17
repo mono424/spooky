@@ -140,6 +140,17 @@ jobs:
         working-directory: packages/client-solid
         run: npm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
 
+      # 5. Build and publish @spooky-sync/devtools-mcp
+      - name: Set version — devtools-mcp
+        run: jq '.version = "${{ needs.prepare.outputs.version }}"' apps/devtools-mcp/package.json > tmp.json && mv tmp.json apps/devtools-mcp/package.json
+
+      - name: Build devtools-mcp
+        run: pnpm --filter @spooky-sync/devtools-mcp build
+
+      - name: Publish devtools-mcp
+        working-directory: apps/devtools-mcp
+        run: npm publish --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
+
   build-cli-binaries:
     needs: [prepare, validate-versions]
     strategy:

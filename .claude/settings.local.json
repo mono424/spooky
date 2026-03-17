@@ -118,7 +118,10 @@
       "Bash(mdfind:*)",
       "Bash(docker rm:*)",
       "Bash(npx:*)",
-      "Bash(find /Users/khadim/dev/spooky -maxdepth 3 -type f \\\\\\(-name *.sh -o -name Makefile \\\\\\) ! -path */node_modules/*)"
+      "Bash(find /Users/khadim/dev/spooky -maxdepth 3 -type f \\\\\\(-name *.sh -o -name Makefile \\\\\\) ! -path */node_modules/*)",
+      "WebFetch(domain:cdn.jsdelivr.net)",
+      "WebFetch(domain:upload.wikimedia.org)",
+      "WebFetch(domain:www.svgrepo.com)"
     ],
     "deny": [],
     "ask": []
