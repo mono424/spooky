@@ -89,6 +89,18 @@ Contributions are welcome! This is a monorepo — see the individual package dir
 
 ---
 
+## Star History
+
+<a href="https://www.star-history.com/?repos=mono424%2Fspooky&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=mono424/spooky&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=mono424/spooky&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=mono424/spooky&type=Date" />
+ </picture>
+</a>
+
+---
+
 <div align="center">
 If you find Spooky useful, consider giving it a ⭐ on <a href="https://github.com/mono424/spooky">GitHub</a>!
 </div>
