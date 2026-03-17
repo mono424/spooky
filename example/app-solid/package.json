@@ -5,7 +5,6 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:example": "pnpm dev",
     "build": "vite build",
     "preview": "vite preview",
     "type-check": "tsc --noEmit"
@@ -13,6 +12,7 @@
   "dependencies": {
     "@solidjs/router": "^0.10.2",
     "@spooky-sync/client-solid": "workspace:*",
+    "@spooky-sync/core": "workspace:*",
     "@tanstack/solid-hotkeys": "^0.4.1",
     "@tanstack/solid-query": "^5.90.10",
     "lucide-solid": "^0.577.0",

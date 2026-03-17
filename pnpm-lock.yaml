@@ -203,6 +203,9 @@ importers:
       '@spooky-sync/client-solid':
         specifier: workspace:*
         version: link:../../packages/client-solid
+      '@spooky-sync/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@tanstack/solid-hotkeys':
         specifier: ^0.4.1
         version: 0.4.1(solid-js@1.9.9)

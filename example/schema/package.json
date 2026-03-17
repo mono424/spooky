@@ -3,19 +3,17 @@
   "version": "0.0.1-canary.19",
   "description": "Database schema and types for SurrealDB",
   "scripts": {
-    "start": "node run.js up -d",
-    "stop": "node run.js down",
-    "dev": "pnpm build && node run.js up --build --force-recreate",
-    "dev:example": "pnpm db:reset && pnpm dev",
-    "db:reset": "rm -rf .spooky/ssp_data && mkdir .spooky/ssp_data && node run.js down -v",
+    "dev": "spooky dev",
+    "dev:app": "pnpm --filter @example/app-solid dev",
+    "generate": "spooky generate",
     "build": "spooky generate && pnpm build:surql",
     "build:surql": "pnpm build:remote:singlenode && pnpm build:remote:cluster",
     "build:remote:surrealism": "spooky --input ./src/schema.surql --output ./.spooky/remote-surrealism.gen.surql --mode surrealism --modules-dir ../../packages/surrealism-modules --config ./spooky.yml",
     "build:remote:singlenode": "spooky --input ./src/schema.surql --output ./.spooky/remote-singlenode.gen.surql --mode singlenode --endpoint http://ssp:8667 --secret mysecret --config ./spooky.yml",
     "build:remote:cluster": "spooky --input ./src/schema.surql --output ./.spooky/remote-cluster.gen.surql --mode cluster --endpoint http://scheduler:9667 --config ./spooky.yml",
-    "migrate:create": "../../apps/cli/target/release/spooky migrate create",
-    "migrate:apply": "../../apps/cli/target/release/spooky migrate apply --url http://localhost:8666 --migrations-dir migrations",
-    "migrate:status": "../../apps/cli/target/release/spooky migrate status --url http://localhost:8666 --migrations-dir migrations"
+    "migrate:create": "spooky migrate create",
+    "migrate:apply": "spooky migrate apply --url http://localhost:8666",
+    "migrate:status": "spooky migrate status --url http://localhost:8666"
   },
   "keywords": [
     "database",

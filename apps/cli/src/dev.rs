@@ -255,7 +255,8 @@ fn run_direct_mode(mode: &str, versions: &ResolvedVersions, config: &SpookyConfi
     let ssp_log = spawn_log_tail(SSP_CONTAINER, "ssp");
 
     // Start the app dev server
-    let app_dev = spawn_pnpm_dev_app();
+    let dev_app_script = config.dev_app.as_deref().unwrap_or("dev:app");
+    let app_dev = spawn_pnpm_dev_app(dev_app_script);
 
     // Start backend dev commands
     let project_dir = std::env::current_dir().context("Failed to get current directory")?;
@@ -287,7 +288,7 @@ fn cleanup_direct(_stop: &Arc<AtomicBool>) -> Result<()> {
     // Remove network
     let _ = docker(&["network", "rm", NETWORK_NAME]);
 
-    println!("{} Cleaned up. Goodbye!", PREFIX);
+    println!("{} Cleaned up. Goodbye! 👻", PREFIX);
     Ok(())
 }
 
@@ -365,7 +366,8 @@ fn run_compose_mode(compose_file: &str, mode: &str, config: &SpookyConfig, stop:
     println!("{} Press Ctrl+C to stop.\n", PREFIX);
 
     // Start the app dev server
-    let app_dev = spawn_pnpm_dev_app();
+    let dev_app_script = config.dev_app.as_deref().unwrap_or("dev:app");
+    let app_dev = spawn_pnpm_dev_app(dev_app_script);
 
     // Start backend dev commands
     let project_dir = std::env::current_dir().context("Failed to get current directory")?;
@@ -389,7 +391,7 @@ fn run_compose_mode(compose_file: &str, mode: &str, config: &SpookyConfig, stop:
 fn cleanup_compose(compose_file: &str) -> Result<()> {
     println!("\n{} Stopping compose services...", PREFIX);
     let _ = docker(&["compose", "-f", compose_file, "down", "--remove-orphans"]);
-    println!("{} Cleaned up. Goodbye!", PREFIX);
+    println!("{} Cleaned up. Goodbye! 👻", PREFIX);
     Ok(())
 }
 
@@ -645,11 +647,11 @@ impl Drop for LogTailGuard {
 
 const APP_COLOR: &str = "\x1b[97m"; // bright white
 
-fn spawn_pnpm_dev_app() -> LogTailGuard {
+fn spawn_pnpm_dev_app(script: &str) -> LogTailGuard {
     let prefix = format!("{}[app]{}", APP_COLOR, ANSI_RESET);
-    println!("{} Starting: pnpm dev:app", prefix);
+    println!("{} Starting: pnpm {}", prefix, script);
     spawn_prefixed(
-        Command::new("pnpm").args(["dev:app"]),
+        Command::new("pnpm").args([script]),
         &prefix,
     )
 }

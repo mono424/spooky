@@ -128,6 +128,7 @@ pub fn add_api(
             backends: std::collections::BTreeMap::new(),
             buckets: Vec::new(),
             client_types: Vec::new(),
+            dev_app: None,
         }
     };
 

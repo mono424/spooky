@@ -79,6 +79,8 @@ pub struct SpookyConfig {
     pub buckets: Vec<String>,
     #[serde(default, rename = "clientTypes", skip_serializing_if = "Vec::is_empty")]
     pub client_types: Vec<ClientTypeConfig>,
+    #[serde(default, rename = "devApp", skip_serializing_if = "Option::is_none")]
+    pub dev_app: Option<String>,
 }
 
 impl SpookyConfig {
@@ -271,6 +273,7 @@ fn default_config() -> SpookyConfig {
         backends: Default::default(),
         buckets: Default::default(),
         client_types: Default::default(),
+        dev_app: None,
     }
 }
 
