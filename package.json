@@ -1,6 +1,6 @@
 {
   "name": "spooky",
-  "version": "0.0.1-canary.23",
+  "version": "0.0.1-canary.24",
   "private": true,
   "description": "Spooky monorepo",
   "scripts": {
