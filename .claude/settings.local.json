@@ -121,7 +121,8 @@
       "Bash(find /Users/khadim/dev/spooky -maxdepth 3 -type f \\\\\\(-name *.sh -o -name Makefile \\\\\\) ! -path */node_modules/*)",
       "WebFetch(domain:cdn.jsdelivr.net)",
       "WebFetch(domain:upload.wikimedia.org)",
-      "WebFetch(domain:www.svgrepo.com)"
+      "WebFetch(domain:www.svgrepo.com)",
+      "Bash(find /Users/khadim/dev/spooky -type f \\\\\\(-name *.test.ts -o -name *.spec.ts -o -name *.test.rs -o -name *.spec.rs \\\\\\))"
     ],
     "deny": [],
     "ask": []
