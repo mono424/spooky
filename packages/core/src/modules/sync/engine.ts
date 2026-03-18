@@ -57,26 +57,29 @@ export class SyncEngine {
       return;
     }
 
-    const [remoteResults] = await this.remote.query<[RecordWithId[]]>(
-      "SELECT (SELECT * FROM ONLY <record>$parent.id) AS record, (SELECT version FROM ONLY _spooky_version WHERE record_id = <record>$parent.id)['version'] as spooky_rv FROM $idsToFetch",
+    const [remoteResults] = await this.remote.query<
+      [(RecordWithId & { spooky_rv: number })[]]
+    >(
+      "SELECT *, (SELECT version FROM ONLY _spooky_version WHERE record_id = $parent.id)['version'] as spooky_rv FROM $idsToFetch",
       { idsToFetch }
     );
-    console.log('remoteResults>', remoteResults);
+
     // Prepare batch for cache (which handles both DB and DBSP)
     const cacheBatch: CacheRecord[] = [];
 
-    for (const { spooky_rv, record } of remoteResults) {
-      if (!record?.id) {
+    for (const result of remoteResults) {
+      if (!result?.id) {
         this.logger.warn(
           {
-            record,
+            result,
             idsToFetch,
             Category: 'spooky-client::SyncEngine::syncRecords',
           },
-          'Remote record has no id. Skipping record'
+          'Remote record has no id (possibly deleted). Skipping record'
         );
         continue;
       }
+      const { spooky_rv, ...record } = result;
       const fullId = encodeRecordId(record.id);
       const table = record.id.table.toString();
       const isAdded = added.some((item) => encodeRecordId(item.id) === fullId);

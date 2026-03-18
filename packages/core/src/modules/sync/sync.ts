@@ -169,7 +169,6 @@ export class SpookySync<S extends SchemaStructure> {
       { event, Category: 'spooky-client::SpookySync::processUpEvent' },
       'Processing up event'
     );
-    console.log('xx1', event);
     switch (event.type) {
       case 'create':
         const dataKeys = Object.keys(event.data).map((key) => ({ key, variable: `data_${key}` }));
