@@ -1,7 +1,7 @@
 {
   "name": "landing-page",
   "type": "module",
-  "version": "0.0.1-canary.24",
+  "version": "0.0.1-canary.25",
   "scripts": {
     "dev": "astro dev",
     "dev:landingpage": "astro dev",

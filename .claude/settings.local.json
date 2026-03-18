@@ -124,7 +124,8 @@
       "WebFetch(domain:www.svgrepo.com)",
       "Bash(find /Users/khadim/dev/spooky -type f \\\\\\(-name *.test.ts -o -name *.spec.ts -o -name *.test.rs -o -name *.spec.rs \\\\\\))",
       "Bash(npm run:*)",
-      "mcp__spooky-devtools__run_query"
+      "mcp__spooky-devtools__run_query",
+      "Bash(node_modules/.bin/tsc --noEmit)"
     ],
     "deny": [],
     "ask": []
