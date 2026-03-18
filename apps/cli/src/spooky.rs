@@ -179,6 +179,9 @@ pub fn generate_spooky_events(
         // --- Versioning Logic ---
         events.push_str("    DELETE _spooky_version WHERE record_id = $before.id;\n\n");
 
+        // --- List Ref Cleanup ---
+        events.push_str("    DELETE _spooky_list_ref WHERE out = $before.id;\n\n");
+
         // --- Ingestion Logic ---
         events.push_str("    LET $plain_before = {\n");
         events.push_str("        id: <string>($before.id OR \"\"),\n");

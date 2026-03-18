@@ -123,7 +123,8 @@
       "WebFetch(domain:upload.wikimedia.org)",
       "WebFetch(domain:www.svgrepo.com)",
       "Bash(find /Users/khadim/dev/spooky -type f \\\\\\(-name *.test.ts -o -name *.spec.ts -o -name *.test.rs -o -name *.spec.rs \\\\\\))",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "mcp__spooky-devtools__run_query"
     ],
     "deny": [],
     "ask": []
