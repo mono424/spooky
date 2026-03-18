@@ -126,6 +126,18 @@ export class SpookySync<S extends SchemaStructure> {
     recordId: RecordId,
     version: number
   ) {
+    if (action === 'DELETE') {
+      this.logger.debug(
+        {
+          queryId: queryId.toString(),
+          recordId: recordId.toString(),
+          Category: 'spooky-client::SpookySync::handleRemoteListRefChange',
+        },
+        'Ignoring DELETE on list_ref — should not happen'
+      );
+      return;
+    }
+
     const existing = this.dataModule.getQueryById(queryId);
 
     if (!existing) {

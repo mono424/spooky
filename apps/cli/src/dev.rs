@@ -489,7 +489,7 @@ fn run_compose_mode(compose_file: &str, mode: &str, config: &SpookyConfig, stop:
     let backend_devs = spawn_backend_dev_commands(config, &project_dir);
 
     let status = Command::new("docker")
-        .args(["compose", "-f", compose_file, "up", "--remove-orphans"])
+        .args(["compose", "-f", compose_file, "up", "--build", "--remove-orphans"])
         .status()
         .context("Failed to run docker compose up")?;
 
