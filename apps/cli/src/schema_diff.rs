@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatementKey {
@@ -42,7 +42,7 @@ impl Ord for StatementKey {
 pub struct SchemaDiff {
     pub added: Vec<String>,
     pub removed: Vec<String>,
-    pub modified: Vec<String>,
+    pub modified: Vec<(String, String)>,
 }
 
 impl SchemaDiff {
@@ -64,8 +64,8 @@ impl SchemaDiff {
 
         if !self.modified.is_empty() {
             parts.push("-- Modified".to_string());
-            for stmt in &self.modified {
-                parts.push(stmt.clone());
+            for (_, new_stmt) in &self.modified {
+                parts.push(new_stmt.clone());
             }
             parts.push(String::new());
         }
@@ -79,6 +79,36 @@ impl SchemaDiff {
         }
 
         parts.join("\n")
+    }
+
+    /// Print the diff in git-style colored format.
+    pub fn print_colored(&self) {
+        const RED: &str = "\x1b[31m";
+        const GREEN: &str = "\x1b[32m";
+        const YELLOW: &str = "\x1b[33m";
+        const RESET: &str = "\x1b[0m";
+
+        if !self.removed.is_empty() {
+            for stmt in &self.removed {
+                println!("  {RED}- {stmt}{RESET}");
+            }
+            println!();
+        }
+
+        if !self.added.is_empty() {
+            for stmt in &self.added {
+                println!("  {GREEN}+ {stmt}{RESET}");
+            }
+            println!();
+        }
+
+        if !self.modified.is_empty() {
+            for (old_stmt, new_stmt) in &self.modified {
+                println!("  {YELLOW}~ {old_stmt}{RESET}");
+                println!("  {YELLOW}~ {new_stmt}{RESET}");
+            }
+            println!();
+        }
     }
 }
 
@@ -312,7 +342,7 @@ pub fn diff_schemas(old_schema: &str, new_schema: &str) -> SchemaDiff {
             None => added.push(new_stmt.clone()),
             Some(old_stmt) => {
                 if normalize_for_compare(old_stmt) != normalize_for_compare(new_stmt) {
-                    modified.push(new_stmt.clone());
+                    modified.push((old_stmt.clone(), new_stmt.clone()));
                 }
             }
         }
@@ -325,6 +355,10 @@ pub fn diff_schemas(old_schema: &str, new_schema: &str) -> SchemaDiff {
         }
     }
 
+    // Post-processing: detect potential field renames
+    // A rename looks like a FIELD removal + FIELD addition on the same table with the same TYPE.
+    let removed = detect_potential_renames(removed, &added, &old_map);
+
     SchemaDiff {
         added,
         removed,
@@ -332,38 +366,132 @@ pub fn diff_schemas(old_schema: &str, new_schema: &str) -> SchemaDiff {
     }
 }
 
+/// Extract the TYPE clause from a DEFINE FIELD statement, if present.
+fn extract_field_type(stmt: &str) -> Option<String> {
+    let upper = stmt.to_uppercase();
+    let type_pos = upper.find(" TYPE ")?;
+    let after_type = &stmt[type_pos + 6..];
+    // TYPE clause ends at the next known keyword or end of statement
+    let end_keywords = [" DEFAULT ", " VALUE ", " ASSERT ", " PERMISSIONS ", " COMMENT ", " READONLY"];
+    let end_pos = end_keywords
+        .iter()
+        .filter_map(|kw| after_type.to_uppercase().find(kw))
+        .min()
+        .unwrap_or(after_type.len());
+    let type_str = after_type[..end_pos].trim().trim_end_matches(';').trim();
+    if type_str.is_empty() {
+        None
+    } else {
+        Some(type_str.to_lowercase())
+    }
+}
+
+/// Check removed FIELD keys against added FIELD statements for potential renames.
+/// Returns the removed list with rename candidates commented out as warnings.
+fn detect_potential_renames(
+    removed: Vec<String>,
+    added: &[String],
+    old_map: &BTreeMap<StatementKey, String>,
+) -> Vec<String> {
+    // Build a lookup: for each table, collect added fields with their types
+    let mut added_fields_by_table: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    for stmt in added {
+        if let Some(key) = extract_statement_key(stmt) {
+            if key.kind == "FIELD" {
+                if let Some((table, field)) = key.identity.split_once('/') {
+                    if let Some(field_type) = extract_field_type(stmt) {
+                        added_fields_by_table
+                            .entry(table.to_string())
+                            .or_default()
+                            .push((field.to_string(), field_type));
+                    }
+                }
+            }
+        }
+    }
+
+    let mut result = Vec::new();
+    for remove_stmt in removed {
+        // Try to parse as a FIELD removal
+        if remove_stmt.contains("REMOVE FIELD") {
+            // Extract the field name and table from the remove statement
+            // Format: "REMOVE FIELD IF EXISTS {field} ON TABLE {table};"
+            let is_rename_candidate = (|| {
+                let upper = remove_stmt.to_uppercase();
+                let field_pos = upper.find("REMOVE FIELD IF EXISTS ")
+                    .map(|p| p + "REMOVE FIELD IF EXISTS ".len())
+                    .or_else(|| upper.find("REMOVE FIELD ").map(|p| p + "REMOVE FIELD ".len()))?;
+                let rest = &remove_stmt[field_pos..];
+                let on_pos = rest.to_uppercase().find(" ON TABLE ")?;
+                let field_name = rest[..on_pos].trim().to_lowercase();
+                let table_name = rest[on_pos + " ON TABLE ".len()..].trim().trim_end_matches(';').trim().to_lowercase();
+
+                // Look up the original DEFINE FIELD statement to get its type
+                let old_key = StatementKey {
+                    kind: "FIELD".to_string(),
+                    identity: format!("{}/{}", table_name, field_name),
+                };
+                let old_stmt = old_map.get(&old_key)?;
+                let old_type = extract_field_type(old_stmt)?;
+
+                // Check if any added field on the same table has the same type
+                let added_fields = added_fields_by_table.get(&table_name)?;
+                let matching_add = added_fields.iter().find(|(_, t)| *t == old_type)?;
+
+                Some((field_name, matching_add.0.clone(), table_name))
+            })();
+
+            if let Some((old_field, new_field, table)) = is_rename_candidate {
+                result.push(format!(
+                    "-- WARNING: Possible rename detected: {} -> {} on table {}\n\
+                     -- If this was a rename, the REMOVE below is unnecessary (the prior migration handled it).\n\
+                     -- Uncomment only if you are intentionally deleting this field.\n\
+                     -- {};",
+                    old_field, new_field, table, remove_stmt
+                ));
+            } else {
+                result.push(remove_stmt);
+            }
+        } else {
+            result.push(remove_stmt);
+        }
+    }
+
+    result
+}
+
 /// Convert a StatementKey into the corresponding REMOVE statement.
 fn generate_remove_statement(key: &StatementKey) -> String {
     match key.kind.as_str() {
-        "TABLE" => format!("REMOVE TABLE {};", key.identity),
+        "TABLE" => format!("REMOVE TABLE IF EXISTS {};", key.identity),
         "FIELD" => {
             // identity is "table/field"
             if let Some((table, field)) = key.identity.split_once('/') {
-                format!("REMOVE FIELD {} ON TABLE {};", field, table)
+                format!("REMOVE FIELD IF EXISTS {} ON TABLE {};", field, table)
             } else {
                 format!("-- REMOVE FIELD {} (malformed key);", key.identity)
             }
         }
         "INDEX" => {
             if let Some((table, index)) = key.identity.split_once('/') {
-                format!("REMOVE INDEX {} ON TABLE {};", index, table)
+                format!("REMOVE INDEX IF EXISTS {} ON TABLE {};", index, table)
             } else {
                 format!("-- REMOVE INDEX {} (malformed key);", key.identity)
             }
         }
         "EVENT" => {
             if let Some((table, event)) = key.identity.split_once('/') {
-                format!("REMOVE EVENT {} ON TABLE {};", event, table)
+                format!("REMOVE EVENT IF EXISTS {} ON TABLE {};", event, table)
             } else {
                 format!("-- REMOVE EVENT {} (malformed key);", key.identity)
             }
         }
-        "ACCESS" => format!("REMOVE ACCESS {} ON DATABASE;", key.identity),
-        "FUNCTION" => format!("REMOVE FUNCTION {};", key.identity),
-        "ANALYZER" => format!("REMOVE ANALYZER {};", key.identity),
-        "PARAM" => format!("REMOVE PARAM {};", key.identity),
-        "BUCKET" => format!("REMOVE BUCKET {};", key.identity),
-        "API" => format!("REMOVE API {};", key.identity),
+        "ACCESS" => format!("REMOVE ACCESS IF EXISTS {} ON DATABASE;", key.identity),
+        "FUNCTION" => format!("REMOVE FUNCTION IF EXISTS {};", key.identity),
+        "ANALYZER" => format!("REMOVE ANALYZER IF EXISTS {};", key.identity),
+        "PARAM" => format!("REMOVE PARAM IF EXISTS {};", key.identity),
+        "BUCKET" => format!("REMOVE BUCKET IF EXISTS {};", key.identity),
+        "API" => format!("REMOVE API IF EXISTS {};", key.identity),
         _ => format!("-- REMOVE {} {};", key.kind, key.identity),
     }
 }
@@ -538,7 +666,7 @@ mod tests {
         let diff = diff_schemas(old, new);
         assert!(diff.added.is_empty());
         assert_eq!(diff.removed.len(), 1);
-        assert!(diff.removed[0].contains("REMOVE FIELD name ON TABLE user"));
+        assert!(diff.removed[0].contains("REMOVE FIELD IF EXISTS name ON TABLE user"));
         assert!(diff.modified.is_empty());
     }
 
@@ -550,7 +678,8 @@ mod tests {
         assert!(diff.added.is_empty());
         assert!(diff.removed.is_empty());
         assert_eq!(diff.modified.len(), 1);
-        assert!(diff.modified[0].contains("option<string>"));
+        assert!(diff.modified[0].0.contains("TYPE string"));
+        assert!(diff.modified[0].1.contains("option<string>"));
     }
 
     #[test]
@@ -587,7 +716,7 @@ mod tests {
             kind: "TABLE".to_string(),
             identity: "user".to_string(),
         };
-        assert_eq!(generate_remove_statement(&key), "REMOVE TABLE user;");
+        assert_eq!(generate_remove_statement(&key), "REMOVE TABLE IF EXISTS user;");
     }
 
     #[test]
@@ -598,7 +727,7 @@ mod tests {
         };
         assert_eq!(
             generate_remove_statement(&key),
-            "REMOVE FIELD name ON TABLE user;"
+            "REMOVE FIELD IF EXISTS name ON TABLE user;"
         );
     }
 
@@ -610,7 +739,7 @@ mod tests {
         };
         assert_eq!(
             generate_remove_statement(&key),
-            "REMOVE INDEX idx_email ON TABLE user;"
+            "REMOVE INDEX IF EXISTS idx_email ON TABLE user;"
         );
     }
 
@@ -622,7 +751,7 @@ mod tests {
         };
         assert_eq!(
             generate_remove_statement(&key),
-            "REMOVE FUNCTION fn::register;"
+            "REMOVE FUNCTION IF EXISTS fn::register;"
         );
     }
 
@@ -631,8 +760,8 @@ mod tests {
     #[test]
     fn test_migration_string_format() {
         let diff = SchemaDiff {
-            removed: vec!["REMOVE FIELD old ON TABLE user;".to_string()],
-            modified: vec!["DEFINE TABLE user SCHEMAFULL;".to_string()],
+            removed: vec!["REMOVE FIELD IF EXISTS old ON TABLE user;".to_string()],
+            modified: vec![("DEFINE TABLE user SCHEMALESS;".to_string(), "DEFINE TABLE user SCHEMAFULL;".to_string())],
             added: vec!["DEFINE FIELD avatar ON TABLE user TYPE string;".to_string()],
         };
         let output = diff.to_migration_string();
@@ -673,6 +802,69 @@ mod tests {
             kind: "FIELD".to_string(),
             identity: "user/name".to_string(),
         }));
+    }
+
+    // ── detect_potential_renames ────────────────────────────────────
+
+    #[test]
+    fn test_diff_detects_potential_rename() {
+        let old = "DEFINE TABLE conversation SCHEMAFULL;\nDEFINE FIELD session ON TABLE conversation TYPE string;";
+        let new = "DEFINE TABLE conversation SCHEMAFULL;\nDEFINE FIELD chat_session ON TABLE conversation TYPE string;";
+        let diff = diff_schemas(old, new);
+        // The removal should be commented out as a rename warning
+        assert_eq!(diff.removed.len(), 1);
+        assert!(diff.removed[0].contains("WARNING: Possible rename detected"));
+        assert!(diff.removed[0].contains("session -> chat_session"));
+        assert!(diff.removed[0].contains("on table conversation"));
+        // The actual REMOVE should be commented out
+        assert!(diff.removed[0].contains("-- REMOVE FIELD IF EXISTS session ON TABLE conversation;"));
+    }
+
+    #[test]
+    fn test_diff_no_rename_different_types() {
+        let old = "DEFINE TABLE user SCHEMAFULL;\nDEFINE FIELD age ON TABLE user TYPE int;";
+        let new = "DEFINE TABLE user SCHEMAFULL;\nDEFINE FIELD name ON TABLE user TYPE string;";
+        let diff = diff_schemas(old, new);
+        // Different types → not a rename candidate, REMOVE should be plain
+        assert_eq!(diff.removed.len(), 1);
+        assert!(!diff.removed[0].contains("WARNING"));
+        assert!(diff.removed[0].contains("REMOVE FIELD IF EXISTS age ON TABLE user;"));
+    }
+
+    #[test]
+    fn test_diff_no_rename_different_tables() {
+        let old = "DEFINE TABLE user SCHEMAFULL;\nDEFINE FIELD name ON TABLE user TYPE string;\nDEFINE TABLE post SCHEMAFULL;";
+        let new = "DEFINE TABLE user SCHEMAFULL;\nDEFINE TABLE post SCHEMAFULL;\nDEFINE FIELD title ON TABLE post TYPE string;";
+        let diff = diff_schemas(old, new);
+        // Removal on user, addition on post → not a rename
+        assert_eq!(diff.removed.len(), 1);
+        assert!(!diff.removed[0].contains("WARNING"));
+    }
+
+    // ── extract_field_type ──────────────────────────────────────────
+
+    #[test]
+    fn test_extract_field_type_simple() {
+        let stmt = "DEFINE FIELD name ON TABLE user TYPE string;";
+        assert_eq!(extract_field_type(stmt).unwrap(), "string");
+    }
+
+    #[test]
+    fn test_extract_field_type_with_default() {
+        let stmt = "DEFINE FIELD status ON TABLE user TYPE string DEFAULT 'active';";
+        assert_eq!(extract_field_type(stmt).unwrap(), "string");
+    }
+
+    #[test]
+    fn test_extract_field_type_option() {
+        let stmt = "DEFINE FIELD bio ON TABLE user TYPE option<string>;";
+        assert_eq!(extract_field_type(stmt).unwrap(), "option<string>");
+    }
+
+    #[test]
+    fn test_extract_field_type_no_type() {
+        let stmt = "DEFINE FIELD computed ON TABLE user VALUE $this.a + $this.b;";
+        assert!(extract_field_type(stmt).is_none());
     }
 
     #[test]

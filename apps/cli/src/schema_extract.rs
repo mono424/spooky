@@ -89,6 +89,8 @@ fn start_ephemeral_surreal_docker(port: u16) -> Result<String> {
             &container_name,
             "-p",
             &format!("{}:8000", port),
+            "-e",
+            "SURREAL_CAPS_ALLOW_EXPERIMENTAL=surrealism,files",
             SURREALDB_IMAGE,
             "start",
             "--bind",
@@ -223,6 +225,37 @@ pub fn extract_old_and_new_schemas(
         let new_schema = extract_schema_from_db(&new_client)?;
 
         Ok((old_schema, new_schema))
+    })();
+
+    stop_ephemeral_surreal_docker(&container_name);
+    result
+}
+
+/// Extract the expected schema by replaying all migrations through an ephemeral SurrealDB.
+///
+/// This is the "old schema" half of `extract_old_and_new_schemas()`, extracted as a
+/// standalone function for use by `migrate fix`.
+pub fn extract_expected_schema_from_migrations(migrations_dir: &Path) -> Result<String> {
+    let port = find_free_port()?;
+    let container_name = start_ephemeral_surreal_docker(port)?;
+
+    let result = (|| -> Result<String> {
+        wait_for_surreal_health(port)?;
+
+        let client = SurrealClient::new(
+            &format!("http://127.0.0.1:{}", port),
+            "main",
+            "main",
+            "root",
+            "root",
+        );
+        client.ensure_ns_db()?;
+
+        if migrations_dir.exists() {
+            migrate::apply(&client, migrations_dir)?;
+        }
+
+        extract_schema_from_db(&client)
     })();
 
     stop_ephemeral_surreal_docker(&container_name);

@@ -117,6 +117,9 @@ enum Commands {
         /// Auto-apply pending migrations without prompting
         #[arg(long)]
         apply_migrations: bool,
+        /// Update stored checksums for modified-but-applied migration files before applying
+        #[arg(long)]
+        fix_checksums: bool,
     },
     /// Generate client types from spooky.yml
     Generate {
@@ -282,6 +285,17 @@ enum MigrateCommands {
         /// Migrations directory
         #[arg(long)]
         migrations_dir: Option<PathBuf>,
+    },
+    /// Fix schema drift and/or checksum mismatches
+    Fix {
+        #[command(flatten)]
+        conn: ConnectionArgs,
+        /// Migrations directory
+        #[arg(long)]
+        migrations_dir: Option<PathBuf>,
+        /// Update stored checksums for modified-but-applied migration files
+        #[arg(long)]
+        fix_checksums: bool,
     },
 }
 
@@ -547,6 +561,23 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
                 &conn.password,
             );
             migrate::status(&client, &resolved_migrations)
+        }
+        MigrateCommands::Fix {
+            conn,
+            migrations_dir,
+            fix_checksums,
+        } => {
+            let spooky_config = backend::load_config(Path::new(DEFAULT_CONFIG_PATH));
+            let resolved_migrations = migrations_dir.unwrap_or(spooky_config.resolved_schema().migrations);
+
+            let client = SurrealClient::new(
+                &conn.url,
+                &conn.namespace,
+                &conn.database,
+                &conn.username,
+                &conn.password,
+            );
+            migrate::fix(&client, &resolved_migrations, fix_checksums)
         }
     }
 }
@@ -897,8 +928,8 @@ fn main() -> Result<()> {
         Some(Commands::Migrate { action }) => return handle_migrate(action),
         Some(Commands::Bucket { action }) => return handle_bucket(action),
         Some(Commands::Api { action }) => return handle_api(action),
-        Some(Commands::Dev { skip_migrations, apply_migrations }) => {
-            return dev::run(skip_migrations, apply_migrations);
+        Some(Commands::Dev { skip_migrations, apply_migrations, fix_checksums }) => {
+            return dev::run(skip_migrations, apply_migrations, fix_checksums);
         }
         Some(Commands::Generate { config }) | Some(Commands::Gen { config }) => {
             let resolved_config = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));

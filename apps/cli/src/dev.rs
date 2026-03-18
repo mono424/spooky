@@ -33,7 +33,7 @@ const INFRA_SERVICES_SURREALISM: &[&str] = &["surrealdb"];
 
 // ── Public entry point ──────────────────────────────────────────────────────
 
-pub fn run(skip_migrations: bool, auto_apply_migrations: bool) -> Result<()> {
+pub fn run(skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bool) -> Result<()> {
     let stop = Arc::new(AtomicBool::new(false));
     let stop_clone = stop.clone();
     ctrlc::set_handler(move || {
@@ -55,17 +55,20 @@ pub fn run(skip_migrations: bool, auto_apply_migrations: bool) -> Result<()> {
     // Check for schema drift before starting infrastructure
     if !skip_migrations {
         println!("{} Checking for schema drift...", PREFIX);
-        check_schema_drift(&config)?;
+        if let Err(e) = check_schema_drift(&config) {
+            eprintln!("{} Warning: Schema drift check failed: {:#}", PREFIX, e);
+            eprintln!("{} Continuing without drift check. Run `spooky migrate create` to check manually.", PREFIX);
+        }
     }
 
     // Check for compose files
     let compose_file = format!("docker-compose.{}.yml", mode);
     if Path::new(&compose_file).exists() {
         println!("{} Found compose file: {}", PREFIX, compose_file);
-        run_compose_mode(&compose_file, &mode, &config, &stop, skip_migrations, auto_apply_migrations, migrations_path)
+        run_compose_mode(&compose_file, &mode, &config, &stop, skip_migrations, auto_apply_migrations, fix_checksums, migrations_path)
     } else {
         println!("{} No compose file found — using direct Docker mode", PREFIX);
-        run_direct_mode(&mode, &versions, &config, &stop, skip_migrations, auto_apply_migrations, migrations_path)
+        run_direct_mode(&mode, &versions, &config, &stop, skip_migrations, auto_apply_migrations, fix_checksums, migrations_path)
     }
 }
 
@@ -119,6 +122,7 @@ fn check_schema_drift(config: &SpookyConfig) -> Result<()> {
         diff.removed.len(),
         diff.modified.len(),
     );
+    diff.print_colored();
 
     // Non-TTY: warn and continue (matches existing pattern in apply_migrations)
     if !std::io::stdin().is_terminal() {
@@ -173,7 +177,7 @@ fn check_schema_drift(config: &SpookyConfig) -> Result<()> {
 
 // ── Direct Docker mode ──────────────────────────────────────────────────────
 
-fn run_direct_mode(mode: &str, versions: &ResolvedVersions, config: &SpookyConfig, stop: &Arc<AtomicBool>, skip_migrations: bool, auto_apply_migrations: bool, migrations_path: &str) -> Result<()> {
+fn run_direct_mode(mode: &str, versions: &ResolvedVersions, config: &SpookyConfig, stop: &Arc<AtomicBool>, skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bool, migrations_path: &str) -> Result<()> {
     let surreal_image = versions.surrealdb_image();
     let ssp_image = versions.ssp_image();
 
@@ -205,6 +209,7 @@ fn run_direct_mode(mode: &str, versions: &ResolvedVersions, config: &SpookyConfi
         "-e", "SURREAL_USER=root",
         "-e", "SURREAL_PASS=root",
         "-e", "SURREAL_LOG=info",
+        "-e", "SURREAL_CAPS_ALLOW_EXPERIMENTAL=surrealism,files",
         &surreal_image,
         "start",
         "--bind", "0.0.0.0:8000",
@@ -233,7 +238,7 @@ fn run_direct_mode(mode: &str, versions: &ResolvedVersions, config: &SpookyConfi
         println!("{} Phase 4: Skipping migrations (--skip-migrations).", PREFIX);
     } else {
         println!("{} Phase 4: Applying migrations...", PREFIX);
-        apply_migrations(SURREAL_PORT, auto_apply_migrations, migrations_path)?;
+        apply_migrations(SURREAL_PORT, auto_apply_migrations, fix_checksums, migrations_path)?;
     }
 
     if stop.load(Ordering::SeqCst) {
@@ -404,7 +409,7 @@ fn cleanup_direct(_stop: &Arc<AtomicBool>) -> Result<()> {
 
 // ── Compose mode ────────────────────────────────────────────────────────────
 
-fn run_compose_mode(compose_file: &str, mode: &str, config: &SpookyConfig, stop: &Arc<AtomicBool>, skip_migrations: bool, auto_apply_migrations: bool, migrations_path: &str) -> Result<()> {
+fn run_compose_mode(compose_file: &str, mode: &str, config: &SpookyConfig, stop: &Arc<AtomicBool>, skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bool, migrations_path: &str) -> Result<()> {
     let infra_services: &[&str] = match mode {
         "cluster" => INFRA_SERVICES_CLUSTER,
         "surrealism" => INFRA_SERVICES_SURREALISM,
@@ -448,7 +453,7 @@ fn run_compose_mode(compose_file: &str, mode: &str, config: &SpookyConfig, stop:
         println!("\n{} Phase 3: Skipping migrations (--skip-migrations).", PREFIX);
     } else {
         println!("\n{} Phase 3: Applying migrations...", PREFIX);
-        apply_migrations(SURREAL_PORT, auto_apply_migrations, migrations_path)?;
+        apply_migrations(SURREAL_PORT, auto_apply_migrations, fix_checksums, migrations_path)?;
     }
 
     if stop.load(Ordering::SeqCst) {
@@ -594,7 +599,7 @@ fn print_container_logs(name: &str, tail: u32) -> Result<()> {
 
 // ── Migration helper ────────────────────────────────────────────────────────
 
-fn apply_migrations(port: u16, auto_apply: bool, migrations_path: &str) -> Result<()> {
+fn apply_migrations(port: u16, auto_apply: bool, fix_checksums: bool, migrations_path: &str) -> Result<()> {
     let migrations_dir = Path::new(migrations_path);
     if !migrations_dir.exists() {
         println!("{} No {}/ directory found, skipping.", PREFIX, migrations_path);
@@ -616,6 +621,42 @@ fn apply_migrations(port: u16, auto_apply: bool, migrations_path: &str) -> Resul
 
     let filesystem = migrate::scan_migrations(migrations_dir)?;
     let applied = client.get_applied_migrations()?;
+
+    // Early checksum validation
+    match migrate::validate_applied_checksums(&applied, &filesystem) {
+        Ok(warnings) => {
+            for warning in &warnings {
+                println!("{} \x1b[33mWARNING: {}\x1b[0m", PREFIX, warning);
+            }
+        }
+        Err(e) => {
+            if fix_checksums {
+                println!("{} Checksum mismatch detected, fixing with --fix-checksums...", PREFIX);
+                let mut fixed = 0;
+                for am in &applied {
+                    if let Some(fm) = filesystem.iter().find(|f| f.version == am.version) {
+                        if !fm.path.exists() {
+                            continue;
+                        }
+                        if let Ok(disk_checksum) = migrate::checksum(&fm.path) {
+                            if disk_checksum != am.checksum {
+                                client.update_migration_checksum(&am.version, &disk_checksum)?;
+                                println!("  {} Updated checksum for {}_{}", PREFIX, am.version, am.name);
+                                fixed += 1;
+                            }
+                        }
+                    }
+                }
+                if fixed > 0 {
+                    println!("{} \x1b[32mFixed {} checksum(s).\x1b[0m", PREFIX, fixed);
+                }
+            } else {
+                eprintln!("{} \x1b[31mChecksum validation failed: {:#}\x1b[0m", PREFIX, e);
+                eprintln!("{} Run with --fix-checksums or `spooky migrate fix --fix-checksums` to resolve.", PREFIX);
+            }
+        }
+    }
+
     let applied_versions: Vec<&str> = applied.iter().map(|a| a.version.as_str()).collect();
     let pending: Vec<_> = filesystem
         .iter()
@@ -662,7 +703,7 @@ fn apply_migrations(port: u16, auto_apply: bool, migrations_path: &str) -> Resul
     match migrate::apply(&client, migrations_dir) {
         Ok(()) => Ok(()),
         Err(e) => {
-            println!("{} Migration failed: {:#}", PREFIX, e);
+            println!("{} \x1b[31mMigration failed:\x1b[0m {:#}", PREFIX, e);
             if auto_apply || !std::io::stdin().is_terminal() {
                 println!("{} Auto-resetting database and retrying migrations.", PREFIX);
                 println!("{} Resetting database and retrying...", PREFIX);

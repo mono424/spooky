@@ -11,6 +11,14 @@ use crate::schema_extract;
 use crate::spooky::generate_spooky_events;
 use crate::surreal_client::{MigrationDB, SurrealClient};
 
+// Subtle ANSI colors for migration output
+const GREEN: &str = "\x1b[32m";
+const YELLOW: &str = "\x1b[33m";
+const RED: &str = "\x1b[31m";
+const DIM: &str = "\x1b[2m";
+const BOLD: &str = "\x1b[1m";
+const RESET: &str = "\x1b[0m";
+
 /// A migration discovered on the filesystem.
 pub(crate) struct FilesystemMigration {
     pub version: String,
@@ -85,6 +93,48 @@ pub(crate) fn sanitize_name(name: &str) -> String {
         .collect()
 }
 
+// ── Checksum validation ──────────────────────────────────────────────────────
+
+/// Validate that applied migration checksums match the filesystem.
+///
+/// Returns a list of warning messages for non-fatal issues (e.g. missing files on disk).
+/// Bails on checksum mismatches.
+pub fn validate_applied_checksums(
+    applied: &[crate::surreal_client::AppliedMigration],
+    filesystem: &[FilesystemMigration],
+) -> Result<Vec<String>> {
+    let mut warnings = Vec::new();
+
+    for am in applied {
+        if let Some(fm) = filesystem.iter().find(|f| f.version == am.version) {
+            if !fm.path.exists() {
+                warnings.push(format!(
+                    "Applied migration {}_{} is missing from disk",
+                    am.version, am.name
+                ));
+                continue;
+            }
+            let disk_checksum = checksum(&fm.path)?;
+            if disk_checksum != am.checksum {
+                bail!(
+                    "Checksum mismatch for migration {}_{}\n  Expected: {}\n  Found:    {}\n\nThe migration file has been modified after it was applied. This is dangerous.\nIf intentional, use `spooky migrate fix --fix-checksums` to update stored checksums.",
+                    am.version,
+                    am.name,
+                    am.checksum,
+                    disk_checksum
+                );
+            }
+        } else {
+            warnings.push(format!(
+                "Applied migration {}_{} not found on disk (drift detected)",
+                am.version, am.name
+            ));
+        }
+    }
+
+    Ok(warnings)
+}
+
 // ── Commands ────────────────────────────────────────────────────────────────
 
 /// Create a new migration file with auto-diff support.
@@ -112,6 +162,22 @@ pub fn create(
 
     // Try auto-diff if builder_config is provided
     if let Some(config) = builder_config {
+        // 0. Early checksum validation when a DB connection is available
+        if let Some((url, ns, db, user, pass)) = conn {
+            let client = SurrealClient::new(url, ns, db, user, pass);
+            if client.ping().is_ok() {
+                if let Ok(()) = client.ensure_migration_table() {
+                    if let Ok(applied) = client.get_applied_migrations() {
+                        let existing = scan_migrations(migrations_dir)?;
+                        let warnings = validate_applied_checksums(&applied, &existing)?;
+                        for warning in &warnings {
+                            println!("{YELLOW}WARNING: {warning}{RESET}");
+                        }
+                    }
+                }
+            }
+        }
+
         // 1. Build new schema
         println!("Building target schema...");
         let new_schema_sql = crate::schema_builder::build_server_schema(config)?;
@@ -139,7 +205,7 @@ pub fn create(
         let diff = schema_diff::diff_schemas(&old_schema, &new_schema);
 
         if diff.is_empty() {
-            println!("No schema changes detected.");
+            println!("{DIM}No schema changes detected.{RESET}");
             return Ok(());
         }
 
@@ -155,10 +221,10 @@ pub fn create(
         fs::write(&file_path, content)
             .context(format!("Failed to write migration file: {:?}", file_path))?;
 
-        println!("Created migration: {}", file_name);
+        println!("{GREEN}Created migration: {}{RESET}", file_name);
         println!("  {}", file_path.display());
         println!(
-            "  {} addition(s), {} removal(s), {} modification(s)",
+            "  {GREEN}+{} addition(s){RESET}, {RED}-{} removal(s){RESET}, {YELLOW}~{} modification(s){RESET}",
             diff.added.len(),
             diff.removed.len(),
             diff.modified.len()
@@ -188,7 +254,7 @@ pub fn create(
     fs::write(&file_path, content)
         .context(format!("Failed to write migration file: {:?}", file_path))?;
 
-    println!("Created migration: {}", file_name);
+    println!("{GREEN}Created migration: {}{RESET}", file_name);
     println!("  {}", file_path.display());
 
     Ok(())
@@ -204,31 +270,9 @@ pub fn apply(client: &dyn MigrationDB, migrations_dir: &Path) -> Result<()> {
     let filesystem = scan_migrations(migrations_dir)?;
 
     // Integrity check: verify checksums of applied migrations
-    for am in &applied {
-        if let Some(fm) = filesystem.iter().find(|f| f.version == am.version) {
-            if !fm.path.exists() {
-                println!(
-                    "WARNING: Applied migration {}_{} is missing from disk",
-                    am.version, am.name
-                );
-                continue;
-            }
-            let disk_checksum = checksum(&fm.path)?;
-            if disk_checksum != am.checksum {
-                bail!(
-                    "Checksum mismatch for migration {}_{}\n  Expected: {}\n  Found:    {}\n\nThe migration file has been modified after it was applied. This is dangerous.\nIf intentional, manually update the checksum in _spooky_migrations.",
-                    am.version,
-                    am.name,
-                    am.checksum,
-                    disk_checksum
-                );
-            }
-        } else {
-            println!(
-                "WARNING: Applied migration {}_{} not found on disk (drift detected)",
-                am.version, am.name
-            );
-        }
+    let warnings = validate_applied_checksums(&applied, &filesystem)?;
+    for warning in &warnings {
+        println!("{YELLOW}WARNING: {warning}{RESET}");
     }
 
     // Find pending migrations
@@ -239,7 +283,7 @@ pub fn apply(client: &dyn MigrationDB, migrations_dir: &Path) -> Result<()> {
         .collect();
 
     if pending.is_empty() {
-        println!("No pending migrations.");
+        println!("{DIM}No pending migrations.{RESET}");
         return Ok(());
     }
 
@@ -280,12 +324,12 @@ pub fn apply(client: &dyn MigrationDB, migrations_dir: &Path) -> Result<()> {
         client.record_migration(&migration.version, &migration.name, &hash)?;
 
         println!(
-            "  Applied  {}_{} [ok]",
+            "  {GREEN}Applied  {}_{} [ok]{RESET}",
             migration.version, migration.name
         );
     }
 
-    println!("\nAll migrations applied successfully.");
+    println!("\n{GREEN}{BOLD}All migrations applied successfully.{RESET}");
     Ok(())
 }
 
@@ -312,18 +356,18 @@ pub fn status(client: &dyn MigrationDB, migrations_dir: &Path) -> Result<()> {
                 let disk_checksum = checksum(&fm.path)?;
                 if disk_checksum != am.checksum {
                     println!(
-                        "  [DRIFT]    {}_{:<40} (checksum mismatch!)",
+                        "  {RED}[DRIFT]    {}_{:<40} (checksum mismatch!){RESET}",
                         fm.version, fm.name
                     );
                     continue;
                 }
             }
             println!(
-                "  [applied]  {}_{:<40} (applied {})",
+                "  {GREEN}[applied]{RESET}  {}_{:<40} {DIM}(applied {}){RESET}",
                 fm.version, fm.name, am.applied_at
             );
         } else {
-            println!("  [pending]  {}_{}", fm.version, fm.name);
+            println!("  {YELLOW}[pending]{RESET}  {}_{}", fm.version, fm.name);
         }
     }
 
@@ -331,7 +375,7 @@ pub fn status(client: &dyn MigrationDB, migrations_dir: &Path) -> Result<()> {
     for am in &applied {
         if !filesystem.iter().any(|f| f.version == am.version) {
             println!(
-                "\n  WARNING: Applied migration {}_{} is not present on disk (drift)",
+                "\n  {YELLOW}WARNING: Applied migration {}_{} is not present on disk (drift){RESET}",
                 am.version, am.name
             );
         }
@@ -339,6 +383,175 @@ pub fn status(client: &dyn MigrationDB, migrations_dir: &Path) -> Result<()> {
 
     println!();
     Ok(())
+}
+
+/// Fix schema drift and/or update stored checksums for modified migration files.
+///
+/// When `fix_checksums` is true:
+///   - Compares on-disk checksums against stored checksums in the DB
+///   - Updates any mismatched stored checksums to match the current file contents
+///
+/// When the live DB is reachable and `fix_checksums` is not the only goal:
+///   1. Replay all migrations through an ephemeral DB → `expected_schema`
+///   2. Extract live DB schema → `actual_schema`
+///   3. `diff_schemas(&actual_schema, &expected_schema)` → corrective diff
+///   4. If non-empty, write a corrective migration file
+pub fn fix(
+    client: &dyn MigrationDB,
+    migrations_dir: &Path,
+    fix_checksums: bool,
+) -> Result<()> {
+    // Ensure the DB is reachable
+    client.ensure_ns_db().context(
+        "Cannot connect to SurrealDB.\n\
+         The `migrate fix` command requires a running database.\n\
+         Start your database first (e.g. `spooky dev`) or pass --url to point at a running instance."
+    )?;
+    client.ping().context("Cannot connect to SurrealDB")?;
+    client.ensure_migration_table()?;
+
+    let applied = client.get_applied_migrations()?;
+    let filesystem = scan_migrations(migrations_dir)?;
+
+    // Fix checksums if requested (do this first so subsequent operations see clean state)
+    if fix_checksums {
+        let mut fixed_count = 0;
+        for am in &applied {
+            if let Some(fm) = filesystem.iter().find(|f| f.version == am.version) {
+                if !fm.path.exists() {
+                    continue;
+                }
+                let disk_checksum = checksum(&fm.path)?;
+                if disk_checksum != am.checksum {
+                    println!(
+                        "  {YELLOW}Updating checksum for {}_{}{RESET}",
+                        am.version, am.name
+                    );
+                    client.update_migration_checksum(&am.version, &disk_checksum)?;
+                    fixed_count += 1;
+                }
+            }
+        }
+        if fixed_count > 0 {
+            println!("{GREEN}Updated {} checksum(s).{RESET}", fixed_count);
+        } else {
+            println!("{DIM}All checksums are up to date.{RESET}");
+        }
+    }
+
+    // Schema drift detection: replay migrations vs live DB
+    println!("Replaying migrations through ephemeral DB...");
+    let expected_schema = schema_extract::extract_expected_schema_from_migrations(migrations_dir)?;
+
+    println!("Extracting live DB schema...");
+    let actual_schema = extract_live_schema(client)?;
+
+    let diff = schema_diff::diff_schemas(&actual_schema, &expected_schema);
+
+    if diff.is_empty() {
+        println!("{GREEN}{BOLD}Live DB schema matches expected schema. No corrective migration needed.{RESET}");
+        return Ok(());
+    }
+
+    // Write corrective migration
+    println!(
+        "Schema drift detected: {GREEN}+{} addition(s){RESET}, {RED}-{} removal(s){RESET}, {YELLOW}~{} modification(s){RESET}",
+        diff.added.len(),
+        diff.removed.len(),
+        diff.modified.len()
+    );
+    diff.print_colored();
+
+    let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
+    let file_name = format!("{}_corrective_fix.surql", timestamp);
+    let file_path = migrations_dir.join(&file_name);
+
+    fs::create_dir_all(migrations_dir)?;
+
+    let migration_body = diff.to_migration_string();
+    let content = format!(
+        "-- Corrective migration (generated by `spooky migrate fix`)\n-- Created: {}\n\n{}",
+        chrono::Utc::now().to_rfc3339(),
+        migration_body,
+    );
+
+    fs::write(&file_path, &content)?;
+    println!("{GREEN}Created corrective migration: {}{RESET}", file_name);
+    println!("  {}", file_path.display());
+    println!("\nReview the migration, then run `spooky migrate apply` to apply it.");
+
+    Ok(())
+}
+
+/// Extract the full schema from a live DB via the MigrationDB trait.
+///
+/// Queries INFO FOR DB and INFO FOR TABLE for each discovered table,
+/// collecting all DEFINE statements (excluding internal `_spooky_migrations`).
+fn extract_live_schema(client: &dyn MigrationDB) -> Result<String> {
+    let db_info_responses = client.execute("INFO FOR DB;")?;
+    let db_info = db_info_responses
+        .into_iter()
+        .next()
+        .and_then(|r| r.result)
+        .unwrap_or(serde_json::Value::Null);
+
+    let mut statements = Vec::new();
+    let mut table_names = Vec::new();
+
+    if let Some(obj) = db_info.as_object() {
+        for (section, values) in obj {
+            if let Some(inner_obj) = values.as_object() {
+                for (name, define_stmt) in inner_obj {
+                    if section == "tables" && name == "_spooky_migrations" {
+                        continue;
+                    }
+                    if let Some(stmt_str) = define_stmt.as_str() {
+                        let trimmed = stmt_str.trim();
+                        if trimmed.ends_with(';') {
+                            statements.push(trimmed.to_string());
+                        } else {
+                            statements.push(format!("{};", trimmed));
+                        }
+                    }
+                    if section == "tables" {
+                        table_names.push(name.clone());
+                    }
+                }
+            }
+        }
+
+        for table_name in &table_names {
+            let table_responses =
+                client.execute(&format!("INFO FOR TABLE {};", table_name))?;
+            let table_info = table_responses
+                .into_iter()
+                .next()
+                .and_then(|r| r.result)
+                .unwrap_or(serde_json::Value::Null);
+
+            if let Some(table_obj) = table_info.as_object() {
+                for (section, values) in table_obj {
+                    if let Some(inner_obj) = values.as_object() {
+                        for (name, define_stmt) in inner_obj {
+                            if section == "fields" && name.ends_with(".*") {
+                                continue;
+                            }
+                            if let Some(stmt_str) = define_stmt.as_str() {
+                                let trimmed = stmt_str.trim();
+                                if trimmed.ends_with(';') {
+                                    statements.push(trimmed.to_string());
+                                } else {
+                                    statements.push(format!("{};", trimmed));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(statements.join("\n"))
 }
 
 /// Inject `OVERWRITE` into `DEFINE` statements that don't already have it,
@@ -458,7 +671,7 @@ pub fn apply_internal_schema(
         .execute(&internal_sql)
         .context("Failed to apply internal Spooky schema")?;
 
-    println!("  Internal Spooky schema applied successfully.");
+    println!("  {GREEN}Internal Spooky schema applied successfully.{RESET}");
     println!("────────────────────────────────────────────────────────\n");
     Ok(())
 }
@@ -535,6 +748,10 @@ mod tests {
                 name.to_string(),
                 checksum.to_string(),
             ));
+            Ok(())
+        }
+
+        fn update_migration_checksum(&self, _version: &str, _new_checksum: &str) -> Result<()> {
             Ok(())
         }
     }
@@ -1143,5 +1360,58 @@ mod tests {
         assert_eq!(recorded.len(), 1);
         assert_eq!(recorded[0].0, "20240102120000");
         assert_eq!(recorded[0].1, "add_avatar");
+    }
+
+    // ── validate_applied_checksums tests ─────────────────────────────
+
+    #[test]
+    fn test_validate_checksums_all_match() {
+        let dir = TempDir::new().unwrap();
+        let content = "DEFINE TABLE user SCHEMAFULL;";
+        create_migration_file(dir.path(), "20240101120000", "initial", content);
+
+        let filesystem = scan_migrations(dir.path()).unwrap();
+        let applied = vec![make_applied(
+            "20240101120000",
+            "initial",
+            &checksum_str(content),
+        )];
+
+        let warnings = validate_applied_checksums(&applied, &filesystem).unwrap();
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_validate_checksums_mismatch_errors() {
+        let dir = TempDir::new().unwrap();
+        create_migration_file(dir.path(), "20240101120000", "initial", "MODIFIED content");
+
+        let filesystem = scan_migrations(dir.path()).unwrap();
+        let applied = vec![make_applied(
+            "20240101120000",
+            "initial",
+            "original_checksum_that_doesnt_match",
+        )];
+
+        let result = validate_applied_checksums(&applied, &filesystem);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Checksum mismatch"));
+    }
+
+    #[test]
+    fn test_validate_checksums_missing_file_warns() {
+        let dir = TempDir::new().unwrap();
+        // Don't create any files on disk
+        let filesystem = scan_migrations(dir.path()).unwrap();
+        let applied = vec![make_applied(
+            "20240101120000",
+            "initial",
+            "some_checksum",
+        )];
+
+        let warnings = validate_applied_checksums(&applied, &filesystem).unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("not found on disk"));
     }
 }

@@ -25,6 +25,7 @@ pub trait MigrationDB {
     fn execute(&self, query: &str) -> Result<Vec<SurrealResponse>>;
     fn get_applied_migrations(&self) -> Result<Vec<AppliedMigration>>;
     fn record_migration(&self, version: &str, name: &str, checksum: &str) -> Result<()>;
+    fn update_migration_checksum(&self, version: &str, new_checksum: &str) -> Result<()>;
 }
 
 pub struct SurrealClient {
@@ -54,6 +55,58 @@ impl SurrealClient {
             auth_header,
         }
     }
+}
+
+/// Send a raw SQL query to SurrealDB via HTTP, returning parsed responses.
+///
+/// This is the shared helper for all ureq call sites. It extracts the response
+/// body from HTTP errors (so we see the actual SurrealDB message) and checks
+/// for ERR status in the parsed response.
+fn send_raw_sql(
+    url: &str,
+    auth_header: &str,
+    ns_header: Option<&str>,
+    db_header: Option<&str>,
+    query: &str,
+) -> Result<Vec<SurrealResponse>> {
+    let mut req = ureq::post(url)
+        .set("Accept", "application/json")
+        .set("Authorization", auth_header);
+
+    if let Some(ns) = ns_header {
+        req = req.set("surreal-ns", ns);
+    }
+    if let Some(db) = db_header {
+        req = req.set("surreal-db", db);
+    }
+
+    let resp = match req.send_string(query) {
+        Ok(resp) => resp,
+        Err(ureq::Error::Status(code, response)) => {
+            let body = response.into_string().unwrap_or_default();
+            bail!("SurrealDB returned HTTP {}: {}", code, body);
+        }
+        Err(ureq::Error::Transport(t)) => {
+            bail!("Failed to connect to SurrealDB: {}", t);
+        }
+    };
+
+    let body: Vec<SurrealResponse> = resp
+        .into_json()
+        .context("Failed to parse SurrealDB response")?;
+
+    for r in &body {
+        if r.status == "ERR" {
+            let msg = r
+                .result
+                .as_ref()
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown error");
+            bail!("SurrealDB error: {}", msg);
+        }
+    }
+
+    Ok(body)
 }
 
 impl SurrealClient {
@@ -86,30 +139,13 @@ impl SurrealClient {
 
     /// Internal execute that returns parsed responses (shared by trait impl and info methods).
     fn execute_query(&self, query: &str) -> Result<Vec<SurrealResponse>> {
-        let resp = ureq::post(&format!("{}/sql", self.url))
-            .set("Accept", "application/json")
-            .set("surreal-ns", &self.namespace)
-            .set("surreal-db", &self.database)
-            .set("Authorization", &self.auth_header)
-            .send_string(query)
-            .context("Failed to connect to SurrealDB")?;
-
-        let body: Vec<SurrealResponse> = resp
-            .into_json()
-            .context("Failed to parse SurrealDB response")?;
-
-        for r in &body {
-            if r.status == "ERR" {
-                let msg = r
-                    .result
-                    .as_ref()
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("Unknown error");
-                bail!("SurrealDB error: {}", msg);
-            }
-        }
-
-        Ok(body)
+        send_raw_sql(
+            &format!("{}/sql", self.url),
+            &self.auth_header,
+            Some(&self.namespace),
+            Some(&self.database),
+            query,
+        )
     }
 
     /// Drop and recreate the database (used to recover from stale migration state in dev).
@@ -118,26 +154,14 @@ impl SurrealClient {
             "USE NS {}; REMOVE DATABASE {};",
             self.namespace, self.database
         );
-        let resp = ureq::post(&format!("{}/sql", self.url))
-            .set("Accept", "application/json")
-            .set("Authorization", &self.auth_header)
-            .send_string(&query)
-            .context("Failed to remove database")?;
-
-        let body: Vec<SurrealResponse> = resp
-            .into_json()
-            .context("Failed to parse SurrealDB response")?;
-
-        for r in &body {
-            if r.status == "ERR" {
-                let msg = r
-                    .result
-                    .as_ref()
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("Unknown error");
-                bail!("SurrealDB error removing database: {}", msg);
-            }
-        }
+        send_raw_sql(
+            &format!("{}/sql", self.url),
+            &self.auth_header,
+            None,
+            None,
+            &query,
+        )
+        .context("Failed to remove database")?;
 
         self.ensure_ns_db()
     }
@@ -148,26 +172,14 @@ impl SurrealClient {
             "DEFINE NAMESPACE IF NOT EXISTS {}; USE NS {}; DEFINE DATABASE IF NOT EXISTS {};",
             self.namespace, self.namespace, self.database
         );
-        let resp = ureq::post(&format!("{}/sql", self.url))
-            .set("Accept", "application/json")
-            .set("Authorization", &self.auth_header)
-            .send_string(&query)
-            .context("Failed to create namespace/database")?;
-
-        let body: Vec<SurrealResponse> = resp
-            .into_json()
-            .context("Failed to parse SurrealDB response")?;
-
-        for r in &body {
-            if r.status == "ERR" {
-                let msg = r
-                    .result
-                    .as_ref()
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("Unknown error");
-                bail!("SurrealDB error creating ns/db: {}", msg);
-            }
-        }
+        send_raw_sql(
+            &format!("{}/sql", self.url),
+            &self.auth_header,
+            None,
+            None,
+            &query,
+        )
+        .context("Failed to create namespace/database")?;
 
         Ok(())
     }
@@ -175,32 +187,8 @@ impl SurrealClient {
 
 impl MigrationDB for SurrealClient {
     fn ensure_ns_db(&self) -> Result<()> {
-        let query = format!(
-            "DEFINE NAMESPACE IF NOT EXISTS {}; USE NS {}; DEFINE DATABASE IF NOT EXISTS {};",
-            self.namespace, self.namespace, self.database
-        );
-        let resp = ureq::post(&format!("{}/sql", self.url))
-            .set("Accept", "application/json")
-            .set("Authorization", &self.auth_header)
-            .send_string(&query)
-            .context("Failed to create namespace/database")?;
-
-        let body: Vec<SurrealResponse> = resp
-            .into_json()
-            .context("Failed to parse SurrealDB response")?;
-
-        for r in &body {
-            if r.status == "ERR" {
-                let msg = r
-                    .result
-                    .as_ref()
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("Unknown error");
-                bail!("SurrealDB error creating ns/db: {}", msg);
-            }
-        }
-
-        Ok(())
+        // Delegate to the inherent method to avoid duplication.
+        SurrealClient::ensure_ns_db(self)
     }
 
     fn execute(&self, query: &str) -> Result<Vec<SurrealResponse>> {
@@ -247,6 +235,15 @@ impl MigrationDB for SurrealClient {
         Ok(())
     }
 
+    fn update_migration_checksum(&self, version: &str, new_checksum: &str) -> Result<()> {
+        let query = format!(
+            "UPDATE _spooky_migrations SET checksum = '{}' WHERE version = '{}';",
+            new_checksum, version
+        );
+        self.execute(&query)
+            .context("Failed to update migration checksum")?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
