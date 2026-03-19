@@ -149,6 +149,12 @@ importers:
 
   apps/ssp: {}
 
+  example:
+    devDependencies:
+      '@spooky-sync/cli':
+        specifier: workspace:*
+        version: link:../apps/cli
+
   example/api:
     dependencies:
       '@ai-sdk/anthropic':
@@ -253,11 +259,7 @@ importers:
         specifier: ^5.3.0
         version: 5.9.3
 
-  example/schema:
-    devDependencies:
-      '@spooky-sync/cli':
-        specifier: workspace:*
-        version: link:../../apps/cli
+  example/schema: {}
 
   packages/client-solid:
     dependencies:

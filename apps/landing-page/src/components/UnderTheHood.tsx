@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { ScrollRevealText } from './ScrollRevealText';
 
 const features = [
   {
@@ -52,12 +53,13 @@ export function FeatureGrid() {
   return (
     <>
       <div className="max-w-3xl mb-16">
-        <p className="text-2xl md:text-3xl font-semibold leading-snug">
-          <span className="text-white">Local first. </span>
-          <span className="text-gray-500">
-            Your app reads and writes to a local database. Users get instant responses, even without a connection. When they're back online, Spooky resolves changes and syncs state across every device — no loading spinners, no conflict modals, no extra code on your end.
-          </span>
-        </p>
+        <ScrollRevealText
+          className="text-2xl md:text-3xl font-semibold leading-snug"
+          segments={[
+            { text: 'Local first. ', preRevealed: true },
+            { text: 'Your app reads and writes to a local database. Users get instant responses, even without a connection. When they\'re back online, Spooky resolves changes and syncs state across every device — no loading spinners, no conflict modals, no extra code on your end.' },
+          ]}
+        />
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4">
@@ -234,21 +236,24 @@ export function ScalableText() {
   return (
     <>
       <div className="mt-16 max-w-3xl">
-        <p className="text-2xl md:text-3xl font-semibold leading-snug">
-          <span className="text-white">Horizontally Scalable. </span>
-          <span className="text-gray-500">
-            The Scheduler distributes queries across SSP instances with automatic load balancing and zero-downtime deployments.{' '}
-          </span>
-          <button
-            onClick={() => setDrawerOpen(true)}
-            className="text-gray-500 hover:text-gray-300 transition-colors duration-200 inline-flex items-center gap-1"
-          >
-            Learn more
-            <svg className="w-5 h-5 inline" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
-            </svg>
-          </button>
-        </p>
+        <ScrollRevealText
+          className="text-2xl md:text-3xl font-semibold leading-snug"
+          segments={[
+            { text: 'Horizontally Scalable. ', preRevealed: true },
+            { text: 'The Scheduler distributes queries across SSP instances with automatic load balancing and zero-downtime deployments.' },
+          ]}
+          trailing={
+            <button
+              onClick={() => setDrawerOpen(true)}
+              className="text-gray-500 hover:text-gray-300 transition-colors duration-200 inline-flex items-center gap-1"
+            >
+              Learn more
+              <svg className="w-5 h-5 inline" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
+              </svg>
+            </button>
+          }
+        />
       </div>
 
       {typeof document !== 'undefined' &&

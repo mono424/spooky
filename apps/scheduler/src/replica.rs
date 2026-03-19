@@ -129,10 +129,10 @@ impl Replica {
             info!("Ingesting table '{}' from remote...", table_name);
 
             let records: Vec<Value> = match remote_db
-                .select(table_name.as_str())
+                .query(format!("SELECT * FROM {}", table_name))
                 .await
             {
-                Ok(r) => r,
+                Ok(mut response) => response.take(0).unwrap_or_default(),
                 Err(e) => {
                     warn!("Skipping table '{}': failed to select: {}", table_name, e);
                     continue;
@@ -300,7 +300,7 @@ impl Replica {
 
     /// Get total record count across all tables
     pub async fn record_count(&self) -> Result<usize> {
-        let tables = vec!["thread", "job", "user"];
+        let tables = vec!["thread", "job", "user", "comment"];
         let mut total = 0;
 
         for table_name in tables {
@@ -321,6 +321,6 @@ impl Replica {
 
     /// Get number of tables
     pub fn table_count(&self) -> usize {
-        3
+        4
     }
 }

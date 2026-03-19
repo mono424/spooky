@@ -3592,7 +3592,7 @@ dependencies = [
 
 [[package]]
 name = "spooky-cli"
-version = "0.1.0"
+version = "0.0.1-canary.26"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

@@ -131,7 +131,10 @@
       "Bash(docker ps:*)",
       "mcp__spooky-devtools__get_events",
       "Bash(docker port:*)",
-      "mcp__spooky-devtools__clear_history"
+      "mcp__spooky-devtools__clear_history",
+      "Bash(kill %1)",
+      "Bash(kill %1 %2)",
+      "Bash(kill:*)"
     ],
     "deny": [],
     "ask": []

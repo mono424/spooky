@@ -209,8 +209,8 @@ pub fn create(
             return Ok(());
         }
 
-        // 4. Write migration
-        let migration_body = diff.to_migration_string();
+        // 4. Write migration (with OVERWRITE so it's idempotent inside transactions)
+        let migration_body = make_defines_overwrite(&diff.to_migration_string());
         let content = format!(
             "-- Migration: {}\n-- Created: {}\n\n{}",
             sanitized,
@@ -561,10 +561,13 @@ fn extract_live_schema(client: &dyn MigrationDB) -> Result<String> {
 /// Leaves alone: `DEFINE TABLE OVERWRITE foo` (already has it)
 ///               `DEFINE EVENT OVERWRITE ...` (already has it, e.g. from generate_spooky_events)
 fn make_defines_overwrite(sql: &str) -> String {
-    // Patterns: DEFINE TABLE, DEFINE FIELD, DEFINE EVENT, DEFINE INDEX
+    // Patterns: DEFINE <KEYWORD> → DEFINE <KEYWORD> OVERWRITE
     // We insert OVERWRITE after the keyword when it's not already present.
     let mut result = sql.to_string();
-    for keyword in &["TABLE", "FIELD", "EVENT", "INDEX"] {
+    for keyword in &[
+        "TABLE", "FIELD", "EVENT", "INDEX", "ACCESS", "BUCKET", "API", "FUNCTION", "ANALYZER",
+        "PARAM",
+    ] {
         // Match "DEFINE <KEYWORD> " but NOT "DEFINE <KEYWORD> OVERWRITE "
         let pattern = format!("DEFINE {} ", keyword);
         let with_overwrite = format!("DEFINE {} OVERWRITE ", keyword);
@@ -1151,12 +1154,12 @@ mod tests {
         assert_eq!(recorded[1].0, "20240102120000");
         assert_eq!(recorded[2].0, "20240103120000");
 
-        // Verify the SQL was actually executed
+        // Verify the SQL was actually executed (wrapped in transactions)
         let queries = mock.executed_queries.borrow();
         assert_eq!(queries.len(), 3);
-        assert_eq!(queries[0], "CREATE first;");
-        assert_eq!(queries[1], "CREATE second;");
-        assert_eq!(queries[2], "CREATE third;");
+        assert_eq!(queries[0], "BEGIN TRANSACTION;\nCREATE first;\nCOMMIT TRANSACTION;");
+        assert_eq!(queries[1], "BEGIN TRANSACTION;\nCREATE second;\nCOMMIT TRANSACTION;");
+        assert_eq!(queries[2], "BEGIN TRANSACTION;\nCREATE third;\nCOMMIT TRANSACTION;");
     }
 
     #[test]
@@ -1311,7 +1314,10 @@ mod tests {
         assert_eq!(recorded[0].1, "add_users");
 
         let queries = mock.executed_queries.borrow();
-        assert_eq!(queries[0], up_sql);
+        assert_eq!(
+            queries[0],
+            format!("BEGIN TRANSACTION;\n{}\nCOMMIT TRANSACTION;", up_sql)
+        );
         drop(recorded);
         drop(queries);
 

@@ -10,7 +10,7 @@ export const dbConfig: SyncedDbConfig<typeof schema> = {
   schemaSurql: SURQL_SCHEMA,
   database: {
     namespace: 'main',
-    database: 'main',
+    database: 'example',
     endpoint: 'ws://localhost:8666/rpc',
     store: 'memory',
     persistenceClient: 'localstorage',

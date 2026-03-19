@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crate::backend::{self, BackendDevConfig, BackendDevTypedConfig, ResolvedVersions, SpookyConfig, DEFAULT_CONFIG_PATH};
+use crate::backend::{self, BackendDevConfig, BackendDevTypedConfig, ResolvedSurrealDb, ResolvedVersions, SpookyConfig, DEFAULT_CONFIG_PATH};
 use crate::migrate;
 use crate::schema_builder::{self, SchemaBuilderConfig};
 use crate::schema_diff;
@@ -48,6 +48,7 @@ pub fn run(skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bo
     let mode = config.mode.clone().unwrap_or_else(|| "singlenode".to_string());
     let versions = ResolvedVersions::from_config(&config);
     let resolved = config.resolved_schema();
+    let resolved_surreal = config.resolved_surrealdb();
     let migrations_path = resolved.migrations.to_string_lossy().to_string();
     let migrations_path = migrations_path.as_str();
     println!("{} Mode: {}", PREFIX, mode);
@@ -65,10 +66,10 @@ pub fn run(skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bo
     let compose_file = format!("docker-compose.{}.yml", mode);
     if Path::new(&compose_file).exists() {
         println!("{} Found compose file: {}", PREFIX, compose_file);
-        run_compose_mode(&compose_file, &mode, &config, &stop, skip_migrations, auto_apply_migrations, fix_checksums, migrations_path)
+        run_compose_mode(&compose_file, &mode, &config, &resolved_surreal, &stop, skip_migrations, auto_apply_migrations, fix_checksums, migrations_path)
     } else {
         println!("{} No compose file found — using direct Docker mode", PREFIX);
-        run_direct_mode(&mode, &versions, &config, &stop, skip_migrations, auto_apply_migrations, fix_checksums, migrations_path)
+        run_direct_mode(&mode, &versions, &config, &resolved_surreal, &stop, skip_migrations, auto_apply_migrations, fix_checksums, migrations_path)
     }
 }
 
@@ -177,7 +178,7 @@ fn check_schema_drift(config: &SpookyConfig) -> Result<()> {
 
 // ── Direct Docker mode ──────────────────────────────────────────────────────
 
-fn run_direct_mode(mode: &str, versions: &ResolvedVersions, config: &SpookyConfig, stop: &Arc<AtomicBool>, skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bool, migrations_path: &str) -> Result<()> {
+fn run_direct_mode(mode: &str, versions: &ResolvedVersions, config: &SpookyConfig, resolved_surreal: &ResolvedSurrealDb, stop: &Arc<AtomicBool>, skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bool, migrations_path: &str) -> Result<()> {
     let surreal_image = versions.surrealdb_image();
     let ssp_image = versions.ssp_image();
 
@@ -238,7 +239,7 @@ fn run_direct_mode(mode: &str, versions: &ResolvedVersions, config: &SpookyConfi
         println!("{} Phase 4: Skipping migrations (--skip-migrations).", PREFIX);
     } else {
         println!("{} Phase 4: Applying migrations...", PREFIX);
-        apply_migrations(SURREAL_PORT, auto_apply_migrations, fix_checksums, migrations_path)?;
+        apply_migrations(SURREAL_PORT, auto_apply_migrations, fix_checksums, migrations_path, resolved_surreal)?;
     }
 
     if stop.load(Ordering::SeqCst) {
@@ -247,7 +248,7 @@ fn run_direct_mode(mode: &str, versions: &ResolvedVersions, config: &SpookyConfi
 
     // Phase 4a: Apply internal Spooky schema (meta tables + events)
     println!("{} Phase 4a: Applying internal Spooky schema...", PREFIX);
-    apply_internal_spooky_schema(SURREAL_PORT, mode)?;
+    apply_internal_spooky_schema(SURREAL_PORT, mode, resolved_surreal)?;
 
     if stop.load(Ordering::SeqCst) {
         return cleanup_direct(stop);
@@ -255,7 +256,7 @@ fn run_direct_mode(mode: &str, versions: &ResolvedVersions, config: &SpookyConfi
 
     // Phase 4b: Apply remote functions with Docker-internal endpoints
     println!("{} Phase 4b: Applying remote functions...", PREFIX);
-    apply_remote_functions(SURREAL_PORT, mode)?;
+    apply_remote_functions(SURREAL_PORT, mode, resolved_surreal)?;
 
     if stop.load(Ordering::SeqCst) {
         return cleanup_direct(stop);
@@ -267,6 +268,9 @@ fn run_direct_mode(mode: &str, versions: &ResolvedVersions, config: &SpookyConfi
         let scheduler_image = versions.scheduler_image();
         let scheduler_port_mapping = format!("{}:9667", SCHEDULER_PORT);
 
+        let scheduler_ns_env = format!("SPOOKY_SCHEDULER_DB_NAMESPACE={}", resolved_surreal.namespace);
+        let scheduler_db_env = format!("SPOOKY_SCHEDULER_DB_DATABASE={}", resolved_surreal.database);
+
         println!("{} Phase 5: Starting scheduler...", PREFIX);
         docker(&[
             "run", "-d",
@@ -277,8 +281,8 @@ fn run_direct_mode(mode: &str, versions: &ResolvedVersions, config: &SpookyConfi
             "-p", &scheduler_port_mapping,
             "-e", "RUST_LOG=info",
             "-e", "SPOOKY_SCHEDULER_DB_URL=surrealdb:8000/rpc",
-            "-e", "SPOOKY_SCHEDULER_DB_NAMESPACE=main",
-            "-e", "SPOOKY_SCHEDULER_DB_DATABASE=main",
+            "-e", &scheduler_ns_env,
+            "-e", &scheduler_db_env,
             "-e", "SPOOKY_SCHEDULER_DB_USERNAME=root",
             "-e", "SPOOKY_SCHEDULER_DB_PASSWORD=root",
             "-e", "SPOOKY_SCHEDULER_REPLICA_DB_PATH=/data/replica",
@@ -324,6 +328,9 @@ fn run_direct_mode(mode: &str, versions: &ResolvedVersions, config: &SpookyConfi
     let scheduler_url_env = format!("SCHEDULER_URL=http://scheduler:{}", SCHEDULER_PORT);
     let advertise_addr_env = format!("ADVERTISE_ADDR={}:{}", SSP_CONTAINER, SSP_PORT);
 
+    let ssp_ns_env = format!("SURREALDB_NS={}", resolved_surreal.namespace);
+    let ssp_db_env = format!("SURREALDB_DB={}", resolved_surreal.database);
+
     let mut ssp_args = vec![
         "run", "-d",
         "--platform", "linux/amd64",
@@ -333,8 +340,8 @@ fn run_direct_mode(mode: &str, versions: &ResolvedVersions, config: &SpookyConfi
         "-p", &port_mapping,
         "-e", "RUST_LOG=info,ssp=debug",
         "-e", "SURREALDB_ADDR=surrealdb:8000/rpc",
-        "-e", "SURREALDB_NS=main",
-        "-e", "SURREALDB_DB=main",
+        "-e", &ssp_ns_env,
+        "-e", &ssp_db_env,
         "-e", "SURREALDB_USER=root",
         "-e", "SURREALDB_PASS=root",
         "-e", "SPOOKY_AUTH_SECRET=mysecret",
@@ -409,7 +416,7 @@ fn cleanup_direct(_stop: &Arc<AtomicBool>) -> Result<()> {
 
 // ── Compose mode ────────────────────────────────────────────────────────────
 
-fn run_compose_mode(compose_file: &str, mode: &str, config: &SpookyConfig, stop: &Arc<AtomicBool>, skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bool, migrations_path: &str) -> Result<()> {
+fn run_compose_mode(compose_file: &str, mode: &str, config: &SpookyConfig, resolved_surreal: &ResolvedSurrealDb, stop: &Arc<AtomicBool>, skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bool, migrations_path: &str) -> Result<()> {
     let infra_services: &[&str] = match mode {
         "cluster" => INFRA_SERVICES_CLUSTER,
         "surrealism" => INFRA_SERVICES_SURREALISM,
@@ -436,12 +443,13 @@ fn run_compose_mode(compose_file: &str, mode: &str, config: &SpookyConfig, stop:
 
     // Phase 2: Wait for SurrealDB health
     println!("\n{} Phase 2: Waiting for SurrealDB health...", PREFIX);
-    wait_for_health(
+    wait_for_health_with_container(
         &format!("http://localhost:{}/health", SURREAL_PORT),
         HEALTH_MAX_RETRIES,
         HEALTH_RETRY_INTERVAL,
         stop,
         "SurrealDB",
+        false,
     )?;
 
     if stop.load(Ordering::SeqCst) {
@@ -453,7 +461,7 @@ fn run_compose_mode(compose_file: &str, mode: &str, config: &SpookyConfig, stop:
         println!("\n{} Phase 3: Skipping migrations (--skip-migrations).", PREFIX);
     } else {
         println!("\n{} Phase 3: Applying migrations...", PREFIX);
-        apply_migrations(SURREAL_PORT, auto_apply_migrations, fix_checksums, migrations_path)?;
+        apply_migrations(SURREAL_PORT, auto_apply_migrations, fix_checksums, migrations_path, resolved_surreal)?;
     }
 
     if stop.load(Ordering::SeqCst) {
@@ -462,7 +470,7 @@ fn run_compose_mode(compose_file: &str, mode: &str, config: &SpookyConfig, stop:
 
     // Phase 3a: Apply internal Spooky schema (meta tables + events)
     println!("{} Phase 3a: Applying internal Spooky schema...", PREFIX);
-    apply_internal_spooky_schema(SURREAL_PORT, mode)?;
+    apply_internal_spooky_schema(SURREAL_PORT, mode, resolved_surreal)?;
 
     if stop.load(Ordering::SeqCst) {
         return cleanup_compose(compose_file);
@@ -470,7 +478,7 @@ fn run_compose_mode(compose_file: &str, mode: &str, config: &SpookyConfig, stop:
 
     // Phase 3b: Apply remote functions with Docker-internal endpoints
     println!("{} Phase 3b: Applying remote functions...", PREFIX);
-    apply_remote_functions(SURREAL_PORT, mode)?;
+    apply_remote_functions(SURREAL_PORT, mode, resolved_surreal)?;
 
     if stop.load(Ordering::SeqCst) {
         return cleanup_compose(compose_file);
@@ -519,12 +527,27 @@ fn wait_for_health(
     stop: &Arc<AtomicBool>,
     service_name: &str,
 ) -> Result<()> {
-    // Try to infer container name from service name for liveness checks
-    let container_name = match service_name {
-        "SurrealDB" => Some(SURREAL_CONTAINER),
-        "Scheduler" => Some(SCHEDULER_CONTAINER),
-        "SSP" => Some(SSP_CONTAINER),
-        _ => None,
+    wait_for_health_with_container(url, max_retries, interval, stop, service_name, true)
+}
+
+fn wait_for_health_with_container(
+    url: &str,
+    max_retries: u32,
+    interval: Duration,
+    stop: &Arc<AtomicBool>,
+    service_name: &str,
+    check_container: bool,
+) -> Result<()> {
+    // Try to infer container name from service name for liveness checks (direct mode only)
+    let container_name = if check_container {
+        match service_name {
+            "SurrealDB" => Some(SURREAL_CONTAINER),
+            "Scheduler" => Some(SCHEDULER_CONTAINER),
+            "SSP" => Some(SSP_CONTAINER),
+            _ => None,
+        }
+    } else {
+        None
     };
 
     for attempt in 1..=max_retries {
@@ -599,7 +622,7 @@ fn print_container_logs(name: &str, tail: u32) -> Result<()> {
 
 // ── Migration helper ────────────────────────────────────────────────────────
 
-fn apply_migrations(port: u16, auto_apply: bool, fix_checksums: bool, migrations_path: &str) -> Result<()> {
+fn apply_migrations(port: u16, auto_apply: bool, fix_checksums: bool, migrations_path: &str, resolved_surreal: &ResolvedSurrealDb) -> Result<()> {
     let migrations_dir = Path::new(migrations_path);
     if !migrations_dir.exists() {
         println!("{} No {}/ directory found, skipping.", PREFIX, migrations_path);
@@ -608,8 +631,8 @@ fn apply_migrations(port: u16, auto_apply: bool, fix_checksums: bool, migrations
 
     let client = SurrealClient::new(
         &format!("http://localhost:{}", port),
-        "main",
-        "main",
+        &resolved_surreal.namespace,
+        &resolved_surreal.database,
         "root",
         "root",
     );
@@ -744,7 +767,7 @@ fn apply_migrations(port: u16, auto_apply: bool, fix_checksums: bool, migrations
 /// Apply the remote functions with Docker-internal endpoints so that
 /// SurrealDB (running inside the Docker network) can reach the SSP/scheduler
 /// via container names instead of `localhost`.
-fn apply_remote_functions(surreal_port: u16, mode: &str) -> Result<()> {
+fn apply_remote_functions(surreal_port: u16, mode: &str, resolved_surreal: &ResolvedSurrealDb) -> Result<()> {
     let endpoint = if mode == "cluster" {
         format!("http://scheduler:{}", SCHEDULER_PORT)
     } else {
@@ -756,8 +779,8 @@ fn apply_remote_functions(surreal_port: u16, mode: &str) -> Result<()> {
 
     let client = SurrealClient::new(
         &format!("http://localhost:{}", surreal_port),
-        "main",
-        "main",
+        &resolved_surreal.namespace,
+        &resolved_surreal.database,
         "root",
         "root",
     );
@@ -809,7 +832,7 @@ fn spawn_pnpm_dev_app(script: &str) -> LogTailGuard {
 
 /// Apply the internal Spooky schema (meta tables + per-table events) so that
 /// record versioning and DBSP ingest work after migrations are applied.
-fn apply_internal_spooky_schema(surreal_port: u16, mode: &str) -> Result<()> {
+fn apply_internal_spooky_schema(surreal_port: u16, mode: &str, resolved_surreal: &ResolvedSurrealDb) -> Result<()> {
     let config = backend::load_config(Path::new(DEFAULT_CONFIG_PATH));
     let resolved = config.resolved_schema();
 
@@ -834,8 +857,8 @@ fn apply_internal_spooky_schema(surreal_port: u16, mode: &str) -> Result<()> {
 
     let client = SurrealClient::new(
         &format!("http://localhost:{}", surreal_port),
-        "main",
-        "main",
+        &resolved_surreal.namespace,
+        &resolved_surreal.database,
         "root",
         "root",
     );

@@ -1,29 +1,12 @@
 {
   "name": "@example/schema",
-  "version": "0.0.1-canary.26",
+  "version": "0.0.1-canary.27",
   "description": "Database schema and types for SurrealDB",
-  "scripts": {
-    "dev": "spooky dev",
-    "dev:app": "pnpm --filter @example/app-solid dev",
-    "generate": "spooky generate",
-    "build": "spooky generate && pnpm build:surql",
-    "build:surql": "pnpm build:remote:singlenode && pnpm build:remote:cluster",
-    "build:remote:surrealism": "spooky --input ./src/schema.surql --output ./.spooky/remote-surrealism.gen.surql --mode surrealism --modules-dir ../../packages/surrealism-modules --config ./spooky.yml",
-    "build:remote:singlenode": "spooky --input ./src/schema.surql --output ./.spooky/remote-singlenode.gen.surql --mode singlenode --endpoint http://ssp:8667 --secret mysecret --config ./spooky.yml",
-    "build:remote:cluster": "spooky --input ./src/schema.surql --output ./.spooky/remote-cluster.gen.surql --mode cluster --endpoint http://scheduler:9667 --config ./spooky.yml",
-    "migrate:create": "spooky migrate create",
-    "migrate:apply": "spooky migrate apply --url http://localhost:8666",
-    "migrate:status": "spooky migrate status --url http://localhost:8666"
-  },
   "keywords": [
     "database",
     "schema",
     "surrealdb"
   ],
   "author": "",
-  "license": "MIT",
-  "packageManager": "pnpm@9.0.0",
-  "devDependencies": {
-    "@spooky-sync/cli": "workspace:*"
-  }
+  "license": "MIT"
 }

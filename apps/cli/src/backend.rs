@@ -10,6 +10,54 @@ pub const DEFAULT_MIGRATIONS_DIR: &str = "migrations";
 pub const DEFAULT_BUCKETS_DIR: &str = "src/buckets";
 pub const DEFAULT_CONFIG_PATH: &str = "spooky.yml";
 
+/// SurrealDB config: either a plain version string (backwards compat)
+/// or an object with version, namespace, and database.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(untagged)]
+pub enum SurrealDbConfig {
+    /// Just the image version, e.g. "v3.0.0"
+    Version(String),
+    /// Full config with optional fields
+    Full {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        namespace: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        database: Option<String>,
+    },
+}
+
+/// Resolved SurrealDB config with all defaults applied.
+#[derive(Debug, Clone)]
+pub struct ResolvedSurrealDb {
+    pub version: String,
+    pub namespace: String,
+    pub database: String,
+}
+
+impl ResolvedSurrealDb {
+    pub fn from_config(config: &Option<SurrealDbConfig>) -> Self {
+        match config {
+            Some(SurrealDbConfig::Version(v)) => Self {
+                version: v.clone(),
+                namespace: "main".to_string(),
+                database: "main".to_string(),
+            },
+            Some(SurrealDbConfig::Full { version, namespace, database }) => Self {
+                version: version.clone().unwrap_or_else(|| DEFAULT_SURREALDB_VERSION.to_string()),
+                namespace: namespace.clone().unwrap_or_else(|| "main".to_string()),
+                database: database.clone().unwrap_or_else(|| "main".to_string()),
+            },
+            None => Self {
+                version: DEFAULT_SURREALDB_VERSION.to_string(),
+                namespace: "main".to_string(),
+                database: "main".to_string(),
+            },
+        }
+    }
+}
+
 /// Schema config: either a directory string (sub-paths derived by convention)
 /// or an object with explicit overrides.
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -64,9 +112,9 @@ pub struct ClientTypeConfig {
 pub struct SpookyConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
-    /// SurrealDB image version (e.g. "v3.0.0"). Separate from spooky service versions.
+    /// SurrealDB config: version string or object with version/namespace/database.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub surrealdb: Option<String>,
+    pub surrealdb: Option<SurrealDbConfig>,
     /// Spooky service versions — either a string (sets both ssp & scheduler)
     /// or an object `{ ssp: "...", scheduler: "..." }` for individual control.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -86,6 +134,10 @@ pub struct SpookyConfig {
 impl SpookyConfig {
     pub fn resolved_schema(&self) -> ResolvedSchema {
         ResolvedSchema::from_config(&self.schema)
+    }
+
+    pub fn resolved_surrealdb(&self) -> ResolvedSurrealDb {
+        ResolvedSurrealDb::from_config(&self.surrealdb)
     }
 }
 
@@ -132,8 +184,7 @@ impl ResolvedVersions {
     /// - `version: "tag"` → sets both ssp & scheduler to "tag"
     /// - `version: { ssp: "...", scheduler: "..." }` → individual control, defaults for missing
     pub fn from_config(config: &SpookyConfig) -> Self {
-        let surrealdb = config.surrealdb.clone()
-            .unwrap_or_else(|| DEFAULT_SURREALDB_VERSION.to_string());
+        let surrealdb = config.resolved_surrealdb().version;
 
         let (ssp, scheduler) = match &config.version {
             Some(VersionConfig::All(v)) => (v.clone(), v.clone()),

@@ -6,6 +6,16 @@ const ROOT = resolve(import.meta.dirname, "..");
 const MANIFEST_PATH = join(ROOT, "apps/devtools/manifest.json");
 const EXCLUDE = ["packages/ssp-wasm/pkg"];
 
+const CARGO_TOML_PACKAGES = [
+  "apps/scheduler/Cargo.toml",
+  "apps/ssp/Cargo.toml",
+  "apps/cli/Cargo.toml",
+  "packages/ssp/Cargo.toml",
+  "packages/ssp-protocol/Cargo.toml",
+  "packages/job-runner/Cargo.toml",
+  "packages/ssp-wasm/Cargo.toml",
+];
+
 const CLI_PLATFORM_PACKAGES = [
   "cli-linux-x64",
   "cli-linux-arm64",
@@ -128,6 +138,31 @@ if (manifest.version === chromeVersion) {
   manifest.version = chromeVersion;
   writeJson(MANIFEST_PATH, manifest);
   updated.push(`  ${manifestRel}: ${oldManifestVersion} -> ${chromeVersion}`);
+}
+
+// Bump Cargo.toml files
+for (const rel of CARGO_TOML_PACKAGES) {
+  const cargoPath = join(ROOT, rel);
+  const content = readFileSync(cargoPath, "utf-8");
+  const match = content.match(/^(version\s*=\s*")([^"]+)(")/m);
+
+  if (!match) {
+    console.warn(`  Warning: no version found in ${rel}`);
+    continue;
+  }
+
+  if (match[2] === version) {
+    skipped.push(rel);
+    continue;
+  }
+
+  const oldVersion = match[2];
+  const newContent = content.replace(
+    /^(version\s*=\s*")([^"]+)(")/m,
+    `$1${version}$3`,
+  );
+  writeFileSync(cargoPath, newContent);
+  updated.push(`  ${rel}: ${oldVersion} -> ${version}`);
 }
 
 // Summary

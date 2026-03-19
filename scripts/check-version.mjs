@@ -5,6 +5,16 @@ import { join, resolve } from "node:path";
 const ROOT = resolve(import.meta.dirname, "..");
 const EXCLUDE = ["packages/ssp-wasm/pkg"];
 
+const CARGO_TOML_PACKAGES = [
+  "apps/scheduler/Cargo.toml",
+  "apps/ssp/Cargo.toml",
+  "apps/cli/Cargo.toml",
+  "packages/ssp/Cargo.toml",
+  "packages/ssp-protocol/Cargo.toml",
+  "packages/job-runner/Cargo.toml",
+  "packages/ssp-wasm/Cargo.toml",
+];
+
 const CLI_PLATFORM_PACKAGES = [
   "cli-linux-x64",
   "cli-linux-arm64",
@@ -71,6 +81,19 @@ if (cliPkg.optionalDependencies) {
   }
 }
 
+// Check Cargo.toml files
+for (const rel of CARGO_TOML_PACKAGES) {
+  const cargoPath = join(ROOT, rel);
+  const content = readFileSync(cargoPath, "utf-8");
+  const match = content.match(/^version\s*=\s*"([^"]+)"/m);
+
+  if (!match) {
+    mismatches.push({ file: rel, actual: "not found" });
+  } else if (match[1] !== expected) {
+    mismatches.push({ file: rel, actual: match[1] });
+  }
+}
+
 if (mismatches.length > 0) {
   console.error(`Version mismatch! Expected ${expected} but found:\n`);
   for (const m of mismatches) {
@@ -80,4 +103,4 @@ if (mismatches.length > 0) {
   process.exit(1);
 }
 
-console.log(`All ${dirs.length} workspace packages + ${CLI_PLATFORM_PACKAGES.length} platform packages are at ${expected}`);
+console.log(`All ${dirs.length} workspace packages + ${CLI_PLATFORM_PACKAGES.length} platform packages + ${CARGO_TOML_PACKAGES.length} Cargo packages are at ${expected}`);

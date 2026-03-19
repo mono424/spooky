@@ -468,9 +468,14 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
             let config_file = config.clone().unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
             let spooky_config = backend::load_config(&config_file);
             let resolved = spooky_config.resolved_schema();
+            let resolved_surreal = spooky_config.resolved_surrealdb();
 
             let resolved_input = input.unwrap_or(resolved.schema);
             let resolved_migrations = migrations_dir.unwrap_or(resolved.migrations);
+
+            // Use config ns/db as defaults when CLI flags are at their default "main"
+            let namespace = if namespace == "main" { resolved_surreal.namespace } else { namespace };
+            let database = if database == "main" { resolved_surreal.database } else { database };
 
             if empty {
                 // Legacy: empty template or schema dump
@@ -519,10 +524,15 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
             let resolved = spooky_config.resolved_schema();
             let resolved_migrations = migrations_dir.unwrap_or(resolved.migrations);
 
+            // Use config ns/db as defaults when CLI flags are at their default "main"
+            let resolved_surreal = spooky_config.resolved_surrealdb();
+            let namespace = if conn.namespace == "main" { resolved_surreal.namespace } else { conn.namespace };
+            let database = if conn.database == "main" { resolved_surreal.database } else { conn.database };
+
             let client = SurrealClient::new(
                 &conn.url,
-                &conn.namespace,
-                &conn.database,
+                &namespace,
+                &database,
                 &conn.username,
                 &conn.password,
             );
@@ -553,10 +563,14 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
             let spooky_config = backend::load_config(Path::new(DEFAULT_CONFIG_PATH));
             let resolved_migrations = migrations_dir.unwrap_or(spooky_config.resolved_schema().migrations);
 
+            let resolved_surreal = spooky_config.resolved_surrealdb();
+            let namespace = if conn.namespace == "main" { resolved_surreal.namespace } else { conn.namespace };
+            let database = if conn.database == "main" { resolved_surreal.database } else { conn.database };
+
             let client = SurrealClient::new(
                 &conn.url,
-                &conn.namespace,
-                &conn.database,
+                &namespace,
+                &database,
                 &conn.username,
                 &conn.password,
             );
@@ -570,10 +584,14 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
             let spooky_config = backend::load_config(Path::new(DEFAULT_CONFIG_PATH));
             let resolved_migrations = migrations_dir.unwrap_or(spooky_config.resolved_schema().migrations);
 
+            let resolved_surreal = spooky_config.resolved_surrealdb();
+            let namespace = if conn.namespace == "main" { resolved_surreal.namespace } else { conn.namespace };
+            let database = if conn.database == "main" { resolved_surreal.database } else { conn.database };
+
             let client = SurrealClient::new(
                 &conn.url,
-                &conn.namespace,
-                &conn.database,
+                &namespace,
+                &database,
                 &conn.username,
                 &conn.password,
             );
