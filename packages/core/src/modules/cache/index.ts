@@ -137,7 +137,7 @@ export class CacheModule implements StreamUpdateReceiver {
   /**
    * Delete a record from local DB and ingest deletion into DBSP
    */
-  async delete(table: string, id: string, skipDbDelete: boolean = false): Promise<void> {
+  async delete(table: string, id: string, skipDbDelete: boolean = false, recordData: Record<string, any> = {}): Promise<void> {
     this.logger.debug(
       { table, id, Category: 'spooky-client::CacheModule::delete' },
       'Deleting record'
@@ -149,9 +149,9 @@ export class CacheModule implements StreamUpdateReceiver {
         await this.local.query('DELETE $id', { id: parseRecordIdString(id) });
       }
 
-      // 2. Ingest deletion into DBSP
+      // 2. Ingest deletion into DBSP (pass record data so predicates can be matched)
       delete this.versionLookups[id];
-      await this.streamProcessor.ingest(table, 'DELETE', id, {});
+      this.streamProcessor.ingest(table, 'DELETE', id, recordData);
 
       this.logger.debug(
         { table, id, Category: 'spooky-client::CacheModule::delete' },

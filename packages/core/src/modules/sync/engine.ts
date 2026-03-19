@@ -57,21 +57,28 @@ export class SyncEngine {
       return;
     }
 
-    const [remoteResults] = await this.remote.query<
-      [(RecordWithId & { spooky_rv: number })[]]
-    >(
-      "SELECT *, (SELECT version FROM ONLY _spooky_version WHERE record_id = $parent.id)['version'] as spooky_rv FROM $idsToFetch",
+    // Build a version map from the diff (versions come from _spooky_list_ref)
+    const versionMap = new Map<string, number>();
+    for (const item of toFetch) {
+      versionMap.set(encodeRecordId(item.id), item.version);
+    }
+
+    // Fetch records from remote — avoid SELECT *, <subquery> FROM $param
+    // pattern which drops the * fields in SurrealDB v3 (known bug).
+    // Versions are already known from the diff's list_ref data.
+    const [remoteResults] = await this.remote.query<[RecordWithId[]]>(
+      'SELECT * FROM $idsToFetch',
       { idsToFetch }
     );
 
     // Prepare batch for cache (which handles both DB and DBSP)
     const cacheBatch: CacheRecord[] = [];
 
-    for (const result of remoteResults) {
-      if (!result?.id) {
+    for (const record of remoteResults) {
+      if (!record?.id) {
         this.logger.warn(
           {
-            result,
+            record,
             idsToFetch,
             Category: 'spooky-client::SyncEngine::syncRecords',
           },
@@ -79,17 +86,17 @@ export class SyncEngine {
         );
         continue;
       }
-      const { spooky_rv, ...record } = result;
       const fullId = encodeRecordId(record.id);
       const table = record.id.table.toString();
       const isAdded = added.some((item) => encodeRecordId(item.id) === fullId);
+      const version = versionMap.get(fullId) ?? 0;
 
       const localVersion = this.cache.lookup(fullId);
-      if (localVersion && spooky_rv <= localVersion) {
+      if (localVersion && version <= localVersion) {
         this.logger.info(
           {
             recordId: fullId,
-            version: spooky_rv,
+            version,
             localVersion,
             Category: 'spooky-client::SyncEngine::syncRecords',
           },
@@ -106,7 +113,7 @@ export class SyncEngine {
         table,
         op: isAdded ? 'CREATE' : 'UPDATE',
         record: cleanedRecord as RecordWithId,
-        version: spooky_rv,
+        version,
       });
     }
 

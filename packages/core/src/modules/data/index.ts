@@ -549,12 +549,27 @@ export class DataModule<S extends SchemaStructure> {
     const rid = parseRecordIdString(id);
     const mutationId = parseRecordIdString(`_spooky_pending_mutations:${Date.now()}`);
 
+    // Fetch the record before deleting so DBSP can match it against query predicates
+    const [beforeRecords] = await this.local.query<[Record<string, any>[]]>(
+      'SELECT * FROM ONLY $id',
+      { id: rid }
+    );
+    const beforeRecord = beforeRecords ?? {};
+
     const query = surql.seal<void>(
       surql.tx([surql.delete('id'), surql.createMutation('delete', 'mid', 'id')])
     );
 
     await withRetry(this.logger, () => this.local.execute(query, { id: rid, mid: mutationId }));
-    await this.cache.delete(table, id, true);
+    await this.cache.delete(table, id, true, beforeRecord);
+
+    // DBSP may not emit view updates for DELETE ops —
+    // manually notify all queries that reference this table
+    for (const [queryHash, queryState] of this.activeQueries) {
+      if (queryState.config.tableName === tableName) {
+        await this.notifyQuerySynced(queryHash);
+      }
+    }
 
     // Emit mutation event
     const mutationEvent: DeleteEvent = {
