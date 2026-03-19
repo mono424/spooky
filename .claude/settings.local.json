@@ -125,7 +125,13 @@
       "Bash(find /Users/khadim/dev/spooky -type f \\\\\\(-name *.test.ts -o -name *.spec.ts -o -name *.test.rs -o -name *.spec.rs \\\\\\))",
       "Bash(npm run:*)",
       "mcp__spooky-devtools__run_query",
-      "Bash(node_modules/.bin/tsc --noEmit)"
+      "Bash(node_modules/.bin/tsc --noEmit)",
+      "Bash(gh run:*)",
+      "Bash(docker pull:*)",
+      "Bash(docker ps:*)",
+      "mcp__spooky-devtools__get_events",
+      "Bash(docker port:*)",
+      "mcp__spooky-devtools__clear_history"
     ],
     "deny": [],
     "ask": []
