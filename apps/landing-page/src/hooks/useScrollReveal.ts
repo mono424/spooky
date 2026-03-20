@@ -18,8 +18,10 @@ export function useScrollReveal() {
     const rect = el.getBoundingClientRect();
     const viewportH = window.innerHeight;
 
-    // 0 when top of element is at viewport bottom, 1 when at viewport center
-    const raw = (viewportH - rect.top) / (viewportH / 2);
+    // 0 when top of element is 40% up the viewport, 1 when at 25% from top
+    const start = viewportH * 0.6;  // 40% up from bottom
+    const end = viewportH * 0.25;   // 25% from top
+    const raw = (start - rect.top) / (start - end);
     setProgress(Math.min(1, Math.max(0, raw)));
   }, []);
 

@@ -88,6 +88,15 @@ const BROWSER_CSS = `
   display: flex;
   flex-direction: column;
 }
+
+@media (max-width: 767px) {
+  .browser-window { height: 320px; }
+  .devtools-container { height: 200px; }
+  .app-viewport { display: none; }
+  .browser-header { padding: 6px 10px; }
+  .url-bar { font-size: 10px; padding: 3px 8px; }
+  .control-dot { width: 8px; height: 8px; }
+}
 `;
 
 // Exact copy of devtools.css content, modified to scope to .devtools-root

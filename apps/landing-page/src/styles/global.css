@@ -12,6 +12,11 @@
     --cursor-color: #ffffff;
   }
 
+  html, body {
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
+
   html {
     /* Professional font stack with Inter as primary */
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
@@ -23,7 +28,6 @@
     /* Enable font smoothing for professional appearance */
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    overflow-x: hidden;
   }
 
   /* High contrast text selection */
@@ -138,7 +142,7 @@
 
   /* Hero Grid Layout */
   .hero-grid {
-    @apply grid items-center gap-8;
+    @apply grid items-center gap-10;
     grid-template-columns: 1fr;
   }
 

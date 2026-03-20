@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 
 type LayerKey = 'editor' | 'types' | 'schema';
 
@@ -187,45 +187,122 @@ function FlatIsometricLayer({
   );
 }
 
-/* ─── Mobile ─── */
-function MobileLayerCard({ layer }: { layer: (typeof LAYERS)[number] }) {
+/* ─── Mobile: scroll-driven crossfade ─── */
+function MobileLayerCard({ layer, active }: { layer: (typeof LAYERS)[number]; active: boolean }) {
   const lines = CODE_MAP[layer.key];
   return (
     <div
       style={{
-        background: '#111113',
-        border: '1px solid rgba(255,255,255,0.08)',
-        borderRadius: 10,
+        position: 'absolute',
+        inset: 0,
+        opacity: active ? 1 : 0,
+        transition: 'opacity 0.5s ease',
+        pointerEvents: active ? 'auto' : 'none',
+        padding: '0 12px',
       }}
     >
       <div
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          padding: '10px 14px',
-          background: '#0a0a0c',
-          borderBottom: '1px solid rgba(255,255,255,0.06)',
-          borderRadius: '10px 10px 0 0',
+          background: '#111113',
+          border: `1px solid ${active ? layer.accentBorder : 'rgba(255,255,255,0.08)'}`,
+          borderRadius: 12,
+          transition: 'border-color 0.3s ease',
+          boxShadow: active ? `0 0 30px ${layer.accent}12, 0 4px 20px rgba(0,0,0,0.4)` : 'none',
         }}
       >
-        <div style={{ display: 'flex', gap: 4 }}>
-          <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'rgba(255,255,255,0.08)' }} />
-          <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'rgba(255,255,255,0.08)' }} />
-          <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'rgba(255,255,255,0.08)' }} />
-        </div>
-        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, fontWeight: 500, color: layer.accent }}>
-          {layer.sublabel}
-        </span>
-      </div>
-      <div style={{ padding: '8px 14px 10px' }}>
-        {lines.map((line, i) => (
-          <div key={i} style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, lineHeight: '18px', whiteSpace: 'nowrap' }}>
-            {line.tokens.map((t, j) => (
-              <span key={j} style={{ color: t.c }}>{t.text}</span>
-            ))}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '8px 12px',
+            background: '#0a0a0c',
+            borderBottom: '1px solid rgba(255,255,255,0.06)',
+            borderRadius: '12px 12px 0 0',
+          }}
+        >
+          <div style={{ display: 'flex', gap: 5 }}>
+            <div style={{ width: 7, height: 7, borderRadius: '50%', background: 'rgba(255,255,255,0.1)' }} />
+            <div style={{ width: 7, height: 7, borderRadius: '50%', background: 'rgba(255,255,255,0.1)' }} />
+            <div style={{ width: 7, height: 7, borderRadius: '50%', background: 'rgba(255,255,255,0.1)' }} />
           </div>
-        ))}
+          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, fontWeight: 500, color: layer.accent }}>
+            {layer.sublabel}
+          </span>
+        </div>
+        <div style={{ padding: '8px 14px 10px', overflowX: 'auto' }}>
+          {lines.map((line, i) => (
+            <div key={i} style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, lineHeight: '17px', whiteSpace: 'nowrap' }}>
+              {line.tokens.map((t, j) => (
+                <span key={j} style={{ color: t.c }}>{t.text}</span>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MobileLayerCrossfade() {
+  const layers = [...LAYERS].reverse();
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [progress, setProgress] = useState(0);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const handleScroll = () => {
+      const rect = container.getBoundingClientRect();
+      const viewportH = window.innerHeight;
+      const raw = Math.max(0, Math.min(1, (viewportH - rect.top) / (viewportH + rect.height)));
+      const clamped = Math.max(0, Math.min(1, (raw - 0.25) / 0.5));
+      const index = Math.min(layers.length - 1, Math.floor(clamped * layers.length));
+      setActiveIndex(index);
+      setProgress(clamped);
+    };
+
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    handleScroll();
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, [layers.length]);
+
+  return (
+    <div ref={containerRef} style={{ position: 'relative', width: '100%', height: 200 }}>
+      {layers.map((layer, i) => (
+        <MobileLayerCard key={layer.key} layer={layer} active={activeIndex === i} />
+      ))}
+      {/* Bottom bar: progress + dots */}
+      <div style={{ position: 'absolute', bottom: -24, left: 12, right: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+        {/* Scroll progress bar */}
+        <div style={{ width: '100%', height: 2, background: 'rgba(255,255,255,0.06)', borderRadius: 1, overflow: 'hidden' }}>
+          <div
+            style={{
+              height: '100%',
+              width: `${progress * 100}%`,
+              background: layers[activeIndex].accent,
+              borderRadius: 1,
+              transition: 'background 0.3s ease',
+            }}
+          />
+        </div>
+        {/* Dots */}
+        <div style={{ display: 'flex', justifyContent: 'center', gap: 6 }}>
+          {layers.map((layer, i) => (
+            <div
+              key={layer.key}
+              style={{
+                width: activeIndex === i ? 16 : 6,
+                height: 6,
+                borderRadius: 3,
+                background: activeIndex === i ? layer.accent : 'rgba(255,255,255,0.15)',
+                transition: 'all 0.3s ease',
+              }}
+            />
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -340,11 +417,9 @@ export const SchemaLayerStack: React.FC = () => {
         </div>
       </div>
 
-      {/* Mobile */}
-      <div className="flex md:hidden" style={{ flexDirection: 'column', gap: 8, padding: '0 4px' }}>
-        {[...LAYERS].reverse().map((layer) => (
-          <MobileLayerCard key={layer.key} layer={layer} />
-        ))}
+      {/* Mobile: scroll-driven crossfade */}
+      <div className="block md:hidden">
+        <MobileLayerCrossfade />
       </div>
     </div>
   );

@@ -15,8 +15,8 @@ export const HeroTerminal: React.FC = () => {
         </div>
       </div>
 
-      {/* Terminal Content */}
-      <div className="terminal-content relative z-10 bg-surface p-6 transition-all duration-300">
+      {/* Terminal Content — Full (desktop) */}
+      <div className="terminal-content relative z-10 bg-surface p-6 transition-all duration-300 hidden lg:block">
         <pre className="font-mono text-sm text-white/60 leading-relaxed whitespace-pre-wrap break-words">
           <code>
             <span className="text-brand-400/70">import</span> {'{'} useQuery {'}'} <span className="text-brand-400/70">from</span> <span className="text-white/65">&quot;@spooky-sync/client-solid&quot;</span>;
@@ -40,6 +40,21 @@ export const HeroTerminal: React.FC = () => {
             {'\n'}    <span className="text-white/45">&lt;/</span><span className="text-white/60">For</span><span className="text-white/45">&gt;</span>
             {'\n'}  );
             {'\n'}{'}'};
+          </code>
+        </pre>
+      </div>
+      {/* Terminal Content — Condensed (mobile) */}
+      <div className="terminal-content relative z-10 bg-surface p-4 transition-all duration-300 lg:hidden">
+        <pre className="font-mono text-xs text-white/60 leading-relaxed whitespace-pre-wrap break-words">
+          <code>
+            <span className="text-brand-400/70">const</span> result = <span className="text-white/85">useQuery</span>(db, () =&gt;
+            {'\n'}  db.<span className="text-white/85">query</span>(<span className="text-white/65">&quot;thread&quot;</span>)
+            {'\n'}    .<span className="text-white/85">related</span>(<span className="text-white/65">&quot;author&quot;</span>)
+            {'\n'}    .<span className="text-white/85">related</span>(<span className="text-white/65">&quot;comments&quot;</span>)
+            {'\n'}    .<span className="text-white/85">orderBy</span>(<span className="text-white/65">&quot;created_at&quot;</span>, <span className="text-white/65">&quot;desc&quot;</span>)
+            {'\n'}    .<span className="text-white/85">limit</span>(<span className="text-white/65">10</span>)
+            {'\n'}    .<span className="text-white/85">build</span>()
+            {'\n'});
           </code>
         </pre>
       </div>

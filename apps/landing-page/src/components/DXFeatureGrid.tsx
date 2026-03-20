@@ -14,7 +14,7 @@ export const DXFeatureGrid: React.FC = () => {
           description="Define your schema once — get type-safe clients, context-aware autocomplete, and real-time validation across your entire stack."
           className="md:rounded-l-2xl"
         >
-          <div className="w-full h-full flex items-center justify-center pt-8 pb-4 relative" style={{ paddingRight: 60 }}>
+          <div className="w-full h-full flex items-center justify-center pt-8 pb-4 relative md:pr-[60px]">
             <SchemaLayerStack />
             {/* Bottom fade */}
             <div
@@ -36,10 +36,15 @@ export const DXFeatureGrid: React.FC = () => {
           description="A complete suite of developer tools embedded directly in your browser. Inspect state, monitor queries, and track events."
           className="md:rounded-r-2xl"
         >
-          <div className="w-full relative" style={{ perspective: 800, perspectiveOrigin: '50% 100%' }}>
+          {/* Desktop: 3D perspective */}
+          <div className="w-full relative hidden md:block" style={{ perspective: 800, perspectiveOrigin: '50% 100%' }}>
             <div style={{ transform: 'rotateX(8deg) scale(0.82) translateY(-60px)', transformOrigin: 'bottom center' }}>
               <DevToolsSimulation />
             </div>
+          </div>
+          {/* Mobile: flat, no perspective */}
+          <div className="w-full relative md:hidden overflow-hidden">
+            <DevToolsSimulation />
           </div>
         </DXFeatureBox>
       </div>

@@ -134,7 +134,14 @@
       "mcp__spooky-devtools__clear_history",
       "Bash(kill %1)",
       "Bash(kill %1 %2)",
-      "Bash(kill:*)"
+      "Bash(kill:*)",
+      "Bash(find /Users/khadim/dev/spooky/apps -type f \\\\\\(-name *.ts -o -name *.tsx -o -name *.js -o -name *.jsx \\\\\\))",
+      "Bash(find /Users/khadim/dev/spooky/packages -type f \\\\\\(-name *.ts -o -name *.tsx -o -name *.js -o -name *.jsx \\\\\\))",
+      "Bash(find /Users/khadim/dev/spooky/example -type f \\\\\\(-name *.ts -o -name *.tsx -o -name *.js -o -name *.jsx \\\\\\))",
+      "Bash(find /Users/khadim/dev/spooky -type f \\\\\\(-name *.surql -o -name schema* -o -name *schema* \\\\\\))",
+      "Bash(find /Users/khadim/dev/spooky -type f \\\\\\(-name *.ts -o -name *.tsx -o -name *.rs \\\\\\) -not -path */node_modules/* -not -path */.git/*)",
+      "Bash(find /Users/khadim/dev/spooky -type f \\\\\\(-name *.ts -o -name *.tsx \\\\\\) -not -path */node_modules/* -not -path */.git/*)",
+      "Bash(find /Users/khadim/dev/spooky -type f \\\\\\(-name *.ts -o -name *.tsx -o -name *.rs -o -name *.surql \\\\\\) -not -path */node_modules/* -not -path */.git/*)"
     ],
     "deny": [],
     "ask": []

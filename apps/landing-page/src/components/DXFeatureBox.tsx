@@ -17,7 +17,7 @@ export const DXFeatureBox: React.FC<DXFeatureBoxProps> = ({
 }) => {
   return (
     <div
-      className={`bg-[#0a0a0a] overflow-hidden flex flex-col min-h-[560px] ${className}`}
+      className={`bg-[#0a0a0a] overflow-hidden flex flex-col min-h-[320px] md:min-h-[560px] ${className}`}
     >
       {/* FIG label */}
       <div className="px-6 pt-5 pb-2">

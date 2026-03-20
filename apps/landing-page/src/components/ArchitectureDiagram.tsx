@@ -194,7 +194,7 @@ const ArchitectureBackSlice = ({ animFrame }: { animFrame: number }) => {
   };
 
   return (
-    <div className="font-mono text-[10px] xs:text-xs leading-tight font-bold whitespace-pre overflow-x-auto select-none bg-black p-6 rounded border border-[#333] shadow-2xl inline-block">
+    <div className="font-mono text-[10px] sm:text-xs leading-tight font-bold whitespace-pre overflow-x-auto select-none bg-black p-6 rounded border border-[#333] shadow-2xl inline-block">
       <div className="text-gray-500 mb-4 border-b border-[#333] pb-2 text-center tracking-widest uppercase">
         // SYSTEM_ARCHITECTURE_LIVE_VIEW
       </div>
