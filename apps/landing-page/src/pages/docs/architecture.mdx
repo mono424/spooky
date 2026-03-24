@@ -108,7 +108,7 @@ graph TD
 - Exposes **proxy endpoints** (`/proxy/query`, `/proxy/signin`, `/proxy/use`) so SSPs can self-bootstrap by querying the snapshot directly
 - Manages SSP lifecycle: `Bootstrapping` → `Replaying` → `Ready`
 - Assigns queries to SSPs using load balancing strategies
-- See [Scheduler API Reference](/spooky/docs/scheduler-api)
+- See [Scheduler API Reference](/docs/scheduler-api)
 
 **SSP (Spooky Sidecar Processor)** (Port 8667 by default)
 - Stateful service maintaining materialized views
@@ -116,7 +116,7 @@ graph TD
 - Registers with scheduler on startup
 - Self-bootstraps by querying the scheduler's proxy endpoints (no chunk push needed)
 - Sends periodic heartbeats with `views` count for health monitoring
-- See [SSP API Reference](/spooky/docs/ssp-api)
+- See [SSP API Reference](/docs/ssp-api)
 
 ---
 
@@ -316,4 +316,4 @@ SSP_ID=ssp-01  # Unique per instance
 
 Production setup with high availability and load distribution.
 
-For detailed deployment instructions, see the [Deployment Guide](/spooky/docs/deployment).
+For detailed deployment instructions, see the [Deployment Guide](/docs/deployment).

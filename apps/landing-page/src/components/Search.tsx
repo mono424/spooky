@@ -50,7 +50,7 @@ export const Search = () => {
         }
 
         // Use variable to prevent Vite from trying to resolve this at build time
-        const pagefindUrl = '/spooky/pagefind/pagefind.js';
+        const pagefindUrl = '/pagefind/pagefind.js';
         const pagefind = await import(/* @vite-ignore */ pagefindUrl);
 
         if (!pagefind) {

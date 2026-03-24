@@ -1,4 +1,4 @@
-export const basePath = process.env.ASTRO_BASE_PATH || '/spooky';
+export const basePath = process.env.ASTRO_BASE_PATH || '';
 export const docsNav = [
   {
     title: 'Getting Started',
