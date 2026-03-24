@@ -29,7 +29,7 @@ interface DevToolsContextValue {
   activeTab: () => TabType;
   selectedQueryHash: () => number | null;
   selectedTable: () => string | null;
-  isSpookyAvailable: () => boolean;
+  isSp00kyAvailable: () => boolean;
   mcpStatus: () => McpStatus;
   setMcpEnabled: (enabled: boolean) => void;
 
@@ -68,7 +68,7 @@ export const DevToolsProvider: ParentComponent = (props) => {
   const [activeTab, setActiveTab] = createSignal<TabType>('events');
   const [selectedQueryHash, setSelectedQueryHash] = createSignal<number | null>(null);
   const [selectedTable, setSelectedTable] = createSignal<string | null>(null);
-  const [isSpookyAvailable, setIsSpookyAvailable] = createSignal(false);
+  const [isSp00kyAvailable, setIsSp00kyAvailable] = createSignal(false);
   const [mcpStatus, setMcpStatus] = createSignal<McpStatus>({ enabled: false, connected: false, port: 9315 });
 
   // Custom hooks
@@ -76,12 +76,12 @@ export const DevToolsProvider: ParentComponent = (props) => {
     onMessage: handleMessage,
     onConnect: () => {
       console.log('[DevTools] Chrome connection established');
-      checkSpooky();
+      checkSp00ky();
       sendMessage({ type: 'GET_MCP_STATUS' });
     },
     onDisconnect: () => {
       console.log('[DevTools] Chrome connection lost');
-      setIsSpookyAvailable(false);
+      setIsSp00kyAvailable(false);
     },
   });
 
@@ -103,19 +103,19 @@ export const DevToolsProvider: ParentComponent = (props) => {
     console.log('[DevTools] Processing message:', message);
 
     switch (message.type) {
-      case 'SPOOKY_DETECTED':
-        setIsSpookyAvailable(true);
+      case 'SP00KY_DETECTED':
+        setIsSp00kyAvailable(true);
         // If state is included in the detection message, use it
         if (message.data && (message.data as any).state) {
           console.log('[DevToolsContext] Initialized with state from detection');
           updateState((message.data as any).state);
         } else {
-          console.log('[DevToolsContext] Spooky detected, requesting state...');
+          console.log('[DevToolsContext] Sp00ky detected, requesting state...');
           requestState();
         }
         break;
 
-      case 'SPOOKY_STATE_CHANGED':
+      case 'SP00KY_STATE_CHANGED':
         if (message.state) {
           console.log(
             '[DevToolsContext] State updated. Tables:',
@@ -125,7 +125,7 @@ export const DevToolsProvider: ParentComponent = (props) => {
         }
         break;
 
-      case 'SPOOKY_TABLE_DATA_RESPONSE':
+      case 'SP00KY_TABLE_DATA_RESPONSE':
         if (message.tableName && message.data) {
           setState(
             'database',
@@ -136,7 +136,7 @@ export const DevToolsProvider: ParentComponent = (props) => {
         }
         break;
 
-      case 'SPOOKY_QUERY_RESPONSE':
+      case 'SP00KY_QUERY_RESPONSE':
         // @ts-ignore - Validating custom message structure
         const msg = message as any;
         console.log('[DevTools] RAW QUERY RESPONSE:', msg);
@@ -168,9 +168,9 @@ export const DevToolsProvider: ParentComponent = (props) => {
         break;
 
       case 'PAGE_RELOADED':
-        console.log('[DevTools] Page reloaded, checking for Spooky...');
+        console.log('[DevTools] Page reloaded, checking for Sp00ky...');
         setTimeout(() => {
-          checkSpooky();
+          checkSp00ky();
         }, 500);
         // Clear pending queries on reload
         pendingQueries.forEach(({ reject }) => reject('Page reloaded'));
@@ -183,7 +183,7 @@ export const DevToolsProvider: ParentComponent = (props) => {
   }
 
   /**
-   * Update state from Spooky - accepts backend state format
+   * Update state from Sp00ky - accepts backend state format
    */
   function updateState(backendState: BackendDevToolsState | DevToolsState) {
     console.log('[DevTools] Received state:', backendState);
@@ -218,22 +218,22 @@ export const DevToolsProvider: ParentComponent = (props) => {
   }
 
   /**
-   * Check if Spooky is available on the page
+   * Check if Sp00ky is available on the page
    */
-  function checkSpooky() {
-    hostPage.checkSpookyAvailable((available) => {
-      console.log('[DevTools] Spooky available:', available);
-      setIsSpookyAvailable(available);
+  function checkSp00ky() {
+    hostPage.checkSp00kyAvailable((available) => {
+      console.log('[DevTools] Sp00ky available:', available);
+      setIsSp00kyAvailable(available);
 
       if (available) {
-        hostPage.getSpookyState(
+        hostPage.getSp00kyState(
           (state) => {
             if (state) {
               updateState(state);
             }
           },
           (error) => {
-            console.error('[DevTools] Error getting Spooky state:', error);
+            console.error('[DevTools] Error getting Sp00ky state:', error);
           }
         );
       }
@@ -261,7 +261,7 @@ export const DevToolsProvider: ParentComponent = (props) => {
    * Refresh state from the page
    */
   function refresh() {
-    checkSpooky();
+    checkSp00ky();
     const currentTable = selectedTable();
     if (currentTable) {
       fetchTableData(currentTable);
@@ -331,15 +331,15 @@ export const DevToolsProvider: ParentComponent = (props) => {
     );
   }
 
-  // Check for Spooky on mount
+  // Check for Sp00ky on mount
   onMount(() => {
     setTimeout(() => {
-      checkSpooky();
+      checkSp00ky();
     }, 500);
 
     // Listen for window messages (table data responses)
     const handleWindowMessage = (event: MessageEvent) => {
-      if (event.data.source === 'spooky-devtools-page') {
+      if (event.data.source === 'sp00ky-devtools-page') {
         handleMessage(event.data as ChromeMessage);
       }
     };
@@ -354,9 +354,9 @@ export const DevToolsProvider: ParentComponent = (props) => {
     };
   });
 
-  // Fetch schema when Spooky becomes available
+  // Fetch schema when Sp00ky becomes available
   createEffect(() => {
-    if (isSpookyAvailable()) {
+    if (isSp00kyAvailable()) {
       // Delay slightly to ensure everything is settled
       setTimeout(() => {
         fetchSchema();
@@ -498,7 +498,7 @@ export const DevToolsProvider: ParentComponent = (props) => {
     activeTab,
     selectedQueryHash,
     selectedTable,
-    isSpookyAvailable,
+    isSp00kyAvailable,
     mcpStatus,
     setMcpEnabled: setMcpEnabledAction,
     setActiveTab,

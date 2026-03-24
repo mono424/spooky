@@ -57,7 +57,7 @@ export function FeatureGrid() {
           className="text-2xl md:text-3xl font-semibold leading-snug"
           segments={[
             { text: 'Local first. ', preRevealed: true },
-            { text: 'Your app reads and writes to a local database. Users get instant responses, even without a connection. When they\'re back online, Spooky resolves changes and syncs state across every device — no loading spinners, no conflict modals, no extra code on your end.' },
+            { text: 'Your app reads and writes to a local database. Users get instant responses, even without a connection. When they\'re back online, Sp00ky resolves changes and syncs state across every device — no loading spinners, no conflict modals, no extra code on your end.' },
           ]}
         />
       </div>

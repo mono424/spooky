@@ -11,7 +11,7 @@ import Note from '../../components/ui/Note.astro';
   File Buckets are an experimental feature. The API surface may change in future releases. Currently only the **memory** backend is supported — files are not persisted across server restarts.
 </Warning>
 
-Buckets provide a type-safe file storage abstraction for uploading, downloading, and managing files in your Spooky application. They integrate directly with your SurrealDB schema for permission control and with the Spooky CLI for guided setup.
+Buckets provide a type-safe file storage abstraction for uploading, downloading, and managing files in your Sp00ky application. They integrate directly with your SurrealDB schema for permission control and with the Sp00ky CLI for guided setup.
 
 ## Defining a Bucket
 
@@ -43,7 +43,7 @@ This example allows unrestricted reads and deletes, but restricts uploads to ima
 
 ## Configuration
 
-Reference your bucket files in `spooky.yml`:
+Reference your bucket files in `sp00ky.yml`:
 
 <CodeBlock
   code={`mode: sidecar
@@ -74,7 +74,7 @@ This walks you through an interactive setup with presets for common use cases:
 | **Audio** | mp3, wav, ogg, flac, aac | 50 MB | No |
 | **Custom** | You choose | You choose | You choose |
 
-The CLI generates the `.surql` file and updates your `spooky.yml` automatically.
+The CLI generates the `.surql` file and updates your `sp00ky.yml` automatically.
 
 ## Generated Schema
 
@@ -98,7 +98,7 @@ Bucket names are extracted as a union type, so `db.bucket('...')` only accepts v
 
 ## Core API
 
-Access a bucket from your `SpookyClient` or `SyncedDb` instance:
+Access a bucket from your `Sp00kyClient` or `SyncedDb` instance:
 
 <CodeBlock
   code={`const bucket = db.bucket('profile_pictures');

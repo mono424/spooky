@@ -1,8 +1,8 @@
 import { DataModule } from './modules/data/index';
 import {
-  SpookyConfig,
+  Sp00kyConfig,
   QueryTimeToLive,
-  SpookyQueryResultPromise,
+  Sp00kyQueryResultPromise,
   PersistenceClient,
   MutationEvent,
   UpdateOptions,
@@ -14,7 +14,7 @@ import {
   RemoteDatabaseService,
 } from './services/database/index';
 import { Surreal } from 'surrealdb';
-import { SpookySync, UpEvent } from './modules/sync/index';
+import { Sp00kySync, UpEvent } from './modules/sync/index';
 import {
   GetTable,
   InnerQuery,
@@ -81,7 +81,7 @@ export class BucketHandle {
   }
 }
 
-export class SpookyClient<S extends SchemaStructure> {
+export class Sp00kyClient<S extends SchemaStructure> {
   private local: LocalDatabaseService;
   private remote: RemoteDatabaseService;
   private persistenceClient: PersistenceClient;
@@ -89,7 +89,7 @@ export class SpookyClient<S extends SchemaStructure> {
   private migrator: LocalMigrator;
   private cache: CacheModule;
   private dataModule: DataModule<S>;
-  private sync: SpookySync<S>;
+  private sync: Sp00kySync<S>;
   private devTools: DevToolsService;
 
   private logger: ReturnType<typeof createLogger>;
@@ -112,16 +112,16 @@ export class SpookyClient<S extends SchemaStructure> {
     return this.sync.subscribeToPendingMutations(cb);
   }
 
-  constructor(private config: SpookyConfig<S>) {
+  constructor(private config: Sp00kyConfig<S>) {
     const logger = createLogger(config.logLevel ?? 'info', config.otelTransmit);
-    this.logger = logger.child({ service: 'SpookyClient' });
+    this.logger = logger.child({ service: 'Sp00kyClient' });
 
     this.logger.info(
       {
         config: { ...config, schema: '[SchemaStructure]' },
-        Category: 'spooky-client::SpookyClient::constructor',
+        Category: 'sp00ky-client::Sp00kyClient::constructor',
       },
-      'SpookyClient initialized'
+      'Sp00kyClient initialized'
     );
 
     this.local = new LocalDatabaseService(this.config.database, logger);
@@ -167,7 +167,7 @@ export class SpookyClient<S extends SchemaStructure> {
     this.auth = new AuthService(this.config.schema, this.remote, this.persistenceClient, logger);
 
     // Initialize Sync
-    this.sync = new SpookySync(this.local, this.remote, this.cache, this.dataModule, this.config.schema, this.logger);
+    this.sync = new Sp00kySync(this.local, this.remote, this.cache, this.dataModule, this.config.schema, this.logger);
 
     // Initialize DevTools
     this.devTools = new DevToolsService(
@@ -218,58 +218,58 @@ export class SpookyClient<S extends SchemaStructure> {
 
   async init() {
     this.logger.info(
-      { Category: 'spooky-client::SpookyClient::init' },
-      'SpookyClient initialization started'
+      { Category: 'sp00ky-client::Sp00kyClient::init' },
+      'Sp00kyClient initialization started'
     );
     try {
       const clientId = this.config.clientId ?? (await this.loadOrGenerateClientId());
       this.persistClientId(clientId);
       this.logger.debug(
-        { clientId, Category: 'spooky-client::SpookyClient::init' },
+        { clientId, Category: 'sp00ky-client::Sp00kyClient::init' },
         'Client ID loaded'
       );
 
       await this.local.connect();
       this.logger.debug(
-        { Category: 'spooky-client::SpookyClient::init' },
+        { Category: 'sp00ky-client::Sp00kyClient::init' },
         'Local database connected'
       );
 
       await this.migrator.provision(this.config.schemaSurql);
-      this.logger.debug({ Category: 'spooky-client::SpookyClient::init' }, 'Schema provisioned');
+      this.logger.debug({ Category: 'sp00ky-client::Sp00kyClient::init' }, 'Schema provisioned');
 
       await this.remote.connect();
       this.logger.debug(
-        { Category: 'spooky-client::SpookyClient::init' },
+        { Category: 'sp00ky-client::Sp00kyClient::init' },
         'Remote database connected'
       );
 
       await this.streamProcessor.init();
       this.logger.debug(
-        { Category: 'spooky-client::SpookyClient::init' },
+        { Category: 'sp00ky-client::Sp00kyClient::init' },
         'StreamProcessor initialized'
       );
 
       await this.auth.init();
-      this.logger.debug({ Category: 'spooky-client::SpookyClient::init' }, 'Auth initialized');
+      this.logger.debug({ Category: 'sp00ky-client::Sp00kyClient::init' }, 'Auth initialized');
 
       await this.dataModule.init();
       this.logger.debug(
-        { Category: 'spooky-client::SpookyClient::init' },
+        { Category: 'sp00ky-client::Sp00kyClient::init' },
         'DataModule initialized'
       );
 
       await this.sync.init(clientId);
-      this.logger.debug({ Category: 'spooky-client::SpookyClient::init' }, 'Sync initialized');
+      this.logger.debug({ Category: 'sp00ky-client::Sp00kyClient::init' }, 'Sync initialized');
 
       this.logger.info(
-        { Category: 'spooky-client::SpookyClient::init' },
-        'SpookyClient initialization completed successfully'
+        { Category: 'sp00ky-client::Sp00kyClient::init' },
+        'Sp00kyClient initialization completed successfully'
       );
     } catch (e) {
       this.logger.error(
-        { error: e, Category: 'spooky-client::SpookyClient::init' },
-        'SpookyClient initialization failed'
+        { error: e, Category: 'sp00ky-client::Sp00kyClient::init' },
+        'Sp00kyClient initialization failed'
       );
       throw e;
     }
@@ -292,8 +292,8 @@ export class SpookyClient<S extends SchemaStructure> {
     table: Table,
     options: QueryOptions<TableModel<GetTable<S, Table>>, false>,
     ttl: QueryTimeToLive = '10m'
-  ): QueryBuilder<S, Table, SpookyQueryResultPromise> {
-    return new QueryBuilder<S, Table, SpookyQueryResultPromise>(
+  ): QueryBuilder<S, Table, Sp00kyQueryResultPromise> {
+    return new QueryBuilder<S, Table, Sp00kyQueryResultPromise>(
       this.config.schema,
       table,
       async (q) => ({
@@ -372,17 +372,17 @@ export class SpookyClient<S extends SchemaStructure> {
 
   private persistClientId(id: string) {
     try {
-      this.persistenceClient.set('spooky_client_id', id);
+      this.persistenceClient.set('sp00ky_client_id', id);
     } catch (e) {
       this.logger.warn(
-        { error: e, Category: 'spooky-client::SpookyClient::persistClientId' },
+        { error: e, Category: 'sp00ky-client::Sp00kyClient::persistClientId' },
         'Failed to persist client ID'
       );
     }
   }
 
   private async loadOrGenerateClientId(): Promise<string> {
-    const clientId = await this.persistenceClient.get<string>('spooky_client_id');
+    const clientId = await this.persistenceClient.get<string>('sp00ky_client_id');
 
     if (clientId) {
       return clientId;

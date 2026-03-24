@@ -55,7 +55,7 @@ pub fn build_server_schema(config: &SchemaBuilderConfig) -> Result<String> {
         config.input_path
     ))?;
 
-    // Process spooky config/backends
+    // Process sp00ky config/backends
     let mut backend_processor = BackendProcessor::new();
     if let Some(config_path) = &config.config_path {
         if config_path.exists() {

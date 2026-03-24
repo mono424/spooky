@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// A dot-separated field path for accessing nested values in SpookyValue.
+/// A dot-separated field path for accessing nested values in Sp00kyValue.
 ///
 /// Example: `Path::new("address.city")` represents the path `["address", "city"]`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

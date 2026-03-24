@@ -1,7 +1,7 @@
 import type {
   BackendDevToolsState,
   DevToolsState,
-  SpookyEvent,
+  Sp00kyEvent,
   ActiveQuery,
   AuthState,
 } from '../types/devtools';
@@ -11,7 +11,7 @@ import type {
  */
 export function adaptBackendState(backendState: BackendDevToolsState): DevToolsState {
   // Transform events
-  const events: SpookyEvent[] = backendState.eventsHistory.map((event) => ({
+  const events: Sp00kyEvent[] = backendState.eventsHistory.map((event) => ({
     type: event.eventType,
     timestamp: event.timestamp,
     data: event.payload,

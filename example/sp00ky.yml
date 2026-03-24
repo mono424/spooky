@@ -2,6 +2,9 @@ mode: cluster # "singlenode", "cluster", or "surrealism"
 surrealdb:
   namespace: main
   database: example
+  # hosting: cloud      # "cloud" (default) or "external"
+  # endpoint: "wss://my-surreal.example.com"  # required when hosting: external
+# cloudApi: "https://staging-api.sp00ky.cloud"  # override Sp00ky Cloud API endpoint
 devApp: dev:app # runs: pnpm --filter @example/app-solid dev (Solid.js frontend)
 schema: ./schema
 buckets:
@@ -13,6 +16,7 @@ clientTypes:
     output: ./client-dart/src/db/models.dart
 backends:
   api:
+    # hosting: cloud    # "cloud" (default) or "external" (self-hosted at baseUrl)
     type: http
     spec: ./api/openapi.yml
     baseUrl: http://host.docker.internal:3660

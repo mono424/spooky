@@ -1,6 +1,6 @@
 import { Router, Route, A } from '@solidjs/router';
 import { createSignal, Show, createEffect } from 'solid-js';
-import { SpookyProvider } from '@spooky-sync/client-solid';
+import { Sp00kyProvider } from '@spooky-sync/client-solid';
 import { AuthProvider, useAuth } from './lib/auth';
 import { dbConfig } from './db';
 import { AuthDialog } from './components/AuthDialog';
@@ -168,7 +168,7 @@ function Layout(props: any) {
 
 export default function App() {
   return (
-    <SpookyProvider
+    <Sp00kyProvider
       config={dbConfig}
       fallback={
         <div class="min-h-screen bg-zinc-950 text-white font-sans flex flex-col items-center justify-center gap-3">
@@ -205,6 +205,6 @@ export default function App() {
           <Route path="/profile" component={ProfilePage} />
         </Router>
       </AuthProvider>
-    </SpookyProvider>
+    </Sp00kyProvider>
   );
 }

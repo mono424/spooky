@@ -2,7 +2,7 @@ use crate::algebra::ZSet;
 use crate::circuit::store::Store;
 use crate::eval::value_ops::resolve_field;
 use crate::operator::plan::OrderSpec;
-use crate::types::SpookyValue;
+use crate::types::Sp00kyValue;
 use std::collections::{BTreeSet, HashMap};
 
 /// TopK operator with sorted buffer state (Z⁻¹).
@@ -32,15 +32,15 @@ pub enum SortableValue {
 }
 
 impl SortableValue {
-    fn from_spooky(val: Option<&SpookyValue>, descending: bool) -> Self {
+    fn from_sp00ky(val: Option<&Sp00kyValue>, descending: bool) -> Self {
         let sv = match val {
-            None | Some(SpookyValue::Null) => SortableValue::Null,
-            Some(SpookyValue::Bool(b)) => SortableValue::Bool(*b),
-            Some(SpookyValue::Number(n)) => {
+            None | Some(Sp00kyValue::Null) => SortableValue::Null,
+            Some(Sp00kyValue::Bool(b)) => SortableValue::Bool(*b),
+            Some(Sp00kyValue::Number(n)) => {
                 // Use integer representation for consistent ordering
                 SortableValue::Int((*n * 1_000_000.0) as i64)
             }
-            Some(SpookyValue::Str(s)) => SortableValue::Str(s.clone()),
+            Some(Sp00kyValue::Str(s)) => SortableValue::Str(s.clone()),
             _ => SortableValue::Null,
         };
         if descending {
@@ -74,7 +74,7 @@ impl TopK {
                 .map(|ord| {
                     let val = row.and_then(|r| resolve_field(Some(r), &ord.field));
                     let desc = ord.direction.eq_ignore_ascii_case("DESC");
-                    SortableValue::from_spooky(val, desc)
+                    SortableValue::from_sp00ky(val, desc)
                 })
                 .collect(),
             None => vec![SortableValue::Str(key.to_string())],
@@ -91,7 +91,7 @@ impl TopK {
 }
 
 impl super::Operator for TopK {
-    fn snapshot(&self, inputs: &[&ZSet], store: &Store, _ctx: Option<&SpookyValue>) -> ZSet {
+    fn snapshot(&self, inputs: &[&ZSet], store: &Store, _ctx: Option<&Sp00kyValue>) -> ZSet {
         let upstream = inputs[0];
         let mut items: Vec<(Vec<SortableValue>, &String)> = upstream
             .iter()
@@ -112,7 +112,7 @@ impl super::Operator for TopK {
         &mut self,
         input_deltas: &[&ZSet],
         store: &Store,
-        _ctx: Option<&SpookyValue>,
+        _ctx: Option<&Sp00kyValue>,
     ) -> ZSet {
         let upstream_delta = input_deltas[0];
         let old_top_k = self.current_top_k();

@@ -7,7 +7,7 @@ import CodeBlock from '../../components/ui/CodeBlock.astro';
 import Warning from '../../components/ui/Warning.astro';
 import Note from '../../components/ui/Note.astro';
 
-Backend functions allow you to execute server-side logic from your Spooky application. Currently, Spooky supports backend integration through the **outbox pattern**, where client operations create job records that are processed asynchronously by a backend service.
+Backend functions allow you to execute server-side logic from your Sp00ky application. Currently, Sp00ky supports backend integration through the **outbox pattern**, where client operations create job records that are processed asynchronously by a backend service.
 
 ## How It Works
 
@@ -25,7 +25,7 @@ The outbox pattern decouples your frontend from backend services:
 
 ## Configuration
 
-Backend functions are configured in your `spooky.yml` file in the schema directory.
+Backend functions are configured in your `sp00ky.yml` file in the schema directory.
 
 <CodeBlock
   code={`mode: sidecar
@@ -97,7 +97,7 @@ app.use('/*', bearerAuth({
 
 ## OpenAPI Specification
 
-Your backend routes are defined using an OpenAPI specification. Each path becomes a callable route from your Spooky client.
+Your backend routes are defined using an OpenAPI specification. Each path becomes a callable route from your Sp00ky client.
 
 <CodeBlock
   code={`openapi: 3.1.0
@@ -227,7 +227,7 @@ await db.run('api', '/spookify', { id: threadData.id }, {
 
 <CodeBlock
   code={`db.run(
-  backend: string,      // Backend name from spooky.yml
+  backend: string,      // Backend name from sp00ky.yml
   path: string,          // Route path from OpenAPI spec
   payload: object,       // Request parameters
   options?: {
@@ -241,7 +241,7 @@ await db.run('api', '/spookify', { id: threadData.id }, {
 
 ### Parameters
 
-- **`backend`**: The name of the backend from your `spooky.yml` (e.g., `'api'`)
+- **`backend`**: The name of the backend from your `sp00ky.yml` (e.g., `'api'`)
 - **`path`**: The API route path (e.g., `'/spookify'`)
 - **`payload`**: An object containing the request parameters defined in your OpenAPI schema
 - **`options`** (optional):
@@ -351,7 +351,7 @@ function ThreadDetail() {
 
 ## Job Runner Setup
 
-The job runner is a separate service that processes outbox jobs. You can use the example job runner from the Spooky repository or implement your own.
+The job runner is a separate service that processes outbox jobs. You can use the example job runner from the Sp00ky repository or implement your own.
 
 The job runner:
 1. Polls the job table for records with `status = 'pending'`
@@ -361,12 +361,12 @@ The job runner:
 5. Implements retry logic based on `retry_strategy`
 
 <Note>
-  See the `packages/job-runner` directory in the Spooky repository for a reference implementation in Rust.
+  See the `packages/job-runner` directory in the Sp00ky repository for a reference implementation in Rust.
 </Note>
 
 ## Dev Server
 
-Each backend in `spooky.yml` can declare an optional `dev` field. When you run `spooky dev`, these commands are spawned alongside the rest of the infrastructure (SurrealDB, SSP, scheduler), so you don't need to start backend services in separate terminals.
+Each backend in `sp00ky.yml` can declare an optional `dev` field. When you run `spooky dev`, these commands are spawned alongside the rest of the infrastructure (SurrealDB, SSP, scheduler), so you don't need to start backend services in separate terminals.
 
 Each backend gets a unique color in the terminal and its output is prefixed with `[backend.<name>.dev]`, making it easy to distinguish logs from different services.
 
@@ -394,7 +394,7 @@ Run an npm/pnpm script:
     dev:
       type: npm
       script: dev           # runs \`pnpm run dev\`
-      workdir: ../api       # optional: directory to run from (relative to spooky.yml)
+      workdir: ../api       # optional: directory to run from (relative to sp00ky.yml)
     # ...other fields...`}
   lang="yaml"
 />
@@ -427,7 +427,7 @@ Run a Python script via [uv](https://docs.astral.sh/uv/):
     dev:
       type: uv
       script: server.py      # runs \`uv run server.py\`
-      workdir: ../ml-service  # optional: directory to run from (relative to spooky.yml)
+      workdir: ../ml-service  # optional: directory to run from (relative to sp00ky.yml)
     # ...other fields...`}
   lang="yaml"
 />
@@ -454,7 +454,7 @@ For the `docker` type, the file is passed directly via Docker's `--env-file` fla
 
 ### workdir
 
-All typed forms support an optional `workdir` field that is resolved relative to the project root (the directory containing `spooky.yml`). If omitted, commands run from the project root.
+All typed forms support an optional `workdir` field that is resolved relative to the project root (the directory containing `sp00ky.yml`). If omitted, commands run from the project root.
 
 <Note>
   Backend dev processes are automatically stopped when you press Ctrl+C to shut down `spooky dev`.

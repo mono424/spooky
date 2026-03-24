@@ -12,7 +12,7 @@ import { cleanRecord } from '../../utils/parser';
  * SyncEngine handles the core sync operations: fetching remote records,
  * caching them locally, and ingesting into DBSP.
  *
- * This is extracted from SpookySync to separate "how to sync" from "when to sync".
+ * This is extracted from Sp00kySync to separate "how to sync" from "when to sync".
  */
 export class SyncEngine {
   private logger: Logger;
@@ -24,7 +24,7 @@ export class SyncEngine {
     private schema: SchemaStructure,
     logger: Logger
   ) {
-    this.logger = logger.child({ service: 'SpookySync:SyncEngine' });
+    this.logger = logger.child({ service: 'Sp00kySync:SyncEngine' });
   }
 
   /**
@@ -40,7 +40,7 @@ export class SyncEngine {
         added,
         updated,
         removed,
-        Category: 'spooky-client::SyncEngine::syncRecords',
+        Category: 'sp00ky-client::SyncEngine::syncRecords',
       },
       'SyncEngine.syncRecords diff'
     );
@@ -57,7 +57,7 @@ export class SyncEngine {
       return;
     }
 
-    // Build a version map from the diff (versions come from _spooky_list_ref)
+    // Build a version map from the diff (versions come from _00_list_ref)
     const versionMap = new Map<string, number>();
     for (const item of toFetch) {
       versionMap.set(encodeRecordId(item.id), item.version);
@@ -80,7 +80,7 @@ export class SyncEngine {
           {
             record,
             idsToFetch,
-            Category: 'spooky-client::SyncEngine::syncRecords',
+            Category: 'sp00ky-client::SyncEngine::syncRecords',
           },
           'Remote record has no id (possibly deleted). Skipping record'
         );
@@ -98,7 +98,7 @@ export class SyncEngine {
             recordId: fullId,
             version,
             localVersion,
-            Category: 'spooky-client::SyncEngine::syncRecords',
+            Category: 'sp00ky-client::SyncEngine::syncRecords',
           },
           'Local version is higher than remote version. Skipping record'
         );
@@ -134,7 +134,7 @@ export class SyncEngine {
     this.logger.debug(
       {
         removed: removed.map((r) => r.toString()),
-        Category: 'spooky-client::SyncEngine::handleRemovedRecords',
+        Category: 'sp00ky-client::SyncEngine::handleRemovedRecords',
       },
       'Checking removed records'
     );
@@ -149,7 +149,7 @@ export class SyncEngine {
       // If remote check fails (e.g., SurrealDB parameter serialization issue),
       // proceed with deletion — the caller has already determined these should be removed
       this.logger.debug(
-        { Category: 'spooky-client::SyncEngine::handleRemovedRecords' },
+        { Category: 'sp00ky-client::SyncEngine::handleRemovedRecords' },
         'Remote existence check failed, proceeding with deletion'
       );
     }
@@ -160,7 +160,7 @@ export class SyncEngine {
         this.logger.debug(
           {
             recordId: recordIdStr,
-            Category: 'spooky-client::SyncEngine::handleRemovedRecords',
+            Category: 'sp00ky-client::SyncEngine::handleRemovedRecords',
           },
           'Deleting confirmed removed record'
         );

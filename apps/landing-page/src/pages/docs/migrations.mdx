@@ -5,7 +5,7 @@ title: Migrations
 
 import CodeBlock from '../../components/ui/CodeBlock.astro';
 
-Spooky includes a built-in migration system for managing incremental, version-controlled changes to your SurrealDB schema. Instead of applying your full schema on every deploy, migrations let you evolve your database safely over time.
+Sp00ky includes a built-in migration system for managing incremental, version-controlled changes to your SurrealDB schema. Instead of applying your full schema on every deploy, migrations let you evolve your database safely over time.
 
 ## Creating a Migration
 
@@ -57,7 +57,7 @@ Run all pending migrations against your database:
 
 <CodeBlock code={`spooky migrate apply`} lang="bash" />
 
-Migrations execute in version order (by timestamp). Each applied migration is recorded in a `_spooky_migrations` tracking table with its version, name, and SHA-256 checksum.
+Migrations execute in version order (by timestamp). Each applied migration is recorded in a `_00_migrations` tracking table with its version, name, and SHA-256 checksum.
 
 ### Connection Flags
 
@@ -125,7 +125,7 @@ If a checksum mismatch is detected during `apply`, you'll see an error like:
   Found:    d4e5f6...
 
 The migration file has been modified after it was applied. This is dangerous.
-If intentional, manually update the checksum in _spooky_migrations.`}
+If intentional, manually update the checksum in _00_migrations.`}
   lang="text"
 />
 

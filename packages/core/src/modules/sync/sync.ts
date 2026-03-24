@@ -13,12 +13,12 @@ import { DataModule } from '../data/index';
 import { encodeRecordId, extractTablePart, parseDuration, surql } from '../../utils/index';
 
 /**
- * The main synchronization engine for Spooky.
+ * The main synchronization engine for Sp00ky.
  * Handles the bidirectional synchronization between the local database and the remote backend.
  * Uses a queue-based architecture with 'up' (local to remote) and 'down' (remote to local) queues.
  * @template S The schema structure type.
  */
-export class SpookySync<S extends SchemaStructure> {
+export class Sp00kySync<S extends SchemaStructure> {
   private clientId: string = '';
   private upQueue: UpQueue;
   private downQueue: DownQueue;
@@ -59,7 +59,7 @@ export class SpookySync<S extends SchemaStructure> {
     private schema: S,
     logger: Logger
   ) {
-    this.logger = logger.child({ service: 'SpookySync' });
+    this.logger = logger.child({ service: 'Sp00kySync' });
     this.upQueue = new UpQueue(this.local, this.logger);
     this.downQueue = new DownQueue(this.local, this.logger);
     this.syncEngine = new SyncEngine(this.remote, this.cache, this.schema, this.logger);
@@ -80,7 +80,7 @@ export class SpookySync<S extends SchemaStructure> {
    * @throws Error if already initialized.
    */
   public async init(clientId: string) {
-    if (this.isInit) throw new Error('SpookySync is already initialized');
+    if (this.isInit) throw new Error('Sp00kySync is already initialized');
     this.clientId = clientId;
     this.isInit = true;
     await this.scheduler.init();
@@ -92,17 +92,17 @@ export class SpookySync<S extends SchemaStructure> {
 
   private async startRefLiveQueries() {
     this.logger.debug(
-      { clientId: this.clientId, Category: 'spooky-client::SpookySync::startRefLiveQueries' },
+      { clientId: this.clientId, Category: 'sp00ky-client::Sp00kySync::startRefLiveQueries' },
       'Starting ref live queries'
     );
 
     const [queryUuid] = await this.remote.query<[Uuid]>(
-      'LIVE SELECT * FROM _spooky_list_ref'
+      'LIVE SELECT * FROM _00_list_ref'
     );
 
     (await this.remote.getClient().liveOf(queryUuid)).subscribe((message) => {
       this.logger.debug(
-        { message, Category: 'spooky-client::SpookySync::startRefLiveQueries' },
+        { message, Category: 'sp00ky-client::Sp00kySync::startRefLiveQueries' },
         'Live update received'
       );
       if (message.action === 'KILLED') return;
@@ -113,7 +113,7 @@ export class SpookySync<S extends SchemaStructure> {
         message.value.version as number
       ).catch((err) => {
         this.logger.error(
-          { err, Category: 'spooky-client::SpookySync::startRefLiveQueries' },
+          { err, Category: 'sp00ky-client::Sp00kySync::startRefLiveQueries' },
           'Error handling remote list ref change'
         );
       });
@@ -131,7 +131,7 @@ export class SpookySync<S extends SchemaStructure> {
         {
           queryId: queryId.toString(),
           recordId: recordId.toString(),
-          Category: 'spooky-client::SpookySync::handleRemoteListRefChange',
+          Category: 'sp00ky-client::Sp00kySync::handleRemoteListRefChange',
         },
         'Ignoring DELETE on list_ref — should not happen'
       );
@@ -144,7 +144,7 @@ export class SpookySync<S extends SchemaStructure> {
       this.logger.warn(
         {
           queryId: queryId.toString(),
-          Category: 'spooky-client::SpookySync::handleRemoteListRefChange',
+          Category: 'sp00ky-client::Sp00kySync::handleRemoteListRefChange',
         },
         'Received remote update for unknown local query'
       );
@@ -160,7 +160,7 @@ export class SpookySync<S extends SchemaStructure> {
         recordId,
         version,
         localArray,
-        Category: 'spooky-client::SpookySync::handleRemoteListRefChange',
+        Category: 'sp00ky-client::Sp00kySync::handleRemoteListRefChange',
       },
       'Live update is being processed'
     );
@@ -178,7 +178,7 @@ export class SpookySync<S extends SchemaStructure> {
 
   private async processUpEvent(event: UpEvent) {
     this.logger.debug(
-      { event, Category: 'spooky-client::SpookySync::processUpEvent' },
+      { event, Category: 'sp00ky-client::Sp00kySync::processUpEvent' },
       'Processing up event'
     );
     switch (event.type) {
@@ -206,7 +206,7 @@ export class SpookySync<S extends SchemaStructure> {
         break;
       default:
         this.logger.error(
-          { event, Category: 'spooky-client::SpookySync::processUpEvent' },
+          { event, Category: 'sp00ky-client::Sp00kySync::processUpEvent' },
           'processUpEvent unknown event type'
         );
         return;
@@ -226,7 +226,7 @@ export class SpookySync<S extends SchemaStructure> {
         recordId,
         tableName,
         error: error.message,
-        Category: 'spooky-client::SpookySync::handleRollback',
+        Category: 'sp00ky-client::Sp00kySync::handleRollback',
       },
       'Rolling back failed mutation'
     );
@@ -242,7 +242,7 @@ export class SpookySync<S extends SchemaStructure> {
           this.logger.warn(
             {
               recordId,
-              Category: 'spooky-client::SpookySync::handleRollback',
+              Category: 'sp00ky-client::Sp00kySync::handleRollback',
             },
             'Cannot rollback update: no beforeRecord available. Down-sync will reconcile.'
           );
@@ -252,7 +252,7 @@ export class SpookySync<S extends SchemaStructure> {
         this.logger.warn(
           {
             recordId,
-            Category: 'spooky-client::SpookySync::handleRollback',
+            Category: 'sp00ky-client::Sp00kySync::handleRollback',
           },
           'Delete rollback not implemented. Down-sync will reconcile.'
         );
@@ -268,7 +268,7 @@ export class SpookySync<S extends SchemaStructure> {
 
   private async processDownEvent(event: DownEvent) {
     this.logger.debug(
-      { event, Category: 'spooky-client::SpookySync::processDownEvent' },
+      { event, Category: 'sp00ky-client::Sp00kySync::processDownEvent' },
       'Processing down event'
     );
     switch (event.type) {
@@ -292,7 +292,7 @@ export class SpookySync<S extends SchemaStructure> {
     const queryState = this.dataModule.getQueryByHash(hash);
     if (!queryState) {
       this.logger.warn(
-        { hash, Category: 'spooky-client::SpookySync::syncQuery' },
+        { hash, Category: 'sp00ky-client::Sp00kySync::syncQuery' },
         'Query not found'
       );
       return;
@@ -320,7 +320,7 @@ export class SpookySync<S extends SchemaStructure> {
   private async registerQuery(queryHash: string) {
     try {
       this.logger.debug(
-        { queryHash, Category: 'spooky-client::SpookySync::registerQuery' },
+        { queryHash, Category: 'sp00ky-client::Sp00kySync::registerQuery' },
         'Register Query state'
       );
       await this.createRemoteQuery(queryHash);
@@ -330,7 +330,7 @@ export class SpookySync<S extends SchemaStructure> {
       await this.dataModule.notifyQuerySynced(queryHash);
     } catch (e) {
       this.logger.error(
-        { err: e, Category: 'spooky-client::SpookySync::registerQuery' },
+        { err: e, Category: 'sp00ky-client::Sp00kySync::registerQuery' },
         'registerQuery error'
       );
       throw e;
@@ -342,7 +342,7 @@ export class SpookySync<S extends SchemaStructure> {
 
     if (!queryState) {
       this.logger.warn(
-        { queryHash, Category: 'spooky-client::SpookySync::createRemoteQuery' },
+        { queryHash, Category: 'sp00ky-client::Sp00kySync::createRemoteQuery' },
         'Query to register not found'
       );
       throw new Error('Query to register not found');
@@ -359,7 +359,7 @@ export class SpookySync<S extends SchemaStructure> {
     });
 
     const [items] = await this.remote.query<[{ out: RecordId<string>; version: number }[]]>(
-      surql.selectByFieldsAnd('_spooky_list_ref', ['in'], ['out', 'version']),
+      surql.selectByFieldsAnd('_00_list_ref', ['in'], ['out', 'version']),
       {
         in: queryState.config.id,
       }
@@ -369,7 +369,7 @@ export class SpookySync<S extends SchemaStructure> {
       {
         queryId: encodeRecordId(queryState.config.id),
         items,
-        Category: 'spooky-client::SpookySync::createRemoteQuery',
+        Category: 'sp00ky-client::Sp00kySync::createRemoteQuery',
       },
       'Got query record version array from remote'
     );
@@ -380,7 +380,7 @@ export class SpookySync<S extends SchemaStructure> {
       {
         queryId: encodeRecordId(queryState.config.id),
         array,
-        Category: 'spooky-client::SpookySync::createRemoteQuery',
+        Category: 'sp00ky-client::Sp00kySync::createRemoteQuery',
       },
       'createdRemoteQuery'
     );
@@ -395,7 +395,7 @@ export class SpookySync<S extends SchemaStructure> {
     const queryState = this.dataModule.getQueryByHash(queryHash);
     if (!queryState) {
       this.logger.warn(
-        { queryHash, Category: 'spooky-client::SpookySync::heartbeatQuery' },
+        { queryHash, Category: 'sp00ky-client::Sp00kySync::heartbeatQuery' },
         'Query to register not found'
       );
       throw new Error('Query to register not found');
@@ -409,7 +409,7 @@ export class SpookySync<S extends SchemaStructure> {
     const queryState = this.dataModule.getQueryByHash(queryHash);
     if (!queryState) {
       this.logger.warn(
-        { queryHash, Category: 'spooky-client::SpookySync::cleanupQuery' },
+        { queryHash, Category: 'sp00ky-client::Sp00kySync::cleanupQuery' },
         'Query to register not found'
       );
       throw new Error('Query to register not found');

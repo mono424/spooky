@@ -7,7 +7,7 @@ export default function GitHubStarsBrutalist() {
     // AbortController prevents state updates if component unmounts during fetch
     const controller = new AbortController();
 
-    fetch('https://api.github.com/repos/mono424/spooky', {
+    fetch('https://api.github.com/repos/mono424/sp00ky', {
       signal: controller.signal,
       // Optional: Cache for 1 hour to prevent hitting GitHub limits
       next: { revalidate: 3600 },
@@ -34,7 +34,7 @@ export default function GitHubStarsBrutalist() {
 
   return (
     <a
-      href="https://github.com/mono424/spooky"
+      href="https://github.com/mono424/sp00ky"
       target="_blank"
       rel="noreferrer"
       className="group inline-flex items-center gap-2 border border-white/20 bg-black px-3 py-1.5 font-mono text-xs font-bold uppercase tracking-wider text-white transition-all hover:bg-white hover:text-black hover:shadow-[4px_4px_0px_0px_rgba(255,255,255,0.5)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"

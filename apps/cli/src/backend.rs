@@ -1,14 +1,28 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use openapiv3::OpenAPI;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Whether a service is hosted on Sp00ky Cloud or externally.
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum HostingMode {
+    Cloud,
+    External,
+}
+
+impl Default for HostingMode {
+    fn default() -> Self {
+        Self::Cloud
+    }
+}
+
 pub const DEFAULT_SCHEMA_PATH: &str = "src/schema.surql";
 pub const DEFAULT_MIGRATIONS_DIR: &str = "migrations";
 pub const DEFAULT_BUCKETS_DIR: &str = "src/buckets";
-pub const DEFAULT_CONFIG_PATH: &str = "spooky.yml";
+pub const DEFAULT_CONFIG_PATH: &str = "sp00ky.yml";
 
 /// SurrealDB config: either a plain version string (backwards compat)
 /// or an object with version, namespace, and database.
@@ -25,6 +39,12 @@ pub enum SurrealDbConfig {
         namespace: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         database: Option<String>,
+        /// "cloud" (default) or "external"
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hosting: Option<HostingMode>,
+        /// Required when hosting is "external" — the SurrealDB endpoint URL
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        endpoint: Option<String>,
     },
 }
 
@@ -34,6 +54,9 @@ pub struct ResolvedSurrealDb {
     pub version: String,
     pub namespace: String,
     pub database: String,
+    pub hosting: HostingMode,
+    /// Only `Some` when `hosting == External`.
+    pub endpoint: Option<String>,
 }
 
 impl ResolvedSurrealDb {
@@ -43,18 +66,31 @@ impl ResolvedSurrealDb {
                 version: v.clone(),
                 namespace: "main".to_string(),
                 database: "main".to_string(),
+                hosting: HostingMode::Cloud,
+                endpoint: None,
             },
-            Some(SurrealDbConfig::Full { version, namespace, database }) => Self {
+            Some(SurrealDbConfig::Full { version, namespace, database, hosting, endpoint }) => Self {
                 version: version.clone().unwrap_or_else(|| DEFAULT_SURREALDB_VERSION.to_string()),
                 namespace: namespace.clone().unwrap_or_else(|| "main".to_string()),
                 database: database.clone().unwrap_or_else(|| "main".to_string()),
+                hosting: hosting.clone().unwrap_or_default(),
+                endpoint: endpoint.clone(),
             },
             None => Self {
                 version: DEFAULT_SURREALDB_VERSION.to_string(),
                 namespace: "main".to_string(),
                 database: "main".to_string(),
+                hosting: HostingMode::Cloud,
+                endpoint: None,
             },
         }
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if self.hosting == HostingMode::External && self.endpoint.is_none() {
+            bail!("SurrealDB hosting is 'external' but no endpoint URL was provided");
+        }
+        Ok(())
     }
 }
 
@@ -109,13 +145,13 @@ pub struct ClientTypeConfig {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct SpookyConfig {
+pub struct Sp00kyConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
     /// SurrealDB config: version string or object with version/namespace/database.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub surrealdb: Option<SurrealDbConfig>,
-    /// Spooky service versions — either a string (sets both ssp & scheduler)
+    /// Sp00ky service versions — either a string (sets both ssp & scheduler)
     /// or an object `{ ssp: "...", scheduler: "..." }` for individual control.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<VersionConfig>,
@@ -129,15 +165,27 @@ pub struct SpookyConfig {
     pub client_types: Vec<ClientTypeConfig>,
     #[serde(default, rename = "devApp", skip_serializing_if = "Option::is_none")]
     pub dev_app: Option<String>,
+    /// Override the Sp00ky Cloud API endpoint (e.g. for staging).
+    #[serde(default, rename = "cloudApi", skip_serializing_if = "Option::is_none")]
+    pub cloud_api: Option<String>,
 }
 
-impl SpookyConfig {
+impl Sp00kyConfig {
     pub fn resolved_schema(&self) -> ResolvedSchema {
         ResolvedSchema::from_config(&self.schema)
     }
 
     pub fn resolved_surrealdb(&self) -> ResolvedSurrealDb {
         ResolvedSurrealDb::from_config(&self.surrealdb)
+    }
+
+    /// Validate hosting configuration for SurrealDB and all backends.
+    pub fn validate(&self) -> Result<()> {
+        self.resolved_surrealdb().validate()?;
+        for (name, backend) in &self.backends {
+            backend.validate(name)?;
+        }
+        Ok(())
     }
 }
 
@@ -183,7 +231,7 @@ impl ResolvedVersions {
     /// - `surrealdb`: from top-level `surrealdb` field, else default
     /// - `version: "tag"` → sets both ssp & scheduler to "tag"
     /// - `version: { ssp: "...", scheduler: "..." }` → individual control, defaults for missing
-    pub fn from_config(config: &SpookyConfig) -> Self {
+    pub fn from_config(config: &Sp00kyConfig) -> Self {
         let surrealdb = config.resolved_surrealdb().version;
 
         let (ssp, scheduler) = match &config.version {
@@ -249,8 +297,52 @@ pub enum BackendDevTypedConfig {
     },
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct BackendDeployConfig {
+    /// Resource allocation for the backend VM
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resources: Option<BackendDeployResources>,
+    /// Expose publicly via {slug}-{name}.fn.spky.cloud
+    #[serde(default)]
+    pub expose: bool,
+    /// Port the service listens on inside the container (default: 8080)
+    #[serde(default = "default_deploy_port")]
+    pub port: u16,
+    /// Environment variables passed to the VM
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env: Vec<String>,
+    /// Override Dockerfile path (defaults to dev.docker.file if available)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dockerfile: Option<String>,
+}
+
+fn default_deploy_port() -> u16 {
+    8080
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct BackendDeployResources {
+    /// Number of vCPUs (default: 1)
+    #[serde(default = "default_vcpus")]
+    pub vcpus: u32,
+    /// Memory in MB (default: 512)
+    #[serde(default = "default_memory")]
+    pub memory: u32,
+    /// Disk in GB (default: 5)
+    #[serde(default = "default_disk")]
+    pub disk: u32,
+}
+
+fn default_vcpus() -> u32 { 1 }
+fn default_memory() -> u32 { 512 }
+fn default_disk() -> u32 { 5 }
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct BackendConfig {
+    /// "cloud" (default) or "external" — whether this backend is deployed to
+    /// Sp00ky Cloud or self-hosted at `baseUrl`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hosting: Option<HostingMode>,
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub backend_type: Option<String>,
     pub spec: String,
@@ -261,6 +353,21 @@ pub struct BackendConfig {
     pub method: BackendMethod,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dev: Option<BackendDevConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deploy: Option<BackendDeployConfig>,
+}
+
+impl BackendConfig {
+    pub fn resolved_hosting(&self) -> HostingMode {
+        self.hosting.clone().unwrap_or_default()
+    }
+
+    pub fn validate(&self, name: &str) -> Result<()> {
+        if self.resolved_hosting() == HostingMode::External && self.base_url.is_none() {
+            bail!("Backend '{}' has hosting 'external' but no baseUrl was provided", name);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -297,9 +404,9 @@ pub struct BackendDefinition {
     pub outbox_table: Option<String>,
 }
 
-/// Load and parse a SpookyConfig from the given path.
+/// Load and parse a Sp00kyConfig from the given path.
 /// Returns a default config if the file doesn't exist or can't be parsed.
-pub fn load_config(path: &Path) -> SpookyConfig {
+pub fn load_config(path: &Path) -> Sp00kyConfig {
     if !path.exists() {
         return default_config();
     }
@@ -315,8 +422,8 @@ pub fn load_config(path: &Path) -> SpookyConfig {
     }
 }
 
-fn default_config() -> SpookyConfig {
-    SpookyConfig {
+fn default_config() -> Sp00kyConfig {
+    Sp00kyConfig {
         mode: Some("singlenode".to_string()),
         surrealdb: None,
         version: None,
@@ -325,6 +432,7 @@ fn default_config() -> SpookyConfig {
         buckets: Default::default(),
         client_types: Default::default(),
         dev_app: None,
+        cloud_api: None,
     }
 }
 
@@ -345,10 +453,10 @@ impl BackendProcessor {
 
     pub fn process(&mut self, config_path: &Path) -> Result<()> {
         let config_str = fs::read_to_string(config_path)
-            .context(format!("Failed to read spooky config: {:?}", config_path))?;
+            .context(format!("Failed to read sp00ky config: {:?}", config_path))?;
 
-        let config: SpookyConfig =
-            serde_yaml::from_str(&config_str).context("Failed to parse spooky config")?;
+        let config: Sp00kyConfig =
+            serde_yaml::from_str(&config_str).context("Failed to parse sp00ky config")?;
 
         let base_dir = config_path.parent().unwrap_or(Path::new("."));
 
@@ -371,7 +479,7 @@ impl BackendProcessor {
     fn process_backend(&mut self, backend_name: &str, backend_config: &BackendConfig, base_dir: &Path) -> Result<()> {
         println!("Processing backend config: {}", backend_name);
 
-        // 1. Append Schema - resolve path relative to spooky.yml
+        // 1. Append Schema - resolve path relative to sp00ky.yml
         let schema_path = base_dir.join(&backend_config.method.schema);
         let schema_content = fs::read_to_string(&schema_path)
             .context(format!("Failed to read backend schema: {:?}", schema_path))?;
@@ -382,7 +490,7 @@ impl BackendProcessor {
         self.schema_appends.push_str(&schema_content);
         println!("  + Appended schema from {:?}", schema_path);
 
-        // 2. Parse OpenAPI Spec - resolve path relative to spooky.yml
+        // 2. Parse OpenAPI Spec - resolve path relative to sp00ky.yml
         let spec_path = base_dir.join(&backend_config.spec);
         let spec_content = fs::read_to_string(&spec_path)
             .context(format!("Failed to read openapi spec: {:?}", spec_path))?;
@@ -463,7 +571,7 @@ impl BackendProcessor {
                 // Also check parameters (query/path) ??
                 // The requirements example showed `args: [...]` which usually implies input parameters.
                 // Given the context of "spookify" example with "id", it was in the body.
-                // I will stick to body properties for now as it matches the spooky RPC style.
+                // I will stick to body properties for now as it matches the sp00ky RPC style.
 
                 backend_def
                     .routes

@@ -1,5 +1,5 @@
 use crate::algebra::{Weight, ZSet};
-use crate::types::{make_key, raw_id, SpookyValue};
+use crate::types::{make_key, raw_id, Sp00kyValue};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -10,7 +10,7 @@ pub struct Collection {
     /// Z-set tracking record membership and weights.
     pub zset: ZSet,
     /// Actual record data, keyed by raw record ID (without table prefix).
-    pub rows: HashMap<String, SpookyValue>,
+    pub rows: HashMap<String, Sp00kyValue>,
 }
 
 impl Collection {
@@ -27,7 +27,7 @@ impl Collection {
         &mut self,
         op: Operation,
         id: &str,
-        data: SpookyValue,
+        data: Sp00kyValue,
     ) -> (String, Weight) {
         let weight = op.weight();
         let normalized = raw_id(id);
@@ -52,15 +52,15 @@ impl Collection {
     }
 
     /// Look up a row by its raw ID.
-    pub fn get_row(&self, id: &str) -> Option<&SpookyValue> {
+    pub fn get_row(&self, id: &str) -> Option<&Sp00kyValue> {
         self.rows.get(raw_id(id))
     }
 
-    /// Get the version of a record from its `spooky_rv` field.
+    /// Get the version of a record from its `_00_rv` field.
     pub fn get_record_version(&self, id: &str) -> Option<i64> {
         self.rows
             .get(raw_id(id))?
-            .get("spooky_rv")?
+            .get("_00_rv")?
             .as_f64()
             .map(|n| n as i64)
     }
@@ -94,7 +94,7 @@ impl Store {
     }
 
     /// Get row data by zset key (format "table:id").
-    pub fn get_row_by_key(&self, key: &str) -> Option<&SpookyValue> {
+    pub fn get_row_by_key(&self, key: &str) -> Option<&Sp00kyValue> {
         let (table, id) = crate::types::parse_key(key)?;
         let coll = self.collections.get(table)?;
         // Try raw ID first, then with table prefix
@@ -114,11 +114,11 @@ pub struct Change {
     pub table: String,
     pub op: Operation,
     pub id: String,
-    pub data: SpookyValue,
+    pub data: Sp00kyValue,
 }
 
 impl Change {
-    pub fn create(table: &str, id: &str, data: impl Into<SpookyValue>) -> Self {
+    pub fn create(table: &str, id: &str, data: impl Into<Sp00kyValue>) -> Self {
         Self {
             table: table.to_string(),
             op: Operation::Create,
@@ -127,7 +127,7 @@ impl Change {
         }
     }
 
-    pub fn update(table: &str, id: &str, data: impl Into<SpookyValue>) -> Self {
+    pub fn update(table: &str, id: &str, data: impl Into<Sp00kyValue>) -> Self {
         Self {
             table: table.to_string(),
             op: Operation::Update,
@@ -141,7 +141,7 @@ impl Change {
             table: table.to_string(),
             op: Operation::Delete,
             id: id.to_string(),
-            data: SpookyValue::Null,
+            data: Sp00kyValue::Null,
         }
     }
 }
@@ -157,11 +157,11 @@ pub struct ChangeSet {
 pub struct Record {
     pub table: String,
     pub id: String,
-    pub data: SpookyValue,
+    pub data: Sp00kyValue,
 }
 
 impl Record {
-    pub fn new(table: &str, id: &str, data: impl Into<SpookyValue>) -> Self {
+    pub fn new(table: &str, id: &str, data: impl Into<Sp00kyValue>) -> Self {
         Self {
             table: table.to_string(),
             id: id.to_string(),

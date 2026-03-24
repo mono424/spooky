@@ -40,7 +40,7 @@ export const SchemaWorkflowEyecatcher: React.FC = () => {
           </div>
           <h3 className="text-2xl font-bold text-text-primary mb-4">Schema-First Development</h3>
           <p className="text-text-tertiary text-body leading-relaxed">
-            Define your database schema once in SurrealDB, and let Spooky generate type-safe
+            Define your database schema once in SurrealDB, and let Sp00ky generate type-safe
             clients for all your targets. One source of truth for your entire stack.
           </p>
         </div>
@@ -117,7 +117,7 @@ export const SchemaWorkflowEyecatcher: React.FC = () => {
               CLI Integration
             </h4>
             <p className="text-text-tertiary leading-relaxed">
-              Run <code className="bg-surface px-1.5 py-0.5 rounded text-text-secondary font-mono text-sm">spooky generate</code> to
+              Run <code className="bg-surface px-1.5 py-0.5 rounded text-text-secondary font-mono text-sm">sp00ky generate</code> to
               regenerate clients whenever your schema changes. Fits right into your workflow.
             </p>
           </div>

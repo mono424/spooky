@@ -69,7 +69,7 @@ COPY --from=builder /usr/src/app/apps/ssp/target/release/ssp-server /usr/local/b
 
 # Set defaults
 ENV RUST_LOG=info
-ENV SPOOKY_PERSISTENCE_FILE=/data/spooky_state.json
+ENV SP00KY_PERSISTENCE_FILE=/data/sp00ky_state.json
 
 # Expose port
 EXPOSE 8667

@@ -53,7 +53,7 @@ apps/
     src/
       main.rs          # Entry point, config loading, startup sequence
       lib.rs           # Core Scheduler struct and lifecycle
-      config.rs        # Configuration (env vars, spooky.yml)
+      config.rs        # Configuration (env vars, sp00ky.yml)
       replica.rs       # In-memory DB replica (table → id → record)
       router.rs        # Query registration load balancer
       job_scheduler.rs # Job scheduling and dispatch
@@ -95,24 +95,24 @@ The default `NatsTransport` maps naturally to NATS features:
 
 | Scheduler Operation | NATS Feature |
 |---|---|
-| Broadcast record updates | `PUBLISH spooky.ingest.<table>` — all SSPs subscribe |
-| Load-balanced query registration | `PUBLISH spooky.query.register` — SSPs in a **queue group** so only one receives it |
-| Job dispatch | `REQUEST spooky.job.execute` — sent to queue group, one SSP picks it up and ACKs |
-| Sidecar bootstrap | `REQUEST spooky.ssp.<id>.bootstrap` — targeted request/reply with chunked payload |
-| SSP health/discovery | SSPs publish to `spooky.ssp.heartbeat` — Scheduler tracks connected pool |
+| Broadcast record updates | `PUBLISH sp00ky.ingest.<table>` — all SSPs subscribe |
+| Load-balanced query registration | `PUBLISH sp00ky.query.register` — SSPs in a **queue group** so only one receives it |
+| Job dispatch | `REQUEST sp00ky.job.execute` — sent to queue group, one SSP picks it up and ACKs |
+| Sidecar bootstrap | `REQUEST sp00ky.ssp.<id>.bootstrap` — targeted request/reply with chunked payload |
+| SSP health/discovery | SSPs publish to `sp00ky.ssp.heartbeat` — Scheduler tracks connected pool |
 | SSP disconnect detection | NATS connection lifecycle events or heartbeat timeout |
 
 **NATS Subjects:**
 
 ```
-spooky.ingest.<table>           # Record updates broadcast
-spooky.query.register           # Query registration (queue group)
-spooky.query.unregister         # Query unregistration
-spooky.job.execute              # Job execution dispatch (queue group)
-spooky.job.status               # Job status updates from SSPs
-spooky.ssp.heartbeat            # SSP heartbeat / presence
-spooky.ssp.<id>.bootstrap       # Targeted bootstrap for specific SSP
-spooky.ssp.<id>.direct          # Direct messages to specific SSP
+sp00ky.ingest.<table>           # Record updates broadcast
+sp00ky.query.register           # Query registration (queue group)
+sp00ky.query.unregister         # Query unregistration
+sp00ky.job.execute              # Job execution dispatch (queue group)
+sp00ky.job.status               # Job status updates from SSPs
+sp00ky.ssp.heartbeat            # SSP heartbeat / presence
+sp00ky.ssp.<id>.bootstrap       # Targeted bootstrap for specific SSP
+sp00ky.ssp.<id>.direct          # Direct messages to specific SSP
 ```
 
 ---
@@ -120,7 +120,7 @@ spooky.ssp.<id>.direct          # Direct messages to specific SSP
 ## Startup Sequence
 
 ```
-1. Load configuration (spooky.yml, env vars)
+1. Load configuration (sp00ky.yml, env vars)
 2. Connect to NATS (or configured transport)
 3. Connect to SurrealDB
 4. Ingest all existing records into in-memory replica
@@ -141,7 +141,7 @@ SurrealDB emits LIVE SELECT event (CREATE/UPDATE/DELETE on record)
   → Scheduler receives event
   → Scheduler updates in-memory replica
   → Scheduler broadcasts via transport:
-      PUBLISH spooky.ingest.<table> { op, id, record }
+      PUBLISH sp00ky.ingest.<table> { op, id, record }
   → All connected SSPs receive and process through their DBSP circuits
 ```
 
@@ -154,7 +154,7 @@ Client sends query registration to Scheduler (via SSP or directly)
       - Least-queries (fewest registered queries)
       - Least-load (based on heartbeat CPU/memory metrics)
   → Scheduler sends via queue group or targeted:
-      PUBLISH spooky.query.register { id, sql, params, clientId, ttl }
+      PUBLISH sp00ky.query.register { id, sql, params, clientId, ttl }
   → One SSP receives and registers the query in its DBSP circuit
   → Scheduler tracks which SSP owns which query (for rebalancing/failover)
 ```
@@ -167,7 +167,7 @@ Scheduler detects new job record (via LIVE SELECT on job table)
       - Immediate execution (default for outbox jobs)
       - Scheduled execution (future: cron-like scheduling)
   → Scheduler dispatches to an SSP via queue group:
-      REQUEST spooky.job.execute { jobId, path, payload, config }
+      REQUEST sp00ky.job.execute { jobId, path, payload, config }
   → SSP executes the job (HTTP call to backend)
   → SSP replies with result (success/failure)
   → Scheduler updates job record in SurrealDB
@@ -176,12 +176,12 @@ Scheduler detects new job record (via LIVE SELECT on job table)
 ### Flow 4: New SSP Bootstrap
 
 ```
-New SSP connects and publishes heartbeat to spooky.ssp.heartbeat
+New SSP connects and publishes heartbeat to sp00ky.ssp.heartbeat
   → Scheduler detects new SSP (unknown ssp_id)
   → Scheduler initiates bootstrap:
       1. Pause broadcasting to new SSP (buffer updates)
       2. Stream full replica to SSP in chunks:
-         REQUEST spooky.ssp.<id>.bootstrap { chunk_index, table, records }
+         REQUEST sp00ky.ssp.<id>.bootstrap { chunk_index, table, records }
       3. Send buffered updates that arrived during bootstrap
       4. Resume normal broadcasting
   → SSP confirms bootstrap complete
@@ -195,7 +195,7 @@ SSP heartbeat times out or NATS detects disconnect
   → Scheduler marks SSP as disconnected
   → Scheduler reassigns orphaned queries to remaining SSPs:
       - For each query owned by disconnected SSP:
-        PUBLISH spooky.query.register (to queue group)
+        PUBLISH sp00ky.query.register (to queue group)
   → Scheduler reassigns in-flight jobs:
       - For each pending job on disconnected SSP:
         Re-dispatch to another SSP via queue group
@@ -266,7 +266,7 @@ pub struct SspInfo {
 
 ## Configuration
 
-Extends `spooky.yml` with a scheduler section:
+Extends `sp00ky.yml` with a scheduler section:
 
 ```yaml
 scheduler:
@@ -276,8 +276,8 @@ scheduler:
     credentials: /path/to/creds            # Optional NATS credentials
   db:
     url: ws://localhost:8000               # SurrealDB WebSocket URL
-    namespace: spooky
-    database: spooky
+    namespace: sp00ky
+    database: sp00ky
     username: root
     password: root
   load_balance: least_queries              # round_robin | least_queries | least_load
@@ -288,7 +288,7 @@ scheduler:
     - job
 ```
 
-Environment variable overrides follow the pattern `SPOOKY_SCHEDULER_<KEY>` (e.g., `SPOOKY_SCHEDULER_NATS_URL`).
+Environment variable overrides follow the pattern `SP00KY_SCHEDULER_<KEY>` (e.g., `SP00KY_SCHEDULER_NATS_URL`).
 
 ---
 
@@ -299,7 +299,7 @@ Environment variable overrides follow the pattern `SPOOKY_SCHEDULER_<KEY>` (e.g.
 The SSP no longer connects directly to SurrealDB for LIVE SELECT. Instead:
 
 1. **Add NATS client** — Subscribe to Scheduler subjects.
-2. **Remove direct LIVE SELECT** — Records arrive via `spooky.ingest.<table>` subscription.
+2. **Remove direct LIVE SELECT** — Records arrive via `sp00ky.ingest.<table>` subscription.
 3. **Listen on query queue group** — Receive query registrations from Scheduler.
 4. **Listen on job queue group** — Receive job dispatch from Scheduler.
 5. **Publish heartbeats** — Periodic heartbeat with load metrics.
@@ -324,7 +324,7 @@ The job runner remains within SSP but is now triggered by Scheduler dispatch rat
 
 ### Phase 2: SSP Integration
 - [ ] Add NATS client to SSP sidecar
-- [ ] SSP subscribes to `spooky.ingest.<table>` for record updates
+- [ ] SSP subscribes to `sp00ky.ingest.<table>` for record updates
 - [ ] SSP publishes heartbeats
 - [ ] Scheduler tracks SSP pool from heartbeats
 - [ ] Implement SSP bootstrap flow (full replica transfer on connect)
@@ -373,4 +373,4 @@ opentelemetry = "0.22"
 - **Client routing:** Should clients talk to the Scheduler directly for query registration, or continue through SSP which forwards to Scheduler?
 - **Replica consistency:** How to handle the window between SurrealDB write and Scheduler replica update? Is eventual consistency acceptable?
 - **Multi-scheduler HA:** Should we plan for multiple Scheduler instances behind NATS for high availability, or is single-instance acceptable for now?
-- **Schema discovery:** Should the Scheduler auto-discover tables from SurrealDB or rely on explicit configuration in `spooky.yml`?
+- **Schema discovery:** Should the Scheduler auto-discover tables from SurrealDB or rely on explicit configuration in `sp00ky.yml`?

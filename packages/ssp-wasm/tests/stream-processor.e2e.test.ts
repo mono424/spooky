@@ -1,5 +1,5 @@
 /**
- * E2E Test Suite for spooky-stream-processor-wasm
+ * E2E Test Suite for sp00ky-stream-processor-wasm
  *
  * Tests the full flow of view registration and record ingestion.
  * Covers simple views, one-level joins, and two-level nested joins.
@@ -9,7 +9,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { initSync, SpookyProcessor } from '../pkg/ssp_wasm.js';
+import { initSync, Sp00kyProcessor } from '../pkg/ssp_wasm.js';
 import type { WasmViewUpdate } from '../pkg/ssp_wasm';
 import {
   makeUserRecord,
@@ -37,7 +37,7 @@ describe('Simple View (Single Table Scan)', () => {
 
   describe('Scenario 1: Records ingested first, then view registered', () => {
     it('should return correct hash tree when view is registered after records exist', async () => {
-      const processor = new SpookyProcessor();
+      const processor = new Sp00kyProcessor();
 
       // 1. Ingest some records first
       const user1 = makeUserRecord('alice', 'alice@example.com');
@@ -65,7 +65,7 @@ describe('Simple View (Single Table Scan)', () => {
 
   describe('Scenario 2: View exists, new record ingested', () => {
     it('should return updated view when new record is ingested', async () => {
-      const processor = new SpookyProcessor();
+      const processor = new Sp00kyProcessor();
 
       // 1. Ingest initial record
       const user1 = makeUserRecord('alice', 'alice@example.com');
@@ -100,7 +100,7 @@ describe('Simple View (Single Table Scan)', () => {
 
   describe('Scenario 3: Empty start, view registered, then record ingested', () => {
     it('should return updated view when first record is ingested', async () => {
-      const processor = new SpookyProcessor();
+      const processor = new Sp00kyProcessor();
 
       // 1. Register view with no data
       const config = createViewConfig(VIEW_ID, SIMPLE_VIEW_SQL);
@@ -137,7 +137,7 @@ describe('One Nested Join (Thread with Author Subquery)', () => {
 
   describe('Scenario 1: Records ingested first, then view registered', () => {
     it('should return correct hash tree with joined data', async () => {
-      const processor = new SpookyProcessor();
+      const processor = new Sp00kyProcessor();
 
       // 1. Create author
       const author = makeAuthorRecord('Alice');
@@ -167,7 +167,7 @@ describe('One Nested Join (Thread with Author Subquery)', () => {
 
   describe('Scenario 2: View exists, new thread record ingested', () => {
     it('should return updated view when new thread is added', async () => {
-      const processor = new SpookyProcessor();
+      const processor = new Sp00kyProcessor();
 
       // 1. Setup author
       const author = makeAuthorRecord('Alice');
@@ -202,7 +202,7 @@ describe('One Nested Join (Thread with Author Subquery)', () => {
 
   describe('Scenario 3: Empty start, view registered, then records ingested', () => {
     it('should return updated view when author and thread are ingested', async () => {
-      const processor = new SpookyProcessor();
+      const processor = new Sp00kyProcessor();
 
       // 1. Register view with no data
       const config = createViewConfig(VIEW_ID, JOIN_VIEW_SQL);
@@ -249,7 +249,7 @@ describe('Two Nested Subqueries (Thread with Author and Comments)', () => {
 
   describe('Scenario 1: Records ingested first, then view registered', () => {
     it('should return correct hash tree with joined data', async () => {
-      const processor = new SpookyProcessor();
+      const processor = new Sp00kyProcessor();
 
       // 1. Create author
       const author = makeAuthorRecord('Alice');
@@ -283,7 +283,7 @@ describe('Two Nested Subqueries (Thread with Author and Comments)', () => {
 
   describe('Scenario 2: View exists, new comment ingested', () => {
     it('should return updated view when new comment is added', async () => {
-      const processor = new SpookyProcessor();
+      const processor = new Sp00kyProcessor();
 
       // 1. Setup hierarchy
       const author = makeAuthorRecord('Alice');
@@ -319,7 +319,7 @@ describe('Two Nested Subqueries (Thread with Author and Comments)', () => {
 
   describe('Scenario 3: Empty start, view registered, then records ingested', () => {
     it('should return updated view when hierarchy is built', async () => {
-      const processor = new SpookyProcessor();
+      const processor = new Sp00kyProcessor();
 
       // 1. Register view with no data
       const config = createViewConfig(VIEW_ID, NESTED_SUBQUERY_SQL);
@@ -362,7 +362,7 @@ describe('Two Nested Subqueries (Thread with Author and Comments)', () => {
 
   describe('Dependency deletion', () => {
     it('should remove comment from view when thread is deleted', async () => {
-      const processor = new SpookyProcessor();
+      const processor = new Sp00kyProcessor();
 
       // 1. Setup hierarchy
       const author = makeAuthorRecord('Alice');
@@ -397,8 +397,8 @@ describe('Two Nested Subqueries (Thread with Author and Comments)', () => {
 
 describe('Hash Tree Consistency', () => {
   it('should produce consistent hashes for identical data regardless of insertion order', async () => {
-    const processor1 = new SpookyProcessor();
-    const processor2 = new SpookyProcessor();
+    const processor1 = new Sp00kyProcessor();
+    const processor2 = new Sp00kyProcessor();
 
     const VIEW_SQL = 'SELECT * FROM user';
     const VIEW_ID = 'consistency-test-view';

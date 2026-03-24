@@ -87,7 +87,7 @@ pub struct Config {
     pub db_pass: String,
     pub db_ns: String,
     pub db_db: String,
-    pub spooky_config_path: PathBuf,
+    pub sp00ky_config_path: PathBuf,
     pub scheduler_url: Option<String>,
     pub ssp_id: String,
     pub heartbeat_interval_ms: u64,
@@ -103,9 +103,9 @@ pub fn load_config() -> Config {
         db_pass: std::env::var("SURREALDB_PASS").unwrap_or_else(|_| "root".to_string()),
         db_ns: std::env::var("SURREALDB_NS").unwrap_or_else(|_| "test".to_string()),
         db_db: std::env::var("SURREALDB_DB").unwrap_or_else(|_| "test".to_string()),
-        spooky_config_path: PathBuf::from(
-            std::env::var("SPOOKY_CONFIG_PATH")
-                .unwrap_or_else(|_| "spooky.yml".to_string()),
+        sp00ky_config_path: PathBuf::from(
+            std::env::var("SP00KY_CONFIG_PATH")
+                .unwrap_or_else(|_| "sp00ky.yml".to_string()),
         ),
         scheduler_url: std::env::var("SCHEDULER_URL").ok(),
         ssp_id: std::env::var("SSP_ID")
@@ -268,7 +268,7 @@ pub async fn run_server() -> anyhow::Result<()> {
         metrics::init_metrics().context("Failed to initialize metrics")?;
     let metrics = Arc::new(metrics);
 
-    info!("\n ____  ____  ____\n/ ___)/ ___)(  _ \\\n\\___ \\\\___ \\ ) __/\n(____/(____/(__)    v{}\n\nSpooky Sync Provider — streaming mode", env!("CARGO_PKG_VERSION"));
+    info!("\n ____  ____  ____\n/ ___)/ ___)(  _ \\\n\\___ \\\\___ \\ ) __/\n(____/(____/(__)    v{}\n\nSp00ky Sync Provider — streaming mode", env!("CARGO_PKG_VERSION"));
 
     let config = load_config();
     let db = connect_database(&config).await?;
@@ -278,8 +278,8 @@ pub async fn run_server() -> anyhow::Result<()> {
     let status = Arc::new(RwLock::new(SspStatus::Bootstrapping));
 
     // Load job configuration
-    let job_config = if config.spooky_config_path.exists() {
-        match job_runner::load_config(&config.spooky_config_path) {
+    let job_config = if config.sp00ky_config_path.exists() {
+        match job_runner::load_config(&config.sp00ky_config_path) {
             Ok(cfg) => {
                 info!(
                     job_tables = cfg.job_tables.len(),
@@ -293,7 +293,7 @@ pub async fn run_server() -> anyhow::Result<()> {
             }
         }
     } else {
-        info!("No spooky config found, job runner disabled");
+        info!("No sp00ky config found, job runner disabled");
         Arc::new(JobConfig::default())
     };
 
@@ -553,7 +553,7 @@ async fn self_bootstrap(
     let tables: Vec<String> = match info_json.get("tables") {
         Some(Value::Object(tables_map)) => tables_map
             .keys()
-            .filter(|name| !name.starts_with("_spooky_"))
+            .filter(|name| !name.starts_with("_00_"))
             .cloned()
             .collect(),
         _ => {
@@ -591,9 +591,9 @@ async fn self_bootstrap(
         info!(table = %table, records = record_count, "Loaded table data");
     }
 
-    // Step 3: Re-register views from _spooky_query
-    let result = source.query("SELECT * FROM _spooky_query").await
-        .context("Failed to query _spooky_query")?;
+    // Step 3: Re-register views from _00_query
+    let result = source.query("SELECT * FROM _00_query").await
+        .context("Failed to query _00_query")?;
 
     let views: Vec<Value> = match result {
         Value::Array(arr) => arr,
@@ -611,9 +611,9 @@ async fn self_bootstrap(
             }
         };
 
-        // Strip the table prefix if present (e.g. "_spooky_query:abc" -> "abc")
+        // Strip the table prefix if present (e.g. "_00_query:abc" -> "abc")
         let raw_id = view_id
-            .strip_prefix("_spooky_query:")
+            .strip_prefix("_00_query:")
             .unwrap_or(&view_id)
             .to_string();
 
@@ -677,7 +677,7 @@ async fn self_bootstrap(
 
 async fn auth_middleware(req: Request, next: Next) -> Response {
     let auth_header = req.headers().get(AUTHORIZATION);
-    let secret = std::env::var("SPOOKY_AUTH_SECRET").unwrap_or_default();
+    let secret = std::env::var("SP00KY_AUTH_SECRET").unwrap_or_default();
 
     match auth_header {
         Some(header) if header.to_str().unwrap_or_default() == format!("Bearer {}", secret) => {
@@ -894,7 +894,7 @@ async fn register_view_handler(
             "View already existed - updating metadata only"
         );
 
-        // Still update the _spooky_query record for fresh clientId/lastActiveAt
+        // Still update the _00_query record for fresh clientId/lastActiveAt
         let client_id = data.metadata.get("clientId").and_then(|v| v.as_str()).unwrap_or("").to_string();
         let last_active_at = data.metadata.get("lastActiveAt").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
@@ -1018,7 +1018,7 @@ async fn unregister_view_handler(
     if let Some(from_id) = parse_record_id(&incantation_id) {
         if let Err(e) = state
             .db
-            .query("DELETE $from->_spooky_list_ref")
+            .query("DELETE $from->_00_list_ref")
             .bind(("from", from_id))
             .await
         {
@@ -1045,7 +1045,7 @@ async fn reset_handler(State(state): State<AppState>) -> impl IntoResponse {
     state.metrics.view_count.add(-(old_view_count as i64), &[]);
 
     // Delete all edges
-    if let Err(e) = state.db.query("DELETE _spooky_list_ref").await {
+    if let Err(e) = state.db.query("DELETE _00_list_ref").await {
         error!("Failed to delete all edges on reset: {}", e);
     }
 
@@ -1175,7 +1175,7 @@ async fn cleanup_expired_query(
 
     // Delete associated list_ref edges
     if let Err(e) = db
-        .query("DELETE $id->_spooky_list_ref")
+        .query("DELETE $id->_00_list_ref")
         .bind(("id", parse_record_id(&incantation_id).unwrap()))
         .await
     {
@@ -1208,7 +1208,7 @@ async fn ttl_cleanup_sweep(
     }
 
     let expired_ids: Vec<String> = match db
-        .query("SELECT VALUE id FROM _spooky_query WHERE lastActiveAt + ttl < time::now()")
+        .query("SELECT VALUE id FROM _00_query WHERE lastActiveAt + ttl < time::now()")
         .await
     {
         Ok(mut response) => response.take(0).unwrap_or_default(),
@@ -1223,7 +1223,7 @@ async fn ttl_cleanup_sweep(
         .into_iter()
         .filter_map(|id| {
             let raw = id
-                .strip_prefix("_spooky_query:")
+                .strip_prefix("_00_query:")
                 .unwrap_or(&id)
                 .to_string();
             if view_ids.contains(&raw) { Some(raw) } else { None }
@@ -1250,10 +1250,10 @@ fn parse_record_id(id: &str) -> Option<RecordId> {
 
 /// Format incantation ID with proper prefix
 fn format_incantation_id(id: &str) -> String {
-    if id.starts_with("_spooky_query:") {
+    if id.starts_with("_00_query:") {
         id.to_string()
     } else {
-        format!("_spooky_query:{}", id)
+        format!("_00_query:{}", id)
     }
 }
 
@@ -1315,7 +1315,7 @@ pub async fn update_all_edges<C: Connection>(
             let version = circuit.store.get_record_version_by_key(id).unwrap_or(1);
             created_count += 1;
             all_statements.push(format!(
-                "RELATE ${1}->_spooky_list_ref->{0} SET version = {2}, clientId = (SELECT VALUE clientId FROM ${1} LIMIT 1)[0]",
+                "RELATE ${1}->_00_list_ref->{0} SET version = {2}, clientId = (SELECT VALUE clientId FROM ${1} LIMIT 1)[0]",
                 id, binding_name, version
             ));
         }
@@ -1335,7 +1335,7 @@ pub async fn update_all_edges<C: Connection>(
             let version = circuit.store.get_record_version_by_key(id).unwrap_or(1);
             updated_count += 1;
             all_statements.push(format!(
-                "UPDATE _spooky_list_ref SET version = {2} WHERE in = ${0} AND out = {1}",
+                "UPDATE _00_list_ref SET version = {2} WHERE in = ${0} AND out = {1}",
                 binding_name, id, version
             ));
         }
@@ -1354,7 +1354,7 @@ pub async fn update_all_edges<C: Connection>(
 
             deleted_count += 1;
             all_statements.push(format!(
-                "DELETE ${1}->_spooky_list_ref WHERE out = {0}",
+                "DELETE ${1}->_00_list_ref WHERE out = {0}",
                 id, binding_name
             ));
         }
@@ -1377,10 +1377,10 @@ pub async fn update_all_edges<C: Connection>(
                     let version = circuit.store.get_record_version_by_key(&item.id).unwrap_or(1);
                     created_count += 1;
                     all_statements.push(format!(
-                        "RELATE ${binding}->_spooky_list_ref->{id} SET \
+                        "RELATE ${binding}->_00_list_ref->{id} SET \
                          version = {version}, \
                          clientId = (SELECT VALUE clientId FROM ${binding} LIMIT 1)[0], \
-                         parent = (SELECT VALUE id FROM _spooky_list_ref WHERE in = ${binding} AND out = {parent} LIMIT 1)[0], \
+                         parent = (SELECT VALUE id FROM _00_list_ref WHERE in = ${binding} AND out = {parent} LIMIT 1)[0], \
                          parent_rel = '{alias}'",
                         binding = binding_name,
                         id = item.id,
@@ -1393,14 +1393,14 @@ pub async fn update_all_edges<C: Connection>(
                     let version = circuit.store.get_record_version_by_key(&item.id).unwrap_or(1);
                     updated_count += 1;
                     all_statements.push(format!(
-                        "UPDATE _spooky_list_ref SET version = {version} WHERE in = ${binding} AND out = {id}",
+                        "UPDATE _00_list_ref SET version = {version} WHERE in = ${binding} AND out = {id}",
                         binding = binding_name, id = item.id, version = version
                     ));
                 }
                 SubqueryOp::Remove => {
                     deleted_count += 1;
                     all_statements.push(format!(
-                        "DELETE ${binding}->_spooky_list_ref WHERE out = {id}",
+                        "DELETE ${binding}->_00_list_ref WHERE out = {id}",
                         binding = binding_name, id = item.id
                     ));
                 }

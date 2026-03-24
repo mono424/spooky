@@ -34,7 +34,7 @@ describe('Intrinsic Hash Logic', () => {
       while (Date.now() - start < timeout) {
         const q = (await db
           .query(
-            `SELECT value intrinsicHash FROM ONLY _spooky_data_hash WHERE recordId = ${userId}`
+            `SELECT value intrinsicHash FROM ONLY _00_data_hash WHERE recordId = ${userId}`
           )
           .collect()) as any;
         const h = Array.isArray(q) ? q[0] : q;
@@ -45,7 +45,7 @@ describe('Intrinsic Hash Logic', () => {
         await new Promise((r) => setTimeout(r, 200));
       }
       const q = (await db
-        .query(`SELECT value intrinsicHash FROM ONLY _spooky_data_hash WHERE recordId = ${userId}`)
+        .query(`SELECT value intrinsicHash FROM ONLY _00_data_hash WHERE recordId = ${userId}`)
         .collect()) as any;
       return Array.isArray(q) ? q[0] : q;
     };

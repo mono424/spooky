@@ -38,8 +38,7 @@ export function McpTab() {
           <div class="mcp-disabled-notice">
             <h3>MCP is disabled</h3>
             <p>
-              Enable MCP to allow AI assistants like Claude to interact with your Spooky
-              application through DevTools. Toggle the switch above to start the bridge connection.
+              Enable MCP to allow AI assistants like Claude to interact with your Sp00ky application through DevTools. Toggle the switch above to start the bridge connection.
             </p>
           </div>
         }
@@ -48,7 +47,7 @@ export function McpTab() {
           <h3>What is MCP?</h3>
           <p>
             The <strong>Model Context Protocol (MCP)</strong> allows AI assistants like Claude to
-            interact with your Spooky application directly through DevTools. When connected, AI can
+            interact with your Sp00ky application directly through DevTools. When connected, AI can
             inspect state, run queries, browse tables, and debug issues in real-time.
           </p>
         </div>
@@ -106,7 +105,7 @@ export function McpTab() {
         <div class="mcp-section">
           <h3>Setup</h3>
           <p>Add the MCP server to Claude Code:</p>
-          <pre class="mcp-code">claude mcp add spooky-devtools node apps/devtools-mcp/dist/index.js</pre>
+          <pre class="mcp-code">claude mcp add sp00ky-devtools node apps/devtools-mcp/dist/index.js</pre>
           <p class="mcp-hint">
             The MCP server runs a WebSocket bridge on{' '}
             <code>ws://127.0.0.1:{mcpStatus().port}</code>. This extension connects to it when

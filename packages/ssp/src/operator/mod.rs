@@ -10,7 +10,7 @@ pub mod distinct;
 
 use crate::algebra::ZSet;
 use crate::circuit::store::Store;
-use crate::types::SpookyValue;
+use crate::types::Sp00kyValue;
 use std::fmt::Debug;
 
 /// A node in the DBSP circuit.
@@ -30,7 +30,7 @@ pub trait Operator: Debug + Send + Sync {
     ///
     /// Used for initial load and correctness verification.
     /// Does NOT modify internal state.
-    fn snapshot(&self, inputs: &[&ZSet], store: &Store, ctx: Option<&SpookyValue>) -> ZSet;
+    fn snapshot(&self, inputs: &[&ZSet], store: &Store, ctx: Option<&Sp00kyValue>) -> ZSet;
 
     /// Incremental evaluation: input deltas → output delta.
     ///
@@ -40,7 +40,7 @@ pub trait Operator: Debug + Send + Sync {
         &mut self,
         input_deltas: &[&ZSet],
         store: &Store,
-        ctx: Option<&SpookyValue>,
+        ctx: Option<&Sp00kyValue>,
     ) -> ZSet;
 
     /// Number of input ports. Scan=0, unary operators=1, Join=2.

@@ -28,10 +28,10 @@ export function useChromeConnection(options?: UseChromeConnectionOptions) {
   };
 
   /**
-   * Request Spooky state from the inspected page
+   * Request Sp00ky state from the inspected page
    */
   const requestState = (): void => {
-    sendMessage({ type: 'GET_SPOOKY_STATE' });
+    sendMessage({ type: 'GET_SP00KY_STATE' });
   };
 
   onMount(() => {
@@ -40,7 +40,7 @@ export function useChromeConnection(options?: UseChromeConnectionOptions) {
     const connect = () => {
       try {
         // Connect to the background script
-        const newPort = chrome.runtime.connect({ name: 'spooky-devtools' });
+        const newPort = chrome.runtime.connect({ name: 'sp00ky-devtools' });
 
         // Listen for messages from background script
         const messageListener = (message: ChromeMessage) => {

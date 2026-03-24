@@ -2,9 +2,9 @@ import { createSignal, onMount, createComponent, createMemo, JSX, mergeProps } f
 import type { SchemaStructure } from '@spooky/query-builder';
 import type { SyncedDbConfig } from '../types';
 import { SyncedDb } from '../index';
-import { SpookyContext } from './context';
+import { Sp00kyContext } from './context';
 
-export interface SpookyProviderProps<S extends SchemaStructure> {
+export interface Sp00kyProviderProps<S extends SchemaStructure> {
   config: SyncedDbConfig<S>;
   fallback?: JSX.Element;
   onError?: (error: Error) => void;
@@ -12,8 +12,8 @@ export interface SpookyProviderProps<S extends SchemaStructure> {
   children: JSX.Element;
 }
 
-export function SpookyProvider<S extends SchemaStructure>(
-  props: SpookyProviderProps<S>
+export function Sp00kyProvider<S extends SchemaStructure>(
+  props: Sp00kyProviderProps<S>
 ): JSX.Element {
   const merged = mergeProps(
     {
@@ -35,7 +35,7 @@ export function SpookyProvider<S extends SchemaStructure>(
       if (merged.onError) {
         merged.onError(error);
       } else {
-        console.error('SpookyProvider: Failed to initialize database', error);
+        console.error('Sp00kyProvider: Failed to initialize database', error);
       }
     }
   });
@@ -43,7 +43,7 @@ export function SpookyProvider<S extends SchemaStructure>(
   const content = createMemo(() => {
     const instance = db();
     if (!instance) return merged.fallback;
-    return createComponent(SpookyContext.Provider, {
+    return createComponent(Sp00kyContext.Provider, {
       value: instance,
       get children() {
         return merged.children;

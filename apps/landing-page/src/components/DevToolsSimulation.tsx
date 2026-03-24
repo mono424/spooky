@@ -692,7 +692,7 @@ const DEVTOOLS_CSS = `
 `;
 
 const MOCK_EVENTS = [
-  { type: 'info', timestamp: 1715011321152, data: { msg: 'Spooky Sidecar initialized' } },
+  { type: 'info', timestamp: 1715011321152, data: { msg: 'Sp00ky Sidecar initialized' } },
   { type: 'info', timestamp: 1715011321340, data: { msg: 'Loading dbsp_worker.wasm... (2.1MB)' } },
   {
     type: 'warn',
@@ -751,7 +751,7 @@ const MOCK_THREAD_DATA = [
   },
   {
     id: 'thread:7d66s',
-    title: 'Spooky vs ElectricSQL',
+    title: 'Sp00ky vs ElectricSQL',
     author: 'user:alex',
     created: '2024-05-03',
   },
@@ -880,7 +880,7 @@ export const DevToolsSimulation = () => {
                 <path d="M2 17l10 5 10-5"></path>
                 <path d="M2 12l10 5 10-5"></path>
               </svg>
-              <h1 style={{ fontSize: 24, fontWeight: 'bold', marginBottom: 8 }}>My Spooky App</h1>
+              <h1 style={{ fontSize: 24, fontWeight: 'bold', marginBottom: 8 }}>My Sp00ky App</h1>
               <p style={{ fontSize: 14, opacity: 0.6 }}>Syncing active...</p>
             </div>
           </div>

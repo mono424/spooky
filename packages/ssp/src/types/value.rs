@@ -7,96 +7,96 @@ use std::collections::HashMap;
 /// Represents the data content of a record in a collection.
 /// Uses standard `String` and `HashMap` instead of SmolStr/FxHasher.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum SpookyValue {
+pub enum Sp00kyValue {
     Null,
     Bool(bool),
     Number(f64),
     Str(String),
-    Array(Vec<SpookyValue>),
-    Object(HashMap<String, SpookyValue>),
+    Array(Vec<Sp00kyValue>),
+    Object(HashMap<String, Sp00kyValue>),
 }
 
-impl Default for SpookyValue {
+impl Default for Sp00kyValue {
     fn default() -> Self {
-        SpookyValue::Null
+        Sp00kyValue::Null
     }
 }
 
-impl SpookyValue {
+impl Sp00kyValue {
     pub fn as_str(&self) -> Option<&str> {
         match self {
-            SpookyValue::Str(s) => Some(s.as_str()),
+            Sp00kyValue::Str(s) => Some(s.as_str()),
             _ => None,
         }
     }
 
     pub fn as_f64(&self) -> Option<f64> {
         match self {
-            SpookyValue::Number(n) => Some(*n),
+            Sp00kyValue::Number(n) => Some(*n),
             _ => None,
         }
     }
 
     pub fn as_bool(&self) -> Option<bool> {
         match self {
-            SpookyValue::Bool(b) => Some(*b),
+            Sp00kyValue::Bool(b) => Some(*b),
             _ => None,
         }
     }
 
-    pub fn as_object(&self) -> Option<&HashMap<String, SpookyValue>> {
+    pub fn as_object(&self) -> Option<&HashMap<String, Sp00kyValue>> {
         match self {
-            SpookyValue::Object(map) => Some(map),
+            Sp00kyValue::Object(map) => Some(map),
             _ => None,
         }
     }
 
-    pub fn as_array(&self) -> Option<&Vec<SpookyValue>> {
+    pub fn as_array(&self) -> Option<&Vec<Sp00kyValue>> {
         match self {
-            SpookyValue::Array(arr) => Some(arr),
+            Sp00kyValue::Array(arr) => Some(arr),
             _ => None,
         }
     }
 
-    pub fn get(&self, key: &str) -> Option<&SpookyValue> {
+    pub fn get(&self, key: &str) -> Option<&Sp00kyValue> {
         self.as_object()?.get(key)
     }
 
     pub fn is_null(&self) -> bool {
-        matches!(self, SpookyValue::Null)
+        matches!(self, Sp00kyValue::Null)
     }
 }
 
-impl From<Value> for SpookyValue {
+impl From<Value> for Sp00kyValue {
     fn from(v: Value) -> Self {
         match v {
-            Value::Null => SpookyValue::Null,
-            Value::Bool(b) => SpookyValue::Bool(b),
-            Value::Number(n) => SpookyValue::Number(n.as_f64().unwrap_or(0.0)),
-            Value::String(s) => SpookyValue::Str(s),
+            Value::Null => Sp00kyValue::Null,
+            Value::Bool(b) => Sp00kyValue::Bool(b),
+            Value::Number(n) => Sp00kyValue::Number(n.as_f64().unwrap_or(0.0)),
+            Value::String(s) => Sp00kyValue::Str(s),
             Value::Array(arr) => {
-                SpookyValue::Array(arr.into_iter().map(SpookyValue::from).collect())
+                Sp00kyValue::Array(arr.into_iter().map(Sp00kyValue::from).collect())
             }
-            Value::Object(obj) => SpookyValue::Object(
+            Value::Object(obj) => Sp00kyValue::Object(
                 obj.into_iter()
-                    .map(|(k, v)| (k, SpookyValue::from(v)))
+                    .map(|(k, v)| (k, Sp00kyValue::from(v)))
                     .collect(),
             ),
         }
     }
 }
 
-impl From<SpookyValue> for Value {
-    fn from(val: SpookyValue) -> Self {
+impl From<Sp00kyValue> for Value {
+    fn from(val: Sp00kyValue) -> Self {
         match val {
-            SpookyValue::Null => Value::Null,
-            SpookyValue::Bool(b) => Value::Bool(b),
-            SpookyValue::Number(n) => json!(n),
-            SpookyValue::Str(s) => Value::String(s),
-            SpookyValue::Array(arr) => {
+            Sp00kyValue::Null => Value::Null,
+            Sp00kyValue::Bool(b) => Value::Bool(b),
+            Sp00kyValue::Number(n) => json!(n),
+            Sp00kyValue::Str(s) => Value::String(s),
+            Sp00kyValue::Array(arr) => {
                 Value::Array(arr.into_iter().map(|v| v.into()).collect())
             }
-            SpookyValue::Object(obj) => {
+            Sp00kyValue::Object(obj) => {
                 Value::Object(obj.into_iter().map(|(k, v)| (k, v.into())).collect())
             }
         }

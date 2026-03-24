@@ -2,7 +2,7 @@
 
 ## AuthService API
 
-The `AuthService` is available on `SpookyClient` as `client.auth`.
+The `AuthService` is available on `Sp00kyClient` as `client.auth`.
 
 ### Properties
 

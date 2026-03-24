@@ -176,6 +176,6 @@ if (updated.length === 0) {
   }
   console.log(`\nNext steps:`);
   console.log(`  git add -A && git commit -m "v${version}"`);
-  console.log(`  git tag spooky/v${version}`);
+  console.log(`  git tag sp00ky/v${version}`);
   console.log(`  git push && git push --tags`);
 }

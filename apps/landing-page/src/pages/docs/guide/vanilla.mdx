@@ -5,7 +5,7 @@ title: Vanilla JS / TS
 
 import CodeBlock from '../../../components/ui/CodeBlock.astro';
 
-You can use Spooky with plain JavaScript or TypeScript without any framework. This guide shows how to use the core `SpookyClient` directly.
+You can use Sp00ky with plain JavaScript or TypeScript without any framework. This guide shows how to use the core `Sp00kyClient` directly.
 
 ## Installation
 
@@ -22,15 +22,15 @@ First, generate your schema types from your SurrealDB schema:
 
 ## Initialize the Client
 
-Create and initialize a `SpookyClient` instance:
+Create and initialize a `Sp00kyClient` instance:
 
 <CodeBlock
   fileName="src/db.ts"
   lang="typescript"
-  code={`import { SpookyClient, type SpookyConfig } from '@spooky-sync/core';
+  code={`import { Sp00kyClient, type Sp00kyConfig } from '@spooky-sync/core';
 import { schema, SURQL_SCHEMA } from './schema.gen';
 
-const config: SpookyConfig<typeof schema> = {
+const config: Sp00kyConfig<typeof schema> = {
   logLevel: 'info',
   schema: schema,
   schemaSurql: SURQL_SCHEMA,
@@ -42,12 +42,12 @@ const config: SpookyConfig<typeof schema> = {
   },
 };
 
-export const client = new SpookyClient<typeof schema>(config);
+export const client = new Sp00kyClient<typeof schema>(config);
 
 // Initialize the client
 export async function initDatabase() {
   await client.init();
-  console.log('Spooky client initialized');
+  console.log('Sp00ky client initialized');
 }`}
 />
 

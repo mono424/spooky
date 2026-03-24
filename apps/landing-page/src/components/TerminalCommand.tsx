@@ -20,7 +20,7 @@ export const TerminalCommand: React.FC = () => {
         {/* Command */}
         <div className="flex items-start gap-2">
           <span className="text-green-400">$</span>
-          <span className="text-green-400">spooky generate --target ts,dart,zod</span>
+          <span className="text-green-400">sp00ky generate --target ts,dart,zod</span>
         </div>
 
         {/* Success Messages */}

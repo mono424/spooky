@@ -43,7 +43,7 @@ describe('Hash Cascade Logic', () => {
     // 4. Capture Initial Hash
     const getHash = async (recordId: string) => {
       const res = (await db
-        .query(`SELECT * FROM ONLY _spooky_data_hash WHERE recordId = ${recordId}`)
+        .query(`SELECT * FROM ONLY _00_data_hash WHERE recordId = ${recordId}`)
         .collect()) as any;
       return Array.isArray(res) ? res[0] : res;
     };

@@ -95,11 +95,11 @@ export class AuthService<S extends SchemaStructure> {
     this.isLoading = true;
 
     try {
-      const token = accessToken || (await this.persistenceClient.get<string>('spooky_auth_token'));
+      const token = accessToken || (await this.persistenceClient.get<string>('sp00ky_auth_token'));
 
       if (!token) {
         this.logger.debug(
-          { Category: 'spooky-client::AuthService::check' },
+          { Category: 'sp00ky-client::AuthService::check' },
           'No token found in storage or arguments'
         );
         this.isLoading = false;
@@ -119,13 +119,13 @@ export class AuthService<S extends SchemaStructure> {
 
       if (user && user.id) {
         this.logger.info(
-          { user, Category: 'spooky-client::AuthService::check' },
+          { user, Category: 'sp00ky-client::AuthService::check' },
           'Auth check complete (via $auth.id)'
         );
         await this.setSession(token, user);
       } else {
         this.logger.warn(
-          { Category: 'spooky-client::AuthService::check' },
+          { Category: 'sp00ky-client::AuthService::check' },
           '$auth.id empty, attempting manual user fetch'
         );
 
@@ -140,13 +140,13 @@ export class AuthService<S extends SchemaStructure> {
 
         if (manualUser && manualUser.id) {
           this.logger.info(
-            { user: manualUser, Category: 'spooky-client::AuthService::check' },
+            { user: manualUser, Category: 'sp00ky-client::AuthService::check' },
             'Auth check complete (via manual fetch)'
           );
           await this.setSession(token, manualUser);
         } else {
           this.logger.warn(
-            { Category: 'spooky-client::AuthService::check' },
+            { Category: 'sp00ky-client::AuthService::check' },
             'Token valid but user not found via fallback'
           );
           await this.signOut();
@@ -154,7 +154,7 @@ export class AuthService<S extends SchemaStructure> {
       }
     } catch (error) {
       this.logger.error(
-        { error, stack: (error as Error).stack, Category: 'spooky-client::AuthService::check' },
+        { error, stack: (error as Error).stack, Category: 'sp00ky-client::AuthService::check' },
         'Auth check failed'
       );
       await this.signOut();
@@ -171,7 +171,7 @@ export class AuthService<S extends SchemaStructure> {
     this.currentUser = null;
     this.isAuthenticated = false;
 
-    await this.persistenceClient.remove('spooky_auth_token');
+    await this.persistenceClient.remove('sp00ky_auth_token');
 
     try {
       await this.remote.getClient().invalidate();
@@ -186,7 +186,7 @@ export class AuthService<S extends SchemaStructure> {
     this.token = token;
     this.currentUser = user;
     this.isAuthenticated = true;
-    await this.persistenceClient.set('spooky_auth_token', token);
+    await this.persistenceClient.set('sp00ky_auth_token', token);
     this.notifyListeners();
   }
 
@@ -212,7 +212,7 @@ export class AuthService<S extends SchemaStructure> {
     }
 
     this.logger.info(
-      { accessName, runtimeParams, Category: 'spooky-client::AuthService::signUp' },
+      { accessName, runtimeParams, Category: 'sp00ky-client::AuthService::signUp' },
       'Attempting signup'
     );
 
@@ -222,7 +222,7 @@ export class AuthService<S extends SchemaStructure> {
     });
 
     this.logger.info(
-      { Category: 'spooky-client::AuthService::signUp' },
+      { Category: 'sp00ky-client::AuthService::signUp' },
       'Signup successful, token received'
     );
 
@@ -253,7 +253,7 @@ export class AuthService<S extends SchemaStructure> {
     }
 
     this.logger.info(
-      { accessName, Category: 'spooky-client::AuthService::signIn' },
+      { accessName, Category: 'sp00ky-client::AuthService::signIn' },
       'Attempting signin'
     );
 

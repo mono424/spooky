@@ -1,6 +1,6 @@
 <div align="center">
 
-# Spooky 👻
+# Sp00ky 👻
 
 **The Reactive, Local-First Framework for SurrealDB**
 
@@ -10,13 +10,13 @@
 [![npm downloads](https://img.shields.io/npm/dm/@spooky-sync/core)](https://www.npmjs.com/package/@spooky-sync/core)
 [![bundle size](https://img.shields.io/bundlejs/size/@spooky-sync/core@canary)](https://bundlejs.com/?q=%40spooky-sync%2Fcore%40canary)
 [![npm version](https://img.shields.io/npm/v/@spooky-sync/cli?label=%40spooky-sync%2Fcli&color=cb3837)](https://www.npmjs.com/package/@spooky-sync/cli)
-[![license](https://img.shields.io/github/license/mono424/spooky)](https://github.com/mono424/spooky)
-[![stars](https://img.shields.io/github/stars/mono424/spooky)](https://github.com/mono424/spooky/stargazers)
-[![last commit](https://img.shields.io/github/last-commit/mono424/spooky)](https://github.com/mono424/spooky/commits/main)
+[![license](https://img.shields.io/github/license/mono424/sp00ky)](https://github.com/mono424/sp00ky)
+[![stars](https://img.shields.io/github/stars/mono424/sp00ky)](https://github.com/mono424/sp00ky/stargazers)
+[![last commit](https://img.shields.io/github/last-commit/mono424/sp00ky)](https://github.com/mono424/sp00ky/commits/main)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![SurrealDB](https://img.shields.io/badge/SurrealDB-FF00A0?logo=surrealdb&logoColor=white)](https://surrealdb.com/)
 
-[Documentation](https://mono424.github.io/spooky/) · [Example App](example/app-solid) · [CLI](https://www.npmjs.com/package/@spooky-sync/cli) · [Contributing](#contributing)
+[Documentation](https://mono424.github.io/sp00ky/) · [Example App](example/app-solid) · [CLI](https://www.npmjs.com/package/@spooky-sync/cli) · [Contributing](#contributing)
 
 </div>
 
@@ -77,7 +77,7 @@ cd example/app-solid && pnpm install && pnpm dev
 
 ## Documentation
 
-Full documentation is available at **[mono424.github.io/spooky](https://mono424.github.io/spooky/)**.
+Full documentation is available at **[mono424.github.io/sp00ky](https://mono424.github.io/sp00ky/)**.
 
 ## Contributing
 
@@ -91,16 +91,16 @@ Contributions are welcome! This is a monorepo — see the individual package dir
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=mono424%2Fspooky&type=date&legend=top-left">
+<a href="https://www.star-history.com/?repos=mono424%2Fsp00ky&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=mono424/spooky&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=mono424/spooky&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=mono424/spooky&type=Date" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=mono424/sp00ky&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=mono424/sp00ky&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=mono424/sp00ky&type=Date" />
  </picture>
 </a>
 
 ---
 
 <div align="center">
-If you find Spooky useful, consider giving it a ⭐ on <a href="https://github.com/mono424/spooky">GitHub</a>!
+If you find Sp00ky useful, consider giving it a ⭐ on <a href="https://github.com/mono424/sp00ky">GitHub</a>!
 </div>

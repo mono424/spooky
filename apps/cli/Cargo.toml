@@ -1,5 +1,5 @@
 [package]
-name = "spooky-cli"
+name = "sp00ky-cli"
 version = "0.0.1-canary.27"
 edition = "2021"
 
@@ -26,4 +26,6 @@ sha2 = "0.10"
 base64 = "0.22"
 ctrlc = "3.4"
 crossterm = "0.28"
+dirs = "6.0"
+open = "5"
 

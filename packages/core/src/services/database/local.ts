@@ -1,16 +1,16 @@
 import { applyDiagnostics, DateTime, Diagnostic, RecordId, Surreal } from 'surrealdb';
 import { createWasmWorkerEngines } from '@surrealdb/wasm';
-import { SpookyConfig } from '../../types';
+import { Sp00kyConfig } from '../../types';
 import { Logger } from '../logger/index';
 import { AbstractDatabaseService } from './database';
 import { createDatabaseEventSystem, DatabaseEventTypes } from './events/index';
 import { encodeRecordId, parseRecordIdString, surql } from '../../utils/index';
 
 export class LocalDatabaseService extends AbstractDatabaseService {
-  private config: SpookyConfig<any>['database'];
+  private config: Sp00kyConfig<any>['database'];
   protected eventType = DatabaseEventTypes.LocalQuery;
 
-  constructor(config: SpookyConfig<any>['database'], logger: Logger) {
+  constructor(config: Sp00kyConfig<any>['database'], logger: Logger) {
     const events = createDatabaseEventSystem();
     super(
       new Surreal({
@@ -38,7 +38,7 @@ export class LocalDatabaseService extends AbstractDatabaseService {
                   type,
                   phase,
                   service: 'surrealdb:local',
-                  Category: 'spooky-client::LocalDatabaseService::diagnostics',
+                  Category: 'sp00ky-client::LocalDatabaseService::diagnostics',
                 },
                 `Local SurrealDB diagnostics captured ${type}:${phase}`
               );
@@ -52,26 +52,26 @@ export class LocalDatabaseService extends AbstractDatabaseService {
     this.config = config;
   }
 
-  getConfig(): SpookyConfig<any>['database'] {
+  getConfig(): Sp00kyConfig<any>['database'] {
     return this.config;
   }
 
   async connect(): Promise<void> {
     const { namespace, database } = this.getConfig();
     this.logger.info(
-      { namespace, database, Category: 'spooky-client::LocalDatabaseService::connect' },
+      { namespace, database, Category: 'sp00ky-client::LocalDatabaseService::connect' },
       'Connecting to local database'
     );
     try {
       const store = this.getConfig().store ?? 'memory';
-      const storeUrl = store === 'memory' ? 'mem://' : 'indxdb://spooky';
+      const storeUrl = store === 'memory' ? 'mem://' : 'indxdb://sp00ky';
       this.logger.debug(
-        { storeUrl, Category: 'spooky-client::LocalDatabaseService::connect' },
+        { storeUrl, Category: 'sp00ky-client::LocalDatabaseService::connect' },
         '[LocalDatabaseService] Calling client.connect'
       );
       await this.client.connect(storeUrl, {});
       this.logger.debug(
-        { namespace, database, Category: 'spooky-client::LocalDatabaseService::connect' },
+        { namespace, database, Category: 'sp00ky-client::LocalDatabaseService::connect' },
         '[LocalDatabaseService] client.connect returned. Calling client.use'
       );
 
@@ -80,17 +80,17 @@ export class LocalDatabaseService extends AbstractDatabaseService {
         database,
       });
       this.logger.debug(
-        { Category: 'spooky-client::LocalDatabaseService::connect' },
+        { Category: 'sp00ky-client::LocalDatabaseService::connect' },
         '[LocalDatabaseService] client.use returned'
       );
 
       this.logger.info(
-        { Category: 'spooky-client::LocalDatabaseService::connect' },
+        { Category: 'sp00ky-client::LocalDatabaseService::connect' },
         'Connected to local database'
       );
     } catch (err) {
       this.logger.error(
-        { err, Category: 'spooky-client::LocalDatabaseService::connect' },
+        { err, Category: 'sp00ky-client::LocalDatabaseService::connect' },
         'Failed to connect to local database'
       );
       throw err;

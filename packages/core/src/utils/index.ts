@@ -59,7 +59,7 @@ export function generateNewTableId<S extends SchemaStructure, T extends TableNam
 
 // ==================== SCHEMA ENCODING/DECODING ====================
 
-export function decodeFromSpooky<S extends SchemaStructure, T extends TableNames<S>>(
+export function decodeFromSp00ky<S extends SchemaStructure, T extends TableNames<S>>(
   schema: S,
   tableName: T,
   record: TableModel<GetTable<S, T>>
@@ -83,10 +83,10 @@ export function decodeFromSpooky<S extends SchemaStructure, T extends TableNames
       ) {
         if (Array.isArray(encoded[field])) {
           encoded[field] = encoded[field].map((item) =>
-            decodeFromSpooky(schema, relation.to, item)
+            decodeFromSp00ky(schema, relation.to, item)
           );
         } else {
-          encoded[field] = decodeFromSpooky(schema, relation.to, encoded[field]);
+          encoded[field] = decodeFromSp00ky(schema, relation.to, encoded[field]);
         }
       }
     }
@@ -165,7 +165,7 @@ export async function withRetry<T>(
             attempt: i + 1,
             retries,
             error: msg,
-            Category: 'spooky-client::utils::withRetry',
+            Category: 'sp00ky-client::utils::withRetry',
           },
           'Retrying DB operation'
         );

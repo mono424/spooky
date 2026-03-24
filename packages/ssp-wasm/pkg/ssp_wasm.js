@@ -182,20 +182,20 @@ if (!('encodeInto' in cachedTextEncoder)) {
 
 let WASM_VECTOR_LEN = 0;
 
-const SpookyProcessorFinalization = (typeof FinalizationRegistry === 'undefined')
+const Sp00kyProcessorFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
-    : new FinalizationRegistry(ptr => wasm.__wbg_spookyprocessor_free(ptr >>> 0, 1));
+    : new FinalizationRegistry(ptr => wasm.__wbg_sp00kyprocessor_free(ptr >>> 0, 1));
 
-export class SpookyProcessor {
+export class Sp00kyProcessor {
     __destroy_into_raw() {
         const ptr = this.__wbg_ptr;
         this.__wbg_ptr = 0;
-        SpookyProcessorFinalization.unregister(this);
+        Sp00kyProcessorFinalization.unregister(this);
         return ptr;
     }
     free() {
         const ptr = this.__destroy_into_raw();
-        wasm.__wbg_spookyprocessor_free(ptr, 0);
+        wasm.__wbg_sp00kyprocessor_free(ptr, 0);
     }
     /**
      * Load circuit state from a JSON string
@@ -204,7 +204,7 @@ export class SpookyProcessor {
     load_state(state) {
         const ptr0 = passStringToWasm0(state, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.spookyprocessor_load_state(this.__wbg_ptr, ptr0, len0);
+        const ret = wasm.sp00kyprocessor_load_state(this.__wbg_ptr, ptr0, len0);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
         }
@@ -217,7 +217,7 @@ export class SpookyProcessor {
         let deferred2_0;
         let deferred2_1;
         try {
-            const ret = wasm.spookyprocessor_save_state(this.__wbg_ptr);
+            const ret = wasm.sp00kyprocessor_save_state(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
             if (ret[3]) {
@@ -237,7 +237,7 @@ export class SpookyProcessor {
      * @returns {any}
      */
     register_view(config) {
-        const ret = wasm.spookyprocessor_register_view(this.__wbg_ptr, config);
+        const ret = wasm.sp00kyprocessor_register_view(this.__wbg_ptr, config);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }
@@ -250,12 +250,12 @@ export class SpookyProcessor {
     unregister_view(id) {
         const ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        wasm.spookyprocessor_unregister_view(this.__wbg_ptr, ptr0, len0);
+        wasm.sp00kyprocessor_unregister_view(this.__wbg_ptr, ptr0, len0);
     }
     constructor() {
-        const ret = wasm.spookyprocessor_new();
+        const ret = wasm.sp00kyprocessor_new();
         this.__wbg_ptr = ret >>> 0;
-        SpookyProcessorFinalization.register(this, this.__wbg_ptr, this);
+        Sp00kyProcessorFinalization.register(this, this.__wbg_ptr, this);
         return this;
     }
     /**
@@ -273,14 +273,14 @@ export class SpookyProcessor {
         const len1 = WASM_VECTOR_LEN;
         const ptr2 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len2 = WASM_VECTOR_LEN;
-        const ret = wasm.spookyprocessor_ingest(this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, record);
+        const ret = wasm.sp00kyprocessor_ingest(this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, record);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }
         return takeFromExternrefTable0(ret[0]);
     }
 }
-if (Symbol.dispose) SpookyProcessor.prototype[Symbol.dispose] = SpookyProcessor.prototype.free;
+if (Symbol.dispose) Sp00kyProcessor.prototype[Symbol.dispose] = Sp00kyProcessor.prototype.free;
 
 /**
  * Called when WASM module is loaded

@@ -39,21 +39,21 @@ export class Bridge {
   }
 
   start(): Promise<void> {
-    const port = parseInt(process.env.SPOOKY_MCP_PORT || '', 10) || BRIDGE_PORT;
+    const port = parseInt(process.env.SP00KY_MCP_PORT || '', 10) || BRIDGE_PORT;
 
     return new Promise((resolve, reject) => {
       this.wss = new WebSocketServer({ host: '127.0.0.1', port }, () => {
-        process.stderr.write(`[spooky-mcp] Bridge listening on ws://127.0.0.1:${port}\n`);
+        process.stderr.write(`[sp00ky-mcp] Bridge listening on ws://127.0.0.1:${port}\n`);
         resolve();
       });
 
       this.wss.on('error', (err) => {
-        process.stderr.write(`[spooky-mcp] Bridge error: ${err.message}\n`);
+        process.stderr.write(`[sp00ky-mcp] Bridge error: ${err.message}\n`);
         reject(err);
       });
 
       this.wss.on('connection', (ws) => {
-        process.stderr.write('[spooky-mcp] Extension connected\n');
+        process.stderr.write('[sp00ky-mcp] Extension connected\n');
 
         // Only allow one extension connection at a time
         if (this.extensionSocket) {
@@ -69,12 +69,12 @@ export class Bridge {
             const msg = JSON.parse(data.toString());
             this.handleMessage(msg);
           } catch (err) {
-            process.stderr.write(`[spooky-mcp] Bad message: ${err}\n`);
+            process.stderr.write(`[sp00ky-mcp] Bad message: ${err}\n`);
           }
         });
 
         ws.on('close', () => {
-          process.stderr.write('[spooky-mcp] Extension disconnected\n');
+          process.stderr.write('[sp00ky-mcp] Extension disconnected\n');
           if (this.extensionSocket === ws) {
             this.extensionSocket = null;
             this.connectedTabs.clear();
@@ -89,7 +89,7 @@ export class Bridge {
         });
 
         ws.on('error', (err) => {
-          process.stderr.write(`[spooky-mcp] Socket error: ${err.message}\n`);
+          process.stderr.write(`[sp00ky-mcp] Socket error: ${err.message}\n`);
         });
       });
     });
@@ -142,7 +142,7 @@ export class Bridge {
 
   async request(method: string, params: Record<string, unknown> = {}, tabId?: number): Promise<unknown> {
     if (!this.extensionSocket || this.extensionSocket.readyState !== WebSocket.OPEN) {
-      throw new Error('No extension connected. Make sure the Spooky DevTools extension is running and has a page with Spooky open.');
+      throw new Error('No extension connected. Make sure the Sp00ky DevTools extension is running and has a page with Sp00ky open.');
     }
 
     const id = `mcp-${++this.requestCounter}`;

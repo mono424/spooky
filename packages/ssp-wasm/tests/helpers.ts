@@ -1,6 +1,6 @@
 /**
- * Test helpers for spooky-stream-processor-wasm E2E tests.
- * Mirrors the patterns from packages/spooky-stream-processor/tests/common/mod.rs
+ * Test helpers for sp00ky-stream-processor-wasm E2E tests.
+ * Mirrors the patterns from packages/sp00ky-stream-processor/tests/common/mod.rs
  */
 
 import type { WasmViewConfig } from '../pkg/ssp_wasm';

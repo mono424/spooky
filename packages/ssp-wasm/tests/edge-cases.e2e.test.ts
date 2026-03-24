@@ -18,7 +18,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { initSync, SpookyProcessor } from '../pkg/ssp_wasm.js';
+import { initSync, Sp00kyProcessor } from '../pkg/ssp_wasm.js';
 import type { WasmViewUpdate } from '../pkg/ssp_wasm';
 import {
   makeUserRecord,
@@ -46,10 +46,10 @@ beforeAll(() => {
 // ---------------------------------------------------------------------------
 describe('State Persistence (save_state / load_state)', () => {
   it('should save and restore an empty processor', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
     const state = processor.save_state();
 
-    const restored = new SpookyProcessor();
+    const restored = new Sp00kyProcessor();
     restored.load_state(state);
 
     // Restored processor should work — register a view and get empty results
@@ -59,7 +59,7 @@ describe('State Persistence (save_state / load_state)', () => {
   });
 
   it('should save and restore processor with data and views, producing same hash', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     // Ingest data and register view
     const user1 = makeUserRecord('alice', 'alice@test.com');
@@ -74,7 +74,7 @@ describe('State Persistence (save_state / load_state)', () => {
 
     // Save and restore
     const state = processor.save_state();
-    const restored = new SpookyProcessor();
+    const restored = new Sp00kyProcessor();
     restored.load_state(state);
 
     // Re-register the same view on restored processor
@@ -87,7 +87,7 @@ describe('State Persistence (save_state / load_state)', () => {
   });
 
   it('should continue incremental updates after restore', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     const user1 = makeUserRecord('alice', 'alice@test.com');
     processor.ingest('user', 'CREATE', user1.id, user1.record);
@@ -97,7 +97,7 @@ describe('State Persistence (save_state / load_state)', () => {
 
     // Save and restore
     const state = processor.save_state();
-    const restored = new SpookyProcessor();
+    const restored = new Sp00kyProcessor();
     restored.load_state(state);
 
     // Re-register the view on restored processor
@@ -122,7 +122,7 @@ describe('State Persistence (save_state / load_state)', () => {
   });
 
   it('should return valid JSON from save_state', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
     const user = makeUserRecord('alice', 'alice@test.com');
     processor.ingest('user', 'CREATE', user.id, user.record);
 
@@ -136,7 +136,7 @@ describe('State Persistence (save_state / load_state)', () => {
   });
 
   it('should throw when loading corrupted state', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
     expect(() => processor.load_state('not-valid-json')).toThrow();
   });
 });
@@ -149,7 +149,7 @@ describe('View Unregistration (unregister_view)', () => {
   const SQL = 'SELECT * FROM user';
 
   it('should stop receiving updates after unregistration', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     // Register view and confirm it works
     const user1 = makeUserRecord('alice', 'alice@test.com');
@@ -174,12 +174,12 @@ describe('View Unregistration (unregister_view)', () => {
   });
 
   it('should not throw when unregistering non-existent view', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
     expect(() => processor.unregister_view('nonexistent-view')).not.toThrow();
   });
 
   it('should allow re-registration after unregister with data intact', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     // Ingest users
     const user1 = makeUserRecord('alice', 'alice@test.com');
@@ -210,7 +210,7 @@ describe('UPDATE Operation', () => {
   const SQL = 'SELECT * FROM user';
 
   it('should emit content update delta without changing membership', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     // Ingest and register
     const user = makeUserRecord('alice', 'alice@test.com');
@@ -239,7 +239,7 @@ describe('UPDATE Operation', () => {
   });
 
   it('should not emit update for record not in any view', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     // Register user view, but ingest/update an author
     const config = createViewConfig(VIEW_ID, SQL);
@@ -259,7 +259,7 @@ describe('UPDATE Operation', () => {
   });
 
   it('should allow UPDATE followed by DELETE', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     const user = makeUserRecord('alice', 'alice@test.com');
     processor.ingest('user', 'CREATE', user.id, user.record);
@@ -294,7 +294,7 @@ describe('UPDATE Operation', () => {
 describe('WHERE Clause Filtering', () => {
   describe('Equality (=)', () => {
     it('should return only matching records', () => {
-      const processor = new SpookyProcessor();
+      const processor = new Sp00kyProcessor();
 
       const p1 = makeProductRecord('Phone', 500, 'electronics');
       const p2 = makeProductRecord('Shirt', 30, 'clothing');
@@ -319,7 +319,7 @@ describe('WHERE Clause Filtering', () => {
 
   describe('Inequality (!=)', () => {
     it('should return only non-matching records', () => {
-      const processor = new SpookyProcessor();
+      const processor = new Sp00kyProcessor();
 
       const p1 = makeProductRecord('Phone', 500, 'electronics');
       const p2 = makeProductRecord('Shirt', 30, 'clothing');
@@ -343,7 +343,7 @@ describe('WHERE Clause Filtering', () => {
 
   describe('Greater than (>)', () => {
     it('should return only records with value > threshold', () => {
-      const processor = new SpookyProcessor();
+      const processor = new Sp00kyProcessor();
 
       const p1 = makeProductRecord('Cheap', 30, 'misc');
       const p2 = makeProductRecord('Mid', 50, 'misc');
@@ -367,7 +367,7 @@ describe('WHERE Clause Filtering', () => {
 
   describe('Greater than or equal (>=)', () => {
     it('should return records with value >= threshold', () => {
-      const processor = new SpookyProcessor();
+      const processor = new Sp00kyProcessor();
 
       const p1 = makeProductRecord('Cheap', 30, 'misc');
       const p2 = makeProductRecord('Mid', 50, 'misc');
@@ -391,7 +391,7 @@ describe('WHERE Clause Filtering', () => {
 
   describe('Less than (<)', () => {
     it('should return only records with value < threshold', () => {
-      const processor = new SpookyProcessor();
+      const processor = new Sp00kyProcessor();
 
       const p1 = makeProductRecord('Cheap', 30, 'misc');
       const p2 = makeProductRecord('Mid', 50, 'misc');
@@ -415,7 +415,7 @@ describe('WHERE Clause Filtering', () => {
 
   describe('Less than or equal (<=)', () => {
     it('should return records with value <= threshold', () => {
-      const processor = new SpookyProcessor();
+      const processor = new Sp00kyProcessor();
 
       const p1 = makeProductRecord('Cheap', 30, 'misc');
       const p2 = makeProductRecord('Mid', 50, 'misc');
@@ -439,7 +439,7 @@ describe('WHERE Clause Filtering', () => {
 
   describe('Incremental filtering', () => {
     it('should only add matching records incrementally', () => {
-      const processor = new SpookyProcessor();
+      const processor = new Sp00kyProcessor();
 
       const config = createViewConfig(
         'where-incr',
@@ -479,7 +479,7 @@ describe('WHERE Clause Filtering', () => {
 
   describe('Deletion from unfiltered view removes record', () => {
     it('should remove record from non-filtered view on delete', () => {
-      const processor = new SpookyProcessor();
+      const processor = new Sp00kyProcessor();
 
       const p1 = makeProductRecord('Phone', 500, 'electronics');
       const p2 = makeProductRecord('Laptop', 1200, 'electronics');
@@ -512,7 +512,7 @@ describe('WHERE Clause Filtering', () => {
 // ---------------------------------------------------------------------------
 describe('ORDER BY and LIMIT', () => {
   it('should return at most LIMIT N records', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     for (let i = 0; i < 5; i++) {
       const u = makeUserRecord(`user${i}`, `user${i}@test.com`);
@@ -525,7 +525,7 @@ describe('ORDER BY and LIMIT', () => {
   });
 
   it('should return cheapest products with ORDER BY price ASC LIMIT 2', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     const products = [
       makeProductRecord('Expensive', 100, 'misc'),
@@ -551,7 +551,7 @@ describe('ORDER BY and LIMIT', () => {
   });
 
   it('should return most expensive products with ORDER BY price DESC LIMIT 2', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     const products = [
       makeProductRecord('Expensive', 100, 'misc'),
@@ -577,7 +577,7 @@ describe('ORDER BY and LIMIT', () => {
   });
 
   it('should displace records when new higher-ranked record is ingested', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     // Start with two cheap products
     const p1 = makeProductRecord('Cheap', 10, 'misc');
@@ -616,7 +616,7 @@ describe('ORDER BY and LIMIT', () => {
 // ---------------------------------------------------------------------------
 describe('Multiple Concurrent Views', () => {
   it('should deliver updates to correct view when two views filter same table', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     const config1 = createViewConfig(
       'multi-electronics',
@@ -656,7 +656,7 @@ describe('Multiple Concurrent Views', () => {
   });
 
   it('should only update relevant view when tables differ', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     const userConfig = createViewConfig('multi-user', 'SELECT * FROM user');
     const productConfig = createViewConfig(
@@ -686,7 +686,7 @@ describe('Multiple Concurrent Views', () => {
   });
 
   it('should not affect other views when one is unregistered', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     const config1 = createViewConfig('multi-a', 'SELECT * FROM user');
     const config2 = createViewConfig('multi-b', 'SELECT * FROM user');
@@ -723,7 +723,7 @@ describe('Multiple Concurrent Views', () => {
 // ---------------------------------------------------------------------------
 describe('Parameterized Queries ($param)', () => {
   it('should filter records using $param from view config', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     const alice = makeUserRecord('alice', 'alice@test.com');
     const bob = makeUserRecord('bob', 'bob@test.com');
@@ -743,7 +743,7 @@ describe('Parameterized Queries ($param)', () => {
   });
 
   it('should produce different results for different param values', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     const alice = makeUserRecord('alice', 'alice@test.com');
     const bob = makeUserRecord('bob', 'bob@test.com');
@@ -777,7 +777,7 @@ describe('Parameterized Queries ($param)', () => {
 // ---------------------------------------------------------------------------
 describe('Edge Cases: Empty and Invalid Records', () => {
   it('should handle ingestion of empty object without crashing', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     const config = createViewConfig('empty-rec', 'SELECT * FROM user');
     processor.register_view(config);
@@ -799,7 +799,7 @@ describe('Edge Cases: Empty and Invalid Records', () => {
   });
 
   it('should exclude records with missing fields from filtered view', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     const config = createViewConfig(
       'missing-field',
@@ -837,7 +837,7 @@ describe('Edge Cases: Empty and Invalid Records', () => {
   });
 
   it('should prioritize id field from record over id param', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     // Record has id = 'user:from_record', but param id = 'user:from_param'
     const record = {
@@ -861,7 +861,7 @@ describe('Edge Cases: Empty and Invalid Records', () => {
 // ---------------------------------------------------------------------------
 describe('Edge Cases: Duplicate and Non-Existent Operations', () => {
   it('should handle creating the same record ID twice without crashing', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     const config = createViewConfig('dup-create', 'SELECT * FROM user');
     processor.register_view(config);
@@ -901,7 +901,7 @@ describe('Edge Cases: Duplicate and Non-Existent Operations', () => {
   });
 
   it('should handle deleting a non-existent record without crashing', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     const config = createViewConfig('del-nonexist', 'SELECT * FROM user');
     processor.register_view(config);
@@ -912,7 +912,7 @@ describe('Edge Cases: Duplicate and Non-Existent Operations', () => {
   });
 
   it('should not add UPDATE-only record to view (weight 0 = no membership)', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     const config = createViewConfig('update-ghost', 'SELECT * FROM user');
     const initial = processor.register_view(config) as WasmViewUpdate;
@@ -941,7 +941,7 @@ describe('Edge Cases: Duplicate and Non-Existent Operations', () => {
   });
 
   it('should allow delete followed by re-create of same ID', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     const record = {
       id: 'user:phoenix',
@@ -990,7 +990,7 @@ describe('Edge Cases: Duplicate and Non-Existent Operations', () => {
 // ---------------------------------------------------------------------------
 describe('Edge Cases: View Registration', () => {
   it('should overwrite view when registering same ID twice', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     // Register a user view
     const config1 = createViewConfig('overwrite-view', 'SELECT * FROM user');
@@ -1021,13 +1021,13 @@ describe('Edge Cases: View Registration', () => {
   });
 
   it('should throw when registering view with invalid SQL', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
     const config = createViewConfig('bad-sql', 'NOT VALID SQL AT ALL');
     expect(() => processor.register_view(config)).toThrow();
   });
 
   it('should throw when registering view with empty SQL', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
     const config = createViewConfig('empty-sql', '');
     expect(() => processor.register_view(config)).toThrow();
   });
@@ -1038,7 +1038,7 @@ describe('Edge Cases: View Registration', () => {
 // ---------------------------------------------------------------------------
 describe('Ingest to Unrelated Table', () => {
   it('should return empty updates when ingesting to unrelated table', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     const config = createViewConfig('unrelated', 'SELECT * FROM user');
     processor.register_view(config);
@@ -1057,7 +1057,7 @@ describe('Ingest to Unrelated Table', () => {
   });
 
   it('should not change view hash when ingesting to unrelated table', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     const user = makeUserRecord('alice', 'alice@test.com');
     processor.ingest('user', 'CREATE', user.id, user.record);
@@ -1091,7 +1091,7 @@ describe('Ingest to Unrelated Table', () => {
 // ---------------------------------------------------------------------------
 describe('Large Batch Operations', () => {
   it('should handle 100 records correctly', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     const users: { id: string; record: Record<string, unknown> }[] = [];
     for (let i = 0; i < 100; i++) {
@@ -1108,7 +1108,7 @@ describe('Large Batch Operations', () => {
   });
 
   it('should handle 100 inserts then 50 deletes correctly', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     const users: { id: string; record: Record<string, unknown> }[] = [];
     for (let i = 0; i < 100; i++) {
@@ -1147,7 +1147,7 @@ describe('Large Batch Operations', () => {
   });
 
   it('should respect LIMIT with large dataset', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     for (let i = 0; i < 100; i++) {
       const u = makeUserRecord(`user_${i}`, `user${i}@test.com`);
@@ -1169,8 +1169,8 @@ describe('Large Batch Operations', () => {
 // 13. Version Tracking
 // ---------------------------------------------------------------------------
 describe('Version Tracking', () => {
-  it('should default version to 1 for records without spooky_rv', () => {
-    const processor = new SpookyProcessor();
+  it('should default version to 1 for records without _00_rv', () => {
+    const processor = new Sp00kyProcessor();
 
     const user = makeUserRecord('alice', 'alice@test.com');
     processor.ingest('user', 'CREATE', user.id, user.record);
@@ -1183,8 +1183,8 @@ describe('Version Tracking', () => {
     expect(entry![1]).toBe(1); // Default version
   });
 
-  it('should reflect spooky_rv field value as version', () => {
-    const processor = new SpookyProcessor();
+  it('should reflect _00_rv field value as version', () => {
+    const processor = new Sp00kyProcessor();
 
     const id = `user:${generateId()}`;
     const record = {
@@ -1192,7 +1192,7 @@ describe('Version Tracking', () => {
       username: 'versioned',
       email: 'v@test.com',
       type: 'user',
-      spooky_rv: 5,
+      _00_rv: 5,
     };
     processor.ingest('user', 'CREATE', id, record);
 
@@ -1210,7 +1210,7 @@ describe('Version Tracking', () => {
 // ---------------------------------------------------------------------------
 describe('Delta Structure Validation', () => {
   it('should have additions on CREATE', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     const config = createViewConfig('delta-create', 'SELECT * FROM user');
     processor.register_view(config);
@@ -1233,7 +1233,7 @@ describe('Delta Structure Validation', () => {
   });
 
   it('should have removals on DELETE', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     const user = makeUserRecord('alice', 'alice@test.com');
     processor.ingest('user', 'CREATE', user.id, user.record);
@@ -1255,7 +1255,7 @@ describe('Delta Structure Validation', () => {
   });
 
   it('should have all records as additions on initial registration', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     const user1 = makeUserRecord('alice', 'alice@test.com');
     const user2 = makeUserRecord('bob', 'bob@test.com');
@@ -1277,7 +1277,7 @@ describe('Delta Structure Validation', () => {
   });
 
   it('should have updates (not additions) on UPDATE of existing record', () => {
-    const processor = new SpookyProcessor();
+    const processor = new Sp00kyProcessor();
 
     const user = makeUserRecord('alice', 'alice@test.com');
     processor.ingest('user', 'CREATE', user.id, user.record);

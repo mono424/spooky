@@ -15,11 +15,11 @@ export class SurrealDBPersistenceClient implements PersistenceClient {
 
   async set<T>(key: string, val: T) {
     try {
-      const id = parseRecordIdString(`_spooky_kv:${key}`);
+      const id = parseRecordIdString(`_00_kv:${key}`);
       await this.db.query(surql.seal(surql.upsert('id', 'data')), { id, data: { val } });
     } catch (error) {
       this.logger.error(
-        { error, Category: 'spooky-client::SurrealDBPersistenceClient::set' },
+        { error, Category: 'sp00ky-client::SurrealDBPersistenceClient::set' },
         'Failed to set KV'
       );
       throw error;
@@ -28,7 +28,7 @@ export class SurrealDBPersistenceClient implements PersistenceClient {
 
   async get<T>(key: string) {
     try {
-      const id = parseRecordIdString(`_spooky_kv:${key}`);
+      const id = parseRecordIdString(`_00_kv:${key}`);
       const [result] = await this.db.query<[{ val: T }]>(
         surql.seal(surql.selectById('id', ['val'])),
         {
@@ -41,7 +41,7 @@ export class SurrealDBPersistenceClient implements PersistenceClient {
       return result.val;
     } catch (error) {
       this.logger.warn(
-        { error, Category: 'spooky-client::SurrealDBPersistenceClient::get' },
+        { error, Category: 'sp00ky-client::SurrealDBPersistenceClient::get' },
         'Failed to get KV'
       );
       return null;
@@ -50,11 +50,11 @@ export class SurrealDBPersistenceClient implements PersistenceClient {
 
   async remove(key: string) {
     try {
-      const id = parseRecordIdString(`_spooky_kv:${key}`);
+      const id = parseRecordIdString(`_00_kv:${key}`);
       await this.db.query(surql.seal(surql.delete('id')), { id });
     } catch (err) {
       this.logger.info(
-        { err, Category: 'spooky-client::SurrealDBPersistenceClient::remove' },
+        { err, Category: 'sp00ky-client::SurrealDBPersistenceClient::remove' },
         'Failed to delete KV'
       );
     }

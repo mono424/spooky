@@ -1,9 +1,9 @@
-import { SpookyProvider } from '@spooky-sync/client-solid';
+import { Sp00kyProvider } from '@spooky-sync/client-solid';
 import { dbConfig } from './db';
 
 export default function App() {
   return (
-    <SpookyProvider
+    <Sp00kyProvider
       config={dbConfig}
       fallback={
         <div class="min-h-screen bg-zinc-950 flex items-center justify-center">
@@ -21,7 +21,7 @@ export default function App() {
 
         <main class="max-w-3xl mx-auto px-6 py-8">
           <div class="bg-zinc-900 border border-white/[0.06] rounded-xl p-6">
-            <h2 class="text-lg font-medium text-white mb-2">Welcome to Spooky!</h2>
+            <h2 class="text-lg font-medium text-white mb-2">Welcome to Sp00ky!</h2>
             <p class="text-zinc-400 text-sm">
               Your app is connected and ready to sync. Add tables to your schema and start building.
             </p>
@@ -31,6 +31,6 @@ export default function App() {
           </div>
         </main>
       </div>
-    </SpookyProvider>
+    </Sp00kyProvider>
   );
 }

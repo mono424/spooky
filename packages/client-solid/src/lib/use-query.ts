@@ -7,8 +7,8 @@ import {
 } from '@spooky-sync/query-builder';
 import { createEffect, createSignal, onCleanup, useContext } from 'solid-js';
 import { SyncedDb } from '..';
-import { SpookyQueryResultPromise } from '@spooky-sync/core';
-import { SpookyContext } from './context';
+import { Sp00kyQueryResultPromise } from '@spooky-sync/core';
+import { Sp00kyContext } from './context';
 
 type QueryArg<
   S extends SchemaStructure,
@@ -17,9 +17,9 @@ type QueryArg<
   RelatedFields extends Record<string, any>,
   IsOne extends boolean,
 > =
-  | FinalQuery<S, TableName, T, RelatedFields, IsOne, SpookyQueryResultPromise>
+  | FinalQuery<S, TableName, T, RelatedFields, IsOne, Sp00kyQueryResultPromise>
   | (() =>
-      | FinalQuery<S, TableName, T, RelatedFields, IsOne, SpookyQueryResultPromise>
+      | FinalQuery<S, TableName, T, RelatedFields, IsOne, Sp00kyQueryResultPromise>
       | null
       | undefined);
 
@@ -82,11 +82,11 @@ export function useQuery<
     options = maybeOptions;
   } else {
     // Context-based overload: useQuery(query, options?)
-    const contextDb = useContext(SpookyContext);
+    const contextDb = useContext(Sp00kyContext);
     if (!contextDb) {
       throw new Error(
-        'useQuery: No db argument provided and no SpookyContext found. ' +
-        'Either pass a SyncedDb instance or wrap your app in <SpookyProvider>.'
+        'useQuery: No db argument provided and no Sp00kyContext found. ' +
+        'Either pass a SyncedDb instance or wrap your app in <Sp00kyProvider>.'
       );
     }
     db = contextDb as SyncedDb<S>;
@@ -100,16 +100,16 @@ export function useQuery<
   const [unsubscribe, setUnsubscribe] = createSignal<(() => void) | undefined>(undefined);
   let prevQueryString: string | undefined;
 
-  const spooky = db.getSpooky();
+  const sp00ky = db.getSp00ky();
 
   const initQuery = async (
-    query: FinalQuery<S, TableName, T, RelatedFields, IsOne, SpookyQueryResultPromise>
+    query: FinalQuery<S, TableName, T, RelatedFields, IsOne, Sp00kyQueryResultPromise>
   ) => {
     const { hash } = await query.run();
     setError(undefined);
 
     let isFirstCall = true;
-    const unsub = await spooky.subscribe(
+    const unsub = await sp00ky.subscribe(
       hash,
       (e) => {
         const data = (query.isOne ? e[0] : e) as TData;

@@ -1,10 +1,10 @@
-# Spooky Hashing Logic Documentation
+# Sp00ky Hashing Logic Documentation
 
 ## Overview
 
-The Spooky Hashing System provides a robust, Merkle Tree-like mechanism for tracking data state and dependencies in SurrealDB. It enables efficient synchronization and change detection by ensuring that any change to a record, its dependencies, or the records it references is reflected in a deterministic hash.
+The Sp00ky Hashing System provides a robust, Merkle Tree-like mechanism for tracking data state and dependencies in SurrealDB. It enables efficient synchronization and change detection by ensuring that any change to a record, its dependencies, or the records it references is reflected in a deterministic hash.
 
-The system relies on a shadow table, `_spooky_data_hash`, which maintains hash data for every record in the database.
+The system relies on a shadow table, `_00_data_hash`, which maintains hash data for every record in the database.
 
 ## Architecture
 
@@ -27,7 +27,7 @@ graph TD
     class Intrinsic,Comp,Total hash;
 ```
 
-For every tracked record `table:id`, there is a corresponding `_spooky_data_hash` record with `RecordId = table:id`. This record contains three primary hash components:
+For every tracked record `table:id`, there is a corresponding `_00_data_hash` record with `RecordId = table:id`. This record contains three primary hash components:
 
 1.  **IntrinsicHash**: Representative of the record's own scalar data.
 2.  **CompositionHash**: Representative of the record's relationships (outgoing references and incoming dependencies).
@@ -65,7 +65,7 @@ When a record points to another (e.g., `thread.author -> user`), the **TotalHash
 
 - **Mechanism**:
   - If `thread:A` has `author = user:B`, then `CompositionHash.author` = `user:B.TotalHash`.
-  - **Cascade Down**: If `user:B` changes, a trigger (`_spooky_z_cascade`) "touches" `thread:A` (updating `_spooky_touch` timestamp). This forces `thread:A` to re-read `user:B`'s new hash and update itself.
+  - **Cascade Down**: If `user:B` changes, a trigger (`_00_z_cascade`) "touches" `thread:A` (updating `_00_touch` timestamp). This forces `thread:A` to re-read `user:B`'s new hash and update itself.
 - **Cycle Breaking**:
   - To prevent infinite feedback loops (e.g., Child hashes Parent <-> Parent hashes Child), **Referenced Fields that point to a Parent are excluded** from the Hashing logic on the Child side.
 
@@ -98,16 +98,16 @@ _Used for: One-to-Many dependencies (e.g., Thread -> Comments)._
 2.  **Calculation**: New `TotalHash` for Comment is generated.
 3.  **Delta**: Difference between Old and New Hash is calculated (`Old XOR New`).
 4.  **Propagation**: The Delta is XORed into the Parent's `CompositionHash`.
-    - `UPDATE _spooky_data_hash SET CompositionHash.comment = XOR(..., Delta) WHERE RecordId = parent_id`.
+    - `UPDATE _00_data_hash SET CompositionHash.comment = XOR(..., Delta) WHERE RecordId = parent_id`.
 
 ### 2. Cascade Down / Reference Propagation (Referenced -> Referrer)
 
 _Used for: Foreign Keys / References (e.g., Thread -> Author)._
 
 1.  **Mutation**: `User` (Author) is updated.
-2.  **Trigger**: `DEFINE EVENT _spooky_z_cascade_thread_author` fires on `User`.
-3.  **Action**: Updates a hidden field `_spooky_touch` on all `Thread` records referencing this User.
-    - `UPDATE thread SET _spooky_touch = time::now() WHERE author = $after.id`.
+2.  **Trigger**: `DEFINE EVENT _00_z_cascade_thread_author` fires on `User`.
+3.  **Action**: Updates a hidden field `_00_touch` on all `Thread` records referencing this User.
+    - `UPDATE thread SET _00_touch = time::now() WHERE author = $after.id`.
 4.  **Reaction**: The update to `Thread` triggers its own Mutation Event.
 5.  **Re-Evaluation**: `Thread` re-calculates its `CompositionHash`. It sees the new `TotalHash` of the User and incorporates it.
 
@@ -137,10 +137,10 @@ Because all aggregations use **XOR** (Reducible), the system is fully reversible
 1.  **User Table**:
     - `IntrinsicHash` changes (due to `avatar` field).
     - `TotalHash` changes.
-    - _Event_: `_spooky_z_cascade` fires for `Thread` table.
+    - _Event_: `_00_z_cascade` fires for `Thread` table.
 
 2.  **Thread Table** (Referencing User):
-    - `_spooky_touch` updated.
+    - `_00_touch` updated.
     - Thread Mutation Event fires.
     - `CompositionHash` recalculates: Reads new `User.TotalHash`.
     - `TotalHash` of Thread changes.

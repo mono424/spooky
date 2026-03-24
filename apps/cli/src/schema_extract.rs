@@ -27,7 +27,7 @@ pub fn extract_schema_from_db(client: &SurrealClient) -> Result<String> {
             if let Some(inner_obj) = values.as_object() {
                 for (name, define_stmt) in inner_obj {
                     // Skip internal migration tracking table
-                    if section == "tables" && name == "_spooky_migrations" {
+                    if section == "tables" && name == "_00_migrations" {
                         continue;
                     }
                     if let Some(stmt_str) = define_stmt.as_str() {
@@ -78,7 +78,7 @@ fn find_free_port() -> Result<u16> {
 const SURREALDB_IMAGE: &str = "surrealdb/surrealdb:v3.0.0";
 
 fn start_ephemeral_surreal_docker(port: u16) -> Result<String> {
-    let container_name = format!("spooky-migrate-ephemeral-{}", port);
+    let container_name = format!("sp00ky-migrate-ephemeral-{}", port);
 
     Command::new("docker")
         .args([

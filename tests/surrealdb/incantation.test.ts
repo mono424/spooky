@@ -1,7 +1,7 @@
 import { createTestDb, clearTestDb, TEST_DB_CONFIG } from './setup';
 import { Surreal } from 'surrealdb';
 
-describe('Spooky Incantations', () => {
+describe('Sp00ky Incantations', () => {
   let db: Surreal;
 
   async function runQuery(query: string) {
@@ -49,14 +49,14 @@ describe('Spooky Incantations', () => {
 
     // DEBUG: Check what was actually saved
     const checkQuery = `
-            LET $inc = (SELECT * FROM _spooky_query WHERE Id = 'inc_active_threads')[0];
+            LET $inc = (SELECT * FROM _00_query WHERE Id = 'inc_active_threads')[0];
             LET $state = fn::dbsp::get_state();
             RETURN { incantation: $inc, state: $state };
         `;
     const checkRes = await runQuery(checkQuery);
     console.log('Post-registration check:', JSON.stringify(checkRes[checkRes.length - 1], null, 2));
 
-    // 3. Create Threads (Triggers _spooky_thread_mutation -> dbsp::ingest -> Update Incantation)
+    // 3. Create Threads (Triggers _00_thread_mutation -> dbsp::ingest -> Update Incantation)
 
     // A. Create Active Thread (Should match)
     const createRes = await runQuery(`
@@ -70,7 +70,7 @@ describe('Spooky Incantations', () => {
 
     // DEBUG: Check state after CREATE
     const afterCreateQuery = `
-            LET $inc = (SELECT * FROM _spooky_query WHERE Id = 'inc_active_threads')[0];
+            LET $inc = (SELECT * FROM _00_query WHERE Id = 'inc_active_threads')[0];
             LET $state = fn::dbsp::get_state();
             RETURN { incantation: $inc, state: $state };
         `;
@@ -91,10 +91,10 @@ describe('Spooky Incantations', () => {
         `);
 
     // 4. Verify Incantation State Loop
-    // The event should have updated _spooky_query table
+    // The event should have updated _00_query table
     // We look for the record with Id "view_active_threads" (ID from Plan) OR "inc_active_threads"?
-    // Wait. `fn::dbsp::register_query` uses `$after.Id` from `_spooky_query`.
-    // `fn::query::register` sets `_spooky_query.Id` to "inc_active_threads".
+    // Wait. `fn::dbsp::register_query` uses `$after.Id` from `_00_query`.
+    // `fn::query::register` sets `_00_query.Id` to "inc_active_threads".
     // So the Plan ID should match that!
     // But in step 1, I named the plan "view_active_threads".
     // `fn::dbsp::register_query` (in Lib.rs) takes `id` and `plan_json`.
@@ -104,7 +104,7 @@ describe('Spooky Incantations', () => {
     // So the WASM module will key the view by "inc_active_threads".
 
     // Check local state in DB
-    const incQuery = `SELECT * FROM _spooky_query WHERE Id = 'inc_active_threads'`;
+    const incQuery = `SELECT * FROM _00_query WHERE Id = 'inc_active_threads'`;
     const incRes = await runQuery(incQuery);
     const incRecord = incRes[0][0];
 
@@ -132,7 +132,7 @@ describe('Spooky Incantations', () => {
     console.log('Incantation Record After Delete:', JSON.stringify(incRecord2, null, 2));
 
     // DEBUG: Check State After Delete to see zset
-    const stateRes2 = await runQuery('SELECT * FROM _spooky_module_state:singleton');
+    const stateRes2 = await runQuery('SELECT * FROM _00_module_state:singleton');
     const state2 = stateRes2[stateRes2.length - 1];
     if (state2) {
       console.log('State2 Object:', JSON.stringify(state2, null, 2));
@@ -182,7 +182,7 @@ describe('Spooky Incantations', () => {
 
     // Helper to get current Hash
     const getHash = async () => {
-      const r = await runQuery(`SELECT Hash FROM ONLY _spooky_query WHERE Id = 'inc_det'`);
+      const r = await runQuery(`SELECT Hash FROM ONLY _00_query WHERE Id = 'inc_det'`);
       return r[0] ? r[0].Hash : null;
     };
 

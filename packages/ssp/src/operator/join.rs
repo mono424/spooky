@@ -2,7 +2,7 @@ use crate::algebra::{ZSet, ZSetOps};
 use crate::circuit::store::Store;
 use crate::eval::value_ops::{compare_values, hash_value, resolve_field};
 use crate::operator::plan::JoinCondition;
-use crate::types::SpookyValue;
+use crate::types::Sp00kyValue;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
@@ -43,7 +43,7 @@ impl Join {
         }
 
         // Build index on the right side
-        let mut right_index: HashMap<u64, Vec<(&String, &i64, &SpookyValue)>> = HashMap::new();
+        let mut right_index: HashMap<u64, Vec<(&String, &i64, &Sp00kyValue)>> = HashMap::new();
         for (r_key, r_weight) in right {
             if let Some(r_val) = store.get_row_by_key(r_key) {
                 if let Some(r_field) = resolve_field(Some(r_val), &condition.right_field) {
@@ -81,7 +81,7 @@ impl Join {
 }
 
 impl super::Operator for Join {
-    fn snapshot(&self, inputs: &[&ZSet], store: &Store, _ctx: Option<&SpookyValue>) -> ZSet {
+    fn snapshot(&self, inputs: &[&ZSet], store: &Store, _ctx: Option<&Sp00kyValue>) -> ZSet {
         Self::hash_join(inputs[0], inputs[1], &self.condition, store)
     }
 
@@ -89,7 +89,7 @@ impl super::Operator for Join {
         &mut self,
         input_deltas: &[&ZSet],
         store: &Store,
-        _ctx: Option<&SpookyValue>,
+        _ctx: Option<&Sp00kyValue>,
     ) -> ZSet {
         let delta_a = input_deltas[0];
         let delta_b = input_deltas[1];

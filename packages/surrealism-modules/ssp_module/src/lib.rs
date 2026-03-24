@@ -1,5 +1,5 @@
 // TODO: re-enable when ssp API stabilizes
-// This module is disabled for v1. The spooky_stream_processor API has changed
+// This module is disabled for v1. The sp00ky_stream_processor API has changed
 // and the types referenced here (Circuit, ViewUpdate, MaterializedViewUpdate, etc.)
 // no longer exist in their previous form.
 
@@ -8,7 +8,7 @@ use surrealism::surrealism;
 
 // mod persistence;
 
-// use spooky_stream_processor::{
+// use sp00ky_stream_processor::{
 //     engine::{
 //         circuit::{dto::BatchEntry, Circuit},
 //         types::Operation,

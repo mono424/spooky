@@ -32,7 +32,7 @@ export interface WasmIngestItem {
 
 
 
-export class SpookyProcessor {
+export class Sp00kyProcessor {
   free(): void;
   [Symbol.dispose](): void;
   /**
@@ -67,14 +67,14 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
   readonly memory: WebAssembly.Memory;
-  readonly __wbg_spookyprocessor_free: (a: number, b: number) => void;
+  readonly __wbg_sp00kyprocessor_free: (a: number, b: number) => void;
   readonly init: () => void;
-  readonly spookyprocessor_ingest: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: any) => [number, number, number];
-  readonly spookyprocessor_load_state: (a: number, b: number, c: number) => [number, number];
-  readonly spookyprocessor_new: () => number;
-  readonly spookyprocessor_register_view: (a: number, b: any) => [number, number, number];
-  readonly spookyprocessor_save_state: (a: number) => [number, number, number, number];
-  readonly spookyprocessor_unregister_view: (a: number, b: number, c: number) => void;
+  readonly sp00kyprocessor_ingest: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: any) => [number, number, number];
+  readonly sp00kyprocessor_load_state: (a: number, b: number, c: number) => [number, number];
+  readonly sp00kyprocessor_new: () => number;
+  readonly sp00kyprocessor_register_view: (a: number, b: any) => [number, number, number];
+  readonly sp00kyprocessor_save_state: (a: number) => [number, number, number, number];
+  readonly sp00kyprocessor_unregister_view: (a: number, b: number, c: number) => void;
   readonly __wbindgen_malloc: (a: number, b: number) => number;
   readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
   readonly __wbindgen_exn_store: (a: number) => void;

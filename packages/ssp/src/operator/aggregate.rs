@@ -1,7 +1,7 @@
 use crate::algebra::{ZSet, ZSetOps};
 use crate::circuit::store::Store;
 use crate::eval::value_ops::resolve_field;
-use crate::types::{Path, SpookyValue};
+use crate::types::{Path, Sp00kyValue};
 use std::collections::HashMap;
 
 /// Supported aggregate functions.
@@ -77,7 +77,7 @@ impl Aggregate {
 }
 
 impl super::Operator for Aggregate {
-    fn snapshot(&self, inputs: &[&ZSet], store: &Store, _ctx: Option<&SpookyValue>) -> ZSet {
+    fn snapshot(&self, inputs: &[&ZSet], store: &Store, _ctx: Option<&Sp00kyValue>) -> ZSet {
         let upstream = inputs[0];
         let mut groups: HashMap<String, AggState> = HashMap::new();
 
@@ -117,7 +117,7 @@ impl super::Operator for Aggregate {
         &mut self,
         input_deltas: &[&ZSet],
         store: &Store,
-        _ctx: Option<&SpookyValue>,
+        _ctx: Option<&Sp00kyValue>,
     ) -> ZSet {
         let upstream_delta = input_deltas[0];
 

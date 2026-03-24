@@ -1,7 +1,7 @@
 import type { Surreal } from 'surrealdb';
 import type { SyncedDb } from '../index';
 import { GenericSchema } from '../lib/models';
-import type { SpookyConfig } from '@spooky-sync/core';
+import type { Sp00kyConfig } from '@spooky-sync/core';
 import type { SchemaStructure, TableNames, GetTable, TableModel } from '@spooky-sync/query-builder';
 
 /**
@@ -44,7 +44,7 @@ export type InferRelationshipsFromConst<S extends SchemaStructure, Schema extend
 // Prettify helper expands types for better intellisense
 type Prettify<T> = { [K in keyof T]: T[K] } & {};
 
-export type SyncedDbConfig<S extends SchemaStructure> = Prettify<SpookyConfig<S>>;
+export type SyncedDbConfig<S extends SchemaStructure> = Prettify<Sp00kyConfig<S>>;
 
 // export interface LocalDbConfig {
 //   name: string;

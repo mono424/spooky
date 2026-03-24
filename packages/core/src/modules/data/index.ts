@@ -62,7 +62,7 @@ export class DataModule<S extends SchemaStructure> {
   }
 
   async init(): Promise<void> {
-    this.logger.info({ Category: 'spooky-client::DataModule::init' }, 'DataModule initialized');
+    this.logger.info({ Category: 'sp00ky-client::DataModule::init' }, 'DataModule initialized');
   }
 
   // ==================== QUERY MANAGEMENT ====================
@@ -78,15 +78,15 @@ export class DataModule<S extends SchemaStructure> {
   ): Promise<QueryHash> {
     const hash = await this.calculateHash({ surql: surqlString, params });
     this.logger.debug(
-      { hash, Category: 'spooky-client::DataModule::query' },
+      { hash, Category: 'sp00ky-client::DataModule::query' },
       'Query Initialization: started'
     );
 
-    const recordId = new RecordId('_spooky_query', hash);
+    const recordId = new RecordId('_00_query', hash);
 
     if (this.activeQueries.has(hash)) {
       this.logger.debug(
-        { hash, Category: 'spooky-client::DataModule::query' },
+        { hash, Category: 'sp00ky-client::DataModule::query' },
         'Query Initialization: exists, returning'
       );
       return hash;
@@ -95,7 +95,7 @@ export class DataModule<S extends SchemaStructure> {
     // Another call is already creating this query — wait for it
     if (this.pendingQueries.has(hash)) {
       this.logger.debug(
-        { hash, Category: 'spooky-client::DataModule::query' },
+        { hash, Category: 'sp00ky-client::DataModule::query' },
         'Query Initialization: pending, waiting for existing creation'
       );
       await this.pendingQueries.get(hash);
@@ -103,7 +103,7 @@ export class DataModule<S extends SchemaStructure> {
     }
 
     this.logger.debug(
-      { hash, Category: 'spooky-client::DataModule::query' },
+      { hash, Category: 'sp00ky-client::DataModule::query' },
       'Query Initialization: not found, creating new query'
     );
 
@@ -194,7 +194,7 @@ export class DataModule<S extends SchemaStructure> {
     const queryState = this.activeQueries.get(queryHash);
     if (!queryState) {
       this.logger.warn(
-        { queryHash, Category: 'spooky-client::DataModule::onStreamUpdate' },
+        { queryHash, Category: 'sp00ky-client::DataModule::onStreamUpdate' },
         'Received update for unknown query. Skipping...'
       );
       return;
@@ -221,7 +221,7 @@ export class DataModule<S extends SchemaStructure> {
       queryState.records = newRecords;
       if (prevJson === newJson) {
         this.logger.debug(
-          { queryHash, Category: 'spooky-client::DataModule::onStreamUpdate' },
+          { queryHash, Category: 'sp00ky-client::DataModule::onStreamUpdate' },
           'Query records unchanged, skipping notification'
         );
         return;
@@ -241,13 +241,13 @@ export class DataModule<S extends SchemaStructure> {
         {
           queryHash,
           recordCount: records?.length,
-          Category: 'spooky-client::DataModule::onStreamUpdate',
+          Category: 'sp00ky-client::DataModule::onStreamUpdate',
         },
         'Query updated from stream'
       );
     } catch (err) {
       this.logger.error(
-        { err, queryHash, Category: 'spooky-client::DataModule::onStreamUpdate' },
+        { err, queryHash, Category: 'sp00ky-client::DataModule::onStreamUpdate' },
         'Failed to fetch records for stream update'
       );
     }
@@ -278,7 +278,7 @@ export class DataModule<S extends SchemaStructure> {
     const queryState = this.activeQueries.get(id);
     if (!queryState) {
       this.logger.warn(
-        { id, Category: 'spooky-client::DataModule::updateQueryLocalArray' },
+        { id, Category: 'sp00ky-client::DataModule::updateQueryLocalArray' },
         'Query to update local array not found'
       );
       return;
@@ -294,7 +294,7 @@ export class DataModule<S extends SchemaStructure> {
     const queryState = this.getQueryByHash(hash);
     if (!queryState) {
       this.logger.warn(
-        { hash, Category: 'spooky-client::DataModule::updateQueryRemoteArray' },
+        { hash, Category: 'sp00ky-client::DataModule::updateQueryRemoteArray' },
         'Query to update remote array not found'
       );
       return;
@@ -392,7 +392,7 @@ export class DataModule<S extends SchemaStructure> {
 
     const rid = parseRecordIdString(id);
     const params = parseParams(tableSchema.columns, data);
-    const mutationId = parseRecordIdString(`_spooky_pending_mutations:${Date.now()}`);
+    const mutationId = parseRecordIdString(`_00_pending_mutations:${Date.now()}`);
 
     const dataKeys = Object.keys(params).map((key) => ({ key, variable: `data_${key}` }));
     const prefixedParams = Object.fromEntries(
@@ -441,7 +441,7 @@ export class DataModule<S extends SchemaStructure> {
       callback([mutationEvent]);
     }
 
-    this.logger.debug({ id, Category: 'spooky-client::DataModule::create' }, 'Record created');
+    this.logger.debug({ id, Category: 'sp00ky-client::DataModule::create' }, 'Record created');
 
     return target;
   }
@@ -463,7 +463,7 @@ export class DataModule<S extends SchemaStructure> {
 
     const rid = parseRecordIdString(id);
     const params = parseParams(tableSchema.columns, data);
-    const mutationId = parseRecordIdString(`_spooky_pending_mutations:${Date.now()}`);
+    const mutationId = parseRecordIdString(`_00_pending_mutations:${Date.now()}`);
 
     // Capture current record state before mutation for rollback support
     const [beforeRecord] = await withRetry(this.logger, () =>
@@ -472,7 +472,7 @@ export class DataModule<S extends SchemaStructure> {
 
     const query = surql.seal<{ target: T }>(
       surql.tx([
-        surql.updateSet('id', [{ statement: 'spooky_rv += 1' }]),
+        surql.updateSet('id', [{ statement: '_00_rv += 1' }]),
         surql.let('updated', surql.updateMerge('id', 'data')),
         surql.createMutation('update', 'mid', 'id', 'data'),
         surql.returnObject([{ key: 'target', variable: 'updated' }]),
@@ -496,8 +496,8 @@ export class DataModule<S extends SchemaStructure> {
         updatedFields[key] = (target as Record<string, any>)[key];
       }
     }
-    if ('spooky_rv' in (target as Record<string, any>)) {
-      updatedFields.spooky_rv = (target as Record<string, any>).spooky_rv;
+    if ('_00_rv' in (target as Record<string, any>)) {
+      updatedFields._00_rv = (target as Record<string, any>)._00_rv;
     }
     this.replaceRecordInQueries(updatedFields);
 
@@ -509,7 +509,7 @@ export class DataModule<S extends SchemaStructure> {
         table: table,
         op: 'UPDATE',
         record: parsedRecord,
-        version: target.spooky_rv as number,
+        version: target._00_rv as number,
       },
       true
     );
@@ -531,7 +531,7 @@ export class DataModule<S extends SchemaStructure> {
       callback([mutationEvent]);
     }
 
-    this.logger.debug({ id, Category: 'spooky-client::DataModule::update' }, 'Record updated');
+    this.logger.debug({ id, Category: 'sp00ky-client::DataModule::update' }, 'Record updated');
 
     return target;
   }
@@ -547,7 +547,7 @@ export class DataModule<S extends SchemaStructure> {
     }
 
     const rid = parseRecordIdString(id);
-    const mutationId = parseRecordIdString(`_spooky_pending_mutations:${Date.now()}`);
+    const mutationId = parseRecordIdString(`_00_pending_mutations:${Date.now()}`);
 
     // Fetch the record before deleting so DBSP can match it against query predicates
     const [beforeRecords] = await this.local.query<[Record<string, any>[]]>(
@@ -582,7 +582,7 @@ export class DataModule<S extends SchemaStructure> {
       callback([mutationEvent]);
     }
 
-    this.logger.debug({ id, Category: 'spooky-client::DataModule::delete' }, 'Record deleted');
+    this.logger.debug({ id, Category: 'sp00ky-client::DataModule::delete' }, 'Record deleted');
   }
 
   // ==================== ROLLBACK METHODS ====================
@@ -601,12 +601,12 @@ export class DataModule<S extends SchemaStructure> {
       this.removeRecordFromQueries(recordId);
 
       this.logger.info(
-        { id, tableName, Category: 'spooky-client::DataModule::rollbackCreate' },
+        { id, tableName, Category: 'sp00ky-client::DataModule::rollbackCreate' },
         'Rolled back optimistic create'
       );
     } catch (err) {
       this.logger.error(
-        { err, id, tableName, Category: 'spooky-client::DataModule::rollbackCreate' },
+        { err, id, tableName, Category: 'sp00ky-client::DataModule::rollbackCreate' },
         'Failed to rollback create'
       );
     }
@@ -641,7 +641,7 @@ export class DataModule<S extends SchemaStructure> {
           table: tableName,
           op: 'UPDATE',
           record: parsedRecord,
-          version: (beforeRecord.spooky_rv as number) || 1,
+          version: (beforeRecord._00_rv as number) || 1,
         },
         true
       );
@@ -650,12 +650,12 @@ export class DataModule<S extends SchemaStructure> {
       await this.replaceRecordInQueries(beforeRecord);
 
       this.logger.info(
-        { id, tableName, Category: 'spooky-client::DataModule::rollbackUpdate' },
+        { id, tableName, Category: 'sp00ky-client::DataModule::rollbackUpdate' },
         'Rolled back optimistic update'
       );
     } catch (err) {
       this.logger.error(
-        { err, id, tableName, Category: 'spooky-client::DataModule::rollbackUpdate' },
+        { err, id, tableName, Category: 'sp00ky-client::DataModule::rollbackUpdate' },
         'Failed to rollback update'
       );
     }
@@ -725,7 +725,7 @@ export class DataModule<S extends SchemaStructure> {
         hash,
         tableName,
         recordCount: queryState.records.length,
-        Category: 'spooky-client::DataModule::query',
+        Category: 'sp00ky-client::DataModule::query',
       },
       'Query registered'
     );
@@ -787,7 +787,7 @@ export class DataModule<S extends SchemaStructure> {
       records = result || [];
     } catch (err) {
       this.logger.warn(
-        { err, Category: 'spooky-client::DataModule::createNewQuery' },
+        { err, Category: 'sp00ky-client::DataModule::createNewQuery' },
         'Failed to load initial cached records'
       );
     }
@@ -819,7 +819,7 @@ export class DataModule<S extends SchemaStructure> {
       this.logger.debug(
         {
           id: encodeRecordId(queryState.config.id),
-          Category: 'spooky-client::DataModule::startTTLHeartbeat',
+          Category: 'sp00ky-client::DataModule::startTTLHeartbeat',
         },
         'TTL heartbeat'
       );

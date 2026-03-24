@@ -1,8 +1,8 @@
 # Scheduler Service
 
-> **Central Orchestration Hub for Spooky Architecture**
+> **Central Orchestration Hub for Sp00ky Architecture**
 
-The Scheduler is a new Rust service that acts as the single point of coordination between SurrealDB and SSP (Spooky Sidecar Processor) instances. It replaces the direct SurrealDB-to-SSP connection model with a hub-and-spoke topology, providing centralized query routing, job scheduling, and event distribution.
+The Scheduler is a new Rust service that acts as the single point of coordination between SurrealDB and SSP (Sp00ky Sidecar Processor) instances. It replaces the direct SurrealDB-to-SSP connection model with a hub-and-spoke topology, providing centralized query routing, job scheduling, and event distribution.
 
 ## Architecture
 
@@ -69,19 +69,19 @@ Channel-agnostic design with NATS as default:
 ### Subjects
 
 ```
-spooky.ingest.<table>           # Record update broadcasts
-spooky.query.register           # Query registration (queue group)
-spooky.query.unregister         # Query unregistration
-spooky.job.execute              # Job dispatch (queue group)
-spooky.job.status               # Job status updates
-spooky.ssp.heartbeat            # SSP presence/health
-spooky.ssp.<id>.bootstrap       # Targeted SSP bootstrap
-spooky.ssp.<id>.direct          # Direct SSP messages
+sp00ky.ingest.<table>           # Record update broadcasts
+sp00ky.query.register           # Query registration (queue group)
+sp00ky.query.unregister         # Query unregistration
+sp00ky.job.execute              # Job dispatch (queue group)
+sp00ky.job.status               # Job status updates
+sp00ky.ssp.heartbeat            # SSP presence/health
+sp00ky.ssp.<id>.bootstrap       # Targeted SSP bootstrap
+sp00ky.ssp.<id>.direct          # Direct SSP messages
 ```
 
 ## Configuration
 
-Create a `spooky.yml` file or use environment variables:
+Create a `sp00ky.yml` file or use environment variables:
 
 ```yaml
 scheduler:
@@ -91,8 +91,8 @@ scheduler:
     credentials: /path/to/creds # Optional
   db:
     url: ws://localhost:8000
-    namespace: spooky
-    database: spooky
+    namespace: sp00ky
+    database: sp00ky
     username: root
     password: root
   load_balance: least_queries # round_robin | least_queries | least_load
@@ -103,7 +103,7 @@ scheduler:
     - job
 ```
 
-Environment variable overrides: `SPOOKY_SCHEDULER_<KEY>` (e.g., `SPOOKY_SCHEDULER_NATS_URL`)
+Environment variable overrides: `SP00KY_SCHEDULER_<KEY>` (e.g., `SP00KY_SCHEDULER_NATS_URL`)
 
 ## Usage
 
@@ -120,11 +120,11 @@ cargo build --release --bin scheduler
 ./target/release/scheduler
 
 # With custom config file
-SPOOKY_CONFIG=custom.yml ./target/release/scheduler
+SP00KY_CONFIG=custom.yml ./target/release/scheduler
 
 # With environment overrides
-SPOOKY_SCHEDULER_NATS_URL=nats://prod:4222 \
-SPOOKY_SCHEDULER_DB_URL=ws://prod-db:8000 \
+SP00KY_SCHEDULER_NATS_URL=nats://prod:4222 \
+SP00KY_SCHEDULER_DB_URL=ws://prod-db:8000 \
 ./target/release/scheduler
 ```
 
@@ -163,4 +163,4 @@ src/
 
 ## License
 
-Same as the parent Spooky project.
+Same as the parent Sp00ky project.

@@ -6,7 +6,7 @@ const SURREAL_PASS = 'root';
 
 // Tables to clean — application data only.
 // NOT `user` (registerUser handles "already exists").
-// NOT `_spooky_*` (internal sync tables).
+// NOT `_00_*` (internal sync tables).
 const TABLES_TO_CLEAN = ['commented_on', 'comment', 'thread', 'job'];
 
 const MAX_RETRIES = 3;

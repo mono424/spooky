@@ -5,7 +5,7 @@ import { BRIDGE_METHODS } from './protocol.js';
 
 export function createServer(bridge: Bridge): McpServer {
   const server = new McpServer({
-    name: 'spooky-devtools',
+    name: 'sp00ky-devtools',
     version: '0.0.1',
   });
 
@@ -13,7 +13,7 @@ export function createServer(bridge: Bridge): McpServer {
 
   server.tool(
     'list_connections',
-    'List browser tabs connected to Spooky DevTools',
+    'List browser tabs connected to Sp00ky DevTools',
     {},
     async () => {
       const tabs = bridge.getConnectedTabs();
@@ -37,7 +37,7 @@ export function createServer(bridge: Bridge): McpServer {
 
   server.tool(
     'get_state',
-    'Get the full Spooky DevTools state (events, queries, auth, database)',
+    'Get the full Sp00ky DevTools state (events, queries, auth, database)',
     { tabId: z.number().optional().describe('Browser tab ID (uses first connected tab if omitted)') },
     async ({ tabId }) => {
       const result = await bridge.request(BRIDGE_METHODS.GET_STATE, {}, tabId);
@@ -175,12 +175,12 @@ export function createServer(bridge: Bridge): McpServer {
 
   // --- Resources ---
 
-  server.resource('state', 'spooky://state', { description: 'Full Spooky DevTools state' }, async (uri) => {
+  server.resource('state', 'sp00ky://state', { description: 'Full Sp00ky DevTools state' }, async (uri) => {
     const state = await bridge.request(BRIDGE_METHODS.GET_STATE);
     return { contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(state, null, 2) }] };
   });
 
-  server.resource('tables', 'spooky://tables', { description: 'List of database tables' }, async (uri) => {
+  server.resource('tables', 'sp00ky://tables', { description: 'List of database tables' }, async (uri) => {
     const state = (await bridge.request(BRIDGE_METHODS.GET_STATE)) as any;
     const tables = state?.database?.tables ?? [];
     return { contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(tables, null, 2) }] };
@@ -188,7 +188,7 @@ export function createServer(bridge: Bridge): McpServer {
 
   server.resource(
     'table-data',
-    new ResourceTemplate('spooky://tables/{tableName}', { list: undefined }),
+    new ResourceTemplate('sp00ky://tables/{tableName}', { list: undefined }),
     { description: 'Contents of a specific database table' },
     async (uri, variables) => {
       const tableName = variables.tableName as string;
@@ -197,13 +197,13 @@ export function createServer(bridge: Bridge): McpServer {
     }
   );
 
-  server.resource('queries', 'spooky://queries', { description: 'Active live queries' }, async (uri) => {
+  server.resource('queries', 'sp00ky://queries', { description: 'Active live queries' }, async (uri) => {
     const state = (await bridge.request(BRIDGE_METHODS.GET_STATE)) as any;
     const queries = state?.activeQueries ?? [];
     return { contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(queries, null, 2) }] };
   });
 
-  server.resource('events', 'spooky://events', { description: 'Event history' }, async (uri) => {
+  server.resource('events', 'sp00ky://events', { description: 'Event history' }, async (uri) => {
     const state = (await bridge.request(BRIDGE_METHODS.GET_STATE)) as any;
     const events = state?.eventsHistory ?? [];
     return { contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(events, null, 2) }] };

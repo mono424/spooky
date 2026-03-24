@@ -1,6 +1,7 @@
 mod add_api;
 mod backend;
 mod bucket;
+mod cloud;
 mod codegen;
 mod dev;
 mod json_schema;
@@ -11,11 +12,11 @@ mod schema_builder;
 mod schema_diff;
 mod schema_extract;
 mod create;
-mod spooky;
+mod sp00ky;
 mod surreal_client;
 
 use anyhow::{Context, Result};
-use backend::{BackendProcessor, SpookyConfig, DEFAULT_CONFIG_PATH};
+use backend::{BackendProcessor, Sp00kyConfig, DEFAULT_CONFIG_PATH};
 use clap::{Args as ClapArgs, Parser as ClapParser, Subcommand};
 use codegen::{CodeGenerator, OutputFormat};
 use json_schema::JsonSchemaGenerator;
@@ -45,7 +46,7 @@ struct Args {
     #[arg(short, long)]
     output: Option<PathBuf>,
 
-    /// Path to the spooky.yml configuration file
+    /// Path to the sp00ky.yml configuration file
     #[arg(short, long)]
     config: Option<PathBuf>,
 
@@ -89,7 +90,7 @@ struct Args {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Create a new Spooky project
+    /// Create a new Sp00ky project
     Create,
     /// Alias for 'create' (backward compat)
     #[command(hide = true)]
@@ -121,19 +122,70 @@ enum Commands {
         #[arg(long)]
         fix_checksums: bool,
     },
-    /// Generate client types from spooky.yml
+    /// Generate client types from sp00ky.yml
     Generate {
-        /// Path to spooky.yml config file
+        /// Path to sp00ky.yml config file
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
     /// Alias for 'generate'
     #[command(hide = true)]
     Gen {
-        /// Path to spooky.yml config file
+        /// Path to sp00ky.yml config file
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
+    /// Cloud deployment and management
+    Cloud {
+        #[command(subcommand)]
+        action: CloudCommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum CloudCommands {
+    /// Authenticate with Sp00ky Cloud (opens browser)
+    Login,
+    /// Clear stored credentials
+    Logout,
+    /// Create a new cloud project
+    Create {
+        /// Project slug (lowercase, alphanumeric + hyphens)
+        #[arg(long)]
+        slug: Option<String>,
+        /// Plan: starter, pro, business
+        #[arg(long, default_value = "starter")]
+        plan: String,
+    },
+    /// Deploy current project to the cloud
+    Deploy,
+    /// Show deployment status
+    Status,
+    /// Tail logs from cloud deployment
+    Logs {
+        /// Filter by service: surrealdb, scheduler, ssp
+        #[arg(long)]
+        service: Option<String>,
+    },
+    /// Scale SSP instances
+    Scale {
+        /// Number of SSP instances
+        #[arg(long)]
+        ssp: u32,
+    },
+    /// Destroy cloud project and all VMs
+    Destroy,
+    /// Billing management
+    Billing {
+        #[command(subcommand)]
+        action: Option<CloudBillingCommands>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum CloudBillingCommands {
+    /// Show current usage
+    Usage,
 }
 
 #[derive(Subcommand, Debug)]
@@ -164,7 +216,7 @@ enum BucketCommands {
         #[arg(long)]
         path_prefix_auth: Option<bool>,
 
-        /// Path to spooky.yml config file
+        /// Path to sp00ky.yml config file
         #[arg(long)]
         config: Option<PathBuf>,
 
@@ -182,7 +234,7 @@ enum ApiCommands {
         #[arg(long)]
         spec: Option<String>,
 
-        /// Backend name (key in spooky.yml)
+        /// Backend name (key in sp00ky.yml)
         #[arg(long)]
         name: Option<String>,
 
@@ -206,7 +258,7 @@ enum ApiCommands {
         #[arg(long)]
         schema_path: Option<String>,
 
-        /// Path to spooky.yml config file
+        /// Path to sp00ky.yml config file
         #[arg(long)]
         config: Option<PathBuf>,
     },
@@ -227,7 +279,7 @@ enum MigrateCommands {
         /// Path to the input .surql schema file (for auto-diff)
         #[arg(long)]
         input: Option<PathBuf>,
-        /// Path to spooky.yml config file
+        /// Path to sp00ky.yml config file
         #[arg(long)]
         config: Option<PathBuf>,
         /// Generation mode: singlenode, cluster, surrealism
@@ -265,7 +317,7 @@ enum MigrateCommands {
         /// Migrations directory
         #[arg(long)]
         migrations_dir: Option<PathBuf>,
-        /// Path to spooky.yml config file
+        /// Path to sp00ky.yml config file
         #[arg(long)]
         config: Option<PathBuf>,
         /// Generation mode: singlenode, cluster, surrealism
@@ -466,9 +518,9 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
         } => {
             // Load config to resolve paths
             let config_file = config.clone().unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
-            let spooky_config = backend::load_config(&config_file);
-            let resolved = spooky_config.resolved_schema();
-            let resolved_surreal = spooky_config.resolved_surrealdb();
+            let sp00ky_config = backend::load_config(&config_file);
+            let resolved = sp00ky_config.resolved_schema();
+            let resolved_surreal = sp00ky_config.resolved_surrealdb();
 
             let resolved_input = input.unwrap_or(resolved.schema);
             let resolved_migrations = migrations_dir.unwrap_or(resolved.migrations);
@@ -520,12 +572,12 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
         } => {
             // Load config to resolve paths
             let config_file = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
-            let spooky_config = backend::load_config(&config_file);
-            let resolved = spooky_config.resolved_schema();
+            let sp00ky_config = backend::load_config(&config_file);
+            let resolved = sp00ky_config.resolved_schema();
             let resolved_migrations = migrations_dir.unwrap_or(resolved.migrations);
 
             // Use config ns/db as defaults when CLI flags are at their default "main"
-            let resolved_surreal = spooky_config.resolved_surrealdb();
+            let resolved_surreal = sp00ky_config.resolved_surrealdb();
             let namespace = if conn.namespace == "main" { resolved_surreal.namespace } else { conn.namespace };
             let database = if conn.database == "main" { resolved_surreal.database } else { conn.database };
 
@@ -540,7 +592,7 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
             // Apply user migrations
             migrate::apply(&client, &resolved_migrations)?;
 
-            // Apply internal Spooky schema (meta tables + events)
+            // Apply internal Sp00ky schema (meta tables + events)
             let config_path_ref = if config_file.exists() {
                 Some(config_file.as_path())
             } else {
@@ -560,10 +612,10 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
             migrations_dir,
         } => {
             // Load config to resolve migrations dir
-            let spooky_config = backend::load_config(Path::new(DEFAULT_CONFIG_PATH));
-            let resolved_migrations = migrations_dir.unwrap_or(spooky_config.resolved_schema().migrations);
+            let sp00ky_config = backend::load_config(Path::new(DEFAULT_CONFIG_PATH));
+            let resolved_migrations = migrations_dir.unwrap_or(sp00ky_config.resolved_schema().migrations);
 
-            let resolved_surreal = spooky_config.resolved_surrealdb();
+            let resolved_surreal = sp00ky_config.resolved_surrealdb();
             let namespace = if conn.namespace == "main" { resolved_surreal.namespace } else { conn.namespace };
             let database = if conn.database == "main" { resolved_surreal.database } else { conn.database };
 
@@ -581,10 +633,10 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
             migrations_dir,
             fix_checksums,
         } => {
-            let spooky_config = backend::load_config(Path::new(DEFAULT_CONFIG_PATH));
-            let resolved_migrations = migrations_dir.unwrap_or(spooky_config.resolved_schema().migrations);
+            let sp00ky_config = backend::load_config(Path::new(DEFAULT_CONFIG_PATH));
+            let resolved_migrations = migrations_dir.unwrap_or(sp00ky_config.resolved_schema().migrations);
 
-            let resolved_surreal = spooky_config.resolved_surrealdb();
+            let resolved_surreal = sp00ky_config.resolved_surrealdb();
             let namespace = if conn.namespace == "main" { resolved_surreal.namespace } else { conn.namespace };
             let database = if conn.database == "main" { resolved_surreal.database } else { conn.database };
 
@@ -631,8 +683,8 @@ fn handle_bucket(action: BucketCommands) -> Result<()> {
             buckets_dir,
         } => {
             let resolved_config = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
-            let spooky_config = backend::load_config(&resolved_config);
-            let resolved_buckets = buckets_dir.unwrap_or(spooky_config.resolved_schema().buckets_dir);
+            let sp00ky_config = backend::load_config(&resolved_config);
+            let resolved_buckets = buckets_dir.unwrap_or(sp00ky_config.resolved_schema().buckets_dir);
 
             bucket::add(
                 name,
@@ -714,11 +766,11 @@ fn run_codegen(
     // Filter the raw schema content to remove fields with FOR select WHERE false
     let mut filtered_schema_content = filter_schema_for_client(&content, &parser)?;
 
-    // Append spooky_rv field to every table for local cache setup (client-side only)
-    println!("  + Injecting spooky_rv field for local cache schema");
+    // Append _00_rv field to every table for local cache setup (client-side only)
+    println!("  + Injecting _00_rv field for local cache schema");
     for table_name in parser.tables.keys() {
         filtered_schema_content.push_str(&format!(
-            "\nDEFINE FIELD spooky_rv ON TABLE {} TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;",
+            "\nDEFINE FIELD _00_rv ON TABLE {} TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;",
             table_name
         ));
     }
@@ -816,7 +868,7 @@ fn run_codegen(
         println!("\nSuccessfully generated all formats!");
     } else {
         let is_client = !matches!(output_format, OutputFormat::Surql);
-        let spooky_events = spooky::generate_spooky_events(
+        let sp00ky_events = sp00ky::generate_sp00ky_events(
             &parser.tables,
             &content,
             is_client,
@@ -832,7 +884,7 @@ fn run_codegen(
                 &json_schema_string,
                 "Schema",
                 Some(&raw_schema_content),
-                Some(&spooky_events),
+                Some(&sp00ky_events),
                 Some(&backend_processor.backend_definitions),
             )
             .context("Failed to generate output code")?;
@@ -869,8 +921,8 @@ fn run_codegen(
 fn handle_generate(config_path: &Path) -> Result<()> {
     let config_str = fs::read_to_string(config_path)
         .context(format!("Failed to read config file: {:?}", config_path))?;
-    let config: SpookyConfig =
-        serde_yaml::from_str(&config_str).context("Failed to parse spooky config")?;
+    let config: Sp00kyConfig =
+        serde_yaml::from_str(&config_str).context("Failed to parse sp00ky config")?;
 
     if config.client_types.is_empty() {
         anyhow::bail!(
@@ -946,6 +998,7 @@ fn main() -> Result<()> {
         Some(Commands::Migrate { action }) => return handle_migrate(action),
         Some(Commands::Bucket { action }) => return handle_bucket(action),
         Some(Commands::Api { action }) => return handle_api(action),
+        Some(Commands::Cloud { action }) => return cloud::run(action),
         Some(Commands::Dev { skip_migrations, apply_migrations, fix_checksums }) => {
             return dev::run(skip_migrations, apply_migrations, fix_checksums);
         }
@@ -992,10 +1045,10 @@ fn main() -> Result<()> {
             .unwrap_or(OutputFormat::JsonSchema)
     };
 
-    // Process spooky config/backends
+    // Process sp00ky config/backends
     let mut backend_processor = BackendProcessor::new();
     if let Some(config_path) = &args.config {
-        println!("Loading spooky config from {:?}", config_path);
+        println!("Loading sp00ky config from {:?}", config_path);
         backend_processor.process(config_path)?;
     }
 

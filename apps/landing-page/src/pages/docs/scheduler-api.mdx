@@ -12,8 +12,8 @@ The Scheduler is the central orchestrator that manages SSP sidecars and coordina
 Default: `http://localhost:9667`
 
 Configure via environment variables:
-- `SPOOKY_SCHEDULER_INGEST_HOST` - Host to bind to (default: `0.0.0.0`)
-- `SPOOKY_SCHEDULER_INGEST_PORT` - Port to bind to (default: `9667`)
+- `SP00KY_SCHEDULER_INGEST_HOST` - Host to bind to (default: `0.0.0.0`)
+- `SP00KY_SCHEDULER_INGEST_PORT` - Port to bind to (default: `9667`)
 
 ## Authentication
 
@@ -456,14 +456,14 @@ While an SSP is bootstrapping, the scheduler buffers incoming messages:
 
 ## Configuration
 
-Configure the scheduler via `spooky.yml` or environment variables:
+Configure the scheduler via `sp00ky.yml` or environment variables:
 
 ```yaml
 # Database connection
 db:
   url: "localhost:8000/rpc"
-  namespace: "spooky"
-  database: "spooky"
+  namespace: "sp00ky"
+  database: "sp00ky"
   username: "root"
   password: "root"
 
@@ -503,21 +503,21 @@ job_tables:
 **Environment Variables:**
 
 - `SCHEDULER_ID` - Unique scheduler identifier (defaults to `scheduler-<uuid>`)
-- `SPOOKY_SCHEDULER_DB_URL` - Database URL (default: `localhost:8000/rpc`)
-- `SPOOKY_SCHEDULER_DB_NAMESPACE` - Database namespace
-- `SPOOKY_SCHEDULER_DB_DATABASE` - Database name
-- `SPOOKY_SCHEDULER_LOAD_BALANCE` - Load balance strategy
-- `SPOOKY_SCHEDULER_HEARTBEAT_INTERVAL_MS` - Heartbeat interval
-- `SPOOKY_SCHEDULER_HEARTBEAT_TIMEOUT_MS` - Heartbeat timeout
-- `SPOOKY_SCHEDULER_BOOTSTRAP_CHUNK_SIZE` - Bootstrap chunk size
-- `SPOOKY_SCHEDULER_BOOTSTRAP_TIMEOUT_SECS` - Bootstrap timeout (default: `120`)
-- `SPOOKY_SCHEDULER_INGEST_HOST` - HTTP server host
-- `SPOOKY_SCHEDULER_INGEST_PORT` - HTTP server port
-- `SPOOKY_SCHEDULER_REPLICA_DB_PATH` - RocksDB snapshot replica path (default: `./data/replica`)
-- `SPOOKY_SCHEDULER_WAL_PATH` - Write-ahead log path (default: `./data/event_wal.log`)
-- `SPOOKY_SCHEDULER_SSP_POLL_INTERVAL_MS` - SSP health poll interval during bootstrap (default: `3000`)
-- `SPOOKY_SCHEDULER_MAX_BUFFER_PER_SSP` - Max buffered messages per SSP (default: `10000`)
-- `SPOOKY_SCHEDULER_SNAPSHOT_UPDATE_INTERVAL_SECS` - Snapshot update interval (default: `300`)
+- `SP00KY_SCHEDULER_DB_URL` - Database URL (default: `localhost:8000/rpc`)
+- `SP00KY_SCHEDULER_DB_NAMESPACE` - Database namespace
+- `SP00KY_SCHEDULER_DB_DATABASE` - Database name
+- `SP00KY_SCHEDULER_LOAD_BALANCE` - Load balance strategy
+- `SP00KY_SCHEDULER_HEARTBEAT_INTERVAL_MS` - Heartbeat interval
+- `SP00KY_SCHEDULER_HEARTBEAT_TIMEOUT_MS` - Heartbeat timeout
+- `SP00KY_SCHEDULER_BOOTSTRAP_CHUNK_SIZE` - Bootstrap chunk size
+- `SP00KY_SCHEDULER_BOOTSTRAP_TIMEOUT_SECS` - Bootstrap timeout (default: `120`)
+- `SP00KY_SCHEDULER_INGEST_HOST` - HTTP server host
+- `SP00KY_SCHEDULER_INGEST_PORT` - HTTP server port
+- `SP00KY_SCHEDULER_REPLICA_DB_PATH` - RocksDB snapshot replica path (default: `./data/replica`)
+- `SP00KY_SCHEDULER_WAL_PATH` - Write-ahead log path (default: `./data/event_wal.log`)
+- `SP00KY_SCHEDULER_SSP_POLL_INTERVAL_MS` - SSP health poll interval during bootstrap (default: `3000`)
+- `SP00KY_SCHEDULER_MAX_BUFFER_PER_SSP` - Max buffered messages per SSP (default: `10000`)
+- `SP00KY_SCHEDULER_SNAPSHOT_UPDATE_INTERVAL_SECS` - Snapshot update interval (default: `300`)
 
 ---
 

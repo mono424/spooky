@@ -57,7 +57,7 @@ impl CodeGenerator {
         json_schema_content: &str,
         _top_level_name: &str,
         raw_schema: Option<&str>,
-        spooky_events: Option<&str>,
+        sp00ky_events: Option<&str>,
         backend_definitions: Option<&BTreeMap<String, BackendDefinition>>,
     ) -> Result<String> {
         let mut content = match self.format {
@@ -84,8 +84,8 @@ impl CodeGenerator {
                 // Add the main schema content
                 schema.push_str(raw_schema.unwrap_or(""));
 
-                // Add spooky events at the end
-                if let Some(events) = spooky_events {
+                // Add sp00ky events at the end
+                if let Some(events) = sp00ky_events {
                     schema.push_str(events);
                 }
                 schema
@@ -99,7 +99,7 @@ impl CodeGenerator {
 
         // Add raw schema constant for TypeScript and Dart
         if let Some(schema) = raw_schema {
-            let full_schema = if let Some(events) = spooky_events {
+            let full_schema = if let Some(events) = sp00ky_events {
                 format!("{}\n\n{}", schema, events)
             } else {
                 schema.to_string()
@@ -300,7 +300,7 @@ impl CodeGenerator {
             if let serde_json::Value::Object(defs_obj) = definitions {
                 // Process each table (skip Relationships and RelationTables)
                 for (table_name, table_def) in defs_obj {
-                    if table_name == "Relationships" || table_name == "RelationTables" || table_name == "Access" || table_name == "Buckets" || table_name.starts_with("_spooky_") {
+                    if table_name == "Relationships" || table_name == "RelationTables" || table_name == "Access" || table_name == "Buckets" || table_name.starts_with("_00_") {
                         continue;
                     }
 
@@ -529,7 +529,7 @@ impl CodeGenerator {
         if let Some(defs) = schema.get("definitions") {
             if let serde_json::Value::Object(defs_obj) = defs {
                 for (table_name, table_def) in defs_obj {
-                    if table_name == "Relationships" || table_name == "RelationTables" || table_name == "Buckets" || table_name.starts_with("_spooky_") {
+                    if table_name == "Relationships" || table_name == "RelationTables" || table_name == "Buckets" || table_name.starts_with("_00_") {
                         continue;
                     }
 
@@ -621,7 +621,7 @@ impl CodeGenerator {
                         if let serde_json::Value::Object(defs_obj) = defs {
                             println!("Processing definitions, found {} tables", defs_obj.len());
                             for (table_name, table_def) in defs_obj {
-                                if table_name == "Relationships" || table_name == "Buckets" || table_name.starts_with("_spooky_") {
+                                if table_name == "Relationships" || table_name == "Buckets" || table_name.starts_with("_00_") {
                                     continue;
                                 }
                                 // Check if this table has any record fields

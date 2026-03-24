@@ -1,7 +1,7 @@
-# SpookyConfig Reference
+# Sp00kyConfig Reference
 
 ```typescript
-interface SpookyConfig<S extends SchemaStructure> {
+interface Sp00kyConfig<S extends SchemaStructure> {
   database: {
     /** SurrealDB WebSocket endpoint URL */
     endpoint?: string;

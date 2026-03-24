@@ -5,7 +5,7 @@ fn main() -> std::io::Result<()> {
     // Relative paths from tools/compress
     let wasm_path = "../../packages/surrealism-modules/ssp_module/target/wasm32-wasip1/debug/ssp_module.wasm";
     let tar_path = "ssp_module.tar";
-    let output_path = "../../tests/.spooky/ssp_module.surli";
+    let output_path = "../../tests/.sp00ky/ssp_module.surli";
 
     println!("Creating tarball from: {}", wasm_path);
     

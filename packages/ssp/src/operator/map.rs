@@ -1,6 +1,6 @@
 use crate::algebra::ZSet;
 use crate::circuit::store::Store;
-use crate::types::SpookyValue;
+use crate::types::Sp00kyValue;
 
 use super::plan::Projection;
 
@@ -24,7 +24,7 @@ impl Map {
 }
 
 impl super::Operator for Map {
-    fn snapshot(&self, inputs: &[&ZSet], _store: &Store, _ctx: Option<&SpookyValue>) -> ZSet {
+    fn snapshot(&self, inputs: &[&ZSet], _store: &Store, _ctx: Option<&Sp00kyValue>) -> ZSet {
         // Field projection doesn't change keys, only values.
         // Since we track membership by key, pass through.
         inputs[0].clone()
@@ -34,7 +34,7 @@ impl super::Operator for Map {
         &mut self,
         input_deltas: &[&ZSet],
         _store: &Store,
-        _ctx: Option<&SpookyValue>,
+        _ctx: Option<&Sp00kyValue>,
     ) -> ZSet {
         input_deltas[0].clone()
     }

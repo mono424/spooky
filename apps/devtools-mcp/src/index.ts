@@ -12,11 +12,11 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  process.stderr.write('[spooky-mcp] MCP server running on stdio\n');
+  process.stderr.write('[sp00ky-mcp] MCP server running on stdio\n');
 
   // Graceful shutdown
   const cleanup = async () => {
-    process.stderr.write('[spooky-mcp] Shutting down...\n');
+    process.stderr.write('[sp00ky-mcp] Shutting down...\n');
     await bridge.stop();
     process.exit(0);
   };
@@ -26,6 +26,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  process.stderr.write(`[spooky-mcp] Fatal error: ${err.message}\n`);
+  process.stderr.write(`[sp00ky-mcp] Fatal error: ${err.message}\n`);
   process.exit(1);
 });

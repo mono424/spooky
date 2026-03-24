@@ -1,6 +1,6 @@
 use crate::algebra::ZSet;
 use crate::operator::QueryPlan;
-use crate::types::SpookyValue;
+use crate::types::Sp00kyValue;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -29,7 +29,7 @@ pub struct View {
     /// Hash of the last emitted output (for change detection).
     pub last_hash: String,
     pub format: OutputFormat,
-    pub params: Option<SpookyValue>,
+    pub params: Option<Sp00kyValue>,
     /// Table names this query depends on.
     pub referenced_tables: Vec<String>,
     /// Tables referenced inside subquery projections (may overlap with primary tables).
@@ -46,7 +46,7 @@ impl View {
         query_id: String,
         plan: QueryPlan,
         format: OutputFormat,
-        params: Option<SpookyValue>,
+        params: Option<Sp00kyValue>,
         referenced_tables: Vec<String>,
     ) -> Self {
         let subquery_tables = plan.root.subquery_tables();

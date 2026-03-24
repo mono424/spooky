@@ -34,7 +34,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/mono424/spooky.git",
+    "url": "https://github.com/mono424/sp00ky.git",
     "directory": "packages/client-solid"
   },
   "publishConfig": {

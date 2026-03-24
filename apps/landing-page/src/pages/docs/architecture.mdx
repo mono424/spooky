@@ -5,7 +5,7 @@ title: Architecture
 
 import CodeBlock from '../../components/ui/CodeBlock.astro';
 
-Spooky operates on a "Sidecar" architecture to enable its powerful synchronization capabilities.
+Sp00ky operates on a "Sidecar" architecture to enable its powerful synchronization capabilities.
 
 ## High Level Overview
 
@@ -20,14 +20,14 @@ graph TD
     subgraph client_app [Client App]
         UI[UI Components]
         LocalDB[(IndexedDB)]
-        WASM[Spooky Core]
+        WASM[Sp00ky Core]
 
         UI <-->|Live Queries| WASM
         WASM <-->|Persist| LocalDB
     end
 
     subgraph backend_sys [Backend]
-        Sidecar[Spooky Sidecar]
+        Sidecar[Sp00ky Sidecar]
         DB[(SurrealDB)]
     end
 
@@ -37,11 +37,11 @@ graph TD
 
 ## Why a Sidecar?
 
-Even though the client connects directly to SurrealDB, the Sidecar is essential for the **Spooky Protocol**:
+Even though the client connects directly to SurrealDB, the Sidecar is essential for the **Sp00ky Protocol**:
 
 ### 1. Integrity & Hashing
 
-The Sidecar listens to changes in the database and computes the Merkle Tree hashes required for the sync engine to work. It writes these hashes back to the `_spooky_*` system tables.
+The Sidecar listens to changes in the database and computes the Merkle Tree hashes required for the sync engine to work. It writes these hashes back to the `_00_*` system tables.
 
 ### 2. Async Processing
 
@@ -51,7 +51,7 @@ It handles tasks that are too heavy for the database functions or the client, en
 
 ## Distributed Architecture
 
-For production deployments, Spooky supports a distributed architecture with multiple SSP instances coordinated by a central Scheduler:
+For production deployments, Sp00ky supports a distributed architecture with multiple SSP instances coordinated by a central Scheduler:
 
 ```mermaid
 graph TD
@@ -110,7 +110,7 @@ graph TD
 - Assigns queries to SSPs using load balancing strategies
 - See [Scheduler API Reference](/docs/scheduler-api)
 
-**SSP (Spooky Sidecar Processor)** (Port 8667 by default)
+**SSP (Sp00ky Sidecar Processor)** (Port 8667 by default)
 - Stateful service maintaining materialized views
 - Executes backend functions and jobs
 - Registers with scheduler on startup
@@ -210,7 +210,7 @@ Assigns queries to the SSP with the fewest active queries.
 ### Least Load
 Assigns queries to the SSP with the lowest combined CPU and memory usage.
 
-Configure via `load_balance` in `spooky.yml` or `SPOOKY_SCHEDULER_LOAD_BALANCE` environment variable.
+Configure via `load_balance` in `sp00ky.yml` or `SP00KY_SCHEDULER_LOAD_BALANCE` environment variable.
 
 ---
 
@@ -304,10 +304,10 @@ Simple setup for development and testing. Client connects directly to SSP.
 
 ```yaml
 # Scheduler
-SPOOKY_SCHEDULER_INGEST_PORT=9667
-SPOOKY_SCHEDULER_DB_URL=surrealdb:8000/rpc
-SPOOKY_SCHEDULER_REPLICA_DB_PATH=./data/replica
-SPOOKY_SCHEDULER_WAL_PATH=./data/event_wal.log
+SP00KY_SCHEDULER_INGEST_PORT=9667
+SP00KY_SCHEDULER_DB_URL=surrealdb:8000/rpc
+SP00KY_SCHEDULER_REPLICA_DB_PATH=./data/replica
+SP00KY_SCHEDULER_WAL_PATH=./data/event_wal.log
 
 # SSP instances
 SCHEDULER_URL=http://scheduler:9667

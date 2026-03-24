@@ -1,4 +1,4 @@
-# SSP – Spooky Stream Processor
+# SSP – Sp00ky Stream Processor
 
 **High-performance incremental materialized views for real-time applications.**
 
@@ -6,7 +6,7 @@
 
 ## Overview
 
-SSP (Spooky Stream Processor) is an incremental view maintenance engine that powers the reactive layer between **SurrealDB** and your application via the **Spooky Sidecar**.
+SSP (Sp00ky Stream Processor) is an incremental view maintenance engine that powers the reactive layer between **SurrealDB** and your application via the **Sp00ky Sidecar**.
 
 ```
 SurrealDB  ──LIVE──►  Sidecar  ──ingest──►  SSP Circuit  ──ViewUpdate──►  DB / Client
@@ -107,10 +107,10 @@ sequenceDiagram
     DBSP-->>SC: Vec<ViewUpdate>
 
     alt Flat/Tree Format
-        SC->>OUT: UPDATE _spooky_query SET hash, array
+        SC->>OUT: UPDATE _00_query SET hash, array
     else Streaming Format
         loop For each DeltaRecord
-            SC->>OUT: RELATE/UPDATE/DELETE _spooky_list_ref
+            SC->>OUT: RELATE/UPDATE/DELETE _00_list_ref
         end
     end
 ```
@@ -179,9 +179,9 @@ ViewUpdate::Streaming(StreamingUpdate {
 
 | Event     | Meaning                  | DB Operation                                                 |
 | --------- | ------------------------ | ------------------------------------------------------------ |
-| `Created` | Record added to view     | `RELATE $from->_spooky_list_ref->$to SET version`            |
-| `Updated` | Record content changed   | `UPDATE $from->_spooky_list_ref SET version WHERE out = $to` |
-| `Deleted` | Record removed from view | `DELETE $from->_spooky_list_ref WHERE out = $to`             |
+| `Created` | Record added to view     | `RELATE $from->_00_list_ref->$to SET version`            |
+| `Updated` | Record content changed   | `UPDATE $from->_00_list_ref SET version WHERE out = $to` |
+| `Deleted` | Record removed from view | `DELETE $from->_00_list_ref WHERE out = $to`             |
 
 ### 5. DB Persistence (Sidecar Output)
 
@@ -190,7 +190,7 @@ ViewUpdate::Streaming(StreamingUpdate {
 ```sql
 UPDATE <record>$id SET hash = <string>$hash, array = $array
 -- Example:
-UPDATE _spooky_query:thread_list SET
+UPDATE _00_query:thread_list SET
   hash = "d4a0562e39718e02...",
   array = [["thread:abc123", 1], ["user:xyz789", 1]]
 ```
@@ -199,15 +199,15 @@ UPDATE _spooky_query:thread_list SET
 
 ```sql
 -- Created
-RELATE _spooky_query:thread_list->_spooky_list_ref->thread:abc123
+RELATE _00_query:thread_list->_00_list_ref->thread:abc123
   SET version = 1, clientId = $clientId
 
 -- Updated
-UPDATE _spooky_query:thread_list->_spooky_list_ref
+UPDATE _00_query:thread_list->_00_list_ref
   SET version = 2 WHERE out = thread:abc123
 
 -- Deleted
-DELETE _spooky_query:thread_list->_spooky_list_ref
+DELETE _00_query:thread_list->_00_list_ref
   WHERE out = comment:old
 ```
 
@@ -357,7 +357,7 @@ ssp/
 │       ├── view.rs       # View logic, delta evaluation
 │       ├── update.rs     # ViewUpdate, DeltaEvent, formatters
 │       ├── operators/    # Operator definitions
-│       └── types/        # SpookyValue, ZSet, FastMap
+│       └── types/        # Sp00kyValue, ZSet, FastMap
 └── tests/
     ├── e2e_communication_test.rs   # Full pipeline validation
     ├── streaming_subquery_edge_test.rs
@@ -392,7 +392,7 @@ let updates = circuit.ingest_record(
 for update in updates {
     match update {
         ViewUpdate::Flat(m) => {
-            // UPDATE _spooky_query SET hash, array
+            // UPDATE _00_query SET hash, array
         }
         ViewUpdate::Streaming(s) => {
             for rec in s.records {
@@ -427,4 +427,4 @@ cargo test --test streaming_subquery_edge_test -- --nocapture
 
 ## License
 
-MIT © Spooky Project
+MIT © Sp00ky Project

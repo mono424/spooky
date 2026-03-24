@@ -1,8 +1,8 @@
-use crate::types::{Path, SpookyValue};
+use crate::types::{Path, Sp00kyValue};
 use std::cmp::Ordering;
 
-/// Resolve a nested value from a SpookyValue by following a Path.
-pub fn resolve_field<'a>(value: Option<&'a SpookyValue>, path: &Path) -> Option<&'a SpookyValue> {
+/// Resolve a nested value from a Sp00kyValue by following a Path.
+pub fn resolve_field<'a>(value: Option<&'a Sp00kyValue>, path: &Path) -> Option<&'a Sp00kyValue> {
     let mut current = value?;
     for segment in path.segments() {
         current = current.get(segment)?;
@@ -10,8 +10,8 @@ pub fn resolve_field<'a>(value: Option<&'a SpookyValue>, path: &Path) -> Option<
     Some(current)
 }
 
-/// Compare two SpookyValues for ordering.
-pub fn compare_values(a: Option<&SpookyValue>, b: Option<&SpookyValue>) -> Ordering {
+/// Compare two Sp00kyValues for ordering.
+pub fn compare_values(a: Option<&Sp00kyValue>, b: Option<&Sp00kyValue>) -> Ordering {
     match (a, b) {
         (None, None) => Ordering::Equal,
         (None, Some(_)) => Ordering::Less,
@@ -20,40 +20,40 @@ pub fn compare_values(a: Option<&SpookyValue>, b: Option<&SpookyValue>) -> Order
     }
 }
 
-fn compare_values_inner(a: &SpookyValue, b: &SpookyValue) -> Ordering {
+fn compare_values_inner(a: &Sp00kyValue, b: &Sp00kyValue) -> Ordering {
     match (a, b) {
-        (SpookyValue::Null, SpookyValue::Null) => Ordering::Equal,
-        (SpookyValue::Null, _) => Ordering::Less,
-        (_, SpookyValue::Null) => Ordering::Greater,
-        (SpookyValue::Number(a), SpookyValue::Number(b)) => {
+        (Sp00kyValue::Null, Sp00kyValue::Null) => Ordering::Equal,
+        (Sp00kyValue::Null, _) => Ordering::Less,
+        (_, Sp00kyValue::Null) => Ordering::Greater,
+        (Sp00kyValue::Number(a), Sp00kyValue::Number(b)) => {
             a.partial_cmp(b).unwrap_or(Ordering::Equal)
         }
-        (SpookyValue::Str(a), SpookyValue::Str(b)) => a.cmp(b),
-        (SpookyValue::Bool(a), SpookyValue::Bool(b)) => a.cmp(b),
+        (Sp00kyValue::Str(a), Sp00kyValue::Str(b)) => a.cmp(b),
+        (Sp00kyValue::Bool(a), Sp00kyValue::Bool(b)) => a.cmp(b),
         _ => Ordering::Equal,
     }
 }
 
-/// Hash a SpookyValue for use in join index lookups.
-pub fn hash_value(value: &SpookyValue) -> u64 {
+/// Hash a Sp00kyValue for use in join index lookups.
+pub fn hash_value(value: &Sp00kyValue) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     match value {
-        SpookyValue::Null => 0u8.hash(&mut hasher),
-        SpookyValue::Bool(b) => b.hash(&mut hasher),
-        SpookyValue::Number(n) => n.to_bits().hash(&mut hasher),
-        SpookyValue::Str(s) => s.hash(&mut hasher),
-        SpookyValue::Array(_) => 2u8.hash(&mut hasher),
-        SpookyValue::Object(_) => 3u8.hash(&mut hasher),
+        Sp00kyValue::Null => 0u8.hash(&mut hasher),
+        Sp00kyValue::Bool(b) => b.hash(&mut hasher),
+        Sp00kyValue::Number(n) => n.to_bits().hash(&mut hasher),
+        Sp00kyValue::Str(s) => s.hash(&mut hasher),
+        Sp00kyValue::Array(_) => 2u8.hash(&mut hasher),
+        Sp00kyValue::Object(_) => 3u8.hash(&mut hasher),
     }
     hasher.finish()
 }
 
 /// Normalize a record ID value (strip table prefix if present in a string).
-pub fn normalize_record_id(value: SpookyValue) -> SpookyValue {
-    if let SpookyValue::Str(s) = &value {
+pub fn normalize_record_id(value: Sp00kyValue) -> Sp00kyValue {
+    if let Sp00kyValue::Str(s) = &value {
         if let Some((_table, id)) = s.split_once(':') {
-            return SpookyValue::Str(id.to_string());
+            return Sp00kyValue::Str(id.to_string());
         }
     }
     value

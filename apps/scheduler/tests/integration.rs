@@ -72,8 +72,8 @@ impl TestHarness {
         let config = SchedulerConfig {
             db: DbConfig {
                 url: "ws://localhost:8000".to_string(),
-                namespace: "spooky".to_string(),
-                database: "spooky".to_string(),
+                namespace: "sp00ky".to_string(),
+                database: "sp00ky".to_string(),
                 username: "root".to_string(),
                 password: "root".to_string(),
             },

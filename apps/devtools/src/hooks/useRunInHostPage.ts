@@ -35,13 +35,13 @@ export function useRunInHostPage() {
   };
 
   /**
-   * Get the Spooky state from the host page
+   * Get the Sp00ky state from the host page
    */
-  const getSpookyState = (
+  const getSp00kyState = (
     onSuccess: (state: any) => void,
     onError?: (error: any) => void
   ): void => {
-    run(`window.__SPOOKY__ ? window.__SPOOKY__.getState() : null`, {
+    run(`window.__SP00KY__ ? window.__SP00KY__.getState() : null`, {
       onSuccess,
       onError,
     });
@@ -58,17 +58,17 @@ export function useRunInHostPage() {
     run(
       `(async function() {
         try {
-          if (window.__SPOOKY__ && window.__SPOOKY__.getTableData) {
-            const data = await window.__SPOOKY__.getTableData("${tableName}");
+          if (window.__SP00KY__ && window.__SP00KY__.getTableData) {
+            const data = await window.__SP00KY__.getTableData("${tableName}");
             window.postMessage({
-              type: 'SPOOKY_TABLE_DATA_RESPONSE',
-              source: 'spooky-devtools-page',
+              type: 'SP00KY_TABLE_DATA_RESPONSE',
+              source: 'sp00ky-devtools-page',
               tableName: "${tableName}",
               data: data
             }, '*');
             return { success: true, count: data?.length || 0 };
           }
-          return { success: false, error: 'Spooky not found' };
+          return { success: false, error: 'Sp00ky not found' };
         } catch (error) {
           return { success: false, error: error instanceof Error ? error.message : String(error) };
         }
@@ -86,8 +86,8 @@ export function useRunInHostPage() {
   ): void => {
     run(
       `(function() {
-        if (window.__SPOOKY__ && window.__SPOOKY__.clearHistory) {
-          window.__SPOOKY__.clearHistory();
+        if (window.__SP00KY__ && window.__SP00KY__.clearHistory) {
+          window.__SP00KY__.clearHistory();
           return { success: true };
         }
         return { success: false };
@@ -97,10 +97,10 @@ export function useRunInHostPage() {
   };
 
   /**
-   * Check if Spooky is available on the page
+   * Check if Sp00ky is available on the page
    */
-  const checkSpookyAvailable = (onSuccess: (available: boolean) => void): void => {
-    run(`!!window.__SPOOKY__`, { onSuccess });
+  const checkSp00kyAvailable = (onSuccess: (available: boolean) => void): void => {
+    run(`!!window.__SP00KY__`, { onSuccess });
   };
 
   /**
@@ -117,12 +117,12 @@ export function useRunInHostPage() {
     run(
       `(async function() {
         try {
-          if (window.__SPOOKY__ && window.__SPOOKY__.updateTableRow) {
+          if (window.__SP00KY__ && window.__SP00KY__.updateTableRow) {
             const updates = JSON.parse("${updatesJson}");
-            const result = await window.__SPOOKY__.updateTableRow("${tableName}", "${recordId}", updates);
+            const result = await window.__SP00KY__.updateTableRow("${tableName}", "${recordId}", updates);
             return result;
           }
-          return { success: false, error: 'Spooky not found' };
+          return { success: false, error: 'Sp00ky not found' };
         } catch (error) {
           return { success: false, error: error instanceof Error ? error.message : String(error) };
         }
@@ -143,11 +143,11 @@ export function useRunInHostPage() {
     run(
       `(async function() {
         try {
-          if (window.__SPOOKY__ && window.__SPOOKY__.deleteTableRow) {
-            const result = await window.__SPOOKY__.deleteTableRow("${tableName}", "${recordId}");
+          if (window.__SP00KY__ && window.__SP00KY__.deleteTableRow) {
+            const result = await window.__SP00KY__.deleteTableRow("${tableName}", "${recordId}");
             return result;
           }
-          return { success: false, error: 'Spooky not found' };
+          return { success: false, error: 'Sp00ky not found' };
         } catch (error) {
           return { success: false, error: error instanceof Error ? error.message : String(error) };
         }
@@ -175,7 +175,7 @@ export function useRunInHostPage() {
     run(
       `(function() {
         try {
-            window.dispatchEvent(new CustomEvent('SPOOKY_RUN_QUERY', {
+            window.dispatchEvent(new CustomEvent('SP00KY_RUN_QUERY', {
                 detail: {
                     requestId: '${requestId}',
                     query: "${escapedQuery}",
@@ -194,13 +194,13 @@ export function useRunInHostPage() {
 
   return {
     run,
-    getSpookyState,
+    getSp00kyState,
     getTableData,
     runQuery,
     updateTableRow,
     deleteTableRow,
     clearHistory,
-    checkSpookyAvailable,
+    checkSp00kyAvailable,
     isRunning,
     error,
   };

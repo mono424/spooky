@@ -1,9 +1,9 @@
-// Content script - injects a script into the page to access Spooky
+// Content script - injects a script into the page to access Sp00ky
 // and communicates with the background script
 
-console.log('Spooky DevTools content script loaded');
+console.log('Sp00ky DevTools content script loaded');
 
-// Inject a script into the page context to access window.__SPOOKY__
+// Inject a script into the page context to access window.__SP00KY__
 // Using external file to avoid CSP violations with inline scripts
 function injectPageScript() {
   const script = document.createElement('script');
@@ -29,7 +29,7 @@ window.addEventListener('message', (event) => {
   if (event.source !== window) return;
 
   // Only handle messages from our injected script
-  if (event.data.source !== 'spooky-devtools-page') return;
+  if (event.data.source !== 'sp00ky-devtools-page') return;
 
   // Debug logging - Log EVERYTHING to debug connection
   console.log('[DevTools Content Script] Forwarding message:', event.data.type);
@@ -54,43 +54,43 @@ window.addEventListener('message', (event) => {
 
 // Listen for messages from the background script/devtools
 chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
-  if (message.type === 'GET_SPOOKY_STATE') {
+  if (message.type === 'GET_SP00KY_STATE') {
     // Request state from the page
     window.postMessage(
       {
         type: 'GET_STATE',
-        source: 'spooky-devtools-content',
+        source: 'sp00ky-devtools-content',
       },
       '*'
     );
   } else if (message.type === 'RUN_QUERY') {
     // Dispatch event for page-script.ts to handle
     window.dispatchEvent(
-      new CustomEvent('SPOOKY_RUN_QUERY', {
+      new CustomEvent('SP00KY_RUN_QUERY', {
         detail: message.payload,
       })
     );
   } else if (message.type === 'GET_TABLE_DATA') {
     window.dispatchEvent(
-      new CustomEvent('SPOOKY_GET_TABLE_DATA', {
+      new CustomEvent('SP00KY_GET_TABLE_DATA', {
         detail: message.payload,
       })
     );
   } else if (message.type === 'UPDATE_TABLE_ROW') {
     window.dispatchEvent(
-      new CustomEvent('SPOOKY_UPDATE_TABLE_ROW', {
+      new CustomEvent('SP00KY_UPDATE_TABLE_ROW', {
         detail: message.payload,
       })
     );
   } else if (message.type === 'DELETE_TABLE_ROW') {
     window.dispatchEvent(
-      new CustomEvent('SPOOKY_DELETE_TABLE_ROW', {
+      new CustomEvent('SP00KY_DELETE_TABLE_ROW', {
         detail: message.payload,
       })
     );
   } else if (message.type === 'CLEAR_HISTORY') {
     window.dispatchEvent(
-      new CustomEvent('SPOOKY_CLEAR_HISTORY', {
+      new CustomEvent('SP00KY_CLEAR_HISTORY', {
         detail: message.payload,
       })
     );

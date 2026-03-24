@@ -1,11 +1,11 @@
 use crate::parser::{FieldType, TableSchema};
 use std::collections::BTreeMap;
 
-/// Generate Spooky events for data hashing and graph synchronization
+/// Generate Sp00ky events for data hashing and graph synchronization
 // ... imports ...
 
-/// Generate Spooky events for data hashing and graph synchronization
-pub fn generate_spooky_events(
+/// Generate Sp00ky events for data hashing and graph synchronization
+pub fn generate_sp00ky_events(
     tables: &BTreeMap<String, TableSchema>,
     _raw_content: &str,
     is_client: bool,
@@ -14,7 +14,7 @@ pub fn generate_spooky_events(
     secret: Option<&str>,
 ) -> String {
     // 2. Generate Events
-    let mut events = String::from("\n-- ==================================================\n-- AUTO-GENERATED SPOOKY EVENTS\n-- ==================================================\n\n");
+    let mut events = String::from("\n-- ==================================================\n-- AUTO-GENERATED SP00KY EVENTS\n-- ==================================================\n\n");
 
     // Client Logic: Minimal logic, only Intrinsic Hash, Dirty Flags
     if is_client {
@@ -29,8 +29,8 @@ pub fn generate_spooky_events(
         sorted_table_names.sort();
 
         for table_name in &sorted_table_names {
-            // Skip system/internal tables and the spooky hash tables themselves
-            if table_name.starts_with("_spooky_") {
+            // Skip system/internal tables and the sp00ky hash tables themselves
+            if table_name.starts_with("_00_") {
                 continue;
             }
 
@@ -45,7 +45,7 @@ pub fn generate_spooky_events(
             // --------------------------------------------------
             events.push_str(&format!("-- Table: {} Client Mutation\n", table_name));
             events.push_str(&format!(
-                "DEFINE EVENT OVERWRITE _spooky_{}_client_mutation ON TABLE {}\n",
+                "DEFINE EVENT OVERWRITE _00_{}_client_mutation ON TABLE {}\n",
                 table_name, table_name
             ));
             events.push_str("WHEN $before != $after AND $event != \"DELETE\"\nTHEN {\n");
@@ -58,7 +58,7 @@ pub fn generate_spooky_events(
             // --------------------------------------------------
             events.push_str(&format!("-- Table: {} Client Deletion\n", table_name));
             events.push_str(&format!(
-                "DEFINE EVENT OVERWRITE _spooky_{}_client_delete ON TABLE {}\n",
+                "DEFINE EVENT OVERWRITE _00_{}_client_delete ON TABLE {}\n",
                 table_name, table_name
             ));
             events.push_str("WHEN $event = \"DELETE\"\nTHEN {\n");
@@ -78,8 +78,8 @@ pub fn generate_spooky_events(
     sorted_table_names.sort();
 
     for table_name in &sorted_table_names {
-        // Skip system/internal tables and the spooky hash tables themselves
-        if table_name.starts_with("_spooky_") {
+        // Skip system/internal tables and the sp00ky hash tables themselves
+        if table_name.starts_with("_00_") {
             continue;
         }
 
@@ -96,24 +96,24 @@ pub fn generate_spooky_events(
         // ===================================
         // Merges version tracking and data ingestion
         events.push_str(&format!(
-            "DEFINE EVENT OVERWRITE _spooky_{}_mutation ON TABLE {}\n",
+            "DEFINE EVENT OVERWRITE _00_{}_mutation ON TABLE {}\n",
             table_name, table_name
         ));
         events.push_str("WHEN $before != $after AND $event != \"DELETE\"\nTHEN {\n");
 
         // --- Versioning Logic ---
-        events.push_str("    LET $spooky_ver_rec = IF $event = \"CREATE\" {\n");
-        events.push_str("        (CREATE _spooky_version SET record_id = $after.id, version = 1 RETURN AFTER)\n");
+        events.push_str("    LET $sp00ky_ver_rec = IF $event = \"CREATE\" {\n");
+        events.push_str("        (CREATE _00_version SET record_id = $after.id, version = 1 RETURN AFTER)\n");
         events.push_str("    } ELSE IF $event = \"UPDATE\" {\n");
-        events.push_str("        IF $spooky_target_version != NONE AND $spooky_target_version.id == $after.id {\n");
-        events.push_str("            LET $u = (UPDATE _spooky_version SET version = <int>$spooky_target_version.version WHERE record_id = $after.id RETURN AFTER);\n");
-        events.push_str("            LET $spooky_target_version = NONE;\n");
+        events.push_str("        IF $sp00ky_target_version != NONE AND $sp00ky_target_version.id == $after.id {\n");
+        events.push_str("            LET $u = (UPDATE _00_version SET version = <int>$sp00ky_target_version.version WHERE record_id = $after.id RETURN AFTER);\n");
+        events.push_str("            LET $sp00ky_target_version = NONE;\n");
         events.push_str("            $u\n");
         events.push_str("        } ELSE {\n");
-        events.push_str("            (UPDATE _spooky_version SET version += 1 WHERE record_id = $after.id RETURN AFTER)\n");
+        events.push_str("            (UPDATE _00_version SET version += 1 WHERE record_id = $after.id RETURN AFTER)\n");
         events.push_str("        }\n");
         events.push_str("    };\n");
-        events.push_str("    LET $spooky_ver = $spooky_ver_rec[0].version;\n\n");
+        events.push_str("    LET $sp00ky_ver = $sp00ky_ver_rec[0].version;\n\n");
 
         // --- Ingestion Logic ---
         events.push_str("    LET $plain_after = {\n");
@@ -136,7 +136,7 @@ pub fn generate_spooky_events(
                 }
             }
         }
-        events.push_str("        spooky_rv: (SELECT VALUE version FROM ONLY _spooky_version WHERE record_id = $after.id)\n");
+        events.push_str("        _00_rv: (SELECT VALUE version FROM ONLY _00_version WHERE record_id = $after.id)\n");
         events.push_str("    };\n");
 
         if is_http {
@@ -171,13 +171,13 @@ pub fn generate_spooky_events(
         // ===================================
         // Merges version cleanup and data ingestion
         events.push_str(&format!(
-            "DEFINE EVENT OVERWRITE _spooky_{}_delete ON TABLE {}\n",
+            "DEFINE EVENT OVERWRITE _00_{}_delete ON TABLE {}\n",
             table_name, table_name
         ));
         events.push_str("WHEN $event = \"DELETE\"\nTHEN {\n");
 
         // --- Versioning Logic ---
-        events.push_str("    DELETE _spooky_version WHERE record_id = $before.id;\n\n");
+        events.push_str("    DELETE _00_version WHERE record_id = $before.id;\n\n");
 
         // --- Ingestion Logic ---
         events.push_str("    LET $plain_before = {\n");

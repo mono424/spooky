@@ -49,7 +49,7 @@ impl Replica {
             .await
             .with_context(|| format!("Failed to open RocksDB at {:?}", db_path))?;
 
-        db.use_ns("spooky").use_db("snapshot").await
+        db.use_ns("sp00ky").use_db("snapshot").await
             .context("Failed to select namespace/database on replica")?;
 
         info!("Opened replica SurrealDB at {:?}", db_path);
@@ -76,7 +76,7 @@ impl Replica {
     pub async fn set_snapshot_seq(&mut self, seq: u64) -> Result<()> {
         self.snapshot_seq = seq;
         self.db
-            .query("UPSERT _spooky_metadata:snapshot SET seq = $seq")
+            .query("UPSERT _00_metadata:snapshot SET seq = $seq")
             .bind(("seq", seq))
             .await
             .context("Failed to persist snapshot_seq")?;
@@ -86,7 +86,7 @@ impl Replica {
     /// Read snapshot_seq from the embedded DB metadata table
     async fn read_snapshot_seq_from_db(db: &Surreal<surrealdb::engine::local::Db>) -> Result<u64> {
         let mut response = db
-            .query("SELECT seq FROM _spooky_metadata:snapshot")
+            .query("SELECT seq FROM _00_metadata:snapshot")
             .await
             .context("Failed to query snapshot metadata")?;
 
@@ -116,7 +116,7 @@ impl Replica {
         let tables: Vec<String> = match info.get("tables") {
             Some(Value::Object(tables_map)) => tables_map
                 .keys()
-                .filter(|name| !name.starts_with("_spooky_"))
+                .filter(|name| !name.starts_with("_00_"))
                 .cloned()
                 .collect(),
             _ => {
@@ -157,24 +157,24 @@ impl Replica {
                 }
             }
 
-            // Also copy _spooky_query table for views
+            // Also copy _00_query table for views
             info!("Ingested {} records from '{}'", count, table_name);
         }
 
         // Copy view definitions
         let mut response = remote_db
-            .query("SELECT * FROM _spooky_query")
+            .query("SELECT * FROM _00_query")
             .await
-            .context("Failed to query _spooky_query on remote")?;
+            .context("Failed to query _00_query on remote")?;
 
         let views: Vec<Value> = response.take(0).unwrap_or_default();
         for view in &views {
             if let Some(id) = view.get("id") {
                 let id_str = id.to_string().trim_matches('"').to_string();
-                let key = if id_str.starts_with("_spooky_query:") {
+                let key = if id_str.starts_with("_00_query:") {
                     id_str.clone()
                 } else {
-                    format!("_spooky_query:{}", id_str)
+                    format!("_00_query:{}", id_str)
                 };
                 if let Err(e) = self.db
                     .query(format!("CREATE {} CONTENT $data", key))
@@ -251,7 +251,7 @@ impl Replica {
         let tables: Vec<String> = match info.get("tables") {
             Some(Value::Object(tables_map)) => tables_map
                 .keys()
-                .filter(|name| !name.starts_with("_spooky_"))
+                .filter(|name| !name.starts_with("_00_"))
                 .cloned()
                 .collect(),
             _ => vec!["thread".to_string(), "job".to_string(), "user".to_string()],

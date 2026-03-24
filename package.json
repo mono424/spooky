@@ -1,8 +1,8 @@
 {
-  "name": "spooky",
+  "name": "sp00ky",
   "version": "0.0.1-canary.27",
   "private": true,
-  "description": "Spooky monorepo",
+  "description": "Sp00ky monorepo",
   "scripts": {
     "dev": "pnpm -r --parallel dev",
     "dev:example": "pnpm --filter @example/project dev",

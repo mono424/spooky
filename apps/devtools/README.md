@@ -1,10 +1,10 @@
-# Spooky DevTools
+# Sp00ky DevTools
 
-A Chrome DevTools extension for debugging and inspecting Spooky state in your applications.
+A Chrome DevTools extension for debugging and inspecting Sp00ky state in your applications.
 
 ## Features
 
-- Detect Spooky instances on any webpage
+- Detect Sp00ky instances on any webpage
 - View all registered stores
 - Inspect store state in real-time
 - See subscriber counts and sync status
@@ -37,14 +37,14 @@ pnpm dev
 3. Enable "Developer mode" (toggle in top-right corner)
 4. Click "Load unpacked"
 5. Select the `packages/devtools/dist` directory
-6. The Spooky DevTools extension should now be loaded
+6. The Sp00ky DevTools extension should now be loaded
 
 ### Using the Extension
 
 1. Open Chrome DevTools (F12 or right-click > Inspect)
-2. Look for the "Spooky" tab in the DevTools
-3. Navigate to a page that uses Spooky
-4. The extension will automatically detect Spooky and display available stores
+2. Look for the "Sp00ky" tab in the DevTools
+3. Navigate to a page that uses Sp00ky
+4. The extension will automatically detect Sp00ky and display available stores
 5. Click on any store in the sidebar to view its current state
 
 ## Extension Structure
@@ -55,7 +55,7 @@ packages/devtools/
 │   ├── devtools.ts      # DevTools page - creates the panel
 │   ├── panel.ts         # Panel UI and logic
 │   ├── background.ts    # Background service worker
-│   └── content.ts       # Content script - detects Spooky
+│   └── content.ts       # Content script - detects Sp00ky
 ├── public/
 │   ├── devtools.html    # DevTools page HTML
 │   ├── panel.html       # Panel UI HTML
@@ -67,9 +67,10 @@ packages/devtools/
 
 ## How It Works
 
-1. **Content Script** (`content.ts`): Injected into every page, checks for `window.__SPOOKY__`
+1. **Content Script** (`content.ts`): Injected into every page, checks for `window.
+__SP00KY__`
 2. **Background Script** (`background.ts`): Handles communication between content scripts and DevTools
-3. **DevTools Page** (`devtools.ts`): Creates the Spooky panel in Chrome DevTools
+3. **DevTools Page** (`devtools.ts`): Creates the Sp00ky panel in Chrome DevTools
 4. **Panel** (`panel.ts`): Displays the UI for viewing stores and state
 
 ## TODO / Future Enhancements
@@ -85,14 +86,14 @@ packages/devtools/
 - [ ] Dark/light theme toggle
 - [ ] Better icons and branding
 
-## Requirements for Spooky Apps
+## Requirements for Sp00ky Apps
 
-For the DevTools to detect your Spooky application, you need to expose Spooky on the window object during development:
+For the DevTools to detect your Sp00ky application, you need to expose Sp00ky on the window object during development:
 
 ```typescript
 // In your app's initialization
 if (import.meta.env.DEV) {
-  (window as any).__SPOOKY__ = {
+  (window as any).__SP00KY__ = {
     version: '1.0.0',
     stores: yourStoresMap,
     // Optional: hook for updates
@@ -102,10 +103,10 @@ if (import.meta.env.DEV) {
   };
 
   // Optionally dispatch an event
-  window.dispatchEvent(new Event('spooky:init'));
+  window.dispatchEvent(new Event('sp00ky:init'));
 }
 ```
 
 ## License
 
-Part of the Spooky monorepo.
+Part of the Sp00ky monorepo.

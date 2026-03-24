@@ -1,4 +1,4 @@
-# Spooky CLI
+# Sp00ky CLI
 
 Generate TypeScript and Dart types from SurrealDB schema files.
 
@@ -36,10 +36,10 @@ spooky --input schema.surql --output output.ts --format typescript
 ### Programmatic API
 
 ```typescript
-import { runSpooky } from 'spooky-cli';
+import { runSp00ky } from 'sp00ky-cli';
 
 // Generate types
-const output = await runSpooky({
+const output = await runSp00ky({
   input: 'path/to/schema.surql',
   output: 'path/to/output.ts',
   format: 'typescript', // or 'dart', 'json'

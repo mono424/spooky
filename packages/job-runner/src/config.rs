@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 
 #[derive(Debug, Deserialize)]
-struct SpookyConfig {
+struct Sp00kyConfig {
     backends: HashMap<String, BackendConfig>,
 }
 
@@ -32,21 +32,21 @@ struct BackendMethod {
     table: Option<String>,
 }
 
-/// Load job configuration from spooky.yml with inline backend configs
-pub fn load_config<P: AsRef<Path>>(spooky_config_path: P) -> Result<JobConfig> {
-    let config_path = spooky_config_path.as_ref();
+/// Load job configuration from sp00ky.yml with inline backend configs
+pub fn load_config<P: AsRef<Path>>(sp00ky_config_path: P) -> Result<JobConfig> {
+    let config_path = sp00ky_config_path.as_ref();
 
-    // Read spooky.yml
+    // Read sp00ky.yml
     let config_str = fs::read_to_string(config_path)
-        .context(format!("Failed to read spooky config: {:?}", config_path))?;
+        .context(format!("Failed to read sp00ky config: {:?}", config_path))?;
 
-    let spooky_config: SpookyConfig =
-        serde_yaml::from_str(&config_str).context("Failed to parse spooky config")?;
+    let sp00ky_config: Sp00kyConfig =
+        serde_yaml::from_str(&config_str).context("Failed to parse sp00ky config")?;
 
     let mut job_tables = HashMap::new();
 
     // Process each backend directly from the map
-    for (backend_name, backend_config) in spooky_config.backends {
+    for (backend_name, backend_config) in sp00ky_config.backends {
         // Only process outbox backends that have a base_url and table
         if backend_config.method.method_type == "outbox" {
             if let (Some(base_url), Some(table)) =

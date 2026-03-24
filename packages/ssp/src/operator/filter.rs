@@ -2,7 +2,7 @@ use crate::algebra::ZSet;
 use crate::circuit::store::Store;
 use crate::eval::value_ops::{compare_values, resolve_field};
 use crate::operator::predicate::Predicate;
-use crate::types::{Path, SpookyValue};
+use crate::types::{Path, Sp00kyValue};
 use serde_json::Value;
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -24,13 +24,13 @@ impl Filter {
         Self { predicate }
     }
 
-    fn check_predicate(&self, key: &str, store: &Store, ctx: Option<&SpookyValue>) -> bool {
+    fn check_predicate(&self, key: &str, store: &Store, ctx: Option<&Sp00kyValue>) -> bool {
         check_predicate_recursive(&self.predicate, key, store, ctx)
     }
 }
 
 impl super::Operator for Filter {
-    fn snapshot(&self, inputs: &[&ZSet], store: &Store, ctx: Option<&SpookyValue>) -> ZSet {
+    fn snapshot(&self, inputs: &[&ZSet], store: &Store, ctx: Option<&Sp00kyValue>) -> ZSet {
         let upstream = inputs[0];
         let mut out = HashMap::new();
         for (key, &weight) in upstream.iter() {
@@ -45,7 +45,7 @@ impl super::Operator for Filter {
         &mut self,
         input_deltas: &[&ZSet],
         store: &Store,
-        ctx: Option<&SpookyValue>,
+        ctx: Option<&Sp00kyValue>,
     ) -> ZSet {
         // Filter is stateless: delta rule = apply predicate to delta
         self.snapshot(input_deltas, store, ctx)
@@ -59,7 +59,7 @@ impl super::Operator for Filter {
 }
 
 /// Resolve a predicate value, handling $param references.
-fn resolve_predicate_value(value: &Value, ctx: Option<&SpookyValue>) -> Option<SpookyValue> {
+fn resolve_predicate_value(value: &Value, ctx: Option<&Sp00kyValue>) -> Option<Sp00kyValue> {
     if let Some(obj) = value.as_object() {
         if let Some(param_path) = obj.get("$param") {
             let ctx = ctx?;
@@ -72,10 +72,10 @@ fn resolve_predicate_value(value: &Value, ctx: Option<&SpookyValue>) -> Option<S
             let path = Path::new(effective_path);
             resolve_field(Some(ctx), &path).cloned()
         } else {
-            Some(SpookyValue::from(value.clone()))
+            Some(Sp00kyValue::from(value.clone()))
         }
     } else {
-        Some(SpookyValue::from(value.clone()))
+        Some(Sp00kyValue::from(value.clone()))
     }
 }
 
@@ -83,7 +83,7 @@ fn check_predicate_recursive(
     pred: &Predicate,
     key: &str,
     store: &Store,
-    ctx: Option<&SpookyValue>,
+    ctx: Option<&Sp00kyValue>,
 ) -> bool {
     match pred {
         Predicate::And { predicates } => predicates
@@ -98,7 +98,7 @@ fn check_predicate_recursive(
             }
             if let Some(row) = store.get_row_by_key(key) {
                 if let Some(val) = resolve_field(Some(row), field) {
-                    if let SpookyValue::Str(s) = val {
+                    if let Sp00kyValue::Str(s) = val {
                         return s.starts_with(prefix.as_str());
                     }
                 }

@@ -1,8 +1,8 @@
 # SSP WASM (Browser Module)
 
-The SSP WASM module compiles the DBSP incremental computation circuit to WebAssembly, enabling browser-side materialized view maintenance. It exposes a `SpookyProcessor` class to JavaScript/TypeScript that mirrors the native circuit's capabilities: register queries, ingest record changes, and receive view deltas — all without server round-trips.
+The SSP WASM module compiles the DBSP incremental computation circuit to WebAssembly, enabling browser-side materialized view maintenance. It exposes a `Sp00kyProcessor` class to JavaScript/TypeScript that mirrors the native circuit's capabilities: register queries, ingest record changes, and receive view deltas — all without server round-trips.
 
-**Package:** `@spooky/ssp-wasm` (in `packages/ssp-wasm/`)
+**Package:** `@sp00ky/ssp-wasm` (in `packages/ssp-wasm/`)
 **Build:** `wasm-pack build --target web --out-dir pkg`
 
 ---
@@ -15,7 +15,7 @@ JavaScript / TypeScript
 StreamProcessorService          ← packages/core/src/services/stream-processor/index.ts
     │  (normalizes RecordId values, manages lifecycle, persists state)
     │
-SpookyProcessor                 ← packages/ssp-wasm/src/lib.rs (wasm_bindgen)
+Sp00kyProcessor                 ← packages/ssp-wasm/src/lib.rs (wasm_bindgen)
     │  (thin wrapper: deserialize JS → Rust, call circuit, serialize back)
     │
 ssp::circuit::Circuit           ← packages/ssp/src/circuit/circuit.rs
@@ -24,21 +24,21 @@ ssp::circuit::Circuit           ← packages/ssp/src/circuit/circuit.rs
 ssp_wasm_bg.wasm                ← compiled binary (~830KB)
 ```
 
-The WASM module is a thin FFI layer. `SpookyProcessor` holds a single `Circuit` instance and translates between JavaScript values and Rust types via `serde-wasm-bindgen`.
+The WASM module is a thin FFI layer. `Sp00kyProcessor` holds a single `Circuit` instance and translates between JavaScript values and Rust types via `serde-wasm-bindgen`.
 
 ---
 
 ## Public API
 
-### `SpookyProcessor` class
+### `Sp00kyProcessor` Class
 
 ```typescript
-import init, { SpookyProcessor } from '@spooky/ssp-wasm';
+import init, { Sp00kyProcessor } from '@sp00ky/ssp-wasm';
 
 // Initialize WASM module (must be called first)
 await init();
 
-const processor = new SpookyProcessor();
+const processor = new Sp00kyProcessor();
 ```
 
 #### `ingest(table, op, id, record) → WasmStreamUpdate[]`
@@ -57,7 +57,7 @@ const updates = processor.ingest(
 **Internal flow:**
 1. Deserialize `record` from `JsValue` to `serde_json::Value`
 2. Normalize via `ssp::sanitizer::normalize_record`
-3. Convert to `SpookyValue`, extract record ID
+3. Convert to `Sp00kyValue`, extract record ID
 4. Build a `Change` (create/update/delete) and wrap in `ChangeSet`
 5. Call `circuit.step(changeset)` → `Vec<ViewDelta>`
 6. Transform each `ViewDelta` into `WasmViewUpdate` with record versions from the store
@@ -152,10 +152,10 @@ interface WasmIngestItem {
 
 ## StreamProcessorService (TypeScript Wrapper)
 
-In the browser, `SpookyProcessor` is not used directly. It's wrapped by `StreamProcessorService` in `packages/core/src/services/stream-processor/index.ts` which provides:
+In the browser, `Sp00kyProcessor` is not used directly. It's wrapped by `StreamProcessorService` in `packages/core/src/services/stream-processor/index.ts` which provides:
 
 ### Lifecycle management
-- `init()` — Initializes WASM module, creates `SpookyProcessor`, loads persisted state from the database
+- `init()` — Initializes WASM module, creates `Sp00kyProcessor`, loads persisted state from the database
 - State is auto-saved after every `ingest()` and `registerQueryPlan()` call
 
 ### Value normalization
@@ -166,7 +166,7 @@ In the browser, `SpookyProcessor` is not used directly. It's wrapped by `StreamP
 - After each `ingest()`, transforms `WasmStreamUpdate[]` into `StreamUpdate[]` and notifies registered receivers (DataManager, DevTools, etc.)
 
 ```typescript
-// Usage in the Spooky client
+// Usage in the Sp00ky client
 const service = new StreamProcessorService(events, db, persistenceClient, logger);
 await service.init();
 
@@ -194,7 +194,7 @@ service.addReceiver({
 ```
 
 ### State persistence
-- Saves to `_spooky_stream_processor_state` record via `persistenceClient.set()`
+- Saves to `_00_stream_processor_state` record via `persistenceClient.set()`
 - Loads on init via `persistenceClient.get()`
 
 ---
@@ -210,7 +210,7 @@ wasm-pack build --target web --out-dir pkg
 ### Output artifacts (`pkg/`)
 | File | Description |
 |------|-------------|
-| `ssp_wasm.js` | JavaScript wrapper with `SpookyProcessor` class and `init()` |
+| `ssp_wasm.js` | JavaScript wrapper with `Sp00kyProcessor` class and `init()` |
 | `ssp_wasm.d.ts` | TypeScript type definitions |
 | `ssp_wasm_bg.wasm` | Compiled WebAssembly binary (~830KB) |
 | `ssp_wasm_bg.wasm.d.ts` | Low-level WASM interface types |
@@ -234,14 +234,14 @@ getrandom = { version = "0.2", features = ["js"] }     # WASM-compatible RNG
 
 **Browser (async):**
 ```typescript
-import init, { SpookyProcessor } from '@spooky/ssp-wasm';
+import init, { Sp00kyProcessor } from '@sp00ky/ssp-wasm';
 await init();  // Fetches and instantiates .wasm file
 ```
 
 **Node.js (sync, for testing):**
 ```typescript
 import { readFileSync } from 'node:fs';
-import { initSync, SpookyProcessor } from '@spooky/ssp-wasm';
+import { initSync, Sp00kyProcessor } from '@sp00ky/ssp-wasm';
 initSync({ module: readFileSync('./pkg/ssp_wasm_bg.wasm') });
 ```
 
@@ -273,15 +273,15 @@ Both share the same core: `ssp::circuit::Circuit` with its `Store`, `Graph`, `Vi
 2. StreamProcessorService.normalizeValue(record)
    └─ Converts RecordId objects to "table:id" strings
          │
-3. SpookyProcessor.ingest(table, op, id, record)   [crosses WASM boundary]
+3. Sp00kyProcessor.ingest(table, op, id, record)   [crosses WASM boundary]
          │
 4. serde_wasm_bindgen::from_value(record)  →  serde_json::Value
          │
 5. sanitizer::normalize_record(record)     →  serde_json::Value (clean)
          │
-6. SpookyValue::from(clean_record)
+6. Sp00kyValue::from(clean_record)
    Operation::from_str(op)
-   Change::create|update|delete(table, id, spooky_value)
+   Change::create|update|delete(table, id, sp00ky_value)
          │
 7. circuit.step(ChangeSet { changes: [change] })
    ┌─────┴──────────────────────────┐

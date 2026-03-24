@@ -48,7 +48,7 @@ impl TestHarness {
     fn with_options(status: SspStatus, job_config: JobConfig) -> Self {
         // Set auth secret for the middleware
         unsafe {
-            std::env::set_var("SPOOKY_AUTH_SECRET", AUTH_SECRET);
+            std::env::set_var("SP00KY_AUTH_SECRET", AUTH_SECRET);
         }
 
         let (tx, rx) = mpsc::channel::<JobEntry>(100);
@@ -782,7 +782,7 @@ mod db_integration_tests {
             .unwrap_or_else(|_| "127.0.0.1:8000".to_string());
 
         unsafe {
-            std::env::set_var("SPOOKY_AUTH_SECRET", AUTH_SECRET);
+            std::env::set_var("SP00KY_AUTH_SECRET", AUTH_SECRET);
         }
 
         let db = Surreal::new::<Ws>(&addr)
@@ -866,7 +866,7 @@ mod db_integration_tests {
     async fn ingest_creates_edges_in_db() {
         let h = create_test_harness_with_db().await;
 
-        // Register view via HTTP so _spooky_query record exists in DB
+        // Register view via HTTP so _00_query record exists in DB
         register_view_via_http(&h, "v1", "SELECT * FROM user").await;
 
         // Ingest a record via HTTP
@@ -880,7 +880,7 @@ mod db_integration_tests {
         assert_eq!(status, StatusCode::OK);
 
         // Query for edges
-        let edges = query_table(&h.db, "SELECT * FROM _spooky_list_ref").await;
+        let edges = query_table(&h.db, "SELECT * FROM _00_list_ref").await;
         assert!(
             !edges.is_empty(),
             "Should have created edges after ingest"
@@ -897,7 +897,7 @@ mod db_integration_tests {
         assert_eq!(status, StatusCode::OK);
 
         // Query persisted metadata
-        let entries = query_table(&h.db, "SELECT * FROM _spooky_query").await;
+        let entries = query_table(&h.db, "SELECT * FROM _00_query").await;
         assert!(
             !entries.is_empty(),
             "Should have persisted view metadata"
@@ -920,13 +920,13 @@ mod db_integration_tests {
         post_authed(h.app(), "/ingest", &payload).await;
 
         // Verify edges were created first
-        let edges_before = query_table(&h.db, "SELECT * FROM _spooky_list_ref").await;
+        let edges_before = query_table(&h.db, "SELECT * FROM _00_list_ref").await;
         assert!(
             !edges_before.is_empty(),
             "Edges should exist before unregister"
         );
 
-        // Unregister via HTTP — handler calls DELETE $from->_spooky_list_ref
+        // Unregister via HTTP — handler calls DELETE $from->_00_list_ref
         let (status, _) =
             post_authed(h.app(), "/view/unregister", &json!({"id": "v1"})).await;
         assert_eq!(status, StatusCode::OK);
@@ -952,7 +952,7 @@ mod db_integration_tests {
         post_authed(h.app(), "/ingest", &payload).await;
 
         // Verify edges were created
-        let edges_before = query_table(&h.db, "SELECT * FROM _spooky_list_ref").await;
+        let edges_before = query_table(&h.db, "SELECT * FROM _00_list_ref").await;
         assert!(!edges_before.is_empty(), "Edges should exist before reset");
 
         // Reset via HTTP
@@ -996,7 +996,7 @@ mod db_integration_tests {
         assert_eq!(status, StatusCode::OK);
 
         // Edges should still exist
-        let edges = query_table(&h.db, "SELECT * FROM _spooky_list_ref").await;
+        let edges = query_table(&h.db, "SELECT * FROM _00_list_ref").await;
         assert!(!edges.is_empty(), "Edges should exist after update");
     }
 
@@ -1018,7 +1018,7 @@ mod db_integration_tests {
         post_authed(h.app(), "/ingest", &create).await;
 
         // Verify edges exist after create
-        let edges_before = query_table(&h.db, "SELECT * FROM _spooky_list_ref").await;
+        let edges_before = query_table(&h.db, "SELECT * FROM _00_list_ref").await;
         assert!(
             !edges_before.is_empty(),
             "Edges should exist after create"

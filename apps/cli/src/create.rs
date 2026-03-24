@@ -73,7 +73,7 @@ mod templates {
     pub const ROOT_PACKAGE_JSON: &str = include_str!("templates/shared/root-package.json.tmpl");
     pub const PNPM_WORKSPACE: &str = include_str!("templates/shared/pnpm-workspace.yaml.tmpl");
     pub const SCHEMA_PACKAGE_JSON: &str = include_str!("templates/shared/schema-package.json.tmpl");
-    pub const SPOOKY_YML: &str = include_str!("templates/shared/spooky.yml.tmpl");
+    pub const SP00KY_YML: &str = include_str!("templates/shared/sp00ky.yml.tmpl");
 
     // AI setup templates
     pub const CLAUDE_MD_FULL: &str = include_str!("templates/shared/claude-md-full.tmpl");
@@ -119,7 +119,7 @@ fn show_splash() -> Result<()> {
 
     let (term_width, term_height) = terminal::size().unwrap_or((80, 24));
 
-    let title = "Spooky";
+    let title = "Sp00ky";
     let version_line = format!("v{}", VERSION);
     let intro_1 = "Real-time sync for SurrealDB.";
     let intro_2 = "Offline-first. Schema-driven. No backend code.";
@@ -339,7 +339,7 @@ pub fn create_project() -> Result<()> {
     } else {
         write_file(root_path.join(".gitignore"), templates::GITIGNORE)?;
 
-        // Write spooky.yml at monorepo root with migrations pointing into schema package
+        // Write sp00ky.yml at monorepo root with migrations pointing into schema package
         let client_types_section = match codegen_format.as_str() {
             "Skip" => String::new(),
             _ => {
@@ -351,8 +351,8 @@ pub fn create_project() -> Result<()> {
             }
         };
         write_file(
-            root_path.join("spooky.yml"),
-            &render(templates::SPOOKY_YML, &[
+            root_path.join("sp00ky.yml"),
+            &render(templates::SP00KY_YML, &[
                 ("SCHEMA_DIR", "packages/schema"),
                 ("CLIENT_TYPES_SECTION", &client_types_section),
             ]),
@@ -412,7 +412,7 @@ pub fn create_project() -> Result<()> {
                     .current_dir(root_path)
                     .output();
                 let _ = Command::new("git")
-                    .args(["commit", "-m", "Initial commit from spooky create"])
+                    .args(["commit", "-m", "Initial commit from sp00ky create"])
                     .current_dir(root_path)
                     .output();
                 println!("  \x1b[32m\u{2713}\x1b[0m Git repository initialized");
@@ -440,14 +440,14 @@ pub fn create_project() -> Result<()> {
             Ok(status) if status.success() => {
                 println!("  \x1b[32m\u{2713}\x1b[0m Dependencies installed");
 
-                // Run spooky generate and migration:create for full projects
+                // Run sp00ky generate and migration:create for full projects
                 // Use the current binary directly instead of the npm-installed one,
                 // so we always get the latest config-loading behavior.
                 if !is_schema_only {
                     let current_exe = std::env::current_exe()
-                        .unwrap_or_else(|_| PathBuf::from("spooky"));
+                        .unwrap_or_else(|_| PathBuf::from("sp00ky"));
 
-                    println!("\n  Running spooky generate...");
+                    println!("\n  Running sp00ky generate...");
                     match Command::new(&current_exe)
                         .args(["generate"])
                         .current_dir(root_path)
@@ -457,7 +457,7 @@ pub fn create_project() -> Result<()> {
                             println!("  \x1b[32m\u{2713}\x1b[0m Schema types generated");
                         }
                         _ => {
-                            println!("  \x1b[33m!\x1b[0m Could not run spooky generate");
+                            println!("  \x1b[33m!\x1b[0m Could not run sp00ky generate");
                         }
                     }
 
@@ -499,12 +499,12 @@ pub fn create_project() -> Result<()> {
         println!("  \x1b[1mpnpm dev\x1b[0m");
     } else {
         println!(
-            "  \x1b[1mpnpm dev\x1b[0m   \x1b[2m# start Spooky dev server + app\x1b[0m"
+            "  \x1b[1mpnpm dev\x1b[0m   \x1b[2m# start Sp00ky dev server + app\x1b[0m"
         );
     }
 
     println!(
-        "\n  \x1b[2mAI: CLAUDE.md and .claude/ configured. Install the Spooky DevTools\x1b[0m"
+        "\n  \x1b[2mAI: CLAUDE.md and .claude/ configured. Install the Sp00ky DevTools\x1b[0m"
     );
     println!(
         "  \x1b[2mbrowser extension for live MCP debugging access.\x1b[0m"
@@ -528,7 +528,7 @@ fn write_schema_package(
     fs::create_dir_all(schema_path.join("src/buckets"))?;
     fs::create_dir_all(schema_path.join("src/outbox"))?;
     fs::create_dir_all(schema_path.join("migrations"))?;
-    fs::create_dir_all(schema_path.join(".spooky"))?;
+    fs::create_dir_all(schema_path.join(".sp00ky"))?;
 
     // Schema content
     let schema_content = match schema_type {
@@ -550,14 +550,14 @@ fn write_schema_package(
     let scripts = if is_schema_only {
         // Schema-only: all scripts live here
         let mut s = String::from(
-            "\n    \"dev\": \"spooky dev\",\n    \"migrate:create\": \"spooky migrate create\",\n    \"migrate:apply\": \"spooky migrate apply --url http://localhost:8666\",\n    \"migrate:status\": \"spooky migrate status --url http://localhost:8666\""
+            "\n    \"dev\": \"sp00ky dev\",\n    \"migrate:create\": \"sp00ky migrate create\",\n    \"migrate:apply\": \"sp00ky migrate apply --url http://localhost:8666\",\n    \"migrate:status\": \"sp00ky migrate status --url http://localhost:8666\""
         );
         if codegen_format != "Skip" {
-            s.push_str(",\n    \"build\": \"spooky generate\"");
+            s.push_str(",\n    \"build\": \"sp00ky generate\"");
         }
         s
     } else {
-        // Full project: no spooky scripts in schema package (they live at root)
+        // Full project: no sp00ky scripts in schema package (they live at root)
         String::new()
     };
 
@@ -579,7 +579,7 @@ fn write_schema_package(
         ]),
     )?;
 
-    // spooky.yml — only for schema-only projects (full projects write it at root)
+    // sp00ky.yml — only for schema-only projects (full projects write it at root)
     if is_schema_only {
         let client_types_section = match codegen_format {
             "Skip" => String::new(),
@@ -599,8 +599,8 @@ fn write_schema_package(
         };
 
         write_file(
-            schema_path.join("spooky.yml"),
-            &render(templates::SPOOKY_YML, &[
+            schema_path.join("sp00ky.yml"),
+            &render(templates::SP00KY_YML, &[
                 ("SCHEMA_DIR", "."),
                 ("CLIENT_TYPES_SECTION", &client_types_section),
             ]),

@@ -1,24 +1,24 @@
-// This script runs in the page context and has access to window.__SPOOKY__
+// This script runs in the page context and has access to window.__SP00KY__
 (function () {
   let isInitialized = false;
 
-  // Hook into Spooky if it exists
-  function checkForSpooky() {
-    if ((window as any).__SPOOKY__ && !isInitialized) {
-      console.log('Spooky detected by DevTools');
+  // Hook into Sp00ky if it exists
+  function checkForSp00ky() {
+    if ((window as any).__SP00KY__ && !isInitialized) {
+      console.log('Sp00ky detected by DevTools');
       isInitialized = true;
 
-      const spooky = (window as any).__SPOOKY__;
+      const sp00ky = (window as any).__SP00KY__;
 
       // Send initial detection message with full state
       window.postMessage(
         {
-          type: 'SPOOKY_DETECTED',
-          source: 'spooky-devtools-page',
+          type: 'SP00KY_DETECTED',
+          source: 'sp00ky-devtools-page',
           data: {
-            version: spooky.version,
+            version: sp00ky.version,
             detected: true,
-            state: spooky.getState ? spooky.getState() : null,
+            state: sp00ky.getState ? sp00ky.getState() : null,
           },
         },
         '*'
@@ -29,22 +29,22 @@
     return false;
   }
 
-  // Listen for state change messages from Spooky DevTools Service
+  // Listen for state change messages from Sp00ky DevTools Service
   window.addEventListener('message', (event) => {
-    // Only handle messages from the same window (from Spooky DevTools Service)
+    // Only handle messages from the same window (from Sp00ky DevTools Service)
     if (event.source !== window) return;
 
-    // Forward SPOOKY_STATE_CHANGED messages with full state to content script
+    // Forward SP00KY_STATE_CHANGED messages with full state to content script
     if (
-      event.data.type === 'SPOOKY_STATE_CHANGED' &&
-      event.data.source === 'spooky-devtools-page'
+      event.data.type === 'SP00KY_STATE_CHANGED' &&
+      event.data.source === 'sp00ky-devtools-page'
     ) {
       // The state is already included in the message from devtools-service
       // Just forward it as-is
     }
 
-    // Forward SPOOKY_DETECTED messages
-    if (event.data.type === 'SPOOKY_DETECTED' && event.data.source === 'spooky-devtools-page') {
+    // Forward SP00KY_DETECTED messages
+    if (event.data.type === 'SP00KY_DETECTED' && event.data.source === 'sp00ky-devtools-page') {
       // Already being handled, no need to duplicate
     }
   });
@@ -52,14 +52,14 @@
   // Listen for GET_STATE requests
   window.addEventListener('message', (event) => {
     if (event.source !== window) return;
-    if (event.data.type === 'GET_STATE' && event.data.source === 'spooky-devtools-content') {
-      if ((window as any).__SPOOKY__) {
-        const spooky = (window as any).__SPOOKY__;
+    if (event.data.type === 'GET_STATE' && event.data.source === 'sp00ky-devtools-content') {
+      if ((window as any).__SP00KY__) {
+        const sp00ky = (window as any).__SP00KY__;
         window.postMessage(
           {
-            type: 'SPOOKY_STATE_CHANGED',
-            source: 'spooky-devtools-page',
-            state: spooky.getState ? spooky.getState() : null,
+            type: 'SP00KY_STATE_CHANGED',
+            source: 'sp00ky-devtools-page',
+            state: sp00ky.getState ? sp00ky.getState() : null,
           },
           '*'
         );
@@ -68,17 +68,17 @@
   });
 
   // Listen for execution requests from content script
-  window.addEventListener('SPOOKY_RUN_QUERY', async (event: any) => {
+  window.addEventListener('SP00KY_RUN_QUERY', async (event: any) => {
     const { requestId, query, target } = event.detail;
 
-    if (!(window as any).__SPOOKY__?.runQuery) {
+    if (!(window as any).__SP00KY__?.runQuery) {
       window.postMessage(
         {
-          type: 'SPOOKY_QUERY_RESPONSE',
-          source: 'spooky-devtools-page',
+          type: 'SP00KY_QUERY_RESPONSE',
+          source: 'sp00ky-devtools-page',
           requestId,
           success: false,
-          error: 'Spooky not found or runQuery not supported',
+          error: 'Sp00ky not found or runQuery not supported',
         },
         '*'
       );
@@ -86,11 +86,11 @@
     }
 
     try {
-      const result = await (window as any).__SPOOKY__.runQuery(query, target);
+      const result = await (window as any).__SP00KY__.runQuery(query, target);
       window.postMessage(
         {
-          type: 'SPOOKY_QUERY_RESPONSE',
-          source: 'spooky-devtools-page',
+          type: 'SP00KY_QUERY_RESPONSE',
+          source: 'sp00ky-devtools-page',
           requestId,
           success: result.success,
           data: result.data,
@@ -101,8 +101,8 @@
     } catch (err: any) {
       window.postMessage(
         {
-          type: 'SPOOKY_QUERY_RESPONSE',
-          source: 'spooky-devtools-page',
+          type: 'SP00KY_QUERY_RESPONSE',
+          source: 'sp00ky-devtools-page',
           requestId,
           success: false,
           error: err.message || String(err),
@@ -113,27 +113,27 @@
   });
 
   // Try immediately
-  if (!checkForSpooky()) {
+  if (!checkForSp00ky()) {
     // If not found, try again after a short delay
-    setTimeout(checkForSpooky, 100);
-    setTimeout(checkForSpooky, 500);
-    setTimeout(checkForSpooky, 1000);
-    setTimeout(checkForSpooky, 2000);
+    setTimeout(checkForSp00ky, 100);
+    setTimeout(checkForSp00ky, 500);
+    setTimeout(checkForSp00ky, 1000);
+    setTimeout(checkForSp00ky, 2000);
   }
 
   // Listen for GET_TABLE_DATA requests from content script
-  window.addEventListener('SPOOKY_GET_TABLE_DATA', async (event: any) => {
+  window.addEventListener('SP00KY_GET_TABLE_DATA', async (event: any) => {
     const { requestId, tableName } = event.detail;
-    const spooky = (window as any).__SPOOKY__;
+    const sp00ky = (window as any).__SP00KY__;
 
-    if (!spooky?.getTableData) {
+    if (!sp00ky?.getTableData) {
       window.postMessage(
         {
-          type: 'SPOOKY_BRIDGE_RESPONSE',
-          source: 'spooky-devtools-page',
+          type: 'SP00KY_BRIDGE_RESPONSE',
+          source: 'sp00ky-devtools-page',
           requestId,
           success: false,
-          error: 'Spooky not found or getTableData not supported',
+          error: 'Sp00ky not found or getTableData not supported',
         },
         '*'
       );
@@ -141,11 +141,11 @@
     }
 
     try {
-      const data = await spooky.getTableData(tableName);
+      const data = await sp00ky.getTableData(tableName);
       window.postMessage(
         {
-          type: 'SPOOKY_BRIDGE_RESPONSE',
-          source: 'spooky-devtools-page',
+          type: 'SP00KY_BRIDGE_RESPONSE',
+          source: 'sp00ky-devtools-page',
           requestId,
           success: true,
           data,
@@ -155,8 +155,8 @@
     } catch (err: any) {
       window.postMessage(
         {
-          type: 'SPOOKY_BRIDGE_RESPONSE',
-          source: 'spooky-devtools-page',
+          type: 'SP00KY_BRIDGE_RESPONSE',
+          source: 'sp00ky-devtools-page',
           requestId,
           success: false,
           error: err.message || String(err),
@@ -167,18 +167,18 @@
   });
 
   // Listen for UPDATE_TABLE_ROW requests from content script
-  window.addEventListener('SPOOKY_UPDATE_TABLE_ROW', async (event: any) => {
+  window.addEventListener('SP00KY_UPDATE_TABLE_ROW', async (event: any) => {
     const { requestId, tableName, recordId, updates } = event.detail;
-    const spooky = (window as any).__SPOOKY__;
+    const sp00ky = (window as any).__SP00KY__;
 
-    if (!spooky?.updateTableRow) {
+    if (!sp00ky?.updateTableRow) {
       window.postMessage(
         {
-          type: 'SPOOKY_BRIDGE_RESPONSE',
-          source: 'spooky-devtools-page',
+          type: 'SP00KY_BRIDGE_RESPONSE',
+          source: 'sp00ky-devtools-page',
           requestId,
           success: false,
-          error: 'Spooky not found or updateTableRow not supported',
+          error: 'Sp00ky not found or updateTableRow not supported',
         },
         '*'
       );
@@ -186,11 +186,11 @@
     }
 
     try {
-      const result = await spooky.updateTableRow(tableName, recordId, updates);
+      const result = await sp00ky.updateTableRow(tableName, recordId, updates);
       window.postMessage(
         {
-          type: 'SPOOKY_BRIDGE_RESPONSE',
-          source: 'spooky-devtools-page',
+          type: 'SP00KY_BRIDGE_RESPONSE',
+          source: 'sp00ky-devtools-page',
           requestId,
           success: result.success !== false,
           data: result,
@@ -201,8 +201,8 @@
     } catch (err: any) {
       window.postMessage(
         {
-          type: 'SPOOKY_BRIDGE_RESPONSE',
-          source: 'spooky-devtools-page',
+          type: 'SP00KY_BRIDGE_RESPONSE',
+          source: 'sp00ky-devtools-page',
           requestId,
           success: false,
           error: err.message || String(err),
@@ -213,18 +213,18 @@
   });
 
   // Listen for DELETE_TABLE_ROW requests from content script
-  window.addEventListener('SPOOKY_DELETE_TABLE_ROW', async (event: any) => {
+  window.addEventListener('SP00KY_DELETE_TABLE_ROW', async (event: any) => {
     const { requestId, tableName, recordId } = event.detail;
-    const spooky = (window as any).__SPOOKY__;
+    const sp00ky = (window as any).__SP00KY__;
 
-    if (!spooky?.deleteTableRow) {
+    if (!sp00ky?.deleteTableRow) {
       window.postMessage(
         {
-          type: 'SPOOKY_BRIDGE_RESPONSE',
-          source: 'spooky-devtools-page',
+          type: 'SP00KY_BRIDGE_RESPONSE',
+          source: 'sp00ky-devtools-page',
           requestId,
           success: false,
-          error: 'Spooky not found or deleteTableRow not supported',
+          error: 'Sp00ky not found or deleteTableRow not supported',
         },
         '*'
       );
@@ -232,11 +232,11 @@
     }
 
     try {
-      const result = await spooky.deleteTableRow(tableName, recordId);
+      const result = await sp00ky.deleteTableRow(tableName, recordId);
       window.postMessage(
         {
-          type: 'SPOOKY_BRIDGE_RESPONSE',
-          source: 'spooky-devtools-page',
+          type: 'SP00KY_BRIDGE_RESPONSE',
+          source: 'sp00ky-devtools-page',
           requestId,
           success: result.success !== false,
           data: result,
@@ -247,8 +247,8 @@
     } catch (err: any) {
       window.postMessage(
         {
-          type: 'SPOOKY_BRIDGE_RESPONSE',
-          source: 'spooky-devtools-page',
+          type: 'SP00KY_BRIDGE_RESPONSE',
+          source: 'sp00ky-devtools-page',
           requestId,
           success: false,
           error: err.message || String(err),
@@ -259,18 +259,18 @@
   });
 
   // Listen for CLEAR_HISTORY requests from content script
-  window.addEventListener('SPOOKY_CLEAR_HISTORY', (event: any) => {
+  window.addEventListener('SP00KY_CLEAR_HISTORY', (event: any) => {
     const { requestId } = event.detail;
-    const spooky = (window as any).__SPOOKY__;
+    const sp00ky = (window as any).__SP00KY__;
 
-    if (!spooky?.clearHistory) {
+    if (!sp00ky?.clearHistory) {
       window.postMessage(
         {
-          type: 'SPOOKY_BRIDGE_RESPONSE',
-          source: 'spooky-devtools-page',
+          type: 'SP00KY_BRIDGE_RESPONSE',
+          source: 'sp00ky-devtools-page',
           requestId,
           success: false,
-          error: 'Spooky not found or clearHistory not supported',
+          error: 'Sp00ky not found or clearHistory not supported',
         },
         '*'
       );
@@ -278,11 +278,11 @@
     }
 
     try {
-      spooky.clearHistory();
+      sp00ky.clearHistory();
       window.postMessage(
         {
-          type: 'SPOOKY_BRIDGE_RESPONSE',
-          source: 'spooky-devtools-page',
+          type: 'SP00KY_BRIDGE_RESPONSE',
+          source: 'sp00ky-devtools-page',
           requestId,
           success: true,
         },
@@ -291,8 +291,8 @@
     } catch (err: any) {
       window.postMessage(
         {
-          type: 'SPOOKY_BRIDGE_RESPONSE',
-          source: 'spooky-devtools-page',
+          type: 'SP00KY_BRIDGE_RESPONSE',
+          source: 'sp00ky-devtools-page',
           requestId,
           success: false,
           error: err.message || String(err),
@@ -302,8 +302,8 @@
     }
   });
 
-  // Also listen for custom event in case Spooky loads later
-  window.addEventListener('spooky:init', () => {
-    checkForSpooky();
+  // Also listen for custom event in case Sp00ky loads later
+  window.addEventListener('sp00ky:init', () => {
+    checkForSp00ky();
   });
 })();

@@ -1,8 +1,8 @@
 import { createTestDb } from './setup';
-import { SURQL_SCHEMA } from '../.spooky/client_schema';
+import { SURQL_SCHEMA } from '../.sp00ky/client_schema';
 import { Surreal, Table } from 'surrealdb';
 
-describe('Client Spooky Events', () => {
+describe('Client Sp00ky Events', () => {
   let db: Surreal;
 
   beforeAll(async () => {
@@ -48,9 +48,9 @@ describe('Client Spooky Events', () => {
     expect(user).toBeDefined();
     expect(user.id).toBeDefined();
 
-    // Verify _spooky_data_hash
+    // Verify _00_data_hash
     const result: any = await (
-      db.query('SELECT * FROM _spooky_data_hash WHERE RecordId = $id', { id: user.id }) as any
+      db.query('SELECT * FROM _00_data_hash WHERE RecordId = $id', { id: user.id }) as any
     ).collect();
     // Assuming result structure matches bubble.test.ts experience or standard v2
     // If result is [ActionResult], then result[0].result is records.
@@ -89,7 +89,7 @@ describe('Client Spooky Events', () => {
 
     // Get initial hash
     const res1: any = await (
-      db.query('SELECT * FROM _spooky_data_hash WHERE RecordId = $id', { id: user.id }) as any
+      db.query('SELECT * FROM _00_data_hash WHERE RecordId = $id', { id: user.id }) as any
     ).collect();
     const qr1 = res1[0];
     const hash1 =
@@ -100,7 +100,7 @@ describe('Client Spooky Events', () => {
           : qr1;
 
     // Reset dirty flag
-    await db.query('UPDATE _spooky_data_hash SET IsDirty = false WHERE RecordId = $id', {
+    await db.query('UPDATE _00_data_hash SET IsDirty = false WHERE RecordId = $id', {
       id: user.id,
     });
 
@@ -112,7 +112,7 @@ describe('Client Spooky Events', () => {
 
     // Verify hash changed and IsDirty is true
     const res2: any = await (
-      db.query('SELECT * FROM _spooky_data_hash WHERE RecordId = $id', { id: user.id }) as any
+      db.query('SELECT * FROM _00_data_hash WHERE RecordId = $id', { id: user.id }) as any
     ).collect();
     const qr2 = res2[0];
     const hash2 =
@@ -134,16 +134,16 @@ describe('Client Spooky Events', () => {
 
     // Verify created
     const res1: any = await (
-      db.query('SELECT * FROM _spooky_data_hash WHERE RecordId = $id', { id: user.id }) as any
+      db.query('SELECT * FROM _00_data_hash WHERE RecordId = $id', { id: user.id }) as any
     ).collect();
     expect(res1[0]).toBeDefined();
 
     // Perform Delete
     await db.delete(user.id);
 
-    // Verify _spooky_data_hash STILL EXISTS and has PendingDelete=true
+    // Verify _00_data_hash STILL EXISTS and has PendingDelete=true
     const res2: any = await (
-      db.query('SELECT * FROM _spooky_data_hash WHERE RecordId = $id', { id: user.id }) as any
+      db.query('SELECT * FROM _00_data_hash WHERE RecordId = $id', { id: user.id }) as any
     ).collect();
 
     const qr = res2[0];

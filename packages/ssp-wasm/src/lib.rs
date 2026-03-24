@@ -2,7 +2,7 @@ use serde::Serialize;
 use serde_json::Value;
 use ssp::circuit::{Change, ChangeSet, Circuit, Operation, ViewDelta};
 use ssp::eval::normalize_record_id;
-use ssp::types::SpookyValue;
+use ssp::types::Sp00kyValue;
 use wasm_bindgen::prelude::*;
 
 /// Version from Cargo.toml
@@ -15,7 +15,7 @@ pub fn init() {
 }
 
 #[wasm_bindgen]
-pub struct SpookyProcessor {
+pub struct Sp00kyProcessor {
     circuit: Circuit,
 }
 
@@ -121,10 +121,10 @@ export interface WasmIngestItem {
 "#;
 
 #[wasm_bindgen]
-impl SpookyProcessor {
+impl Sp00kyProcessor {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> SpookyProcessor {
-        SpookyProcessor {
+    pub fn new() -> Sp00kyProcessor {
+        Sp00kyProcessor {
             circuit: Circuit::new(),
         }
     }
@@ -140,16 +140,16 @@ impl SpookyProcessor {
         let record: Value = serde_wasm_bindgen::from_value(record)
             .map_err(|e| JsValue::from_str(&format!("Failed to parse record: {}", e)))?;
 
-        // Normalize the record and convert to new SpookyValue
+        // Normalize the record and convert to new Sp00kyValue
         let clean_record = ssp::sanitizer::normalize_record(record);
-        let clean_sv: SpookyValue = clean_record.into();
+        let clean_sv: Sp00kyValue = clean_record.into();
 
         let record_id = clean_sv
             .get("id")
             .cloned()
             .map(normalize_record_id)
             .and_then(|v| match v {
-                SpookyValue::Str(s) => Some(s.to_string()),
+                Sp00kyValue::Str(s) => Some(s.to_string()),
                 _ => None,
             })
             .unwrap_or_else(|| {

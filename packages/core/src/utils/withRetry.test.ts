@@ -145,7 +145,7 @@ describe('withRetry', () => {
         attempt: 1,
         retries: 3,
         error: 'Can not open transaction',
-        Category: 'spooky-client::utils::withRetry',
+        Category: 'sp00ky-client::utils::withRetry',
       }),
       'Retrying DB operation'
     );

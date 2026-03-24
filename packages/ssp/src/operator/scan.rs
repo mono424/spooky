@@ -1,6 +1,6 @@
 use crate::algebra::ZSet;
 use crate::circuit::store::Store;
-use crate::types::SpookyValue;
+use crate::types::Sp00kyValue;
 
 /// Scan operator: reads a base collection's Z-set.
 ///
@@ -23,7 +23,7 @@ impl Scan {
 }
 
 impl super::Operator for Scan {
-    fn snapshot(&self, _inputs: &[&ZSet], store: &Store, _ctx: Option<&SpookyValue>) -> ZSet {
+    fn snapshot(&self, _inputs: &[&ZSet], store: &Store, _ctx: Option<&Sp00kyValue>) -> ZSet {
         store
             .get_collection(&self.table)
             .map(|c| c.zset.clone())
@@ -34,7 +34,7 @@ impl super::Operator for Scan {
         &mut self,
         input_deltas: &[&ZSet],
         _store: &Store,
-        _ctx: Option<&SpookyValue>,
+        _ctx: Option<&Sp00kyValue>,
     ) -> ZSet {
         // The scheduler injects the table delta as input_deltas[0]
         input_deltas

@@ -32,7 +32,7 @@ async function loadOtelModules(otelEndpoint: string) {
     ]);
 
   const resource = resourceFromAttributes({
-    [ATTR_SERVICE_NAME]: 'spooky-client',
+    [ATTR_SERVICE_NAME]: 'sp00ky-client',
   });
 
   const exporter = new OTLPLogExporter({
@@ -61,7 +61,7 @@ async function loadOtelModules(otelEndpoint: string) {
  * ```ts
  * import { createOtelTransmit } from '@spooky-sync/core/otel';
  *
- * new SpookyClient({
+ * new Sp00kyClient({
  *   // ...
  *   otelTransmit: createOtelTransmit('http://localhost:4318/v1/logs'),
  * });
@@ -89,7 +89,7 @@ export function createOtelTransmit(endpoint: string, level: Level = 'info'): Pin
             body = JSON.stringify(msg);
           }
 
-          let category = 'spooky-client::unknown';
+          let category = 'sp00ky-client::unknown';
 
           const attributes = {};
           for (const msg of messages) {

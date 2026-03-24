@@ -3,7 +3,7 @@ layout: ../../layouts/DocsLayout.astro
 title: Installation
 ---
 
-Getting started with Spooky involves setting up the CLI tool and configuring your project.
+Getting started with Sp00ky involves setting up the CLI tool and configuring your project.
 
 ## Prerequisites
 
@@ -15,7 +15,7 @@ import CodeBlock from '../../components/ui/CodeBlock.astro';
 
 ## Step 1: Install the CLI
 
-The Spooky CLI is your primary tool for generating code and managing schemas.
+The Sp00ky CLI is your primary tool for generating code and managing schemas.
 
 <CodeBlock code={`pnpm add -D @spooky-sync/cli`} lang="bash" />
 
@@ -27,11 +27,11 @@ Install the core client and the bindings for your framework.
 
 ## Step 3: Run Infrastructure
 
-The easiest way to start everything is with the Spooky CLI:
+The easiest way to start everything is with the Sp00ky CLI:
 
 <CodeBlock code={`spooky dev`} lang="bash" />
 
-This starts SurrealDB, the SSP sidecar, applies migrations, and runs your app dev server — all in one command. If your backends have a `dev` field configured in `spooky.yml`, those are started too. See [Backend Functions](/docs/backend-functions#dev-server) for details.
+This starts SurrealDB, the SSP sidecar, applies migrations, and runs your app dev server — all in one command. If your backends have a `dev` field configured in `sp00ky.yml`, those are started too. See [Backend Functions](/docs/backend-functions#dev-server) for details.
 
 Alternatively, you can set up infrastructure manually with Docker Compose:
 
@@ -46,8 +46,8 @@ services:
     volumes:
       - ./data:/data
 
-  spooky-sidecar:
-    image: ghcr.io/spooky-org/sidecar:latest
+  sp00ky-sidecar:
+    image: ghcr.io/sp00ky-org/sidecar:latest
     environment:
       - SURREAL_URL=ws://surrealdb:8000
       - SURREAL_USER=root

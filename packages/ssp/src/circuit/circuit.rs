@@ -3,7 +3,7 @@ use crate::circuit::graph::Graph;
 use crate::circuit::store::{ChangeSet, Operation, Record, Store};
 use crate::circuit::view::{OutputFormat, View};
 use crate::operator::QueryPlan;
-use crate::types::{make_key, SpookyValue};
+use crate::types::{make_key, Sp00kyValue};
 use std::collections::HashMap;
 
 /// Operation type for a subquery record delta.
@@ -14,7 +14,7 @@ pub enum SubqueryOp {
     Remove,
 }
 
-/// A single subquery record change to be reflected in `_spooky_list_ref`.
+/// A single subquery record change to be reflected in `_00_list_ref`.
 #[derive(Debug, Clone)]
 pub struct SubqueryDeltaItem {
     /// The subquery record key (e.g., "comment:abc123").
@@ -238,7 +238,7 @@ impl Circuit {
         let query_id = plan.id.clone();
         let referenced_tables = plan.root.referenced_tables();
         let format = format.unwrap_or_default();
-        let params_sv = params.map(SpookyValue::from);
+        let params_sv = params.map(Sp00kyValue::from);
 
         // Build the operator DAG
         let graph = Graph::from_plan(&plan.root);
@@ -628,7 +628,7 @@ impl Circuit {
         for qs in state.queries {
             let query_id = qs.plan.id.clone();
             let referenced_tables = qs.plan.root.referenced_tables();
-            let params_sv = qs.params.map(SpookyValue::from);
+            let params_sv = qs.params.map(Sp00kyValue::from);
 
             // Rebuild the operator DAG from the plan
             let graph = Graph::from_plan(&qs.plan.root);

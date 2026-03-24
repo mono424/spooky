@@ -191,14 +191,14 @@ fn check_duplicate_bucket(name: &str, buckets_dir: &Path, config_path: &Path) ->
         }
     }
 
-    // Check spooky.yml for duplicate path reference
+    // Check sp00ky.yml for duplicate path reference
     if config_path.exists() {
         let content = fs::read_to_string(config_path)
-            .context("Failed to read spooky.yml")?;
+            .context("Failed to read sp00ky.yml")?;
         let expected_entry = format!("{}.surql", name);
         if content.contains(&expected_entry) {
             bail!(
-                "spooky.yml already references a bucket file containing '{}'",
+                "sp00ky.yml already references a bucket file containing '{}'",
                 name
             );
         }
@@ -232,9 +232,9 @@ fn generate_surql(name: &str, backend: &str, max_size: u64, extensions: &[String
     )
 }
 
-// ── spooky.yml update ────────────────────────────────────────────────────────
+// ── sp00ky.yml update ────────────────────────────────────────────────────────
 
-fn update_spooky_yml(config_path: &Path, relative_surql_path: &str) -> Result<()> {
+fn update_sp00ky_yml(config_path: &Path, relative_surql_path: &str) -> Result<()> {
     let entry = format!("  - {}", relative_surql_path);
 
     if !config_path.exists() {
@@ -245,11 +245,11 @@ fn update_spooky_yml(config_path: &Path, relative_surql_path: &str) -> Result<()
     }
 
     let content = fs::read_to_string(config_path)
-        .context("Failed to read spooky.yml")?;
+        .context("Failed to read sp00ky.yml")?;
 
     // Check for duplicate
     if content.contains(relative_surql_path) {
-        bail!("spooky.yml already contains entry for {}", relative_surql_path);
+        bail!("sp00ky.yml already contains entry for {}", relative_surql_path);
     }
 
     if content.contains("buckets:") {
@@ -308,7 +308,7 @@ fn update_spooky_yml(config_path: &Path, relative_surql_path: &str) -> Result<()
         };
 
         fs::write(config_path, new_content)
-            .context("Failed to write updated spooky.yml")?;
+            .context("Failed to write updated sp00ky.yml")?;
     } else {
         // No buckets key — append section to end
         let mut new_content = content.clone();
@@ -317,7 +317,7 @@ fn update_spooky_yml(config_path: &Path, relative_surql_path: &str) -> Result<()
         }
         new_content.push_str(&format!("buckets:\n{}\n", entry));
         fs::write(config_path, new_content)
-            .context("Failed to write updated spooky.yml")?;
+            .context("Failed to write updated sp00ky.yml")?;
     }
 
     Ok(())
@@ -498,8 +498,8 @@ pub fn add(
     fs::write(&surql_path, &surql_content)
         .context(format!("Failed to write {:?}", surql_path))?;
 
-    // Update spooky.yml
-    update_spooky_yml(&config, &surql_relative)?;
+    // Update sp00ky.yml
+    update_sp00ky_yml(&config, &surql_relative)?;
 
     // ── Output ───────────────────────────────────────────────────────────
 
@@ -509,7 +509,7 @@ pub fn add(
     println!("    File:    {}", surql_relative);
     println!("    Config:  {} (updated)", config.display());
     println!();
-    println!("  Run `spooky` to regenerate types with the new bucket.");
+    println!("  Run `sp00ky` to regenerate types with the new bucket.");
     println!();
 
     Ok(())
@@ -677,14 +677,14 @@ mod tests {
         assert!(result.contains("$action NOT IN ['put']"));
     }
 
-    // ── update_spooky_yml ────────────────────────────────────────────────
+    // ── update_sp00ky_yml ────────────────────────────────────────────────
 
     #[test]
     fn test_update_yml_creates_new_file() {
         let dir = TempDir::new().unwrap();
-        let config_path = dir.path().join("spooky.yml");
+        let config_path = dir.path().join("sp00ky.yml");
 
-        update_spooky_yml(&config_path, "./src/buckets/test.surql").unwrap();
+        update_sp00ky_yml(&config_path, "./src/buckets/test.surql").unwrap();
 
         let content = fs::read_to_string(&config_path).unwrap();
         assert!(content.contains("buckets:"));
@@ -694,7 +694,7 @@ mod tests {
     #[test]
     fn test_update_yml_appends_to_existing_buckets() {
         let dir = TempDir::new().unwrap();
-        let config_path = dir.path().join("spooky.yml");
+        let config_path = dir.path().join("sp00ky.yml");
 
         fs::write(
             &config_path,
@@ -702,7 +702,7 @@ mod tests {
         )
         .unwrap();
 
-        update_spooky_yml(&config_path, "./src/buckets/new.surql").unwrap();
+        update_sp00ky_yml(&config_path, "./src/buckets/new.surql").unwrap();
 
         let content = fs::read_to_string(&config_path).unwrap();
         assert!(content.contains("  - ./src/buckets/existing.surql"));
@@ -713,11 +713,11 @@ mod tests {
     #[test]
     fn test_update_yml_adds_buckets_section() {
         let dir = TempDir::new().unwrap();
-        let config_path = dir.path().join("spooky.yml");
+        let config_path = dir.path().join("sp00ky.yml");
 
         fs::write(&config_path, "mode: cluster\nbackends:\n  api:\n    type: http\n").unwrap();
 
-        update_spooky_yml(&config_path, "./src/buckets/test.surql").unwrap();
+        update_sp00ky_yml(&config_path, "./src/buckets/test.surql").unwrap();
 
         let content = fs::read_to_string(&config_path).unwrap();
         assert!(content.contains("buckets:"));
@@ -728,7 +728,7 @@ mod tests {
     #[test]
     fn test_update_yml_rejects_duplicate() {
         let dir = TempDir::new().unwrap();
-        let config_path = dir.path().join("spooky.yml");
+        let config_path = dir.path().join("sp00ky.yml");
 
         fs::write(
             &config_path,
@@ -736,7 +736,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = update_spooky_yml(&config_path, "./src/buckets/test.surql");
+        let result = update_sp00ky_yml(&config_path, "./src/buckets/test.surql");
         assert!(result.is_err());
     }
 
@@ -770,7 +770,7 @@ mod tests {
         let buckets_dir = dir.path().join("buckets");
         fs::create_dir_all(&buckets_dir).unwrap();
         fs::write(buckets_dir.join("test.surql"), "content").unwrap();
-        let config_path = dir.path().join("spooky.yml");
+        let config_path = dir.path().join("sp00ky.yml");
 
         let result = check_duplicate_bucket("test", &buckets_dir, &config_path);
         assert!(result.is_err());
@@ -786,7 +786,7 @@ mod tests {
             "DEFINE BUCKET IF NOT EXISTS test BACKEND \"memory\"",
         )
         .unwrap();
-        let config_path = dir.path().join("spooky.yml");
+        let config_path = dir.path().join("sp00ky.yml");
 
         let result = check_duplicate_bucket("test", &buckets_dir, &config_path);
         assert!(result.is_err());
@@ -796,7 +796,7 @@ mod tests {
     fn test_no_duplicate() {
         let dir = TempDir::new().unwrap();
         let buckets_dir = dir.path().join("buckets");
-        let config_path = dir.path().join("spooky.yml");
+        let config_path = dir.path().join("sp00ky.yml");
 
         let result = check_duplicate_bucket("new_bucket", &buckets_dir, &config_path);
         assert!(result.is_ok());

@@ -37,13 +37,13 @@ interface DevToolsState {
   database?: DatabaseState;
 }
 
-interface SpookyData {
+interface Sp00kyData {
   detected: boolean;
   version?: string;
   state?: DevToolsState | null;
 }
 
-let currentData: SpookyData | null = null;
+let currentData: Sp00kyData | null = null;
 let selectedQueryHash: number | null = null;
 let selectedTableName: string | null = null;
 
@@ -52,7 +52,7 @@ const tabId = chrome.devtools.inspectedWindow.tabId;
 
 // Create a connection to the background script
 const backgroundConnection = chrome.runtime.connect({
-  name: 'spooky-devtools-panel',
+  name: 'sp00ky-devtools-panel',
 });
 
 // Detect and apply Chrome DevTools theme
@@ -181,21 +181,21 @@ function initPanel() {
   backgroundConnection.onMessage.addListener((message) => {
     console.log('Panel received message:', message);
 
-    if (message.type === 'SPOOKY_DETECTED') {
-      console.log('SPOOKY_DETECTED message received with data:', message.data);
+    if (message.type === 'SP00KY_DETECTED') {
+      console.log('SP00KY_DETECTED message received with data:', message.data);
       updateUI(message.data || { detected: true, version: message.data?.version });
     }
 
-    if (message.type === 'SPOOKY_STATE_CHANGED') {
-      console.log('SPOOKY_STATE_CHANGED message received with state:', message.state);
+    if (message.type === 'SP00KY_STATE_CHANGED') {
+      console.log('SP00KY_STATE_CHANGED message received with state:', message.state);
       // State is included in the message from devtools-service
       if (message.state) {
         updateUI({ detected: true, state: message.state });
       }
     }
 
-    if (message.type === 'SPOOKY_TABLE_DATA_RESPONSE') {
-      console.log('SPOOKY_TABLE_DATA_RESPONSE received:', message);
+    if (message.type === 'SP00KY_TABLE_DATA_RESPONSE') {
+      console.log('SP00KY_TABLE_DATA_RESPONSE received:', message);
       const { tableName, data } = message;
       if (tableName && data) {
         updateTableData(tableName, data);
@@ -207,43 +207,43 @@ function initPanel() {
   refreshState();
 }
 
-// Fetch the current Spooky state
+// Fetch the current Sp00ky state
 function refreshState() {
-  chrome.devtools.inspectedWindow.eval(`(${detectSpooky.toString()})()`, (result, isException) => {
+  chrome.devtools.inspectedWindow.eval(`(${detectSp00ky.toString()})()`, (result, isException) => {
     if (isException) {
-      console.error('Error detecting Spooky:', isException);
+      console.error('Error detecting Sp00ky:', isException);
       updateUI({ detected: false });
     } else if (result && typeof result === 'object' && 'detected' in result) {
-      updateUI(result as SpookyData);
+      updateUI(result as Sp00kyData);
     } else {
       updateUI({ detected: false });
     }
   });
 }
 
-// Function that runs in the page context to detect Spooky
-function detectSpooky() {
+// Function that runs in the page context to detect Sp00ky
+function detectSp00ky() {
   try {
-    // Check if Spooky is available on the window object
-    const spooky = (window as any).__SPOOKY__;
+    // Check if Sp00ky is available on the window object
+    const sp00ky = (window as any).__SP00KY__;
 
-    if (!spooky) {
+    if (!sp00ky) {
       return { detected: false };
     }
 
     return {
       detected: true,
-      version: spooky.version || 'unknown',
-      state: spooky.getState ? spooky.getState() : null,
+      version: sp00ky.version || 'unknown',
+      state: sp00ky.getState ? sp00ky.getState() : null,
     };
   } catch (error) {
-    console.error('Error in detectSpooky:', error);
+    console.error('Error in detectSp00ky:', error);
     return { detected: false };
   }
 }
 
-// Update the UI with Spooky data
-function updateUI(data: SpookyData) {
+// Update the UI with Sp00ky data
+function updateUI(data: Sp00kyData) {
   console.log('updateUI called with data:', data);
   currentData = data;
 
@@ -272,7 +272,7 @@ function updateUI(data: SpookyData) {
   }
 }
 
-function updateStatus(data: SpookyData) {
+function updateStatus(data: Sp00kyData) {
   const statusEl = document.getElementById('status');
   if (statusEl) {
     const statusDot = statusEl.querySelector('.status-dot');
@@ -282,12 +282,12 @@ function updateStatus(data: SpookyData) {
       if (data.detected) {
         statusDot.className = 'status-dot active';
         const authStatus = data.state?.auth.authenticated ? 'Authenticated' : 'Not authenticated';
-        statusText.textContent = `Spooky detected ${
+        statusText.textContent = `Sp00ky detected ${
           data.version ? `(v${data.version})` : ''
         } • ${authStatus}`;
       } else {
         statusDot.className = 'status-dot inactive';
-        statusText.textContent = 'Spooky not detected on this page';
+        statusText.textContent = 'Sp00ky not detected on this page';
       }
     }
   }
@@ -552,8 +552,8 @@ function setupTabs() {
 function clearEventsHistory() {
   chrome.devtools.inspectedWindow.eval(
     `(function() {
-      if (window.__SPOOKY__ && window.__SPOOKY__.clearHistory) {
-        window.__SPOOKY__.clearHistory();
+      if (window.__SP00KY__ && window.__SP00KY__.clearHistory) {
+        window.__SP00KY__.clearHistory();
         return { success: true };
       }
       return { success: false };
@@ -631,22 +631,22 @@ function fetchTableData(tableName: string) {
   chrome.devtools.inspectedWindow.eval(
     `(async function() {
       try {
-        if (window.__SPOOKY__ && window.__SPOOKY__.getTableData) {
+        if (window.__SP00KY__ && window.__SP00KY__.getTableData) {
           console.log('Fetching table data for:', "${tableName}");
-          const data = await window.__SPOOKY__.getTableData("${tableName}");
+          const data = await window.__SP00KY__.getTableData("${tableName}");
           console.log('Got table data:', data);
 
           // Post message back to devtools
           window.postMessage({
-            type: 'SPOOKY_TABLE_DATA_RESPONSE',
-            source: 'spooky-devtools-page',
+            type: 'SP00KY_TABLE_DATA_RESPONSE',
+            source: 'sp00ky-devtools-page',
             tableName: "${tableName}",
             data: data
           }, '*');
 
           return { success: true, count: data?.length || 0 };
         }
-        console.warn('window.__SPOOKY__.getTableData not available');
+        console.warn('window.__SP00KY__.getTableData not available');
         return { success: false, error: 'API not available' };
       } catch (error) {
         console.error('Error fetching table data:', error);

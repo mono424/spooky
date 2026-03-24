@@ -3,7 +3,7 @@ name: Chrome Web Store Publish
 on:
   push:
     tags:
-      - "spooky/v*"
+      - "sp00ky/v*"
 
 permissions:
   contents: read
@@ -19,7 +19,7 @@ jobs:
       - name: Extract version from tag
         id: meta
         run: |
-          TAG="${GITHUB_REF#refs/tags/spooky/v}"
+          TAG="${GITHUB_REF#refs/tags/sp00ky/v}"
           echo "version_name=$TAG" >> "$GITHUB_OUTPUT"
 
           # Chrome only allows X.Y.Z.W with integers.

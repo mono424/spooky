@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 
 fn main() -> std::io::Result<()> {
     let input_path = "target/wasm32-wasip1/debug/ssp_module.wasm";
-    let output_path = "../../../tests/.spooky/ssp_module.surli"; // Write directly to tests folder
+    let output_path = "../../../tests/.sp00ky/ssp_module.surli"; // Write directly to tests folder
 
     let mut input_file = File::open(input_path)?;
     let mut buffer = Vec::new();

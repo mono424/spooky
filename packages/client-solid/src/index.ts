@@ -1,9 +1,9 @@
 import type { SyncedDbConfig } from './types';
 import {
-  SpookyClient,
+  Sp00kyClient,
   AuthService,
   BucketHandle,
-  type SpookyQueryResultPromise,
+  type Sp00kyQueryResultPromise,
   UpdateOptions,
   RunOptions,
 } from '@spooky-sync/core';
@@ -33,7 +33,7 @@ export type { Model, GenericModel, GenericSchema, ModelPayload } from './lib/mod
 export { useQuery } from './lib/use-query';
 export { useFileUpload, type FileUploadResult } from './lib/use-file-upload';
 export { useDownloadFile, type UseDownloadFileOptions, type UseDownloadFileResult } from './lib/use-download-file';
-export { SpookyProvider, type SpookyProviderProps } from './lib/SpookyProvider';
+export { Sp00kyProvider, type Sp00kyProviderProps } from './lib/Sp00kyProvider';
 export { useDb } from './lib/context';
 
 // export { AuthEventTypes } from "@spooky-sync/core"; // TODO: Verify if AuthEventTypes exists in core
@@ -94,30 +94,30 @@ export type WithRelatedMany<Field extends string, RelatedFields extends RelatedF
 };
 
 /**
- * SyncedDb - A thin wrapper around spooky-ts for Solid.js integration
- * Delegates all logic to the underlying spooky-ts instance
+ * SyncedDb - A thin wrapper around sp00ky-ts for Solid.js integration
+ * Delegates all logic to the underlying sp00ky-ts instance
  */
 export class SyncedDb<S extends SchemaStructure> {
   private config: SyncedDbConfig<S>;
-  private spooky: SpookyClient<S> | null = null;
+  private sp00ky: Sp00kyClient<S> | null = null;
   private _initialized = false;
 
   constructor(config: SyncedDbConfig<S>) {
     this.config = config;
   }
 
-  public getSpooky(): SpookyClient<S> {
-    if (!this.spooky) throw new Error('SyncedDb not initialized');
-    return this.spooky;
+  public getSp00ky(): Sp00kyClient<S> {
+    if (!this.sp00ky) throw new Error('SyncedDb not initialized');
+    return this.sp00ky;
   }
 
   /**
-   * Initialize the spooky-ts instance
+   * Initialize the sp00ky-ts instance
    */
   async init(): Promise<void> {
     if (this._initialized) return;
-    this.spooky = new SpookyClient<S>(this.config);
-    await this.spooky.init();
+    this.sp00ky = new Sp00kyClient<S>(this.config);
+    await this.sp00ky.init();
     this._initialized = true;
   }
 
@@ -125,8 +125,8 @@ export class SyncedDb<S extends SchemaStructure> {
    * Create a new record in the database
    */
   async create(id: string, payload: Record<string, unknown>): Promise<void> {
-    if (!this.spooky) throw new Error('SyncedDb not initialized');
-    await this.spooky.create(id, payload as Record<string, unknown>);
+    if (!this.sp00ky) throw new Error('SyncedDb not initialized');
+    await this.sp00ky.create(id, payload as Record<string, unknown>);
   }
 
   /**
@@ -138,8 +138,8 @@ export class SyncedDb<S extends SchemaStructure> {
     payload: Partial<TableModel<GetTable<S, TName>>>,
     options?: UpdateOptions
   ): Promise<void> {
-    if (!this.spooky) throw new Error('SyncedDb not initialized');
-    await this.spooky.update(
+    if (!this.sp00ky) throw new Error('SyncedDb not initialized');
+    await this.sp00ky.update(
       tableName as string,
       recordId,
       payload as Record<string, unknown>,
@@ -154,10 +154,10 @@ export class SyncedDb<S extends SchemaStructure> {
     tableName: TName,
     selector: string | InnerQuery<GetTable<S, TName>, boolean>
   ): Promise<void> {
-    if (!this.spooky) throw new Error('SyncedDb not initialized');
+    if (!this.sp00ky) throw new Error('SyncedDb not initialized');
     if (typeof selector !== 'string')
       throw new Error('Only string ID selectors are supported currently with core');
-    await this.spooky.delete(tableName as string, selector);
+    await this.sp00ky.delete(tableName as string, selector);
   }
 
   /**
@@ -165,9 +165,9 @@ export class SyncedDb<S extends SchemaStructure> {
    */
   public query<TName extends TableNames<S>>(
     table: TName
-  ): QueryBuilder<S, TName, SpookyQueryResultPromise, {}, false> {
-    if (!this.spooky) throw new Error('SyncedDb not initialized');
-    return this.spooky.query(table, {});
+  ): QueryBuilder<S, TName, Sp00kyQueryResultPromise, {}, false> {
+    if (!this.sp00ky) throw new Error('SyncedDb not initialized');
+    return this.sp00ky.query(table, {});
   }
 
   /**
@@ -182,17 +182,17 @@ export class SyncedDb<S extends SchemaStructure> {
     payload: RoutePayload<S, B, R>,
     options?: RunOptions,
   ): Promise<void> {
-    if (!this.spooky) throw new Error('SyncedDb not initialized');
-    await this.spooky.run(backend, path, payload, options);
+    if (!this.sp00ky) throw new Error('SyncedDb not initialized');
+    await this.sp00ky.run(backend, path, payload, options);
   }
 
   /**
    * Authenticate with the database
    */
   public async authenticate(token: string): Promise<RecordId<string>> {
-    const result = await this.spooky?.authenticate(token);
-    // SpookyClient.authenticate returns whatever remote.authenticate returns (boolean or token usually?)
-    // Wait, checked SpookyClient: return this.remote.getClient().authenticate(token);
+    const result = await this.sp00ky?.authenticate(token);
+    // Sp00kyClient.authenticate returns whatever remote.authenticate returns (boolean or token usually?)
+    // Wait, checked Sp00kyClient: return this.remote.getClient().authenticate(token);
     // SurrealDB authenticate returns void? or token?
     // Assuming void or token.
     return new RecordId('user', 'me'); // Placeholder or actual?
@@ -210,54 +210,54 @@ export class SyncedDb<S extends SchemaStructure> {
    * Sign out, clear session and local storage
    */
   public async signOut(): Promise<void> {
-    if (!this.spooky) throw new Error('SyncedDb not initialized');
-    await this.spooky.auth.signOut();
+    if (!this.sp00ky) throw new Error('SyncedDb not initialized');
+    await this.sp00ky.auth.signOut();
   }
 
   /**
    * Execute a function with direct access to the remote database connection
    */
   public async useRemote<T>(fn: (db: Surreal) => T | Promise<T>): Promise<T> {
-    if (!this.spooky) throw new Error('SyncedDb not initialized');
-    return await this.spooky.useRemote(fn);
+    if (!this.sp00ky) throw new Error('SyncedDb not initialized');
+    return await this.sp00ky.useRemote(fn);
   }
   /**
    * Access the remote database service directly
    */
-  get remote(): SpookyClient<S>['remoteClient'] {
-    if (!this.spooky) throw new Error('SyncedDb not initialized');
-    return this.spooky.remoteClient;
+  get remote(): Sp00kyClient<S>['remoteClient'] {
+    if (!this.sp00ky) throw new Error('SyncedDb not initialized');
+    return this.sp00ky.remoteClient;
   }
 
   /**
    * Access the local database service directly
    */
-  get local(): SpookyClient<S>['localClient'] {
-    if (!this.spooky) throw new Error('SyncedDb not initialized');
-    return this.spooky.localClient;
+  get local(): Sp00kyClient<S>['localClient'] {
+    if (!this.sp00ky) throw new Error('SyncedDb not initialized');
+    return this.sp00ky.localClient;
   }
 
   /**
    * Access the auth service
    */
   get auth(): AuthService<S> {
-    if (!this.spooky) throw new Error('SyncedDb not initialized');
-    return this.spooky.auth;
+    if (!this.sp00ky) throw new Error('SyncedDb not initialized');
+    return this.sp00ky.auth;
   }
 
   get pendingMutationCount(): number {
-    if (!this.spooky) throw new Error('SyncedDb not initialized');
-    return this.spooky.pendingMutationCount;
+    if (!this.sp00ky) throw new Error('SyncedDb not initialized');
+    return this.sp00ky.pendingMutationCount;
   }
 
   subscribeToPendingMutations(cb: (count: number) => void): () => void {
-    if (!this.spooky) throw new Error('SyncedDb not initialized');
-    return this.spooky.subscribeToPendingMutations(cb);
+    if (!this.sp00ky) throw new Error('SyncedDb not initialized');
+    return this.sp00ky.subscribeToPendingMutations(cb);
   }
 
   bucket<B extends BucketNames<S>>(name: B): BucketHandle {
-    if (!this.spooky) throw new Error('SyncedDb not initialized');
-    return this.spooky.bucket(name);
+    if (!this.sp00ky) throw new Error('SyncedDb not initialized');
+    return this.sp00ky.bucket(name);
   }
 
   getBucketConfig(name: string): BucketDefinitionSchema | undefined {

@@ -23,13 +23,13 @@ export interface BackendAuthState {
 
 // Frontend DevTools State - normalized for UI
 export interface DevToolsState {
-  events: SpookyEvent[];
+  events: Sp00kyEvent[];
   activeQueries: ActiveQuery[];
   auth: AuthState;
   database: DatabaseState;
 }
 
-export interface SpookyEvent {
+export interface Sp00kyEvent {
   type: string;
   timestamp: number;
   data: unknown;
@@ -78,9 +78,9 @@ export interface ChromeMessage {
   tableName?: string;
 }
 
-export interface SpookyTableDataResponse {
-  type: 'SPOOKY_TABLE_DATA_RESPONSE';
-  source: 'spooky-devtools-page';
+export interface Sp00kyTableDataResponse {
+  type: 'SP00KY_TABLE_DATA_RESPONSE';
+  source: 'sp00ky-devtools-page';
   tableName: string;
   data: Record<string, unknown>[];
 }

@@ -47,7 +47,7 @@ export abstract class AbstractDatabaseService {
           const startTime = performance.now();
           try {
             this.logger.debug(
-              { query, vars, Category: 'spooky-client::Database::query' },
+              { query, vars, Category: 'sp00ky-client::Database::query' },
               'Executing query'
             );
             const pending = this.client.query(query, vars);
@@ -67,7 +67,7 @@ export abstract class AbstractDatabaseService {
 
             resolve(result);
             this.logger.trace(
-              { query, result, Category: 'spooky-client::Database::query' },
+              { query, result, Category: 'sp00ky-client::Database::query' },
               'Query executed successfully'
             );
           } catch (err) {
@@ -84,7 +84,7 @@ export abstract class AbstractDatabaseService {
             });
 
             this.logger.error(
-              { query, vars, err, Category: 'spooky-client::Database::query' },
+              { query, vars, err, Category: 'sp00ky-client::Database::query' },
               'Query execution failed'
             );
             reject(err);
@@ -102,7 +102,7 @@ export abstract class AbstractDatabaseService {
   }
 
   async close(): Promise<void> {
-    this.logger.info({ Category: 'spooky-client::Database::close' }, 'Closing database connection');
+    this.logger.info({ Category: 'sp00ky-client::Database::close' }, 'Closing database connection');
     await this.client.close();
   }
 }

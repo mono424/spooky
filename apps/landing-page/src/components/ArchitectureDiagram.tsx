@@ -28,7 +28,7 @@ const ArchitectureBackSlice = ({ animFrame }: { animFrame: number }) => {
     '            │                          │              ', // 18
     '            ▼                          │              ', // 19
     '    +--------------------------------------------+    ', // 20
-    '    |           SPOOKY STREAM PROCESSOR          |    ', // 21
+    '    |           SP00KY STREAM PROCESSOR          |    ', // 21
     '    +--------------------------------------------+    ', // 22
   ];
 
@@ -67,18 +67,18 @@ const ArchitectureBackSlice = ({ animFrame }: { animFrame: number }) => {
   if (frame >= 14 && frame < 20) {
     activeModules.add('REMOTE SURREALDB');
     activeModules.add('EVENTS');
-    activeModules.add('SPOOKY STREAM PROCESSOR');
+    activeModules.add('SP00KY STREAM PROCESSOR');
     const pos = frame - 14;
     if (pos < 4) lines[16 + pos] = replaceAt(lines[16 + pos], 12, '●');
   }
 
   if (frame >= 18 && frame < 22) {
-    activeModules.add('SPOOKY STREAM PROCESSOR');
+    activeModules.add('SP00KY STREAM PROCESSOR');
     lines[21] = replaceAt(lines[21], 5, '                COMPUTING...                ');
   }
 
   if (frame >= 21 && frame < 27) {
-    activeModules.add('SPOOKY STREAM PROCESSOR');
+    activeModules.add('SP00KY STREAM PROCESSOR');
     activeModules.add('QUERIES');
     activeModules.add('REMOTE SURREALDB');
     const pos = frame - 21;
@@ -179,15 +179,15 @@ const ArchitectureBackSlice = ({ animFrame }: { animFrame: number }) => {
         '<span class="text-gray-500">QUERIES</span>'
       );
 
-    if (activeModules.has('SPOOKY STREAM PROCESSOR'))
+    if (activeModules.has('SP00KY STREAM PROCESSOR'))
       processed = processed.replace(
-        /SPOOKY STREAM PROCESSOR/g,
-        '<span class="text-green-500 font-bold">SPOOKY STREAM PROCESSOR</span>'
+        /SP00KY STREAM PROCESSOR/g,
+        '<span class="text-green-500 font-bold">SP00KY STREAM PROCESSOR</span>'
       );
     else
       processed = processed.replace(
-        /SPOOKY STREAM PROCESSOR/g,
-        '<span class="text-gray-500">SPOOKY STREAM PROCESSOR</span>'
+        /SP00KY STREAM PROCESSOR/g,
+        '<span class="text-gray-500">SP00KY STREAM PROCESSOR</span>'
       );
 
     return processed;

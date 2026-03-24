@@ -70,22 +70,22 @@ export type QueryTimeToLive =
 /**
  * Result object returned when a query is registered or executed.
  */
-export interface SpookyQueryResult {
+export interface Sp00kyQueryResult {
   /** The unique hash identifier for the query. */
   hash: string;
 }
 
-export type SpookyQueryResultPromise = Promise<SpookyQueryResult>;
+export type Sp00kyQueryResultPromise = Promise<Sp00kyQueryResult>;
 
 export interface EventSubscriptionOptions {
   priority?: number;
 }
 
 /**
- * Configuration options for the Spooky client.
+ * Configuration options for the Sp00ky client.
  * @template S The schema structure type.
  */
-export interface SpookyConfig<S extends SchemaStructure> {
+export interface Sp00kyConfig<S extends SchemaStructure> {
   /** Database connection configuration. */
   database: {
     /** The SurrealDB endpoint URL. */

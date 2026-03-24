@@ -114,7 +114,7 @@ export class UpQueue {
 
         if (errorType === 'network') {
           this.logger.error(
-            { error, event, Category: 'spooky-client::UpQueue::next' },
+            { error, event, Category: 'sp00ky-client::UpQueue::next' },
             'Network error processing mutation, re-queuing'
           );
           this.queue.unshift(event);
@@ -123,14 +123,14 @@ export class UpQueue {
 
         // Application error — rollback instead of re-queuing
         this.logger.error(
-          { error, event, Category: 'spooky-client::UpQueue::next' },
+          { error, event, Category: 'sp00ky-client::UpQueue::next' },
           'Application error processing mutation, rolling back'
         );
         try {
           await this.removeEventFromDatabase(event.mutation_id);
         } catch (removeError) {
           this.logger.error(
-            { error: removeError, event, Category: 'spooky-client::UpQueue::next' },
+            { error: removeError, event, Category: 'sp00ky-client::UpQueue::next' },
             'Failed to remove rolled-back mutation from database'
           );
         }
@@ -139,7 +139,7 @@ export class UpQueue {
             await onRollback(event, error instanceof Error ? error : new Error(String(error)));
           } catch (rollbackError) {
             this.logger.error(
-              { error: rollbackError, event, Category: 'spooky-client::UpQueue::next' },
+              { error: rollbackError, event, Category: 'sp00ky-client::UpQueue::next' },
               'Rollback handler failed'
             );
           }
@@ -154,7 +154,7 @@ export class UpQueue {
         await this.removeEventFromDatabase(event.mutation_id);
       } catch (error) {
         this.logger.error(
-          { error, event, Category: 'spooky-client::UpQueue::next' },
+          { error, event, Category: 'sp00ky-client::UpQueue::next' },
           'Failed to remove mutation from database after successful processing'
         );
       }
@@ -172,7 +172,7 @@ export class UpQueue {
   async loadFromDatabase() {
     try {
       const [records] = await this.local.query<any>(
-        `SELECT * FROM _spooky_pending_mutations ORDER BY created_at ASC`
+        `SELECT * FROM _00_pending_mutations ORDER BY created_at ASC`
       );
 
       this.queue = records
@@ -205,7 +205,7 @@ export class UpQueue {
                 {
                   mutationType: r.mutationType,
                   record: r,
-                  Category: 'spooky-client::UpQueue::loadFromDatabase',
+                  Category: 'sp00ky-client::UpQueue::loadFromDatabase',
                 },
                 'Unknown mutation type'
               );
@@ -215,7 +215,7 @@ export class UpQueue {
         .filter((e: UpEvent | null): e is UpEvent => e !== null);
     } catch (error) {
       this.logger.error(
-        { error, Category: 'spooky-client::UpQueue::loadFromDatabase' },
+        { error, Category: 'sp00ky-client::UpQueue::loadFromDatabase' },
         'Failed to load pending mutations from database'
       );
     }

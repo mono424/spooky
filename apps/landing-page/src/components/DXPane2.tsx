@@ -17,7 +17,7 @@ export const DXPane2: React.FC = () => {
           </div>
           <h3 className="text-2xl font-bold text-text-primary mb-4">Effortlessly Transparent</h3>
           <p className="text-text-tertiary text-body leading-relaxed">
-            Stop guessing what your application is doing. Spooky provides a complete suite of
+            Stop guessing what your application is doing. Sp00ky provides a complete suite of
             tools embedded directly in your browser.
           </p>
         </div>

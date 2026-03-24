@@ -1,8 +1,8 @@
-# Spooky Stream Processor (SSP) Server
+# Sp00ky Stream Processor (SSP) Server
 
 The **SSP Server** (`apps/ssp`) is the specialized sidecar responsible for real-time stream processing, managing live views, and maintaining the graph-based cache in SurrealDB.
 
-It acts as a bridge between SurrealDB's raw data events and the reactive `_spooky_query` graph.
+It acts as a bridge between SurrealDB's raw data events and the reactive `_00_query` graph.
 
 ## 🧠 Architecture & Communication Flow
 
@@ -66,8 +66,8 @@ SSP establishes a **single, multiplexed WebSocket connection** to SurrealDB at s
 
 The SSP API itself is protected via a **Bearer Token** middleware.
 
-- **Header**: `Authorization: Bearer <SPOOKY_AUTH_SECRET>`
-- **Env Var**: `SPOOKY_AUTH_SECRET` must be set in the environment.
+- **Header**: `Authorization: Bearer <SP00KY_AUTH_SECRET>`
+- **Env Var**: `SP00KY_AUTH_SECRET` must be set in the environment.
 
 ## ⚙️ Core Workflows & Performance
 
@@ -85,7 +85,7 @@ When a client subscribes to a live query:
 
 1.  **Preparation**: SSP parses the query and parameters.
 2.  **Engine Registration**: The engine registers the query and computes the _initial state_.
-3.  **Metadata Upsert**: Saves view metadata (`clientId`, `ttl`, `sql`) to `_spooky_query`.
+3.  **Metadata Upsert**: Saves view metadata (`clientId`, `ttl`, `sql`) to `_00_query`.
 4.  **Initial Population**: Takes the initial snapshot and bulk-inserts edges in a single transaction.
     - **Metric**: **1 Registration = 2 DB Round-trips** (1 Metadata + 1 Edges).
 
@@ -95,7 +95,7 @@ SSP uses an asynchronous, debounced persistence strategy to ensure durability wi
 
 ### Mechanism
 
-- **State File**: `data/spooky_state.json` (Configurable via `SPOOKY_PERSISTENCE_FILE`).
+- **State File**: `data/sp00ky_state.json` (Configurable via `SP00KY_PERSISTENCE_FILE`).
 - **Trigger**: Every `ingest`, `register`, `unregister`, or `reset` marks the state as "dirty".
 - **Debounce**: The background saver waits for **2 seconds** of inactivity before writing to disk. This prevents disk thrashing during high-load bursts.
 - **Shutdown**: On `SIGINT` or `SIGTERM`, the server performs a forced synchronous save to ensure no data is lost.
@@ -150,4 +150,4 @@ Remove a live query and clean up edges.
 
 ### `POST /reset`
 
-Wipe in-memory state and `_spooky_list_ref` edges. Useful for development/testing.
+Wipe in-memory state and `_00_list_ref` edges. Useful for development/testing.

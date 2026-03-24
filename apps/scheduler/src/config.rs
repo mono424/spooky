@@ -45,8 +45,8 @@ impl Default for SchedulerConfig {
         Self {
             db: DbConfig {
                 url: "localhost:8000/rpc".to_string(),
-                namespace: "spooky".to_string(),
-                database: "spooky".to_string(),
+                namespace: "sp00ky".to_string(),
+                database: "sp00ky".to_string(),
                 username: "root".to_string(),
                 password: "root".to_string(),
             },
@@ -74,12 +74,12 @@ impl SchedulerConfig {
         let mut builder = config::Config::builder()
             .add_source(config::Config::try_from(&SchedulerConfig::default())?);
 
-        // Try to load from spooky.yml (optional)
-        builder = builder.add_source(config::File::with_name("spooky").required(false));
+        // Try to load from sp00ky.yml (optional)
+        builder = builder.add_source(config::File::with_name("sp00ky").required(false));
 
-        // Override with environment variables (SPOOKY_SCHEDULER_*)
+        // Override with environment variables (SP00KY_SCHEDULER_*)
         builder =
-            builder.add_source(config::Environment::with_prefix("SPOOKY_SCHEDULER").separator("_"));
+            builder.add_source(config::Environment::with_prefix("SP00KY_SCHEDULER").separator("_"));
 
         let config = builder.build()?;
         let mut scheduler_config: SchedulerConfig = config.try_deserialize()?;

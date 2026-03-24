@@ -1,4 +1,4 @@
-import init, { SpookyProcessor } from '@spooky-sync/ssp-wasm';
+import init, { Sp00kyProcessor } from '@spooky-sync/ssp-wasm';
 import { EventDefinition, EventSystem } from '../../events/index';
 import { Logger } from 'pino';
 import { LocalDatabaseService } from '../database/index';
@@ -80,25 +80,25 @@ export class StreamProcessorService {
     if (this.isInitialized) return;
 
     this.logger.info(
-      { Category: 'spooky-client::StreamProcessorService::init' },
+      { Category: 'sp00ky-client::StreamProcessorService::init' },
       'Initializing WASM...'
     );
     try {
       await init(); // Initialize the WASM module (web target)
-      // We cast the generated SpookyProcessor to our interface which is safer
-      this.processor = new SpookyProcessor() as unknown as WasmProcessor;
+      // We cast the generated Sp00kyProcessor to our interface which is safer
+      this.processor = new Sp00kyProcessor() as unknown as WasmProcessor;
 
       // Try to load state
       await this.loadState();
 
       this.isInitialized = true;
       this.logger.info(
-        { Category: 'spooky-client::StreamProcessorService::init' },
+        { Category: 'sp00ky-client::StreamProcessorService::init' },
         'Initialized successfully'
       );
     } catch (e) {
       this.logger.error(
-        { error: e, Category: 'spooky-client::StreamProcessorService::init' },
+        { error: e, Category: 'sp00ky-client::StreamProcessorService::init' },
         'Failed to initialize'
       );
       throw e;
@@ -108,7 +108,7 @@ export class StreamProcessorService {
   async loadState() {
     if (!this.processor) return;
     try {
-      const result = await this.persistenceClient.get('_spooky_stream_processor_state');
+      const result = await this.persistenceClient.get('_00_stream_processor_state');
 
       // Check if we have a valid result from the query
       if (
@@ -122,7 +122,7 @@ export class StreamProcessorService {
         this.logger.info(
           {
             stateLength: state.length,
-            Category: 'spooky-client::StreamProcessorService::loadState',
+            Category: 'sp00ky-client::StreamProcessorService::loadState',
           },
           'Loading state from DB'
         );
@@ -132,19 +132,19 @@ export class StreamProcessorService {
           (this.processor as any).load_state(state);
         } else {
           this.logger.warn(
-            { Category: 'spooky-client::StreamProcessorService::loadState' },
+            { Category: 'sp00ky-client::StreamProcessorService::loadState' },
             'load_state method not found on processor'
           );
         }
       } else {
         this.logger.info(
-          { Category: 'spooky-client::StreamProcessorService::loadState' },
+          { Category: 'sp00ky-client::StreamProcessorService::loadState' },
           'No saved state found'
         );
       }
     } catch (e) {
       this.logger.error(
-        { error: e, Category: 'spooky-client::StreamProcessorService::loadState' },
+        { error: e, Category: 'sp00ky-client::StreamProcessorService::loadState' },
         'Failed to load state'
       );
     }
@@ -157,16 +157,16 @@ export class StreamProcessorService {
       if (typeof (this.processor as any).save_state === 'function') {
         const state = (this.processor as any).save_state();
         if (state) {
-          await this.persistenceClient.set('_spooky_stream_processor_state', state);
+          await this.persistenceClient.set('_00_stream_processor_state', state);
           this.logger.trace(
-            { Category: 'spooky-client::StreamProcessorService::saveState' },
+            { Category: 'sp00ky-client::StreamProcessorService::saveState' },
             'State saved'
           );
         }
       }
     } catch (e) {
       this.logger.error(
-        { error: e, Category: 'spooky-client::StreamProcessorService::saveState' },
+        { error: e, Category: 'sp00ky-client::StreamProcessorService::saveState' },
         'Failed to save state'
       );
     }
@@ -188,14 +188,14 @@ export class StreamProcessorService {
         table,
         op,
         id,
-        Category: 'spooky-client::StreamProcessorService::ingest',
+        Category: 'sp00ky-client::StreamProcessorService::ingest',
       },
       'Ingesting into ssp'
     );
 
     if (!this.processor) {
       this.logger.warn(
-        { Category: 'spooky-client::StreamProcessorService::ingest' },
+        { Category: 'sp00ky-client::StreamProcessorService::ingest' },
         'Not initialized, skipping ingest'
       );
       return [];
@@ -211,7 +211,7 @@ export class StreamProcessorService {
           op,
           id,
           rawUpdates: rawUpdates.length,
-          Category: 'spooky-client::StreamProcessorService::ingest',
+          Category: 'sp00ky-client::StreamProcessorService::ingest',
         },
         'Ingesting into ssp done'
       );
@@ -229,7 +229,7 @@ export class StreamProcessorService {
       return rawUpdates;
     } catch (e) {
       this.logger.error(
-        { error: e, Category: 'spooky-client::StreamProcessorService::ingest' },
+        { error: e, Category: 'sp00ky-client::StreamProcessorService::ingest' },
         'Ingesting into ssp failed'
       );
     }
@@ -243,7 +243,7 @@ export class StreamProcessorService {
   registerQueryPlan(queryPlan: QueryPlanConfig) {
     if (!this.processor) {
       this.logger.warn(
-        { Category: 'spooky-client::StreamProcessorService::registerQueryPlan' },
+        { Category: 'sp00ky-client::StreamProcessorService::registerQueryPlan' },
         'Not initialized, skipping registration'
       );
       return;
@@ -254,7 +254,7 @@ export class StreamProcessorService {
         queryHash: queryPlan.queryHash,
         surql: queryPlan.surql,
         params: queryPlan.params,
-        Category: 'spooky-client::StreamProcessorService::registerQueryPlan',
+        Category: 'sp00ky-client::StreamProcessorService::registerQueryPlan',
       },
       'Registering query plan'
     );
@@ -272,7 +272,7 @@ export class StreamProcessorService {
       });
 
       this.logger.debug(
-        { initialUpdate, Category: 'spooky-client::StreamProcessorService::registerQueryPlan' },
+        { initialUpdate, Category: 'sp00ky-client::StreamProcessorService::registerQueryPlan' },
         'register_view result'
       );
 
@@ -289,14 +289,14 @@ export class StreamProcessorService {
           queryHash: queryPlan.queryHash,
           surql: queryPlan.surql,
           params: queryPlan.params,
-          Category: 'spooky-client::StreamProcessorService::registerQueryPlan',
+          Category: 'sp00ky-client::StreamProcessorService::registerQueryPlan',
         },
         'Registered query plan'
       );
       return update;
     } catch (e) {
       this.logger.error(
-        { error: e, Category: 'spooky-client::StreamProcessorService::registerQueryPlan' },
+        { error: e, Category: 'sp00ky-client::StreamProcessorService::registerQueryPlan' },
         'Error registering query plan'
       );
       throw e;
@@ -313,7 +313,7 @@ export class StreamProcessorService {
       this.saveState();
     } catch (e) {
       this.logger.error(
-        { error: e, Category: 'spooky-client::StreamProcessorService::unregisterQueryPlan' },
+        { error: e, Category: 'sp00ky-client::StreamProcessorService::unregisterQueryPlan' },
         'Error unregistering query plan'
       );
     }
@@ -334,7 +334,7 @@ export class StreamProcessorService {
       if (hasTable && hasId && hasToString && isNotPlainObject) {
         const result = value.toString();
         this.logger.trace(
-          { result, Category: 'spooky-client::StreamProcessorService::normalizeValue' },
+          { result, Category: 'sp00ky-client::StreamProcessorService::normalizeValue' },
           'RecordId detected'
         );
         return result;

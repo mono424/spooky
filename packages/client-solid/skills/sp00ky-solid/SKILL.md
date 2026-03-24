@@ -1,29 +1,29 @@
 ---
-name: spooky-solid
+name: sp00ky-solid
 description: >-
-  SolidJS integration for the Spooky reactive local-first SurrealDB framework.
-  Use when setting up SpookyProvider, using useQuery for reactive data, building
+  SolidJS integration for the Sp00ky reactive local-first SurrealDB framework.
+  Use when setting up Sp00kyProvider, using useQuery for reactive data, building
   queries with QueryBuilder in SolidJS components, handling mutations, auth,
-  file uploads/downloads, or working with Spooky types like Model and RecordId.
+  file uploads/downloads, or working with Sp00ky types like Model and RecordId.
 metadata:
-  author: spooky-sync
+  author: sp00ky-sync
   version: "0.0.1"
 ---
 
-# Spooky SolidJS Client
+# Sp00ky SolidJS Client
 
-`@spooky-sync/client-solid` provides SolidJS bindings for the Spooky framework. It wraps `@spooky-sync/core` with a context provider, reactive `useQuery` hook, and file operation hooks.
+`@spooky-sync/client-solid` provides SolidJS bindings for the Sp00ky framework. It wraps `@spooky-sync/core` with a context provider, reactive `useQuery` hook, and file operation hooks.
 
 ## Setup
 
 ```tsx
-import { SpookyProvider } from '@spooky-sync/client-solid';
+import { Sp00kyProvider } from '@spooky-sync/client-solid';
 import { schema } from './generated/schema';
 import schemaSurql from './generated/schema.surql?raw';
 
 function App() {
   return (
-    <SpookyProvider
+    <Sp00kyProvider
       config={{
         database: {
           endpoint: 'ws://localhost:8000',
@@ -40,16 +40,16 @@ function App() {
       onError={(err) => console.error('DB failed', err)}
     >
       <MyApp />
-    </SpookyProvider>
+    </Sp00kyProvider>
   );
 }
 ```
 
-### SpookyProvider Props
+### Sp00kyProvider Props
 
 | Prop | Type | Description |
 |------|------|-------------|
-| `config` | `SyncedDbConfig<S>` | Same as `SpookyConfig` from core |
+| `config` | `SyncedDbConfig<S>` | Same as `Sp00kyConfig` from core |
 | `fallback` | `JSX.Element` | Shown while the database is initializing |
 | `onReady` | `(db: SyncedDb<S>) => void` | Called when initialization succeeds |
 | `onError` | `(error: Error) => void` | Called if initialization fails |
@@ -200,7 +200,7 @@ const { url, isLoading } = useDownloadFile('avatars', () => user()?.avatarPath);
 
 ## Backend Runs
 
-Use `db.run()` to trigger server-side operations via the outbox pattern. See the `spooky-core` skill for full details on `db.run()` and how it works.
+Use `db.run()` to trigger server-side operations via the outbox pattern. See the `sp00ky-core` skill for full details on `db.run()` and how it works.
 
 ### Basic Usage
 

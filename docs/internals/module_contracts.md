@@ -1,6 +1,6 @@
-# Spooky Stream Processor Module Contracts
+# Sp00ky Stream Processor Module Contracts
 
-This document defines the interface and call contracts for the different modules interacting with the Spooky Stream Processor core logic.
+This document defines the interface and call contracts for the different modules interacting with the Sp00ky Stream Processor core logic.
 
 ## 1. Core Logic (`ssp` Rust Crate)
 
@@ -106,7 +106,7 @@ Removes an incantation.
 
 ---
 
-## 3. Spooky Sidecar (Server-Side)
+## 3. Sp00ky Sidecar (Server-Side)
 
 **Caller:** External Services or Event Hooks (HTTP)
 **Execution Config:** Standalone Service (Docker/Process)
@@ -131,7 +131,7 @@ Triggers an ingest operation on the server-side circuit.
 ```
 
 **Response:** `200 OK`
-_Side Effects:_ Updates persistent state and `_spooky_query` records in SurrealDB.
+_Side Effects:_ Updates persistent state and `_00_query` records in SurrealDB.
 
 #### `POST /view/register`
 
@@ -151,7 +151,7 @@ Registers an incantation on the sidecar.
 ```
 
 **Response:** `200 OK`
-_Side Effects:_ Upserts `_spooky_query` metadata record in SurrealDB.
+_Side Effects:_ Upserts `_00_query` metadata record in SurrealDB.
 
 #### `POST /view/unregister`
 
@@ -188,7 +188,7 @@ function::dbsp::ingest($table, $event, $id, $after)
 | `$id`    | The record ID                                            |
 | `$after` | The record content (use `$before` for deletes if needed) |
 
-**Updates:** Directly modifies `_spooky_query` tables via internal Rust calls.
+**Updates:** Directly modifies `_00_query` tables via internal Rust calls.
 
 #### `function::dbsp::register_view`
 

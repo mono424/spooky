@@ -2,7 +2,7 @@
 
 ## Overview
 
-This plan addresses the issue where edges in `_spooky_list_ref` are incorrectly deleted when registering views or ingesting records. The fix involves three main areas:
+This plan addresses the issue where edges in `_00_list_ref` are incorrectly deleted when registering views or ingesting records. The fix involves three main areas:
 
 1. **Delta computation fix** - Ensure first-run provides proper delta
 2. **Record ID format alignment** - Match IDs between SSP and SurrealDB
@@ -126,7 +126,7 @@ cargo run
 
 # In another terminal, register a view and watch logs
 curl -X POST http://localhost:8667/view/register \
-  -H "Authorization: Bearer $SPOOKY_AUTH_SECRET" \
+  -H "Authorization: Bearer $SP00KY_AUTH_SECRET" \
   -H "Content-Type: application/json" \
   -d '{ ... your view payload ... }'
 ```
@@ -136,8 +136,8 @@ curl -X POST http://localhost:8667/view/register \
 Run this query in SurrealDB to check the format:
 
 ```sql
--- Check what format _spooky_version uses
-SELECT id, record_id FROM _spooky_version LIMIT 5;
+-- Check what format _00_version uses
+SELECT id, record_id FROM _00_version LIMIT 5;
 
 -- Expected output will show either:
 -- record_id: "user:123"  (full format)
@@ -219,7 +219,7 @@ mod tests {
         // Setup: Create database with one record
         let mut db = Database::new();
         let table = db.ensure_table("users");
-        table.rows.insert(SmolStr::new("1"), SpookyValue::Null);
+        table.rows.insert(SmolStr::new("1"), Sp00kyValue::Null);
         table.zset.insert(SmolStr::new("users:1"), 1);
 
         // Act: Process empty batch (simulates first run on registration)
@@ -247,7 +247,7 @@ mod tests {
 
 Based on Phase 1.4 findings, choose ONE of these approaches:
 
-#### Option A: If `_spooky_version.record_id` uses FULL format (`user:123`)
+#### Option A: If `_00_version.record_id` uses FULL format (`user:123`)
 
 **File:** `packages/ssp/src/view.rs`
 
@@ -282,7 +282,7 @@ fn categorize_changes(...) -> (Vec<SmolStr>, Vec<SmolStr>, Vec<SmolStr>) {
 }
 ```
 
-#### Option B: If `_spooky_version.record_id` uses STRIPPED format (`123`)
+#### Option B: If `_00_version.record_id` uses STRIPPED format (`123`)
 
 Keep `build_result_data` as-is (stripping prefix), but update the SQL query to handle this:
 
@@ -293,9 +293,9 @@ Keep `build_result_data` as-is (stripping prefix), but update the SQL query to h
 ```rust
 DeltaEvent::Created => {
     format!(
-        r#"LET $target = (SELECT id FROM _spooky_version WHERE record_id = '{0}');
+        r#"LET $target = (SELECT id FROM _00_version WHERE record_id = '{0}');
         IF $target THEN
-            RELATE ${1}->_spooky_list_ref->$target[0].id
+            RELATE ${1}->_00_list_ref->$target[0].id
                 SET version = $target[0].version,
                     clientId = (SELECT clientId FROM ONLY ${1}).clientId
         ELSE
@@ -314,8 +314,8 @@ Ensure UPDATE and DELETE also use correct format:
 ```rust
 DeltaEvent::Updated => {
     format!(
-        "UPDATE ${1}->_spooky_list_ref SET version += 1
-         WHERE out = (SELECT id FROM _spooky_version WHERE record_id = '{0}')[0]",
+        "UPDATE ${1}->_00_list_ref SET version += 1
+         WHERE out = (SELECT id FROM _00_version WHERE record_id = '{0}')[0]",
         record.id,
         binding_name
     )
@@ -323,8 +323,8 @@ DeltaEvent::Updated => {
 
 DeltaEvent::Deleted => {
     format!(
-        "DELETE ${1}->_spooky_list_ref
-         WHERE out = (SELECT id FROM _spooky_version WHERE record_id = '{0}')[0]",
+        "DELETE ${1}->_00_list_ref
+         WHERE out = (SELECT id FROM _00_version WHERE record_id = '{0}')[0]",
         record.id,
         binding_name
     )
@@ -378,7 +378,7 @@ async fn register_view_handler(
 
         if let Some(from_id) = parse_record_id(&id_str) {
             match state.db
-                .query("DELETE $from->_spooky_list_ref RETURN BEFORE")
+                .query("DELETE $from->_00_list_ref RETURN BEFORE")
                 .bind(("from", from_id))
                 .await
             {
@@ -450,7 +450,7 @@ curl -X POST http://localhost:8667/view/register -H "Authorization: Bearer $SECR
 
 # 4. Verify edge exists
 surreal sql --conn http://localhost:8000 --ns test --db test \
-  "SELECT * FROM _spooky_list_ref"
+  "SELECT * FROM _00_list_ref"
 ```
 
 **Expected logs:**
@@ -470,7 +470,7 @@ curl -X POST http://localhost:8667/ingest -H "Authorization: Bearer $SECRET" \
   -d '{"table":"users","op":"CREATE","id":"user:2","record":{"name":"Bob"}}'
 
 # Verify second edge exists
-surreal sql "SELECT * FROM _spooky_list_ref"
+surreal sql "SELECT * FROM _00_list_ref"
 ```
 
 **Expected:** Two edges exist, first edge unchanged.
@@ -484,7 +484,7 @@ curl -X POST http://localhost:8667/view/register -H "Authorization: Bearer $SECR
   -d '{ ... same view ... }'
 
 # Verify edges recreated
-surreal sql "SELECT * FROM _spooky_list_ref"
+surreal sql "SELECT * FROM _00_list_ref"
 ```
 
 **Expected logs:**
@@ -504,7 +504,7 @@ curl -X POST http://localhost:8667/view/register -H "Authorization: Bearer $SECR
   -d '{ ... second view for users ... }'
 
 # Verify edges from BOTH views exist
-surreal sql "SELECT *, <-_spooky_query AS from_view FROM _spooky_list_ref"
+surreal sql "SELECT *, <-_00_query AS from_view FROM _00_list_ref"
 ```
 
 **Expected:** 4 edges total (2 records × 2 views), each with correct `from_view`.
@@ -526,21 +526,21 @@ async fn test_edge_sync_lifecycle() {
     assert_eq!(resp.status(), 200);
 
     // 3. Verify edge created
-    let edges = app.query_db("SELECT * FROM _spooky_list_ref").await;
+    let edges = app.query_db("SELECT * FROM _00_list_ref").await;
     assert_eq!(edges.len(), 1);
 
     // 4. Ingest second record
     app.ingest("users", "CREATE", "user:2", json!({"name": "Test2"})).await;
 
     // 5. Verify second edge created, first unchanged
-    let edges = app.query_db("SELECT * FROM _spooky_list_ref").await;
+    let edges = app.query_db("SELECT * FROM _00_list_ref").await;
     assert_eq!(edges.len(), 2);
 
     // 6. Re-register view
     app.register_view("test-view", "SELECT * FROM users").await;
 
     // 7. Verify edges recreated (not duplicated)
-    let edges = app.query_db("SELECT * FROM _spooky_list_ref").await;
+    let edges = app.query_db("SELECT * FROM _00_list_ref").await;
     assert_eq!(edges.len(), 2);
 }
 ```
@@ -565,7 +565,7 @@ Add comments explaining the fix:
 /// # Record ID Format
 /// - Cache keys use ZSet format: "table:id" (e.g., "users:123")
 /// - Result data uses stripped format: "123"
-/// - This matches _spooky_version.record_id format
+/// - This matches _00_version.record_id format
 pub fn process_batch(...) { ... }
 ```
 
@@ -597,7 +597,7 @@ If issues occur after deployment:
 2. **Data Fix:** Run cleanup query:
    ```sql
    -- Delete all edges and let them be recreated
-   DELETE _spooky_list_ref;
+   DELETE _00_list_ref;
    ```
 3. **Trigger Recreation:** Re-register all views to recreate edges
 
@@ -606,7 +606,7 @@ If issues occur after deployment:
 ## Summary Checklist
 
 - [ ] **Phase 1:** Add diagnostic logging
-- [ ] **Phase 1:** Verify `_spooky_version.record_id` format
+- [ ] **Phase 1:** Verify `_00_version.record_id` format
 - [ ] **Phase 2:** Fix first-run delta emission
 - [ ] **Phase 2:** Add unit test
 - [ ] **Phase 3:** Align record ID format (Option A or B)
@@ -813,7 +813,7 @@ async fn register_view_handler(
         );
         if let Some(from_id) = parse_record_id(&id_str) {
             match state.db
-                .query("DELETE $from->_spooky_list_ref RETURN BEFORE")
+                .query("DELETE $from->_00_list_ref RETURN BEFORE")
                 .bind(("from", from_id))
                 .await
             {
@@ -981,13 +981,13 @@ pub async fn update_all_edges<C: Connection>(db: &Surreal<C>, updates: &[&Stream
             let stmt = match record.event {
                 DeltaEvent::Created => {
                     created_count += 1;
-                    // Only create edge if _spooky_version record exists
+                    // Only create edge if _00_version record exists
                     // IMPORTANT: record.id is the STRIPPED id (e.g., "123" not "user:123")
-                    // Make sure _spooky_version.record_id matches this format!
+                    // Make sure _00_version.record_id matches this format!
                     format!(
-                        r#"LET $target = (SELECT id, record_id FROM _spooky_version WHERE record_id = '{0}');
+                        r#"LET $target = (SELECT id, record_id FROM _00_version WHERE record_id = '{0}');
                         IF $target THEN
-                            RELATE ${1}->_spooky_list_ref->$target.id
+                            RELATE ${1}->_00_list_ref->$target.id
                                 SET version = $target.version,
                                     clientId = (SELECT clientId FROM ONLY ${1}).clientId;
                         ELSE
@@ -1001,7 +1001,7 @@ pub async fn update_all_edges<C: Connection>(db: &Surreal<C>, updates: &[&Stream
                 DeltaEvent::Updated => {
                     updated_count += 1;
                     format!(
-                        "UPDATE ${1}->_spooky_list_ref SET version += 1 WHERE out = (SELECT id FROM ONLY _spooky_version WHERE record_id = '{0}')",
+                        "UPDATE ${1}->_00_list_ref SET version += 1 WHERE out = (SELECT id FROM ONLY _00_version WHERE record_id = '{0}')",
                         record.id,
                         binding_name
                     )
@@ -1009,7 +1009,7 @@ pub async fn update_all_edges<C: Connection>(db: &Surreal<C>, updates: &[&Stream
                 DeltaEvent::Deleted => {
                     deleted_count += 1;
                     format!(
-                        "DELETE ${1}->_spooky_list_ref WHERE out = (SELECT id FROM ONLY _spooky_version WHERE record_id = '{0}')",
+                        "DELETE ${1}->_00_list_ref WHERE out = (SELECT id FROM ONLY _00_version WHERE record_id = '{0}')",
                         record.id,
                         binding_name
                     )
@@ -1150,19 +1150,19 @@ export RUST_LOG=ssp::edges=info,ssp::view::process_batch=warn
 Run these in SurrealDB to verify the fix:
 
 ```sql
--- Check _spooky_version record_id format
-SELECT id, record_id FROM _spooky_version LIMIT 5;
+-- Check _00_version record_id format
+SELECT id, record_id FROM _00_version LIMIT 5;
 
 -- Count edges per incantation
 SELECT in AS incantation, count() AS edge_count
-FROM _spooky_list_ref
+FROM _00_list_ref
 GROUP BY in;
 
 -- Check edges for a specific view
-SELECT ->_spooky_list_ref->_spooky_version.record_id AS records
-FROM _spooky_query:YOUR_VIEW_ID;
+SELECT ->_00_list_ref->_00_version.record_id AS records
+FROM _00_query:YOUR_VIEW_ID;
 
 -- Find orphaned edges (edges to non-existent versions)
-SELECT * FROM _spooky_list_ref
-WHERE out NOT IN (SELECT id FROM _spooky_version);
+SELECT * FROM _00_list_ref
+WHERE out NOT IN (SELECT id FROM _00_version);
 ```

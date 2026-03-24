@@ -6,7 +6,7 @@ This directory should contain the extension icons in the following sizes:
 - `icon48.png` - 48x48 pixels (extension management page)
 - `icon128.png` - 128x128 pixels (Chrome Web Store)
 
-For now, you can use any PNG images with the spooky branding. Consider using a ghost emoji or similar spooky-themed icon.
+For now, you can use any PNG images with the sp00ky branding. Consider using a ghost emoji or similar sp00ky-themed icon.
 
 To generate icons quickly, you can:
 

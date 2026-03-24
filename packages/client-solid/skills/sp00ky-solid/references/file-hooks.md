@@ -7,7 +7,7 @@ Upload, download, and manage files in a SurrealDB bucket.
 ### Signatures
 
 ```typescript
-// Context-based (inside SpookyProvider)
+// Context-based (inside Sp00kyProvider)
 useFileUpload<S>(bucketName: BucketNames<S>): FileUploadResult;
 
 // Explicit db

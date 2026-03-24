@@ -5,7 +5,7 @@ title: SSP API Reference
 
 import CodeBlock from '../../components/ui/CodeBlock.astro';
 
-The SSP (Spooky Sidecar Processor) is a stateful service that maintains materialized views and executes backend functions.
+The SSP (Sp00ky Sidecar Processor) is a stateful service that maintains materialized views and executes backend functions.
 
 ## Base URL
 
@@ -18,10 +18,10 @@ Configure via: `LISTEN_ADDR` environment variable
 All endpoints (except `/health`, `/version`, and `/info`) require authentication via the `Authorization` header:
 
 ```
-Authorization: Bearer <SPOOKY_AUTH_SECRET>
+Authorization: Bearer <SP00KY_AUTH_SECRET>
 ```
 
-Set via `SPOOKY_AUTH_SECRET` environment variable.
+Set via `SP00KY_AUTH_SECRET` environment variable.
 
 ---
 
@@ -442,7 +442,7 @@ Configure the SSP via environment variables:
 LISTEN_ADDR=0.0.0.0:8667
 
 # Authentication
-SPOOKY_AUTH_SECRET=your-secret-token
+SP00KY_AUTH_SECRET=your-secret-token
 
 # Database connection
 SURREALDB_ADDR=127.0.0.1:8000
@@ -452,7 +452,7 @@ SURREALDB_NS=test
 SURREALDB_DB=test
 
 # Job configuration
-SPOOKY_CONFIG_PATH=spooky.yml
+SP00KY_CONFIG_PATH=sp00ky.yml
 
 # TTL cleanup interval (seconds, default: 60)
 TTL_CLEANUP_INTERVAL_SECS=60
@@ -474,7 +474,7 @@ ADVERTISE_ADDR=http://ssp-01.example.com:8667
 HEARTBEAT_INTERVAL_MS=5000
 ```
 
-### Job Configuration (`spooky.yml`)
+### Job Configuration (`sp00ky.yml`)
 
 ```yaml
 job_tables:
@@ -562,7 +562,7 @@ When `SCHEDULER_URL` is set:
 
 ### Job Execution Issues
 
-1. Verify job table configuration in `spooky.yml`
+1. Verify job table configuration in `sp00ky.yml`
 2. Check job status updates in database
 3. Review SSP logs for job execution errors
 4. Verify backend API connectivity and authentication

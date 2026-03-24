@@ -128,26 +128,26 @@ app.openapi(spookifyRoute, async (c) => {
       return c.json({ error: 'Thread not found' }, 404);
     }
 
-    // 2. Generate spooky content with AI
+    // 2. Generate sp00ky content with AI
     // Warning: Requires ANTHROPIC_API_KEY environment variable
     // Use z from 'zod' here
     // Define the output structure
-    type SpookySuggestion = {
+    type Sp00kySuggestion = {
       title_suggestion: string;
       content_suggestion: string;
     };
 
     const resultSchema = z.object({
-      title_suggestion: z.string().describe('A spooky version of the original title'),
-      content_suggestion: z.string().describe('A spooky, eerie version of the original content'),
-    }) as z.Schema<SpookySuggestion>;
+      title_suggestion: z.string().describe('A sp00ky version of the original title'),
+      content_suggestion: z.string().describe('A sp00ky, eerie version of the original content'),
+    }) as z.Schema<Sp00kySuggestion>;
 
     const resultAI = await generateText({
       model,
       output: Output.object({
         schema: resultSchema as any,
       }),
-      prompt: `Spookify the following thread content. Make it sound haunted, eerie, and fit for a ghost story.
+      prompt: `Sp00kify the following thread content. Make it sound haunted, eerie, and fit for a ghost story.
       
       Original Title: ${record.title}
       Original Content: ${record.content}

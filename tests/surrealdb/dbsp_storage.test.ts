@@ -20,7 +20,7 @@ describe('DBSP Storage Persistence', () => {
     }
   });
 
-  test('should save state correctly to _spooky_module_state after ingest', async () => {
+  test('should save state correctly to _00_module_state after ingest', async () => {
     // 1. Reset state first to be clean
     await runQuery('RETURN mod::dbsp::reset({})');
 
@@ -37,7 +37,7 @@ describe('DBSP Storage Persistence', () => {
     // ingest returns { updates: [] }
     expect(ingRes[0].updates).toBeDefined();
     // 4. Check persistent storage table
-    const checkSql = 'SELECT * FROM _spooky_module_state:dbsp';
+    const checkSql = 'SELECT * FROM _00_module_state:dbsp';
     const storageRes = await runQuery(checkSql);
     console.log('Storage Res:', JSON.stringify(storageRes, null, 2));
 
@@ -48,17 +48,17 @@ describe('DBSP Storage Persistence', () => {
 
     expect(recordList.length).toBeGreaterThan(0);
     const content = recordList[0].content || recordList[0]; // Handle if 'content' is nested or direct
-    expect(records[0].id.toString()).toBe('_spooky_module_state:dbsp');
+    expect(records[0].id.toString()).toBe('_00_module_state:dbsp');
     expect(records[0].content).toBeDefined();
 
-    expect(records[0].id.toString()).toBe('_spooky_module_state:dbsp');
+    expect(records[0].id.toString()).toBe('_00_module_state:dbsp');
     expect(records[0].content).toBeDefined();
 
     // 5. Automated Hash Update Test
-    // Create an incantation and verify Hash is updated automatically (by _spooky_dbsp_register event)
+    // Create an incantation and verify Hash is updated automatically (by _00_dbsp_register event)
     const autoIncantId = 'auto_test_view';
     const autoIncantSql = `
-      UPSERT _spooky_query:${autoIncantId} CONTENT {
+      UPSERT _00_query:${autoIncantId} CONTENT {
         id: '${autoIncantId}',
         sql: 'SELECT * FROM storage_items',
         params: {},
@@ -70,7 +70,7 @@ describe('DBSP Storage Persistence', () => {
     await runQuery(autoIncantSql);
 
     // Check if Hash is populated
-    const checkAutoSql = `SELECT * FROM _spooky_query:${autoIncantId}`;
+    const checkAutoSql = `SELECT * FROM _00_query:${autoIncantId}`;
     const autoRes = await runQuery(checkAutoSql);
     // console.log("Auto Incantation Res:", JSON.stringify(autoRes, null, 2));
 
@@ -82,7 +82,7 @@ describe('DBSP Storage Persistence', () => {
     expect(autoRecord.hash).not.toBe('NONE');
 
     // Verify it registered in module state too
-    const circuitRes = await runQuery('SELECT content FROM _spooky_module_state:dbsp');
+    const circuitRes = await runQuery('SELECT content FROM _00_module_state:dbsp');
     const circuitContent = JSON.parse((circuitRes[0].result || circuitRes[0])[0].content);
     expect(circuitContent.views.find((v: any) => v.plan.id === autoIncantId)).toBeDefined();
     expect(circuitContent.views.find((v: any) => v.plan.id === autoIncantId)).toBeDefined();
@@ -96,7 +96,7 @@ describe('DBSP Storage Persistence', () => {
     // Create a user first.
     await runQuery(`CREATE user:alice SET username = 'alice', password = 'password123';`);
     const paramIncantSql = `
-      UPSERT _spooky_query:${paramIncantId} CONTENT {
+      UPSERT _00_query:${paramIncantId} CONTENT {
         id: '${paramIncantId}',
         sql: 'SELECT * FROM user WHERE id = $id',
         params: { id: "user:alice" },
@@ -108,7 +108,7 @@ describe('DBSP Storage Persistence', () => {
     await runQuery(paramIncantSql);
 
     // Check Auto Hash
-    const checkParamSql = `SELECT * FROM _spooky_query:${paramIncantId}`;
+    const checkParamSql = `SELECT * FROM _00_query:${paramIncantId}`;
     const paramRes = await runQuery(checkParamSql);
     const paramRecord = (paramRes[0].result || paramRes[0])[0];
 
@@ -139,7 +139,7 @@ describe('DBSP Storage Persistence', () => {
     // We strictly use the Event-driven flow: UPSERT the Incantation, and expect the Event to register it and populate Hash.
     await runQuery(`
       LET $params = { id: thread:test_parsing };
-      UPSERT _spooky_query:parsing_test_view SET 
+      UPSERT _00_query:parsing_test_view SET 
           id = '${viewName}', 
           sql = "${query}", 
           params = $params,
@@ -147,7 +147,7 @@ describe('DBSP Storage Persistence', () => {
     `);
 
     // Check if Hash is populated
-    const records = await runQuery(`SELECT * FROM _spooky_query:parsing_test_view`);
+    const records = await runQuery(`SELECT * FROM _00_query:parsing_test_view`);
     const record = (records[0].result || records[0])[0];
     expect(record.hash).toBeDefined();
     expect(record.hash).not.toBe('');
@@ -178,7 +178,7 @@ describe('DBSP Storage Persistence', () => {
 
     await runQuery(`
       LET $res = mod::dbsp::register_view('${viewName}', "${query}", "${trickyParams}");
-      UPSERT _spooky_query:complex_test_view SET 
+      UPSERT _00_query:complex_test_view SET 
           id = '${viewName}', 
           sql = "${query}", 
           params = { id: ${threadId} },
@@ -187,7 +187,7 @@ describe('DBSP Storage Persistence', () => {
     `);
 
     // Check if Hash is populated
-    const records = await runQuery(`SELECT * FROM _spooky_query:complex_test_view`);
+    const records = await runQuery(`SELECT * FROM _00_query:complex_test_view`);
     const record = (records[0].result || records[0])[0];
     expect(record.hash).toBeDefined();
     expect(record.hash).not.toBe('');
@@ -209,7 +209,7 @@ describe('DBSP Storage Persistence', () => {
 
     await runQuery(`
       LET $res = mod::dbsp::register_view('${viewName}', "${query}", "${params}");
-      UPSERT _spooky_query:${viewName} SET 
+      UPSERT _00_query:${viewName} SET 
           id = '${viewName}', 
           sql = "${query}", 
           params = { id: ${threadId} },
@@ -217,7 +217,7 @@ describe('DBSP Storage Persistence', () => {
           ttl = 1h;
     `);
 
-    const records = await runQuery(`SELECT * FROM _spooky_query:${viewName}`);
+    const records = await runQuery(`SELECT * FROM _00_query:${viewName}`);
     const record = (records[0].result || records[0])[0];
 
     expect(record.hash).toBeDefined();
@@ -232,7 +232,7 @@ describe('DBSP Storage Persistence', () => {
     // 1. Register with valid params
     await runQuery(`
       LET $res = mod::dbsp::register_view('${viewName}', "${query}", "${initialParams}");
-      UPSERT _spooky_query:${viewName} SET 
+      UPSERT _00_query:${viewName} SET 
         id = '${viewName}',
         sql = "${query}",
         params = ${initialParams},
@@ -240,7 +240,7 @@ describe('DBSP Storage Persistence', () => {
         ttl = 1h;
     `);
 
-    let records = await runQuery(`SELECT * FROM _spooky_query:${viewName}`);
+    let records = await runQuery(`SELECT * FROM _00_query:${viewName}`);
     let record = (records[0].result || records[0])[0];
     const initialHash = record.hash;
     expect(initialHash).not.toBe('');
@@ -253,7 +253,7 @@ describe('DBSP Storage Persistence', () => {
 
     await runQuery(`
       LET $res = mod::dbsp::register_view('${viewName}', "${query}", "${newParams}");
-      UPSERT _spooky_query:${viewName} SET 
+      UPSERT _00_query:${viewName} SET 
         id = '${viewName}',
         sql = "${query}",
         params = ${newParams},
@@ -261,7 +261,7 @@ describe('DBSP Storage Persistence', () => {
         ttl = 1h;
     `);
 
-    records = await runQuery(`SELECT * FROM _spooky_query:${viewName}`);
+    records = await runQuery(`SELECT * FROM _00_query:${viewName}`);
     record = (records[0].result || records[0])[0];
 
     expect(record.hash).toBeDefined();
@@ -286,7 +286,7 @@ describe('DBSP Storage Persistence', () => {
     // 1. Ingest/Register
     await runQuery(`
       LET $res = mod::dbsp::register_view('${viewName}', "${query}", "${params}");
-      UPSERT _spooky_query:${viewName} SET 
+      UPSERT _00_query:${viewName} SET 
           id = '${viewName}', 
           sql = "${query}", 
           params = ${params},
@@ -338,7 +338,7 @@ describe('DBSP Storage Persistence', () => {
     // Just ensuring no error is thrown during these operations is a good baseline.
     // And verifying that *fetching* the state manually via SQL returns valid JSON.
 
-    const state = await runQuery(`SELECT content FROM _spooky_module_state:dbsp`);
+    const state = await runQuery(`SELECT content FROM _00_module_state:dbsp`);
     const contentStr = (state[0].result || state[0])[0]?.content;
 
     expect(contentStr).toBeDefined();
@@ -348,14 +348,14 @@ describe('DBSP Storage Persistence', () => {
     expect(contentStr).toContain('Line 1\\nLine 2'); // Should be escaped in the JSON string
   }, 20000);
 
-  test('should trigger _spooky_thread_mutation event and create deterministic hash record', async () => {
+  test('should trigger _00_thread_mutation event and create deterministic hash record', async () => {
     const timestamp = Date.now();
     const threadId = `thread:mutation_test_${timestamp}`;
     const incantId = `thread_test_view_${timestamp}`;
 
     // 1. Create a thread record (mutation) - Ensure cleanup/isolation via unique ID
     const createQuery = `
-      UPSERT _spooky_query:${incantId} CONTENT {
+      UPSERT _00_query:${incantId} CONTENT {
         id: '${incantId}',
         sql: 'SELECT * FROM thread',
         params: {},
@@ -366,7 +366,7 @@ describe('DBSP Storage Persistence', () => {
 
       CREATE ${threadId} SET 
         title = 'Mutation Test Thread',
-        content = 'Testing spooky event triggering',
+        content = 'Testing sp00ky event triggering',
         author = user:mutation_test;
     `;
     const res = await runQuery(createQuery);
@@ -384,12 +384,12 @@ describe('DBSP Storage Persistence', () => {
     // So user[0] is the result of first statement, which is [Record].
     // So we want user[0][0].id or user[0].result[0].id depending on SDK version.
 
-    // 2. Verify _spooky_data_hash record exists with deterministic ID
+    // 2. Verify _00_data_hash record exists with deterministic ID
     // ID should be crypto::blake3(threadId)
     // We can just select from it directly using the same logic function to verify
     // Verify alternative syntax: casting string to record
     const hashCheck = await runQuery(`
-      SELECT * FROM _spooky_data_hash WHERE recordId = '${threadId}' OR recordId = <record>'${threadId}';
+      SELECT * FROM _00_data_hash WHERE recordId = '${threadId}' OR recordId = <record>'${threadId}';
     `);
 
     // hashCheck might be array of records directly or [[records]] depending on driver version/query type
@@ -399,17 +399,17 @@ describe('DBSP Storage Persistence', () => {
 
     if (!hashRecord) {
       // Fallback dump for debugging
-      const allHashes = await runQuery('SELECT * FROM _spooky_data_hash');
+      const allHashes = await runQuery('SELECT * FROM _00_data_hash');
       console.log('DEBUG: Lookup failed. All hashes:', JSON.stringify(allHashes, null, 2));
     }
 
     expect(hashRecord).toBeDefined();
     expect(hashRecord.recordId.toString()).toBe(threadId);
 
-    expect(hashRecord.id.toString()).toMatch(/_spooky_data_hash:.+/);
+    expect(hashRecord.id.toString()).toMatch(/_00_data_hash:.+/);
 
-    // 4. Verify Merkle Tree in _spooky_query does NOT have MISSING_HASH
-    const incantations = await runQuery(`SELECT * FROM _spooky_query:${incantId}`);
+    // 4. Verify Merkle Tree in _00_query does NOT have MISSING_HASH
+    const incantations = await runQuery(`SELECT * FROM _00_query:${incantId}`);
     const tree =
       incantations[0]?.result?.[0]?.tree ||
       incantations[0]?.tree ||

@@ -210,7 +210,7 @@ impl MigrationDB for SurrealClient {
 
     fn get_applied_migrations(&self) -> Result<Vec<AppliedMigration>> {
         let responses = self
-            .execute("SELECT version, name, applied_at, checksum FROM _spooky_migrations ORDER BY version ASC;")
+            .execute("SELECT version, name, applied_at, checksum FROM _00_migrations ORDER BY version ASC;")
             .context("Failed to query applied migrations")?;
 
         let result = responses
@@ -227,7 +227,7 @@ impl MigrationDB for SurrealClient {
 
     fn record_migration(&self, version: &str, name: &str, checksum: &str) -> Result<()> {
         let query = format!(
-            "CREATE _spooky_migrations SET version = '{}', name = '{}', checksum = '{}';",
+            "CREATE _00_migrations SET version = '{}', name = '{}', checksum = '{}';",
             version, name, checksum
         );
         self.execute(&query)
@@ -237,7 +237,7 @@ impl MigrationDB for SurrealClient {
 
     fn update_migration_checksum(&self, version: &str, new_checksum: &str) -> Result<()> {
         let query = format!(
-            "UPDATE _spooky_migrations SET checksum = '{}' WHERE version = '{}';",
+            "UPDATE _00_migrations SET checksum = '{}' WHERE version = '{}';",
             new_checksum, version
         );
         self.execute(&query)

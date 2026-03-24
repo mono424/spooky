@@ -37,7 +37,7 @@ export class DevToolsService implements StreamUpdateReceiver {
       this.notifyDevTools();
     });
 
-    this.logger.debug({ Category: 'spooky-client::DevToolsService::init' }, 'Service initialized');
+    this.logger.debug({ Category: 'sp00ky-client::DevToolsService::init' }, 'Service initialized');
   }
 
   // Get active queries directly from DataManager (single source of truth)
@@ -70,7 +70,7 @@ export class DevToolsService implements StreamUpdateReceiver {
 
   public onQueryInitialized(payload: any) {
     this.logger.debug(
-      { payload, Category: 'spooky-client::DevToolsService::onQueryInitialized' },
+      { payload, Category: 'sp00ky-client::DevToolsService::onQueryInitialized' },
       'QueryInitialized'
     );
     const queryHash = this.hashString(payload.queryId.toString());
@@ -87,7 +87,7 @@ export class DevToolsService implements StreamUpdateReceiver {
     this.logger.debug(
       {
         id: payload.queryId?.toString(),
-        Category: 'spooky-client::DevToolsService::onQueryUpdated',
+        Category: 'sp00ky-client::DevToolsService::onQueryUpdated',
       },
       'QueryUpdated'
     );
@@ -102,7 +102,7 @@ export class DevToolsService implements StreamUpdateReceiver {
 
   public onStreamUpdate(update: StreamUpdate) {
     this.logger.debug(
-      { update, Category: 'spooky-client::DevToolsService::onStreamUpdate' },
+      { update, Category: 'sp00ky-client::DevToolsService::onStreamUpdate' },
       'StreamUpdate'
     );
     this.addEvent('STREAM_UPDATE', {
@@ -171,8 +171,8 @@ export class DevToolsService implements StreamUpdateReceiver {
     if (typeof window !== 'undefined') {
       window.postMessage(
         {
-          type: 'SPOOKY_STATE_CHANGED',
-          source: 'spooky-devtools-page',
+          type: 'SP00KY_STATE_CHANGED',
+          source: 'sp00ky-devtools-page',
           state: this.getState(),
         },
         '*'
@@ -229,7 +229,7 @@ export class DevToolsService implements StreamUpdateReceiver {
 
   private exposeToWindow() {
     if (typeof window !== 'undefined') {
-      (window as any).__SPOOKY__ = {
+      (window as any).__SP00KY__ = {
         version: this.version,
         getState: () => this.getState(),
         clearHistory: () => {
@@ -270,7 +270,7 @@ export class DevToolsService implements StreamUpdateReceiver {
             return this.serializeForDevTools(records) || [];
           } catch (e) {
             this.logger.error(
-              { err: e, Category: 'spooky-client::DevToolsService::exposeToWindow' },
+              { err: e, Category: 'sp00ky-client::DevToolsService::exposeToWindow' },
               'Failed to get table data'
             );
             return [];
@@ -299,7 +299,7 @@ export class DevToolsService implements StreamUpdateReceiver {
         runQuery: async (query: string, target: 'local' | 'remote' = 'local') => {
           try {
             this.logger.debug(
-              { query, target, Category: 'spooky-client::DevToolsService::runQuery' },
+              { query, target, Category: 'sp00ky-client::DevToolsService::runQuery' },
               'Running query (START)'
             );
             const service = target === 'remote' ? this.remoteDatabaseService : this.databaseService;
@@ -314,7 +314,7 @@ export class DevToolsService implements StreamUpdateReceiver {
                 time: queryTime,
                 resultType: typeof result,
                 isArray: Array.isArray(result),
-                Category: 'spooky-client::DevToolsService::runQuery',
+                Category: 'sp00ky-client::DevToolsService::runQuery',
               },
               'Database returned result'
             );
@@ -328,7 +328,7 @@ export class DevToolsService implements StreamUpdateReceiver {
               {
                 serializeTime,
                 serializedLength: JSON.stringify(serialized).length,
-                Category: 'spooky-client::DevToolsService::runQuery',
+                Category: 'sp00ky-client::DevToolsService::runQuery',
               },
               'Serialization complete'
             );
@@ -340,7 +340,7 @@ export class DevToolsService implements StreamUpdateReceiver {
             };
           } catch (e: any) {
             this.logger.error(
-              { err: e, query, target, Category: 'spooky-client::DevToolsService::runQuery' },
+              { err: e, query, target, Category: 'sp00ky-client::DevToolsService::runQuery' },
               'Query execution failed'
             );
             // Ensure we always return a string for error
@@ -353,8 +353,8 @@ export class DevToolsService implements StreamUpdateReceiver {
 
       window.postMessage(
         {
-          type: 'SPOOKY_DETECTED',
-          source: 'spooky-devtools-page',
+          type: 'SP00KY_DETECTED',
+          source: 'sp00ky-devtools-page',
           data: { version: this.version, detected: true },
         },
         '*'

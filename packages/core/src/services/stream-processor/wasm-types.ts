@@ -23,7 +23,7 @@ export interface WasmIngestItem {
   version?: number;
 }
 
-// Interface matching the SpookyProcessor class from WASM
+// Interface matching the Sp00kyProcessor class from WASM
 export interface WasmProcessor {
   ingest(table: string, op: string, id: string, record: any): WasmStreamUpdate[];
   register_view(config: WasmQueryConfig): WasmStreamUpdate | undefined;

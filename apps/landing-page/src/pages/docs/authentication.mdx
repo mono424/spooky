@@ -7,7 +7,7 @@ import CodeBlock from '../../components/ui/CodeBlock.astro';
 import Warning from '../../components/ui/Warning.astro';
 import Note from '../../components/ui/Note.astro';
 
-Authentication in Spooky is built directly into the sql schema, making it robust, typesafe, and dynamic. Because access control is defined at the database layer, your rules are consistently enforced regardless of how the data is accessed.
+Authentication in Sp00ky is built directly into the sql schema, making it robust, typesafe, and dynamic. Because access control is defined at the database layer, your rules are consistently enforced regardless of how the data is accessed.
 
 ## Schema Configuration
 
@@ -38,7 +38,7 @@ lang="sql"
 
 ## Client-Side Authentication
 
-Spooky provides a strongly-typed authentication service on the client. It integrates seamlessly with the schema definitions.
+Sp00ky provides a strongly-typed authentication service on the client. It integrates seamlessly with the schema definitions.
 
 ### Sign In
 
@@ -47,7 +47,7 @@ Spooky provides a strongly-typed authentication service on the client. It integr
 
 // The second argument is typesafe based on your SIGNIN definition
 await db.auth.signIn('account', {
-username: 'spooky_user',
+username: 'sp00ky_user',
 password: 'secure_password'
 });`}
 lang="typescript"

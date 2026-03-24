@@ -53,9 +53,9 @@ pub struct AppState {
 
 The SSP is stateless — all state lives in SurrealDB. On every startup, the SSP self-bootstraps:
 
-1. **Discover tables** — `INFO FOR DB`, filter out system tables (`_spooky_*`)
+1. **Discover tables** — `INFO FOR DB`, filter out system tables (`_00_*`)
 2. **Load table data** — `SELECT * FROM {table}` for each table, bulk-load via `Circuit::load()`
-3. **Re-register views** — `SELECT * FROM _spooky_query`, rebuild each view via `prepare_registration_dbsp()` + `circuit.add_query()`
+3. **Re-register views** — `SELECT * FROM _00_query`, rebuild each view via `prepare_registration_dbsp()` + `circuit.add_query()`
 4. **Set status to Ready** — `/health` transitions from `"bootstrapping"` to `"ready"`
 
 The bootstrap runs in a spawned Tokio task so the HTTP server is available immediately (the scheduler can poll `/health` to know when the SSP is ready).
@@ -74,8 +74,8 @@ All configuration is via environment variables:
 | `SURREALDB_PASS` | `root` | SurrealDB password |
 | `SURREALDB_NS` | `test` | SurrealDB namespace |
 | `SURREALDB_DB` | `test` | SurrealDB database |
-| `SPOOKY_AUTH_SECRET` | (empty) | Bearer token for auth middleware |
-| `SPOOKY_CONFIG_PATH` | `spooky.yml` | Path to job runner configuration |
+| `SP00KY_AUTH_SECRET` | (empty) | Bearer token for auth middleware |
+| `SP00KY_CONFIG_PATH` | `sp00ky.yml` | Path to job runner configuration |
 | `SCHEDULER_URL` | (none) | Scheduler URL for registration and heartbeats |
 | `SSP_ID` | `ssp-<uuid>` | Unique identifier for this SSP instance |
 | `HEARTBEAT_INTERVAL_MS` | `5000` | Heartbeat interval to scheduler |
@@ -86,7 +86,7 @@ All configuration is via environment variables:
 
 ## HTTP API
 
-All endpoints require `Authorization: Bearer <SPOOKY_AUTH_SECRET>` header.
+All endpoints require `Authorization: Bearer <SP00KY_AUTH_SECRET>` header.
 
 ### `POST /ingest`
 
@@ -98,7 +98,7 @@ Process a single record mutation.
   "table": "thread",
   "op": "CREATE",
   "id": "thread:abc123",
-  "record": { "title": "Hello", "status": "active", "spooky_rv": 1 }
+  "record": { "title": "Hello", "status": "active", "_00_rv": 1 }
 }
 ```
 
@@ -112,9 +112,9 @@ Process a single record mutation.
 **Response:** `200 OK` (no body)
 
 **Edge operations in SurrealDB:**
-- Additions: `RELATE $from->_spooky_list_ref->$record_id SET version = N, clientId = ...`
-- Updates: `UPDATE _spooky_list_ref SET version = N WHERE in = $from AND out = $record_id`
-- Removals: `DELETE $from->_spooky_list_ref WHERE out = $record_id`
+- Additions: `RELATE $from->_00_list_ref->$record_id SET version = N, clientId = ...`
+- Updates: `UPDATE _00_list_ref SET version = N WHERE in = $from AND out = $record_id`
+- Removals: `DELETE $from->_00_list_ref WHERE out = $record_id`
 
 All edge operations are wrapped in `BEGIN TRANSACTION; ... COMMIT TRANSACTION;`.
 
@@ -137,7 +137,7 @@ Register a materialized view.
 **Behavior:**
 1. Calls `ssp::service::view::prepare_registration_dbsp(payload)` which parses SurrealQL into an `OperatorPlan` tree
 2. Calls `circuit.add_query(plan, params, Some(OutputFormat::Streaming))`
-3. Upserts incantation metadata to `_spooky_query` table in SurrealDB
+3. Upserts incantation metadata to `_00_query` table in SurrealDB
 4. Creates initial edges for any matching records
 
 **Response:** `200 OK`
@@ -151,7 +151,7 @@ Remove a materialized view.
 { "id": "view-abc" }
 ```
 
-**Behavior:** Calls `circuit.remove_query(id)` and deletes all `_spooky_list_ref` edges from that incantation.
+**Behavior:** Calls `circuit.remove_query(id)` and deletes all `_00_list_ref` edges from that incantation.
 
 ### `POST /reset`
 

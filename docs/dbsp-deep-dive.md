@@ -2,7 +2,7 @@
 
 *How the mathematics of Z-sets, incremental view maintenance, and circuit computation power real-time reactive systems — with lessons from building one in Rust.*
 
-> This document is designed to be read linearly, like a lecture or a podcast episode. By the end, you will understand the full theory of DBSP, see exactly how it maps to a working Rust implementation (the Spooky Stream Processor), and have concrete recommendations for building or rebuilding a DBSP-based system. If you are converting this to audio, it reads well from start to finish.
+> This document is designed to be read linearly, like a lecture or a podcast episode. By the end, you will understand the full theory of DBSP, see exactly how it maps to a working Rust implementation (the Sp00ky Stream Processor), and have concrete recommendations for building or rebuilding a DBSP-based system. If you are converting this to audio, it reads well from start to finish.
 
 ---
 
@@ -20,13 +20,13 @@ The challenge is making this work for arbitrary queries. Filtering is easy: does
 
 This is where DBSP comes in. **Database Stream Processing**, or DBSP, is the most rigorous mathematical framework for incremental view maintenance ever published. It was developed by Mihai Budiu, Frank McSherry, and their team (first at VMware Research, now at Feldera). Their key contribution, published at VLDB 2023, is a proof that *any* relational query — including joins, aggregations, nested queries, and recursive queries — can be incrementalized using a small set of mathematical primitives. Not "most queries." Not "simple queries." Any query.
 
-### The Spooky Context
+### The Sp00ky Context
 
-This is not just academic for us. Spooky is a reactive, local-first framework for SurrealDB. Its beating heart is the **SSP** — the Spooky Stream Processor — a Rust crate that implements a DBSP-inspired incremental view maintenance engine. The SSP runs in two environments: as a WebAssembly module inside the browser (so your UI updates in real-time without round trips to a server) and as a native Rust sidecar service on the backend (where it processes record changes from SurrealDB and broadcasts view updates to connected clients).
+This is not just academic for us. Sp00ky is a reactive, local-first framework for SurrealDB. Its beating heart is the **SSP** — the Sp00ky Stream Processor — a Rust crate that implements a DBSP-inspired incremental view maintenance engine. The SSP runs in two environments: as a WebAssembly module inside the browser (so your UI updates in real-time without round trips to a server) and as a native Rust sidecar service on the backend (where it processes record changes from SurrealDB and broadcasts view updates to connected clients).
 
 The SSP currently handles the basics: ingesting record changes, maintaining materialized views defined by SurrealQL queries, computing deltas, and emitting updates. But it is not working correctly in its current state. The incremental evaluation is incomplete — it falls back to full re-computation for complex queries — and the codebase has accumulated patches that need a clean rebuild. Before we rebuild, we need to deeply understand the theory. That is what this document is for.
 
-*So to recap: the problem is stale views. The solution is incremental view maintenance. The framework is DBSP. And the implementation we are building is the Spooky Stream Processor. Now let us dig into the mathematics that makes it all work.*
+*So to recap: the problem is stale views. The solution is incremental view maintenance. The framework is DBSP. And the implementation we are building is the Sp00ky Stream Processor. Now let us dig into the mathematics that makes it all work.*
 
 ---
 
@@ -83,7 +83,7 @@ Fourth, you can **subtract** Z-sets to get deltas. If you have the old state and
 
 Why does this matter for engineering? Because the group structure guarantees that delta operations compose correctly. You can split a batch of changes into sub-batches, process them independently, merge the results, and the final state will be identical to processing them sequentially. This is what enables parallelism.
 
-### Z-Sets in the Spooky Codebase
+### Z-Sets in the Sp00ky Codebase
 
 If you look at the SSP source code in `packages/ssp/src/engine/types/zset.rs`, you will see the Z-set definition is almost comically simple:
 
@@ -158,7 +158,7 @@ let w = l_weight * *r_weight;
 
 The ring structure guarantees that incrementalizing joins is algebraically sound — the delta rules for joins follow directly from the distributive law of the ring. This is not just a convenient coincidence; it is the mathematical foundation that makes the entire DBSP framework work.
 
-*Checkpoint: A Z-set is a map from elements to integer weights. Positive weights mean present, negative mean deleted, zero means absent. Z-sets form an abelian group under addition, which means deltas compose correctly. They also form a ring with multiplication, which is what makes joins work. The Spooky SSP implements Z-sets as a HashMap with FxHasher, and provides both full-multiplicity and membership-only interfaces. Now that we understand the data structure, let us tackle the real problem: how do you keep a view up to date when the underlying data changes?*
+*Checkpoint: A Z-set is a map from elements to integer weights. Positive weights mean present, negative mean deleted, zero means absent. Z-sets form an abelian group under addition, which means deltas compose correctly. They also form a ring with multiplication, which is what makes joins work. The Sp00ky SSP implements Z-sets as a HashMap with FxHasher, and provides both full-multiplicity and membership-only interfaces. Now that we understand the data structure, let us tackle the real problem: how do you keep a view up to date when the underlying data changes?*
 
 ---
 
@@ -189,7 +189,7 @@ The hard cases are operators that need *state*. A join between tables A and B is
 
 ### Dual-Mode Evaluation in the SSP
 
-The Spooky SSP implements this dual-mode approach directly. In `packages/ssp/src/engine/view.rs`, the `compute_view_delta` method is the decision point:
+The Sp00ky SSP implements this dual-mode approach directly. In `packages/ssp/src/engine/view.rs`, the `compute_view_delta` method is the decision point:
 
 ```rust
 fn compute_view_delta(
@@ -256,7 +256,7 @@ This becomes a deeper circuit:
 
 The subquery introduces a branch: the `Project` operator triggers a sub-circuit for each parent record. Changes to either the `thread` or `user` table can affect this view's output.
 
-### The Spooky Circuit
+### The Sp00ky Circuit
 
 In the SSP, the `Circuit` struct in `packages/ssp/src/engine/circuit.rs` is the top-level container that ties everything together:
 
@@ -268,7 +268,7 @@ pub struct Circuit {
 }
 ```
 
-The `Database` holds all the base tables. Each `Table` stores both the row data (`rows: FastMap<RowKey, SpookyValue>`) and the membership Z-set (`zset: ZSet`). The `views` vector holds all registered materialized views, each with its `QueryPlan` (the operator tree), a `cache: ZSet` (the current view state), and a `last_hash` (for change detection). The `dependency_list` is the routing table — it maps each table name to the indices of views that depend on that table.
+The `Database` holds all the base tables. Each `Table` stores both the row data (`rows: FastMap<RowKey, Sp00kyValue>`) and the membership Z-set (`zset: ZSet`). The `views` vector holds all registered materialized views, each with its `QueryPlan` (the operator tree), a `cache: ZSet` (the current view state), and a `last_hash` (for change detection). The `dependency_list` is the routing table — it maps each table name to the indices of views that depend on that table.
 
 When a record is ingested, the flow is:
 
@@ -486,7 +486,7 @@ Operator::Join { left, right, on } => {
     for (r_key, r_weight) in s_right.as_ref() {
         if let Some(r_val) = self.get_row_value(r_key, db) {
             if let Some(r_field) = resolve_nested_value(Some(r_val), &on.right_field) {
-                let hash = hash_spooky_value(r_field);
+                let hash = hash_sp00ky_value(r_field);
                 right_index.entry(hash).or_default().push((r_key, r_weight, r_field));
             }
         }
@@ -496,10 +496,10 @@ Operator::Join { left, right, on } => {
     for (l_key, l_weight) in s_left.as_ref() {
         if let Some(l_val) = self.get_row_value(l_key, db) {
             if let Some(l_field) = resolve_nested_value(Some(l_val), &on.left_field) {
-                let hash = hash_spooky_value(l_field);
+                let hash = hash_sp00ky_value(l_field);
                 if let Some(matches) = right_index.get(&hash) {
                     for (_r_key, r_weight, r_field) in matches {
-                        if compare_spooky_values(Some(l_field), Some(*r_field)) == Ordering::Equal {
+                        if compare_sp00ky_values(Some(l_field), Some(*r_field)) == Ordering::Equal {
                             let w = l_weight * *r_weight;  // Ring multiplication!
                             *out.entry(l_key.clone()).or_insert(0) += w;
                         }
@@ -676,7 +676,7 @@ Feldera, the company founded by DBSP's creators, maintains an open-source Rust i
 
 If you are building a server-side streaming SQL engine, Feldera is the gold standard. Study its architecture, its operator implementations, and its testing strategies. The codebase is the best reference for understanding how DBSP theory maps to production Rust code.
 
-However, Feldera is designed for server-side use. It has heavy dependencies (its own runtime, Tokio, various system libraries) and assumes a multi-threaded environment. It does NOT compile to WebAssembly. For the Spooky SSP, which must run in the browser, Feldera cannot be used directly.
+However, Feldera is designed for server-side use. It has heavy dependencies (its own runtime, Tokio, various system libraries) and assumes a multi-threaded environment. It does NOT compile to WebAssembly. For the Sp00ky SSP, which must run in the browser, Feldera cannot be used directly.
 
 ### Differential Dataflow and Timely Dataflow
 
@@ -858,7 +858,7 @@ DBSP is a mathematical framework that turns any SQL query into an incremental co
 
 The computation is modeled as a circuit — a directed graph of operators (Scan, Filter, Join, Project, Limit, Aggregate) connected by streams of Z-sets. Each operator has a snapshot mode (full computation) and a delta mode (incremental computation). The integration operator Z^{-1} gives the circuit memory, allowing stateful operators like joins to access accumulated state from previous time steps.
 
-The Spooky Stream Processor is a working implementation that gets the fundamentals right. It has Z-sets, delta propagation, a dependency list for efficient routing, fast paths for simple Scan + Filter queries, and multiple output formats (Flat with hash-based deduplication, Streaming with per-record delta events). But it currently falls back to full snapshot evaluation for complex operators — joins, limits, and subquery projections.
+The Sp00ky Stream Processor is a working implementation that gets the fundamentals right. It has Z-sets, delta propagation, a dependency list for efficient routing, fast paths for simple Scan + Filter queries, and multiple output formats (Flat with hash-based deduplication, Streaming with per-record delta events). But it currently falls back to full snapshot evaluation for complex operators — joins, limits, and subquery projections.
 
 The rebuild path is clear. Add per-operator state (integration operators at each stateful node). Implement the join delta rule (three-term: delta-A with state-B, state-A with delta-B, delta-A with delta-B). Implement incremental top-K (sorted buffer). Add aggregation operators with incremental rules. The Rust ecosystem has excellent references in Feldera and differential-dataflow, but neither compiles to WASM, so the SSP must remain a custom implementation informed by their design patterns.
 
@@ -895,7 +895,7 @@ The end result will be a DBSP engine that runs in the browser and on the server,
 | **Membership Model** | A simplified Z-set model where weights are normalized to 0 (absent) or 1 (present). Sufficient for tracking which records are in a view, but insufficient for aggregation. |
 | **Multiplicity Model** | The full Z-set model where weights can be any integer. Required for correct aggregation (COUNT, SUM, etc.) and duplicate handling. |
 | **Dependency List** | A map from table names to the set of views that reference that table. Used for efficient routing of mutations to affected views. |
-| **SSP** | Spooky Stream Processor. The Rust crate implementing the DBSP engine for the Spooky framework. |
+| **SSP** | Sp00ky Stream Processor. The Rust crate implementing the DBSP engine for the Sp00ky framework. |
 
 ## Appendix B: Delta Rules Quick Reference
 
@@ -913,7 +913,7 @@ The end result will be a DBSP engine that runs in the browser and on the server,
 | **Aggregate (GROUP BY)** | Route deltas to groups, apply per-group aggregate rule | Yes (per-group state) | NOT implemented |
 | **Subquery (lateral)** | Track parent-to-result dependency map; re-evaluate on parent or base data change | Yes (dependency map) | Falls back to snapshot |
 
-## Appendix C: Key Files in the Spooky SSP Codebase
+## Appendix C: Key Files in the Sp00ky SSP Codebase
 
 | File | Purpose |
 |---|---|

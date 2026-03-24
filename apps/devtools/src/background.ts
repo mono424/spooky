@@ -1,7 +1,7 @@
 // Background service worker for the extension
 // Handles communication between content scripts and devtools panels
 
-console.log('Spooky DevTools background script loaded');
+console.log('Sp00ky DevTools background script loaded');
 
 // Keep track of active connections
 const connections = new Map<number, chrome.runtime.Port>();
@@ -15,8 +15,8 @@ let bridgeReconnectDelay = 1000;
 const BRIDGE_MAX_RECONNECT_DELAY = 30000;
 let mcpEnabled = false;
 
-// Track tabs that have Spooky detected
-const spookyTabs = new Map<number, { url?: string; title?: string }>();
+// Track tabs that have Sp00ky detected
+const sp00kyTabs = new Map<number, { url?: string; title?: string }>();
 
 function connectToBridge() {
   if (!mcpEnabled) return;
@@ -96,7 +96,7 @@ function setMcpEnabled(enabled: boolean) {
 
 function reportTabsToBridge() {
   if (!bridgeSocket || bridgeSocket.readyState !== WebSocket.OPEN) return;
-  const tabs = Array.from(spookyTabs.entries()).map(([tabId, info]) => ({
+  const tabs = Array.from(sp00kyTabs.entries()).map(([tabId, info]) => ({
     tabId,
     ...info,
   }));
@@ -120,13 +120,13 @@ async function handleBridgeRequest(msg: any) {
   // Resolve target tab
   let targetTabId: number | undefined = requestedTabId;
   if (targetTabId === undefined) {
-    // Use first known spooky tab
-    const firstTab = spookyTabs.keys().next().value;
+    // Use first known sp00ky tab
+    const firstTab = sp00kyTabs.keys().next().value;
     targetTabId = firstTab;
   }
 
   if (targetTabId === undefined) {
-    sendBridgeError(id, -32000, 'No Spooky tabs connected');
+    sendBridgeError(id, -32000, 'No Sp00ky tabs connected');
     return;
   }
 
@@ -136,7 +136,7 @@ async function handleBridgeRequest(msg: any) {
     pendingBridgeRequests.set(id, targetTabId);
     try {
       await chrome.tabs.sendMessage(targetTabId, {
-        type: 'GET_SPOOKY_STATE',
+        type: 'GET_SP00KY_STATE',
       });
     } catch (err: any) {
       pendingBridgeRequests.delete(id);
@@ -276,9 +276,9 @@ chrome.runtime.onConnect.addListener((port) => {
 chrome.runtime.onMessage.addListener((message, sender) => {
   const senderTabId = sender.tab?.id;
 
-  // Track Spooky tabs
-  if (message.type === 'SPOOKY_DETECTED' && senderTabId) {
-    spookyTabs.set(senderTabId, {
+  // Track Sp00ky tabs
+  if (message.type === 'SP00KY_DETECTED' && senderTabId) {
+    sp00kyTabs.set(senderTabId, {
       url: sender.tab?.url,
       title: sender.tab?.title,
     });
@@ -286,7 +286,7 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   }
 
   // Handle bridge responses (from page-script via content script)
-  if (message.type === 'SPOOKY_BRIDGE_RESPONSE' && message.requestId) {
+  if (message.type === 'SP00KY_BRIDGE_RESPONSE' && message.requestId) {
     const bridgeId = message.requestId.replace('bridge-', '');
     pendingBridgeRequests.delete(message.requestId);
 
@@ -299,7 +299,7 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   }
 
   // Handle query responses for bridge
-  if (message.type === 'SPOOKY_QUERY_RESPONSE' && message.requestId?.startsWith('bridge-')) {
+  if (message.type === 'SP00KY_QUERY_RESPONSE' && message.requestId?.startsWith('bridge-')) {
     const bridgeId = message.requestId.replace('bridge-', '');
     pendingBridgeRequests.delete(message.requestId);
 
@@ -311,7 +311,7 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   }
 
   // Handle state responses for bridge getState requests
-  if (message.type === 'SPOOKY_STATE_CHANGED' && senderTabId) {
+  if (message.type === 'SP00KY_STATE_CHANGED' && senderTabId) {
     // Check if any pending bridge getState requests match this tab
     for (const [reqId, reqTabId] of pendingBridgeRequests) {
       if (reqTabId === senderTabId && !reqId.startsWith('bridge-')) {
@@ -354,10 +354,10 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   }
 });
 
-// Clean up spooky tabs when tabs are closed
+// Clean up sp00ky tabs when tabs are closed
 chrome.tabs.onRemoved.addListener((tabId) => {
-  if (spookyTabs.has(tabId)) {
-    spookyTabs.delete(tabId);
+  if (sp00kyTabs.has(tabId)) {
+    sp00kyTabs.delete(tabId);
     reportTabsToBridge();
   }
 });

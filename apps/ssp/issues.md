@@ -13,8 +13,8 @@ After reviewing the code, I've identified several issues that could cause "stran
 **Problem:** The `RELATE` statement creates a NEW edge every time it's called, even if an edge already exists between the same `from` and `to` nodes.
 
 ```sql
-RELATE ${1}->_spooky_list_ref->(SELECT id FROM ONLY _spooky_version WHERE record_id = {0}) 
-    SET version = (SELECT version FROM ONLY _spooky_version WHERE record_id = {0}).version, 
+RELATE ${1}->_00_list_ref->(SELECT id FROM ONLY _00_version WHERE record_id = {0}) 
+    SET version = (SELECT version FROM ONLY _00_version WHERE record_id = {0}).version, 
         clientId = (SELECT clientId FROM ONLY ${1}).clientId
 ```
 
@@ -28,15 +28,15 @@ RELATE ${1}->_spooky_list_ref->(SELECT id FROM ONLY _spooky_version WHERE record
 
 ```sql
 -- Option 1: Use IF NOT EXISTS (SurrealDB specific)
-LET $to = (SELECT id FROM ONLY _spooky_version WHERE record_id = {0});
-IF (SELECT * FROM _spooky_list_ref WHERE in = ${1} AND out = $to) = [] THEN
-    RELATE ${1}->_spooky_list_ref->$to 
-        SET version = (SELECT version FROM ONLY _spooky_version WHERE record_id = {0}).version,
+LET $to = (SELECT id FROM ONLY _00_version WHERE record_id = {0});
+IF (SELECT * FROM _00_list_ref WHERE in = ${1} AND out = $to) = [] THEN
+    RELATE ${1}->_00_list_ref->$to 
+        SET version = (SELECT version FROM ONLY _00_version WHERE record_id = {0}).version,
             clientId = (SELECT clientId FROM ONLY ${1}).clientId;
 END;
 
 -- Option 2: Upsert pattern (if SurrealDB supports)
-UPSERT INTO _spooky_list_ref ...
+UPSERT INTO _00_list_ref ...
 ```
 
 ---
@@ -45,20 +45,20 @@ UPSERT INTO _spooky_list_ref ...
 
 **Location:** Lines 637-640, 646-652
 
-**Problem:** The `record.id` from `StreamingUpdate` is in format `"user:1"`, but your SQL expects to find it in `_spooky_version.record_id`.
+**Problem:** The `record.id` from `StreamingUpdate` is in format `"user:1"`, but your SQL expects to find it in `_00_version.record_id`.
 
 ```rust
 // record.id = "user:1"
 let stmt = format!(
-    "RELATE ${1}->_spooky_list_ref->(SELECT id FROM ONLY _spooky_version WHERE record_id = {0})",
-    record.id,  // "user:1" - is this quoted? does _spooky_version have this exact format?
+    "RELATE ${1}->_00_list_ref->(SELECT id FROM ONLY _00_version WHERE record_id = {0})",
+    record.id,  // "user:1" - is this quoted? does _00_version have this exact format?
     binding_name,
 )
 ```
 
 **Questions:**
-1. Is `record_id` in `_spooky_version` stored as `"user:1"` or `user:1` (RecordId type)?
-2. Does the `SELECT id FROM ONLY _spooky_version WHERE record_id = user:1` work correctly?
+1. Is `record_id` in `_00_version` stored as `"user:1"` or `user:1` (RecordId type)?
+2. Does the `SELECT id FROM ONLY _00_version WHERE record_id = user:1` work correctly?
 
 **Debugging:** Add logging to see what the actual query looks like:
 
@@ -96,10 +96,10 @@ format!(
 **Problem:** `SELECT id FROM ONLY` returns NONE if no record exists, causing `RELATE` to fail silently.
 
 ```sql
-RELATE $from->_spooky_list_ref->(SELECT id FROM ONLY _spooky_version WHERE record_id = user:1)
+RELATE $from->_00_list_ref->(SELECT id FROM ONLY _00_version WHERE record_id = user:1)
 ```
 
-If `_spooky_version` doesn't have a record for `user:1`:
+If `_00_version` doesn't have a record for `user:1`:
 - The subquery returns NONE
 - RELATE with NONE as target fails or creates broken edge
 - No error is raised!
@@ -107,9 +107,9 @@ If `_spooky_version` doesn't have a record for `user:1`:
 **Fix:** Check for existence or handle NONE:
 
 ```sql
-LET $target = (SELECT id FROM ONLY _spooky_version WHERE record_id = {0});
+LET $target = (SELECT id FROM ONLY _00_version WHERE record_id = {0});
 IF $target != NONE THEN
-    RELATE ${1}->_spooky_list_ref->$target SET ...;
+    RELATE ${1}->_00_list_ref->$target SET ...;
 ELSE
     -- Log or handle missing version record
 END;
@@ -121,15 +121,15 @@ END;
 
 **Location:** Lines 654-660
 
-**Problem:** `SET version += 1` increments the edge version, but you probably want to sync it with `_spooky_version.version`:
+**Problem:** `SET version += 1` increments the edge version, but you probably want to sync it with `_00_version.version`:
 
 ```sql
 -- Current: Increments edge version independently
-UPDATE ${1}->_spooky_list_ref SET version += 1 WHERE out = ...
+UPDATE ${1}->_00_list_ref SET version += 1 WHERE out = ...
 
 -- Should be: Sync with actual record version?
-UPDATE ${1}->_spooky_list_ref 
-    SET version = (SELECT version FROM ONLY _spooky_version WHERE record_id = {0}).version
+UPDATE ${1}->_00_list_ref 
+    SET version = (SELECT version FROM ONLY _00_version WHERE record_id = {0}).version
     WHERE out = ...
 ```
 
@@ -154,7 +154,7 @@ let view_existed = {
 
 if view_existed {
     // 3. Delete edges (no lock on circuit)
-    state.db.query("DELETE $from->_spooky_list_ref").await;
+    state.db.query("DELETE $from->_00_list_ref").await;
 }
 
 // 4. Gap here - ingest could run!
@@ -187,7 +187,7 @@ let update = {
         // Delete edges while holding lock
         if let Some(from_id) = parse_record_id(&id_str) {
             let _ = state.db
-                .query("DELETE $from->_spooky_list_ref")
+                .query("DELETE $from->_00_list_ref")
                 .bind(("from", from_id))
                 .await;
         }
@@ -280,17 +280,17 @@ if parse_record_id(&record.id).is_none() {
 
 ```sql
 -- You're doing this:
-SELECT id FROM ONLY _spooky_version WHERE record_id = user:1
+SELECT id FROM ONLY _00_version WHERE record_id = user:1
 
 -- But ONLY expects a specific record, not a filter:
 SELECT * FROM ONLY user:1  -- This works
 SELECT * FROM ONLY table WHERE x = y  -- This might not work as expected!
 ```
 
-**Fix:** Use `SELECT VALUE id FROM _spooky_version WHERE ... LIMIT 1`:
+**Fix:** Use `SELECT VALUE id FROM _00_version WHERE ... LIMIT 1`:
 
 ```sql
-SELECT VALUE id FROM _spooky_version WHERE record_id = 'user:1' LIMIT 1
+SELECT VALUE id FROM _00_version WHERE record_id = 'user:1' LIMIT 1
 ```
 
 ---
@@ -307,7 +307,7 @@ async fn debug_edges_handler(
     let id_str = format_incantation_id(&view_id);
     
     let result = state.db
-        .query("SELECT * FROM $from->_spooky_list_ref")
+        .query("SELECT * FROM $from->_00_list_ref")
         .bind(("from", parse_record_id(&id_str)))
         .await;
     
@@ -337,7 +337,7 @@ async fn verify_edge_counts(
 ) {
     let id_str = format_incantation_id(view_id);
     let result = db
-        .query("SELECT count() FROM $from->_spooky_list_ref GROUP ALL")
+        .query("SELECT count() FROM $from->_00_list_ref GROUP ALL")
         .bind(("from", parse_record_id(&id_str)))
         .await;
     

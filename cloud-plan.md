@@ -1,8 +1,8 @@
-# Spooky Cloud - Comprehensive Plan
+# Sp00ky Cloud - Comprehensive Plan
 
 ## Context
 
-Spooky is a local-first, real-time sync framework built on SurrealDB with DBSP-powered incremental view maintenance. It already supports singlenode and cluster deployment modes (SurrealDB + Scheduler + N SSP instances via NATS). The goal is to build a **managed cloud service** so users can deploy Spooky clusters via CLI, pay through Stripe, and never touch infrastructure. The API will be written in **Golang**, tenant workloads will run in **Firecracker VMs** for hard isolation, and the entire experience will be **CLI-first** (no web dashboard).
+Sp00ky is a local-first, real-time sync framework built on SurrealDB with DBSP-powered incremental view maintenance. It already supports singlenode and cluster deployment modes (SurrealDB + Scheduler + N SSP instances via NATS). The goal is to build a **managed cloud service** so users can deploy Sp00ky clusters via CLI, pay through Stripe, and never touch infrastructure. The API will be written in **Golang**, tenant workloads will run in **Firecracker VMs** for hard isolation, and the entire experience will be **CLI-first** (no web dashboard).
 
 ---
 
@@ -65,9 +65,9 @@ Each project gets its own VM group -- no shared databases, no shared processes. 
 ### Rootfs Snapshots
 
 Pre-built minimal images (~40-50MB each):
-- `spooky-surrealdb.ext4` -- Alpine + SurrealDB binary
-- `spooky-scheduler.ext4` -- Alpine + Scheduler binary
-- `spooky-ssp.ext4` -- Alpine + SSP binary
+- `sp00ky-surrealdb.ext4` -- Alpine + SurrealDB binary
+- `sp00ky-scheduler.ext4` -- Alpine + Scheduler binary
+- `sp00ky-ssp.ext4` -- Alpine + SSP binary
 
 Config passed via Firecracker MMDS (metadata service). Persistent data on separate attached drives.
 
@@ -83,8 +83,8 @@ Host Machine
 ```
 
 No routing between tenant bridges. External access via reverse proxy:
-- `{slug}.db.cloud.spooky.dev` -> SurrealDB WebSocket
-- `{slug}.ssp.cloud.spooky.dev` -> Scheduler endpoint
+- `{slug}.db.cloud.sp00ky.dev` -> SurrealDB WebSocket
+- `{slug}.ssp.cloud.sp00ky.dev` -> Scheduler endpoint
 
 ---
 
@@ -93,7 +93,7 @@ No routing between tenant bridges. External access via reverse proxy:
 ### Project Structure
 
 ```
-github.com/spookycloud/cloud-api/
+github.com/sp00kycloud/cloud-api/
   cmd/
     api/main.go              # HTTP server
     worker/main.go           # Background jobs (billing, VM health)
@@ -132,7 +132,7 @@ Single Go binary with internal domain packages -- not microservices.
 - `GET /v1/projects/:id/deployment` -- Status
 - `POST /v1/projects/:id/scale` -- Scale SSP count
 - `GET /v1/projects/:id/logs` -- Stream logs (SSE)
-- `POST /v1/projects/:id/schema/push` -- Upload spooky.yml + schema
+- `POST /v1/projects/:id/schema/push` -- Upload sp00ky.yml + schema
 - `POST /v1/projects/:id/migrations/apply` -- Apply migrations
 
 **Billing:**
@@ -156,7 +156,7 @@ The API never directly calls Firecracker -- only the host agent does.
 
 ### Authentication
 
-1. **CLI Login**: Device authorization flow. CLI opens browser, user authenticates, API returns JWT + refresh token stored in `~/.spooky/credentials.json`
+1. **CLI Login**: Device authorization flow. CLI opens browser, user authenticates, API returns JWT + refresh token stored in `~/.sp00ky/credentials.json`
 2. **API Keys**: Long-lived, scoped (`spk_live_*`), stored SHA-256 hashed in Postgres
 
 ---
@@ -180,32 +180,32 @@ schema_uploads    -- project_id, schema_hash, bundle (BYTEA)
 
 ## CLI Extensions
 
-New `spooky cloud` command group added to `apps/cli/src/main.rs`:
+New `sp00ky cloud` command group added to `apps/cli/src/main.rs`:
 
 ```
-spooky cloud login              # Browser-based device auth
-spooky cloud logout             # Clear credentials
-spooky cloud create             # Create project (interactive)
-spooky cloud deploy             # Deploy current project
-spooky cloud status             # Deployment status
-spooky cloud logs [--service X] # Tail logs
-spooky cloud scale --ssp N      # Scale SSP instances
-spooky cloud destroy            # Tear down
-spooky cloud billing            # Open Stripe portal in browser
-spooky cloud billing usage      # Show usage in terminal
-spooky cloud migrate apply      # Apply migrations to cloud
-spooky cloud migrate status     # Check migration status
+sp00ky cloud login              # Browser-based device auth
+sp00ky cloud logout             # Clear credentials
+sp00ky cloud create             # Create project (interactive)
+sp00ky cloud deploy             # Deploy current project
+sp00ky cloud status             # Deployment status
+sp00ky cloud logs [--service X] # Tail logs
+sp00ky cloud scale --ssp N      # Scale SSP instances
+sp00ky cloud destroy            # Tear down
+sp00ky cloud billing            # Open Stripe portal in browser
+sp00ky cloud billing usage      # Show usage in terminal
+sp00ky cloud migrate apply      # Apply migrations to cloud
+sp00ky cloud migrate status     # Check migration status
 ```
 
 ### Stripe Billing Flow
 
 ```
-1. `spooky cloud create` -> project created (status: pending_payment)
-2. CLI prints: "Run `spooky cloud billing` to set up payment"
-3. `spooky cloud billing` -> API creates Stripe Checkout Session -> opens browser
+1. `sp00ky cloud create` -> project created (status: pending_payment)
+2. CLI prints: "Run `sp00ky cloud billing` to set up payment"
+3. `sp00ky cloud billing` -> API creates Stripe Checkout Session -> opens browser
 4. User completes payment in Stripe
 5. Stripe webhook -> API marks project active
-6. `spooky cloud deploy` now works
+6. `sp00ky cloud deploy` now works
 ```
 
 ---
@@ -268,10 +268,10 @@ Firecracker requires `/dev/kvm` -- dedicated hardware is required.
 ## Client Connectivity (No SDK Changes Needed)
 
 ```typescript
-// SpookyClient already supports arbitrary endpoints
-const client = new SpookyClient({
+// Sp00kyClient already supports arbitrary endpoints
+const client = new Sp00kyClient({
   database: {
-    endpoint: "wss://abc123.db.cloud.spooky.dev",
+    endpoint: "wss://abc123.db.cloud.sp00ky.dev",
     namespace: "main",
     database: "main",
     token: "<jwt>"
@@ -280,7 +280,7 @@ const client = new SpookyClient({
 });
 ```
 
-The `endpoint` field in `SpookyConfig` (`packages/core/src/types.ts`) already supports this. Migration from self-hosted to cloud is a config change.
+The `endpoint` field in `Sp00kyConfig` (`packages/core/src/types.ts`) already supports this. Migration from self-hosted to cloud is a config change.
 
 ---
 
@@ -297,14 +297,14 @@ The `endpoint` field in `SpookyConfig` (`packages/core/src/types.ts`) already su
 
 ### Phase 2: Production Hardening (4-6 weeks)
 - Automated daily backups
-- `spooky cloud logs` (SSE streaming)
-- `spooky cloud migrate` commands
+- `sp00ky cloud logs` (SSE streaming)
+- `sp00ky cloud migrate` commands
 - Usage metering + Stripe metered billing
 - Auto-restart on VM failure
 - Schema push + hot-reload
 
 ### Phase 3: Scale (6-8 weeks)
-- `spooky cloud scale` for SSP horizontal scaling
+- `sp00ky cloud scale` for SSP horizontal scaling
 - VM placement optimization (cross-host, anti-affinity)
 - Tenant metrics dashboard (via API)
 - Custom domains (CNAME + Let's Encrypt)
@@ -324,16 +324,16 @@ The `endpoint` field in `SpookyConfig` (`packages/core/src/types.ts`) already su
 | File | Relevance |
 |------|-----------|
 | `apps/cli/src/main.rs` | Extend Commands enum with `cloud` subcommand |
-| `apps/cli/src/backend.rs` | SpookyConfig struct -- cloud deploy reads this |
+| `apps/cli/src/backend.rs` | Sp00kyConfig struct -- cloud deploy reads this |
 | `apps/scheduler/src/config.rs` | Env var pattern to replicate in VM provisioning |
 | `example/schema/docker-compose.cluster.yml` | Reference topology for cloud provisioner |
-| `packages/core/src/types.ts` | `SpookyConfig.database.endpoint` -- client connection point |
+| `packages/core/src/types.ts` | `Sp00kyConfig.database.endpoint` -- client connection point |
 | `apps/ssp/src/lib.rs` | SSP env vars and health endpoints |
 
 ## Verification
 
 1. **Go API**: `go test ./...` + manual curl against local instance
 2. **Host Agent**: Integration test with Firecracker on a KVM-enabled machine
-3. **CLI**: `spooky cloud login` -> `create` -> `billing` -> `deploy` -> `status` -> `logs` -> `destroy` end-to-end flow
-4. **Client connectivity**: Connect a SpookyClient to a cloud-deployed instance, verify sync works
+3. **CLI**: `sp00ky cloud login` -> `create` -> `billing` -> `deploy` -> `status` -> `logs` -> `destroy` end-to-end flow
+4. **Client connectivity**: Connect a Sp00kyClient to a cloud-deployed instance, verify sync works
 5. **Billing**: Stripe test mode end-to-end (checkout -> webhook -> subscription active)

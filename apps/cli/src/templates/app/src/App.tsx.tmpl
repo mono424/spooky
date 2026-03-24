@@ -1,5 +1,5 @@
 import { createSignal, Show } from 'solid-js';
-import { SpookyProvider } from '@spooky-sync/client-solid';
+import { Sp00kyProvider } from '@spooky-sync/client-solid';
 import { AuthProvider, useAuth } from './auth';
 import { dbConfig } from './db';
 
@@ -120,7 +120,7 @@ function Dashboard() {
         <div class="bg-zinc-900 border border-white/[0.06] rounded-xl p-6">
           <h2 class="text-lg font-medium text-white mb-2">Welcome!</h2>
           <p class="text-zinc-400 text-sm">
-            You're signed in and connected to Spooky. Your data syncs in real-time across all devices.
+            You're signed in and connected to Sp00ky. Your data syncs in real-time across all devices.
           </p>
           <p class="text-zinc-500 text-sm mt-4">
             Edit <code class="text-zinc-300 bg-zinc-800 px-1.5 py-0.5 rounded text-xs">src/App.tsx</code> to start building your app.
@@ -133,7 +133,7 @@ function Dashboard() {
 
 export default function App() {
   return (
-    <SpookyProvider
+    <Sp00kyProvider
       config={dbConfig}
       fallback={
         <div class="min-h-screen bg-zinc-950 flex items-center justify-center">
@@ -147,6 +147,6 @@ export default function App() {
           <Dashboard />
         </Show>
       </AuthProvider>
-    </SpookyProvider>
+    </Sp00kyProvider>
   );
 }

@@ -39,7 +39,7 @@ impl HttpTransport {
             .build()
             .expect("Failed to create HTTP client");
 
-        let ssp_auth_secret = std::env::var("SPOOKY_AUTH_SECRET").ok();
+        let ssp_auth_secret = std::env::var("SP00KY_AUTH_SECRET").ok();
 
         Self { client, ssp_auth_secret }
     }

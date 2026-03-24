@@ -4,7 +4,7 @@ use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::backend::{AuthConfig, BackendConfig, BackendMethod, SpookyConfig};
+use crate::backend::{AuthConfig, BackendConfig, BackendMethod, Sp00kyConfig};
 
 // ── Outbox schema template ──────────────────────────────────────────────────
 
@@ -98,16 +98,16 @@ pub fn add_api(
     schema_path: Option<String>,
     config: PathBuf,
 ) -> Result<()> {
-    // Step 1: Locate spooky.yml
+    // Step 1: Locate sp00ky.yml
     let config_path = if config.exists() {
         config.clone()
     } else {
-        let cwd_config = PathBuf::from("spooky.yml");
+        let cwd_config = PathBuf::from("sp00ky.yml");
         if cwd_config.exists() {
             cwd_config
         } else {
-            let input = Text::new("Path to spooky.yml:")
-                .with_default("spooky.yml")
+            let input = Text::new("Path to sp00ky.yml:")
+                .with_default("sp00ky.yml")
                 .with_help_message("Will be created if it doesn't exist")
                 .prompt()?;
             PathBuf::from(input)
@@ -115,12 +115,12 @@ pub fn add_api(
     };
 
     // Step 2: Load or create config
-    let mut spooky_config: SpookyConfig = if config_path.exists() {
+    let mut sp00ky_config: Sp00kyConfig = if config_path.exists() {
         let content = fs::read_to_string(&config_path)
             .context(format!("Failed to read config: {:?}", config_path))?;
-        serde_yaml::from_str(&content).context("Failed to parse spooky.yml")?
+        serde_yaml::from_str(&content).context("Failed to parse sp00ky.yml")?
     } else {
-        SpookyConfig {
+        Sp00kyConfig {
             mode: None,
             surrealdb: None,
             version: None,
@@ -129,6 +129,7 @@ pub fn add_api(
             buckets: Vec::new(),
             client_types: Vec::new(),
             dev_app: None,
+            cloud_api: None,
         }
     };
 
@@ -137,7 +138,7 @@ pub fn add_api(
         s
     } else {
         Text::new("Path to OpenAPI spec:")
-            .with_help_message("Relative to spooky.yml (e.g. ../api/openapi.yml)")
+            .with_help_message("Relative to sp00ky.yml (e.g. ../api/openapi.yml)")
             .prompt()?
     };
 
@@ -164,14 +165,14 @@ pub fn add_api(
     } else {
         Text::new("Backend name:")
             .with_default("api")
-            .with_help_message("Used as the key in spooky.yml backends section")
+            .with_help_message("Used as the key in sp00ky.yml backends section")
             .prompt()?
     };
 
     // Sanity check: no duplicate
-    if spooky_config.backends.contains_key(&backend_name) {
+    if sp00ky_config.backends.contains_key(&backend_name) {
         bail!(
-            "Backend '{}' already exists in spooky.yml",
+            "Backend '{}' already exists in sp00ky.yml",
             backend_name
         );
     }
@@ -230,7 +231,7 @@ pub fn add_api(
     } else {
         Text::new("Schema output path:")
             .with_default(&default_schema_path)
-            .with_help_message("Where to write the outbox .surql file (relative to spooky.yml)")
+            .with_help_message("Where to write the outbox .surql file (relative to sp00ky.yml)")
             .prompt()?
     };
 
@@ -264,8 +265,9 @@ pub fn add_api(
     fs::write(&resolved_schema_output, &surql_content)
         .context(format!("Failed to write schema: {:?}", resolved_schema_output))?;
 
-    // 2. Update spooky.yml
+    // 2. Update sp00ky.yml
     let new_backend = BackendConfig {
+        hosting: None,
         backend_type: Some("http".to_string()),
         spec: spec_path_str.clone(),
         base_url: Some(base_url_val.clone()),
@@ -276,11 +278,12 @@ pub fn add_api(
             table: Some(table_name.clone()),
         },
         dev: None,
+        deploy: None,
     };
 
-    spooky_config.backends.insert(backend_name.clone(), new_backend);
+    sp00ky_config.backends.insert(backend_name.clone(), new_backend);
 
-    let yaml_output = serde_yaml::to_string(&spooky_config)
+    let yaml_output = serde_yaml::to_string(&sp00ky_config)
         .context("Failed to serialize config to YAML")?;
 
     fs::write(&config_path, &yaml_output)
@@ -297,7 +300,7 @@ pub fn add_api(
     println!("  Schema:      {}", schema_output_str);
     println!("  Config:      {} (updated)", config_path.display());
     println!();
-    println!("  Run `spooky` to regenerate types with the new backend.");
+    println!("  Run `sp00ky` to regenerate types with the new backend.");
     println!();
 
     Ok(())

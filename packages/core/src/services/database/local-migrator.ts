@@ -34,7 +34,7 @@ export class LocalMigrator {
 
     if (await this.isSchemaUpToDate(hash)) {
       this.logger.info(
-        { Category: 'spooky-client::LocalMigrator::provision' },
+        { Category: 'sp00ky-client::LocalMigrator::provision' },
         '[Provisioning] Schema is up to date, skipping migration'
       );
       return;
@@ -43,10 +43,10 @@ export class LocalMigrator {
     await this.recreateDatabase(database);
 
     const systemSchema = `
-      DEFINE TABLE IF NOT EXISTS _spooky_stream_processor_state SCHEMALESS PERMISSIONS FOR select, create, update, delete WHERE true;
-      DEFINE TABLE IF NOT EXISTS _spooky_query SCHEMALESS PERMISSIONS FOR select, create, update, delete WHERE true;
-      DEFINE TABLE IF NOT EXISTS _spooky_schema SCHEMALESS PERMISSIONS FOR select, create, update, delete WHERE true;
-      DEFINE TABLE IF NOT EXISTS _spooky_pending_mutations SCHEMALESS PERMISSIONS FOR select, create, update, delete WHERE true;
+      DEFINE TABLE IF NOT EXISTS _00_stream_processor_state SCHEMALESS PERMISSIONS FOR select, create, update, delete WHERE true;
+      DEFINE TABLE IF NOT EXISTS _00_query SCHEMALESS PERMISSIONS FOR select, create, update, delete WHERE true;
+      DEFINE TABLE IF NOT EXISTS _00_schema SCHEMALESS PERMISSIONS FOR select, create, update, delete WHERE true;
+      DEFINE TABLE IF NOT EXISTS _00_pending_mutations SCHEMALESS PERMISSIONS FOR select, create, update, delete WHERE true;
     `;
     const fullSchema = schemaSurql + '\n' + systemSchema;
 
@@ -60,7 +60,7 @@ export class LocalMigrator {
       // SKIP INDEXES: WASM engine hangs on DEFINE INDEX (confirmed)
       if (cleanStatement.toUpperCase().startsWith('DEFINE INDEX')) {
         this.logger.warn(
-          { Category: 'spooky-client::LocalMigrator::provision' },
+          { Category: 'sp00ky-client::LocalMigrator::provision' },
           `[Provisioning] Skipping index definition (WASM hang avoidance): ${cleanStatement.substring(0, 50)}...`
         );
         continue;
@@ -68,17 +68,17 @@ export class LocalMigrator {
 
       try {
         this.logger.info(
-          { Category: 'spooky-client::LocalMigrator::provision' },
+          { Category: 'sp00ky-client::LocalMigrator::provision' },
           `[Provisioning] (${i + 1}/${statements.length}) Executing: ${statement.substring(0, 50)}...`
         );
         await this.localDb.query(statement);
         this.logger.info(
-          { Category: 'spooky-client::LocalMigrator::provision' },
+          { Category: 'sp00ky-client::LocalMigrator::provision' },
           `[Provisioning] (${i + 1}/${statements.length}) Done`
         );
       } catch (e) {
         this.logger.error(
-          { Category: 'spooky-client::LocalMigrator::provision' },
+          { Category: 'sp00ky-client::LocalMigrator::provision' },
           `[Provisioning] (${i + 1}/${statements.length}) Error executing statement: ${statement}`
         );
         throw e;
@@ -91,7 +91,7 @@ export class LocalMigrator {
   private async isSchemaUpToDate(hash: string): Promise<boolean> {
     try {
       const [lastSchemaRecord] = await this.localDb.query<any>(
-        `SELECT hash, created_at FROM ONLY _spooky_schema ORDER BY created_at DESC LIMIT 1;`
+        `SELECT hash, created_at FROM ONLY _00_schema ORDER BY created_at DESC LIMIT 1;`
       );
       return lastSchemaRecord?.hash === hash;
     } catch (error) {
@@ -101,14 +101,14 @@ export class LocalMigrator {
 
   private async recreateDatabase(database: string) {
     try {
-      await this.localDb.query(`DEFINE DATABASE _spooky_temp;`);
+      await this.localDb.query(`DEFINE DATABASE _00_temp;`);
     } catch (e) {
       // Ignore if exists
     }
 
     try {
       await this.localDb.query(`
-        USE DB _spooky_temp;
+        USE DB _00_temp;
         REMOVE DATABASE ${database};
       `);
     } catch (e) {
@@ -196,7 +196,7 @@ export class LocalMigrator {
 
   private async createHashRecord(hash: string) {
     await this.localDb.query(
-      `UPSERT _spooky_schema SET hash = $hash, created_at = time::now() WHERE hash = $hash;`,
+      `UPSERT _00_schema SET hash = $hash, created_at = time::now() WHERE hash = $hash;`,
       { hash }
     );
   }

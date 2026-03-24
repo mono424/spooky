@@ -1,6 +1,6 @@
 use crate::algebra::{ZSet, ZSetOps};
 use crate::circuit::store::Store;
-use crate::types::SpookyValue;
+use crate::types::Sp00kyValue;
 use std::collections::HashMap;
 
 /// Distinct operator: ensures output weights are 0 or 1.
@@ -38,7 +38,7 @@ impl Distinct {
 }
 
 impl super::Operator for Distinct {
-    fn snapshot(&self, inputs: &[&ZSet], _store: &Store, _ctx: Option<&SpookyValue>) -> ZSet {
+    fn snapshot(&self, inputs: &[&ZSet], _store: &Store, _ctx: Option<&Sp00kyValue>) -> ZSet {
         Self::threshold(inputs[0])
     }
 
@@ -46,7 +46,7 @@ impl super::Operator for Distinct {
         &mut self,
         input_deltas: &[&ZSet],
         _store: &Store,
-        _ctx: Option<&SpookyValue>,
+        _ctx: Option<&Sp00kyValue>,
     ) -> ZSet {
         // I: integrate input
         self.integrated.add(input_deltas[0]);

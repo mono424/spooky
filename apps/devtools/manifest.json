@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Spooky DevTools",
+  "name": "Sp00ky DevTools",
   "version": "0.0.1.0",
-  "description": "Chrome DevTools panel for debugging and inspecting Spooky state",
+  "description": "Chrome DevTools panel for debugging and inspecting Sp00ky state",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",

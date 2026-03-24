@@ -11,14 +11,14 @@ const tabs: { id: TabType; label: string }[] = [
 ];
 
 export function Tabs() {
-  const { activeTab, setActiveTab, isSpookyAvailable, refresh, clearEvents } = useDevTools();
+  const { activeTab, setActiveTab, isSp00kyAvailable, refresh, clearEvents } = useDevTools();
 
   return (
     <div class="tabs">
       <div class="toolbar-group">
         <div class="status-indicator">
           <Show
-            when={isSpookyAvailable()}
+            when={isSp00kyAvailable()}
             fallback={
               <>
                 <span class="status-dot inactive" />

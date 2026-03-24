@@ -37,7 +37,7 @@ describe('Bubble Hash Logic', () => {
 
     const getThreadHash = async () => {
       const res = (await db
-        .query(`SELECT value totalHash FROM ONLY _spooky_data_hash WHERE recordId = ${threadId}`)
+        .query(`SELECT value totalHash FROM ONLY _00_data_hash WHERE recordId = ${threadId}`)
         .collect()) as any;
       return Array.isArray(res) ? res[0] : res;
     };

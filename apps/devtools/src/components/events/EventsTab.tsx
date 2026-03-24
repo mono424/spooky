@@ -1,9 +1,9 @@
 import { For, Show, createSignal, createMemo } from 'solid-js';
 import { useDevTools } from '../../context/DevToolsContext';
 import { formatTime } from '../../utils/formatters';
-import type { SpookyEvent } from '../../types/devtools';
+import type { Sp00kyEvent } from '../../types/devtools';
 
-function EventItem(props: { event: SpookyEvent }) {
+function EventItem(props: { event: Sp00kyEvent }) {
   return (
     <div class="event-item">
       <div class="event-header">

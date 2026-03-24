@@ -1,6 +1,6 @@
 # SSP Incremental View Module
 
-**Package**: `spooky/ssp_module`
+**Package**: `sp00ky/ssp_module`
 **Version**: `0.1.0`
 
 This module implements a **stateless, in-memory Incremental View Maintenance (IVM)** engine for SurrealDB using WebAssembly (WASM). It is inspired by the principles of **DBSP (Digital Bitstream Signal Processing)**, treating database changes as a stream of signals (deltas) that flow through a circuit of views to update materialized results efficiently.
@@ -19,7 +19,7 @@ This allows for efficient algebraic manipulation of sets. An update is simply th
 
 ### 2. Stateless Architecture (The "Circuit")
 
-Due to the stateless nature of SurrealDB's WASM runtime (memory is reset between function calls), the entire "Circuit" state is serialized and persisted in the database (`_spooky_module_state` table).
+Due to the stateless nature of SurrealDB's WASM runtime (memory is reset between function calls), the entire "Circuit" state is serialized and persisted in the database (`_00_module_state` table).
 
 1.  **Load**: The current `Circuit` JSON is loaded from SurrealDB into the WASM module.
 2.  **Process**: The module applies the incoming Delta (Change) to the circuit.

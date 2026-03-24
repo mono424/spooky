@@ -6,13 +6,13 @@ title: Query Data
 import CodeBlock from '../../components/ui/CodeBlock.astro';
 import Note from '../../components/ui/Note.astro';
 
-Querying data in Spooky is designed to be intuitive and reactive. The system handles the entire lifecycle of a query, from initialization to registration and liveness updates, ensuring your UI is always consistent with the database state.
+Querying data in Sp00ky is designed to be intuitive and reactive. The system handles the entire lifecycle of a query, from initialization to registration and liveness updates, ensuring your UI is always consistent with the database state.
 
 ## Query Lifecycle
 
-1.  **Initialization**: When a component requests data, Spooky checks if a live query for that data already exists.
+1.  **Initialization**: When a component requests data, Sp00ky checks if a live query for that data already exists.
 2.  **Registration**: If not, it registers a new query with the sync engine.
-3.  **Liveness**: The query remains "live" as long as there are active subscribers. Spooky automatically manages subscriptions and unsubscription to optimize performance.
+3.  **Liveness**: The query remains "live" as long as there are active subscribers. Sp00ky automatically manages subscriptions and unsubscription to optimize performance.
 
 ## Fluent Query API
 
@@ -34,11 +34,11 @@ const users = usersQuery.data();`}
 
 ## Relationships
 
-Spooky makes fetching related data incredibly simple with the `.related()` method. It automatically handles the underlying graph traversals or joins.
+Sp00ky makes fetching related data incredibly simple with the `.related()` method. It automatically handles the underlying graph traversals or joins.
 
 ### Unified Query Syntax
 
-Whether you are fetching a simple 1:1 link, a 1:N collection, or traversing a complex N:M graph, the syntax remains exactly the same. Spooky uses your schema definition to determine how to fetch the data.
+Whether you are fetching a simple 1:1 link, a 1:N collection, or traversing a complex N:M graph, the syntax remains exactly the same. Sp00ky uses your schema definition to determine how to fetch the data.
 
 <CodeBlock
   code={`// Fetch threads with their authors (1:1)
@@ -60,12 +60,12 @@ threads.data()?.forEach(thread => {
 />
 
 <Note>
-  **Magic behind the scenes:** You don't need to manually specify graph paths (e.g., `->liked->post`) or join conditions. Spooky inspects your `schema.surql` to understand that `liked` is a relation table connecting users to posts, and generates the correct query automatically.
+  **Magic behind the scenes:** You don't need to manually specify graph paths (e.g., `->liked->post`) or join conditions. Sp00ky inspects your `schema.surql` to understand that `liked` is a relation table connecting users to posts, and generates the correct query automatically.
 </Note>
 
 ## Type Safety
 
-One of Spooky's strongest features is its end-to-end type safety.
+One of Sp00ky's strongest features is its end-to-end type safety.
 
 When you use `.related()`, the return type of your query is automatically adjusted.
 
@@ -87,7 +87,7 @@ This ensures you can never accidentally access a property on a relation that has
 
 ## Using Hooks (SolidJS Example)
 
-For reactive applications, Spooky provides hooks that automatically update your component when the data changes.
+For reactive applications, Sp00ky provides hooks that automatically update your component when the data changes.
 
 <CodeBlock
   code={`import { useQuery } from '@spooky-sync/client-solid';

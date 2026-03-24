@@ -20,7 +20,7 @@ export class ResilientPersistenceClient implements PersistenceClient {
       return await this.inner.get<T>(key);
     } catch (e) {
       this.logger.warn(
-        { key, error: e, Category: 'spooky-client::ResilientPersistenceClient::get' },
+        { key, error: e, Category: 'sp00ky-client::ResilientPersistenceClient::get' },
         'Persistence read failed, dropping key'
       );
       await this.inner.remove(key).catch(() => {});

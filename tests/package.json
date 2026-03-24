@@ -6,8 +6,8 @@
     "test": "jest --runInBand",
     "test:watch": "jest --watch",
     "generate": "pnpm run generate:client && pnpm run generate:remote",
-    "generate:client": "spooky --input ../example/schema/src/schema.surql --output .spooky/client_schema.ts",
-    "generate:remote": "spooky --input ../example/schema/src/schema.surql --output .spooky/schema.gen.surql --modules-dir ../packages/surrealism-modules"
+    "generate:client": "spooky --input ../example/schema/src/schema.surql --output .sp00ky/client_schema.ts",
+    "generate:remote": "spooky --input ../example/schema/src/schema.surql --output .sp00ky/schema.gen.surql --modules-dir ../packages/surrealism-modules"
   },
   "devDependencies": {
     "@spooky-sync/cli": "workspace:*",
