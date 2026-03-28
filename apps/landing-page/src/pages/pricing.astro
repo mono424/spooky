@@ -1,0 +1,155 @@
+---
+import '../styles/global.css';
+import { DeployTerminal } from '../components/DeployTerminal';
+import { PricingPage } from '../components/PricingPage';
+import { basePath } from '../config/nav';
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="generator" content={Astro.generator} />
+    <meta name="description" content="Sp00ky Sync Pricing - Simple, transparent pricing for every team" />
+    <title>Pricing — Sp00ky Sync</title>
+  </head>
+
+  <body class="min-h-screen flex flex-col">
+    <div class="sticky top-0 z-50 border-b border-white/5 px-4 py-2 md:p-4 bg-black transition-all duration-300">
+      <nav class="max-w-7xl mx-auto flex justify-between items-center gap-8">
+        <a
+          href="/"
+          class="font-bold text-xl tracking-tight transition-colors duration-200 hover:text-text-tertiary cursor-pointer"
+        >
+          Sp00ky Sync
+        </a>
+        <div class="flex items-center gap-6">
+          <div class="hidden md:flex items-center gap-6 text-body-sm">
+            <a
+              href="/pricing"
+              class="text-text-primary transition-colors duration-200"
+            >
+              Pricing
+            </a>
+            <a
+              href={`${basePath}/docs`}
+              class="text-text-tertiary hover:text-text-primary transition-colors duration-200"
+            >
+              Docs
+            </a>
+            <a
+              href="https://github.com/mono424/sp00ky"
+              target="_blank"
+              class="text-text-tertiary hover:text-text-primary transition-colors duration-200"
+            >
+              GitHub
+            </a>
+          </div>
+          <button
+            id="mobile-menu-btn"
+            class="md:hidden p-2 text-text-tertiary hover:text-text-primary transition-colors duration-200"
+            aria-label="Toggle menu"
+          >
+            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
+            </svg>
+          </button>
+        </div>
+      </nav>
+      <div id="mobile-menu" class="hidden md:hidden border-t border-white/5 px-4 pb-4 pt-2 flex flex-col gap-3 text-body-sm">
+        <a href="/pricing" class="text-text-primary transition-colors duration-200">Pricing</a>
+        <a href={`${basePath}/docs`} class="text-text-tertiary hover:text-text-primary transition-colors duration-200">Docs</a>
+        <a href="https://github.com/mono424/sp00ky" target="_blank" class="text-text-tertiary hover:text-text-primary transition-colors duration-200">GitHub</a>
+      </div>
+      <script>
+        const menuBtn = document.getElementById('mobile-menu-btn');
+        const mobileMenu = document.getElementById('mobile-menu');
+        if (menuBtn && mobileMenu) {
+          menuBtn.addEventListener('click', () => {
+            mobileMenu.classList.toggle('hidden');
+          });
+        }
+      </script>
+    </div>
+
+    <main class="relative flex-1">
+      {/* Hero Section */}
+      <section class="pt-24 pb-0 md:pt-32 md:pb-0">
+        <div class="max-w-5xl mx-auto px-4">
+          <h1
+            class="text-section md:text-hero font-semibold text-text-primary mb-6 opacity-0 animate-fade-in animation-delay-200"
+          >
+            Deploy in seconds.<br />
+            <span class="text-text-tertiary">Scale when you're ready.</span>
+          </h1>
+          <p
+            class="text-body-lg text-text-muted max-w-xl mb-16 opacity-0 animate-fade-in animation-delay-400"
+          >
+            No pipelines. No dashboards. Dev to prod is just one command.
+          </p>
+
+          {/* Deploy Terminal */}
+          <div class="opacity-0 animate-slide-up animation-delay-600">
+            <DeployTerminal client:visible />
+          </div>
+        </div>
+      </section>
+
+      {/* Pricing Section */}
+      <section class="pt-12 md:pt-20 pb-16 md:pb-24">
+        <PricingPage client:load />
+      </section>
+
+
+      {/* CTA Section */}
+      <section class="py-16 md:py-32 border-t border-white/5 text-center">
+        <div class="max-w-4xl mx-auto px-4">
+          <h2 class="text-section font-semibold mb-6 text-text-primary">
+            Ready to ship?
+          </h2>
+          <p class="text-text-tertiary text-body-lg mb-10 max-w-xl mx-auto">
+            Get started with Sp00ky Sync in minutes. No credit card required.
+          </p>
+          <a
+            href={`${basePath}/docs`}
+            class="inline-flex items-center gap-3 bg-white text-black px-8 py-3 font-medium text-lg rounded-lg transition-colors duration-150 hover:bg-white/90 group"
+          >
+            <span>Get Started</span>
+            <svg
+              class="w-5 h-5 transition-transform duration-200 group-hover:translate-x-1"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
+            </svg>
+          </a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="py-12 border-t border-white/5 relative">
+      <div class="max-w-7xl mx-auto px-4 flex flex-col md:flex-row justify-between items-center">
+        <div class="mb-4 md:mb-0 text-sm text-text-tertiary flex items-center relative">
+          <img src="/logo_transparent.svg" alt="Sp00ky Logo" class="w-4 h-4 mr-2" />
+          © 2026 Sp00ky Sync
+        </div>
+        <div class="space-x-6 text-sm">
+          <a href="/pricing" class="text-text-tertiary hover:text-text-primary transition-colors duration-200">Pricing</a>
+          <a href="#" class="text-text-tertiary hover:text-text-primary transition-colors duration-200">Privacy</a>
+          <a href="#" class="text-text-tertiary hover:text-text-primary transition-colors duration-200">Terms</a>
+          <a
+            href="https://github.com/mono424/sp00ky"
+            target="_blank"
+            class="text-text-tertiary hover:text-text-primary transition-colors duration-200"
+          >GitHub</a>
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

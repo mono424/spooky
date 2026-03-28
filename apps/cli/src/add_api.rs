@@ -121,6 +121,7 @@ pub fn add_api(
         serde_yaml::from_str(&content).context("Failed to parse sp00ky.yml")?
     } else {
         Sp00kyConfig {
+            slug: None,
             mode: None,
             surrealdb: None,
             version: None,

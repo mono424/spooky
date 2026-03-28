@@ -157,6 +157,8 @@ enum CloudCommands {
         #[arg(long, default_value = "starter")]
         plan: String,
     },
+    /// List cloud projects
+    List,
     /// Deploy current project to the cloud
     Deploy,
     /// Show deployment status

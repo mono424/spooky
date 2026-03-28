@@ -146,6 +146,9 @@ pub struct ClientTypeConfig {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Sp00kyConfig {
+    /// Cloud project slug (used by `sp00ky cloud` commands)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slug: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
     /// SurrealDB config: version string or object with version/namespace/database.
@@ -424,6 +427,7 @@ pub fn load_config(path: &Path) -> Sp00kyConfig {
 
 fn default_config() -> Sp00kyConfig {
     Sp00kyConfig {
+        slug: None,
         mode: Some("singlenode".to_string()),
         surrealdb: None,
         version: None,
