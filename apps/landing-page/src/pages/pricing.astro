@@ -27,6 +27,12 @@ import { basePath } from '../config/nav';
         <div class="flex items-center gap-6">
           <div class="hidden md:flex items-center gap-6 text-body-sm">
             <a
+              href="/#features"
+              class="text-text-tertiary hover:text-text-primary transition-colors duration-200"
+            >
+              Features
+            </a>
+            <a
               href="/pricing"
               class="text-text-primary transition-colors duration-200"
             >
@@ -58,6 +64,7 @@ import { basePath } from '../config/nav';
         </div>
       </nav>
       <div id="mobile-menu" class="hidden md:hidden border-t border-white/5 px-4 pb-4 pt-2 flex flex-col gap-3 text-body-sm">
+        <a href="/#features" class="text-text-tertiary hover:text-text-primary transition-colors duration-200">Features</a>
         <a href="/pricing" class="text-text-primary transition-colors duration-200">Pricing</a>
         <a href={`${basePath}/docs`} class="text-text-tertiary hover:text-text-primary transition-colors duration-200">Docs</a>
         <a href="https://github.com/mono424/sp00ky" target="_blank" class="text-text-tertiary hover:text-text-primary transition-colors duration-200">GitHub</a>
