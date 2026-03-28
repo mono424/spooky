@@ -1343,4 +1343,14 @@ fn print_deployment_details(data: &serde_json::Value) {
             }
         }
     }
+
+    if let Some(urls) = data.get("urls").and_then(|v| v.as_object()) {
+        if !urls.is_empty() {
+            println!();
+            println!("  Endpoints:");
+            for (name, url) in urls {
+                println!("    {} {}", name, url.as_str().unwrap_or("-"));
+            }
+        }
+    }
 }

@@ -1,6 +1,8 @@
 <div align="center">
 
-# Sp00ky 👻
+<img src="apps/landing-page/public/logo.webp" alt="Sp00ky Logo" width="200" />
+
+# Sp00ky
 
 **The Reactive, Local-First Framework for SurrealDB**
 
