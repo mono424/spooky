@@ -12,6 +12,15 @@ import { basePath } from '../config/nav';
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="generator" content={Astro.generator} />
     <meta name="description" content="sp00ky Pricing - Simple, transparent pricing for every team" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content={Astro.site + 'pricing'} />
+    <meta property="og:title" content="Pricing — sp00ky" />
+    <meta property="og:description" content="Simple, transparent pricing for every team" />
+    <meta property="og:image" content={new URL('/social-card.png', Astro.site)} />
+    <meta property="twitter:card" content="summary_large_image" />
+    <meta property="twitter:title" content="Pricing — sp00ky" />
+    <meta property="twitter:description" content="Simple, transparent pricing for every team" />
+    <meta property="twitter:image" content={new URL('/social-card.png', Astro.site)} />
     <title>Pricing — sp00ky</title>
   </head>
 

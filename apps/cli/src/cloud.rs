@@ -1022,7 +1022,86 @@ fn deploy() -> Result<()> {
     println!("  Deployment v{} created. Waiting for provisioning...", version);
     println!();
 
-    // Stream deployment events via SSE
+    // Phase 1: Stream events until infra is ready (migrating state)
+    let phase1_status = stream_deployment_events(&client, &pid)?;
+
+    match phase1_status.as_str() {
+        "migrating" => {
+            println!();
+            println!("  ▸ Infrastructure ready. Running migrations...");
+
+            // Get the SurrealDB URL from deployment status
+            if let Ok(status_resp) = client.get(&format!("/v1/projects/{}/deployment", pid)) {
+                if let Ok(status_data) = status_resp.into_json::<serde_json::Value>() {
+                    if let Some(db_url) = status_data["urls"]["surrealdb"].as_str() {
+                        // Run migrations against the cloud SurrealDB
+                        let resolved = config.resolved_surrealdb();
+                        let surreal_client = crate::surreal_client::SurrealClient::new(
+                            &format!("{}/sql", db_url),
+                            &resolved.namespace,
+                            &resolved.database,
+                            "root",
+                            "root",
+                        );
+
+                        let schema = config.resolved_schema();
+                        let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
+                        let migrations_dir = config_dir.join(&schema.migrations);
+
+                        if migrations_dir.exists() {
+                            match crate::migrate::apply(&surreal_client, &migrations_dir) {
+                                Ok(()) => println!("  ▸ Migrations complete."),
+                                Err(e) => println!("  ▸ Migration warning: {}", e),
+                            }
+                        } else {
+                            println!("  ▸ No migrations directory found, skipping.");
+                        }
+                    }
+                }
+            }
+
+            // Phase 2: Finalize deployment (triggers app VM provisioning)
+            println!("  ▸ Deploying applications...");
+            client.post(
+                &format!("/v1/projects/{}/deploy/finalize", pid),
+                &serde_json::json!({}),
+            )?;
+
+            // Stream events until fully running
+            let phase2_status = stream_deployment_events(&client, &pid)?;
+            match phase2_status.as_str() {
+                "running" => {
+                    println!();
+                    println!("  Deployment is running!");
+                    if let Ok(status_resp) = client.get(&format!("/v1/projects/{}/deployment", pid)) {
+                        if let Ok(status) = status_resp.into_json::<serde_json::Value>() {
+                            print_deployment_details(&status);
+                        }
+                    }
+                }
+                "failed" => bail!("Deployment failed."),
+                _ => bail!("Deployment ended unexpectedly (status: {})", phase2_status),
+            }
+        }
+        "running" => {
+            // No migration phase (legacy or no infra VMs)
+            println!();
+            println!("  Deployment is running!");
+            if let Ok(status_resp) = client.get(&format!("/v1/projects/{}/deployment", pid)) {
+                if let Ok(status) = status_resp.into_json::<serde_json::Value>() {
+                    print_deployment_details(&status);
+                }
+            }
+        }
+        "failed" => bail!("Deployment failed."),
+        _ => bail!("Deployment ended unexpectedly (status: {})", phase1_status),
+    }
+
+    Ok(())
+}
+
+/// Stream SSE deployment events and return the final status when the stream closes.
+fn stream_deployment_events(client: &CloudClient, pid: &str) -> Result<String> {
     let events_url = format!(
         "{}/v1/projects/{}/deployment/events",
         client.base_url, pid
@@ -1038,7 +1117,6 @@ fn deploy() -> Result<()> {
             use std::io::BufRead;
 
             let mut final_status = String::new();
-            let mut final_error = String::new();
 
             for line in reader.lines() {
                 let line = match line {
@@ -1072,87 +1150,27 @@ fn deploy() -> Result<()> {
                     "deployment" => {
                         let status = event["status"].as_str().unwrap_or("unknown");
                         final_status = status.to_string();
-                        if let Some(err) = event["error"].as_str() {
-                            if !err.is_empty() {
-                                final_error = err.to_string();
-                            }
-                        }
                         match status {
-                            "provisioning" => {
-                                println!("  ▸ Provisioning VMs...");
-                            }
-                            "running" | "failed" | "destroyed" => {
-                                // Stream will close, handled below
-                            }
-                            _ => {
-                                println!("  ▸ {}", status);
-                            }
+                            "provisioning" => println!("  ▸ Provisioning VMs..."),
+                            "deploying_apps" => println!("  ▸ Deploying applications..."),
+                            "migrating" | "running" | "failed" | "destroyed" => {}
+                            _ => println!("  ▸ {}", status),
                         }
                     }
                     _ => {}
                 }
             }
 
-            // Stream ended — check final state
-            match final_status.as_str() {
-                "running" => {
-                    println!();
-                    println!("  Deployment is running!");
-                    // Fetch final details
-                    if let Ok(status_resp) = client.get(&format!("/v1/projects/{}/deployment", pid)) {
-                        if let Ok(status) = status_resp.into_json::<serde_json::Value>() {
-                            print_deployment_details(&status);
-                        }
-                    }
-                }
-                "failed" => {
-                    bail!("Deployment failed: {}", if final_error.is_empty() { "unknown error" } else { &final_error });
-                }
-                "destroyed" => {
-                    bail!("Deployment was destroyed.");
-                }
-                _ => {
-                    bail!("Deployment stream ended unexpectedly (status: {})", final_status);
-                }
-            }
+            Ok(final_status)
         }
-        Err(_) => {
-            // Fallback: poll for status (server may not support SSE yet)
-            loop {
-                thread::sleep(Duration::from_secs(2));
-
-                let status_resp = client.get(&format!("/v1/projects/{}/deployment", pid))?;
-                let status: serde_json::Value =
-                    status_resp.into_json().context("Failed to parse status")?;
-
-                let dep_status = status["deployment"]["status"]
-                    .as_str()
-                    .unwrap_or("unknown");
-
-                match dep_status {
-                    "running" => {
-                        println!("  Deployment is running!");
-                        print_deployment_details(&status);
-                        return Ok(());
-                    }
-                    "failed" => {
-                        let error = status["deployment"]["error"]
-                            .as_str()
-                            .unwrap_or("unknown error");
-                        bail!("Deployment failed: {}", error);
-                    }
-                    "destroyed" => {
-                        bail!("Deployment was destroyed.");
-                    }
-                    _ => {
-                        print!("  Status: {}...\r", dep_status);
-                    }
-                }
-            }
+        Err(ureq::Error::Status(code, resp)) => {
+            let body = resp.into_string().unwrap_or_default();
+            bail!("Failed to stream events (HTTP {}): {}", code, body);
+        }
+        Err(ureq::Error::Transport(t)) => {
+            bail!("Connection error: {}", t);
         }
     }
-
-    Ok(())
 }
 
 fn status() -> Result<()> {

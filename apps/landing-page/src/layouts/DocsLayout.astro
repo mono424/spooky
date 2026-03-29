@@ -22,7 +22,15 @@ const activeGroup = nav.find((g: any) =>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width" />
-    <title>{title} | ZeroIndex</title>
+    <meta property="og:type" content="article" />
+    <meta property="og:title" content={`${title} — sp00ky Docs`} />
+    <meta property="og:description" content="sp00ky documentation — The Reactive, Local-First Framework for SurrealDB" />
+    <meta property="og:image" content={new URL('/social-card.png', Astro.site)} />
+    <meta property="twitter:card" content="summary_large_image" />
+    <meta property="twitter:title" content={`${title} — sp00ky Docs`} />
+    <meta property="twitter:description" content="sp00ky documentation — The Reactive, Local-First Framework for SurrealDB" />
+    <meta property="twitter:image" content={new URL('/social-card.png', Astro.site)} />
+    <title>{title} — sp00ky Docs</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
