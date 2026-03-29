@@ -55,6 +55,16 @@ impl SurrealClient {
             auth_header,
         }
     }
+
+    /// Create a client without authentication (for unauthenticated SurrealDB instances).
+    pub fn new_unauthenticated(url: &str, namespace: &str, database: &str) -> Self {
+        Self {
+            url: url.trim_end_matches('/').to_string(),
+            namespace: namespace.to_string(),
+            database: database.to_string(),
+            auth_header: String::new(),
+        }
+    }
 }
 
 /// Send a raw SQL query to SurrealDB via HTTP, returning parsed responses.
@@ -70,8 +80,11 @@ fn send_raw_sql(
     query: &str,
 ) -> Result<Vec<SurrealResponse>> {
     let mut req = ureq::post(url)
-        .set("Accept", "application/json")
-        .set("Authorization", auth_header);
+        .set("Accept", "application/json");
+
+    if !auth_header.is_empty() {
+        req = req.set("Authorization", auth_header);
+    }
 
     if let Some(ns) = ns_header {
         req = req.set("surreal-ns", ns);

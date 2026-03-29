@@ -897,7 +897,10 @@ fn deploy() -> Result<()> {
             );
         }
 
-        let context_dir = dockerfile_path.parent().unwrap_or(config_dir);
+        let context_dir = match &deploy.context {
+            Some(ctx) => config_dir.join(ctx),
+            None => config_dir.to_path_buf(),
+        };
         let image_tag = format!("sp00ky-backend-{}:deploy", name);
 
         // Build Docker image
@@ -905,6 +908,7 @@ fn deploy() -> Result<()> {
         let build_status = std::process::Command::new("docker")
             .args([
                 "build",
+                "--platform", "linux/amd64",
                 "-t",
                 &image_tag,
                 "-f",
@@ -920,23 +924,25 @@ fn deploy() -> Result<()> {
             bail!("Docker build failed for backend '{}'", name);
         }
 
-        // Save image as tar.gz
+        // Export image as flat rootfs tar.gz (not layered docker save)
         let tmp_tar = std::env::temp_dir().join(format!("sp00ky-{}-{}.tar.gz", slug, name));
-        println!("  Saving image for backend '{}'...", name);
-        let save_status = std::process::Command::new("sh")
-            .args([
-                "-c",
-                &format!(
-                    "docker save {} | gzip > {}",
-                    image_tag,
-                    tmp_tar.to_string_lossy()
-                ),
-            ])
+        println!("  Exporting image for backend '{}'...", name);
+        let container_name = format!("sp00ky-export-{}-{}", slug, name);
+        let _ = std::process::Command::new("docker").args(["rm", "-f", &container_name]).output();
+        let create_out = std::process::Command::new("docker")
+            .args(["create", "--name", &container_name, &image_tag])
+            .output()
+            .context(format!("Failed to create container for backend '{}'", name))?;
+        if !create_out.status.success() {
+            bail!("Failed to create container for backend '{}' export", name);
+        }
+        let export_status = std::process::Command::new("sh")
+            .args(["-c", &format!("docker export {} | gzip > {}", container_name, tmp_tar.to_string_lossy())])
             .status()
-            .context("Failed to save docker image")?;
-
-        if !save_status.success() {
-            bail!("Failed to save docker image for backend '{}'", name);
+            .context("Failed to export backend container")?;
+        let _ = std::process::Command::new("docker").args(["rm", "-f", &container_name]).output();
+        if !export_status.success() {
+            bail!("Failed to export docker image for backend '{}'", name);
         }
 
         // Upload image tar to API
@@ -1005,10 +1011,104 @@ fn deploy() -> Result<()> {
         }),
     };
 
+    // Build and upload frontend if configured
+    let mut frontend_manifest: Option<serde_json::Value> = None;
+    if let Some(ref frontend_config) = config.frontend {
+        let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
+        let dockerfile_path = config_dir.join(&frontend_config.dockerfile);
+
+        if !dockerfile_path.exists() {
+            bail!("Frontend Dockerfile not found: {}", dockerfile_path.display());
+        }
+
+        let context_dir = match &frontend_config.context {
+            Some(ctx) => config_dir.join(ctx),
+            None => config_dir.to_path_buf(),
+        };
+        let image_tag = format!("sp00ky-frontend-{}:deploy", slug);
+
+        println!("  Building frontend image...");
+        let build_status = std::process::Command::new("docker")
+            .args([
+                "build", "--platform", "linux/amd64",
+                "-t", &image_tag,
+                "-f", &dockerfile_path.to_string_lossy(),
+                &context_dir.to_string_lossy(),
+            ])
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit())
+            .status()
+            .context("Failed to run docker build for frontend")?;
+
+        if !build_status.success() {
+            bail!("Docker build failed for frontend");
+        }
+
+        let tmp_tar = std::env::temp_dir().join(format!("sp00ky-{}-frontend.tar.gz", slug));
+        println!("  Exporting frontend image...");
+        // Use docker create + export to get a flat rootfs (not layered image)
+        let container_name = format!("sp00ky-export-{}", slug);
+        let _ = std::process::Command::new("docker").args(["rm", "-f", &container_name]).output();
+        let create_status = std::process::Command::new("docker")
+            .args(["create", "--name", &container_name, &image_tag])
+            .output()
+            .context("Failed to create container for export")?;
+        if !create_status.status.success() {
+            bail!("Failed to create container for frontend export");
+        }
+        let export_status = std::process::Command::new("sh")
+            .args(["-c", &format!("docker export {} | gzip > {}", container_name, tmp_tar.to_string_lossy())])
+            .status()
+            .context("Failed to export frontend container")?;
+        let _ = std::process::Command::new("docker").args(["rm", "-f", &container_name]).output();
+        if !export_status.success() {
+            bail!("Failed to export frontend container");
+        }
+
+        println!("  Uploading frontend image...");
+        let image_data = fs::read(&tmp_tar).context("Failed to read frontend image tar")?;
+        let upload_url = format!("{}/v1/projects/{}/images/frontend", client.base_url, pid);
+        match ureq::put(&upload_url)
+            .set("Authorization", &format!("Bearer {}", client.token))
+            .set("Content-Type", "application/octet-stream")
+            .send_bytes(&image_data)
+        {
+            Ok(_) => {}
+            Err(ureq::Error::Status(code, resp)) => {
+                let body = resp.into_string().unwrap_or_default();
+                bail!("Frontend image upload failed (HTTP {}): {}", code, body);
+            }
+            Err(ureq::Error::Transport(t)) => {
+                bail!("Frontend image upload failed: {}", t);
+            }
+        }
+        let _ = fs::remove_file(&tmp_tar);
+
+        let resources = frontend_config.resources.clone().unwrap_or(backend::BackendDeployResources {
+            vcpus: 1,
+            memory: 512,
+            disk: 5,
+        });
+
+        frontend_manifest = Some(serde_json::json!({
+            "image": format!("{}/frontend", slug),
+            "port": frontend_config.port,
+            "resources": {
+                "vcpus": resources.vcpus,
+                "memory_mb": resources.memory,
+                "disk_gb": resources.disk,
+            },
+            "env": frontend_config.env,
+        }));
+
+        println!("  Frontend ready for deployment.");
+    }
+
     let deploy_body = serde_json::json!({
         "surrealdb": surrealdb_manifest,
         "backends": backend_manifests,
         "external_backends": external_backends,
+        "frontend": frontend_manifest,
     });
 
     let resp = client.post(
@@ -1034,27 +1134,44 @@ fn deploy() -> Result<()> {
             if let Ok(status_resp) = client.get(&format!("/v1/projects/{}/deployment", pid)) {
                 if let Ok(status_data) = status_resp.into_json::<serde_json::Value>() {
                     if let Some(db_url) = status_data["urls"]["surrealdb"].as_str() {
-                        // Run migrations against the cloud SurrealDB
-                        let resolved = config.resolved_surrealdb();
-                        let surreal_client = crate::surreal_client::SurrealClient::new(
-                            &format!("{}/sql", db_url),
-                            &resolved.namespace,
-                            &resolved.database,
-                            "root",
-                            "root",
-                        );
-
-                        let schema = config.resolved_schema();
-                        let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
-                        let migrations_dir = config_dir.join(&schema.migrations);
-
-                        if migrations_dir.exists() {
-                            match crate::migrate::apply(&surreal_client, &migrations_dir) {
-                                Ok(()) => println!("  ▸ Migrations complete."),
-                                Err(e) => println!("  ▸ Migration warning: {}", e),
+                        // Wait for SurrealDB to be reachable via public URL
+                        print!("  ▸ Connecting to SurrealDB");
+                        let mut db_ready = false;
+                        for _ in 0..30 {
+                            let check = ureq::post(&format!("{}/sql", db_url))
+                                .set("Accept", "application/json")
+                                .send_string("INFO FOR KV;");
+                            if check.is_ok() {
+                                db_ready = true;
+                                break;
                             }
+                            print!(".");
+                            thread::sleep(Duration::from_secs(2));
+                        }
+                        println!();
+
+                        if !db_ready {
+                            println!("  ▸ Warning: SurrealDB not reachable at {}, skipping migrations.", db_url);
                         } else {
-                            println!("  ▸ No migrations directory found, skipping.");
+                            let resolved = config.resolved_surrealdb();
+                            let surreal_client = crate::surreal_client::SurrealClient::new_unauthenticated(
+                                db_url,
+                                &resolved.namespace,
+                                &resolved.database,
+                            );
+
+                            let schema = config.resolved_schema();
+                            let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
+                            let migrations_dir = config_dir.join(&schema.migrations);
+
+                            if migrations_dir.exists() {
+                                match crate::migrate::apply(&surreal_client, &migrations_dir) {
+                                    Ok(()) => println!("  ▸ Migrations complete."),
+                                    Err(e) => println!("  ▸ Migration warning: {}", e),
+                                }
+                            } else {
+                                println!("  ▸ No migrations directory found, skipping.");
+                            }
                         }
                     }
                 }

@@ -130,6 +130,7 @@ pub fn add_api(
             buckets: Vec::new(),
             client_types: Vec::new(),
             dev_app: None,
+            frontend: None,
             cloud_api: None,
         }
     };

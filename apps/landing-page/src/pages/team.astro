@@ -1,7 +1,6 @@
 ---
 import '../styles/global.css';
-import { DeployTerminal } from '../components/DeployTerminal';
-import { PricingPage } from '../components/PricingPage';
+import { TeamGrid } from '../components/TeamGrid';
 import { basePath } from '../config/nav';
 ---
 
@@ -11,17 +10,17 @@ import { basePath } from '../config/nav';
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="generator" content={Astro.generator} />
-    <meta name="description" content="sp00ky Pricing - Simple, transparent pricing for every team" />
+    <meta name="description" content="Meet the team behind sp00ky" />
     <meta property="og:type" content="website" />
-    <meta property="og:url" content={Astro.site + 'pricing'} />
-    <meta property="og:title" content="Pricing — sp00ky" />
-    <meta property="og:description" content="Simple, transparent pricing for every team" />
+    <meta property="og:url" content={Astro.site + 'team'} />
+    <meta property="og:title" content="Team — sp00ky" />
+    <meta property="og:description" content="Meet the team behind sp00ky" />
     <meta property="og:image" content={new URL('/social-card.png', Astro.site)} />
     <meta property="twitter:card" content="summary_large_image" />
-    <meta property="twitter:title" content="Pricing — sp00ky" />
-    <meta property="twitter:description" content="Simple, transparent pricing for every team" />
+    <meta property="twitter:title" content="Team — sp00ky" />
+    <meta property="twitter:description" content="Meet the team behind sp00ky" />
     <meta property="twitter:image" content={new URL('/social-card.png', Astro.site)} />
-    <title>Pricing — sp00ky</title>
+    <title>Team — sp00ky</title>
   </head>
 
   <body class="min-h-screen flex flex-col">
@@ -43,13 +42,13 @@ import { basePath } from '../config/nav';
             </a>
             <a
               href="/pricing"
-              class="text-text-primary transition-colors duration-200"
+              class="text-text-tertiary hover:text-text-primary transition-colors duration-200"
             >
               Pricing
             </a>
             <a
               href="/team"
-              class="text-text-tertiary hover:text-text-primary transition-colors duration-200"
+              class="text-text-primary transition-colors duration-200"
             >
               Team
             </a>
@@ -80,8 +79,8 @@ import { basePath } from '../config/nav';
       </nav>
       <div id="mobile-menu" class="hidden md:hidden border-t border-white/5 px-4 pb-4 pt-2 flex flex-col gap-3 text-body-sm">
         <a href="/#features" class="text-text-tertiary hover:text-text-primary transition-colors duration-200">Features</a>
-        <a href="/pricing" class="text-text-primary transition-colors duration-200">Pricing</a>
-        <a href="/team" class="text-text-tertiary hover:text-text-primary transition-colors duration-200">Team</a>
+        <a href="/pricing" class="text-text-tertiary hover:text-text-primary transition-colors duration-200">Pricing</a>
+        <a href="/team" class="text-text-primary transition-colors duration-200">Team</a>
         <a href={`${basePath}/docs`} class="text-text-tertiary hover:text-text-primary transition-colors duration-200">Docs</a>
         <a href="https://github.com/mono424/sp00ky" target="_blank" class="text-text-tertiary hover:text-text-primary transition-colors duration-200">GitHub</a>
       </div>
@@ -97,62 +96,24 @@ import { basePath } from '../config/nav';
     </div>
 
     <main class="relative flex-1">
-      {/* Hero Section */}
       <section class="pt-24 pb-0 md:pt-32 md:pb-0">
         <div class="max-w-5xl mx-auto px-4">
           <h1
             class="text-section md:text-hero font-semibold text-text-primary mb-6 opacity-0 animate-fade-in animation-delay-200"
           >
-            Deploy in seconds.<br />
-            <span class="text-text-tertiary">Scale when you're ready.</span>
+            Built by people<br />
+            <span class="text-text-tertiary">who ship.</span>
           </h1>
           <p
             class="text-body-lg text-text-muted max-w-xl mb-16 opacity-0 animate-fade-in animation-delay-400"
           >
-            No pipelines. No dashboards. Dev to prod is just one command.
+            A small team obsessed with developer experience.
           </p>
-
-          {/* Deploy Terminal */}
-          <div class="opacity-0 animate-slide-up animation-delay-600">
-            <DeployTerminal client:visible />
-          </div>
         </div>
       </section>
 
-      {/* Pricing Section */}
-      <section class="pt-12 md:pt-20 pb-16 md:pb-24">
-        <PricingPage client:load />
-      </section>
-
-
-      {/* CTA Section */}
-      <section class="py-16 md:py-32 border-t border-white/5 text-center">
-        <div class="max-w-4xl mx-auto px-4">
-          <h2 class="text-section font-semibold mb-6 text-text-primary">
-            Ready to ship?
-          </h2>
-          <p class="text-text-tertiary text-body-lg mb-10 max-w-xl mx-auto">
-            Get started with sp00ky in minutes. No credit card required.
-          </p>
-          <a
-            href={`${basePath}/docs`}
-            class="inline-flex items-center gap-3 bg-white text-black px-8 py-3 font-medium text-lg rounded-lg transition-colors duration-150 hover:bg-white/90 group"
-          >
-            <span>Get Started</span>
-            <svg
-              class="w-5 h-5 transition-transform duration-200 group-hover:translate-x-1"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
-            </svg>
-          </a>
-        </div>
+      <section class="pb-16 md:pb-24">
+        <TeamGrid client:load />
       </section>
     </main>
 

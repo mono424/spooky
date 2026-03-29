@@ -168,9 +168,34 @@ pub struct Sp00kyConfig {
     pub client_types: Vec<ClientTypeConfig>,
     #[serde(default, rename = "devApp", skip_serializing_if = "Option::is_none")]
     pub dev_app: Option<String>,
+    /// Frontend deployment configuration
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frontend: Option<FrontendDeployConfig>,
     /// Override the Sp00ky Cloud API endpoint (e.g. for staging).
     #[serde(default, rename = "cloudApi", skip_serializing_if = "Option::is_none")]
     pub cloud_api: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct FrontendDeployConfig {
+    /// Dockerfile path (relative to sp00ky.yml)
+    pub dockerfile: String,
+    /// Build context directory (relative to sp00ky.yml, defaults to project root)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+    /// Port the frontend listens on inside the container (default: 3000)
+    #[serde(default = "default_frontend_port")]
+    pub port: u16,
+    /// Resource allocation
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resources: Option<BackendDeployResources>,
+    /// Environment variables
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env: Vec<String>,
+}
+
+fn default_frontend_port() -> u16 {
+    3000
 }
 
 impl Sp00kyConfig {
@@ -317,6 +342,9 @@ pub struct BackendDeployConfig {
     /// Override Dockerfile path (defaults to dev.docker.file if available)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dockerfile: Option<String>,
+    /// Build context directory (relative to sp00ky.yml, defaults to project root)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
 }
 
 fn default_deploy_port() -> u16 {
@@ -436,6 +464,7 @@ fn default_config() -> Sp00kyConfig {
         buckets: Default::default(),
         client_types: Default::default(),
         dev_app: None,
+        frontend: None,
         cloud_api: None,
     }
 }
