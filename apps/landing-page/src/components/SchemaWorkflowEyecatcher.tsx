@@ -40,7 +40,7 @@ export const SchemaWorkflowEyecatcher: React.FC = () => {
           </div>
           <h3 className="text-2xl font-bold text-text-primary mb-4">Schema-First Development</h3>
           <p className="text-text-tertiary text-body leading-relaxed">
-            Define your database schema once in SurrealDB, and let Sp00ky generate type-safe
+            Define your database schema once in SurrealDB, and let sp00ky generate type-safe
             clients for all your targets. One source of truth for your entire stack.
           </p>
         </div>
