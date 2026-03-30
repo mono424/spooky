@@ -10,7 +10,7 @@ interface TeamMember {
 const teamMembers: TeamMember[] = [
   {
     name: 'Khadim Fall',
-    role: 'Founder',
+    role: 'Engineer',
     photo: '/team/khadim.jpg',
     xHandle: 'khad_im',
   },
