@@ -840,6 +840,31 @@ fn create(slug: Option<String>, plan: String) -> Result<()> {
     Ok(())
 }
 
+/// Load environment variables from a file (KEY=val lines, skipping comments and blanks).
+fn load_deploy_env_file(env_file: Option<&str>, config_dir: &std::path::Path) -> Vec<String> {
+    let path = match env_file {
+        Some(p) => config_dir.join(p),
+        None => return Vec::new(),
+    };
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("  Warning: Could not read env-file {:?}: {}", path, e);
+            return Vec::new();
+        }
+    };
+    println!("  Loaded env-file: {}", path.display());
+    content
+        .lines()
+        .filter(|l| {
+            let trimmed = l.trim();
+            !trimmed.is_empty() && !trimmed.starts_with('#')
+        })
+        .filter(|l| l.contains('='))
+        .map(|l| l.trim().to_string())
+        .collect()
+}
+
 fn deploy() -> Result<()> {
     // Guided flow: ensure login → project → billing before expensive work
     let creds = ensure_login()?;
@@ -979,6 +1004,10 @@ fn deploy() -> Result<()> {
             disk: 5,
         });
 
+        // Merge env-file vars with inline env (inline overrides file)
+        let mut merged_env = load_deploy_env_file(deploy.env_file.as_deref(), config_dir);
+        merged_env.extend(deploy.env.clone());
+
         backend_manifests.push(serde_json::json!({
             "name": name,
             "image": format!("{}/{}", slug, name),
@@ -989,7 +1018,7 @@ fn deploy() -> Result<()> {
                 "memory_mb": resources.memory,
                 "disk_gb": resources.disk,
             },
-            "env": deploy.env,
+            "env": merged_env,
         }));
 
         println!("  Backend '{}' ready for deployment.", name);
@@ -1090,6 +1119,10 @@ fn deploy() -> Result<()> {
             disk: 5,
         });
 
+        // Merge env-file vars with inline env (inline overrides file)
+        let mut merged_env = load_deploy_env_file(frontend_config.env_file.as_deref(), config_dir);
+        merged_env.extend(frontend_config.env.clone());
+
         frontend_manifest = Some(serde_json::json!({
             "image": format!("{}/frontend", slug),
             "port": frontend_config.port,
@@ -1098,7 +1131,7 @@ fn deploy() -> Result<()> {
                 "memory_mb": resources.memory,
                 "disk_gb": resources.disk,
             },
-            "env": frontend_config.env,
+            "env": merged_env,
         }));
 
         println!("  Frontend ready for deployment.");

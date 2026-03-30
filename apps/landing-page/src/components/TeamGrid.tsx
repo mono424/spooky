@@ -4,6 +4,7 @@ interface TeamMember {
   name: string;
   role: string;
   photo: string;
+  photoPosition?: string;
   xHandle?: string;
 }
 
@@ -18,6 +19,7 @@ const teamMembers: TeamMember[] = [
     name: 'Tim Besel',
     role: 'Engineer',
     photo: '/team/tim.jpg',
+    photoPosition: 'top',
   },
 ];
 
@@ -32,7 +34,7 @@ function TeamMemberCard({ member, index }: { member: TeamMember; index: number }
           <img
             src={member.photo}
             alt={member.name}
-            className="w-full h-full object-cover grayscale transition-[filter] duration-500 ease-out group-hover:brightness-110"
+            className={`w-full h-full object-cover grayscale transition-[filter] duration-500 ease-out group-hover:brightness-110 ${member.photoPosition ? `object-${member.photoPosition}` : ''}`}
             loading="lazy"
           />
         </div>

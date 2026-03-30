@@ -192,6 +192,9 @@ pub struct FrontendDeployConfig {
     /// Environment variables
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env: Vec<String>,
+    /// Path to env file (relative to sp00ky.yml)
+    #[serde(default, rename = "env-file", skip_serializing_if = "Option::is_none")]
+    pub env_file: Option<String>,
 }
 
 fn default_frontend_port() -> u16 {
@@ -339,6 +342,9 @@ pub struct BackendDeployConfig {
     /// Environment variables passed to the VM
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env: Vec<String>,
+    /// Path to env file (relative to sp00ky.yml)
+    #[serde(default, rename = "env-file", skip_serializing_if = "Option::is_none")]
+    pub env_file: Option<String>,
     /// Override Dockerfile path (defaults to dev.docker.file if available)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dockerfile: Option<String>,
