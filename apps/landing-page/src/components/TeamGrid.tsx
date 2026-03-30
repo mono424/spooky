@@ -34,7 +34,8 @@ function TeamMemberCard({ member, index }: { member: TeamMember; index: number }
           <img
             src={member.photo}
             alt={member.name}
-            className={`w-full h-full object-cover grayscale transition-[filter] duration-500 ease-out group-hover:brightness-110 ${member.photoPosition ? `object-${member.photoPosition}` : ''}`}
+            className="w-full h-full object-cover grayscale transition-[filter] duration-500 ease-out group-hover:brightness-110"
+            style={member.photoPosition ? { objectPosition: member.photoPosition } : undefined}
             loading="lazy"
           />
         </div>
