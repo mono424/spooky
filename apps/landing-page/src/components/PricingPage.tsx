@@ -1,6 +1,24 @@
 import React, { useState } from 'react';
 
-const plans = [
+interface PlanFeature {
+  label: string;
+  type: 'included' | 'addon' | 'excluded' | 'general';
+  addonPrice?: string;
+  specs?: { cpu?: string; mem?: string };
+}
+
+interface Plan {
+  name: string;
+  description: string;
+  monthlyPrice: number;
+  yearlyPrice: number;
+  command: string | null;
+  ctaHref?: string;
+  popular: boolean;
+  features: PlanFeature[];
+}
+
+const plans: Plan[] = [
   {
     name: 'Starter',
     description: 'For side projects and small apps.',
@@ -9,10 +27,15 @@ const plans = [
     command: 'npx @spky/cli deploy --plan starter',
     popular: false,
     features: [
-      'Up to 5,000 synced records',
-      '1 project',
-      'Community support',
-      'Basic analytics',
+      { label: 'Scheduler', type: 'included', specs: { cpu: '1', mem: '512MB' } },
+      { label: '1 SSP instance', type: 'included', specs: { cpu: '1', mem: '512MB' } },
+      { label: '1 Backend Service', type: 'included', specs: { cpu: '1', mem: '512MB' } },
+      { label: '5GB storage', type: 'included' },
+      { label: 'Community support', type: 'included' },
+      { label: 'Custom domains', type: 'excluded' },
+      { label: 'SurrealDB', type: 'addon', addonPrice: '+$19/mo' },
+      { label: 'Extra SSP instance', type: 'addon', addonPrice: '+$15/mo' },
+      { label: 'Extra Backend Service', type: 'addon', addonPrice: '+$10/mo' },
     ],
   },
   {
@@ -23,12 +46,15 @@ const plans = [
     command: 'npx @spky/cli deploy --plan pro',
     popular: true,
     features: [
-      'Unlimited synced records',
-      'Unlimited projects',
-      'Priority support',
-      'Advanced analytics',
-      'Team collaboration',
-      'Custom domains',
+      { label: 'Scheduler', type: 'included', specs: { cpu: '2', mem: '2GB' } },
+      { label: '3 SSP instances', type: 'included', specs: { cpu: '2', mem: '1GB' } },
+      { label: '1 Backend Service', type: 'included', specs: { cpu: '2', mem: '1GB' } },
+      { label: '20GB storage', type: 'included' },
+      { label: 'Priority support', type: 'included' },
+      { label: 'Custom domains', type: 'included' },
+      { label: 'SurrealDB', type: 'addon', addonPrice: '+$29/mo' },
+      { label: 'Extra SSP instance', type: 'addon', addonPrice: '+$15/mo' },
+      { label: 'Extra Backend Service', type: 'addon', addonPrice: '+$10/mo' },
     ],
   },
   {
@@ -40,13 +66,60 @@ const plans = [
     ctaHref: 'https://github.com/mono424/sp00ky',
     popular: false,
     features: [
-      'Full source access',
-      'Unlimited everything',
-      'Community support',
-      'Self-managed infrastructure',
+      { label: 'Full source access', type: 'general' },
+      { label: 'Unlimited everything', type: 'general' },
+      { label: 'Community support', type: 'general' },
+      { label: 'Self-managed infrastructure', type: 'general' },
     ],
   },
 ];
+
+function Tooltip({ label, children }: { label: string; children: React.ReactNode }) {
+  const [visible, setVisible] = useState(false);
+  return (
+    <span
+      className="relative inline-flex"
+      onMouseEnter={() => setVisible(true)}
+      onMouseLeave={() => setVisible(false)}
+    >
+      {children}
+      <span
+        className={`absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 text-[11px] font-medium text-text-primary bg-white/[0.08] backdrop-blur-sm border border-white/[0.08] rounded-md whitespace-nowrap pointer-events-none transition-all duration-150 ${
+          visible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-1'
+        }`}
+      >
+        {label}
+      </span>
+    </span>
+  );
+}
+
+function SpecBadges({ specs }: { specs: { cpu?: string; mem?: string } }) {
+  return (
+    <span className="inline-flex items-center gap-1 ml-auto shrink-0">
+      {specs.cpu && (
+        <Tooltip label={`${specs.cpu} vCPU`}>
+          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-white/[0.04] text-[10px] font-mono tabular-nums text-text-muted leading-none">
+            <svg className="w-2.5 h-2.5 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 3v1.5M4.5 8.25H3m18 0h-1.5M4.5 12H3m18 0h-1.5M4.5 15.75H3m18 0h-1.5M8.25 19.5V21M12 3v1.5m0 15V21m3.75-18v1.5m0 15V21m-9-1.5h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25h-9A2.25 2.25 0 006 8.25v9a2.25 2.25 0 002.25 2.25z" />
+            </svg>
+            {specs.cpu}
+          </span>
+        </Tooltip>
+      )}
+      {specs.mem && (
+        <Tooltip label={`${specs.mem} Memory`}>
+          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-white/[0.04] text-[10px] font-mono tabular-nums text-text-muted leading-none">
+            <svg className="w-2.5 h-2.5 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 3h12a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V5a2 2 0 012-2zm0 8h12a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2a2 2 0 012-2z" />
+            </svg>
+            {specs.mem}
+          </span>
+        </Tooltip>
+      )}
+    </span>
+  );
+}
 
 function formatPrice(price: number): string {
   if (price === 0) return 'Free';
@@ -86,7 +159,7 @@ export const PricingPage: React.FC = () => {
   const [yearly, setYearly] = useState(false);
 
   return (
-    <div className="max-w-4xl mx-auto px-4">
+    <div className="max-w-5xl mx-auto px-4">
       {/* Toggle */}
       <div className="flex justify-center mb-12">
         <div className="relative inline-grid grid-cols-2 rounded-full bg-white/[0.03] border border-white/[0.06] p-1">
@@ -173,19 +246,52 @@ export const PricingPage: React.FC = () => {
               {/* Features */}
               <div className="border-t border-white/[0.06] mt-5 pt-5">
                 <ul className="space-y-2.5">
-                  {plan.features.map((feature) => (
-                    <li key={feature} className="flex items-center gap-2.5 text-[13px] text-text-tertiary">
-                      <svg
-                        className="w-3.5 h-3.5 text-text-muted shrink-0"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={2}
-                      >
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                      </svg>
-                      {feature}
-                    </li>
+                  {plan.features.map((feature, i) => (
+                    <React.Fragment key={feature.label}>
+                      {feature.type === 'addon' && i > 0 && plan.features[i - 1].type !== 'addon' && (
+                        <li className="border-t border-white/[0.04] my-2" />
+                      )}
+                      <li className={`flex items-center gap-2.5 text-[13px] ${
+                        feature.type === 'excluded' ? 'text-text-quaternary' : 'text-text-tertiary'
+                      }`}>
+                        {feature.type === 'excluded' ? (
+                          <svg
+                            className="w-3.5 h-3.5 text-text-quaternary shrink-0"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={2}
+                          >
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        ) : feature.type === 'addon' ? (
+                          <svg
+                            className="w-3.5 h-3.5 text-text-quaternary shrink-0"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={2}
+                          >
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                          </svg>
+                        ) : (
+                          <svg
+                            className="w-3.5 h-3.5 text-text-muted shrink-0"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={2}
+                          >
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                          </svg>
+                        )}
+                        <span className={feature.type === 'excluded' ? 'line-through' : ''}>{feature.label}</span>
+                        {feature.specs && <SpecBadges specs={feature.specs} />}
+                        {feature.addonPrice && (
+                          <span className="text-text-muted ml-auto text-[12px]">{feature.addonPrice}</span>
+                        )}
+                      </li>
+                    </React.Fragment>
                   ))}
                 </ul>
               </div>

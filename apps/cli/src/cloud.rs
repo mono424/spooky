@@ -32,6 +32,23 @@ fn api_base_url() -> String {
     DEFAULT_API_URL.to_string()
 }
 
+/// Derive the upload URL for large files (bypasses Cloudflare proxy).
+/// Converts "https://api-staging.sp00ky.cloud" → "https://upload.staging.spky.cloud"
+/// Falls back to the API URL if no upload domain can be derived.
+fn upload_base_url(api_url: &str) -> String {
+    if let Ok(url) = std::env::var("SP00KY_CLOUD_UPLOAD") {
+        return url;
+    }
+    // Try to derive: api-{stage}.sp00ky.cloud → upload.{stage}.spky.cloud
+    if let Some(host) = api_url.strip_prefix("https://").or(api_url.strip_prefix("http://")) {
+        let host = host.split('/').next().unwrap_or(host);
+        if host.contains("sp00ky.cloud") {
+            return "https://upload.spky.cloud".to_string();
+        }
+    }
+    api_url.to_string()
+}
+
 fn credentials_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -929,7 +946,8 @@ fn deploy() -> Result<()> {
         let image_tag = format!("sp00ky-backend-{}:deploy", name);
 
         // Build Docker image
-        println!("  Building image for backend '{}'...", name);
+        println!("  Building image for backend '{}' (dockerfile={}, context={})...",
+            name, dockerfile_path.display(), context_dir.display());
         let build_status = std::process::Command::new("docker")
             .args([
                 "build",
@@ -970,26 +988,31 @@ fn deploy() -> Result<()> {
             bail!("Failed to export docker image for backend '{}'", name);
         }
 
-        // Upload image tar to API
-        println!("  Uploading image for backend '{}'...", name);
+        // Upload image tar to API with progress
         let image_data = fs::read(&tmp_tar)
             .context(format!("Failed to read image tar for backend '{}'", name))?;
+        let total = image_data.len();
+        println!("  Uploading image for backend '{}' ({:.1}MB)...", name, total as f64 / 1_048_576.0);
 
         let upload_url = format!(
             "{}/v1/projects/{}/images/{}",
-            client.base_url, pid, name
+            upload_base_url(&client.base_url), pid, name
         );
+        let progress = ProgressReader::new(&image_data, total, &format!("  Uploading '{}'", name));
         match ureq::put(&upload_url)
             .set("Authorization", &format!("Bearer {}", client.token))
             .set("Content-Type", "application/octet-stream")
-            .send_bytes(&image_data)
+            .set("Content-Length", &total.to_string())
+            .send(progress)
         {
-            Ok(_) => {}
+            Ok(_) => { println!(); }
             Err(ureq::Error::Status(code, resp)) => {
+                println!();
                 let body = resp.into_string().unwrap_or_default();
                 bail!("Image upload failed for '{}' (HTTP {}): {}", name, code, body);
             }
             Err(ureq::Error::Transport(t)) => {
+                println!();
                 bail!("Image upload failed for '{}': {}", name, t);
             }
         }
@@ -1094,20 +1117,25 @@ fn deploy() -> Result<()> {
             bail!("Failed to export frontend container");
         }
 
-        println!("  Uploading frontend image...");
         let image_data = fs::read(&tmp_tar).context("Failed to read frontend image tar")?;
-        let upload_url = format!("{}/v1/projects/{}/images/frontend", client.base_url, pid);
+        let total = image_data.len();
+        println!("  Uploading frontend image ({:.1}MB)...", total as f64 / 1_048_576.0);
+        let upload_url = format!("{}/v1/projects/{}/images/frontend", upload_base_url(&client.base_url), pid);
+        let progress = ProgressReader::new(&image_data, total, "  Uploading frontend");
         match ureq::put(&upload_url)
             .set("Authorization", &format!("Bearer {}", client.token))
             .set("Content-Type", "application/octet-stream")
-            .send_bytes(&image_data)
+            .set("Content-Length", &total.to_string())
+            .send(progress)
         {
-            Ok(_) => {}
+            Ok(_) => { println!(); }
             Err(ureq::Error::Status(code, resp)) => {
+                println!();
                 let body = resp.into_string().unwrap_or_default();
                 bail!("Frontend image upload failed (HTTP {}): {}", code, body);
             }
             Err(ureq::Error::Transport(t)) => {
+                println!();
                 bail!("Frontend image upload failed: {}", t);
             }
         }
@@ -1248,6 +1276,38 @@ fn deploy() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// A Read wrapper that prints upload progress percentage.
+struct ProgressReader<'a> {
+    data: &'a [u8],
+    pos: usize,
+    total: usize,
+    label: String,
+    last_pct: u8,
+}
+
+impl<'a> ProgressReader<'a> {
+    fn new(data: &'a [u8], total: usize, label: &str) -> Self {
+        Self { data, pos: 0, total, label: label.to_string(), last_pct: 0 }
+    }
+}
+
+impl<'a> std::io::Read for ProgressReader<'a> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let remaining = &self.data[self.pos..];
+        let n = std::cmp::min(buf.len(), remaining.len());
+        buf[..n].copy_from_slice(&remaining[..n]);
+        self.pos += n;
+        let pct = if self.total > 0 { (self.pos * 100 / self.total) as u8 } else { 100 };
+        if pct != self.last_pct {
+            self.last_pct = pct;
+            print!("\r  {} {}%", self.label, pct);
+            use std::io::Write;
+            std::io::stdout().flush().ok();
+        }
+        Ok(n)
+    }
 }
 
 /// Stream SSE deployment events and return the final status when the stream closes.
