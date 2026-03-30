@@ -4,7 +4,7 @@ interface TeamMember {
   name: string;
   role: string;
   photo: string;
-  xHandle: string;
+  xHandle?: string;
 }
 
 const teamMembers: TeamMember[] = [
@@ -13,6 +13,11 @@ const teamMembers: TeamMember[] = [
     role: 'Founder',
     photo: '/team/khadim.jpg',
     xHandle: 'khad_im',
+  },
+  {
+    name: 'Tim Besel',
+    role: 'Engineer',
+    photo: '/team/tim.jpg',
   },
 ];
 
@@ -33,17 +38,19 @@ function TeamMemberCard({ member, index }: { member: TeamMember; index: number }
         </div>
         <p className="text-[15px] font-medium text-text-primary mt-4">{member.name}</p>
         <p className="text-[13px] text-text-muted mt-0.5">{member.role}</p>
-        <a
-          href={`https://x.com/${member.xHandle}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex mt-2 text-text-muted hover:text-text-primary transition-colors duration-200"
-          aria-label={`${member.name} on X`}
-        >
-          <svg viewBox="0 0 24 24" className="w-4 h-4 fill-current">
-            <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
-          </svg>
-        </a>
+        {member.xHandle && (
+          <a
+            href={`https://x.com/${member.xHandle}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex mt-2 text-text-muted hover:text-text-primary transition-colors duration-200"
+            aria-label={`${member.name} on X`}
+          >
+            <svg viewBox="0 0 24 24" className="w-4 h-4 fill-current">
+              <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+            </svg>
+          </a>
+        )}
       </div>
     </div>
   );

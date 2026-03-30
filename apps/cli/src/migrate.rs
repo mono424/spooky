@@ -308,14 +308,9 @@ pub fn apply(client: &dyn MigrationDB, migrations_dir: &Path) -> Result<()> {
             migration.version, migration.name
         );
 
-        // Wrap in a transaction so partial failures roll back cleanly
-        let transactional_sql = format!(
-            "BEGIN TRANSACTION;\n{}\nCOMMIT TRANSACTION;",
-            sql
-        );
-
+        // Apply migration statements directly (SurrealDB DDL doesn't support transactions)
         client
-            .execute(&transactional_sql)
+            .execute(&sql)
             .context(format!(
                 "Failed to apply migration {}_{}",
                 migration.version, migration.name

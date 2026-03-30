@@ -222,9 +222,19 @@ impl MigrationDB for SurrealClient {
     }
 
     fn get_applied_migrations(&self) -> Result<Vec<AppliedMigration>> {
-        let responses = self
+        let responses = match self
             .execute("SELECT version, name, applied_at, checksum FROM _00_migrations ORDER BY version ASC;")
-            .context("Failed to query applied migrations")?;
+        {
+            Ok(r) => r,
+            Err(e) => {
+                // SurrealDB 3.x returns error for non-existent tables — treat as empty
+                let msg = e.to_string();
+                if msg.contains("does not exist") || msg.contains("NotFound") {
+                    return Ok(vec![]);
+                }
+                return Err(e).context("Failed to query applied migrations");
+            }
+        };
 
         let result = responses
             .into_iter()

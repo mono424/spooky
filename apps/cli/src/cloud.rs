@@ -1167,7 +1167,7 @@ fn deploy() -> Result<()> {
                             if migrations_dir.exists() {
                                 match crate::migrate::apply(&surreal_client, &migrations_dir) {
                                     Ok(()) => println!("  ▸ Migrations complete."),
-                                    Err(e) => println!("  ▸ Migration warning: {}", e),
+                                    Err(e) => println!("  ▸ Migration warning: {:?}", e),
                                 }
                             } else {
                                 println!("  ▸ No migrations directory found, skipping.");
