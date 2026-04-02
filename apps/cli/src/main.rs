@@ -182,12 +182,30 @@ enum CloudCommands {
         #[command(subcommand)]
         action: Option<CloudBillingCommands>,
     },
+    /// Manage API keys for CI/CD authentication
+    Keys {
+        #[command(subcommand)]
+        action: CloudKeyCommands,
+    },
 }
 
 #[derive(Subcommand, Debug)]
 enum CloudBillingCommands {
     /// Show current usage
     Usage,
+}
+
+#[derive(Subcommand, Debug)]
+enum CloudKeyCommands {
+    /// Create a new API key
+    Create,
+    /// List all API keys
+    List,
+    /// Revoke an API key
+    Revoke {
+        /// Key ID to revoke
+        id: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]

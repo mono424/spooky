@@ -175,24 +175,24 @@ PERMISSIONS
 -- The Registry of active Live Queries (Incantations).
 -- ==================================================
 
-DEFINE TABLE _spooky_query SCHEMALESS
+DEFINE TABLE _00_query SCHEMALESS
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- The raw query string (for re-hydration/debugging)
 -- The raw query string (for re-hydration/debugging)
-DEFINE FIELD surql ON TABLE _spooky_query TYPE option<string>
+DEFINE FIELD surql ON TABLE _00_query TYPE option<string>
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- The raw query string (for re-hydration/debugging)
-DEFINE FIELD clientId ON TABLE _spooky_query TYPE option<string>
+DEFINE FIELD clientId ON TABLE _00_query TYPE option<string>
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- For garbage collection (Heartbeat)
-DEFINE FIELD lastActiveAt ON TABLE _spooky_query TYPE datetime DEFAULT time::now()
+DEFINE FIELD lastActiveAt ON TABLE _00_query TYPE datetime DEFAULT time::now()
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- How long this Incantation stays alive without activity
-DEFINE FIELD ttl ON TABLE _spooky_query TYPE duration
+DEFINE FIELD ttl ON TABLE _00_query TYPE duration
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- ==================================================
@@ -200,28 +200,28 @@ DEFINE FIELD ttl ON TABLE _spooky_query TYPE duration
 -- The current list of results for a query/incantation
 -- ==================================================
 
-DEFINE TABLE _spooky_list_ref SCHEMALESS
+DEFINE TABLE _00_list_ref SCHEMALESS
     PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD in ON TABLE _spooky_list_ref TYPE record
+DEFINE FIELD in ON TABLE _00_list_ref TYPE record
     PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD out ON TABLE _spooky_list_ref TYPE record
+DEFINE FIELD out ON TABLE _00_list_ref TYPE record
     PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD clientId ON TABLE _spooky_list_ref TYPE string
+DEFINE FIELD clientId ON TABLE _00_list_ref TYPE string
     PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD version ON TABLE _spooky_list_ref TYPE int
+DEFINE FIELD version ON TABLE _00_list_ref TYPE int
     PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD updatedAt ON TABLE _spooky_list_ref TYPE datetime VALUE time::now() READONLY
+DEFINE FIELD updatedAt ON TABLE _00_list_ref TYPE datetime VALUE time::now() READONLY
     PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD parent ON TABLE _spooky_list_ref TYPE option<record<_spooky_list_ref>>
+DEFINE FIELD parent ON TABLE _00_list_ref TYPE option<record<_00_list_ref>>
     PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD parent_rel ON TABLE _spooky_list_ref TYPE option<string>
+DEFINE FIELD parent_rel ON TABLE _00_list_ref TYPE option<string>
     PERMISSIONS FOR select, create, update WHERE true;
 
 -- ==================================================
@@ -230,27 +230,27 @@ DEFINE FIELD parent_rel ON TABLE _spooky_list_ref TYPE option<string>
 -- ==================================================
 
 -- Remote-only meta tables (not synced to client)
-DEFINE TABLE _spooky_module_state SCHEMALESS PERMISSIONS FULL;
+DEFINE TABLE _00_module_state SCHEMALESS PERMISSIONS FULL;
 
 -- Unregister from DBSP on deletion
 -- Unregister from DBSP on deletion
-DEFINE EVENT _spooky_dbsp_cleanup ON TABLE _spooky_query WHEN $event = "DELETE" THEN {
+DEFINE EVENT _00_dbsp_cleanup ON TABLE _00_query WHEN $event = "DELETE" THEN {
     let $payload = { id: <string>$before.id };
     let $result = http::post('http://scheduler:9667/view/unregister', $payload, { "Authorization": "Bearer " });
 };
 
 -- Note: Registration is now handled explicitly by fn::query::register calling mod::dbsp::register_view
--- The previous _spooky_dbsp_register event is removed to prevent recursion and double-registration.
+-- The previous _00_dbsp_register event is removed to prevent recursion and double-registration.
 
 -- ==================================================
 -- SPOOKY VERSION
 -- Tracks the version of every record for sync.
 -- ==================================================
-DEFINE TABLE _spooky_version SCHEMALESS
+DEFINE TABLE _00_version SCHEMALESS
     PERMISSIONS FOR select WHERE true;
-DEFINE FIELD record_id ON TABLE _spooky_version TYPE record;
-DEFINE FIELD version ON TABLE _spooky_version TYPE int;
-DEFINE INDEX idx_record_id ON TABLE _spooky_version COLUMNS record_id UNIQUE;
+DEFINE FIELD record_id ON TABLE _00_version TYPE record;
+DEFINE FIELD version ON TABLE _00_version TYPE int;
+DEFINE INDEX idx_record_id ON TABLE _00_version COLUMNS record_id UNIQUE;
 -- ==================================================
 -- COMMON REMOTE FUNCTIONS
 -- ==================================================
@@ -300,21 +300,21 @@ DEFINE API "/spooky"
 -- AUTO-GENERATED SPOOKY EVENTS
 -- ==================================================
 
-DEFINE EVENT OVERWRITE _spooky_comment_mutation ON TABLE comment
+DEFINE EVENT OVERWRITE _00_comment_mutation ON TABLE comment
 WHEN $before != $after AND $event != "DELETE"
 THEN {
-    LET $spooky_ver_rec = IF $event = "CREATE" {
-        (CREATE _spooky_version SET record_id = $after.id, version = 1 RETURN AFTER)
+    LET $sp00ky_ver_rec = IF $event = "CREATE" {
+        (CREATE _00_version SET record_id = $after.id, version = 1 RETURN AFTER)
     } ELSE IF $event = "UPDATE" {
-        IF $spooky_target_version != NONE AND $spooky_target_version.id == $after.id {
-            LET $u = (UPDATE _spooky_version SET version = <int>$spooky_target_version.version WHERE record_id = $after.id RETURN AFTER);
-            LET $spooky_target_version = NONE;
+        IF $sp00ky_target_version != NONE AND $sp00ky_target_version.id == $after.id {
+            LET $u = (UPDATE _00_version SET version = <int>$sp00ky_target_version.version WHERE record_id = $after.id RETURN AFTER);
+            LET $sp00ky_target_version = NONE;
             $u
         } ELSE {
-            (UPDATE _spooky_version SET version += 1 WHERE record_id = $after.id RETURN AFTER)
+            (UPDATE _00_version SET version += 1 WHERE record_id = $after.id RETURN AFTER)
         }
     };
-    LET $spooky_ver = $spooky_ver_rec[0].version;
+    LET $sp00ky_ver= $sp00ky_ver_rec[0].version;
 
     LET $plain_after = {
         id: <string>($after.id OR ""),
@@ -322,7 +322,7 @@ THEN {
         content: $after.content,
         created_at: <string>($after.created_at OR ""),
         thread: <string>($after.thread OR ""),
-        spooky_rv: (SELECT VALUE version FROM ONLY _spooky_version WHERE record_id = $after.id)
+        _00_rv: (SELECT VALUE version FROM ONLY _00_version WHERE record_id = $after.id)
     };
     LET $payload = {
         table: 'comment',
@@ -334,10 +334,10 @@ THEN {
     http::post('http://scheduler:9667/ingest', $payload, { "Authorization": "Bearer " });
 };
 
-DEFINE EVENT OVERWRITE _spooky_comment_delete ON TABLE comment
+DEFINE EVENT OVERWRITE _00_comment_delete ON TABLE comment
 WHEN $event = "DELETE"
 THEN {
-    DELETE _spooky_version WHERE record_id = $before.id;
+    DELETE _00_version WHERE record_id = $before.id;
 
     LET $plain_before = {
         id: <string>($before.id OR ""),
@@ -356,21 +356,21 @@ THEN {
     http::post('http://scheduler:9667/ingest', $payload, { "Authorization": "Bearer " });
 };
 
-DEFINE EVENT OVERWRITE _spooky_job_mutation ON TABLE job
+DEFINE EVENT OVERWRITE _00_job_mutation ON TABLE job
 WHEN $before != $after AND $event != "DELETE"
 THEN {
-    LET $spooky_ver_rec = IF $event = "CREATE" {
-        (CREATE _spooky_version SET record_id = $after.id, version = 1 RETURN AFTER)
+    LET $sp00ky_ver_rec = IF $event = "CREATE" {
+        (CREATE _00_version SET record_id = $after.id, version = 1 RETURN AFTER)
     } ELSE IF $event = "UPDATE" {
-        IF $spooky_target_version != NONE AND $spooky_target_version.id == $after.id {
-            LET $u = (UPDATE _spooky_version SET version = <int>$spooky_target_version.version WHERE record_id = $after.id RETURN AFTER);
-            LET $spooky_target_version = NONE;
+        IF $sp00ky_target_version != NONE AND $sp00ky_target_version.id == $after.id {
+            LET $u = (UPDATE _00_version SET version = <int>$sp00ky_target_version.version WHERE record_id = $after.id RETURN AFTER);
+            LET $sp00ky_target_version = NONE;
             $u
         } ELSE {
-            (UPDATE _spooky_version SET version += 1 WHERE record_id = $after.id RETURN AFTER)
+            (UPDATE _00_version SET version += 1 WHERE record_id = $after.id RETURN AFTER)
         }
     };
-    LET $spooky_ver = $spooky_ver_rec[0].version;
+    LET $sp00ky_ver= $sp00ky_ver_rec[0].version;
 
     LET $plain_after = {
         id: <string>($after.id OR ""),
@@ -384,7 +384,7 @@ THEN {
         retry_strategy: $after.retry_strategy,
         status: $after.status,
         updated_at: <string>($after.updated_at OR ""),
-        spooky_rv: (SELECT VALUE version FROM ONLY _spooky_version WHERE record_id = $after.id)
+        _00_rv: (SELECT VALUE version FROM ONLY _00_version WHERE record_id = $after.id)
     };
     LET $payload = {
         table: 'job',
@@ -396,10 +396,10 @@ THEN {
     http::post('http://scheduler:9667/ingest', $payload, { "Authorization": "Bearer " });
 };
 
-DEFINE EVENT OVERWRITE _spooky_job_delete ON TABLE job
+DEFINE EVENT OVERWRITE _00_job_delete ON TABLE job
 WHEN $event = "DELETE"
 THEN {
-    DELETE _spooky_version WHERE record_id = $before.id;
+    DELETE _00_version WHERE record_id = $before.id;
 
     LET $plain_before = {
         id: <string>($before.id OR ""),
@@ -424,21 +424,21 @@ THEN {
     http::post('http://scheduler:9667/ingest', $payload, { "Authorization": "Bearer " });
 };
 
-DEFINE EVENT OVERWRITE _spooky_thread_mutation ON TABLE thread
+DEFINE EVENT OVERWRITE _00_thread_mutation ON TABLE thread
 WHEN $before != $after AND $event != "DELETE"
 THEN {
-    LET $spooky_ver_rec = IF $event = "CREATE" {
-        (CREATE _spooky_version SET record_id = $after.id, version = 1 RETURN AFTER)
+    LET $sp00ky_ver_rec = IF $event = "CREATE" {
+        (CREATE _00_version SET record_id = $after.id, version = 1 RETURN AFTER)
     } ELSE IF $event = "UPDATE" {
-        IF $spooky_target_version != NONE AND $spooky_target_version.id == $after.id {
-            LET $u = (UPDATE _spooky_version SET version = <int>$spooky_target_version.version WHERE record_id = $after.id RETURN AFTER);
-            LET $spooky_target_version = NONE;
+        IF $sp00ky_target_version != NONE AND $sp00ky_target_version.id == $after.id {
+            LET $u = (UPDATE _00_version SET version = <int>$sp00ky_target_version.version WHERE record_id = $after.id RETURN AFTER);
+            LET $sp00ky_target_version = NONE;
             $u
         } ELSE {
-            (UPDATE _spooky_version SET version += 1 WHERE record_id = $after.id RETURN AFTER)
+            (UPDATE _00_version SET version += 1 WHERE record_id = $after.id RETURN AFTER)
         }
     };
-    LET $spooky_ver = $spooky_ver_rec[0].version;
+    LET $sp00ky_ver= $sp00ky_ver_rec[0].version;
 
     LET $plain_after = {
         id: <string>($after.id OR ""),
@@ -449,7 +449,7 @@ THEN {
         created_at: <string>($after.created_at OR ""),
         title: $after.title,
         title_suggestion: $after.title_suggestion,
-        spooky_rv: (SELECT VALUE version FROM ONLY _spooky_version WHERE record_id = $after.id)
+        _00_rv: (SELECT VALUE version FROM ONLY _00_version WHERE record_id = $after.id)
     };
     LET $payload = {
         table: 'thread',
@@ -461,10 +461,10 @@ THEN {
     http::post('http://scheduler:9667/ingest', $payload, { "Authorization": "Bearer " });
 };
 
-DEFINE EVENT OVERWRITE _spooky_thread_delete ON TABLE thread
+DEFINE EVENT OVERWRITE _00_thread_delete ON TABLE thread
 WHEN $event = "DELETE"
 THEN {
-    DELETE _spooky_version WHERE record_id = $before.id;
+    DELETE _00_version WHERE record_id = $before.id;
 
     LET $plain_before = {
         id: <string>($before.id OR ""),
@@ -486,28 +486,28 @@ THEN {
     http::post('http://scheduler:9667/ingest', $payload, { "Authorization": "Bearer " });
 };
 
-DEFINE EVENT OVERWRITE _spooky_user_mutation ON TABLE user
+DEFINE EVENT OVERWRITE _00_user_mutation ON TABLE user
 WHEN $before != $after AND $event != "DELETE"
 THEN {
-    LET $spooky_ver_rec = IF $event = "CREATE" {
-        (CREATE _spooky_version SET record_id = $after.id, version = 1 RETURN AFTER)
+    LET $sp00ky_ver_rec = IF $event = "CREATE" {
+        (CREATE _00_version SET record_id = $after.id, version = 1 RETURN AFTER)
     } ELSE IF $event = "UPDATE" {
-        IF $spooky_target_version != NONE AND $spooky_target_version.id == $after.id {
-            LET $u = (UPDATE _spooky_version SET version = <int>$spooky_target_version.version WHERE record_id = $after.id RETURN AFTER);
-            LET $spooky_target_version = NONE;
+        IF $sp00ky_target_version != NONE AND $sp00ky_target_version.id == $after.id {
+            LET $u = (UPDATE _00_version SET version = <int>$sp00ky_target_version.version WHERE record_id = $after.id RETURN AFTER);
+            LET $sp00ky_target_version = NONE;
             $u
         } ELSE {
-            (UPDATE _spooky_version SET version += 1 WHERE record_id = $after.id RETURN AFTER)
+            (UPDATE _00_version SET version += 1 WHERE record_id = $after.id RETURN AFTER)
         }
     };
-    LET $spooky_ver = $spooky_ver_rec[0].version;
+    LET $sp00ky_ver= $sp00ky_ver_rec[0].version;
 
     LET $plain_after = {
         id: <string>($after.id OR ""),
         created_at: <string>($after.created_at OR ""),
         password: $after.password,
         username: $after.username,
-        spooky_rv: (SELECT VALUE version FROM ONLY _spooky_version WHERE record_id = $after.id)
+        _00_rv: (SELECT VALUE version FROM ONLY _00_version WHERE record_id = $after.id)
     };
     LET $payload = {
         table: 'user',
@@ -519,10 +519,10 @@ THEN {
     http::post('http://scheduler:9667/ingest', $payload, { "Authorization": "Bearer " });
 };
 
-DEFINE EVENT OVERWRITE _spooky_user_delete ON TABLE user
+DEFINE EVENT OVERWRITE _00_user_delete ON TABLE user
 WHEN $event = "DELETE"
 THEN {
-    DELETE _spooky_version WHERE record_id = $before.id;
+    DELETE _00_version WHERE record_id = $before.id;
 
     LET $plain_before = {
         id: <string>($before.id OR ""),

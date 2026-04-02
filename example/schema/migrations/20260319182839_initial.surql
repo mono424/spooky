@@ -5,14 +5,14 @@
 REMOVE FUNCTION IF EXISTS fn::query::heartbeat;
 REMOVE FUNCTION IF EXISTS fn::query::register;
 REMOVE API IF EXISTS '/spooky';
-REMOVE EVENT IF EXISTS _spooky_comment_delete ON TABLE comment;
-REMOVE EVENT IF EXISTS _spooky_comment_mutation ON TABLE comment;
-REMOVE EVENT IF EXISTS _spooky_job_delete ON TABLE job;
-REMOVE EVENT IF EXISTS _spooky_job_mutation ON TABLE job;
-REMOVE EVENT IF EXISTS _spooky_thread_delete ON TABLE thread;
-REMOVE EVENT IF EXISTS _spooky_thread_mutation ON TABLE thread;
-REMOVE EVENT IF EXISTS _spooky_user_delete ON TABLE user;
-REMOVE EVENT IF EXISTS _spooky_user_mutation ON TABLE user;
+REMOVE EVENT IF EXISTS _00_comment_delete ON TABLE comment;
+REMOVE EVENT IF EXISTS _00_comment_mutation ON TABLE comment;
+REMOVE EVENT IF EXISTS _00_job_delete ON TABLE job;
+REMOVE EVENT IF EXISTS _00_job_mutation ON TABLE job;
+REMOVE EVENT IF EXISTS _00_thread_delete ON TABLE thread;
+REMOVE EVENT IF EXISTS _00_thread_mutation ON TABLE thread;
+REMOVE EVENT IF EXISTS _00_user_delete ON TABLE user;
+REMOVE EVENT IF EXISTS _00_user_mutation ON TABLE user;
 
 -- Modified
-DEFINE EVENT OVERWRITE _spooky_dbsp_cleanup ON _spooky_query WHEN $event = 'DELETE' THEN { LET $payload = { id: <string> $before.id }; LET $result = http::post('http://localhost:9667/view/unregister', $payload, { Authorization: 'Bearer ' }); };
+DEFINE EVENT OVERWRITE _00_dbsp_cleanup ON _00_query WHEN $event = 'DELETE' THEN { LET $payload = { id: <string> $before.id }; LET $result = http::post('http://localhost:9667/view/unregister', $payload, { Authorization: 'Bearer ' }); };

@@ -35,10 +35,10 @@ class Schema {
     });
 
     factory Schema.fromJson(Map<String, dynamic> json) => Schema(
-        spookyPendingMutations: SpookyPendingMutations.fromJson(json["_spooky_pending_mutations"]),
-        spookyQuery: SpookyQuery.fromJson(json["_spooky_query"]),
-        spookySchema: SpookySchema.fromJson(json["_spooky_schema"]),
-        spookyStreamProcessorState: SpookyStreamProcessorState.fromJson(json["_spooky_stream_processor_state"]),
+        spookyPendingMutations: SpookyPendingMutations.fromJson(json["_00_pending_mutations"]),
+        spookyQuery: SpookyQuery.fromJson(json["_00_query"]),
+        spookySchema: SpookySchema.fromJson(json["_00_schema"]),
+        spookyStreamProcessorState: SpookyStreamProcessorState.fromJson(json["_00_stream_processor_state"]),
         comment: Comment.fromJson(json["comment"]),
         commentedOn: CommentedOn.fromJson(json["commented_on"]),
         job: Job.fromJson(json["job"]),
@@ -47,10 +47,10 @@ class Schema {
     );
 
     Map<String, dynamic> toJson() => {
-        "_spooky_pending_mutations": spookyPendingMutations.toJson(),
-        "_spooky_query": spookyQuery.toJson(),
-        "_spooky_schema": spookySchema.toJson(),
-        "_spooky_stream_processor_state": spookyStreamProcessorState.toJson(),
+        "_00_pending_mutations": spookyPendingMutations.toJson(),
+        "_00_query": spookyQuery.toJson(),
+        "_00_schema": spookySchema.toJson(),
+        "_00_stream_processor_state": spookyStreamProcessorState.toJson(),
         "comment": comment.toJson(),
         "commented_on": commentedOn.toJson(),
         "job": job.toJson(),
@@ -547,48 +547,48 @@ PERMISSIONS FOR select, create, update WHERE true;
 -- Used in local-migrator.ts
 -- ==================================================
 
-DEFINE TABLE IF NOT EXISTS _spooky_schema SCHEMAFULL;
-DEFINE FIELD IF NOT EXISTS id ON _spooky_schema TYPE string;
-DEFINE FIELD IF NOT EXISTS hash ON _spooky_schema TYPE string;
-DEFINE FIELD IF NOT EXISTS created_at ON _spooky_schema TYPE datetime VALUE time::now();
-DEFINE INDEX IF NOT EXISTS unique_hash ON _spooky_schema FIELDS hash UNIQUE;
+DEFINE TABLE IF NOT EXISTS _00_schema SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS id ON _00_schema TYPE string;
+DEFINE FIELD IF NOT EXISTS hash ON _00_schema TYPE string;
+DEFINE FIELD IF NOT EXISTS created_at ON _00_schema TYPE datetime VALUE time::now();
+DEFINE INDEX IF NOT EXISTS unique_hash ON _00_schema FIELDS hash UNIQUE;
 
 -- ==================================================
 -- SPOOKY STREAM PROCESSOR STATE
 -- Stores the local state of the stream processor (DBSP)
 -- ==================================================
 
-DEFINE TABLE IF NOT EXISTS _spooky_stream_processor_state SCHEMALESS
+DEFINE TABLE IF NOT EXISTS _00_stream_processor_state SCHEMALESS
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
-DEFINE FIELD IF NOT EXISTS id ON _spooky_stream_processor_state TYPE string;
-DEFINE FIELD IF NOT EXISTS state ON _spooky_stream_processor_state TYPE string;
-DEFINE FIELD IF NOT EXISTS updated_at ON _spooky_stream_processor_state TYPE datetime VALUE time::now();
+DEFINE FIELD IF NOT EXISTS id ON _00_stream_processor_state TYPE string;
+DEFINE FIELD IF NOT EXISTS state ON _00_stream_processor_state TYPE string;
+DEFINE FIELD IF NOT EXISTS updated_at ON _00_stream_processor_state TYPE datetime VALUE time::now();
 
 -- ==================================================
 -- SPOOKY INCANTATION
 -- The Registry of active Live Queries (Incantations).
 -- ==================================================
 
-DEFINE TABLE _spooky_query SCHEMALESS
+DEFINE TABLE _00_query SCHEMALESS
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
-DEFINE FIELD surql ON TABLE _spooky_query TYPE option<string>
+DEFINE FIELD surql ON TABLE _00_query TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD localArray ON TABLE _spooky_query TYPE any
+DEFINE FIELD localArray ON TABLE _00_query TYPE any
 PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD remoteArray ON TABLE _spooky_query TYPE any
+DEFINE FIELD remoteArray ON TABLE _00_query TYPE any
 PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD lastActiveAt ON TABLE _spooky_query TYPE option<datetime> DEFAULT time::now()
+DEFINE FIELD lastActiveAt ON TABLE _00_query TYPE option<datetime> DEFAULT time::now()
 PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD ttl ON TABLE _spooky_query TYPE option<string>
+DEFINE FIELD ttl ON TABLE _00_query TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD tableName ON TABLE _spooky_query TYPE option<string>
+DEFINE FIELD tableName ON TABLE _00_query TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- ==================================================
@@ -596,30 +596,30 @@ PERMISSIONS FOR select, create, update WHERE true;
 -- Stores create, update, and delete events
 -- ==================================================
 
-DEFINE TABLE _spooky_pending_mutations SCHEMAFULL
+DEFINE TABLE _00_pending_mutations SCHEMAFULL
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
-DEFINE FIELD IF NOT EXISTS id ON _spooky_pending_mutations TYPE string;
+DEFINE FIELD IF NOT EXISTS id ON _00_pending_mutations TYPE string;
 
-DEFINE FIELD IF NOT EXISTS mutationType ON _spooky_pending_mutations TYPE string
+DEFINE FIELD IF NOT EXISTS mutationType ON _00_pending_mutations TYPE string
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- The target record ID (for update/delete) - maps to 'id' in the event object
-DEFINE FIELD IF NOT EXISTS recordId ON _spooky_pending_mutations TYPE option<record>
+DEFINE FIELD IF NOT EXISTS recordId ON _00_pending_mutations TYPE option<record>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- The data payload (for create/update)
-DEFINE FIELD IF NOT EXISTS data ON _spooky_pending_mutations TYPE option<object> FLEXIBLE
+DEFINE FIELD IF NOT EXISTS data ON _00_pending_mutations TYPE option<object> FLEXIBLE
 PERMISSIONS FOR select, create, update WHERE true;
-DEFINE FIELD spooky_rv ON TABLE _spooky_pending_mutations TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
-DEFINE FIELD spooky_rv ON TABLE _spooky_query TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
-DEFINE FIELD spooky_rv ON TABLE _spooky_schema TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
-DEFINE FIELD spooky_rv ON TABLE _spooky_stream_processor_state TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
-DEFINE FIELD spooky_rv ON TABLE comment TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
-DEFINE FIELD spooky_rv ON TABLE commented_on TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
-DEFINE FIELD spooky_rv ON TABLE job TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
-DEFINE FIELD spooky_rv ON TABLE thread TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
-DEFINE FIELD spooky_rv ON TABLE user TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD _00_rv ON TABLE _00_pending_mutations TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD _00_rv ON TABLE _00_query TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD _00_rv ON TABLE _00_schema TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD _00_rv ON TABLE _00_stream_processor_state TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD _00_rv ON TABLE comment TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD _00_rv ON TABLE commented_on TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD _00_rv ON TABLE job TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD _00_rv ON TABLE thread TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD _00_rv ON TABLE user TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 
 
 -- ==================================================
@@ -627,56 +627,56 @@ DEFINE FIELD spooky_rv ON TABLE user TYPE int DEFAULT 0 PERMISSIONS FOR select, 
 -- ==================================================
 
 -- Table: comment Client Mutation
-DEFINE EVENT OVERWRITE _spooky_comment_client_mutation ON TABLE comment
+DEFINE EVENT OVERWRITE _00_comment_client_mutation ON TABLE comment
 WHEN \$before != \$after AND \$event != \"DELETE\"
 THEN {
     -- No-op for now. Client mutation sync logic moved to DBSP.
 };
 
 -- Table: comment Client Deletion
-DEFINE EVENT OVERWRITE _spooky_comment_client_delete ON TABLE comment
+DEFINE EVENT OVERWRITE _00_comment_client_delete ON TABLE comment
 WHEN \$event = \"DELETE\"
 THEN {
     -- No-op for now.
 };
 
 -- Table: job Client Mutation
-DEFINE EVENT OVERWRITE _spooky_job_client_mutation ON TABLE job
+DEFINE EVENT OVERWRITE _00_job_client_mutation ON TABLE job
 WHEN \$before != \$after AND \$event != \"DELETE\"
 THEN {
     -- No-op for now. Client mutation sync logic moved to DBSP.
 };
 
 -- Table: job Client Deletion
-DEFINE EVENT OVERWRITE _spooky_job_client_delete ON TABLE job
+DEFINE EVENT OVERWRITE _00_job_client_delete ON TABLE job
 WHEN \$event = \"DELETE\"
 THEN {
     -- No-op for now.
 };
 
 -- Table: thread Client Mutation
-DEFINE EVENT OVERWRITE _spooky_thread_client_mutation ON TABLE thread
+DEFINE EVENT OVERWRITE _00_thread_client_mutation ON TABLE thread
 WHEN \$before != \$after AND \$event != \"DELETE\"
 THEN {
     -- No-op for now. Client mutation sync logic moved to DBSP.
 };
 
 -- Table: thread Client Deletion
-DEFINE EVENT OVERWRITE _spooky_thread_client_delete ON TABLE thread
+DEFINE EVENT OVERWRITE _00_thread_client_delete ON TABLE thread
 WHEN \$event = \"DELETE\"
 THEN {
     -- No-op for now.
 };
 
 -- Table: user Client Mutation
-DEFINE EVENT OVERWRITE _spooky_user_client_mutation ON TABLE user
+DEFINE EVENT OVERWRITE _00_user_client_mutation ON TABLE user
 WHEN \$before != \$after AND \$event != \"DELETE\"
 THEN {
     -- No-op for now. Client mutation sync logic moved to DBSP.
 };
 
 -- Table: user Client Deletion
-DEFINE EVENT OVERWRITE _spooky_user_client_delete ON TABLE user
+DEFINE EVENT OVERWRITE _00_user_client_delete ON TABLE user
 WHEN \$event = \"DELETE\"
 THEN {
     -- No-op for now.

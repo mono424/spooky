@@ -8,7 +8,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::backend::{self, BackendDevConfig, BackendDevTypedConfig, HostingMode};
-use crate::{CloudBillingCommands, CloudCommands};
+use crate::{CloudBillingCommands, CloudCommands, CloudKeyCommands};
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -30,6 +30,25 @@ fn api_base_url() -> String {
         }
     }
     DEFAULT_API_URL.to_string()
+}
+
+/// Derive the SurrealDB WebSocket endpoint for a project.
+/// api-staging.sp00ky.cloud → wss://{slug}.db.staging.spky.cloud/rpc
+/// api.sp00ky.cloud → wss://{slug}.db.spky.cloud/rpc
+fn derive_db_ws_endpoint(api_url: &str, slug: &str) -> Option<String> {
+    let host = api_url.strip_prefix("https://")
+        .or(api_url.strip_prefix("http://"))?
+        .split('/').next()?;
+
+    if let Some(stage) = host.strip_prefix("api-").and_then(|h| h.strip_suffix(".sp00ky.cloud")) {
+        // Staging: api-staging.sp00ky.cloud → db.staging.spky.cloud
+        Some(format!("wss://{}.db.{}.spky.cloud/rpc", slug, stage))
+    } else if host.ends_with(".sp00ky.cloud") {
+        // Production: api.sp00ky.cloud → db.spky.cloud
+        Some(format!("wss://{}.db.spky.cloud/rpc", slug))
+    } else {
+        None
+    }
 }
 
 /// Derive the upload URL for large files (bypasses Cloudflare proxy).
@@ -67,6 +86,15 @@ struct Credentials {
 }
 
 fn load_credentials() -> Option<Credentials> {
+    // API key from environment takes precedence (for CI/CD)
+    if let Ok(api_key) = std::env::var("SPOOKY_API_KEY") {
+        if api_key.starts_with("spk_live_") {
+            return Some(Credentials {
+                access_token: api_key,
+                refresh_token: String::new(),
+            });
+        }
+    }
     let path = credentials_path();
     let content = fs::read_to_string(&path).ok()?;
     serde_json::from_str(&content).ok()
@@ -105,14 +133,25 @@ struct CloudClient {
     base_url: String,
     token: String,
     refresh_token: String,
+    is_api_key: bool,
 }
 
 impl CloudClient {
     fn new(creds: &Credentials) -> Self {
+        let is_api_key = creds.access_token.starts_with("spk_live_");
         Self {
             base_url: api_base_url(),
             token: creds.access_token.clone(),
             refresh_token: creds.refresh_token.clone(),
+            is_api_key,
+        }
+    }
+
+    fn auth_header(&self) -> String {
+        if self.is_api_key {
+            format!("ApiKey {}", self.token)
+        } else {
+            format!("Bearer {}", self.token)
         }
     }
 
@@ -170,17 +209,17 @@ impl CloudClient {
     fn get(&mut self, path: &str) -> Result<ureq::Response> {
         let url = format!("{}{}", self.base_url, path);
         match ureq::get(&url)
-            .set("Authorization", &format!("Bearer {}", self.token))
+            .set("Authorization", &self.auth_header())
             .set("Accept", "application/json")
             .call()
         {
             Ok(resp) => Ok(resp),
-            Err(ureq::Error::Status(401, _)) => {
+            Err(ureq::Error::Status(401, _)) if !self.is_api_key => {
                 self.try_refresh().map_err(|_| {
                     anyhow::anyhow!("Session expired. Run `sp00ky cloud login` to re-authenticate.")
                 })?;
                 match ureq::get(&url)
-                    .set("Authorization", &format!("Bearer {}", self.token))
+                    .set("Authorization", &self.auth_header())
                     .set("Accept", "application/json")
                     .call()
                 {
@@ -208,17 +247,17 @@ impl CloudClient {
     fn post(&mut self, path: &str, body: &serde_json::Value) -> Result<ureq::Response> {
         let url = format!("{}{}", self.base_url, path);
         match ureq::post(&url)
-            .set("Authorization", &format!("Bearer {}", self.token))
+            .set("Authorization", &self.auth_header())
             .set("Accept", "application/json")
             .send_json(body.clone())
         {
             Ok(resp) => Ok(resp),
-            Err(ureq::Error::Status(401, _)) => {
+            Err(ureq::Error::Status(401, _)) if !self.is_api_key => {
                 self.try_refresh().map_err(|_| {
                     anyhow::anyhow!("Session expired. Run `sp00ky cloud login` to re-authenticate.")
                 })?;
                 match ureq::post(&url)
-                    .set("Authorization", &format!("Bearer {}", self.token))
+                    .set("Authorization", &self.auth_header())
                     .set("Accept", "application/json")
                     .send_json(body.clone())
                 {
@@ -246,17 +285,17 @@ impl CloudClient {
     fn delete(&mut self, path: &str) -> Result<ureq::Response> {
         let url = format!("{}{}", self.base_url, path);
         match ureq::delete(&url)
-            .set("Authorization", &format!("Bearer {}", self.token))
+            .set("Authorization", &self.auth_header())
             .set("Accept", "application/json")
             .call()
         {
             Ok(resp) => Ok(resp),
-            Err(ureq::Error::Status(401, _)) => {
+            Err(ureq::Error::Status(401, _)) if !self.is_api_key => {
                 self.try_refresh().map_err(|_| {
                     anyhow::anyhow!("Session expired. Run `sp00ky cloud login` to re-authenticate.")
                 })?;
                 match ureq::delete(&url)
-                    .set("Authorization", &format!("Bearer {}", self.token))
+                    .set("Authorization", &self.auth_header())
                     .set("Accept", "application/json")
                     .call()
                 {
@@ -669,6 +708,7 @@ pub fn run(action: CloudCommands) -> Result<()> {
         CloudCommands::Scale { ssp } => scale(ssp),
         CloudCommands::Destroy => destroy(),
         CloudCommands::Billing { action } => billing(action),
+        CloudCommands::Keys { action } => keys(action),
     }
 }
 
@@ -900,6 +940,7 @@ fn deploy() -> Result<()> {
 
     let mut backend_manifests: Vec<serde_json::Value> = Vec::new();
     let mut external_backends: Vec<serde_json::Value> = Vec::new();
+    // Image hashes are stored on the API server (works cross-machine)
 
     for (name, backend_config) in &config.backends {
         // External backends are self-hosted — skip cloud deployment
@@ -967,6 +1008,36 @@ fn deploy() -> Result<()> {
             bail!("Docker build failed for backend '{}'", name);
         }
 
+        // Check if image changed since last deploy (skip export+upload if unchanged)
+        let image_id = get_docker_image_id(&image_tag);
+        if let Some(ref id) = image_id {
+            if let Some(remote_hash) = get_remote_image_hash(&client, &pid, name) {
+                if remote_hash == *id {
+                    println!("  Image for backend '{}' unchanged, skipping upload.", name);
+                    // Still include in manifest with previous image path
+                    let resources = deploy.resources.clone().unwrap_or(backend::BackendDeployResources {
+                        vcpus: 1,
+                        memory: 512,
+                        disk: 5,
+                    });
+                    backend_manifests.push(serde_json::json!({
+                        "name": name,
+                        "image": format!("{}/{}", slug, name),
+                        "port": deploy.port,
+                        "expose": deploy.expose,
+                        "resources": {
+                            "vcpus": resources.vcpus,
+                            "memory_mb": resources.memory,
+                            "disk_gb": resources.disk,
+                        },
+                        "env": deploy.env,
+                    }));
+                    println!("  Backend '{}' ready for deployment.", name);
+                    continue;
+                }
+            }
+        }
+
         // Export image as flat rootfs tar.gz (not layered docker save)
         let tmp_tar = std::env::temp_dir().join(format!("sp00ky-{}-{}.tar.gz", slug, name));
         println!("  Exporting image for backend '{}'...", name);
@@ -999,10 +1070,12 @@ fn deploy() -> Result<()> {
             upload_base_url(&client.base_url), pid, name
         );
         let progress = ProgressReader::new(&image_data, total, &format!("  Uploading '{}'", name));
+        let hash_header = image_id.as_deref().unwrap_or("");
         match ureq::put(&upload_url)
             .set("Authorization", &format!("Bearer {}", client.token))
             .set("Content-Type", "application/octet-stream")
             .set("Content-Length", &total.to_string())
+            .set("X-Image-Hash", hash_header)
             .send(progress)
         {
             Ok(_) => { println!(); }
@@ -1079,14 +1152,26 @@ fn deploy() -> Result<()> {
         };
         let image_tag = format!("sp00ky-frontend-{}:deploy", slug);
 
+        // Auto-compute the SurrealDB WebSocket endpoint for the frontend
+        // api-staging.sp00ky.cloud → db.staging.spky.cloud → wss://{slug}.db.staging.spky.cloud/rpc
+        let db_ws_endpoint = derive_db_ws_endpoint(&client.base_url, &slug);
+
         println!("  Building frontend image...");
+        let mut build_args = vec![
+            "build".to_string(), "--platform".to_string(), "linux/amd64".to_string(),
+            "-t".to_string(), image_tag.clone(),
+            "-f".to_string(), dockerfile_path.to_string_lossy().to_string(),
+        ];
+        // Inject VITE_DB_ENDPOINT as build-arg so Vite picks it up during build
+        if let Some(ref endpoint) = db_ws_endpoint {
+            build_args.push("--build-arg".to_string());
+            build_args.push(format!("VITE_DB_ENDPOINT={}", endpoint));
+            println!("  DB endpoint: {}", endpoint);
+        }
+        build_args.push(context_dir.to_string_lossy().to_string());
+
         let build_status = std::process::Command::new("docker")
-            .args([
-                "build", "--platform", "linux/amd64",
-                "-t", &image_tag,
-                "-f", &dockerfile_path.to_string_lossy(),
-                &context_dir.to_string_lossy(),
-            ])
+            .args(&build_args)
             .stdout(std::process::Stdio::inherit())
             .stderr(std::process::Stdio::inherit())
             .status()
@@ -1095,6 +1180,28 @@ fn deploy() -> Result<()> {
         if !build_status.success() {
             bail!("Docker build failed for frontend");
         }
+
+        // Check if frontend image changed since last deploy
+        let frontend_image_id = get_docker_image_id(&image_tag);
+        let frontend_unchanged = frontend_image_id.as_ref()
+            .and_then(|id| get_remote_image_hash(&client, &pid, "frontend").map(|h| h == *id))
+            .unwrap_or(false);
+
+        if frontend_unchanged {
+            println!("  Frontend image unchanged, skipping upload.");
+            // Still set the manifest so the frontend gets deployed
+            let resources = frontend_config.resources.clone().unwrap_or(backend::BackendDeployResources {
+                vcpus: 1, memory: 512, disk: 5,
+            });
+            let mut merged_env = load_deploy_env_file(frontend_config.env_file.as_deref(), config_dir);
+            merged_env.extend(frontend_config.env.clone());
+            frontend_manifest = Some(serde_json::json!({
+                "image": format!("{}/frontend", slug),
+                "port": frontend_config.port,
+                "resources": { "vcpus": resources.vcpus, "memory_mb": resources.memory, "disk_gb": resources.disk },
+                "env": merged_env,
+            }));
+        } else {
 
         let tmp_tar = std::env::temp_dir().join(format!("sp00ky-{}-frontend.tar.gz", slug));
         println!("  Exporting frontend image...");
@@ -1122,10 +1229,12 @@ fn deploy() -> Result<()> {
         println!("  Uploading frontend image ({:.1}MB)...", total as f64 / 1_048_576.0);
         let upload_url = format!("{}/v1/projects/{}/images/frontend", upload_base_url(&client.base_url), pid);
         let progress = ProgressReader::new(&image_data, total, "  Uploading frontend");
+        let hash_header = frontend_image_id.as_deref().unwrap_or("");
         match ureq::put(&upload_url)
             .set("Authorization", &format!("Bearer {}", client.token))
             .set("Content-Type", "application/octet-stream")
             .set("Content-Length", &total.to_string())
+            .set("X-Image-Hash", hash_header)
             .send(progress)
         {
             Ok(_) => { println!(); }
@@ -1163,6 +1272,7 @@ fn deploy() -> Result<()> {
         }));
 
         println!("  Frontend ready for deployment.");
+        } // end else (frontend changed)
     }
 
     let deploy_body = serde_json::json!({
@@ -1215,11 +1325,25 @@ fn deploy() -> Result<()> {
                             println!("  ▸ Warning: SurrealDB not reachable at {}, skipping migrations.", db_url);
                         } else {
                             let resolved = config.resolved_surrealdb();
-                            let surreal_client = crate::surreal_client::SurrealClient::new_unauthenticated(
-                                db_url,
-                                &resolved.namespace,
-                                &resolved.database,
-                            );
+                            // Use the auto-generated password from the deployment status
+                            let db_password = status_data["surrealdb_password"]
+                                .as_str()
+                                .unwrap_or("");
+                            let surreal_client = if db_password.is_empty() {
+                                crate::surreal_client::SurrealClient::new_unauthenticated(
+                                    db_url,
+                                    &resolved.namespace,
+                                    &resolved.database,
+                                )
+                            } else {
+                                crate::surreal_client::SurrealClient::new(
+                                    db_url,
+                                    &resolved.namespace,
+                                    &resolved.database,
+                                    "root",
+                                    db_password,
+                                )
+                            };
 
                             let schema = config.resolved_schema();
                             let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
@@ -1276,6 +1400,30 @@ fn deploy() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Get the Docker image ID (SHA digest) for a given tag.
+fn get_docker_image_id(tag: &str) -> Option<String> {
+    let output = std::process::Command::new("docker")
+        .args(["inspect", "--format", "{{.Id}}", tag])
+        .output()
+        .ok()?;
+    if output.status.success() {
+        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        None
+    }
+}
+
+/// Get the remote image hash from the API.
+fn get_remote_image_hash(client: &CloudClient, pid: &str, image_name: &str) -> Option<String> {
+    let url = format!("{}/v1/projects/{}/images/{}/hash", client.base_url, pid, image_name);
+    let resp = ureq::get(&url)
+        .set("Authorization", &format!("Bearer {}", client.token))
+        .call().ok()?;
+    let data: serde_json::Value = resp.into_json().ok()?;
+    let hash = data["hash"].as_str()?.to_string();
+    if hash.is_empty() { None } else { Some(hash) }
 }
 
 /// A Read wrapper that prints upload progress percentage.
@@ -1534,6 +1682,48 @@ fn billing(action: Option<CloudBillingCommands>) -> Result<()> {
             Ok(())
         }
     }
+}
+
+fn keys(action: CloudKeyCommands) -> Result<()> {
+    let creds = require_credentials()?;
+    let mut client = CloudClient::new(&creds);
+
+    match action {
+        CloudKeyCommands::Create => {
+            let resp = client.post("/v1/auth/keys", &serde_json::json!({}))?;
+            let data: serde_json::Value = resp.into_json()?;
+            let key = data["key"].as_str().unwrap_or("");
+            let id = data["id"].as_str().unwrap_or("");
+            println!("API key created:");
+            println!("  Key: {}", key);
+            println!("  ID:  {}", id);
+            println!();
+            println!("  Save this key — it won't be shown again.");
+            println!("  Use it in CI/CD: export SPOOKY_API_KEY={}", key);
+        }
+        CloudKeyCommands::List => {
+            let resp = client.get("/v1/auth/keys")?;
+            let data: Vec<serde_json::Value> = resp.into_json()?;
+            if data.is_empty() {
+                println!("No API keys found. Create one with `sp00ky cloud keys create`.");
+            } else {
+                println!("{:<38} {:<24} {}", "ID", "PREFIX", "CREATED");
+                for key in &data {
+                    println!(
+                        "{:<38} {:<24} {}",
+                        key["id"].as_str().unwrap_or("-"),
+                        key["prefix"].as_str().unwrap_or("-"),
+                        key["created_at"].as_str().unwrap_or("-"),
+                    );
+                }
+            }
+        }
+        CloudKeyCommands::Revoke { id } => {
+            client.delete(&format!("/v1/auth/keys/{}", id))?;
+            println!("API key {} revoked.", id);
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
