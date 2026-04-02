@@ -45,6 +45,10 @@ pub enum SurrealDbConfig {
         /// Required when hosting is "external" — the SurrealDB endpoint URL
         #[serde(default, skip_serializing_if = "Option::is_none")]
         endpoint: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        username: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        password: Option<String>,
     },
 }
 
@@ -57,6 +61,8 @@ pub struct ResolvedSurrealDb {
     pub hosting: HostingMode,
     /// Only `Some` when `hosting == External`.
     pub endpoint: Option<String>,
+    pub username: String,
+    pub password: String,
 }
 
 impl ResolvedSurrealDb {
@@ -68,13 +74,17 @@ impl ResolvedSurrealDb {
                 database: "main".to_string(),
                 hosting: HostingMode::Cloud,
                 endpoint: None,
+                username: "root".to_string(),
+                password: "root".to_string(),
             },
-            Some(SurrealDbConfig::Full { version, namespace, database, hosting, endpoint }) => Self {
+            Some(SurrealDbConfig::Full { version, namespace, database, hosting, endpoint, username, password }) => Self {
                 version: version.clone().unwrap_or_else(|| DEFAULT_SURREALDB_VERSION.to_string()),
                 namespace: namespace.clone().unwrap_or_else(|| "main".to_string()),
                 database: database.clone().unwrap_or_else(|| "main".to_string()),
                 hosting: hosting.clone().unwrap_or_default(),
                 endpoint: endpoint.clone(),
+                username: username.clone().unwrap_or_else(|| "root".to_string()),
+                password: password.clone().unwrap_or_else(|| "root".to_string()),
             },
             None => Self {
                 version: DEFAULT_SURREALDB_VERSION.to_string(),
@@ -82,6 +92,8 @@ impl ResolvedSurrealDb {
                 database: "main".to_string(),
                 hosting: HostingMode::Cloud,
                 endpoint: None,
+                username: "root".to_string(),
+                password: "root".to_string(),
             },
         }
     }

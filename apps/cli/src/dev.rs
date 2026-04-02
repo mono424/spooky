@@ -215,6 +215,9 @@ fn run_direct_mode(mode: &str, versions: &ResolvedVersions, config: &Sp00kyConfi
         std::fs::create_dir_all(&surreal_data_dir).ok();
         let surreal_data_mount = format!("{}:/data", surreal_data_dir.display());
 
+        let surreal_user_env = format!("SURREAL_USER={}", resolved_surreal.username);
+        let surreal_pass_env = format!("SURREAL_PASS={}", resolved_surreal.password);
+
         docker(&[
             "run", "-d",
             "--name", SURREAL_CONTAINER,
@@ -222,16 +225,16 @@ fn run_direct_mode(mode: &str, versions: &ResolvedVersions, config: &Sp00kyConfi
             "--network-alias", "surrealdb",
             "-p", &format!("{}:8000", SURREAL_PORT),
             "-v", &surreal_data_mount,
-            "-e", "SURREAL_USER=root",
-            "-e", "SURREAL_PASS=root",
+            "-e", &surreal_user_env,
+            "-e", &surreal_pass_env,
             "-e", "SURREAL_LOG=info",
             "-e", "SURREAL_CAPS_ALLOW_EXPERIMENTAL=surrealism,files",
             &surreal_image,
             "start",
             "--bind", "0.0.0.0:8000",
             "--allow-all",
-            "--user", "root",
-            "--pass", "root",
+            "--user", &resolved_surreal.username,
+            "--pass", &resolved_surreal.password,
             "surrealkv:/data",
         ])?;
 
@@ -288,6 +291,8 @@ fn run_direct_mode(mode: &str, versions: &ResolvedVersions, config: &Sp00kyConfi
 
         let scheduler_ns_env = format!("SP00KY_SCHEDULER_DB_NAMESPACE={}", resolved_surreal.namespace);
         let scheduler_db_env = format!("SP00KY_SCHEDULER_DB_DATABASE={}", resolved_surreal.database);
+        let scheduler_user_env = format!("SP00KY_SCHEDULER_DB_USERNAME={}", resolved_surreal.username);
+        let scheduler_pass_env = format!("SP00KY_SCHEDULER_DB_PASSWORD={}", resolved_surreal.password);
 
         println!("{} Phase 5: Starting scheduler...", PREFIX);
         docker(&[
@@ -301,8 +306,8 @@ fn run_direct_mode(mode: &str, versions: &ResolvedVersions, config: &Sp00kyConfi
             "-e", "SP00KY_SCHEDULER_DB_URL=surrealdb:8000/rpc",
             "-e", &scheduler_ns_env,
             "-e", &scheduler_db_env,
-            "-e", "SP00KY_SCHEDULER_DB_USERNAME=root",
-            "-e", "SP00KY_SCHEDULER_DB_PASSWORD=root",
+            "-e", &scheduler_user_env,
+            "-e", &scheduler_pass_env,
             "-e", "SP00KY_SCHEDULER_REPLICA_DB_PATH=/data/replica",
             "-e", "SP00KY_SCHEDULER_WAL_PATH=/data/event_wal.log",
             "-e", "SP00KY_AUTH_SECRET=mysecret",
@@ -348,6 +353,8 @@ fn run_direct_mode(mode: &str, versions: &ResolvedVersions, config: &Sp00kyConfi
 
     let ssp_ns_env = format!("SURREALDB_NS={}", resolved_surreal.namespace);
     let ssp_db_env = format!("SURREALDB_DB={}", resolved_surreal.database);
+    let ssp_user_env = format!("SURREALDB_USER={}", resolved_surreal.username);
+    let ssp_pass_env = format!("SURREALDB_PASS={}", resolved_surreal.password);
 
     let mut ssp_args = vec![
         "run", "-d",
@@ -360,8 +367,8 @@ fn run_direct_mode(mode: &str, versions: &ResolvedVersions, config: &Sp00kyConfi
         "-e", "SURREALDB_ADDR=surrealdb:8000/rpc",
         "-e", &ssp_ns_env,
         "-e", &ssp_db_env,
-        "-e", "SURREALDB_USER=root",
-        "-e", "SURREALDB_PASS=root",
+        "-e", &ssp_user_env,
+        "-e", &ssp_pass_env,
         "-e", "SP00KY_AUTH_SECRET=mysecret",
         "-e", "SP00KY_PERSISTENCE_FILE=/data/sp00ky_state.json",
         "-e", "SP00KY_CONFIG_PATH=/config/sp00ky.yml",

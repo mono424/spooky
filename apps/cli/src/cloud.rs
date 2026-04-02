@@ -1133,6 +1133,8 @@ fn deploy() -> Result<()> {
             "endpoint": resolved_surreal.endpoint,
             "namespace": resolved_surreal.namespace,
             "database": resolved_surreal.database,
+            "username": resolved_surreal.username,
+            "password": resolved_surreal.password,
         }),
     };
 

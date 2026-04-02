@@ -2,6 +2,8 @@ mode: cluster # "singlenode", "cluster", or "surrealism"
 surrealdb:
   namespace: main
   database: example
+  # username: root       # SurrealDB auth username (default: root)
+  # password: root       # SurrealDB auth password (default: root)
   # hosting: cloud      # "cloud" (default) or "external"
   # endpoint: "wss://my-surreal.example.com"  # required when hosting: external
 # cloudApi: "https://staging-api.sp00ky.cloud"  # override Sp00ky Cloud API endpoint
