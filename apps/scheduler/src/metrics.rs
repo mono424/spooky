@@ -8,6 +8,17 @@ use tracing::info;
 use crate::job_scheduler::JobTracker;
 use crate::query::QueryTracker;
 use crate::router::{SspPool, SspState};
+
+/// Get the local IP address from network interfaces (first non-loopback IPv4)
+fn get_local_ip() -> Option<String> {
+    // Try reading from /proc/net/fib_trie or use a simpler approach
+    // Parse IP from the hostname command or network config
+    if let Ok(output) = std::process::Command::new("hostname").arg("-I").output() {
+        let ips = String::from_utf8_lossy(&output.stdout);
+        return ips.split_whitespace().next().map(|s| s.to_string());
+    }
+    None
+}
 use crate::SchedulerStatus;
 
 /// Metrics snapshot
@@ -53,6 +64,7 @@ pub fn create_metrics_router(state: MetricsState) -> Router {
         .route("/metrics", get(get_metrics))
         .route("/health", get(health_check))
         .route("/info", get(info_handler))
+        .route("/info/text", get(info_text_handler))
         .with_state(state)
 }
 
@@ -137,12 +149,30 @@ async fn info_handler(
     let pool = state.ssp_pool.read().await;
     let total_views: usize = pool.all().iter().map(|ssp| ssp.views).sum();
 
+    let now = std::time::Instant::now();
+
+    // Collect scheduler environment variables
+    let env_vars: serde_json::Map<String, serde_json::Value> = [
+        "SP00KY_SCHEDULER_DB_URL", "SP00KY_SCHEDULER_DB_NAMESPACE",
+        "SP00KY_SCHEDULER_DB_DATABASE", "SP00KY_SCHEDULER_DB_USERNAME",
+        "SCHEDULER_ID",
+    ].iter().filter_map(|&key| {
+        std::env::var(key).ok().map(|val| (key.to_string(), serde_json::Value::String(val)))
+    }).collect();
+
+    // Get scheduler's own IP from network interfaces or env
+    let scheduler_ip = get_local_ip();
+
     let mut entities = vec![serde_json::json!({
         "entity": "scheduler",
         "id": state.scheduler_id,
+        "ip": scheduler_ip,
         "status": scheduler_status,
         "views": total_views,
         "version": env!("CARGO_PKG_VERSION"),
+        "uptime_seconds": state.start_time.elapsed().as_secs(),
+        "last_heartbeat_seconds_ago": null,
+        "env": env_vars,
     })];
 
     for ssp in pool.all() {
@@ -152,16 +182,40 @@ async fn info_handler(
             Some(SspState::Ready) => "ready",
             None => "unknown",
         };
+        let last_heartbeat_seconds_ago = now
+            .duration_since(ssp.last_heartbeat)
+            .as_secs();
+        // Extract IP from SSP's registered URL (e.g. "http://10.100.1.30:8667" -> "10.100.1.30")
+        let ssp_ip = ssp.url.trim_start_matches("http://")
+            .split(':').next()
+            .map(|s| s.to_string());
         entities.push(serde_json::json!({
             "entity": "ssp",
             "id": ssp.id,
+            "ip": ssp_ip,
             "status": ssp_status,
             "views": ssp.views,
             "version": ssp.version,
+            "uptime_seconds": now.duration_since(ssp.connected_at).as_secs(),
+            "last_heartbeat_seconds_ago": last_heartbeat_seconds_ago,
+            "env": ssp.env,
         }));
     }
 
     Json(serde_json::Value::Array(entities))
+}
+
+/// Info handler that returns plain text JSON (for SurrealDB DEFINE API consumption)
+async fn info_text_handler(
+    State(state): State<MetricsState>,
+) -> (axum::http::StatusCode, [(axum::http::header::HeaderName, &'static str); 1], String) {
+    let json_resp = info_handler(State(state)).await;
+    let json_string = serde_json::to_string(&json_resp.0).unwrap_or_else(|_| "[]".to_string());
+    (
+        axum::http::StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, "text/plain")],
+        json_string,
+    )
 }
 
 /// Start query reassignment monitor

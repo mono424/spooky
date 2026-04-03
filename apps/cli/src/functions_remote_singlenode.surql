@@ -24,7 +24,7 @@ DEFINE FUNCTION OVERWRITE fn::query::register($config: object) {
 DEFINE API OVERWRITE "/spooky"
     FOR get
     THEN {
-        LET $info = http::get('{{ENDPOINT}}/info', {
+        LET $info = http::get('{{ENDPOINT}}/info/text', {
             "Authorization": "Bearer {{SECRET}}"
         });
         RETURN {

@@ -177,6 +177,11 @@ enum CloudCommands {
     },
     /// Destroy cloud project and all VMs
     Destroy,
+    /// Manage database backups
+    Backup {
+        #[command(subcommand)]
+        action: CloudBackupCommands,
+    },
     /// Billing management
     Billing {
         #[command(subcommand)]
@@ -186,6 +191,40 @@ enum CloudCommands {
     Keys {
         #[command(subcommand)]
         action: CloudKeyCommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum CloudBackupCommands {
+    /// List backups
+    List,
+    /// Create a manual backup
+    Create {
+        /// Optional backup name
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Restore database from a backup
+    Restore {
+        /// Backup ID to restore from
+        backup_id: String,
+    },
+    /// Delete a backup
+    Delete {
+        /// Backup ID to delete
+        backup_id: String,
+    },
+    /// Configure automatic backups
+    Configure {
+        /// Enable or disable backups
+        #[arg(long)]
+        enabled: Option<bool>,
+        /// Cron schedule (e.g. "0 2 * * *")
+        #[arg(long)]
+        schedule: Option<String>,
+        /// Number of backups to retain
+        #[arg(long)]
+        retention: Option<u32>,
     },
 }
 

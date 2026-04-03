@@ -229,7 +229,7 @@ export class DevToolsService implements StreamUpdateReceiver {
 
   private exposeToWindow() {
     if (typeof window !== 'undefined') {
-      (window as any).__SP00KY__ = {
+      (window as any).__00__ = {
         version: this.version,
         getState: () => this.getState(),
         clearHistory: () => {
@@ -359,6 +359,9 @@ export class DevToolsService implements StreamUpdateReceiver {
         },
         '*'
       );
+
+      // Dispatch custom event so the devtools page-script can detect late initialization
+      window.dispatchEvent(new CustomEvent('sp00ky:init'));
     }
   }
 }

@@ -63,6 +63,7 @@ pub struct AppState {
     pub job_queue_tx: mpsc::Sender<JobEntry>,
     pub ssp_id: String,
     pub scheduler_url: Option<String>,
+    pub start_time: std::time::Instant,
 }
 
 // --- Request/Response DTOs ---
@@ -150,10 +151,20 @@ async fn register_with_scheduler(
         }
     };
 
+    // Collect relevant env vars to send to scheduler
+    let env_vars: std::collections::HashMap<String, String> = [
+        "SURREALDB_ADDR", "SURREALDB_NS", "SURREALDB_DB", "SURREALDB_USER",
+        "SCHEDULER_URL", "LISTEN_ADDR", "ADVERTISE_ADDR", "SSP_ID",
+        "HEARTBEAT_INTERVAL_MS", "TTL_CLEANUP_INTERVAL_SECS",
+    ].iter().filter_map(|&key| {
+        std::env::var(key).ok().map(|val| (key.to_string(), val))
+    }).collect();
+
     let payload = ssp_protocol::SspRegistration {
         ssp_id: ssp_id.to_string(),
         url: format!("http://{}", registration_host),
         version: env!("CARGO_PKG_VERSION").to_string(),
+        env: if env_vars.is_empty() { None } else { Some(env_vars) },
     };
 
     match client.post(&registration_url).json(&payload).send().await {
@@ -321,6 +332,7 @@ pub async fn run_server() -> anyhow::Result<()> {
         job_queue_tx,
         ssp_id: config.ssp_id.clone(),
         scheduler_url: config.scheduler_url.clone(),
+        start_time: std::time::Instant::now(),
     };
 
     let app = create_app(state);
@@ -377,20 +389,32 @@ pub async fn run_server() -> anyhow::Result<()> {
                 BootstrapSource::Direct(db)
             };
 
-            match self_bootstrap(&source, &processor).await {
-                Ok(()) => {
-                    let guard = processor.read().await;
-                    metrics.view_count.add(guard.view_count() as i64, &[]);
-                    info!(
-                        tables = guard.table_names().len(),
-                        views = guard.view_count(),
-                        "Bootstrap complete"
-                    );
-                    *status.write().await = SspStatus::Ready;
-                }
-                Err(e) => {
-                    error!(error = %e, "Bootstrap failed");
-                    *status.write().await = SspStatus::Failed;
+            // Retry bootstrap up to 10 times with backoff (tables may not exist yet
+            // if migrations haven't run)
+            let mut attempt = 0;
+            loop {
+                attempt += 1;
+                match self_bootstrap(&source, &processor).await {
+                    Ok(()) => {
+                        let guard = processor.read().await;
+                        metrics.view_count.add(guard.view_count() as i64, &[]);
+                        info!(
+                            tables = guard.table_names().len(),
+                            views = guard.view_count(),
+                            "Bootstrap complete"
+                        );
+                        *status.write().await = SspStatus::Ready;
+                        break;
+                    }
+                    Err(e) => {
+                        if attempt >= 10 {
+                            error!(error = %e, attempts = attempt, "Bootstrap failed after retries");
+                            *status.write().await = SspStatus::Failed;
+                            break;
+                        }
+                        warn!(error = %e, attempt = attempt, "Bootstrap failed, retrying in 5s...");
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    }
                 }
             }
         });
@@ -1076,13 +1100,30 @@ async fn info_handler(State(state): State<AppState>) -> Json<Value> {
         SspStatus::Ready => "ready",
         SspStatus::Failed => "failed",
     };
+    // Collect relevant environment variables
+    let env_vars: serde_json::Map<String, Value> = [
+        "SURREALDB_ADDR", "SURREALDB_NS", "SURREALDB_DB", "SURREALDB_USER",
+        "SCHEDULER_URL", "LISTEN_ADDR", "ADVERTISE_ADDR", "SSP_ID",
+        "HEARTBEAT_INTERVAL_MS", "TTL_CLEANUP_INTERVAL_SECS",
+    ].iter().filter_map(|&key| {
+        std::env::var(key).ok().map(|val| (key.to_string(), Value::String(val)))
+    }).collect();
+
+    // Derive IP from ADVERTISE_ADDR (e.g. "10.100.1.30:8667" -> "10.100.1.30")
+    let ip = std::env::var("ADVERTISE_ADDR").ok()
+        .and_then(|addr| addr.split(':').next().map(|s| s.to_string()));
+
     Json(json!([
         {
             "entity": "ssp",
             "id": state.ssp_id,
+            "ip": ip,
             "status": status_str,
             "views": circuit.view_count(),
             "version": env!("CARGO_PKG_VERSION"),
+            "uptime_seconds": state.start_time.elapsed().as_secs(),
+            "last_heartbeat_seconds_ago": null,
+            "env": env_vars,
         }
     ]))
 }

@@ -91,6 +91,7 @@ async fn handle_register(
         views: 0,
         cpu_usage: None,
         memory_usage: None,
+        env: request.env.clone(),
     };
 
     // Add to pool, mark as bootstrapping, record snapshot_seq

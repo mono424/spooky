@@ -1,6 +1,6 @@
 [package]
 name = "scheduler"
-version = "0.0.1-canary.29"
+version = "0.0.1-canary.30"
 edition = "2021"
 
 [dependencies]
@@ -18,6 +18,9 @@ anyhow = "1"
 axum = "0.7"
 uuid = { version = "1", features = ["v4"] }
 ssp-protocol = { path = "../../packages/ssp-protocol" }
+rust-s3 = { version = "0.35", default-features = false, features = ["tokio-rustls-tls"] }
+flate2 = "1"
+chrono = { version = "0.4", features = ["serde"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

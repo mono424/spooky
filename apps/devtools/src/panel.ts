@@ -225,7 +225,7 @@ function refreshState() {
 function detectSp00ky() {
   try {
     // Check if Sp00ky is available on the window object
-    const sp00ky = (window as any).__SP00KY__;
+    const sp00ky = (window as any).__00__;
 
     if (!sp00ky) {
       return { detected: false };
@@ -552,8 +552,8 @@ function setupTabs() {
 function clearEventsHistory() {
   chrome.devtools.inspectedWindow.eval(
     `(function() {
-      if (window.__SP00KY__ && window.__SP00KY__.clearHistory) {
-        window.__SP00KY__.clearHistory();
+      if (window.__00__ && window.__00__.clearHistory) {
+        window.__00__.clearHistory();
         return { success: true };
       }
       return { success: false };
@@ -631,9 +631,9 @@ function fetchTableData(tableName: string) {
   chrome.devtools.inspectedWindow.eval(
     `(async function() {
       try {
-        if (window.__SP00KY__ && window.__SP00KY__.getTableData) {
+        if (window.__00__ && window.__00__.getTableData) {
           console.log('Fetching table data for:', "${tableName}");
-          const data = await window.__SP00KY__.getTableData("${tableName}");
+          const data = await window.__00__.getTableData("${tableName}");
           console.log('Got table data:', data);
 
           // Post message back to devtools
@@ -646,7 +646,7 @@ function fetchTableData(tableName: string) {
 
           return { success: true, count: data?.length || 0 };
         }
-        console.warn('window.__SP00KY__.getTableData not available');
+        console.warn('window.__00__.getTableData not available');
         return { success: false, error: 'API not available' };
       } catch (error) {
         console.error('Error fetching table data:', error);

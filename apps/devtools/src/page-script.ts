@@ -1,14 +1,14 @@
-// This script runs in the page context and has access to window.__SP00KY__
+// This script runs in the page context and has access to window.__00__
 (function () {
   let isInitialized = false;
 
   // Hook into Sp00ky if it exists
   function checkForSp00ky() {
-    if ((window as any).__SP00KY__ && !isInitialized) {
+    if ((window as any).__00__ && !isInitialized) {
       console.log('Sp00ky detected by DevTools');
       isInitialized = true;
 
-      const sp00ky = (window as any).__SP00KY__;
+      const sp00ky = (window as any).__00__;
 
       // Send initial detection message with full state
       window.postMessage(
@@ -29,32 +29,12 @@
     return false;
   }
 
-  // Listen for state change messages from Sp00ky DevTools Service
-  window.addEventListener('message', (event) => {
-    // Only handle messages from the same window (from Sp00ky DevTools Service)
-    if (event.source !== window) return;
-
-    // Forward SP00KY_STATE_CHANGED messages with full state to content script
-    if (
-      event.data.type === 'SP00KY_STATE_CHANGED' &&
-      event.data.source === 'sp00ky-devtools-page'
-    ) {
-      // The state is already included in the message from devtools-service
-      // Just forward it as-is
-    }
-
-    // Forward SP00KY_DETECTED messages
-    if (event.data.type === 'SP00KY_DETECTED' && event.data.source === 'sp00ky-devtools-page') {
-      // Already being handled, no need to duplicate
-    }
-  });
-
   // Listen for GET_STATE requests
   window.addEventListener('message', (event) => {
     if (event.source !== window) return;
     if (event.data.type === 'GET_STATE' && event.data.source === 'sp00ky-devtools-content') {
-      if ((window as any).__SP00KY__) {
-        const sp00ky = (window as any).__SP00KY__;
+      if ((window as any).__00__) {
+        const sp00ky = (window as any).__00__;
         window.postMessage(
           {
             type: 'SP00KY_STATE_CHANGED',
@@ -71,7 +51,7 @@
   window.addEventListener('SP00KY_RUN_QUERY', async (event: any) => {
     const { requestId, query, target } = event.detail;
 
-    if (!(window as any).__SP00KY__?.runQuery) {
+    if (!(window as any).__00__?.runQuery) {
       window.postMessage(
         {
           type: 'SP00KY_QUERY_RESPONSE',
@@ -86,7 +66,7 @@
     }
 
     try {
-      const result = await (window as any).__SP00KY__.runQuery(query, target);
+      const result = await (window as any).__00__.runQuery(query, target);
       window.postMessage(
         {
           type: 'SP00KY_QUERY_RESPONSE',
@@ -112,19 +92,27 @@
     }
   });
 
-  // Try immediately
+  // Try immediately, then fast retries, then long-tail fallback
   if (!checkForSp00ky()) {
-    // If not found, try again after a short delay
+    // Fast retries for normal case
     setTimeout(checkForSp00ky, 100);
     setTimeout(checkForSp00ky, 500);
     setTimeout(checkForSp00ky, 1000);
     setTimeout(checkForSp00ky, 2000);
+
+    // Long-tail fallback: check every 3s for up to 30s
+    let longPollCount = 0;
+    const longPoll = setInterval(() => {
+      if (checkForSp00ky() || ++longPollCount >= 10) {
+        clearInterval(longPoll);
+      }
+    }, 3000);
   }
 
   // Listen for GET_TABLE_DATA requests from content script
   window.addEventListener('SP00KY_GET_TABLE_DATA', async (event: any) => {
     const { requestId, tableName } = event.detail;
-    const sp00ky = (window as any).__SP00KY__;
+    const sp00ky = (window as any).__00__;
 
     if (!sp00ky?.getTableData) {
       window.postMessage(
@@ -169,7 +157,7 @@
   // Listen for UPDATE_TABLE_ROW requests from content script
   window.addEventListener('SP00KY_UPDATE_TABLE_ROW', async (event: any) => {
     const { requestId, tableName, recordId, updates } = event.detail;
-    const sp00ky = (window as any).__SP00KY__;
+    const sp00ky = (window as any).__00__;
 
     if (!sp00ky?.updateTableRow) {
       window.postMessage(
@@ -215,7 +203,7 @@
   // Listen for DELETE_TABLE_ROW requests from content script
   window.addEventListener('SP00KY_DELETE_TABLE_ROW', async (event: any) => {
     const { requestId, tableName, recordId } = event.detail;
-    const sp00ky = (window as any).__SP00KY__;
+    const sp00ky = (window as any).__00__;
 
     if (!sp00ky?.deleteTableRow) {
       window.postMessage(
@@ -261,7 +249,7 @@
   // Listen for CLEAR_HISTORY requests from content script
   window.addEventListener('SP00KY_CLEAR_HISTORY', (event: any) => {
     const { requestId } = event.detail;
-    const sp00ky = (window as any).__SP00KY__;
+    const sp00ky = (window as any).__00__;
 
     if (!sp00ky?.clearHistory) {
       window.postMessage(

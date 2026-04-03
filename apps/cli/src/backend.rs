@@ -183,9 +183,41 @@ pub struct Sp00kyConfig {
     /// Frontend deployment configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frontend: Option<FrontendDeployConfig>,
+    /// Deployment configuration (SSP count, scaling options)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deployment: Option<DeploymentConfig>,
     /// Override the Sp00ky Cloud API endpoint (e.g. for staging).
     #[serde(default, rename = "cloudApi", skip_serializing_if = "Option::is_none")]
     pub cloud_api: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct DeploymentConfig {
+    /// Number of SSP instances to provision (overrides plan default)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssp_count: Option<u32>,
+    /// Backup configuration
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup: Option<BackupConfig>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct BackupConfig {
+    /// Enable automated backups
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// Cron schedule (e.g., "0 2 * * *" for 2am daily)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<String>,
+    /// Number of backups to retain
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retention: Option<u32>,
+    /// External S3-compatible bucket URL (skip MinIO if set)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bucket_url: Option<String>,
+    /// Path to env file with BACKUP_ACCESS_KEY and BACKUP_SECRET_KEY
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credentials_env_file: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -483,6 +515,7 @@ fn default_config() -> Sp00kyConfig {
         client_types: Default::default(),
         dev_app: None,
         frontend: None,
+        deployment: None,
         cloud_api: None,
     }
 }

@@ -41,7 +41,7 @@ export function useRunInHostPage() {
     onSuccess: (state: any) => void,
     onError?: (error: any) => void
   ): void => {
-    run(`window.__SP00KY__ ? window.__SP00KY__.getState() : null`, {
+    run(`window.__00__ ? window.__00__.getState() : null`, {
       onSuccess,
       onError,
     });
@@ -58,8 +58,8 @@ export function useRunInHostPage() {
     run(
       `(async function() {
         try {
-          if (window.__SP00KY__ && window.__SP00KY__.getTableData) {
-            const data = await window.__SP00KY__.getTableData("${tableName}");
+          if (window.__00__ && window.__00__.getTableData) {
+            const data = await window.__00__.getTableData("${tableName}");
             window.postMessage({
               type: 'SP00KY_TABLE_DATA_RESPONSE',
               source: 'sp00ky-devtools-page',
@@ -86,8 +86,8 @@ export function useRunInHostPage() {
   ): void => {
     run(
       `(function() {
-        if (window.__SP00KY__ && window.__SP00KY__.clearHistory) {
-          window.__SP00KY__.clearHistory();
+        if (window.__00__ && window.__00__.clearHistory) {
+          window.__00__.clearHistory();
           return { success: true };
         }
         return { success: false };
@@ -100,7 +100,7 @@ export function useRunInHostPage() {
    * Check if Sp00ky is available on the page
    */
   const checkSp00kyAvailable = (onSuccess: (available: boolean) => void): void => {
-    run(`!!window.__SP00KY__`, { onSuccess });
+    run(`!!window.__00__`, { onSuccess });
   };
 
   /**
@@ -117,9 +117,9 @@ export function useRunInHostPage() {
     run(
       `(async function() {
         try {
-          if (window.__SP00KY__ && window.__SP00KY__.updateTableRow) {
+          if (window.__00__ && window.__00__.updateTableRow) {
             const updates = JSON.parse("${updatesJson}");
-            const result = await window.__SP00KY__.updateTableRow("${tableName}", "${recordId}", updates);
+            const result = await window.__00__.updateTableRow("${tableName}", "${recordId}", updates);
             return result;
           }
           return { success: false, error: 'Sp00ky not found' };
@@ -143,8 +143,8 @@ export function useRunInHostPage() {
     run(
       `(async function() {
         try {
-          if (window.__SP00KY__ && window.__SP00KY__.deleteTableRow) {
-            const result = await window.__SP00KY__.deleteTableRow("${tableName}", "${recordId}");
+          if (window.__00__ && window.__00__.deleteTableRow) {
+            const result = await window.__00__.deleteTableRow("${tableName}", "${recordId}");
             return result;
           }
           return { success: false, error: 'Sp00ky not found' };

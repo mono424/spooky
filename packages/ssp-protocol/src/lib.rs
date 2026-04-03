@@ -43,6 +43,8 @@ pub struct SspRegistration {
     pub ssp_id: String,
     pub url: String,
     pub version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

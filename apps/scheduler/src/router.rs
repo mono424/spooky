@@ -74,6 +74,7 @@ impl SspPool {
                 views,
                 cpu_usage,
                 memory_usage,
+                env: None,
             };
             self.ssps.insert(ssp_id.to_string(), info);
         }

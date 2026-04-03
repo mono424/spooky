@@ -3,7 +3,7 @@
 
 console.log('Sp00ky DevTools content script loaded');
 
-// Inject a script into the page context to access window.__SP00KY__
+// Inject a script into the page context to access window.__00__
 // Using external file to avoid CSP violations with inline scripts
 function injectPageScript() {
   const script = document.createElement('script');

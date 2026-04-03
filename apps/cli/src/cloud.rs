@@ -8,7 +8,8 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::backend::{self, BackendDevConfig, BackendDevTypedConfig, HostingMode};
-use crate::{CloudBillingCommands, CloudCommands, CloudKeyCommands};
+use crate::surreal_client::MigrationDB;
+use crate::{CloudBackupCommands, CloudBillingCommands, CloudCommands, CloudKeyCommands};
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -707,6 +708,7 @@ pub fn run(action: CloudCommands) -> Result<()> {
         CloudCommands::Logs { service } => logs(service),
         CloudCommands::Scale { ssp } => scale(ssp),
         CloudCommands::Destroy => destroy(),
+        CloudCommands::Backup { action } => backup(action),
         CloudCommands::Billing { action } => billing(action),
         CloudCommands::Keys { action } => keys(action),
     }
@@ -1277,11 +1279,15 @@ fn deploy() -> Result<()> {
         } // end else (frontend changed)
     }
 
+    let ssp_count = config.deployment.as_ref()
+        .and_then(|d| d.ssp_count);
+
     let deploy_body = serde_json::json!({
         "surrealdb": surrealdb_manifest,
         "backends": backend_manifests,
         "external_backends": external_backends,
         "frontend": frontend_manifest,
+        "ssp_count": ssp_count,
     });
 
     let resp = client.post(
@@ -1359,12 +1365,32 @@ fn deploy() -> Result<()> {
                             } else {
                                 println!("  ▸ No migrations directory found, skipping.");
                             }
+
+                            // Apply remote functions (DEFINE API, fn::query::register, etc.)
+                            // Derive SSP endpoint from SurrealDB IP (SSP is always .30 on same subnet)
+                            if let Some(db_url_str) = status_data["urls"]["surrealdb"].as_str() {
+                                // Get SSP IP from deployment status, or derive from DB IP
+                                let ssp_endpoint = status_data["urls"]["ssp"]
+                                    .as_str()
+                                    .map(|s| s.to_string())
+                                    .or_else(|| {
+                                        // Derive from VMs list: find SSP VM IP
+                                        status_data["vms"].as_array().and_then(|vms| {
+                                            vms.iter()
+                                                .find(|v| v["role"].as_str() == Some("ssp"))
+                                                .and_then(|v| v["internal_ip"].as_str())
+                                                .map(|ip| format!("http://{}:8667", ip))
+                                        })
+                                    });
+
+                                // Remote functions will be applied after SSP is provisioned (phase 2)
+                            }
                         }
                     }
                 }
             }
 
-            // Phase 2: Finalize deployment (triggers app VM provisioning)
+            // Phase 2: Finalize deployment (triggers SSP + scheduler + app VM provisioning)
             println!("  ▸ Deploying applications...");
             client.post(
                 &format!("/v1/projects/{}/deploy/finalize", pid),
@@ -1377,9 +1403,74 @@ fn deploy() -> Result<()> {
                 "running" => {
                     println!();
                     println!("  Deployment is running!");
+
+                    // Apply remote functions now that SSP is running
                     if let Ok(status_resp) = client.get(&format!("/v1/projects/{}/deployment", pid)) {
                         if let Ok(status) = status_resp.into_json::<serde_json::Value>() {
                             print_deployment_details(&status);
+
+                            // Find SSP endpoint and apply functions
+                            if let Some(db_url) = status["urls"]["surrealdb"].as_str() {
+                                let ssp_endpoint = status["urls"]["ssp"]
+                                    .as_str()
+                                    .map(|s| s.to_string())
+                                    .or_else(|| {
+                                        status["vms"].as_array().and_then(|vms| {
+                                            vms.iter()
+                                                .find(|v| v["role"].as_str() == Some("ssp"))
+                                                .and_then(|v| v["internal_ip"].as_str())
+                                                .map(|ip| format!("http://{}:8667", ip))
+                                        })
+                                    });
+
+                                // Use scheduler URL for remote functions (scheduler routes to SSPs)
+                                // Fall back to SSP URL for singlenode mode without scheduler
+                                let endpoint = status["urls"]["scheduler"]
+                                    .as_str()
+                                    .map(|s| s.to_string())
+                                    .or_else(|| ssp_endpoint.clone());
+
+                                if let Some(fn_endpoint) = endpoint {
+                                    let resolved = config.resolved_surrealdb();
+                                    let db_password = status["surrealdb_password"].as_str().unwrap_or("");
+                                    let surreal_client = if db_password.is_empty() {
+                                        crate::surreal_client::SurrealClient::new_unauthenticated(
+                                            db_url, &resolved.namespace, &resolved.database,
+                                        )
+                                    } else {
+                                        crate::surreal_client::SurrealClient::new(
+                                            db_url, &resolved.namespace, &resolved.database, "root", db_password,
+                                        )
+                                    };
+                                    let mode = config.mode.as_deref().unwrap_or("singlenode");
+                                    // Extract SP00KY_AUTH_SECRET from backend env config
+                                    let auth_secret = status["ssp_auth_secret"]
+                                        .as_str()
+                                        .map(|s| s.to_string())
+                                        .unwrap_or_else(|| {
+                                            let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
+                                            for (_name, backend_config) in &config.backends {
+                                                if let Some(deploy) = &backend_config.deploy {
+                                                    let mut all_env = load_deploy_env_file(deploy.env_file.as_deref(), config_dir);
+                                                    all_env.extend(deploy.env.clone());
+                                                    for entry in &all_env {
+                                                        if let Some(val) = entry.strip_prefix("SP00KY_AUTH_SECRET=") {
+                                                            return val.to_string();
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            String::new()
+                                        });
+                                    let functions_sql = crate::schema_builder::build_remote_functions_schema(
+                                        mode, &fn_endpoint, &auth_secret,
+                                    );
+                                    match surreal_client.execute(&functions_sql) {
+                                        Ok(_) => println!("  ▸ Remote functions applied."),
+                                        Err(e) => println!("  ▸ Warning: failed to apply remote functions: {:?}", e),
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -1631,6 +1722,76 @@ fn destroy() -> Result<()> {
     client.delete(&format!("/v1/projects/{}", pid))?;
 
     println!("Project '{}' destroyed.", slug);
+    Ok(())
+}
+
+fn backup(action: CloudBackupCommands) -> Result<()> {
+    let creds = require_credentials()?;
+    let mut client = CloudClient::new(&creds);
+    let (_slug, pid) = resolve_project_id(&mut client)?;
+
+    match action {
+        CloudBackupCommands::List => {
+            let resp = client.get(&format!("/v1/projects/{}/backups", pid))?;
+            let backups: Vec<serde_json::Value> = resp.into_json()?;
+            if backups.is_empty() {
+                println!("  No backups found.");
+                return Ok(());
+            }
+            println!("  {:<36}  {:<12}  {:<10}  {}", "ID", "STATUS", "SIZE", "CREATED");
+            println!("  {}", "-".repeat(80));
+            for b in &backups {
+                let id = b["id"].as_str().unwrap_or("?");
+                let status = b["status"].as_str().unwrap_or("?");
+                let size = b["size_bytes"].as_i64().unwrap_or(0);
+                let created = b["created_at"].as_str().unwrap_or("?");
+                let name = b["name"].as_str().unwrap_or("");
+                let size_str = if size > 1_000_000 {
+                    format!("{:.1} MB", size as f64 / 1_000_000.0)
+                } else if size > 0 {
+                    format!("{:.1} KB", size as f64 / 1_000.0)
+                } else {
+                    "—".to_string()
+                };
+                let label = if name.is_empty() { id.to_string() } else { format!("{} ({})", name, &id[..8]) };
+                println!("  {:<36}  {:<12}  {:<10}  {}", label, status, size_str, &created[..19]);
+            }
+        }
+        CloudBackupCommands::Create { name } => {
+            println!("  Creating backup...");
+            let body = serde_json::json!({ "name": name });
+            let resp = client.post(&format!("/v1/projects/{}/backups", pid), &body)?;
+            let result: serde_json::Value = resp.into_json()?;
+            println!("  Backup created: {}", result["id"].as_str().unwrap_or("?"));
+            println!("  Status: {}", result["status"].as_str().unwrap_or("pending"));
+        }
+        CloudBackupCommands::Restore { backup_id } => {
+            println!("  Restoring from backup {}...", backup_id);
+            let resp = client.post(
+                &format!("/v1/projects/{}/backups/{}/restore", pid, backup_id),
+                &serde_json::json!({}),
+            )?;
+            let result: serde_json::Value = resp.into_json()?;
+            println!("  {}", result["message"].as_str().unwrap_or("Restore initiated"));
+        }
+        CloudBackupCommands::Delete { backup_id } => {
+            let resp = client.delete(&format!("/v1/projects/{}/backups/{}", pid, backup_id))?;
+            if resp.status() == 200 {
+                println!("  Backup {} deleted.", backup_id);
+            } else {
+                bail!("Failed to delete backup");
+            }
+        }
+        CloudBackupCommands::Configure { enabled, schedule, retention } => {
+            let body = serde_json::json!({
+                "enabled": enabled,
+                "schedule": schedule,
+                "retention": retention,
+            });
+            client.post(&format!("/v1/projects/{}/backups/configure", pid), &body)?;
+            println!("  Backup configuration updated.");
+        }
+    }
     Ok(())
 }
 

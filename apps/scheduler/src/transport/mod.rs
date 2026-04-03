@@ -22,6 +22,8 @@ pub struct SspInfo {
     pub cpu_usage: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_usage: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<std::collections::HashMap<String, String>>,
 }
 
 /// HTTP-based transport for communicating with SSP sidecars
