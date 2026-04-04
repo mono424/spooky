@@ -4143,7 +4143,7 @@ dependencies = [
 
 [[package]]
 name = "scheduler"
-version = "0.0.1-canary.30"
+version = "0.0.1-canary.31"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4504,7 +4504,7 @@ dependencies = [
 
 [[package]]
 name = "ssp-protocol"
-version = "0.0.1-canary.30"
+version = "0.0.1-canary.31"
 dependencies = [
  "serde",
  "serde_json",

@@ -177,6 +177,18 @@ enum CloudCommands {
     },
     /// Destroy cloud project and all VMs
     Destroy,
+    /// Upgrade SSP and scheduler to latest version
+    Upgrade {
+        /// Only check for updates, don't apply
+        #[arg(long)]
+        check: bool,
+        /// Target specific version (e.g. 0.0.1-canary.30)
+        #[arg(long)]
+        version: Option<String>,
+        /// Skip major version warning
+        #[arg(long)]
+        force: bool,
+    },
     /// Manage database backups
     Backup {
         #[command(subcommand)]

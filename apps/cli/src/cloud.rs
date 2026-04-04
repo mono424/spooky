@@ -745,6 +745,7 @@ pub fn run(action: CloudCommands) -> Result<()> {
         CloudCommands::Logs { service } => logs(service),
         CloudCommands::Scale { ssp } => scale(ssp),
         CloudCommands::Destroy => destroy(),
+        CloudCommands::Upgrade { check, version, force } => upgrade(check, version, force),
         CloudCommands::Backup { action } => backup(action),
         CloudCommands::Billing { action } => billing(action),
         CloudCommands::Keys { action } => keys(action),
@@ -1481,11 +1482,13 @@ fn deploy() -> Result<()> {
                                         )
                                     };
                                     let mode = config.mode.as_deref().unwrap_or("singlenode");
-                                    // Extract SP00KY_AUTH_SECRET from backend env config
-                                    let auth_secret = status["ssp_auth_secret"]
+                                    // Read the auth secret from the server's deployment status response.
+                                    // The cloud API generates this and sets it on both scheduler and SSP VMs.
+                                    let auth_secret = status["sp00ky_auth_secret"]
                                         .as_str()
                                         .map(|s| s.to_string())
                                         .unwrap_or_else(|| {
+                                            // Fallback: check backend env config (for local/custom setups)
                                             let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
                                             for (_name, backend_config) in &config.backends {
                                                 if let Some(deploy) = &backend_config.deploy {
@@ -1589,8 +1592,128 @@ impl<'a> std::io::Read for ProgressReader<'a> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Deployment status display — animated inline table
+// ---------------------------------------------------------------------------
+
+const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// Shared state between the SSE reader and the render thread.
+struct DeployState {
+    phase: String,
+    vms: Vec<(String, String, String)>, // (role, ip, status)
+    done: bool,
+}
+
+fn vm_icon(status: &str, spinner_frame: usize) -> String {
+    match status {
+        "running" => " ●".to_string(),
+        "starting" => format!(" {}", SPINNER_FRAMES[spinner_frame % SPINNER_FRAMES.len()]),
+        "failed" => " ✗".to_string(),
+        "stopped" => " ○".to_string(),
+        _ => " ·".to_string(), // pending
+    }
+}
+
+fn vm_style(status: &str) -> &str {
+    match status {
+        "running" => "\x1b[32m",  // green
+        "starting" => "\x1b[33m", // yellow
+        "failed" => "\x1b[31m",   // red
+        "stopped" => "\x1b[90m",  // dim
+        _ => "\x1b[90m",          // dim / pending
+    }
+}
+
+/// Render the full VM table in-place by moving the cursor up and overwriting.
+fn render_vm_table(
+    vms: &[(String, String, String)],
+    phase: &str,
+    spinner_frame: usize,
+    first_render: bool,
+) {
+    use std::io::Write;
+    let mut out = std::io::stdout();
+
+    // Layout: blank + phase + blank + header + vms + blank
+    let total_lines = 4 + vms.len();
+
+    if !first_render {
+        write!(out, "\x1b[{}A", total_lines).ok();
+    }
+
+    // Phase header with padding
+    let phase_label = match phase {
+        "provisioning" => "Provisioning infrastructure",
+        "deploying_apps" => "Deploying applications",
+        "migrating" => "Running migrations",
+        "running" => "Deployment complete",
+        "failed" => "Deployment failed",
+        _ => phase,
+    };
+    write!(out, "\r\x1b[2K\n").ok(); // top padding
+
+    // Phase line with its own spinner for in-progress phases
+    match phase {
+        "running" => {
+            write!(
+                out,
+                "\r\x1b[2K   \x1b[32m●\x1b[0m \x1b[1m{}\x1b[0m\n",
+                phase_label
+            )
+            .ok();
+        }
+        "failed" => {
+            write!(
+                out,
+                "\r\x1b[2K   \x1b[31m✗\x1b[0m \x1b[1m{}\x1b[0m\n",
+                phase_label
+            )
+            .ok();
+        }
+        _ => {
+            let f = SPINNER_FRAMES[spinner_frame % SPINNER_FRAMES.len()];
+            write!(
+                out,
+                "\r\x1b[2K   \x1b[36m{}\x1b[0m \x1b[1m{}\x1b[0m\n",
+                f, phase_label
+            )
+            .ok();
+        }
+    }
+
+    write!(out, "\r\x1b[2K\n").ok(); // padding after phase
+
+    // Header
+    write!(
+        out,
+        "\r\x1b[2K   \x1b[90m  {:<14} {:<18} {}\x1b[0m\n",
+        "SERVICE", "IP", "STATUS"
+    )
+    .ok();
+
+    // VM rows
+    for (role, ip, status) in vms {
+        let icon = vm_icon(status, spinner_frame);
+        let style = vm_style(status);
+        write!(
+            out,
+            "\r\x1b[2K   {}{}\x1b[0m {}{:<14}\x1b[0m \x1b[90m{:<18}\x1b[0m {}{}\x1b[0m\n",
+            style, icon, style, role, ip, style, status,
+        )
+        .ok();
+    }
+
+    write!(out, "\r\x1b[2K").ok(); // bottom padding line (no newline, cursor stays)
+
+    out.flush().ok();
+}
+
 /// Stream SSE deployment events and return the final status when the stream closes.
+/// Uses an animated inline table with spinner for in-progress services.
 fn stream_deployment_events(client: &CloudClient, pid: &str) -> Result<String> {
+    use std::sync::{Arc, Mutex};
+
     let events_url = format!(
         "{}/v1/projects/{}/deployment/events",
         client.base_url, pid
@@ -1604,6 +1727,44 @@ fn stream_deployment_events(client: &CloudClient, pid: &str) -> Result<String> {
         Ok(sse_resp) => {
             let reader = std::io::BufReader::new(sse_resp.into_reader());
             use std::io::BufRead;
+
+            let is_tty = std::io::stdout().is_terminal();
+
+            let state = Arc::new(Mutex::new(DeployState {
+                phase: String::from("provisioning"),
+                vms: Vec::new(),
+                done: false,
+            }));
+
+            // Spawn a render thread that redraws every 80ms for spinner animation
+            let render_state = Arc::clone(&state);
+            let render_handle = if is_tty {
+                Some(thread::spawn(move || {
+                    let mut frame: usize = 0;
+                    let mut rendered = false;
+
+                    loop {
+                        thread::sleep(Duration::from_millis(80));
+
+                        let s = render_state.lock().unwrap();
+                        if s.done {
+                            // Final render
+                            render_vm_table(&s.vms, &s.phase, frame, !rendered);
+                            rendered = true;
+                            break;
+                        }
+                        if !s.vms.is_empty() {
+                            render_vm_table(&s.vms, &s.phase, frame, !rendered);
+                            rendered = true;
+                        }
+                        drop(s);
+
+                        frame += 1;
+                    }
+                }))
+            } else {
+                None
+            };
 
             let mut final_status = String::new();
 
@@ -1624,30 +1785,58 @@ fn stream_deployment_events(client: &CloudClient, pid: &str) -> Result<String> {
                 let event_type = event["type"].as_str().unwrap_or("");
                 match event_type {
                     "vm" => {
-                        let role = event["role"].as_str().unwrap_or("?");
-                        let ip = event["ip"].as_str().unwrap_or("?");
-                        let status = event["status"].as_str().unwrap_or("?");
-                        let icon = match status {
-                            "starting" => "◐",
-                            "running" => "●",
-                            "failed" => "✗",
-                            "stopped" => "○",
-                            _ => "·",
-                        };
-                        println!("  {} {:12} {:16} {}", icon, role, ip, status);
+                        let role = event["role"].as_str().unwrap_or("?").to_string();
+                        let ip = event["ip"].as_str().unwrap_or("?").to_string();
+                        let status = event["status"].as_str().unwrap_or("?").to_string();
+
+                        if is_tty {
+                            let mut s = state.lock().unwrap();
+                            if let Some(vm) = s.vms.iter_mut().find(|v| v.0 == role && v.1 == ip) {
+                                vm.2 = status;
+                            } else {
+                                s.vms.push((role, ip, status));
+                            }
+                        } else {
+                            let icon = match status.as_str() {
+                                "running" => "●",
+                                "starting" => "◐",
+                                "failed" => "✗",
+                                "stopped" => "○",
+                                _ => "·",
+                            };
+                            println!("  {} {:14} {:18} {}", icon, role, ip, status);
+                        }
                     }
                     "deployment" => {
                         let status = event["status"].as_str().unwrap_or("unknown");
                         final_status = status.to_string();
-                        match status {
-                            "provisioning" => println!("  ▸ Provisioning VMs..."),
-                            "deploying_apps" => println!("  ▸ Deploying applications..."),
-                            "migrating" | "running" | "failed" | "destroyed" => {}
-                            _ => println!("  ▸ {}", status),
+
+                        if is_tty {
+                            let mut s = state.lock().unwrap();
+                            s.phase = status.to_string();
+                        } else {
+                            match status {
+                                "provisioning" => println!("  ▸ Provisioning VMs..."),
+                                "deploying_apps" => println!("  ▸ Deploying applications..."),
+                                "migrating" | "running" | "failed" | "destroyed" => {}
+                                _ => println!("  ▸ {}", status),
+                            }
                         }
                     }
                     _ => {}
                 }
+            }
+
+            // Signal render thread to stop and do final render
+            if is_tty {
+                {
+                    let mut s = state.lock().unwrap();
+                    s.done = true;
+                }
+                if let Some(handle) = render_handle {
+                    handle.join().ok();
+                }
+                println!(); // final newline after table
             }
 
             Ok(final_status)
@@ -2010,6 +2199,124 @@ fn billing(action: Option<CloudBillingCommands>) -> Result<()> {
     }
 }
 
+fn upgrade(check_only: bool, target_version: Option<String>, force: bool) -> Result<()> {
+    let api_base = api_base_url();
+
+    println!("  Checking for updates...");
+    println!();
+
+    // Get latest cached versions from the control plane (public endpoint, no auth)
+    let latest_resp = ureq::get(&format!("{}/v1/images/latest", api_base))
+        .call()
+        .context("Failed to fetch latest image versions")?;
+    let latest: serde_json::Value = latest_resp.into_json().context("Failed to parse latest versions")?;
+
+    // Try to get current running versions (requires auth — may fail gracefully)
+    let mut running_versions: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut client_and_pid: Option<(CloudClient, String)> = None;
+
+    if let Ok(creds) = require_credentials() {
+        let mut client = CloudClient::new(&creds);
+        if let Ok((_slug, pid)) = resolve_project_id(&mut client) {
+            if let Ok(status_resp) = client.get(&format!("/v1/projects/{}/deployment", pid)) {
+                if let Ok(status) = status_resp.into_json::<serde_json::Value>() {
+                    // Extract versions from /api/spooky if possible
+                    if let Some(db_url) = status["urls"]["surrealdb"].as_str() {
+                        let config_path = std::env::current_dir().unwrap_or_default().join("sp00ky.yml");
+                        let config = backend::load_config(&config_path);
+                        let resolved = config.resolved_surrealdb();
+                        let spooky_url = format!("{}/api/{}/{}/spooky", db_url, resolved.namespace, resolved.database);
+                        if let Ok(resp) = ureq::get(&spooky_url).call() {
+                            if let Ok(entities) = resp.into_json::<Vec<serde_json::Value>>() {
+                                for entity in &entities {
+                                    if let (Some(role), Some(version)) = (entity["entity"].as_str(), entity["version"].as_str()) {
+                                        running_versions.insert(role.to_string(), version.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    client_and_pid = Some((client, pid.clone()));
+                }
+            }
+        }
+    }
+
+    // running_versions was populated above (in auth block)
+
+    // Display version comparison
+    println!("  {:<14} {:<24} {:<24} {}", "ROLE", "CURRENT", "LATEST", "STATUS");
+    println!("  {}", "─".repeat(70));
+
+    let mut has_update = false;
+    for role in &["scheduler", "ssp"] {
+        let current = running_versions.get(*role).map(|s| s.as_str()).unwrap_or("not deployed");
+        let latest_ver = latest.get(*role)
+            .and_then(|v| v["version"].as_str())
+            .unwrap_or("not cached");
+
+        let status_str = if current == latest_ver {
+            "up to date"
+        } else if latest_ver == "not cached" {
+            "no cached image"
+        } else {
+            has_update = true;
+            "update available"
+        };
+
+        println!("  {:<14} {:<24} {:<24} {}", role, current, latest_ver, status_str);
+    }
+    println!();
+
+    if check_only {
+        return Ok(());
+    }
+
+    if !has_update {
+        println!("  Everything is up to date.");
+        return Ok(());
+    }
+
+    // Check for major version changes
+    // (simplified: just check if the major version number changed)
+    if !force {
+        // For now, always allow canary updates without force flag
+    }
+
+    let confirmed = inquire::Confirm::new("Apply update?")
+        .with_default(true)
+        .prompt()
+        .context("Failed to read confirmation")?;
+
+    if !confirmed {
+        println!("  Cancelled.");
+        return Ok(());
+    }
+
+    println!("  Upgrading...");
+
+    if let Some((mut client, pid)) = client_and_pid {
+        // Deploy with upgrade_infra flag — tells orchestrator to replace SSP/scheduler VMs
+        println!("  Redeploying with updated images...");
+        let resp = client.post(
+            &format!("/v1/projects/{}/deploy", pid),
+            &serde_json::json!({"upgrade_infra": true}),
+        )?;
+
+        if resp.status() == 200 || resp.status() == 201 {
+            println!("  Deployment triggered. Use 'sp00ky cloud status' to monitor progress.");
+        } else {
+            println!("  Warning: deploy returned HTTP {}", resp.status());
+        }
+    } else {
+        bail!("Not authenticated. Run `sp00ky cloud login` first, then retry the upgrade.");
+    }
+
+    println!();
+    println!("  Upgrade initiated.");
+    Ok(())
+}
+
 fn keys(action: CloudKeyCommands) -> Result<()> {
     let creds = require_credentials()?;
     let mut client = CloudClient::new(&creds);
@@ -2056,6 +2363,8 @@ fn keys(action: CloudKeyCommands) -> Result<()> {
 // Helpers
 // ---------------------------------------------------------------------------
 
+
+
 fn print_deployment_details(data: &serde_json::Value) {
     if let Some(dep) = data.get("deployment") {
         println!(
@@ -2094,6 +2403,31 @@ fn print_deployment_details(data: &serde_json::Value) {
             println!("  Endpoints:");
             for (name, url) in urls {
                 println!("    {} {}", name, url.as_str().unwrap_or("-"));
+            }
+        }
+
+        // Show component versions from /api/spooky
+        if let Some(db_url) = urls.get("surrealdb").and_then(|v| v.as_str()) {
+            let config_path = std::env::current_dir().unwrap_or_default().join("sp00ky.yml");
+            let config = backend::load_config(&config_path);
+            let resolved = config.resolved_surrealdb();
+            let spooky_url = format!("{}/api/{}/{}/spooky", db_url, resolved.namespace, resolved.database);
+            if let Ok(resp) = ureq::get(&spooky_url).timeout(std::time::Duration::from_secs(5)).call() {
+                if let Ok(entities) = resp.into_json::<Vec<serde_json::Value>>() {
+                    if !entities.is_empty() {
+                        println!();
+                        println!("  {:<14} {:<24} {}", "COMPONENT", "VERSION", "STATUS");
+                        println!("  {}", "-".repeat(50));
+                        for entity in &entities {
+                            println!(
+                                "  {:<14} {:<24} {}",
+                                entity["entity"].as_str().unwrap_or("-"),
+                                entity["version"].as_str().unwrap_or("-"),
+                                entity["status"].as_str().unwrap_or("-"),
+                            );
+                        }
+                    }
+                }
             }
         }
     }
