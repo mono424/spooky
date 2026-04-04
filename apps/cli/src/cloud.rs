@@ -742,7 +742,7 @@ pub fn run(action: CloudCommands) -> Result<()> {
         CloudCommands::List => list(),
         CloudCommands::Deploy => deploy(),
         CloudCommands::Status => status(),
-        CloudCommands::Logs { service } => logs(service),
+        CloudCommands::Logs { filter, split, service } => logs(filter, split, service),
         CloudCommands::Scale { ssp } => scale(ssp),
         CloudCommands::Destroy => destroy(),
         CloudCommands::Upgrade { check, version, force } => upgrade(check, version, force),
@@ -1341,7 +1341,12 @@ fn deploy() -> Result<()> {
     println!();
 
     // Phase 1: Stream events until infra is ready (migrating state)
-    let phase1_status = stream_deployment_events(&client, &pid)?;
+    let phase1_raw = stream_deployment_events(&client, &pid)?;
+    let (phase1_status, phase1_error) = if let Some((s, e)) = phase1_raw.split_once('|') {
+        (s.to_string(), Some(e.to_string()))
+    } else {
+        (phase1_raw, None)
+    };
 
     match phase1_status.as_str() {
         "migrating" => {
@@ -1437,7 +1442,12 @@ fn deploy() -> Result<()> {
             )?;
 
             // Stream events until fully running
-            let phase2_status = stream_deployment_events(&client, &pid)?;
+            let phase2_raw = stream_deployment_events(&client, &pid)?;
+            let (phase2_status, phase2_error) = if let Some((s, e)) = phase2_raw.split_once('|') {
+                (s.to_string(), Some(e.to_string()))
+            } else {
+                (phase2_raw, None)
+            };
             match phase2_status.as_str() {
                 "running" => {
                     println!();
@@ -1510,12 +1520,36 @@ fn deploy() -> Result<()> {
                                         Ok(_) => println!("  ▸ Remote functions applied."),
                                         Err(e) => println!("  ▸ Warning: failed to apply remote functions: {:?}", e),
                                     }
+
+                                    // Apply internal Sp00ky schema (per-table events for scheduler ingest).
+                                    // This generates DEFINE EVENT statements on every user table that POST
+                                    // record changes to the scheduler's /ingest endpoint.
+                                    let int_schema = config.resolved_schema();
+                                    let int_config_dir = config_path.parent()
+                                        .unwrap_or(std::path::Path::new("."));
+                                    let schema_input_path = int_config_dir.join(&int_schema.schema);
+                                    if schema_input_path.exists() {
+                                        match crate::migrate::apply_internal_schema(
+                                            &surreal_client,
+                                            &schema_input_path,
+                                            Some(config_path.as_path()),
+                                            mode,
+                                            Some(&fn_endpoint),
+                                            Some(&auth_secret),
+                                        ) {
+                                            Ok(()) => {}
+                                            Err(e) => println!("  ▸ Warning: failed to apply internal schema: {:?}", e),
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                 }
-                "failed" => bail!("Deployment failed."),
+                "failed" => {
+                    let detail = phase2_error.as_deref().unwrap_or("unknown error");
+                    bail!("Deployment failed: {}", detail);
+                }
                 _ => bail!("Deployment ended unexpectedly (status: {})", phase2_status),
             }
         }
@@ -1529,7 +1563,10 @@ fn deploy() -> Result<()> {
                 }
             }
         }
-        "failed" => bail!("Deployment failed."),
+        "failed" => {
+            let detail = phase1_error.as_deref().unwrap_or("unknown error");
+            bail!("Deployment failed: {}", detail);
+        }
         _ => bail!("Deployment ended unexpectedly (status: {})", phase1_status),
     }
 
@@ -1767,6 +1804,7 @@ fn stream_deployment_events(client: &CloudClient, pid: &str) -> Result<String> {
             };
 
             let mut final_status = String::new();
+            let mut deploy_error = String::new();
 
             for line in reader.lines() {
                 let line = match line {
@@ -1810,6 +1848,11 @@ fn stream_deployment_events(client: &CloudClient, pid: &str) -> Result<String> {
                     "deployment" => {
                         let status = event["status"].as_str().unwrap_or("unknown");
                         final_status = status.to_string();
+                        if let Some(err) = event["error"].as_str() {
+                            if !err.is_empty() {
+                                deploy_error = err.to_string();
+                            }
+                        }
 
                         if is_tty {
                             let mut s = state.lock().unwrap();
@@ -1839,7 +1882,11 @@ fn stream_deployment_events(client: &CloudClient, pid: &str) -> Result<String> {
                 println!(); // final newline after table
             }
 
-            Ok(final_status)
+            if deploy_error.is_empty() {
+                Ok(final_status)
+            } else {
+                Ok(format!("{}|{}", final_status, deploy_error))
+            }
         }
         Err(ureq::Error::Status(code, resp)) => {
             let body = resp.into_string().unwrap_or_default();
@@ -1863,48 +1910,418 @@ fn status() -> Result<()> {
     Ok(())
 }
 
-fn logs(service: Option<String>) -> Result<()> {
+// ---------------------------------------------------------------------------
+// Log streaming
+// ---------------------------------------------------------------------------
+
+/// Known service names and their display colors.
+fn service_color(service: &str) -> crossterm::style::Color {
+    use crossterm::style::Color;
+    match service {
+        "surrealdb" => Color::Cyan,
+        "scheduler" => Color::Yellow,
+        "ssp" => Color::Green,
+        "backend" => Color::Magenta,
+        "frontend" => Color::Blue,
+        _ => Color::White,
+    }
+}
+
+/// Expand blueprint names and comma-separated service lists into a set of service names.
+fn resolve_filters(filter: Option<&str>, service: Option<&str>) -> Option<std::collections::HashSet<String>> {
+    // --filter takes precedence over deprecated --service
+    let raw = filter.or(service)?;
+    let mut services = std::collections::HashSet::new();
+    for token in raw.split(',') {
+        let token = token.trim().to_lowercase();
+        match token.as_str() {
+            "spooky" => {
+                services.insert("ssp".to_string());
+                services.insert("scheduler".to_string());
+            }
+            other if !other.is_empty() => {
+                services.insert(other.to_string());
+            }
+            _ => {}
+        }
+    }
+    if services.is_empty() { None } else { Some(services) }
+}
+
+/// Strip ANSI escape sequences from a string so ratatui's cell-width
+/// tracking stays in sync with what the terminal actually renders.
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // Skip ESC [ ... (final byte in 0x40–0x7E)
+            if let Some(next) = chars.next() {
+                if next == '[' {
+                    for c2 in chars.by_ref() {
+                        if c2.is_ascii() && (0x40..=0x7E).contains(&(c2 as u8)) {
+                            break;
+                        }
+                    }
+                }
+                // else: lone ESC + char, just skip both
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Parse a SSE data line like `[role] message` into (service, message).
+fn parse_log_line(data: &str) -> Option<(String, String)> {
+    let data = data.trim();
+    if data.starts_with('[') {
+        if let Some(end) = data.find(']') {
+            let service = data[1..end].to_string();
+            let message = strip_ansi(data[end + 1..].trim_start());
+            return Some((service, message));
+        }
+    }
+    Some(("unknown".to_string(), strip_ansi(data)))
+}
+
+enum LogEvent {
+    Line { service: String, message: String },
+    Eof,
+    Error(String),
+}
+
+/// Spawn a background thread that reads the SSE stream and sends parsed log events.
+fn spawn_sse_reader(
+    url: String,
+    auth_header: String,
+    tx: std::sync::mpsc::Sender<LogEvent>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        let resp = ureq::get(&url)
+            .set("Authorization", &auth_header)
+            .set("Accept", "text/event-stream")
+            .call();
+
+        match resp {
+            Ok(resp) => {
+                // Use a small buffer so lines are yielded promptly over the SSE
+                // stream, rather than waiting for the default 8KB to fill.
+                let reader = std::io::BufReader::with_capacity(512, resp.into_reader());
+                use std::io::BufRead;
+                for line in reader.lines() {
+                    match line {
+                        Ok(line) => {
+                            if let Some(data) = line.strip_prefix("data: ") {
+                                if let Some((service, message)) = parse_log_line(data) {
+                                    if tx.send(LogEvent::Line { service, message }).is_err() {
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let _ = tx.send(LogEvent::Error(format!("Read error: {}", e)));
+                            return;
+                        }
+                    }
+                }
+                let _ = tx.send(LogEvent::Eof);
+            }
+            Err(ureq::Error::Status(code, resp)) => {
+                let body = resp.into_string().unwrap_or_default();
+                let _ = tx.send(LogEvent::Error(format!("HTTP {}: {}", code, body)));
+            }
+            Err(ureq::Error::Transport(t)) => {
+                let _ = tx.send(LogEvent::Error(format!("Connection error: {}", t)));
+            }
+        }
+    })
+}
+
+/// Non-split mode: colored streaming output to stdout.
+fn logs_stream(
+    rx: std::sync::mpsc::Receiver<LogEvent>,
+    filters: &Option<std::collections::HashSet<String>>,
+) -> Result<()> {
+    use crossterm::style::{Color, ResetColor, SetForegroundColor};
+    use std::io::Write;
+
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+
+    loop {
+        match rx.recv() {
+            Ok(LogEvent::Line { service, message }) => {
+                if let Some(ref f) = filters {
+                    if !f.contains(&service) {
+                        continue;
+                    }
+                }
+                let color = service_color(&service);
+                let _ = crossterm::execute!(
+                    out,
+                    SetForegroundColor(color),
+                );
+                let _ = write!(out, "[{}]", service);
+                let _ = crossterm::execute!(out, SetForegroundColor(Color::Reset));
+                let _ = crossterm::execute!(out, ResetColor);
+                let _ = writeln!(out, " {}", message);
+                let _ = out.flush();
+            }
+            Ok(LogEvent::Eof) => break,
+            Ok(LogEvent::Error(e)) => bail!("{}", e),
+            Err(_) => break,
+        }
+    }
+    Ok(())
+}
+
+/// Split mode: ratatui TUI with one panel per service.
+fn logs_split(
+    rx: std::sync::mpsc::Receiver<LogEvent>,
+    filters: &Option<std::collections::HashSet<String>>,
+    direction: ratatui::layout::Direction,
+) -> Result<()> {
+    use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+    use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
+    use ratatui::layout::{Constraint, Layout};
+    use ratatui::style::{Color, Style};
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::{Block, Borders, Paragraph};
+    use std::collections::{HashMap, VecDeque};
+
+    const MAX_LINES: usize = 1000;
+    const MIN_PANEL_HEIGHT: u16 = 4; // border top + 2 content lines + border bottom
+
+    // If an explicit filter is set, pre-create panels for those services.
+    // Otherwise we dynamically add panels as data arrives.
+    let explicit_filter = filters.is_some();
+    let mut panel_order: Vec<String> = if let Some(ref f) = filters {
+        let mut v: Vec<String> = f.iter().cloned().collect();
+        v.sort();
+        v
+    } else {
+        Vec::new()
+    };
+
+    let mut panels: HashMap<String, VecDeque<String>> = HashMap::new();
+    for svc in &panel_order {
+        panels.insert(svc.clone(), VecDeque::new());
+    }
+
+    // Install panic hook to restore terminal
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = crossterm::terminal::disable_raw_mode();
+        let _ = crossterm::execute!(std::io::stderr(), LeaveAlternateScreen);
+        original_hook(info);
+    }));
+
+    // Flush any pending stdout before taking over the terminal
+    use std::io::Write;
+    std::io::stdout().flush()?;
+
+    crossterm::terminal::enable_raw_mode()?;
+    let mut stdout = std::io::stdout();
+    crossterm::execute!(
+        stdout,
+        EnterAlternateScreen,
+        crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
+        crossterm::cursor::Hide,
+        crossterm::cursor::MoveTo(0, 0)
+    )?;
+    let backend = ratatui::backend::CrosstermBackend::new(stdout);
+    let mut terminal = ratatui::Terminal::new(backend)?;
+    terminal.clear()?;
+
+    let mut stream_ended = false;
+
+    loop {
+        // Drain all pending log events (non-blocking)
+        if !stream_ended {
+            loop {
+                match rx.try_recv() {
+                    Ok(LogEvent::Line { service, message }) => {
+                        // Dynamically add panels for new services (when no explicit filter)
+                        if !panels.contains_key(&service) {
+                            if explicit_filter {
+                                continue; // skip services not in the filter
+                            }
+                            panel_order.push(service.clone());
+                            panels.insert(service.clone(), VecDeque::new());
+                        }
+                        if let Some(buf) = panels.get_mut(&service) {
+                            buf.push_back(message);
+                            if buf.len() > MAX_LINES {
+                                buf.pop_front();
+                            }
+                        }
+                    }
+                    Ok(LogEvent::Eof) => {
+                        for buf in panels.values_mut() {
+                            buf.push_back("--- Stream ended ---".to_string());
+                        }
+                        stream_ended = true;
+                        break;
+                    }
+                    Ok(LogEvent::Error(e)) => {
+                        for buf in panels.values_mut() {
+                            buf.push_back(format!("--- Error: {} ---", e));
+                        }
+                        stream_ended = true;
+                        break;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        stream_ended = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Render
+        let stream_status = stream_ended;
+        let visible_panels: Vec<String> = panel_order.clone();
+        terminal.draw(|frame| {
+
+            if visible_panels.is_empty() {
+                let msg = Paragraph::new(Line::from(Span::styled(
+                    " Waiting for logs...",
+                    Style::default().fg(Color::DarkGray),
+                )));
+                frame.render_widget(msg, frame.area());
+                return;
+            }
+
+            // Reserve 1 line at the bottom for the status bar
+            let outer = Layout::default()
+                .direction(ratatui::layout::Direction::Vertical)
+                .constraints([
+                    Constraint::Min(0),
+                    Constraint::Length(1),
+                ])
+                .split(frame.area());
+
+            let panel_area = outer[0];
+            let status_area = outer[1];
+
+            // Cap visible panels to what fits (each panel needs at least MIN_PANEL_HEIGHT)
+            let max_panels = (panel_area.height / MIN_PANEL_HEIGHT) as usize;
+            let show: &[String] = if visible_panels.len() > max_panels && max_panels > 0 {
+                &visible_panels[..max_panels]
+            } else {
+                &visible_panels
+            };
+            let n = show.len() as u32;
+
+            let constraints: Vec<Constraint> = (0..n)
+                .map(|_| Constraint::Ratio(1, n))
+                .collect();
+            let chunks = Layout::default()
+                .direction(direction.clone())
+                .constraints(constraints)
+                .split(panel_area);
+
+            for (i, svc) in show.iter().enumerate() {
+                let color: Color = match service_color(svc) {
+                    crossterm::style::Color::Cyan => Color::Cyan,
+                    crossterm::style::Color::Yellow => Color::Yellow,
+                    crossterm::style::Color::Green => Color::Green,
+                    crossterm::style::Color::Magenta => Color::Magenta,
+                    crossterm::style::Color::Blue => Color::Blue,
+                    _ => Color::White,
+                };
+
+                let area = chunks[i];
+                if area.height < 3 {
+                    continue; // skip panels too small to render
+                }
+                let inner_height = area.height.saturating_sub(2) as usize;
+                let buf = &panels[svc];
+                let start = buf.len().saturating_sub(inner_height);
+                let lines: Vec<Line> = buf
+                    .iter()
+                    .skip(start)
+                    .map(|l| Line::from(Span::raw(l.as_str())))
+                    .collect();
+
+                let block = Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(color))
+                    .title(format!(" {} ", svc))
+                    .title_style(Style::default().fg(color));
+
+                let paragraph = Paragraph::new(lines)
+                    .block(block);
+
+                frame.render_widget(paragraph, area);
+            }
+
+            // Status bar
+            let status_text = if stream_status {
+                " Stream disconnected — press q to exit"
+            } else {
+                " Streaming logs — press q to exit"
+            };
+            let status_color = if stream_status { Color::Red } else { Color::DarkGray };
+            let status = Paragraph::new(Line::from(Span::styled(
+                status_text,
+                Style::default().fg(status_color),
+            )));
+            frame.render_widget(status, status_area);
+        })?;
+
+        // Handle input (250ms poll for ~4fps refresh)
+        if event::poll(Duration::from_millis(250))? {
+            if let Event::Key(key) = event::read()? {
+                match key.code {
+                    KeyCode::Char('q') => break,
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break,
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    crossterm::terminal::disable_raw_mode()?;
+    crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen, crossterm::cursor::Show)?;
+    Ok(())
+}
+
+fn logs(filter: Option<String>, split: Option<String>, service: Option<String>) -> Result<()> {
     let creds = require_credentials()?;
     let mut client = CloudClient::new(&creds);
     let (slug, pid) = resolve_project_id(&mut client)?;
 
-    let mut path = format!("/v1/projects/{}/logs", pid);
-    if let Some(ref svc) = service {
-        path = format!("{}?service={}", path, svc);
+    let filters = resolve_filters(filter.as_deref(), service.as_deref());
+
+    let path = format!("/v1/projects/{}/logs", pid);
+    let url = format!("{}{}", client.base_url, path);
+    let auth_header = client.auth_header();
+
+    let is_split = split.is_some();
+
+    if !is_split {
+        println!("Streaming logs for '{}' (Ctrl+C to stop)...", slug);
+        if let Some(ref f) = filters {
+            let mut names: Vec<&str> = f.iter().map(|s| s.as_str()).collect();
+            names.sort();
+            println!("Filtering: {}", names.join(", "));
+        }
+        println!();
     }
 
-    println!("Streaming logs for '{}' (Ctrl+C to stop)...", slug);
-    println!();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let _reader = spawn_sse_reader(url, auth_header, tx);
 
-    // SSE streaming - read line by line
-    let url = format!("{}{}", client.base_url, path);
-    let resp = ureq::get(&url)
-        .set("Authorization", &format!("Bearer {}", client.token))
-        .set("Accept", "text/event-stream")
-        .call();
-
-    match resp {
-        Ok(resp) => {
-            let reader = std::io::BufReader::new(resp.into_reader());
-            let reader = std::io::BufRead::lines(reader);
-            for line in reader {
-                match line {
-                    Ok(line) => {
-                        if let Some(data) = line.strip_prefix("data: ") {
-                            println!("{}", data);
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-        }
-        Err(ureq::Error::Status(code, resp)) => {
-            let body = resp.into_string().unwrap_or_default();
-            bail!("Failed to stream logs (HTTP {}): {}", code, body);
-        }
-        Err(ureq::Error::Transport(t)) => {
-            bail!("Connection error: {}", t);
-        }
+    match split.as_deref() {
+        Some("h") => logs_split(rx, &filters, ratatui::layout::Direction::Vertical)?,
+        Some("v") => logs_split(rx, &filters, ratatui::layout::Direction::Horizontal)?,
+        Some(other) => bail!("Invalid split mode '{}'. Use 'h' (horizontal) or 'v' (vertical).", other),
+        None => logs_stream(rx, &filters)?,
     }
 
     Ok(())
@@ -2368,67 +2785,107 @@ fn keys(action: CloudKeyCommands) -> Result<()> {
 fn print_deployment_details(data: &serde_json::Value) {
     if let Some(dep) = data.get("deployment") {
         println!(
-            "  Deployment v{} - {}",
+            "  Deployment v{} — {}",
             dep["version"].as_u64().unwrap_or(0),
             dep["status"].as_str().unwrap_or("unknown")
         );
         if let Some(err) = dep["error"].as_str() {
             println!("  Error: {}", err);
         }
-        println!(
-            "  Created: {}",
-            dep["created_at"].as_str().unwrap_or("-")
-        );
     }
 
+    // Collect component versions from /api/spooky (keyed by entity name)
+    let mut component_versions: std::collections::HashMap<String, (String, String)> =
+        std::collections::HashMap::new();
+    if let Some(db_url) = data.get("urls").and_then(|u| u.get("surrealdb")).and_then(|v| v.as_str()) {
+        let config_path = std::env::current_dir().unwrap_or_default().join("sp00ky.yml");
+        let config = backend::load_config(&config_path);
+        let resolved = config.resolved_surrealdb();
+        let spooky_url = format!("{}/api/{}/{}/spooky", db_url, resolved.namespace, resolved.database);
+        if let Ok(resp) = ureq::get(&spooky_url).timeout(std::time::Duration::from_secs(5)).call() {
+            if let Ok(entities) = resp.into_json::<Vec<serde_json::Value>>() {
+                for entity in &entities {
+                    let name = entity["entity"].as_str().unwrap_or("").to_string();
+                    let ver = entity["version"].as_str().unwrap_or("-").to_string();
+                    let st = entity["status"].as_str().unwrap_or("-").to_string();
+                    if !name.is_empty() {
+                        component_versions.insert(name, (ver, st));
+                    }
+                }
+            }
+        }
+    }
+
+    // Collect URL endpoints keyed by role
+    let urls: std::collections::HashMap<String, String> = data
+        .get("urls")
+        .and_then(|v| v.as_object())
+        .map(|m| {
+            m.iter()
+                .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("-").to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Print unified table
     if let Some(vms) = data.get("vms").and_then(|v| v.as_array()) {
         if !vms.is_empty() {
             println!();
-            println!("  {:<12} {:<16} {:<10}", "ROLE", "IP", "STATUS");
-            println!("  {}", "-".repeat(40));
+            println!(
+                "  {:<14} {:<18} {:<22} {:<10}",
+                "ROLE", "IP", "VERSION", "STATUS"
+            );
+            println!("  {}", "─".repeat(66));
+
             for vm in vms {
+                let role = vm["role"].as_str().unwrap_or("-");
+                let ip = vm["internal_ip"].as_str().unwrap_or("-");
+                let vm_status = vm["status"].as_str().unwrap_or("-");
+
+                // Look up version from component data (match by role name)
+                let version = component_versions
+                    .get(role)
+                    .map(|(v, _)| v.as_str())
+                    .unwrap_or("-");
+
+                // Status icon
+                let icon = match vm_status {
+                    "running" => "\x1b[32m●\x1b[0m",
+                    "starting" => "\x1b[33m◐\x1b[0m",
+                    "failed" => "\x1b[31m✗\x1b[0m",
+                    "stopped" => "\x1b[90m○\x1b[0m",
+                    _ => "\x1b[90m·\x1b[0m",
+                };
+
                 println!(
-                    "  {:<12} {:<16} {:<10}",
-                    vm["role"].as_str().unwrap_or("-"),
-                    vm["internal_ip"].as_str().unwrap_or("-"),
-                    vm["status"].as_str().unwrap_or("-"),
+                    "  {} {:<13} {:<18} {:<22} {}",
+                    icon, role, ip, version, vm_status,
                 );
             }
         }
     }
 
-    if let Some(urls) = data.get("urls").and_then(|v| v.as_object()) {
-        if !urls.is_empty() {
-            println!();
-            println!("  Endpoints:");
-            for (name, url) in urls {
-                println!("    {} {}", name, url.as_str().unwrap_or("-"));
-            }
+    // Print public endpoints (skip internal ssp/scheduler URLs)
+    let public_urls: Vec<_> = urls.iter()
+        .filter(|(name, url)| {
+            url.starts_with("http") && !matches!(name.as_str(), "ssp" | "scheduler")
+        })
+        .collect();
+    if !public_urls.is_empty() {
+        println!();
+        println!("  \x1b[90mEndpoints:\x1b[0m");
+        for (name, url) in &public_urls {
+            println!("    \x1b[90m{}\x1b[0m {}", name, url);
         }
+    }
 
-        // Show component versions from /api/spooky
-        if let Some(db_url) = urls.get("surrealdb").and_then(|v| v.as_str()) {
+    // Print spooky status endpoint
+    if let Some(db_url) = urls.get("surrealdb") {
+        if db_url.starts_with("http") {
             let config_path = std::env::current_dir().unwrap_or_default().join("sp00ky.yml");
             let config = backend::load_config(&config_path);
             let resolved = config.resolved_surrealdb();
-            let spooky_url = format!("{}/api/{}/{}/spooky", db_url, resolved.namespace, resolved.database);
-            if let Ok(resp) = ureq::get(&spooky_url).timeout(std::time::Duration::from_secs(5)).call() {
-                if let Ok(entities) = resp.into_json::<Vec<serde_json::Value>>() {
-                    if !entities.is_empty() {
-                        println!();
-                        println!("  {:<14} {:<24} {}", "COMPONENT", "VERSION", "STATUS");
-                        println!("  {}", "-".repeat(50));
-                        for entity in &entities {
-                            println!(
-                                "  {:<14} {:<24} {}",
-                                entity["entity"].as_str().unwrap_or("-"),
-                                entity["version"].as_str().unwrap_or("-"),
-                                entity["status"].as_str().unwrap_or("-"),
-                            );
-                        }
-                    }
-                }
-            }
+            println!("    \x1b[90mstatus\x1b[0m {}/api/{}/{}/spooky", db_url, resolved.namespace, resolved.database);
         }
     }
 }

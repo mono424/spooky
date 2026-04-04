@@ -627,22 +627,12 @@ pub fn apply_internal_schema(
     println!("  + Applying meta tables (remote)...");
     let mut meta_tables_remote = include_str!("meta_tables_remote.surql").to_string();
 
-    // Replace unregister_view for singlenode/cluster mode
+    // Replace unregister_view for singlenode/cluster mode — uses $sp00ky_endpoint param
     if mode == "singlenode" || mode == "cluster" {
-        let default_endpoint = if mode == "cluster" {
-            "http://localhost:9667"
-        } else {
-            "http://localhost:8667"
-        };
-        let ep = endpoint.unwrap_or(default_endpoint);
-        let sec = secret.unwrap_or("");
-
         let unregister_call = "let $result = mod::dbsp::unregister_view(<string>$before.id);";
-        let unregister_http = format!(
-            "let $payload = {{ id: <string>$before.id }};\n    let $result = http::post('{}/view/unregister', $payload, {{ \"Authorization\": \"Bearer {}\" }});",
-            ep, sec
-        );
-        meta_tables_remote = meta_tables_remote.replace(unregister_call, &unregister_http);
+        let unregister_http =
+            "let $payload = { id: <string>$before.id };\n    let $result = http::post($sp00ky_endpoint + '/view/unregister', $payload, { \"Authorization\": \"Bearer \" + $sp00ky_secret });";
+        meta_tables_remote = meta_tables_remote.replace(unregister_call, unregister_http);
     }
 
     // Make all DEFINE statements idempotent by injecting OVERWRITE

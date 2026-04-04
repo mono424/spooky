@@ -23,6 +23,16 @@ pub fn build_remote_functions_schema(
 ) -> String {
     let mut content = String::new();
 
+    // Set database-level params so events can reference them without hardcoding
+    content.push_str(&format!(
+        "DEFINE PARAM OVERWRITE $sp00ky_endpoint VALUE '{}';\n",
+        endpoint
+    ));
+    content.push_str(&format!(
+        "DEFINE PARAM OVERWRITE $sp00ky_secret VALUE '{}';\n\n",
+        secret
+    ));
+
     // Common remote functions (heartbeat)
     content.push_str(include_str!("functions_remote.surql"));
 
@@ -104,23 +114,10 @@ pub fn build_server_schema(config: &SchemaBuilderConfig) -> Result<String> {
     // Replace unregister_view call (this transforms event handlers in user
     // schema, not function definitions — always apply it)
     if config.mode == "singlenode" || config.mode == "cluster" {
-        let default_endpoint = if config.mode == "cluster" {
-            "http://localhost:9667"
-        } else {
-            "http://localhost:8667"
-        };
-        let endpoint = config
-            .endpoint
-            .as_deref()
-            .unwrap_or(default_endpoint);
-        let secret = config.secret.as_deref().unwrap_or("");
-
         let unregister_call = "let $result = mod::dbsp::unregister_view(<string>$before.id);";
-        let unregister_http = format!(
-            "let $payload = {{ id: <string>$before.id }};\n    let $result = http::post('{}/view/unregister', $payload, {{ \"Authorization\": \"Bearer {}\" }});",
-            endpoint, secret
-        );
-        content = content.replace(unregister_call, &unregister_http);
+        let unregister_http =
+            "let $payload = { id: <string>$before.id };\n    let $result = http::post($sp00ky_endpoint + '/view/unregister', $payload, { \"Authorization\": \"Bearer \" + $sp00ky_secret });";
+        content = content.replace(unregister_call, unregister_http);
     }
 
     Ok(content)

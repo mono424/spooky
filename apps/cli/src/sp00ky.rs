@@ -10,8 +10,8 @@ pub fn generate_sp00ky_events(
     _raw_content: &str,
     is_client: bool,
     mode: &str,
-    endpoint: Option<&str>,
-    secret: Option<&str>,
+    _endpoint: Option<&str>,
+    _secret: Option<&str>,
 ) -> String {
     // 2. Generate Events
     let mut events = String::from("\n-- ==================================================\n-- AUTO-GENERATED SP00KY EVENTS\n-- ==================================================\n\n");
@@ -140,10 +140,6 @@ pub fn generate_sp00ky_events(
         events.push_str("    };\n");
 
         if is_http {
-            let ep = endpoint.unwrap_or("http://localhost:8667");
-            let sec = secret.unwrap_or("");
-            let url = format!("{}/ingest", ep);
-
             events.push_str("    LET $payload = {\n");
             events.push_str(&format!("        table: '{}',\n", table_name));
             events.push_str("        op: $event,\n");
@@ -152,10 +148,7 @@ pub fn generate_sp00ky_events(
             events.push_str("        hash: \"\"\n");
             events.push_str("    };\n");
 
-            events.push_str(&format!(
-                "    http::post('{}', $payload, {{ \"Authorization\": \"Bearer {}\" }});\n",
-                url, sec
-            ));
+            events.push_str("    http::post($sp00ky_endpoint + '/ingest', $payload, { \"Authorization\": \"Bearer \" + $sp00ky_secret });\n");
         } else {
             // Surrealism / WASM Mode
             events.push_str(&format!(
@@ -206,10 +199,6 @@ pub fn generate_sp00ky_events(
         events.push_str("    };\n");
 
         if is_http {
-            let ep = endpoint.unwrap_or("http://localhost:8667");
-            let sec = secret.unwrap_or("");
-            let url = format!("{}/ingest", ep);
-
             events.push_str("    LET $payload = {\n");
             events.push_str(&format!("        table: '{}',\n", table_name));
             events.push_str("        op: \"DELETE\",\n");
@@ -218,10 +207,7 @@ pub fn generate_sp00ky_events(
             events.push_str("        hash: \"\"\n");
             events.push_str("    };\n");
 
-            events.push_str(&format!(
-                "    http::post('{}', $payload, {{ \"Authorization\": \"Bearer {}\" }});\n",
-                url, sec
-            ));
+            events.push_str("    http::post($sp00ky_endpoint + '/ingest', $payload, { \"Authorization\": \"Bearer \" + $sp00ky_secret });\n");
         } else {
             events.push_str(&format!("    mod::dbsp::ingest('{}', \"DELETE\", <string>($before.id OR \"\"), $plain_before);\n", table_name));
             events.push_str("    mod::dbsp::save_state(NONE);\n");

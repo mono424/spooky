@@ -165,8 +165,18 @@ enum CloudCommands {
     Status,
     /// Tail logs from cloud deployment
     Logs {
-        /// Filter by service: surrealdb, scheduler, ssp
+        /// Filter by service(s): surrealdb, scheduler, ssp, backend, frontend.
+        /// Supports blueprints: "spooky" = ssp+scheduler.
+        /// Comma-separated: --filter spooky,surrealdb
         #[arg(long)]
+        filter: Option<String>,
+
+        /// Split view: "h" (horizontal/stacked) or "v" (vertical/side-by-side)
+        #[arg(long)]
+        split: Option<String>,
+
+        /// (Deprecated) Filter by single service
+        #[arg(long, hide = true)]
         service: Option<String>,
     },
     /// Scale SSP instances
