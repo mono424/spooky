@@ -63,13 +63,16 @@ async fn main() -> Result<()> {
         )
     );
     
+    let backup_router = scheduler::backup::create_backup_router(scheduler.backup_state());
+
     let app = axum::Router::new()
         .merge(ingest_router)
         .merge(query_router)
         .merge(job_router)
         .merge(ssp_router)
         .merge(proxy_router)
-        .merge(metrics_router);
+        .merge(metrics_router)
+        .merge(backup_router);
     
     let ingest_addr = format!("{}:{}", 
         scheduler.config().ingest_host.as_deref().unwrap_or("0.0.0.0"),

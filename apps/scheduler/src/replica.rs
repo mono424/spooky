@@ -21,7 +21,7 @@ fn build_thing_id(table: &str, id: &str) -> String {
 }
 
 /// Chunk of replica data for bootstrap
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ReplicaChunk {
     pub chunk_index: usize,
     pub table: String,

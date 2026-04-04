@@ -1,3 +1,4 @@
+pub mod backup;
 pub mod config;
 pub mod replica;
 pub mod router;
@@ -155,6 +156,14 @@ impl Scheduler {
     pub fn proxy_state(&self) -> crate::proxy::ProxyState {
         crate::proxy::ProxyState {
             replica: Arc::clone(&self.replica),
+        }
+    }
+
+    pub fn backup_state(&self) -> crate::backup::BackupState {
+        crate::backup::BackupState {
+            replica: Arc::clone(&self.replica),
+            status: Arc::clone(&self.status),
+            config: Arc::new(crate::backup::BackupConfig::from_env()),
         }
     }
 

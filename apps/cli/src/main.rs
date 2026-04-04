@@ -192,6 +192,34 @@ enum CloudCommands {
         #[command(subcommand)]
         action: CloudKeyCommands,
     },
+    /// Link a GitHub repository for automated deployments
+    Link {
+        #[command(subcommand)]
+        action: CloudLinkCommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum CloudLinkCommands {
+    /// Set up automated deployments from GitHub
+    Setup,
+    /// Show link configuration and recent runs
+    Status,
+    /// Change link settings (branch, auto-deploy)
+    Settings {
+        /// Branch to deploy from
+        #[arg(long)]
+        branch: Option<String>,
+        /// Enable or disable auto-deploy on push
+        #[arg(long)]
+        auto_deploy: Option<bool>,
+    },
+    /// Remove GitHub link
+    Unlink,
+    /// Manually trigger a deployment from the linked repo
+    Trigger,
+    /// List recent build runs
+    Runs,
 }
 
 #[derive(Subcommand, Debug)]
@@ -225,6 +253,12 @@ pub enum CloudBackupCommands {
         /// Number of backups to retain
         #[arg(long)]
         retention: Option<u32>,
+    },
+    /// Reset the database (drop all data, re-run migrations)
+    Reset {
+        /// Skip the backup before reset
+        #[arg(long)]
+        no_backup: bool,
     },
 }
 

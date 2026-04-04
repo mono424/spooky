@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::backend::{self, BackendDevConfig, BackendDevTypedConfig, HostingMode};
 use crate::surreal_client::MigrationDB;
-use crate::{CloudBackupCommands, CloudBillingCommands, CloudCommands, CloudKeyCommands};
+use crate::{CloudBackupCommands, CloudBillingCommands, CloudCommands, CloudKeyCommands, CloudLinkCommands};
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -299,6 +299,43 @@ impl CloudClient {
                     .set("Authorization", &self.auth_header())
                     .set("Accept", "application/json")
                     .call()
+                {
+                    Ok(resp) => Ok(resp),
+                    Err(ureq::Error::Status(401, _)) => {
+                        bail!("Session expired. Run `sp00ky cloud login` to re-authenticate.")
+                    }
+                    Err(ureq::Error::Status(code, resp)) => {
+                        bail!("{}", Self::format_api_error(code, resp))
+                    }
+                    Err(ureq::Error::Transport(t)) => {
+                        bail!("Failed to connect to Sp00ky Cloud API: {}", t)
+                    }
+                }
+            }
+            Err(ureq::Error::Status(code, resp)) => {
+                bail!("{}", Self::format_api_error(code, resp))
+            }
+            Err(ureq::Error::Transport(t)) => {
+                bail!("Failed to connect to Sp00ky Cloud API: {}", t)
+            }
+        }
+    }
+    fn patch(&mut self, path: &str, body: &serde_json::Value) -> Result<ureq::Response> {
+        let url = format!("{}{}", self.base_url, path);
+        match ureq::request("PATCH", &url)
+            .set("Authorization", &self.auth_header())
+            .set("Accept", "application/json")
+            .send_json(body.clone())
+        {
+            Ok(resp) => Ok(resp),
+            Err(ureq::Error::Status(401, _)) if !self.is_api_key => {
+                self.try_refresh().map_err(|_| {
+                    anyhow::anyhow!("Session expired. Run `sp00ky cloud login` to re-authenticate.")
+                })?;
+                match ureq::request("PATCH", &url)
+                    .set("Authorization", &self.auth_header())
+                    .set("Accept", "application/json")
+                    .send_json(body.clone())
                 {
                     Ok(resp) => Ok(resp),
                     Err(ureq::Error::Status(401, _)) => {
@@ -711,6 +748,7 @@ pub fn run(action: CloudCommands) -> Result<()> {
         CloudCommands::Backup { action } => backup(action),
         CloudCommands::Billing { action } => billing(action),
         CloudCommands::Keys { action } => keys(action),
+        CloudCommands::Link { action } => link(action),
     }
 }
 
@@ -1791,6 +1829,131 @@ fn backup(action: CloudBackupCommands) -> Result<()> {
             client.post(&format!("/v1/projects/{}/backups/configure", pid), &body)?;
             println!("  Backup configuration updated.");
         }
+        CloudBackupCommands::Reset { no_backup } => {
+            println!();
+            println!("  ╔══════════════════════════════════════════════════════╗");
+            println!("  ║  ⚠️  WARNING: DATABASE RESET                        ║");
+            println!("  ║                                                      ║");
+            println!("  ║  This will PERMANENTLY DELETE all data in the        ║");
+            println!("  ║  database and recreate it from scratch.              ║");
+            println!("  ║                                                      ║");
+            println!("  ║  All user accounts, records, and application         ║");
+            println!("  ║  data will be lost. Migrations will be re-applied.   ║");
+            println!("  ╚══════════════════════════════════════════════════════╝");
+            println!();
+
+            let confirmed = inquire::Confirm::new(
+                "Are you absolutely sure you want to reset the database?"
+            )
+            .with_default(false)
+            .prompt()
+            .context("Failed to read confirmation")?;
+
+            if !confirmed {
+                println!("  Cancelled.");
+                return Ok(());
+            }
+
+            // Offer to create a backup first
+            if !no_backup {
+                let backup_first = inquire::Confirm::new(
+                    "Create a backup before resetting?"
+                )
+                .with_default(true)
+                .prompt()
+                .context("Failed to read confirmation")?;
+
+                if backup_first {
+                    println!("  Creating backup before reset...");
+                    let body = serde_json::json!({ "name": "pre-reset-backup" });
+                    let resp = client.post(&format!("/v1/projects/{}/backups", pid), &body)?;
+                    let result: serde_json::Value = resp.into_json()?;
+                    let backup_id = result["id"].as_str().unwrap_or("?").to_string();
+                    println!("  Backup {} created. Waiting for completion...", backup_id);
+
+                    // Poll until backup completes
+                    for _ in 0..60 {
+                        thread::sleep(Duration::from_secs(5));
+                        let status_resp = client.get(&format!("/v1/projects/{}/backups", pid))?;
+                        let backups: Vec<serde_json::Value> = status_resp.into_json()?;
+                        if let Some(b) = backups.iter().find(|b| b["id"].as_str() == Some(&backup_id)) {
+                            match b["status"].as_str() {
+                                Some("completed") => {
+                                    println!("  Backup completed.");
+                                    break;
+                                }
+                                Some("failed") => {
+                                    let err = b["error"].as_str().unwrap_or("unknown");
+                                    bail!("Backup failed: {}. Aborting reset.", err);
+                                }
+                                _ => print!("."),
+                            }
+                        }
+                    }
+                    println!();
+                }
+            }
+
+            // Reset the database
+            println!("  Resetting database...");
+            let resp = client.post(
+                &format!("/v1/projects/{}/backups/reset", pid),
+                &serde_json::json!({}),
+            )?;
+            let result: serde_json::Value = resp.into_json()?;
+            println!("  Database reset: {}", result["status"].as_str().unwrap_or("done"));
+
+            // Re-run migrations
+            println!("  Running migrations...");
+            let config_path = std::env::current_dir()?.join("sp00ky.yml");
+            let config = backend::load_config(&config_path);
+
+            if let Some(db_url) = result["surrealdb_ip"].as_str() {
+                let resolved = config.resolved_surrealdb();
+                let db_password = result.get("db_password")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                // Connect directly to SurrealDB internal IP for migrations
+                let surreal_url = format!("http://{}:8000", db_url);
+                let surreal_client = if db_password.is_empty() {
+                    crate::surreal_client::SurrealClient::new_unauthenticated(
+                        &surreal_url, &resolved.namespace, &resolved.database,
+                    )
+                } else {
+                    crate::surreal_client::SurrealClient::new(
+                        &surreal_url, &resolved.namespace, &resolved.database,
+                        "root", db_password,
+                    )
+                };
+
+                let schema = config.resolved_schema();
+                let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
+                let migrations_dir = config_dir.join(&schema.migrations);
+
+                if migrations_dir.exists() {
+                    match crate::migrate::apply(&surreal_client, &migrations_dir) {
+                        Ok(()) => println!("  Migrations complete."),
+                        Err(e) => println!("  Migration warning: {:?}", e),
+                    }
+                }
+
+                // Apply remote functions
+                if let Some(sched_url) = result["scheduler_url"].as_str() {
+                    let mode = config.mode.as_deref().unwrap_or("singlenode");
+                    let functions_sql = crate::schema_builder::build_remote_functions_schema(
+                        mode, sched_url, "",
+                    );
+                    match surreal_client.execute(&functions_sql) {
+                        Ok(_) => println!("  Remote functions applied."),
+                        Err(e) => println!("  Warning: remote functions: {:?}", e),
+                    }
+                }
+            }
+
+            println!();
+            println!("  Database reset complete.");
+        }
     }
     Ok(())
 }
@@ -1934,4 +2097,331 @@ fn print_deployment_details(data: &serde_json::Value) {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Link (GitHub auto-deploy)
+// ---------------------------------------------------------------------------
+
+fn link(action: CloudLinkCommands) -> Result<()> {
+    match action {
+        CloudLinkCommands::Setup => link_setup(),
+        CloudLinkCommands::Status => link_status(),
+        CloudLinkCommands::Settings { branch, auto_deploy } => link_settings(branch, auto_deploy),
+        CloudLinkCommands::Unlink => link_unlink(),
+        CloudLinkCommands::Trigger => link_trigger(),
+        CloudLinkCommands::Runs => link_runs(),
+    }
+}
+
+fn link_setup() -> Result<()> {
+    let creds = ensure_login()?;
+    let mut client = CloudClient::new(&creds);
+    let (_slug, pid) = resolve_project_id(&mut client)?;
+
+    // Initiate setup
+    let resp = client.post(
+        &format!("/v1/projects/{}/link/setup", pid),
+        &serde_json::json!({}),
+    )?;
+    let data: serde_json::Value = resp.into_json()?;
+    let install_url = data["install_url"]
+        .as_str()
+        .context("Missing install_url in response")?;
+
+    println!("Opening GitHub to install the Sp00ky Cloud app...");
+    println!("  {}", install_url);
+    let _ = open::that(install_url);
+
+    // Poll until linked
+    println!();
+    println!("Waiting for GitHub App installation...");
+
+    let mut attempts = 0;
+    let max_attempts = 120; // 6 minutes at 3s intervals
+
+    loop {
+        thread::sleep(Duration::from_secs(3));
+        attempts += 1;
+
+        if attempts > max_attempts {
+            bail!("Timed out waiting for GitHub App installation. Try again with `sp00ky cloud link setup`.");
+        }
+
+        let resp = client.get(&format!("/v1/projects/{}/link", pid))?;
+        let data: serde_json::Value = resp.into_json()?;
+        let status = data["status"].as_str().unwrap_or("");
+
+        match status {
+            "linked" => {
+                let repo_owner = data["repo_owner"].as_str().unwrap_or("");
+                let repo_name = data["repo_name"].as_str().unwrap_or("");
+                let branch = data["branch"].as_str().unwrap_or("main");
+
+                println!("Linked to {}/{} on branch '{}'", repo_owner, repo_name, branch);
+                println!("  Auto-deploy: {}", if data["auto_deploy"].as_bool().unwrap_or(true) { "enabled" } else { "disabled" });
+
+                // Offer to deploy now
+                if is_interactive() {
+                    let deploy_now = inquire::Confirm::new("Deploy now?")
+                        .with_default(true)
+                        .prompt()
+                        .unwrap_or(false);
+
+                    if deploy_now {
+                        let resp = client.post(
+                            &format!("/v1/projects/{}/link/trigger", pid),
+                            &serde_json::json!({}),
+                        )?;
+                        let run: serde_json::Value = resp.into_json()?;
+                        println!("Build triggered (run: {})", run["run_id"].as_str().unwrap_or("?"));
+                        println!("  Commit: {}", run["commit_sha"].as_str().unwrap_or("?"));
+                    }
+                }
+                return Ok(());
+            }
+            "pending_repo_selection" => {
+                // Installation complete but multiple repos — user needs to pick one
+                if let Some(repos) = data["repos"].as_array() {
+                    if repos.is_empty() {
+                        continue;
+                    }
+
+                    let repo_names: Vec<String> = repos
+                        .iter()
+                        .map(|r| r["full_name"].as_str().unwrap_or("?").to_string())
+                        .collect();
+
+                    println!();
+                    let selection = inquire::Select::new("Select repository:", repo_names)
+                        .prompt()
+                        .context("Failed to select repository")?;
+
+                    // Parse owner/name
+                    let parts: Vec<&str> = selection.split('/').collect();
+                    if parts.len() != 2 {
+                        bail!("Invalid repository format");
+                    }
+
+                    client.patch(
+                        &format!("/v1/projects/{}/link", pid),
+                        &serde_json::json!({
+                            "repo_owner": parts[0],
+                            "repo_name": parts[1],
+                        }),
+                    )?;
+
+                    println!("Linked to {}", selection);
+
+                    // Offer to deploy
+                    if is_interactive() {
+                        let deploy_now = inquire::Confirm::new("Deploy now?")
+                            .with_default(true)
+                            .prompt()
+                            .unwrap_or(false);
+
+                        if deploy_now {
+                            let resp = client.post(
+                                &format!("/v1/projects/{}/link/trigger", pid),
+                                &serde_json::json!({}),
+                            )?;
+                            let run: serde_json::Value = resp.into_json()?;
+                            println!("Build triggered (run: {})", run["run_id"].as_str().unwrap_or("?"));
+                        }
+                    }
+                    return Ok(());
+                }
+            }
+            "not_linked" => {
+                // Still waiting
+                if attempts % 10 == 0 {
+                    print!(".");
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn link_status() -> Result<()> {
+    let creds = require_credentials()?;
+    let mut client = CloudClient::new(&creds);
+    let (slug, pid) = resolve_project_id(&mut client)?;
+
+    let resp = client.get(&format!("/v1/projects/{}/link", pid))?;
+    let data: serde_json::Value = resp.into_json()?;
+    let status = data["status"].as_str().unwrap_or("unknown");
+
+    match status {
+        "linked" => {
+            println!("Project: {}", slug);
+            println!("Repository: {}/{}",
+                data["repo_owner"].as_str().unwrap_or("?"),
+                data["repo_name"].as_str().unwrap_or("?"));
+            println!("Branch: {}", data["branch"].as_str().unwrap_or("?"));
+            println!("Auto-deploy: {}", if data["auto_deploy"].as_bool().unwrap_or(true) { "enabled" } else { "disabled" });
+
+            if let Some(runs) = data["runs"].as_array() {
+                if !runs.is_empty() {
+                    println!();
+                    println!("Recent runs:");
+                    println!("  {:<10} {:<12} {:<20} {}", "STATUS", "COMMIT", "TIME", "MESSAGE");
+                    println!("  {}", "-".repeat(60));
+                    for run in runs {
+                        let sha = run["commit_sha"].as_str().unwrap_or("?");
+                        let short_sha = if sha.len() > 8 { &sha[..8] } else { sha };
+                        println!("  {:<10} {:<12} {:<20} {}",
+                            run["status"].as_str().unwrap_or("?"),
+                            short_sha,
+                            run["created_at"].as_str().unwrap_or("?").get(..19).unwrap_or("?"),
+                            run["commit_message"].as_str().unwrap_or("").lines().next().unwrap_or(""),
+                        );
+                    }
+                }
+            }
+        }
+        "not_linked" => {
+            println!("Project '{}' is not linked to a GitHub repository.", slug);
+            println!("Run `sp00ky cloud link setup` to set up automated deployments.");
+        }
+        _ => {
+            println!("Link status: {}", status);
+        }
+    }
+
+    Ok(())
+}
+
+fn link_settings(branch: Option<String>, auto_deploy: Option<bool>) -> Result<()> {
+    let creds = require_credentials()?;
+    let mut client = CloudClient::new(&creds);
+    let (_slug, pid) = resolve_project_id(&mut client)?;
+
+    // If no flags provided, use interactive prompts
+    let (branch, auto_deploy) = if branch.is_none() && auto_deploy.is_none() && is_interactive() {
+        // Get current settings first
+        let resp = client.get(&format!("/v1/projects/{}/link", pid))?;
+        let data: serde_json::Value = resp.into_json()?;
+        if data["status"].as_str() != Some("linked") {
+            bail!("Project is not linked. Run `sp00ky cloud link setup` first.");
+        }
+
+        let current_branch = data["branch"].as_str().unwrap_or("main").to_string();
+        let current_auto = data["auto_deploy"].as_bool().unwrap_or(true);
+
+        let new_branch = inquire::Text::new("Branch:")
+            .with_default(&current_branch)
+            .prompt()
+            .context("Failed to read branch")?;
+
+        let new_auto = inquire::Confirm::new("Auto-deploy on push?")
+            .with_default(current_auto)
+            .prompt()
+            .context("Failed to read auto-deploy setting")?;
+
+        (Some(new_branch), Some(new_auto))
+    } else {
+        (branch, auto_deploy)
+    };
+
+    let mut body = serde_json::Map::new();
+    if let Some(b) = &branch {
+        body.insert("branch".to_string(), serde_json::Value::String(b.clone()));
+    }
+    if let Some(a) = auto_deploy {
+        body.insert("auto_deploy".to_string(), serde_json::Value::Bool(a));
+    }
+
+    client.patch(
+        &format!("/v1/projects/{}/link", pid),
+        &serde_json::Value::Object(body),
+    )?;
+
+    println!("Settings updated.");
+    if let Some(b) = &branch {
+        println!("  Branch: {}", b);
+    }
+    if let Some(a) = auto_deploy {
+        println!("  Auto-deploy: {}", if a { "enabled" } else { "disabled" });
+    }
+
+    Ok(())
+}
+
+fn link_unlink() -> Result<()> {
+    let creds = require_credentials()?;
+    let mut client = CloudClient::new(&creds);
+    let (slug, pid) = resolve_project_id(&mut client)?;
+
+    if is_interactive() {
+        let confirm = inquire::Confirm::new(&format!("Unlink project '{}'? This will stop automated deployments.", slug))
+            .with_default(false)
+            .prompt()
+            .context("Failed to read confirmation")?;
+
+        if !confirm {
+            println!("Cancelled.");
+            return Ok(());
+        }
+    }
+
+    client.delete(&format!("/v1/projects/{}/link", pid))?;
+    println!("Project '{}' unlinked from GitHub.", slug);
+
+    Ok(())
+}
+
+fn link_trigger() -> Result<()> {
+    let creds = require_credentials()?;
+    let mut client = CloudClient::new(&creds);
+    let (slug, pid) = resolve_project_id(&mut client)?;
+
+    let resp = client.post(
+        &format!("/v1/projects/{}/link/trigger", pid),
+        &serde_json::json!({}),
+    )?;
+    let data: serde_json::Value = resp.into_json()?;
+
+    println!("Build triggered for '{}'", slug);
+    println!("  Run ID: {}", data["run_id"].as_str().unwrap_or("?"));
+    println!("  Commit: {}", data["commit_sha"].as_str().unwrap_or("?"));
+    println!("  Status: {}", data["status"].as_str().unwrap_or("pending"));
+
+    Ok(())
+}
+
+fn link_runs() -> Result<()> {
+    let creds = require_credentials()?;
+    let mut client = CloudClient::new(&creds);
+    let (_slug, pid) = resolve_project_id(&mut client)?;
+
+    let resp = client.get(&format!("/v1/projects/{}/link/runs", pid))?;
+    let runs: Vec<serde_json::Value> = resp.into_json()?;
+
+    if runs.is_empty() {
+        println!("No build runs found. Push to the linked branch or run `sp00ky cloud link trigger`.");
+        return Ok(());
+    }
+
+    println!("{:<10} {:<12} {:<20} {}", "STATUS", "COMMIT", "TIME", "MESSAGE");
+    println!("{}", "-".repeat(70));
+
+    for run in &runs {
+        let sha = run["commit_sha"].as_str().unwrap_or("?");
+        let short_sha = if sha.len() > 8 { &sha[..8] } else { sha };
+        let time = run["created_at"].as_str().unwrap_or("?");
+        let short_time = time.get(..19).unwrap_or(time);
+        let msg = run["commit_message"].as_str().unwrap_or("")
+            .lines().next().unwrap_or("");
+        let msg_truncated = if msg.len() > 40 { &msg[..37] } else { msg };
+
+        println!("{:<10} {:<12} {:<20} {}",
+            run["status"].as_str().unwrap_or("?"),
+            short_sha,
+            short_time,
+            msg_truncated,
+        );
+    }
+
+    Ok(())
 }

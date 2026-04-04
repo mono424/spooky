@@ -155,8 +155,19 @@ async fn do_create_backup(
     let bucket = state.config.get_bucket()
         .context("Failed to connect to MinIO")?;
 
-    // Ensure bucket exists (ignore error if already exists)
-    let _ = bucket.create_bucket().await;
+    // Ensure bucket exists by trying to create it (idempotent)
+    let region = Region::Custom {
+        region: "us-east-1".to_string(),
+        endpoint: state.config.minio_endpoint.clone(),
+    };
+    let creds = Credentials::new(
+        Some(&state.config.minio_access_key),
+        Some(&state.config.minio_secret_key),
+        None, None, None,
+    ).context("Failed to create credentials")?;
+    let _ = Bucket::create_with_path_style(
+        &state.config.bucket_name, region, creds, s3::BucketConfiguration::default(),
+    ).await;
 
     let resp_code = bucket.put_object(&storage_path, &compressed).await
         .context("Failed to upload to MinIO")?;
@@ -226,7 +237,8 @@ async fn do_restore_backup(
     }
 
     // Decompress
-    let mut decoder = flate2::read::GzDecoder::new(resp.bytes());
+    let compressed_data = resp.bytes().to_vec();
+    let mut decoder = flate2::read::GzDecoder::new(compressed_data.as_slice());
     let mut json_data = Vec::new();
     std::io::Read::read_to_end(&mut decoder, &mut json_data)
         .context("Failed to decompress backup")?;
@@ -283,10 +295,7 @@ async fn backup_status(
     State(state): State<BackupState>,
 ) -> Json<serde_json::Value> {
     let bucket_ok = state.config.get_bucket()
-        .and_then(|b| {
-            // Just check if we can construct the bucket
-            Ok(true)
-        })
+        .map(|_| true)
         .unwrap_or(false);
 
     Json(serde_json::json!({
