@@ -4143,7 +4143,7 @@ dependencies = [
 
 [[package]]
 name = "scheduler"
-version = "0.0.1-canary.31"
+version = "0.0.1-canary.32"
 dependencies = [
  "anyhow",
  "async-trait",
