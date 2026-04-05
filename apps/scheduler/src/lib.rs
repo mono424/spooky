@@ -149,6 +149,7 @@ impl Scheduler {
             start_time: self.start_time,
             scheduler_id: self.config.scheduler_id.clone(),
             status: Arc::clone(&self.status),
+            backends: self.config.backends.clone(),
         }
     }
 

@@ -1061,6 +1061,10 @@ fn deploy() -> Result<()> {
                         memory: 512,
                         disk: 5,
                     });
+                    let cmd = get_docker_cmd(&image_tag);
+                    // Merge env-file vars with inline env (same as changed path)
+                    let mut merged_env = load_deploy_env_file(deploy.env_file.as_deref(), config_dir);
+                    merged_env.extend(deploy.env.clone());
                     backend_manifests.push(serde_json::json!({
                         "name": name,
                         "image": format!("{}/{}", slug, name),
@@ -1071,7 +1075,9 @@ fn deploy() -> Result<()> {
                             "memory_mb": resources.memory,
                             "disk_gb": resources.disk,
                         },
-                        "env": deploy.env,
+                        "env": merged_env,
+                        "cmd": cmd,
+                        "healthcheck": deploy.healthcheck,
                     }));
                     println!("  Backend '{}' ready for deployment.", name);
                     continue;
@@ -1145,6 +1151,7 @@ fn deploy() -> Result<()> {
         let mut merged_env = load_deploy_env_file(deploy.env_file.as_deref(), config_dir);
         merged_env.extend(deploy.env.clone());
 
+        let cmd = get_docker_cmd(&image_tag);
         backend_manifests.push(serde_json::json!({
             "name": name,
             "image": format!("{}/{}", slug, name),
@@ -1156,6 +1163,8 @@ fn deploy() -> Result<()> {
                 "disk_gb": resources.disk,
             },
             "env": merged_env,
+            "cmd": cmd,
+            "healthcheck": deploy.healthcheck,
         }));
 
         println!("  Backend '{}' ready for deployment.", name);
@@ -1238,11 +1247,13 @@ fn deploy() -> Result<()> {
             });
             let mut merged_env = load_deploy_env_file(frontend_config.env_file.as_deref(), config_dir);
             merged_env.extend(frontend_config.env.clone());
+            let cmd = get_docker_cmd(&image_tag);
             frontend_manifest = Some(serde_json::json!({
                 "image": format!("{}/frontend", slug),
                 "port": frontend_config.port,
                 "resources": { "vcpus": resources.vcpus, "memory_mb": resources.memory, "disk_gb": resources.disk },
                 "env": merged_env,
+                "cmd": cmd,
             }));
         } else {
 
@@ -1303,6 +1314,7 @@ fn deploy() -> Result<()> {
         let mut merged_env = load_deploy_env_file(frontend_config.env_file.as_deref(), config_dir);
         merged_env.extend(frontend_config.env.clone());
 
+        let cmd = get_docker_cmd(&image_tag);
         frontend_manifest = Some(serde_json::json!({
             "image": format!("{}/frontend", slug),
             "port": frontend_config.port,
@@ -1312,6 +1324,7 @@ fn deploy() -> Result<()> {
                 "disk_gb": resources.disk,
             },
             "env": merged_env,
+            "cmd": cmd,
         }));
 
         println!("  Frontend ready for deployment.");
@@ -1410,24 +1423,74 @@ fn deploy() -> Result<()> {
                                 println!("  ▸ No migrations directory found, skipping.");
                             }
 
-                            // Apply remote functions (DEFINE API, fn::query::register, etc.)
-                            // Derive SSP endpoint from SurrealDB IP (SSP is always .30 on same subnet)
-                            if let Some(db_url_str) = status_data["urls"]["surrealdb"].as_str() {
-                                // Get SSP IP from deployment status, or derive from DB IP
-                                let ssp_endpoint = status_data["urls"]["ssp"]
+                            // Apply remote functions + internal schema BEFORE finalize so that
+                            // SSP/scheduler can bootstrap from already-migrated tables (they
+                            // require _00_query etc. to exist at startup).
+                            // Derive SSP/scheduler endpoint from SurrealDB VM's internal IP
+                            // (deterministic: SurrealDB=.10, scheduler=.20, SSP=.30 on same subnet).
+                            let fn_endpoint = status_data["vms"].as_array()
+                                .and_then(|vms| {
+                                    vms.iter()
+                                        .find(|v| v["role"].as_str() == Some("surrealdb"))
+                                        .and_then(|v| v["internal_ip"].as_str())
+                                })
+                                .and_then(|surreal_ip| {
+                                    let parts: Vec<&str> = surreal_ip.split('.').collect();
+                                    if parts.len() == 4 {
+                                        let subnet = format!("{}.{}.{}", parts[0], parts[1], parts[2]);
+                                        // Use scheduler (.20) as the primary endpoint — it routes to SSPs
+                                        Some(format!("http://{}.20:9667", subnet))
+                                    } else {
+                                        None
+                                    }
+                                });
+
+                            if let Some(ref fn_endpoint) = fn_endpoint {
+                                let mode = config.mode.as_deref().unwrap_or("singlenode");
+                                let auth_secret = status_data["sp00ky_auth_secret"]
                                     .as_str()
                                     .map(|s| s.to_string())
-                                    .or_else(|| {
-                                        // Derive from VMs list: find SSP VM IP
-                                        status_data["vms"].as_array().and_then(|vms| {
-                                            vms.iter()
-                                                .find(|v| v["role"].as_str() == Some("ssp"))
-                                                .and_then(|v| v["internal_ip"].as_str())
-                                                .map(|ip| format!("http://{}:8667", ip))
-                                        })
+                                    .unwrap_or_else(|| {
+                                        let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
+                                        for (_name, backend_config) in &config.backends {
+                                            if let Some(deploy) = &backend_config.deploy {
+                                                let mut all_env = load_deploy_env_file(deploy.env_file.as_deref(), config_dir);
+                                                all_env.extend(deploy.env.clone());
+                                                for entry in &all_env {
+                                                    if let Some(val) = entry.strip_prefix("SP00KY_AUTH_SECRET=") {
+                                                        return val.to_string();
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        String::new()
                                     });
 
-                                // Remote functions will be applied after SSP is provisioned (phase 2)
+                                let functions_sql = crate::schema_builder::build_remote_functions_schema(
+                                    mode, fn_endpoint, &auth_secret,
+                                );
+                                match surreal_client.execute(&functions_sql) {
+                                    Ok(_) => println!("  ▸ Remote functions applied."),
+                                    Err(e) => println!("  ▸ Warning: failed to apply remote functions: {:?}", e),
+                                }
+
+                                let int_schema = config.resolved_schema();
+                                let int_config_dir = config_path.parent()
+                                    .unwrap_or(std::path::Path::new("."));
+                                let schema_input_path = int_config_dir.join(&int_schema.schema);
+                                if schema_input_path.exists() {
+                                    match crate::migrate::apply_internal_schema(
+                                        &surreal_client,
+                                        &schema_input_path,
+                                        Some(config_path.as_path()),
+                                        mode,
+                                        Some(fn_endpoint),
+                                        Some(&auth_secret),
+                                    ) {
+                                        Ok(()) => {}
+                                        Err(e) => println!("  ▸ Warning: failed to apply internal schema: {:?}", e),
+                                    }
+                                }
                             }
                         }
                     }
@@ -1453,96 +1516,9 @@ fn deploy() -> Result<()> {
                     println!();
                     println!("  Deployment is running!");
 
-                    // Apply remote functions now that SSP is running
                     if let Ok(status_resp) = client.get(&format!("/v1/projects/{}/deployment", pid)) {
                         if let Ok(status) = status_resp.into_json::<serde_json::Value>() {
                             print_deployment_details(&status);
-
-                            // Find SSP endpoint and apply functions
-                            if let Some(db_url) = status["urls"]["surrealdb"].as_str() {
-                                let ssp_endpoint = status["urls"]["ssp"]
-                                    .as_str()
-                                    .map(|s| s.to_string())
-                                    .or_else(|| {
-                                        status["vms"].as_array().and_then(|vms| {
-                                            vms.iter()
-                                                .find(|v| v["role"].as_str() == Some("ssp"))
-                                                .and_then(|v| v["internal_ip"].as_str())
-                                                .map(|ip| format!("http://{}:8667", ip))
-                                        })
-                                    });
-
-                                // Use scheduler URL for remote functions (scheduler routes to SSPs)
-                                // Fall back to SSP URL for singlenode mode without scheduler
-                                let endpoint = status["urls"]["scheduler"]
-                                    .as_str()
-                                    .map(|s| s.to_string())
-                                    .or_else(|| ssp_endpoint.clone());
-
-                                if let Some(fn_endpoint) = endpoint {
-                                    let resolved = config.resolved_surrealdb();
-                                    let db_password = status["surrealdb_password"].as_str().unwrap_or("");
-                                    let surreal_client = if db_password.is_empty() {
-                                        crate::surreal_client::SurrealClient::new_unauthenticated(
-                                            db_url, &resolved.namespace, &resolved.database,
-                                        )
-                                    } else {
-                                        crate::surreal_client::SurrealClient::new(
-                                            db_url, &resolved.namespace, &resolved.database, "root", db_password,
-                                        )
-                                    };
-                                    let mode = config.mode.as_deref().unwrap_or("singlenode");
-                                    // Read the auth secret from the server's deployment status response.
-                                    // The cloud API generates this and sets it on both scheduler and SSP VMs.
-                                    let auth_secret = status["sp00ky_auth_secret"]
-                                        .as_str()
-                                        .map(|s| s.to_string())
-                                        .unwrap_or_else(|| {
-                                            // Fallback: check backend env config (for local/custom setups)
-                                            let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
-                                            for (_name, backend_config) in &config.backends {
-                                                if let Some(deploy) = &backend_config.deploy {
-                                                    let mut all_env = load_deploy_env_file(deploy.env_file.as_deref(), config_dir);
-                                                    all_env.extend(deploy.env.clone());
-                                                    for entry in &all_env {
-                                                        if let Some(val) = entry.strip_prefix("SP00KY_AUTH_SECRET=") {
-                                                            return val.to_string();
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            String::new()
-                                        });
-                                    let functions_sql = crate::schema_builder::build_remote_functions_schema(
-                                        mode, &fn_endpoint, &auth_secret,
-                                    );
-                                    match surreal_client.execute(&functions_sql) {
-                                        Ok(_) => println!("  ▸ Remote functions applied."),
-                                        Err(e) => println!("  ▸ Warning: failed to apply remote functions: {:?}", e),
-                                    }
-
-                                    // Apply internal Sp00ky schema (per-table events for scheduler ingest).
-                                    // This generates DEFINE EVENT statements on every user table that POST
-                                    // record changes to the scheduler's /ingest endpoint.
-                                    let int_schema = config.resolved_schema();
-                                    let int_config_dir = config_path.parent()
-                                        .unwrap_or(std::path::Path::new("."));
-                                    let schema_input_path = int_config_dir.join(&int_schema.schema);
-                                    if schema_input_path.exists() {
-                                        match crate::migrate::apply_internal_schema(
-                                            &surreal_client,
-                                            &schema_input_path,
-                                            Some(config_path.as_path()),
-                                            mode,
-                                            Some(&fn_endpoint),
-                                            Some(&auth_secret),
-                                        ) {
-                                            Ok(()) => {}
-                                            Err(e) => println!("  ▸ Warning: failed to apply internal schema: {:?}", e),
-                                        }
-                                    }
-                                }
-                            }
                         }
                     }
                 }
@@ -1584,6 +1560,24 @@ fn get_docker_image_id(tag: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+/// Extract the CMD from a Docker image as a shell command string.
+fn get_docker_cmd(tag: &str) -> Option<String> {
+    let output = std::process::Command::new("docker")
+        .args(["inspect", "--format", "{{json .Config.Cmd}}", tag])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let parts: Vec<String> = serde_json::from_str(&raw).ok()?;
+    if parts.is_empty() {
+        return None;
+    }
+    // Join as a shell command (handles ["node", "dist/index.js"] → "node dist/index.js")
+    Some(parts.join(" "))
 }
 
 /// Get the remote image hash from the API.

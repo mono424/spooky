@@ -21,6 +21,15 @@ pub struct SchedulerConfig {
     pub wal_path: PathBuf,
     #[serde(skip)]
     pub scheduler_id: String,
+    #[serde(skip)]
+    pub backends: Vec<BackendHealthConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BackendHealthConfig {
+    pub name: String,
+    pub url: String,
+    pub healthcheck: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -64,6 +73,7 @@ impl Default for SchedulerConfig {
             ssp_poll_interval_ms: 3000,
             wal_path: PathBuf::from("./data/event_wal.log"),
             scheduler_id: String::new(),
+            backends: vec![],
         }
     }
 }
@@ -86,6 +96,13 @@ impl SchedulerConfig {
 
         scheduler_config.scheduler_id = std::env::var("SCHEDULER_ID")
             .unwrap_or_else(|_| format!("scheduler-{}", uuid::Uuid::new_v4()));
+
+        // Parse backend health check targets from JSON env var
+        if let Ok(backends_json) = std::env::var("SP00KY_SCHEDULER_BACKENDS") {
+            if let Ok(backends) = serde_json::from_str::<Vec<BackendHealthConfig>>(&backends_json) {
+                scheduler_config.backends = backends;
+            }
+        }
 
         Ok(scheduler_config)
     }

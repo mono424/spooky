@@ -395,6 +395,9 @@ pub struct BackendDeployConfig {
     /// Build context directory (relative to sp00ky.yml, defaults to project root)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
+    /// Health check path for the scheduler to ping (e.g. "/health")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub healthcheck: Option<String>,
 }
 
 fn default_deploy_port() -> u16 {
