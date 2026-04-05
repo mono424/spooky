@@ -1576,8 +1576,16 @@ fn get_docker_cmd(tag: &str) -> Option<String> {
     if parts.is_empty() {
         return None;
     }
-    // Join as a shell command (handles ["node", "dist/index.js"] → "node dist/index.js")
-    Some(parts.join(" "))
+    // Shell-quote arguments that contain spaces or special chars
+    // e.g. ["nginx", "-g", "daemon off;"] → "nginx -g 'daemon off;'"
+    let quoted: Vec<String> = parts.iter().map(|p| {
+        if p.contains(' ') || p.contains(';') || p.contains('\'') || p.contains('"') {
+            format!("'{}'", p.replace('\'', "'\\''"))
+        } else {
+            p.clone()
+        }
+    }).collect();
+    Some(quoted.join(" "))
 }
 
 /// Get the remote image hash from the API.
@@ -1781,7 +1789,6 @@ fn stream_deployment_events(client: &CloudClient, pid: &str) -> Result<String> {
                         if s.done {
                             // Final render
                             render_vm_table(&s.vms, &s.phase, frame, !rendered);
-                            rendered = true;
                             break;
                         }
                         if !s.vms.is_empty() {
@@ -2610,7 +2617,7 @@ fn billing(action: Option<CloudBillingCommands>) -> Result<()> {
     }
 }
 
-fn upgrade(check_only: bool, target_version: Option<String>, force: bool) -> Result<()> {
+fn upgrade(check_only: bool, _target_version: Option<String>, force: bool) -> Result<()> {
     let api_base = api_base_url();
 
     println!("  Checking for updates...");
