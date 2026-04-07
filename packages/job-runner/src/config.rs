@@ -1,6 +1,7 @@
 use crate::types::{BackendInfo, JobConfig};
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -78,5 +79,41 @@ pub fn load_config<P: AsRef<Path>>(sp00ky_config_path: P) -> Result<JobConfig> {
         }
     }
 
+    Ok(JobConfig { job_tables })
+}
+
+/// Build a JobConfig from a SurrealDB _sp00ky_config record.
+/// Expected format: { "backends": [{ "name": "...", "base_url": "...", "method_type": "outbox", "table": "..." }] }
+pub fn from_db_record(record: &Value) -> Result<JobConfig> {
+    let backends = record
+        .get("backends")
+        .and_then(|v| v.as_array())
+        .context("_sp00ky_config record missing 'backends' array")?;
+
+    let mut job_tables = HashMap::new();
+    for entry in backends {
+        let method_type = entry.get("method_type").and_then(|v| v.as_str()).unwrap_or("");
+        if method_type != "outbox" {
+            continue;
+        }
+        let name = entry.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let base_url = entry.get("base_url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let table = entry.get("table").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if table.is_empty() || base_url.is_empty() {
+            continue;
+        }
+        let auth_token = entry
+            .get("auth_token")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        job_tables.insert(
+            table,
+            BackendInfo {
+                name,
+                base_url,
+                auth_token,
+            },
+        );
+    }
     Ok(JobConfig { job_tables })
 }

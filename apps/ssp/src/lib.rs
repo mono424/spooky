@@ -245,6 +245,37 @@ pub async fn connect_database(config: &Config) -> anyhow::Result<SharedDb> {
     Ok(Arc::new(db))
 }
 
+// --- Job Config Loading ---
+
+async fn load_job_config_from_db(db: &Surreal<Client>) -> anyhow::Result<JobConfig> {
+    let result: Option<serde_json::Value> = db
+        .select(("_sp00ky_config", "main"))
+        .await
+        .map_err(|e| anyhow::anyhow!("SurrealDB select failed: {}", e))?;
+    match result {
+        Some(record) => job_runner::from_db_record(&record),
+        None => Ok(JobConfig::default()),
+    }
+}
+
+fn load_job_config_from_file(path: &std::path::Path) -> Arc<JobConfig> {
+    if path.exists() {
+        match job_runner::load_config(path) {
+            Ok(cfg) => {
+                info!(job_tables = cfg.job_tables.len(), "Loaded job config from file");
+                Arc::new(cfg)
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to load job config from file, job runner disabled");
+                Arc::new(JobConfig::default())
+            }
+        }
+    } else {
+        info!("No job config found, job runner disabled");
+        Arc::new(JobConfig::default())
+    }
+}
+
 // --- Router Setup ---
 
 pub fn create_app(state: AppState) -> Router {
@@ -288,24 +319,20 @@ pub async fn run_server() -> anyhow::Result<()> {
     let processor_arc = Arc::new(RwLock::new(Circuit::new()));
     let status = Arc::new(RwLock::new(SspStatus::Bootstrapping));
 
-    // Load job configuration
-    let job_config = if config.sp00ky_config_path.exists() {
-        match job_runner::load_config(&config.sp00ky_config_path) {
-            Ok(cfg) => {
-                info!(
-                    job_tables = cfg.job_tables.len(),
-                    "Loaded job configuration"
-                );
-                Arc::new(cfg)
-            }
-            Err(e) => {
-                warn!(error = %e, "Failed to load job config, job runner disabled");
-                Arc::new(JobConfig::default())
-            }
+    // Load job configuration from SurrealDB (_sp00ky_config:main), fall back to file
+    let job_config = match load_job_config_from_db(&db).await {
+        Ok(cfg) if !cfg.job_tables.is_empty() => {
+            info!(job_tables = cfg.job_tables.len(), "Loaded job config from SurrealDB");
+            Arc::new(cfg)
         }
-    } else {
-        info!("No sp00ky config found, job runner disabled");
-        Arc::new(JobConfig::default())
+        Ok(_) => {
+            info!("No job config in SurrealDB, trying file fallback");
+            load_job_config_from_file(&config.sp00ky_config_path)
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to load job config from SurrealDB, trying file fallback");
+            load_job_config_from_file(&config.sp00ky_config_path)
+        }
     };
 
     // Create job queue channel

@@ -160,7 +160,11 @@ enum CloudCommands {
     /// List cloud projects
     List,
     /// Deploy current project to the cloud
-    Deploy,
+    Deploy {
+        /// Also upgrade SSP and scheduler to latest version
+        #[arg(long)]
+        upgrade: bool,
+    },
     /// Show deployment status
     Status,
     /// Tail logs from cloud deployment
@@ -187,18 +191,6 @@ enum CloudCommands {
     },
     /// Destroy cloud project and all VMs
     Destroy,
-    /// Upgrade SSP and scheduler to latest version
-    Upgrade {
-        /// Only check for updates, don't apply
-        #[arg(long)]
-        check: bool,
-        /// Target specific version (e.g. 0.0.1-canary.30)
-        #[arg(long)]
-        version: Option<String>,
-        /// Skip major version warning
-        #[arg(long)]
-        force: bool,
-    },
     /// Manage database backups
     Backup {
         #[command(subcommand)]

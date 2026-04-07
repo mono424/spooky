@@ -34,35 +34,38 @@ fn api_base_url() -> String {
 }
 
 /// Derive the SurrealDB WebSocket endpoint for a project.
-/// api-staging.sp00ky.cloud → wss://{slug}.db.staging.spky.cloud/rpc
-/// api.sp00ky.cloud → wss://{slug}.db.spky.cloud/rpc
+/// api-stg.sp00ky.cloud → wss://{slug}-db.stg.spky.cloud/rpc
+/// api.sp00ky.cloud → wss://{slug}-db.spky.cloud/rpc
 fn derive_db_ws_endpoint(api_url: &str, slug: &str) -> Option<String> {
     let host = api_url.strip_prefix("https://")
         .or(api_url.strip_prefix("http://"))?
         .split('/').next()?;
 
     if let Some(stage) = host.strip_prefix("api-").and_then(|h| h.strip_suffix(".sp00ky.cloud")) {
-        // Staging: api-staging.sp00ky.cloud → db.staging.spky.cloud
-        Some(format!("wss://{}.db.{}.spky.cloud/rpc", slug, stage))
+        // Staging: api-stg.sp00ky.cloud → {slug}-db.stg.spky.cloud
+        Some(format!("wss://{}-db.{}.spky.cloud/rpc", slug, stage))
     } else if host.ends_with(".sp00ky.cloud") {
-        // Production: api.sp00ky.cloud → db.spky.cloud
-        Some(format!("wss://{}.db.spky.cloud/rpc", slug))
+        // Production: api.sp00ky.cloud → {slug}-db.spky.cloud
+        Some(format!("wss://{}-db.spky.cloud/rpc", slug))
     } else {
         None
     }
 }
 
 /// Derive the upload URL for large files (bypasses Cloudflare proxy).
-/// Converts "https://api-staging.sp00ky.cloud" → "https://upload.staging.spky.cloud"
+/// Converts "https://api-stg.sp00ky.cloud" → "https://upload-stg.spky.cloud"
 /// Falls back to the API URL if no upload domain can be derived.
 fn upload_base_url(api_url: &str) -> String {
     if let Ok(url) = std::env::var("SP00KY_CLOUD_UPLOAD") {
         return url;
     }
-    // Try to derive: api-{stage}.sp00ky.cloud → upload.{stage}.spky.cloud
+    // Try to derive: api-{stage}.sp00ky.cloud → upload-{stage}.spky.cloud
     if let Some(host) = api_url.strip_prefix("https://").or(api_url.strip_prefix("http://")) {
         let host = host.split('/').next().unwrap_or(host);
-        if host.contains("sp00ky.cloud") {
+        if let Some(stage) = host.strip_prefix("api-").and_then(|h| h.strip_suffix(".sp00ky.cloud")) {
+            return format!("https://upload.{}.spky.cloud", stage);
+        }
+        if host == "api.sp00ky.cloud" {
             return "https://upload.spky.cloud".to_string();
         }
     }
@@ -740,12 +743,11 @@ pub fn run(action: CloudCommands) -> Result<()> {
         CloudCommands::Logout => logout(),
         CloudCommands::Create { slug, plan } => create(slug, plan),
         CloudCommands::List => list(),
-        CloudCommands::Deploy => deploy(),
+        CloudCommands::Deploy { upgrade } => deploy(upgrade),
         CloudCommands::Status => status(),
         CloudCommands::Logs { filter, split, service } => logs(filter, split, service),
         CloudCommands::Scale { ssp } => scale(ssp),
         CloudCommands::Destroy => destroy(),
-        CloudCommands::Upgrade { check, version, force } => upgrade(check, version, force),
         CloudCommands::Backup { action } => backup(action),
         CloudCommands::Billing { action } => billing(action),
         CloudCommands::Keys { action } => keys(action),
@@ -963,7 +965,7 @@ fn load_deploy_env_file(env_file: Option<&str>, config_dir: &std::path::Path) ->
         .collect()
 }
 
-fn deploy() -> Result<()> {
+fn deploy(upgrade: bool) -> Result<()> {
     // Guided flow: ensure login → project → billing before expensive work
     let creds = ensure_login()?;
     let mut client = CloudClient::new(&creds);
@@ -1065,9 +1067,10 @@ fn deploy() -> Result<()> {
                     // Merge env-file vars with inline env (same as changed path)
                     let mut merged_env = load_deploy_env_file(deploy.env_file.as_deref(), config_dir);
                     merged_env.extend(deploy.env.clone());
-                    backend_manifests.push(serde_json::json!({
+                    let mut manifest = serde_json::json!({
                         "name": name,
                         "image": format!("{}/{}", slug, name),
+                        "image_hash": &image_id,
                         "port": deploy.port,
                         "expose": deploy.expose,
                         "resources": {
@@ -1078,7 +1081,14 @@ fn deploy() -> Result<()> {
                         "env": merged_env,
                         "cmd": cmd,
                         "healthcheck": deploy.healthcheck,
-                    }));
+                    });
+                    if let Some(table) = &backend_config.method.table {
+                        manifest["method"] = serde_json::json!({
+                            "type": &backend_config.method.method_type,
+                            "table": table,
+                        });
+                    }
+                    backend_manifests.push(manifest);
                     println!("  Backend '{}' ready for deployment.", name);
                     continue;
                 }
@@ -1152,9 +1162,10 @@ fn deploy() -> Result<()> {
         merged_env.extend(deploy.env.clone());
 
         let cmd = get_docker_cmd(&image_tag);
-        backend_manifests.push(serde_json::json!({
+        let mut manifest = serde_json::json!({
             "name": name,
             "image": format!("{}/{}", slug, name),
+            "image_hash": &image_id,
             "port": deploy.port,
             "expose": deploy.expose,
             "resources": {
@@ -1165,7 +1176,14 @@ fn deploy() -> Result<()> {
             "env": merged_env,
             "cmd": cmd,
             "healthcheck": deploy.healthcheck,
-        }));
+        });
+        if let Some(table) = &backend_config.method.table {
+            manifest["method"] = serde_json::json!({
+                "type": &backend_config.method.method_type,
+                "table": table,
+            });
+        }
+        backend_manifests.push(manifest);
 
         println!("  Backend '{}' ready for deployment.", name);
     }
@@ -1210,7 +1228,8 @@ fn deploy() -> Result<()> {
 
         println!("  Building frontend image...");
         let mut build_args = vec![
-            "build".to_string(), "--platform".to_string(), "linux/amd64".to_string(),
+            "build".to_string(), "--no-cache".to_string(),
+            "--platform".to_string(), "linux/amd64".to_string(),
             "-t".to_string(), image_tag.clone(),
             "-f".to_string(), dockerfile_path.to_string_lossy().to_string(),
         ];
@@ -1250,6 +1269,7 @@ fn deploy() -> Result<()> {
             let cmd = get_docker_cmd(&image_tag);
             frontend_manifest = Some(serde_json::json!({
                 "image": format!("{}/frontend", slug),
+                "image_hash": &frontend_image_id,
                 "port": frontend_config.port,
                 "resources": { "vcpus": resources.vcpus, "memory_mb": resources.memory, "disk_gb": resources.disk },
                 "env": merged_env,
@@ -1317,6 +1337,7 @@ fn deploy() -> Result<()> {
         let cmd = get_docker_cmd(&image_tag);
         frontend_manifest = Some(serde_json::json!({
             "image": format!("{}/frontend", slug),
+            "image_hash": &frontend_image_id,
             "port": frontend_config.port,
             "resources": {
                 "vcpus": resources.vcpus,
@@ -1340,6 +1361,7 @@ fn deploy() -> Result<()> {
         "external_backends": external_backends,
         "frontend": frontend_manifest,
         "ssp_count": ssp_count,
+        "upgrade_infra": upgrade,
     });
 
     let resp = client.post(
@@ -1929,24 +1951,65 @@ fn service_color(service: &str) -> crossterm::style::Color {
 }
 
 /// Expand blueprint names and comma-separated service lists into a set of service names.
-fn resolve_filters(filter: Option<&str>, service: Option<&str>) -> Option<std::collections::HashSet<String>> {
+fn resolve_filters(filter: Option<&str>, service: Option<&str>) -> Option<Vec<String>> {
     // --filter takes precedence over deprecated --service
     let raw = filter.or(service)?;
-    let mut services = std::collections::HashSet::new();
+    let mut services = Vec::new();
     for token in raw.split(',') {
         let token = token.trim().to_lowercase();
         match token.as_str() {
             "spooky" => {
-                services.insert("ssp".to_string());
-                services.insert("scheduler".to_string());
+                services.push("ssp".to_string());
+                services.push("scheduler".to_string());
             }
             other if !other.is_empty() => {
-                services.insert(other.to_string());
+                services.push(other.to_string());
             }
             _ => {}
         }
     }
     if services.is_empty() { None } else { Some(services) }
+}
+
+/// Check if a service name matches any of the filter patterns.
+/// Supports exact match and simple glob patterns with `*` and `?`.
+fn matches_filter(service: &str, filters: &[String]) -> bool {
+    fn glob_match(pattern: &str, text: &str) -> bool {
+        let mut star_p = None;
+        let mut star_t = None;
+        let pattern: Vec<char> = pattern.chars().collect();
+        let text: Vec<char> = text.chars().collect();
+        let (mut pi, mut ti) = (0, 0);
+        while ti < text.len() {
+            if pi < pattern.len() && (pattern[pi] == '?' || pattern[pi] == text[ti]) {
+                pi += 1;
+                ti += 1;
+            } else if pi < pattern.len() && pattern[pi] == '*' {
+                star_p = Some(pi);
+                star_t = Some(ti);
+                pi += 1;
+            } else if let Some(sp) = star_p {
+                pi = sp + 1;
+                let st = star_t.unwrap() + 1;
+                star_t = Some(st);
+                ti = st;
+            } else {
+                return false;
+            }
+        }
+        while pi < pattern.len() && pattern[pi] == '*' {
+            pi += 1;
+        }
+        pi == pattern.len()
+    }
+
+    filters.iter().any(|f| {
+        if f.contains('*') || f.contains('?') {
+            glob_match(f, service)
+        } else {
+            f == service
+        }
+    })
 }
 
 /// Strip ANSI escape sequences from a string so ratatui's cell-width
@@ -2044,7 +2107,7 @@ fn spawn_sse_reader(
 /// Non-split mode: colored streaming output to stdout.
 fn logs_stream(
     rx: std::sync::mpsc::Receiver<LogEvent>,
-    filters: &Option<std::collections::HashSet<String>>,
+    filters: &Option<Vec<String>>,
 ) -> Result<()> {
     use crossterm::style::{Color, ResetColor, SetForegroundColor};
     use std::io::Write;
@@ -2056,7 +2119,7 @@ fn logs_stream(
         match rx.recv() {
             Ok(LogEvent::Line { service, message }) => {
                 if let Some(ref f) = filters {
-                    if !f.contains(&service) {
+                    if !matches_filter(&service, f) {
                         continue;
                     }
                 }
@@ -2082,7 +2145,7 @@ fn logs_stream(
 /// Split mode: ratatui TUI with one panel per service.
 fn logs_split(
     rx: std::sync::mpsc::Receiver<LogEvent>,
-    filters: &Option<std::collections::HashSet<String>>,
+    filters: &Option<Vec<String>>,
     direction: ratatui::layout::Direction,
 ) -> Result<()> {
     use crossterm::event::{self, Event, KeyCode, KeyModifiers};
@@ -2099,10 +2162,15 @@ fn logs_split(
     // If an explicit filter is set, pre-create panels for those services.
     // Otherwise we dynamically add panels as data arrives.
     let explicit_filter = filters.is_some();
-    let mut panel_order: Vec<String> = if let Some(ref f) = filters {
-        let mut v: Vec<String> = f.iter().cloned().collect();
-        v.sort();
-        v
+    let has_glob = filters.as_ref().is_some_and(|f| f.iter().any(|p| p.contains('*') || p.contains('?')));
+    let mut panel_order: Vec<String> = if !has_glob {
+        if let Some(ref f) = filters {
+            let mut v: Vec<String> = f.iter().cloned().collect();
+            v.sort();
+            v
+        } else {
+            Vec::new()
+        }
     } else {
         Vec::new()
     };
@@ -2148,7 +2216,12 @@ fn logs_split(
                         // Dynamically add panels for new services (when no explicit filter)
                         if !panels.contains_key(&service) {
                             if explicit_filter {
-                                continue; // skip services not in the filter
+                                if let Some(ref f) = filters {
+                                    if !matches_filter(&service, f) {
+                                        continue; // skip services not matching the filter
+                                    }
+                                }
+                                // Glob-matched service: dynamically add panel
                             }
                             panel_order.push(service.clone());
                             panels.insert(service.clone(), VecDeque::new());
@@ -2615,124 +2688,6 @@ fn billing(action: Option<CloudBillingCommands>) -> Result<()> {
             Ok(())
         }
     }
-}
-
-fn upgrade(check_only: bool, _target_version: Option<String>, force: bool) -> Result<()> {
-    let api_base = api_base_url();
-
-    println!("  Checking for updates...");
-    println!();
-
-    // Get latest cached versions from the control plane (public endpoint, no auth)
-    let latest_resp = ureq::get(&format!("{}/v1/images/latest", api_base))
-        .call()
-        .context("Failed to fetch latest image versions")?;
-    let latest: serde_json::Value = latest_resp.into_json().context("Failed to parse latest versions")?;
-
-    // Try to get current running versions (requires auth — may fail gracefully)
-    let mut running_versions: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    let mut client_and_pid: Option<(CloudClient, String)> = None;
-
-    if let Ok(creds) = require_credentials() {
-        let mut client = CloudClient::new(&creds);
-        if let Ok((_slug, pid)) = resolve_project_id(&mut client) {
-            if let Ok(status_resp) = client.get(&format!("/v1/projects/{}/deployment", pid)) {
-                if let Ok(status) = status_resp.into_json::<serde_json::Value>() {
-                    // Extract versions from /api/spooky if possible
-                    if let Some(db_url) = status["urls"]["surrealdb"].as_str() {
-                        let config_path = std::env::current_dir().unwrap_or_default().join("sp00ky.yml");
-                        let config = backend::load_config(&config_path);
-                        let resolved = config.resolved_surrealdb();
-                        let spooky_url = format!("{}/api/{}/{}/spooky", db_url, resolved.namespace, resolved.database);
-                        if let Ok(resp) = ureq::get(&spooky_url).call() {
-                            if let Ok(entities) = resp.into_json::<Vec<serde_json::Value>>() {
-                                for entity in &entities {
-                                    if let (Some(role), Some(version)) = (entity["entity"].as_str(), entity["version"].as_str()) {
-                                        running_versions.insert(role.to_string(), version.to_string());
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    client_and_pid = Some((client, pid.clone()));
-                }
-            }
-        }
-    }
-
-    // running_versions was populated above (in auth block)
-
-    // Display version comparison
-    println!("  {:<14} {:<24} {:<24} {}", "ROLE", "CURRENT", "LATEST", "STATUS");
-    println!("  {}", "─".repeat(70));
-
-    let mut has_update = false;
-    for role in &["scheduler", "ssp"] {
-        let current = running_versions.get(*role).map(|s| s.as_str()).unwrap_or("not deployed");
-        let latest_ver = latest.get(*role)
-            .and_then(|v| v["version"].as_str())
-            .unwrap_or("not cached");
-
-        let status_str = if current == latest_ver {
-            "up to date"
-        } else if latest_ver == "not cached" {
-            "no cached image"
-        } else {
-            has_update = true;
-            "update available"
-        };
-
-        println!("  {:<14} {:<24} {:<24} {}", role, current, latest_ver, status_str);
-    }
-    println!();
-
-    if check_only {
-        return Ok(());
-    }
-
-    if !has_update {
-        println!("  Everything is up to date.");
-        return Ok(());
-    }
-
-    // Check for major version changes
-    // (simplified: just check if the major version number changed)
-    if !force {
-        // For now, always allow canary updates without force flag
-    }
-
-    let confirmed = inquire::Confirm::new("Apply update?")
-        .with_default(true)
-        .prompt()
-        .context("Failed to read confirmation")?;
-
-    if !confirmed {
-        println!("  Cancelled.");
-        return Ok(());
-    }
-
-    println!("  Upgrading...");
-
-    if let Some((mut client, pid)) = client_and_pid {
-        // Deploy with upgrade_infra flag — tells orchestrator to replace SSP/scheduler VMs
-        println!("  Redeploying with updated images...");
-        let resp = client.post(
-            &format!("/v1/projects/{}/deploy", pid),
-            &serde_json::json!({"upgrade_infra": true}),
-        )?;
-
-        if resp.status() == 200 || resp.status() == 201 {
-            println!("  Deployment triggered. Use 'sp00ky cloud status' to monitor progress.");
-        } else {
-            println!("  Warning: deploy returned HTTP {}", resp.status());
-        }
-    } else {
-        bail!("Not authenticated. Run `sp00ky cloud login` first, then retry the upgrade.");
-    }
-
-    println!();
-    println!("  Upgrade initiated.");
-    Ok(())
 }
 
 fn keys(action: CloudKeyCommands) -> Result<()> {
