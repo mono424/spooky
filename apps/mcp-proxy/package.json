@@ -1,6 +1,6 @@
 {
   "name": "@spooky-sync/mcp-proxy",
-  "version": "0.0.1-canary.34",
+  "version": "0.0.1-canary.35",
   "description": "MCP server proxy for Sp00ky Sync — direct database access without browser",
   "license": "MIT",
   "type": "module",
