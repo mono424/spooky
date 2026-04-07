@@ -1,0 +1,33 @@
+{
+  "name": "@spooky-sync/mcp-proxy",
+  "version": "0.0.1-canary.33",
+  "description": "MCP server proxy for Sp00ky Sync — direct database access without browser",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "sp00ky-mcp-proxy": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mono424/sp00ky.git",
+    "directory": "apps/mcp-proxy"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.6.2"
+  }
+}

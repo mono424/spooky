@@ -5,6 +5,7 @@ mod cloud;
 mod codegen;
 mod dev;
 mod json_schema;
+mod mcp;
 mod migrate;
 mod modules;
 mod parser;
@@ -135,6 +136,8 @@ enum Commands {
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
+    /// Start an MCP server for AI assistant integration
+    Mcp,
     /// Cloud deployment and management
     Cloud {
         #[command(subcommand)]
@@ -1105,6 +1108,7 @@ fn main() -> Result<()> {
         Some(Commands::Migrate { action }) => return handle_migrate(action),
         Some(Commands::Bucket { action }) => return handle_bucket(action),
         Some(Commands::Api { action }) => return handle_api(action),
+        Some(Commands::Mcp) => return mcp::run(),
         Some(Commands::Cloud { action }) => return cloud::run(action),
         Some(Commands::Dev { skip_migrations, apply_migrations, fix_checksums }) => {
             return dev::run(skip_migrations, apply_migrations, fix_checksums);

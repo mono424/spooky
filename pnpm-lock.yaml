@@ -147,6 +147,22 @@ importers:
         specifier: ^1.4.0
         version: 1.4.0
 
+  apps/mcp-proxy:
+    dependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.12.1
+        version: 1.27.1(zod@3.25.76)
+      zod:
+        specifier: ^3.24.0
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^20.0.0
+        version: 20.19.22
+      typescript:
+        specifier: ^5.6.2
+        version: 5.9.3
+
   apps/ssp: {}
 
   example:

@@ -17,15 +17,17 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "mcp-proxy"
   ],
   "scripts": {
     "dev": "vite",
     "build:rust": "cargo build --release",
     "build:vite": "vite build",
     "build:types": "tsc --emitDeclarationOnly --declaration --declarationDir dist",
+    "build:mcp-proxy": "cd ../mcp-proxy && npm run build && cp -r dist ../cli/mcp-proxy",
     "build:js": "npm run build:vite && npm run build:types",
-    "build": "npm run build:rust && npm run build:js",
+    "build": "npm run build:rust && npm run build:mcp-proxy && npm run build:js",
     "preview": "vite preview",
     "test": "vitest",
     "lint": "eslint src",
