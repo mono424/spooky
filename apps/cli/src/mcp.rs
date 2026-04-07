@@ -16,16 +16,15 @@ fn resolve_mcp_proxy() -> Result<PathBuf> {
     let exe_dir = exe.parent().unwrap_or(Path::new("."));
 
     let candidates = [
-        // Bundled: mcp-proxy/ sits next to dist/ in the CLI package
-        // When run via npx, binary resolves into node_modules/.../cli-darwin-arm64/
-        // and mcp-proxy/ is in node_modules/.../cli/mcp-proxy/
+        // npx: binary at node_modules/@spooky-sync/cli-darwin-arm64/spooky
+        //       mcp-proxy at node_modules/@spooky-sync/cli/mcp-proxy/
+        exe_dir.join("../../cli/mcp-proxy/index.js"),
+        // Bundled: mcp-proxy/ sits next to the binary
         exe_dir.join("../mcp-proxy/index.js"),
-        // Dev monorepo: relative to CWD (e.g. run from repo root)
+        // Dev monorepo: relative to CWD
         PathBuf::from("apps/cli/mcp-proxy/index.js"),
         // Dev monorepo: binary at apps/cli/target/release/spooky
         exe_dir.join("../../../mcp-proxy/dist/index.js"),
-        // Fallback: sibling apps/mcp-proxy/dist
-        PathBuf::from("apps/mcp-proxy/dist/index.js"),
     ];
 
     for candidate in &candidates {
