@@ -23,6 +23,7 @@ pub const DEFAULT_SCHEMA_PATH: &str = "src/schema.surql";
 pub const DEFAULT_MIGRATIONS_DIR: &str = "migrations";
 pub const DEFAULT_BUCKETS_DIR: &str = "src/buckets";
 pub const DEFAULT_CONFIG_PATH: &str = "sp00ky.yml";
+pub const YAML_SCHEMA_COMMENT: &str = "# yaml-language-server: $schema=https://sp00ky.org/schema/sp00ky.schema.json";
 
 /// SurrealDB config: either a plain version string (backwards compat)
 /// or an object with version, namespace, and database.

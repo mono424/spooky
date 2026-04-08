@@ -4,7 +4,7 @@ use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::backend::{AuthConfig, BackendConfig, BackendMethod, Sp00kyConfig};
+use crate::backend::{AuthConfig, BackendConfig, BackendMethod, Sp00kyConfig, YAML_SCHEMA_COMMENT};
 
 // ── Outbox schema template ──────────────────────────────────────────────────
 
@@ -288,6 +288,7 @@ pub fn add_api(
 
     let yaml_output = serde_yaml::to_string(&sp00ky_config)
         .context("Failed to serialize config to YAML")?;
+    let yaml_output = format!("{}\n{}", YAML_SCHEMA_COMMENT, yaml_output);
 
     fs::write(&config_path, &yaml_output)
         .context(format!("Failed to write config: {:?}", config_path))?;

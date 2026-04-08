@@ -60,6 +60,42 @@ backends:
 - **`method.table`**: The name of the job table in SurrealDB (e.g., `job`)
 - **`method.schema`**: Path to the SurrealQL schema file that defines the job table structure
 - **`dev`** (optional): A dev server command that `spooky dev` will spawn alongside infrastructure (see [Dev Server](#dev-server) below)
+- **`deploy.timeout`** (optional): HTTP request timeout in seconds for the job runner when calling this backend (default: `10`). Increase this for long-running operations like LLM inference.
+- **`deploy.timeout_overridable`** (optional): When `true`, the frontend can override the timeout per-job via the `timeout` option in `db.run()`. When `false` (default), the deploy-time timeout is always used.
+
+### Timeout Configuration
+
+By default, the job runner allows **10 seconds** for each HTTP request to complete. For backends that perform long-running operations (e.g., LLM inference, file processing), you can increase the timeout in the `deploy` section:
+
+<CodeBlock
+  code={`backends:
+  agent:
+    type: http
+    spec: ./openapi.yaml
+    baseUrl: http://host.docker.internal:8767
+    method:
+      type: outbox
+      table: jobs_agent
+      schema: ./src/outbox/agent.surql
+    deploy:
+      dockerfile: ./Dockerfile
+      port: 8767
+      timeout: 120               # Allow up to 2 minutes per request
+      timeout_overridable: true   # Let the frontend set per-job timeouts`}
+  lang="yaml"
+/>
+
+When `timeout_overridable` is `true`, the frontend can pass a `timeout` option to `db.run()`:
+
+<CodeBlock
+  code={`// Use a 60-second timeout for this specific call
+await db.run('agent', '/chat', { message: 'Hello' }, {
+  timeout: 60
+});`}
+  lang="typescript"
+/>
+
+If `timeout_overridable` is `false` (the default), the `timeout` option in `db.run()` is ignored and the deploy-time value is always used.
 
 ### Authentication
 
@@ -172,6 +208,12 @@ DEFINE FIELD retry_strategy ON TABLE job TYPE string DEFAULT ALWAYS "linear"
     FOR create, select WHERE true
     FOR update WHERE false;
 
+-- Optional: per-job timeout override (seconds)
+DEFINE FIELD timeout ON TABLE job TYPE option<int>
+  PERMISSIONS
+    FOR create, select WHERE true
+    FOR update WHERE false;
+
 -- Job status lifecycle
 DEFINE FIELD status ON TABLE job TYPE string DEFAULT ALWAYS "pending"
   ASSERT $value IN ["pending", "processing", "success", "failed"]
@@ -209,6 +251,7 @@ DEFINE FIELD created_at ON TABLE job TYPE datetime
 - **`retries`**: Number of retry attempts so far
 - **`max_retries`**: Maximum number of retry attempts before marking as failed
 - **`retry_strategy`**: Retry timing strategy (`linear` or `exponential`)
+- **`timeout`**: Optional per-job timeout override in seconds (only used if backend has `timeout_overridable: true`)
 - **`errors`**: Array of error objects from failed execution attempts
 
 ## Calling Backend Functions
@@ -233,7 +276,8 @@ await db.run('api', '/spookify', { id: threadData.id }, {
   options?: {
     assignedTo?: string,           // Link to parent record
     max_retries?: number,          // Override default max retries
-    retry_strategy?: 'linear' | 'exponential'  // Override retry strategy
+    retry_strategy?: 'linear' | 'exponential',  // Override retry strategy
+    timeout?: number               // Override backend timeout (seconds)
   }
 )`}
   lang="typescript"
@@ -248,6 +292,7 @@ await db.run('api', '/spookify', { id: threadData.id }, {
   - **`assignedTo`**: Record ID to link this job to (useful for querying related jobs)
   - **`max_retries`**: Override the default maximum retry attempts (default: 3)
   - **`retry_strategy`**: Override the retry strategy (default: `'linear'`)
+  - **`timeout`**: Override the backend HTTP request timeout in seconds. Only takes effect if the backend has `timeout_overridable: true` in `sp00ky.yml`.
 
 <Warning>
   The `db.run()` method validates the payload against your OpenAPI schema. Missing required parameters will throw an error.
@@ -490,9 +535,9 @@ if (job?.status === 'failed') {
   lang="typescript"
 />
 
-### Set Appropriate Retry Policies
+### Set Appropriate Retry and Timeout Policies
 
-For idempotent operations, use higher retry counts. For non-idempotent operations, use lower retry counts or disable retries:
+For idempotent operations, use higher retry counts. For non-idempotent operations, use lower retry counts or disable retries. For long-running operations like AI inference, increase the timeout:
 
 <CodeBlock
   code={`// Safe to retry multiple times
@@ -504,6 +549,13 @@ await db.run('api', '/generate-content', data, {
 // Should not retry
 await db.run('api', '/charge-payment', data, {
   max_retries: 0
+});
+
+// Long-running AI operation (requires timeout_overridable: true on backend)
+await db.run('agent', '/chat', data, {
+  timeout: 120,
+  max_retries: 2,
+  retry_strategy: 'exponential'
 });`}
   lang="typescript"
 />

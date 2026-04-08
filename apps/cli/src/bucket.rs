@@ -4,6 +4,8 @@ use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::backend::YAML_SCHEMA_COMMENT;
+
 // ── Presets ──────────────────────────────────────────────────────────────────
 
 struct Preset {
@@ -238,7 +240,7 @@ fn update_sp00ky_yml(config_path: &Path, relative_surql_path: &str) -> Result<()
     let entry = format!("  - {}", relative_surql_path);
 
     if !config_path.exists() {
-        let content = format!("buckets:\n{}\n", entry);
+        let content = format!("{}\nbuckets:\n{}\n", YAML_SCHEMA_COMMENT, entry);
         fs::write(config_path, content)
             .context(format!("Failed to create {:?}", config_path))?;
         return Ok(());
