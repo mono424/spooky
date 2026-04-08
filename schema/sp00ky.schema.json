@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://sp00ky.org/schema/sp00ky.schema.json",
+  "$id": "https://sp00ky.cloud/schema/sp00ky.schema.json",
   "title": "sp00ky.yml",
   "description": "Configuration file for Sp00ky — an offline-first, real-time sync framework built on SurrealDB.",
   "type": "object",
