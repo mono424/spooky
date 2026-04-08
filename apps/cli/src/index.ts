@@ -75,6 +75,6 @@ export async function runSyncgen(options: SyncgenOptions): Promise<string> {
     }
     return stdout;
   } catch (error: any) {
-    throw new Error(`Syncgen failed: ${error.message}`, { cause: error });
+    throw new Error(`Syncgen failed: ${error.message}`);
   }
 }
