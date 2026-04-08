@@ -1,0 +1,321 @@
+---
+layout: ../../../layouts/DocsLayout.astro
+title: Environment Variables
+---
+
+import CodeBlock from '../../../components/ui/CodeBlock.astro';
+import Warning from '../../../components/ui/Warning.astro';
+import Note from '../../../components/ui/Note.astro';
+
+Sp00ky Cloud provides encrypted environment variable storage that syncs across your team. Each variable supports separate **development** and **production** values, so your local dev setup and production deployment stay in sync without `.env` files.
+
+## How It Works
+
+All environment variables are **encrypted at rest** using a per-user vault. The encryption flow is:
+
+1. You set a **vault passphrase** (separate from your GitHub login) on first use
+2. Sp00ky generates an RSA-4096 keypair and encrypts it with your passphrase
+3. When you set a variable, the value is encrypted with your public key before storage
+4. When you load variables, you provide your passphrase — the server decrypts and returns them
+5. Your private key **never leaves the server**. Your passphrase is **never stored in cleartext**.
+
+<Note title="Vault Passphrase">
+Your vault passphrase is separate from your GitHub login. You'll set it the first time you use <code>env init</code>, <code>env set</code>, or <code>env load</code>. You can choose to cache it locally in <code>~/.sp00ky/vault-passphrase</code> so you don't need to enter it every time.
+</Note>
+
+## Quick Start
+
+<CodeBlock
+  code={`# 1. Initialize your encryption vault
+spooky cloud env init
+
+# 2. Set a variable (interactive — prompts for value and environment)
+spooky cloud env set DATABASE_URL
+
+# 3. Load variables and start your app
+spooky cloud env load && pnpm dev`}
+  lang="bash"
+/>
+
+## Initializing the Vault
+
+Before using environment variables, initialize your encryption vault:
+
+<CodeBlock
+  code={`spooky cloud env init`}
+  lang="bash"
+/>
+
+You'll be prompted to:
+1. **Choose a vault passphrase** — this protects your encryption keys, pick something strong
+2. **Confirm the passphrase**
+3. **Optionally cache it** locally in `~/.sp00ky/vault-passphrase`
+
+If you skip `env init`, the vault will be created automatically the first time you run `env set`.
+
+## Setting Variables
+
+Run `env set` with an optional variable name:
+
+<CodeBlock
+  code={`# With a name — goes straight to the value prompt
+spooky cloud env set DATABASE_URL
+
+# Without a name — prompts for the name first
+spooky cloud env set`}
+  lang="bash"
+/>
+
+The CLI will interactively ask you:
+
+1. **Variable name** (if not provided as argument)
+2. **Which environment(s)** — choose from:
+   - *Both (same value)* — use one value for dev and prod
+   - *Development only*
+   - *Production only*
+   - *Both (different values)* — prompts for each separately
+3. **The value** — entered with masked input (like a password prompt)
+
+Variable names are automatically uppercased. Running `env set` on an existing variable updates only the environments you specify — it won't overwrite the other environment's value.
+
+## Loading Variables
+
+Load environment variables and pipe them into your dev workflow:
+
+<CodeBlock
+  code={`# Load development variables (default) and start your app
+spooky cloud env load && pnpm dev
+
+# Load production variables
+spooky cloud env load --prod && pnpm start`}
+  lang="bash"
+/>
+
+The output format is `KEY=value`, one per line — designed for shell evaluation:
+
+<CodeBlock
+  code={`# Export into the current shell
+eval "$(spooky cloud env load)"
+
+# Or use with env
+env $(spooky cloud env load | xargs) pnpm dev`}
+  lang="bash"
+/>
+
+The first time you run `env load`, you'll be prompted for your vault passphrase. You can choose to cache it locally so subsequent loads are automatic.
+
+<Note title="CI/CD Usage">
+In non-interactive environments (CI/CD), set the <code>SPOOKY_API_KEY</code> environment variable for authentication and cache the vault passphrase in <code>~/.sp00ky/vault-passphrase</code> during your pipeline setup.
+</Note>
+
+## Listing Variables
+
+View all configured variable names and which environments are set:
+
+<CodeBlock
+  code={`spooky cloud env list`}
+  lang="bash"
+/>
+
+Example output:
+
+<CodeBlock
+  code={`NAME                           DEV    PROD   UPDATED
+-----------------------------------------------------------------
+DATABASE_URL                   yes    yes    2026-04-08T12:00:00
+STRIPE_SECRET_KEY              yes    yes    2026-04-08T12:00:00
+DEBUG_MODE                     yes    -      2026-04-08T12:00:00`}
+  lang="bash"
+/>
+
+Values are never shown in the list — only names and whether each environment has a value set.
+
+## Deleting Variables
+
+Remove an environment variable entirely (both dev and prod values):
+
+<CodeBlock
+  code={`spooky cloud env delete DATABASE_URL`}
+  lang="bash"
+/>
+
+## Changing Your Vault Passphrase
+
+<CodeBlock
+  code={`spooky cloud env change-passphrase`}
+  lang="bash"
+/>
+
+You'll be prompted for your current passphrase, then a new one with confirmation. If you have a cached passphrase in `~/.sp00ky/`, it will be updated automatically.
+
+Existing encrypted variables are **not** re-encrypted — only the key material is re-wrapped with the new passphrase.
+
+## Passphrase Caching
+
+When you first enter your vault passphrase, the CLI offers to cache it at `~/.sp00ky/vault-passphrase`. This is a local plaintext file that allows `env load` and `env set` to work without prompting each time.
+
+To clear the cache:
+
+<CodeBlock
+  code={`rm ~/.sp00ky/vault-passphrase`}
+  lang="bash"
+/>
+
+You'll be prompted for your passphrase again on the next `env load` or `env set`.
+
+## CLI Reference
+
+<CodeBlock
+  code={`spooky cloud env <COMMAND>
+
+Commands:
+  init               Initialize the encryption vault (set a vault passphrase)
+  set [NAME]         Set an environment variable (interactive prompts)
+  list               List all environment variable names
+  load [--prod]      Load and output environment variables
+  delete <NAME>      Delete an environment variable
+  change-passphrase  Change your vault passphrase`}
+  lang="bash"
+/>
+
+## API Reference
+
+All endpoints require authentication via Bearer token or API key.
+
+### Vault Endpoints
+
+#### Initialize Vault
+
+<CodeBlock
+  code={`POST /v1/vault/init
+Content-Type: application/json
+
+{
+  "passphrase": "your-vault-passphrase"
+}`}
+  lang="bash"
+/>
+
+Returns `201 Created` on success. Returns `409 Conflict` if already initialized.
+
+#### Vault Status
+
+<CodeBlock
+  code={`GET /v1/vault/status`}
+  lang="bash"
+/>
+
+<CodeBlock
+  code={`{ "initialized": true }`}
+  lang="json"
+/>
+
+#### Change Passphrase
+
+<CodeBlock
+  code={`POST /v1/vault/change-passphrase
+Content-Type: application/json
+
+{
+  "current_passphrase": "old-passphrase",
+  "new_passphrase": "new-passphrase"
+}`}
+  lang="bash"
+/>
+
+Returns `401` with code `invalid_passphrase` if the current passphrase is wrong.
+
+### Environment Variable Endpoints
+
+All endpoints are scoped to a project: `/v1/projects/{projectID}/envs`.
+
+#### Set Variable
+
+<CodeBlock
+  code={`PUT /v1/projects/{projectID}/envs/{NAME}
+Content-Type: application/json
+
+{
+  "dev_value": "localhost:5432",
+  "prod_value": "prod-host:5432",
+  "both": false
+}`}
+  lang="bash"
+/>
+
+- `dev_value` and `prod_value` are optional — provide one or both
+- Set `both: true` with `dev_value` to use the same value for both environments
+- Variable names are stored uppercase
+- Returns `400` with code `vault_not_initialized` if the vault hasn't been set up
+
+#### List Variables
+
+<CodeBlock
+  code={`GET /v1/projects/{projectID}/envs`}
+  lang="bash"
+/>
+
+Returns variable names and metadata (no decrypted values):
+
+<CodeBlock
+  code={`[
+  {
+    "name": "DATABASE_URL",
+    "has_dev": true,
+    "has_prod": true,
+    "updated_at": "2026-04-08T12:00:00Z"
+  }
+]`}
+  lang="json"
+/>
+
+#### Load Variables (Decrypt)
+
+<CodeBlock
+  code={`POST /v1/projects/{projectID}/envs/load
+Content-Type: application/json
+
+{
+  "passphrase": "your-vault-passphrase",
+  "environment": "development"
+}`}
+  lang="bash"
+/>
+
+- `environment` accepts `"development"` (default) or `"production"`
+
+<CodeBlock
+  code={`{
+  "variables": {
+    "DATABASE_URL": "postgres://localhost:5432/myapp",
+    "API_KEY": "sk_test_abc123"
+  }
+}`}
+  lang="json"
+/>
+
+- Returns `401` with code `invalid_passphrase` if the passphrase is wrong
+- Returns `400` with code `vault_not_initialized` if the vault hasn't been set up
+
+#### Delete Variable
+
+<CodeBlock
+  code={`DELETE /v1/projects/{projectID}/envs/{NAME}`}
+  lang="bash"
+/>
+
+Returns `204 No Content` on success, `404` if the variable doesn't exist.
+
+## Encryption Details
+
+For those interested in the cryptographic implementation:
+
+- **Key derivation**: Argon2id (time=1, memory=64MB, threads=4) derives a 32-byte key from your passphrase
+- **Symmetric encryption**: AES-256-GCM for key material (encryption key and private key)
+- **Asymmetric encryption**: RSA-4096 with OAEP padding (SHA-256)
+- **Hybrid encryption**: Each env value is encrypted with a random AES-256 key, which is then encrypted with your RSA public key — supports values of any size
+- **Key hierarchy**: Passphrase → derived key → encryption key → private key → env values
+
+<Warning>
+If you lose your vault passphrase, there is no way to recover your encrypted environment variables. The passphrase is never stored on the server. Make sure to keep it in a secure location.
+</Warning>

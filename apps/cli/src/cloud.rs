@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::backend::{self, BackendDevConfig, BackendDevTypedConfig, HostingMode};
 use crate::surreal_client::MigrationDB;
-use crate::{CloudBackupCommands, CloudBillingCommands, CloudCommands, CloudKeyCommands, CloudLinkCommands};
+use crate::{CloudBackupCommands, CloudBillingCommands, CloudCommands, CloudEnvCommands, CloudKeyCommands, CloudLinkCommands};
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -323,6 +323,44 @@ impl CloudClient {
             }
         }
     }
+    fn put(&mut self, path: &str, body: &serde_json::Value) -> Result<ureq::Response> {
+        let url = format!("{}{}", self.base_url, path);
+        match ureq::request("PUT", &url)
+            .set("Authorization", &self.auth_header())
+            .set("Accept", "application/json")
+            .send_json(body.clone())
+        {
+            Ok(resp) => Ok(resp),
+            Err(ureq::Error::Status(401, _)) if !self.is_api_key => {
+                self.try_refresh().map_err(|_| {
+                    anyhow::anyhow!("Session expired. Run `sp00ky cloud login` to re-authenticate.")
+                })?;
+                match ureq::request("PUT", &url)
+                    .set("Authorization", &self.auth_header())
+                    .set("Accept", "application/json")
+                    .send_json(body.clone())
+                {
+                    Ok(resp) => Ok(resp),
+                    Err(ureq::Error::Status(401, _)) => {
+                        bail!("Session expired. Run `sp00ky cloud login` to re-authenticate.")
+                    }
+                    Err(ureq::Error::Status(code, resp)) => {
+                        bail!("{}", Self::format_api_error(code, resp))
+                    }
+                    Err(ureq::Error::Transport(t)) => {
+                        bail!("Failed to connect to Sp00ky Cloud API: {}", t)
+                    }
+                }
+            }
+            Err(ureq::Error::Status(code, resp)) => {
+                bail!("{}", Self::format_api_error(code, resp))
+            }
+            Err(ureq::Error::Transport(t)) => {
+                bail!("Failed to connect to Sp00ky Cloud API: {}", t)
+            }
+        }
+    }
+
     fn patch(&mut self, path: &str, body: &serde_json::Value) -> Result<ureq::Response> {
         let url = format!("{}{}", self.base_url, path);
         match ureq::request("PATCH", &url)
@@ -752,6 +790,7 @@ pub fn run(action: CloudCommands) -> Result<()> {
         CloudCommands::Billing { action } => billing(action),
         CloudCommands::Keys { action } => keys(action),
         CloudCommands::Link { action } => link(action),
+        CloudCommands::Env { action } => env(action),
     }
 }
 
@@ -3172,6 +3211,478 @@ fn link_runs() -> Result<()> {
             short_time,
             msg_truncated,
         );
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Environment Variables
+// ---------------------------------------------------------------------------
+
+const VAULT_PASSPHRASE_FILE: &str = "vault-passphrase";
+
+fn vault_passphrase_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(SP00KY_DIR)
+        .join(VAULT_PASSPHRASE_FILE)
+}
+
+fn load_cached_passphrase() -> Option<String> {
+    fs::read_to_string(vault_passphrase_path()).ok().map(|s| s.trim().to_string())
+}
+
+fn save_cached_passphrase(passphrase: &str) -> Result<()> {
+    let path = vault_passphrase_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&path, passphrase)?;
+    Ok(())
+}
+
+fn prompt_passphrase(label: &str) -> Result<String> {
+    inquire::Password::new(label)
+        .without_confirmation()
+        .prompt()
+        .context("Failed to read passphrase")
+}
+
+/// Get the vault passphrase: cached file > prompt. Optionally offer to cache.
+fn get_passphrase() -> Result<String> {
+    if let Some(pp) = load_cached_passphrase() {
+        return Ok(pp);
+    }
+    let pp = prompt_passphrase("Vault passphrase:")?;
+    if is_interactive() {
+        let cache = inquire::Confirm::new("Cache passphrase locally in ~/.sp00ky/?")
+            .with_default(true)
+            .with_help_message("Saves to ~/.sp00ky/vault-passphrase so you don't need to enter it every time")
+            .prompt()
+            .unwrap_or(false);
+        if cache {
+            save_cached_passphrase(&pp)?;
+        }
+    }
+    Ok(pp)
+}
+
+fn ensure_vault(client: &mut CloudClient) -> Result<()> {
+    let resp = client.get("/v1/vault/status")?;
+    let data: serde_json::Value = resp.into_json()?;
+    if data["initialized"].as_bool() == Some(true) {
+        return Ok(());
+    }
+
+    if !is_interactive() {
+        bail!("Vault not initialized. Run `sp00ky cloud env init` first.");
+    }
+
+    println!("Your encryption vault is not set up yet.");
+    println!("Choose a passphrase to protect your environment variable secrets.");
+    println!();
+
+    let passphrase = inquire::Password::new("New vault passphrase:")
+        .with_display_mode(inquire::PasswordDisplayMode::Masked)
+        .prompt()
+        .context("Failed to read passphrase")?;
+
+    if passphrase.is_empty() {
+        bail!("Passphrase cannot be empty.");
+    }
+
+    let confirm = inquire::Password::new("Confirm passphrase:")
+        .with_display_mode(inquire::PasswordDisplayMode::Masked)
+        .without_confirmation()
+        .prompt()
+        .context("Failed to read confirmation")?;
+
+    if passphrase != confirm {
+        bail!("Passphrases do not match.");
+    }
+
+    println!("Generating encryption keys (this may take a moment)...");
+    client.post("/v1/vault/init", &serde_json::json!({ "passphrase": passphrase }))?;
+    println!("Vault initialized.");
+
+    let cache = inquire::Confirm::new("Cache passphrase locally in ~/.sp00ky/?")
+        .with_default(true)
+        .prompt()
+        .unwrap_or(false);
+    if cache {
+        save_cached_passphrase(&passphrase)?;
+    }
+
+    Ok(())
+}
+
+fn env(action: CloudEnvCommands) -> Result<()> {
+    match action {
+        CloudEnvCommands::Init => env_init(),
+        CloudEnvCommands::Set { name } => env_set(name),
+        CloudEnvCommands::List => env_list(),
+        CloudEnvCommands::Load { prod } => env_load(prod),
+        CloudEnvCommands::Delete { name } => env_delete(name),
+        CloudEnvCommands::ChangePassphrase => env_change_passphrase(),
+        CloudEnvCommands::Import { file } => env_import(file),
+    }
+}
+
+fn env_init() -> Result<()> {
+    let creds = ensure_login()?;
+    let mut client = CloudClient::new(&creds);
+
+    let resp = client.get("/v1/vault/status")?;
+    let data: serde_json::Value = resp.into_json()?;
+    if data["initialized"].as_bool() == Some(true) {
+        println!("Vault is already initialized.");
+        return Ok(());
+    }
+
+    println!("Choose a passphrase to protect your environment variable secrets.");
+    println!("This is separate from your GitHub login.");
+    println!();
+
+    let passphrase = inquire::Password::new("New vault passphrase:")
+        .with_display_mode(inquire::PasswordDisplayMode::Masked)
+        .prompt()
+        .context("Failed to read passphrase")?;
+
+    if passphrase.is_empty() {
+        bail!("Passphrase cannot be empty.");
+    }
+
+    let confirm = inquire::Password::new("Confirm passphrase:")
+        .with_display_mode(inquire::PasswordDisplayMode::Masked)
+        .without_confirmation()
+        .prompt()
+        .context("Failed to read confirmation")?;
+
+    if passphrase != confirm {
+        bail!("Passphrases do not match.");
+    }
+
+    println!("Generating encryption keys (this may take a moment)...");
+    client.post("/v1/vault/init", &serde_json::json!({ "passphrase": passphrase }))?;
+    println!("Vault initialized successfully.");
+
+    let cache = inquire::Confirm::new("Cache passphrase locally in ~/.sp00ky/?")
+        .with_default(true)
+        .with_help_message("So you don't need to enter it every time you load env variables")
+        .prompt()
+        .unwrap_or(false);
+    if cache {
+        save_cached_passphrase(&passphrase)?;
+        println!("Passphrase cached at ~/.sp00ky/vault-passphrase");
+    }
+
+    Ok(())
+}
+
+fn env_set(name_arg: Option<String>) -> Result<()> {
+    let creds = ensure_login()?;
+    let mut client = CloudClient::new(&creds);
+
+    ensure_vault(&mut client)?;
+
+    let (slug, project) = ensure_project(&mut client)?;
+    let pid = project_id(&project);
+
+    let name = match name_arg {
+        Some(n) => n.to_uppercase(),
+        None => {
+            inquire::Text::new("Variable name:")
+                .with_help_message("e.g. DATABASE_URL, STRIPE_KEY")
+                .prompt()
+                .context("Failed to read variable name")?
+                .to_uppercase()
+        }
+    };
+
+    if name.is_empty() {
+        bail!("Variable name cannot be empty.");
+    }
+
+    // Ask which environments
+    let env_choice = inquire::Select::new(
+        "Which environment(s)?",
+        vec!["Both (same value)", "Development only", "Production only", "Both (different values)"],
+    )
+    .prompt()
+    .context("Failed to read environment choice")?;
+
+    let (dev_value, prod_value, both) = match env_choice {
+        "Both (same value)" => {
+            let val = inquire::Password::new(&format!("Value for {}:", name))
+                .with_display_mode(inquire::PasswordDisplayMode::Masked)
+                .without_confirmation()
+                .prompt()
+                .context("Failed to read value")?;
+            (Some(val), None, true)
+        }
+        "Development only" => {
+            let val = inquire::Password::new(&format!("Development value for {}:", name))
+                .with_display_mode(inquire::PasswordDisplayMode::Masked)
+                .without_confirmation()
+                .prompt()
+                .context("Failed to read value")?;
+            (Some(val), None, false)
+        }
+        "Production only" => {
+            let val = inquire::Password::new(&format!("Production value for {}:", name))
+                .with_display_mode(inquire::PasswordDisplayMode::Masked)
+                .without_confirmation()
+                .prompt()
+                .context("Failed to read value")?;
+            (None, Some(val), false)
+        }
+        "Both (different values)" => {
+            let dev = inquire::Password::new(&format!("Development value for {}:", name))
+                .with_display_mode(inquire::PasswordDisplayMode::Masked)
+                .without_confirmation()
+                .prompt()
+                .context("Failed to read dev value")?;
+            let prod = inquire::Password::new(&format!("Production value for {}:", name))
+                .with_display_mode(inquire::PasswordDisplayMode::Masked)
+                .without_confirmation()
+                .prompt()
+                .context("Failed to read prod value")?;
+            (Some(dev), Some(prod), false)
+        }
+        _ => unreachable!(),
+    };
+
+    let mut body = serde_json::json!({ "both": both });
+    if let Some(ref v) = dev_value {
+        body["dev_value"] = serde_json::Value::String(v.clone());
+    }
+    if let Some(ref v) = prod_value {
+        body["prod_value"] = serde_json::Value::String(v.clone());
+    }
+
+    client.put(&format!("/v1/projects/{}/envs/{}", pid, name), &body)?;
+    println!("Set {} for project '{}'.", name, slug);
+
+    Ok(())
+}
+
+fn parse_env_file(path: &str) -> Result<Vec<(String, String)>> {
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("Could not read env file: {}", path))?;
+    let pairs: Vec<(String, String)> = content
+        .lines()
+        .filter(|l| {
+            let trimmed = l.trim();
+            !trimmed.is_empty() && !trimmed.starts_with('#')
+        })
+        .filter_map(|l| {
+            let (key, value) = l.split_once('=')?;
+            let key = key.trim().to_string();
+            let mut value = value.trim().to_string();
+            // Strip surrounding quotes
+            if (value.starts_with('"') && value.ends_with('"'))
+                || (value.starts_with('\'') && value.ends_with('\''))
+            {
+                value = value[1..value.len() - 1].to_string();
+            }
+            Some((key, value))
+        })
+        .collect();
+    Ok(pairs)
+}
+
+fn env_import(file: String) -> Result<()> {
+    let pairs = parse_env_file(&file)?;
+    if pairs.is_empty() {
+        bail!("No KEY=VALUE pairs found in '{}'.", file);
+    }
+
+    println!("Found {} variable(s) in '{}':", pairs.len(), file);
+    for (key, _) in &pairs {
+        println!("  {}", key);
+    }
+    println!();
+
+    let creds = ensure_login()?;
+    let mut client = CloudClient::new(&creds);
+    ensure_vault(&mut client)?;
+    let (slug, project) = ensure_project(&mut client)?;
+    let pid = project_id(&project);
+
+    let env_choice = inquire::Select::new(
+        "Import these variables to which environment(s)?",
+        vec!["Both (same value)", "Development only", "Production only"],
+    )
+    .prompt()
+    .context("Failed to read environment choice")?;
+
+    let confirm = inquire::Confirm::new(
+        &format!("Import {} variables to project '{}'?", pairs.len(), slug),
+    )
+    .with_default(true)
+    .prompt()
+    .unwrap_or(false);
+
+    if !confirm {
+        println!("Import cancelled.");
+        return Ok(());
+    }
+
+    let total = pairs.len();
+    let mut success = 0;
+    let mut failed = 0;
+
+    for (i, (key, value)) in pairs.iter().enumerate() {
+        let name = key.to_uppercase();
+        let body = match env_choice {
+            "Both (same value)" => {
+                serde_json::json!({ "both": true, "dev_value": value })
+            }
+            "Development only" => {
+                serde_json::json!({ "both": false, "dev_value": value })
+            }
+            "Production only" => {
+                serde_json::json!({ "both": false, "prod_value": value })
+            }
+            _ => unreachable!(),
+        };
+
+        print!("[{}/{}] Setting {}... ", i + 1, total, name);
+        match client.put(&format!("/v1/projects/{}/envs/{}", pid, name), &body) {
+            Ok(_) => {
+                println!("ok");
+                success += 1;
+            }
+            Err(e) => {
+                println!("FAILED: {}", e);
+                failed += 1;
+            }
+        }
+    }
+
+    println!();
+    println!("Import complete: {} succeeded, {} failed.", success, failed);
+    if failed > 0 {
+        bail!("{} variable(s) failed to import.", failed);
+    }
+
+    Ok(())
+}
+
+fn env_list() -> Result<()> {
+    let creds = ensure_login()?;
+    let mut client = CloudClient::new(&creds);
+    let (_slug, project) = ensure_project(&mut client)?;
+    let pid = project_id(&project);
+
+    let resp = client.get(&format!("/v1/projects/{}/envs", pid))?;
+    let data: Vec<serde_json::Value> = resp.into_json()?;
+
+    if data.is_empty() {
+        println!("No environment variables set. Use `sp00ky cloud env set` to add one.");
+        return Ok(());
+    }
+
+    println!("{:<30} {:<6} {:<6} {}", "NAME", "DEV", "PROD", "UPDATED");
+    println!("{}", "-".repeat(65));
+    for var in &data {
+        let dev = if var["has_dev"].as_bool() == Some(true) { "yes" } else { "-" };
+        let prod = if var["has_prod"].as_bool() == Some(true) { "yes" } else { "-" };
+        let updated = var["updated_at"].as_str().unwrap_or("-");
+        let short_time = updated.get(..19).unwrap_or(updated);
+        println!(
+            "{:<30} {:<6} {:<6} {}",
+            var["name"].as_str().unwrap_or("-"),
+            dev,
+            prod,
+            short_time,
+        );
+    }
+
+    Ok(())
+}
+
+fn env_load(prod: bool) -> Result<()> {
+    let creds = ensure_login()?;
+    let mut client = CloudClient::new(&creds);
+    let (_slug, project) = ensure_project(&mut client)?;
+    let pid = project_id(&project);
+
+    let passphrase = get_passphrase()?;
+    let environment = if prod { "production" } else { "development" };
+
+    let resp = client.post(
+        &format!("/v1/projects/{}/envs/load", pid),
+        &serde_json::json!({
+            "passphrase": passphrase,
+            "environment": environment,
+        }),
+    )?;
+    let data: serde_json::Value = resp.into_json()?;
+
+    if let Some(vars) = data["variables"].as_object() {
+        if vars.is_empty() {
+            eprintln!("No {} variables found.", environment);
+            return Ok(());
+        }
+        for (key, value) in vars {
+            if let Some(val) = value.as_str() {
+                println!("{}={}", key, val);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn env_delete(name: String) -> Result<()> {
+    let creds = ensure_login()?;
+    let mut client = CloudClient::new(&creds);
+    let (slug, project) = ensure_project(&mut client)?;
+    let pid = project_id(&project);
+
+    client.delete(&format!("/v1/projects/{}/envs/{}", pid, name.to_uppercase()))?;
+    println!("Deleted {} from project '{}'.", name.to_uppercase(), slug);
+
+    Ok(())
+}
+
+fn env_change_passphrase() -> Result<()> {
+    let creds = ensure_login()?;
+    let mut client = CloudClient::new(&creds);
+
+    let current = prompt_passphrase("Current passphrase:")?;
+    let new_pp = inquire::Password::new("New passphrase:")
+        .with_display_mode(inquire::PasswordDisplayMode::Masked)
+        .prompt()
+        .context("Failed to read new passphrase")?;
+
+    if new_pp.is_empty() {
+        bail!("Passphrase cannot be empty.");
+    }
+
+    let confirm = inquire::Password::new("Confirm new passphrase:")
+        .with_display_mode(inquire::PasswordDisplayMode::Masked)
+        .without_confirmation()
+        .prompt()
+        .context("Failed to read confirmation")?;
+
+    if new_pp != confirm {
+        bail!("Passphrases do not match.");
+    }
+
+    client.post("/v1/vault/change-passphrase", &serde_json::json!({
+        "current_passphrase": current,
+        "new_passphrase": new_pp,
+    }))?;
+
+    // Update cached passphrase if it exists
+    if vault_passphrase_path().exists() {
+        save_cached_passphrase(&new_pp)?;
+        println!("Passphrase changed. Local cache updated.");
+    } else {
+        println!("Passphrase changed.");
     }
 
     Ok(())

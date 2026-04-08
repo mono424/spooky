@@ -12,7 +12,6 @@ export const docsNav = [
       { text: 'Mutate Data', href: `${basePath}/docs/mutate-data` },
       { text: 'Backend Functions', href: `${basePath}/docs/backend-functions` },
       { text: 'File Buckets', href: `${basePath}/docs/buckets` },
-      { text: 'Environment Variables', href: `${basePath}/docs/env-variables` },
     ],
   },
   {
@@ -24,10 +23,18 @@ export const docsNav = [
     ],
   },
   {
+    title: 'Cloud',
+    links: [
+      { text: 'Cloud Deployment', href: `${basePath}/docs/cloud/deployment` },
+      { text: 'Environment Variables', href: `${basePath}/docs/cloud/env-variables` },
+      { text: 'Backups', href: `${basePath}/docs/cloud/backups` },
+    ],
+  },
+  {
     title: 'Reference',
     links: [
       { text: 'Configuration', href: `${basePath}/docs/configuration` },
-      { text: 'Deployment', href: `${basePath}/docs/deployment` },
+      { text: 'Self-Hosted Deployment', href: `${basePath}/docs/deployment` },
       { text: 'Architecture', href: `${basePath}/docs/architecture` },
       { text: 'Scheduler API', href: `${basePath}/docs/scheduler-api` },
       { text: 'SSP API', href: `${basePath}/docs/ssp-api` },

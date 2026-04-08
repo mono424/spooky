@@ -214,6 +214,11 @@ enum CloudCommands {
         #[command(subcommand)]
         action: CloudLinkCommands,
     },
+    /// Manage encrypted environment variables
+    Env {
+        #[command(subcommand)]
+        action: CloudEnvCommands,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -295,6 +300,38 @@ enum CloudKeyCommands {
     Revoke {
         /// Key ID to revoke
         id: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum CloudEnvCommands {
+    /// Initialize the encryption vault (set a vault passphrase)
+    Init,
+    /// Set an environment variable
+    Set {
+        /// Variable name (e.g. DATABASE_URL)
+        name: Option<String>,
+    },
+    /// List all environment variable names
+    List,
+    /// Load and export environment variables
+    Load {
+        /// Load production values instead of development
+        #[arg(long)]
+        prod: bool,
+    },
+    /// Delete an environment variable
+    Delete {
+        /// Variable name to delete
+        name: String,
+    },
+    /// Change your vault passphrase
+    ChangePassphrase,
+    /// Import environment variables from a .env file
+    Import {
+        /// Path to the .env file (defaults to .env in current directory)
+        #[arg(default_value = ".env")]
+        file: String,
     },
 }
 
