@@ -43,7 +43,7 @@ interface Sp00kyData {
   state?: DevToolsState | null;
 }
 
-let currentData: Sp00kyData | null = null;
+let _currentData: Sp00kyData | null = null;
 let selectedQueryHash: number | null = null;
 let selectedTableName: string | null = null;
 
@@ -55,11 +55,12 @@ const backgroundConnection = chrome.runtime.connect({
   name: 'sp00ky-devtools-panel',
 });
 
+function applyTheme(theme: 'light' | 'dark') {
+  document.documentElement.setAttribute('data-theme', theme);
+}
+
 // Detect and apply Chrome DevTools theme
 function detectAndApplyTheme() {
-  function applyTheme(theme: 'light' | 'dark') {
-    document.documentElement.setAttribute('data-theme', theme);
-  }
 
   // Method 1: Try to get themeName from chrome.devtools.panels (if available)
   try {
@@ -77,7 +78,7 @@ function detectAndApplyTheme() {
       }
       return;
     }
-  } catch (e) {
+  } catch (_e) {
     // themeName API might not be available
   }
 
@@ -91,9 +92,9 @@ function detectAndApplyTheme() {
         const rgbMatch = bodyBg.match(/\d+/g);
 
         if (rgbMatch && rgbMatch.length >= 3) {
-          const r = parseInt(rgbMatch[0]);
-          const g = parseInt(rgbMatch[1]);
-          const b = parseInt(rgbMatch[2]);
+          const r = Number.parseInt(rgbMatch[0]);
+          const g = Number.parseInt(rgbMatch[1]);
+          const b = Number.parseInt(rgbMatch[2]);
           // Calculate relative luminance (per WCAG)
           const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
           applyTheme(luminance > 0.5 ? 'light' : 'dark');
@@ -102,7 +103,7 @@ function detectAndApplyTheme() {
           const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
           applyTheme(prefersDark ? 'dark' : 'light');
         }
-      } catch (e) {
+      } catch (_e) {
         // Fallback to system preference
         const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
         applyTheme(prefersDark ? 'dark' : 'light');
@@ -121,7 +122,7 @@ function detectAndApplyTheme() {
       if (!(chrome.devtools.panels as any).themeName) {
         applyTheme(e.matches ? 'dark' : 'light');
       }
-    } catch (err) {
+    } catch (_err) {
       applyTheme(e.matches ? 'dark' : 'light');
     }
   });
@@ -135,9 +136,9 @@ function detectAndApplyTheme() {
       const rgbMatch = bodyBg.match(/\d+/g);
 
       if (rgbMatch && rgbMatch.length >= 3) {
-        const r = parseInt(rgbMatch[0]);
-        const g = parseInt(rgbMatch[1]);
-        const b = parseInt(rgbMatch[2]);
+        const r = Number.parseInt(rgbMatch[0]);
+        const g = Number.parseInt(rgbMatch[1]);
+        const b = Number.parseInt(rgbMatch[2]);
         const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
         const detectedTheme = luminance > 0.5 ? 'light' : 'dark';
 
@@ -146,7 +147,7 @@ function detectAndApplyTheme() {
           applyTheme(detectedTheme);
         }
       }
-    } catch (e) {
+    } catch (_e) {
       // Ignore errors
     }
   }, 2000);
@@ -172,10 +173,12 @@ function initPanel() {
   setupTabs();
 
   // Tell the background script which tab we're inspecting
+  // oxlint-disable require-post-message-target-origin -- chrome.runtime.Port.postMessage, not window.postMessage
   backgroundConnection.postMessage({
     name: 'init',
     tabId: tabId,
   });
+  // oxlint-enable require-post-message-target-origin
 
   // Listen for state updates from the background script via the port
   backgroundConnection.onMessage.addListener((message) => {
@@ -245,7 +248,7 @@ function detectSp00ky() {
 // Update the UI with Sp00ky data
 function updateUI(data: Sp00kyData) {
   console.log('updateUI called with data:', data);
-  currentData = data;
+  _currentData = data;
 
   // Update status
   updateStatus(data);
@@ -303,7 +306,7 @@ function updateEventsHistory(events: DevToolsEvent[]) {
   }
 
   // Reverse to show newest first
-  const reversedEvents = [...events].reverse();
+  const reversedEvents = [...events].toReversed();
   eventsListEl.innerHTML = reversedEvents
     .map((event) => {
       const time = new Date(event.timestamp).toLocaleTimeString();
@@ -364,7 +367,7 @@ function updateActiveQueries(queries: Record<number, ActiveQuery>) {
   // Add click handlers to query items
   queriesListContentEl.querySelectorAll('.query-item').forEach((item) => {
     item.addEventListener('click', () => {
-      const queryHash = parseInt((item as HTMLElement).dataset.queryHash || '0');
+      const queryHash = Number.parseInt((item as HTMLElement).dataset.queryHash || '0');
       selectQuery(queryHash, queries);
     });
   });
@@ -385,7 +388,7 @@ function selectQuery(queryHash: number, queries: Record<number, ActiveQuery>) {
     const queriesListContentEl = document.getElementById('queries-list-content');
     if (queriesListContentEl) {
       queriesListContentEl.querySelectorAll('.query-item').forEach((item) => {
-        if (parseInt((item as HTMLElement).dataset.queryHash || '0') === queryHash) {
+        if (Number.parseInt((item as HTMLElement).dataset.queryHash || '0') === queryHash) {
           item.classList.add('selected');
         } else {
           item.classList.remove('selected');
@@ -687,7 +690,7 @@ function updateTableData(tableName: string, data: Record<string, unknown>[]) {
         Object.keys(row).forEach((key) => columns.add(key));
       }
     });
-    const columnArray = Array.from(columns).sort((a, b) => {
+    const columnArray = Array.from(columns).toSorted((a, b) => {
       if (a === 'id') return -1;
       if (b === 'id') return 1;
       return a.localeCompare(b);
@@ -713,7 +716,7 @@ function updateTableData(tableName: string, data: Record<string, unknown>[]) {
             } else if (typeof value === 'object') {
               try {
                 displayValue = escapeHtml(JSON.stringify(value));
-              } catch (e) {
+              } catch (_e) {
                 displayValue = escapeHtml('[Object]');
               }
             } else {

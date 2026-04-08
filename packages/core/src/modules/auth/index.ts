@@ -1,17 +1,14 @@
-import { RemoteDatabaseService } from '../../services/database/remote';
-import { LocalDatabaseService } from '../../services/database/local';
-import { DataModule } from '../data/index';
-import {
+import type { RemoteDatabaseService } from '../../services/database/remote';
+import type {
   SchemaStructure,
   AccessDefinition,
   ColumnSchema,
   TypeNameToTypeMap,
 } from '@spooky-sync/query-builder';
-import { Logger } from '../../services/logger/index';
-import { encodeRecordId } from '../../utils/index';
+import type { Logger } from '../../services/logger/index';
 export * from './events/index';
 import { AuthEventTypes, createAuthEventSystem } from './events/index';
-import { PersistenceClient } from '../../types';
+import type { PersistenceClient } from '../../types';
 
 // Helper to pretty print types
 type Prettify<T> = {
@@ -175,7 +172,7 @@ export class AuthService<S extends SchemaStructure> {
 
     try {
       await this.remote.getClient().invalidate();
-    } catch (e) {
+    } catch (_e) {
       // Ignore invalidation errors
     }
 

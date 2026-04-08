@@ -1,5 +1,5 @@
-import { RecordId } from 'surrealdb';
-import { RecordVersionArray, RecordVersionDiff } from '../../types';
+import type { RecordId } from 'surrealdb';
+import type { RecordVersionArray, RecordVersionDiff } from '../../types';
 import { parseRecordIdString, encodeRecordId } from '../../utils/index';
 
 export class ArraySyncer {
@@ -8,8 +8,8 @@ export class ArraySyncer {
   private needsSort = false;
 
   constructor(localArray: RecordVersionArray, remoteArray: RecordVersionArray) {
-    this.remoteArray = remoteArray.sort((a, b) => a[0].localeCompare(b[0]));
-    this.localArray = localArray.sort((a, b) => a[0].localeCompare(b[0]));
+    this.remoteArray = remoteArray.toSorted((a, b) => a[0].localeCompare(b[0]));
+    this.localArray = localArray.toSorted((a, b) => a[0].localeCompare(b[0]));
   }
 
   /**
@@ -92,10 +92,12 @@ export function diffRecordVersionArray(
   return {
     added: added.map((id) => ({
       id: parseRecordIdString(id),
+      // oxlint-disable-next-line no-non-null-assertion
       version: remoteMap.get(id)!,
     })),
     updated: updated.map((id) => ({
       id: parseRecordIdString(id),
+      // oxlint-disable-next-line no-non-null-assertion
       version: remoteMap.get(id)!,
     })),
     removed: removed.map(parseRecordIdString),
@@ -126,7 +128,7 @@ export function applyRecordVersionDiff(
     currentMap.set(encodeRecordId(item.id), item.version);
   }
 
-  return Array.from(currentMap).sort((a, b) => a[0].localeCompare(b[0]));
+  return Array.from(currentMap).toSorted((a, b) => a[0].localeCompare(b[0]));
 }
 
 export function createDiffFromDbOp(

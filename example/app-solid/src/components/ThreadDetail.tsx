@@ -1,13 +1,14 @@
 import { createSignal, For, Show } from 'solid-js';
 import { useNavigate, useParams } from '@solidjs/router';
 import { CommentForm } from './CommentForm';
-import { useQuery, useDb, SyncedDb } from '@spooky-sync/client-solid';
+import type { SyncedDb } from '@spooky-sync/client-solid';
+import { useQuery, useDb } from '@spooky-sync/client-solid';
 import { useAuth } from '../lib/auth';
 import { CommentBox } from './CommentBox';
 import { ThreadSidebar } from './ThreadSidebar';
 import { createHotkey, isInputActive } from '../lib/keyboard';
-import SpookButton from './SpookButton';
-import { schema } from '../schema.gen';
+import { SpookButton } from './SpookButton';
+import type { schema } from '../schema.gen';
 import { ProfilePicture } from './ProfilePicture';
 import { Tooltip } from './Tooltip';
 
@@ -245,6 +246,7 @@ export function ThreadDetail() {
                           </span>
                           <div class="flex gap-2">
                             <button
+                              // oxlint-disable-next-line no-non-null-assertion
                               onMouseDown={() => handleAcceptTitle(threadData().title_suggestion!)}
                               class="text-xs font-medium bg-surface hover:bg-surface-hover border border-white/[0.06] text-zinc-300 hover:text-white px-3 py-1 rounded-md transition-colors duration-150"
                             >
@@ -283,6 +285,7 @@ export function ThreadDetail() {
                           </span>
                           <div class="flex gap-2">
                             <button
+                              // oxlint-disable-next-line no-non-null-assertion
                               onMouseDown={() => handleAcceptContent(threadData().content_suggestion!)}
                               class="text-xs font-medium bg-surface hover:bg-surface-hover border border-white/[0.06] text-zinc-300 hover:text-white px-3 py-1 rounded-md transition-colors duration-150"
                             >

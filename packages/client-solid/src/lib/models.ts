@@ -1,4 +1,4 @@
-import { RecordId } from 'surrealdb';
+import type { RecordId } from 'surrealdb';
 
 // Re-export types from query-builder for backward compatibility
 export type { GenericModel, GenericSchema } from '@spooky/query-builder';

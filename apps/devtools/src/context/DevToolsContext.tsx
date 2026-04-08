@@ -50,6 +50,7 @@ const DevToolsContext = createContext<DevToolsContextValue>();
 
 export const DevToolsProvider: ParentComponent = (props) => {
   // Store for DevTools state
+  // oxlint-disable-next-line no-shadow -- intentionally matching interface field name
   const [state, setState] = createStore<DevToolsState>({
     events: [],
     activeQueries: [],
@@ -137,11 +138,12 @@ export const DevToolsProvider: ParentComponent = (props) => {
         break;
 
       case 'SP00KY_QUERY_RESPONSE':
-        // @ts-ignore - Validating custom message structure
+        // @ts-expect-error - Validating custom message structure
         const msg = message as any;
         console.log('[DevTools] RAW QUERY RESPONSE:', msg);
 
         if (msg.requestId && pendingQueries.has(msg.requestId)) {
+          // oxlint-disable-next-line no-non-null-assertion -- guarded by .has() check above
           const { resolve, reject } = pendingQueries.get(msg.requestId)!;
           pendingQueries.delete(msg.requestId);
 
@@ -227,9 +229,9 @@ export const DevToolsProvider: ParentComponent = (props) => {
 
       if (available) {
         hostPage.getSp00kyState(
-          (state) => {
-            if (state) {
-              updateState(state);
+          (sp00kyState) => {
+            if (sp00kyState) {
+              updateState(sp00kyState);
             }
           },
           (error) => {
@@ -346,9 +348,6 @@ export const DevToolsProvider: ParentComponent = (props) => {
 
     window.addEventListener('message', handleWindowMessage);
 
-    return () => {
-      window.removeEventListener('message', handleWindowMessage);
-    };
     return () => {
       window.removeEventListener('message', handleWindowMessage);
     };

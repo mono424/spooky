@@ -1,7 +1,7 @@
 import { describe, it, expect, expectTypeOf } from 'vitest';
 import { QueryBuilder, buildQueryFromOptions } from './query-builder';
 import { RecordId } from 'surrealdb';
-import type { TableNames, TableModel, GetTable } from './table-schema';
+import type { TableModel } from './table-schema';
 
 // Schema for testing the new array-based API
 const testSchema = {
@@ -270,11 +270,15 @@ describe('Edge Cases', () => {
 describe('Type Tests', () => {
   it('should enforce correct table names', () => {
     // Valid table names should work
+    // oxlint-disable-next-line no-new
     new QueryBuilder(testSchema, 'user');
+    // oxlint-disable-next-line no-new
     new QueryBuilder(testSchema, 'thread');
+    // oxlint-disable-next-line no-new
     new QueryBuilder(testSchema, 'comment');
 
     // @ts-expect-error - invalid table name should not compile
+    // oxlint-disable-next-line no-new
     new QueryBuilder(testSchema, 'invalid_table');
   });
 
@@ -389,9 +393,6 @@ describe('Type Tests', () => {
 });
 
 describe('Schema Metadata Integration', () => {
-  // Using testSchema from top-level scope
-  type TestSchemaMetadata = typeof testSchema;
-
   it('should accept testSchema in constructor', () => {
     const builder = new QueryBuilder(testSchema, 'thread', (q) => q.selectQuery);
 

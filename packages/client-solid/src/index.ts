@@ -1,14 +1,14 @@
 import type { SyncedDbConfig } from './types';
 import {
   Sp00kyClient,
-  AuthService,
-  BucketHandle,
   type Sp00kyQueryResultPromise,
-  UpdateOptions,
-  RunOptions,
+  type AuthService,
+  type BucketHandle,
+  type UpdateOptions,
+  type RunOptions,
 } from '@spooky-sync/core';
 
-import {
+import type {
   GetTable,
   QueryBuilder,
   SchemaStructure,
@@ -25,9 +25,16 @@ import {
   RoutePayload,
   BucketNames,
   BucketDefinitionSchema,
+  QueryModifier,
+  QueryModifierBuilder,
+  QueryInfo,
+  RelationshipsMetadata,
+  RelationshipDefinition,
+  InferRelatedModelFromMetadata,
+  GetCardinality,
 } from '@spooky-sync/query-builder';
 
-import { RecordId, Uuid, Surreal } from 'surrealdb';
+import { RecordId, Uuid, type Surreal } from 'surrealdb';
 export { RecordId, Uuid };
 export type { Model, GenericModel, GenericSchema, ModelPayload } from './lib/models';
 export { useQuery } from './lib/use-query';
@@ -37,7 +44,7 @@ export { Sp00kyProvider, type Sp00kyProviderProps } from './lib/Sp00kyProvider';
 export { useDb } from './lib/context';
 
 // export { AuthEventTypes } from "@spooky-sync/core"; // TODO: Verify if AuthEventTypes exists in core
-export type {};
+
 
 // Re-export query builder types for convenience
 export type {
@@ -52,7 +59,7 @@ export type {
   TableModel,
   TableNames,
   QueryResult,
-} from '@spooky-sync/query-builder';
+};
 
 export type RelationshipField<
   Schema extends SchemaStructure,
@@ -190,7 +197,7 @@ export class SyncedDb<S extends SchemaStructure> {
    * Authenticate with the database
    */
   public async authenticate(token: string): Promise<RecordId<string>> {
-    const result = await this.sp00ky?.authenticate(token);
+    await this.sp00ky?.authenticate(token);
     // Sp00kyClient.authenticate returns whatever remote.authenticate returns (boolean or token usually?)
     // Wait, checked Sp00kyClient: return this.remote.getClient().authenticate(token);
     // SurrealDB authenticate returns void? or token?

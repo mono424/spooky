@@ -21,6 +21,7 @@ export function useChromeConnection(options?: UseChromeConnectionOptions) {
   const sendMessage = (message: ChromeMessage): void => {
     const currentPort = port();
     if (currentPort && isConnected()) {
+      // oxlint-disable-next-line require-post-message-target-origin -- chrome.runtime.Port.postMessage, not window.postMessage
       currentPort.postMessage(message);
     } else {
       console.warn('[DevTools] Cannot send message: not connected', message);
@@ -66,10 +67,12 @@ export function useChromeConnection(options?: UseChromeConnectionOptions) {
         setIsConnected(true);
 
         // Initialize connection with tab ID
+        // oxlint-disable require-post-message-target-origin -- chrome.runtime.Port.postMessage, not window.postMessage
         newPort.postMessage({
           name: 'init',
           tabId: chrome.devtools.inspectedWindow.tabId,
         });
+        // oxlint-enable require-post-message-target-origin
 
         console.log('[DevTools] Connected to background script');
         options?.onConnect?.();
@@ -83,7 +86,7 @@ export function useChromeConnection(options?: UseChromeConnectionOptions) {
       }
     };
 
-    let activeConnection = connect();
+    const activeConnection = connect();
 
     // Cleanup on unmount
     onCleanup(() => {
@@ -96,7 +99,7 @@ export function useChromeConnection(options?: UseChromeConnectionOptions) {
           newPort.onMessage.removeListener(messageListener);
           newPort.onDisconnect.removeListener(disconnectListener);
           newPort.disconnect();
-        } catch (e) {
+        } catch (_e) {
           /* ignore */
         }
       }

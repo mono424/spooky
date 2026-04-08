@@ -1,5 +1,6 @@
 import { render } from 'solid-js/web';
 import { App } from './App';
+// oxlint-disable-next-line no-unassigned-import
 import './styles/devtools.css';
 
 console.log('[DevTools Panel] Initializing...');

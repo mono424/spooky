@@ -1,5 +1,6 @@
-import { createTestDb, TEST_DB_CONFIG } from './setup';
-import { Surreal, Table } from 'surrealdb';
+import { createTestDb } from './setup';
+import type { Surreal} from 'surrealdb';
+import { Table } from 'surrealdb';
 
 describe('Intrinsic Hash Logic', () => {
   let db: Surreal;

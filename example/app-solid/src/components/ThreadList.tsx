@@ -2,10 +2,16 @@ import { For, Show, createSignal, createEffect, onCleanup } from 'solid-js';
 import { useNavigate } from '@solidjs/router';
 import { useQuery, useDb } from '@spooky-sync/client-solid';
 import { createHotkey } from '../lib/keyboard';
-import { schema } from '../schema.gen';
+import type { schema } from '../schema.gen';
 import { ProfilePicture } from './ProfilePicture';
 import { ArrowDownAZ, ArrowUpZA, CalendarArrowDown, CalendarArrowUp, Plus } from 'lucide-solid';
 import { Tooltip } from './Tooltip';
+
+// Scroll the selected thread card into view
+function scrollSelectedIntoView(index: number) {
+  const el = document.querySelector(`[data-thread-index="${index}"]`);
+  el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
 
 export function ThreadList() {
   const db = useDb<typeof schema>();
@@ -47,12 +53,6 @@ export function ThreadList() {
 
   const handleThreadClick = (threadId: string) => {
     navigate(`/thread/${threadId}`);
-  };
-
-  // Scroll the selected thread card into view
-  const scrollSelectedIntoView = (index: number) => {
-    const el = document.querySelector(`[data-thread-index="${index}"]`);
-    el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   };
 
   createHotkey('J', () => {

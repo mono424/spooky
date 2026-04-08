@@ -1,5 +1,6 @@
 import { Surreal } from 'surrealdb';
-import { GenericContainer, StartedTestContainer, Wait } from 'testcontainers';
+import type { StartedTestContainer} from 'testcontainers';
+import { GenericContainer, Wait } from 'testcontainers';
 
 let container: StartedTestContainer | null = null;
 let currentPort: number | null = null;
@@ -84,7 +85,7 @@ export async function createTestDb() {
   // Yes.
   try {
     await db.query(`REMOVE DATABASE ${TEST_DB_CONFIG.database};`);
-  } catch (e) {
+  } catch {
     /* ignore if not exists */
   }
 

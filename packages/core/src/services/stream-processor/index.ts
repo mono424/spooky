@@ -1,10 +1,11 @@
+// oxlint-disable-next-line no-named-as-default -- WASM module default export convention
 import init, { Sp00kyProcessor } from '@spooky-sync/ssp-wasm';
-import { EventDefinition, EventSystem } from '../../events/index';
-import { Logger } from 'pino';
-import { LocalDatabaseService } from '../database/index';
-import { WasmProcessor, WasmStreamUpdate } from './wasm-types';
-import { Duration } from 'surrealdb';
-import { PersistenceClient, QueryTimeToLive, RecordVersionArray } from '../../types';
+import type { EventDefinition, EventSystem } from '../../events/index';
+import type { Logger } from 'pino';
+import type { LocalDatabaseService } from '../database/index';
+import type { WasmProcessor, WasmStreamUpdate } from './wasm-types';
+import type { Duration } from 'surrealdb';
+import type { PersistenceClient, QueryTimeToLive, RecordVersionArray } from '../../types';
 
 // Simple interface for query plan registration (replaces Incantation class)
 interface QueryPlanConfig {

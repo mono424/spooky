@@ -1,9 +1,11 @@
-import { Diagnostic, Surreal, applyDiagnostics } from 'surrealdb';
+import type { Diagnostic} from 'surrealdb';
+import { Surreal, applyDiagnostics } from 'surrealdb';
 import { createWasmEngines } from '@surrealdb/wasm';
 import type { CacheStrategy } from '../types';
 
 const printDiagnostic = ({ key, type, phase, ...other }: Diagnostic) => {
   if (phase === 'progress' || phase === 'after') {
+    // oxlint-disable-next-line no-console -- intentional diagnostic logging
     console.log(`[SurrealDB_WASM] [${key}] ${type}:${phase}\n${JSON.stringify(other, null, 2)}`);
   }
 };
@@ -11,6 +13,7 @@ const printDiagnostic = ({ key, type, phase, ...other }: Diagnostic) => {
 /**
  * SurrealDB WASM client factory for different storage strategies
  */
+// oxlint-disable-next-line no-extraneous-class -- factory pattern groups related static methods
 export class SurrealDBWasmFactory {
   /**
    * Creates a SurrealDB WASM instance with the specified storage strategy

@@ -3,6 +3,15 @@ import { createSignal, onMount, onCleanup } from 'solid-js';
 export type Theme = 'light' | 'dark' | 'auto';
 
 /**
+ * Get theme from system preference
+ */
+function getSystemTheme(): 'light' | 'dark' {
+  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  console.log('[DevTools Theme] System prefers dark mode:', prefersDark);
+  return prefersDark ? 'dark' : 'light';
+}
+
+/**
  * Custom hook to manage theme state and sync with Chrome DevTools theme
  */
 export function useTheme() {
@@ -16,15 +25,6 @@ export function useTheme() {
     document.documentElement.setAttribute('data-theme', themeValue);
     setEffectiveTheme(themeValue);
     console.log('[DevTools Theme] Applied theme:', themeValue);
-  };
-
-  /**
-   * Get theme from system preference
-   */
-  const getSystemTheme = (): 'light' | 'dark' => {
-    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    console.log('[DevTools Theme] System prefers dark mode:', prefersDark);
-    return prefersDark ? 'dark' : 'light';
   };
 
   /**

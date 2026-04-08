@@ -1,5 +1,6 @@
-import { createEventSystem, EventDefinition, EventSystem } from '../../../events/index';
-import { RecordVersionArray } from '../../../types';
+import type { EventDefinition, EventSystem } from '../../../events/index';
+import { createEventSystem } from '../../../events/index';
+import type { RecordVersionArray } from '../../../types';
 
 export const SyncQueueEventTypes = {
   MutationEnqueued: 'MUTATION_ENQUEUED',

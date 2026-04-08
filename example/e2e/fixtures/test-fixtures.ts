@@ -1,4 +1,5 @@
-import { test as base, expect, Page } from '@playwright/test';
+import type { Page } from '@playwright/test';
+import { test as base, expect } from '@playwright/test';
 
 export interface TestUser {
   username: string;
@@ -80,6 +81,7 @@ export async function navigateToThread(page: Page, title: string) {
 }
 
 export const test = base.extend<{ testUser: TestUser }>({
+  // eslint-disable-next-line no-empty-pattern
   testUser: async ({}, use) => {
     await use(testUser);
   },

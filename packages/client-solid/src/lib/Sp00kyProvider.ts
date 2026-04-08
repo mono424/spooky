@@ -1,4 +1,5 @@
-import { createSignal, onMount, createComponent, createMemo, JSX, mergeProps } from 'solid-js';
+import type { JSX} from 'solid-js';
+import { createSignal, onMount, createComponent, createMemo, mergeProps } from 'solid-js';
 import type { SchemaStructure } from '@spooky/query-builder';
 import type { SyncedDbConfig } from '../types';
 import { SyncedDb } from '../index';
@@ -35,6 +36,7 @@ export function Sp00kyProvider<S extends SchemaStructure>(
       if (merged.onError) {
         merged.onError(error);
       } else {
+        // oxlint-disable-next-line no-console
         console.error('Sp00kyProvider: Failed to initialize database', error);
       }
     }

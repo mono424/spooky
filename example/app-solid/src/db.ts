@@ -1,4 +1,4 @@
-import { SyncedDbConfig } from '@spooky-sync/client-solid';
+import type { SyncedDbConfig } from '@spooky-sync/client-solid';
 import { createOtelTransmit } from '@spooky-sync/core/otel';
 import { schema, SURQL_SCHEMA } from './schema.gen';
 

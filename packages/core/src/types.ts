@@ -1,9 +1,9 @@
-import { RecordId, SchemaStructure } from '@spooky-sync/query-builder';
-import { Level, type LoggerOptions } from 'pino';
-import { PushEventOptions } from './events/index';
-import { UpEvent } from './modules/sync/index';
+import type { RecordId, SchemaStructure } from '@spooky-sync/query-builder';
+import type { Level, LoggerOptions } from 'pino';
+import type { PushEventOptions } from './events/index';
+import type { UpEvent } from './modules/sync/index';
 
-export type { Level } from 'pino';
+export type { Level };
 
 /**
  * A pino browser transmit object for forwarding logs to an external sink (e.g. OpenTelemetry).
@@ -214,6 +214,8 @@ export interface RunOptions {
   assignedTo?: string;
   max_retries?: number;
   retry_strategy?: 'linear' | 'exponential';
+  /** Timeout in seconds for the backend HTTP call. Only used if the backend allows timeout override. */
+  timeout?: number;
 }
 
 /**

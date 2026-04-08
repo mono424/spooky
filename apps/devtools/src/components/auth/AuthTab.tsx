@@ -29,11 +29,13 @@ export function AuthTab() {
               <div style="margin-left: 12px; margin-top: 4px;">
                 <Show when={state.auth.user?.email}>
                   <div>
+                    {/* oxlint-disable-next-line no-non-null-assertion */}
                     <strong>Email:</strong> {state.auth.user!.email}
                   </div>
                 </Show>
                 <Show when={state.auth.user?.roles && state.auth.user.roles.length > 0}>
                   <div style="margin-top: 4px;">
+                    {/* oxlint-disable-next-line no-non-null-assertion */}
                     <strong>Roles:</strong> {state.auth.user!.roles!.join(', ')}
                   </div>
                 </Show>

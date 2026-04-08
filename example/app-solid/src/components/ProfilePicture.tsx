@@ -1,6 +1,7 @@
-import { Show, Accessor } from 'solid-js';
+import type { Accessor } from 'solid-js';
+import { Show } from 'solid-js';
 import { useDownloadFile } from '@spooky-sync/client-solid';
-import { schema } from '../schema.gen';
+import type { schema } from '../schema.gen';
 
 const sizeClasses = {
   xs: 'w-7 h-7 text-xs',
@@ -31,6 +32,7 @@ export function ProfilePicture(props: {
       }
     >
       <img
+        // oxlint-disable-next-line no-non-null-assertion
         src={profilePicUrl()!}
         alt="Profile picture"
         class={`${classes()} rounded-full object-cover flex-shrink-0`}

@@ -140,7 +140,7 @@ const highlightLine = (line: string, lang: Language): React.ReactNode => {
 
   // Split line into tokens
   const tokens: React.ReactNode[] = [];
-  let remaining = line;
+  const remaining = line;
   let key = 0;
 
   // Handle comments first (they take precedence)

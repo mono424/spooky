@@ -1,5 +1,6 @@
 import { createTestDb, TEST_DB_CONFIG } from './setup';
-import { Surreal, Table } from 'surrealdb';
+import type { Surreal} from 'surrealdb';
+import { Table } from 'surrealdb';
 
 describe('SurrealDB Simple CRUD', () => {
   let db: Surreal;
@@ -9,7 +10,7 @@ describe('SurrealDB Simple CRUD', () => {
     // Drop database clean before starting
     try {
       await db.query(`REMOVE DATABASE ${TEST_DB_CONFIG.database}`);
-    } catch (e) {
+    } catch {
       // Ignore if db doesn't exist
     }
     await db.query(`DEFINE DATABASE ${TEST_DB_CONFIG.database}`);

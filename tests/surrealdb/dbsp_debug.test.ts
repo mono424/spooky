@@ -1,4 +1,4 @@
-import { Surreal } from 'surrealdb';
+import type { Surreal } from 'surrealdb';
 import { createTestDb, clearTestDb } from './setup';
 
 describe('DBSP Debug', () => {

@@ -1,4 +1,4 @@
-export default function SpookButton(p: { loading: boolean; loadingLabel?: string; onClick: () => void; label?: string; children?: any }) {
+export function SpookButton(p: { loading: boolean; loadingLabel?: string; onClick: () => void; label?: string; children?: any }) {
   return (
     <button
       onClick={p.onClick}

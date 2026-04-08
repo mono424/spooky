@@ -1,5 +1,5 @@
 import { createTestDb } from './setup';
-import { Surreal, Table } from 'surrealdb';
+import { Table, type Surreal } from 'surrealdb';
 
 let db: Surreal;
 

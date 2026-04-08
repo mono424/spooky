@@ -1,4 +1,5 @@
-import { createSignal, Show, JSX, onCleanup } from 'solid-js';
+import type { JSX} from 'solid-js';
+import { createSignal, Show, onCleanup } from 'solid-js';
 
 interface TooltipProps {
   text: string;

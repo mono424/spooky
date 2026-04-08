@@ -1,7 +1,7 @@
-import { PersistenceClient } from '../../types';
+import type { PersistenceClient } from '../../types';
 import { parseRecordIdString, surql } from '../../utils/index';
-import { Logger } from 'pino';
-import { AbstractDatabaseService } from '../database/database';
+import type { Logger } from 'pino';
+import type { AbstractDatabaseService } from '../database/database';
 
 export class SurrealDBPersistenceClient implements PersistenceClient {
   private logger: Logger;

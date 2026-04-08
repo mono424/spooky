@@ -1,6 +1,6 @@
 export { SurrealDBWasmFactory } from './surrealdb-wasm-factory';
 
-import { Surreal } from 'surrealdb';
+import type { Surreal } from 'surrealdb';
 import type { CacheStrategy } from '../types';
 
 /**

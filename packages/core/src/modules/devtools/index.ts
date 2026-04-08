@@ -1,8 +1,8 @@
-import { LocalDatabaseService, RemoteDatabaseService } from '../../services/database/index';
-import { Logger } from '../../services/logger/index';
-import { SchemaStructure } from '@spooky-sync/query-builder';
+import type { LocalDatabaseService, RemoteDatabaseService } from '../../services/database/index';
+import type { Logger } from '../../services/logger/index';
+import type { SchemaStructure } from '@spooky-sync/query-builder';
 import { RecordId } from 'surrealdb';
-import { StreamUpdate, StreamUpdateReceiver } from '../../services/stream-processor/index';
+import type { StreamUpdate, StreamUpdateReceiver } from '../../services/stream-processor/index';
 import { encodeRecordId } from '../../utils/index';
 
 // DevTools interfaces (matching extension expectations)
@@ -13,8 +13,8 @@ export interface DevToolsEvent {
   payload: any;
 }
 
-import { DataModule } from '../data/index';
-import { AuthService } from '../auth/index';
+import type { DataModule } from '../data/index';
+import type { AuthService } from '../auth/index';
 import { AuthEventTypes } from '../auth/events/index';
 
 export class DevToolsService implements StreamUpdateReceiver {

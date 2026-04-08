@@ -1,5 +1,5 @@
-import pino, { Level, type Logger as PinoLogger, type LoggerOptions } from 'pino';
-import { PinoTransmit } from '../../types';
+import pino, { type Level, type Logger as PinoLogger, type LoggerOptions } from 'pino';
+import type { PinoTransmit } from '../../types';
 
 export type Logger = PinoLogger;
 
@@ -7,6 +7,7 @@ export function createLogger(level: Level = 'info', transmit?: PinoTransmit): Lo
   const browserConfig: LoggerOptions['browser'] = {
     asObject: true,
     write: (o: any) => {
+      // oxlint-disable-next-line no-console
       console.log(JSON.stringify(o));
     },
   };

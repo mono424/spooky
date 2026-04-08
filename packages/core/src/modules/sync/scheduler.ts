@@ -1,5 +1,5 @@
-import { Logger } from '../../services/logger/index';
-import { UpQueue, DownQueue, DownEvent, UpEvent, RollbackCallback } from './queue/index';
+import type { Logger } from '../../services/logger/index';
+import type { UpQueue, DownQueue, DownEvent, UpEvent, RollbackCallback } from './queue/index';
 import { SyncQueueEventTypes } from './events/index';
 
 /**

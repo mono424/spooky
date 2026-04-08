@@ -3,7 +3,7 @@ import { useNavigate } from '@solidjs/router';
 import { useAuth } from '../lib/auth';
 import { Uuid, useDb } from '@spooky-sync/client-solid';
 import { RecordId } from 'surrealdb';
-import { schema } from '../schema.gen';
+import type { schema } from '../schema.gen';
 import { createHotkey } from '../lib/keyboard';
 import { Tooltip } from './Tooltip';
 
@@ -60,7 +60,7 @@ export function CreateThreadDialog(props: CreateThreadDialogProps) {
     props.onClose();
   };
 
-  let titleInputRef!: HTMLInputElement;
+  let titleInputRef: HTMLInputElement | undefined = undefined;
 
   // Autofocus title input on open
   createEffect(() => {
@@ -119,7 +119,7 @@ export function CreateThreadDialog(props: CreateThreadDialogProps) {
                   </span>
                 </div>
                 <input
-                  ref={titleInputRef!}
+                  ref={(el) => titleInputRef = el}
                   id="create-title"
                   type="text"
                   value={title()}

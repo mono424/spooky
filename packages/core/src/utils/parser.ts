@@ -1,4 +1,5 @@
-import { ColumnSchema, RecordId } from '@spooky-sync/query-builder';
+import type { ColumnSchema} from '@spooky-sync/query-builder';
+import { RecordId } from '@spooky-sync/query-builder';
 import { parseRecordIdString } from './index';
 import { DateTime } from 'surrealdb';
 

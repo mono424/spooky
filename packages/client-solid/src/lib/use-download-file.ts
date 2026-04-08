@@ -78,9 +78,8 @@ export function useDownloadFile<S extends SchemaStructure>(
 
   let currentKey: string | null = null;
   let privateUrl: string | null = null;
-  let refetchTrigger: () => void;
   const [refetchSignal, setRefetchSignal] = createSignal(0);
-  refetchTrigger = () => setRefetchSignal((n) => n + 1);
+  const refetchTrigger = () => setRefetchSignal((n) => n + 1);
 
   async function doDownload(key: string, filePath: string): Promise<string | null> {
     if (useCache) {
@@ -184,6 +183,7 @@ export function useDownloadFile<S extends SchemaStructure>(
           setUrl(result);
           setIsLoading(false);
         }
+        return undefined;
       },
       (err) => {
         if (!cancelled) {

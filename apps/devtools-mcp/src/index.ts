@@ -2,13 +2,28 @@
 
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { Bridge } from './bridge.js';
+import { SurrealClient } from './surreal.js';
 import { createServer } from './server.js';
 
 async function main() {
   const bridge = new Bridge();
   await bridge.start();
 
-  const server = createServer(bridge);
+  const surreal = process.env.SURREAL_URL
+    ? new SurrealClient({
+        url: process.env.SURREAL_URL,
+        namespace: process.env.SURREAL_NS ?? 'main',
+        database: process.env.SURREAL_DB ?? 'main',
+        username: process.env.SURREAL_USER ?? 'root',
+        password: process.env.SURREAL_PASS ?? 'root',
+      })
+    : null;
+
+  if (surreal) {
+    process.stderr.write(`[sp00ky-mcp] Direct DB mode enabled (${process.env.SURREAL_URL})\n`);
+  }
+
+  const server = createServer(bridge, surreal);
   const transport = new StdioServerTransport();
   await server.connect(transport);
 

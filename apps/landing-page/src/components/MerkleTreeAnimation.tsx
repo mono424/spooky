@@ -1,14 +1,14 @@
 import React, { useEffect, useState } from 'react';
 
+// Helper to generate short random hash
+const generateHash = () =>
+  '0x' + Array.from({ length: 4 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
+
 // Re-exporting the Tree as the default or named to be flexible
 export const MerkleTree = () => {
   const [activeNodes, setActiveNodes] = useState<number[]>([]);
   const [hashingNode, setHashingNode] = useState<number | null>(null);
   const [nodeHashes, setNodeHashes] = useState<Record<number, string>>({});
-
-  // Helper to generate short random hash
-  const generateHash = () =>
-    '0x' + Array.from({ length: 4 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
 
   // Initial population
   useEffect(() => {
@@ -84,9 +84,6 @@ export const MerkleTree = () => {
 export const MerkleDashboard = () => {
   const [hashingNode, setHashingNode] = useState<number | null>(null);
   const [nodeHashes, setNodeHashes] = useState<Record<number, string>>({});
-
-  const generateHash = () =>
-    '0x' + Array.from({ length: 4 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
 
   useEffect(() => {
     const initial: Record<number, string> = {};

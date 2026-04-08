@@ -1,7 +1,6 @@
-import { OpenAPIHono } from '@hono/zod-openapi';
+import { OpenAPIHono, createRoute, z as zOpenApi } from '@hono/zod-openapi';
 import { logger } from 'hono/logger';
 import { bearerAuth } from 'hono/bearer-auth';
-import { createRoute, z as zOpenApi } from '@hono/zod-openapi';
 import { z } from 'zod';
 import { generateText, Output } from 'ai';
 import { anthropic } from '@ai-sdk/anthropic';

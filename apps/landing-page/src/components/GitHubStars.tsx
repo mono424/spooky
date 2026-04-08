@@ -17,8 +17,8 @@ export default function GitHubStarsBrutalist() {
         return res.json();
       })
       .then((data) => setStars(data.stargazers_count))
-      .catch((err) => {
-        if (err.name !== 'AbortError') console.error(err);
+      .catch(() => {
+        // Silently ignore fetch errors (including AbortError)
       });
 
     return () => controller.abort();

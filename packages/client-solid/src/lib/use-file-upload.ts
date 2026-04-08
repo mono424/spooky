@@ -33,6 +33,7 @@ export function useFileUpload<S extends SchemaStructure>(
     bucketName = dbOrBucketName as BucketNames<S>;
   } else {
     db = dbOrBucketName as SyncedDb<S>;
+    // oxlint-disable-next-line no-non-null-assertion
     bucketName = maybeBucketName!;
   }
 
@@ -52,7 +53,7 @@ export function useFileUpload<S extends SchemaStructure>(
     const config = db.getBucketConfig(bucketName as string);
     if (!config) return;
 
-    if (config.maxSize != null && file.size > config.maxSize) {
+    if (config.maxSize !== null && config.maxSize !== undefined && file.size > config.maxSize) {
       const maxMB = (config.maxSize / (1024 * 1024)).toFixed(1);
       throw new Error(`File exceeds maximum size of ${maxMB} MB.`);
     }

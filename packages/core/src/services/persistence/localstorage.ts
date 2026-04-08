@@ -1,5 +1,5 @@
-import { Logger } from 'pino';
-import { PersistenceClient } from '../../types';
+import type { Logger } from 'pino';
+import type { PersistenceClient } from '../../types';
 
 export class LocalStoragePersistenceClient implements PersistenceClient {
   private logger: Logger;

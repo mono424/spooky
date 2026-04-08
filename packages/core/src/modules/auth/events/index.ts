@@ -1,4 +1,5 @@
-import { createEventSystem, EventDefinition, EventSystem } from '../../../events/index';
+import type { EventDefinition, EventSystem } from '../../../events/index';
+import { createEventSystem } from '../../../events/index';
 
 export const AuthEventTypes = {
   AuthStateChanged: 'AUTH_STATE_CHANGED',

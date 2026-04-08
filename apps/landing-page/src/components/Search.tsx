@@ -14,7 +14,7 @@ export const Search = () => {
     const down = (e: KeyboardEvent) => {
       if (e.key === 'k' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
-        setOpen((open) => !open);
+        setOpen((prev) => !prev);
       }
       if (e.key === 'Escape') {
         setOpen(false);
@@ -58,13 +58,12 @@ export const Search = () => {
         }
 
         await pagefind.init(); // Ensure initialized
-        const search = await pagefind.search(query);
+        const searchResult = await pagefind.search(query);
 
         // Load the top 5 results data
-        const data = await Promise.all(search.results.slice(0, 5).map((r: any) => r.data()));
+        const data = await Promise.all(searchResult.results.slice(0, 5).map((r: any) => r.data()));
         setResults(data);
-      } catch (e) {
-        console.error('Search failed:', e);
+      } catch {
         if (import.meta.env.DEV) {
           setError('Search is only available in production builds.');
         } else {

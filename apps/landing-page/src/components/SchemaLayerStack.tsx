@@ -84,12 +84,12 @@ function FlatIsometricLayer({
   layer,
   index,
   hovered,
-  onHover,
+  _onHover,
 }: {
   layer: (typeof LAYERS)[number];
   index: number;
   hovered: LayerKey | null;
-  onHover: (key: LayerKey | null) => void;
+  _onHover: (key: LayerKey | null) => void;
 }) {
   const isHovered = hovered === layer.key;
   const isDimmed = hovered !== null && !isHovered;
@@ -245,7 +245,7 @@ function MobileLayerCard({ layer, active }: { layer: (typeof LAYERS)[number]; ac
 }
 
 function MobileLayerCrossfade() {
-  const layers = [...LAYERS].reverse();
+  const layers = [...LAYERS].toReversed();
   const containerRef = useRef<HTMLDivElement>(null);
   const [activeIndex, setActiveIndex] = useState(0);
   const [progress, setProgress] = useState(0);
@@ -371,7 +371,7 @@ export const SchemaLayerStack: React.FC = () => {
             pointerEvents: 'auto',
           }}
         >
-          {[...LAYERS].reverse().map((layer) => {
+          {[...LAYERS].toReversed().map((layer) => {
             const isActive = hovered === layer.key;
             return (
               <div

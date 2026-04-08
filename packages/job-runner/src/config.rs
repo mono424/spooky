@@ -66,6 +66,8 @@ pub fn load_config<P: AsRef<Path>>(sp00ky_config_path: P) -> Result<JobConfig> {
                     name: backend_name,
                     base_url,
                     auth_token,
+                    timeout: None,
+                    timeout_overridable: false,
                 };
 
                 // Map table to backend info
@@ -106,12 +108,16 @@ pub fn from_db_record(record: &Value) -> Result<JobConfig> {
             .get("auth_token")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        let timeout = entry.get("timeout").and_then(|v| v.as_u64()).map(|v| v as u32);
+        let timeout_overridable = entry.get("timeout_overridable").and_then(|v| v.as_bool()).unwrap_or(false);
         job_tables.insert(
             table,
             BackendInfo {
                 name,
                 base_url,
                 auth_token,
+                timeout,
+                timeout_overridable,
             },
         );
     }

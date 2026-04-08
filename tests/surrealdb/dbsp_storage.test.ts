@@ -1,5 +1,5 @@
 import { createTestDb, clearTestDb } from './setup';
-import { Surreal, RecordId } from 'surrealdb';
+import type { Surreal} from 'surrealdb';
 
 describe('DBSP Storage Persistence', () => {
   let db: Surreal;
@@ -47,7 +47,7 @@ describe('DBSP Storage Persistence', () => {
     const recordList = Array.isArray(records) ? records : [records];
 
     expect(recordList.length).toBeGreaterThan(0);
-    const content = recordList[0].content || recordList[0]; // Handle if 'content' is nested or direct
+    const _content = recordList[0].content || recordList[0]; // Handle if 'content' is nested or direct
     expect(records[0].id.toString()).toBe('_00_module_state:dbsp');
     expect(records[0].content).toBeDefined();
 
@@ -309,7 +309,7 @@ describe('DBSP Storage Persistence', () => {
     // Instead we can check if `register_view` for a NEW view works.
 
     const viewName2 = 'newline_view_2';
-    const res2 = await runQuery(`
+    const _res2 = await runQuery(`
       RETURN mod::dbsp::register_view('${viewName2}', "${query}", "${params}");
     `);
 
@@ -373,7 +373,7 @@ describe('DBSP Storage Persistence', () => {
     // res will contain array of results. Last one is the CREATE result.
     expect(res).toBeDefined();
     // 1. Create a user (needed as author)
-    const user = await runQuery(`
+    const _user = await runQuery(`
       CREATE user:mutation_test CONTENT {
         username: "mutation_tester",
         password: "password",

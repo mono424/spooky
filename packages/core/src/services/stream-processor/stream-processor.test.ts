@@ -127,7 +127,7 @@ describe('StreamProcessor Ingest Behavior', () => {
     const params = { id: new MockRecordId('user', '2dng4ngbicbl0scod87i') };
     const normalizedParams = normalizeValue(params);
 
-    const ingestedRecord = {
+    const _ingestedRecord = {
       id: 'user:2dng4ngbicbl0scod87i',
       username: 'sara',
     };

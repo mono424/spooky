@@ -1,16 +1,17 @@
-import { LocalDatabaseService, RemoteDatabaseService } from '../../services/database/index';
-import { MutationEvent, RecordVersionArray } from '../../types';
+import type { LocalDatabaseService, RemoteDatabaseService } from '../../services/database/index';
+import type { RecordVersionArray } from '../../types';
 import { createSyncEventSystem, SyncEventTypes, SyncQueueEventTypes } from './events/index';
-import { Logger } from '../../services/logger/index';
-import { DownEvent, DownQueue, UpEvent, UpQueue } from './queue/index';
-import { RecordId, Uuid } from 'surrealdb';
+import type { Logger } from '../../services/logger/index';
+import type { DownEvent, UpEvent} from './queue/index';
+import { DownQueue, UpQueue } from './queue/index';
+import type { RecordId, Uuid } from 'surrealdb';
 import { ArraySyncer, createDiffFromDbOp } from './utils';
 import { SyncEngine } from './engine';
 import { SyncScheduler } from './scheduler';
-import { SchemaStructure } from '@spooky-sync/query-builder';
-import { CacheModule } from '../cache/index';
-import { DataModule } from '../data/index';
-import { encodeRecordId, extractTablePart, parseDuration, surql } from '../../utils/index';
+import type { SchemaStructure } from '@spooky-sync/query-builder';
+import type { CacheModule } from '../cache/index';
+import type { DataModule } from '../data/index';
+import { encodeRecordId, extractTablePart, surql } from '../../utils/index';
 
 /**
  * The main synchronization engine for Sp00ky.

@@ -1,9 +1,9 @@
-import { Surreal } from 'surrealdb';
+import type { Surreal } from 'surrealdb';
 import { createTestDb, TEST_DB_CONFIG } from './setup';
 
 let db: Surreal;
-const testNs = 'main';
-const testDb = 'main';
+const _testNs = 'main';
+const _testDb = 'main';
 
 describe('Authentication Flows', () => {
   beforeAll(async () => {

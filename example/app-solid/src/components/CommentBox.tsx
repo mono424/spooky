@@ -1,8 +1,8 @@
 import { Show } from 'solid-js';
 import { useAuth } from '../lib/auth';
-import { SchemaDefinition } from '../schema.gen';
-import { GetTable, TableModel, useDb } from '@spooky-sync/client-solid';
-import { schema } from '../schema.gen';
+import type { SchemaDefinition, schema } from '../schema.gen';
+import type { GetTable, TableModel} from '@spooky-sync/client-solid';
+import { useDb } from '@spooky-sync/client-solid';
 import { ProfilePicture } from './ProfilePicture';
 
 type AugmentedComment = Omit<TableModel<GetTable<SchemaDefinition, 'comment'>>, 'author'> & {
@@ -18,9 +18,7 @@ export function CommentBox(props: { comment: AugmentedComment }) {
   };
 
   const handleDelete = () => {
-    if (confirm('Are you sure you want to delete this reply?')) {
-      db.delete('comment', props.comment.id);
-    }
+    db.delete('comment', props.comment.id);
   };
 
   return (

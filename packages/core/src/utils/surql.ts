@@ -1,4 +1,4 @@
-import { MutationEventType } from '../types';
+import type { MutationEventType } from '../types';
 
 // ==================== TYPES ====================
 
@@ -90,16 +90,16 @@ export const surql: SurqlHelper = {
     returnValues: ({ field: string; alias: string } | string)[]
   ) {
     return `SELECT ${returnValues
-      .map((returnValues) =>
-        typeof returnValues === 'string'
-          ? returnValues
-          : `${returnValues.field} as ${returnValues.alias}`
+      .map((rv) =>
+        typeof rv === 'string'
+          ? rv
+          : `${rv.field} as ${rv.alias}`
       )
       .join(',')} FROM ${table} WHERE ${whereVar
-      .map((whereVar) =>
-        typeof whereVar === 'string'
-          ? `${whereVar} = $${whereVar}`
-          : `${whereVar.field} = $${whereVar.variable}`
+      .map((wv) =>
+        typeof wv === 'string'
+          ? `${wv} = $${wv}`
+          : `${wv.field} = $${wv.variable}`
       )
       .join(' AND ')}`;
   },
@@ -136,12 +136,12 @@ export const surql: SurqlHelper = {
     keyDataVar: ({ key: string; variable: string } | { statement: string } | string)[]
   ) {
     return `UPDATE $${idVar} SET ${keyDataVar
-      .map((keyDataVar) =>
-        typeof keyDataVar === 'string'
-          ? `${keyDataVar} = $${keyDataVar}`
-          : 'statement' in keyDataVar
-            ? keyDataVar.statement
-            : `${keyDataVar.key} = $${keyDataVar.variable}`
+      .map((kdv) =>
+        typeof kdv === 'string'
+          ? `${kdv} = $${kdv}`
+          : 'statement' in kdv
+            ? kdv.statement
+            : `${kdv.key} = $${kdv.variable}`
       )
       .join(', ')}`;
   },

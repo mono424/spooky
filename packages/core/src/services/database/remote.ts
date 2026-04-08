@@ -1,12 +1,12 @@
+import type {
+  Diagnostic} from 'surrealdb';
 import {
   applyDiagnostics,
   createRemoteEngines,
-  Diagnostic,
   Surreal,
-  SurrealTransaction,
 } from 'surrealdb';
-import { Sp00kyConfig } from '../../types';
-import { Logger } from '../logger/index';
+import type { Sp00kyConfig } from '../../types';
+import type { Logger } from '../logger/index';
 import { AbstractDatabaseService } from './database';
 import { createDatabaseEventSystem, DatabaseEventTypes } from './events/index';
 

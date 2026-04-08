@@ -1081,6 +1081,8 @@ fn deploy(upgrade: bool) -> Result<()> {
                         "env": merged_env,
                         "cmd": cmd,
                         "healthcheck": deploy.healthcheck,
+                        "timeout": deploy.timeout,
+                        "timeout_overridable": deploy.timeout_overridable,
                     });
                     if let Some(table) = &backend_config.method.table {
                         manifest["method"] = serde_json::json!({
@@ -1176,6 +1178,8 @@ fn deploy(upgrade: bool) -> Result<()> {
             "env": merged_env,
             "cmd": cmd,
             "healthcheck": deploy.healthcheck,
+            "timeout": deploy.timeout,
+            "timeout_overridable": deploy.timeout_overridable,
         });
         if let Some(table) = &backend_config.method.table {
             manifest["method"] = serde_json::json!({

@@ -33,7 +33,7 @@ function parseValue(value: string): unknown {
     }
   } else if (value === 'true' || value === 'false') {
     return value === 'true';
-  } else if (!isNaN(Number(value)) && value !== '') {
+  } else if (!Number.isNaN(Number(value)) && value !== '') {
     return Number(value);
   }
   return value;

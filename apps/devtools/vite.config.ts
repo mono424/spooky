@@ -1,5 +1,5 @@
 import { defineConfig } from 'vite';
-import { resolve } from 'path';
+import { resolve, dirname, join } from 'path';
 import {
   copyFileSync,
   mkdirSync,
@@ -10,7 +10,6 @@ import {
   writeFileSync,
 } from 'fs';
 import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
 import solid from 'vite-plugin-solid';
 
 const __filename = fileURLToPath(import.meta.url);

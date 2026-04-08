@@ -1,5 +1,5 @@
-import { createTestDb, TEST_DB_CONFIG } from './setup';
-import { Surreal } from 'surrealdb';
+import { createTestDb } from './setup';
+import type { Surreal } from 'surrealdb';
 
 describe('Blake3 XOR Logic', () => {
   let db: Surreal;

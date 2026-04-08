@@ -14,6 +14,7 @@ export function DatabaseTab() {
 
   return (
     <div style={{ display: 'flex', 'flex-direction': 'column', height: '100%', width: '100%' }}>
+      {/* oxlint-disable-next-line no-non-null-assertion */}
       {error() && <Toast message={error()!} type="error" onDismiss={() => setError(null)} />}
       <div
         class="table-controls"

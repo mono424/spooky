@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 
+const replaceAt = (str: string, index: number, replacement: string) => {
+  return str.substring(0, index) + replacement + str.substring(index + replacement.length);
+};
+
 // ---------- Back Slice: ASCII Architecture Animation ----------
 const ArchitectureBackSlice = ({ animFrame }: { animFrame: number }) => {
-  const replaceAt = (str: string, index: number, replacement: string) => {
-    return str.substring(0, index) + replacement + str.substring(index + replacement.length);
-  };
 
   const baseLines = [
     '      [   APP A  ]                  [   APP B  ]      ', // 0

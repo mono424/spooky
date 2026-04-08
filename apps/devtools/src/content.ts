@@ -8,7 +8,7 @@ console.log('Sp00ky DevTools content script loaded');
 function injectPageScript() {
   const script = document.createElement('script');
   script.src = chrome.runtime.getURL('page-script.js');
-  script.onload = function () {
+  script.addEventListener('load', function () {
     // Remove script tag after execution to keep DOM clean
     try {
       script.remove();
@@ -16,10 +16,10 @@ function injectPageScript() {
       // Ignore errors if script is already removed
       console.warn('[DevTools] Script removal failed:', e);
     }
-  };
-  script.onerror = function (error) {
+  });
+  script.addEventListener('error', function (error) {
     console.error('[DevTools] Failed to load page-script.js:', error);
-  };
+  });
   (document.head || document.documentElement).appendChild(script);
 }
 
@@ -46,7 +46,7 @@ window.addEventListener('message', (event) => {
           console.warn('[DevTools] Failed to send message to background:', error);
         }
       });
-  } catch (error) {
+  } catch (_error) {
     // Extension was reloaded, runtime is no longer available
     // This is normal during development, silently ignore
   }

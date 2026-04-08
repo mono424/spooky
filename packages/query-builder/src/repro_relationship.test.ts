@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { QueryBuilder, SchemaStructure } from './index';
+import { QueryBuilder } from './index';
 
 describe('QueryBuilder Relationship Inference', () => {
   const schema = {

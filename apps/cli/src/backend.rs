@@ -398,6 +398,12 @@ pub struct BackendDeployConfig {
     /// Health check path for the scheduler to ping (e.g. "/health")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub healthcheck: Option<String>,
+    /// HTTP request timeout in seconds (default: 10)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<u32>,
+    /// Whether the frontend can override the timeout per-job
+    #[serde(default, rename = "timeout_overridable", skip_serializing_if = "Option::is_none")]
+    pub timeout_overridable: Option<bool>,
 }
 
 fn default_deploy_port() -> u16 {

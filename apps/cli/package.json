@@ -1,6 +1,6 @@
 {
   "name": "@spooky-sync/cli",
-  "version": "0.0.1-canary.35",
+  "version": "0.0.1-canary.36",
   "description": "Generate TypeScript/Dart types from SurrealDB schema files",
   "type": "module",
   "main": "./dist/syncgen.cjs",
@@ -18,16 +18,16 @@
   },
   "files": [
     "dist",
-    "mcp-proxy"
+    "devtools-mcp"
   ],
   "scripts": {
     "dev": "vite",
     "build:rust": "cargo build --release",
     "build:vite": "vite build",
     "build:types": "tsc --emitDeclarationOnly --declaration --declarationDir dist",
-    "build:mcp-proxy": "cd ../mcp-proxy && npm run build && cp -r dist ../cli/mcp-proxy",
+    "build:devtools-mcp": "cd ../devtools-mcp && npm run build && cp -r dist ../cli/devtools-mcp",
     "build:js": "npm run build:vite && npm run build:types",
-    "build": "npm run build:rust && npm run build:mcp-proxy && npm run build:js",
+    "build": "npm run build:rust && npm run build:devtools-mcp && npm run build:js",
     "preview": "vite preview",
     "test": "vitest",
     "lint": "eslint src",

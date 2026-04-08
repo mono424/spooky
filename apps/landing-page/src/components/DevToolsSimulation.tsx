@@ -805,7 +805,7 @@ export const DevToolsSimulation = () => {
     setIsDragging(true);
   };
 
-  const handlePointerMove = (e: React.PointerEvent) => {
+  const handlePointerMove = (_e: React.PointerEvent) => {
     if (!isDragging) return;
   };
 

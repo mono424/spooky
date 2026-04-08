@@ -2,7 +2,7 @@ import { createSignal, createEffect, Show } from 'solid-js';
 import { useNavigate } from '@solidjs/router';
 import { useAuth } from '../lib/auth';
 import { useDb, useFileUpload, useDownloadFile } from '@spooky-sync/client-solid';
-import { schema } from '../schema.gen';
+import type { schema } from '../schema.gen';
 import { createHotkey, createHotkeySequence, isInputActive } from '../lib/keyboard';
 import { Tooltip } from './Tooltip';
 
@@ -33,7 +33,7 @@ export function ProfileEdit() {
     () => auth.user()?.profile_picture,
   );
 
-  let fileInputRef!: HTMLInputElement;
+  let fileInputRef: HTMLInputElement | undefined = undefined;
 
   // Pre-fill username from current user
   createEffect(() => {
@@ -128,6 +128,7 @@ export function ProfileEdit() {
             }
           >
             <img
+              // oxlint-disable-next-line no-non-null-assertion
               src={profilePicUrl()!}
               alt="Profile picture"
               class="w-20 h-20 rounded-full object-cover flex-shrink-0"
@@ -145,7 +146,7 @@ export function ProfileEdit() {
             <p class="text-xs text-zinc-500">JPG, PNG or GIF. Max 5 MB.</p>
           </div>
           <input
-            ref={fileInputRef!}
+            ref={(el) => fileInputRef = el}
             type="file"
             accept="image/*"
             class="hidden"

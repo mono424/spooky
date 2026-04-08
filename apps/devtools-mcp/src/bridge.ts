@@ -1,8 +1,6 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import {
   type BridgeRequest,
-  type BridgeResponse,
-  type BridgeNotification,
   isBridgeResponse,
   isBridgeNotification,
   BRIDGE_PORT,
@@ -39,7 +37,7 @@ export class Bridge {
   }
 
   start(): Promise<void> {
-    const port = parseInt(process.env.SP00KY_MCP_PORT || '', 10) || BRIDGE_PORT;
+    const port = Number.parseInt(process.env.SP00KY_MCP_PORT || '', 10) || BRIDGE_PORT;
 
     return new Promise((resolve, reject) => {
       this.wss = new WebSocketServer({ host: '127.0.0.1', port }, () => {
@@ -163,6 +161,7 @@ export class Bridge {
       }, REQUEST_TIMEOUT_MS);
 
       this.pendingRequests.set(id, { resolve, reject, timer });
+      // oxlint-disable-next-line no-non-null-assertion
       this.extensionSocket!.send(JSON.stringify(request));
     });
   }

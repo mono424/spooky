@@ -27,7 +27,7 @@ export function useScrollReveal() {
 
   const onScroll = useCallback(() => {
     if (!visibleRef.current) return;
-    if (rafRef.current != null) return;
+    if (rafRef.current !== null) return;
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = null;
       update();
@@ -52,7 +52,7 @@ export function useScrollReveal() {
     return () => {
       observer.disconnect();
       window.removeEventListener('scroll', onScroll);
-      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
     };
   }, [onScroll, update]);
 

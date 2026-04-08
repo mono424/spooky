@@ -1,7 +1,8 @@
-import { Accessor, createSignal } from 'solid-js';
+import type { Accessor} from 'solid-js';
+import { createSignal } from 'solid-js';
 import { useAuth } from '../lib/auth';
 import { RecordId, Uuid, useDb } from '@spooky-sync/client-solid';
-import { schema } from '../schema.gen';
+import type { schema } from '../schema.gen';
 import { ProfilePicture } from './ProfilePicture';
 import { Tooltip } from './Tooltip';
 

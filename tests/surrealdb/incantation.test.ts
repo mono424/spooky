@@ -1,5 +1,5 @@
-import { createTestDb, clearTestDb, TEST_DB_CONFIG } from './setup';
-import { Surreal } from 'surrealdb';
+import { createTestDb, clearTestDb } from './setup';
+import type { Surreal } from 'surrealdb';
 
 describe('Sp00ky Incantations', () => {
   let db: Surreal;
@@ -54,12 +54,12 @@ describe('Sp00ky Incantations', () => {
             RETURN { incantation: $inc, state: $state };
         `;
     const checkRes = await runQuery(checkQuery);
-    console.log('Post-registration check:', JSON.stringify(checkRes[checkRes.length - 1], null, 2));
+    console.log('Post-registration check:', JSON.stringify(checkRes.at(-1), null, 2));
 
     // 3. Create Threads (Triggers _00_thread_mutation -> dbsp::ingest -> Update Incantation)
 
     // A. Create Active Thread (Should match)
-    const createRes = await runQuery(`
+    const _createRes = await runQuery(`
             CREATE thread:active_new CONTENT {
                 active: true,
                 title: 'SurrealDB 2.0',
@@ -77,7 +77,7 @@ describe('Sp00ky Incantations', () => {
     const afterCreateRes = await runQuery(afterCreateQuery);
     console.log(
       'After CREATE check:',
-      JSON.stringify(afterCreateRes[afterCreateRes.length - 1], null, 2)
+      JSON.stringify(afterCreateRes.at(-1), null, 2)
     );
 
     // B. Create Inactive Thread (Should NOT match)
@@ -133,7 +133,7 @@ describe('Sp00ky Incantations', () => {
 
     // DEBUG: Check State After Delete to see zset
     const stateRes2 = await runQuery('SELECT * FROM _00_module_state:singleton');
-    const state2 = stateRes2[stateRes2.length - 1];
+    const state2 = stateRes2.at(-1);
     if (state2) {
       console.log('State2 Object:', JSON.stringify(state2, null, 2));
       if (

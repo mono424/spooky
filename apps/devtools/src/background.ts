@@ -30,35 +30,35 @@ function connectToBridge() {
     return;
   }
 
-  bridgeSocket.onopen = () => {
+  bridgeSocket.addEventListener('open', () => {
     console.log('[DevTools Bridge] Connected to MCP bridge');
     bridgeReconnectDelay = 1000; // Reset backoff
 
     // Report connected tabs
     reportTabsToBridge();
     broadcastMcpStatus();
-  };
+  });
 
-  bridgeSocket.onmessage = (event) => {
+  bridgeSocket.addEventListener('message', (event) => {
     try {
       const msg = JSON.parse(event.data as string);
       handleBridgeRequest(msg);
     } catch (err) {
       console.warn('[DevTools Bridge] Bad message:', err);
     }
-  };
+  });
 
-  bridgeSocket.onclose = () => {
+  bridgeSocket.addEventListener('close', () => {
     console.log('[DevTools Bridge] Disconnected from MCP bridge');
     bridgeSocket = null;
     broadcastMcpStatus();
     scheduleBridgeReconnect();
-  };
+  });
 
-  bridgeSocket.onerror = (err) => {
+  bridgeSocket.addEventListener('error', (err) => {
     console.warn('[DevTools Bridge] WebSocket error:', err);
     // onclose will fire after this, triggering reconnect
-  };
+  });
 }
 
 function scheduleBridgeReconnect() {

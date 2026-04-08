@@ -6,7 +6,7 @@ import {
   createDiffFromDbOp,
   ArraySyncer,
 } from './utils';
-import { RecordVersionArray, RecordVersionDiff } from '../../types';
+import type { RecordVersionArray, RecordVersionDiff } from '../../types';
 import { encodeRecordId } from '../../utils/index';
 
 function rid(table: string, id: string): RecordId<string> {
@@ -305,7 +305,7 @@ describe('ArraySyncer', () => {
     expect(diff!.removed).toHaveLength(3);
     // Check they come in sorted order
     const removedIds = diff!.removed.map((r) => encodeRecordId(r));
-    const sorted = [...removedIds].sort();
+    const sorted = [...removedIds].toSorted();
     expect(removedIds).toEqual(sorted);
   });
 });

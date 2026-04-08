@@ -118,9 +118,9 @@ export function validateFlatArray(resultData: unknown, expectedIds?: string[]): 
 
   // If expected IDs provided, check they are all present
   if (expectedIds && expectedIds.length > 0) {
-    const presentIds = resultData.map((item) => item[0]);
+    const presentIds = new Set(resultData.map((item) => item[0]));
     for (const expectedId of expectedIds) {
-      if (!presentIds.includes(expectedId)) {
+      if (!presentIds.has(expectedId)) {
         return false;
       }
     }

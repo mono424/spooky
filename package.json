@@ -1,6 +1,6 @@
 {
   "name": "sp00ky",
-  "version": "0.0.1-canary.35",
+  "version": "0.0.1-canary.36",
   "private": true,
   "description": "Sp00ky monorepo",
   "scripts": {
@@ -10,6 +10,7 @@
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "lint": "pnpm -r lint",
+    "lint:oxc": "oxlint .",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,yml,yaml}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,yml,yaml}\"",
     "version:bump": "node scripts/bump-version.mjs",

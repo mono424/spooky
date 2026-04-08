@@ -219,7 +219,7 @@ describe('One Nested Join (Thread with Author Subquery)', () => {
       ) as WasmViewUpdate[];
 
       // Author alone shouldn't trigger update (no threads yet)
-      const authorViewUpdate = authorUpdates.find((u) => u.query_id === VIEW_ID);
+      const _authorViewUpdate = authorUpdates.find((u) => u.query_id === VIEW_ID);
       // May or may not have update depending on implementation
 
       // 3. Add thread
@@ -334,7 +334,7 @@ describe('Two Nested Subqueries (Thread with Author and Comments)', () => {
       processor.ingest('thread', 'CREATE', thread.id, thread.record);
 
       const comment = makeCommentRecord('Great post!', thread.id, author.id);
-      const updates = processor.ingest(
+      const _updates = processor.ingest(
         'comment',
         'CREATE',
         comment.id,

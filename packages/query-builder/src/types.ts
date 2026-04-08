@@ -47,10 +47,10 @@ export interface QueryOptions<TModel extends GenericModel, IsOne extends boolean
   isOne?: IsOne;
 }
 
-export interface LiveQueryOptions<TModel extends GenericModel> extends Omit<
+export type LiveQueryOptions<TModel extends GenericModel> = Omit<
   QueryOptions<TModel, boolean>,
   'orderBy'
-> {}
+>;
 
 // Import schema types for schema-aware modifiers
 import type {
@@ -139,6 +139,7 @@ export type RelationshipFields<TModel extends GenericModel> = {
  * Simplified to directly access the nested structure
  */
 export type InferRelatedModelFromMetadata<
+  // oxlint-disable-next-line no-unused-vars -- Schema is used as a generic constraint
   Schema extends GenericSchema,
   TableName extends string,
   FieldName extends string,

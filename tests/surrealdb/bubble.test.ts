@@ -1,5 +1,6 @@
-import { createTestDb, TEST_DB_CONFIG } from './setup';
-import { Surreal, Table } from 'surrealdb';
+import { createTestDb } from './setup';
+import type { Surreal} from 'surrealdb';
+import { Table } from 'surrealdb';
 
 describe('Bubble Hash Logic', () => {
   let db: Surreal;
@@ -58,7 +59,7 @@ describe('Bubble Hash Logic', () => {
     expect(initialThreadHash).toBeDefined();
 
     // 2. Create a Comment (Child) linked to Thread
-    const commentIdVal = 'bubble_comment_' + Date.now();
+    const _commentIdVal = 'bubble_comment_' + Date.now();
     const comment = await db.create(new Table('comment')).content({
       content: 'Child Content 1',
       thread: threadId,

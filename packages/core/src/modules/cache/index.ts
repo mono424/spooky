@@ -1,13 +1,13 @@
-import { LocalDatabaseService } from '../../services/database/index';
-import {
+import type { LocalDatabaseService } from '../../services/database/index';
+import type {
   StreamProcessorService,
   StreamUpdate,
   StreamUpdateReceiver,
 } from '../../services/stream-processor/index';
-import { Logger } from '../../services/logger/index';
+import type { Logger } from '../../services/logger/index';
 import { parseRecordIdString, encodeRecordId, surql } from '../../utils/index';
-import { CacheRecord, QueryConfig } from './types';
-import { RecordVersionArray } from '../../types';
+import type { CacheRecord, QueryConfig } from './types';
+import type { RecordVersionArray } from '../../types';
 
 export * from './types';
 

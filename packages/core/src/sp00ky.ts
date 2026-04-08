@@ -1,24 +1,21 @@
 import { DataModule } from './modules/data/index';
-import {
+import type {
   Sp00kyConfig,
   QueryTimeToLive,
   Sp00kyQueryResultPromise,
   PersistenceClient,
-  MutationEvent,
   UpdateOptions,
-  RunOptions,
-} from './types';
+  RunOptions} from './types';
 import {
   LocalDatabaseService,
   LocalMigrator,
   RemoteDatabaseService,
 } from './services/database/index';
-import { Surreal } from 'surrealdb';
-import { Sp00kySync, UpEvent } from './modules/sync/index';
-import {
+import type { UpEvent } from './modules/sync/index';
+import { Sp00kySync } from './modules/sync/index';
+import type {
   GetTable,
   InnerQuery,
-  QueryBuilder,
   QueryOptions,
   SchemaStructure,
   TableModel,
@@ -26,7 +23,9 @@ import {
   BucketNames,
   BackendNames,
   BackendRoutes,
-  RoutePayload,
+  RoutePayload} from '@spooky-sync/query-builder';
+import {
+  QueryBuilder
 } from '@spooky-sync/query-builder';
 
 import { DevToolsService } from './modules/devtools/index';

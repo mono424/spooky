@@ -1,6 +1,5 @@
-import type { Surreal } from 'surrealdb';
 import type { SyncedDb } from '../index';
-import { GenericSchema } from '../lib/models';
+import type { GenericSchema } from '../lib/models';
 import type { Sp00kyConfig } from '@spooky-sync/core';
 import type { SchemaStructure, TableNames, GetTable, TableModel } from '@spooky-sync/query-builder';
 

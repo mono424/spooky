@@ -1,11 +1,9 @@
-import { Surreal, SurrealTransaction } from 'surrealdb';
-import { createLogger, Logger } from '../logger/index';
-import {
+import type { Surreal, SurrealTransaction } from 'surrealdb';
+import type { Logger } from '../logger/index';
+import type {
   DatabaseEventSystem,
-  DatabaseEventTypes,
-  DatabaseQueryEventPayload,
-} from './events/index';
-import { SealedQuery } from '../../utils/surql';
+  DatabaseEventTypes} from './events/index';
+import type { SealedQuery } from '../../utils/surql';
 
 export abstract class AbstractDatabaseService {
   protected client: Surreal;
@@ -43,6 +41,7 @@ export abstract class AbstractDatabaseService {
   async query<T extends unknown[]>(query: string, vars?: Record<string, unknown>): Promise<T> {
     return new Promise((resolve, reject) => {
       this.queryQueue = this.queryQueue
+        // oxlint-disable-next-line promise/always-return
         .then(async () => {
           const startTime = performance.now();
           try {
@@ -87,6 +86,7 @@ export abstract class AbstractDatabaseService {
               { query, vars, err, Category: 'sp00ky-client::Database::query' },
               'Query execution failed'
             );
+            // oxlint-disable-next-line no-multiple-resolved -- resolve/reject are in try/catch, mutually exclusive
             reject(err);
           }
         })

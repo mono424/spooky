@@ -1,5 +1,6 @@
-import { createContext, useContext, createSignal, JSX, Show, onCleanup } from 'solid-js';
-import { schema } from '../schema.gen';
+import type { JSX} from 'solid-js';
+import { createContext, useContext, createSignal, Show, onCleanup } from 'solid-js';
+import type { schema } from '../schema.gen';
 import { type GetTable, type TableModel, useQuery, useDb } from '@spooky-sync/client-solid';
 
 type User = TableModel<GetTable<typeof schema, 'user'>>;

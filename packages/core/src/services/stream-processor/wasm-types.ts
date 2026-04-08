@@ -1,4 +1,4 @@
-import { RecordVersionArray } from '../../types';
+import type { RecordVersionArray } from '../../types';
 
 export interface WasmStreamUpdate {
   query_id: string;

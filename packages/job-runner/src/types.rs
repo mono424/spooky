@@ -1,5 +1,6 @@
 use serde_json::Value;
 use std::collections::HashMap;
+use std::time::Duration;
 
 /// Info about a single backend that handles jobs
 #[derive(Clone, Debug)]
@@ -7,6 +8,22 @@ pub struct BackendInfo {
     pub name: String,
     pub base_url: String,
     pub auth_token: Option<String>,
+    pub timeout: Option<u32>,
+    pub timeout_overridable: bool,
+}
+
+impl BackendInfo {
+    /// Compute the effective timeout for a job, considering the backend default
+    /// and an optional per-job override (only used if timeout_overridable is true).
+    pub fn effective_timeout(&self, job_override: Option<u32>) -> Duration {
+        let base = self.timeout.unwrap_or(10);
+        let seconds = if self.timeout_overridable {
+            job_override.unwrap_or(base)
+        } else {
+            base
+        };
+        Duration::from_secs(seconds as u64)
+    }
 }
 
 /// Configuration mapping job tables to their backends
@@ -27,6 +44,7 @@ pub struct JobEntry {
     pub max_retries: u32,
     pub retry_strategy: String, // "linear" or "exponential"
     pub auth_token: Option<String>,
+    pub timeout: Duration,
 }
 
 impl JobEntry {
@@ -36,6 +54,7 @@ impl JobEntry {
         base_url: String,
         auth_token: Option<String>,
         record: &Value,
+        timeout: Duration,
     ) -> Self {
         Self {
             id,
@@ -57,6 +76,7 @@ impl JobEntry {
                 .unwrap_or("linear")
                 .to_string(),
             auth_token,
+            timeout,
         }
     }
 }

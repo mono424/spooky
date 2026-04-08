@@ -1,5 +1,8 @@
-import { createTestDb, clearTestDb, TEST_DB_CONFIG } from './setup';
-import { Surreal } from 'surrealdb';
+import { createTestDb, clearTestDb } from './setup';
+import type { Surreal } from 'surrealdb';
+
+const getHash = (updates: any[]) =>
+  updates && updates.length > 0 && updates[0] && updates[0].tree ? updates[0].tree.hash : null;
 
 describe('DBSP Module Integration', () => {
   let db: Surreal;
@@ -48,7 +51,7 @@ describe('DBSP Module Integration', () => {
     const res2 = await runQuery(chainedQuery);
     console.log('DEBUG: res2:', JSON.stringify(res2));
 
-    const updates = res2 && res2.length > 0 ? res2[res2.length - 1] : [];
+    const updates = res2 && res2.length > 0 ? res2.at(-1) : [];
     expect(Array.isArray(updates)).toBe(true);
     expect(updates.length).toBeGreaterThan(0);
 
@@ -134,8 +137,6 @@ describe('DBSP Module Integration', () => {
     const updates2 = Array.isArray(results[2]) ? results[2] : [results[2]];
     const updates3 = Array.isArray(results[3]) ? results[3] : [results[3]];
 
-    const getHash = (updates: any[]) =>
-      updates && updates.length > 0 && updates[0] && updates[0].tree ? updates[0].tree.hash : null;
     const hash1 = getHash(updates1);
     const hash2 = getHash(updates2);
     const hash3 = getHash(updates3);
@@ -167,7 +168,7 @@ describe('DBSP Module Integration', () => {
         `;
 
     const res = await runQuery(chainedQuery);
-    const resultObj = res && res.length > 0 ? res[res.length - 1] : null;
+    const resultObj = res && res.length > 0 ? res.at(-1) : null;
     expect(resultObj).not.toBeNull();
 
     expect(resultObj.post_updates).toBeDefined();
@@ -198,7 +199,7 @@ describe('DBSP Module Integration', () => {
         `;
 
     const res = await runQuery(chainedQuery);
-    const result = res && res.length > 0 ? res[res.length - 1] : {};
+    const result = res && res.length > 0 ? res.at(-1) : {};
 
     const up1 = result.up1 ? result.up1[0] : null;
     expect(up1).toBeDefined();
@@ -218,7 +219,7 @@ describe('DBSP Module Integration', () => {
             RETURN $r1;
         `;
     const res = await runQuery(chainedQuery);
-    const r1 = res[res.length - 1];
+    const r1 = res.at(-1);
     expect(r1.msg).toContain('Registered');
   });
 
@@ -275,7 +276,7 @@ describe('DBSP Module Integration', () => {
         `;
 
     const res = await runQuery(Q);
-    const R = res && res.length > 0 ? res[res.length - 1] : {};
+    const R = res && res.length > 0 ? res.at(-1) : {};
 
     // Validation
     const u1 = R.user1 ? R.user1.find((u: any) => u.query_id === 'view_active') : undefined;
@@ -312,7 +313,7 @@ describe('DBSP Module Integration', () => {
         `;
 
     const res = await runQuery(Q);
-    const R = res && res.length > 0 ? res[res.length - 1] : {};
+    const R = res && res.length > 0 ? res.at(-1) : {};
 
     // Check OR view (val=10 OR val=100) -> Items 1 and 3 should be in. Item 2 (20) out.
     const up1_or = R.up1.find((u: any) => u.query_id === 'view_or');
@@ -359,7 +360,7 @@ describe('DBSP Module Integration', () => {
         `;
 
     const res = await runQuery(Q);
-    const updates = res.length > 0 ? res[res.length - 1] : [];
+    const updates = res.length > 0 ? res.at(-1) : [];
 
     // Check Filter: {1, 3, 4}
     const uf = updates.find((u: any) => u.query_id === 'complex_filter');

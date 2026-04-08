@@ -1,7 +1,7 @@
-import { GetTable, SchemaStructure, TableModel, TableNames } from '@spooky-sync/query-builder';
+import type { GetTable, SchemaStructure, TableModel, TableNames } from '@spooky-sync/query-builder';
 import { Uuid, RecordId, Duration } from 'surrealdb';
-import { Logger } from '../services/logger/index';
-import { QueryTimeToLive } from '../types';
+import type { Logger } from '../services/logger/index';
+import type { QueryTimeToLive } from '../types';
 
 export * from './surql';
 export * from './parser';
@@ -74,12 +74,12 @@ export function decodeFromSp00ky<S extends SchemaStructure, T extends TableNames
   for (const field of Object.keys(table.columns)) {
     const column = table.columns[field] as any;
     const relation = schema.relationships.find((r) => r.from === tableName && r.field === field);
-    if ((column.recordId || relation) && encoded[field] != null) {
+    if ((column.recordId || relation) && encoded[field] !== null && encoded[field] !== undefined) {
       if (encoded[field] instanceof RecordId) {
         encoded[field] = `${encoded[field].table.toString()}:${encoded[field].id}`;
       } else if (
         relation &&
-        (encoded[field] instanceof Object || encoded[field] instanceof Array)
+        (encoded[field] instanceof Object || Array.isArray(encoded[field]))
       ) {
         if (Array.isArray(encoded[field])) {
           encoded[field] = encoded[field].map((item) =>
@@ -117,7 +117,7 @@ export function parseDuration(duration: QueryTimeToLive | Duration): number {
 
   const match = duration.match(/^(\d+)([smh])$/);
   if (!match) return 600000;
-  const val = parseInt(match[1], 10);
+  const val = Number.parseInt(match[1], 10);
   const unit = match[2];
   switch (unit) {
     case 's':

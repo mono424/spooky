@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { EventSystem, EventDefinition } from './index';
+import type { EventDefinition } from './index';
+import { EventSystem } from './index';
 
 // Define test event types
 type TestEvents = {

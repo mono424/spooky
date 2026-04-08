@@ -26,7 +26,7 @@ export function EventsTab() {
   const availableTypes = createMemo(() => {
     const types = new Set<string>();
     state.events.forEach((e) => types.add(e.type));
-    return Array.from(types).sort();
+    return Array.from(types).toSorted();
   });
 
   const filteredEvents = createMemo(() => {

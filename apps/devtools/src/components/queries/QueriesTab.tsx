@@ -7,7 +7,7 @@ function QueryList() {
 
   // Sort queries by createdAt in descending order (newest first)
   const sortedQueries = createMemo(() => {
-    return [...state.activeQueries].sort((a, b) => b.createdAt - a.createdAt);
+    return [...state.activeQueries].toSorted((a, b) => b.createdAt - a.createdAt);
   });
 
   return (
@@ -36,7 +36,9 @@ function QueryList() {
                 </div>
                 <Show when={query.query}>
                   <div class="query-preview">
+                    {/* oxlint-disable-next-line no-non-null-assertion */}
                     {query.query!.substring(0, 50)}
+                    {/* oxlint-disable-next-line no-non-null-assertion */}
                     {query.query!.length > 50 ? '...' : ''}
                   </div>
                 </Show>

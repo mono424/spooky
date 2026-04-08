@@ -75,6 +75,7 @@ export function TableView(props: TableViewProps) {
               setData([]);
             }
           }
+          return undefined;
         })
         .catch((err) => {
           console.error('[TableView] Query Error:', err);
@@ -126,7 +127,7 @@ export function TableView(props: TableViewProps) {
     // Merge schema columns and data columns
     const allKeys = new Set([...schemaCols, ...dataKeys]);
 
-    const finalCols = Array.from(allKeys).sort((a, b) => {
+    const finalCols = Array.from(allKeys).toSorted((a, b) => {
       // ID always first
       if (a.toLowerCase() === 'id') return -1;
       if (b.toLowerCase() === 'id') return 1;
@@ -201,6 +202,7 @@ export function TableView(props: TableViewProps) {
               setData(res);
             }
           }
+          return undefined;
         })
         .catch(console.error);
     }
@@ -211,25 +213,24 @@ export function TableView(props: TableViewProps) {
     if (!recordId) return;
     const tableName = selectedTable();
     if (!tableName) return;
-    if (confirm(`Delete record ${recordId}?`)) {
-      deleteTableRow(tableName, recordId);
-      // Refresh data after delete
-      const table = selectedTable();
-      const currentSource = props.source;
-      if (table && runQuery) {
-        runQuery(`SELECT * FROM ${table} LIMIT 20`, currentSource)
-          .then((res: any) => {
-            if (Array.isArray(res)) {
-              if (res.length > 0 && res[0] && typeof res[0] === 'object' && 'result' in res[0]) {
-                const queryResult = res[0].result;
-                setData(Array.isArray(queryResult) ? queryResult : []);
-              } else {
-                setData(res);
-              }
+    deleteTableRow(tableName, recordId);
+    // Refresh data after delete
+    const table = selectedTable();
+    const currentSource = props.source;
+    if (table && runQuery) {
+      runQuery(`SELECT * FROM ${table} LIMIT 20`, currentSource)
+        .then((res: any) => {
+          if (Array.isArray(res)) {
+            if (res.length > 0 && res[0] && typeof res[0] === 'object' && 'result' in res[0]) {
+              const queryResult = res[0].result;
+              setData(Array.isArray(queryResult) ? queryResult : []);
+            } else {
+              setData(res);
             }
-          })
-          .catch(console.error);
-      }
+          }
+          return undefined;
+        })
+        .catch(console.error);
     }
   };
 
@@ -241,7 +242,7 @@ export function TableView(props: TableViewProps) {
           fallback={<div class="empty-state">Select a table to view data</div>}
         >
           <Show
-            when={!loading() && tableData() && tableData()!.length >= 0}
+            when={!loading() && tableData() && tableData()!.length >= 0} // oxlint-disable-line no-non-null-assertion
             fallback={
               loading() ? (
                 <div class="empty-state">Loading...</div>

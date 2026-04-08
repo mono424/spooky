@@ -1,6 +1,7 @@
 import { createTestDb } from './setup';
 import { SURQL_SCHEMA } from '../.sp00ky/client_schema';
-import { Surreal, Table } from 'surrealdb';
+import type { Surreal} from 'surrealdb';
+import { Table } from 'surrealdb';
 
 describe('Client Sp00ky Events', () => {
   let db: Surreal;
@@ -10,7 +11,7 @@ describe('Client Sp00ky Events', () => {
     // Use a separate namespace/database for client testing to avoid conflicts
     try {
       await db.query('REMOVE DATABASE test_client');
-    } catch (e) {}
+    } catch { /* ignore */ }
     await db.query('DEFINE DATABASE test_client');
     await db.use({ namespace: 'test_client', database: 'test_client' });
 

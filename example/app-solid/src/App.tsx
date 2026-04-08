@@ -1,4 +1,4 @@
-import { Router, Route, A } from '@solidjs/router';
+import { Router, Route, A, useNavigate } from '@solidjs/router';
 import { createSignal, Show, createEffect } from 'solid-js';
 import { Sp00kyProvider } from '@spooky-sync/client-solid';
 import { AuthProvider, useAuth } from './lib/auth';
@@ -7,7 +7,6 @@ import { AuthDialog } from './components/AuthDialog';
 import { PendingMutationsIndicator } from './components/PendingMutationsIndicator';
 import { createHotkey, createHotkeySequence, useShortcutsHelp } from './lib/keyboard';
 import { ShortcutsHelp } from './components/ShortcutsHelp';
-import { useNavigate } from '@solidjs/router';
 
 // Import routes
 import Home from './routes/index';
@@ -38,11 +37,6 @@ function Layout(props: any) {
   const openAuth = (mode: 'signin' | 'signup') => {
     setAuthMode(mode);
     setShowAuthDialog(true);
-  };
-
-  const userInitial = () => {
-    const name = auth.user()?.username;
-    return name ? name.charAt(0).toUpperCase() : '?';
   };
 
   return (

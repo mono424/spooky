@@ -1,5 +1,6 @@
 import { createTestDb } from './setup';
-import { Surreal, Table } from 'surrealdb';
+import type { Surreal} from 'surrealdb';
+import { Table } from 'surrealdb';
 
 let db: Surreal;
 
@@ -94,7 +95,7 @@ describe('Hashing Scenarios Tests', () => {
     // Since test runs fast, race condition possible. Best to wait.
 
     // Let's fetch loop.
-    let hash = await getHash(threadId);
+    const hash = await getHash(threadId);
     // We expect 'comment' hash to be DIFFERENT from empty.
     // We can compare against Scenario 1's "empty" hash if we knew it.
     // Instead, let's just assert it is valid.

@@ -1,6 +1,6 @@
-import type { Surreal } from 'surrealdb';
-import { Logger, createLogger } from '../logger/index';
-import { LocalDatabaseService } from './local';
+import type { Logger} from '../logger/index';
+import { createLogger } from '../logger/index';
+import type { LocalDatabaseService } from './local';
 
 export interface SchemaRecord {
   hash: string;
@@ -23,8 +23,8 @@ export class LocalMigrator {
     logger: Logger
   ) {
     this.logger = logger.child({ service: 'LocalMigrator' });
-    logger?.child({ service: 'LocalMigrator' }) ??
-      createLogger('info').child({ service: 'LocalMigrator' });
+    void (logger?.child({ service: 'LocalMigrator' }) ??
+      createLogger('info').child({ service: 'LocalMigrator' }));
   }
 
   async provision(schemaSurql: string): Promise<void> {
@@ -94,7 +94,7 @@ export class LocalMigrator {
         `SELECT hash, created_at FROM ONLY _00_schema ORDER BY created_at DESC LIMIT 1;`
       );
       return lastSchemaRecord?.hash === hash;
-    } catch (error) {
+    } catch (_error) {
       return false;
     }
   }
@@ -102,7 +102,7 @@ export class LocalMigrator {
   private async recreateDatabase(database: string) {
     try {
       await this.localDb.query(`DEFINE DATABASE _00_temp;`);
-    } catch (e) {
+    } catch (_e) {
       // Ignore if exists
     }
 
@@ -111,7 +111,7 @@ export class LocalMigrator {
         USE DB _00_temp;
         REMOVE DATABASE ${database};
       `);
-    } catch (e) {
+    } catch (_e) {
       // Ignore error if database doesn't exist
     }
 

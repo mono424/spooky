@@ -116,8 +116,8 @@ const displayName = languageMap[lang.toLowerCase()] || lang;
           copyIcon.classList.remove('hidden');
           checkIcon.classList.add('hidden');
         }, 2000);
-      } catch (err) {
-        console.error('Failed to copy!', err);
+      } catch {
+        // Copy failed silently
       }
     });
   });

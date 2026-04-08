@@ -1,4 +1,4 @@
-import {
+import type {
   ColumnSchema,
   FinalQuery,
   SchemaStructure,
@@ -7,7 +7,7 @@ import {
 } from '@spooky-sync/query-builder';
 import { createEffect, createSignal, onCleanup, useContext } from 'solid-js';
 import { SyncedDb } from '..';
-import { Sp00kyQueryResultPromise } from '@spooky-sync/core';
+import type { Sp00kyQueryResultPromise } from '@spooky-sync/core';
 import { Sp00kyContext } from './context';
 
 type QueryArg<
@@ -112,11 +112,11 @@ export function useQuery<
     const unsub = await sp00ky.subscribe(
       hash,
       (e) => {
-        const data = (query.isOne ? e[0] : e) as TData;
-        setData(() => data);
+        const queryData = (query.isOne ? e[0] : e) as TData;
+        setData(() => queryData);
         // The first (immediate) callback with no data likely means the local DB
         // hasn't synced yet — don't mark as fetched so UI shows loading state
-        const hasData = query.isOne ? data != null : (e as any[]).length > 0;
+        const hasData = query.isOne ? queryData !== null && queryData !== undefined : (e as any[]).length > 0;
         if (!isFirstCall || hasData) {
           setIsFetched(true);
         }

@@ -25,8 +25,6 @@ import {
   makeUserRecordExtended,
   makeProductRecord,
   makeAuthorRecord,
-  makeThreadRecord,
-  makeCommentRecord,
   createViewConfig,
   validateFlatArray,
   generateId,
@@ -70,7 +68,7 @@ describe('State Persistence (save_state / load_state)', () => {
     const config = createViewConfig('persist-data', 'SELECT * FROM user');
     const originalResult = processor.register_view(config) as WasmViewUpdate;
     const originalHash = originalResult.result_hash;
-    const originalIds = originalResult.result_data.map((i) => i[0]).sort();
+    const originalIds = originalResult.result_data.map((i) => i[0]).toSorted();
 
     // Save and restore
     const state = processor.save_state();
@@ -80,7 +78,7 @@ describe('State Persistence (save_state / load_state)', () => {
     // Re-register the same view on restored processor
     const restoredConfig = createViewConfig('persist-data', 'SELECT * FROM user');
     const restoredResult = restored.register_view(restoredConfig) as WasmViewUpdate;
-    const restoredIds = restoredResult.result_data.map((i) => i[0]).sort();
+    const restoredIds = restoredResult.result_data.map((i) => i[0]).toSorted();
 
     expect(restoredResult.result_hash).toBe(originalHash);
     expect(restoredIds).toEqual(originalIds);

@@ -1,17 +1,16 @@
 import { RecordId, Duration } from 'surrealdb';
-import {
+import type {
   SchemaStructure,
   TableNames,
   BackendNames,
   BackendRoutes,
   RoutePayload,
 } from '@spooky-sync/query-builder';
-import { LocalDatabaseService } from '../../services/database/index';
-import { CacheModule, RecordWithId } from '../cache/index';
-import { Logger } from '../../services/logger/index';
-import { StreamUpdate } from '../../services/stream-processor/index';
-import {
-  MutationEvent,
+import type { LocalDatabaseService } from '../../services/database/index';
+import type { CacheModule, RecordWithId } from '../cache/index';
+import type { Logger } from '../../services/logger/index';
+import type { StreamUpdate } from '../../services/stream-processor/index';
+import type {
   QueryConfig,
   QueryHash,
   QueryState,
@@ -21,8 +20,7 @@ import {
   RecordVersionArray,
   QueryConfigRecord,
   UpdateOptions,
-  RunOptions,
-} from '../../types';
+  RunOptions} from '../../types';
 import {
   parseRecordIdString,
   extractIdPart,
@@ -34,8 +32,8 @@ import {
   extractTablePart,
   generateId,
 } from '../../utils/index';
-import { CreateEvent, DeleteEvent, UpdateEvent } from '../sync/index';
-import { PushEventOptions } from '../../events/index';
+import type { CreateEvent, DeleteEvent, UpdateEvent } from '../sync/index';
+import type { PushEventOptions } from '../../events/index';
 
 /**
  * DataModule - Unified query and mutation management
@@ -173,6 +171,7 @@ export class DataModule<S extends SchemaStructure> {
     if (op === 'UPDATE') {
       // Clear existing timer if any
       if (this.debounceTimers.has(queryHash)) {
+        // oxlint-disable-next-line no-non-null-assertion -- guarded by .has() check above
         clearTimeout(this.debounceTimers.get(queryHash)!);
       }
 
@@ -369,6 +368,10 @@ export class DataModule<S extends SchemaStructure> {
       max_retries: options?.max_retries ?? 3,
       retry_strategy: options?.retry_strategy ?? 'linear',
     };
+
+    if (options?.timeout != null) {
+      record.timeout = options.timeout;
+    }
 
     if (options?.assignedTo) {
       record.assigned_to = options.assignedTo;
@@ -866,7 +869,7 @@ export function parseUpdateOptions(
     const delay = options.debounced !== true ? (options.debounced?.delay ?? 200) : 200;
     const keyType = options.debounced !== true ? (options.debounced?.key ?? id) : id;
     const key =
-      keyType === 'recordId_x_fields' ? `${id}::${Object.keys(data).sort().join('#')}` : id;
+      keyType === 'recordId_x_fields' ? `${id}::${Object.keys(data).toSorted().join('#')}` : id;
 
     pushEventOptions = {
       debounced: {

@@ -1,10 +1,11 @@
-import { applyDiagnostics, DateTime, Diagnostic, RecordId, Surreal } from 'surrealdb';
+import type { Diagnostic} from 'surrealdb';
+import { applyDiagnostics, DateTime, RecordId, Surreal } from 'surrealdb';
 import { createWasmWorkerEngines } from '@surrealdb/wasm';
-import { Sp00kyConfig } from '../../types';
-import { Logger } from '../logger/index';
+import type { Sp00kyConfig } from '../../types';
+import type { Logger } from '../logger/index';
 import { AbstractDatabaseService } from './database';
 import { createDatabaseEventSystem, DatabaseEventTypes } from './events/index';
-import { encodeRecordId, parseRecordIdString, surql } from '../../utils/index';
+import { encodeRecordId } from '../../utils/index';
 
 export class LocalDatabaseService extends AbstractDatabaseService {
   private config: Sp00kyConfig<any>['database'];

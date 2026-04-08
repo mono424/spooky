@@ -1,9 +1,9 @@
-import { RecordId } from 'surrealdb';
-import { SchemaStructure } from '@spooky-sync/query-builder';
-import { RemoteDatabaseService } from '../../services/database/index';
-import { CacheModule, CacheRecord, RecordWithId } from '../cache/index';
-import { RecordVersionDiff } from '../../types';
-import { Logger } from '../../services/logger/index';
+import type { RecordId } from 'surrealdb';
+import type { SchemaStructure } from '@spooky-sync/query-builder';
+import type { RemoteDatabaseService } from '../../services/database/index';
+import type { CacheModule, CacheRecord, RecordWithId } from '../cache/index';
+import type { RecordVersionDiff } from '../../types';
+import type { Logger } from '../../services/logger/index';
 import { SyncEventTypes, createSyncEventSystem } from './events/index';
 import { encodeRecordId } from '../../utils/index';
 import { cleanRecord } from '../../utils/parser';

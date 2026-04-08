@@ -1,0 +1,245 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicolo-ribaudo/oxlint-schema/main/.oxlintrc.json",
+
+  "plugins": [
+    "typescript",
+    "unicorn",
+    "import",
+    "promise",
+    "vitest",
+    "jsdoc"
+  ],
+
+  "env": {
+    "browser": true,
+    "es2024": true
+  },
+
+  "settings": {
+    "jsdoc": {
+      "ignorePrivate": true,
+      "ignoreInternal": true
+    }
+  },
+
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn",
+    "pedantic": "off",
+    "perf": "warn",
+    "style": "off",
+    "restriction": "off",
+    "nursery": "off"
+  },
+
+  "rules": {
+    // ── Correctness (errors) ─────────────────────────────────────────────
+
+    "no-unused-vars": "off",
+    "typescript/no-unused-vars": [
+      "error",
+      {
+        "argsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_",
+        "caughtErrorsIgnorePattern": "^_"
+      }
+    ],
+
+    "use-isnan": "error",
+    "no-cond-assign": "error",
+    "no-unreachable": "error",
+    "no-constant-condition": "error",
+    "no-dupe-keys": "error",
+    "no-duplicate-case": "error",
+    "no-empty-pattern": "error",
+    "no-loss-of-precision": "error",
+    "no-self-assign": "error",
+    "no-self-compare": "error",
+    "no-fallthrough": "error",
+    "no-var": "error",
+    "no-debugger": "error",
+    "no-alert": "error",
+    "no-eval": "error",
+    "no-implied-eval": "error",
+
+    // ── TypeScript ───────────────────────────────────────────────────────
+
+    "typescript/no-explicit-any": "warn",
+
+    "typescript/ban-ts-comment": [
+      "error",
+      {
+        "ts-expect-error": "allow-with-description",
+        "ts-ignore": true,
+        "ts-nocheck": true,
+        "ts-check": false
+      }
+    ],
+
+    "typescript/no-non-null-assertion": "warn",
+    "typescript/no-unnecessary-type-assertion": "warn",
+    "typescript/prefer-as-const": "error",
+    "typescript/no-empty-interface": "warn",
+    "typescript/no-confusing-void-expression": "warn",
+    "typescript/no-misused-promises": "error",
+
+    "typescript/consistent-type-imports": [
+      "warn",
+      {
+        "prefer": "type-imports",
+        "fixStyle": "separate-type-imports"
+      }
+    ],
+
+    "typescript/no-namespace": "error",
+
+    // ── Import ───────────────────────────────────────────────────────────
+
+    "import/no-self-import": "error",
+    "import/no-cycle": "warn",
+    "import/no-duplicates": "warn",
+
+    // ── Promise ──────────────────────────────────────────────────────────
+
+    "promise/no-return-in-finally": "error",
+    "promise/no-new-statics": "error",
+
+    // ── Suspicious / Quality (warn) ──────────────────────────────────────
+
+    "no-console": "warn",
+    "eqeqeq": "warn",
+    "prefer-const": "warn",
+    "no-param-reassign": "warn",
+    "no-await-in-loop": "warn",
+
+    // ── Unicorn ──────────────────────────────────────────────────────────
+
+    "unicorn/no-instanceof-array": "error",
+    "unicorn/throw-new-error": "error",
+    "unicorn/no-empty-file": "error",
+    "unicorn/prefer-array-flat-map": "warn",
+    "unicorn/prefer-array-flat": "warn",
+    "unicorn/prefer-includes": "warn",
+    "unicorn/prefer-number-properties": "warn",
+    "unicorn/prefer-string-starts-ends-with": "warn",
+    "unicorn/prefer-string-trim-start-end": "warn",
+    "unicorn/no-useless-spread": "warn",
+    "unicorn/prefer-at": "warn",
+    "unicorn/prefer-event-target": "off",
+    "unicorn/prefer-top-level-await": "off",
+
+    // ── Vitest ───────────────────────────────────────────────────────────
+
+    "vitest/no-focused-tests": "error",
+    "vitest/no-identical-title": "error",
+    "vitest/expect-expect": "warn",
+    "vitest/no-disabled-tests": "warn",
+
+    // ── JSDoc ────────────────────────────────────────────────────────────
+
+    "jsdoc/check-access": "warn",
+    "jsdoc/check-tag-names": "warn",
+    "jsdoc/empty-tags": "warn"
+  },
+
+  "overrides": [
+    {
+      "files": ["**/*.gen.ts", "**/*.gen.tsx", "**/generated/**"],
+      "rules": {
+        "typescript/no-explicit-any": "off",
+        "typescript/no-unused-vars": "off",
+        "no-console": "off",
+        "unicorn/prefer-at": "off",
+        "unicorn/prefer-includes": "off",
+        "prefer-const": "off"
+      }
+    },
+    {
+      "files": [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/*.spec.ts",
+        "**/*.spec.tsx",
+        "**/tests/**",
+        "**/__tests__/**"
+      ],
+      "rules": {
+        "typescript/no-explicit-any": "off",
+        "no-console": "off",
+        "typescript/no-non-null-assertion": "off",
+        "no-param-reassign": "off",
+        "vitest/require-mock-type-parameters": "off",
+        "typescript/no-unused-vars": [
+          "warn",
+          {
+            "argsIgnorePattern": "^_",
+            "varsIgnorePattern": "^_"
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "**/vite.config.*",
+        "**/vitest.config.*",
+        "**/tailwind.config.*",
+        "**/postcss.config.*",
+        "**/tsup.config.*",
+        "**/tsdown.config.*",
+        "**/astro.config.*",
+        "**/playwright.config.*"
+      ],
+      "rules": {
+        "no-console": "off",
+        "typescript/no-explicit-any": "off",
+        "import/no-cycle": "off"
+      }
+    },
+    {
+      "files": ["packages/ssp-wasm/pkg/**", "**/*.d.ts"],
+      "rules": {
+        "typescript/no-explicit-any": "off",
+        "typescript/no-unused-vars": "off",
+        "typescript/no-namespace": "off",
+        "no-console": "off"
+      }
+    },
+    {
+      "files": ["apps/cli/**"],
+      "rules": {
+        "no-console": "off"
+      }
+    },
+    {
+      "files": ["example/**"],
+      "rules": {
+        "no-console": "off"
+      }
+    },
+    {
+      "files": ["apps/devtools/**", "apps/devtools-mcp/**"],
+      "rules": {
+        "no-console": "off"
+      }
+    },
+    {
+      "files": ["scripts/**"],
+      "rules": {
+        "no-console": "off"
+      }
+    }
+  ],
+
+  "ignorePatterns": [
+    "node_modules",
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/build/**",
+    "**/.astro/**",
+    "**/pkg/**",
+    "**/*.min.js",
+    "pnpm-lock.yaml",
+    "**/vite.config.ts.timestamp-*",
+    "apps/cli/devtools-mcp/**"
+  ]
+}

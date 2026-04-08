@@ -809,11 +809,15 @@ async fn ingest_handler(
         if is_assigned && op == Operation::Create {
             if let Some(status) = payload.record.get("status").and_then(|v| v.as_str()) {
                 if status == "pending" {
+                    let job_timeout_override = payload.record.get("timeout").and_then(|v| v.as_u64()).map(|v| v as u32);
+                    let effective_timeout = backend_info.effective_timeout(job_timeout_override);
+
                     let job_entry = JobEntry::from_record(
                         payload.id.clone(),
                         backend_info.base_url.clone(),
                         backend_info.auth_token.clone(),
                         &payload.record,
+                        effective_timeout,
                     );
 
                     debug!(

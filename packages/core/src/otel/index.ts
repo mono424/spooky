@@ -1,5 +1,5 @@
-import { Level } from 'pino';
-import { PinoTransmit } from '../types';
+import type { Level } from 'pino';
+import type { PinoTransmit } from '../types';
 
 // Map pino levels to OTEL severity numbers
 // https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/logs/data-model.md#severity-fields
@@ -74,6 +74,7 @@ export function createOtelTransmit(endpoint: string, level: Level = 'info'): Pin
   return {
     level: level,
     send: (levelLabel: string, logEvent: any) => {
+      // oxlint-disable-next-line promise/always-return
       otelReady.then((getOtelLogger) => {
         try {
           const messages = [...logEvent.messages];
@@ -81,12 +82,12 @@ export function createOtelTransmit(endpoint: string, level: Level = 'info'): Pin
 
           // Construct the message body
           let body = '';
-          const msg = messages.pop();
+          const lastMsg = messages.pop();
 
-          if (typeof msg === 'string') {
-            body = msg;
-          } else if (msg) {
-            body = JSON.stringify(msg);
+          if (typeof lastMsg === 'string') {
+            body = lastMsg;
+          } else if (lastMsg) {
+            body = JSON.stringify(lastMsg);
           }
 
           let category = 'sp00ky-client::unknown';
@@ -114,9 +115,11 @@ export function createOtelTransmit(endpoint: string, level: Level = 'info'): Pin
             timestamp: new Date(logEvent.ts),
           });
         } catch (e) {
+          // oxlint-disable-next-line no-console
           console.warn('Failed to transmit log to OTEL endpoint', e);
         }
       }).catch((e) => {
+        // oxlint-disable-next-line no-console
         console.warn('Failed to load OpenTelemetry modules', e);
       });
     },

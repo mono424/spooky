@@ -16,7 +16,6 @@ export const DXSwiper: React.FC = () => {
     if (isTransitioning || currentPane >= totalPanes - 1) return;
     setIsTransitioning(true);
     const nextPane = Math.min(currentPane + 1, totalPanes - 1);
-    console.log('Moving to pane:', nextPane);
     setCurrentPane(nextPane);
     setTimeout(() => setIsTransitioning(false), 400);
   }, [currentPane, totalPanes, isTransitioning]);

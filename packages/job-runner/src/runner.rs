@@ -8,8 +8,6 @@ use surrealdb::types::RecordId;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-
 pub struct JobRunner<C: Connection> {
     queue_rx: mpsc::Receiver<JobEntry>,
     queue_tx: mpsc::Sender<JobEntry>,
@@ -20,7 +18,6 @@ pub struct JobRunner<C: Connection> {
 impl<C: Connection> JobRunner<C> {
     pub fn new(queue_rx: mpsc::Receiver<JobEntry>, queue_tx: mpsc::Sender<JobEntry>, db: Arc<Surreal<C>>) -> Self {
         let http_client = reqwest::Client::builder()
-            .timeout(REQUEST_TIMEOUT)
             .build()
             .expect("Failed to create HTTP client");
 
@@ -65,17 +62,18 @@ impl<C: Connection> JobRunner<C> {
             _ => job.payload.clone(),
         };
 
-        // Execute HTTP request
+        // Execute HTTP request with per-job timeout
         let mut request = self
             .http_client
             .post(&url)
+            .timeout(job.timeout)
             .json(&payload);
-        
+
         // Add authorization header if token is present
         if let Some(ref token) = job.auth_token {
             request = request.header("Authorization", format!("Bearer {}", token));
         }
-        
+
         let result = request.send().await;
 
         match result {

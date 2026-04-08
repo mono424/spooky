@@ -172,7 +172,7 @@ export class InnerQuery<
 /**
  * Helper type to get the model type for a related table
  */
-type GetRelatedModel<S extends SchemaStructure, RelatedTableName extends string> =
+type _GetRelatedModel<S extends SchemaStructure, RelatedTableName extends string> =
   RelatedTableName extends TableNames<S> ? TableModel<GetTable<S, RelatedTableName>> : never;
 
 /**
@@ -234,6 +234,7 @@ export class FinalQuery<
   S extends SchemaStructure,
   TableName extends TableNames<S>,
   T extends { columns: Record<string, ColumnSchema> },
+  // oxlint-disable-next-line no-unused-vars -- RelatedFields is used externally for type inference
   RelatedFields extends RelatedFieldsMap,
   IsOne extends boolean,
   R = void,
@@ -641,6 +642,7 @@ export function extractSubqueryQueryInfos<S extends SchemaStructure>(
     if (relationship) {
       // Determine foreign key field
       // rel.alias is guaranteed to be defined if relationship is found (matched r.field)
+      // oxlint-disable-next-line no-non-null-assertion -- alias is guaranteed defined when relationship is found
       let foreignKeyField = rel.alias!;
 
       if (relationship.cardinality === 'many') {

@@ -1,5 +1,5 @@
-import { RecordId, Duration } from 'surrealdb';
-import { QueryTimeToLive, RecordVersionArray } from '../../types';
+import type { RecordId, Duration } from 'surrealdb';
+import type { QueryTimeToLive } from '../../types';
 
 export type RecordWithId = Record<string, any> & { id: RecordId<string> };
 

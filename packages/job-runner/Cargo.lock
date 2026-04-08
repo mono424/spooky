@@ -1901,7 +1901,7 @@ dependencies = [
 
 [[package]]
 name = "job-runner"
-version = "0.0.1-canary.32"
+version = "0.0.1-canary.36"
 dependencies = [
  "anyhow",
  "reqwest 0.12.28",
