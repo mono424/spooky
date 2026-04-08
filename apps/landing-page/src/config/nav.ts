@@ -12,6 +12,7 @@ export const docsNav = [
       { text: 'Mutate Data', href: `${basePath}/docs/mutate-data` },
       { text: 'Backend Functions', href: `${basePath}/docs/backend-functions` },
       { text: 'File Buckets', href: `${basePath}/docs/buckets` },
+      { text: 'Environment Variables', href: `${basePath}/docs/env-variables` },
     ],
   },
   {
