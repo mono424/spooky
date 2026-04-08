@@ -8,7 +8,7 @@ const currentPath = Astro.url.pathname;
   {
     nav.map((group) => (
       <details open class="group">
-        <summary class="flex items-center justify-between cursor-pointer list-none text-sm font-medium text-text-main mb-2 px-2 hover:opacity-80 select-none">
+        <summary class="flex items-center justify-between cursor-pointer list-none text-sm font-medium text-text-primary mb-2 px-2 hover:opacity-80 select-none">
           {group.title}
           <svg
             class="w-4 h-4 transition-transform group-open:rotate-180 text-text-muted"
@@ -37,7 +37,7 @@ const currentPath = Astro.url.pathname;
                     'flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm transition-colors border border-transparent',
                     isActive
                       ? 'text-white bg-white/5 font-medium border-white/10'
-                      : 'text-zinc-500 hover:text-zinc-300 hover:bg-white/5',
+                      : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/5',
                   ]}
                 >
                   {isActive && <span class="w-1.5 h-1.5 bg-white rounded-full" />}

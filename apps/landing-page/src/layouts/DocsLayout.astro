@@ -96,7 +96,7 @@ const activeGroup = nav.find((g: any) =>
   <body
     transition:name="root"
     transition:animate="none"
-    class="bg-background text-text-main font-sans antialiased selection:bg-primary/20"
+    class="bg-background text-text-secondary font-sans antialiased selection:bg-primary/20"
   >
     <Header transition:persist />
 
@@ -118,7 +118,7 @@ const activeGroup = nav.find((g: any) =>
               activeGroup && (
                 <>
                   <span class="mx-2 text-zinc-600">/</span>
-                  <span class="text-text-main font-medium">{activeGroup.title}</span>
+                  <span class="text-text-primary font-medium">{activeGroup.title}</span>
                 </>
               )
             }
@@ -148,7 +148,7 @@ const activeGroup = nav.find((g: any) =>
           <div class="flex justify-end mb-4">
             <button
               id="mobile-menu-close"
-              class="p-2 text-text-muted hover:text-text-main rounded-md"
+              class="p-2 text-text-muted hover:text-text-primary rounded-md"
             >
               <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path

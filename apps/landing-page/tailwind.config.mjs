@@ -112,15 +112,23 @@ export default {
       typography: (theme) => ({
         DEFAULT: {
           css: {
-            color: theme('colors.text.muted'),
+            color: theme('colors.text.secondary'),
             maxWidth: 'none',
-            h1: { color: theme('colors.text.main'), fontWeight: '600' },
-            h2: { color: theme('colors.text.main'), fontWeight: '500', marginTop: '2em' },
-            h3: { color: theme('colors.text.main'), fontWeight: '500' },
-            strong: { color: theme('colors.text.main') },
+            a: { color: theme('colors.brand.400'), textDecoration: 'underline', textUnderlineOffset: '2px' },
+            'a:hover': { color: theme('colors.brand.300') },
+            h1: { color: theme('colors.text.primary'), fontWeight: '600' },
+            h2: { color: theme('colors.text.primary'), fontWeight: '500', marginTop: '2em' },
+            h3: { color: theme('colors.text.primary'), fontWeight: '500' },
+            h4: { color: theme('colors.text.primary'), fontWeight: '500' },
+            strong: { color: theme('colors.text.primary') },
+            'li::marker': { color: theme('colors.text.tertiary') },
+            hr: { borderColor: theme('colors.surface.border') },
+            blockquote: { color: theme('colors.text.tertiary'), borderLeftColor: theme('colors.surface.border') },
+            'thead th': { color: theme('colors.text.primary') },
+            'tbody td': { color: theme('colors.text.secondary') },
             code: {
-              color: theme('colors.text.main'),
-              backgroundColor: theme('colors.surface'),
+              color: theme('colors.text.primary'),
+              backgroundColor: theme('colors.surface.elevated'),
               padding: '0.2em 0.4em',
               borderRadius: '0.25rem',
               fontWeight: '400',
@@ -128,7 +136,7 @@ export default {
             'code::before': { content: '""' },
             'code::after': { content: '""' },
             pre: {
-              backgroundColor: '#121212', // Darker code block bg
+              backgroundColor: '#121212',
               border: `1px solid ${theme('colors.border')}`,
               borderRadius: '0.5rem',
             },
