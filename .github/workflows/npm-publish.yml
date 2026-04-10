@@ -159,27 +159,27 @@ jobs:
           - runner: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             package: cli-linux-x64
-            binary: spooky
+            binary: spky
             cross: false
           - runner: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             package: cli-linux-arm64
-            binary: spooky
+            binary: spky
             cross: true
           - runner: macos-latest
             target: aarch64-apple-darwin
             package: cli-darwin-arm64
-            binary: spooky
+            binary: spky
             cross: false
           - runner: macos-latest
             target: x86_64-apple-darwin
             package: cli-darwin-x64
-            binary: spooky
+            binary: spky
             cross: false
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
             package: cli-win32-x64
-            binary: spooky.exe
+            binary: spky.exe
             cross: false
     runs-on: ${{ matrix.runner }}
     steps:
@@ -252,7 +252,7 @@ jobs:
 
       - name: Set executable permission
         if: ${{ matrix.package != 'cli-win32-x64' }}
-        run: chmod +x apps/cli/npm/${{ matrix.package }}/spooky
+        run: chmod +x apps/cli/npm/${{ matrix.package }}/spky
 
       - name: Set version
         run: |

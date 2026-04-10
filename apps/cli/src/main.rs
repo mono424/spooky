@@ -324,6 +324,11 @@ pub enum CloudTeamCommands {
         /// Email address of the member to remove
         email: String,
     },
+    /// Rename the tenant
+    Rename {
+        /// New tenant name
+        name: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]

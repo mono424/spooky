@@ -3024,6 +3024,32 @@ fn team(action: CloudTeamCommands) -> Result<()> {
             println!("  {} has been removed from the team.", email);
             Ok(())
         }
+
+        CloudTeamCommands::Rename { name } => {
+            let resp = client.get("/v1/tenants")?;
+            let tenants: Vec<serde_json::Value> = resp.into_json().context("Failed to parse tenants")?;
+            let tenant = tenants.first().context("No tenant found")?;
+            let tenant_id = tenant["id"].as_str().context("No tenant ID")?;
+            let current_name = tenant["name"].as_str().unwrap_or("-");
+
+            let new_name = match name {
+                Some(n) => n,
+                None => {
+                    println!("  Current name: {}", current_name);
+                    inquire::Text::new("New tenant name:")
+                        .prompt()
+                        .context("Failed to read name")?
+                }
+            };
+
+            let resp = client.patch(
+                &format!("/v1/tenants/{}", tenant_id),
+                &serde_json::json!({ "name": new_name }),
+            )?;
+            let updated: serde_json::Value = resp.into_json().context("Failed to parse response")?;
+            println!("  Tenant renamed to '{}'.", updated["name"].as_str().unwrap_or(&new_name));
+            Ok(())
+        }
     }
 }
 
