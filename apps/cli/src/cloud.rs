@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::backend::{self, BackendDevConfig, BackendDevTypedConfig, HostingMode};
 use crate::surreal_client::MigrationDB;
-use crate::{CloudBackupCommands, CloudBillingCommands, CloudCommands, CloudEnvCommands, CloudKeyCommands, CloudLinkCommands};
+use crate::{CloudBackupCommands, CloudBillingCommands, CloudCommands, CloudEnvCommands, CloudKeyCommands, CloudLinkCommands, CloudTeamCommands};
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -699,10 +699,42 @@ fn ensure_billing_active(
 
 /// Open Stripe checkout and poll until payment completes.
 fn wait_for_billing(client: &mut CloudClient, slug: &str) -> Result<()> {
-    // Start checkout
+    // Plan selection
+    let plan = if is_interactive() {
+        let plans = vec!["Starter", "Pro"];
+        let selection = inquire::Select::new("Select a plan:", plans)
+            .prompt()
+            .context("Failed to select plan")?;
+        match selection {
+            "Pro" => "pro",
+            _ => "starter",
+        }
+    } else {
+        "starter"
+    };
+
+    // Billing interval selection
+    let interval = if is_interactive() {
+        let intervals = vec!["Monthly", "Yearly"];
+        let selection = inquire::Select::new("Billing interval:", intervals)
+            .prompt()
+            .context("Failed to select billing interval")?;
+        match selection {
+            "Yearly" => "yearly",
+            _ => "monthly",
+        }
+    } else {
+        "monthly"
+    };
+
+    // Start checkout with plan and interval
     let resp = client.post(
         "/v1/billing/checkout",
-        &serde_json::json!({ "project_id": slug }),
+        &serde_json::json!({
+            "project_id": slug,
+            "plan": plan,
+            "billing_interval": interval,
+        }),
     )?;
     let data: serde_json::Value =
         resp.into_json().context("Failed to parse checkout response")?;
@@ -791,6 +823,7 @@ pub fn run(action: CloudCommands) -> Result<()> {
         CloudCommands::Keys { action } => keys(action),
         CloudCommands::Link { action } => link(action),
         CloudCommands::Env { action } => env(action),
+        CloudCommands::Team { action } => team(action),
     }
 }
 
@@ -2734,6 +2767,80 @@ fn billing(action: Option<CloudBillingCommands>) -> Result<()> {
             }
             Ok(())
         }
+        Some(CloudBillingCommands::ChangePlan) => {
+            let slug = resolve_project_slug()?;
+
+            // Get current project info
+            let project = fetch_project(&mut client, &slug)?
+                .context(format!("Project '{}' not found", slug))?;
+            let current_plan = project["plan"].as_str().unwrap_or("starter");
+            let current_interval = project["billing_interval"].as_str().unwrap_or("monthly");
+
+            println!("  Current plan: {} ({})", current_plan, current_interval);
+            println!();
+
+            // Plan selection
+            let plans = vec!["Starter", "Pro"];
+            let default_plan = if current_plan == "pro" { 1 } else { 0 };
+            let plan_selection = inquire::Select::new("Select a plan:", plans)
+                .with_starting_cursor(default_plan)
+                .prompt()
+                .context("Failed to select plan")?;
+            let new_plan = match plan_selection {
+                "Pro" => "pro",
+                _ => "starter",
+            };
+
+            // Billing interval selection
+            let intervals = vec!["Monthly", "Yearly"];
+            let default_interval = if current_interval == "yearly" { 1 } else { 0 };
+            let interval_selection = inquire::Select::new("Billing interval:", intervals)
+                .with_starting_cursor(default_interval)
+                .prompt()
+                .context("Failed to select billing interval")?;
+            let new_interval = match interval_selection {
+                "Yearly" => "yearly",
+                _ => "monthly",
+            };
+
+            if new_plan == current_plan && new_interval == current_interval {
+                println!("  No changes needed — already on {} ({}).", new_plan, new_interval);
+                return Ok(());
+            }
+
+            let confirm = inquire::Confirm::new(&format!(
+                "Switch to {} ({})? Stripe will handle proration.",
+                new_plan, new_interval,
+            ))
+            .with_default(true)
+            .prompt()
+            .context("Failed to read confirmation")?;
+
+            if !confirm {
+                println!("  Cancelled.");
+                return Ok(());
+            }
+
+            let resp = client.post(
+                "/v1/billing/change-plan",
+                &serde_json::json!({
+                    "project_id": slug,
+                    "plan": new_plan,
+                    "billing_interval": new_interval,
+                }),
+            )?;
+            let data: serde_json::Value = resp.into_json().context("Failed to parse response")?;
+            let status = data["status"].as_str().unwrap_or("unknown");
+
+            if status == "updated" {
+                println!("  Plan updated to {} ({}).", new_plan, new_interval);
+            } else if status == "no_change" {
+                println!("  No changes needed.");
+            } else {
+                println!("  Response: {}", data);
+            }
+            Ok(())
+        }
         None => {
             let slug = resolve_project_slug()?;
 
@@ -2754,6 +2861,167 @@ fn billing(action: Option<CloudBillingCommands>) -> Result<()> {
                     wait_for_billing(&mut client, &slug)?;
                 }
             }
+            Ok(())
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Team management
+// ---------------------------------------------------------------------------
+
+fn team(action: CloudTeamCommands) -> Result<()> {
+    let creds = require_credentials()?;
+    let mut client = CloudClient::new(&creds);
+
+    match action {
+        CloudTeamCommands::List => {
+            let resp = client.get("/v1/tenants")?;
+            let tenants: Vec<serde_json::Value> = resp.into_json().context("Failed to parse tenants")?;
+
+            // Find the active tenant (personal or first one)
+            let tenant = tenants.first().context("No tenant found")?;
+            let tenant_id = tenant["id"].as_str().context("No tenant ID")?;
+
+            let resp = client.get(&format!("/v1/tenants/{}/members", tenant_id))?;
+            let members: Vec<serde_json::Value> = resp.into_json().context("Failed to parse members")?;
+
+            if members.is_empty() {
+                println!("No team members found.");
+                return Ok(());
+            }
+
+            println!("{:<30} {:<10} {}", "EMAIL", "ROLE", "JOINED");
+            println!("{}", "-".repeat(60));
+            for member in &members {
+                let email = member["email"].as_str()
+                    .or_else(|| member["github_login"].as_str())
+                    .unwrap_or("-");
+                let role = member["role"].as_str().unwrap_or("-");
+                let created = member["created_at"].as_str().unwrap_or("-");
+                // Trim the timestamp to just the date portion
+                let date = created.split('T').next().unwrap_or(created);
+                println!("{:<30} {:<10} {}", email, role, date);
+            }
+            Ok(())
+        }
+
+        CloudTeamCommands::Invite { email } => {
+            let resp = client.get("/v1/tenants")?;
+            let tenants: Vec<serde_json::Value> = resp.into_json().context("Failed to parse tenants")?;
+            let tenant = tenants.first().context("No tenant found")?;
+            let tenant_id = tenant["id"].as_str().context("No tenant ID")?;
+
+            // Check if vault exists and prompt for passphrase to transfer vault key
+            let vault_resp = client.get("/v1/vault/status")?;
+            let vault_status: serde_json::Value = vault_resp.into_json().unwrap_or_default();
+            let vault_initialized = vault_status["initialized"].as_bool().unwrap_or(false);
+
+            let mut body = serde_json::json!({
+                "email": email,
+                "role": "member",
+            });
+
+            if vault_initialized && is_interactive() {
+                let passphrase = inquire::Password::new("Vault passphrase (to share vault access):")
+                    .with_display_mode(inquire::PasswordDisplayMode::Masked)
+                    .without_confirmation()
+                    .prompt()
+                    .context("Failed to read passphrase")?;
+                body["passphrase"] = serde_json::Value::String(passphrase);
+            }
+
+            client.post(
+                &format!("/v1/tenants/{}/invitations", tenant_id),
+                &body,
+            )?;
+
+            println!("  Invitation sent to {}.", email);
+            println!("  They will receive an email with a link to accept.");
+            Ok(())
+        }
+
+        CloudTeamCommands::Invitations => {
+            let resp = client.get("/v1/tenants")?;
+            let tenants: Vec<serde_json::Value> = resp.into_json().context("Failed to parse tenants")?;
+            let tenant = tenants.first().context("No tenant found")?;
+            let tenant_id = tenant["id"].as_str().context("No tenant ID")?;
+
+            let resp = client.get(&format!("/v1/tenants/{}/invitations", tenant_id))?;
+            let invitations: Vec<serde_json::Value> = resp.into_json().context("Failed to parse invitations")?;
+
+            if invitations.is_empty() {
+                println!("No pending invitations.");
+                return Ok(());
+            }
+
+            println!("{:<30} {:<10} {:<12} {}", "EMAIL", "ROLE", "STATUS", "EXPIRES");
+            println!("{}", "-".repeat(70));
+            for inv in &invitations {
+                let email = inv["email"].as_str().unwrap_or("-");
+                let role = inv["role"].as_str().unwrap_or("-");
+                let status = inv["status"].as_str().unwrap_or("-");
+                let expires = inv["expires_at"].as_str().unwrap_or("-");
+                let date = expires.split('T').next().unwrap_or(expires);
+                println!("{:<30} {:<10} {:<12} {}", email, role, status, date);
+            }
+            Ok(())
+        }
+
+        CloudTeamCommands::Revoke { email } => {
+            let resp = client.get("/v1/tenants")?;
+            let tenants: Vec<serde_json::Value> = resp.into_json().context("Failed to parse tenants")?;
+            let tenant = tenants.first().context("No tenant found")?;
+            let tenant_id = tenant["id"].as_str().context("No tenant ID")?;
+
+            // Find the invitation by email
+            let resp = client.get(&format!("/v1/tenants/{}/invitations", tenant_id))?;
+            let invitations: Vec<serde_json::Value> = resp.into_json().context("Failed to parse invitations")?;
+
+            let inv = invitations.iter().find(|i| {
+                i["email"].as_str() == Some(&email)
+            }).context(format!("No pending invitation found for '{}'", email))?;
+
+            let inv_id = inv["id"].as_str().context("No invitation ID")?;
+
+            client.delete(&format!("/v1/tenants/{}/invitations/{}", tenant_id, inv_id))?;
+            println!("  Invitation for {} has been revoked.", email);
+            Ok(())
+        }
+
+        CloudTeamCommands::Remove { email } => {
+            let resp = client.get("/v1/tenants")?;
+            let tenants: Vec<serde_json::Value> = resp.into_json().context("Failed to parse tenants")?;
+            let tenant = tenants.first().context("No tenant found")?;
+            let tenant_id = tenant["id"].as_str().context("No tenant ID")?;
+
+            // Find the member by email
+            let resp = client.get(&format!("/v1/tenants/{}/members", tenant_id))?;
+            let members: Vec<serde_json::Value> = resp.into_json().context("Failed to parse members")?;
+
+            let member = members.iter().find(|m| {
+                m["email"].as_str() == Some(&email) || m["github_login"].as_str() == Some(&email)
+            }).context(format!("No member found with email '{}'", email))?;
+
+            let member_id = member["id"].as_str().context("No member ID")?;
+
+            if is_interactive() {
+                let confirm = inquire::Confirm::new(&format!(
+                    "Remove {} from the team? This revokes all access immediately.",
+                    email,
+                ))
+                .with_default(false)
+                .prompt()
+                .context("Failed to read confirmation")?;
+
+                if !confirm {
+                    println!("  Cancelled.");
+                    return Ok(());
+                }
+            }
+
+            client.delete(&format!("/v1/tenants/{}/members/{}", tenant_id, member_id))?;
+            println!("  {} has been removed from the team.", email);
             Ok(())
         }
     }

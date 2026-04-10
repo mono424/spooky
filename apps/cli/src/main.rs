@@ -225,6 +225,11 @@ enum CloudCommands {
         #[command(subcommand)]
         action: CloudEnvCommands,
     },
+    /// Manage team members and invitations
+    Team {
+        #[command(subcommand)]
+        action: CloudTeamCommands,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -294,6 +299,31 @@ pub enum CloudBackupCommands {
 enum CloudBillingCommands {
     /// Show current usage
     Usage,
+    /// Change plan or billing interval
+    ChangePlan,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum CloudTeamCommands {
+    /// List all team members
+    List,
+    /// Invite a user by their GitHub email
+    Invite {
+        /// GitHub email address of the user to invite
+        email: String,
+    },
+    /// List pending invitations
+    Invitations,
+    /// Revoke a pending invitation
+    Revoke {
+        /// Email address of the invitation to revoke
+        email: String,
+    },
+    /// Remove a team member
+    Remove {
+        /// Email address of the member to remove
+        email: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]

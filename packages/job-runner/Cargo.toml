@@ -1,6 +1,6 @@
 [package]
 name = "job-runner"
-version = "0.0.1-canary.41"
+version = "0.0.1-canary.42"
 edition = "2021"
 
 [dependencies]
