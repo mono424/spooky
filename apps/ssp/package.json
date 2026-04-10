@@ -1,6 +1,6 @@
 {
   "name": "ssp",
-  "version": "0.0.1-canary.38",
+  "version": "0.0.1-canary.39",
   "private": true,
   "scripts": {
     "build": "docker build -f Dockerfile -t ssp ../.."

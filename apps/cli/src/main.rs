@@ -28,9 +28,13 @@ use std::path::{Path, PathBuf};
 use surreal_client::SurrealClient;
 
 #[derive(ClapParser, Debug)]
-#[command(name = "syncgen")]
+#[command(name = "spooky")]
 #[command(about = "Generate types from SurrealDB schema files", long_about = None)]
+#[command(version, disable_version_flag = true)]
 struct Args {
+    #[arg(long = "version", short = 'v', action = clap::ArgAction::Version)]
+    version: (),
+
     /// Path to the project directory (defaults to current directory)
     #[arg(long)]
     path: Option<PathBuf>,
@@ -91,6 +95,8 @@ struct Args {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Print version information
+    Version,
     /// Create a new Sp00ky project
     Create,
     /// Alias for 'create' (backward compat)
@@ -1141,6 +1147,10 @@ fn main() -> Result<()> {
     }
 
     match args.command {
+        Some(Commands::Version) => {
+            println!("spooky {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
         Some(Commands::Create) | Some(Commands::Setup) => return create_project(),
         Some(Commands::Migrate { action }) => return handle_migrate(action),
         Some(Commands::Bucket { action }) => return handle_bucket(action),
