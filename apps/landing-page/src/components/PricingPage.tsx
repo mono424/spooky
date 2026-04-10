@@ -31,18 +31,14 @@ const plans: Plan[] = [
       { label: '1 SSP instance', type: 'included', specs: { cpu: '1', mem: '512MB' } },
       { label: '1 Backend Service', type: 'included', specs: { cpu: '1', mem: '512MB' } },
       { label: '5GB storage', type: 'included' },
-      { label: '1 backup (up to 5GB)', type: 'included' },
       { label: 'CI/CD Cloud Builder (60 min/mo)', type: 'included' },
-      { label: 'No additional team members included', type: 'included' },
       { label: 'Shared Vault', type: 'included' },
       { label: 'Custom domains', type: 'included' },
-      { label: 'SSO', type: 'excluded' },
       { label: 'Community support', type: 'included' },
-      { label: 'SurrealDB', type: 'addon', addonPrice: '+$19/mo' },
-      { label: 'Additional team member', type: 'addon', addonPrice: '+$5/mo' },
-      { label: 'Extra SSP instance', type: 'addon', addonPrice: '+$15/mo' },
-      { label: 'Extra Backend Service', type: 'addon', addonPrice: '+$10/mo' },
-      { label: 'Extra build minutes', type: 'addon', addonPrice: '+$0.10/min' },
+      { label: 'SSO', type: 'excluded' },
+      { label: 'Backups', type: 'excluded' },
+      { label: '5 team members included', type: 'excluded' },
+      { label: 'Priority support', type: 'excluded' },
     ],
   },
   {
@@ -57,19 +53,14 @@ const plans: Plan[] = [
       { label: '3 SSP instances', type: 'included', specs: { cpu: '2', mem: '1GB' } },
       { label: '1 Backend Service', type: 'included', specs: { cpu: '2', mem: '1GB' } },
       { label: '20GB storage', type: 'included' },
-      { label: 'Unlimited backups (50GB)', type: 'included' },
       { label: 'CI/CD Cloud Builder (600 min/mo)', type: 'included' },
-      { label: 'Up to 5 team members', type: 'included' },
       { label: 'Shared Vault', type: 'included' },
       { label: 'Custom domains', type: 'included' },
+      { label: 'Community support', type: 'included' },
       { label: 'SSO', type: 'included' },
+      { label: 'Unlimited backups (50GB)', type: 'included' },
+      { label: '5 additional team members', type: 'included' },
       { label: 'Priority support', type: 'included' },
-      { label: 'SurrealDB', type: 'addon', addonPrice: '+$29/mo' },
-      { label: 'Additional team member', type: 'addon', addonPrice: '+$5/mo' },
-      { label: 'Extra SSP instance', type: 'addon', addonPrice: '+$15/mo' },
-      { label: 'Extra Backend Service', type: 'addon', addonPrice: '+$10/mo' },
-      { label: 'Extra backup storage', type: 'addon', addonPrice: '+$0.50/GB/mo' },
-      { label: 'Extra build minutes', type: 'addon', addonPrice: '+$0.07/min' },
     ],
   },
   {
@@ -313,6 +304,29 @@ export const PricingPage: React.FC = () => {
             </div>
           );
         })}
+      </div>
+
+      {/* Add-ons */}
+      <div className="mt-20 max-w-xl mx-auto">
+        <p className="text-[13px] text-text-muted mb-6">Add-ons</p>
+        <div className="space-y-0">
+          {[
+            { name: 'SurrealDB', price: 'from $19/mo' },
+            { name: 'Team member', price: '$5/mo' },
+            { name: 'SSP instance', price: '$15/mo' },
+            { name: 'Backend service', price: '$10/mo' },
+            { name: 'Backup storage', price: '$0.50/GB/mo' },
+            { name: 'Build minutes', price: '$0.07/min' },
+          ].map((addon) => (
+            <div
+              key={addon.name}
+              className="flex items-center justify-between py-3 border-b border-white/[0.06]"
+            >
+              <span className="text-[13px] text-text-tertiary">{addon.name}</span>
+              <span className="text-[13px] text-text-muted tabular-nums">{addon.price}</span>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

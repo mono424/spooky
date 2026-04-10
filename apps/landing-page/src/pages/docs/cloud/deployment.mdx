@@ -7,7 +7,7 @@ import CodeBlock from '../../../components/ui/CodeBlock.astro';
 import Warning from '../../../components/ui/Warning.astro';
 import Note from '../../../components/ui/Note.astro';
 
-Sp00ky Cloud handles infrastructure provisioning, scaling, and management so you can deploy your project with a single command. No Docker Compose files, no server setup — just `spooky cloud deploy`.
+Sp00ky Cloud handles infrastructure provisioning, scaling, and management so you can deploy your project with a single command. No Docker Compose files, no server setup — just `spky cloud deploy`.
 
 ## Prerequisites
 
@@ -19,13 +19,13 @@ Sp00ky Cloud handles infrastructure provisioning, scaling, and management so you
 
 <CodeBlock
   code={`# 1. Log in to Sp00ky Cloud
-spooky cloud login
+spky cloud login
 
 # 2. Create a cloud project
-spooky cloud create --slug my-app
+spky cloud create --slug my-app
 
 # 3. Deploy
-spooky cloud deploy`}
+spky cloud deploy`}
   lang="bash"
 />
 
@@ -34,7 +34,7 @@ spooky cloud deploy`}
 Log in via GitHub OAuth. The CLI opens your browser to complete the flow:
 
 <CodeBlock
-  code={`spooky cloud login`}
+  code={`spky cloud login`}
   lang="bash"
 />
 
@@ -43,22 +43,22 @@ A 4-digit verification code is shown in your terminal. Confirm it in the browser
 To log out:
 
 <CodeBlock
-  code={`spooky cloud logout`}
+  code={`spky cloud logout`}
   lang="bash"
 />
 
 <Note title="CI/CD">
-For automated pipelines, create an API key with <code>spooky cloud keys create</code> and set the <code>SPOOKY_API_KEY</code> environment variable. No browser login required.
+For automated pipelines, create an API key with <code>spky cloud keys create</code> and set the <code>SPOOKY_API_KEY</code> environment variable. No browser login required.
 </Note>
 
 ## Creating a Project
 
 <CodeBlock
   code={`# Interactive — prompts for slug if not provided
-spooky cloud create
+spky cloud create
 
 # With options
-spooky cloud create --slug my-app --plan starter`}
+spky cloud create --slug my-app --plan starter`}
   lang="bash"
 />
 
@@ -76,7 +76,7 @@ slug: my-app
 ## Deploying
 
 <CodeBlock
-  code={`spooky cloud deploy`}
+  code={`spky cloud deploy`}
   lang="bash"
 />
 
@@ -97,14 +97,14 @@ You'll see real-time progress as each step completes.
 To also upgrade SSP and Scheduler to the latest version:
 
 <CodeBlock
-  code={`spooky cloud deploy --upgrade`}
+  code={`spky cloud deploy --upgrade`}
   lang="bash"
 />
 
 ## Checking Status
 
 <CodeBlock
-  code={`spooky cloud status`}
+  code={`spky cloud status`}
   lang="bash"
 />
 
@@ -147,23 +147,23 @@ Tail logs from your cloud deployment in real time:
 
 <CodeBlock
   code={`# All services
-spooky cloud logs
+spky cloud logs
 
 # Filter by service
-spooky cloud logs --filter surrealdb
-spooky cloud logs --filter ssp
-spooky cloud logs --filter backend
-spooky cloud logs --filter frontend
+spky cloud logs --filter surrealdb
+spky cloud logs --filter ssp
+spky cloud logs --filter backend
+spky cloud logs --filter frontend
 
 # Multiple services (comma-separated)
-spooky cloud logs --filter ssp,surrealdb
+spky cloud logs --filter ssp,surrealdb
 
 # Blueprint shorthand: "spooky" = ssp + scheduler
-spooky cloud logs --filter spooky
+spky cloud logs --filter spooky
 
 # Split view
-spooky cloud logs --filter ssp,surrealdb --split h   # horizontal (stacked)
-spooky cloud logs --filter ssp,surrealdb --split v   # vertical (side-by-side)`}
+spky cloud logs --filter ssp,surrealdb --split h   # horizontal (stacked)
+spky cloud logs --filter ssp,surrealdb --split v   # vertical (side-by-side)`}
   lang="bash"
 />
 
@@ -173,14 +173,14 @@ Scale your SSP instances horizontally:
 
 <CodeBlock
   code={`# Scale to 3 SSP instances
-spooky cloud scale --ssp 3`}
+spky cloud scale --ssp 3`}
   lang="bash"
 />
 
 ## Listing Projects
 
 <CodeBlock
-  code={`spooky cloud list`}
+  code={`spky cloud list`}
   lang="bash"
 />
 
@@ -193,7 +193,7 @@ This permanently tears down all VMs and infrastructure for the project. Data wil
 </Warning>
 
 <CodeBlock
-  code={`spooky cloud destroy`}
+  code={`spky cloud destroy`}
   lang="bash"
 />
 
@@ -203,13 +203,13 @@ Create long-lived API keys for CI/CD pipelines:
 
 <CodeBlock
   code={`# Create a new key
-spooky cloud keys create
+spky cloud keys create
 
 # List keys
-spooky cloud keys list
+spky cloud keys list
 
 # Revoke a key
-spooky cloud keys revoke <key-id>`}
+spky cloud keys revoke <key-id>`}
   lang="bash"
 />
 
@@ -217,7 +217,7 @@ Use the key in CI by setting the environment variable:
 
 <CodeBlock
   code={`export SPOOKY_API_KEY=spk_live_...
-spooky cloud deploy`}
+spky cloud deploy`}
   lang="bash"
 />
 
@@ -227,22 +227,22 @@ Link a GitHub repository for automated deployments on push:
 
 <CodeBlock
   code={`# Set up auto-deploy
-spooky cloud link setup
+spky cloud link setup
 
 # Check link status
-spooky cloud link status
+spky cloud link status
 
 # Configure settings
-spooky cloud link settings --branch main --auto-deploy true
+spky cloud link settings --branch main --auto-deploy true
 
 # Manually trigger a deploy
-spooky cloud link trigger
+spky cloud link trigger
 
 # View recent build runs
-spooky cloud link runs
+spky cloud link runs
 
 # Remove the link
-spooky cloud link unlink`}
+spky cloud link unlink`}
   lang="bash"
 />
 
@@ -250,17 +250,17 @@ spooky cloud link unlink`}
 
 <CodeBlock
   code={`# Open the billing portal
-spooky cloud billing
+spky cloud billing
 
 # View current month's usage
-spooky cloud billing usage`}
+spky cloud billing usage`}
   lang="bash"
 />
 
 ## CLI Reference
 
 <CodeBlock
-  code={`spooky cloud <COMMAND>
+  code={`spky cloud <COMMAND>
 
 Commands:
   login              Authenticate with Sp00ky Cloud (opens browser)

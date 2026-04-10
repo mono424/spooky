@@ -11,7 +11,7 @@ Sp00ky includes a built-in migration system for managing incremental, version-co
 
 Use the `create` subcommand to scaffold a new migration file:
 
-<CodeBlock code={`spooky migrate create "add_user_avatar"`} lang="bash" />
+<CodeBlock code={`spky migrate create "add_user_avatar"`} lang="bash" />
 
 This creates a timestamped `.surql` file in your `migrations` directory.
 
@@ -55,14 +55,14 @@ The name is automatically sanitized — spaces and hyphens become underscores, a
 
 Run all pending migrations against your database:
 
-<CodeBlock code={`spooky migrate apply`} lang="bash" />
+<CodeBlock code={`spky migrate apply`} lang="bash" />
 
 Migrations execute in version order (by timestamp). Each applied migration is recorded in a `_00_migrations` tracking table with its version, name, and SHA-256 checksum.
 
 ### Connection Flags
 
 <CodeBlock
-  code={`spooky migrate apply \\
+  code={`spky migrate apply \\
   --url http://localhost:8000 \\
   --namespace myapp \\
   --database production \\
@@ -77,7 +77,7 @@ All connection flags can also be set via environment variables (see below).
 
 View which migrations have been applied and which are still pending:
 
-<CodeBlock code={`spooky migrate status`} lang="bash" />
+<CodeBlock code={`spky migrate status`} lang="bash" />
 
 Example output:
 
@@ -133,7 +133,7 @@ If intentional, manually update the checksum in _00_migrations.`}
 
 If you have an existing `.surql` schema file and want to start using migrations, use the `--schema` flag to create an initial migration pre-populated with your schema:
 
-<CodeBlock code={`spooky migrate create "bootstrap_schema" --schema ./schema.surql`} lang="bash" />
+<CodeBlock code={`spky migrate create "bootstrap_schema" --schema ./schema.surql`} lang="bash" />
 
 This generates a migration file containing your full schema with a warning comment at the top:
 
@@ -171,10 +171,10 @@ export SURREAL_USER="\$DB_USER"
 export SURREAL_PASS="\$DB_PASS"
 
 # Check for drift before deploying
-spooky migrate status
+spky migrate status
 
 # Apply any pending migrations
-spooky migrate apply
+spky migrate apply
 
 echo "Migrations applied successfully"`}
   lang="bash"

@@ -13,13 +13,13 @@ Sp00ky Cloud provides built-in database backups for your SurrealDB data. Create 
 
 <CodeBlock
   code={`# Create a backup
-spooky cloud backup create
+spky cloud backup create
 
 # List all backups
-spooky cloud backup list
+spky cloud backup list
 
 # Restore from a backup
-spooky cloud backup restore <backup-id>`}
+spky cloud backup restore <backup-id>`}
   lang="bash"
 />
 
@@ -29,10 +29,10 @@ Create a manual backup of your database:
 
 <CodeBlock
   code={`# Create a backup
-spooky cloud backup create
+spky cloud backup create
 
 # Create a named backup
-spooky cloud backup create --name before-migration`}
+spky cloud backup create --name before-migration`}
   lang="bash"
 />
 
@@ -41,7 +41,7 @@ Backups run asynchronously. The CLI returns immediately with a backup ID and sta
 ## Listing Backups
 
 <CodeBlock
-  code={`spooky cloud backup list`}
+  code={`spky cloud backup list`}
   lang="bash"
 />
 
@@ -59,7 +59,7 @@ f9g0h1i2-...                          completed     10.2 MB     2026-04-06T02:00
 ## Restoring from a Backup
 
 <CodeBlock
-  code={`spooky cloud backup restore <backup-id>`}
+  code={`spky cloud backup restore <backup-id>`}
   lang="bash"
 />
 
@@ -70,7 +70,7 @@ Restoring a backup replaces your current database contents with the backup data.
 ## Deleting Backups
 
 <CodeBlock
-  code={`spooky cloud backup delete <backup-id>`}
+  code={`spky cloud backup delete <backup-id>`}
   lang="bash"
 />
 
@@ -80,13 +80,13 @@ Configure scheduled backups with a cron expression:
 
 <CodeBlock
   code={`# Enable daily backups at 2 AM, keep last 7
-spooky cloud backup configure --enabled true --schedule "0 2 * * *" --retention 7
+spky cloud backup configure --enabled true --schedule "0 2 * * *" --retention 7
 
 # Disable automatic backups
-spooky cloud backup configure --enabled false
+spky cloud backup configure --enabled false
 
 # Change retention to keep 30 backups
-spooky cloud backup configure --retention 30`}
+spky cloud backup configure --retention 30`}
   lang="bash"
 />
 
@@ -101,7 +101,7 @@ spooky cloud backup configure --retention 30`}
 Reset your database to a clean state — drops all data and re-runs migrations:
 
 <CodeBlock
-  code={`spooky cloud backup reset`}
+  code={`spky cloud backup reset`}
   lang="bash"
 />
 
@@ -116,7 +116,7 @@ The CLI will:
 To skip the pre-reset backup prompt:
 
 <CodeBlock
-  code={`spooky cloud backup reset --no-backup`}
+  code={`spky cloud backup reset --no-backup`}
   lang="bash"
 />
 
@@ -127,7 +127,7 @@ Database reset is irreversible. All user accounts, records, and application data
 ## CLI Reference
 
 <CodeBlock
-  code={`spooky cloud backup <COMMAND>
+  code={`spky cloud backup <COMMAND>
 
 Commands:
   list                          List backups

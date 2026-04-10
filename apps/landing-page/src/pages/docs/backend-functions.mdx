@@ -59,7 +59,7 @@ backends:
 - **`method.type`**: The method for calling the backend (use `outbox` for the outbox pattern)
 - **`method.table`**: The name of the job table in SurrealDB (e.g., `job`)
 - **`method.schema`**: Path to the SurrealQL schema file that defines the job table structure
-- **`dev`** (optional): A dev server command that `spooky dev` will spawn alongside infrastructure (see [Dev Server](#dev-server) below)
+- **`dev`** (optional): A dev server command that `spky dev` will spawn alongside infrastructure (see [Dev Server](#dev-server) below)
 - **`deploy.timeout`** (optional): HTTP request timeout in seconds for the job runner when calling this backend (default: `10`). Increase this for long-running operations like LLM inference.
 - **`deploy.timeout_overridable`** (optional): When `true`, the frontend can override the timeout per-job via the `timeout` option in `db.run()`. When `false` (default), the deploy-time timeout is always used.
 
@@ -411,7 +411,7 @@ The job runner:
 
 ## Dev Server
 
-Each backend in `sp00ky.yml` can declare an optional `dev` field. When you run `spooky dev`, these commands are spawned alongside the rest of the infrastructure (SurrealDB, SSP, scheduler), so you don't need to start backend services in separate terminals.
+Each backend in `sp00ky.yml` can declare an optional `dev` field. When you run `spky dev`, these commands are spawned alongside the rest of the infrastructure (SurrealDB, SSP, scheduler), so you don't need to start backend services in separate terminals.
 
 Each backend gets a unique color in the terminal and its output is prefixed with `[backend.<name>.dev]`, making it easy to distinguish logs from different services.
 
@@ -502,7 +502,7 @@ For the `docker` type, the file is passed directly via Docker's `--env-file` fla
 All typed forms support an optional `workdir` field that is resolved relative to the project root (the directory containing `sp00ky.yml`). If omitted, commands run from the project root.
 
 <Note>
-  Backend dev processes are automatically stopped when you press Ctrl+C to shut down `spooky dev`.
+  Backend dev processes are automatically stopped when you press Ctrl+C to shut down `spky dev`.
 </Note>
 
 ## Best Practices

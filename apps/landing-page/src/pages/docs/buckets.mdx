@@ -52,14 +52,14 @@ buckets:
   lang="yaml"
 />
 
-After adding or modifying a bucket, regenerate your types by running `spooky` so the bucket names and config are available in your generated schema.
+After adding or modifying a bucket, regenerate your types by running `spky` so the bucket names and config are available in your generated schema.
 
 ## CLI: Adding a Bucket
 
 The fastest way to add a bucket is with the CLI:
 
 <CodeBlock
-  code={`spooky bucket add`}
+  code={`spky bucket add`}
   lang="bash"
 />
 
@@ -78,7 +78,7 @@ The CLI generates the `.surql` file and updates your `sp00ky.yml` automatically.
 
 ## Generated Schema
 
-After running `spooky`, your generated schema includes bucket metadata for type-safe access:
+After running `spky`, your generated schema includes bucket metadata for type-safe access:
 
 <CodeBlock
   code={`export const schema = {

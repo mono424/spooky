@@ -27,13 +27,13 @@ Your vault passphrase is separate from your GitHub login. You'll set it the firs
 
 <CodeBlock
   code={`# 1. Initialize your encryption vault
-spooky cloud env init
+spky cloud env init
 
 # 2. Set a variable (interactive — prompts for value and environment)
-spooky cloud env set DATABASE_URL
+spky cloud env set DATABASE_URL
 
 # 3. Load variables and start your app
-spooky cloud env load && pnpm dev`}
+spky cloud env load && pnpm dev`}
   lang="bash"
 />
 
@@ -42,7 +42,7 @@ spooky cloud env load && pnpm dev`}
 Before using environment variables, initialize your encryption vault:
 
 <CodeBlock
-  code={`spooky cloud env init`}
+  code={`spky cloud env init`}
   lang="bash"
 />
 
@@ -59,10 +59,10 @@ Run `env set` with an optional variable name:
 
 <CodeBlock
   code={`# With a name — goes straight to the value prompt
-spooky cloud env set DATABASE_URL
+spky cloud env set DATABASE_URL
 
 # Without a name — prompts for the name first
-spooky cloud env set`}
+spky cloud env set`}
   lang="bash"
 />
 
@@ -84,10 +84,10 @@ Load environment variables and pipe them into your dev workflow:
 
 <CodeBlock
   code={`# Load development variables (default) and start your app
-spooky cloud env load && pnpm dev
+spky cloud env load && pnpm dev
 
 # Load production variables
-spooky cloud env load --prod && pnpm start`}
+spky cloud env load --prod && pnpm start`}
   lang="bash"
 />
 
@@ -95,10 +95,10 @@ The output format is `KEY=value`, one per line — designed for shell evaluation
 
 <CodeBlock
   code={`# Export into the current shell
-eval "$(spooky cloud env load)"
+eval "$(spky cloud env load)"
 
 # Or use with env
-env $(spooky cloud env load | xargs) pnpm dev`}
+env $(spky cloud env load | xargs) pnpm dev`}
   lang="bash"
 />
 
@@ -113,7 +113,7 @@ In non-interactive environments (CI/CD), set the <code>SPOOKY_API_KEY</code> env
 View all configured variable names and which environments are set:
 
 <CodeBlock
-  code={`spooky cloud env list`}
+  code={`spky cloud env list`}
   lang="bash"
 />
 
@@ -135,14 +135,14 @@ Values are never shown in the list — only names and whether each environment h
 Remove an environment variable entirely (both dev and prod values):
 
 <CodeBlock
-  code={`spooky cloud env delete DATABASE_URL`}
+  code={`spky cloud env delete DATABASE_URL`}
   lang="bash"
 />
 
 ## Changing Your Vault Passphrase
 
 <CodeBlock
-  code={`spooky cloud env change-passphrase`}
+  code={`spky cloud env change-passphrase`}
   lang="bash"
 />
 
@@ -166,7 +166,7 @@ You'll be prompted for your passphrase again on the next `env load` or `env set`
 ## CLI Reference
 
 <CodeBlock
-  code={`spooky cloud env <COMMAND>
+  code={`spky cloud env <COMMAND>
 
 Commands:
   init               Initialize the encryption vault (set a vault passphrase)

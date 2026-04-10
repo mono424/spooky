@@ -23,14 +23,14 @@ Additional team members beyond the plan limit are billed as a metered add-on at 
 Invite a new member by their GitHub username:
 
 <CodeBlock
-  code={`spooky cloud team invite <github-username>`}
+  code={`spky cloud team invite <github-username>`}
   lang="bash"
 />
 
-The invited user receives an email with a link to accept the invitation. Once accepted, they can log in with `spooky cloud login` and will have access to all projects within the tenant.
+The invited user receives an email with a link to accept the invitation. Once accepted, they can log in with `spky cloud login` and will have access to all projects within the tenant.
 
 <Note title="GitHub Account Required">
-Team members must have a GitHub account. Sp00ky Cloud uses GitHub OAuth for authentication, so the invited user will log in through the same <code>spooky cloud login</code> flow.
+Team members must have a GitHub account. Sp00ky Cloud uses GitHub OAuth for authentication, so the invited user will log in through the same <code>spky cloud login</code> flow.
 </Note>
 
 ### Pending Invitations
@@ -38,21 +38,21 @@ Team members must have a GitHub account. Sp00ky Cloud uses GitHub OAuth for auth
 View all pending invitations that have not yet been accepted:
 
 <CodeBlock
-  code={`spooky cloud team invitations`}
+  code={`spky cloud team invitations`}
   lang="bash"
 />
 
 Revoke a pending invitation:
 
 <CodeBlock
-  code={`spooky cloud team revoke <github-username>`}
+  code={`spky cloud team revoke <github-username>`}
   lang="bash"
 />
 
 ## Listing Team Members
 
 <CodeBlock
-  code={`spooky cloud team list`}
+  code={`spky cloud team list`}
   lang="bash"
 />
 
@@ -72,7 +72,7 @@ bob-ops           member   2026-04-02T09:00:00`}
 Remove a member from the tenant:
 
 <CodeBlock
-  code={`spooky cloud team remove <github-username>`}
+  code={`spky cloud team remove <github-username>`}
   lang="bash"
 />
 
@@ -92,7 +92,7 @@ Each tenant has exactly one owner (the user who created the first project). Owne
 ## CLI Reference
 
 <CodeBlock
-  code={`spooky cloud team <COMMAND>
+  code={`spky cloud team <COMMAND>
 
 Commands:
   list                 List all team members
