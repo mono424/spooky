@@ -26,6 +26,8 @@ export const docsNav = [
     title: 'Cloud',
     links: [
       { text: 'Cloud Deployment', href: `${basePath}/docs/cloud/deployment` },
+      { text: 'Team Members', href: `${basePath}/docs/cloud/team` },
+      { text: 'Shared Vault', href: `${basePath}/docs/cloud/vault` },
       { text: 'Environment Variables', href: `${basePath}/docs/cloud/env-variables` },
       { text: 'Backups', href: `${basePath}/docs/cloud/backups` },
     ],

@@ -1,0 +1,104 @@
+---
+layout: ../../../layouts/DocsLayout.astro
+title: Team Members
+---
+
+import CodeBlock from '../../../components/ui/CodeBlock.astro';
+import Warning from '../../../components/ui/Warning.astro';
+import Note from '../../../components/ui/Note.astro';
+
+Sp00ky Cloud projects live inside a **tenant**. Every tenant has an owner and can have additional team members who share access to projects, deployments, and the shared vault.
+
+## Plan Limits
+
+| Plan | Included Members | Additional Members |
+| :--- | :--- | :--- |
+| **Starter** | 1 (owner only) | +$5/mo each |
+| **Pro** | Up to 5 | +$5/mo each |
+
+Additional team members beyond the plan limit are billed as a metered add-on at $5 per member per month.
+
+## Inviting Team Members
+
+Invite a new member by their GitHub username:
+
+<CodeBlock
+  code={`spooky cloud team invite <github-username>`}
+  lang="bash"
+/>
+
+The invited user receives an email with a link to accept the invitation. Once accepted, they can log in with `spooky cloud login` and will have access to all projects within the tenant.
+
+<Note title="GitHub Account Required">
+Team members must have a GitHub account. Sp00ky Cloud uses GitHub OAuth for authentication, so the invited user will log in through the same <code>spooky cloud login</code> flow.
+</Note>
+
+### Pending Invitations
+
+View all pending invitations that have not yet been accepted:
+
+<CodeBlock
+  code={`spooky cloud team invitations`}
+  lang="bash"
+/>
+
+Revoke a pending invitation:
+
+<CodeBlock
+  code={`spooky cloud team revoke <github-username>`}
+  lang="bash"
+/>
+
+## Listing Team Members
+
+<CodeBlock
+  code={`spooky cloud team list`}
+  lang="bash"
+/>
+
+Example output:
+
+<CodeBlock
+  code={`USERNAME          ROLE     JOINED
+-------------------------------------------------
+khadim            owner    2026-03-01T10:00:00
+alice-dev         member   2026-03-15T14:30:00
+bob-ops           member   2026-04-02T09:00:00`}
+  lang="bash"
+/>
+
+## Removing Team Members
+
+Remove a member from the tenant:
+
+<CodeBlock
+  code={`spooky cloud team remove <github-username>`}
+  lang="bash"
+/>
+
+<Warning>
+Removing a team member immediately revokes their access to all projects and the shared vault. Their vault keys are deleted and any API keys they created are revoked. This action cannot be undone — you will need to re-invite them if you want to restore access.
+</Warning>
+
+## Roles
+
+| Role | Capabilities |
+| :--- | :--- |
+| **Owner** | Full access. Manage billing, invite/remove members, create/destroy projects, deploy, manage vault. |
+| **Member** | Access all projects. Deploy, view logs, manage environment variables via shared vault. Cannot manage billing or remove other members. |
+
+Each tenant has exactly one owner (the user who created the first project). Ownership cannot be transferred at this time.
+
+## CLI Reference
+
+<CodeBlock
+  code={`spooky cloud team <COMMAND>
+
+Commands:
+  list                 List all team members
+  invite <username>    Invite a GitHub user to your tenant
+  invitations          List pending invitations
+  revoke <username>    Revoke a pending invitation
+  remove <username>    Remove a team member`}
+  lang="bash"
+/>

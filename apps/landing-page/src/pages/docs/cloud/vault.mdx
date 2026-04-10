@@ -1,0 +1,114 @@
+---
+layout: ../../../layouts/DocsLayout.astro
+title: Shared Vault
+---
+
+import CodeBlock from '../../../components/ui/CodeBlock.astro';
+import Warning from '../../../components/ui/Warning.astro';
+import Note from '../../../components/ui/Note.astro';
+
+The **Shared Vault** is a team-wide encrypted store that allows all team members to access the same environment variables without sharing raw secrets over side channels. Every Starter and Pro plan includes a shared vault.
+
+For CLI usage and individual commands, see the [Environment Variables](/docs/cloud/env-variables) documentation. This page explains how the vault works across a team and how it is secured.
+
+## How Sharing Works
+
+When a team member sets an environment variable, it becomes available to every other member of the tenant — no manual sharing required. The flow works like this:
+
+1. **Each member has their own vault keypair.** When a user joins a tenant (via `spooky cloud team invite`), they initialize their own vault with `spooky cloud env init` and a personal passphrase.
+2. **Variables are encrypted per-user.** When a variable is set, the server encrypts the value separately for each team member's public key. Every member gets their own encrypted copy they can decrypt with their own passphrase.
+3. **Decryption is always local to the user.** When you run `spooky cloud env load`, the server returns your personally-encrypted copy and you decrypt it with your passphrase. No one else's passphrase or private key is involved.
+
+This means:
+- Team members **never need to share passphrases** with each other
+- Each member's passphrase is independent — changing yours does not affect anyone else
+- Revoking a member (via `spooky cloud team remove`) deletes their encrypted copies and vault keys immediately
+
+<Note title="New Members">
+When a new member joins and initializes their vault, existing environment variables are automatically re-encrypted for their public key. They can immediately load all shared variables with <code>spooky cloud env load</code>.
+</Note>
+
+## Security Model
+
+### Encryption Architecture
+
+The vault uses a **hybrid encryption** scheme combining asymmetric and symmetric cryptography:
+
+| Layer | Algorithm | Purpose |
+| :--- | :--- | :--- |
+| Passphrase derivation | Argon2id (time=1, mem=64MB, threads=4) | Derives a 32-byte key from the user's passphrase |
+| Key encryption | AES-256-GCM | Encrypts the user's RSA private key at rest |
+| Value encryption | RSA-4096 (OAEP, SHA-256) | Wraps a per-value AES key |
+| Bulk encryption | AES-256-GCM | Encrypts the actual variable value (supports any size) |
+
+### Key Hierarchy
+
+```
+User passphrase
+  └─ Argon2id ──▶ Derived key (32 bytes)
+                    └─ AES-256-GCM ──▶ Encrypted private key (stored on server)
+
+Per variable:
+  Random AES-256 key
+    ├─ AES-256-GCM ──▶ Encrypted variable value
+    └─ RSA-4096 OAEP ──▶ Encrypted AES key (one copy per team member)
+```
+
+Each environment variable value is encrypted with a fresh random AES-256 key. That AES key is then encrypted with every team member's RSA public key, producing one sealed copy per member. This is standard **hybrid encryption** — the RSA layer handles key distribution while AES handles bulk data.
+
+### What Is Stored Where
+
+| Data | Location | Encrypted? |
+| :--- | :--- | :--- |
+| User's RSA-4096 keypair | Server (Postgres) | Private key encrypted with user's passphrase-derived key |
+| User's passphrase | **Nowhere** — never stored on server | Optionally cached locally at `~/.sp00ky/vault-passphrase` |
+| Environment variable values | Server (Postgres) | Encrypted per-user with hybrid RSA+AES scheme |
+| AES wrapping keys | Server (Postgres) | Encrypted with each member's RSA public key |
+
+### Threat Model
+
+**What the server cannot do:**
+- The server **cannot decrypt** any environment variable values. It only stores ciphertext and encrypted key material.
+- The server **cannot read** your private key without your passphrase.
+
+**What a compromised team member cannot do:**
+- A team member **cannot decrypt** another member's copy of a variable. Each copy is encrypted to a different RSA public key.
+- A removed member **cannot access** variables after removal. Their encrypted copies and vault keys are deleted server-side.
+
+**What you are responsible for:**
+- **Your vault passphrase.** If you lose it, there is no recovery — you must re-initialize your vault and existing variables will be re-encrypted for your new key by another team member triggering a sync.
+- **Local passphrase cache.** If you cache your passphrase in `~/.sp00ky/vault-passphrase`, anyone with access to your machine can decrypt your variables.
+
+<Warning>
+The vault passphrase is never stored on the server. If all team members lose their passphrases, encrypted environment variables cannot be recovered. Make sure at least one team member keeps their passphrase in a secure location.
+</Warning>
+
+### Member Removal
+
+When a team member is removed via `spooky cloud team remove`:
+
+1. Their RSA keypair is **deleted** from the server
+2. All per-user encrypted copies of variables for that member are **deleted**
+3. Any API keys they created are **revoked**
+4. Remaining members' copies are unaffected — no re-encryption is needed
+
+The removed member can no longer decrypt any variables, even if they had previously loaded them, because their server-side key material is gone and future values will never be encrypted for their key.
+
+## Vault Initialization for Teams
+
+Each team member must initialize their own vault independently:
+
+<CodeBlock
+  code={`# Each team member runs this once
+spooky cloud env init`}
+  lang="bash"
+/>
+
+This generates a personal RSA-4096 keypair and sets a vault passphrase. Once initialized, all existing shared variables are automatically encrypted for the new member's public key.
+
+## Best Practices
+
+- **Use strong, unique passphrases.** Each member should use a passphrase they don't use elsewhere. Consider a password manager.
+- **Rotate variables, not passphrases.** If you suspect a variable was leaked, use `spooky cloud env set` to set a new value. This re-encrypts the new value for all current team members.
+- **Limit team size.** Only invite members who need access to production secrets. Use the member role to restrict billing and team management access.
+- **Audit regularly.** Use `spooky cloud team list` to review who has access. Remove members who no longer need it.

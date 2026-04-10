@@ -2482,7 +2482,33 @@ fn destroy() -> Result<()> {
 
     client.delete(&format!("/v1/projects/{}", pid))?;
 
-    println!("Project '{}' destroyed.", slug);
+    println!("  Destroying project '{}'...", slug);
+
+    // Poll until the project status is "destroyed" or it disappears
+    let max_attempts = 60; // ~3 minutes at 3s intervals
+    for _ in 0..max_attempts {
+        thread::sleep(Duration::from_secs(3));
+
+        match fetch_project(&mut client, &slug)? {
+            None => {
+                // Project no longer listed — fully removed
+                println!("  Project '{}' destroyed.", slug);
+                return Ok(());
+            }
+            Some(project) => {
+                let status = project["status"].as_str().unwrap_or("unknown");
+                if status == "destroyed" {
+                    println!("  Project '{}' destroyed.", slug);
+                    return Ok(());
+                }
+                // Still tearing down, keep polling
+            }
+        }
+    }
+
+    println!(
+        "  Destroy is still in progress. Run `sp00ky cloud status` to check."
+    );
     Ok(())
 }
 
