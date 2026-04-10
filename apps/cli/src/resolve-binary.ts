@@ -20,7 +20,7 @@ function getPlatformBinary(): string | undefined {
   const pkg = PLATFORM_PACKAGES[key];
   if (!pkg) return undefined;
 
-  const binaryName = platform() === 'win32' ? 'spooky.exe' : 'spooky';
+  const binaryName = platform() === 'win32' ? 'spky.exe' : 'spky';
 
   try {
     const require = createRequire(import.meta.url);
@@ -32,7 +32,7 @@ function getPlatformBinary(): string | undefined {
 }
 
 export function findBinary(): string {
-  const binaryName = platform() === 'win32' ? 'spooky.exe' : 'spooky';
+  const binaryName = platform() === 'win32' ? 'spky.exe' : 'spky';
 
   // 1. Platform-specific npm package
   const platformBinary = getPlatformBinary();
@@ -65,7 +65,7 @@ export function findBinary(): string {
     : `\nYour platform (${key}) is not supported.`;
 
   throw new Error(
-    `Could not find spooky binary. Checked paths:\n` +
+    `Could not find spky binary. Checked paths:\n` +
       `  - Platform package (${pkg ?? 'none'})\n` +
       `  - ${devPath}\n` +
       `  - ${legacyPath}\n` +

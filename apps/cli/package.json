@@ -1,13 +1,13 @@
 {
   "name": "@spooky-sync/cli",
-  "version": "0.0.1-canary.39",
+  "version": "0.0.1-canary.40",
   "description": "Generate TypeScript/Dart types from SurrealDB schema files",
   "type": "module",
   "main": "./dist/syncgen.cjs",
   "module": "./dist/syncgen.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "spooky": "./dist/cli.js"
+    "spky": "./dist/cli.js"
   },
   "exports": {
     ".": {

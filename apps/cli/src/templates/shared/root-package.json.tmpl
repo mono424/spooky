@@ -2,13 +2,13 @@
   "name": "{{PROJECT_NAME}}",
   "private": true,
   "scripts": {
-    "dev": "spooky dev",
+    "dev": "spky dev",
     "dev:app": "pnpm --filter @{{PROJECT_NAME}}/app dev",
-    "build": "spooky generate && pnpm --filter @{{PROJECT_NAME}}/app build",
-    "generate": "spooky generate",
-    "migrate:create": "spooky migrate create",
-    "migrate:apply": "spooky migrate apply --url http://localhost:8666",
-    "migrate:status": "spooky migrate status --url http://localhost:8666"
+    "build": "spky generate && pnpm --filter @{{PROJECT_NAME}}/app build",
+    "generate": "spky generate",
+    "migrate:create": "spky migrate create",
+    "migrate:apply": "spky migrate apply --url http://localhost:8666",
+    "migrate:status": "spky migrate status --url http://localhost:8666"
   },
   "devDependencies": {
     "@spooky-sync/cli": "{{VERSION}}"

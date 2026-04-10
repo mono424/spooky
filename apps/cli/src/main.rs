@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use surreal_client::SurrealClient;
 
 #[derive(ClapParser, Debug)]
-#[command(name = "spooky")]
+#[command(name = "spky")]
 #[command(about = "Generate types from SurrealDB schema files", long_about = None)]
 #[command(version, disable_version_flag = true)]
 struct Args {
@@ -1148,7 +1148,7 @@ fn main() -> Result<()> {
 
     match args.command {
         Some(Commands::Version) => {
-            println!("spooky {}", env!("CARGO_PKG_VERSION"));
+            println!("spky {}", env!("CARGO_PKG_VERSION"));
             return Ok(());
         }
         Some(Commands::Create) | Some(Commands::Setup) => return create_project(),

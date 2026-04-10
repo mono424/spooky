@@ -10,14 +10,14 @@ fn resolve_devtools_mcp() -> Result<PathBuf> {
     let exe_dir = exe.parent().unwrap_or(Path::new("."));
 
     let candidates = [
-        // npx: binary at node_modules/@spooky-sync/cli-darwin-arm64/spooky
+        // npx: binary at node_modules/@spooky-sync/cli-darwin-arm64/spky
         //       devtools-mcp at node_modules/@spooky-sync/cli/devtools-mcp/
         exe_dir.join("../../cli/devtools-mcp/index.js"),
         // Bundled: devtools-mcp/ sits next to the binary
         exe_dir.join("../devtools-mcp/index.js"),
         // Dev monorepo: relative to CWD
         PathBuf::from("apps/cli/devtools-mcp/index.js"),
-        // Dev monorepo: binary at apps/cli/target/release/spooky
+        // Dev monorepo: binary at apps/cli/target/release/spky
         exe_dir.join("../../../devtools-mcp/dist/index.js"),
     ];
 

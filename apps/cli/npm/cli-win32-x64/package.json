@@ -1,6 +1,6 @@
 {
   "name": "@spooky-sync/cli-win32-x64",
-  "version": "0.0.1-canary.39",
+  "version": "0.0.1-canary.40",
   "description": "Windows x64 binary for @spooky-sync/cli",
   "license": "MIT",
   "os": [
@@ -10,7 +10,7 @@
     "x64"
   ],
   "files": [
-    "spooky.exe"
+    "spky.exe"
   ],
   "repository": {
     "type": "git",

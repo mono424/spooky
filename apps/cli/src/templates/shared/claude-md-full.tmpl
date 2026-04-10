@@ -55,7 +55,7 @@ Use these tools to debug and inspect the app while it's running in the browser.
 **NEVER make direct HTTP/fetch calls to external APIs from client code.** Sp00ky uses an **outbox pattern** — the client writes a job record to SurrealDB, and the Sp00ky backend processes it server-side.
 
 To add a new API integration:
-1. Run `spooky api add` — this scaffolds the outbox table, schema, and backend config from an OpenAPI spec
+1. Run `spky api add` — this scaffolds the outbox table, schema, and backend config from an OpenAPI spec
 2. The client creates a record in the outbox table (e.g. `db.create("job", { path: "/endpoint", payload: { ... } })`)
 3. The Sp00ky backend picks up the job, calls the external API, and writes the result back
 

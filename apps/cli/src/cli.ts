@@ -5,7 +5,7 @@ const binary = findBinary();
 const result = spawnSync(binary, process.argv.slice(2), { stdio: 'inherit' });
 
 if (result.error) {
-  console.error(`Failed to execute spooky: ${result.error.message}`);
+  console.error(`Failed to execute spky: ${result.error.message}`);
   process.exit(1);
 }
 

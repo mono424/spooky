@@ -18,19 +18,19 @@ This package wraps a Rust-based code generator that parses SurrealDB `.surql` sc
 
 ```bash
 # Generate TypeScript types
-spooky --input schema.surql --output types.ts
+spky --input schema.surql --output types.ts
 
 # Generate Dart types
-spooky --input schema.surql --output types.dart
+spky --input schema.surql --output types.dart
 
 # Generate JSON Schema
-spooky --input schema.surql --output schema.json
+spky --input schema.surql --output schema.json
 
 # Generate all formats at once
-spooky --input schema.surql --output output --all
+spky --input schema.surql --output output --all
 
 # Specify format explicitly
-spooky --input schema.surql --output output.ts --format typescript
+spky --input schema.surql --output output.ts --format typescript
 ```
 
 ### Programmatic API
@@ -95,7 +95,7 @@ cli/
 
 ## How It Works
 
-1. The Rust binary (`spooky`) parses SurrealDB schema files and generates JSON Schema
+1. The Rust binary (`spky`) parses SurrealDB schema files and generates JSON Schema
 2. For TypeScript/Dart output, it uses `quicktype` to convert JSON Schema to the target language
 3. The TypeScript wrapper (`src/index.ts`) spawns the Rust binary as a child process
 4. Vite bundles the TypeScript wrapper for distribution
