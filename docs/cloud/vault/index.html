@@ -7,7 +7,7 @@
 <h2 id="how-sharing-works">How Sharing Works</h2>
 <p>When a team member sets an environment variable, it becomes available to every other member of the tenant — no manual sharing required. The flow works like this:</p>
 <ol>
-<li><strong>Each member has their own vault keypair.</strong> When a user joins a tenant (via <code>spky cloud team invite</code>), they initialize their own vault with <code>spky cloud env init</code> and a personal passphrase.</li>
+<li><strong>Each member has their own vault keypair.</strong> When a user joins a tenant (via <code>spky cloud team invite &lt;email&gt;</code>), they initialize their own vault with <code>spky cloud env init</code> and a personal passphrase.</li>
 <li><strong>Variables are encrypted per-user.</strong> When a variable is set, the server encrypts the value separately for each team member’s public key. Every member gets their own encrypted copy they can decrypt with their own passphrase.</li>
 <li><strong>Decryption is always local to the user.</strong> When you run <code>spky cloud env load</code>, the server returns your personally-encrypted copy and you decrypt it with your passphrase. No one else’s passphrase or private key is involved.</li>
 </ol>
