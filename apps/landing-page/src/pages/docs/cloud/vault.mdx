@@ -15,7 +15,7 @@ For CLI usage and individual commands, see the [Environment Variables](/docs/clo
 
 When a team member sets an environment variable, it becomes available to every other member of the tenant — no manual sharing required. The flow works like this:
 
-1. **Each member has their own vault keypair.** When a user joins a tenant (via `spky cloud team invite`), they initialize their own vault with `spky cloud env init` and a personal passphrase.
+1. **Each member has their own vault keypair.** When a user joins a tenant (via `spky cloud team invite <email>`), they initialize their own vault with `spky cloud env init` and a personal passphrase.
 2. **Variables are encrypted per-user.** When a variable is set, the server encrypts the value separately for each team member's public key. Every member gets their own encrypted copy they can decrypt with their own passphrase.
 3. **Decryption is always local to the user.** When you run `spky cloud env load`, the server returns your personally-encrypted copy and you decrypt it with your passphrase. No one else's passphrase or private key is involved.
 
