@@ -9,15 +9,15 @@
 <p>The vault is initialized the first time any team member runs <code>spky cloud env init</code>. Subsequent members receive access through the <a href="/docs/cloud/team#inviting-team-members">invitation flow</a>.</p>
 <h2 id="architecture">Architecture</h2>
 <h3 id="key-hierarchy">Key Hierarchy</h3>
-<pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto;white-space:pre-wrap;word-wrap:break-word" tabindex="0" data-language="plaintext"><code><span class="line"><span>Member passphrase</span></span>
-<span class="line"><span>  └─ Argon2id ──▶ Derived key (32 bytes, per-member)</span></span>
-<span class="line"><span>                    └─ decrypts ──▶ Encryption key (shared secret, one copy per member)</span></span>
-<span class="line"><span>                                      └─ decrypts ──▶ Tenant RSA-4096 private key (one per tenant)</span></span>
+<pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto;white-space:pre-wrap;word-wrap:break-word" tabindex="0" data-language="plaintext"><code><span class="line"><span>Passphrase</span></span>
+<span class="line"><span> └─ Argon2id ─▶ Derived key (per-member)</span></span>
+<span class="line"><span>     └─ decrypts ─▶ Encryption key (shared)</span></span>
+<span class="line"><span>         └─ decrypts ─▶ RSA private key (per-tenant)</span></span>
 <span class="line"><span></span></span>
 <span class="line"><span>Per variable:</span></span>
-<span class="line"><span>  Random AES-256 key</span></span>
-<span class="line"><span>    ├─ encrypts ──▶ Variable value (AES-256-GCM)</span></span>
-<span class="line"><span>    └─ encrypted by ──▶ Tenant RSA public key (RSA-4096 OAEP)</span></span></code></pre>
+<span class="line"><span>  Random AES key</span></span>
+<span class="line"><span>   ├─ encrypts ─▶ Value (AES-256-GCM)</span></span>
+<span class="line"><span>   └─ wrapped by ─▶ RSA public key (OAEP)</span></span></code></pre>
 <p>There are three layers of encryption:</p>
 <ol>
 <li><strong>Passphrase layer (per-member).</strong> Each member’s passphrase is run through Argon2id to derive a 32-byte key. This derived key encrypts that member’s copy of the shared encryption key.</li>
