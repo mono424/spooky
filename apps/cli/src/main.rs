@@ -230,6 +230,11 @@ enum CloudCommands {
         #[command(subcommand)]
         action: CloudTeamCommands,
     },
+    /// Manage vault passphrase resets
+    Vault {
+        #[command(subcommand)]
+        action: CloudVaultCommands,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -329,6 +334,21 @@ pub enum CloudTeamCommands {
         /// New tenant name
         name: Option<String>,
     },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum CloudVaultCommands {
+    /// Request a vault passphrase reset (if you forgot your passphrase)
+    RequestReset,
+    /// Approve a pending vault reset request (admin only)
+    ApproveReset {
+        /// Email of the member whose reset to approve
+        email: String,
+    },
+    /// Complete your vault passphrase reset (set a new passphrase after admin approval)
+    CompleteReset,
+    /// List pending vault reset requests (admin only)
+    ListResets,
 }
 
 #[derive(Subcommand, Debug)]

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::backend::{self, BackendDevConfig, BackendDevTypedConfig, HostingMode};
 use crate::surreal_client::MigrationDB;
-use crate::{CloudBackupCommands, CloudBillingCommands, CloudCommands, CloudEnvCommands, CloudKeyCommands, CloudLinkCommands, CloudTeamCommands};
+use crate::{CloudBackupCommands, CloudBillingCommands, CloudCommands, CloudEnvCommands, CloudKeyCommands, CloudLinkCommands, CloudTeamCommands, CloudVaultCommands};
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -824,6 +824,7 @@ pub fn run(action: CloudCommands) -> Result<()> {
         CloudCommands::Link { action } => link(action),
         CloudCommands::Env { action } => env(action),
         CloudCommands::Team { action } => team(action),
+        CloudCommands::Vault { action } => vault(action),
     }
 }
 
@@ -3048,6 +3049,135 @@ fn team(action: CloudTeamCommands) -> Result<()> {
             )?;
             let updated: serde_json::Value = resp.into_json().context("Failed to parse response")?;
             println!("  Tenant renamed to '{}'.", updated["name"].as_str().unwrap_or(&new_name));
+            Ok(())
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Vault passphrase reset
+// ---------------------------------------------------------------------------
+
+fn vault(action: CloudVaultCommands) -> Result<()> {
+    let creds = require_credentials()?;
+    let mut client = CloudClient::new(&creds);
+
+    // Get tenant ID (same pattern as team())
+    let resp = client.get("/v1/tenants")?;
+    let tenants: Vec<serde_json::Value> = resp.into_json().context("Failed to parse tenants")?;
+    let tenant = tenants.first().context("No tenant found")?;
+    let tenant_id = tenant["id"].as_str().context("No tenant ID")?;
+
+    match action {
+        CloudVaultCommands::RequestReset => {
+            client.post(
+                &format!("/v1/tenants/{}/vault-resets", tenant_id),
+                &serde_json::json!({}),
+            )?;
+            println!("  Reset request submitted.");
+            println!("  Your team admin(s) have been notified by email.");
+            Ok(())
+        }
+
+        CloudVaultCommands::ApproveReset { email } => {
+            // List pending resets and find the one for this email
+            let resp = client.get(&format!("/v1/tenants/{}/vault-resets", tenant_id))?;
+            let resets: Vec<serde_json::Value> = resp.into_json().context("Failed to parse reset requests")?;
+
+            let reset = resets.iter().find(|r| {
+                r["email"].as_str() == Some(&email) && r["status"].as_str() == Some("pending")
+            }).context(format!("No pending reset request found for '{}'", email))?;
+
+            let reset_id = reset["id"].as_str().context("No reset ID")?;
+
+            let passphrase = get_passphrase()?;
+
+            client.post(
+                &format!("/v1/tenants/{}/vault-resets/{}/approve", tenant_id, reset_id),
+                &serde_json::json!({ "passphrase": passphrase }),
+            )?;
+
+            println!("  Reset approved for {}.", email);
+            println!("  They have been notified by email and can now set a new passphrase.");
+            Ok(())
+        }
+
+        CloudVaultCommands::CompleteReset => {
+            // Check if we have an approved reset
+            let resp = client.get(&format!("/v1/tenants/{}/vault-resets/mine", tenant_id))?;
+            let reset: serde_json::Value = resp.into_json().context("Failed to parse reset status")?;
+
+            let status = reset["status"].as_str().unwrap_or("");
+            if status == "pending" {
+                println!("  Your reset request is still pending admin approval.");
+                println!("  Ask a team admin to run: sp00ky cloud vault approve-reset <your-email>");
+                return Ok(());
+            }
+            if status != "approved" {
+                bail!("No approved reset request found. Request one first with: sp00ky cloud vault request-reset");
+            }
+
+            // Prompt for new passphrase
+            let passphrase = inquire::Password::new("New vault passphrase:")
+                .with_display_mode(inquire::PasswordDisplayMode::Masked)
+                .prompt()
+                .context("Failed to read passphrase")?;
+
+            if passphrase.is_empty() {
+                bail!("Passphrase cannot be empty.");
+            }
+
+            let confirm = inquire::Password::new("Confirm passphrase:")
+                .with_display_mode(inquire::PasswordDisplayMode::Masked)
+                .without_confirmation()
+                .prompt()
+                .context("Failed to read confirmation")?;
+
+            if passphrase != confirm {
+                bail!("Passphrases do not match.");
+            }
+
+            client.post(
+                &format!("/v1/tenants/{}/vault-resets/complete", tenant_id),
+                &serde_json::json!({ "passphrase": passphrase }),
+            )?;
+
+            // Update cached passphrase if it exists
+            if load_cached_passphrase().is_some() {
+                save_cached_passphrase(&passphrase)?;
+                println!("  Cached passphrase updated.");
+            } else if is_interactive() {
+                let cache = inquire::Confirm::new("Cache passphrase locally in ~/.sp00ky/?")
+                    .with_default(true)
+                    .prompt()
+                    .unwrap_or(false);
+                if cache {
+                    save_cached_passphrase(&passphrase)?;
+                }
+            }
+
+            println!("  Vault passphrase has been reset successfully.");
+            Ok(())
+        }
+
+        CloudVaultCommands::ListResets => {
+            let resp = client.get(&format!("/v1/tenants/{}/vault-resets", tenant_id))?;
+            let resets: Vec<serde_json::Value> = resp.into_json().context("Failed to parse reset requests")?;
+
+            if resets.is_empty() {
+                println!("No pending vault reset requests.");
+                return Ok(());
+            }
+
+            println!("{:<30} {:<12} {}", "EMAIL", "STATUS", "REQUESTED");
+            println!("{}", "-".repeat(60));
+            for reset in &resets {
+                let email = reset["email"].as_str().unwrap_or("-");
+                let status = reset["status"].as_str().unwrap_or("-");
+                let created = reset["created_at"].as_str().unwrap_or("-");
+                let date = created.split('T').next().unwrap_or(created);
+                println!("{:<30} {:<12} {}", email, status, date);
+            }
             Ok(())
         }
     }

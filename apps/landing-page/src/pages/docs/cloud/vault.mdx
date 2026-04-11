@@ -7,108 +7,173 @@ import CodeBlock from '../../../components/ui/CodeBlock.astro';
 import Warning from '../../../components/ui/Warning.astro';
 import Note from '../../../components/ui/Note.astro';
 
-The **Shared Vault** is a team-wide encrypted store that allows all team members to access the same environment variables without sharing raw secrets over side channels. Every Starter and Pro plan includes a shared vault.
+The **Shared Vault** is a team-wide encrypted store that protects your environment variables at rest. All team members on a tenant share the same vault, and each member accesses it with their own passphrase. Every Starter and Pro plan includes a shared vault.
 
-For CLI usage and individual commands, see the [Environment Variables](/docs/cloud/env-variables) documentation. This page explains how the vault works across a team and how it is secured.
+For CLI usage and commands, see [Environment Variables](/docs/cloud/env-variables). This page explains how the vault works internally and how it is secured.
 
-## How Sharing Works
+## Overview
 
-When a team member sets an environment variable, it becomes available to every other member of the tenant — no manual sharing required. The flow works like this:
+Every tenant has a single vault containing an RSA-4096 keypair. Environment variables are encrypted with this keypair and stored in Postgres. The private key is itself encrypted, and each team member holds a personal key to unlock it — protected by their own passphrase.
 
-1. **Each member has their own vault keypair.** When a user joins a tenant (via `spky cloud team invite <email>`), they initialize their own vault with `spky cloud env init` and a personal passphrase.
-2. **Variables are encrypted per-user.** When a variable is set, the server encrypts the value separately for each team member's public key. Every member gets their own encrypted copy they can decrypt with their own passphrase.
-3. **Decryption is always local to the user.** When you run `spky cloud env load`, the server returns your personally-encrypted copy and you decrypt it with your passphrase. No one else's passphrase or private key is involved.
+The vault is initialized the first time any team member runs `spky cloud env init`. Subsequent members receive access through the [invitation flow](/docs/cloud/team#inviting-team-members).
 
-This means:
-- Team members **never need to share passphrases** with each other
-- Each member's passphrase is independent — changing yours does not affect anyone else
-- Revoking a member (via `spky cloud team remove`) deletes their encrypted copies and vault keys immediately
-
-<Note title="New Members">
-When a new member joins and initializes their vault, existing environment variables are automatically re-encrypted for their public key. They can immediately load all shared variables with <code>spky cloud env load</code>.
-</Note>
-
-## Security Model
-
-### Encryption Architecture
-
-The vault uses a **hybrid encryption** scheme combining asymmetric and symmetric cryptography:
-
-| Layer | Algorithm | Purpose |
-| :--- | :--- | :--- |
-| Passphrase derivation | Argon2id (time=1, mem=64MB, threads=4) | Derives a 32-byte key from the user's passphrase |
-| Key encryption | AES-256-GCM | Encrypts the user's RSA private key at rest |
-| Value encryption | RSA-4096 (OAEP, SHA-256) | Wraps a per-value AES key |
-| Bulk encryption | AES-256-GCM | Encrypts the actual variable value (supports any size) |
+## Architecture
 
 ### Key Hierarchy
 
 ```
-User passphrase
-  └─ Argon2id ──▶ Derived key (32 bytes)
-                    └─ AES-256-GCM ──▶ Encrypted private key (stored on server)
+Member passphrase
+  └─ Argon2id ──▶ Derived key (32 bytes, per-member)
+                    └─ decrypts ──▶ Encryption key (shared secret, one copy per member)
+                                      └─ decrypts ──▶ Tenant RSA-4096 private key (one per tenant)
 
 Per variable:
   Random AES-256 key
-    ├─ AES-256-GCM ──▶ Encrypted variable value
-    └─ RSA-4096 OAEP ──▶ Encrypted AES key (one copy per team member)
+    ├─ encrypts ──▶ Variable value (AES-256-GCM)
+    └─ encrypted by ──▶ Tenant RSA public key (RSA-4096 OAEP)
 ```
 
-Each environment variable value is encrypted with a fresh random AES-256 key. That AES key is then encrypted with every team member's RSA public key, producing one sealed copy per member. This is standard **hybrid encryption** — the RSA layer handles key distribution while AES handles bulk data.
+There are three layers of encryption:
+
+1. **Passphrase layer (per-member).** Each member's passphrase is run through Argon2id to derive a 32-byte key. This derived key encrypts that member's copy of the shared encryption key.
+2. **Encryption key layer (shared).** A single random AES-256 encryption key protects the tenant's RSA private key. Every member stores their own encrypted copy of this key.
+3. **Tenant keypair layer (per-tenant).** An RSA-4096 keypair. The public key encrypts environment variable values via hybrid encryption. The private key (encrypted at rest) decrypts them.
+
+### How Variables Are Encrypted
+
+When you set a variable:
+
+1. The CLI sends the plaintext value to the server
+2. The server generates a random AES-256 key, encrypts the value with AES-256-GCM, and encrypts the AES key with the tenant's RSA public key
+3. The combined ciphertext (encrypted AES key + encrypted value) is stored in Postgres
+
+There is **one encrypted copy** per variable per environment (dev/prod) — not one per member.
+
+### How Variables Are Decrypted
+
+When you load variables:
+
+1. The CLI sends your passphrase to the server
+2. The server derives a key from your passphrase, decrypts your copy of the encryption key, decrypts the tenant's RSA private key, and decrypts each variable
+3. The server returns the plaintext values to the CLI
+
+<Note title="Server-Side Decryption">
+Decryption happens on the server, not on the client. Your passphrase is sent to the server over TLS for each <code>env load</code> and is used only in memory — it is never persisted. The encryption protects data <strong>at rest</strong> in the database, not in transit between the server and CLI (that's handled by TLS).
+</Note>
+
+### Algorithms
+
+| Layer | Algorithm | Purpose |
+| :--- | :--- | :--- |
+| Passphrase derivation | Argon2id (time=1, mem=64 MB, threads=4) | Derives a 32-byte key from the member's passphrase |
+| Encryption key wrapping | AES-256-GCM | Each member's derived key encrypts their copy of the encryption key |
+| Private key encryption | AES-256-GCM | The encryption key encrypts the tenant's RSA private key at rest |
+| Value encryption | RSA-4096 OAEP (SHA-256) + AES-256-GCM | Hybrid encryption of each environment variable value |
 
 ### What Is Stored Where
 
-| Data | Location | Encrypted? |
+| Data | Location | Protection |
 | :--- | :--- | :--- |
-| User's RSA-4096 keypair | Server (Postgres) | Private key encrypted with user's passphrase-derived key |
-| User's passphrase | **Nowhere** — never stored on server | Optionally cached locally at `~/.sp00ky/vault-passphrase` |
-| Environment variable values | Server (Postgres) | Encrypted per-user with hybrid RSA+AES scheme |
-| AES wrapping keys | Server (Postgres) | Encrypted with each member's RSA public key |
+| Tenant RSA public key | Server (Postgres) | Plaintext — used to encrypt new values |
+| Tenant RSA private key | Server (Postgres) | Encrypted with the encryption key (AES-256-GCM) |
+| Encryption key | Server (Postgres) | One copy per member, each encrypted with that member's passphrase-derived key |
+| Member passphrase | **Never stored on server** | Optionally cached locally at `~/.sp00ky/vault-passphrase` |
+| Environment variable values | Server (Postgres) | Hybrid encrypted with tenant public key (one copy per variable) |
 
-### Threat Model
+## Sharing Across a Team
 
-**What the server cannot do:**
-- The server **cannot decrypt** any environment variable values. It only stores ciphertext and encrypted key material.
-- The server **cannot read** your private key without your passphrase.
+When a member sets a variable, it's encrypted with the tenant's public key — every member who has the encryption key (i.e., every member of the tenant) can decrypt it. No manual sharing is needed.
 
-**What a compromised team member cannot do:**
-- A team member **cannot decrypt** another member's copy of a variable. Each copy is encrypted to a different RSA public key.
-- A removed member **cannot access** variables after removal. Their encrypted copies and vault keys are deleted server-side.
+**Inviting new members:** When you run `spky cloud team invite`, the CLI prompts for your passphrase if the vault is initialized. Your passphrase decrypts the encryption key, which is re-encrypted with a server-side transit key and included in the invitation. When the new member accepts, they set their own passphrase, and the encryption key is re-encrypted for them. No variables need to be re-encrypted.
 
-**What you are responsible for:**
-- **Your vault passphrase.** If you lose it, there is no recovery — you must re-initialize your vault and existing variables will be re-encrypted for your new key by another team member triggering a sync.
-- **Local passphrase cache.** If you cache your passphrase in `~/.sp00ky/vault-passphrase`, anyone with access to your machine can decrypt your variables.
+**Changing your passphrase:** Only your copy of the encryption key is re-wrapped. Other members and existing variables are unaffected.
+
+**Removing a member:** Their copy of the encryption key is deleted from `tenant_members` and any API keys they created are revoked. The tenant's keypair and encrypted variables remain unchanged.
+
+## Security Model
+
+### What the encryption protects
+
+- **Database breach.** An attacker who gains access to Postgres sees only ciphertext. Without a member's passphrase, they cannot derive the encryption key, and without the encryption key, they cannot decrypt the tenant's private key or any variable values.
+- **Unauthorized access.** Only authenticated tenant members with a valid passphrase can decrypt variables.
+
+### What the encryption does not protect
+
+- **Compromised server.** Because decryption happens server-side, a compromised server process could observe plaintext values during `env load` or `env set`. The encryption is at-rest protection, not end-to-end.
+- **Compromised member machine.** If a member caches their passphrase at `~/.sp00ky/vault-passphrase`, anyone with access to that machine can load variables.
+
+### Member removal
+
+When a member is removed (`spky cloud team remove`):
+
+1. Their copy of the encryption key is **deleted** from the server
+2. Their API keys are **revoked**
+3. The tenant keypair and encrypted variables are **unaffected**
+
+The removed member can no longer decrypt any variables — their path to the tenant's private key is destroyed. If you suspect a removed member had access to sensitive values, rotate those values with `spky cloud env set`.
 
 <Warning>
-The vault passphrase is never stored on the server. If all team members lose their passphrases, encrypted environment variables cannot be recovered. Make sure at least one team member keeps their passphrase in a secure location.
+If all team members lose their passphrases, encrypted environment variables cannot be recovered. The passphrase is never stored on the server. Keep at least one passphrase in a secure location (e.g., a password manager).
 </Warning>
 
-### Member Removal
+## Passphrase Management
 
-When a team member is removed via `spky cloud team remove`:
-
-1. Their RSA keypair is **deleted** from the server
-2. All per-user encrypted copies of variables for that member are **deleted**
-3. Any API keys they created are **revoked**
-4. Remaining members' copies are unaffected — no re-encryption is needed
-
-The removed member can no longer decrypt any variables, even if they had previously loaded them, because their server-side key material is gone and future values will never be encrypted for their key.
-
-## Vault Initialization for Teams
-
-Each team member must initialize their own vault independently:
+### Changing your passphrase
 
 <CodeBlock
-  code={`# Each team member runs this once
-spky cloud env init`}
+  code={`spky cloud env change-passphrase`}
   lang="bash"
 />
 
-This generates a personal RSA-4096 keypair and sets a vault passphrase. Once initialized, all existing shared variables are automatically encrypted for the new member's public key.
+You'll be prompted for your current passphrase, then a new one with confirmation. Only your copy of the encryption key is re-wrapped — existing variables and other members are unaffected.
+
+### Caching
+
+The CLI can cache your passphrase locally at `~/.sp00ky/vault-passphrase` so you don't need to enter it every time. To clear the cache:
+
+<CodeBlock
+  code={`rm ~/.sp00ky/vault-passphrase`}
+  lang="bash"
+/>
+
+### Passphrase Reset {#passphrase-reset}
+
+If you forget your vault passphrase, a team admin can approve a reset so you can set a new one.
+
+**How it works:**
+
+1. You request a reset — all admins are notified by email
+2. An admin approves the reset by entering their passphrase, which proves they have vault access. The encryption key is temporarily held on the server encrypted with a transit key.
+3. You set a new passphrase — the encryption key is re-encrypted with your new passphrase, and the transit-encrypted copy is deleted.
+
+<CodeBlock
+  code={`# Step 1: Request a reset
+spky cloud vault request-reset
+
+# Step 2: Admin approves (enters their passphrase)
+spky cloud vault approve-reset alice@example.com
+
+# Step 3: Set your new passphrase
+spky cloud vault complete-reset`}
+  lang="bash"
+/>
+
+Admins can list and manage pending requests:
+
+<CodeBlock
+  code={`# List pending requests
+spky cloud vault list-resets`}
+  lang="bash"
+/>
+
+<Note title="Reset Security">
+Reset requests expire after 7 days. Only one active request per member is allowed at a time. The admin must provide their own passphrase to approve — only someone with vault access can grant it to others.
+</Note>
 
 ## Best Practices
 
-- **Use strong, unique passphrases.** Each member should use a passphrase they don't use elsewhere. Consider a password manager.
-- **Rotate variables, not passphrases.** If you suspect a variable was leaked, use `spky cloud env set` to set a new value. This re-encrypts the new value for all current team members.
-- **Limit team size.** Only invite members who need access to production secrets. Use the member role to restrict billing and team management access.
+- **Use strong, unique passphrases.** Consider a password manager. Each member's passphrase should be independent.
+- **Rotate variables when compromised.** If you suspect a value was leaked, run `spky cloud env set` with a new value rather than rotating passphrases.
+- **Limit team size.** Only invite members who need access to production secrets.
 - **Audit regularly.** Use `spky cloud team list` to review who has access. Remove members who no longer need it.
+- **Keep at least one passphrase safe.** If all passphrases are lost, there is no recovery path. Store at least one in a password manager.

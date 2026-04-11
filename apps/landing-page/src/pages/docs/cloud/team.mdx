@@ -7,13 +7,13 @@ import CodeBlock from '../../../components/ui/CodeBlock.astro';
 import Warning from '../../../components/ui/Warning.astro';
 import Note from '../../../components/ui/Note.astro';
 
-Sp00ky Cloud projects live inside a **tenant**. Every tenant has an owner and can have additional team members who share access to projects, deployments, and the shared vault.
+Sp00ky Cloud projects live inside a **tenant**. Every tenant has at least one admin and can have additional team members who share access to projects, deployments, and the [Shared Vault](/docs/cloud/vault).
 
 ## Plan Limits
 
 | Plan | Included Members | Additional Members |
 | :--- | :--- | :--- |
-| **Starter** | 1 (owner only) | +$5/mo each |
+| **Starter** | 1 (admin only) | +$5/mo each |
 | **Pro** | Up to 5 | +$5/mo each |
 
 Additional team members beyond the plan limit are billed as a metered add-on at $5 per member per month.
@@ -23,19 +23,19 @@ Additional team members beyond the plan limit are billed as a metered add-on at 
 Invite a new member by their GitHub email address:
 
 <CodeBlock
-  code={`spky cloud team invite <email>`}
+  code={`spky cloud team invite alice@example.com`}
   lang="bash"
 />
 
-The invited user receives an email with a link to accept the invitation. Once accepted, they can log in with `spky cloud login` and will have access to all projects within the tenant.
+If the [Shared Vault](/docs/cloud/vault) is initialized, the CLI will prompt for your vault passphrase to securely transfer vault access to the new member. The invited user receives an email with a link to accept — they'll authenticate via GitHub OAuth and set their own vault passphrase.
 
 <Note title="GitHub Account Required">
-Team members must have a GitHub account with the invited email address. Sp00ky Cloud uses GitHub OAuth for authentication, so the invited user will log in through the same <code>spky cloud login</code> flow.
+Team members must have a GitHub account with the invited email address. Sp00ky Cloud uses GitHub OAuth for authentication.
 </Note>
 
 ### Pending Invitations
 
-View all pending invitations that have not yet been accepted:
+View all pending invitations:
 
 <CodeBlock
   code={`spky cloud team invitations`}
@@ -45,9 +45,11 @@ View all pending invitations that have not yet been accepted:
 Revoke a pending invitation:
 
 <CodeBlock
-  code={`spky cloud team revoke <email>`}
+  code={`spky cloud team revoke alice@example.com`}
   lang="bash"
 />
+
+Invitations expire after 7 days.
 
 ## Listing Team Members
 
@@ -59,35 +61,60 @@ Revoke a pending invitation:
 Example output:
 
 <CodeBlock
-  code={`EMAIL                        ROLE     JOINED
----------------------------------------------------------
-khadim@example.com           owner    2026-03-01T10:00:00
-alice@example.com            member   2026-03-15T14:30:00
-bob@example.com              member   2026-04-02T09:00:00`}
+  code={`EMAIL                          ROLE       JOINED
+------------------------------------------------------------
+khadim@example.com             admin      2026-03-01
+alice@example.com              member     2026-03-15
+bob@example.com                member     2026-04-02`}
   lang="bash"
 />
 
 ## Removing Team Members
 
-Remove a member from the tenant:
-
 <CodeBlock
-  code={`spky cloud team remove <email>`}
+  code={`spky cloud team remove alice@example.com`}
   lang="bash"
 />
 
 <Warning>
-Removing a team member immediately revokes their access to all projects and the shared vault. Their vault keys are deleted and any API keys they created are revoked. This action cannot be undone — you will need to re-invite them if you want to restore access.
+Removing a team member immediately revokes all access. Their copy of the vault encryption key is deleted and any API keys they created are revoked. This cannot be undone — you'll need to re-invite them to restore access.
 </Warning>
+
+If a removed member previously loaded sensitive values, consider rotating those variables with `spky cloud env set`.
 
 ## Roles
 
 | Role | Capabilities |
 | :--- | :--- |
-| **Owner** | Full access. Manage billing, invite/remove members, create/destroy projects, deploy, manage vault. |
+| **Admin** | Full access. Manage billing, invite/remove members, create/destroy projects, deploy, approve vault resets. |
 | **Member** | Access all projects. Deploy, view logs, manage environment variables via shared vault. Cannot manage billing or remove other members. |
 
-Each tenant has exactly one owner (the user who created the first project). Ownership cannot be transferred at this time.
+The user who creates the first project becomes the tenant's admin. Additional admins can be added by inviting with the admin role.
+
+## Vault Passphrase Reset
+
+If a team member loses their vault passphrase, an admin can approve a reset so they can set a new one. This does not affect other members' passphrases or any encrypted data.
+
+<CodeBlock
+  code={`# Member requests a reset (admins are notified by email)
+spky cloud vault request-reset
+
+# Admin approves the reset
+spky cloud vault approve-reset alice@example.com
+
+# Member completes the reset with a new passphrase
+spky cloud vault complete-reset`}
+  lang="bash"
+/>
+
+See [Passphrase Reset](/docs/cloud/vault#passphrase-reset) for the full details.
+
+## Renaming a Tenant
+
+<CodeBlock
+  code={`spky cloud team rename "My Team"`}
+  lang="bash"
+/>
 
 ## CLI Reference
 
@@ -95,10 +122,11 @@ Each tenant has exactly one owner (the user who created the first project). Owne
   code={`spky cloud team <COMMAND>
 
 Commands:
-  list                 List all team members
-  invite <email>    Invite a user by their GitHub email
-  invitations          List pending invitations
-  revoke <email>    Revoke a pending invitation
-  remove <email>    Remove a team member`}
+  list               List all team members
+  invite <EMAIL>     Invite a user by their GitHub email
+  invitations        List pending invitations
+  revoke <EMAIL>     Revoke a pending invitation
+  remove <EMAIL>     Remove a team member
+  rename [NAME]      Rename the tenant`}
   lang="bash"
 />
