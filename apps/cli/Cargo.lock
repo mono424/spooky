@@ -3766,18 +3766,21 @@ checksum = "1b6b67fb9a61334225b5b790716f609cd58395f895b3fe8b328786812a40bc3b"
 
 [[package]]
 name = "sp00ky-cli"
-version = "0.0.1-canary.43"
+version = "0.0.1-canary.45"
 dependencies = [
  "anyhow",
+ "argon2",
  "base64 0.22.1",
  "chrono",
  "clap",
  "crossterm 0.28.1",
  "ctrlc",
  "dirs",
+ "hex",
  "inquire",
  "open",
  "openapiv3",
+ "rand 0.8.5",
  "ratatui",
  "regex",
  "serde",

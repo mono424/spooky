@@ -22,7 +22,7 @@ The vault is initialized the first time any team member runs `spky cloud env ini
 ### Key Hierarchy
 
 ```
-Passphrase
+Passphrase (client-side only)
  └─ Argon2id ─▶ Derived key (per-member)
      └─ decrypts ─▶ Encryption key (shared)
          └─ decrypts ─▶ RSA private key (per-tenant)
@@ -35,7 +35,7 @@ Per variable:
 
 There are three layers of encryption:
 
-1. **Passphrase layer (per-member).** Each member's passphrase is run through Argon2id to derive a 32-byte key. This derived key encrypts that member's copy of the shared encryption key.
+1. **Passphrase layer (per-member).** Each member's passphrase is run through Argon2id **locally on the CLI** to derive a 32-byte key. The passphrase never leaves your machine. This derived key encrypts that member's copy of the shared encryption key.
 2. **Encryption key layer (shared).** A single random AES-256 encryption key protects the tenant's RSA private key. Every member stores their own encrypted copy of this key.
 3. **Tenant keypair layer (per-tenant).** An RSA-4096 keypair. The public key encrypts environment variable values via hybrid encryption. The private key (encrypted at rest) decrypts them.
 
@@ -53,19 +53,20 @@ There is **one encrypted copy** per variable per environment (dev/prod) — not 
 
 When you load variables:
 
-1. The CLI sends your passphrase to the server
-2. The server derives a key from your passphrase, decrypts your copy of the encryption key, decrypts the tenant's RSA private key, and decrypts each variable
-3. The server returns the plaintext values to the CLI
+1. The CLI derives a key from your passphrase locally using Argon2id — the passphrase never leaves your machine
+2. The CLI sends the derived key to the server
+3. The server uses the derived key to decrypt your copy of the encryption key, decrypts the tenant's RSA private key, and decrypts each variable
+4. The server returns the plaintext values to the CLI
 
 <Note title="Server-Side Decryption">
-Decryption happens on the server, not on the client. Your passphrase is sent to the server over TLS for each <code>env load</code> and is used only in memory — it is never persisted. The encryption protects data <strong>at rest</strong> in the database, not in transit between the server and CLI (that's handled by TLS).
+Variable decryption happens on the server, not on the client. However, your passphrase never leaves your machine — only the derived key is sent to the server over TLS. The derived key is used only in memory and is never persisted server-side. The encryption protects data <strong>at rest</strong> in the database, not in transit between the server and CLI (that's handled by TLS).
 </Note>
 
 ### Algorithms
 
 | Layer | Algorithm | Purpose |
 | :--- | :--- | :--- |
-| Passphrase derivation | Argon2id (time=1, mem=64 MB, threads=4) | Derives a 32-byte key from the member's passphrase |
+| Passphrase derivation | Argon2id (time=1, mem=64 MB, threads=4) | Derives a 32-byte key from the member's passphrase (client-side) |
 | Encryption key wrapping | AES-256-GCM | Each member's derived key encrypts their copy of the encryption key |
 | Private key encryption | AES-256-GCM | The encryption key encrypts the tenant's RSA private key at rest |
 | Value encryption | RSA-4096 OAEP (SHA-256) + AES-256-GCM | Hybrid encryption of each environment variable value |
@@ -77,7 +78,7 @@ Decryption happens on the server, not on the client. Your passphrase is sent to 
 | Tenant RSA public key | Server (Postgres) | Plaintext — used to encrypt new values |
 | Tenant RSA private key | Server (Postgres) | Encrypted with the encryption key (AES-256-GCM) |
 | Encryption key | Server (Postgres) | One copy per member, each encrypted with that member's passphrase-derived key |
-| Member passphrase | **Never stored on server** | Optionally cached locally at `~/.sp00ky/vault-passphrase` |
+| Member passphrase | **Never leaves the client** | Never stored on disk; only the derived key is optionally cached at `~/.sp00ky/vault-derived-key` |
 | Environment variable values | Server (Postgres) | Hybrid encrypted with tenant public key (one copy per variable) |
 
 ## Sharing Across a Team
@@ -99,8 +100,8 @@ When a member sets a variable, it's encrypted with the tenant's public key — e
 
 ### What the encryption does not protect
 
-- **Compromised server.** Because decryption happens server-side, a compromised server process could observe plaintext values during `env load` or `env set`. The encryption is at-rest protection, not end-to-end.
-- **Compromised member machine.** If a member caches their passphrase at `~/.sp00ky/vault-passphrase`, anyone with access to that machine can load variables.
+- **Compromised server.** Because variable decryption happens server-side, a compromised server process could observe plaintext values during `env load` or `env set`. The encryption is at-rest protection, not end-to-end. However, the passphrase itself never reaches the server — only the derived key.
+- **Compromised member machine.** If a member caches their derived key at `~/.sp00ky/vault-derived-key`, anyone with access to that machine can load variables. The derived key cannot be reversed back to the original passphrase.
 
 ### Member removal
 
@@ -129,10 +130,10 @@ You'll be prompted for your current passphrase, then a new one with confirmation
 
 ### Caching
 
-The CLI can cache your passphrase locally at `~/.sp00ky/vault-passphrase` so you don't need to enter it every time. To clear the cache:
+The CLI can cache your derived key locally at `~/.sp00ky/vault-derived-key` so you don't need to enter your passphrase every time. The derived key cannot be reversed back to your passphrase. To clear the cache:
 
 <CodeBlock
-  code={`rm ~/.sp00ky/vault-passphrase`}
+  code={`rm ~/.sp00ky/vault-derived-key`}
   lang="bash"
 />
 

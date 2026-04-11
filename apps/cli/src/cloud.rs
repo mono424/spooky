@@ -5,6 +5,8 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
+use argon2::{Argon2, Algorithm, Version, Params};
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
 use crate::backend::{self, BackendDevConfig, BackendDevTypedConfig, HostingMode};
@@ -2924,12 +2926,8 @@ fn team(action: CloudTeamCommands) -> Result<()> {
             });
 
             if vault_initialized && is_interactive() {
-                let passphrase = inquire::Password::new("Vault passphrase (to share vault access):")
-                    .with_display_mode(inquire::PasswordDisplayMode::Masked)
-                    .without_confirmation()
-                    .prompt()
-                    .context("Failed to read passphrase")?;
-                body["passphrase"] = serde_json::Value::String(passphrase);
+                let dk = get_derived_key(&mut client)?;
+                body["derived_key"] = serde_json::Value::String(dk);
             }
 
             client.post(
@@ -3090,11 +3088,11 @@ fn vault(action: CloudVaultCommands) -> Result<()> {
 
             let reset_id = reset["id"].as_str().context("No reset ID")?;
 
-            let passphrase = get_passphrase()?;
+            let dk = get_derived_key(&mut client)?;
 
             client.post(
                 &format!("/v1/tenants/{}/vault-resets/{}/approve", tenant_id, reset_id),
-                &serde_json::json!({ "passphrase": passphrase }),
+                &serde_json::json!({ "derived_key": dk }),
             )?;
 
             println!("  Reset approved for {}.", email);
@@ -3137,22 +3135,27 @@ fn vault(action: CloudVaultCommands) -> Result<()> {
                 bail!("Passphrases do not match.");
             }
 
+            let salt_hex = generate_salt();
+            let salt = hex::decode(&salt_hex).context("Invalid salt")?;
+            println!("Deriving encryption key...");
+            let dk = derive_key(&passphrase, &salt)?;
+
             client.post(
                 &format!("/v1/tenants/{}/vault-resets/complete", tenant_id),
-                &serde_json::json!({ "passphrase": passphrase }),
+                &serde_json::json!({ "derived_key": dk, "salt": salt_hex }),
             )?;
 
-            // Update cached passphrase if it exists
-            if load_cached_passphrase().is_some() {
-                save_cached_passphrase(&passphrase)?;
-                println!("  Cached passphrase updated.");
+            // Update cached derived key if it exists
+            if load_cached_derived_key().is_some() {
+                save_cached_derived_key(&dk)?;
+                println!("  Cached derived key updated.");
             } else if is_interactive() {
-                let cache = inquire::Confirm::new("Cache passphrase locally in ~/.sp00ky/?")
+                let cache = inquire::Confirm::new("Cache derived key locally in ~/.sp00ky/?")
                     .with_default(true)
                     .prompt()
                     .unwrap_or(false);
                 if cache {
-                    save_cached_passphrase(&passphrase)?;
+                    save_cached_derived_key(&dk)?;
                 }
             }
 
@@ -3670,25 +3673,33 @@ fn link_runs() -> Result<()> {
 // Environment Variables
 // ---------------------------------------------------------------------------
 
-const VAULT_PASSPHRASE_FILE: &str = "vault-passphrase";
+const VAULT_DERIVED_KEY_FILE: &str = "vault-derived-key";
+const VAULT_PASSPHRASE_FILE_LEGACY: &str = "vault-passphrase";
 
-fn vault_passphrase_path() -> PathBuf {
+fn vault_derived_key_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(SP00KY_DIR)
-        .join(VAULT_PASSPHRASE_FILE)
+        .join(VAULT_DERIVED_KEY_FILE)
 }
 
-fn load_cached_passphrase() -> Option<String> {
-    fs::read_to_string(vault_passphrase_path()).ok().map(|s| s.trim().to_string())
+fn vault_passphrase_path_legacy() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(SP00KY_DIR)
+        .join(VAULT_PASSPHRASE_FILE_LEGACY)
 }
 
-fn save_cached_passphrase(passphrase: &str) -> Result<()> {
-    let path = vault_passphrase_path();
+fn load_cached_derived_key() -> Option<String> {
+    fs::read_to_string(vault_derived_key_path()).ok().map(|s| s.trim().to_string())
+}
+
+fn save_cached_derived_key(hex_key: &str) -> Result<()> {
+    let path = vault_derived_key_path();
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(&path, passphrase)?;
+    fs::write(&path, hex_key)?;
     Ok(())
 }
 
@@ -3699,23 +3710,71 @@ fn prompt_passphrase(label: &str) -> Result<String> {
         .context("Failed to read passphrase")
 }
 
-/// Get the vault passphrase: cached file > prompt. Optionally offer to cache.
-fn get_passphrase() -> Result<String> {
-    if let Some(pp) = load_cached_passphrase() {
-        return Ok(pp);
+fn derive_key(passphrase: &str, salt: &[u8]) -> Result<String> {
+    let params = Params::new(65536, 1, 4, Some(32))
+        .map_err(|e| anyhow::anyhow!("Invalid Argon2 params: {}", e))?;
+    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+    let mut output = [0u8; 32];
+    argon2
+        .hash_password_into(passphrase.as_bytes(), salt, &mut output)
+        .map_err(|e| anyhow::anyhow!("Argon2 derivation failed: {}", e))?;
+    Ok(hex::encode(output))
+}
+
+fn generate_salt() -> String {
+    let mut salt = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut salt);
+    hex::encode(salt)
+}
+
+fn fetch_key_params(client: &mut CloudClient) -> Result<String> {
+    let resp = client.get("/v1/vault/key-params")?;
+    let data: serde_json::Value = resp.into_json()?;
+    let salt_hex = data["salt"].as_str().context("No salt in key-params response")?;
+    Ok(salt_hex.to_string())
+}
+
+/// Get the vault derived key: cached file > migrate legacy > prompt + derive.
+fn get_derived_key(client: &mut CloudClient) -> Result<String> {
+    // 1. Check for cached derived key
+    if let Some(dk) = load_cached_derived_key() {
+        return Ok(dk);
     }
+
+    // 2. Auto-migrate legacy passphrase file
+    let legacy_path = vault_passphrase_path_legacy();
+    if let Ok(passphrase) = fs::read_to_string(&legacy_path) {
+        let passphrase = passphrase.trim().to_string();
+        if !passphrase.is_empty() {
+            println!("Migrating cached passphrase to derived key...");
+            let salt_hex = fetch_key_params(client)?;
+            let salt = hex::decode(&salt_hex).context("Invalid salt hex")?;
+            let dk = derive_key(&passphrase, &salt)?;
+            save_cached_derived_key(&dk)?;
+            let _ = fs::remove_file(&legacy_path);
+            println!("Done. Cached derived key saved to ~/.sp00ky/vault-derived-key");
+            return Ok(dk);
+        }
+    }
+
+    // 3. Prompt for passphrase and derive
     let pp = prompt_passphrase("Vault passphrase:")?;
+    println!("Deriving key (this may take a moment)...");
+    let salt_hex = fetch_key_params(client)?;
+    let salt = hex::decode(&salt_hex).context("Invalid salt hex")?;
+    let dk = derive_key(&pp, &salt)?;
+
     if is_interactive() {
-        let cache = inquire::Confirm::new("Cache passphrase locally in ~/.sp00ky/?")
+        let cache = inquire::Confirm::new("Cache derived key locally in ~/.sp00ky/?")
             .with_default(true)
-            .with_help_message("Saves to ~/.sp00ky/vault-passphrase so you don't need to enter it every time")
+            .with_help_message("Saves to ~/.sp00ky/vault-derived-key so you don't need to enter your passphrase every time")
             .prompt()
             .unwrap_or(false);
         if cache {
-            save_cached_passphrase(&pp)?;
+            save_cached_derived_key(&dk)?;
         }
     }
-    Ok(pp)
+    Ok(dk)
 }
 
 fn ensure_vault(client: &mut CloudClient) -> Result<()> {
@@ -3752,16 +3811,19 @@ fn ensure_vault(client: &mut CloudClient) -> Result<()> {
         bail!("Passphrases do not match.");
     }
 
-    println!("Generating encryption keys (this may take a moment)...");
-    client.post("/v1/vault/init", &serde_json::json!({ "passphrase": passphrase }))?;
+    let salt_hex = generate_salt();
+    let salt = hex::decode(&salt_hex).context("Invalid salt")?;
+    println!("Deriving encryption key (this may take a moment)...");
+    let dk = derive_key(&passphrase, &salt)?;
+    client.post("/v1/vault/init", &serde_json::json!({ "derived_key": dk, "salt": salt_hex }))?;
     println!("Vault initialized.");
 
-    let cache = inquire::Confirm::new("Cache passphrase locally in ~/.sp00ky/?")
+    let cache = inquire::Confirm::new("Cache derived key locally in ~/.sp00ky/?")
         .with_default(true)
         .prompt()
         .unwrap_or(false);
     if cache {
-        save_cached_passphrase(&passphrase)?;
+        save_cached_derived_key(&dk)?;
     }
 
     Ok(())
@@ -3813,18 +3875,21 @@ fn env_init() -> Result<()> {
         bail!("Passphrases do not match.");
     }
 
-    println!("Generating encryption keys (this may take a moment)...");
-    client.post("/v1/vault/init", &serde_json::json!({ "passphrase": passphrase }))?;
+    let salt_hex = generate_salt();
+    let salt = hex::decode(&salt_hex).context("Invalid salt")?;
+    println!("Deriving encryption key (this may take a moment)...");
+    let dk = derive_key(&passphrase, &salt)?;
+    client.post("/v1/vault/init", &serde_json::json!({ "derived_key": dk, "salt": salt_hex }))?;
     println!("Vault initialized successfully.");
 
-    let cache = inquire::Confirm::new("Cache passphrase locally in ~/.sp00ky/?")
+    let cache = inquire::Confirm::new("Cache derived key locally in ~/.sp00ky/?")
         .with_default(true)
         .with_help_message("So you don't need to enter it every time you load env variables")
         .prompt()
         .unwrap_or(false);
     if cache {
-        save_cached_passphrase(&passphrase)?;
-        println!("Passphrase cached at ~/.sp00ky/vault-passphrase");
+        save_cached_derived_key(&dk)?;
+        println!("Derived key cached at ~/.sp00ky/vault-derived-key");
     }
 
     Ok(())
@@ -4059,13 +4124,13 @@ fn env_load(prod: bool) -> Result<()> {
     let (_slug, project) = ensure_project(&mut client)?;
     let pid = project_id(&project);
 
-    let passphrase = get_passphrase()?;
+    let derived_key = get_derived_key(&mut client)?;
     let environment = if prod { "production" } else { "development" };
 
     let resp = client.post(
         &format!("/v1/projects/{}/envs/load", pid),
         &serde_json::json!({
-            "passphrase": passphrase,
+            "derived_key": derived_key,
             "environment": environment,
         }),
     )?;
@@ -4103,6 +4168,9 @@ fn env_change_passphrase() -> Result<()> {
     let mut client = CloudClient::new(&creds);
 
     let current = prompt_passphrase("Current passphrase:")?;
+    let salt_hex = fetch_key_params(&mut client)?;
+    let current_dk = derive_key(&current, &hex::decode(&salt_hex)?)?;
+
     let new_pp = inquire::Password::new("New passphrase:")
         .with_display_mode(inquire::PasswordDisplayMode::Masked)
         .prompt()
@@ -4122,14 +4190,18 @@ fn env_change_passphrase() -> Result<()> {
         bail!("Passphrases do not match.");
     }
 
+    let new_salt_hex = generate_salt();
+    let new_dk = derive_key(&new_pp, &hex::decode(&new_salt_hex)?)?;
+
     client.post("/v1/vault/change-passphrase", &serde_json::json!({
-        "current_passphrase": current,
-        "new_passphrase": new_pp,
+        "current_derived_key": current_dk,
+        "new_derived_key": new_dk,
+        "new_salt": new_salt_hex,
     }))?;
 
-    // Update cached passphrase if it exists
-    if vault_passphrase_path().exists() {
-        save_cached_passphrase(&new_pp)?;
+    // Update cached derived key
+    if vault_derived_key_path().exists() {
+        save_cached_derived_key(&new_dk)?;
         println!("Passphrase changed. Local cache updated.");
     } else {
         println!("Passphrase changed.");
