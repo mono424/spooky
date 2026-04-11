@@ -3705,6 +3705,7 @@ fn save_cached_derived_key(hex_key: &str) -> Result<()> {
 
 fn prompt_passphrase(label: &str) -> Result<String> {
     inquire::Password::new(label)
+        .with_display_mode(inquire::PasswordDisplayMode::Masked)
         .without_confirmation()
         .prompt()
         .context("Failed to read passphrase")
