@@ -806,6 +806,21 @@ async fn ingest_handler(
         // In cluster mode, only process jobs assigned to this SSP.
         let is_standalone = state.scheduler_url.is_none();
         let is_assigned = is_standalone || payload.job_assignee.as_deref() == Some(&state.ssp_id);
+
+        info!(
+            table = %payload.table,
+            op = ?op,
+            record_id = %payload.id,
+            backend = %backend_info.name,
+            base_url = %backend_info.base_url,
+            is_standalone,
+            is_assigned,
+            job_assignee = ?payload.job_assignee,
+            ssp_id = %state.ssp_id,
+            record_status = ?payload.record.get("status").and_then(|v| v.as_str()),
+            "Job routing: table matched job config"
+        );
+
         if is_assigned && op == Operation::Create {
             if let Some(status) = payload.record.get("status").and_then(|v| v.as_str()) {
                 if status == "pending" {
@@ -820,19 +835,50 @@ async fn ingest_handler(
                         effective_timeout,
                     );
 
-                    debug!(
+                    info!(
                         job_id = %job_entry.id,
                         path = %job_entry.path,
                         backend = %backend_info.name,
-                        "Queueing job"
+                        timeout_secs = effective_timeout.as_secs(),
+                        "Queueing job for execution"
                     );
 
                     if let Err(e) = state.job_queue_tx.send(job_entry).await {
                         error!(error = %e, "Failed to queue job");
                     }
+                } else {
+                    debug!(
+                        record_id = %payload.id,
+                        status,
+                        "Job routing: skipped — status is not 'pending'"
+                    );
                 }
+            } else {
+                debug!(
+                    record_id = %payload.id,
+                    "Job routing: skipped — no 'status' field in record"
+                );
             }
+        } else if !is_assigned {
+            debug!(
+                record_id = %payload.id,
+                job_assignee = ?payload.job_assignee,
+                ssp_id = %state.ssp_id,
+                "Job routing: skipped — not assigned to this SSP"
+            );
+        } else {
+            debug!(
+                record_id = %payload.id,
+                op = ?op,
+                "Job routing: skipped — operation is not CREATE"
+            );
         }
+    } else if !state.job_config.job_tables.is_empty() {
+        debug!(
+            table = %payload.table,
+            configured_tables = ?state.job_config.job_tables.keys().collect::<Vec<_>>(),
+            "Job routing: table not in job config"
+        );
     }
 
     // Process through circuit

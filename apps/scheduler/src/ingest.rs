@@ -119,6 +119,14 @@ async fn handle_ingest(
         pool.select_for_query()
     };
 
+    info!(
+        table = %request.table,
+        op = %request.op,
+        record_id = %request.id,
+        job_assignee = ?job_assignee,
+        "Ingest: job assignee selected for event"
+    );
+
     // Set assignee on request before broadcast
     let mut request = request;
     request.job_assignee = job_assignee;

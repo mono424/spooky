@@ -231,27 +231,25 @@ async fn info_handler(
         }));
     }
 
-    // Ping backends that have health check paths configured
-    let http_client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(3))
-        .build()
-        .unwrap_or_default();
-    for backend in &state.backends {
-        let health_url = format!("{}{}", backend.url.trim_end_matches('/'), backend.healthcheck);
-        let status = match http_client.get(&health_url).send().await {
-            Ok(resp) if resp.status().is_success() => "healthy",
-            Ok(_) => "unhealthy",
-            Err(_) => "unreachable",
-        };
-        let backend_ip = backend.url.trim_start_matches("http://")
-            .split(':').next()
-            .map(|s| s.to_string());
+    // Read cached backend health status
+    let backend_entries = state.backend_health.read().await;
+    for entry in backend_entries.iter() {
         entities.push(serde_json::json!({
             "entity": "backend",
-            "id": backend.name,
-            "ip": backend_ip,
-            "status": status,
-            "healthcheck": backend.healthcheck,
+            "id": entry.name,
+            "ip": entry.ip(),
+            "url": entry.url,
+            "port": entry.port,
+            "status": entry.status.as_str(),
+            "healthcheck": entry.healthcheck,
+            "last_checked": entry.last_checked.map(|t| {
+                chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339()
+            }),
+            "last_healthy": entry.last_healthy.map(|t| {
+                chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339()
+            }),
+            "response_time_ms": entry.response_time_ms,
+            "env": entry.env,
         }));
     }
 
