@@ -56,10 +56,19 @@ async fn main() -> Result<()> {
 
     let proxy_router = scheduler::proxy::create_proxy_router(scheduler.proxy_state());
 
+    // Create backend health cache and start background monitor
+    let backend_health_cache = scheduler::backend_health::create_health_cache(&config.backends);
+    scheduler::backend_health::start_backend_health_monitor(
+        config.backends.clone(),
+        backend_health_cache.clone(),
+        config.health_check_interval_secs,
+    );
+
     let metrics_router = scheduler::metrics::create_metrics_router(
         scheduler.metrics_state(
             std::sync::Arc::clone(&query_tracker),
             std::sync::Arc::clone(&job_tracker),
+            backend_health_cache,
         )
     );
     

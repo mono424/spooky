@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::info;
 
+use crate::backend_health::{BackendHealthCache, BackendStatus};
 use crate::job_scheduler::JobTracker;
 use crate::query::QueryTracker;
 use crate::router::{SspPool, SspState};
@@ -56,7 +57,7 @@ pub struct MetricsState {
     pub start_time: std::time::Instant,
     pub scheduler_id: String,
     pub status: Arc<RwLock<SchedulerStatus>>,
-    pub backends: Vec<crate::config::BackendHealthConfig>,
+    pub backend_health: BackendHealthCache,
 }
 
 /// Create metrics router
@@ -123,17 +124,44 @@ async fn health_check(
     State(state): State<MetricsState>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     let pool = state.ssp_pool.read().await;
+    let total_ssps = pool.count();
     let ready_ssps = pool
         .all()
         .iter()
         .filter(|ssp| pool.is_ready(&ssp.id))
         .count();
 
-    if ready_ssps > 0 {
-        (StatusCode::OK, Json(serde_json::json!({ "status": "healthy" })))
+    let backends = state.backend_health.read().await;
+    let total_backends = backends.len();
+    let healthy_backends = backends.iter().filter(|b| b.status == BackendStatus::Healthy).count();
+    let unhealthy_backends = backends.iter().filter(|b| b.status == BackendStatus::Unhealthy).count();
+    let unreachable_backends = backends.iter().filter(|b| b.status == BackendStatus::Unreachable).count();
+
+    let ssps_ok = ready_ssps > 0;
+    let all_backends_ok = total_backends == 0 || healthy_backends == total_backends;
+    let all_backends_down = total_backends > 0 && (unreachable_backends + unhealthy_backends) == total_backends;
+
+    let (status_code, status_str) = if ssps_ok && all_backends_ok {
+        (StatusCode::OK, "healthy")
+    } else if !ssps_ok || all_backends_down {
+        (StatusCode::SERVICE_UNAVAILABLE, "unavailable")
     } else {
-        (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({ "status": "unavailable" })))
-    }
+        (StatusCode::OK, "degraded")
+    };
+
+    (status_code, Json(serde_json::json!({
+        "status": status_str,
+        "ssps": {
+            "ready": ready_ssps,
+            "total": total_ssps,
+        },
+        "backends": {
+            "healthy": healthy_backends,
+            "unhealthy": unhealthy_backends,
+            "unreachable": unreachable_backends,
+            "total": total_backends,
+        }
+    })))
 }
 
 /// Info handler — returns entity list with identity and status

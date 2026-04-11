@@ -1,3 +1,4 @@
+pub mod backend_health;
 pub mod backup;
 pub mod config;
 pub mod replica;
@@ -141,6 +142,7 @@ impl Scheduler {
         &self,
         query_tracker: Arc<crate::query::QueryTracker>,
         job_tracker: Arc<crate::job_scheduler::JobTracker>,
+        backend_health: crate::backend_health::BackendHealthCache,
     ) -> crate::metrics::MetricsState {
         crate::metrics::MetricsState {
             ssp_pool: Arc::clone(&self.ssp_pool),
@@ -149,7 +151,7 @@ impl Scheduler {
             start_time: self.start_time,
             scheduler_id: self.config.scheduler_id.clone(),
             status: Arc::clone(&self.status),
-            backends: self.config.backends.clone(),
+            backend_health,
         }
     }
 

@@ -19,6 +19,7 @@ pub struct SchedulerConfig {
     pub bootstrap_timeout_secs: u64,
     pub ssp_poll_interval_ms: u64,
     pub wal_path: PathBuf,
+    pub health_check_interval_secs: u64,
     #[serde(skip)]
     pub scheduler_id: String,
     #[serde(skip)]
@@ -30,6 +31,10 @@ pub struct BackendHealthConfig {
     pub name: String,
     pub url: String,
     pub healthcheck: String,
+    #[serde(default)]
+    pub port: Option<u16>,
+    #[serde(default)]
+    pub env: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -72,6 +77,7 @@ impl Default for SchedulerConfig {
             bootstrap_timeout_secs: 120,
             ssp_poll_interval_ms: 3000,
             wal_path: PathBuf::from("./data/event_wal.log"),
+            health_check_interval_secs: 15,
             scheduler_id: String::new(),
             backends: vec![],
         }
