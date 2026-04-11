@@ -22,15 +22,15 @@ The vault is initialized the first time any team member runs `spky cloud env ini
 ### Key Hierarchy
 
 ```
-Member passphrase
-  └─ Argon2id ──▶ Derived key (32 bytes, per-member)
-                    └─ decrypts ──▶ Encryption key (shared secret, one copy per member)
-                                      └─ decrypts ──▶ Tenant RSA-4096 private key (one per tenant)
+Passphrase
+ └─ Argon2id ─▶ Derived key (per-member)
+     └─ decrypts ─▶ Encryption key (shared)
+         └─ decrypts ─▶ RSA private key (per-tenant)
 
 Per variable:
-  Random AES-256 key
-    ├─ encrypts ──▶ Variable value (AES-256-GCM)
-    └─ encrypted by ──▶ Tenant RSA public key (RSA-4096 OAEP)
+  Random AES key
+   ├─ encrypts ─▶ Value (AES-256-GCM)
+   └─ wrapped by ─▶ RSA public key (OAEP)
 ```
 
 There are three layers of encryption:
