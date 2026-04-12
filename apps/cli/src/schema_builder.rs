@@ -2,12 +2,12 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::path::PathBuf;
 
-use crate::backend::BackendProcessor;
+use crate::backend::{BackendProcessor, DeployMode};
 
 pub struct SchemaBuilderConfig {
     pub input_path: PathBuf,
     pub config_path: Option<PathBuf>,
-    pub mode: String,
+    pub mode: DeployMode,
     pub endpoint: Option<String>,
     pub secret: Option<String>,
     pub include_functions: bool,
@@ -17,7 +17,7 @@ pub struct SchemaBuilderConfig {
 /// with endpoint/secret substitution).  Used by `dev.rs` to apply functions
 /// separately with Docker-internal URLs.
 pub fn build_remote_functions_schema(
-    mode: &str,
+    mode: &DeployMode,
     endpoint: &str,
     secret: &str,
 ) -> String {
@@ -40,14 +40,14 @@ pub fn build_remote_functions_schema(
     let functions_remote_singlenode = include_str!("functions_remote_singlenode.surql");
     let functions_remote_surrealism = include_str!("functions_remote_surrealism.surql");
 
-    if mode == "singlenode" || mode == "cluster" {
+    if *mode == DeployMode::Singlenode || *mode == DeployMode::Cluster {
         let mut singlenode_fn = functions_remote_singlenode.to_string();
         singlenode_fn = singlenode_fn.replace("{{ENDPOINT}}", endpoint);
         singlenode_fn = singlenode_fn.replace("{{SECRET}}", secret);
 
         content.push('\n');
         content.push_str(&singlenode_fn);
-    } else if mode == "surrealism" {
+    } else if *mode == DeployMode::Surrealism {
         content.push('\n');
         content.push_str(functions_remote_surrealism);
     }
@@ -95,7 +95,7 @@ pub fn build_server_schema(config: &SchemaBuilderConfig) -> Result<String> {
 
     // Remote functions — only when include_functions is true
     if config.include_functions {
-        let default_endpoint = if config.mode == "cluster" {
+        let default_endpoint = if config.mode == DeployMode::Cluster {
             "http://localhost:9667"
         } else {
             "http://localhost:8667"
@@ -113,7 +113,7 @@ pub fn build_server_schema(config: &SchemaBuilderConfig) -> Result<String> {
 
     // Replace unregister_view call (this transforms event handlers in user
     // schema, not function definitions — always apply it)
-    if config.mode == "singlenode" || config.mode == "cluster" {
+    if config.mode == DeployMode::Singlenode || config.mode == DeployMode::Cluster {
         let unregister_call = "let $result = mod::dbsp::unregister_view(<string>$before.id);";
         let unregister_http =
             "let $payload = { id: <string>$before.id };\n    let $result = http::post($sp00ky_endpoint + '/view/unregister', $payload, { \"Authorization\": \"Bearer \" + $sp00ky_secret });";

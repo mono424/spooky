@@ -7,7 +7,6 @@ surrealdb:
   # hosting: cloud      # "cloud" (default) or "external"
   # endpoint: "wss://my-surreal.example.com"  # required when hosting: external
 # cloudApi: "https://staging-api.sp00ky.cloud"  # override Sp00ky Cloud API endpoint
-devApp: dev:app # runs: pnpm --filter @example/app-solid dev (Solid.js frontend)
 schema: ./schema
 buckets:
   - ./schema/src/buckets/profile.surql
@@ -16,10 +15,16 @@ clientTypes:
     output: ./app-solid/src/schema.gen.ts
   - format: dart
     output: ./client-dart/src/db/models.dart
-backends:
+apps:
+  web:
+    type: frontend
+    dev:
+      type: npm
+      script: dev:app
+    env: ".env.local"
   api:
+    type: backend
     # hosting: cloud    # "cloud" (default) or "external" (self-hosted at baseUrl)
-    type: http
     spec: ./api/openapi.yml
     baseUrl: http://host.docker.internal:3660
     dev:
@@ -33,3 +38,6 @@ backends:
       type: outbox
       table: job
       schema: ./schema/src/outbox/api.surql
+    env:
+      dev: ".env.local"
+      cloud: "vault"

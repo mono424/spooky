@@ -1,3 +1,4 @@
+use crate::backend::DeployMode;
 use crate::parser::{FieldType, TableSchema};
 use std::collections::BTreeMap;
 
@@ -9,7 +10,7 @@ pub fn generate_sp00ky_events(
     tables: &BTreeMap<String, TableSchema>,
     _raw_content: &str,
     is_client: bool,
-    mode: &str,
+    mode: &DeployMode,
     _endpoint: Option<&str>,
     _secret: Option<&str>,
 ) -> String {
@@ -71,7 +72,7 @@ pub fn generate_sp00ky_events(
 
     // Remote Logic: DBSP Ingest (Surrealism) OR Sidecar HTTP Call
 
-    let is_http = mode == "singlenode" || mode == "cluster";
+    let is_http = *mode == DeployMode::Singlenode || *mode == DeployMode::Cluster;
 
     // Sort table names for deterministic output
     let mut sorted_table_names: Vec<_> = tables.keys().collect();

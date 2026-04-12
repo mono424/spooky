@@ -1015,29 +1015,205 @@ fn create(slug: Option<String>, plan: String) -> Result<()> {
     Ok(())
 }
 
-/// Load environment variables from a file (KEY=val lines, skipping comments and blanks).
-fn load_deploy_env_file(env_file: Option<&str>, config_dir: &std::path::Path) -> Vec<String> {
-    let path = match env_file {
-        Some(p) => config_dir.join(p),
-        None => return Vec::new(),
-    };
-    let content = match std::fs::read_to_string(&path) {
-        Ok(c) => c,
+/// Load vault env vars for deploy via the API. Returns "KEY=VAL" strings.
+fn load_vault_envs_for_deploy(client: &mut CloudClient, pid: &str, prod: bool) -> Vec<String> {
+    let derived_key = match get_derived_key(client) {
+        Ok(dk) => dk,
         Err(e) => {
-            eprintln!("  Warning: Could not read env-file {:?}: {}", path, e);
+            eprintln!("  Warning: Could not load vault passphrase: {}. Skipping vault env vars.", e);
             return Vec::new();
         }
     };
-    println!("  Loaded env-file: {}", path.display());
-    content
-        .lines()
-        .filter(|l| {
-            let trimmed = l.trim();
-            !trimmed.is_empty() && !trimmed.starts_with('#')
-        })
-        .filter(|l| l.contains('='))
-        .map(|l| l.trim().to_string())
-        .collect()
+    let environment = if prod { "production" } else { "development" };
+    let resp = match client.post(
+        &format!("/v1/projects/{}/envs/load", pid),
+        &serde_json::json!({ "derived_key": derived_key, "environment": environment }),
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("  Warning: Could not load vault env vars: {}. Skipping.", e);
+            return Vec::new();
+        }
+    };
+    let data: serde_json::Value = match resp.into_json() {
+        Ok(d) => d,
+        Err(_) => return Vec::new(),
+    };
+    let mut result = Vec::new();
+    if let Some(vars) = data["variables"].as_object() {
+        for (key, value) in vars {
+            if let Some(val) = value.as_str() {
+                result.push(format!("{}={}", key, val));
+            }
+        }
+    }
+    result
+}
+
+/// Resolve a single EnvSource into "KEY=VAL" strings for cloud deploy.
+fn resolve_deploy_env_source(
+    source: &backend::EnvSource,
+    config_dir: &std::path::Path,
+    client: &mut CloudClient,
+    pid: &str,
+) -> Vec<String> {
+    match source {
+        backend::EnvSource::Str(s) if s == "vault" => {
+            load_vault_envs_for_deploy(client, pid, true)
+        }
+        backend::EnvSource::Vault(whitelist) => {
+            let all = load_vault_envs_for_deploy(client, pid, true);
+            all.into_iter()
+                .filter(|entry| {
+                    entry.split_once('=')
+                        .map(|(k, _)| whitelist.iter().any(|w| w == k))
+                        .unwrap_or(false)
+                })
+                .collect()
+        }
+        backend::EnvSource::Str(file_path) => {
+            let path = config_dir.join(file_path);
+            let envs = crate::dev::load_dotenv_file(&path);
+            if !envs.is_empty() {
+                println!("  Loaded env-file: {}", path.display());
+            }
+            envs.into_iter().map(|(k, v)| format!("{}={}", k, v)).collect()
+        }
+        backend::EnvSource::Map(map) => {
+            map.iter()
+                .map(|(k, v)| {
+                    let val = match v {
+                        serde_yaml::Value::String(s) => s.clone(),
+                        serde_yaml::Value::Number(n) => n.to_string(),
+                        serde_yaml::Value::Bool(b) => b.to_string(),
+                        other => serde_yaml::to_string(other).unwrap_or_default().trim().to_string(),
+                    };
+                    format!("{}={}", k, val)
+                })
+                .collect()
+        }
+    }
+}
+
+/// Resolve an EnvEntry (single source or list) for deploy.
+fn resolve_deploy_env_entry(
+    entry: &backend::EnvEntry,
+    config_dir: &std::path::Path,
+    client: &mut CloudClient,
+    pid: &str,
+) -> Vec<String> {
+    match entry {
+        backend::EnvEntry::Source(source) => resolve_deploy_env_source(source, config_dir, client, pid),
+        backend::EnvEntry::List(sources) => {
+            let mut merged = std::collections::BTreeMap::new();
+            for source in sources {
+                for entry in resolve_deploy_env_source(source, config_dir, client, pid) {
+                    if let Some((k, v)) = entry.split_once('=') {
+                        merged.insert(k.to_string(), v.to_string());
+                    }
+                }
+            }
+            merged.into_iter().map(|(k, v)| format!("{}={}", k, v)).collect()
+        }
+    }
+}
+
+/// Resolve the full EnvConfig for cloud deploy, returning "KEY=VAL" strings.
+fn resolve_env_for_deploy(
+    env: &Option<backend::EnvConfig>,
+    config_dir: &std::path::Path,
+    client: &mut CloudClient,
+    pid: &str,
+) -> Vec<String> {
+    let env = match env {
+        Some(e) => e,
+        None => return Vec::new(),
+    };
+    match env {
+        backend::EnvConfig::Source(source) => resolve_deploy_env_source(source, config_dir, client, pid),
+        backend::EnvConfig::List(sources) => {
+            let mut merged = std::collections::BTreeMap::new();
+            for source in sources {
+                for entry in resolve_deploy_env_source(source, config_dir, client, pid) {
+                    if let Some((k, v)) = entry.split_once('=') {
+                        merged.insert(k.to_string(), v.to_string());
+                    }
+                }
+            }
+            merged.into_iter().map(|(k, v)| format!("{}={}", k, v)).collect()
+        }
+        backend::EnvConfig::PerEnvironment { cloud, .. } => {
+            match cloud {
+                Some(entry) => resolve_deploy_env_entry(entry, config_dir, client, pid),
+                None => Vec::new(),
+            }
+        }
+    }
+}
+
+/// Build a backend manifest JSON value.
+fn build_backend_manifest(
+    name: &str,
+    slug: &str,
+    image_id: &Option<String>,
+    port: u16,
+    deploy: &backend::AppDeployConfig,
+    merged_env: &[String],
+    cmd: &Option<String>,
+    app_config: &backend::AppConfig,
+) -> serde_json::Value {
+    let resources = deploy.resources.clone().unwrap_or(backend::BackendDeployResources {
+        vcpus: 1, memory: 512, disk: 5,
+    });
+    let mut manifest = serde_json::json!({
+        "name": name,
+        "image": format!("{}/{}", slug, name),
+        "image_hash": image_id,
+        "port": port,
+        "expose": deploy.expose,
+        "resources": {
+            "vcpus": resources.vcpus,
+            "memory_mb": resources.memory,
+            "disk_gb": resources.disk,
+        },
+        "env": merged_env,
+        "cmd": cmd,
+        "healthcheck": deploy.healthcheck,
+        "timeout": deploy.timeout,
+        "timeout_overridable": deploy.timeout_overridable,
+    });
+    if let Some(ref method) = app_config.method {
+        if let Some(ref table) = method.table {
+            manifest["method"] = serde_json::json!({
+                "type": method.method_type,
+                "table": table,
+            });
+        }
+    }
+    manifest
+}
+
+/// Build a frontend manifest JSON value.
+fn build_frontend_manifest(
+    slug: &str,
+    image_id: &Option<String>,
+    port: u16,
+    resources: &backend::BackendDeployResources,
+    merged_env: &[String],
+    cmd: &Option<String>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "image": format!("{}/frontend", slug),
+        "image_hash": image_id,
+        "port": port,
+        "resources": {
+            "vcpus": resources.vcpus,
+            "memory_mb": resources.memory,
+            "disk_gb": resources.disk,
+        },
+        "env": merged_env,
+        "cmd": cmd,
+    })
 }
 
 fn deploy(upgrade: bool) -> Result<()> {
@@ -1051,36 +1227,35 @@ fn deploy(upgrade: bool) -> Result<()> {
     println!();
     println!("Deploying project '{}'...", slug);
 
-    // Load sp00ky.yml and find deployable backends
+    // Load sp00ky.yml and find deployable apps
     let config_path = std::env::current_dir()?.join("sp00ky.yml");
     let config = backend::load_config(&config_path);
     config.validate()?;
 
+    let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
     let mut backend_manifests: Vec<serde_json::Value> = Vec::new();
     let mut external_backends: Vec<serde_json::Value> = Vec::new();
-    // Image hashes are stored on the API server (works cross-machine)
 
-    for (name, backend_config) in &config.backends {
+    for (name, app_config) in config.backends() {
         // External backends are self-hosted — skip cloud deployment
-        if backend_config.resolved_hosting() == HostingMode::External {
+        if app_config.resolved_hosting() == HostingMode::External {
             println!("  Skipping external backend '{}' (self-hosted at {})", name,
-                backend_config.base_url.as_deref().unwrap_or("?"));
+                app_config.base_url.as_deref().unwrap_or("?"));
             external_backends.push(serde_json::json!({
                 "name": name,
-                "base_url": backend_config.base_url,
+                "base_url": app_config.base_url,
             }));
             continue;
         }
 
-        let deploy = match &backend_config.deploy {
+        let deploy = match &app_config.deploy {
             Some(d) => d,
             None => continue,
         };
 
         // Resolve Dockerfile path
         let dockerfile = deploy.dockerfile.clone().unwrap_or_else(|| {
-            // Try to get from dev.docker config
-            match &backend_config.dev {
+            match &app_config.dev {
                 Some(BackendDevConfig::Typed(BackendDevTypedConfig::Docker { file, .. })) => {
                     file.clone()
                 }
@@ -1088,7 +1263,6 @@ fn deploy(upgrade: bool) -> Result<()> {
             }
         });
 
-        let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
         let dockerfile_path = config_dir.join(&dockerfile);
         if !dockerfile_path.exists() {
             bail!(
@@ -1103,6 +1277,7 @@ fn deploy(upgrade: bool) -> Result<()> {
             None => config_dir.to_path_buf(),
         };
         let image_tag = format!("sp00ky-backend-{}:deploy", name);
+        let port = app_config.deploy_port();
 
         // Build Docker image
         println!("  Building image for backend '{}' (dockerfile={}, context={})...",
@@ -1126,46 +1301,17 @@ fn deploy(upgrade: bool) -> Result<()> {
             bail!("Docker build failed for backend '{}'", name);
         }
 
+        // Resolve env vars from unified env config
+        let merged_env = resolve_env_for_deploy(&app_config.env, config_dir, &mut client, &pid);
+
         // Check if image changed since last deploy (skip export+upload if unchanged)
         let image_id = get_docker_image_id(&image_tag);
         if let Some(ref id) = image_id {
             if let Some(remote_hash) = get_remote_image_hash(&client, &pid, name) {
                 if remote_hash == *id {
                     println!("  Image for backend '{}' unchanged, skipping upload.", name);
-                    // Still include in manifest with previous image path
-                    let resources = deploy.resources.clone().unwrap_or(backend::BackendDeployResources {
-                        vcpus: 1,
-                        memory: 512,
-                        disk: 5,
-                    });
                     let cmd = get_docker_cmd(&image_tag);
-                    // Merge env-file vars with inline env (same as changed path)
-                    let mut merged_env = load_deploy_env_file(deploy.env_file.as_deref(), config_dir);
-                    merged_env.extend(deploy.env.clone());
-                    let mut manifest = serde_json::json!({
-                        "name": name,
-                        "image": format!("{}/{}", slug, name),
-                        "image_hash": &image_id,
-                        "port": deploy.port,
-                        "expose": deploy.expose,
-                        "resources": {
-                            "vcpus": resources.vcpus,
-                            "memory_mb": resources.memory,
-                            "disk_gb": resources.disk,
-                        },
-                        "env": merged_env,
-                        "cmd": cmd,
-                        "healthcheck": deploy.healthcheck,
-                        "timeout": deploy.timeout,
-                        "timeout_overridable": deploy.timeout_overridable,
-                    });
-                    if let Some(table) = &backend_config.method.table {
-                        manifest["method"] = serde_json::json!({
-                            "type": &backend_config.method.method_type,
-                            "table": table,
-                        });
-                    }
-                    backend_manifests.push(manifest);
+                    backend_manifests.push(build_backend_manifest(name, &slug, &image_id, port, deploy, &merged_env, &cmd, app_config));
                     println!("  Backend '{}' ready for deployment.", name);
                     continue;
                 }
@@ -1228,41 +1374,8 @@ fn deploy(upgrade: bool) -> Result<()> {
         let _ = fs::remove_file(&tmp_tar);
 
         // Build manifest
-        let resources = deploy.resources.clone().unwrap_or(backend::BackendDeployResources {
-            vcpus: 1,
-            memory: 512,
-            disk: 5,
-        });
-
-        // Merge env-file vars with inline env (inline overrides file)
-        let mut merged_env = load_deploy_env_file(deploy.env_file.as_deref(), config_dir);
-        merged_env.extend(deploy.env.clone());
-
         let cmd = get_docker_cmd(&image_tag);
-        let mut manifest = serde_json::json!({
-            "name": name,
-            "image": format!("{}/{}", slug, name),
-            "image_hash": &image_id,
-            "port": deploy.port,
-            "expose": deploy.expose,
-            "resources": {
-                "vcpus": resources.vcpus,
-                "memory_mb": resources.memory,
-                "disk_gb": resources.disk,
-            },
-            "env": merged_env,
-            "cmd": cmd,
-            "healthcheck": deploy.healthcheck,
-            "timeout": deploy.timeout,
-            "timeout_overridable": deploy.timeout_overridable,
-        });
-        if let Some(table) = &backend_config.method.table {
-            manifest["method"] = serde_json::json!({
-                "type": &backend_config.method.method_type,
-                "table": table,
-            });
-        }
-        backend_manifests.push(manifest);
+        backend_manifests.push(build_backend_manifest(name, &slug, &image_id, port, deploy, &merged_env, &cmd, app_config));
 
         println!("  Backend '{}' ready for deployment.", name);
     }
@@ -1287,32 +1400,37 @@ fn deploy(upgrade: bool) -> Result<()> {
 
     // Build and upload frontend if configured
     let mut frontend_manifest: Option<serde_json::Value> = None;
-    if let Some(ref frontend_config) = config.frontend {
-        let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
-        let dockerfile_path = config_dir.join(&frontend_config.dockerfile);
+    if let Some((frontend_name, frontend_app)) = config.frontend() {
+        let frontend_deploy = frontend_app.deploy.as_ref()
+            .context("Frontend app is missing 'deploy' configuration")?;
+        let dockerfile = frontend_deploy.dockerfile.as_deref()
+            .context("Frontend app deploy is missing 'dockerfile'")?;
+        let dockerfile_path = config_dir.join(dockerfile);
 
         if !dockerfile_path.exists() {
             bail!("Frontend Dockerfile not found: {}", dockerfile_path.display());
         }
 
-        let context_dir = match &frontend_config.context {
+        let context_dir = match &frontend_deploy.context {
             Some(ctx) => config_dir.join(ctx),
             None => config_dir.to_path_buf(),
         };
         let image_tag = format!("sp00ky-frontend-{}:deploy", slug);
+        let port = frontend_app.deploy_port();
 
         // Auto-compute the SurrealDB WebSocket endpoint for the frontend
-        // api-staging.sp00ky.cloud → db.staging.spky.cloud → wss://{slug}.db.staging.spky.cloud/rpc
         let db_ws_endpoint = derive_db_ws_endpoint(&client.base_url, &slug);
 
-        println!("  Building frontend image...");
+        // Resolve env vars from unified env config
+        let merged_env = resolve_env_for_deploy(&frontend_app.env, config_dir, &mut client, &pid);
+
+        println!("  Building frontend image ('{}')...", frontend_name);
         let mut build_args = vec![
             "build".to_string(), "--no-cache".to_string(),
             "--platform".to_string(), "linux/amd64".to_string(),
             "-t".to_string(), image_tag.clone(),
             "-f".to_string(), dockerfile_path.to_string_lossy().to_string(),
         ];
-        // Inject VITE_DB_ENDPOINT as build-arg so Vite picks it up during build
         if let Some(ref endpoint) = db_ws_endpoint {
             build_args.push("--build-arg".to_string());
             build_args.push(format!("VITE_DB_ENDPOINT={}", endpoint));
@@ -1337,28 +1455,18 @@ fn deploy(upgrade: bool) -> Result<()> {
             .and_then(|id| get_remote_image_hash(&client, &pid, "frontend").map(|h| h == *id))
             .unwrap_or(false);
 
+        let resources = frontend_deploy.resources.clone().unwrap_or(backend::BackendDeployResources {
+            vcpus: 1, memory: 512, disk: 5,
+        });
+
         if frontend_unchanged {
             println!("  Frontend image unchanged, skipping upload.");
-            // Still set the manifest so the frontend gets deployed
-            let resources = frontend_config.resources.clone().unwrap_or(backend::BackendDeployResources {
-                vcpus: 1, memory: 512, disk: 5,
-            });
-            let mut merged_env = load_deploy_env_file(frontend_config.env_file.as_deref(), config_dir);
-            merged_env.extend(frontend_config.env.clone());
             let cmd = get_docker_cmd(&image_tag);
-            frontend_manifest = Some(serde_json::json!({
-                "image": format!("{}/frontend", slug),
-                "image_hash": &frontend_image_id,
-                "port": frontend_config.port,
-                "resources": { "vcpus": resources.vcpus, "memory_mb": resources.memory, "disk_gb": resources.disk },
-                "env": merged_env,
-                "cmd": cmd,
-            }));
+            frontend_manifest = Some(build_frontend_manifest(&slug, &frontend_image_id, port, &resources, &merged_env, &cmd));
         } else {
 
         let tmp_tar = std::env::temp_dir().join(format!("sp00ky-{}-frontend.tar.gz", slug));
         println!("  Exporting frontend image...");
-        // Use docker create + export to get a flat rootfs (not layered image)
         let container_name = format!("sp00ky-export-{}", slug);
         let _ = std::process::Command::new("docker").args(["rm", "-f", &container_name]).output();
         let create_status = std::process::Command::new("docker")
@@ -1403,29 +1511,8 @@ fn deploy(upgrade: bool) -> Result<()> {
         }
         let _ = fs::remove_file(&tmp_tar);
 
-        let resources = frontend_config.resources.clone().unwrap_or(backend::BackendDeployResources {
-            vcpus: 1,
-            memory: 512,
-            disk: 5,
-        });
-
-        // Merge env-file vars with inline env (inline overrides file)
-        let mut merged_env = load_deploy_env_file(frontend_config.env_file.as_deref(), config_dir);
-        merged_env.extend(frontend_config.env.clone());
-
         let cmd = get_docker_cmd(&image_tag);
-        frontend_manifest = Some(serde_json::json!({
-            "image": format!("{}/frontend", slug),
-            "image_hash": &frontend_image_id,
-            "port": frontend_config.port,
-            "resources": {
-                "vcpus": resources.vcpus,
-                "memory_mb": resources.memory,
-                "disk_gb": resources.disk,
-            },
-            "env": merged_env,
-            "cmd": cmd,
-        }));
+        frontend_manifest = Some(build_frontend_manifest(&slug, &frontend_image_id, port, &resources, &merged_env, &cmd));
 
         println!("  Frontend ready for deployment.");
         } // end else (frontend changed)
@@ -1547,20 +1634,17 @@ fn deploy(upgrade: bool) -> Result<()> {
                                 });
 
                             if let Some(ref fn_endpoint) = fn_endpoint {
-                                let mode = config.mode.as_deref().unwrap_or("singlenode");
+                                let mode = config.mode.clone().unwrap_or_default();
                                 let auth_secret = status_data["sp00ky_auth_secret"]
                                     .as_str()
                                     .map(|s| s.to_string())
                                     .unwrap_or_else(|| {
                                         let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
-                                        for (_name, backend_config) in &config.backends {
-                                            if let Some(deploy) = &backend_config.deploy {
-                                                let mut all_env = load_deploy_env_file(deploy.env_file.as_deref(), config_dir);
-                                                all_env.extend(deploy.env.clone());
-                                                for entry in &all_env {
-                                                    if let Some(val) = entry.strip_prefix("SP00KY_AUTH_SECRET=") {
-                                                        return val.to_string();
-                                                    }
+                                        for (_name, app_config) in config.backends() {
+                                            let all_env = resolve_env_for_deploy(&app_config.env, config_dir, &mut client, &pid);
+                                            for entry in &all_env {
+                                                if let Some(val) = entry.strip_prefix("SP00KY_AUTH_SECRET=") {
+                                                    return val.to_string();
                                                 }
                                             }
                                         }
@@ -1568,7 +1652,7 @@ fn deploy(upgrade: bool) -> Result<()> {
                                     });
 
                                 let functions_sql = crate::schema_builder::build_remote_functions_schema(
-                                    mode, fn_endpoint, &auth_secret,
+                                    &mode, fn_endpoint, &auth_secret,
                                 );
                                 match surreal_client.execute(&functions_sql) {
                                     Ok(_) => println!("  ▸ Remote functions applied."),
@@ -1584,7 +1668,7 @@ fn deploy(upgrade: bool) -> Result<()> {
                                         &surreal_client,
                                         &schema_input_path,
                                         Some(config_path.as_path()),
-                                        mode,
+                                        &mode,
                                         Some(fn_endpoint),
                                         Some(&auth_secret),
                                     ) {
@@ -2725,9 +2809,9 @@ fn backup(action: CloudBackupCommands) -> Result<()> {
 
                 // Apply remote functions
                 if let Some(sched_url) = result["scheduler_url"].as_str() {
-                    let mode = config.mode.as_deref().unwrap_or("singlenode");
+                    let mode = config.mode.clone().unwrap_or_default();
                     let functions_sql = crate::schema_builder::build_remote_functions_schema(
-                        mode, sched_url, "",
+                        &mode, sched_url, "",
                     );
                     match surreal_client.execute(&functions_sql) {
                         Ok(_) => println!("  Remote functions applied."),

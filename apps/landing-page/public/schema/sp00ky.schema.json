@@ -13,8 +13,8 @@
     "mode": {
       "type": "string",
       "description": "Deployment mode.",
-      "enum": ["sidecar", "singlenode"],
-      "default": "sidecar"
+      "enum": ["singlenode", "cluster", "surrealism"],
+      "default": "singlenode"
     },
     "surrealdb": {
       "description": "SurrealDB configuration. Can be a version string (e.g. \"v3.0.0\") or a full config object.",
@@ -85,11 +85,11 @@
         }
       ]
     },
-    "backends": {
+    "apps": {
       "type": "object",
-      "description": "Backend service definitions. Each key is the backend name.",
+      "description": "Application definitions (backends and frontends). Each key is the app name.",
       "additionalProperties": {
-        "$ref": "#/$defs/backendConfig"
+        "$ref": "#/$defs/appConfig"
       }
     },
     "buckets": {
@@ -105,13 +105,6 @@
       "items": {
         "$ref": "#/$defs/clientTypeConfig"
       }
-    },
-    "devApp": {
-      "type": "string",
-      "description": "Dev command to start the frontend app during `spooky dev`."
-    },
-    "frontend": {
-      "$ref": "#/$defs/frontendDeployConfig"
     },
     "deployment": {
       "$ref": "#/$defs/deploymentConfig"
@@ -174,29 +167,29 @@
       },
       "additionalProperties": false
     },
-    "backendConfig": {
+    "appConfig": {
       "type": "object",
-      "description": "Configuration for a single backend service.",
-      "required": ["spec", "method"],
+      "description": "Configuration for a single application (backend or frontend).",
+      "required": ["type"],
       "properties": {
+        "type": {
+          "type": "string",
+          "description": "App type: backend or frontend.",
+          "enum": ["backend", "frontend"]
+        },
         "hosting": {
           "type": "string",
           "description": "Whether this backend is deployed to Sp00ky Cloud or self-hosted.",
           "enum": ["cloud", "external"],
           "default": "cloud"
         },
-        "type": {
-          "type": "string",
-          "description": "Backend type.",
-          "enum": ["http"]
-        },
         "spec": {
           "type": "string",
-          "description": "Path to the OpenAPI specification file that defines API routes."
+          "description": "Path to the OpenAPI specification file (required for backends)."
         },
         "baseUrl": {
           "type": "string",
-          "description": "Base URL of the HTTP backend service (used for local development).",
+          "description": "Base URL of the backend service (required when hosting is \"external\").",
           "examples": ["https://api.example.com"]
         },
         "auth": {
@@ -206,19 +199,34 @@
           "$ref": "#/$defs/backendMethod"
         },
         "dev": {
-          "$ref": "#/$defs/backendDevConfig"
+          "$ref": "#/$defs/devConfig"
         },
         "deploy": {
-          "$ref": "#/$defs/backendDeployConfig"
+          "$ref": "#/$defs/appDeployConfig"
+        },
+        "env": {
+          "$ref": "#/$defs/envConfig"
         }
       },
-      "if": {
-        "properties": { "hosting": { "const": "external" } },
-        "required": ["hosting"]
-      },
-      "then": {
-        "required": ["baseUrl"]
-      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "type": { "const": "backend" } }
+          },
+          "then": {
+            "required": ["spec", "method"]
+          }
+        },
+        {
+          "if": {
+            "properties": { "hosting": { "const": "external" } },
+            "required": ["hosting"]
+          },
+          "then": {
+            "required": ["baseUrl"]
+          }
+        }
+      ],
       "additionalProperties": false
     },
     "authConfig": {
@@ -259,7 +267,7 @@
       },
       "additionalProperties": false
     },
-    "backendDevConfig": {
+    "devConfig": {
       "description": "Dev server configuration. Can be a raw shell command string or a typed object.",
       "oneOf": [
         {
@@ -283,10 +291,7 @@
       "description": "Run an npm/pnpm script as the dev server.",
       "required": ["type", "script"],
       "properties": {
-        "type": {
-          "type": "string",
-          "const": "npm"
-        },
+        "type": { "type": "string", "const": "npm" },
         "script": {
           "type": "string",
           "description": "npm script name to run (e.g. \"dev\")."
@@ -294,10 +299,6 @@
         "workdir": {
           "type": "string",
           "description": "Working directory relative to sp00ky.yml."
-        },
-        "env-file": {
-          "type": "string",
-          "description": "Path to a dotenv-style env file, resolved relative to the project root."
         }
       },
       "additionalProperties": false
@@ -307,10 +308,7 @@
       "description": "Build and run a Dockerfile as the dev server.",
       "required": ["type", "file"],
       "properties": {
-        "type": {
-          "type": "string",
-          "const": "docker"
-        },
+        "type": { "type": "string", "const": "docker" },
         "file": {
           "type": "string",
           "description": "Dockerfile to build."
@@ -322,15 +320,6 @@
         "port": {
           "type": "string",
           "description": "Port mapping (e.g. \"3000:3000\")."
-        },
-        "env": {
-          "type": "array",
-          "description": "Environment variables in KEY=VALUE format.",
-          "items": { "type": "string" }
-        },
-        "env-file": {
-          "type": "string",
-          "description": "Path to a dotenv-style env file, passed via Docker's --env-file flag."
         }
       },
       "additionalProperties": false
@@ -340,10 +329,7 @@
       "description": "Run a Python script via uv as the dev server.",
       "required": ["type", "script"],
       "properties": {
-        "type": {
-          "type": "string",
-          "const": "uv"
-        },
+        "type": { "type": "string", "const": "uv" },
         "script": {
           "type": "string",
           "description": "Python script to run via `uv run` (e.g. \"server.py\")."
@@ -351,17 +337,13 @@
         "workdir": {
           "type": "string",
           "description": "Working directory relative to sp00ky.yml."
-        },
-        "env-file": {
-          "type": "string",
-          "description": "Path to a dotenv-style env file, resolved relative to the project root."
         }
       },
       "additionalProperties": false
     },
-    "backendDeployConfig": {
+    "appDeployConfig": {
       "type": "object",
-      "description": "Deployment configuration for a backend service on Sp00ky Cloud.",
+      "description": "Deployment configuration for an app on Sp00ky Cloud.",
       "properties": {
         "dockerfile": {
           "type": "string",
@@ -373,8 +355,7 @@
         },
         "port": {
           "type": "integer",
-          "description": "Port the service listens on inside the container.",
-          "default": 8080,
+          "description": "Port the service listens on inside the container. Defaults to 8080 for backends, 3000 for frontends.",
           "minimum": 1,
           "maximum": 65535
         },
@@ -386,33 +367,57 @@
         "resources": {
           "$ref": "#/$defs/resources"
         },
-        "env": {
-          "type": "array",
-          "description": "Environment variables in KEY=VALUE format passed to the VM.",
-          "items": { "type": "string" }
-        },
-        "env-file": {
-          "type": "string",
-          "description": "Path to a dotenv-style env file (relative to sp00ky.yml). Variables are injected into the deployed container."
-        },
         "healthcheck": {
           "type": "string",
-          "description": "Health check HTTP path for the scheduler to ping (e.g. \"/health\")."
+          "description": "Health check HTTP path for the scheduler to ping (e.g. \"/health\"). Backend only."
         },
         "timeout": {
           "type": "integer",
-          "description": "HTTP request timeout in seconds for the job runner when calling this backend. Increase for long-running operations like LLM inference.",
+          "description": "HTTP request timeout in seconds for the job runner. Backend only.",
           "default": 10,
           "minimum": 1,
           "maximum": 3600
         },
-        "timeout_overridable": {
+        "timeoutOverridable": {
           "type": "boolean",
-          "description": "When true, the frontend can override the timeout per-job via the `timeout` option in `db.run()`. When false, the deploy-time timeout is always used.",
+          "description": "When true, the frontend can override the timeout per-job. Backend only.",
           "default": false
         }
       },
       "additionalProperties": false
+    },
+    "envConfig": {
+      "description": "Environment variable configuration. Supports multiple forms:\n- \"vault\" — fetch all vars from encrypted vault\n- { vault: [KEY1, KEY2] } — fetch only whitelisted vars from vault\n- \"path/to/file\" — load from dotenv file\n- { KEY: \"val\" } — inline key-value map\n- { dev: <source>, cloud: <source> } — per-environment split\n- [<source>, ...] — array of sources, merged in order (later overrides earlier)",
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "\"vault\" to use encrypted vault, or a path to a dotenv file."
+        },
+        {
+          "type": "object",
+          "description": "Inline key-value map, or a per-environment split with \"dev\" and/or \"cloud\" keys."
+        },
+        {
+          "type": "array",
+          "description": "Array of env sources, merged in order (later entries override earlier ones).",
+          "items": {
+            "$ref": "#/$defs/envSource"
+          }
+        }
+      ]
+    },
+    "envSource": {
+      "description": "A single environment variable source.",
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "\"vault\" for all encrypted vault vars, or a path to a dotenv file."
+        },
+        {
+          "type": "object",
+          "description": "Inline key-value map, or vault with whitelist: { vault: [KEY1, KEY2] }."
+        }
+      ]
     },
     "resources": {
       "type": "object",
@@ -456,46 +461,11 @@
       },
       "additionalProperties": false
     },
-    "frontendDeployConfig": {
-      "type": "object",
-      "description": "Frontend deployment configuration for Sp00ky Cloud.",
-      "required": ["dockerfile"],
-      "properties": {
-        "dockerfile": {
-          "type": "string",
-          "description": "Dockerfile path relative to sp00ky.yml."
-        },
-        "context": {
-          "type": "string",
-          "description": "Docker build context directory relative to sp00ky.yml. Defaults to the project root."
-        },
-        "port": {
-          "type": "integer",
-          "description": "Port the frontend listens on inside the container.",
-          "default": 3000,
-          "minimum": 1,
-          "maximum": 65535
-        },
-        "resources": {
-          "$ref": "#/$defs/resources"
-        },
-        "env": {
-          "type": "array",
-          "description": "Environment variables in KEY=VALUE format.",
-          "items": { "type": "string" }
-        },
-        "env-file": {
-          "type": "string",
-          "description": "Path to a dotenv-style env file (relative to sp00ky.yml)."
-        }
-      },
-      "additionalProperties": false
-    },
     "deploymentConfig": {
       "type": "object",
       "description": "Deployment-level configuration for Sp00ky Cloud.",
       "properties": {
-        "ssp_count": {
+        "sspCount": {
           "type": "integer",
           "description": "Number of SSP instances to provision. Overrides the plan default.",
           "minimum": 1,
@@ -525,12 +495,12 @@
           "description": "Number of backups to retain.",
           "minimum": 1
         },
-        "bucket_url": {
+        "bucketUrl": {
           "type": "string",
           "description": "External S3-compatible bucket URL. If set, MinIO is skipped.",
           "examples": ["https://api.example.com"]
         },
-        "credentials_env_file": {
+        "credentialsEnvFile": {
           "type": "string",
           "description": "Path to env file with BACKUP_ACCESS_KEY and BACKUP_SECRET_KEY."
         }

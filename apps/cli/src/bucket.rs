@@ -700,7 +700,7 @@ mod tests {
 
         fs::write(
             &config_path,
-            "buckets:\n  - ./src/buckets/existing.surql\nbackends:\n  api:\n    type: http\n",
+            "buckets:\n  - ./src/buckets/existing.surql\napps:\n  api:\n    type: backend\n",
         )
         .unwrap();
 
@@ -709,7 +709,7 @@ mod tests {
         let content = fs::read_to_string(&config_path).unwrap();
         assert!(content.contains("  - ./src/buckets/existing.surql"));
         assert!(content.contains("  - ./src/buckets/new.surql"));
-        assert!(content.contains("backends:"));
+        assert!(content.contains("apps:"));
     }
 
     #[test]
@@ -717,7 +717,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let config_path = dir.path().join("sp00ky.yml");
 
-        fs::write(&config_path, "mode: cluster\nbackends:\n  api:\n    type: http\n").unwrap();
+        fs::write(&config_path, "mode: cluster\napps:\n  api:\n    type: backend\n").unwrap();
 
         update_sp00ky_yml(&config_path, "./src/buckets/test.surql").unwrap();
 

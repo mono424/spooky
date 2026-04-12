@@ -7,5 +7,21 @@ buckets: []{{CLIENT_TYPES_SECTION}}
 #   database: main
 #   username: root       # SurrealDB auth username (default: root)
 #   password: root       # SurrealDB auth password (default: root)
-# devApp: "dev:app"  # customize the pnpm script used by `sp00ky dev` for your frontend
 # cloudApi: "https://staging-api.sp00ky.cloud"  # override Sp00ky Cloud API endpoint
+# apps:
+#   web:
+#     type: frontend
+#     dev:
+#       type: npm
+#       script: "dev:app"
+#     env: ".env.local"
+#   api:
+#     type: backend
+#     spec: ./api/openapi.yml
+#     method:
+#       type: outbox
+#       table: job
+#       schema: ./schema/src/outbox/api.surql
+#     env:
+#       dev: ".env.local"
+#       cloud: "vault"

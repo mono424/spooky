@@ -29,9 +29,9 @@ Backend functions are configured in your `sp00ky.yml` file in the schema directo
 
 <CodeBlock
   code={`mode: sidecar
-backends:
+apps:
   api:
-    type: http
+    type: backend
     baseUrl: http://host.docker.internal:3660
     spec: ../api/openapi.yml
     dev:
@@ -44,33 +44,47 @@ backends:
     method:
       type: outbox
       table: job
-      schema: ./src/outbox/api.surql`}
+      schema: ./src/outbox/api.surql
+    env:
+      dev: ".env.local"
+      cloud: "vault"`}
   lang="yaml"
 />
 
+<Note>
+  You can validate your config at any time with `spky lint`.
+</Note>
+
 ### Configuration Fields
 
-- **`type`**: The backend type (currently only `http` is supported)
+All apps are defined under the `apps` key. Each app has a required `type` field (`backend` or `frontend`).
+
+**Backend-specific fields:**
+- **`spec`** (required): Path to the OpenAPI specification file that defines your API routes
 - **`baseUrl`**: The base URL of your HTTP backend service
-- **`spec`**: Path to the OpenAPI specification file that defines your API routes
 - **`auth`** (optional): Authentication configuration for the backend
   - **`type`**: Authentication type (currently only `token` is supported)
   - **`token`**: The bearer token to include in HTTP requests
-- **`method.type`**: The method for calling the backend (use `outbox` for the outbox pattern)
-- **`method.table`**: The name of the job table in SurrealDB (e.g., `job`)
-- **`method.schema`**: Path to the SurrealQL schema file that defines the job table structure
+- **`method`** (required): Trigger method configuration
+  - **`type`**: The method type (use `outbox` for the outbox pattern)
+  - **`table`**: The name of the job table in SurrealDB (e.g., `job`)
+  - **`schema`**: Path to the SurrealQL schema file that defines the job table structure
+
+**Shared fields (all app types):**
 - **`dev`** (optional): A dev server command that `spky dev` will spawn alongside infrastructure (see [Dev Server](#dev-server) below)
-- **`deploy.timeout`** (optional): HTTP request timeout in seconds for the job runner when calling this backend (default: `10`). Increase this for long-running operations like LLM inference.
-- **`deploy.timeout_overridable`** (optional): When `true`, the frontend can override the timeout per-job via the `timeout` option in `db.run()`. When `false` (default), the deploy-time timeout is always used.
+- **`deploy`** (optional): Cloud deployment configuration (dockerfile, port, resources)
+  - **`timeout`**: HTTP request timeout in seconds (default: `10`, backend only)
+  - **`timeoutOverridable`**: When `true`, the frontend can override the timeout per-job (backend only)
+- **`env`** (optional): Environment variable configuration (see [Environment Variables](#environment-variables) below)
 
 ### Timeout Configuration
 
 By default, the job runner allows **10 seconds** for each HTTP request to complete. For backends that perform long-running operations (e.g., LLM inference, file processing), you can increase the timeout in the `deploy` section:
 
 <CodeBlock
-  code={`backends:
+  code={`apps:
   agent:
-    type: http
+    type: backend
     spec: ./openapi.yaml
     baseUrl: http://host.docker.internal:8767
     method:
@@ -81,11 +95,11 @@ By default, the job runner allows **10 seconds** for each HTTP request to comple
       dockerfile: ./Dockerfile
       port: 8767
       timeout: 120               # Allow up to 2 minutes per request
-      timeout_overridable: true   # Let the frontend set per-job timeouts`}
+      timeoutOverridable: true    # Let the frontend set per-job timeouts`}
   lang="yaml"
 />
 
-When `timeout_overridable` is `true`, the frontend can pass a `timeout` option to `db.run()`:
+When `timeoutOverridable` is `true`, the frontend can pass a `timeout` option to `db.run()`:
 
 <CodeBlock
   code={`// Use a 60-second timeout for this specific call
@@ -95,7 +109,7 @@ await db.run('agent', '/chat', { message: 'Hello' }, {
   lang="typescript"
 />
 
-If `timeout_overridable` is `false` (the default), the `timeout` option in `db.run()` is ignored and the deploy-time value is always used.
+If `timeoutOverridable` is `false` (the default), the `timeout` option in `db.run()` is ignored and the deploy-time value is always used.
 
 ### Authentication
 
@@ -105,9 +119,9 @@ This is useful for securing your backend APIs and ensuring that only authorized 
 
 <CodeBlock
   code={`# Backend with authentication
-backends:
+apps:
   api:
-    type: http
+    type: backend
     baseUrl: https://api.example.com
     spec: ../api/openapi.yml
     auth:
@@ -251,7 +265,7 @@ DEFINE FIELD created_at ON TABLE job TYPE datetime
 - **`retries`**: Number of retry attempts so far
 - **`max_retries`**: Maximum number of retry attempts before marking as failed
 - **`retry_strategy`**: Retry timing strategy (`linear` or `exponential`)
-- **`timeout`**: Optional per-job timeout override in seconds (only used if backend has `timeout_overridable: true`)
+- **`timeout`**: Optional per-job timeout override in seconds (only used if backend has `timeoutOverridable: true`)
 - **`errors`**: Array of error objects from failed execution attempts
 
 ## Calling Backend Functions
@@ -285,14 +299,14 @@ await db.run('api', '/spookify', { id: threadData.id }, {
 
 ### Parameters
 
-- **`backend`**: The name of the backend from your `sp00ky.yml` (e.g., `'api'`)
+- **`backend`**: The name of the backend app from your `sp00ky.yml` (e.g., `'api'`)
 - **`path`**: The API route path (e.g., `'/spookify'`)
 - **`payload`**: An object containing the request parameters defined in your OpenAPI schema
 - **`options`** (optional):
   - **`assignedTo`**: Record ID to link this job to (useful for querying related jobs)
   - **`max_retries`**: Override the default maximum retry attempts (default: 3)
   - **`retry_strategy`**: Override the retry strategy (default: `'linear'`)
-  - **`timeout`**: Override the backend HTTP request timeout in seconds. Only takes effect if the backend has `timeout_overridable: true` in `sp00ky.yml`.
+  - **`timeout`**: Override the backend HTTP request timeout in seconds. Only takes effect if the backend has `timeoutOverridable: true` in `sp00ky.yml`.
 
 <Warning>
   The `db.run()` method validates the payload against your OpenAPI schema. Missing required parameters will throw an error.
@@ -411,17 +425,18 @@ The job runner:
 
 ## Dev Server
 
-Each backend in `sp00ky.yml` can declare an optional `dev` field. When you run `spky dev`, these commands are spawned alongside the rest of the infrastructure (SurrealDB, SSP, scheduler), so you don't need to start backend services in separate terminals.
+Each app in `sp00ky.yml` can declare an optional `dev` field. When you run `spky dev`, these commands are spawned alongside the rest of the infrastructure (SurrealDB, SSP, scheduler), so you don't need to start backend services in separate terminals.
 
-Each backend gets a unique color in the terminal and its output is prefixed with `[backend.<name>.dev]`, making it easy to distinguish logs from different services.
+Each app gets a unique color in the terminal and its output is prefixed with `[app.<name>.dev]`, making it easy to distinguish logs from different services.
 
 ### String Form
 
 The simplest option is a raw shell command:
 
 <CodeBlock
-  code={`backends:
+  code={`apps:
   api:
+    type: backend
     dev: "node server.js"
     # ...other fields...`}
   lang="yaml"
@@ -434,8 +449,9 @@ This runs the command from the project root using `sh -c`.
 Run an npm/pnpm script:
 
 <CodeBlock
-  code={`backends:
+  code={`apps:
   api:
+    type: backend
     dev:
       type: npm
       script: dev           # runs \`pnpm run dev\`
@@ -449,15 +465,14 @@ Run an npm/pnpm script:
 Build and run a Dockerfile:
 
 <CodeBlock
-  code={`backends:
+  code={`apps:
   worker:
+    type: backend
     dev:
       type: docker
       file: Dockerfile.dev   # Dockerfile to build
       workdir: ../worker     # optional: build context directory
       port: "3000:3000"      # optional: port mapping
-      env:                   # optional: environment variables
-        - NODE_ENV=development
     # ...other fields...`}
   lang="yaml"
 />
@@ -467,8 +482,9 @@ Build and run a Dockerfile:
 Run a Python script via [uv](https://docs.astral.sh/uv/):
 
 <CodeBlock
-  code={`backends:
+  code={`apps:
   ml-service:
+    type: backend
     dev:
       type: uv
       script: server.py      # runs \`uv run server.py\`
@@ -479,30 +495,94 @@ Run a Python script via [uv](https://docs.astral.sh/uv/):
 
 This uses `uv run` to execute the script inside the project's virtual environment, automatically installing dependencies from `pyproject.toml` if needed.
 
-### env-file
-
-All typed forms support an optional `env-file` field that loads environment variables from a dotenv-style file (one `KEY=VALUE` per line, `#` comments and blank lines are ignored). The path is resolved relative to the project root.
-
-<CodeBlock
-  code={`backends:
-  api:
-    dev:
-      type: npm
-      script: dev
-      env-file: .env.development   # loaded into the process environment
-      workdir: ../api
-    # ...other fields...`}
-  lang="yaml"
-/>
-
-For the `docker` type, the file is passed directly via Docker's `--env-file` flag. For all other types (`npm`, `uv`), the variables are parsed and injected into the spawned process environment.
-
 ### workdir
 
 All typed forms support an optional `workdir` field that is resolved relative to the project root (the directory containing `sp00ky.yml`). If omitted, commands run from the project root.
 
 <Note>
   Backend dev processes are automatically stopped when you press Ctrl+C to shut down `spky dev`.
+</Note>
+
+## Environment Variables
+
+Every app supports a unified `env` property for injecting environment variables into both dev and cloud environments. The `env` field accepts several forms:
+
+### String Form
+
+A simple string is either `"vault"` (to load from the encrypted Sp00ky Cloud vault) or a path to a dotenv file:
+
+<CodeBlock
+  code={`apps:
+  api:
+    type: backend
+    env: ".env.local"        # dotenv file (KEY=VALUE format)
+    # ...other fields...`}
+  lang="yaml"
+/>
+
+### Inline Map
+
+Pass variables directly:
+
+<CodeBlock
+  code={`apps:
+  api:
+    type: backend
+    env:
+      DATABASE_URL: "postgres://localhost/mydb"
+      LOG_LEVEL: debug
+    # ...other fields...`}
+  lang="yaml"
+/>
+
+### Per-Environment
+
+Use different sources for local development vs cloud deployment:
+
+<CodeBlock
+  code={`apps:
+  agent:
+    type: backend
+    env:
+      dev: ".env.local"      # dotenv file for \`spky dev\`
+      cloud: "vault"          # encrypted vault for cloud deploys
+    # ...other fields...`}
+  lang="yaml"
+/>
+
+### Array (Merge Order)
+
+Combine multiple sources — later entries override earlier ones:
+
+<CodeBlock
+  code={`apps:
+  api:
+    type: backend
+    env:
+      - "vault"                       # base: all vault vars
+      - ".env.overrides"              # override specific values from file
+      - { LOG_LEVEL: debug }          # final inline override
+    # ...other fields...`}
+  lang="yaml"
+/>
+
+### Vault Whitelist
+
+Instead of loading all vault variables, select only the ones you need:
+
+<CodeBlock
+  code={`apps:
+  web:
+    type: frontend
+    env:
+      - vault: [VITE_API_URL, VITE_PUBLIC_KEY]   # only these from vault
+      - ".env.local"
+    # ...other fields...`}
+  lang="yaml"
+/>
+
+<Note>
+  For dev mode, `"vault"` loads variables via the Sp00ky Cloud API (requires `spky cloud login`). For cloud deploys, vault variables are resolved automatically and included in the deployment manifest.
 </Note>
 
 ## Best Practices
@@ -551,7 +631,7 @@ await db.run('api', '/charge-payment', data, {
   max_retries: 0
 });
 
-// Long-running AI operation (requires timeout_overridable: true on backend)
+// Long-running AI operation (requires timeoutOverridable: true on backend)
 await db.run('agent', '/chat', data, {
   timeout: 120,
   max_retries: 2,

@@ -5,6 +5,63 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+// ── App Type ────────────────────────────────────────────────────────────────
+
+/// Discriminator for app type — must be specified explicitly.
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum AppType {
+    Backend,
+    Frontend,
+}
+
+/// Deployment mode.
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum DeployMode {
+    Singlenode,
+    Cluster,
+    Surrealism,
+}
+
+impl Default for DeployMode {
+    fn default() -> Self {
+        Self::Singlenode
+    }
+}
+
+impl std::fmt::Display for DeployMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DeployMode::Singlenode => write!(f, "singlenode"),
+            DeployMode::Cluster => write!(f, "cluster"),
+            DeployMode::Surrealism => write!(f, "surrealism"),
+        }
+    }
+}
+
+/// Authentication type for backend services.
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum AuthType {
+    Token,
+}
+
+/// Backend trigger method type.
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum MethodType {
+    Outbox,
+}
+
+/// Client type generation format.
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ClientFormat {
+    Typescript,
+    Dart,
+}
+
 /// Whether a service is hosted on Sp00ky Cloud or externally.
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -153,7 +210,7 @@ impl ResolvedSchema {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ClientTypeConfig {
-    pub format: String,
+    pub format: ClientFormat,
     pub output: String,
 }
 
@@ -163,7 +220,7 @@ pub struct Sp00kyConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slug: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub mode: Option<String>,
+    pub mode: Option<DeployMode>,
     /// SurrealDB config: version string or object with version/namespace/database.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub surrealdb: Option<SurrealDbConfig>,
@@ -173,17 +230,13 @@ pub struct Sp00kyConfig {
     pub version: Option<VersionConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schema: Option<SchemaConfig>,
+    /// Application definitions (backends and frontends). Each key is the app name.
     #[serde(default)]
-    pub backends: BTreeMap<String, BackendConfig>,
+    pub apps: BTreeMap<String, AppConfig>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub buckets: Vec<String>,
     #[serde(default, rename = "clientTypes", skip_serializing_if = "Vec::is_empty")]
     pub client_types: Vec<ClientTypeConfig>,
-    #[serde(default, rename = "devApp", skip_serializing_if = "Option::is_none")]
-    pub dev_app: Option<String>,
-    /// Frontend deployment configuration
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub frontend: Option<FrontendDeployConfig>,
     /// Deployment configuration (SSP count, scaling options)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deployment: Option<DeploymentConfig>,
@@ -195,7 +248,7 @@ pub struct Sp00kyConfig {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct DeploymentConfig {
     /// Number of SSP instances to provision (overrides plan default)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, rename = "sspCount", skip_serializing_if = "Option::is_none")]
     pub ssp_count: Option<u32>,
     /// Backup configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -214,36 +267,176 @@ pub struct BackupConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retention: Option<u32>,
     /// External S3-compatible bucket URL (skip MinIO if set)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, rename = "bucketUrl", skip_serializing_if = "Option::is_none")]
     pub bucket_url: Option<String>,
     /// Path to env file with BACKUP_ACCESS_KEY and BACKUP_SECRET_KEY
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, rename = "credentialsEnvFile", skip_serializing_if = "Option::is_none")]
     pub credentials_env_file: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct FrontendDeployConfig {
-    /// Dockerfile path (relative to sp00ky.yml)
-    pub dockerfile: String,
-    /// Build context directory (relative to sp00ky.yml, defaults to project root)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context: Option<String>,
-    /// Port the frontend listens on inside the container (default: 3000)
-    #[serde(default = "default_frontend_port")]
-    pub port: u16,
-    /// Resource allocation
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resources: Option<BackendDeployResources>,
-    /// Environment variables
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub env: Vec<String>,
-    /// Path to env file (relative to sp00ky.yml)
-    #[serde(default, rename = "env-file", skip_serializing_if = "Option::is_none")]
-    pub env_file: Option<String>,
+// ── Unified Env Config ──────────────────────────────────────────────────────
+
+/// A single environment variable source: "vault", a dotenv file path, or an inline map.
+#[derive(Debug, Clone)]
+pub enum EnvSource {
+    /// "vault" (all vars) or a dotenv file path
+    Str(String),
+    /// Inline key-value map, e.g. `{ DB_URL: "localhost", PORT: 3000 }`
+    Map(BTreeMap<String, serde_yaml::Value>),
+    /// Vault with a whitelist of variable names, e.g. `{ vault: [DB_URL, API_KEY] }`
+    Vault(Vec<String>),
 }
 
-fn default_frontend_port() -> u16 {
-    3000
+impl Serialize for EnvSource {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        match self {
+            EnvSource::Str(s) => serializer.serialize_str(s),
+            EnvSource::Map(m) => m.serialize(serializer),
+            EnvSource::Vault(keys) => {
+                use serde::ser::SerializeMap;
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry("vault", keys)?;
+                map.end()
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for EnvSource {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let value = serde_yaml::Value::deserialize(deserializer)?;
+        match &value {
+            serde_yaml::Value::String(s) => Ok(EnvSource::Str(s.clone())),
+            serde_yaml::Value::Mapping(m) => {
+                // Check for vault whitelist: { vault: [KEY1, KEY2, ...] }
+                let vault_key = serde_yaml::Value::String("vault".into());
+                if m.len() == 1 {
+                    if let Some(val) = m.get(&vault_key) {
+                        if let serde_yaml::Value::Sequence(seq) = val {
+                            let keys: Vec<String> = seq.iter()
+                                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                .collect();
+                            return Ok(EnvSource::Vault(keys));
+                        }
+                    }
+                }
+                // Otherwise it's an inline key-value map
+                let map = m.iter()
+                    .filter_map(|(k, v)| k.as_str().map(|s| (s.to_string(), v.clone())))
+                    .collect();
+                Ok(EnvSource::Map(map))
+            }
+            _ => Err(serde::de::Error::custom("env source must be a string or a map")),
+        }
+    }
+}
+
+/// An env entry used inside `PerEnvironment`: a single source or a list of sources.
+#[derive(Debug, Clone)]
+pub enum EnvEntry {
+    Source(EnvSource),
+    List(Vec<EnvSource>),
+}
+
+impl Serialize for EnvEntry {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        match self {
+            EnvEntry::Source(s) => s.serialize(serializer),
+            EnvEntry::List(l) => l.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for EnvEntry {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let value = serde_yaml::Value::deserialize(deserializer)?;
+        match &value {
+            serde_yaml::Value::Sequence(_) => {
+                let sources: Vec<EnvSource> = serde_yaml::from_value(value)
+                    .map_err(serde::de::Error::custom)?;
+                Ok(EnvEntry::List(sources))
+            }
+            _ => {
+                let source: EnvSource = serde_yaml::from_value(value)
+                    .map_err(serde::de::Error::custom)?;
+                Ok(EnvEntry::Source(source))
+            }
+        }
+    }
+}
+
+/// Environment variable configuration.
+///
+/// Supports:
+/// - `"vault"` or `"path/to/file"` — single string source
+/// - `{ KEY: "val" }` — inline key-value map
+/// - `{ dev: <entry>, cloud: <entry> }` — per-environment split
+/// - `["vault", ".env", { KEY: "val" }]` — array of sources, merged in order
+#[derive(Debug, Clone)]
+pub enum EnvConfig {
+    Source(EnvSource),
+    PerEnvironment {
+        dev: Option<EnvEntry>,
+        cloud: Option<EnvEntry>,
+    },
+    List(Vec<EnvSource>),
+}
+
+impl Serialize for EnvConfig {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        match self {
+            EnvConfig::Source(s) => s.serialize(serializer),
+            EnvConfig::PerEnvironment { dev, cloud } => {
+                use serde::ser::SerializeMap;
+                let mut map = serializer.serialize_map(None)?;
+                if let Some(d) = dev { map.serialize_entry("dev", d)?; }
+                if let Some(c) = cloud { map.serialize_entry("cloud", c)?; }
+                map.end()
+            }
+            EnvConfig::List(l) => l.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for EnvConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let value = serde_yaml::Value::deserialize(deserializer)?;
+        match &value {
+            serde_yaml::Value::String(s) => Ok(EnvConfig::Source(EnvSource::Str(s.clone()))),
+            serde_yaml::Value::Sequence(_) => {
+                let sources: Vec<EnvSource> = serde_yaml::from_value(value)
+                    .map_err(serde::de::Error::custom)?;
+                Ok(EnvConfig::List(sources))
+            }
+            serde_yaml::Value::Mapping(m) => {
+                // If the object has ONLY "dev" and/or "cloud" keys → PerEnvironment
+                let keys: Vec<&str> = m.keys().filter_map(|k| k.as_str()).collect();
+                let is_per_env = !keys.is_empty()
+                    && keys.iter().all(|k| *k == "dev" || *k == "cloud");
+
+                if is_per_env {
+                    let dev_key = serde_yaml::Value::String("dev".into());
+                    let cloud_key = serde_yaml::Value::String("cloud".into());
+                    let dev = m.get(&dev_key)
+                        .map(|v| serde_yaml::from_value::<EnvEntry>(v.clone()))
+                        .transpose()
+                        .map_err(serde::de::Error::custom)?;
+                    let cloud = m.get(&cloud_key)
+                        .map(|v| serde_yaml::from_value::<EnvEntry>(v.clone()))
+                        .transpose()
+                        .map_err(serde::de::Error::custom)?;
+                    Ok(EnvConfig::PerEnvironment { dev, cloud })
+                } else {
+                    // Inline key-value map
+                    let map = m.iter()
+                        .filter_map(|(k, v)| k.as_str().map(|s| (s.to_string(), v.clone())))
+                        .collect();
+                    Ok(EnvConfig::Source(EnvSource::Map(map)))
+                }
+            }
+            _ => Err(serde::de::Error::custom("env config must be a string, map, or array")),
+        }
+    }
 }
 
 impl Sp00kyConfig {
@@ -255,11 +448,25 @@ impl Sp00kyConfig {
         ResolvedSurrealDb::from_config(&self.surrealdb)
     }
 
-    /// Validate hosting configuration for SurrealDB and all backends.
+    /// Iterate over backend apps only.
+    pub fn backends(&self) -> impl Iterator<Item = (&str, &AppConfig)> {
+        self.apps.iter()
+            .filter(|(_, app)| app.app_type == AppType::Backend)
+            .map(|(name, app)| (name.as_str(), app))
+    }
+
+    /// Return the first frontend app, if any.
+    pub fn frontend(&self) -> Option<(&str, &AppConfig)> {
+        self.apps.iter()
+            .find(|(_, app)| app.app_type == AppType::Frontend)
+            .map(|(name, app)| (name.as_str(), app))
+    }
+
+    /// Validate hosting configuration for SurrealDB and all apps.
     pub fn validate(&self) -> Result<()> {
         self.resolved_surrealdb().validate()?;
-        for (name, backend) in &self.backends {
-            backend.validate(name)?;
+        for (name, app) in &self.apps {
+            app.validate(name)?;
         }
         Ok(())
     }
@@ -348,8 +555,6 @@ pub enum BackendDevTypedConfig {
         script: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         workdir: Option<String>,
-        #[serde(default, rename = "env-file", skip_serializing_if = "Option::is_none")]
-        env_file: Option<String>,
     },
     #[serde(rename = "docker")]
     Docker {
@@ -358,57 +563,43 @@ pub enum BackendDevTypedConfig {
         workdir: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         port: Option<String>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        env: Vec<String>,
-        #[serde(default, rename = "env-file", skip_serializing_if = "Option::is_none")]
-        env_file: Option<String>,
     },
     #[serde(rename = "uv")]
     Uv {
         script: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         workdir: Option<String>,
-        #[serde(default, rename = "env-file", skip_serializing_if = "Option::is_none")]
-        env_file: Option<String>,
     },
 }
 
+/// Unified deploy configuration for all app types.
+/// Port defaults depend on app type (8080 for backends, 3000 for frontends).
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct BackendDeployConfig {
-    /// Resource allocation for the backend VM
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resources: Option<BackendDeployResources>,
-    /// Expose publicly via {slug}-{name}.fn.spky.cloud
-    #[serde(default)]
-    pub expose: bool,
-    /// Port the service listens on inside the container (default: 8080)
-    #[serde(default = "default_deploy_port")]
-    pub port: u16,
-    /// Environment variables passed to the VM
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub env: Vec<String>,
-    /// Path to env file (relative to sp00ky.yml)
-    #[serde(default, rename = "env-file", skip_serializing_if = "Option::is_none")]
-    pub env_file: Option<String>,
-    /// Override Dockerfile path (defaults to dev.docker.file if available)
+pub struct AppDeployConfig {
+    /// Dockerfile path (relative to sp00ky.yml)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dockerfile: Option<String>,
     /// Build context directory (relative to sp00ky.yml, defaults to project root)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
-    /// Health check path for the scheduler to ping (e.g. "/health")
+    /// Port the service listens on (no default — resolved by app type)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    /// Resource allocation for the VM
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resources: Option<BackendDeployResources>,
+    /// Expose publicly via {slug}-{name}.fn.spky.cloud (backend only)
+    #[serde(default)]
+    pub expose: bool,
+    /// Health check path for the scheduler to ping, e.g. "/health" (backend only)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub healthcheck: Option<String>,
-    /// HTTP request timeout in seconds (default: 10)
+    /// HTTP request timeout in seconds (backend only, default: 10)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout: Option<u32>,
-    /// Whether the frontend can override the timeout per-job
-    #[serde(default, rename = "timeout_overridable", skip_serializing_if = "Option::is_none")]
+    /// Whether the frontend can override the timeout per-job (backend only)
+    #[serde(default, rename = "timeoutOverridable", skip_serializing_if = "Option::is_none")]
     pub timeout_overridable: Option<bool>,
-}
-
-fn default_deploy_port() -> u16 {
-    8080
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -428,34 +619,98 @@ fn default_vcpus() -> u32 { 1 }
 fn default_memory() -> u32 { 512 }
 fn default_disk() -> u32 { 5 }
 
+impl BackendDeployResources {
+    pub fn validate(&self) -> Result<()> {
+        if self.vcpus < 1 {
+            bail!("resources.vcpus must be >= 1, got {}", self.vcpus);
+        }
+        if self.memory < 128 {
+            bail!("resources.memory must be >= 128 MB, got {}", self.memory);
+        }
+        if self.disk < 1 {
+            bail!("resources.disk must be >= 1 GB, got {}", self.disk);
+        }
+        Ok(())
+    }
+}
+
+/// Unified application configuration — works for both backend and frontend apps.
 #[derive(Debug, Deserialize, Serialize)]
-pub struct BackendConfig {
+pub struct AppConfig {
+    /// App type: "backend" or "frontend" (required).
+    #[serde(rename = "type")]
+    pub app_type: AppType,
+
+    // ── Backend-specific fields ─────────────────────────────────────────
     /// "cloud" (default) or "external" — whether this backend is deployed to
     /// Sp00ky Cloud or self-hosted at `baseUrl`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hosting: Option<HostingMode>,
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub backend_type: Option<String>,
-    pub spec: String,
-    #[serde(rename = "baseUrl", skip_serializing_if = "Option::is_none")]
+    /// Path to the OpenAPI specification file (required for backends).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spec: Option<String>,
+    /// Base URL for the backend service (required when hosting is "external").
+    #[serde(default, rename = "baseUrl", skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<AuthConfig>,
-    pub method: BackendMethod,
+    /// Trigger method (required for backends).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub method: Option<BackendMethod>,
+
+    // ── Shared fields ───────────────────────────────────────────────────
+    /// Dev server configuration (npm, docker, uv, or raw command).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dev: Option<BackendDevConfig>,
+    /// Deployment configuration (dockerfile, port, resources, etc.)
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub deploy: Option<BackendDeployConfig>,
+    pub deploy: Option<AppDeployConfig>,
+    /// Environment variable configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<EnvConfig>,
 }
 
-impl BackendConfig {
+impl AppConfig {
     pub fn resolved_hosting(&self) -> HostingMode {
         self.hosting.clone().unwrap_or_default()
     }
 
+    /// Resolve the deploy port, falling back to type-specific defaults.
+    pub fn deploy_port(&self) -> u16 {
+        self.deploy.as_ref()
+            .and_then(|d| d.port)
+            .unwrap_or(match self.app_type {
+                AppType::Backend => 8080,
+                AppType::Frontend => 3000,
+            })
+    }
+
     pub fn validate(&self, name: &str) -> Result<()> {
-        if self.resolved_hosting() == HostingMode::External && self.base_url.is_none() {
-            bail!("Backend '{}' has hosting 'external' but no baseUrl was provided", name);
+        match self.app_type {
+            AppType::Backend => {
+                if self.spec.is_none() {
+                    bail!("Backend app '{}' is missing required field 'spec'", name);
+                }
+                if self.method.is_none() {
+                    bail!("Backend app '{}' is missing required field 'method'", name);
+                }
+                if self.resolved_hosting() == HostingMode::External && self.base_url.is_none() {
+                    bail!("Backend app '{}' has hosting 'external' but no baseUrl was provided", name);
+                }
+            }
+            AppType::Frontend => {
+                if let Some(ref deploy) = self.deploy {
+                    if deploy.dockerfile.is_none() {
+                        bail!("Frontend app '{}' has 'deploy' but is missing 'dockerfile'", name);
+                    }
+                }
+            }
+        }
+        if let Some(ref deploy) = self.deploy {
+            if let Some(ref resources) = deploy.resources {
+                resources.validate()
+                    .context(format!("Invalid resources for app '{}'", name))?;
+            }
         }
         Ok(())
     }
@@ -464,7 +719,7 @@ impl BackendConfig {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct AuthConfig {
     #[serde(rename = "type")]
-    pub auth_type: String,
+    pub auth_type: AuthType,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
 }
@@ -472,7 +727,7 @@ pub struct AuthConfig {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct BackendMethod {
     #[serde(rename = "type")]
-    pub method_type: String,
+    pub method_type: MethodType,
     pub schema: String,
     pub table: Option<String>,
 }
@@ -516,15 +771,13 @@ pub fn load_config(path: &Path) -> Sp00kyConfig {
 fn default_config() -> Sp00kyConfig {
     Sp00kyConfig {
         slug: None,
-        mode: Some("singlenode".to_string()),
+        mode: Some(DeployMode::Singlenode),
         surrealdb: None,
         version: None,
         schema: None,
-        backends: Default::default(),
+        apps: Default::default(),
         buckets: Default::default(),
         client_types: Default::default(),
-        dev_app: None,
-        frontend: None,
         deployment: None,
         cloud_api: None,
     }
@@ -554,8 +807,11 @@ impl BackendProcessor {
 
         let base_dir = config_path.parent().unwrap_or(Path::new("."));
 
-        for (backend_name, backend_config) in config.backends {
-            self.process_backend(&backend_name, &backend_config, base_dir)?;
+        for (name, app) in &config.apps {
+            if app.app_type != AppType::Backend {
+                continue;
+            }
+            self.process_backend(name, app, base_dir)?;
         }
 
         for path_str in &config.buckets {
@@ -570,11 +826,16 @@ impl BackendProcessor {
         Ok(())
     }
 
-    fn process_backend(&mut self, backend_name: &str, backend_config: &BackendConfig, base_dir: &Path) -> Result<()> {
+    fn process_backend(&mut self, backend_name: &str, app_config: &AppConfig, base_dir: &Path) -> Result<()> {
         println!("Processing backend config: {}", backend_name);
 
+        let method = app_config.method.as_ref()
+            .context(format!("Backend '{}' is missing 'method' field", backend_name))?;
+        let spec = app_config.spec.as_ref()
+            .context(format!("Backend '{}' is missing 'spec' field", backend_name))?;
+
         // 1. Append Schema - resolve path relative to sp00ky.yml
-        let schema_path = base_dir.join(&backend_config.method.schema);
+        let schema_path = base_dir.join(&method.schema);
         let schema_content = fs::read_to_string(&schema_path)
             .context(format!("Failed to read backend schema: {:?}", schema_path))?;
 
@@ -585,7 +846,7 @@ impl BackendProcessor {
         println!("  + Appended schema from {:?}", schema_path);
 
         // 2. Parse OpenAPI Spec - resolve path relative to sp00ky.yml
-        let spec_path = base_dir.join(&backend_config.spec);
+        let spec_path = base_dir.join(spec);
         let spec_content = fs::read_to_string(&spec_path)
             .context(format!("Failed to read openapi spec: {:?}", spec_path))?;
 
@@ -594,7 +855,7 @@ impl BackendProcessor {
 
         let mut backend_def = BackendDefinition {
             routes: BTreeMap::new(),
-            outbox_table: backend_config.method.table.clone(),
+            outbox_table: method.table.clone(),
         };
 
         for (path, item) in openapi.paths {

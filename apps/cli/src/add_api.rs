@@ -4,7 +4,7 @@ use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::backend::{AuthConfig, BackendConfig, BackendMethod, Sp00kyConfig, YAML_SCHEMA_COMMENT};
+use crate::backend::{AppConfig, AppType, AuthConfig, AuthType, BackendMethod, MethodType, Sp00kyConfig, YAML_SCHEMA_COMMENT};
 
 // ── Outbox schema template ──────────────────────────────────────────────────
 
@@ -126,11 +126,9 @@ pub fn add_api(
             surrealdb: None,
             version: None,
             schema: None,
-            backends: std::collections::BTreeMap::new(),
+            apps: std::collections::BTreeMap::new(),
             buckets: Vec::new(),
             client_types: Vec::new(),
-            dev_app: None,
-            frontend: None,
             deployment: None,
             cloud_api: None,
         }
@@ -168,14 +166,14 @@ pub fn add_api(
     } else {
         Text::new("Backend name:")
             .with_default("api")
-            .with_help_message("Used as the key in sp00ky.yml backends section")
+            .with_help_message("Used as the key in sp00ky.yml apps section")
             .prompt()?
     };
 
     // Sanity check: no duplicate
-    if sp00ky_config.backends.contains_key(&backend_name) {
+    if sp00ky_config.apps.contains_key(&backend_name) {
         bail!(
-            "Backend '{}' already exists in sp00ky.yml",
+            "App '{}' already exists in sp00ky.yml",
             backend_name
         );
     }
@@ -191,9 +189,9 @@ pub fn add_api(
     };
 
     // Step 6: Auth
-    let auth_config = if let Some(at) = auth_type {
+    let auth_config = if let Some(_at) = auth_type {
         Some(AuthConfig {
-            auth_type: at,
+            auth_type: AuthType::Token,
             token: auth_token,
         })
     } else {
@@ -206,7 +204,7 @@ pub fn add_api(
                 .with_help_message("Bearer token for API authentication")
                 .prompt()?;
             Some(AuthConfig {
-                auth_type: "token".to_string(),
+                auth_type: AuthType::Token,
                 token: if token.is_empty() { None } else { Some(token) },
             })
         } else {
@@ -269,22 +267,23 @@ pub fn add_api(
         .context(format!("Failed to write schema: {:?}", resolved_schema_output))?;
 
     // 2. Update sp00ky.yml
-    let new_backend = BackendConfig {
+    let new_app = AppConfig {
+        app_type: AppType::Backend,
         hosting: None,
-        backend_type: Some("http".to_string()),
-        spec: spec_path_str.clone(),
+        spec: Some(spec_path_str.clone()),
         base_url: Some(base_url_val.clone()),
         auth: auth_config,
-        method: BackendMethod {
-            method_type: "outbox".to_string(),
+        method: Some(BackendMethod {
+            method_type: MethodType::Outbox,
             schema: schema_output_str.clone(),
             table: Some(table_name.clone()),
-        },
+        }),
         dev: None,
         deploy: None,
+        env: None,
     };
 
-    sp00ky_config.backends.insert(backend_name.clone(), new_backend);
+    sp00ky_config.apps.insert(backend_name.clone(), new_app);
 
     let yaml_output = serde_yaml::to_string(&sp00ky_config)
         .context("Failed to serialize config to YAML")?;

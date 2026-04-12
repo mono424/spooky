@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::backend::BackendProcessor;
+use crate::backend::{BackendProcessor, DeployMode};
 use crate::parser::SchemaParser;
 use crate::schema_builder::SchemaBuilderConfig;
 use crate::schema_diff;
@@ -582,7 +582,7 @@ pub fn apply_internal_schema(
     client: &dyn MigrationDB,
     schema_input_path: &Path,
     config_path: Option<&Path>,
-    mode: &str,
+    mode: &DeployMode,
     endpoint: Option<&str>,
     secret: Option<&str>,
 ) -> Result<()> {
@@ -628,7 +628,7 @@ pub fn apply_internal_schema(
     let mut meta_tables_remote = include_str!("meta_tables_remote.surql").to_string();
 
     // Replace unregister_view for singlenode/cluster mode — uses $sp00ky_endpoint param
-    if mode == "singlenode" || mode == "cluster" {
+    if *mode == DeployMode::Singlenode || *mode == DeployMode::Cluster {
         let unregister_call = "let $result = mod::dbsp::unregister_view(<string>$before.id);";
         let unregister_http =
             "let $payload = { id: <string>$before.id };\n    let $result = http::post($sp00ky_endpoint + '/view/unregister', $payload, { \"Authorization\": \"Bearer \" + $sp00ky_secret });";

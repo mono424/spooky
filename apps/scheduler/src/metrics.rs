@@ -164,6 +164,52 @@ async fn health_check(
     })))
 }
 
+/// Patterns that indicate a sensitive environment variable (checked case-insensitively).
+const SENSITIVE_PATTERNS: &[&str] = &[
+    "key", "secret", "token", "password", "pass", "auth",
+    "credential", "private",
+];
+
+/// Mask values in an env map where the key matches any sensitive pattern.
+fn mask_sensitive_env(
+    env: serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Map<String, serde_json::Value> {
+    env.into_iter()
+        .map(|(k, v)| {
+            let lower = k.to_lowercase();
+            let is_sensitive = SENSITIVE_PATTERNS.iter().any(|pat| lower.contains(pat));
+            if is_sensitive {
+                (k, serde_json::Value::String("****".to_string()))
+            } else {
+                (k, v)
+            }
+        })
+        .collect()
+}
+
+/// Convert `["KEY=value", ...]` to a `serde_json::Map`.
+fn vec_env_to_map(entries: &[String]) -> serde_json::Map<String, serde_json::Value> {
+    entries
+        .iter()
+        .map(|entry| {
+            if let Some((k, v)) = entry.split_once('=') {
+                (k.to_string(), serde_json::Value::String(v.to_string()))
+            } else {
+                (entry.clone(), serde_json::Value::String(String::new()))
+            }
+        })
+        .collect()
+}
+
+/// Convert `HashMap<String, String>` to a `serde_json::Map`.
+fn hashmap_env_to_map(
+    map: &std::collections::HashMap<String, String>,
+) -> serde_json::Map<String, serde_json::Value> {
+    map.iter()
+        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+        .collect()
+}
+
 /// Info handler — returns entity list with identity and status
 async fn info_handler(
     State(state): State<MetricsState>,
@@ -201,7 +247,7 @@ async fn info_handler(
         "version": env!("CARGO_PKG_VERSION"),
         "uptime_seconds": state.start_time.elapsed().as_secs(),
         "last_heartbeat_seconds_ago": null,
-        "env": env_vars,
+        "env": mask_sensitive_env(env_vars),
     })];
 
     for ssp in pool.all() {
@@ -218,6 +264,8 @@ async fn info_handler(
         let ssp_ip = ssp.url.trim_start_matches("http://")
             .split(':').next()
             .map(|s| s.to_string());
+        let ssp_env = ssp.env.as_ref()
+            .map(|e| serde_json::Value::Object(mask_sensitive_env(hashmap_env_to_map(e))));
         entities.push(serde_json::json!({
             "entity": "ssp",
             "id": ssp.id,
@@ -227,13 +275,15 @@ async fn info_handler(
             "version": ssp.version,
             "uptime_seconds": now.duration_since(ssp.connected_at).as_secs(),
             "last_heartbeat_seconds_ago": last_heartbeat_seconds_ago,
-            "env": ssp.env,
+            "env": ssp_env,
         }));
     }
 
     // Read cached backend health status
     let backend_entries = state.backend_health.read().await;
     for entry in backend_entries.iter() {
+        let backend_env = entry.env.as_ref()
+            .map(|e| serde_json::Value::Object(mask_sensitive_env(vec_env_to_map(e))));
         entities.push(serde_json::json!({
             "entity": "backend",
             "id": entry.name,
@@ -249,7 +299,7 @@ async fn info_handler(
                 chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339()
             }),
             "response_time_ms": entry.response_time_ms,
-            "env": entry.env,
+            "env": backend_env,
         }));
     }
 

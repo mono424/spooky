@@ -17,7 +17,7 @@ mod sp00ky;
 mod surreal_client;
 
 use anyhow::{Context, Result};
-use backend::{BackendProcessor, Sp00kyConfig, DEFAULT_CONFIG_PATH};
+use backend::{BackendProcessor, DeployMode, Sp00kyConfig, DEFAULT_CONFIG_PATH};
 use clap::{Args as ClapArgs, Parser as ClapParser, Subcommand};
 use codegen::{CodeGenerator, OutputFormat};
 use json_schema::JsonSchemaGenerator;
@@ -138,6 +138,12 @@ enum Commands {
     /// Alias for 'generate'
     #[command(hide = true)]
     Gen {
+        /// Path to sp00ky.yml config file
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+    },
+    /// Validate sp00ky.yml configuration
+    Lint {
         /// Path to sp00ky.yml config file
         #[arg(short, long)]
         config: Option<PathBuf>,
@@ -737,6 +743,12 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
             let namespace = if namespace == "main" { resolved_surreal.namespace } else { namespace };
             let database = if database == "main" { resolved_surreal.database } else { database };
 
+            let deploy_mode = match mode.as_str() {
+                "cluster" => DeployMode::Cluster,
+                "surrealism" => DeployMode::Surrealism,
+                _ => DeployMode::Singlenode,
+            };
+
             if empty {
                 // Legacy: empty template or schema dump
                 migrate::create(&resolved_migrations, &name, schema.as_deref(), None, None)
@@ -745,7 +757,7 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
                 let builder_config = schema_builder::SchemaBuilderConfig {
                     input_path: resolved_input,
                     config_path: Some(config_file),
-                    mode,
+                    mode: deploy_mode,
                     endpoint,
                     secret,
                     include_functions: false,
@@ -806,11 +818,16 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
             } else {
                 None
             };
+            let deploy_mode = match mode.as_str() {
+                "cluster" => DeployMode::Cluster,
+                "surrealism" => DeployMode::Surrealism,
+                _ => DeployMode::Singlenode,
+            };
             migrate::apply_internal_schema(
                 &client,
                 &resolved.schema,
                 config_path_ref,
-                &mode,
+                &deploy_mode,
                 endpoint.as_deref(),
                 secret.as_deref(),
             )
@@ -916,7 +933,7 @@ fn run_codegen(
     config_path: Option<&Path>,
     backend_processor: &BackendProcessor,
     no_header: bool,
-    mode: &str,
+    mode: &DeployMode,
     endpoint: Option<&str>,
     secret: Option<&str>,
     modules_dir: &Path,
@@ -988,7 +1005,7 @@ fn run_codegen(
         let builder_config = schema_builder::SchemaBuilderConfig {
             input_path: input_path.to_path_buf(),
             config_path: config_path.map(|p| p.to_path_buf()),
-            mode: mode.to_string(),
+            mode: mode.clone(),
             endpoint: endpoint.map(|s| s.to_string()),
             secret: secret.map(|s| s.to_string()),
             include_functions: true,
@@ -1085,7 +1102,7 @@ fn run_codegen(
             secret,
         );
 
-        let include_modules = mode == "surrealism";
+        let include_modules = *mode == DeployMode::Surrealism;
         let generator = CodeGenerator::new(output_format, !no_header, include_modules);
         let output_content = generator
             .generate_with_schema(
@@ -1108,7 +1125,7 @@ fn run_codegen(
             OutputFormat::Surql => "sql",
         };
 
-        if matches!(output_format, OutputFormat::Surql) && mode == "surrealism" {
+        if matches!(output_format, OutputFormat::Surql) && *mode == DeployMode::Surrealism {
             if let Some(output_dir) = output_path.parent() {
                 println!("\nProcessing Surrealism Modules...");
                 if let Err(e) = modules::compile_modules(modules_dir, output_dir) {
@@ -1121,6 +1138,158 @@ fn run_codegen(
             "\nSuccessfully generated {} at {:?}",
             format_name, output_path
         );
+    }
+
+    Ok(())
+}
+
+fn handle_lint(config_path: &Path) -> Result<()> {
+    use anyhow::bail;
+    use backend::{AppType, BackendDevConfig, BackendDevTypedConfig, EnvSource, EnvConfig, EnvEntry};
+
+    let mut errors: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+
+    // 1. Check config file exists
+    if !config_path.exists() {
+        bail!("Config file not found: {}", config_path.display());
+    }
+    let base_dir = config_path.parent().unwrap_or(Path::new("."));
+
+    // 2. Parse YAML
+    let content = fs::read_to_string(config_path)
+        .context(format!("Failed to read {}", config_path.display()))?;
+    let config: Sp00kyConfig = serde_yaml::from_str(&content)
+        .context(format!("Failed to parse {}", config_path.display()))?;
+    println!("  Parsed {} successfully.", config_path.display());
+
+    // 3. Structural validation
+    if let Err(e) = config.validate() {
+        errors.push(format!("{}", e));
+    }
+
+    // 4. Check referenced files exist
+    let check_file = |path: &str, label: &str, errs: &mut Vec<String>| {
+        let resolved = base_dir.join(path);
+        if !resolved.exists() {
+            errs.push(format!("{} not found: {}", label, resolved.display()));
+        }
+    };
+
+    // Schema paths
+    let schema = config.resolved_schema();
+    if !base_dir.join(&schema.schema).exists() {
+        warnings.push(format!("Schema file not found: {}", base_dir.join(&schema.schema).display()));
+    }
+
+    // Bucket files
+    for bucket_path in &config.buckets {
+        check_file(bucket_path, "Bucket file", &mut errors);
+    }
+
+    // Per-app checks
+    for (name, app) in &config.apps {
+        let prefix = format!("apps.{}", name);
+
+        // Spec file (backends)
+        if let Some(spec) = &app.spec {
+            check_file(spec, &format!("{}.spec", prefix), &mut errors);
+        }
+
+        // Method schema file (backends)
+        if let Some(method) = &app.method {
+            check_file(&method.schema, &format!("{}.method.schema", prefix), &mut errors);
+        }
+
+        // Deploy dockerfile
+        if let Some(deploy) = &app.deploy {
+            if let Some(dockerfile) = &deploy.dockerfile {
+                check_file(dockerfile, &format!("{}.deploy.dockerfile", prefix), &mut errors);
+            }
+            if let Some(context) = &deploy.context {
+                let resolved = base_dir.join(context);
+                if !resolved.is_dir() {
+                    errors.push(format!("{}.deploy.context directory not found: {}", prefix, resolved.display()));
+                }
+            }
+        }
+
+        // Dev workdir
+        if let Some(ref dev) = app.dev {
+            match dev {
+                BackendDevConfig::Typed(BackendDevTypedConfig::Npm { workdir: Some(w), .. })
+                | BackendDevConfig::Typed(BackendDevTypedConfig::Docker { workdir: Some(w), .. })
+                | BackendDevConfig::Typed(BackendDevTypedConfig::Uv { workdir: Some(w), .. }) => {
+                    let resolved = base_dir.join(w);
+                    if !resolved.is_dir() {
+                        warnings.push(format!("{}.dev.workdir directory not found: {}", prefix, resolved.display()));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Env file references
+        fn check_env_file_sources(source: &EnvSource, base_dir: &Path, prefix: &str, warnings: &mut Vec<String>) {
+            match source {
+                EnvSource::Str(s) if s != "vault" => {
+                    let resolved = base_dir.join(s);
+                    if !resolved.exists() {
+                        warnings.push(format!("{}.env file not found: {}", prefix, resolved.display()));
+                    }
+                }
+                _ => {}
+            }
+        }
+        fn check_env_entry(entry: &EnvEntry, base_dir: &Path, prefix: &str, warnings: &mut Vec<String>) {
+            match entry {
+                EnvEntry::Source(s) => check_env_file_sources(s, base_dir, prefix, warnings),
+                EnvEntry::List(sources) => {
+                    for s in sources { check_env_file_sources(s, base_dir, prefix, warnings); }
+                }
+            }
+        }
+        if let Some(ref env) = app.env {
+            match env {
+                EnvConfig::Source(s) => check_env_file_sources(s, base_dir, &prefix, &mut warnings),
+                EnvConfig::List(sources) => {
+                    for s in sources { check_env_file_sources(s, base_dir, &prefix, &mut warnings); }
+                }
+                EnvConfig::PerEnvironment { dev, cloud } => {
+                    if let Some(e) = dev { check_env_entry(e, base_dir, &prefix, &mut warnings); }
+                    if let Some(e) = cloud { check_env_entry(e, base_dir, &prefix, &mut warnings); }
+                }
+            }
+        }
+
+        // Frontend-specific: warn if no deploy config
+        if app.app_type == AppType::Frontend && app.deploy.is_none() {
+            warnings.push(format!("{}: frontend app has no deploy configuration", prefix));
+        }
+    }
+
+    // 5. Print results
+    if !warnings.is_empty() {
+        println!();
+        for w in &warnings {
+            println!("  \x1b[33mwarning\x1b[0m: {}", w);
+        }
+    }
+
+    if !errors.is_empty() {
+        println!();
+        for e in &errors {
+            println!("  \x1b[31merror\x1b[0m: {}", e);
+        }
+        println!();
+        bail!("Lint failed with {} error(s) and {} warning(s).", errors.len(), warnings.len());
+    }
+
+    if warnings.is_empty() {
+        println!("  \x1b[32mAll checks passed.\x1b[0m");
+    } else {
+        println!();
+        println!("  \x1b[32mNo errors.\x1b[0m {} warning(s).", warnings.len());
     }
 
     Ok(())
@@ -1148,25 +1317,16 @@ fn handle_generate(config_path: &Path) -> Result<()> {
 
     for (i, ct) in config.client_types.iter().enumerate() {
         println!(
-            "\n[{}/{}] Generating {} → {}",
+            "\n[{}/{}] Generating {:?} → {}",
             i + 1,
             config.client_types.len(),
             ct.format,
             ct.output
         );
 
-        let output_format = match ct.format.to_lowercase().as_str() {
-            "json" => OutputFormat::JsonSchema,
-            "typescript" | "ts" => OutputFormat::Typescript,
-            "dart" => OutputFormat::Dart,
-            "surql" => OutputFormat::Surql,
-            _ => {
-                anyhow::bail!(
-                    "Unknown format '{}' in clientTypes[{}]. Supported: json, typescript, dart, surql",
-                    ct.format,
-                    i
-                );
-            }
+        let output_format = match ct.format {
+            backend::ClientFormat::Typescript => OutputFormat::Typescript,
+            backend::ClientFormat::Dart => OutputFormat::Dart,
         };
 
         let input_path = base_dir.join(&resolved.schema);
@@ -1181,7 +1341,7 @@ fn handle_generate(config_path: &Path) -> Result<()> {
             Some(config_path),
             &backend_processor,
             false,
-            "singlenode",
+            &DeployMode::Singlenode,
             None,
             None,
             Path::new("../../packages/surrealism-modules"),
@@ -1210,6 +1370,10 @@ fn main() -> Result<()> {
         Some(Commands::Migrate { action }) => return handle_migrate(action),
         Some(Commands::Bucket { action }) => return handle_bucket(action),
         Some(Commands::Api { action }) => return handle_api(action),
+        Some(Commands::Lint { config }) => {
+            let resolved_config = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
+            return handle_lint(&resolved_config);
+        }
         Some(Commands::Mcp) => return mcp::run(),
         Some(Commands::Cloud { action }) => return cloud::run(action),
         Some(Commands::Dev { skip_migrations, apply_migrations, fix_checksums }) => {
@@ -1222,8 +1386,15 @@ fn main() -> Result<()> {
         None => {} // fall through to legacy codegen mode
     }
 
+    // Parse mode string from CLI args into DeployMode
+    let cli_mode = match args.mode.as_str() {
+        "cluster" => DeployMode::Cluster,
+        "surrealism" => DeployMode::Surrealism,
+        _ => DeployMode::Singlenode,
+    };
+
     // Surrealism mode is not supported yet
-    if args.mode == "surrealism" {
+    if cli_mode == DeployMode::Surrealism {
         eprintln!("Warning: Surrealism mode is not supported yet.");
         std::process::exit(1);
     }
@@ -1275,7 +1446,7 @@ fn main() -> Result<()> {
         args.config.as_deref(),
         &backend_processor,
         args.no_header,
-        &args.mode,
+        &cli_mode,
         args.endpoint.as_deref(),
         args.secret.as_deref(),
         &args.modules_dir,

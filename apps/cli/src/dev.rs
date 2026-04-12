@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crate::backend::{self, BackendDevConfig, BackendDevTypedConfig, HostingMode, ResolvedSurrealDb, ResolvedVersions, Sp00kyConfig, DEFAULT_CONFIG_PATH};
+use crate::backend::{self, BackendDevConfig, BackendDevTypedConfig, DeployMode, HostingMode, ResolvedSurrealDb, ResolvedVersions, Sp00kyConfig, DEFAULT_CONFIG_PATH};
 use crate::migrate;
 use crate::schema_builder::{self, SchemaBuilderConfig};
 use crate::schema_diff;
@@ -56,7 +56,7 @@ pub fn run(skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bo
 
     // Read config from sp00ky.yml
     let config = backend::load_config(Path::new(DEFAULT_CONFIG_PATH));
-    let mode = config.mode.clone().unwrap_or_else(|| "singlenode".to_string());
+    let mode = config.mode.clone().unwrap_or(DeployMode::Singlenode);
     let versions = ResolvedVersions::from_config(&config);
     let resolved = config.resolved_schema();
     let resolved_surreal = config.resolved_surrealdb();
@@ -74,7 +74,7 @@ pub fn run(skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bo
     }
 
     // Check for compose files
-    let compose_file = format!("docker-compose.{}.yml", mode);
+    let compose_file = format!("docker-compose.{}.yml", mode.to_string());
     if Path::new(&compose_file).exists() {
         println!("{} Found compose file: {}", PREFIX, compose_file);
         run_compose_mode(&compose_file, &mode, &config, &resolved_surreal, &stop, skip_migrations, auto_apply_migrations, fix_checksums, migrations_path)
@@ -102,7 +102,7 @@ fn check_schema_drift(config: &Sp00kyConfig) -> Result<()> {
     let builder_config = SchemaBuilderConfig {
         input_path: schema_path.clone(),
         config_path: if config_path.exists() { Some(config_path.to_path_buf()) } else { None },
-        mode: config.mode.clone().unwrap_or_else(|| "singlenode".to_string()),
+        mode: config.mode.clone().unwrap_or(DeployMode::Singlenode),
         endpoint: None,
         secret: None,
         include_functions: false,
@@ -189,7 +189,7 @@ fn check_schema_drift(config: &Sp00kyConfig) -> Result<()> {
 
 // ── Direct Docker mode ──────────────────────────────────────────────────────
 
-fn run_direct_mode(mode: &str, versions: &ResolvedVersions, config: &Sp00kyConfig, resolved_surreal: &ResolvedSurrealDb, stop: &Arc<AtomicBool>, skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bool, migrations_path: &str) -> Result<()> {
+fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00kyConfig, resolved_surreal: &ResolvedSurrealDb, stop: &Arc<AtomicBool>, skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bool, migrations_path: &str) -> Result<()> {
     let surreal_image = versions.surrealdb_image();
     let ssp_image = versions.ssp_image();
 
@@ -285,7 +285,7 @@ fn run_direct_mode(mode: &str, versions: &ResolvedVersions, config: &Sp00kyConfi
 
     // Phase 5 (cluster only): Start scheduler before SSP so SSP can register
     let scheduler_log;
-    if mode == "cluster" {
+    if *mode == DeployMode::Cluster {
         let scheduler_image = versions.scheduler_image();
         let scheduler_port_mapping = format!("{}:9667", SCHEDULER_PORT);
 
@@ -374,7 +374,7 @@ fn run_direct_mode(mode: &str, versions: &ResolvedVersions, config: &Sp00kyConfi
         "-e", "SP00KY_CONFIG_PATH=/config/sp00ky.yml",
     ];
 
-    if mode == "cluster" {
+    if *mode == DeployMode::Cluster {
         ssp_args.extend(["-e", &scheduler_url_env]);
         ssp_args.extend(["-e", "SSP_ID=ssp-1"]);
         ssp_args.extend(["-e", &advertise_addr_env]);
@@ -392,7 +392,7 @@ fn run_direct_mode(mode: &str, versions: &ResolvedVersions, config: &Sp00kyConfi
     println!("\n{} Development environment ready!", PREFIX);
     println!("{} SurrealDB:  http://localhost:{}", PREFIX, SURREAL_PORT);
     println!("{} SSP:        http://localhost:{}", PREFIX, SSP_PORT);
-    if mode == "cluster" {
+    if *mode == DeployMode::Cluster {
         println!("{} Scheduler:  http://localhost:{}", PREFIX, SCHEDULER_PORT);
     }
     println!("{} Press Ctrl+C to stop.\n", PREFIX);
@@ -401,12 +401,9 @@ fn run_direct_mode(mode: &str, versions: &ResolvedVersions, config: &Sp00kyConfi
     let surreal_log = spawn_log_tail(SURREAL_CONTAINER, "surrealdb");
     let ssp_log = spawn_log_tail(SSP_CONTAINER, "ssp");
 
-    // Start the app dev server
-    let dev_app_script = config.dev_app.as_deref().unwrap_or("dev:app");
-    let app_dev = spawn_pnpm_dev_app(dev_app_script);
-
-    // Start backend dev commands
+    // Start app dev servers (frontend + backends)
     let project_dir = std::env::current_dir().context("Failed to get current directory")?;
+    let app_dev = spawn_frontend_dev(config, &project_dir);
     let backend_devs = spawn_backend_dev_commands(config, &project_dir);
 
     // Wait for Ctrl+C
@@ -441,13 +438,13 @@ fn cleanup_direct(_stop: &Arc<AtomicBool>) -> Result<()> {
 
 // ── Compose mode ────────────────────────────────────────────────────────────
 
-fn run_compose_mode(compose_file: &str, mode: &str, config: &Sp00kyConfig, resolved_surreal: &ResolvedSurrealDb, stop: &Arc<AtomicBool>, skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bool, migrations_path: &str) -> Result<()> {
+fn run_compose_mode(compose_file: &str, mode: &DeployMode, config: &Sp00kyConfig, resolved_surreal: &ResolvedSurrealDb, stop: &Arc<AtomicBool>, skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bool, migrations_path: &str) -> Result<()> {
     let use_local_surreal = resolved_surreal.hosting != HostingMode::External;
     let surreal_url = surreal_connection_url(resolved_surreal, SURREAL_PORT);
 
     let infra_services: &[&str] = match mode {
-        "cluster" => INFRA_SERVICES_CLUSTER,
-        "surrealism" => INFRA_SERVICES_SURREALISM,
+        DeployMode::Cluster => INFRA_SERVICES_CLUSTER,
+        DeployMode::Surrealism => INFRA_SERVICES_SURREALISM,
         _ => INFRA_SERVICES_SINGLENODE,
     };
 
@@ -530,12 +527,9 @@ fn run_compose_mode(compose_file: &str, mode: &str, config: &Sp00kyConfig, resol
     println!("\n{} Phase 4: Starting remaining services...", PREFIX);
     println!("{} Press Ctrl+C to stop.\n", PREFIX);
 
-    // Start the app dev server
-    let dev_app_script = config.dev_app.as_deref().unwrap_or("dev:app");
-    let app_dev = spawn_pnpm_dev_app(dev_app_script);
-
-    // Start backend dev commands
+    // Start app dev servers (frontend + backends)
     let project_dir = std::env::current_dir().context("Failed to get current directory")?;
+    let app_dev = spawn_frontend_dev(config, &project_dir);
     let backend_devs = spawn_backend_dev_commands(config, &project_dir);
 
     let status = Command::new("docker")
@@ -809,8 +803,8 @@ fn apply_migrations(surreal_url: &str, auto_apply: bool, fix_checksums: bool, mi
 /// Apply the remote functions with Docker-internal endpoints so that
 /// SurrealDB (running inside the Docker network) can reach the SSP/scheduler
 /// via container names instead of `localhost`.
-fn apply_remote_functions(surreal_url: &str, mode: &str, resolved_surreal: &ResolvedSurrealDb) -> Result<()> {
-    let endpoint = if mode == "cluster" {
+fn apply_remote_functions(surreal_url: &str, mode: &DeployMode, resolved_surreal: &ResolvedSurrealDb) -> Result<()> {
+    let endpoint = if *mode == DeployMode::Cluster {
         format!("http://scheduler:{}", SCHEDULER_PORT)
     } else {
         format!("http://ssp:{}", SSP_PORT)
@@ -863,18 +857,63 @@ impl Drop for LogTailGuard {
 
 const APP_COLOR: &str = "\x1b[97m"; // bright white
 
-fn spawn_pnpm_dev_app(script: &str) -> LogTailGuard {
+fn spawn_pnpm_dev_app(script: &str, envs: Vec<(String, String)>) -> LogTailGuard {
     let prefix = format!("{}[app]{}", APP_COLOR, ANSI_RESET);
     println!("{} Starting: pnpm {}", prefix, script);
     spawn_prefixed(
-        Command::new("pnpm").args([script]),
+        Command::new("pnpm").args([script]).envs(envs),
         &prefix,
     )
 }
 
+/// Start the frontend app dev server from the apps config.
+fn spawn_frontend_dev(config: &Sp00kyConfig, project_dir: &Path) -> LogTailGuard {
+    if let Some((_name, frontend)) = config.frontend() {
+        let envs = resolve_env_for_dev(&frontend.env, project_dir);
+        // Use the same dev config dispatch as backends
+        if let Some(ref dev_config) = frontend.dev {
+            let prefix = format!("{}[app]{}", APP_COLOR, ANSI_RESET);
+            match dev_config {
+                BackendDevConfig::Command(cmd) => {
+                    println!("{} Starting: {}", prefix, cmd);
+                    return spawn_prefixed(
+                        Command::new("sh").args(["-c", cmd.as_str()]).current_dir(project_dir).envs(envs),
+                        &prefix,
+                    );
+                }
+                BackendDevConfig::Typed(BackendDevTypedConfig::Npm { script, workdir }) => {
+                    let cwd = resolve_workdir(project_dir, workdir.as_deref());
+                    println!("{} Starting: pnpm run {}", prefix, script);
+                    return spawn_prefixed(
+                        Command::new("pnpm").args(["run", script]).current_dir(cwd).envs(envs),
+                        &prefix,
+                    );
+                }
+                BackendDevConfig::Typed(BackendDevTypedConfig::Docker { file, workdir, port }) => {
+                    let cwd = resolve_workdir(project_dir, workdir.as_deref());
+                    println!("{} Building: docker build -f {}", prefix, file);
+                    return spawn_docker_dev(file, port.as_deref(), &envs, &cwd, "frontend", &prefix);
+                }
+                BackendDevConfig::Typed(BackendDevTypedConfig::Uv { script, workdir }) => {
+                    let cwd = resolve_workdir(project_dir, workdir.as_deref());
+                    println!("{} Starting: uv run {}", prefix, script);
+                    return spawn_prefixed(
+                        Command::new("uv").args(["run", script]).current_dir(cwd).envs(envs),
+                        &prefix,
+                    );
+                }
+            }
+        }
+        // Fallback: no dev config — try pnpm dev:app
+        return spawn_pnpm_dev_app("dev:app", envs);
+    }
+    // No frontend app defined — try default pnpm dev:app
+    spawn_pnpm_dev_app("dev:app", Vec::new())
+}
+
 /// Apply the internal Sp00ky schema (meta tables + per-table events) so that
 /// record versioning and DBSP ingest work after migrations are applied.
-fn apply_internal_sp00ky_schema(surreal_url: &str, mode: &str, resolved_surreal: &ResolvedSurrealDb) -> Result<()> {
+fn apply_internal_sp00ky_schema(surreal_url: &str, mode: &DeployMode, resolved_surreal: &ResolvedSurrealDb) -> Result<()> {
     let config = backend::load_config(Path::new(DEFAULT_CONFIG_PATH));
     let resolved = config.resolved_schema();
 
@@ -883,7 +922,7 @@ fn apply_internal_sp00ky_schema(surreal_url: &str, mode: &str, resolved_surreal:
         return Ok(());
     }
 
-    let endpoint = if mode == "cluster" {
+    let endpoint = if *mode == DeployMode::Cluster {
         format!("http://scheduler:{}", SCHEDULER_PORT)
     } else {
         format!("http://ssp:{}", SSP_PORT)
@@ -935,39 +974,38 @@ const ANSI_RESET: &str = "\x1b[0m";
 fn spawn_backend_dev_commands(config: &Sp00kyConfig, project_dir: &Path) -> Vec<LogTailGuard> {
     let mut guards = Vec::new();
     let mut color_idx = 0;
-    for (name, backend) in &config.backends {
-        let dev_config = match &backend.dev {
+    for (name, app) in config.backends() {
+        let dev_config = match &app.dev {
             Some(cfg) => cfg,
             None => continue,
         };
         let color = BACKEND_COLORS[color_idx % BACKEND_COLORS.len()];
         color_idx += 1;
-        let prefix = format!("{}[backend.{}.dev]{}", color, name, ANSI_RESET);
+        let prefix = format!("{}[app.{}.dev]{}", color, name, ANSI_RESET);
+        let envs = resolve_env_for_dev(&app.env, project_dir);
         match dev_config {
             BackendDevConfig::Command(cmd) => {
                 println!("{} Starting: {}", prefix, cmd);
                 guards.push(spawn_prefixed(
-                    Command::new("sh").args(["-c", cmd]).current_dir(project_dir),
+                    Command::new("sh").args(["-c", cmd]).current_dir(project_dir).envs(envs),
                     &prefix,
                 ));
             }
-            BackendDevConfig::Typed(BackendDevTypedConfig::Npm { script, workdir, env_file }) => {
+            BackendDevConfig::Typed(BackendDevTypedConfig::Npm { script, workdir }) => {
                 let cwd = resolve_workdir(project_dir, workdir.as_deref());
-                let envs = load_env_file(env_file.as_deref(), project_dir, &prefix);
                 println!("{} Starting: pnpm run {}", prefix, script);
                 guards.push(spawn_prefixed(
                     Command::new("pnpm").args(["run", script]).current_dir(cwd).envs(envs),
                     &prefix,
                 ));
             }
-            BackendDevConfig::Typed(BackendDevTypedConfig::Docker { file, workdir, port, env, env_file }) => {
+            BackendDevConfig::Typed(BackendDevTypedConfig::Docker { file, workdir, port }) => {
                 let cwd = resolve_workdir(project_dir, workdir.as_deref());
                 println!("{} Building: docker build -f {}", prefix, file);
-                guards.push(spawn_docker_dev(file, port.as_deref(), env, env_file.as_deref(), &cwd, name, &prefix, project_dir));
+                guards.push(spawn_docker_dev(file, port.as_deref(), &envs, &cwd, name, &prefix));
             }
-            BackendDevConfig::Typed(BackendDevTypedConfig::Uv { script, workdir, env_file }) => {
+            BackendDevConfig::Typed(BackendDevTypedConfig::Uv { script, workdir }) => {
                 let cwd = resolve_workdir(project_dir, workdir.as_deref());
-                let envs = load_env_file(env_file.as_deref(), project_dir, &prefix);
                 println!("{} Starting: uv run {}", prefix, script);
                 guards.push(spawn_prefixed(
                     Command::new("uv").args(["run", script]).current_dir(cwd).envs(envs),
@@ -987,20 +1025,15 @@ fn resolve_workdir(project_dir: &Path, workdir: Option<&str>) -> std::path::Path
 }
 
 /// Parse a dotenv-style file into key-value pairs.
-/// Resolves the path relative to `project_dir`. Skips blank lines and `#` comments.
-fn load_env_file(env_file: Option<&str>, project_dir: &Path, prefix: &str) -> Vec<(String, String)> {
-    let path = match env_file {
-        Some(p) => project_dir.join(p),
-        None => return Vec::new(),
-    };
-    let content = match std::fs::read_to_string(&path) {
+/// Resolves the path relative to `base_dir`. Skips blank lines and `#` comments.
+pub fn load_dotenv_file(path: &Path) -> Vec<(String, String)> {
+    let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("{} Warning: Could not read env-file {:?}: {}", prefix, path, e);
+            eprintln!("  Warning: Could not read env-file {:?}: {}", path, e);
             return Vec::new();
         }
     };
-    println!("{} Loaded env-file: {}", prefix, path.display());
     content
         .lines()
         .filter(|l| {
@@ -1012,6 +1045,108 @@ fn load_env_file(env_file: Option<&str>, project_dir: &Path, prefix: &str) -> Ve
             Some((key.trim().to_string(), value.trim().to_string()))
         })
         .collect()
+}
+
+/// Load all vault env vars for dev via subprocess.
+fn load_dev_vault_envs() -> Vec<(String, String)> {
+    match std::process::Command::new("sp00ky")
+        .args(["cloud", "env", "load"])
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .filter_map(|l| {
+                    let (k, v) = l.split_once('=')?;
+                    Some((k.trim().to_string(), v.trim().to_string()))
+                })
+                .collect()
+        }
+        Ok(output) => {
+            eprintln!("  Warning: Vault env load failed: {}", String::from_utf8_lossy(&output.stderr).trim());
+            Vec::new()
+        }
+        Err(e) => {
+            eprintln!("  Warning: Could not load vault env vars: {}", e);
+            Vec::new()
+        }
+    }
+}
+
+/// Resolve an EnvSource into key-value pairs for dev mode.
+fn resolve_env_source(source: &backend::EnvSource, project_dir: &Path) -> Vec<(String, String)> {
+    match source {
+        backend::EnvSource::Str(s) if s == "vault" => load_dev_vault_envs(),
+        backend::EnvSource::Vault(whitelist) => {
+            let all = load_dev_vault_envs();
+            all.into_iter()
+                .filter(|(k, _)| whitelist.iter().any(|w| w == k))
+                .collect()
+        }
+        backend::EnvSource::Str(file_path) => {
+            let path = project_dir.join(file_path);
+            let envs = load_dotenv_file(&path);
+            if !envs.is_empty() {
+                println!("  Loaded env-file: {}", path.display());
+            }
+            envs
+        }
+        backend::EnvSource::Map(map) => {
+            map.iter()
+                .map(|(k, v)| {
+                    let val = match v {
+                        serde_yaml::Value::String(s) => s.clone(),
+                        serde_yaml::Value::Number(n) => n.to_string(),
+                        serde_yaml::Value::Bool(b) => b.to_string(),
+                        other => serde_yaml::to_string(other).unwrap_or_default().trim().to_string(),
+                    };
+                    (k.clone(), val)
+                })
+                .collect()
+        }
+    }
+}
+
+/// Resolve an EnvEntry (single source or list) into key-value pairs.
+fn resolve_env_entry(entry: &backend::EnvEntry, project_dir: &Path) -> Vec<(String, String)> {
+    match entry {
+        backend::EnvEntry::Source(source) => resolve_env_source(source, project_dir),
+        backend::EnvEntry::List(sources) => {
+            let mut merged = std::collections::BTreeMap::new();
+            for source in sources {
+                for (k, v) in resolve_env_source(source, project_dir) {
+                    merged.insert(k, v);
+                }
+            }
+            merged.into_iter().collect()
+        }
+    }
+}
+
+/// Resolve the full EnvConfig for dev mode, merging sources in order.
+pub fn resolve_env_for_dev(env: &Option<backend::EnvConfig>, project_dir: &Path) -> Vec<(String, String)> {
+    let env = match env {
+        Some(e) => e,
+        None => return Vec::new(),
+    };
+    match env {
+        backend::EnvConfig::Source(source) => resolve_env_source(source, project_dir),
+        backend::EnvConfig::List(sources) => {
+            let mut merged = std::collections::BTreeMap::new();
+            for source in sources {
+                for (k, v) in resolve_env_source(source, project_dir) {
+                    merged.insert(k, v);
+                }
+            }
+            merged.into_iter().collect()
+        }
+        backend::EnvConfig::PerEnvironment { dev, .. } => {
+            match dev {
+                Some(entry) => resolve_env_entry(entry, project_dir),
+                None => Vec::new(),
+            }
+        }
+    }
 }
 
 /// Spawn a command with its stdout/stderr prefixed line-by-line.
@@ -1056,9 +1191,9 @@ fn spawn_prefixed(cmd: &mut Command, prefix: &str) -> LogTailGuard {
     }
 }
 
-fn spawn_docker_dev(file: &str, port: Option<&str>, env: &[String], env_file: Option<&str>, cwd: &Path, name: &str, prefix: &str, project_dir: &Path) -> LogTailGuard {
+fn spawn_docker_dev(file: &str, port: Option<&str>, envs: &[(String, String)], cwd: &Path, name: &str, prefix: &str) -> LogTailGuard {
     let tag = format!("sp00ky-dev-{}", name);
-    let container_name = format!("sp00ky-dev-backend-{}", name);
+    let container_name = format!("sp00ky-dev-app-{}", name);
 
     // Build the image (blocking, with prefixed output)
     let build_result = Command::new("docker")
@@ -1102,21 +1237,10 @@ fn spawn_docker_dev(file: &str, port: Option<&str>, env: &[String], env_file: Op
         args.push(p.to_string());
     }
 
-    // Pass env-file as --env-file to docker (resolved relative to project root)
-    if let Some(ef) = env_file {
-        let resolved = project_dir.join(ef);
-        if resolved.exists() {
-            args.push("--env-file".to_string());
-            args.push(resolved.to_string_lossy().to_string());
-            println!("{} Loaded env-file: {}", prefix, resolved.display());
-        } else {
-            eprintln!("{} Warning: Could not read env-file {:?}", prefix, resolved);
-        }
-    }
-
-    for e in env {
+    // Pass resolved env vars as -e flags
+    for (k, v) in envs {
         args.push("-e".to_string());
-        args.push(e.to_string());
+        args.push(format!("{}={}", k, v));
     }
 
     args.push(tag);
