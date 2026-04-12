@@ -73,6 +73,117 @@ slug: my-app
   lang="yaml"
 />
 
+## Environment Variables
+
+Every app in `sp00ky.yml` supports a unified `env` property for injecting environment variables into both local dev and cloud deployments. There are several ways to provide them.
+
+### Dotenv File
+
+Point to a dotenv file (one `KEY=VALUE` per line):
+
+<CodeBlock
+  code={`apps:
+  api:
+    type: backend
+    env: ".env.local"
+    # ...`}
+  lang="yaml"
+/>
+
+### Inline Map
+
+Pass variables directly in the config:
+
+<CodeBlock
+  code={`apps:
+  api:
+    type: backend
+    env:
+      DATABASE_URL: "postgres://localhost/mydb"
+      LOG_LEVEL: debug
+    # ...`}
+  lang="yaml"
+/>
+
+### Per-Environment
+
+Use different sources for local development (`spky dev`) vs cloud deployment (`spky cloud deploy`):
+
+<CodeBlock
+  code={`apps:
+  agent:
+    type: backend
+    env:
+      dev: ".env.local"       # loaded during spky dev
+      cloud: "vault"           # loaded from encrypted vault on deploy
+    # ...`}
+  lang="yaml"
+/>
+
+### Encrypted Vault
+
+Load all variables from the [Sp00ky Cloud vault](/docs/cloud/env-variables):
+
+<CodeBlock
+  code={`apps:
+  api:
+    type: backend
+    env: "vault"
+    # ...`}
+  lang="yaml"
+/>
+
+To load only specific variables, use a whitelist:
+
+<CodeBlock
+  code={`apps:
+  web:
+    type: frontend
+    env:
+      vault: [VITE_API_URL, VITE_PUBLIC_KEY]
+    # ...`}
+  lang="yaml"
+/>
+
+<Note>
+  Vault variables must be set up first with <code>spky cloud env init</code> and <code>spky cloud env set</code>. See [Environment Variables](/docs/cloud/env-variables) for the full workflow.
+</Note>
+
+### Merging Sources
+
+Combine multiple sources in an array — later entries override earlier ones:
+
+<CodeBlock
+  code={`apps:
+  api:
+    type: backend
+    env:
+      - "vault"                        # base: all vault vars
+      - ".env.overrides"               # override specific values from file
+      - { LOG_LEVEL: debug }           # final inline override
+    # ...`}
+  lang="yaml"
+/>
+
+All forms can be combined with per-environment splits:
+
+<CodeBlock
+  code={`apps:
+  agent:
+    type: backend
+    env:
+      dev:
+        - ".env.local"
+        - { DEBUG: true }
+      cloud:
+        - "vault"
+        - ".env.cloud.overrides"
+    # ...`}
+  lang="yaml"
+/>
+
+For the full env reference, see [Backend Functions — Environment Variables](/docs/backend-functions#environment-variables).
+
 ## Listing Projects
 
 <CodeBlock
