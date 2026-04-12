@@ -505,84 +505,23 @@ All typed forms support an optional `workdir` field that is resolved relative to
 
 ## Environment Variables
 
-Every app supports a unified `env` property for injecting environment variables into both dev and cloud environments. The `env` field accepts several forms:
+Sp00ky auto-injects `SPKY_*` variables into every app — including `SPKY_DB_URL`, `SPKY_DB_WS`, `SPKY_DB_NS`, `SPKY_DB_NAME`, `SPKY_DB_USER`, `SPKY_DB_PASS`, and `SPKY_ENV`. Your backend can use these to connect to SurrealDB without any manual configuration.
 
-### String Form
-
-A simple string is either `"vault"` (to load from the encrypted Sp00ky Cloud vault) or a path to a dotenv file:
-
-<CodeBlock
-  code={`apps:
-  api:
-    type: backend
-    env: ".env.local"        # dotenv file (KEY=VALUE format)
-    # ...other fields...`}
-  lang="yaml"
-/>
-
-### Inline Map
-
-Pass variables directly:
-
-<CodeBlock
-  code={`apps:
-  api:
-    type: backend
-    env:
-      DATABASE_URL: "postgres://localhost/mydb"
-      LOG_LEVEL: debug
-    # ...other fields...`}
-  lang="yaml"
-/>
-
-### Per-Environment
-
-Use different sources for local development vs cloud deployment:
+For app-specific variables (API keys, feature flags, etc.), use the `env` property on each app. It supports dotenv files, inline maps, vault secrets, per-environment splits, and arrays — see [Environment Variables](/docs/environment-variables) for the full guide.
 
 <CodeBlock
   code={`apps:
   agent:
     type: backend
     env:
-      dev: ".env.local"      # dotenv file for \`spky dev\`
-      cloud: "vault"          # encrypted vault for cloud deploys
-    # ...other fields...`}
-  lang="yaml"
-/>
-
-### Array (Merge Order)
-
-Combine multiple sources — later entries override earlier ones:
-
-<CodeBlock
-  code={`apps:
-  api:
-    type: backend
-    env:
-      - "vault"                       # base: all vault vars
-      - ".env.overrides"              # override specific values from file
-      - { LOG_LEVEL: debug }          # final inline override
-    # ...other fields...`}
-  lang="yaml"
-/>
-
-### Vault Whitelist
-
-Instead of loading all vault variables, select only the ones you need:
-
-<CodeBlock
-  code={`apps:
-  web:
-    type: frontend
-    env:
-      - vault: [VITE_API_URL, VITE_PUBLIC_KEY]   # only these from vault
-      - ".env.local"
+      dev: ".env.local"
+      cloud: "vault"
     # ...other fields...`}
   lang="yaml"
 />
 
 <Note>
-  For dev mode, `"vault"` loads variables via the Sp00ky Cloud API (requires `spky cloud login`). For cloud deploys, vault variables are resolved automatically and included in the deployment manifest.
+  Auto-injected <code>SPKY_*</code> variables can be overridden — if you set <code>SPKY_DB_URL</code> in your env config, your value takes precedence.
 </Note>
 
 ## Best Practices
