@@ -196,8 +196,13 @@ impl Scheduler {
 
         // Step 1: Connect to remote SurrealDB
         info!("Connecting to SurrealDB at {}", self.config.db.url);
+        let ws_addr = self.config.db.url
+            .strip_prefix("ws://")
+            .or_else(|| self.config.db.url.strip_prefix("wss://"))
+            .unwrap_or(&self.config.db.url);
+
         let db = surrealdb::Surreal::new::<surrealdb::engine::remote::ws::Ws>(
-            self.config.db.url.as_str()
+            ws_addr
         ).await?;
 
         db.signin(surrealdb::opt::auth::Root {

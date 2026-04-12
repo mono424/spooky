@@ -12,9 +12,9 @@ const currentPath = Astro.url.pathname;
           currentPath === link.href ||
           (link.href !== `${basePath}/docs` && currentPath.startsWith(link.href))
       );
-      const isOpen = index === 0 || hasActivePage;
+      const isOpen = hasActivePage;
       return (
-      <details open={isOpen} class="group">
+      <details open={isOpen} name="docs-sidebar" class="group">
         <summary class="flex items-center justify-between cursor-pointer list-none text-sm font-medium text-text-primary mb-2 px-2 hover:opacity-80 select-none">
           {group.title}
           <svg
@@ -58,6 +58,19 @@ const currentPath = Astro.url.pathname;
     );})
   }
 </nav>
+
+<script>
+  // Accordion fallback for browsers without <details name=""> support
+  document.querySelectorAll('details[name="docs-sidebar"]').forEach((details) => {
+    details.addEventListener('toggle', () => {
+      if (details.open) {
+        document.querySelectorAll('details[name="docs-sidebar"]').forEach((other) => {
+          if (other !== details) other.open = false;
+        });
+      }
+    });
+  });
+</script>
 
 <style>
   /* Remove default details marker */

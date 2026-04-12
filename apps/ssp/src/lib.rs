@@ -220,7 +220,12 @@ impl BootstrapSource {
 pub async fn connect_database(config: &Config) -> anyhow::Result<SharedDb> {
     info!(addr = %config.db_addr, "Connecting to SurrealDB");
 
-    let db = Surreal::new::<Ws>(&config.db_addr)
+    let addr = config.db_addr
+        .strip_prefix("ws://")
+        .or_else(|| config.db_addr.strip_prefix("wss://"))
+        .unwrap_or(&config.db_addr);
+
+    let db = Surreal::new::<Ws>(addr)
         .await
         .context("Failed to connect to SurrealDB")?;
 
