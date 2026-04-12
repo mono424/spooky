@@ -889,7 +889,7 @@ fn build_job_config_json(config: &Sp00kyConfig) -> String {
 fn build_spky_dev_vars(resolved_surreal: &ResolvedSurrealDb, mode: &DeployMode) -> Vec<(String, String)> {
     let mut vars = vec![
         ("SPKY_ENV".into(), "dev".into()),
-        ("SPKY_DB_URL".into(), format!("localhost:{}", SURREAL_PORT)),
+        ("SPKY_DB_URL".into(), format!("http://localhost:{}", SURREAL_PORT)),
         ("SPKY_DB_NS".into(), resolved_surreal.namespace.clone()),
         ("SPKY_DB_NAME".into(), resolved_surreal.database.clone()),
         ("SPKY_DB_USER".into(), resolved_surreal.username.clone()),
