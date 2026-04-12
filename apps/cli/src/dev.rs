@@ -289,7 +289,8 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
         let scheduler_image = versions.scheduler_image();
         let scheduler_port_mapping = format!("{}:9667", SCHEDULER_PORT);
 
-        let scheduler_db_url_env = "SPKY_DB_URL=surrealdb:8000".to_string();
+        let scheduler_db_url_env = "SPKY_DB_URL=http://surrealdb:8000".to_string();
+        let scheduler_db_ws_env = "SPKY_DB_WS=ws://surrealdb:8000".to_string();
         let scheduler_ns_env = format!("SPKY_DB_NS={}", resolved_surreal.namespace);
         let scheduler_db_env = format!("SPKY_DB_NAME={}", resolved_surreal.database);
         let scheduler_user_env = format!("SPKY_DB_USER={}", resolved_surreal.username);
@@ -305,6 +306,7 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
             "-p", &scheduler_port_mapping,
             "-e", "RUST_LOG=info",
             "-e", &scheduler_db_url_env,
+            "-e", &scheduler_db_ws_env,
             "-e", &scheduler_ns_env,
             "-e", &scheduler_db_env,
             "-e", &scheduler_user_env,
@@ -343,7 +345,8 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
     let port_mapping = format!("{}:8667", SSP_PORT);
     let data_mount_str = format!("{}:/data", data_dir.display());
 
-    let ssp_db_url_env = "SPKY_DB_URL=surrealdb:8000".to_string();
+    let ssp_db_url_env = "SPKY_DB_URL=http://surrealdb:8000".to_string();
+    let ssp_db_ws_env = "SPKY_DB_WS=ws://surrealdb:8000".to_string();
     let ssp_ns_env = format!("SPKY_DB_NS={}", resolved_surreal.namespace);
     let ssp_db_env = format!("SPKY_DB_NAME={}", resolved_surreal.database);
     let ssp_user_env = format!("SPKY_DB_USER={}", resolved_surreal.username);
@@ -364,6 +367,7 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
         "-p", &port_mapping,
         "-e", "RUST_LOG=info,ssp=debug",
         "-e", &ssp_db_url_env,
+        "-e", &ssp_db_ws_env,
         "-e", &ssp_ns_env,
         "-e", &ssp_db_env,
         "-e", &ssp_user_env,
@@ -890,6 +894,7 @@ fn build_spky_dev_vars(resolved_surreal: &ResolvedSurrealDb, mode: &DeployMode) 
     let mut vars = vec![
         ("SPKY_ENV".into(), "dev".into()),
         ("SPKY_DB_URL".into(), format!("http://localhost:{}", SURREAL_PORT)),
+        ("SPKY_DB_WS".into(), format!("ws://localhost:{}", SURREAL_PORT)),
         ("SPKY_DB_NS".into(), resolved_surreal.namespace.clone()),
         ("SPKY_DB_NAME".into(), resolved_surreal.database.clone()),
         ("SPKY_DB_USER".into(), resolved_surreal.username.clone()),

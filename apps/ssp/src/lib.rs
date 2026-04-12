@@ -98,7 +98,7 @@ pub struct Config {
 pub fn load_config() -> Config {
     Config {
         listen_addr: std::env::var("SPKY_SSP_LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:8667".to_string()),
-        db_addr: std::env::var("SPKY_DB_URL").unwrap_or_else(|_| "127.0.0.1:8000".to_string()),
+        db_addr: std::env::var("SPKY_DB_WS").unwrap_or_else(|_| "ws://127.0.0.1:8000".to_string()),
         db_user: std::env::var("SPKY_DB_USER").unwrap_or_else(|_| "root".to_string()),
         db_pass: std::env::var("SPKY_DB_PASS").unwrap_or_else(|_| "root".to_string()),
         db_ns: std::env::var("SPKY_DB_NS").unwrap_or_else(|_| "test".to_string()),

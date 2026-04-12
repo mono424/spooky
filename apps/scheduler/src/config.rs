@@ -58,7 +58,7 @@ impl Default for SchedulerConfig {
     fn default() -> Self {
         Self {
             db: DbConfig {
-                url: "localhost:8000".to_string(),
+                url: "ws://localhost:8000".to_string(),
                 namespace: "sp00ky".to_string(),
                 database: "sp00ky".to_string(),
                 username: "root".to_string(),
@@ -97,7 +97,7 @@ impl SchedulerConfig {
         let mut scheduler_config: SchedulerConfig = config.try_deserialize()?;
 
         // Override DB settings from SPKY_* environment variables
-        if let Ok(v) = std::env::var("SPKY_DB_URL") {
+        if let Ok(v) = std::env::var("SPKY_DB_WS") {
             scheduler_config.db.url = v;
         }
         if let Ok(v) = std::env::var("SPKY_DB_NS") {
