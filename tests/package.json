@@ -1,6 +1,6 @@
 {
   "name": "@spooky-sync/tests",
-  "version": "0.0.1-canary.45",
+  "version": "0.0.1-canary.46",
   "private": true,
   "scripts": {
     "test": "jest --runInBand",
