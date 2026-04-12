@@ -6,13 +6,25 @@ export const docsNav = [
       { text: 'Introduction', href: `${basePath}/docs` },
       { text: 'Installation', href: `${basePath}/docs/install` },
       { text: 'Schema', href: `${basePath}/docs/schema` },
-      { text: 'Migrations', href: `${basePath}/docs/migrations` },
       { text: 'Authentication', href: `${basePath}/docs/authentication` },
+      { text: 'Environment Variables', href: `${basePath}/docs/environment-variables` },
+    ],
+  },
+  {
+    title: 'Data',
+    links: [
       { text: 'Query Data', href: `${basePath}/docs/query-data` },
       { text: 'Mutate Data', href: `${basePath}/docs/mutate-data` },
-      { text: 'Backend Functions', href: `${basePath}/docs/backend-functions` },
-      { text: 'Environment Variables', href: `${basePath}/docs/environment-variables` },
+      { text: 'Migrations', href: `${basePath}/docs/migrations` },
       { text: 'File Buckets', href: `${basePath}/docs/buckets` },
+    ],
+  },
+  {
+    title: 'Backend',
+    links: [
+      { text: 'Setup', href: `${basePath}/docs/backend/setup` },
+      { text: 'Jobs & Usage', href: `${basePath}/docs/backend/jobs` },
+      { text: 'Dev Server', href: `${basePath}/docs/backend/dev-server` },
     ],
   },
   {

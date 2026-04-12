@@ -1,0 +1,175 @@
+---
+layout: ../../../layouts/DocsLayout.astro
+title: Backend Setup
+---
+
+import CodeBlock from '../../../components/ui/CodeBlock.astro';
+import Warning from '../../../components/ui/Warning.astro';
+import Note from '../../../components/ui/Note.astro';
+
+export const configCode = `mode: sidecar
+apps:
+  api:
+    type: backend
+    baseUrl: http://host.docker.internal:3660
+    spec: ../api/openapi.yml
+    dev:
+      type: npm
+      script: dev
+      workdir: ../api
+    auth:
+      type: token
+      token: THIS_IS_TOP_SECRET
+    method:
+      type: outbox
+      table: job
+      schema: ./src/outbox/api.surql
+    env:
+      dev: ".env.local"
+      cloud: "vault"`;
+
+export const timeoutCode = `apps:
+  agent:
+    type: backend
+    spec: ./openapi.yaml
+    baseUrl: http://host.docker.internal:8767
+    method:
+      type: outbox
+      table: jobs_agent
+      schema: ./src/outbox/agent.surql
+    deploy:
+      dockerfile: ./Dockerfile
+      port: 8767
+      timeout: 120               # Allow up to 2 minutes per request
+      timeoutOverridable: true    # Let the frontend set per-job timeouts`;
+
+export const timeoutClientCode = `// Use a 60-second timeout for this specific call
+await db.run('agent', '/chat', { message: 'Hello' }, {
+  timeout: 60
+});`;
+
+export const authConfigCode = `# Backend with authentication
+apps:
+  api:
+    type: backend
+    baseUrl: https://api.example.com
+    spec: ../api/openapi.yml
+    auth:
+      type: token
+      token: \${API_TOKEN}  # Can use environment variables
+    method:
+      type: outbox
+      table: job
+      schema: ./src/outbox/api.surql`;
+
+export const authMiddlewareCode = `import { bearerAuth } from 'hono/bearer-auth';
+
+app.use('/*', bearerAuth({
+  token: process.env.API_AUTH_TOKEN
+}));`;
+
+export const openapiCode = `openapi: 3.1.0
+info:
+  version: 1.0.0
+  title: example
+paths:
+  /spookify:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id:
+                  type: string
+                  example: thread:kv9b3b...
+              required:
+                - id
+      responses:
+        '200':
+          description: ok
+        '404':
+          description: Thread not found
+        '500':
+          description: Internal server error`;
+
+Backend functions allow you to execute server-side logic from your Sp00ky application. Currently, Sp00ky supports backend integration through the **outbox pattern**, where client operations create job records that are processed asynchronously by a backend service.
+
+## How It Works
+
+The outbox pattern decouples your frontend from backend services:
+
+1. Your client calls `db.run()` to create a job record in SurrealDB
+2. A separate job runner service polls for pending jobs
+3. The job runner executes the HTTP request to your backend API
+4. The job status is updated in the database
+5. Your client can query the job status reactively
+
+<Note>
+  Direct backend calls may be supported in future versions. For now, the outbox pattern is the recommended approach for all backend integrations.
+</Note>
+
+## Configuration
+
+Backend functions are configured in your `sp00ky.yml` file in the schema directory.
+
+<CodeBlock code={configCode} lang="yaml" />
+
+<Note>
+  You can validate your config at any time with `spky lint`.
+</Note>
+
+### Configuration Fields
+
+All apps are defined under the `apps` key. Each app has a required `type` field (`backend` or `frontend`).
+
+**Backend-specific fields:**
+- **`spec`** (required): Path to the OpenAPI specification file that defines your API routes
+- **`baseUrl`**: The base URL of your HTTP backend service
+- **`auth`** (optional): Authentication configuration for the backend
+  - **`type`**: Authentication type (currently only `token` is supported)
+  - **`token`**: The bearer token to include in HTTP requests
+- **`method`** (required): Trigger method configuration
+  - **`type`**: The method type (use `outbox` for the outbox pattern)
+  - **`table`**: The name of the job table in SurrealDB (e.g., `job`)
+  - **`schema`**: Path to the SurrealQL schema file that defines the job table structure
+
+**Shared fields (all app types):**
+- **`dev`** (optional): A dev server command that `spky dev` will spawn alongside infrastructure (see [Dev Server](/docs/backend/dev-server) below)
+- **`deploy`** (optional): Cloud deployment configuration (dockerfile, port, resources)
+  - **`timeout`**: HTTP request timeout in seconds (default: `10`, backend only)
+  - **`timeoutOverridable`**: When `true`, the frontend can override the timeout per-job (backend only)
+- **`env`** (optional): Environment variable configuration (see [Environment Variables](/docs/environment-variables) below)
+
+### Timeout Configuration
+
+By default, the job runner allows **10 seconds** for each HTTP request to complete. For backends that perform long-running operations (e.g., LLM inference, file processing), you can increase the timeout in the `deploy` section:
+
+<CodeBlock code={timeoutCode} lang="yaml" />
+
+When `timeoutOverridable` is `true`, the frontend can pass a `timeout` option to `db.run()`:
+
+<CodeBlock code={timeoutClientCode} lang="typescript" />
+
+If `timeoutOverridable` is `false` (the default), the `timeout` option in `db.run()` is ignored and the deploy-time value is always used.
+
+### Authentication
+
+When you configure an `auth` block in your backend configuration, the job runner will automatically include the token in all HTTP requests to that backend using the `Authorization: Bearer <token>` header.
+
+This is useful for securing your backend APIs and ensuring that only authorized job runners can execute requests.
+
+<CodeBlock code={authConfigCode} lang="yaml" />
+
+On your backend server, validate the bearer token in your middleware:
+
+<CodeBlock code={authMiddlewareCode} lang="typescript" />
+
+## OpenAPI Specification
+
+Your backend routes are defined using an OpenAPI specification. Each path becomes a callable route from your Sp00ky client.
+
+<CodeBlock code={openapiCode} lang="yaml" />
+
+The request body schema defines the parameters that will be validated when you call `db.run()`. In this example, the `/spookify` endpoint requires an `id` parameter.

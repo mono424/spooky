@@ -1,0 +1,101 @@
+---
+layout: ../../../layouts/DocsLayout.astro
+title: Dev Server
+---
+
+import CodeBlock from '../../../components/ui/CodeBlock.astro';
+import Note from '../../../components/ui/Note.astro';
+
+export const stringFormCode = `apps:
+  api:
+    type: backend
+    dev: "node server.js"
+    # ...other fields...`;
+
+export const npmCode = `apps:
+  api:
+    type: backend
+    dev:
+      type: npm
+      script: dev           # runs \`pnpm run dev\`
+      workdir: ../api       # optional: directory to run from (relative to sp00ky.yml)
+    # ...other fields...`;
+
+export const dockerCode = `apps:
+  worker:
+    type: backend
+    dev:
+      type: docker
+      file: Dockerfile.dev   # Dockerfile to build
+      workdir: ../worker     # optional: build context directory
+      port: "3000:3000"      # optional: port mapping
+    # ...other fields...`;
+
+export const uvCode = `apps:
+  ml-service:
+    type: backend
+    dev:
+      type: uv
+      script: server.py      # runs \`uv run server.py\`
+      workdir: ../ml-service  # optional: directory to run from (relative to sp00ky.yml)
+    # ...other fields...`;
+
+export const envCode = `apps:
+  agent:
+    type: backend
+    env:
+      dev: ".env.local"
+      cloud: "vault"
+    # ...other fields...`;
+
+Each app in `sp00ky.yml` can declare an optional `dev` field. When you run `spky dev`, these commands are spawned alongside the rest of the infrastructure (SurrealDB, SSP, scheduler), so you don't need to start backend services in separate terminals.
+
+Each app gets a unique color in the terminal and its output is prefixed with `[app.<name>.dev]`, making it easy to distinguish logs from different services.
+
+## String Form
+
+The simplest option is a raw shell command:
+
+<CodeBlock code={stringFormCode} lang="yaml" />
+
+This runs the command from the project root using `sh -c`.
+
+## npm Type
+
+Run an npm/pnpm script:
+
+<CodeBlock code={npmCode} lang="yaml" />
+
+## Docker Type
+
+Build and run a Dockerfile:
+
+<CodeBlock code={dockerCode} lang="yaml" />
+
+## uv Type (Python)
+
+Run a Python script via [uv](https://docs.astral.sh/uv/):
+
+<CodeBlock code={uvCode} lang="yaml" />
+
+This uses `uv run` to execute the script inside the project's virtual environment, automatically installing dependencies from `pyproject.toml` if needed.
+
+## workdir
+
+All typed forms support an optional `workdir` field that is resolved relative to the project root (the directory containing `sp00ky.yml`). If omitted, commands run from the project root.
+
+<Note>
+  Backend dev processes are automatically stopped when you press Ctrl+C to shut down `spky dev`.
+</Note>
+
+## Environment Variables
+
+Sp00ky auto-injects `SPKY_*` variables into every app — including `SPKY_DB_URL`, `SPKY_DB_WS`, `SPKY_DB_NS`, `SPKY_DB_NAME`, `SPKY_DB_USER`, `SPKY_DB_PASS`, and `SPKY_ENV`. Your backend can use these to connect to SurrealDB without any manual configuration.
+
+For app-specific variables (API keys, feature flags, etc.), use the `env` property on each app. It supports dotenv files, inline maps, vault secrets, per-environment splits, and arrays — see [Environment Variables](/docs/environment-variables) for the full guide.
+
+<CodeBlock code={envCode} lang="yaml" />
+
+<Note>
+  Auto-injected <code>SPKY_*</code> variables can be overridden — if you set <code>SPKY_DB_URL</code> in your env config, your value takes precedence.
+</Note>
