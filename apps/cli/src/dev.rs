@@ -289,7 +289,7 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
         let scheduler_image = versions.scheduler_image();
         let scheduler_port_mapping = format!("{}:9667", SCHEDULER_PORT);
 
-        let scheduler_db_url_env = format!("SPKY_DB_URL=surrealdb:{}/rpc", SURREAL_PORT);
+        let scheduler_db_url_env = "SPKY_DB_URL=surrealdb:8000".to_string();
         let scheduler_ns_env = format!("SPKY_DB_NS={}", resolved_surreal.namespace);
         let scheduler_db_env = format!("SPKY_DB_NAME={}", resolved_surreal.database);
         let scheduler_user_env = format!("SPKY_DB_USER={}", resolved_surreal.username);
@@ -333,9 +333,6 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
 
     // Phase 6: Start SSP
     println!("{} Phase 6: Starting SSP...", PREFIX);
-    let config_mount = std::env::current_dir()
-        .context("Failed to get current directory")?
-        .join("sp00ky.yml");
     let data_dir = std::env::current_dir()
         .context("Failed to get current directory")?
         .join(".sp00ky/ssp_data");
@@ -344,16 +341,19 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
     std::fs::create_dir_all(&data_dir).ok();
 
     let port_mapping = format!("{}:8667", SSP_PORT);
-    let config_mount_str = format!("{}:/config/sp00ky.yml:ro", config_mount.display());
     let data_mount_str = format!("{}:/data", data_dir.display());
 
-    let ssp_db_url_env = format!("SPKY_DB_URL=surrealdb:{}/rpc", SURREAL_PORT);
+    let ssp_db_url_env = "SPKY_DB_URL=surrealdb:8000".to_string();
     let ssp_ns_env = format!("SPKY_DB_NS={}", resolved_surreal.namespace);
     let ssp_db_env = format!("SPKY_DB_NAME={}", resolved_surreal.database);
     let ssp_user_env = format!("SPKY_DB_USER={}", resolved_surreal.username);
     let ssp_pass_env = format!("SPKY_DB_PASS={}", resolved_surreal.password);
     let scheduler_url_env = format!("SPKY_SCHEDULER_URL=http://scheduler:{}", SCHEDULER_PORT);
     let advertise_addr_env = format!("SPKY_SSP_ADVERTISE_ADDR={}:{}", SSP_CONTAINER, SSP_PORT);
+
+    // Build SPKY_JOB_CONFIG from backend apps with outbox method
+    let job_config_json = build_job_config_json(config);
+    let job_config_env = format!("SPKY_JOB_CONFIG={}", job_config_json);
 
     let mut ssp_args = vec![
         "run", "-d",
@@ -369,7 +369,7 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
         "-e", &ssp_user_env,
         "-e", &ssp_pass_env,
         "-e", "SPKY_AUTH_SECRET=mysecret",
-        "-e", "SPKY_CONFIG_PATH=/config/sp00ky.yml",
+        "-e", &job_config_env,
     ];
 
     if *mode == DeployMode::Cluster {
@@ -378,9 +378,6 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
         ssp_args.extend(["-e", &advertise_addr_env]);
     }
 
-    if config_mount.exists() {
-        ssp_args.extend(["-v", &config_mount_str]);
-    }
     ssp_args.extend(["-v", &data_mount_str]);
     ssp_args.push(&ssp_image);
 
@@ -853,19 +850,54 @@ impl Drop for LogTailGuard {
     }
 }
 
+/// Build SPKY_JOB_CONFIG JSON from backend apps with outbox methods.
+/// Uses baseUrl from sp00ky.yml for dev mode (Docker-internal URLs use host.docker.internal).
+fn build_job_config_json(config: &Sp00kyConfig) -> String {
+    let mut entries = Vec::new();
+    for (name, app) in config.backends() {
+        let method = match &app.method {
+            Some(m) => m,
+            None => continue,
+        };
+        let base_url = match &app.base_url {
+            Some(u) => u.clone(),
+            None => continue,
+        };
+        let table = match &method.table {
+            Some(t) => t.clone(),
+            None => continue,
+        };
+        let auth_token = app.auth.as_ref().and_then(|a| a.token.clone());
+        let timeout = app.deploy.as_ref().and_then(|d| d.timeout);
+        let timeout_overridable = app.deploy.as_ref()
+            .and_then(|d| d.timeout_overridable)
+            .unwrap_or(false);
+
+        entries.push(serde_json::json!({
+            "name": name,
+            "table": table,
+            "base_url": base_url,
+            "auth_token": auth_token,
+            "timeout": timeout,
+            "timeout_overridable": timeout_overridable,
+        }));
+    }
+    serde_json::to_string(&entries).unwrap_or_else(|_| "[]".to_string())
+}
+
 /// Build the auto-injected SPKY_* environment variables for dev mode.
 fn build_spky_dev_vars(resolved_surreal: &ResolvedSurrealDb, mode: &DeployMode) -> Vec<(String, String)> {
     let mut vars = vec![
         ("SPKY_ENV".into(), "dev".into()),
-        ("SPKY_DB_URL".into(), format!("surrealdb:{}/rpc", SURREAL_PORT)),
+        ("SPKY_DB_URL".into(), format!("localhost:{}", SURREAL_PORT)),
         ("SPKY_DB_NS".into(), resolved_surreal.namespace.clone()),
         ("SPKY_DB_NAME".into(), resolved_surreal.database.clone()),
         ("SPKY_DB_USER".into(), resolved_surreal.username.clone()),
         ("SPKY_DB_PASS".into(), resolved_surreal.password.clone()),
-        ("SPKY_SSP_ADDR".into(), format!("ssp:{}", SSP_PORT)),
+        ("SPKY_SSP_ADDR".into(), format!("localhost:{}", SSP_PORT)),
     ];
     if *mode == DeployMode::Cluster {
-        vars.push(("SPKY_SCHEDULER_URL".into(), format!("http://scheduler:{}", SCHEDULER_PORT)));
+        vars.push(("SPKY_SCHEDULER_URL".into(), format!("http://localhost:{}", SCHEDULER_PORT)));
     }
     vars
 }
@@ -1090,30 +1122,9 @@ pub fn load_dotenv_file(path: &Path) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Load all vault env vars for dev via subprocess.
+/// Load all vault env vars for dev via the Cloud API directly.
 fn load_dev_vault_envs() -> Vec<(String, String)> {
-    match std::process::Command::new("sp00ky")
-        .args(["cloud", "env", "load"])
-        .output()
-    {
-        Ok(output) if output.status.success() => {
-            String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .filter_map(|l| {
-                    let (k, v) = l.split_once('=')?;
-                    Some((k.trim().to_string(), v.trim().to_string()))
-                })
-                .collect()
-        }
-        Ok(output) => {
-            eprintln!("  Warning: Vault env load failed: {}", String::from_utf8_lossy(&output.stderr).trim());
-            Vec::new()
-        }
-        Err(e) => {
-            eprintln!("  Warning: Could not load vault env vars: {}", e);
-            Vec::new()
-        }
-    }
+    crate::cloud::load_vault_envs_for_dev()
 }
 
 /// Resolve an EnvSource into key-value pairs for dev mode.

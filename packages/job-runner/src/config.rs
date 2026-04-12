@@ -8,15 +8,19 @@ use std::path::Path;
 
 #[derive(Debug, Deserialize)]
 struct Sp00kyConfig {
-    backends: HashMap<String, BackendConfig>,
+    #[serde(default)]
+    apps: HashMap<String, AppConfig>,
 }
 
 #[derive(Debug, Deserialize)]
-struct BackendConfig {
+struct AppConfig {
+    #[serde(rename = "type")]
+    app_type: Option<String>,
     #[serde(rename = "baseUrl")]
     base_url: Option<String>,
-    method: BackendMethod,
+    method: Option<AppMethod>,
     auth: Option<AuthConfig>,
+    deploy: Option<DeployConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -27,17 +31,23 @@ struct AuthConfig {
 }
 
 #[derive(Debug, Deserialize)]
-struct BackendMethod {
+struct AppMethod {
     #[serde(rename = "type")]
     method_type: String,
     table: Option<String>,
 }
 
-/// Load job configuration from sp00ky.yml with inline backend configs
+#[derive(Debug, Deserialize)]
+struct DeployConfig {
+    timeout: Option<u32>,
+    #[serde(rename = "timeoutOverridable")]
+    timeout_overridable: Option<bool>,
+}
+
+/// Load job configuration from sp00ky.yml with inline app configs
 pub fn load_config<P: AsRef<Path>>(sp00ky_config_path: P) -> Result<JobConfig> {
     let config_path = sp00ky_config_path.as_ref();
 
-    // Read sp00ky.yml
     let config_str = fs::read_to_string(config_path)
         .context(format!("Failed to read sp00ky config: {:?}", config_path))?;
 
@@ -46,37 +56,42 @@ pub fn load_config<P: AsRef<Path>>(sp00ky_config_path: P) -> Result<JobConfig> {
 
     let mut job_tables = HashMap::new();
 
-    // Process each backend directly from the map
-    for (backend_name, backend_config) in sp00ky_config.backends {
-        // Only process outbox backends that have a base_url and table
-        if backend_config.method.method_type == "outbox" {
-            if let (Some(base_url), Some(table)) =
-                (backend_config.base_url, backend_config.method.table)
-            {
-                // Extract auth token if present
-                let auth_token = backend_config.auth.and_then(|auth| {
-                    if auth.auth_type == "token" {
-                        auth.token
-                    } else {
-                        None
-                    }
-                });
-
-                let backend_info = BackendInfo {
-                    name: backend_name,
-                    base_url,
-                    auth_token,
-                    timeout: None,
-                    timeout_overridable: false,
-                };
-
-                // Map table to backend info
-                if job_tables.insert(table.clone(), backend_info).is_some() {
-                    tracing::warn!(
-                        table = %table,
-                        "Table already mapped to another backend - overwriting"
-                    );
+    for (app_name, app_config) in sp00ky_config.apps {
+        // Only process backend apps with outbox method
+        if app_config.app_type.as_deref() != Some("backend") {
+            continue;
+        }
+        let method = match &app_config.method {
+            Some(m) if m.method_type == "outbox" => m,
+            _ => continue,
+        };
+        if let (Some(base_url), Some(table)) = (&app_config.base_url, &method.table) {
+            let auth_token = app_config.auth.and_then(|auth| {
+                if auth.auth_type == "token" {
+                    auth.token
+                } else {
+                    None
                 }
+            });
+
+            let timeout = app_config.deploy.as_ref().and_then(|d| d.timeout);
+            let timeout_overridable = app_config.deploy.as_ref()
+                .and_then(|d| d.timeout_overridable)
+                .unwrap_or(false);
+
+            let backend_info = BackendInfo {
+                name: app_name,
+                base_url: base_url.clone(),
+                auth_token,
+                timeout,
+                timeout_overridable,
+            };
+
+            if job_tables.insert(table.clone(), backend_info).is_some() {
+                tracing::warn!(
+                    table = %table,
+                    "Table already mapped to another backend - overwriting"
+                );
             }
         }
     }

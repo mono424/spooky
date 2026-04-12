@@ -13,6 +13,72 @@ use crate::backend::{self, BackendDevConfig, BackendDevTypedConfig, HostingMode}
 use crate::surreal_client::MigrationDB;
 use crate::{CloudBackupCommands, CloudBillingCommands, CloudCommands, CloudEnvCommands, CloudKeyCommands, CloudLinkCommands, CloudTeamCommands, CloudVaultCommands};
 
+/// Load vault environment variables for dev mode via the Cloud API.
+/// Returns key-value pairs. Returns empty vec (with warning) if not logged in or vault not initialized.
+pub fn load_vault_envs_for_dev() -> Vec<(String, String)> {
+    let creds = match load_credentials() {
+        Some(c) => c,
+        None => {
+            eprintln!("  Warning: Not logged in to Sp00ky Cloud. Skipping vault env vars. Run `spky cloud login` first.");
+            return Vec::new();
+        }
+    };
+    let mut client = CloudClient::new(&creds);
+
+    // Resolve project
+    let pid = match resolve_project_id_quiet(&mut client) {
+        Some(pid) => pid,
+        None => {
+            eprintln!("  Warning: Could not resolve cloud project. Skipping vault env vars.");
+            return Vec::new();
+        }
+    };
+
+    let derived_key = match get_derived_key(&mut client) {
+        Ok(dk) => dk,
+        Err(e) => {
+            eprintln!("  Warning: Could not load vault passphrase: {}. Skipping vault env vars.", e);
+            return Vec::new();
+        }
+    };
+
+    let resp = match client.post(
+        &format!("/v1/projects/{}/envs/load", pid),
+        &serde_json::json!({ "derived_key": derived_key, "environment": "development" }),
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("  Warning: Could not load vault env vars: {}. Skipping.", e);
+            return Vec::new();
+        }
+    };
+
+    let data: serde_json::Value = match resp.into_json() {
+        Ok(d) => d,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut result = Vec::new();
+    if let Some(vars) = data["variables"].as_object() {
+        for (key, value) in vars {
+            if let Some(val) = value.as_str() {
+                result.push((key.clone(), val.to_string()));
+            }
+        }
+    }
+    result
+}
+
+/// Quietly resolve the project ID from sp00ky.yml slug, without prompts.
+fn resolve_project_id_quiet(client: &mut CloudClient) -> Option<String> {
+    let config_path = std::env::current_dir().ok()?.join("sp00ky.yml");
+    if !config_path.exists() { return None; }
+    let config = backend::load_config(&config_path);
+    let slug = config.slug?;
+    let project = fetch_project(client, &slug).ok()??;
+    Some(project_id(&project))
+}
+
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------

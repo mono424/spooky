@@ -9,7 +9,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::path::PathBuf;
+
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -88,7 +88,6 @@ pub struct Config {
     pub db_pass: String,
     pub db_ns: String,
     pub db_db: String,
-    pub sp00ky_config_path: PathBuf,
     pub scheduler_url: Option<String>,
     pub ssp_id: String,
     pub heartbeat_interval_ms: u64,
@@ -104,10 +103,6 @@ pub fn load_config() -> Config {
         db_pass: std::env::var("SPKY_DB_PASS").unwrap_or_else(|_| "root".to_string()),
         db_ns: std::env::var("SPKY_DB_NS").unwrap_or_else(|_| "test".to_string()),
         db_db: std::env::var("SPKY_DB_NAME").unwrap_or_else(|_| "test".to_string()),
-        sp00ky_config_path: PathBuf::from(
-            std::env::var("SPKY_CONFIG_PATH")
-                .unwrap_or_else(|_| "sp00ky.yml".to_string()),
-        ),
         scheduler_url: std::env::var("SPKY_SCHEDULER_URL").ok(),
         ssp_id: std::env::var("SPKY_SSP_ID")
             .unwrap_or_else(|_| format!("ssp-{}", uuid::Uuid::new_v4())),
@@ -247,33 +242,39 @@ pub async fn connect_database(config: &Config) -> anyhow::Result<SharedDb> {
 
 // --- Job Config Loading ---
 
-async fn load_job_config_from_db(db: &Surreal<Client>) -> anyhow::Result<JobConfig> {
-    let result: Option<serde_json::Value> = db
-        .select(("_sp00ky_config", "main"))
-        .await
-        .map_err(|e| anyhow::anyhow!("SurrealDB select failed: {}", e))?;
-    match result {
-        Some(record) => job_runner::from_db_record(&record),
-        None => Ok(JobConfig::default()),
-    }
-}
-
-fn load_job_config_from_file(path: &std::path::Path) -> Arc<JobConfig> {
-    if path.exists() {
-        match job_runner::load_config(path) {
-            Ok(cfg) => {
-                info!(job_tables = cfg.job_tables.len(), "Loaded job config from file");
-                Arc::new(cfg)
-            }
-            Err(e) => {
-                warn!(error = %e, "Failed to load job config from file, job runner disabled");
-                Arc::new(JobConfig::default())
-            }
+/// Load job config from the SPKY_JOB_CONFIG env var (JSON).
+/// Format: [{"name":"api","table":"job","base_url":"http://...","auth_token":null,"timeout":10,"timeout_overridable":false}, ...]
+fn load_job_config_from_env() -> Arc<JobConfig> {
+    let json = match std::env::var("SPKY_JOB_CONFIG") {
+        Ok(v) if !v.is_empty() => v,
+        _ => {
+            info!("No SPKY_JOB_CONFIG set, job runner disabled");
+            return Arc::new(JobConfig::default());
         }
-    } else {
-        info!("No job config found, job runner disabled");
-        Arc::new(JobConfig::default())
+    };
+
+    let entries: Vec<serde_json::Value> = match serde_json::from_str(&json) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(error = %e, "Failed to parse SPKY_JOB_CONFIG, job runner disabled");
+            return Arc::new(JobConfig::default());
+        }
+    };
+
+    let mut job_tables = std::collections::HashMap::new();
+    for entry in &entries {
+        let name = entry.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let table = entry.get("table").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let base_url = entry.get("base_url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if table.is_empty() || base_url.is_empty() { continue; }
+        let auth_token = entry.get("auth_token").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let timeout = entry.get("timeout").and_then(|v| v.as_u64()).map(|v| v as u32);
+        let timeout_overridable = entry.get("timeout_overridable").and_then(|v| v.as_bool()).unwrap_or(false);
+        job_tables.insert(table, job_runner::BackendInfo { name, base_url, auth_token, timeout, timeout_overridable });
     }
+
+    info!(job_tables = job_tables.len(), "Loaded job config from SPKY_JOB_CONFIG");
+    Arc::new(JobConfig { job_tables })
 }
 
 // --- Router Setup ---
@@ -319,21 +320,8 @@ pub async fn run_server() -> anyhow::Result<()> {
     let processor_arc = Arc::new(RwLock::new(Circuit::new()));
     let status = Arc::new(RwLock::new(SspStatus::Bootstrapping));
 
-    // Load job configuration from SurrealDB (_sp00ky_config:main), fall back to file
-    let job_config = match load_job_config_from_db(&db).await {
-        Ok(cfg) if !cfg.job_tables.is_empty() => {
-            info!(job_tables = cfg.job_tables.len(), "Loaded job config from SurrealDB");
-            Arc::new(cfg)
-        }
-        Ok(_) => {
-            info!("No job config in SurrealDB, trying file fallback");
-            load_job_config_from_file(&config.sp00ky_config_path)
-        }
-        Err(e) => {
-            warn!(error = %e, "Failed to load job config from SurrealDB, trying file fallback");
-            load_job_config_from_file(&config.sp00ky_config_path)
-        }
-    };
+    // Load job configuration from SPKY_JOB_CONFIG env var
+    let job_config = load_job_config_from_env();
 
     // Create job queue channel
     let (job_queue_tx, job_queue_rx) = mpsc::channel::<JobEntry>(100);
