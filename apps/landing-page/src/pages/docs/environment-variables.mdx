@@ -1,0 +1,208 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: Environment Variables
+---
+
+import CodeBlock from '../../components/ui/CodeBlock.astro';
+import Warning from '../../components/ui/Warning.astro';
+import Note from '../../components/ui/Note.astro';
+
+Most applications need environment variables — database URLs, API keys, feature flags, third-party credentials. Sp00ky provides a single `env` property on every app in `sp00ky.yml` that handles environment variables across local development and cloud deployment.
+
+The `env` property accepts several forms that can be mixed and matched depending on your needs.
+
+## From a File
+
+The most common approach is a `.env` file — a plain text file with one `KEY=VALUE` per line. Comments (`#`) and blank lines are ignored.
+
+<CodeBlock
+  code={`# .env.local
+DATABASE_URL=postgres://localhost:5432/mydb
+API_SECRET=dev-secret-123
+LOG_LEVEL=debug`}
+  lang="bash"
+/>
+
+Reference it in your app config:
+
+<CodeBlock
+  code={`apps:
+  api:
+    type: backend
+    env: ".env.local"
+    # ...`}
+  lang="yaml"
+/>
+
+The path is resolved relative to your `sp00ky.yml`. When you run `spky dev`, these variables are injected into the app's process. When you run `spky cloud deploy`, they are included in the deployment manifest.
+
+<Warning>
+  Don't commit <code>.env</code> files containing secrets to version control. Add them to <code>.gitignore</code> and use the <a href="/docs/cloud/env-variables">encrypted vault</a> for production secrets.
+</Warning>
+
+## Inline
+
+For non-sensitive values or quick overrides, define variables directly in the config:
+
+<CodeBlock
+  code={`apps:
+  api:
+    type: backend
+    env:
+      LOG_LEVEL: debug
+      PORT: 3000
+      ENABLE_CACHE: true
+    # ...`}
+  lang="yaml"
+/>
+
+Values can be strings, numbers, or booleans.
+
+## From the Vault
+
+For production secrets, Sp00ky Cloud provides an [encrypted vault](/docs/cloud/env-variables) — a zero-knowledge store where variables are encrypted client-side before reaching the server.
+
+<CodeBlock
+  code={`apps:
+  api:
+    type: backend
+    env: "vault"
+    # ...`}
+  lang="yaml"
+/>
+
+This loads **all** variables from the vault. If you only need specific ones, pass a whitelist:
+
+<CodeBlock
+  code={`apps:
+  web:
+    type: frontend
+    env:
+      vault: [VITE_API_URL, VITE_PUBLIC_KEY]
+    # ...`}
+  lang="yaml"
+/>
+
+<Note>
+  Vault variables must be set up first with <code>spky cloud env init</code> and <code>spky cloud env set</code>. See <a href="/docs/cloud/env-variables">Cloud Environment Variables</a> for the full setup guide.
+</Note>
+
+## Different Variables for Dev and Cloud
+
+In practice, local development and cloud deployment rarely use the same values. Use the `dev` / `cloud` split to provide different sources for each:
+
+<CodeBlock
+  code={`apps:
+  agent:
+    type: backend
+    env:
+      dev: ".env.local"         # used during spky dev
+      cloud: "vault"             # used during spky cloud deploy
+    # ...`}
+  lang="yaml"
+/>
+
+Each side accepts any form — a file path, inline map, `"vault"`, a vault whitelist, or an array.
+
+## Layering Multiple Sources
+
+When a single source isn't enough, use an array. Sources are merged in order — later entries override earlier ones by key:
+
+<CodeBlock
+  code={`apps:
+  api:
+    type: backend
+    env:
+      - "vault"                        # 1. start with all vault secrets
+      - ".env.overrides"               # 2. override specific values from file
+      - { LOG_LEVEL: debug }           # 3. final inline override
+    # ...`}
+  lang="yaml"
+/>
+
+This is useful for layering secrets from the vault with non-secret config, then applying local tweaks on top.
+
+Arrays also work inside per-environment splits:
+
+<CodeBlock
+  code={`apps:
+  agent:
+    type: backend
+    env:
+      dev:
+        - ".env.local"
+        - { DEBUG: true }
+      cloud:
+        - "vault"
+        - ".env.cloud.overrides"
+    # ...`}
+  lang="yaml"
+/>
+
+## Full Example
+
+Here's a realistic `sp00ky.yml` showing environment variables across a frontend and two backends:
+
+<CodeBlock
+  code={`apps:
+  web:
+    type: frontend
+    dev:
+      type: npm
+      script: dev:app
+    deploy:
+      dockerfile: ./Dockerfile
+      port: 3000
+    env:
+      dev:
+        VITE_API_URL: "http://localhost:8765"
+      cloud:
+        vault: [VITE_API_URL, VITE_PUBLIC_KEY]
+
+  api:
+    type: backend
+    spec: ./api/openapi.yml
+    method:
+      type: outbox
+      table: job
+      schema: ./schema/src/outbox/api.surql
+    env: ".env.local"
+
+  agent:
+    type: backend
+    spec: ./agent/openapi.yml
+    method:
+      type: outbox
+      table: jobs_agent
+      schema: ./schema/src/outbox/agent.surql
+    env:
+      dev: ".env.agent.local"
+      cloud:
+        - "vault"
+        - { MAX_TOKENS: 4096 }`}
+  lang="yaml"
+/>
+
+## How Variables Are Injected
+
+| Context | Behavior |
+| :--- | :--- |
+| **`spky dev`** (npm, uv) | Variables are set in the spawned process environment |
+| **`spky dev`** (docker) | Variables are passed as `-e KEY=VAL` flags to `docker run` |
+| **`spky cloud deploy`** | Variables are resolved and included in the deployment manifest, then injected into containers at runtime |
+| **`"vault"` in dev** | The CLI fetches decrypted variables from the Sp00ky Cloud API (requires `spky cloud login`) |
+| **`"vault"` in deploy** | Variables are fetched server-side and included in the manifest |
+
+## Validating Your Config
+
+Run `spky lint` to check that all referenced env files exist before deploying:
+
+<CodeBlock
+  code={`$ spky lint
+  Parsed sp00ky.yml successfully.
+
+  warning: apps.api.env file not found: .env.local
+
+  No errors. 1 warning(s).`}
+  lang="bash"
+/>
