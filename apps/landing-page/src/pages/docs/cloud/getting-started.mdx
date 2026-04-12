@@ -1,0 +1,105 @@
+---
+layout: ../../../layouts/DocsLayout.astro
+title: Getting Started
+---
+
+import CodeBlock from '../../../components/ui/CodeBlock.astro';
+import Warning from '../../../components/ui/Warning.astro';
+import Note from '../../../components/ui/Note.astro';
+
+Sp00ky Cloud handles infrastructure provisioning, scaling, and management so you can deploy your project with a single command. No Docker Compose files, no server setup — just `spky cloud deploy`.
+
+## Prerequisites
+
+- The Sp00ky CLI installed (`npm i -g @sp00ky/cli`)
+- A `sp00ky.yml` config file in your project root
+- Docker installed locally (for building backend images)
+
+## Quick Start
+
+<CodeBlock
+  code={`# 1. Log in to Sp00ky Cloud
+spky cloud login
+
+# 2. Create a cloud project
+spky cloud create --slug my-app
+
+# 3. Deploy
+spky cloud deploy`}
+  lang="bash"
+/>
+
+## Authentication
+
+Log in via GitHub OAuth. The CLI opens your browser to complete the flow:
+
+<CodeBlock
+  code={`spky cloud login`}
+  lang="bash"
+/>
+
+A 4-digit verification code is shown in your terminal. Confirm it in the browser to authenticate. Credentials are saved to `~/.sp00ky/credentials.json`.
+
+To log out:
+
+<CodeBlock
+  code={`spky cloud logout`}
+  lang="bash"
+/>
+
+<Note title="CI/CD">
+For automated pipelines, create an API key with <code>spky cloud keys create</code> and set the <code>SPOOKY_API_KEY</code> environment variable. See [CI/CD](/docs/cloud/ci-cd) for details.
+</Note>
+
+## Creating a Project
+
+<CodeBlock
+  code={`# Interactive — prompts for slug if not provided
+spky cloud create
+
+# With options
+spky cloud create --slug my-app --plan starter`}
+  lang="bash"
+/>
+
+Available plans: `starter`, `pro`, `business`. The slug must be lowercase alphanumeric with hyphens, and is globally unique.
+
+Your project slug should match the `slug` field in your `sp00ky.yml`:
+
+<CodeBlock
+  code={`# sp00ky.yml
+slug: my-app
+# ... rest of config`}
+  lang="yaml"
+/>
+
+## Listing Projects
+
+<CodeBlock
+  code={`spky cloud list`}
+  lang="bash"
+/>
+
+Shows all your cloud projects with their plan, status, and creation date.
+
+## Destroying a Project
+
+<Warning>
+This permanently tears down all VMs and infrastructure for the project. Data will be lost unless you have a backup.
+</Warning>
+
+<CodeBlock
+  code={`spky cloud destroy`}
+  lang="bash"
+/>
+
+## Billing
+
+<CodeBlock
+  code={`# Open the billing portal
+spky cloud billing
+
+# View current month's usage
+spky cloud billing usage`}
+  lang="bash"
+/>

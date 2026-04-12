@@ -1,0 +1,64 @@
+---
+layout: ../../../layouts/DocsLayout.astro
+title: Logs & Monitoring
+---
+
+import CodeBlock from '../../../components/ui/CodeBlock.astro';
+import Note from '../../../components/ui/Note.astro';
+
+## Viewing Logs
+
+Tail logs from your cloud deployment in real time:
+
+<CodeBlock
+  code={`# All services
+spky cloud logs
+
+# Filter by service
+spky cloud logs --filter surrealdb
+spky cloud logs --filter ssp
+spky cloud logs --filter backend
+spky cloud logs --filter frontend
+
+# Multiple services (comma-separated)
+spky cloud logs --filter ssp,surrealdb
+
+# Blueprint shorthand: "spooky" = ssp + scheduler
+spky cloud logs --filter spooky
+
+# Split view
+spky cloud logs --filter ssp,surrealdb --split h   # horizontal (stacked)
+spky cloud logs --filter ssp,surrealdb --split v   # vertical (side-by-side)`}
+  lang="bash"
+/>
+
+## Status Badge
+
+Add a live deployment status badge to your GitHub README or any webpage. The badge is a public SVG endpoint — no authentication required.
+
+<CodeBlock
+  code={`![Sp00ky Status](https://api.sp00ky.cloud/v1/badge/your-project-slug)`}
+  lang="markdown"
+/>
+
+Or in HTML:
+
+<CodeBlock
+  code={`<img src="https://api.sp00ky.cloud/v1/badge/your-project-slug" alt="Sp00ky Status" />`}
+  lang="html"
+/>
+
+The badge displays the current deployment status:
+
+| Status | Color | Meaning |
+| :--- | :--- | :--- |
+| **live** | Green | Deployment is running |
+| **building** | Yellow | Deployment in progress (pending, provisioning, migrating, or deploying) |
+| **error** | Red | Deployment failed |
+| **unknown** | Gray | No deployment found |
+
+The badge is never cached — it always reflects the current state. You can also append `.svg` to the URL: `/v1/badge/your-project-slug.svg`.
+
+<Note title="Staging">
+For staging deployments, use the staging API URL: <code>https://api-stg.sp00ky.cloud/v1/badge/your-project-slug</code>
+</Note>

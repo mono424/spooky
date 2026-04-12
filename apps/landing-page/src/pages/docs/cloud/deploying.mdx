@@ -1,0 +1,67 @@
+---
+layout: ../../../layouts/DocsLayout.astro
+title: Deploying
+---
+
+import CodeBlock from '../../../components/ui/CodeBlock.astro';
+import Warning from '../../../components/ui/Warning.astro';
+import Note from '../../../components/ui/Note.astro';
+
+## Deploy
+
+<CodeBlock
+  code={`spky cloud deploy`}
+  lang="bash"
+/>
+
+The deploy command performs these steps automatically:
+
+1. **Validates** your `sp00ky.yml` configuration
+2. **Builds** Docker images for each app (linux/amd64)
+3. **Uploads** images to Sp00ky Cloud (skips unchanged images)
+4. **Provisions** infrastructure (SurrealDB, Scheduler, SSP instances)
+5. **Runs migrations** against the cloud database
+6. **Deploys** your backend and frontend containers
+7. **Configures** DNS and SSL certificates
+
+You'll see real-time progress as each step completes.
+
+<Note>
+  Run <code>spky lint</code> before deploying to catch config issues early.
+</Note>
+
+### Upgrading Infrastructure
+
+To also upgrade SSP and Scheduler to the latest version:
+
+<CodeBlock
+  code={`spky cloud deploy --upgrade`}
+  lang="bash"
+/>
+
+## Checking Status
+
+<CodeBlock
+  code={`spky cloud status`}
+  lang="bash"
+/>
+
+Shows the current deployment version, status, and all running VMs with their roles and versions.
+
+## Scaling
+
+Scale your SSP instances horizontally:
+
+<CodeBlock
+  code={`# Scale to 3 SSP instances
+spky cloud scale --ssp 3`}
+  lang="bash"
+/>
+
+You can also set the default SSP count in your `sp00ky.yml`:
+
+<CodeBlock
+  code={`deployment:
+  sspCount: 2`}
+  lang="yaml"
+/>
