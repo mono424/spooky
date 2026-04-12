@@ -7,10 +7,22 @@ import CodeBlock from '../../../components/ui/CodeBlock.astro';
 import Warning from '../../../components/ui/Warning.astro';
 import Note from '../../../components/ui/Note.astro';
 
+export const code5 = `spky cloud deploy`;
+
+export const code4 = `spky cloud deploy --upgrade`;
+
+export const code3 = `spky cloud status`;
+
+export const code2 = `# Scale to 3 SSP instances
+spky cloud scale --ssp 3`;
+
+export const code1 = `deployment:
+  sspCount: 2`;
+
 ## Deploy
 
 <CodeBlock
-  code={`spky cloud deploy`}
+  code={code5}
   lang="bash"
 />
 
@@ -35,14 +47,14 @@ You'll see real-time progress as each step completes.
 To also upgrade SSP and Scheduler to the latest version:
 
 <CodeBlock
-  code={`spky cloud deploy --upgrade`}
+  code={code4}
   lang="bash"
 />
 
 ## Checking Status
 
 <CodeBlock
-  code={`spky cloud status`}
+  code={code3}
   lang="bash"
 />
 
@@ -53,15 +65,13 @@ Shows the current deployment version, status, and all running VMs with their rol
 Scale your SSP instances horizontally:
 
 <CodeBlock
-  code={`# Scale to 3 SSP instances
-spky cloud scale --ssp 3`}
+  code={code2}
   lang="bash"
 />
 
 You can also set the default SSP count in your `sp00ky.yml`:
 
 <CodeBlock
-  code={`deployment:
-  sspCount: 2`}
+  code={code1}
   lang="yaml"
 />

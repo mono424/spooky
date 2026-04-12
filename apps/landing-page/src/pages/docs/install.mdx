@@ -13,30 +13,13 @@ Getting started with Sp00ky involves setting up the CLI tool and configuring you
 
 import CodeBlock from '../../components/ui/CodeBlock.astro';
 
-## Step 1: Install the CLI
+export const code5 = `pnpm add -D @spooky-sync/cli`;
 
-The Sp00ky CLI is your primary tool for generating code and managing schemas.
+export const code4 = `pnpm add @spooky-sync/core @spooky-sync/client-solid`;
 
-<CodeBlock code={`pnpm add -D @spooky-sync/cli`} lang="bash" />
+export const code3 = `spky dev`;
 
-## Step 2: Install Client SDKs
-
-Install the core client and the bindings for your framework.
-
-<CodeBlock code={`pnpm add @spooky-sync/core @spooky-sync/client-solid`} lang="bash" />
-
-## Step 3: Run Infrastructure
-
-The easiest way to start everything is with the Sp00ky CLI:
-
-<CodeBlock code={`spky dev`} lang="bash" />
-
-This starts SurrealDB, the SSP sidecar, applies migrations, and runs your app dev server — all in one command. If your apps have a `dev` field configured in `sp00ky.yml`, those are started too. See [Backend Functions](/docs/backend-functions#dev-server) for details.
-
-Alternatively, you can set up infrastructure manually with Docker Compose:
-
-<CodeBlock
-  code={`version: '3.8'
+export const code2 = `version: '3.8'
 services:
   surrealdb:
     image: surrealdb/surrealdb:latest
@@ -53,10 +36,37 @@ services:
       - SURREAL_USER=root
       - SURREAL_PASS=root
     depends_on:
-      - surrealdb`}
+      - surrealdb`;
+
+export const code1 = `docker compose up -d`;
+
+## Step 1: Install the CLI
+
+The Sp00ky CLI is your primary tool for generating code and managing schemas.
+
+<CodeBlock code={code5} lang="bash" />
+
+## Step 2: Install Client SDKs
+
+Install the core client and the bindings for your framework.
+
+<CodeBlock code={code4} lang="bash" />
+
+## Step 3: Run Infrastructure
+
+The easiest way to start everything is with the Sp00ky CLI:
+
+<CodeBlock code={code3} lang="bash" />
+
+This starts SurrealDB, the SSP sidecar, applies migrations, and runs your app dev server — all in one command. If your apps have a `dev` field configured in `sp00ky.yml`, those are started too. See [Backend Functions](/docs/backend-functions#dev-server) for details.
+
+Alternatively, you can set up infrastructure manually with Docker Compose:
+
+<CodeBlock
+  code={code2}
   lang="yaml"
 />
 
 Run it with:
 
-<CodeBlock code={`docker compose up -d`} lang="bash" />
+<CodeBlock code={code1} lang="bash" />

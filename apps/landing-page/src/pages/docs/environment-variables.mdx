@@ -7,30 +7,7 @@ import CodeBlock from '../../components/ui/CodeBlock.astro';
 import Warning from '../../components/ui/Warning.astro';
 import Note from '../../components/ui/Note.astro';
 
-Most applications need environment variables — database URLs, API keys, feature flags, third-party credentials. Sp00ky provides a single `env` property on every app in `sp00ky.yml` that handles environment variables across local development and cloud deployment.
-
-Additionally, Sp00ky **auto-injects** a set of `SPKY_*` variables into every app so your services can connect to infrastructure without manual configuration.
-
-## Auto-Injected Variables
-
-Every app (backend and frontend) automatically receives these variables — no configuration needed:
-
-| Variable | Description | Dev example | Cloud example |
-| :--- | :--- | :--- | :--- |
-| `SPKY_ENV` | Current environment | `dev` | `cloud` |
-| `SPKY_DB_URL` | SurrealDB HTTP endpoint | `http://localhost:8666` | `http://10.100.1.10:8000` |
-| `SPKY_DB_WS` | SurrealDB WebSocket endpoint | `ws://localhost:8666` | `ws://10.100.1.10:8000` |
-| `SPKY_DB_NS` | SurrealDB namespace | From `sp00ky.yml` | From deployment config |
-| `SPKY_DB_NAME` | SurrealDB database name | From `sp00ky.yml` | From deployment config |
-| `SPKY_DB_USER` | SurrealDB username | From `sp00ky.yml` | `root` |
-| `SPKY_DB_PASS` | SurrealDB password | From `sp00ky.yml` | Auto-generated |
-| `SPKY_SSP_ADDR` | SSP endpoint | `http://localhost:8667` | `http://10.100.1.30:8667` |
-| `SPKY_SCHEDULER_URL` | Scheduler endpoint (cluster mode) | `http://localhost:9667` | `http://10.100.1.20:9667` |
-
-Use `SPKY_DB_URL` for HTTP-based SDKs (JavaScript, Python) and `SPKY_DB_WS` for WebSocket-based SDKs (Rust SurrealDB client). Both always point to the same database — just different protocols.
-
-<CodeBlock
-  code={`// JavaScript / TypeScript
+export const code11 = `// JavaScript / TypeScript
 const db = new Surreal();
 await db.connect(process.env.SPKY_DB_URL);
 await db.signin({
@@ -40,133 +17,63 @@ await db.signin({
 await db.use({
   namespace: process.env.SPKY_DB_NS,
   database: process.env.SPKY_DB_NAME,
-});`}
-  lang="typescript"
-/>
+});`;
 
-<CodeBlock
-  code={`# Python
+export const code10 = `# Python
 import os, httpx
 url = os.environ["SPKY_DB_URL"]
 ns = os.environ["SPKY_DB_NS"]
 db = os.environ["SPKY_DB_NAME"]
 resp = httpx.post(f"{url}/sql", content="SELECT * FROM user;",
     headers={"surreal-ns": ns, "surreal-db": db},
-    auth=(os.environ["SPKY_DB_USER"], os.environ["SPKY_DB_PASS"]))`}
-  lang="python"
-/>
+    auth=(os.environ["SPKY_DB_USER"], os.environ["SPKY_DB_PASS"]))`;
 
-<Note>
-  Auto-injected variables can be overridden — if you set <code>SPKY_DB_URL</code> in your <code>env</code> config, your value takes precedence over the auto-injected one.
-</Note>
-
-## Custom Environment Variables
-
-Beyond the auto-injected `SPKY_*` variables, you can provide your own using the `env` property. It accepts several forms.
-
-### From a File
-
-A `.env` file with one `KEY=VALUE` per line. Comments (`#`) and blank lines are ignored.
-
-<CodeBlock
-  code={`apps:
+export const code9 = `apps:
   api:
     type: backend
     env: ".env.local"
-    # ...`}
-  lang="yaml"
-/>
+    # ...`;
 
-The path is resolved relative to your `sp00ky.yml`.
-
-<Warning>
-  Don't commit <code>.env</code> files containing secrets to version control. Add them to <code>.gitignore</code> and use the <a href="/docs/cloud/env-variables">encrypted vault</a> for production secrets.
-</Warning>
-
-### Inline
-
-Define variables directly in the config:
-
-<CodeBlock
-  code={`apps:
+export const code8 = `apps:
   api:
     type: backend
     env:
       LOG_LEVEL: debug
       PORT: 3000
       ENABLE_CACHE: true
-    # ...`}
-  lang="yaml"
-/>
+    # ...`;
 
-Values can be strings, numbers, or booleans.
-
-### From the Vault
-
-For production secrets, use the [encrypted vault](/docs/cloud/env-variables):
-
-<CodeBlock
-  code={`apps:
+export const code7 = `apps:
   api:
     type: backend
     env: "vault"
-    # ...`}
-  lang="yaml"
-/>
+    # ...`;
 
-This loads **all** variables from the vault. To load only specific ones, pass a whitelist:
-
-<CodeBlock
-  code={`apps:
+export const code6 = `apps:
   web:
     type: frontend
     env:
       vault: [VITE_API_URL, VITE_PUBLIC_KEY]
-    # ...`}
-  lang="yaml"
-/>
+    # ...`;
 
-<Note>
-  Vault variables must be set up first with <code>spky cloud env init</code> and <code>spky cloud env set</code>. See <a href="/docs/cloud/env-variables">Cloud Environment Variables</a> for the full setup guide.
-</Note>
-
-### Per-Environment
-
-Use different sources for local development vs cloud deployment:
-
-<CodeBlock
-  code={`apps:
+export const code5 = `apps:
   agent:
     type: backend
     env:
       dev: ".env.local"         # used during spky dev
       cloud: "vault"             # used during spky cloud deploy
-    # ...`}
-  lang="yaml"
-/>
+    # ...`;
 
-Each side accepts any form — a file path, inline map, `"vault"`, a vault whitelist, or an array.
-
-### Layering Multiple Sources
-
-Combine multiple sources in an array. Later entries override earlier ones by key:
-
-<CodeBlock
-  code={`apps:
+export const code4 = `apps:
   api:
     type: backend
     env:
       - "vault"                        # 1. start with all vault secrets
       - ".env.overrides"               # 2. override specific values from file
       - { LOG_LEVEL: debug }           # 3. final inline override
-    # ...`}
-  lang="yaml"
-/>
+    # ...`;
 
-Arrays also work inside per-environment splits:
-
-<CodeBlock
-  code={`apps:
+export const code3 = `apps:
   agent:
     type: backend
     env:
@@ -176,16 +83,9 @@ Arrays also work inside per-environment splits:
       cloud:
         - "vault"
         - ".env.cloud.overrides"
-    # ...`}
-  lang="yaml"
-/>
+    # ...`;
 
-## Full Example
-
-A realistic `sp00ky.yml` showing environment variables across a frontend and two backends. Note that `SPKY_DB_*` variables are auto-injected — you only need to configure app-specific secrets.
-
-<CodeBlock
-  code={`apps:
+export const code2 = `apps:
   web:
     type: frontend
     dev:
@@ -220,7 +120,134 @@ A realistic `sp00ky.yml` showing environment variables across a frontend and two
       dev: ".env.agent.local"
       cloud:
         - "vault"
-        - { MAX_TOKENS: 4096 }`}
+        - { MAX_TOKENS: 4096 }`;
+
+export const code1 = `$ spky lint
+  Parsed sp00ky.yml successfully.
+
+  warning: apps.api.env file not found: .env.local
+
+  No errors. 1 warning(s).`;
+
+Most applications need environment variables — database URLs, API keys, feature flags, third-party credentials. Sp00ky provides a single `env` property on every app in `sp00ky.yml` that handles environment variables across local development and cloud deployment.
+
+Additionally, Sp00ky **auto-injects** a set of `SPKY_*` variables into every app so your services can connect to infrastructure without manual configuration.
+
+## Auto-Injected Variables
+
+Every app (backend and frontend) automatically receives these variables — no configuration needed:
+
+| Variable | Description | Dev example | Cloud example |
+| :--- | :--- | :--- | :--- |
+| `SPKY_ENV` | Current environment | `dev` | `cloud` |
+| `SPKY_DB_URL` | SurrealDB HTTP endpoint | `http://localhost:8666` | `http://10.100.1.10:8000` |
+| `SPKY_DB_WS` | SurrealDB WebSocket endpoint | `ws://localhost:8666` | `ws://10.100.1.10:8000` |
+| `SPKY_DB_NS` | SurrealDB namespace | From `sp00ky.yml` | From deployment config |
+| `SPKY_DB_NAME` | SurrealDB database name | From `sp00ky.yml` | From deployment config |
+| `SPKY_DB_USER` | SurrealDB username | From `sp00ky.yml` | `root` |
+| `SPKY_DB_PASS` | SurrealDB password | From `sp00ky.yml` | Auto-generated |
+| `SPKY_SSP_ADDR` | SSP endpoint | `http://localhost:8667` | `http://10.100.1.30:8667` |
+| `SPKY_SCHEDULER_URL` | Scheduler endpoint (cluster mode) | `http://localhost:9667` | `http://10.100.1.20:9667` |
+
+Use `SPKY_DB_URL` for HTTP-based SDKs (JavaScript, Python) and `SPKY_DB_WS` for WebSocket-based SDKs (Rust SurrealDB client). Both always point to the same database — just different protocols.
+
+<CodeBlock
+  code={code11}
+  lang="typescript"
+/>
+
+<CodeBlock
+  code={code10}
+  lang="python"
+/>
+
+<Note>
+  Auto-injected variables can be overridden — if you set <code>SPKY_DB_URL</code> in your <code>env</code> config, your value takes precedence over the auto-injected one.
+</Note>
+
+## Custom Environment Variables
+
+Beyond the auto-injected `SPKY_*` variables, you can provide your own using the `env` property. It accepts several forms.
+
+### From a File
+
+A `.env` file with one `KEY=VALUE` per line. Comments (`#`) and blank lines are ignored.
+
+<CodeBlock
+  code={code9}
+  lang="yaml"
+/>
+
+The path is resolved relative to your `sp00ky.yml`.
+
+<Warning>
+  Don't commit <code>.env</code> files containing secrets to version control. Add them to <code>.gitignore</code> and use the <a href="/docs/cloud/env-variables">encrypted vault</a> for production secrets.
+</Warning>
+
+### Inline
+
+Define variables directly in the config:
+
+<CodeBlock
+  code={code8}
+  lang="yaml"
+/>
+
+Values can be strings, numbers, or booleans.
+
+### From the Vault
+
+For production secrets, use the [encrypted vault](/docs/cloud/env-variables):
+
+<CodeBlock
+  code={code7}
+  lang="yaml"
+/>
+
+This loads **all** variables from the vault. To load only specific ones, pass a whitelist:
+
+<CodeBlock
+  code={code6}
+  lang="yaml"
+/>
+
+<Note>
+  Vault variables must be set up first with <code>spky cloud env init</code> and <code>spky cloud env set</code>. See <a href="/docs/cloud/env-variables">Cloud Environment Variables</a> for the full setup guide.
+</Note>
+
+### Per-Environment
+
+Use different sources for local development vs cloud deployment:
+
+<CodeBlock
+  code={code5}
+  lang="yaml"
+/>
+
+Each side accepts any form — a file path, inline map, `"vault"`, a vault whitelist, or an array.
+
+### Layering Multiple Sources
+
+Combine multiple sources in an array. Later entries override earlier ones by key:
+
+<CodeBlock
+  code={code4}
+  lang="yaml"
+/>
+
+Arrays also work inside per-environment splits:
+
+<CodeBlock
+  code={code3}
+  lang="yaml"
+/>
+
+## Full Example
+
+A realistic `sp00ky.yml` showing environment variables across a frontend and two backends. Note that `SPKY_DB_*` variables are auto-injected — you only need to configure app-specific secrets.
+
+<CodeBlock
+  code={code2}
   lang="yaml"
 />
 
@@ -241,11 +268,6 @@ User-provided variables always take precedence over auto-injected `SPKY_*` varia
 Run `spky lint` to check that all referenced env files exist before deploying:
 
 <CodeBlock
-  code={`$ spky lint
-  Parsed sp00ky.yml successfully.
-
-  warning: apps.api.env file not found: .env.local
-
-  No errors. 1 warning(s).`}
+  code={code1}
   lang="bash"
 />

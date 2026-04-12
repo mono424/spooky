@@ -7,6 +7,39 @@ import CodeBlock from '../../../components/ui/CodeBlock.astro';
 import Warning from '../../../components/ui/Warning.astro';
 import Note from '../../../components/ui/Note.astro';
 
+export const code8 = `# 1. Log in to Sp00ky Cloud
+spky cloud login
+
+# 2. Create a cloud project
+spky cloud create --slug my-app
+
+# 3. Deploy
+spky cloud deploy`;
+
+export const code7 = `spky cloud login`;
+
+export const code6 = `spky cloud logout`;
+
+export const code5 = `# Interactive — prompts for slug if not provided
+spky cloud create
+
+# With options
+spky cloud create --slug my-app --plan starter`;
+
+export const code4 = `# sp00ky.yml
+slug: my-app
+# ... rest of config`;
+
+export const code3 = `spky cloud list`;
+
+export const code2 = `spky cloud destroy`;
+
+export const code1 = `# Open the billing portal
+spky cloud billing
+
+# View current month's usage
+spky cloud billing usage`;
+
 Sp00ky Cloud handles infrastructure provisioning, scaling, and management so you can deploy your project with a single command. No Docker Compose files, no server setup — just `spky cloud deploy`.
 
 ## Prerequisites
@@ -18,14 +51,7 @@ Sp00ky Cloud handles infrastructure provisioning, scaling, and management so you
 ## Quick Start
 
 <CodeBlock
-  code={`# 1. Log in to Sp00ky Cloud
-spky cloud login
-
-# 2. Create a cloud project
-spky cloud create --slug my-app
-
-# 3. Deploy
-spky cloud deploy`}
+  code={code8}
   lang="bash"
 />
 
@@ -34,7 +60,7 @@ spky cloud deploy`}
 Log in via GitHub OAuth. The CLI opens your browser to complete the flow:
 
 <CodeBlock
-  code={`spky cloud login`}
+  code={code7}
   lang="bash"
 />
 
@@ -43,7 +69,7 @@ A 4-digit verification code is shown in your terminal. Confirm it in the browser
 To log out:
 
 <CodeBlock
-  code={`spky cloud logout`}
+  code={code6}
   lang="bash"
 />
 
@@ -54,11 +80,7 @@ For automated pipelines, create an API key with <code>spky cloud keys create</co
 ## Creating a Project
 
 <CodeBlock
-  code={`# Interactive — prompts for slug if not provided
-spky cloud create
-
-# With options
-spky cloud create --slug my-app --plan starter`}
+  code={code5}
   lang="bash"
 />
 
@@ -67,16 +89,14 @@ Available plans: `starter`, `pro`, `business`. The slug must be lowercase alphan
 Your project slug should match the `slug` field in your `sp00ky.yml`:
 
 <CodeBlock
-  code={`# sp00ky.yml
-slug: my-app
-# ... rest of config`}
+  code={code4}
   lang="yaml"
 />
 
 ## Listing Projects
 
 <CodeBlock
-  code={`spky cloud list`}
+  code={code3}
   lang="bash"
 />
 
@@ -89,17 +109,13 @@ This permanently tears down all VMs and infrastructure for the project. Data wil
 </Warning>
 
 <CodeBlock
-  code={`spky cloud destroy`}
+  code={code2}
   lang="bash"
 />
 
 ## Billing
 
 <CodeBlock
-  code={`# Open the billing portal
-spky cloud billing
-
-# View current month's usage
-spky cloud billing usage`}
+  code={code1}
   lang="bash"
 />

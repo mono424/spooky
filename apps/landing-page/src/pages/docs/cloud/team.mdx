@@ -7,6 +7,43 @@ import CodeBlock from '../../../components/ui/CodeBlock.astro';
 import Warning from '../../../components/ui/Warning.astro';
 import Note from '../../../components/ui/Note.astro';
 
+export const code9 = `spky cloud team invite alice@example.com`;
+
+export const code8 = `spky cloud team invitations`;
+
+export const code7 = `spky cloud team revoke alice@example.com`;
+
+export const code6 = `spky cloud team list`;
+
+export const code5 = `EMAIL                          ROLE       JOINED
+------------------------------------------------------------
+khadim@example.com             admin      2026-03-01
+alice@example.com              member     2026-03-15
+bob@example.com                member     2026-04-02`;
+
+export const code4 = `spky cloud team remove alice@example.com`;
+
+export const code3 = `# Member requests a reset (admins are notified by email)
+spky cloud vault request-reset
+
+# Admin approves the reset
+spky cloud vault approve-reset alice@example.com
+
+# Member completes the reset with a new passphrase
+spky cloud vault complete-reset`;
+
+export const code2 = `spky cloud team rename "My Team"`;
+
+export const code1 = `spky cloud team <COMMAND>
+
+Commands:
+  list               List all team members
+  invite <EMAIL>     Invite a user by their GitHub email
+  invitations        List pending invitations
+  revoke <EMAIL>     Revoke a pending invitation
+  remove <EMAIL>     Remove a team member
+  rename [NAME]      Rename the tenant`;
+
 Sp00ky Cloud projects live inside a **tenant**. Every tenant has at least one admin and can have additional team members who share access to projects, deployments, and the [Shared Vault](/docs/cloud/vault).
 
 ## Plan Limits
@@ -23,7 +60,7 @@ Additional team members beyond the plan limit are billed as a metered add-on at 
 Invite a new member by their GitHub email address:
 
 <CodeBlock
-  code={`spky cloud team invite alice@example.com`}
+  code={code9}
   lang="bash"
 />
 
@@ -38,14 +75,14 @@ Team members must have a GitHub account with the invited email address. Sp00ky C
 View all pending invitations:
 
 <CodeBlock
-  code={`spky cloud team invitations`}
+  code={code8}
   lang="bash"
 />
 
 Revoke a pending invitation:
 
 <CodeBlock
-  code={`spky cloud team revoke alice@example.com`}
+  code={code7}
   lang="bash"
 />
 
@@ -54,25 +91,21 @@ Invitations expire after 7 days.
 ## Listing Team Members
 
 <CodeBlock
-  code={`spky cloud team list`}
+  code={code6}
   lang="bash"
 />
 
 Example output:
 
 <CodeBlock
-  code={`EMAIL                          ROLE       JOINED
-------------------------------------------------------------
-khadim@example.com             admin      2026-03-01
-alice@example.com              member     2026-03-15
-bob@example.com                member     2026-04-02`}
+  code={code5}
   lang="bash"
 />
 
 ## Removing Team Members
 
 <CodeBlock
-  code={`spky cloud team remove alice@example.com`}
+  code={code4}
   lang="bash"
 />
 
@@ -96,14 +129,7 @@ The user who creates the first project becomes the tenant's admin. Additional ad
 If a team member loses their vault passphrase, an admin can approve a reset so they can set a new one. This does not affect other members' passphrases or any encrypted data.
 
 <CodeBlock
-  code={`# Member requests a reset (admins are notified by email)
-spky cloud vault request-reset
-
-# Admin approves the reset
-spky cloud vault approve-reset alice@example.com
-
-# Member completes the reset with a new passphrase
-spky cloud vault complete-reset`}
+  code={code3}
   lang="bash"
 />
 
@@ -112,21 +138,13 @@ See [Passphrase Reset](/docs/cloud/vault#passphrase-reset) for the full details.
 ## Renaming a Tenant
 
 <CodeBlock
-  code={`spky cloud team rename "My Team"`}
+  code={code2}
   lang="bash"
 />
 
 ## CLI Reference
 
 <CodeBlock
-  code={`spky cloud team <COMMAND>
-
-Commands:
-  list               List all team members
-  invite <EMAIL>     Invite a user by their GitHub email
-  invitations        List pending invitations
-  revoke <EMAIL>     Revoke a pending invitation
-  remove <EMAIL>     Remove a team member
-  rename [NAME]      Rename the tenant`}
+  code={code1}
   lang="bash"
 />

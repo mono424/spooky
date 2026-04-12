@@ -6,18 +6,11 @@ title: Mutate Data
 import CodeBlock from '../../components/ui/CodeBlock.astro';
 import Warning from '../../components/ui/Warning.astro';
 
-Mutating data in Sp00ky is performant and secure. Changes are instantly reflected in your local UI (optimistic updates) and synchronized with the server.
-
-## Creating Records
-
-To create a new record, use the `db.create` method. You need to specify the record ID (or let Sp00ky generate one) and the data.
-
-<CodeBlock
-  code={`import { Uuid } from 'surrealdb';
+export const code3 = `import { Uuid } from 'surrealdb';
 
 // Generate a unique ID
 const genId = Uuid.v4().toString().replace(/-/g, '');
-const threadId = \`thread:\${genId}\`;
+const threadId = \\\`thread:\\\${genId}\\\`;
 
 // Create the record
 await db.create(threadId, {
@@ -25,7 +18,33 @@ await db.create(threadId, {
   content: 'This is the content of the thread.',
   author: 'user:current_user_id', // Record ID as string
   active: true,
-});`}
+});`;
+
+export const code2 = `// Partial update
+await db.update('thread', 'thread:123', {
+  title: 'Updated Title'
+});
+
+// Update with debouncing (useful for real-time typing)
+await db.update('thread', 'thread:123', {
+  content: 'Updated content...'
+}, {
+  debounced: {
+    key: 'recordId_x_fields',
+    delay: 500
+  }
+});`;
+
+export const code1 = `await db.delete('thread', 'thread:123');`;
+
+Mutating data in Sp00ky is performant and secure. Changes are instantly reflected in your local UI (optimistic updates) and synchronized with the server.
+
+## Creating Records
+
+To create a new record, use the `db.create` method. You need to specify the record ID (or let Sp00ky generate one) and the data.
+
+<CodeBlock
+  code={code3}
   lang="typescript"
 />
 
@@ -39,20 +58,7 @@ await db.create(threadId, {
 Use `db.update()` to update existing records. This performs a partial update (merge) by default.
 
 <CodeBlock
-  code={`// Partial update
-await db.update('thread', 'thread:123', {
-  title: 'Updated Title'
-});
-
-// Update with debouncing (useful for real-time typing)
-await db.update('thread', 'thread:123', {
-  content: 'Updated content...'
-}, {
-  debounced: {
-    key: 'recordId_x_fields',
-    delay: 500
-  }
-});`}
+  code={code2}
   lang="typescript"
 />
 
@@ -61,6 +67,6 @@ await db.update('thread', 'thread:123', {
 To delete a record, call `db.delete` with the table name and record ID.
 
 <CodeBlock 
-  code={`await db.delete('thread', 'thread:123');`} 
+  code={code1} 
   lang="typescript" 
 />

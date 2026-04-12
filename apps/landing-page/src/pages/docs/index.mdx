@@ -3,44 +3,97 @@ layout: ../../layouts/DocsLayout.astro
 title: Introduction
 ---
 
-import Icon from '../../components/ui/Icon.astro';
+import CodeBlock from '../../components/ui/CodeBlock.astro';
+import Note from '../../components/ui/Note.astro';
 
-**Sp00ky** is a reactive, local-first application framework built on top of **SurrealDB**. It bridges the gap between the database and the client, providing live queries that update incrementally and efficiently with strong type safety.
+export const heroCode = `import { useQuery } from '@spooky-sync/client-solid';
+import { For } from 'solid-js';
+import { db } from './db';
 
-## Supported Frameworks
+function Threads() {
+  const threads = useQuery(db, () =>
+    db.query('thread')
+      .related('author')
+      .orderBy('created_at', 'desc')
+      .limit(20)
+      .build()
+  );
 
-Sp00ky provides official client libraries for multiple platforms:
+  return (
+    <For each={threads.data()}>
+      {(thread) => (
+        <div>
+          <h2>{thread.title}</h2>
+          <span>{thread.author.username}</span>
+        </div>
+      )}
+    </For>
+  );
+}`;
 
-- **TypeScript / JavaScript** (SolidJS, Vanilla)
-- **Flutter / Dart** (Mobile/Desktop)
-- **Rust** (Core library and WASM Modules)
+export const schemaCode = `DEFINE TABLE thread SCHEMAFULL;
+DEFINE FIELD title ON TABLE thread TYPE string;
+DEFINE FIELD author ON TABLE thread TYPE record<user>;
+DEFINE FIELD created_at ON TABLE thread TYPE datetime VALUE time::now();`;
 
-## Key Features
+export const schemaGenCode = `type Thread = {
+  id: RecordId<"thread">;
+  title: string;
+  author: RecordId<"user">;
+  created_at: Date;
+};`;
 
-<h3 class="flex items-center gap-3 text-xl font-semibold mt-8 mb-4">
-  <Icon name="zap" class="w-6 h-6 text-zinc-400" />
-  <span>1. Live Queries</span>
-</h3>
+export const mutationCode = `await db.create('thread', {
+  title: 'Hello world',
+  author: currentUser,
+});
+// Every useQuery('thread') updates. Everywhere. Instantly.`;
 
-Instead of fetching data once, your components subscribe to **Queries**. When data changes on the server (or locally), your UI updates instantly. No manual refetching required.
+export const installCode = `pnpm add @spooky-sync/core @spooky-sync/client-solid`;
 
-<h3 class="flex items-center gap-3 text-xl font-semibold mt-8 mb-4">
-  <Icon name="database" class="w-6 h-6 text-zinc-400" />
-  <span>2. Local-First</span>
-</h3>
+**You write your app. Sp00ky handles the rest.**
 
-Sp00ky uses IndexedDB to store a local replica of your data. This means your app works perfectly **offline**. Changes are queued and synchronized automatically when the connection returns.
+Real-time sync. Offline support. End-to-end type safety. You don't configure any of it. It just works.
 
-<h3 class="flex items-center gap-3 text-xl font-semibold mt-8 mb-4">
-  <Icon name="shield-check" class="w-6 h-6 text-zinc-400" />
-  <span>3. End-to-End Type Safety</span>
-</h3>
+<CodeBlock fileName="Threads.tsx" code={heroCode} lang="typescript" />
 
-Your database schema _is_ your application schema. Sp00ky generates TypeScript interfaces directly from your `.surql` files, ensuring you catch errors at compile time, not runtime.
+## What you didn't write
 
-## Getting Started
+No fetch calls. No cache invalidation. No WebSocket setup. No offline logic. No manual type definitions.
 
-Check out the [Installation](/docs/install) guide to set up your environment, or jump straight into a framework guide:
+That component is live. Type-safe. Works offline. Syncs across devices. You didn't think about any of it.
 
-- [SolidJS / React](/docs/guide/solid)
-- [Flutter](/docs/guide/flutter)
+## Schema is your source of truth
+
+Define your schema once. Types flow everywhere.
+
+<CodeBlock fileName="schema.surql" code={schemaCode} lang="sql" />
+
+<CodeBlock fileName="schema.gen.ts" code={schemaGenCode} lang="typescript" />
+
+Run `spky generate` and your types are always in sync with your database. No drift. No guessing.
+
+## Queries are live
+
+When data changes — from another user, another device, or another tab — your UI re-renders. Automatically.
+
+<CodeBlock code={mutationCode} lang="typescript" />
+
+No polling. No refetch logic. No stale data.
+
+## Offline by default
+
+Your app works without a connection. Changes are stored locally and sync when the network comes back. You don't configure this. It just works.
+
+## Get started
+
+<CodeBlock code={installCode} lang="bash" />
+
+<Note>
+  Sp00ky supports **SolidJS**, **Flutter**, and **Vanilla JS/TS**. Pick the guide for your stack.
+</Note>
+
+- [Installation](/docs/install) — set up the CLI and infrastructure
+- [SolidJS guide](/docs/guide/solid) — get reactive in minutes
+- [Flutter guide](/docs/guide/flutter) — build offline-first mobile apps
+- [Vanilla JS / TS](/docs/guide/vanilla) — use Sp00ky with any framework

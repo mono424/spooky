@@ -7,6 +7,22 @@ import CodeBlock from '../../../components/ui/CodeBlock.astro';
 import Warning from '../../../components/ui/Warning.astro';
 import Note from '../../../components/ui/Note.astro';
 
+export const code4 = `spky cloud env change-passphrase`;
+
+export const code3 = `rm ~/.sp00ky/vault-derived-key`;
+
+export const code2 = `# Step 1: Request a reset
+spky cloud vault request-reset
+
+# Step 2: Admin approves (enters their passphrase)
+spky cloud vault approve-reset alice@example.com
+
+# Step 3: Set your new passphrase
+spky cloud vault complete-reset`;
+
+export const code1 = `# List pending requests
+spky cloud vault list-resets`;
+
 The **Shared Vault** is a team-wide encrypted store that protects your environment variables at rest. All team members on a tenant share the same vault, and each member accesses it with their own passphrase. Every Starter and Pro plan includes a shared vault.
 
 For CLI usage and commands, see [Environment Variables](/docs/cloud/env-variables). This page explains how the vault works internally and how it is secured.
@@ -122,7 +138,7 @@ If all team members lose their passphrases, encrypted environment variables cann
 ### Changing your passphrase
 
 <CodeBlock
-  code={`spky cloud env change-passphrase`}
+  code={code4}
   lang="bash"
 />
 
@@ -133,7 +149,7 @@ You'll be prompted for your current passphrase, then a new one with confirmation
 The CLI can cache your derived key locally at `~/.sp00ky/vault-derived-key` so you don't need to enter your passphrase every time. The derived key cannot be reversed back to your passphrase. To clear the cache:
 
 <CodeBlock
-  code={`rm ~/.sp00ky/vault-derived-key`}
+  code={code3}
   lang="bash"
 />
 
@@ -148,22 +164,14 @@ If you forget your vault passphrase, a team admin can approve a reset so you can
 3. You set a new passphrase — the encryption key is re-encrypted with your new passphrase, and the transit-encrypted copy is deleted.
 
 <CodeBlock
-  code={`# Step 1: Request a reset
-spky cloud vault request-reset
-
-# Step 2: Admin approves (enters their passphrase)
-spky cloud vault approve-reset alice@example.com
-
-# Step 3: Set your new passphrase
-spky cloud vault complete-reset`}
+  code={code2}
   lang="bash"
 />
 
 Admins can list and manage pending requests:
 
 <CodeBlock
-  code={`# List pending requests
-spky cloud vault list-resets`}
+  code={code1}
   lang="bash"
 />
 

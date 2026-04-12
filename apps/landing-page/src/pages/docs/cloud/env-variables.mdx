@@ -7,6 +7,165 @@ import CodeBlock from '../../../components/ui/CodeBlock.astro';
 import Warning from '../../../components/ui/Warning.astro';
 import Note from '../../../components/ui/Note.astro';
 
+export const code30 = `# 1. Initialize your encryption vault
+spky cloud env init
+
+# 2. Set a variable (interactive — prompts for value and environment)
+spky cloud env set DATABASE_URL
+
+# 3. Load variables and start your app
+spky cloud env load && pnpm dev`;
+
+export const code29 = `spky cloud env init`;
+
+export const code28 = `# With a name — goes straight to the value prompt
+spky cloud env set DATABASE_URL
+
+# Without a name — prompts for the name first
+spky cloud env set`;
+
+export const code27 = `# Load development variables (default) and start your app
+spky cloud env load && pnpm dev
+
+# Load production variables
+spky cloud env load --prod && pnpm start`;
+
+export const code26 = `# Export into the current shell
+eval "$(spky cloud env load)"
+
+# Or use with env
+env $(spky cloud env load | xargs) pnpm dev`;
+
+export const code25 = `spky cloud env list`;
+
+export const code24 = `NAME                           DEV    PROD   UPDATED
+-----------------------------------------------------------------
+DATABASE_URL                   yes    yes    2026-04-08
+STRIPE_SECRET_KEY              yes    yes    2026-04-08
+DEBUG_MODE                     yes    -      2026-04-08`;
+
+export const code23 = `spky cloud env delete DATABASE_URL`;
+
+export const code22 = `spky cloud env import .env`;
+
+export const code21 = `spky cloud env change-passphrase`;
+
+export const code20 = `# Request a reset (admins are notified by email)
+spky cloud vault request-reset
+
+# After admin approves, set your new passphrase
+spky cloud vault complete-reset`;
+
+export const code19 = `rm ~/.sp00ky/vault-passphrase`;
+
+export const code18 = `spky cloud env <COMMAND>
+
+Commands:
+  init               Initialize the encryption vault
+  set [NAME]         Set an environment variable
+  list               List all environment variable names
+  load [--prod]      Load and output decrypted variables
+  delete <NAME>      Delete an environment variable
+  change-passphrase  Change your vault passphrase
+  import <FILE>      Import variables from an .env file
+
+spky cloud vault <COMMAND>
+
+Commands:
+  request-reset          Request a vault passphrase reset
+  approve-reset <EMAIL>  Approve a pending reset (admin only)
+  complete-reset         Set new passphrase after approval
+  list-resets            List pending resets (admin only)`;
+
+export const code17 = `POST /v1/vault/init
+Content-Type: application/json
+
+{
+  "passphrase": "your-vault-passphrase"
+}`;
+
+export const code16 = `GET /v1/vault/status`;
+
+export const code15 = `{ "initialized": true }`;
+
+export const code14 = `POST /v1/vault/change-passphrase
+Content-Type: application/json
+
+{
+  "current_passphrase": "old-passphrase",
+  "new_passphrase": "new-passphrase"
+}`;
+
+export const code13 = `POST /v1/tenants/{tenantID}/vault-resets`;
+
+export const code12 = `GET /v1/tenants/{tenantID}/vault-resets`;
+
+export const code11 = `[
+  {
+    "id": "uuid",
+    "account_id": "uuid",
+    "email": "alice@example.com",
+    "status": "pending",
+    "expires_at": "2026-04-18T12:00:00Z",
+    "created_at": "2026-04-11T12:00:00Z"
+  }
+]`;
+
+export const code10 = `GET /v1/tenants/{tenantID}/vault-resets/mine`;
+
+export const code9 = `POST /v1/tenants/{tenantID}/vault-resets/{resetID}/approve
+Content-Type: application/json
+
+{
+  "passphrase": "admin-vault-passphrase"
+}`;
+
+export const code8 = `POST /v1/tenants/{tenantID}/vault-resets/complete
+Content-Type: application/json
+
+{
+  "passphrase": "new-vault-passphrase"
+}`;
+
+export const code7 = `DELETE /v1/tenants/{tenantID}/vault-resets/{resetID}`;
+
+export const code6 = `PUT /v1/projects/{projectID}/envs/{NAME}
+Content-Type: application/json
+
+{
+  "dev_value": "localhost:5432",
+  "prod_value": "prod-host:5432",
+  "both": false
+}`;
+
+export const code5 = `GET /v1/projects/{projectID}/envs`;
+
+export const code4 = `[
+  {
+    "name": "DATABASE_URL",
+    "has_dev": true,
+    "has_prod": true,
+    "updated_at": "2026-04-08T12:00:00Z"
+  }
+]`;
+
+export const code3 = `POST /v1/projects/{projectID}/envs/load
+Content-Type: application/json
+
+{
+  "passphrase": "your-vault-passphrase",
+  "environment": "development"
+}`;
+
+export const code2 = `{
+  "variables": {
+    "DATABASE_URL": "postgres://localhost:5432/myapp",
+    "API_KEY": "sk_test_abc123"
+  }
+}`;
+
+export const code1 = `DELETE /v1/projects/{projectID}/envs/{NAME}`;
+
 Sp00ky Cloud provides encrypted environment variable storage that syncs across your team. Each variable supports separate **development** and **production** values, so your local dev setup and production deployment stay in sync without `.env` files.
 
 All values are encrypted at rest using the tenant's [Shared Vault](/docs/cloud/vault). For details on the encryption model, key hierarchy, and security properties, see the vault documentation.
@@ -14,14 +173,7 @@ All values are encrypted at rest using the tenant's [Shared Vault](/docs/cloud/v
 ## Quick Start
 
 <CodeBlock
-  code={`# 1. Initialize your encryption vault
-spky cloud env init
-
-# 2. Set a variable (interactive — prompts for value and environment)
-spky cloud env set DATABASE_URL
-
-# 3. Load variables and start your app
-spky cloud env load && pnpm dev`}
+  code={code30}
   lang="bash"
 />
 
@@ -30,7 +182,7 @@ spky cloud env load && pnpm dev`}
 Before using environment variables, initialize your encryption vault:
 
 <CodeBlock
-  code={`spky cloud env init`}
+  code={code29}
   lang="bash"
 />
 
@@ -48,11 +200,7 @@ The first team member to run <code>env init</code> creates the tenant vault. Oth
 ## Setting Variables
 
 <CodeBlock
-  code={`# With a name — goes straight to the value prompt
-spky cloud env set DATABASE_URL
-
-# Without a name — prompts for the name first
-spky cloud env set`}
+  code={code28}
   lang="bash"
 />
 
@@ -73,22 +221,14 @@ Variable names are automatically uppercased. Running `env set` on an existing va
 Load environment variables and pipe them into your dev workflow:
 
 <CodeBlock
-  code={`# Load development variables (default) and start your app
-spky cloud env load && pnpm dev
-
-# Load production variables
-spky cloud env load --prod && pnpm start`}
+  code={code27}
   lang="bash"
 />
 
 The output format is `KEY=value`, one per line — designed for shell evaluation:
 
 <CodeBlock
-  code={`# Export into the current shell
-eval "$(spky cloud env load)"
-
-# Or use with env
-env $(spky cloud env load | xargs) pnpm dev`}
+  code={code26}
   lang="bash"
 />
 
@@ -101,18 +241,14 @@ In non-interactive environments (CI/CD), set the <code>SPOOKY_API_KEY</code> env
 ## Listing Variables
 
 <CodeBlock
-  code={`spky cloud env list`}
+  code={code25}
   lang="bash"
 />
 
 Example output:
 
 <CodeBlock
-  code={`NAME                           DEV    PROD   UPDATED
------------------------------------------------------------------
-DATABASE_URL                   yes    yes    2026-04-08
-STRIPE_SECRET_KEY              yes    yes    2026-04-08
-DEBUG_MODE                     yes    -      2026-04-08`}
+  code={code24}
   lang="bash"
 />
 
@@ -121,7 +257,7 @@ Values are never shown — only names and whether each environment has a value s
 ## Deleting Variables
 
 <CodeBlock
-  code={`spky cloud env delete DATABASE_URL`}
+  code={code23}
   lang="bash"
 />
 
@@ -130,7 +266,7 @@ Values are never shown — only names and whether each environment has a value s
 Import variables from an `.env` file:
 
 <CodeBlock
-  code={`spky cloud env import .env`}
+  code={code22}
   lang="bash"
 />
 
@@ -141,7 +277,7 @@ Supports standard `.env` format — one `KEY=value` per line, comments with `#`,
 **Changing your passphrase:**
 
 <CodeBlock
-  code={`spky cloud env change-passphrase`}
+  code={code21}
   lang="bash"
 />
 
@@ -150,11 +286,7 @@ Only your copy of the encryption key is re-wrapped. Other members and existing v
 **Forgot your passphrase?** A team admin can approve a reset so you can set a new one:
 
 <CodeBlock
-  code={`# Request a reset (admins are notified by email)
-spky cloud vault request-reset
-
-# After admin approves, set your new passphrase
-spky cloud vault complete-reset`}
+  code={code20}
   lang="bash"
 />
 
@@ -163,31 +295,14 @@ See [Passphrase Reset](/docs/cloud/vault#passphrase-reset) for the full flow.
 **Caching:** The CLI can cache your passphrase at `~/.sp00ky/vault-passphrase`. To clear it:
 
 <CodeBlock
-  code={`rm ~/.sp00ky/vault-passphrase`}
+  code={code19}
   lang="bash"
 />
 
 ## CLI Reference
 
 <CodeBlock
-  code={`spky cloud env <COMMAND>
-
-Commands:
-  init               Initialize the encryption vault
-  set [NAME]         Set an environment variable
-  list               List all environment variable names
-  load [--prod]      Load and output decrypted variables
-  delete <NAME>      Delete an environment variable
-  change-passphrase  Change your vault passphrase
-  import <FILE>      Import variables from an .env file
-
-spky cloud vault <COMMAND>
-
-Commands:
-  request-reset          Request a vault passphrase reset
-  approve-reset <EMAIL>  Approve a pending reset (admin only)
-  complete-reset         Set new passphrase after approval
-  list-resets            List pending resets (admin only)`}
+  code={code18}
   lang="bash"
 />
 
@@ -200,12 +315,7 @@ All endpoints require authentication via Bearer token or API key.
 #### Initialize Vault
 
 <CodeBlock
-  code={`POST /v1/vault/init
-Content-Type: application/json
-
-{
-  "passphrase": "your-vault-passphrase"
-}`}
+  code={code17}
   lang="bash"
 />
 
@@ -214,25 +324,19 @@ Returns `201 Created` on success. Returns `409 Conflict` if already initialized.
 #### Vault Status
 
 <CodeBlock
-  code={`GET /v1/vault/status`}
+  code={code16}
   lang="bash"
 />
 
 <CodeBlock
-  code={`{ "initialized": true }`}
+  code={code15}
   lang="json"
 />
 
 #### Change Passphrase
 
 <CodeBlock
-  code={`POST /v1/vault/change-passphrase
-Content-Type: application/json
-
-{
-  "current_passphrase": "old-passphrase",
-  "new_passphrase": "new-passphrase"
-}`}
+  code={code14}
   lang="bash"
 />
 
@@ -243,7 +347,7 @@ Returns `401` with code `invalid_passphrase` if the current passphrase is wrong.
 #### Request Reset
 
 <CodeBlock
-  code={`POST /v1/tenants/{tenantID}/vault-resets`}
+  code={code13}
   lang="bash"
 />
 
@@ -252,28 +356,19 @@ Returns `201 Created`. Sends email notification to all admins. Returns `409 Conf
 #### List Reset Requests (Admin)
 
 <CodeBlock
-  code={`GET /v1/tenants/{tenantID}/vault-resets`}
+  code={code12}
   lang="bash"
 />
 
 <CodeBlock
-  code={`[
-  {
-    "id": "uuid",
-    "account_id": "uuid",
-    "email": "alice@example.com",
-    "status": "pending",
-    "expires_at": "2026-04-18T12:00:00Z",
-    "created_at": "2026-04-11T12:00:00Z"
-  }
-]`}
+  code={code11}
   lang="json"
 />
 
 #### Check Own Reset Status
 
 <CodeBlock
-  code={`GET /v1/tenants/{tenantID}/vault-resets/mine`}
+  code={code10}
   lang="bash"
 />
 
@@ -282,12 +377,7 @@ Returns the current member's active reset request, or `404` if none exists.
 #### Approve Reset (Admin)
 
 <CodeBlock
-  code={`POST /v1/tenants/{tenantID}/vault-resets/{resetID}/approve
-Content-Type: application/json
-
-{
-  "passphrase": "admin-vault-passphrase"
-}`}
+  code={code9}
   lang="bash"
 />
 
@@ -296,12 +386,7 @@ Returns `401` with code `invalid_passphrase` if the admin's passphrase is wrong.
 #### Complete Reset
 
 <CodeBlock
-  code={`POST /v1/tenants/{tenantID}/vault-resets/complete
-Content-Type: application/json
-
-{
-  "passphrase": "new-vault-passphrase"
-}`}
+  code={code8}
   lang="bash"
 />
 
@@ -310,7 +395,7 @@ Returns `404` if no approved reset exists. Passphrase must be at least 8 charact
 #### Cancel Reset
 
 <CodeBlock
-  code={`DELETE /v1/tenants/{tenantID}/vault-resets/{resetID}`}
+  code={code7}
   lang="bash"
 />
 
@@ -323,14 +408,7 @@ All endpoints are scoped to a project: `/v1/projects/{projectID}/envs`.
 #### Set Variable
 
 <CodeBlock
-  code={`PUT /v1/projects/{projectID}/envs/{NAME}
-Content-Type: application/json
-
-{
-  "dev_value": "localhost:5432",
-  "prod_value": "prod-host:5432",
-  "both": false
-}`}
+  code={code6}
   lang="bash"
 />
 
@@ -342,46 +420,28 @@ Content-Type: application/json
 #### List Variables
 
 <CodeBlock
-  code={`GET /v1/projects/{projectID}/envs`}
+  code={code5}
   lang="bash"
 />
 
 Returns variable names and metadata (no decrypted values):
 
 <CodeBlock
-  code={`[
-  {
-    "name": "DATABASE_URL",
-    "has_dev": true,
-    "has_prod": true,
-    "updated_at": "2026-04-08T12:00:00Z"
-  }
-]`}
+  code={code4}
   lang="json"
 />
 
 #### Load Variables (Decrypt)
 
 <CodeBlock
-  code={`POST /v1/projects/{projectID}/envs/load
-Content-Type: application/json
-
-{
-  "passphrase": "your-vault-passphrase",
-  "environment": "development"
-}`}
+  code={code3}
   lang="bash"
 />
 
 - `environment` accepts `"development"` (default) or `"production"`
 
 <CodeBlock
-  code={`{
-  "variables": {
-    "DATABASE_URL": "postgres://localhost:5432/myapp",
-    "API_KEY": "sk_test_abc123"
-  }
-}`}
+  code={code2}
   lang="json"
 />
 
@@ -391,7 +451,7 @@ Content-Type: application/json
 #### Delete Variable
 
 <CodeBlock
-  code={`DELETE /v1/projects/{projectID}/envs/{NAME}`}
+  code={code1}
   lang="bash"
 />
 

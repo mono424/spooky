@@ -6,17 +6,7 @@ title: Cloud Deployment
 import CodeBlock from '../../../components/ui/CodeBlock.astro';
 import Note from '../../../components/ui/Note.astro';
 
-This page has been reorganized. See:
-
-- [Getting Started](/docs/cloud/getting-started) — Authentication, project creation, billing
-- [Deploying](/docs/cloud/deploying) — Deploy command, upgrades, status, scaling
-- [Logs & Monitoring](/docs/cloud/logs) — Log tailing, filtering, status badge
-- [CI/CD](/docs/cloud/ci-cd) — API keys, GitHub integration
-
-## CLI Reference
-
-<CodeBlock
-  code={`spky cloud <COMMAND>
+export const code1 = `spky cloud <COMMAND>
 
 Commands:
   login              Authenticate with Sp00ky Cloud (opens browser)
@@ -32,6 +22,18 @@ Commands:
   billing            Billing management
   keys               Manage API keys for CI/CD
   link               Link a GitHub repository for auto-deploy
-  env                Manage encrypted environment variables`}
+  env                Manage encrypted environment variables`;
+
+This page has been reorganized. See:
+
+- [Getting Started](/docs/cloud/getting-started) — Authentication, project creation, billing
+- [Deploying](/docs/cloud/deploying) — Deploy command, upgrades, status, scaling
+- [Logs & Monitoring](/docs/cloud/logs) — Log tailing, filtering, status badge
+- [CI/CD](/docs/cloud/ci-cd) — API keys, GitHub integration
+
+## CLI Reference
+
+<CodeBlock
+  code={code1}
   lang="bash"
 />

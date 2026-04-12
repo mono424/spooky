@@ -5,34 +5,12 @@ title: SolidJS Guide
 
 import CodeBlock from '../../../components/ui/CodeBlock.astro';
 
-This guide walks you through building a reactive app with SolidJS and Sp00ky.
+export const code7 = `npm install @spooky-sync/client-solid surrealdb`;
 
-## 1. Installation
+export const code6 = `# Generate TypeScript types from your schema
+spky --input src/schema.surql --output src/schema.gen.ts --format typescript`;
 
-Install the required dependencies:
-
-<CodeBlock code={`npm install @spooky-sync/client-solid surrealdb`} lang="bash" />
-
-## 2. Generate Schema Types
-
-First, create your schema file and generate TypeScript types:
-
-<CodeBlock 
-  code={`# Generate TypeScript types from your schema
-spky --input src/schema.surql --output src/schema.gen.ts --format typescript`}
-  lang="bash"
-/>
-
-This generates a `schema.gen.ts` file with your schema definition and types.
-
-## 3. Initialize Database
-
-Create a `db.ts` file to configure and export your database instance:
-
-<CodeBlock
-  fileName="src/db.ts"
-  lang="typescript"
-  code={`import { SyncedDb, type SyncedDbConfig } from '@spooky-sync/client-solid';
+export const code5 = `import { SyncedDb, type SyncedDbConfig } from '@spooky-sync/client-solid';
 import { schema, SURQL_SCHEMA } from './schema.gen';
 
 export const dbConfig: SyncedDbConfig<typeof schema> = {
@@ -66,17 +44,9 @@ export function initDatabase(): Promise<void> {
   })();
   
   return initPromise;
-}`}
-/>
+}`;
 
-## 4. App Entry Point
-
-Initialize the database in your root component before rendering the app:
-
-<CodeBlock
-  fileName="src/App.tsx"
-  lang="tsx"
-  code={`import { createSignal, onMount, Show } from 'solid-js';
+export const code4 = `import { createSignal, onMount, Show } from 'solid-js';
 import { initDatabase } from './db';
 
 export default function App() {
@@ -99,17 +69,9 @@ export default function App() {
       <MainContent />
     </Show>
   );
-}`}
-/>
+}`;
 
-## 5. Querying Data with useQuery
-
-Use the `useQuery` hook to create reactive queries that automatically update:
-
-<CodeBlock
-  fileName="src/components/ThreadList.tsx"
-  lang="tsx"
-  code={`import { For } from 'solid-js';
+export const code3 = `import { For } from 'solid-js';
 import { useQuery } from '@spooky-sync/client-solid';
 import { db } from '../db';
 
@@ -146,17 +108,9 @@ export function ThreadList() {
       </ul>
     </div>
   );
-}`}
-/>
+}`;
 
-## 6. Authentication with Auth Context
-
-Create an auth context to manage user authentication state:
-
-<CodeBlock
-  fileName="src/lib/auth.tsx"
-  lang="tsx"
-  code={`import { createContext, useContext, createSignal, onCleanup, type JSX } from 'solid-js';
+export const code2 = `import { createContext, useContext, createSignal, onCleanup, type JSX } from 'solid-js';
 import { useQuery } from '@spooky-sync/client-solid';
 import { db } from '../db';
 
@@ -215,21 +169,14 @@ export function useAuth() {
     throw new Error('useAuth must be used within AuthProvider');
   }
   return context;
-}`}
-/>
+}`;
 
-## 7. Creating and Updating Data
-
-Use the database methods to create and update records:
-
-<CodeBlock
-  lang="typescript"
-  code={`import { Uuid } from 'surrealdb';
+export const code1 = `import { Uuid } from 'surrealdb';
 import { db } from './db';
 
 // Create a new thread
 async function createThread(title: string, content: string, authorId: string) {
-  const id = \`thread:\${Uuid.v4().toString().replace(/-/g, '')}\`;
+  const id = \\\`thread:\\\${Uuid.v4().toString().replace(/-/g, '')}\\\`;
   
   await db.create(id, {
     title,
@@ -247,5 +194,72 @@ async function updateThread(threadId: string, updates: { title?: string; content
 // Delete a thread
 async function deleteThread(threadId: string) {
   await db.delete('thread', threadId);
-}`}
+}`;
+
+This guide walks you through building a reactive app with SolidJS and Sp00ky.
+
+## 1. Installation
+
+Install the required dependencies:
+
+<CodeBlock code={code7} lang="bash" />
+
+## 2. Generate Schema Types
+
+First, create your schema file and generate TypeScript types:
+
+<CodeBlock 
+  code={code6}
+  lang="bash"
+/>
+
+This generates a `schema.gen.ts` file with your schema definition and types.
+
+## 3. Initialize Database
+
+Create a `db.ts` file to configure and export your database instance:
+
+<CodeBlock
+  fileName="src/db.ts"
+  lang="typescript"
+  code={code5}
+/>
+
+## 4. App Entry Point
+
+Initialize the database in your root component before rendering the app:
+
+<CodeBlock
+  fileName="src/App.tsx"
+  lang="tsx"
+  code={code4}
+/>
+
+## 5. Querying Data with useQuery
+
+Use the `useQuery` hook to create reactive queries that automatically update:
+
+<CodeBlock
+  fileName="src/components/ThreadList.tsx"
+  lang="tsx"
+  code={code3}
+/>
+
+## 6. Authentication with Auth Context
+
+Create an auth context to manage user authentication state:
+
+<CodeBlock
+  fileName="src/lib/auth.tsx"
+  lang="tsx"
+  code={code2}
+/>
+
+## 7. Creating and Updating Data
+
+Use the database methods to create and update records:
+
+<CodeBlock
+  lang="typescript"
+  code={code1}
 />

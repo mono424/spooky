@@ -6,38 +6,19 @@ title: CI/CD
 import CodeBlock from '../../../components/ui/CodeBlock.astro';
 import Note from '../../../components/ui/Note.astro';
 
-## API Keys
-
-Create long-lived API keys for automated deployments in CI/CD pipelines:
-
-<CodeBlock
-  code={`# Create a new key
+export const code3 = `# Create a new key
 spky cloud keys create
 
 # List keys
 spky cloud keys list
 
 # Revoke a key
-spky cloud keys revoke <key-id>`}
-  lang="bash"
-/>
+spky cloud keys revoke <key-id>`;
 
-Use the key in CI by setting the environment variable:
+export const code2 = `export SPOOKY_API_KEY=spk_live_...
+spky cloud deploy`;
 
-<CodeBlock
-  code={`export SPOOKY_API_KEY=spk_live_...
-spky cloud deploy`}
-  lang="bash"
-/>
-
-No browser login is required when `SPOOKY_API_KEY` is set.
-
-## GitHub Integration
-
-Link a GitHub repository for automated deployments on push:
-
-<CodeBlock
-  code={`# Set up auto-deploy
+export const code1 = `# Set up auto-deploy
 spky cloud link setup
 
 # Check link status
@@ -53,7 +34,32 @@ spky cloud link trigger
 spky cloud link runs
 
 # Remove the link
-spky cloud link unlink`}
+spky cloud link unlink`;
+
+## API Keys
+
+Create long-lived API keys for automated deployments in CI/CD pipelines:
+
+<CodeBlock
+  code={code3}
+  lang="bash"
+/>
+
+Use the key in CI by setting the environment variable:
+
+<CodeBlock
+  code={code2}
+  lang="bash"
+/>
+
+No browser login is required when `SPOOKY_API_KEY` is set.
+
+## GitHub Integration
+
+Link a GitHub repository for automated deployments on push:
+
+<CodeBlock
+  code={code1}
   lang="bash"
 />
 

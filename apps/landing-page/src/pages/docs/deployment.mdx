@@ -5,21 +5,7 @@ title: Deployment
 
 import CodeBlock from '../../components/ui/CodeBlock.astro';
 
-Deploying Sp00ky requires running the **Sp00ky Sidecar (SSP)** alongside your SurrealDB instance. For production deployments, the **Scheduler** coordinates multiple SSP instances.
-
-## Architecture
-
-1.  **SurrealDB**: Your persistent data store.
-2.  **Sp00ky SSP (Sidecar)**: A backend service that monitors SurrealDB for changes and maintains materialized views.
-3.  **Scheduler** *(optional)*: Central coordinator for distributed deployments with multiple SSPs. Maintains a RocksDB snapshot replica and WAL.
-4.  **Client**: Connects directly to SurrealDB.
-
-## Single Node (Development)
-
-The simplest setup for development and testing. No scheduler needed.
-
-<CodeBlock
-  code={`version: '3.8'
+export const code2 = `version: '3.8'
 services:
   surrealdb:
     image: surrealdb/surrealdb:latest
@@ -42,16 +28,9 @@ services:
     ports:
       - "8667:8667"
     depends_on:
-      - surrealdb`}
-  lang="yaml"
-/>
+      - surrealdb`;
 
-## Distributed (Production)
-
-For production with high availability and horizontal scaling, use a Scheduler with multiple SSP instances.
-
-<CodeBlock
-  code={`version: '3.8'
+export const code1 = `version: '3.8'
 services:
   surrealdb:
     image: surrealdb/surrealdb:latest
@@ -121,7 +100,32 @@ services:
 
 volumes:
   surreal-data:
-  scheduler-data:`}
+  scheduler-data:`;
+
+Deploying Sp00ky requires running the **Sp00ky Sidecar (SSP)** alongside your SurrealDB instance. For production deployments, the **Scheduler** coordinates multiple SSP instances.
+
+## Architecture
+
+1.  **SurrealDB**: Your persistent data store.
+2.  **Sp00ky SSP (Sidecar)**: A backend service that monitors SurrealDB for changes and maintains materialized views.
+3.  **Scheduler** *(optional)*: Central coordinator for distributed deployments with multiple SSPs. Maintains a RocksDB snapshot replica and WAL.
+4.  **Client**: Connects directly to SurrealDB.
+
+## Single Node (Development)
+
+The simplest setup for development and testing. No scheduler needed.
+
+<CodeBlock
+  code={code2}
+  lang="yaml"
+/>
+
+## Distributed (Production)
+
+For production with high availability and horizontal scaling, use a Scheduler with multiple SSP instances.
+
+<CodeBlock
+  code={code1}
   lang="yaml"
 />
 

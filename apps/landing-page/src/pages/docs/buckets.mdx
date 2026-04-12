@@ -7,18 +7,7 @@ import CodeBlock from '../../components/ui/CodeBlock.astro';
 import Warning from '../../components/ui/Warning.astro';
 import Note from '../../components/ui/Note.astro';
 
-<Warning title="Experimental">
-  File Buckets are an experimental feature. The API surface may change in future releases. Currently only the **memory** backend is supported — files are not persisted across server restarts.
-</Warning>
-
-Buckets provide a type-safe file storage abstraction for uploading, downloading, and managing files in your Sp00ky application. They integrate directly with your SurrealDB schema for permission control and with the Sp00ky CLI for guided setup.
-
-## Defining a Bucket
-
-Buckets are defined in SurrealQL using the `DEFINE BUCKET` statement. Create a `.surql` file in your `src/buckets/` directory:
-
-<CodeBlock
-  code={`DEFINE BUCKET IF NOT EXISTS profile_pictures BACKEND "memory"
+export const code10 = `DEFINE BUCKET IF NOT EXISTS profile_pictures BACKEND "memory"
   PERMISSIONS WHERE
     $action NOT IN ['put']
     OR (
@@ -29,59 +18,15 @@ Buckets are defined in SurrealQL using the `DEFINE BUCKET` statement. Create a `
         OR string::ends_with(file::key($file), '.png')
         OR string::ends_with(file::key($file), '.gif')
       )
-    );`}
-  lang="sql"
-/>
+    );`;
 
-### Permission Variables
-
-- **`$action`** — The operation type: `'put'`, `'get'`, or `'delete'`
-- **`file::head($file).size`** — The file size in bytes
-- **`file::key($file)`** — The file path/key
-
-This example allows unrestricted reads and deletes, but restricts uploads to images under 5MB.
-
-## Configuration
-
-Reference your bucket files in `sp00ky.yml`:
-
-<CodeBlock
-  code={`mode: sidecar
+export const code9 = `mode: sidecar
 buckets:
-  - ./src/buckets/profile.surql`}
-  lang="yaml"
-/>
+  - ./src/buckets/profile.surql`;
 
-After adding or modifying a bucket, regenerate your types by running `spky` so the bucket names and config are available in your generated schema.
+export const code8 = `spky bucket add`;
 
-## CLI: Adding a Bucket
-
-The fastest way to add a bucket is with the CLI:
-
-<CodeBlock
-  code={`spky bucket add`}
-  lang="bash"
-/>
-
-This walks you through an interactive setup with presets for common use cases:
-
-| Preset | Extensions | Max Size | Path Isolation |
-|---|---|---|---|
-| **Avatars** | jpg, jpeg, png, gif, webp | 2 MB | Yes |
-| **Images** | jpg, jpeg, png, gif, webp, svg | 10 MB | No |
-| **Documents** | pdf, doc, docx, txt, csv, xlsx | 25 MB | No |
-| **Video** | mp4, webm, mov, avi | 100 MB | No |
-| **Audio** | mp3, wav, ogg, flac, aac | 50 MB | No |
-| **Custom** | You choose | You choose | You choose |
-
-The CLI generates the `.surql` file and updates your `sp00ky.yml` automatically.
-
-## Generated Schema
-
-After running `spky`, your generated schema includes bucket metadata for type-safe access:
-
-<CodeBlock
-  code={`export const schema = {
+export const code7 = `export const schema = {
   // ...tables, relationships, etc.
   buckets: [
     {
@@ -90,18 +35,9 @@ After running `spky`, your generated schema includes bucket metadata for type-sa
       allowedExtensions: ['jpg', 'jpeg', 'png', 'gif'] as const,
     },
   ],
-} as const;`}
-  lang="typescript"
-/>
+} as const;`;
 
-Bucket names are extracted as a union type, so `db.bucket('...')` only accepts valid bucket names from your schema.
-
-## Core API
-
-Access a bucket from your `Sp00kyClient` or `SyncedDb` instance:
-
-<CodeBlock
-  code={`const bucket = db.bucket('profile_pictures');
+export const code6 = `const bucket = db.bucket('profile_pictures');
 
 // Upload a file
 await bucket.put('avatars/user1.jpg', fileBytes);
@@ -125,18 +61,9 @@ const meta = await bucket.head('avatars/user1.jpg');
 await bucket.copy('avatars/user1.jpg', 'backups/user1.jpg');
 
 // Rename a file
-await bucket.rename('avatars/old.jpg', 'avatars/new.jpg');`}
-  lang="typescript"
-/>
+await bucket.rename('avatars/old.jpg', 'avatars/new.jpg');`;
 
-## SolidJS Hooks
-
-### useFileUpload
-
-Upload files with built-in validation against your bucket configuration (max size, allowed extensions):
-
-<CodeBlock
-  code={`import { useFileUpload } from '@spooky-sync/client-solid';
+export const code5 = `import { useFileUpload } from '@spooky-sync/client-solid';
 
 function AvatarUpload() {
   const { upload, isUploading, error, clearError } = useFileUpload('profile_pictures');
@@ -145,7 +72,7 @@ function AvatarUpload() {
     const file = (e.target as HTMLInputElement).files?.[0];
     if (!file) return;
 
-    await upload(\`avatars/\${userId}.jpg\`, file);
+    await upload(\\\`avatars/\\\${userId}.jpg\\\`, file);
   };
 
   return (
@@ -155,16 +82,9 @@ function AvatarUpload() {
       {error() && <span>{error()!.message}</span>}
     </div>
   );
-}`}
-  lang="typescript"
-/>
+}`;
 
-The hook validates file size and extension **before** attempting the upload, providing instant feedback.
-
-#### API
-
-<CodeBlock
-  code={`const {
+export const code4 = `const {
   isUploading: Accessor<boolean>,
   error: Accessor<Error | null>,
   clearError: () => void,
@@ -172,16 +92,9 @@ The hook validates file size and extension **before** attempting the upload, pro
   download: (path: string) => Promise<string | null>,
   remove: (path: string) => Promise<void>,
   exists: (path: string) => Promise<boolean>,
-} = useFileUpload(bucketName);`}
-  lang="typescript"
-/>
+} = useFileUpload(bucketName);`;
 
-### useDownloadFile
-
-Reactively download and cache files as blob URLs:
-
-<CodeBlock
-  code={`import { useDownloadFile } from '@spooky-sync/client-solid';
+export const code3 = `import { useDownloadFile } from '@spooky-sync/client-solid';
 
 function ProfilePicture(props: { path: string | null }) {
   const { url, isLoading, error } = useDownloadFile(
@@ -196,7 +109,126 @@ function ProfilePicture(props: { path: string | null }) {
       {error() && <span>Failed to load image</span>}
     </div>
   );
-}`}
+}`;
+
+export const code2 = `const {
+  url: Accessor<string | null>,
+  isLoading: Accessor<boolean>,
+  error: Accessor<Error | null>,
+  refetch: () => void,
+} = useDownloadFile(bucketName, pathAccessor, options?);
+
+// Options
+interface UseDownloadFileOptions {
+  cache?: boolean;  // default: true
+}`;
+
+export const code1 = `// With path isolation enabled, uploading to "avatar.jpg"
+// actually stores the file at "<user_id>/avatar.jpg"
+await upload('avatar.jpg', file);`;
+
+<Warning title="Experimental">
+  File Buckets are an experimental feature. The API surface may change in future releases. Currently only the **memory** backend is supported — files are not persisted across server restarts.
+</Warning>
+
+Buckets provide a type-safe file storage abstraction for uploading, downloading, and managing files in your Sp00ky application. They integrate directly with your SurrealDB schema for permission control and with the Sp00ky CLI for guided setup.
+
+## Defining a Bucket
+
+Buckets are defined in SurrealQL using the `DEFINE BUCKET` statement. Create a `.surql` file in your `src/buckets/` directory:
+
+<CodeBlock
+  code={code10}
+  lang="sql"
+/>
+
+### Permission Variables
+
+- **`$action`** — The operation type: `'put'`, `'get'`, or `'delete'`
+- **`file::head($file).size`** — The file size in bytes
+- **`file::key($file)`** — The file path/key
+
+This example allows unrestricted reads and deletes, but restricts uploads to images under 5MB.
+
+## Configuration
+
+Reference your bucket files in `sp00ky.yml`:
+
+<CodeBlock
+  code={code9}
+  lang="yaml"
+/>
+
+After adding or modifying a bucket, regenerate your types by running `spky` so the bucket names and config are available in your generated schema.
+
+## CLI: Adding a Bucket
+
+The fastest way to add a bucket is with the CLI:
+
+<CodeBlock
+  code={code8}
+  lang="bash"
+/>
+
+This walks you through an interactive setup with presets for common use cases:
+
+| Preset | Extensions | Max Size | Path Isolation |
+|---|---|---|---|
+| **Avatars** | jpg, jpeg, png, gif, webp | 2 MB | Yes |
+| **Images** | jpg, jpeg, png, gif, webp, svg | 10 MB | No |
+| **Documents** | pdf, doc, docx, txt, csv, xlsx | 25 MB | No |
+| **Video** | mp4, webm, mov, avi | 100 MB | No |
+| **Audio** | mp3, wav, ogg, flac, aac | 50 MB | No |
+| **Custom** | You choose | You choose | You choose |
+
+The CLI generates the `.surql` file and updates your `sp00ky.yml` automatically.
+
+## Generated Schema
+
+After running `spky`, your generated schema includes bucket metadata for type-safe access:
+
+<CodeBlock
+  code={code7}
+  lang="typescript"
+/>
+
+Bucket names are extracted as a union type, so `db.bucket('...')` only accepts valid bucket names from your schema.
+
+## Core API
+
+Access a bucket from your `Sp00kyClient` or `SyncedDb` instance:
+
+<CodeBlock
+  code={code6}
+  lang="typescript"
+/>
+
+## SolidJS Hooks
+
+### useFileUpload
+
+Upload files with built-in validation against your bucket configuration (max size, allowed extensions):
+
+<CodeBlock
+  code={code5}
+  lang="typescript"
+/>
+
+The hook validates file size and extension **before** attempting the upload, providing instant feedback.
+
+#### API
+
+<CodeBlock
+  code={code4}
+  lang="typescript"
+/>
+
+### useDownloadFile
+
+Reactively download and cache files as blob URLs:
+
+<CodeBlock
+  code={code3}
   lang="typescript"
 />
 
@@ -209,17 +241,7 @@ Features:
 #### API
 
 <CodeBlock
-  code={`const {
-  url: Accessor<string | null>,
-  isLoading: Accessor<boolean>,
-  error: Accessor<Error | null>,
-  refetch: () => void,
-} = useDownloadFile(bucketName, pathAccessor, options?);
-
-// Options
-interface UseDownloadFileOptions {
-  cache?: boolean;  // default: true
-}`}
+  code={code2}
   lang="typescript"
 />
 
@@ -228,9 +250,7 @@ interface UseDownloadFileOptions {
 When enabled (via the `pathPrefixAuth` option in the CLI), file paths are automatically prefixed with the authenticated user's ID. This ensures users can only access their own files.
 
 <CodeBlock
-  code={`// With path isolation enabled, uploading to "avatar.jpg"
-// actually stores the file at "<user_id>/avatar.jpg"
-await upload('avatar.jpg', file);`}
+  code={code1}
   lang="typescript"
 />
 

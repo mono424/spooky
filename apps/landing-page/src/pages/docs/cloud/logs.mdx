@@ -6,12 +6,7 @@ title: Logs & Monitoring
 import CodeBlock from '../../../components/ui/CodeBlock.astro';
 import Note from '../../../components/ui/Note.astro';
 
-## Viewing Logs
-
-Tail logs from your cloud deployment in real time:
-
-<CodeBlock
-  code={`# All services
+export const code3 = `# All services
 spky cloud logs
 
 # Filter by service
@@ -28,7 +23,18 @@ spky cloud logs --filter spooky
 
 # Split view
 spky cloud logs --filter ssp,surrealdb --split h   # horizontal (stacked)
-spky cloud logs --filter ssp,surrealdb --split v   # vertical (side-by-side)`}
+spky cloud logs --filter ssp,surrealdb --split v   # vertical (side-by-side)`;
+
+export const code2 = `![Sp00ky Status](https://api.sp00ky.cloud/v1/badge/your-project-slug)`;
+
+export const code1 = `<img src="https://api.sp00ky.cloud/v1/badge/your-project-slug" alt="Sp00ky Status" />`;
+
+## Viewing Logs
+
+Tail logs from your cloud deployment in real time:
+
+<CodeBlock
+  code={code3}
   lang="bash"
 />
 
@@ -37,14 +43,14 @@ spky cloud logs --filter ssp,surrealdb --split v   # vertical (side-by-side)`}
 Add a live deployment status badge to your GitHub README or any webpage. The badge is a public SVG endpoint — no authentication required.
 
 <CodeBlock
-  code={`![Sp00ky Status](https://api.sp00ky.cloud/v1/badge/your-project-slug)`}
+  code={code2}
   lang="markdown"
 />
 
 Or in HTML:
 
 <CodeBlock
-  code={`<img src="https://api.sp00ky.cloud/v1/badge/your-project-slug" alt="Sp00ky Status" />`}
+  code={code1}
   lang="html"
 />
 

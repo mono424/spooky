@@ -7,14 +7,7 @@ import CodeBlock from '../../components/ui/CodeBlock.astro';
 import Warning from '../../components/ui/Warning.astro';
 import Note from '../../components/ui/Note.astro';
 
-Authentication in Sp00ky is built directly into the sql schema, making it robust, typesafe, and dynamic. Because access control is defined at the database layer, your rules are consistently enforced regardless of how the data is accessed.
-
-## Schema Configuration
-
-You define authentication using `DEFINE ACCESS`. This allows you to specify exactly how users sign up and sign in, and what permissions they have.
-
-<CodeBlock
-  code={`-- Define access scope for accounts
+export const code5 = `-- Define access scope for accounts
 DEFINE ACCESS account ON DATABASE TYPE RECORD
   SIGNUP ( 
     CREATE user 
@@ -32,52 +25,26 @@ DEFINE ACCESS account ON DATABASE TYPE RECORD
 DEFINE TABLE user SCHEMAFULL
 PERMISSIONS
 FOR update, delete WHERE id = $auth.id
-FOR select, create WHERE true;`}
-lang="sql"
-/>
+FOR select, create WHERE true;`;
 
-## Client-Side Authentication
-
-Sp00ky provides a strongly-typed authentication service on the client. It integrates seamlessly with the schema definitions.
-
-### Sign In
-
-<CodeBlock
-  code={`import { db } from './db';
+export const code4 = `import { db } from './db';
 
 // The second argument is typesafe based on your SIGNIN definition
 await db.auth.signIn('account', {
 username: 'sp00ky_user',
 password: 'secure_password'
-});`}
-lang="typescript"
-/>
+});`;
 
-### Sign Up
-
-<CodeBlock
-  code={`import { db } from './db';
+export const code3 = `import { db } from './db';
 
 await db.auth.signUp('account', {
 username: 'new_user',
 password: 'secure_password'
-});`}
-lang="typescript"
-/>
+});`;
 
-### Sign Out
+export const code2 = `await db.auth.signOut();`;
 
-<CodeBlock
-  code={`await db.auth.signOut();`}
-  lang="typescript"
-/>
-
-### Reacting to Auth State
-
-You can subscribe to authentication state changes to update your UI dynamically. The callback receives the user ID when authenticated, or `null` when signed out.
-
-<CodeBlock
-  code={`import { createSignal, onCleanup } from 'solid-js';
+export const code1 = `import { createSignal, onCleanup } from 'solid-js';
 
 function MyComponent() {
   const [userId, setUserId] = createSignal<string | null>(null);
@@ -96,7 +63,50 @@ function MyComponent() {
   onCleanup(() => unsubscribe());
   
   return <div>User ID: {userId() || 'Not logged in'}</div>;
-}`}
+}`;
+
+Authentication in Sp00ky is built directly into the sql schema, making it robust, typesafe, and dynamic. Because access control is defined at the database layer, your rules are consistently enforced regardless of how the data is accessed.
+
+## Schema Configuration
+
+You define authentication using `DEFINE ACCESS`. This allows you to specify exactly how users sign up and sign in, and what permissions they have.
+
+<CodeBlock
+  code={code5}
+lang="sql"
+/>
+
+## Client-Side Authentication
+
+Sp00ky provides a strongly-typed authentication service on the client. It integrates seamlessly with the schema definitions.
+
+### Sign In
+
+<CodeBlock
+  code={code4}
+lang="typescript"
+/>
+
+### Sign Up
+
+<CodeBlock
+  code={code3}
+lang="typescript"
+/>
+
+### Sign Out
+
+<CodeBlock
+  code={code2}
+  lang="typescript"
+/>
+
+### Reacting to Auth State
+
+You can subscribe to authentication state changes to update your UI dynamically. The callback receives the user ID when authenticated, or `null` when signed out.
+
+<CodeBlock
+  code={code1}
   lang="typescript"
 />
 

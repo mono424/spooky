@@ -7,19 +7,63 @@ import CodeBlock from '../../../components/ui/CodeBlock.astro';
 import Warning from '../../../components/ui/Warning.astro';
 import Note from '../../../components/ui/Note.astro';
 
-Sp00ky Cloud provides built-in database backups for your SurrealDB data. Create manual snapshots, configure automatic schedules, and restore from any backup point.
-
-## Quick Start
-
-<CodeBlock
-  code={`# Create a backup
+export const code10 = `# Create a backup
 spky cloud backup create
 
 # List all backups
 spky cloud backup list
 
 # Restore from a backup
-spky cloud backup restore <backup-id>`}
+spky cloud backup restore <backup-id>`;
+
+export const code9 = `# Create a backup
+spky cloud backup create
+
+# Create a named backup
+spky cloud backup create --name before-migration`;
+
+export const code8 = `spky cloud backup list`;
+
+export const code7 = `ID                                    STATUS        SIZE        CREATED
+--------------------------------------------------------------------------------
+before-migration (a1b2c3d4)           completed     12.4 MB     2026-04-08T10:00:00
+e5f6a7b8-...                          completed     11.8 MB     2026-04-07T02:00:00
+f9g0h1i2-...                          completed     10.2 MB     2026-04-06T02:00:00`;
+
+export const code6 = `spky cloud backup restore <backup-id>`;
+
+export const code5 = `spky cloud backup delete <backup-id>`;
+
+export const code4 = `# Enable daily backups at 2 AM, keep last 7
+spky cloud backup configure --enabled true --schedule "0 2 * * *" --retention 7
+
+# Disable automatic backups
+spky cloud backup configure --enabled false
+
+# Change retention to keep 30 backups
+spky cloud backup configure --retention 30`;
+
+export const code3 = `spky cloud backup reset`;
+
+export const code2 = `spky cloud backup reset --no-backup`;
+
+export const code1 = `spky cloud backup <COMMAND>
+
+Commands:
+  list                          List backups
+  create [--name NAME]          Create a manual backup
+  restore <backup-id>           Restore database from a backup
+  delete <backup-id>            Delete a backup
+  configure [--enabled] [--schedule] [--retention]
+                                Configure automatic backups
+  reset [--no-backup]           Reset the database (drop all data, re-run migrations)`;
+
+Sp00ky Cloud provides built-in database backups for your SurrealDB data. Create manual snapshots, configure automatic schedules, and restore from any backup point.
+
+## Quick Start
+
+<CodeBlock
+  code={code10}
   lang="bash"
 />
 
@@ -28,11 +72,7 @@ spky cloud backup restore <backup-id>`}
 Create a manual backup of your database:
 
 <CodeBlock
-  code={`# Create a backup
-spky cloud backup create
-
-# Create a named backup
-spky cloud backup create --name before-migration`}
+  code={code9}
   lang="bash"
 />
 
@@ -41,25 +81,21 @@ Backups run asynchronously. The CLI returns immediately with a backup ID and sta
 ## Listing Backups
 
 <CodeBlock
-  code={`spky cloud backup list`}
+  code={code8}
   lang="bash"
 />
 
 Example output:
 
 <CodeBlock
-  code={`ID                                    STATUS        SIZE        CREATED
---------------------------------------------------------------------------------
-before-migration (a1b2c3d4)           completed     12.4 MB     2026-04-08T10:00:00
-e5f6a7b8-...                          completed     11.8 MB     2026-04-07T02:00:00
-f9g0h1i2-...                          completed     10.2 MB     2026-04-06T02:00:00`}
+  code={code7}
   lang="bash"
 />
 
 ## Restoring from a Backup
 
 <CodeBlock
-  code={`spky cloud backup restore <backup-id>`}
+  code={code6}
   lang="bash"
 />
 
@@ -70,7 +106,7 @@ Restoring a backup replaces your current database contents with the backup data.
 ## Deleting Backups
 
 <CodeBlock
-  code={`spky cloud backup delete <backup-id>`}
+  code={code5}
   lang="bash"
 />
 
@@ -79,14 +115,7 @@ Restoring a backup replaces your current database contents with the backup data.
 Configure scheduled backups with a cron expression:
 
 <CodeBlock
-  code={`# Enable daily backups at 2 AM, keep last 7
-spky cloud backup configure --enabled true --schedule "0 2 * * *" --retention 7
-
-# Disable automatic backups
-spky cloud backup configure --enabled false
-
-# Change retention to keep 30 backups
-spky cloud backup configure --retention 30`}
+  code={code4}
   lang="bash"
 />
 
@@ -101,7 +130,7 @@ spky cloud backup configure --retention 30`}
 Reset your database to a clean state — drops all data and re-runs migrations:
 
 <CodeBlock
-  code={`spky cloud backup reset`}
+  code={code3}
   lang="bash"
 />
 
@@ -116,7 +145,7 @@ The CLI will:
 To skip the pre-reset backup prompt:
 
 <CodeBlock
-  code={`spky cloud backup reset --no-backup`}
+  code={code2}
   lang="bash"
 />
 
@@ -127,15 +156,6 @@ Database reset is irreversible. All user accounts, records, and application data
 ## CLI Reference
 
 <CodeBlock
-  code={`spky cloud backup <COMMAND>
-
-Commands:
-  list                          List backups
-  create [--name NAME]          Create a manual backup
-  restore <backup-id>           Restore database from a backup
-  delete <backup-id>            Delete a backup
-  configure [--enabled] [--schedule] [--retention]
-                                Configure automatic backups
-  reset [--no-backup]           Reset the database (drop all data, re-run migrations)`}
+  code={code1}
   lang="bash"
 />

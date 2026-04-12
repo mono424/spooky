@@ -5,29 +5,11 @@ title: Vanilla JS / TS
 
 import CodeBlock from '../../../components/ui/CodeBlock.astro';
 
-You can use Sp00ky with plain JavaScript or TypeScript without any framework. This guide shows how to use the core `Sp00kyClient` directly.
+export const code7 = `npm install @spooky-sync/core surrealdb`;
 
-## Installation
+export const code6 = `spky --input src/schema.surql --output src/schema.gen.ts --format typescript`;
 
-<CodeBlock code={`npm install @spooky-sync/core surrealdb`} lang="bash" />
-
-## Generate Schema Types
-
-First, generate your schema types from your SurrealDB schema:
-
-<CodeBlock 
-  code={`spky --input src/schema.surql --output src/schema.gen.ts --format typescript`}
-  lang="bash"
-/>
-
-## Initialize the Client
-
-Create and initialize a `Sp00kyClient` instance:
-
-<CodeBlock
-  fileName="src/db.ts"
-  lang="typescript"
-  code={`import { Sp00kyClient, type Sp00kyConfig } from '@spooky-sync/core';
+export const code5 = `import { Sp00kyClient, type Sp00kyConfig } from '@spooky-sync/core';
 import { schema, SURQL_SCHEMA } from './schema.gen';
 
 const config: Sp00kyConfig<typeof schema> = {
@@ -48,16 +30,9 @@ export const client = new Sp00kyClient<typeof schema>(config);
 export async function initDatabase() {
   await client.init();
   console.log('Sp00ky client initialized');
-}`}
-/>
+}`;
 
-## Querying Data
-
-Use the query builder to fetch data and subscribe to updates:
-
-<CodeBlock
-  lang="typescript"
-  code={`import { client } from './db';
+export const code4 = `import { client } from './db';
 
 // Build a query
 const query = client.query('thread')
@@ -85,23 +60,16 @@ function renderThreads(threads: any[]) {
   const container = document.getElementById('threads');
   if (!container) return;
   
-  container.innerHTML = threads.map(thread => \`
+  container.innerHTML = threads.map(thread => \\\`
     <div class="thread">
-      <h3>\${thread.title}</h3>
-      <p>\${thread.content}</p>
-      <small>By \${thread.author?.username || 'Unknown'}</small>
+      <h3>\\\${thread.title}</h3>
+      <p>\\\${thread.content}</p>
+      <small>By \\\${thread.author?.username || 'Unknown'}</small>
     </div>
-  \`).join('');
-}`}
-/>
+  \\\`).join('');
+}`;
 
-## Authentication
-
-Use the auth service to handle user authentication:
-
-<CodeBlock
-  lang="typescript"
-  code={`import { client } from './db';
+export const code3 = `import { client } from './db';
 
 // Sign up a new user
 async function signUp(username: string, password: string) {
@@ -137,21 +105,14 @@ client.auth.subscribe((userId) => {
 // Sign out
 async function signOut() {
   await client.auth.signOut();
-}`}
-/>
+}`;
 
-## Creating and Updating Records
-
-Use the client methods to mutate data:
-
-<CodeBlock
-  lang="typescript"
-  code={`import { client } from './db';
+export const code2 = `import { client } from './db';
 import { Uuid } from 'surrealdb';
 
 // Create a new thread
 async function createThread(title: string, content: string, authorId: string) {
-  const id = \`thread:\${Uuid.v4().toString().replace(/-/g, '')}\`;
+  const id = \\\`thread:\\\${Uuid.v4().toString().replace(/-/g, '')}\\\`;
   
   await client.create(id, {
     title,
@@ -176,17 +137,9 @@ async function updateThread(threadId: string, title: string) {
 async function deleteThread(threadId: string) {
   await client.delete('thread', threadId);
   console.log('Thread deleted');
-}`}
-/>
+}`;
 
-## Complete Example
-
-Here's a complete working example:
-
-<CodeBlock
-  fileName="src/main.ts"
-  lang="typescript"
-  code={`import { client, initDatabase } from './db';
+export const code1 = `import { client, initDatabase } from './db';
 
 async function main() {
   // Initialize database
@@ -217,15 +170,76 @@ async function main() {
     const container = document.getElementById('threads');
     if (!container) return;
     
-    container.innerHTML = threads.map(thread => \`
+    container.innerHTML = threads.map(thread => \\\`
       <article>
-        <h2>\${thread.title}</h2>
-        <p>\${thread.content}</p>
-        <footer>By \${thread.author?.username || 'Unknown'}</footer>
+        <h2>\\\${thread.title}</h2>
+        <p>\\\${thread.content}</p>
+        <footer>By \\\${thread.author?.username || 'Unknown'}</footer>
       </article>
-    \`).join('');
+    \\\`).join('');
   }
 }
 
-main().catch(console.error);`}
+main().catch(console.error);`;
+
+You can use Sp00ky with plain JavaScript or TypeScript without any framework. This guide shows how to use the core `Sp00kyClient` directly.
+
+## Installation
+
+<CodeBlock code={code7} lang="bash" />
+
+## Generate Schema Types
+
+First, generate your schema types from your SurrealDB schema:
+
+<CodeBlock 
+  code={code6}
+  lang="bash"
+/>
+
+## Initialize the Client
+
+Create and initialize a `Sp00kyClient` instance:
+
+<CodeBlock
+  fileName="src/db.ts"
+  lang="typescript"
+  code={code5}
+/>
+
+## Querying Data
+
+Use the query builder to fetch data and subscribe to updates:
+
+<CodeBlock
+  lang="typescript"
+  code={code4}
+/>
+
+## Authentication
+
+Use the auth service to handle user authentication:
+
+<CodeBlock
+  lang="typescript"
+  code={code3}
+/>
+
+## Creating and Updating Records
+
+Use the client methods to mutate data:
+
+<CodeBlock
+  lang="typescript"
+  code={code2}
+/>
+
+## Complete Example
+
+Here's a complete working example:
+
+<CodeBlock
+  fileName="src/main.ts"
+  lang="typescript"
+  code={code1}
 />
