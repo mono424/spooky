@@ -93,18 +93,31 @@ impl SchedulerConfig {
         // Try to load from sp00ky.yml (optional)
         builder = builder.add_source(config::File::with_name("sp00ky").required(false));
 
-        // Override with environment variables (SP00KY_SCHEDULER_*)
-        builder =
-            builder.add_source(config::Environment::with_prefix("SP00KY_SCHEDULER").separator("_"));
-
         let config = builder.build()?;
         let mut scheduler_config: SchedulerConfig = config.try_deserialize()?;
 
-        scheduler_config.scheduler_id = std::env::var("SCHEDULER_ID")
+        // Override DB settings from SPKY_* environment variables
+        if let Ok(v) = std::env::var("SPKY_DB_URL") {
+            scheduler_config.db.url = v;
+        }
+        if let Ok(v) = std::env::var("SPKY_DB_NS") {
+            scheduler_config.db.namespace = v;
+        }
+        if let Ok(v) = std::env::var("SPKY_DB_NAME") {
+            scheduler_config.db.database = v;
+        }
+        if let Ok(v) = std::env::var("SPKY_DB_USER") {
+            scheduler_config.db.username = v;
+        }
+        if let Ok(v) = std::env::var("SPKY_DB_PASS") {
+            scheduler_config.db.password = v;
+        }
+
+        scheduler_config.scheduler_id = std::env::var("SPKY_SCHEDULER_ID")
             .unwrap_or_else(|_| format!("scheduler-{}", uuid::Uuid::new_v4()));
 
         // Parse backend health check targets from JSON env var
-        if let Ok(backends_json) = std::env::var("SP00KY_SCHEDULER_BACKENDS") {
+        if let Ok(backends_json) = std::env::var("SPKY_SCHEDULER_BACKENDS") {
             if let Ok(backends) = serde_json::from_str::<Vec<BackendHealthConfig>>(&backends_json) {
                 scheduler_config.backends = backends;
             }

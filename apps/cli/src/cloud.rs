@@ -1193,6 +1193,26 @@ fn build_backend_manifest(
     manifest
 }
 
+/// Build auto-injected SPKY_* vars for cloud deploy manifests.
+/// These are base vars — the orchestrator adds IP-specific ones (SPKY_DB_URL, SPKY_DB_PASS, etc.)
+fn build_spky_cloud_vars(config: &backend::Sp00kyConfig) -> Vec<String> {
+    let resolved = config.resolved_surrealdb();
+    vec![
+        "SPKY_ENV=cloud".into(),
+        format!("SPKY_DB_NS={}", resolved.namespace),
+        format!("SPKY_DB_NAME={}", resolved.database),
+    ]
+}
+
+/// Warn if a frontend app uses vault without a whitelist.
+fn warn_frontend_vault_no_whitelist_deploy(name: &str, env: &Option<backend::EnvConfig>) {
+    if let Some(backend::EnvConfig::Source(backend::EnvSource::Str(s))) = env {
+        if s == "vault" {
+            eprintln!("  \x1b[33mwarning\x1b[0m: Frontend app '{}' uses vault without a whitelist. Consider using vault: [KEY1, KEY2] to avoid exposing all secrets to the frontend.", name);
+        }
+    }
+}
+
 /// Build a frontend manifest JSON value.
 fn build_frontend_manifest(
     slug: &str,
@@ -1301,8 +1321,21 @@ fn deploy(upgrade: bool) -> Result<()> {
             bail!("Docker build failed for backend '{}'", name);
         }
 
-        // Resolve env vars from unified env config
-        let merged_env = resolve_env_for_deploy(&app_config.env, config_dir, &mut client, &pid);
+        // Resolve env vars: SPKY_* base + user config (user overrides SPKY)
+        let spky_vars = build_spky_cloud_vars(&config);
+        let user_env = resolve_env_for_deploy(&app_config.env, config_dir, &mut client, &pid);
+        let mut env_map = std::collections::BTreeMap::new();
+        for entry in &spky_vars {
+            if let Some((k, v)) = entry.split_once('=') {
+                env_map.insert(k.to_string(), v.to_string());
+            }
+        }
+        for entry in &user_env {
+            if let Some((k, v)) = entry.split_once('=') {
+                env_map.insert(k.to_string(), v.to_string());
+            }
+        }
+        let merged_env: Vec<String> = env_map.into_iter().map(|(k, v)| format!("{}={}", k, v)).collect();
 
         // Check if image changed since last deploy (skip export+upload if unchanged)
         let image_id = get_docker_image_id(&image_tag);
@@ -1421,8 +1454,22 @@ fn deploy(upgrade: bool) -> Result<()> {
         // Auto-compute the SurrealDB WebSocket endpoint for the frontend
         let db_ws_endpoint = derive_db_ws_endpoint(&client.base_url, &slug);
 
-        // Resolve env vars from unified env config
-        let merged_env = resolve_env_for_deploy(&frontend_app.env, config_dir, &mut client, &pid);
+        // Resolve env vars: SPKY_* base + user config (user overrides SPKY)
+        warn_frontend_vault_no_whitelist_deploy(frontend_name, &frontend_app.env);
+        let spky_vars = build_spky_cloud_vars(&config);
+        let user_env = resolve_env_for_deploy(&frontend_app.env, config_dir, &mut client, &pid);
+        let mut env_map = std::collections::BTreeMap::new();
+        for entry in &spky_vars {
+            if let Some((k, v)) = entry.split_once('=') {
+                env_map.insert(k.to_string(), v.to_string());
+            }
+        }
+        for entry in &user_env {
+            if let Some((k, v)) = entry.split_once('=') {
+                env_map.insert(k.to_string(), v.to_string());
+            }
+        }
+        let merged_env: Vec<String> = env_map.into_iter().map(|(k, v)| format!("{}={}", k, v)).collect();
 
         println!("  Building frontend image ('{}')...", frontend_name);
         let mut build_args = vec![

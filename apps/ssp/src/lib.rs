@@ -98,24 +98,24 @@ pub struct Config {
 
 pub fn load_config() -> Config {
     Config {
-        listen_addr: std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:8667".to_string()),
-        db_addr: std::env::var("SURREALDB_ADDR").unwrap_or_else(|_| "127.0.0.1:8000".to_string()),
-        db_user: std::env::var("SURREALDB_USER").unwrap_or_else(|_| "root".to_string()),
-        db_pass: std::env::var("SURREALDB_PASS").unwrap_or_else(|_| "root".to_string()),
-        db_ns: std::env::var("SURREALDB_NS").unwrap_or_else(|_| "test".to_string()),
-        db_db: std::env::var("SURREALDB_DB").unwrap_or_else(|_| "test".to_string()),
+        listen_addr: std::env::var("SPKY_SSP_LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:8667".to_string()),
+        db_addr: std::env::var("SPKY_DB_URL").unwrap_or_else(|_| "127.0.0.1:8000".to_string()),
+        db_user: std::env::var("SPKY_DB_USER").unwrap_or_else(|_| "root".to_string()),
+        db_pass: std::env::var("SPKY_DB_PASS").unwrap_or_else(|_| "root".to_string()),
+        db_ns: std::env::var("SPKY_DB_NS").unwrap_or_else(|_| "test".to_string()),
+        db_db: std::env::var("SPKY_DB_NAME").unwrap_or_else(|_| "test".to_string()),
         sp00ky_config_path: PathBuf::from(
-            std::env::var("SP00KY_CONFIG_PATH")
+            std::env::var("SPKY_CONFIG_PATH")
                 .unwrap_or_else(|_| "sp00ky.yml".to_string()),
         ),
-        scheduler_url: std::env::var("SCHEDULER_URL").ok(),
-        ssp_id: std::env::var("SSP_ID")
+        scheduler_url: std::env::var("SPKY_SCHEDULER_URL").ok(),
+        ssp_id: std::env::var("SPKY_SSP_ID")
             .unwrap_or_else(|_| format!("ssp-{}", uuid::Uuid::new_v4())),
         heartbeat_interval_ms: std::env::var("HEARTBEAT_INTERVAL_MS")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(5000),
-        advertise_addr: std::env::var("ADVERTISE_ADDR").ok(),
+        advertise_addr: std::env::var("SPKY_SSP_ADVERTISE_ADDR").ok(),
         ttl_cleanup_interval_secs: std::env::var("TTL_CLEANUP_INTERVAL_SECS")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -153,8 +153,8 @@ async fn register_with_scheduler(
 
     // Collect relevant env vars to send to scheduler
     let env_vars: std::collections::HashMap<String, String> = [
-        "SURREALDB_ADDR", "SURREALDB_NS", "SURREALDB_DB", "SURREALDB_USER",
-        "SCHEDULER_URL", "LISTEN_ADDR", "ADVERTISE_ADDR", "SSP_ID",
+        "SPKY_DB_URL", "SPKY_DB_NS", "SPKY_DB_NAME", "SPKY_DB_USER",
+        "SPKY_SCHEDULER_URL", "SPKY_SSP_LISTEN_ADDR", "SPKY_SSP_ADVERTISE_ADDR", "SPKY_SSP_ID",
         "HEARTBEAT_INTERVAL_MS", "TTL_CLEANUP_INTERVAL_SECS",
     ].iter().filter_map(|&key| {
         std::env::var(key).ok().map(|val| (key.to_string(), val))
@@ -515,7 +515,7 @@ pub async fn run_server() -> anyhow::Result<()> {
             }
         });
     } else {
-        info!("No SCHEDULER_URL configured, running in standalone mode");
+        info!("No SPKY_SCHEDULER_URL configured, running in standalone mode");
     }
 
     // Spawn TTL cleanup loop
@@ -728,7 +728,7 @@ async fn self_bootstrap(
 
 async fn auth_middleware(req: Request, next: Next) -> Response {
     let auth_header = req.headers().get(AUTHORIZATION);
-    let secret = std::env::var("SP00KY_AUTH_SECRET").unwrap_or_default();
+    let secret = std::env::var("SPKY_AUTH_SECRET").unwrap_or_default();
 
     match auth_header {
         Some(header) if header.to_str().unwrap_or_default() == format!("Bearer {}", secret) => {
@@ -1179,15 +1179,15 @@ async fn info_handler(State(state): State<AppState>) -> Json<Value> {
     };
     // Collect relevant environment variables
     let env_vars: serde_json::Map<String, Value> = [
-        "SURREALDB_ADDR", "SURREALDB_NS", "SURREALDB_DB", "SURREALDB_USER",
-        "SCHEDULER_URL", "LISTEN_ADDR", "ADVERTISE_ADDR", "SSP_ID",
+        "SPKY_DB_URL", "SPKY_DB_NS", "SPKY_DB_NAME", "SPKY_DB_USER",
+        "SPKY_SCHEDULER_URL", "SPKY_SSP_LISTEN_ADDR", "SPKY_SSP_ADVERTISE_ADDR", "SPKY_SSP_ID",
         "HEARTBEAT_INTERVAL_MS", "TTL_CLEANUP_INTERVAL_SECS",
     ].iter().filter_map(|&key| {
         std::env::var(key).ok().map(|val| (key.to_string(), Value::String(val)))
     }).collect();
 
-    // Derive IP from ADVERTISE_ADDR (e.g. "10.100.1.30:8667" -> "10.100.1.30")
-    let ip = std::env::var("ADVERTISE_ADDR").ok()
+    // Derive IP from SPKY_SSP_ADVERTISE_ADDR (e.g. "10.100.1.30:8667" -> "10.100.1.30")
+    let ip = std::env::var("SPKY_SSP_ADVERTISE_ADDR").ok()
         .and_then(|addr| addr.split(':').next().map(|s| s.to_string()));
 
     Json(json!([

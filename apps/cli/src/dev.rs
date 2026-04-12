@@ -289,10 +289,11 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
         let scheduler_image = versions.scheduler_image();
         let scheduler_port_mapping = format!("{}:9667", SCHEDULER_PORT);
 
-        let scheduler_ns_env = format!("SP00KY_SCHEDULER_DB_NAMESPACE={}", resolved_surreal.namespace);
-        let scheduler_db_env = format!("SP00KY_SCHEDULER_DB_DATABASE={}", resolved_surreal.database);
-        let scheduler_user_env = format!("SP00KY_SCHEDULER_DB_USERNAME={}", resolved_surreal.username);
-        let scheduler_pass_env = format!("SP00KY_SCHEDULER_DB_PASSWORD={}", resolved_surreal.password);
+        let scheduler_db_url_env = format!("SPKY_DB_URL=surrealdb:{}/rpc", SURREAL_PORT);
+        let scheduler_ns_env = format!("SPKY_DB_NS={}", resolved_surreal.namespace);
+        let scheduler_db_env = format!("SPKY_DB_NAME={}", resolved_surreal.database);
+        let scheduler_user_env = format!("SPKY_DB_USER={}", resolved_surreal.username);
+        let scheduler_pass_env = format!("SPKY_DB_PASS={}", resolved_surreal.password);
 
         println!("{} Phase 5: Starting scheduler...", PREFIX);
         docker(&[
@@ -303,14 +304,12 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
             "--network-alias", "scheduler",
             "-p", &scheduler_port_mapping,
             "-e", "RUST_LOG=info",
-            "-e", "SP00KY_SCHEDULER_DB_URL=surrealdb:8000/rpc",
+            "-e", &scheduler_db_url_env,
             "-e", &scheduler_ns_env,
             "-e", &scheduler_db_env,
             "-e", &scheduler_user_env,
             "-e", &scheduler_pass_env,
-            "-e", "SP00KY_SCHEDULER_REPLICA_DB_PATH=/data/replica",
-            "-e", "SP00KY_SCHEDULER_WAL_PATH=/data/event_wal.log",
-            "-e", "SP00KY_AUTH_SECRET=mysecret",
+            "-e", "SPKY_AUTH_SECRET=mysecret",
             &scheduler_image,
         ])?;
 
@@ -348,13 +347,13 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
     let config_mount_str = format!("{}:/config/sp00ky.yml:ro", config_mount.display());
     let data_mount_str = format!("{}:/data", data_dir.display());
 
-    let scheduler_url_env = format!("SCHEDULER_URL=http://scheduler:{}", SCHEDULER_PORT);
-    let advertise_addr_env = format!("ADVERTISE_ADDR={}:{}", SSP_CONTAINER, SSP_PORT);
-
-    let ssp_ns_env = format!("SURREALDB_NS={}", resolved_surreal.namespace);
-    let ssp_db_env = format!("SURREALDB_DB={}", resolved_surreal.database);
-    let ssp_user_env = format!("SURREALDB_USER={}", resolved_surreal.username);
-    let ssp_pass_env = format!("SURREALDB_PASS={}", resolved_surreal.password);
+    let ssp_db_url_env = format!("SPKY_DB_URL=surrealdb:{}/rpc", SURREAL_PORT);
+    let ssp_ns_env = format!("SPKY_DB_NS={}", resolved_surreal.namespace);
+    let ssp_db_env = format!("SPKY_DB_NAME={}", resolved_surreal.database);
+    let ssp_user_env = format!("SPKY_DB_USER={}", resolved_surreal.username);
+    let ssp_pass_env = format!("SPKY_DB_PASS={}", resolved_surreal.password);
+    let scheduler_url_env = format!("SPKY_SCHEDULER_URL=http://scheduler:{}", SCHEDULER_PORT);
+    let advertise_addr_env = format!("SPKY_SSP_ADVERTISE_ADDR={}:{}", SSP_CONTAINER, SSP_PORT);
 
     let mut ssp_args = vec![
         "run", "-d",
@@ -364,19 +363,18 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
         "--network-alias", "ssp",
         "-p", &port_mapping,
         "-e", "RUST_LOG=info,ssp=debug",
-        "-e", "SURREALDB_ADDR=surrealdb:8000/rpc",
+        "-e", &ssp_db_url_env,
         "-e", &ssp_ns_env,
         "-e", &ssp_db_env,
         "-e", &ssp_user_env,
         "-e", &ssp_pass_env,
-        "-e", "SP00KY_AUTH_SECRET=mysecret",
-        "-e", "SP00KY_PERSISTENCE_FILE=/data/sp00ky_state.json",
-        "-e", "SP00KY_CONFIG_PATH=/config/sp00ky.yml",
+        "-e", "SPKY_AUTH_SECRET=mysecret",
+        "-e", "SPKY_CONFIG_PATH=/config/sp00ky.yml",
     ];
 
     if *mode == DeployMode::Cluster {
         ssp_args.extend(["-e", &scheduler_url_env]);
-        ssp_args.extend(["-e", "SSP_ID=ssp-1"]);
+        ssp_args.extend(["-e", "SPKY_SSP_ID=ssp-1"]);
         ssp_args.extend(["-e", &advertise_addr_env]);
     }
 
@@ -403,8 +401,8 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
 
     // Start app dev servers (frontend + backends)
     let project_dir = std::env::current_dir().context("Failed to get current directory")?;
-    let app_dev = spawn_frontend_dev(config, &project_dir);
-    let backend_devs = spawn_backend_dev_commands(config, &project_dir);
+    let app_dev = spawn_frontend_dev(config, &project_dir, resolved_surreal, mode);
+    let backend_devs = spawn_backend_dev_commands(config, &project_dir, resolved_surreal, mode);
 
     // Wait for Ctrl+C
     while !stop.load(Ordering::SeqCst) {
@@ -529,8 +527,8 @@ fn run_compose_mode(compose_file: &str, mode: &DeployMode, config: &Sp00kyConfig
 
     // Start app dev servers (frontend + backends)
     let project_dir = std::env::current_dir().context("Failed to get current directory")?;
-    let app_dev = spawn_frontend_dev(config, &project_dir);
-    let backend_devs = spawn_backend_dev_commands(config, &project_dir);
+    let app_dev = spawn_frontend_dev(config, &project_dir, resolved_surreal, mode);
+    let backend_devs = spawn_backend_dev_commands(config, &project_dir, resolved_surreal, mode);
 
     let status = Command::new("docker")
         .args(["compose", "-f", compose_file, "up", "--build", "--remove-orphans"])
@@ -855,6 +853,46 @@ impl Drop for LogTailGuard {
     }
 }
 
+/// Build the auto-injected SPKY_* environment variables for dev mode.
+fn build_spky_dev_vars(resolved_surreal: &ResolvedSurrealDb, mode: &DeployMode) -> Vec<(String, String)> {
+    let mut vars = vec![
+        ("SPKY_ENV".into(), "dev".into()),
+        ("SPKY_DB_URL".into(), format!("surrealdb:{}/rpc", SURREAL_PORT)),
+        ("SPKY_DB_NS".into(), resolved_surreal.namespace.clone()),
+        ("SPKY_DB_NAME".into(), resolved_surreal.database.clone()),
+        ("SPKY_DB_USER".into(), resolved_surreal.username.clone()),
+        ("SPKY_DB_PASS".into(), resolved_surreal.password.clone()),
+        ("SPKY_SSP_ADDR".into(), format!("ssp:{}", SSP_PORT)),
+    ];
+    if *mode == DeployMode::Cluster {
+        vars.push(("SPKY_SCHEDULER_URL".into(), format!("http://scheduler:{}", SCHEDULER_PORT)));
+    }
+    vars
+}
+
+/// Merge SPKY auto-injected vars with user-provided vars. User vars take precedence.
+fn merge_spky_with_user_env(spky_vars: &[(String, String)], user_vars: Vec<(String, String)>) -> Vec<(String, String)> {
+    let mut merged = std::collections::BTreeMap::new();
+    // SPKY vars first (base)
+    for (k, v) in spky_vars {
+        merged.insert(k.clone(), v.clone());
+    }
+    // User vars override
+    for (k, v) in user_vars {
+        merged.insert(k, v);
+    }
+    merged.into_iter().collect()
+}
+
+/// Warn if a frontend app uses vault without a whitelist.
+fn warn_frontend_vault_no_whitelist(name: &str, env: &Option<backend::EnvConfig>) {
+    if let Some(backend::EnvConfig::Source(backend::EnvSource::Str(s))) = env {
+        if s == "vault" {
+            eprintln!("  \x1b[33mwarning\x1b[0m: Frontend app '{}' uses vault without a whitelist. Consider using vault: [KEY1, KEY2] to avoid exposing all secrets to the frontend.", name);
+        }
+    }
+}
+
 const APP_COLOR: &str = "\x1b[97m"; // bright white
 
 fn spawn_pnpm_dev_app(script: &str, envs: Vec<(String, String)>) -> LogTailGuard {
@@ -867,9 +905,12 @@ fn spawn_pnpm_dev_app(script: &str, envs: Vec<(String, String)>) -> LogTailGuard
 }
 
 /// Start the frontend app dev server from the apps config.
-fn spawn_frontend_dev(config: &Sp00kyConfig, project_dir: &Path) -> LogTailGuard {
-    if let Some((_name, frontend)) = config.frontend() {
-        let envs = resolve_env_for_dev(&frontend.env, project_dir);
+fn spawn_frontend_dev(config: &Sp00kyConfig, project_dir: &Path, resolved_surreal: &ResolvedSurrealDb, mode: &DeployMode) -> LogTailGuard {
+    if let Some((name, frontend)) = config.frontend() {
+        warn_frontend_vault_no_whitelist(name, &frontend.env);
+        let spky_vars = build_spky_dev_vars(resolved_surreal, mode);
+        let user_envs = resolve_env_for_dev(&frontend.env, project_dir);
+        let envs = merge_spky_with_user_env(&spky_vars, user_envs);
         // Use the same dev config dispatch as backends
         if let Some(ref dev_config) = frontend.dev {
             let prefix = format!("{}[app]{}", APP_COLOR, ANSI_RESET);
@@ -971,7 +1012,8 @@ const BACKEND_COLORS: &[&str] = &[
 ];
 const ANSI_RESET: &str = "\x1b[0m";
 
-fn spawn_backend_dev_commands(config: &Sp00kyConfig, project_dir: &Path) -> Vec<LogTailGuard> {
+fn spawn_backend_dev_commands(config: &Sp00kyConfig, project_dir: &Path, resolved_surreal: &ResolvedSurrealDb, mode: &DeployMode) -> Vec<LogTailGuard> {
+    let spky_vars = build_spky_dev_vars(resolved_surreal, mode);
     let mut guards = Vec::new();
     let mut color_idx = 0;
     for (name, app) in config.backends() {
@@ -982,7 +1024,8 @@ fn spawn_backend_dev_commands(config: &Sp00kyConfig, project_dir: &Path) -> Vec<
         let color = BACKEND_COLORS[color_idx % BACKEND_COLORS.len()];
         color_idx += 1;
         let prefix = format!("{}[app.{}.dev]{}", color, name, ANSI_RESET);
-        let envs = resolve_env_for_dev(&app.env, project_dir);
+        let user_envs = resolve_env_for_dev(&app.env, project_dir);
+        let envs = merge_spky_with_user_env(&spky_vars, user_envs);
         match dev_config {
             BackendDevConfig::Command(cmd) => {
                 println!("{} Starting: {}", prefix, cmd);

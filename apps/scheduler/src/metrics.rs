@@ -228,9 +228,9 @@ async fn info_handler(
 
     // Collect scheduler environment variables
     let env_vars: serde_json::Map<String, serde_json::Value> = [
-        "SP00KY_SCHEDULER_DB_URL", "SP00KY_SCHEDULER_DB_NAMESPACE",
-        "SP00KY_SCHEDULER_DB_DATABASE", "SP00KY_SCHEDULER_DB_USERNAME",
-        "SCHEDULER_ID",
+        "SPKY_DB_URL", "SPKY_DB_NS",
+        "SPKY_DB_NAME", "SPKY_DB_USER",
+        "SPKY_SCHEDULER_ID",
     ].iter().filter_map(|&key| {
         std::env::var(key).ok().map(|val| (key.to_string(), serde_json::Value::String(val)))
     }).collect();
