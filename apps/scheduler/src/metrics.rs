@@ -1,11 +1,11 @@
 use anyhow::Result;
-use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
+use axum::{extract::State, http::StatusCode, routing::{get, put}, Json, Router};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::info;
 
-use crate::backend_health::{BackendHealthCache, BackendStatus};
+use crate::backend_health::{BackendHealthCache, BackendStatus, SharedBackendConfigs};
 use crate::job_scheduler::JobTracker;
 use crate::query::QueryTracker;
 use crate::router::{SspPool, SspState};
@@ -58,6 +58,7 @@ pub struct MetricsState {
     pub scheduler_id: String,
     pub status: Arc<RwLock<SchedulerStatus>>,
     pub backend_health: BackendHealthCache,
+    pub shared_backend_configs: SharedBackendConfigs,
 }
 
 /// Create metrics router
@@ -67,6 +68,7 @@ pub fn create_metrics_router(state: MetricsState) -> Router {
         .route("/health", get(health_check))
         .route("/info", get(info_handler))
         .route("/info/text", get(info_text_handler))
+        .route("/backends", put(update_backends_handler))
         .with_state(state)
 }
 
@@ -304,6 +306,20 @@ async fn info_handler(
     }
 
     Json(serde_json::Value::Array(entities))
+}
+
+/// Update backend health check configs at runtime (called by orchestrator on redeploy).
+async fn update_backends_handler(
+    State(state): State<MetricsState>,
+    Json(new_backends): Json<Vec<crate::config::BackendHealthConfig>>,
+) -> StatusCode {
+    info!(count = new_backends.len(), "Updating backend configs via PUT /backends");
+    crate::backend_health::update_backends(
+        &state.shared_backend_configs,
+        &state.backend_health,
+        new_backends,
+    ).await;
+    StatusCode::OK
 }
 
 /// Info handler that returns plain text JSON (for SurrealDB DEFINE API consumption)

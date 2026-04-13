@@ -427,11 +427,10 @@ impl<'de> Deserialize<'de> for EnvConfig {
                         .map_err(serde::de::Error::custom)?;
                     Ok(EnvConfig::PerEnvironment { dev, cloud })
                 } else {
-                    // Inline key-value map
-                    let map = m.iter()
-                        .filter_map(|(k, v)| k.as_str().map(|s| (s.to_string(), v.clone())))
-                        .collect();
-                    Ok(EnvConfig::Source(EnvSource::Map(map)))
+                    // Delegate to EnvSource which handles vault whitelist + inline maps
+                    let source: EnvSource = serde_yaml::from_value(value)
+                        .map_err(serde::de::Error::custom)?;
+                    Ok(EnvConfig::Source(source))
                 }
             }
             _ => Err(serde::de::Error::custom("env config must be a string, map, or array")),

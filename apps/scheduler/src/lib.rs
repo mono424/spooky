@@ -143,6 +143,7 @@ impl Scheduler {
         query_tracker: Arc<crate::query::QueryTracker>,
         job_tracker: Arc<crate::job_scheduler::JobTracker>,
         backend_health: crate::backend_health::BackendHealthCache,
+        shared_backend_configs: crate::backend_health::SharedBackendConfigs,
     ) -> crate::metrics::MetricsState {
         crate::metrics::MetricsState {
             ssp_pool: Arc::clone(&self.ssp_pool),
@@ -152,6 +153,7 @@ impl Scheduler {
             scheduler_id: self.config.scheduler_id.clone(),
             status: Arc::clone(&self.status),
             backend_health,
+            shared_backend_configs,
         }
     }
 

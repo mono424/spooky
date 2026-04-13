@@ -56,10 +56,11 @@ async fn main() -> Result<()> {
 
     let proxy_router = scheduler::proxy::create_proxy_router(scheduler.proxy_state());
 
-    // Create backend health cache and start background monitor
+    // Create backend health cache and shared configs for live updates
     let backend_health_cache = scheduler::backend_health::create_health_cache(&config.backends);
+    let shared_backend_configs = scheduler::backend_health::create_shared_configs(&config.backends);
     scheduler::backend_health::start_backend_health_monitor(
-        config.backends.clone(),
+        shared_backend_configs.clone(),
         backend_health_cache.clone(),
         config.health_check_interval_secs,
     );
@@ -69,6 +70,7 @@ async fn main() -> Result<()> {
             std::sync::Arc::clone(&query_tracker),
             std::sync::Arc::clone(&job_tracker),
             backend_health_cache,
+            shared_backend_configs,
         )
     );
     

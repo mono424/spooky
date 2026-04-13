@@ -5,6 +5,39 @@ use tracing::{info, warn};
 
 use crate::config::BackendHealthConfig;
 
+/// Shared backend configs that can be updated at runtime (e.g. via PUT /backends).
+pub type SharedBackendConfigs = Arc<RwLock<Vec<BackendHealthConfig>>>;
+
+pub fn create_shared_configs(backends: &[BackendHealthConfig]) -> SharedBackendConfigs {
+    Arc::new(RwLock::new(backends.to_vec()))
+}
+
+/// Replace the backend configs and reconcile the health cache.
+/// Existing backends keep their health status; new ones start as Unknown.
+pub async fn update_backends(
+    configs: &SharedBackendConfigs,
+    cache: &BackendHealthCache,
+    new_backends: Vec<BackendHealthConfig>,
+) {
+    // Update shared configs first (same lock order as the health monitor)
+    *configs.write().await = new_backends.clone();
+
+    // Reconcile cache: keep health status for unchanged backends
+    let mut entries = cache.write().await;
+    let old_entries: Vec<BackendHealthEntry> = entries.drain(..).collect();
+    for cfg in &new_backends {
+        if let Some(existing) = old_entries.iter().find(|e| e.name == cfg.name && e.url == cfg.url) {
+            let mut entry = existing.clone();
+            entry.env = cfg.env.clone();
+            entry.healthcheck = cfg.healthcheck.clone();
+            entry.port = cfg.port;
+            entries.push(entry);
+        } else {
+            entries.push(BackendHealthEntry::from_config(cfg));
+        }
+    }
+}
+
 /// Backend health status
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendStatus {
@@ -73,34 +106,29 @@ pub fn create_health_cache(backends: &[BackendHealthConfig]) -> BackendHealthCac
     Arc::new(RwLock::new(entries))
 }
 
-/// Spawn a background task that periodically health-checks all backends
+/// Spawn a background task that periodically health-checks all backends.
+/// Reads from `SharedBackendConfigs` on each tick so live updates via
+/// `update_backends()` are picked up without restarting.
 pub fn start_backend_health_monitor(
-    backends: Vec<BackendHealthConfig>,
+    configs: SharedBackendConfigs,
     cache: BackendHealthCache,
     interval_secs: u64,
 ) {
-    if backends.is_empty() {
-        info!("No backends configured for health checking");
-        return;
-    }
-
     let http_client = reqwest::Client::builder()
         .timeout(Duration::from_secs(3))
         .build()
         .unwrap_or_default();
 
-    info!(
-        count = backends.len(),
-        interval_secs, "Starting backend health monitor"
-    );
+    info!(interval_secs, "Starting backend health monitor");
 
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
-        // Run the first check immediately
         interval.tick().await;
 
         loop {
-            for (i, backend) in backends.iter().enumerate() {
+            let backends = configs.read().await.clone();
+
+            for backend in &backends {
                 let health_url = format!(
                     "{}{}",
                     backend.url.trim_end_matches('/'),
@@ -132,7 +160,7 @@ pub fn start_backend_health_monitor(
 
                 let now = SystemTime::now();
                 let mut entries = cache.write().await;
-                if let Some(entry) = entries.get_mut(i) {
+                if let Some(entry) = entries.iter_mut().find(|e| e.name == backend.name) {
                     entry.status = status;
                     entry.last_checked = Some(now);
                     entry.response_time_ms = Some(response_time_ms);
