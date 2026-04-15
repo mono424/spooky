@@ -131,6 +131,8 @@ pub fn add_api(
             client_types: Vec::new(),
             deployment: None,
             cloud_api: None,
+            migration_engine: None,
+            surrealkit: None,
         }
     };
 

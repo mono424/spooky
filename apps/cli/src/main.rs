@@ -7,6 +7,7 @@ mod dev;
 mod json_schema;
 mod mcp;
 mod migrate;
+mod migration;
 mod modules;
 mod parser;
 mod schema_builder;
@@ -25,7 +26,6 @@ use parser::SchemaParser;
 use create::create_project;
 use std::fs;
 use std::path::{Path, PathBuf};
-use surreal_client::SurrealClient;
 
 #[derive(ClapParser, Debug)]
 #[command(name = "spky")]
@@ -790,53 +790,57 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
             endpoint,
             secret,
         } => {
-            // Load config to resolve paths
             let config_file = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
             let sp00ky_config = backend::load_config(&config_file);
             let resolved = sp00ky_config.resolved_schema();
             let resolved_migrations = migrations_dir.unwrap_or(resolved.migrations);
 
-            // Use config ns/db as defaults when CLI flags are at their default "main"
             let resolved_surreal = sp00ky_config.resolved_surrealdb();
             let namespace = if conn.namespace == "main" { resolved_surreal.namespace } else { conn.namespace };
             let database = if conn.database == "main" { resolved_surreal.database } else { conn.database };
 
-            let client = SurrealClient::new(
-                &conn.url,
-                &namespace,
-                &database,
-                &conn.username,
-                &conn.password,
-            );
-
-            // Apply user migrations
-            migrate::apply(&client, &resolved_migrations)?;
-
-            // Apply internal Sp00ky schema (meta tables + events)
-            let config_path_ref = if config_file.exists() {
-                Some(config_file.as_path())
-            } else {
-                None
-            };
             let deploy_mode = match mode.as_str() {
                 "cluster" => DeployMode::Cluster,
                 "surrealism" => DeployMode::Surrealism,
                 _ => DeployMode::Singlenode,
             };
-            migrate::apply_internal_schema(
-                &client,
-                &resolved.schema,
-                config_path_ref,
-                &deploy_mode,
-                endpoint.as_deref(),
-                secret.as_deref(),
-            )
+
+            let config_path_opt = if config_file.exists() {
+                Some(config_file.clone())
+            } else {
+                None
+            };
+
+            let ctx = migration::MigrationContext {
+                environment: migration::MigrationEnvironment::Production,
+                project_dir: std::env::current_dir()?,
+                migrations_dir: resolved_migrations,
+                deploy_mode: deploy_mode.clone(),
+                url: conn.url,
+                namespace,
+                database,
+                username: conn.username,
+                password: conn.password,
+                builder_config: None,
+                surrealkit_binary: sp00ky_config.resolved_surrealkit_binary(),
+                internal_schema: Some(migration::InternalSchemaConfig {
+                    schema_path: resolved.schema,
+                    config_path: config_path_opt,
+                    deploy_mode,
+                    endpoint: endpoint.clone(),
+                    secret: secret.clone(),
+                }),
+                remote_functions: None,
+            };
+
+            let engine = migration::create_engine(ctx)?;
+            engine.apply()?;
+            Ok(())
         }
         MigrateCommands::Status {
             conn,
             migrations_dir,
         } => {
-            // Load config to resolve migrations dir
             let sp00ky_config = backend::load_config(Path::new(DEFAULT_CONFIG_PATH));
             let resolved_migrations = migrations_dir.unwrap_or(sp00ky_config.resolved_schema().migrations);
 
@@ -844,14 +848,26 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
             let namespace = if conn.namespace == "main" { resolved_surreal.namespace } else { conn.namespace };
             let database = if conn.database == "main" { resolved_surreal.database } else { conn.database };
 
-            let client = SurrealClient::new(
-                &conn.url,
-                &namespace,
-                &database,
-                &conn.username,
-                &conn.password,
-            );
-            migrate::status(&client, &resolved_migrations)
+            let ctx = migration::MigrationContext {
+                environment: migration::MigrationEnvironment::Production,
+                project_dir: std::env::current_dir()?,
+                migrations_dir: resolved_migrations,
+                deploy_mode: DeployMode::Singlenode,
+                url: conn.url,
+                namespace,
+                database,
+                username: conn.username,
+                password: conn.password,
+                builder_config: None,
+                surrealkit_binary: sp00ky_config.resolved_surrealkit_binary(),
+                internal_schema: None,
+                remote_functions: None,
+            };
+
+            let engine = migration::create_engine(ctx)?;
+            let statuses = engine.status()?;
+            print_migration_status(&statuses);
+            Ok(())
         }
         MigrateCommands::Fix {
             conn,
@@ -865,16 +881,68 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
             let namespace = if conn.namespace == "main" { resolved_surreal.namespace } else { conn.namespace };
             let database = if conn.database == "main" { resolved_surreal.database } else { conn.database };
 
-            let client = SurrealClient::new(
-                &conn.url,
-                &namespace,
-                &database,
-                &conn.username,
-                &conn.password,
-            );
-            migrate::fix(&client, &resolved_migrations, fix_checksums)
+            let ctx = migration::MigrationContext {
+                environment: migration::MigrationEnvironment::Production,
+                project_dir: std::env::current_dir()?,
+                migrations_dir: resolved_migrations,
+                deploy_mode: DeployMode::Singlenode,
+                url: conn.url,
+                namespace,
+                database,
+                username: conn.username,
+                password: conn.password,
+                builder_config: None,
+                surrealkit_binary: sp00ky_config.resolved_surrealkit_binary(),
+                internal_schema: None,
+                remote_functions: None,
+            };
+
+            let engine = migration::create_engine(ctx)?;
+            engine.fix(fix_checksums)
         }
     }
+}
+
+fn print_migration_status(statuses: &[migration::MigrationInfo]) {
+    const GREEN: &str = "\x1b[32m";
+    const YELLOW: &str = "\x1b[33m";
+    const RED: &str = "\x1b[31m";
+    const DIM: &str = "\x1b[2m";
+    const RESET: &str = "\x1b[0m";
+
+    if statuses.is_empty() {
+        println!("No migrations found.");
+        return;
+    }
+
+    println!("Migration Status:\n");
+
+    for info in statuses {
+        match info.state {
+            migration::MigrationState::Applied => {
+                let at = info.applied_at.as_deref().unwrap_or("");
+                println!(
+                    "  {GREEN}[applied]{RESET}  {}_{:<40} {DIM}(applied {}){RESET}",
+                    info.id, info.name, at
+                );
+            }
+            migration::MigrationState::Pending => {
+                println!(
+                    "  {YELLOW}[pending]{RESET}  {}_{}",
+                    info.id, info.name
+                );
+            }
+            migration::MigrationState::Drift => {
+                let detail = info.detail.as_deref().unwrap_or("");
+                println!(
+                    "  {RED}[DRIFT]    {}_{:<40} ({}){RESET}",
+                    info.id, info.name, detail
+                );
+            }
+        }
+    }
+
+    println!();
 }
 
 fn handle_api(action: ApiCommands) -> Result<()> {
@@ -1452,4 +1520,170 @@ fn main() -> Result<()> {
         &args.modules_dir,
         args.all,
     )
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use crate::migration::{self, MigrationEngine, MigrationEnvironment, MigrationInfo, MigrationState};
+    use crate::migration::engine::{ApplyResult, CreateResult};
+    use crate::migration::sp00ky_engine::Sp00kyEngine;
+    use crate::backend::DeployMode;
+    use tempfile::TempDir;
+
+    // ── Mock Engine ────────────────────────────────────────────────────
+
+    struct MockEngine {
+        fail_apply: bool,
+    }
+
+    impl MockEngine {
+        fn new() -> Self { Self { fail_apply: false } }
+        fn failing() -> Self { Self { fail_apply: true } }
+    }
+
+    impl MigrationEngine for MockEngine {
+        fn check_connection(&self) -> anyhow::Result<()> { Ok(()) }
+
+        fn apply(&self) -> anyhow::Result<ApplyResult> {
+            if self.fail_apply {
+                anyhow::bail!("mock apply failure");
+            }
+            Ok(ApplyResult { applied_count: 3, messages: vec!["applied 3".into()] })
+        }
+
+        fn status(&self) -> anyhow::Result<Vec<MigrationInfo>> {
+            Ok(vec![MigrationInfo {
+                id: "20240101".into(),
+                name: "test_migration".into(),
+                state: MigrationState::Pending,
+                applied_at: None,
+                detail: None,
+            }])
+        }
+
+        fn create(&self, name: &str) -> anyhow::Result<CreateResult> {
+            Ok(CreateResult { file_path: None, message: format!("created {}", name), has_changes: true })
+        }
+
+        fn fix(&self, _fix_checksums: bool) -> anyhow::Result<()> { Ok(()) }
+    }
+
+    fn wrap_mock(mock: MockEngine) -> Sp00kyEngine {
+        Sp00kyEngine::new(
+            Box::new(mock), "http://localhost:8000".into(), "ns".into(),
+            "db".into(), "root".into(), "root".into(), None, None,
+        )
+    }
+
+    // ── Factory tests ──────────────────────────────────────────────────
+
+    fn make_ctx(tmp: &TempDir, surrealkit_binary: Option<String>) -> migration::MigrationContext {
+        migration::MigrationContext {
+            environment: MigrationEnvironment::Production,
+            project_dir: tmp.path().to_path_buf(),
+            migrations_dir: tmp.path().join("migrations"),
+            deploy_mode: DeployMode::Singlenode,
+            url: "http://localhost:8000".into(),
+            namespace: "test_ns".into(),
+            database: "test_db".into(),
+            username: "root".into(),
+            password: "root".into(),
+            builder_config: None,
+            surrealkit_binary,
+            internal_schema: None,
+            remote_functions: None,
+        }
+    }
+
+    #[test]
+    fn test_factory_selects_legacy_when_no_surrealkit() {
+        let tmp = TempDir::new().unwrap();
+        let engine = migration::create_engine(make_ctx(&tmp, None));
+        assert!(engine.is_ok());
+    }
+
+    #[test]
+    fn test_factory_fails_with_missing_surrealkit_binary() {
+        let tmp = TempDir::new().unwrap();
+        match migration::create_engine(make_ctx(&tmp, Some("nonexistent_xyz_12345".into()))) {
+            Err(e) => assert!(e.to_string().contains("not found")),
+            Ok(_) => panic!("should fail with missing binary"),
+        }
+    }
+
+    // ── Decorator tests ────────────────────────────────────────────────
+
+    #[test]
+    fn test_decorator_apply_delegates_to_inner() {
+        let engine = wrap_mock(MockEngine::new());
+        let result = engine.apply().unwrap();
+        assert_eq!(result.applied_count, 3);
+        assert_eq!(result.messages, vec!["applied 3"]);
+    }
+
+    #[test]
+    fn test_decorator_apply_propagates_inner_error() {
+        let engine = wrap_mock(MockEngine::failing());
+        let err = engine.apply().unwrap_err();
+        assert!(err.to_string().contains("mock apply failure"));
+    }
+
+    #[test]
+    fn test_decorator_status_delegates_to_inner() {
+        let engine = wrap_mock(MockEngine::new());
+        let statuses = engine.status().unwrap();
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].id, "20240101");
+        assert_eq!(statuses[0].state, MigrationState::Pending);
+    }
+
+    #[test]
+    fn test_decorator_create_delegates_to_inner() {
+        let engine = wrap_mock(MockEngine::new());
+        let result = engine.create("add_users").unwrap();
+        assert_eq!(result.message, "created add_users");
+    }
+
+    #[test]
+    fn test_decorator_fix_delegates() {
+        wrap_mock(MockEngine::new()).fix(true).unwrap();
+    }
+
+    #[test]
+    fn test_decorator_check_connection_delegates() {
+        wrap_mock(MockEngine::new()).check_connection().unwrap();
+    }
+
+    // ── SurrealKit adapter tests ───────────────────────────────────────
+
+    #[test]
+    fn test_surrealkit_fails_when_binary_not_found() {
+        match crate::migration::surrealkit::SurrealKitEngine::new(
+            "nonexistent_xyz_12345".into(), MigrationEnvironment::Production,
+            std::path::PathBuf::from("."), "http://localhost:8000".into(),
+            "ns".into(), "db".into(), "root".into(), "root".into(),
+        ) {
+            Err(e) => assert!(e.to_string().contains("not found")),
+            Ok(_) => panic!("should fail with missing binary"),
+        }
+    }
+
+    #[test]
+    fn test_surrealkit_succeeds_with_valid_binary() {
+        let result = crate::migration::surrealkit::SurrealKitEngine::new(
+            "echo".into(), MigrationEnvironment::Dev,
+            std::path::PathBuf::from("."), "http://localhost:8000".into(),
+            "ns".into(), "db".into(), "root".into(), "root".into(),
+        );
+        assert!(result.is_ok());
+    }
+
+    // ── Type tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_migration_state_equality() {
+        assert_eq!(MigrationState::Applied, MigrationState::Applied);
+        assert_ne!(MigrationState::Applied, MigrationState::Pending);
+        assert_ne!(MigrationState::Pending, MigrationState::Drift);
+    }
 }

@@ -243,6 +243,18 @@ pub struct Sp00kyConfig {
     /// Override the Sp00ky Cloud API endpoint (e.g. for staging).
     #[serde(default, rename = "cloudApi", skip_serializing_if = "Option::is_none")]
     pub cloud_api: Option<String>,
+    /// Migration engine to use: "legacy" (default) or "surrealkit".
+    #[serde(default, rename = "migrationEngine", skip_serializing_if = "Option::is_none")]
+    pub migration_engine: Option<String>,
+    /// SurrealKit-specific configuration (only used when migrationEngine = "surrealkit").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surrealkit: Option<SurrealKitConfig>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct SurrealKitConfig {
+    /// Path to the surrealkit binary. Defaults to "surrealkit" (found via PATH).
+    pub binary: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -459,6 +471,20 @@ impl Sp00kyConfig {
         self.apps.iter()
             .find(|(_, app)| app.app_type == AppType::Frontend)
             .map(|(name, app)| (name.as_str(), app))
+    }
+
+    /// Resolve the surrealkit binary path (if migration engine is "surrealkit").
+    pub fn resolved_surrealkit_binary(&self) -> Option<String> {
+        if self.migration_engine.as_deref() == Some("surrealkit") {
+            Some(
+                self.surrealkit
+                    .as_ref()
+                    .and_then(|c| c.binary.clone())
+                    .unwrap_or_else(|| "surrealkit".to_string()),
+            )
+        } else {
+            None
+        }
     }
 
     /// Validate hosting configuration for SurrealDB and all apps.
@@ -779,6 +805,8 @@ fn default_config() -> Sp00kyConfig {
         client_types: Default::default(),
         deployment: None,
         cloud_api: None,
+        migration_engine: None,
+        surrealkit: None,
     }
 }
 

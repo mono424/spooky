@@ -3491,11 +3491,26 @@ fn print_deployment_details(data: &serde_json::Value) {
                 let ip = vm["internal_ip"].as_str().unwrap_or("-");
                 let vm_status = vm["status"].as_str().unwrap_or("-");
 
-                // Look up version from component data (match by role name)
-                let version = component_versions
+                // Look up version from component data, fall back to image_hash
+                let name = vm["name"].as_str().unwrap_or(role);
+                let component_ver = component_versions
                     .get(role)
+                    .or_else(|| component_versions.get(name))
                     .map(|(v, _)| v.as_str())
-                    .unwrap_or("-");
+                    .filter(|v| *v != "-");
+                let version = if let Some(v) = component_ver {
+                    v.to_string()
+                } else {
+                    let raw_hash = vm["image_hash"].as_str()
+                        .or_else(|| vm.get("metadata").and_then(|m| m.get("image_hash")).and_then(|v| v.as_str()))
+                        .unwrap_or("-");
+                    if raw_hash.len() > 12 && raw_hash != "-" {
+                        let h = raw_hash.trim_start_matches("sha256:");
+                        format!("{}…", &h[..12.min(h.len())])
+                    } else {
+                        raw_hash.to_string()
+                    }
+                };
 
                 // Status icon
                 let icon = match vm_status {
