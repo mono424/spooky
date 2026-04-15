@@ -1686,4 +1686,249 @@ mod migration_tests {
         assert_ne!(MigrationState::Applied, MigrationState::Pending);
         assert_ne!(MigrationState::Pending, MigrationState::Drift);
     }
+
+    // ── Dev flow integration tests ─────────────────────────────────────
+    //
+    // These simulate the exact logic from dev.rs::apply_migrations():
+    //   1. create engine
+    //   2. optionally fix checksums
+    //   3. call status(), filter pending
+    //   4. call apply()
+    //   5. on failure: retry after reset
+
+    /// Mock engine with configurable status results for flow testing.
+    struct FlowMockEngine {
+        statuses: Vec<MigrationInfo>,
+        apply_result: std::cell::RefCell<Vec<anyhow::Result<ApplyResult>>>,
+        fix_called: std::cell::RefCell<bool>,
+    }
+
+    impl FlowMockEngine {
+        fn with_pending(count: usize) -> Self {
+            let statuses = (0..count).map(|i| MigrationInfo {
+                id: format!("2024010{}120000", i + 1),
+                name: format!("migration_{}", i + 1),
+                state: MigrationState::Pending,
+                applied_at: None,
+                detail: None,
+            }).collect();
+            Self {
+                statuses,
+                apply_result: std::cell::RefCell::new(vec![Ok(ApplyResult { applied_count: count, messages: vec![] })]),
+                fix_called: std::cell::RefCell::new(false),
+            }
+        }
+
+        fn all_applied() -> Self {
+            Self {
+                statuses: vec![MigrationInfo {
+                    id: "20240101120000".into(),
+                    name: "initial".into(),
+                    state: MigrationState::Applied,
+                    applied_at: Some("2024-01-01T12:00:00Z".into()),
+                    detail: None,
+                }],
+                apply_result: std::cell::RefCell::new(vec![]),
+                fix_called: std::cell::RefCell::new(false),
+            }
+        }
+
+        fn with_drift() -> Self {
+            Self {
+                statuses: vec![
+                    MigrationInfo {
+                        id: "20240101120000".into(),
+                        name: "initial".into(),
+                        state: MigrationState::Drift,
+                        applied_at: Some("2024-01-01T12:00:00Z".into()),
+                        detail: Some("checksum mismatch".into()),
+                    },
+                    MigrationInfo {
+                        id: "20240102120000".into(),
+                        name: "second".into(),
+                        state: MigrationState::Pending,
+                        applied_at: None,
+                        detail: None,
+                    },
+                ],
+                apply_result: std::cell::RefCell::new(vec![Ok(ApplyResult { applied_count: 1, messages: vec![] })]),
+                fix_called: std::cell::RefCell::new(false),
+            }
+        }
+
+        fn failing_then_succeeding() -> Self {
+            Self {
+                statuses: vec![MigrationInfo {
+                    id: "20240101120000".into(),
+                    name: "initial".into(),
+                    state: MigrationState::Pending,
+                    applied_at: None,
+                    detail: None,
+                }],
+                apply_result: std::cell::RefCell::new(vec![
+                    Err(anyhow::anyhow!("migration failed: table already exists")),
+                    Ok(ApplyResult { applied_count: 1, messages: vec![] }),
+                ]),
+                fix_called: std::cell::RefCell::new(false),
+            }
+        }
+    }
+
+    impl MigrationEngine for FlowMockEngine {
+        fn check_connection(&self) -> anyhow::Result<()> { Ok(()) }
+
+        fn apply(&self) -> anyhow::Result<ApplyResult> {
+            let mut results = self.apply_result.borrow_mut();
+            if results.is_empty() {
+                Ok(ApplyResult { applied_count: 0, messages: vec![] })
+            } else {
+                results.remove(0)
+            }
+        }
+
+        fn status(&self) -> anyhow::Result<Vec<MigrationInfo>> {
+            Ok(self.statuses.clone())
+        }
+
+        fn create(&self, name: &str) -> anyhow::Result<CreateResult> {
+            Ok(CreateResult { file_path: None, message: format!("created {}", name), has_changes: true })
+        }
+
+        fn fix(&self, _fix_checksums: bool) -> anyhow::Result<()> {
+            *self.fix_called.borrow_mut() = true;
+            Ok(())
+        }
+    }
+
+    /// Simulates the dev.rs apply_migrations flow with a mock engine.
+    fn simulate_dev_flow(engine: &dyn MigrationEngine, auto_apply: bool, fix_checksums: bool)
+        -> anyhow::Result<String>
+    {
+        let mut output = String::new();
+
+        // Step 1: Fix checksums if requested (mirrors dev.rs line 692)
+        if fix_checksums {
+            if let Err(e) = engine.fix(true) {
+                output.push_str(&format!("checksum fix failed: {:#}\n", e));
+            }
+        }
+
+        // Step 2: Get status (mirrors dev.rs line 699)
+        let statuses = engine.status()?;
+
+        // Step 3: Report drift (mirrors dev.rs line 708)
+        for info in &statuses {
+            if info.state == MigrationState::Drift {
+                output.push_str(&format!("DRIFT: {}_{}\n", info.id, info.name));
+            }
+        }
+
+        // Step 4: Filter pending (mirrors dev.rs line 715)
+        let pending: Vec<_> = statuses.iter()
+            .filter(|s| s.state == MigrationState::Pending)
+            .collect();
+
+        if pending.is_empty() {
+            output.push_str("no_pending\n");
+            return Ok(output);
+        }
+
+        output.push_str(&format!("pending:{}\n", pending.len()));
+
+        // Step 5: Apply (mirrors dev.rs line 754)
+        // In non-TTY/auto mode, always apply
+        if auto_apply {
+            match engine.apply() {
+                Ok(r) => output.push_str(&format!("applied:{}\n", r.applied_count)),
+                Err(e) => {
+                    output.push_str(&format!("apply_failed:{}\n", e));
+                    // Retry after reset (mirrors dev.rs line 768)
+                    match engine.apply() {
+                        Ok(r) => output.push_str(&format!("retry_applied:{}\n", r.applied_count)),
+                        Err(e2) => output.push_str(&format!("retry_failed:{}\n", e2)),
+                    }
+                }
+            }
+        }
+
+        Ok(output)
+    }
+
+    /// Simulates the cloud.rs deploy migration flow with a mock engine.
+    fn simulate_cloud_flow(engine: &dyn MigrationEngine) -> String {
+        // Cloud flow is simple: just apply (mirrors cloud.rs line 1719 / 2917)
+        match engine.apply() {
+            Ok(_) => "migrations_complete".into(),
+            Err(e) => format!("migration_warning:{}", e),
+        }
+    }
+
+    #[test]
+    fn test_dev_flow_no_pending_skips_apply() {
+        let engine = FlowMockEngine::all_applied();
+        let output = simulate_dev_flow(&engine, true, false).unwrap();
+        assert!(output.contains("no_pending"));
+        assert!(!output.contains("applied:"));
+    }
+
+    #[test]
+    fn test_dev_flow_pending_migrations_applied() {
+        let engine = FlowMockEngine::with_pending(3);
+        let output = simulate_dev_flow(&engine, true, false).unwrap();
+        assert!(output.contains("pending:3"));
+        assert!(output.contains("applied:3"));
+    }
+
+    #[test]
+    fn test_dev_flow_drift_reported_then_pending_applied() {
+        let engine = FlowMockEngine::with_drift();
+        let output = simulate_dev_flow(&engine, true, false).unwrap();
+        assert!(output.contains("DRIFT: 20240101120000_initial"));
+        assert!(output.contains("pending:1"));
+        assert!(output.contains("applied:1"));
+    }
+
+    #[test]
+    fn test_dev_flow_fix_checksums_called_when_requested() {
+        let engine = FlowMockEngine::with_pending(1);
+        let _ = simulate_dev_flow(&engine, true, true).unwrap();
+        assert!(*engine.fix_called.borrow());
+    }
+
+    #[test]
+    fn test_dev_flow_fix_checksums_not_called_by_default() {
+        let engine = FlowMockEngine::with_pending(1);
+        let _ = simulate_dev_flow(&engine, true, false).unwrap();
+        assert!(!*engine.fix_called.borrow());
+    }
+
+    #[test]
+    fn test_dev_flow_apply_failure_triggers_retry() {
+        let engine = FlowMockEngine::failing_then_succeeding();
+        let output = simulate_dev_flow(&engine, true, false).unwrap();
+        assert!(output.contains("apply_failed:"));
+        assert!(output.contains("retry_applied:1"));
+    }
+
+    #[test]
+    fn test_cloud_flow_success() {
+        let engine = FlowMockEngine::with_pending(2);
+        let output = simulate_cloud_flow(&engine);
+        assert_eq!(output, "migrations_complete");
+    }
+
+    #[test]
+    fn test_cloud_flow_failure_returns_warning() {
+        let engine = FlowMockEngine::failing_then_succeeding();
+        let output = simulate_cloud_flow(&engine);
+        assert!(output.starts_with("migration_warning:"));
+        assert!(output.contains("table already exists"));
+    }
+
+    #[test]
+    fn test_cloud_flow_with_all_applied() {
+        let engine = FlowMockEngine::all_applied();
+        let output = simulate_cloud_flow(&engine);
+        assert_eq!(output, "migrations_complete");
+    }
 }
