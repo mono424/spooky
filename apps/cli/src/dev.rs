@@ -658,68 +658,61 @@ fn print_container_logs(name: &str, tail: u32) -> Result<()> {
 // ── Migration helper ────────────────────────────────────────────────────────
 
 fn apply_migrations(surreal_url: &str, auto_apply: bool, fix_checksums: bool, migrations_path: &str, resolved_surreal: &ResolvedSurrealDb) -> Result<()> {
+    use crate::migration::{self, MigrationState};
+
     let migrations_dir = Path::new(migrations_path);
     if !migrations_dir.exists() {
         println!("{} No {}/ directory found, skipping.", PREFIX, migrations_path);
         return Ok(());
     }
 
-    let client = SurrealClient::new(
-        surreal_url,
-        &resolved_surreal.namespace,
-        &resolved_surreal.database,
-        "root",
-        "root",
-    );
+    let sp00ky_config = backend::load_config(Path::new(DEFAULT_CONFIG_PATH));
 
-    // Check for pending migrations and prompt user before applying
-    client.ensure_ns_db().context("Failed to ensure namespace/database exist")?;
-    client.ping().context("Cannot connect to SurrealDB")?;
-    client.ensure_migration_table()?;
+    // Build engine for user migrations only (internal schema + remote functions
+    // are separate phases in the dev flow with stop-checks between them).
+    let ctx = migration::MigrationContext {
+        environment: migration::MigrationEnvironment::Dev,
+        project_dir: std::env::current_dir().context("Failed to get current directory")?,
+        migrations_dir: migrations_dir.to_path_buf(),
+        deploy_mode: DeployMode::Singlenode,
+        url: surreal_url.to_string(),
+        namespace: resolved_surreal.namespace.clone(),
+        database: resolved_surreal.database.clone(),
+        username: "root".to_string(),
+        password: "root".to_string(),
+        builder_config: None,
+        surrealkit_binary: sp00ky_config.resolved_surrealkit_binary(),
+        internal_schema: None,
+        remote_functions: None,
+    };
 
-    let filesystem = migrate::scan_migrations(migrations_dir)?;
-    let applied = client.get_applied_migrations()?;
+    let engine = migration::create_engine(ctx)?;
 
-    // Early checksum validation
-    match migrate::validate_applied_checksums(&applied, &filesystem) {
-        Ok(warnings) => {
-            for warning in &warnings {
-                println!("{} \x1b[33mWARNING: {}\x1b[0m", PREFIX, warning);
-            }
-        }
-        Err(e) => {
-            if fix_checksums {
-                println!("{} Checksum mismatch detected, fixing with --fix-checksums...", PREFIX);
-                let mut fixed = 0;
-                for am in &applied {
-                    if let Some(fm) = filesystem.iter().find(|f| f.version == am.version) {
-                        if !fm.path.exists() {
-                            continue;
-                        }
-                        if let Ok(disk_checksum) = migrate::checksum(&fm.path) {
-                            if disk_checksum != am.checksum {
-                                client.update_migration_checksum(&am.version, &disk_checksum)?;
-                                println!("  {} Updated checksum for {}_{}", PREFIX, am.version, am.name);
-                                fixed += 1;
-                            }
-                        }
-                    }
-                }
-                if fixed > 0 {
-                    println!("{} \x1b[32mFixed {} checksum(s).\x1b[0m", PREFIX, fixed);
-                }
-            } else {
-                eprintln!("{} \x1b[31mChecksum validation failed: {:#}\x1b[0m", PREFIX, e);
-                eprintln!("{} Run with --fix-checksums or `sp00ky migrate fix --fix-checksums` to resolve.", PREFIX);
-            }
+    // Fix checksums first if requested
+    if fix_checksums {
+        if let Err(e) = engine.fix(true) {
+            eprintln!("{} \x1b[33mWARNING: checksum fix failed: {:#}\x1b[0m", PREFIX, e);
         }
     }
 
-    let applied_versions: Vec<&str> = applied.iter().map(|a| a.version.as_str()).collect();
-    let pending: Vec<_> = filesystem
-        .iter()
-        .filter(|f| !applied_versions.contains(&f.version.as_str()))
-        .collect();
+    // Check for pending migrations
+    let statuses = match engine.status() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("{} \x1b[31mFailed to check migration status: {:#}\x1b[0m", PREFIX, e);
+            return Ok(());
+        }
+    };
+
+    // Report drift warnings
+    for info in &statuses {
+        if info.state == MigrationState::Drift {
+            let detail = info.detail.as_deref().unwrap_or("");
+            println!("{} \x1b[33mWARNING: Drift on {}_{}: {}\x1b[0m", PREFIX, info.id, info.name, detail);
+        }
+    }
+
+    let pending: Vec<_> = statuses.iter().filter(|s| s.state == MigrationState::Pending).collect();
 
     if pending.is_empty() {
         println!("{} No pending migrations.", PREFIX);
@@ -728,7 +721,7 @@ fn apply_migrations(surreal_url: &str, auto_apply: bool, fix_checksums: bool, mi
 
     println!("{} Found {} pending migration(s):", PREFIX, pending.len());
     for m in &pending {
-        println!("  - {}_{}", m.version, m.name);
+        println!("  - {}_{}", m.id, m.name);
     }
 
     if auto_apply {
@@ -758,15 +751,24 @@ fn apply_migrations(surreal_url: &str, auto_apply: bool, fix_checksums: bool, mi
         }
     }
 
-    match migrate::apply(&client, migrations_dir) {
-        Ok(()) => Ok(()),
+    match engine.apply() {
+        Ok(_) => Ok(()),
         Err(e) => {
             println!("{} \x1b[31mMigration failed:\x1b[0m {:#}", PREFIX, e);
+
+            // Reset-and-retry uses SurrealClient directly (dev-only escape hatch)
+            let client = SurrealClient::new(
+                surreal_url,
+                &resolved_surreal.namespace,
+                &resolved_surreal.database,
+                "root",
+                "root",
+            );
+
             if auto_apply || !std::io::stdin().is_terminal() {
                 println!("{} Auto-resetting database and retrying migrations.", PREFIX);
-                println!("{} Resetting database and retrying...", PREFIX);
                 client.reset_database()?;
-                migrate::apply(&client, migrations_dir)
+                engine.apply().map(|_| ())
             } else {
                 let options = vec![
                     "Reset database and retry",
@@ -784,7 +786,7 @@ fn apply_migrations(surreal_url: &str, auto_apply: bool, fix_checksums: bool, mi
                     "Reset database and retry" => {
                         println!("{} Resetting database and retrying...", PREFIX);
                         client.reset_database()?;
-                        migrate::apply(&client, migrations_dir)
+                        engine.apply().map(|_| ())
                     }
                     "Skip migrations (continue without applying)" => {
                         println!("{} Skipping migrations. Dev server will start without applying pending migrations.", PREFIX);

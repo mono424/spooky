@@ -1695,6 +1695,36 @@ fn deploy(upgrade: bool) -> Result<()> {
                             let db_password = status_data["surrealdb_password"]
                                 .as_str()
                                 .unwrap_or("");
+                            let schema = config.resolved_schema();
+                            let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
+                            let migrations_dir = config_dir.join(&schema.migrations);
+
+                            // Apply user migrations via migration engine
+                            if migrations_dir.exists() {
+                                let ctx = crate::migration::MigrationContext {
+                                    environment: crate::migration::MigrationEnvironment::Production,
+                                    project_dir: config_dir.to_path_buf(),
+                                    migrations_dir: migrations_dir.clone(),
+                                    deploy_mode: config.mode.clone().unwrap_or_default(),
+                                    url: db_url.to_string(),
+                                    namespace: resolved.namespace.clone(),
+                                    database: resolved.database.clone(),
+                                    username: "root".to_string(),
+                                    password: db_password.to_string(),
+                                    builder_config: None,
+                                    surrealkit_binary: config.resolved_surrealkit_binary(),
+                                    internal_schema: None,
+                                    remote_functions: None,
+                                };
+                                match crate::migration::create_engine(ctx).and_then(|e| e.apply()) {
+                                    Ok(_) => println!("  ▸ Migrations complete."),
+                                    Err(e) => println!("  ▸ Migration warning: {:?}", e),
+                                }
+                            } else {
+                                println!("  ▸ No migrations directory found, skipping.");
+                            }
+
+                            // Build SurrealClient for post-migration steps
                             let surreal_client = if db_password.is_empty() {
                                 crate::surreal_client::SurrealClient::new_unauthenticated(
                                     db_url,
@@ -1710,19 +1740,6 @@ fn deploy(upgrade: bool) -> Result<()> {
                                     db_password,
                                 )
                             };
-
-                            let schema = config.resolved_schema();
-                            let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
-                            let migrations_dir = config_dir.join(&schema.migrations);
-
-                            if migrations_dir.exists() {
-                                match crate::migrate::apply(&surreal_client, &migrations_dir) {
-                                    Ok(()) => println!("  ▸ Migrations complete."),
-                                    Err(e) => println!("  ▸ Migration warning: {:?}", e),
-                                }
-                            } else {
-                                println!("  ▸ No migrations directory found, skipping.");
-                            }
 
                             // Apply remote functions + internal schema BEFORE finalize so that
                             // SSP/scheduler can bootstrap from already-migrated tables (they
@@ -2898,30 +2915,45 @@ fn backup(action: CloudBackupCommands) -> Result<()> {
 
                 // Connect directly to SurrealDB internal IP for migrations
                 let surreal_url = format!("http://{}:8000", db_url);
-                let surreal_client = if db_password.is_empty() {
-                    crate::surreal_client::SurrealClient::new_unauthenticated(
-                        &surreal_url, &resolved.namespace, &resolved.database,
-                    )
-                } else {
-                    crate::surreal_client::SurrealClient::new(
-                        &surreal_url, &resolved.namespace, &resolved.database,
-                        "root", db_password,
-                    )
-                };
 
                 let schema = config.resolved_schema();
                 let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
                 let migrations_dir = config_dir.join(&schema.migrations);
 
                 if migrations_dir.exists() {
-                    match crate::migrate::apply(&surreal_client, &migrations_dir) {
-                        Ok(()) => println!("  Migrations complete."),
+                    let ctx = crate::migration::MigrationContext {
+                        environment: crate::migration::MigrationEnvironment::Production,
+                        project_dir: config_dir.to_path_buf(),
+                        migrations_dir: migrations_dir.clone(),
+                        deploy_mode: config.mode.clone().unwrap_or_default(),
+                        url: surreal_url.clone(),
+                        namespace: resolved.namespace.clone(),
+                        database: resolved.database.clone(),
+                        username: "root".to_string(),
+                        password: db_password.to_string(),
+                        builder_config: None,
+                        surrealkit_binary: config.resolved_surrealkit_binary(),
+                        internal_schema: None,
+                        remote_functions: None,
+                    };
+                    match crate::migration::create_engine(ctx).and_then(|e| e.apply()) {
+                        Ok(_) => println!("  Migrations complete."),
                         Err(e) => println!("  Migration warning: {:?}", e),
                     }
                 }
 
                 // Apply remote functions
                 if let Some(sched_url) = result["scheduler_url"].as_str() {
+                    let surreal_client = if db_password.is_empty() {
+                        crate::surreal_client::SurrealClient::new_unauthenticated(
+                            &surreal_url, &resolved.namespace, &resolved.database,
+                        )
+                    } else {
+                        crate::surreal_client::SurrealClient::new(
+                            &surreal_url, &resolved.namespace, &resolved.database,
+                            "root", db_password,
+                        )
+                    };
                     let mode = config.mode.clone().unwrap_or_default();
                     let functions_sql = crate::schema_builder::build_remote_functions_schema(
                         &mode, sched_url, "",
