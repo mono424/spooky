@@ -33,22 +33,20 @@ export class CrdtField {
   private logger: Logger | null;
 
   private _onCursorUpdate: ((data: Uint8Array) => void) | null = null;
-  private pendingCursorUpdates: Uint8Array[] = [];
+  private pendingCursorUpdate: Uint8Array | null = null;
 
   /** Callback set by the editor to receive remote cursor updates.
    *  Any cursor data that arrived before this callback was set will be replayed. */
   set onCursorUpdate(cb: ((data: Uint8Array) => void) | null) {
     this._onCursorUpdate = cb;
-    if (cb && this.pendingCursorUpdates.length > 0) {
-      for (const data of this.pendingCursorUpdates) {
-        try { cb(data); } catch (e) {
-          this.logger?.warn(
-            { error: e, Category: 'sp00ky-client::CrdtField::onCursorUpdate' },
-            'Failed to replay pending cursor update'
-          );
-        }
+    if (cb && this.pendingCursorUpdate) {
+      try { cb(this.pendingCursorUpdate); } catch (e) {
+        this.logger?.warn(
+          { error: e, Category: 'sp00ky-client::CrdtField::onCursorUpdate' },
+          'Failed to replay pending cursor update'
+        );
       }
-      this.pendingCursorUpdates = [];
+      this.pendingCursorUpdate = null;
     }
   }
 
@@ -57,7 +55,6 @@ export class CrdtField {
   constructor(
     private fieldName: string,
     initialState?: string,
-    _fallbackText?: string,
     logger?: Logger | null,
   ) {
     this.logger = logger ?? null;
@@ -66,8 +63,6 @@ export class CrdtField {
       this.doc.import(decodeBase64(initialState));
       this.loadedFromCrdt = true;
     }
-    // fallbackText is NOT loaded into the LoroDoc here —
-    // the editor handles it via the content prop + reconfigure() pattern
   }
 
   getDoc(): LoroDoc { return this.doc; }
@@ -135,7 +130,8 @@ export class CrdtField {
       if (this._onCursorUpdate) {
         this._onCursorUpdate(data);
       } else {
-        this.pendingCursorUpdates.push(data);
+        // Only keep the latest cursor state — older positions are useless
+        this.pendingCursorUpdate = data;
       }
     } catch (e) {
       this.logger?.warn(

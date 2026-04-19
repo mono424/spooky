@@ -116,7 +116,9 @@ export function CollaborativeEditor(props: CollaborativeEditorProps) {
           plugins: [...editorRef.view.state.plugins, cursorPlugin],
         });
         editorRef.view.updateState(state);
-      } catch {}
+      } catch (e) {
+        console.warn('[CollaborativeEditor] Failed to add cursor plugin:', e);
+      }
 
       // Sync cursor state: push local cursor changes to _00_crdt as "_cursor" field
       cursorUnsub = presenceRef.subscribeBy((by) => {
@@ -129,7 +131,9 @@ export function CollaborativeEditor(props: CollaborativeEditorProps) {
 
       // Import remote cursor state when it arrives
       crdtField.onCursorUpdate = (data: Uint8Array) => {
-        try { presenceRef.apply(data); } catch {}
+        try { presenceRef.apply(data); } catch (e) {
+          console.warn('[CollaborativeEditor] Failed to apply remote cursor:', e);
+        }
       };
     }, 200);
   });

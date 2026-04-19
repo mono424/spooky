@@ -48,7 +48,24 @@ const currentPath = Astro.url.pathname;
                   ]}
                 >
                   {isActive && <span class="w-1.5 h-1.5 bg-white rounded-full" />}
-                  {link.text}
+                  <span>{link.text}</span>
+                  {link.experimental && (
+                    <svg
+                      class="ml-auto w-3.5 h-3.5 text-amber-300 shrink-0"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      viewBox="0 0 24 24"
+                      aria-label="Experimental"
+                    >
+                      <title>Experimental</title>
+                      <path d="M9 3h6" />
+                      <path d="M10 3v6.5L4.5 19a2 2 0 0 0 1.7 3h11.6a2 2 0 0 0 1.7-3L14 9.5V3" />
+                      <path d="M7 14h10" />
+                    </svg>
+                  )}
                 </a>
               </li>
             );

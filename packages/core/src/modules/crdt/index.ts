@@ -65,7 +65,7 @@ export class CrdtManager {
       );
     }
 
-    crdtField = new CrdtField(field, initialCrdtState, fallbackText, this.logger);
+    crdtField = new CrdtField(field, initialCrdtState, this.logger);
     crdtField.startSync(this.remote, recordId);
     this.fields.set(key, crdtField);
 
@@ -87,8 +87,9 @@ export class CrdtManager {
       this.fields.delete(key);
     }
 
+    const prefix = `${table}:${recordId}:`;
     const hasOtherFields = Array.from(this.fields.keys()).some(
-      (k) => k !== key && k.includes(recordId)
+      (k) => k !== key && k.startsWith(prefix)
     );
     if (!hasOtherFields) {
       this.killLiveSelect(recordId);
@@ -105,7 +106,9 @@ export class CrdtManager {
       field.stopSync();
     }
     this.fields.clear();
-    this.liveQueries.clear();
+    for (const recordId of this.liveQueries.keys()) {
+      this.killLiveSelect(recordId);
+    }
   }
 
   private async ensureLiveSelect(table: string, recordId: string): Promise<void> {
@@ -113,7 +116,8 @@ export class CrdtManager {
 
     try {
       const [uuid] = await this.remote.query<[Uuid]>(
-        `LIVE SELECT * FROM _00_crdt WHERE record_id = ${recordId}`,
+        `LIVE SELECT * FROM _00_crdt WHERE record_id = $rid`,
+        { rid: parseRecordIdString(recordId) },
       );
 
       this.liveQueries.set(recordId, { uuid, table });

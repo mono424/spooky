@@ -301,7 +301,6 @@ export function ThreadDetail() {
                         </Show>
 
                         {/* Editable Title (CRDT) */}
-                        {/* Editable Title */}
                         <Show
                           when={titleCrdtField()}
                           fallback={
