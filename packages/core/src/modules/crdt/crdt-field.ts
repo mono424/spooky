@@ -1,6 +1,24 @@
 import { LoroDoc } from 'loro-crdt';
 import type { RemoteDatabaseService } from '../../services/database/index';
+import type { Logger } from '../../services/logger/index';
 import { parseRecordIdString } from '../../utils/index';
+
+// ==================== CURSOR UTILITIES ====================
+
+export const CURSOR_COLORS = [
+  '#3b82f6', '#ef4444', '#22c55e', '#f59e0b',
+  '#8b5cf6', '#ec4899', '#14b8a6', '#f97316',
+];
+
+export function cursorColorFromName(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
+  }
+  return CURSOR_COLORS[Math.abs(hash) % CURSOR_COLORS.length];
+}
+
+// ==================== CRDT FIELD ====================
 
 export class CrdtField {
   private doc: LoroDoc;
@@ -8,12 +26,41 @@ export class CrdtField {
   private remote: RemoteDatabaseService | null = null;
   private recordId: string | null = null;
   private unsubscribe: (() => void) | null = null;
-  /** Timestamp of the last push — imports within 500ms are suppressed (echo) */
   private lastPushTime = 0;
-
+  private lastCursorPushTime = 0;
   private loadedFromCrdt = false;
+  private pushRetryCount = 0;
+  private logger: Logger | null;
 
-  constructor(private fieldName: string, initialState?: string, _fallbackText?: string) {
+  private _onCursorUpdate: ((data: Uint8Array) => void) | null = null;
+  private pendingCursorUpdates: Uint8Array[] = [];
+
+  /** Callback set by the editor to receive remote cursor updates.
+   *  Any cursor data that arrived before this callback was set will be replayed. */
+  set onCursorUpdate(cb: ((data: Uint8Array) => void) | null) {
+    this._onCursorUpdate = cb;
+    if (cb && this.pendingCursorUpdates.length > 0) {
+      for (const data of this.pendingCursorUpdates) {
+        try { cb(data); } catch (e) {
+          this.logger?.warn(
+            { error: e, Category: 'sp00ky-client::CrdtField::onCursorUpdate' },
+            'Failed to replay pending cursor update'
+          );
+        }
+      }
+      this.pendingCursorUpdates = [];
+    }
+  }
+
+  get onCursorUpdate() { return this._onCursorUpdate; }
+
+  constructor(
+    private fieldName: string,
+    initialState?: string,
+    _fallbackText?: string,
+    logger?: Logger | null,
+  ) {
+    this.logger = logger ?? null;
     this.doc = new LoroDoc();
     if (initialState) {
       this.doc.import(decodeBase64(initialState));
@@ -47,11 +94,55 @@ export class CrdtField {
   importRemote(base64State: string): void {
     // Suppress echo: skip imports within 500ms of our own push
     if (Date.now() - this.lastPushTime < 500) return;
-    try { this.doc.import(decodeBase64(base64State)); } catch {}
+    try {
+      this.doc.import(decodeBase64(base64State));
+    } catch (e) {
+      this.logger?.warn(
+        { error: e, Category: 'sp00ky-client::CrdtField::importRemote' },
+        'Failed to import remote CRDT state'
+      );
+    }
   }
 
   exportSnapshot(): string {
     return encodeBase64(this.doc.export({ mode: 'snapshot' }));
+  }
+
+  /** Push cursor ephemeral state to _00_crdt as a "_cursor_<fieldName>" entry */
+  async pushCursorState(encoded: Uint8Array): Promise<void> {
+    if (!this.remote || !this.recordId) return;
+    this.lastCursorPushTime = Date.now();
+    try {
+      const state = encodeBase64(encoded);
+      await this.remote.query(
+        `INSERT INTO _00_crdt (record_id, field, state) VALUES ($rid, $field, $state)
+         ON DUPLICATE KEY UPDATE state = $state`,
+        { rid: parseRecordIdString(this.recordId), field: `_cursor_${this.fieldName}`, state }
+      );
+    } catch (e) {
+      this.logger?.warn(
+        { error: e, Category: 'sp00ky-client::CrdtField::pushCursorState' },
+        'Failed to push cursor state'
+      );
+    }
+  }
+
+  /** Import remote cursor state (called by CrdtManager from LIVE SELECT) */
+  importRemoteCursor(base64State: string): void {
+    if (Date.now() - this.lastCursorPushTime < 300) return; // echo suppression
+    try {
+      const data = decodeBase64(base64State);
+      if (this._onCursorUpdate) {
+        this._onCursorUpdate(data);
+      } else {
+        this.pendingCursorUpdates.push(data);
+      }
+    } catch (e) {
+      this.logger?.warn(
+        { error: e, Category: 'sp00ky-client::CrdtField::importRemoteCursor' },
+        'Failed to apply remote cursor data'
+      );
+    }
   }
 
   private schedulePush(): void {
@@ -68,7 +159,17 @@ export class CrdtField {
          ON DUPLICATE KEY UPDATE state = $state`,
         { rid: parseRecordIdString(this.recordId), field: this.fieldName, state: this.exportSnapshot() }
       );
-    } catch {}
+      this.pushRetryCount = 0;
+    } catch (e) {
+      this.logger?.warn(
+        { error: e, Category: 'sp00ky-client::CrdtField::pushToRemote' },
+        'Failed to push CRDT state to remote'
+      );
+      if (this.pushRetryCount < 2) {
+        this.pushRetryCount++;
+        this.schedulePush();
+      }
+    }
   }
 }
 

@@ -317,6 +317,7 @@ export function ThreadDetail() {
                               editable={isAuthor()}
                               singleLine
 
+                              username={auth.user()?.username}
                               onUpdate={(text) => handleTitleChange(text)}
                             />
                           )}
@@ -380,7 +381,7 @@ export function ThreadDetail() {
                               placeholder="Write something..."
                               class="text-[15px] text-zinc-300 focus-within:text-white leading-relaxed min-h-[120px] [&_.ProseMirror]:outline-none [&_.ProseMirror]:min-h-[120px]"
                               editable={isAuthor()}
-
+                              username={auth.user()?.username}
                               onUpdate={(text) => handleContentChange(text)}
                             />
                           )}

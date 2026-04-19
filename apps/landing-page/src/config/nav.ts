@@ -17,6 +17,7 @@ export const docsNav = [
       { text: 'Mutate Data', href: `${basePath}/docs/mutate-data` },
       { text: 'Migrations', href: `${basePath}/docs/migrations` },
       { text: 'File Buckets', href: `${basePath}/docs/buckets` },
+      { text: 'CRDT Fields', href: `${basePath}/docs/crdt` },
     ],
   },
   {

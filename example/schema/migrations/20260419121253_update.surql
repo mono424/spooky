@@ -1,0 +1,9 @@
+-- Migration: update
+-- Created: 2026-04-19T12:12:54.528245+00:00
+
+-- Added
+DEFINE TABLE OVERWRITE _00_crdt TYPE ANY SCHEMALESS PERMISSIONS FOR select, create, update, delete WHERE true;
+DEFINE FIELD OVERWRITE field ON _00_crdt TYPE string PERMISSIONS FULL;
+DEFINE FIELD OVERWRITE record_id ON _00_crdt TYPE record PERMISSIONS FULL;
+DEFINE FIELD OVERWRITE state ON _00_crdt TYPE none | string PERMISSIONS FULL;
+DEFINE INDEX OVERWRITE idx_record_field ON _00_crdt FIELDS record_id, field UNIQUE;

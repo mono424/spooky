@@ -5,7 +5,7 @@ import type { Uuid } from 'surrealdb';
 import { CrdtField } from './crdt-field';
 import { parseRecordIdString } from '../../utils/index';
 
-export { CrdtField } from './crdt-field';
+export { CrdtField, cursorColorFromName, CURSOR_COLORS } from './crdt-field';
 
 /**
  * CrdtManager manages active CrdtField instances and their sync channels.
@@ -65,7 +65,7 @@ export class CrdtManager {
       );
     }
 
-    crdtField = new CrdtField(field, initialCrdtState, fallbackText);
+    crdtField = new CrdtField(field, initialCrdtState, fallbackText, this.logger);
     crdtField.startSync(this.remote, recordId);
     this.fields.set(key, crdtField);
 
@@ -128,13 +128,21 @@ export class CrdtManager {
 
           if (!fieldName || !state) return;
 
+          // Route cursor updates to the corresponding CrdtField
+          if (fieldName.startsWith('_cursor_')) {
+            const actualField = fieldName.slice('_cursor_'.length);
+            const key = this.makeKey(table, recordId, actualField);
+            const crdtField = this.fields.get(key);
+            if (crdtField) {
+              crdtField.importRemoteCursor(state);
+            }
+            return;
+          }
+
+          // Route document updates
           const key = this.makeKey(table, recordId, fieldName);
           const crdtField = this.fields.get(key);
           if (crdtField) {
-            this.logger.debug(
-              { recordId, field: fieldName, action: message.action, Category: 'sp00ky-client::CrdtManager::liveSelect' },
-              'LIVE SELECT delivered CRDT update'
-            );
             crdtField.importRemote(state);
           }
         }

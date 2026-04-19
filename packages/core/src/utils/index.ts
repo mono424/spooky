@@ -137,6 +137,18 @@ export async function fileToUint8Array(file: File | Blob): Promise<Uint8Array> {
   return new Uint8Array(buffer);
 }
 
+// ==================== TEXT UTILITIES ====================
+
+/**
+ * Convert plain text to simple HTML paragraphs.
+ * Useful for seeding a rich-text editor (e.g. TipTap/ProseMirror) with fallback content.
+ */
+export function textToHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .split('\n').map((l) => `<p>${l || '<br>'}</p>`).join('');
+}
+
 // ==================== DATABASE UTILITIES ====================
 
 /**
