@@ -17,6 +17,8 @@
 [![license](https://img.shields.io/github/license/mono424/sp00ky)](https://github.com/mono424/sp00ky)
 [![stars](https://img.shields.io/github/stars/mono424/sp00ky)](https://github.com/mono424/sp00ky/stargazers)
 [![last commit](https://img.shields.io/github/last-commit/mono424/sp00ky)](https://github.com/mono424/sp00ky/commits/main)
+[![Docker SSP](https://img.shields.io/docker/v/mono424/spooky-ssp?label=spooky-ssp&logo=docker&logoColor=white&color=2496ED)](https://hub.docker.com/r/mono424/spooky-ssp)
+[![Docker Scheduler](https://img.shields.io/docker/v/mono424/spooky-scheduler?label=spooky-scheduler&logo=docker&logoColor=white&color=2496ED)](https://hub.docker.com/r/mono424/spooky-scheduler)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![SurrealDB](https://img.shields.io/badge/SurrealDB-FF00A0?logo=surrealdb&logoColor=white)](https://surrealdb.com/)
 
@@ -70,6 +72,8 @@ const ThreadList = () => {
 | [`@spooky-sync/client-solid`](https://www.npmjs.com/package/@spooky-sync/client-solid)   | SolidJS bindings (`useQuery`, etc.)                |
 | [`@spooky-sync/query-builder`](https://www.npmjs.com/package/@spooky-sync/query-builder) | Type-safe query builder                            |
 | [`@spooky-sync/cli`](https://www.npmjs.com/package/@spooky-sync/cli)                     | CLI for schema generation                          |
+| [`mono424/spooky-ssp`](https://hub.docker.com/r/mono424/spooky-ssp)                     | SSP sidecar (Docker)                               |
+| [`mono424/spooky-scheduler`](https://hub.docker.com/r/mono424/spooky-scheduler)          | Scheduler service (Docker)                         |
 
 ## Example App
 
