@@ -468,6 +468,9 @@ export class DataModule<S extends SchemaStructure> {
     const params = parseParams(tableSchema.columns, data);
     const mutationId = parseRecordIdString(`_00_pending_mutations:${Date.now()}`);
 
+    // Note: CRDT state is pushed directly to the _00_crdt table by CrdtField.pushToRemote(),
+    // NOT through the record update pipeline. This keeps the record data clean.
+
     // Capture current record state before mutation for rollback support
     const [beforeRecord] = await withRetry(this.logger, () =>
       this.local.query<[Record<string, any>]>('SELECT * FROM ONLY $id', { id: rid })

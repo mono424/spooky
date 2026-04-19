@@ -34,6 +34,7 @@ import { AuthService } from './modules/auth/index';
 import { StreamProcessorService } from './services/stream-processor/index';
 import { EventSystem } from './events/index';
 import { CacheModule } from './modules/cache/index';
+import { CrdtManager, CrdtField } from './modules/crdt/index';
 import { LocalStoragePersistenceClient } from './services/persistence/localstorage';
 import { generateId, parseParams } from './utils/index';
 import { SurrealDBPersistenceClient } from './services/persistence/surrealdb';
@@ -90,6 +91,7 @@ export class Sp00kyClient<S extends SchemaStructure> {
   private dataModule: DataModule<S>;
   private sync: Sp00kySync<S>;
   private devTools: DevToolsService;
+  private crdtManager: CrdtManager;
 
   private logger: ReturnType<typeof createLogger>;
   public auth: AuthService<S>;
@@ -153,6 +155,9 @@ export class Sp00kyClient<S extends SchemaStructure> {
       },
       logger
     );
+
+    // Initialize CRDT Manager (needs remote for _00_crdt LIVE SELECT)
+    this.crdtManager = new CrdtManager(this.config.schema, this.remote, logger);
 
     this.dataModule = new DataModule(
       this.cache,
@@ -275,12 +280,34 @@ export class Sp00kyClient<S extends SchemaStructure> {
   }
 
   async close() {
+    this.crdtManager.closeAll();
     await this.local.close();
     await this.remote.close();
   }
 
   authenticate(token: string) {
     return this.remote.getClient().authenticate(token);
+  }
+
+  /**
+   * Open a CRDT field for collaborative editing.
+   * Returns a CrdtField with a LoroDoc that can be bound to any editor.
+   * Also starts a LIVE SELECT on _00_crdt for real-time sync.
+   */
+  async openCrdtField(
+    table: string,
+    recordId: string,
+    field: string,
+    fallbackText?: string,
+  ): Promise<CrdtField> {
+    return this.crdtManager.open(table, recordId, field, fallbackText);
+  }
+
+  /**
+   * Close a CRDT field when editing is done.
+   */
+  closeCrdtField(table: string, recordId: string, field: string): void {
+    this.crdtManager.close(table, recordId, field);
   }
 
   deauthenticate() {

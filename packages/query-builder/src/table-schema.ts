@@ -6,11 +6,17 @@ export type ValueType = 'string' | 'number' | 'boolean' | 'null' | 'json';
 /**
  * Column metadata defining the type and optionality of a field
  */
+/**
+ * CRDT types supported by Sp00ky's Loro integration
+ */
+export type CrdtType = 'text' | 'map' | 'list' | 'counter';
+
 export interface ColumnSchema {
   readonly type: ValueType;
   readonly optional: boolean;
   readonly dateTime?: boolean;
   readonly recordId?: boolean;
+  readonly crdt?: CrdtType;
 }
 
 /**

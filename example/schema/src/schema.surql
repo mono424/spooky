@@ -55,9 +55,11 @@ DEFINE TABLE thread SCHEMAFULL
     FOR update, delete, create WHERE $access = "account" AND author.id = $auth.id
 ;
 
+-- @crdt text
 DEFINE FIELD title ON TABLE thread TYPE string
     ASSERT $value != NONE AND string::len($value) > 0 AND string::len($value) <= 200;
 
+-- @crdt text
 DEFINE FIELD content ON TABLE thread TYPE string
     ASSERT $value != NONE AND string::len($value) > 0;
 

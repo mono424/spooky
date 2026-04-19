@@ -4,7 +4,7 @@ title: File Buckets
 ---
 
 import CodeBlock from '../../components/ui/CodeBlock.astro';
-import Warning from '../../components/ui/Warning.astro';
+import Experimental from '../../components/ui/Experimental.astro';
 import Note from '../../components/ui/Note.astro';
 
 export const code10 = `DEFINE BUCKET IF NOT EXISTS profile_pictures BACKEND "memory"
@@ -127,9 +127,9 @@ export const code1 = `// With path isolation enabled, uploading to "avatar.jpg"
 // actually stores the file at "<user_id>/avatar.jpg"
 await upload('avatar.jpg', file);`;
 
-<Warning title="Experimental">
-  File Buckets are an experimental feature. The API surface may change in future releases. Currently only the **memory** backend is supported — files are not persisted across server restarts.
-</Warning>
+<Experimental>
+  File Buckets are experimental. The API may change in future releases. Currently only the **memory** backend is supported, so files are not persisted across server restarts.
+</Experimental>
 
 Buckets provide a type-safe file storage abstraction for uploading, downloading, and managing files in your Sp00ky application. They integrate directly with your SurrealDB schema for permission control and with the Sp00ky CLI for guided setup.
 

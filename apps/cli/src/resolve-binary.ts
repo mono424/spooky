@@ -40,10 +40,15 @@ export function findBinary(): string {
     return platformBinary;
   }
 
-  // 2. Local dev build (from dist/ -> ../target/release/)
-  const devPath = resolve(__dirname, '../target/release', binaryName);
-  if (existsSync(devPath)) {
-    return devPath;
+  // 2. Local dev build (from dist/ -> ../target/release/ or ../target/debug/)
+  const releasePath = resolve(__dirname, '../target/release', binaryName);
+  if (existsSync(releasePath)) {
+    return releasePath;
+  }
+
+  const debugPath = resolve(__dirname, '../target/debug', binaryName);
+  if (existsSync(debugPath)) {
+    return debugPath;
   }
 
   // 3. Legacy fallback (binary next to dist/)
@@ -67,7 +72,8 @@ export function findBinary(): string {
   throw new Error(
     `Could not find spky binary. Checked paths:\n` +
       `  - Platform package (${pkg ?? 'none'})\n` +
-      `  - ${devPath}\n` +
+      `  - ${releasePath}\n` +
+      `  - ${debugPath}\n` +
       `  - ${legacyPath}\n` +
       `  - ${cwdPath}\n` +
       hint

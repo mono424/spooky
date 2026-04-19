@@ -1,0 +1,23 @@
+---
+const { title = 'Experimental' } = Astro.props;
+---
+
+<div
+  class="relative overflow-hidden rounded-lg border border-amber-400/20 bg-amber-400/5 p-4 my-6 flex items-start gap-3 backdrop-blur-sm"
+>
+  {/* Icon - Amber (Lab Flask) */}
+  <div class="shrink-0 text-amber-300 mt-0.5">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-5 h-5">
+      <path
+        fill-rule="evenodd"
+        d="M10 2a.75.75 0 0 0 0 1.5h.5V8.13a.75.75 0 0 0-.18.49l-4.5 8.25A2.25 2.25 0 0 0 7.787 20h8.426a2.25 2.25 0 0 0 1.968-3.13l-4.5-8.25a.75.75 0 0 0-.181-.49V3.5h.5a.75.75 0 0 0 0-1.5h-4Zm1.25 1.5h1.5V8.5a.75.75 0 0 0 .13.42L15.93 15H8.07l3.05-6.08a.75.75 0 0 0 .13-.42V3.5Z"
+        clip-rule="evenodd"
+      />
+    </svg>
+  </div>
+
+  <div class="text-amber-200/70 text-sm leading-relaxed">
+    <strong class="block text-amber-300 mb-1 text-sm font-medium">{title}</strong>
+    <slot />
+  </div>
+</div>

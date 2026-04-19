@@ -325,10 +325,15 @@ impl CodeGenerator {
 
                                 let mut flags = Vec::new();
                                 if is_record_id {
-                                    flags.push("recordId: true");
+                                    flags.push("recordId: true".to_string());
                                 }
                                 if is_datetime {
-                                    flags.push("dateTime: true");
+                                    flags.push("dateTime: true".to_string());
+                                }
+                                if let Some(crdt) = col_def.get("x-crdt").and_then(|v| v.as_str()) {
+                                    if !crdt.is_empty() {
+                                        flags.push(format!("crdt: '{}' as const", crdt));
+                                    }
                                 }
 
                                 if flags.is_empty() {

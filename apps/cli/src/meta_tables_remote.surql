@@ -76,3 +76,15 @@ DEFINE TABLE OVERWRITE _00_version SCHEMALESS
 DEFINE FIELD OVERWRITE record_id ON TABLE _00_version TYPE record;
 DEFINE FIELD OVERWRITE version ON TABLE _00_version TYPE int;
 DEFINE INDEX OVERWRITE idx_record_id ON TABLE _00_version COLUMNS record_id UNIQUE;
+
+-- ==================================================
+-- SPOOKY CRDT
+-- Stores per-field CRDT state for collaborative editing.
+-- One row per record+field combination.
+-- ==================================================
+DEFINE TABLE OVERWRITE _00_crdt SCHEMALESS
+    PERMISSIONS FOR select, create, update, delete WHERE true;
+DEFINE FIELD OVERWRITE record_id ON TABLE _00_crdt TYPE record;
+DEFINE FIELD OVERWRITE field ON TABLE _00_crdt TYPE string;
+DEFINE FIELD OVERWRITE state ON TABLE _00_crdt TYPE option<string>;
+DEFINE INDEX OVERWRITE idx_record_field ON TABLE _00_crdt COLUMNS record_id, field UNIQUE;

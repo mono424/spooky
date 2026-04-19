@@ -1,9 +1,11 @@
 import { defineConfig } from 'vite';
 import solid from 'vite-plugin-solid';
+import wasm from 'vite-plugin-wasm';
+import topLevelAwait from 'vite-plugin-top-level-await';
 import path from 'path';
 
 export default defineConfig({
-  plugins: [solid()],
+  plugins: [solid(), wasm(), topLevelAwait()],
   resolve: {
     alias: {
       '@spooky-sync/client-solid': path.resolve(__dirname, '../../packages/client-solid/src/index.ts'),

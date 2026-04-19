@@ -353,6 +353,13 @@ impl JsonSchemaGenerator {
                 field_obj.insert("x-is-datetime".to_string(), Value::Bool(true));
             }
 
+            // Add annotation metadata (e.g., x-crdt from -- @crdt text)
+            for ann in &field_def.annotations {
+                let key = format!("x-{}", ann.name);
+                let val = ann.value.clone().unwrap_or_default();
+                field_obj.insert(key, Value::String(val));
+            }
+
             properties.insert(field_name.clone(), Value::Object(field_obj));
 
             // Determine if field is required

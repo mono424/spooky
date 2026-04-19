@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 
+use crate::annotations::FieldAnnotation;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
@@ -52,6 +53,8 @@ pub struct FieldDefinition {
     pub is_record_id: bool,
     pub select_permission: Option<String>,
     pub should_strip: bool, // True if field should be excluded from client
+    #[serde(skip)]
+    pub annotations: Vec<FieldAnnotation>, // Parsed from -- @name value comments
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -355,6 +358,7 @@ impl SchemaParser {
                     is_record_id,
                     select_permission: select_permission.clone(),
                     should_strip,
+                    annotations: Vec::new(),
                 };
 
                 if let Some(table) = self.tables.get_mut(&table_name) {
@@ -542,6 +546,7 @@ impl SchemaParser {
                     is_record_id: false,
                     select_permission: None,
                     should_strip: false,
+                    annotations: Vec::new(),
                 },
             );
         }

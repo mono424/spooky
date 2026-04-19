@@ -171,7 +171,8 @@ pub fn generate_sp00ky_events(
         events.push_str("WHEN $event = \"DELETE\"\nTHEN {\n");
 
         // --- Versioning Logic ---
-        events.push_str("    DELETE _00_version WHERE record_id = $before.id;\n\n");
+        events.push_str("    DELETE _00_version WHERE record_id = $before.id;\n");
+        events.push_str("    DELETE _00_crdt WHERE record_id = $before.id;\n\n");
 
         // --- Ingestion Logic ---
         events.push_str("    LET $plain_before = {\n");

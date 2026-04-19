@@ -2,7 +2,7 @@
   "name": "ssp-wasm",
   "type": "module",
   "description": "WASM bindings for ssp",
-  "version": "0.1.0",
+  "version": "0.0.1-canary.53",
   "license": "MIT",
   "files": [
     "ssp_wasm_bg.wasm",

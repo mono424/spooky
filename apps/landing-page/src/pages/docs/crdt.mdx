@@ -1,0 +1,200 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: CRDT Fields
+---
+
+import CodeBlock from '../../components/ui/CodeBlock.astro';
+import Experimental from '../../components/ui/Experimental.astro';
+import Note from '../../components/ui/Note.astro';
+import PropTable from '../../components/ui/PropTable.astro';
+
+export const schemaCode = `-- @crdt text
+DEFINE FIELD title ON TABLE thread TYPE string
+    ASSERT $value != NONE AND string::len($value) > 0;
+
+-- @crdt text
+DEFINE FIELD content ON TABLE thread TYPE string
+    ASSERT $value != NONE AND string::len($value) > 0;`;
+
+export const hookCode = `const titleField = useCrdtField(
+  'thread',
+  () => thread()?.id,    // reactive record ID
+  'title',
+  () => thread()?.title  // fallback for pre-CRDT records
+);`;
+
+export const tiptapCode = `import { onMount, onCleanup } from 'solid-js';
+import { Editor, Extension } from '@tiptap/core';
+import StarterKit from '@tiptap/starter-kit';
+import { LoroSyncPlugin, LoroUndoPlugin, undo, redo } from 'loro-prosemirror';
+import { textToHtml, type CrdtField } from '@spooky-sync/core';
+import { keymap } from '@tiptap/pm/keymap';
+
+export function CollaborativeEditor(props: { field: CrdtField; content?: string }) {
+  let ref: HTMLDivElement | undefined;
+  let editor: Editor | undefined;
+
+  onMount(() => {
+    const doc = props.field.getDoc();
+
+    editor = new Editor({
+      element: ref,
+      extensions: [
+        StarterKit.configure({ history: false }), // Loro handles undo
+        Extension.create({
+          name: 'loroSync',
+          addProseMirrorPlugins: () => [
+            LoroSyncPlugin({ doc }),
+            LoroUndoPlugin({ doc }),
+            keymap({ 'Mod-z': undo, 'Mod-y': redo, 'Mod-Shift-z': redo }),
+          ],
+        }),
+      ],
+    });
+
+    // Seed the doc for records that existed before CRDT was enabled
+    if (!props.field.hasContent() && props.content) {
+      editor.commands.setContent(textToHtml(props.content));
+    }
+  });
+
+  onCleanup(() => editor?.destroy());
+  return <div ref={ref} />;
+}`;
+
+export const providerCode = `import { Sp00kyProvider } from '@spooky-sync/client-solid';
+import { dbConfig } from './db';
+
+<Sp00kyProvider config={dbConfig}>
+  {/* useCrdtField must be called inside this provider */}
+</Sp00kyProvider>`;
+
+export const apiCode = `import type { CrdtField } from '@spooky-sync/core';
+
+const field: CrdtField = titleField();
+
+field.getDoc();                // LoroDoc - the underlying Loro document
+field.hasContent();            // boolean - true once saved CRDT state has loaded
+field.pushCursorState(bytes);  // Promise<void> - broadcast local cursor
+field.onCursorUpdate = (data) => { /* remote cursor bytes */ };`;
+
+export const helpersCode = `import { cursorColorFromName, CURSOR_COLORS, textToHtml } from '@spooky-sync/core';
+
+const color = cursorColorFromName('ada');  // deterministic per-user color
+const html = textToHtml('hello\\nworld');  // plain text -> HTML paragraphs`;
+
+<Experimental>
+  CRDT Fields are experimental. The API may change between canary releases. Only `text` has a built-in editor today.
+</Experimental>
+
+Two users. Same thread. Both typing at the same time.
+
+With a normal database, somebody's changes get silently overwritten. Locking makes the UX terrible. Server-side merging is a nightmare for character-level edits.
+
+**CRDTs fix this.** A Conflict-free Replicated Data Type guarantees that any two replicas merge automatically, no matter what order edits arrive in. No central authority. No conflicts. Every peer converges on the same result.
+
+Sp00ky uses [Loro](https://loro.dev) under the hood. You add a comment to your schema, and you get real-time collaborative editing with cursor presence. That's it.
+
+## 1. Annotate your schema
+
+Add `-- @crdt text` above any field:
+
+<CodeBlock
+  code={schemaCode}
+  lang="sql"
+/>
+
+Then run `spky` to regenerate.
+
+| Type | What it does |
+|---|---|
+| `text` | Character-level text merging with full editor support |
+| `map` | Key/value with last-write-wins per key |
+| `list` | Ordered collections with stable insertion |
+| `counter` | Monotonic numeric counters |
+
+<Note>
+  SurrealDB ignores the comment. Sp00ky's parser picks it up and wires everything for you.
+</Note>
+
+## 2. Get the CrdtField
+
+`useCrdtField` gives you a reactive `CrdtField`. It loads existing CRDT state, starts syncing, and rebinds when the record ID changes.
+
+<CodeBlock
+  code={hookCode}
+  lang="typescript"
+/>
+
+<PropTable props={[
+  { name: 'table', type: 'string', default: '-', desc: 'Table name' },
+  { name: 'recordIdAccessor', type: '() => string | undefined', default: '-', desc: 'Reactive getter for the record ID. Hook rebinds when it changes.' },
+  { name: 'field', type: 'string', default: '-', desc: 'The CRDT-enabled field name' },
+  { name: 'fallbackAccessor', type: '() => string | undefined', default: '-', desc: 'Current plain text value. Seeds the editor for pre-CRDT records.' },
+]} />
+
+<Note>
+  Must live inside a `<Sp00kyProvider>`.
+</Note>
+
+<CodeBlock
+  code={providerCode}
+  lang="typescript"
+/>
+
+## 3. Pick an editor
+
+`CrdtField.getDoc()` returns a standard [Loro](https://loro.dev) `LoroDoc`. Loro ships ProseMirror plugins via [`loro-prosemirror`](https://www.npmjs.com/package/loro-prosemirror), so any editor built on ProseMirror works out of the box:
+
+| Editor | Why pick it |
+|---|---|
+| [TipTap](https://tiptap.dev) | Most popular. Headless, extensible, great DX. |
+| [Milkdown](https://milkdown.dev) | Plugin-driven Markdown editor on ProseMirror. |
+| [Novel](https://novel.sh) | Notion-style block editor. |
+| [ProseMirror](https://prosemirror.net) | Full control, no abstractions. |
+
+Not using ProseMirror? You can still use the `LoroDoc` directly with any editor that supports external state. Call `doc.getText('field')` to read, subscribe to changes, and import/export snapshots yourself.
+
+### TipTap example
+
+Here's a minimal collaborative editor using TipTap + Loro. Disable TipTap's built-in history and let `LoroUndoPlugin` handle undo/redo so it works correctly across peers.
+
+<CodeBlock
+  code={tiptapCode}
+  lang="typescript"
+/>
+
+For a full-featured version with cursor presence, single-line mode, and placeholder support, see [`CollaborativeEditor.tsx`](https://github.com/piesocket/sp00ky/blob/main/example/app-solid/src/components/CollaborativeEditor.tsx) in the example app.
+
+## 4. Go deeper (optional)
+
+Building a custom editor, or wiring `map`/`list`/`counter`? Use the `CrdtField` API directly:
+
+<CodeBlock
+  code={apiCode}
+  lang="typescript"
+/>
+
+`getDoc()` gives you a standard `LoroDoc`. Plug in any Loro-compatible binding.
+
+For cursor presence in a custom editor:
+- **Push:** Call `pushCursorState(encoded)` when the local cursor moves
+- **Receive:** Set `field.onCursorUpdate = (data) => { ... }` to get remote cursors. The latest pending update is replayed when you attach the callback.
+
+### Helpers
+
+<CodeBlock
+  code={helpersCode}
+  lang="typescript"
+/>
+
+## Under the hood
+
+CRDT state lives in a `_00_crdt` sidecar table, completely separate from your records. When `useCrdtField` mounts it loads existing state, opens a `LIVE SELECT` to stream updates, and pushes local changes back (debounced at 300ms). Cursors ride the same channel under `_cursor_<field>` keys. Failed pushes retry twice before logging. Works with any backend that supports live queries.
+
+## Limitations
+
+- **Text only** for now. `map`/`list`/`counter` need manual `LoroDoc` wiring.
+- **SolidJS only.** Flutter and Vanilla don't have `useCrdtField` yet.
+- **Needs live queries.** Without `LIVE SELECT`, edits reconcile on reload.
+- **API may change** while experimental.
