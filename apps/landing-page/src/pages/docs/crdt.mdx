@@ -84,7 +84,7 @@ const color = cursorColorFromName('ada');  // deterministic per-user color
 const html = textToHtml('hello\\nworld');  // plain text -> HTML paragraphs`;
 
 <Experimental>
-  CRDT Fields are experimental. The API may change between canary releases. Only `text` has a built-in editor today.
+  CRDT Fields are experimental. The API may change between canary releases.
 </Experimental>
 
 Two users. Same thread. Both typing at the same time.
@@ -164,7 +164,7 @@ Here's a minimal collaborative editor using TipTap + Loro. Disable TipTap's buil
   lang="typescript"
 />
 
-For a full-featured version with cursor presence, single-line mode, and placeholder support, see [`CollaborativeEditor.tsx`](https://github.com/piesocket/sp00ky/blob/main/example/app-solid/src/components/CollaborativeEditor.tsx) in the example app.
+For a full-featured version with cursor presence, single-line mode, and placeholder support, see [`CollaborativeEditor.tsx`](https://github.com/mono424/sp00ky/blob/main/example/app-solid/src/components/CollaborativeEditor.tsx) in the example app.
 
 ## 4. Go deeper (optional)
 
@@ -194,7 +194,7 @@ CRDT state lives in a `_00_crdt` sidecar table, completely separate from your re
 
 ## Limitations
 
-- **Text only** for now. `map`/`list`/`counter` need manual `LoroDoc` wiring.
+- **`text`** has ready-made ProseMirror integration. `map`/`list`/`counter` work via `getDoc()` and the Loro API directly.
 - **SolidJS only.** Flutter and Vanilla don't have `useCrdtField` yet.
 - **Needs live queries.** Without `LIVE SELECT`, edits reconcile on reload.
 - **API may change** while experimental.

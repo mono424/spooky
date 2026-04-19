@@ -7,6 +7,12 @@ import CodeBlock from '../../components/ui/CodeBlock.astro';
 import Warning from '../../components/ui/Warning.astro';
 import Note from '../../components/ui/Note.astro';
 
+export const engineYaml = `# sp00ky.yml
+migrationEngine: surrealkit   # "legacy" (default) or "surrealkit"
+
+surrealkit:
+  binary: /path/to/surrealkit  # optional, defaults to "surrealkit" in PATH`;
+
 export const code18 = `spky migrate create "add_user_avatar"`;
 
 export const code17 = `Created migration: 20240215093000_add_user_avatar.surql
@@ -114,6 +120,23 @@ Sp00ky includes a built-in migration system for managing incremental, version-co
 4. Each applied migration is tracked in a `_00_migrations` table with a SHA-256 checksum, so drift and re-application are detected automatically
 
 Migrations are applied individually (SurrealDB DDL does not support transactions). All generated `DEFINE` statements include the `OVERWRITE` keyword for idempotency.
+
+## Migration Engine
+
+Sp00ky supports two migration engines. Set `migrationEngine` in your `sp00ky.yml` to choose:
+
+<CodeBlock code={engineYaml} lang="yaml" />
+
+| Engine | Description |
+|---|---|
+| `legacy` | **(default)** Built-in engine with auto-diff, SHA-256 checksum tracking, and ephemeral SurrealDB for schema comparison. Described in detail below. |
+| `surrealkit` | Delegates to the external [SurrealKit](https://crates.io/crates/surrealkit) CLI. Uses `surrealkit sync` (declarative push) during `spky dev` and `surrealkit rollout` (phased migrations) for production deploys. |
+
+<Note>
+  When using `surrealkit`, install it with `cargo install surrealkit` or set the binary path in `sp00ky.yml`. The CLI verifies the binary exists before running any migration command.
+</Note>
+
+The rest of this page documents the **legacy** engine. If you're using SurrealKit, refer to the [SurrealKit documentation](https://crates.io/crates/surrealkit) for engine-specific commands — all `spky migrate` subcommands (`create`, `apply`, `status`, `fix`) are routed through whichever engine you've selected.
 
 ## Creating Migrations
 
