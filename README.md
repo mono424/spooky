@@ -1,6 +1,10 @@
 <div align="center">
 
-<img src="apps/landing-page/public/logo.webp" alt="Sp00ky Logo" width="200" />
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="apps/landing-page/public/logo.svg" />
+  <source media="(prefers-color-scheme: light)" srcset="apps/landing-page/public/logo_dark.svg" />
+  <img src="apps/landing-page/public/logo_dark.svg" alt="Sp00ky Logo" width="200" />
+</picture>
 
 **The Reactive, Local-First Framework for SurrealDB**
 
