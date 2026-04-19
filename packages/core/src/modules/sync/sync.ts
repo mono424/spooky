@@ -183,7 +183,7 @@ export class Sp00kySync<S extends SchemaStructure> {
       'Processing up event'
     );
     switch (event.type) {
-      case 'create':
+      case 'create': {
         const dataKeys = Object.keys(event.data).map((key) => ({ key, variable: `data_${key}` }));
         const prefixedParams = Object.fromEntries(
           dataKeys.map(({ key, variable }) => [variable, event.data[key]])
@@ -194,6 +194,7 @@ export class Sp00kySync<S extends SchemaStructure> {
           ...prefixedParams,
         });
         break;
+      }
       case 'update':
         await this.remote.query(`UPDATE $id MERGE $data`, {
           id: event.record_id,

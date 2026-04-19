@@ -1,4 +1,5 @@
 mod add_api;
+mod annotations;
 mod backend;
 mod bucket;
 mod cloud;
@@ -1045,11 +1046,28 @@ fn run_codegen(
         println!("  + Appended schema from {:?}", append_path);
     }
 
+    // Extract field annotations from raw content (before surrealdb-core strips comments)
+    let field_annotations = annotations::extract_field_annotations(&content);
+
     // Parse the schema
     let mut parser = SchemaParser::new();
     parser
         .parse_file(&content)
         .context("Failed to parse SurrealDB schema")?;
+
+    // Merge annotations into parsed field definitions
+    for ((table_name, field_name), anns) in &field_annotations {
+        if let Some(table_schema) = parser.tables.get_mut(table_name) {
+            if let Some(field_def) = table_schema.fields.get_mut(field_name) {
+                field_def.annotations = anns.clone();
+            } else {
+                eprintln!(
+                    "  ⚠ Annotation on unknown field: {}.{}",
+                    table_name, field_name
+                );
+            }
+        }
+    }
 
     // Extract buckets from separate bucket files (if any)
     if !backend_processor.bucket_schema.is_empty() {
@@ -1066,6 +1084,18 @@ fn run_codegen(
             "\nDEFINE FIELD _00_rv ON TABLE {} TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;",
             table_name
         ));
+    }
+
+    // Inject _00_crdt field for tables with CRDT-annotated fields (client-side only)
+    for table_name in parser.tables.keys() {
+        let has_crdt = field_annotations.keys().any(|(t, _)| t == table_name);
+        if has_crdt {
+            println!("  + Injecting _00_crdt field on table '{}' for CRDT support", table_name);
+            filtered_schema_content.push_str(&format!(
+                "\nDEFINE FIELD _00_crdt ON TABLE {} FLEXIBLE TYPE option<object> PERMISSIONS FOR select, create, update WHERE true;",
+                table_name
+            ));
+        }
     }
 
     // Choose which content to use based on format

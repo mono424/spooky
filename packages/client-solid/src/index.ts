@@ -38,6 +38,7 @@ import { RecordId, Uuid, type Surreal } from 'surrealdb';
 export { RecordId, Uuid };
 export type { Model, GenericModel, GenericSchema, ModelPayload } from './lib/models';
 export { useQuery } from './lib/use-query';
+export { useCrdtField } from './lib/use-crdt-field';
 export { useFileUpload, type FileUploadResult } from './lib/use-file-upload';
 export { useDownloadFile, type UseDownloadFileOptions, type UseDownloadFileResult } from './lib/use-download-file';
 export { Sp00kyProvider, type Sp00kyProviderProps } from './lib/Sp00kyProvider';

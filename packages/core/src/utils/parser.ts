@@ -9,7 +9,7 @@ export function cleanRecord(
 ): Record<string, any> {
   const cleaned: Record<string, any> = {};
   for (const [key, value] of Object.entries(record)) {
-    if (key === 'id' || key in tableSchema) {
+    if (key === 'id' || key.startsWith('_00_') || key in tableSchema) {
       cleaned[key] = value;
     }
   }
