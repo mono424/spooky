@@ -816,13 +816,11 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
                 environment: migration::MigrationEnvironment::Production,
                 project_dir: std::env::current_dir()?,
                 migrations_dir: resolved_migrations,
-                deploy_mode: deploy_mode.clone(),
                 url: conn.url,
                 namespace,
                 database,
                 username: conn.username,
                 password: conn.password,
-                builder_config: None,
                 surrealkit_binary: sp00ky_config.resolved_surrealkit_binary(),
                 internal_schema: Some(migration::InternalSchemaConfig {
                     schema_path: resolved.schema,
@@ -853,13 +851,11 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
                 environment: migration::MigrationEnvironment::Production,
                 project_dir: std::env::current_dir()?,
                 migrations_dir: resolved_migrations,
-                deploy_mode: DeployMode::Singlenode,
                 url: conn.url,
                 namespace,
                 database,
                 username: conn.username,
                 password: conn.password,
-                builder_config: None,
                 surrealkit_binary: sp00ky_config.resolved_surrealkit_binary(),
                 internal_schema: None,
                 remote_functions: None,
@@ -886,13 +882,11 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
                 environment: migration::MigrationEnvironment::Production,
                 project_dir: std::env::current_dir()?,
                 migrations_dir: resolved_migrations,
-                deploy_mode: DeployMode::Singlenode,
                 url: conn.url,
                 namespace,
                 database,
                 username: conn.username,
                 password: conn.password,
-                builder_config: None,
                 surrealkit_binary: sp00ky_config.resolved_surrealkit_binary(),
                 internal_schema: None,
                 remote_functions: None,
@@ -1555,9 +1549,7 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod migration_tests {
     use crate::migration::{self, MigrationEngine, MigrationEnvironment, MigrationInfo, MigrationState};
-    use crate::migration::engine::{ApplyResult, CreateResult};
     use crate::migration::sp00ky_engine::Sp00kyEngine;
-    use crate::backend::DeployMode;
     use tempfile::TempDir;
 
     // ── Mock Engine ────────────────────────────────────────────────────
@@ -1572,13 +1564,11 @@ mod migration_tests {
     }
 
     impl MigrationEngine for MockEngine {
-        fn check_connection(&self) -> anyhow::Result<()> { Ok(()) }
-
-        fn apply(&self) -> anyhow::Result<ApplyResult> {
+        fn apply(&self) -> anyhow::Result<()> {
             if self.fail_apply {
                 anyhow::bail!("mock apply failure");
             }
-            Ok(ApplyResult { applied_count: 3, messages: vec!["applied 3".into()] })
+            Ok(())
         }
 
         fn status(&self) -> anyhow::Result<Vec<MigrationInfo>> {
@@ -1589,10 +1579,6 @@ mod migration_tests {
                 applied_at: None,
                 detail: None,
             }])
-        }
-
-        fn create(&self, name: &str) -> anyhow::Result<CreateResult> {
-            Ok(CreateResult { file_path: None, message: format!("created {}", name), has_changes: true })
         }
 
         fn fix(&self, _fix_checksums: bool) -> anyhow::Result<()> { Ok(()) }
@@ -1612,13 +1598,11 @@ mod migration_tests {
             environment: MigrationEnvironment::Production,
             project_dir: tmp.path().to_path_buf(),
             migrations_dir: tmp.path().join("migrations"),
-            deploy_mode: DeployMode::Singlenode,
             url: "http://localhost:8000".into(),
             namespace: "test_ns".into(),
             database: "test_db".into(),
             username: "root".into(),
             password: "root".into(),
-            builder_config: None,
             surrealkit_binary,
             internal_schema: None,
             remote_functions: None,
@@ -1646,9 +1630,7 @@ mod migration_tests {
     #[test]
     fn test_decorator_apply_delegates_to_inner() {
         let engine = wrap_mock(MockEngine::new());
-        let result = engine.apply().unwrap();
-        assert_eq!(result.applied_count, 3);
-        assert_eq!(result.messages, vec!["applied 3"]);
+        engine.apply().unwrap();
     }
 
     #[test]
@@ -1668,20 +1650,8 @@ mod migration_tests {
     }
 
     #[test]
-    fn test_decorator_create_delegates_to_inner() {
-        let engine = wrap_mock(MockEngine::new());
-        let result = engine.create("add_users").unwrap();
-        assert_eq!(result.message, "created add_users");
-    }
-
-    #[test]
     fn test_decorator_fix_delegates() {
         wrap_mock(MockEngine::new()).fix(true).unwrap();
-    }
-
-    #[test]
-    fn test_decorator_check_connection_delegates() {
-        wrap_mock(MockEngine::new()).check_connection().unwrap();
     }
 
     // ── SurrealKit adapter tests ───────────────────────────────────────
@@ -1729,7 +1699,7 @@ mod migration_tests {
     /// Mock engine with configurable status results for flow testing.
     struct FlowMockEngine {
         statuses: Vec<MigrationInfo>,
-        apply_result: std::cell::RefCell<Vec<anyhow::Result<ApplyResult>>>,
+        apply_result: std::cell::RefCell<Vec<anyhow::Result<()>>>,
         fix_called: std::cell::RefCell<bool>,
     }
 
@@ -1744,7 +1714,7 @@ mod migration_tests {
             }).collect();
             Self {
                 statuses,
-                apply_result: std::cell::RefCell::new(vec![Ok(ApplyResult { applied_count: count, messages: vec![] })]),
+                apply_result: std::cell::RefCell::new(vec![Ok(())]),
                 fix_called: std::cell::RefCell::new(false),
             }
         }
@@ -1781,7 +1751,7 @@ mod migration_tests {
                         detail: None,
                     },
                 ],
-                apply_result: std::cell::RefCell::new(vec![Ok(ApplyResult { applied_count: 1, messages: vec![] })]),
+                apply_result: std::cell::RefCell::new(vec![Ok(())]),
                 fix_called: std::cell::RefCell::new(false),
             }
         }
@@ -1797,7 +1767,7 @@ mod migration_tests {
                 }],
                 apply_result: std::cell::RefCell::new(vec![
                     Err(anyhow::anyhow!("migration failed: table already exists")),
-                    Ok(ApplyResult { applied_count: 1, messages: vec![] }),
+                    Ok(()),
                 ]),
                 fix_called: std::cell::RefCell::new(false),
             }
@@ -1805,12 +1775,10 @@ mod migration_tests {
     }
 
     impl MigrationEngine for FlowMockEngine {
-        fn check_connection(&self) -> anyhow::Result<()> { Ok(()) }
-
-        fn apply(&self) -> anyhow::Result<ApplyResult> {
+        fn apply(&self) -> anyhow::Result<()> {
             let mut results = self.apply_result.borrow_mut();
             if results.is_empty() {
-                Ok(ApplyResult { applied_count: 0, messages: vec![] })
+                Ok(())
             } else {
                 results.remove(0)
             }
@@ -1818,10 +1786,6 @@ mod migration_tests {
 
         fn status(&self) -> anyhow::Result<Vec<MigrationInfo>> {
             Ok(self.statuses.clone())
-        }
-
-        fn create(&self, name: &str) -> anyhow::Result<CreateResult> {
-            Ok(CreateResult { file_path: None, message: format!("created {}", name), has_changes: true })
         }
 
         fn fix(&self, _fix_checksums: bool) -> anyhow::Result<()> {
@@ -1869,12 +1833,12 @@ mod migration_tests {
         // In non-TTY/auto mode, always apply
         if auto_apply {
             match engine.apply() {
-                Ok(r) => output.push_str(&format!("applied:{}\n", r.applied_count)),
+                Ok(()) => output.push_str("applied\n"),
                 Err(e) => {
                     output.push_str(&format!("apply_failed:{}\n", e));
                     // Retry after reset (mirrors dev.rs line 768)
                     match engine.apply() {
-                        Ok(r) => output.push_str(&format!("retry_applied:{}\n", r.applied_count)),
+                        Ok(()) => output.push_str("retry_applied\n"),
                         Err(e2) => output.push_str(&format!("retry_failed:{}\n", e2)),
                     }
                 }
@@ -1898,7 +1862,7 @@ mod migration_tests {
         let engine = FlowMockEngine::all_applied();
         let output = simulate_dev_flow(&engine, true, false).unwrap();
         assert!(output.contains("no_pending"));
-        assert!(!output.contains("applied:"));
+        assert!(!output.contains("applied"));
     }
 
     #[test]
@@ -1906,7 +1870,7 @@ mod migration_tests {
         let engine = FlowMockEngine::with_pending(3);
         let output = simulate_dev_flow(&engine, true, false).unwrap();
         assert!(output.contains("pending:3"));
-        assert!(output.contains("applied:3"));
+        assert!(output.contains("applied"));
     }
 
     #[test]
@@ -1915,7 +1879,7 @@ mod migration_tests {
         let output = simulate_dev_flow(&engine, true, false).unwrap();
         assert!(output.contains("DRIFT: 20240101120000_initial"));
         assert!(output.contains("pending:1"));
-        assert!(output.contains("applied:1"));
+        assert!(output.contains("applied"));
     }
 
     #[test]
@@ -1937,7 +1901,7 @@ mod migration_tests {
         let engine = FlowMockEngine::failing_then_succeeding();
         let output = simulate_dev_flow(&engine, true, false).unwrap();
         assert!(output.contains("apply_failed:"));
-        assert!(output.contains("retry_applied:1"));
+        assert!(output.contains("retry_applied"));
     }
 
     #[test]

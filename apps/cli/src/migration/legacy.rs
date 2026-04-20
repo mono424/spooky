@@ -2,12 +2,9 @@ use anyhow::{Context, Result};
 use std::path::PathBuf;
 
 use crate::migrate;
-use crate::schema_builder::SchemaBuilderConfig;
 use crate::surreal_client::{MigrationDB, SurrealClient};
 
-use super::engine::{
-    ApplyResult, CreateResult, MigrationEngine, MigrationInfo, MigrationState,
-};
+use super::engine::{MigrationEngine, MigrationInfo, MigrationState};
 
 /// Legacy migration engine wrapping the existing `migrate.rs` functions.
 ///
@@ -20,7 +17,6 @@ pub struct LegacyEngine {
     username: String,
     password: String,
     migrations_dir: PathBuf,
-    builder_config: Option<SchemaBuilderConfig>,
 }
 
 impl LegacyEngine {
@@ -31,7 +27,6 @@ impl LegacyEngine {
         username: String,
         password: String,
         migrations_dir: PathBuf,
-        builder_config: Option<SchemaBuilderConfig>,
     ) -> Self {
         Self {
             url,
@@ -40,7 +35,6 @@ impl LegacyEngine {
             username,
             password,
             migrations_dir,
-            builder_config,
         }
     }
 
@@ -56,18 +50,9 @@ impl LegacyEngine {
 }
 
 impl MigrationEngine for LegacyEngine {
-    fn check_connection(&self) -> Result<()> {
+    fn apply(&self) -> Result<()> {
         let client = self.make_client();
-        client.ping().context("Cannot connect to SurrealDB")
-    }
-
-    fn apply(&self) -> Result<ApplyResult> {
-        let client = self.make_client();
-        migrate::apply(&client, &self.migrations_dir)?;
-        Ok(ApplyResult {
-            applied_count: 0,
-            messages: vec![],
-        })
+        migrate::apply(&client, &self.migrations_dir)
     }
 
     fn status(&self) -> Result<Vec<MigrationInfo>> {
@@ -127,28 +112,6 @@ impl MigrationEngine for LegacyEngine {
         }
 
         Ok(infos)
-    }
-
-    fn create(&self, name: &str) -> Result<CreateResult> {
-        let conn = Some((
-            self.url.as_str(),
-            self.namespace.as_str(),
-            self.database.as_str(),
-            self.username.as_str(),
-            self.password.as_str(),
-        ));
-        migrate::create(
-            &self.migrations_dir,
-            name,
-            None,
-            self.builder_config.as_ref(),
-            conn,
-        )?;
-        Ok(CreateResult {
-            file_path: None,
-            message: format!("Migration '{}' created", name),
-            has_changes: true,
-        })
     }
 
     fn fix(&self, fix_checksums: bool) -> Result<()> {

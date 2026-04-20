@@ -2,10 +2,7 @@ use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
 use std::process::Command;
 
-use super::engine::{
-    ApplyResult, CreateResult, MigrationEngine, MigrationEnvironment, MigrationInfo,
-    MigrationState,
-};
+use super::engine::{MigrationEngine, MigrationEnvironment, MigrationInfo, MigrationState};
 
 /// SurrealKit migration engine that shells out to the `surrealkit` CLI binary.
 ///
@@ -103,28 +100,17 @@ impl SurrealKitEngine {
 }
 
 impl MigrationEngine for SurrealKitEngine {
-    fn check_connection(&self) -> Result<()> {
-        self.run(&["rollout", "status"]).map(|_| ())
-    }
-
-    fn apply(&self) -> Result<ApplyResult> {
+    fn apply(&self) -> Result<()> {
         match self.environment {
             MigrationEnvironment::Dev => {
-                let output = self.run(&["sync"])?;
-                Ok(ApplyResult {
-                    applied_count: 0,
-                    messages: vec![output],
-                })
+                self.run(&["sync"])?;
             }
             MigrationEnvironment::Production => {
-                let start_output = self.run(&["rollout", "start"])?;
-                let complete_output = self.run(&["rollout", "complete"])?;
-                Ok(ApplyResult {
-                    applied_count: 1,
-                    messages: vec![start_output, complete_output],
-                })
+                self.run(&["rollout", "start"])?;
+                self.run(&["rollout", "complete"])?;
             }
         }
+        Ok(())
     }
 
     fn status(&self) -> Result<Vec<MigrationInfo>> {
@@ -142,24 +128,6 @@ impl MigrationEngine for SurrealKitEngine {
             applied_at: None,
             detail: Some(output),
         }])
-    }
-
-    fn create(&self, _name: &str) -> Result<CreateResult> {
-        match self.environment {
-            MigrationEnvironment::Dev => Ok(CreateResult {
-                file_path: None,
-                message: "Dev mode uses declarative sync -- no migration file needed.".to_string(),
-                has_changes: false,
-            }),
-            MigrationEnvironment::Production => {
-                let output = self.run(&["rollout", "plan"])?;
-                Ok(CreateResult {
-                    file_path: None,
-                    message: output,
-                    has_changes: true,
-                })
-            }
-        }
     }
 
     fn fix(&self, _fix_checksums: bool) -> Result<()> {

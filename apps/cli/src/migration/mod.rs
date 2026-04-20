@@ -6,9 +6,6 @@ pub(crate) mod surrealkit;
 use anyhow::Result;
 use std::path::PathBuf;
 
-use crate::backend::DeployMode;
-use crate::schema_builder::SchemaBuilderConfig;
-
 pub use engine::{MigrationEngine, MigrationEnvironment, MigrationInfo, MigrationState};
 pub use sp00ky_engine::{InternalSchemaConfig, RemoteFunctionsConfig};
 
@@ -17,15 +14,12 @@ pub struct MigrationContext {
     pub environment: MigrationEnvironment,
     pub project_dir: PathBuf,
     pub migrations_dir: PathBuf,
-    pub deploy_mode: DeployMode,
     // Connection params
     pub url: String,
     pub namespace: String,
     pub database: String,
     pub username: String,
     pub password: String,
-    // For legacy create's auto-diff
-    pub builder_config: Option<SchemaBuilderConfig>,
     // surrealkit-specific (None = use legacy engine)
     pub surrealkit_binary: Option<String>,
     // Post-migration steps (optional, set by caller based on context)
@@ -58,7 +52,6 @@ pub fn create_engine(ctx: MigrationContext) -> Result<Box<dyn MigrationEngine>> 
             ctx.username.clone(),
             ctx.password.clone(),
             ctx.migrations_dir.clone(),
-            ctx.builder_config,
         ))
     };
 

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use crate::backend::DeployMode;
 use crate::surreal_client::{MigrationDB, SurrealClient};
 
-use super::engine::{ApplyResult, CreateResult, MigrationEngine, MigrationInfo};
+use super::engine::{MigrationEngine, MigrationInfo};
 
 /// Configuration for applying internal Sp00ky schema after user migrations.
 pub struct InternalSchemaConfig {
@@ -77,13 +77,9 @@ impl Sp00kyEngine {
 }
 
 impl MigrationEngine for Sp00kyEngine {
-    fn check_connection(&self) -> Result<()> {
-        self.inner.check_connection()
-    }
-
-    fn apply(&self) -> Result<ApplyResult> {
+    fn apply(&self) -> Result<()> {
         // 1. User migrations (delegated to inner engine)
-        let result = self.inner.apply()?;
+        self.inner.apply()?;
 
         // 2. Remote functions (if configured)
         if let Some(ref rf) = self.remote_functions {
@@ -113,15 +109,11 @@ impl MigrationEngine for Sp00kyEngine {
             .context("Failed to apply internal Sp00ky schema")?;
         }
 
-        Ok(result)
+        Ok(())
     }
 
     fn status(&self) -> Result<Vec<MigrationInfo>> {
         self.inner.status()
-    }
-
-    fn create(&self, name: &str) -> Result<CreateResult> {
-        self.inner.create(name)
     }
 
     fn fix(&self, fix_checksums: bool) -> Result<()> {

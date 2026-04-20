@@ -328,58 +328,6 @@ pub fn apply(client: &dyn MigrationDB, migrations_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Display migration status.
-pub fn status(client: &dyn MigrationDB, migrations_dir: &Path) -> Result<()> {
-    client.ping().context("Cannot connect to SurrealDB")?;
-    client.ensure_migration_table()?;
-
-    let applied = client.get_applied_migrations()?;
-    let filesystem = scan_migrations(migrations_dir)?;
-
-    if filesystem.is_empty() && applied.is_empty() {
-        println!("No migrations found.");
-        return Ok(());
-    }
-
-    println!("Migration Status:\n");
-
-    // Show filesystem migrations with their status
-    for fm in &filesystem {
-        if let Some(am) = applied.iter().find(|a| a.version == fm.version) {
-            // Check for checksum mismatch
-            if fm.path.exists() {
-                let disk_checksum = checksum(&fm.path)?;
-                if disk_checksum != am.checksum {
-                    println!(
-                        "  {RED}[DRIFT]    {}_{:<40} (checksum mismatch!){RESET}",
-                        fm.version, fm.name
-                    );
-                    continue;
-                }
-            }
-            println!(
-                "  {GREEN}[applied]{RESET}  {}_{:<40} {DIM}(applied {}){RESET}",
-                fm.version, fm.name, am.applied_at
-            );
-        } else {
-            println!("  {YELLOW}[pending]{RESET}  {}_{}", fm.version, fm.name);
-        }
-    }
-
-    // Warn about applied migrations not on disk
-    for am in &applied {
-        if !filesystem.iter().any(|f| f.version == am.version) {
-            println!(
-                "\n  {YELLOW}WARNING: Applied migration {}_{} is not present on disk (drift){RESET}",
-                am.version, am.name
-            );
-        }
-    }
-
-    println!();
-    Ok(())
-}
-
 /// Fix schema drift and/or update stored checksums for modified migration files.
 ///
 /// When `fix_checksums` is true:
@@ -1214,59 +1162,6 @@ mod tests {
 
         apply(&mock, dir.path()).unwrap();
         assert!(mock.recorded.borrow().is_empty());
-    }
-
-    // ── status tests ────────────────────────────────────────────────────
-
-    #[test]
-    fn test_status_no_migrations() {
-        let dir = TempDir::new().unwrap();
-        let mock = MockDB::new();
-
-        // Should succeed (just prints "No migrations found")
-        status(&mock, dir.path()).unwrap();
-    }
-
-    #[test]
-    fn test_status_with_pending_only() {
-        let dir = TempDir::new().unwrap();
-        create_migration_file(dir.path(), "20240101120000", "pending", "-- up");
-
-        let mock = MockDB::new();
-        // Should succeed without error
-        status(&mock, dir.path()).unwrap();
-    }
-
-    #[test]
-    fn test_status_with_applied_and_pending() {
-        let dir = TempDir::new().unwrap();
-        let up_sql = "CREATE first;";
-        create_migration_file(dir.path(), "20240101120000", "applied", up_sql);
-        create_migration_file(dir.path(), "20240102120000", "pending", "CREATE second;");
-
-        let mock = MockDB::with_applied(vec![make_applied(
-            "20240101120000",
-            "applied",
-            &checksum_str(up_sql),
-        )]);
-
-        // Should succeed without error
-        status(&mock, dir.path()).unwrap();
-    }
-
-    #[test]
-    fn test_status_detects_checksum_drift() {
-        let dir = TempDir::new().unwrap();
-        create_migration_file(dir.path(), "20240101120000", "drifted", "MODIFIED content");
-
-        let mock = MockDB::with_applied(vec![make_applied(
-            "20240101120000",
-            "drifted",
-            "original_checksum_doesnt_match",
-        )]);
-
-        // Should succeed (drift is a warning, not an error in status)
-        status(&mock, dir.path()).unwrap();
     }
 
     // ── Integration-style tests (filesystem + mock DB) ──────────────────

@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://sp00ky.cloud/schema/sp00ky.schema.json
 mode: cluster # "singlenode", "cluster", or "surrealism"
-cloudApi: https://api-stg.sp00ky.cloud
+cloudApi: https://api-stg.sp00ky.cloud # override Sp00ky Cloud API endpoint
 slug: threads
 surrealdb:
   namespace: main
@@ -9,8 +9,8 @@ surrealdb:
   # password: root       # SurrealDB auth password (default: root)
   # hosting: cloud      # "cloud" (default) or "external"
   # endpoint: "wss://my-surreal.example.com"  # required when hosting: external
-# cloudApi: "https://staging-api.sp00ky.cloud"  # override Sp00ky Cloud API endpoint
 schema: ./schema
+version: canary
 buckets:
   - ./schema/src/buckets/profile.surql
 clientTypes:
