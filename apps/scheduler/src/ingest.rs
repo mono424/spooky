@@ -32,6 +32,30 @@ pub struct IngestState {
     pub wal: Arc<RwLock<EventWal>>,
 }
 
+/// Snapshot of how far behind the replica is vs. the ingest stream.
+/// `pending_events` are durable in the WAL but not yet applied to the replica.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PendingEventsStat {
+    pub pending_events: usize,
+    pub snapshot_seq: u64,
+    pub latest_seq: u64,
+    pub lag: u64,
+}
+
+/// Cheap, non-blocking read of the in-memory buffer + counters.
+pub async fn pending_events_snapshot(state: &IngestState) -> PendingEventsStat {
+    let pending_events = state.event_buffer.read().await.len();
+    let snapshot_seq = state.replica.read().await.snapshot_seq();
+    let latest_seq = state.seq_counter.load(Ordering::SeqCst);
+    let lag = latest_seq.saturating_sub(snapshot_seq);
+    PendingEventsStat {
+        pending_events,
+        snapshot_seq,
+        latest_seq,
+        lag,
+    }
+}
+
 /// Create ingest router
 pub fn create_ingest_router(state: IngestState) -> Router {
     Router::new()

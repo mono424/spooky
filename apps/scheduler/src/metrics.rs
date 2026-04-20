@@ -6,6 +6,7 @@ use tokio::sync::RwLock;
 use tracing::info;
 
 use crate::backend_health::{BackendHealthCache, BackendStatus, SharedBackendConfigs};
+use crate::ingest::{pending_events_snapshot, IngestState};
 use crate::job_scheduler::JobTracker;
 use crate::query::QueryTracker;
 use crate::router::{SspPool, SspState};
@@ -36,6 +37,10 @@ pub struct SchedulerMetrics {
     pub total_queries: usize,
     pub running_jobs: usize,
     pub uptime_seconds: u64,
+    pub pending_events: usize,
+    pub snapshot_seq: u64,
+    pub latest_seq: u64,
+    pub lag: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,6 +64,7 @@ pub struct MetricsState {
     pub status: Arc<RwLock<SchedulerStatus>>,
     pub backend_health: BackendHealthCache,
     pub shared_backend_configs: SharedBackendConfigs,
+    pub ingest: IngestState,
 }
 
 /// Create metrics router
@@ -107,6 +113,8 @@ async fn get_metrics(
         })
         .collect();
 
+    let pending = pending_events_snapshot(&state.ingest).await;
+
     let metrics = Metrics {
         scheduler: SchedulerMetrics {
             total_ssps,
@@ -114,6 +122,10 @@ async fn get_metrics(
             total_queries: query_assignments.len(),
             running_jobs,
             uptime_seconds: state.start_time.elapsed().as_secs(),
+            pending_events: pending.pending_events,
+            snapshot_seq: pending.snapshot_seq,
+            latest_seq: pending.latest_seq,
+            lag: pending.lag,
         },
         ssps,
     };
@@ -240,6 +252,8 @@ async fn info_handler(
     // Get scheduler's own IP from network interfaces or env
     let scheduler_ip = get_local_ip();
 
+    let pending = pending_events_snapshot(&state.ingest).await;
+
     let mut entities = vec![serde_json::json!({
         "entity": "scheduler",
         "id": state.scheduler_id,
@@ -249,6 +263,10 @@ async fn info_handler(
         "version": env!("CARGO_PKG_VERSION"),
         "uptime_seconds": state.start_time.elapsed().as_secs(),
         "last_heartbeat_seconds_ago": null,
+        "pending_events": pending.pending_events,
+        "snapshot_seq": pending.snapshot_seq,
+        "latest_seq": pending.latest_seq,
+        "lag": pending.lag,
         "env": mask_sensitive_env(env_vars),
     })];
 

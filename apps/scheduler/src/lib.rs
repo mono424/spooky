@@ -19,7 +19,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::RwLock;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use crate::config::SchedulerConfig;
 use crate::messages::BufferedEvent;
@@ -27,6 +27,61 @@ use crate::replica::Replica;
 use crate::router::SspPool;
 use crate::transport::HttpTransport;
 use crate::wal::EventWal;
+
+/// Drain the in-memory event buffer and apply all events to the replica.
+/// Also advances `snapshot_seq` and truncates the WAL up to that seq.
+/// Returns the number of events applied (may be 0). Does NOT touch `SchedulerStatus`.
+pub async fn drain_and_apply(
+    event_buffer: &Arc<RwLock<VecDeque<BufferedEvent>>>,
+    replica: &Arc<RwLock<Replica>>,
+    wal: &Arc<RwLock<EventWal>>,
+) -> Result<usize> {
+    let events: Vec<BufferedEvent> = {
+        let mut buffer = event_buffer.write().await;
+        buffer.drain(..).collect()
+    };
+
+    if events.is_empty() {
+        return Ok(0);
+    }
+
+    let event_count = events.len();
+    let max_seq = events.last().map(|e| e.seq).unwrap_or(0);
+
+    {
+        let mut rep = replica.write().await;
+        for event in &events {
+            let op = match event.update.operation {
+                crate::messages::RecordOp::Create => crate::replica::RecordOp::Create,
+                crate::messages::RecordOp::Update => crate::replica::RecordOp::Update,
+                crate::messages::RecordOp::Delete => crate::replica::RecordOp::Delete,
+            };
+            if let Err(e) = rep
+                .apply(
+                    &event.update.table,
+                    op,
+                    &event.update.record_id,
+                    event.update.data.clone(),
+                )
+                .await
+            {
+                error!(seq = event.seq, error = ?e, "Failed to apply event to snapshot");
+            }
+        }
+        if let Err(e) = rep.set_snapshot_seq(max_seq).await {
+            error!(error = %e, "Failed to persist snapshot_seq");
+        }
+    }
+
+    {
+        let mut wal_guard = wal.write().await;
+        if let Err(e) = wal_guard.truncate(max_seq) {
+            error!(error = %e, "Failed to truncate WAL");
+        }
+    }
+
+    Ok(event_count)
+}
 
 /// Scheduler lifecycle status
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -154,6 +209,7 @@ impl Scheduler {
             status: Arc::clone(&self.status),
             backend_health,
             shared_backend_configs,
+            ingest: self.ingest_state(),
         }
     }
 
@@ -164,11 +220,18 @@ impl Scheduler {
         }
     }
 
-    pub fn backup_state(&self) -> crate::backup::BackupState {
+    pub fn backup_state(
+        &self,
+        registry: Arc<crate::backup::BackupRegistry>,
+        tx: tokio::sync::mpsc::Sender<crate::backup::BackupJob>,
+        config: Arc<crate::backup::BackupConfig>,
+    ) -> crate::backup::BackupState {
         crate::backup::BackupState {
             replica: Arc::clone(&self.replica),
-            status: Arc::clone(&self.status),
-            config: Arc::new(crate::backup::BackupConfig::from_env()),
+            ingest: self.ingest_state(),
+            config,
+            registry,
+            tx,
         }
     }
 
@@ -283,60 +346,15 @@ impl Scheduler {
                 // Set status to SnapshotUpdating
                 *status.write().await = SchedulerStatus::SnapshotUpdating;
 
-                // Drain event buffer and apply to snapshot
-                let events: Vec<BufferedEvent> = {
-                    let mut buffer = event_buffer.write().await;
-                    buffer.drain(..).collect()
-                };
-
-                if events.is_empty() {
-                    *status.write().await = SchedulerStatus::Ready;
-                    continue;
-                }
-
-                let event_count = events.len();
-                let max_seq = events.last().map(|e| e.seq).unwrap_or(0);
-
-                info!(event_count, max_seq, "Applying buffered events to snapshot");
-
-                // Apply events to replica
-                {
-                    let mut rep = replica.write().await;
-                    for event in &events {
-                        let op = match event.update.operation {
-                            crate::messages::RecordOp::Create => crate::replica::RecordOp::Create,
-                            crate::messages::RecordOp::Update => crate::replica::RecordOp::Update,
-                            crate::messages::RecordOp::Delete => crate::replica::RecordOp::Delete,
-                        };
-                        if let Err(e) = rep.apply(
-                            &event.update.table,
-                            op,
-                            &event.update.record_id,
-                            event.update.data.clone(),
-                        ).await {
-                            error!(
-                                seq = event.seq,
-                                error = ?e,
-                                "Failed to apply event to snapshot"
-                            );
-                        }
+                match drain_and_apply(&event_buffer, &replica, &wal).await {
+                    Ok(0) => {}
+                    Ok(event_count) => {
+                        info!(event_count, "Snapshot update complete");
                     }
-
-                    // Update snapshot_seq
-                    if let Err(e) = rep.set_snapshot_seq(max_seq).await {
-                        error!(error = %e, "Failed to persist snapshot_seq");
+                    Err(e) => {
+                        error!(error = %e, "Snapshot update failed");
                     }
                 }
-
-                // Truncate WAL
-                {
-                    let mut wal_guard = wal.write().await;
-                    if let Err(e) = wal_guard.truncate(max_seq) {
-                        error!(error = %e, "Failed to truncate WAL");
-                    }
-                }
-
-                info!(event_count, max_seq, "Snapshot update complete");
 
                 // Set status back to Ready
                 *status.write().await = SchedulerStatus::Ready;

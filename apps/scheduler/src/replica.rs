@@ -224,6 +224,16 @@ impl Replica {
         Ok(())
     }
 
+    /// Export the replica to a file using SurrealDB's native export.
+    /// Produces a standard SurrealQL dump importable via `surreal import`.
+    pub async fn export_to_file(&self, path: &std::path::Path) -> Result<()> {
+        self.db
+            .export(path)
+            .await
+            .with_context(|| format!("Failed to export replica to {:?}", path))?;
+        Ok(())
+    }
+
     /// Run an arbitrary SurrealQL query against the snapshot DB
     /// Returns the raw JSON response (used by the HTTP proxy)
     pub async fn query(&self, surql: &str) -> Result<Value> {

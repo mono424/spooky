@@ -74,7 +74,14 @@ async fn main() -> Result<()> {
         )
     );
     
-    let backup_router = scheduler::backup::create_backup_router(scheduler.backup_state());
+    let backup_config = Arc::new(scheduler::backup::BackupConfig::from_env());
+    let backup_registry = Arc::new(scheduler::backup::BackupRegistry::new());
+    let (backup_tx, backup_rx) = scheduler::backup::create_backup_channel();
+    let backup_router = scheduler::backup::create_backup_router(scheduler.backup_state(
+        Arc::clone(&backup_registry),
+        backup_tx.clone(),
+        Arc::clone(&backup_config),
+    ));
 
     let app = axum::Router::new()
         .merge(ingest_router)
@@ -101,8 +108,19 @@ async fn main() -> Result<()> {
         std::sync::Arc::clone(&job_tracker),
         std::sync::Arc::clone(&transport),
     ).await;
-    
-    info!("Started background monitors for query reassignment and job failover");
+
+    // Spawn the single-consumer backup worker
+    {
+        let replica = scheduler.replica.clone();
+        let ingest = scheduler.ingest_state();
+        let config = Arc::clone(&backup_config);
+        let registry = Arc::clone(&backup_registry);
+        tokio::spawn(async move {
+            scheduler::backup::run_backup_worker(backup_rx, replica, ingest, config, registry).await;
+        });
+    }
+
+    info!("Started background monitors for query reassignment, job failover, and backups");
     
     // Spawn HTTP server
     let server_handle = tokio::spawn(async move {
