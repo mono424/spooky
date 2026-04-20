@@ -190,6 +190,7 @@ import { basePath } from '../config/nav';
             View on Github
           </a>
         </div>
+
       </div>
     </section>
 
@@ -275,6 +276,7 @@ import { basePath } from '../config/nav';
               View on Github
             </a>
           </div>
+
         </div>
 
         <div class="relative flex items-center justify-end">
@@ -322,6 +324,47 @@ import { basePath } from '../config/nav';
     <section class="pt-12 pb-16 md:pb-32 border-b border-white/10">
       <div class="max-w-7xl mx-auto px-4">
         <FeatureGrid client:visible />
+      </div>
+
+      <!-- Try Out Now — card style -->
+      <div class="max-w-7xl mx-auto px-4 mt-16 md:mt-24">
+        <div class="try-out-btn group relative rounded-2xl border border-white/[0.08] bg-[#111318] overflow-hidden cursor-pointer transition-all duration-300 hover:border-white/[0.14]">
+          <div class="flex flex-col md:flex-row items-stretch min-h-[200px]">
+            <!-- Left: copy + CTA -->
+            <div class="relative z-10 flex flex-col justify-between p-8 md:p-10 md:w-[45%]">
+              <div>
+                <h3 class="text-xl font-semibold text-white/90 mb-2">Experimental Demo</h3>
+                <p class="text-sm text-white/40 leading-relaxed max-w-[260px]">
+                  Explore a live app built with sp00ky. Powered by CRDTs, file buckets, and real-time sync.
+                </p>
+              </div>
+              <div class="mt-6">
+                <span class="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white/70 rounded-lg border border-white/[0.1] bg-white/[0.04] group-hover:bg-white/[0.08] group-hover:text-white group-hover:border-white/[0.18] transition-all duration-300">
+                  Try it now
+                  <svg class="w-3.5 h-3.5 -rotate-[0deg] group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform duration-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M7 17L17 7M17 7H7M17 7v10" />
+                  </svg>
+                </span>
+              </div>
+            </div>
+            <!-- Right: grid pattern + ghost -->
+            <div class="relative flex-1 min-h-[160px] md:min-h-0">
+              <!-- Grid pattern -->
+              <div class="absolute inset-0 tryout-grid opacity-[0.35]"></div>
+              <!-- Ghost icon -->
+              <div class="absolute inset-0 flex items-center justify-center">
+                <div class="flex flex-col items-center gap-5 opacity-40 group-hover:opacity-60 transition-opacity duration-500">
+                  <img src="/logo.svg" alt="sp00ky" class="w-40 md:w-48" />
+                  <span class="text-[11px] font-mono uppercase tracking-[0.25em] text-white/50">threads demo</span>
+                </div>
+              </div>
+              <!-- Vertical label -->
+              <div class="hidden md:flex absolute right-0 top-0 bottom-0 w-10 items-center justify-center">
+                <span class="text-[10px] font-mono uppercase tracking-[0.3em] text-white/15 whitespace-nowrap" style="writing-mode: vertical-rl;">Experimental Preview</span>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -495,6 +538,63 @@ import { basePath } from '../config/nav';
         </div>
       </div>
     </footer>
+
+    <!-- Try Out Now fullscreen iframe overlay -->
+    <div id="tryout-overlay" class="fixed inset-0 z-[100] hidden">
+      <div class="absolute inset-0 bg-black/80 backdrop-blur-sm" id="tryout-backdrop"></div>
+      <div class="relative z-10 flex flex-col w-full h-full p-3 md:p-6">
+        <div class="flex justify-end mb-2">
+          <button
+            id="tryout-close"
+            class="flex items-center gap-2 px-4 py-2 text-sm font-medium text-text-tertiary hover:text-white bg-white/10 hover:bg-white/20 rounded-lg transition-all duration-200"
+            aria-label="Close demo"
+          >
+            <span>Close</span>
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+            </svg>
+          </button>
+        </div>
+        <iframe
+          id="tryout-iframe"
+          class="flex-1 w-full rounded-xl border border-white/10 bg-black"
+          title="sp00ky Demo"
+          allowfullscreen
+        ></iframe>
+      </div>
+    </div>
+
+    <script>
+      const overlay = document.getElementById('tryout-overlay');
+      const iframe = document.getElementById('tryout-iframe') as HTMLIFrameElement;
+      const closeBtn = document.getElementById('tryout-close');
+      const backdrop = document.getElementById('tryout-backdrop');
+
+      function openTryout() {
+        if (!overlay || !iframe) return;
+        iframe.src = 'https://threads-app.stg.spky.cloud/';
+        overlay.classList.remove('hidden');
+        document.body.style.overflow = 'hidden';
+      }
+
+      function closeTryout() {
+        if (!overlay || !iframe) return;
+        overlay.classList.add('hidden');
+        iframe.src = '';
+        document.body.style.overflow = '';
+      }
+
+      document.querySelectorAll('.try-out-btn').forEach((btn) => {
+        btn.addEventListener('click', openTryout);
+      });
+
+      closeBtn?.addEventListener('click', closeTryout);
+      backdrop?.addEventListener('click', closeTryout);
+
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeTryout();
+      });
+    </script>
   </body>
 
   <script>
@@ -656,6 +756,14 @@ import { basePath } from '../config/nav';
 
     .schema-details[open] .expanded-content {
       animation: expand-in 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    /* Try Out Now — grid pattern */
+    .tryout-grid {
+      background-image:
+        linear-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.06) 1px, transparent 1px);
+      background-size: 40px 40px;
     }
   </style>
 </html>
