@@ -1226,6 +1226,7 @@ fn build_backend_manifest(
     deploy: &backend::AppDeployConfig,
     merged_env: &[String],
     cmd: &Option<String>,
+    working_dir: &Option<String>,
     app_config: &backend::AppConfig,
 ) -> serde_json::Value {
     let resources = deploy.resources.clone().unwrap_or(backend::BackendDeployResources {
@@ -1244,6 +1245,7 @@ fn build_backend_manifest(
         },
         "env": merged_env,
         "cmd": cmd,
+        "working_dir": working_dir,
         "healthcheck": deploy.healthcheck,
         "timeout": deploy.timeout,
         "timeout_overridable": deploy.timeout_overridable,
@@ -1287,6 +1289,7 @@ fn build_frontend_manifest(
     resources: &backend::BackendDeployResources,
     merged_env: &[String],
     cmd: &Option<String>,
+    working_dir: &Option<String>,
 ) -> serde_json::Value {
     serde_json::json!({
         "image": format!("{}/frontend", slug),
@@ -1299,6 +1302,7 @@ fn build_frontend_manifest(
         },
         "env": merged_env,
         "cmd": cmd,
+        "working_dir": working_dir,
     })
 }
 
@@ -1387,10 +1391,21 @@ fn deploy(upgrade: bool) -> Result<()> {
             bail!("Docker build failed for backend '{}'", name);
         }
 
-        // Resolve env vars: SPKY_* base + user config (user overrides SPKY)
+        // Resolve env vars:
+        //   image Config.Env (seeds PATH, LANG, venv, NODE_ENV, etc. —
+        //     stripped by `docker export` so we have to carry them over
+        //     in the manifest)
+        //   → SPKY_* base
+        //   → user config (wins on conflicts)
         let spky_vars = build_spky_cloud_vars(&config);
         let user_env = resolve_env_for_deploy(&app_config.env, config_dir, &mut client, &pid);
+        let image_env = get_docker_env(&image_tag);
         let mut env_map = std::collections::BTreeMap::new();
+        for entry in &image_env {
+            if let Some((k, v)) = entry.split_once('=') {
+                env_map.insert(k.to_string(), v.to_string());
+            }
+        }
         for entry in &spky_vars {
             if let Some((k, v)) = entry.split_once('=') {
                 env_map.insert(k.to_string(), v.to_string());
@@ -1402,6 +1417,7 @@ fn deploy(upgrade: bool) -> Result<()> {
             }
         }
         let merged_env: Vec<String> = env_map.into_iter().map(|(k, v)| format!("{}={}", k, v)).collect();
+        let working_dir = get_docker_workdir(&image_tag);
 
         // Check if image changed since last deploy (skip export+upload if unchanged)
         let image_id = get_docker_image_id(&image_tag);
@@ -1410,7 +1426,7 @@ fn deploy(upgrade: bool) -> Result<()> {
                 if remote_hash == *id {
                     println!("  Image for backend '{}' unchanged, skipping upload.", name);
                     let cmd = get_docker_cmd(&image_tag);
-                    backend_manifests.push(build_backend_manifest(name, &slug, &image_id, port, deploy, &merged_env, &cmd, app_config));
+                    backend_manifests.push(build_backend_manifest(name, &slug, &image_id, port, deploy, &merged_env, &cmd, &working_dir, app_config));
                     println!("  Backend '{}' ready for deployment.", name);
                     continue;
                 }
@@ -1474,7 +1490,7 @@ fn deploy(upgrade: bool) -> Result<()> {
 
         // Build manifest
         let cmd = get_docker_cmd(&image_tag);
-        backend_manifests.push(build_backend_manifest(name, &slug, &image_id, port, deploy, &merged_env, &cmd, app_config));
+        backend_manifests.push(build_backend_manifest(name, &slug, &image_id, port, deploy, &merged_env, &cmd, &working_dir, app_config));
 
         println!("  Backend '{}' ready for deployment.", name);
     }
@@ -1520,22 +1536,11 @@ fn deploy(upgrade: bool) -> Result<()> {
         // Auto-compute the SurrealDB WebSocket endpoint for the frontend
         let db_ws_endpoint = derive_db_ws_endpoint(&client.base_url, &slug);
 
-        // Resolve env vars: SPKY_* base + user config (user overrides SPKY)
+        // Resolve env vars: (merged_env is built after the docker build so
+        // the image's Config.Env can be seeded first — see below.)
         warn_frontend_vault_no_whitelist_deploy(frontend_name, &frontend_app.env);
         let spky_vars = build_spky_cloud_vars(&config);
         let user_env = resolve_env_for_deploy(&frontend_app.env, config_dir, &mut client, &pid);
-        let mut env_map = std::collections::BTreeMap::new();
-        for entry in &spky_vars {
-            if let Some((k, v)) = entry.split_once('=') {
-                env_map.insert(k.to_string(), v.to_string());
-            }
-        }
-        for entry in &user_env {
-            if let Some((k, v)) = entry.split_once('=') {
-                env_map.insert(k.to_string(), v.to_string());
-            }
-        }
-        let merged_env: Vec<String> = env_map.into_iter().map(|(k, v)| format!("{}={}", k, v)).collect();
 
         println!("  Building frontend image ('{}')...", frontend_name);
         let mut build_args = vec![
@@ -1562,6 +1567,28 @@ fn deploy(upgrade: bool) -> Result<()> {
             bail!("Docker build failed for frontend");
         }
 
+        // Now that the image is built, merge the env in priority order:
+        // image Config.Env → SPKY → user (user wins on conflicts).
+        let image_env = get_docker_env(&image_tag);
+        let mut env_map = std::collections::BTreeMap::new();
+        for entry in &image_env {
+            if let Some((k, v)) = entry.split_once('=') {
+                env_map.insert(k.to_string(), v.to_string());
+            }
+        }
+        for entry in &spky_vars {
+            if let Some((k, v)) = entry.split_once('=') {
+                env_map.insert(k.to_string(), v.to_string());
+            }
+        }
+        for entry in &user_env {
+            if let Some((k, v)) = entry.split_once('=') {
+                env_map.insert(k.to_string(), v.to_string());
+            }
+        }
+        let merged_env: Vec<String> = env_map.into_iter().map(|(k, v)| format!("{}={}", k, v)).collect();
+        let working_dir = get_docker_workdir(&image_tag);
+
         // Check if frontend image changed since last deploy
         let frontend_image_id = get_docker_image_id(&image_tag);
         let frontend_unchanged = frontend_image_id.as_ref()
@@ -1575,7 +1602,7 @@ fn deploy(upgrade: bool) -> Result<()> {
         if frontend_unchanged {
             println!("  Frontend image unchanged, skipping upload.");
             let cmd = get_docker_cmd(&image_tag);
-            frontend_manifest = Some(build_frontend_manifest(&slug, &frontend_image_id, port, &resources, &merged_env, &cmd));
+            frontend_manifest = Some(build_frontend_manifest(&slug, &frontend_image_id, port, &resources, &merged_env, &cmd, &working_dir));
         } else {
 
         let tmp_tar = std::env::temp_dir().join(format!("sp00ky-{}-frontend.tar.gz", slug));
@@ -1625,7 +1652,7 @@ fn deploy(upgrade: bool) -> Result<()> {
         let _ = fs::remove_file(&tmp_tar);
 
         let cmd = get_docker_cmd(&image_tag);
-        frontend_manifest = Some(build_frontend_manifest(&slug, &frontend_image_id, port, &resources, &merged_env, &cmd));
+        frontend_manifest = Some(build_frontend_manifest(&slug, &frontend_image_id, port, &resources, &merged_env, &cmd, &working_dir));
 
         println!("  Frontend ready for deployment.");
         } // end else (frontend changed)
@@ -1744,22 +1771,36 @@ fn deploy(upgrade: bool) -> Result<()> {
                             // Apply remote functions + internal schema BEFORE finalize so that
                             // SSP/scheduler can bootstrap from already-migrated tables (they
                             // require _00_query etc. to exist at startup).
-                            // Derive SSP/scheduler endpoint from SurrealDB VM's internal IP
-                            // (deterministic: SurrealDB=.10, scheduler=.20, SSP=.30 on same subnet).
+                            //
+                            // SurrealDB calls this endpoint from inside its container via
+                            // http::get(), so the scheduler container's DNS alias (`scheduler`
+                            // in Docker mode, a fixed IP in Firecracker mode) is what works.
+                            // In Firecracker mode the scheduler isn't up yet at this point
+                            // (apps phase runs after migrate), so we fall back to the
+                            // deterministic .20 suffix the orchestrator assigns.
                             let fn_endpoint = status_data["vms"].as_array()
                                 .and_then(|vms| {
-                                    vms.iter()
-                                        .find(|v| v["role"].as_str() == Some("surrealdb"))
+                                    // Prefer a running scheduler's real internal IP — works for
+                                    // both modes whenever a scheduler is actually up.
+                                    if let Some(sched_ip) = vms.iter()
+                                        .find(|v| v["role"].as_str() == Some("scheduler"))
                                         .and_then(|v| v["internal_ip"].as_str())
-                                })
-                                .and_then(|surreal_ip| {
+                                    {
+                                        return Some(format!("http://{}:9667", sched_ip));
+                                    }
+                                    // Firecracker fallback: derive from SurrealDB IP's subnet
+                                    // (deterministic: SurrealDB=.10, scheduler=.20, SSP=.30).
+                                    let surreal_ip = vms.iter()
+                                        .find(|v| v["role"].as_str() == Some("surrealdb"))
+                                        .and_then(|v| v["internal_ip"].as_str())?;
                                     let parts: Vec<&str> = surreal_ip.split('.').collect();
-                                    if parts.len() == 4 {
+                                    if parts.len() == 4 && parts[0] == "10" {
                                         let subnet = format!("{}.{}.{}", parts[0], parts[1], parts[2]);
-                                        // Use scheduler (.20) as the primary endpoint — it routes to SSPs
                                         Some(format!("http://{}.20:9667", subnet))
                                     } else {
-                                        None
+                                        // Docker mode without scheduler running yet: use the
+                                        // Docker DNS alias set by the runtime adapter.
+                                        Some("http://scheduler:9667".to_string())
                                     }
                                 });
 
@@ -1878,16 +1919,63 @@ fn get_docker_image_id(tag: &str) -> Option<String> {
 }
 
 /// Extract the CMD from a Docker image as a shell command string.
-fn get_docker_cmd(tag: &str) -> Option<String> {
-    let output = std::process::Command::new("docker")
-        .args(["inspect", "--format", "{{json .Config.Cmd}}", tag])
+/// Return the image's Config.WorkingDir (empty string if unset) — needed
+/// by the Docker runtime because `docker import` strips image metadata,
+/// so we have to re-apply the WORKDIR at container-create time.
+fn get_docker_workdir(tag: &str) -> Option<String> {
+    let out = std::process::Command::new("docker")
+        .args(["inspect", "--format", "{{.Config.WorkingDir}}", tag])
         .output()
         .ok()?;
-    if !output.status.success() {
+    if !out.status.success() {
         return None;
     }
-    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let parts: Vec<String> = serde_json::from_str(&raw).ok()?;
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+/// Return the image's Config.Env as individual KEY=VAL strings — needed
+/// because `docker import` drops them and the user's backend often
+/// depends on PATH, NODE_ENV, LANG, virtualenv paths, etc. inherited
+/// from the base image.
+fn get_docker_env(tag: &str) -> Vec<String> {
+    let out = match std::process::Command::new("docker")
+        .args(["inspect", "--format", "{{json .Config.Env}}", tag])
+        .output()
+    {
+        Ok(o) if o.status.success() => o,
+        _ => return Vec::new(),
+    };
+    let raw = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    serde_json::from_str::<Vec<String>>(&raw).unwrap_or_default()
+}
+
+fn get_docker_cmd(tag: &str) -> Option<String> {
+    // Combine Entrypoint and Cmd the way Docker itself would when running
+    // the container. Many base images (nginx, python, node) rely on
+    // ENTRYPOINT + CMD — capturing only Cmd drops the actual startup
+    // binary and the deployed container fails with "no command specified".
+    let inspect = |field: &str| -> Option<Vec<String>> {
+        let out = std::process::Command::new("docker")
+            .args(["inspect", "--format", &format!("{{{{json .Config.{}}}}}", field), tag])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let raw = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        serde_json::from_str::<Vec<String>>(&raw).ok()
+    };
+
+    let entrypoint = inspect("Entrypoint").unwrap_or_default();
+    let cmd = inspect("Cmd").unwrap_or_default();
+    let mut parts: Vec<String> = Vec::new();
+    parts.extend(entrypoint);
+    parts.extend(cmd);
     if parts.is_empty() {
         return None;
     }

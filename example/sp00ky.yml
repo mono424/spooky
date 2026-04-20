@@ -1,4 +1,7 @@
+# yaml-language-server: $schema=https://sp00ky.cloud/schema/sp00ky.schema.json
 mode: cluster # "singlenode", "cluster", or "surrealism"
+cloudApi: https://api-stg.sp00ky.cloud
+slug: threads
 surrealdb:
   namespace: main
   database: example
@@ -21,7 +24,14 @@ apps:
     dev:
       type: npm
       script: dev:app
-    env: ".env.local"
+    deploy:
+      dockerfile: ./app-solid/Dockerfile
+      context: ../
+      port: 80
+    env:
+      dev: '.env.local'
+      vault:
+        - 'VITE_DB_ENDPOINT'
   api:
     type: backend
     # hosting: cloud    # "cloud" (default) or "external" (self-hosted at baseUrl)
@@ -31,6 +41,11 @@ apps:
       type: npm
       script: dev
       workdir: ./api
+    deploy:
+      dockerfile: ./api/Dockerfile
+      context: ../
+      port: 3660
+      healthcheck: /health
     auth:
       type: token
       token: THIS_IS_TOP_SECRET
@@ -39,5 +54,8 @@ apps:
       table: job
       schema: ./schema/src/outbox/api.surql
     env:
-      dev: ".env.local"
-      cloud: "vault"
+      dev: '.env.local'
+      cloud:
+        vault:
+          - 'ANTHROPIC_API_KEY'
+          - 'API_AUTH_TOKEN'

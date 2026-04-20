@@ -99,17 +99,17 @@ app.openapi(spookifyRoute, async (c) => {
 
   try {
     // Connect to SurrealDB
-    const surrealUrl = process.env.SURREAL_URL || 'http://127.0.0.1:8000/rpc';
+    const surrealUrl = process.env.SPKY_DB_URL || 'http://127.0.0.1:8000/rpc';
     await db.connect(surrealUrl);
 
     await db.use({
-      namespace: process.env.SURREAL_NAMESPACE || 'test',
-      database: process.env.SURREAL_DATABASE || 'test',
+      namespace: process.env.SPKY_DB_NS || 'main',
+      database: process.env.SPKY_DB_NAME || 'example',
     });
 
     await db.signin({
-      username: process.env.SURREAL_USER || 'root',
-      password: process.env.SURREAL_PASS || 'root',
+      username: process.env.SPKY_DB_USER || 'root',
+      password: process.env.SPKY_DB_PASS || 'root',
     });
 
     // 1. Query the record
