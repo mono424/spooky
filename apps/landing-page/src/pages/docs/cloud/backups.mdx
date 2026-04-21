@@ -58,7 +58,7 @@ Commands:
                                 Configure automatic backups
   reset [--no-backup]           Reset the database (drop all data, re-run migrations)`;
 
-Sp00ky Cloud provides built-in database backups for your SurrealDB data. Create manual snapshots, configure automatic schedules, and restore from any backup point.
+Sp00ky Cloud takes care of your backups for you. Make a snapshot whenever you want, set up a schedule, and roll back to any backup when you need to.
 
 ## Quick Start
 
@@ -69,14 +69,14 @@ Sp00ky Cloud provides built-in database backups for your SurrealDB data. Create 
 
 ## Creating Backups
 
-Create a manual backup of your database:
+Make a backup of your database whenever you want one.
 
 <CodeBlock
   code={code9}
   lang="bash"
 />
 
-Backups run asynchronously. The CLI returns immediately with a backup ID and status `pending`. The backup transitions to `in_progress` and then `completed` once done.
+Backups run in the background. The CLI returns right away with a backup ID and a `pending` status. It moves to `in_progress` and then to `completed` once it's done.
 
 ## Listing Backups
 
@@ -85,7 +85,7 @@ Backups run asynchronously. The CLI returns immediately with a backup ID and sta
   lang="bash"
 />
 
-Example output:
+You'll see something like this:
 
 <CodeBlock
   code={code7}
@@ -99,9 +99,23 @@ Example output:
   lang="bash"
 />
 
+Here's what happens when you run it:
+
+1. The scheduler queues the restore and the CLI prints the restore ID.
+2. Ingestion stops. New writes get a `503`, and proxy queries and SSP registrations are rejected while the restore is running.
+3. Both databases are wiped and reloaded from the same backup file. Main SurrealDB and the scheduler's snapshot replica stay in sync.
+4. Pending items are cleared. That covers the in-memory event buffer, the write-ahead log, and any per-SSP message buffers.
+5. Connected SSPs are evicted. They'll re-register on their next heartbeat against the restored state.
+6. The CLI polls for progress every 5 seconds (up to 5 minutes) and shows the current phase as it moves from `queued` to `running` to `completed`.
+7. Once the restore finishes, your migrations run again against the restored database.
+
 <Warning>
-Restoring a backup replaces your current database contents with the backup data. Any changes made after the backup was created will be lost. Consider creating a fresh backup before restoring.
+Restoring replaces your current data with the backup. Anything you wrote after the backup was taken is gone. If you're not sure, take a fresh backup first.
 </Warning>
+
+<Note>
+If the main database gets wiped but the snapshot replica fails to import, the scheduler stays in the `restoring` state on purpose. That blocks reads until someone re-runs the restore. Serving traffic from a half-restored cluster would give back wrong data.
+</Note>
 
 ## Deleting Backups
 
@@ -112,22 +126,22 @@ Restoring a backup replaces your current database contents with the backup data.
 
 ## Automatic Backups
 
-Configure scheduled backups with a cron expression:
+Set up a schedule with a cron expression:
 
 <CodeBlock
   code={code4}
   lang="bash"
 />
 
-| Option | Description |
+| Option | What it does |
 | :--- | :--- |
-| `--enabled` | Enable or disable automatic backups (`true`/`false`) |
-| `--schedule` | Cron expression for backup frequency (e.g. `"0 2 * * *"` for daily at 2 AM) |
-| `--retention` | Number of backups to keep before oldest are deleted |
+| `--enabled` | Turn automatic backups on or off (`true`/`false`) |
+| `--schedule` | Cron expression for how often to back up (e.g. `"0 2 * * *"` for daily at 2 AM) |
+| `--retention` | How many backups to keep before the oldest ones get deleted |
 
 ## Database Reset
 
-Reset your database to a clean state — drops all data and re-runs migrations:
+Reset your database to a clean slate. This drops all data and re-runs your migrations.
 
 <CodeBlock
   code={code3}
@@ -136,11 +150,11 @@ Reset your database to a clean state — drops all data and re-runs migrations:
 
 The CLI will:
 
-1. **Warn** you that all data will be permanently deleted
-2. **Ask for confirmation**
-3. **Offer to create a backup** before resetting (recommended)
-4. Wait for the backup to complete if created
-5. **Reset the database** and re-apply migrations
+1. Warn you that all data will be deleted.
+2. Ask you to confirm.
+3. Offer to create a backup first (a good idea).
+4. Wait for that backup to finish if you said yes.
+5. Reset the database and re-apply your migrations.
 
 To skip the pre-reset backup prompt:
 
@@ -150,7 +164,7 @@ To skip the pre-reset backup prompt:
 />
 
 <Warning>
-Database reset is irreversible. All user accounts, records, and application data will be permanently deleted. Always create a backup first unless you're resetting a development project.
+There's no undo for a reset. Every user, every record, every bit of app data goes away for good. Always take a backup first unless this is a dev project you don't care about.
 </Warning>
 
 ## CLI Reference
