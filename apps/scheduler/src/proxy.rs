@@ -11,6 +11,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, error};
 
 use crate::replica::Replica;
+use crate::SchedulerStatus;
 
 /// Request to execute a SurrealQL query against the snapshot DB
 #[derive(Debug, Deserialize)]
@@ -22,6 +23,7 @@ pub struct ProxyQueryRequest {
 #[derive(Clone)]
 pub struct ProxyState {
     pub replica: Arc<RwLock<Replica>>,
+    pub status: Arc<RwLock<SchedulerStatus>>,
 }
 
 /// Create proxy router for SSP bootstrap
@@ -33,11 +35,25 @@ pub fn create_proxy_router(state: ProxyState) -> Router {
         .with_state(state)
 }
 
+async fn reject_if_restoring(
+    status: &Arc<RwLock<SchedulerStatus>>,
+) -> Result<(), (StatusCode, String)> {
+    if *status.read().await == SchedulerStatus::Restoring {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Scheduler is restoring from backup".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// Handle a SurrealQL query forwarded to the snapshot DB
 async fn handle_proxy_query(
     State(state): State<ProxyState>,
     Json(request): Json<ProxyQueryRequest>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
+    reject_if_restoring(&state.status).await?;
+
     debug!("Proxy query: {}", request.query);
 
     let replica = state.replica.read().await;
@@ -54,11 +70,17 @@ async fn handle_proxy_query(
 }
 
 /// No-op signin — snapshot DB doesn't need auth
-async fn handle_proxy_signin() -> StatusCode {
-    StatusCode::OK
+async fn handle_proxy_signin(
+    State(state): State<ProxyState>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    reject_if_restoring(&state.status).await?;
+    Ok(StatusCode::OK)
 }
 
 /// No-op namespace/db selection — already configured
-async fn handle_proxy_use() -> StatusCode {
-    StatusCode::OK
+async fn handle_proxy_use(
+    State(state): State<ProxyState>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    reject_if_restoring(&state.status).await?;
+    Ok(StatusCode::OK)
 }

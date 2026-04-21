@@ -77,10 +77,16 @@ async fn main() -> Result<()> {
     let backup_config = Arc::new(scheduler::backup::BackupConfig::from_env());
     let backup_registry = Arc::new(scheduler::backup::BackupRegistry::new());
     let (backup_tx, backup_rx) = scheduler::backup::create_backup_channel();
+    let restore_registry = Arc::new(scheduler::restore::RestoreRegistry::new());
+    let (restore_tx, restore_rx) = scheduler::restore::create_restore_channel();
+    let backup_restore_lock = Arc::new(tokio::sync::Mutex::new(()));
     let backup_router = scheduler::backup::create_backup_router(scheduler.backup_state(
         Arc::clone(&backup_registry),
         backup_tx.clone(),
         Arc::clone(&backup_config),
+        Arc::clone(&restore_registry),
+        restore_tx.clone(),
+        Arc::clone(&backup_restore_lock),
     ));
 
     let app = axum::Router::new()
@@ -115,12 +121,30 @@ async fn main() -> Result<()> {
         let ingest = scheduler.ingest_state();
         let config = Arc::clone(&backup_config);
         let registry = Arc::clone(&backup_registry);
+        let lock = Arc::clone(&backup_restore_lock);
         tokio::spawn(async move {
-            scheduler::backup::run_backup_worker(backup_rx, replica, ingest, config, registry).await;
+            scheduler::backup::run_backup_worker(backup_rx, replica, ingest, config, registry, lock).await;
         });
     }
 
-    info!("Started background monitors for query reassignment, job failover, and backups");
+    // Spawn the single-consumer restore worker
+    {
+        let replica = scheduler.replica.clone();
+        let ingest = scheduler.ingest_state();
+        let ssp_pool = Arc::clone(&scheduler.ssp_pool);
+        let s3_config = Arc::clone(&backup_config);
+        let db_config = Arc::new(scheduler.config().db.clone());
+        let registry = Arc::clone(&restore_registry);
+        let lock = Arc::clone(&backup_restore_lock);
+        tokio::spawn(async move {
+            scheduler::restore::run_restore_worker(
+                restore_rx, replica, ingest, ssp_pool, s3_config, db_config, registry, lock,
+            )
+            .await;
+        });
+    }
+
+    info!("Started background monitors for query reassignment, job failover, backups, and restores");
     
     // Spawn HTTP server
     let server_handle = tokio::spawn(async move {

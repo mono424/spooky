@@ -193,6 +193,19 @@ impl SspPool {
         self.ssps.remove(ssp_id)
     }
 
+    /// Drop every SSP from the pool and clear all associated buffers/state.
+    /// Used when the replica has been restored and SSPs must re-register
+    /// against the new state. Returns the count of SSPs removed.
+    pub fn clear_all(&mut self) -> usize {
+        let count = self.ssps.len();
+        self.ssps.clear();
+        self.ssp_states.clear();
+        self.message_buffers.clear();
+        self.ssp_snapshot_seqs.clear();
+        self.round_robin_index = 0;
+        count
+    }
+
     /// Get an SSP by ID
     pub fn get(&self, ssp_id: &str) -> Option<&SspInfo> {
         self.ssps.get(ssp_id)

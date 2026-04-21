@@ -233,6 +233,7 @@ async fn info_handler(
         SchedulerStatus::Ready => "ready",
         SchedulerStatus::SnapshotFrozen => "frozen",
         SchedulerStatus::SnapshotUpdating => "updating",
+        SchedulerStatus::Restoring => "restoring",
     };
 
     let pool = state.ssp_pool.read().await;

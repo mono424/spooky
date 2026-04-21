@@ -234,6 +234,70 @@ impl Replica {
         Ok(())
     }
 
+    /// Import a SurrealQL dump file into the replica. Caller must ensure the
+    /// underlying DB is empty (call `reset` first) — `import` executes the
+    /// statements from the file and will error on duplicate records.
+    pub async fn import_from_file(&self, path: &std::path::Path) -> Result<()> {
+        self.db
+            .import(path)
+            .await
+            .with_context(|| format!("Failed to import replica from {:?}", path))?;
+        Ok(())
+    }
+
+    /// Drop the embedded DB handle, remove the on-disk RocksDB directory, and
+    /// reopen a fresh empty DB at the same path. Resets `snapshot_seq` to 0.
+    /// The caller must hold the write lock on the replica.
+    pub async fn reset(&mut self) -> Result<()> {
+        // Only kv-rocksdb is compiled in, so the "placeholder" also lives on
+        // disk. Use a tempdir so the old RocksDB handle drops and releases its
+        // file locks before we delete the real directory.
+        let placeholder_dir =
+            tempfile::tempdir().context("Failed to create tempdir for replica reset")?;
+        let placeholder = Surreal::new::<RocksDb>(
+            placeholder_dir.path().to_str().unwrap_or("/tmp/spky_reset"),
+        )
+        .await
+        .context("Failed to open placeholder DB during reset")?;
+        self.db = placeholder;
+
+        if self.db_path.exists() {
+            std::fs::remove_dir_all(&self.db_path)
+                .with_context(|| format!("Failed to remove replica dir {:?}", self.db_path))?;
+        }
+        if let Some(parent) = self.db_path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to recreate parent dir {:?}", parent))?;
+        }
+
+        let fresh = Surreal::new::<RocksDb>(
+            self.db_path.to_str().unwrap_or("./data/replica"),
+        )
+        .await
+        .with_context(|| format!("Failed to reopen RocksDB at {:?}", self.db_path))?;
+
+        fresh
+            .use_ns("sp00ky")
+            .use_db("snapshot")
+            .await
+            .context("Failed to select namespace/database on fresh replica")?;
+
+        self.db = fresh;
+        self.snapshot_seq = 0;
+        drop(placeholder_dir);
+        info!(path = ?self.db_path, "Replica reset (dropped + reopened empty)");
+        Ok(())
+    }
+
+    /// Re-read `snapshot_seq` from the embedded metadata table. Useful after
+    /// importing a dump — the imported `_00_metadata:snapshot` row carries the
+    /// seq from the time of backup.
+    pub async fn reload_snapshot_seq(&mut self) -> Result<u64> {
+        let seq = Self::read_snapshot_seq_from_db(&self.db).await.unwrap_or(0);
+        self.snapshot_seq = seq;
+        Ok(seq)
+    }
+
     /// Run an arbitrary SurrealQL query against the snapshot DB
     /// Returns the raw JSON response (used by the HTTP proxy)
     pub async fn query(&self, surql: &str) -> Result<Value> {

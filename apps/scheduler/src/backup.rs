@@ -15,11 +15,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::io::Write;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, Mutex, RwLock};
 use tracing::{error, info, warn};
 
 use crate::ingest::{pending_events_snapshot, IngestState};
 use crate::replica::Replica;
+use crate::restore::{RestoreJob, RestoreRegistry};
 
 /// Max finished (Completed/Failed) jobs to retain in the registry.
 const RECENT_JOB_LIMIT: usize = 50;
@@ -33,6 +34,9 @@ pub struct BackupState {
     pub config: Arc<BackupConfig>,
     pub registry: Arc<BackupRegistry>,
     pub tx: mpsc::Sender<BackupJob>,
+    pub restore_registry: Arc<RestoreRegistry>,
+    pub restore_tx: mpsc::Sender<RestoreJob>,
+    pub backup_restore_lock: Arc<Mutex<()>>,
 }
 
 #[derive(Debug, Clone)]
@@ -76,7 +80,7 @@ impl BackupConfig {
         .context("Failed to build S3 credentials")
     }
 
-    fn get_bucket(&self) -> Result<Box<Bucket>> {
+    pub fn get_bucket(&self) -> Result<Box<Bucket>> {
         let bucket = Bucket::new(&self.s3_bucket, self.region(), self.credentials()?)?
             .with_path_style();
         Ok(bucket)
@@ -260,6 +264,7 @@ pub fn create_backup_router(state: BackupState) -> Router {
     Router::new()
         .route("/backup/create", post(create_backup))
         .route("/backup/restore", post(restore_backup))
+        .route("/backup/restore/status/:restore_id", get(restore_status_by_id))
         .route("/backup/status", get(backup_status))
         .route("/backup/status/:backup_id", get(backup_status_by_id))
         .with_state(state)
@@ -325,25 +330,95 @@ async fn create_backup(
 
 #[derive(Deserialize)]
 struct RestoreRequest {
-    #[allow(dead_code)]
+    /// Optional — if omitted the scheduler uses `backup_id` as the restore id.
+    #[serde(default)]
+    restore_id: Option<String>,
     backup_id: String,
-    #[allow(dead_code)]
     project_slug: String,
-    #[allow(dead_code)]
     storage_path: String,
 }
 
+#[derive(Serialize)]
+struct RestoreResponse {
+    restore_id: String,
+    status: String,
+    queue_position: usize,
+}
+
 async fn restore_backup(
-    State(_state): State<BackupState>,
-    Json(_req): Json<RestoreRequest>,
-) -> (StatusCode, Json<serde_json::Value>) {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(serde_json::json!({
-            "error": "restore via native import not yet implemented",
-            "hint": "download the .surql.gz artifact from S3 and run `surreal import`",
-        })),
-    )
+    State(state): State<BackupState>,
+    Json(req): Json<RestoreRequest>,
+) -> Result<(StatusCode, Json<RestoreResponse>), (StatusCode, String)> {
+    let restore_id = req.restore_id.unwrap_or_else(|| req.backup_id.clone());
+
+    if state.restore_registry.contains(&restore_id).await {
+        return Err((
+            StatusCode::CONFLICT,
+            format!("restore_id {} already exists", restore_id),
+        ));
+    }
+
+    state
+        .restore_registry
+        .enqueue(
+            restore_id.clone(),
+            req.backup_id.clone(),
+            req.project_slug.clone(),
+            req.storage_path.clone(),
+        )
+        .await;
+
+    let job = RestoreJob {
+        restore_id: restore_id.clone(),
+        backup_id: req.backup_id.clone(),
+        project_slug: req.project_slug.clone(),
+        storage_path: req.storage_path.clone(),
+    };
+
+    if let Err(e) = state.restore_tx.send(job).await {
+        state
+            .restore_registry
+            .mark_failed(
+                &restore_id,
+                format!("queue send failed: {}", e),
+                crate::restore::RestoreProgress::default(),
+            )
+            .await;
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Restore queue is closed".to_string(),
+        ));
+    }
+
+    let queue_position = state.restore_registry.queue_len().await;
+    info!(
+        restore_id = %restore_id,
+        backup_id = %req.backup_id,
+        queue_position,
+        "Restore enqueued"
+    );
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(RestoreResponse {
+            restore_id,
+            status: "queued".to_string(),
+            queue_position,
+        }),
+    ))
+}
+
+async fn restore_status_by_id(
+    State(state): State<BackupState>,
+    Path(restore_id): Path<String>,
+) -> Result<Json<crate::restore::RestoreJobState>, (StatusCode, String)> {
+    match state.restore_registry.get(&restore_id).await {
+        Some(s) => Ok(Json(s)),
+        None => Err((
+            StatusCode::NOT_FOUND,
+            format!("restore_id {} not found", restore_id),
+        )),
+    }
 }
 
 async fn backup_status(State(state): State<BackupState>) -> Json<serde_json::Value> {
@@ -402,11 +477,15 @@ pub async fn run_backup_worker(
     ingest: IngestState,
     config: Arc<BackupConfig>,
     registry: Arc<BackupRegistry>,
+    lock: Arc<Mutex<()>>,
 ) {
     info!("Backup worker started");
     while let Some(job) = rx.recv().await {
         registry.mark_running(&job.backup_id).await;
         info!(backup_id = %job.backup_id, project = %job.project_slug, "Backup worker running job");
+
+        // Serialize with the restore worker — never back up mid-restore.
+        let _guard = lock.lock().await;
 
         match execute_backup(&job, &replica, &ingest, &config).await {
             Ok((size_bytes, snapshot_seq, storage_path)) => {

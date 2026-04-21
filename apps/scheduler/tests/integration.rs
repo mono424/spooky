@@ -140,6 +140,7 @@ impl TestHarness {
     fn proxy_router(&self) -> Router {
         let state = ProxyState {
             replica: Arc::clone(&self.replica),
+            status: Arc::clone(&self.status),
         };
         proxy::create_proxy_router(state)
     }

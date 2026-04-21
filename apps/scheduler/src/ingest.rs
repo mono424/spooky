@@ -68,13 +68,22 @@ async fn handle_ingest(
     State(state): State<IngestState>,
     Json(request): Json<IngestRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    // Gate: reject if scheduler is cloning
+    // Gate: reject if scheduler is cloning or restoring
     let scheduler_status = *state.status.read().await;
-    if scheduler_status == SchedulerStatus::Cloning {
-        return Err((
-            StatusCode::SERVICE_UNAVAILABLE,
-            "SSP_NOT_READY: Scheduler is cloning database".to_string(),
-        ));
+    match scheduler_status {
+        SchedulerStatus::Cloning => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "SSP_NOT_READY: Scheduler is cloning database".to_string(),
+            ));
+        }
+        SchedulerStatus::Restoring => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "SSP_NOT_READY: Scheduler is restoring from backup".to_string(),
+            ));
+        }
+        _ => {}
     }
 
     info!(

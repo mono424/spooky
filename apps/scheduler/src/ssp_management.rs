@@ -59,14 +59,23 @@ async fn handle_register(
         ));
     }
 
-    // Check scheduler is not Cloning
+    // Check scheduler is not Cloning or Restoring
     {
         let scheduler_status = *state.status.read().await;
-        if scheduler_status == SchedulerStatus::Cloning {
-            return Err((
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Scheduler is still cloning database".to_string(),
-            ));
+        match scheduler_status {
+            SchedulerStatus::Cloning => {
+                return Err((
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Scheduler is still cloning database".to_string(),
+                ));
+            }
+            SchedulerStatus::Restoring => {
+                return Err((
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Scheduler is restoring from backup".to_string(),
+                ));
+            }
+            _ => {}
         }
     }
 
@@ -149,6 +158,14 @@ async fn handle_heartbeat(
     State(state): State<SspManagementState>,
     Json(heartbeat): Json<SspHeartbeat>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    // Reject heartbeats during restore so SSPs back off instead of spamming
+    if *state.status.read().await == SchedulerStatus::Restoring {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Scheduler is restoring from backup".to_string(),
+        ));
+    }
+
     // Check if SSP exists in pool
     let ssp_exists = {
         let pool = state.ssp_pool.read().await;

@@ -2,6 +2,7 @@ pub mod backend_health;
 pub mod backup;
 pub mod config;
 pub mod replica;
+pub mod restore;
 pub mod router;
 pub mod job_scheduler;
 pub mod transport;
@@ -94,6 +95,8 @@ pub enum SchedulerStatus {
     SnapshotFrozen,
     /// Batch-applying buffered events to snapshot
     SnapshotUpdating,
+    /// Restore in progress — ingest, register, proxy are all rejected
+    Restoring,
 }
 
 /// Main Scheduler service that orchestrates SurrealDB and SSP sidecars
@@ -217,14 +220,19 @@ impl Scheduler {
     pub fn proxy_state(&self) -> crate::proxy::ProxyState {
         crate::proxy::ProxyState {
             replica: Arc::clone(&self.replica),
+            status: Arc::clone(&self.status),
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn backup_state(
         &self,
         registry: Arc<crate::backup::BackupRegistry>,
         tx: tokio::sync::mpsc::Sender<crate::backup::BackupJob>,
         config: Arc<crate::backup::BackupConfig>,
+        restore_registry: Arc<crate::restore::RestoreRegistry>,
+        restore_tx: tokio::sync::mpsc::Sender<crate::restore::RestoreJob>,
+        backup_restore_lock: Arc<tokio::sync::Mutex<()>>,
     ) -> crate::backup::BackupState {
         crate::backup::BackupState {
             replica: Arc::clone(&self.replica),
@@ -232,6 +240,28 @@ impl Scheduler {
             config,
             registry,
             tx,
+            restore_registry,
+            restore_tx,
+            backup_restore_lock,
+        }
+    }
+
+    pub fn restore_state(
+        &self,
+        registry: Arc<crate::restore::RestoreRegistry>,
+        tx: tokio::sync::mpsc::Sender<crate::restore::RestoreJob>,
+        s3_config: Arc<crate::backup::BackupConfig>,
+        backup_restore_lock: Arc<tokio::sync::Mutex<()>>,
+    ) -> crate::restore::RestoreState {
+        crate::restore::RestoreState {
+            replica: Arc::clone(&self.replica),
+            ingest: self.ingest_state(),
+            ssp_pool: Arc::clone(&self.ssp_pool),
+            s3_config,
+            db_config: Arc::new(self.config.db.clone()),
+            registry,
+            tx,
+            backup_restore_lock,
         }
     }
 

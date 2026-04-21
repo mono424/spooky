@@ -2895,7 +2895,127 @@ fn backup(action: CloudBackupCommands) -> Result<()> {
                 &serde_json::json!({}),
             )?;
             let result: serde_json::Value = resp.into_json()?;
-            println!("  {}", result["message"].as_str().unwrap_or("Restore initiated"));
+            let restore_id = result["id"]
+                .as_str()
+                .or_else(|| result["restore_id"].as_str())
+                .unwrap_or(&backup_id)
+                .to_string();
+            println!("  Restore {} queued. Waiting for completion...", restore_id);
+
+            // Poll until restore completes. Same cadence as backup polling in
+            // the Reset flow (5s × 60 = up to 5 minutes).
+            let mut last_status = String::new();
+            let mut final_status: Option<String> = None;
+            let mut final_error: Option<String> = None;
+            for _ in 0..60 {
+                thread::sleep(Duration::from_secs(5));
+                let status_resp = client.get(&format!(
+                    "/v1/projects/{}/backups/{}/restore",
+                    pid, backup_id
+                ))?;
+                let row: serde_json::Value = status_resp.into_json()?;
+                let status = row["status"].as_str().unwrap_or("pending").to_string();
+                match status.as_str() {
+                    "completed" => {
+                        if !last_status.is_empty() {
+                            println!();
+                        }
+                        println!("  Restore completed.");
+                        final_status = Some(status);
+                        break;
+                    }
+                    "failed" => {
+                        if !last_status.is_empty() {
+                            println!();
+                        }
+                        final_error = Some(
+                            row["error"]
+                                .as_str()
+                                .unwrap_or("unknown")
+                                .to_string(),
+                        );
+                        final_status = Some(status);
+                        break;
+                    }
+                    _ => {
+                        if status != last_status {
+                            if !last_status.is_empty() {
+                                println!();
+                            }
+                            print!("  [{}]", status);
+                            last_status = status;
+                        } else {
+                            print!(".");
+                        }
+                        let _ = std::io::Write::flush(&mut std::io::stdout());
+                    }
+                }
+            }
+
+            match final_status.as_deref() {
+                Some("completed") => {}
+                Some("failed") => {
+                    let err = final_error.unwrap_or_else(|| "unknown".to_string());
+                    bail!("Restore failed: {}", err);
+                }
+                _ => bail!("Restore did not complete within 5 minutes. Check status with `sp00ky cloud backup list`."),
+            }
+
+            // Re-run migrations against the restored database.
+            println!("  Running migrations...");
+            let config_path = std::env::current_dir()?.join("sp00ky.yml");
+            let config = backend::load_config(&config_path);
+
+            let deployment = client.get(&format!("/v1/projects/{}/deployment", pid))?;
+            let deployment: serde_json::Value = deployment.into_json()?;
+
+            let db_url = deployment["urls"]["surrealdb"]
+                .as_str()
+                .map(|s| s.to_string())
+                .or_else(|| {
+                    deployment["surrealdb_ip"]
+                        .as_str()
+                        .map(|ip| format!("http://{}:8000", ip))
+                });
+            let db_password = deployment["surrealdb_password"]
+                .as_str()
+                .or_else(|| deployment["db_password"].as_str())
+                .unwrap_or("")
+                .to_string();
+
+            if let Some(db_url) = db_url {
+                let resolved = config.resolved_surrealdb();
+                let schema = config.resolved_schema();
+                let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
+                let migrations_dir = config_dir.join(&schema.migrations);
+
+                if migrations_dir.exists() {
+                    let ctx = crate::migration::MigrationContext {
+                        environment: crate::migration::MigrationEnvironment::Production,
+                        project_dir: config_dir.to_path_buf(),
+                        migrations_dir: migrations_dir.clone(),
+                        url: db_url.clone(),
+                        namespace: resolved.namespace.clone(),
+                        database: resolved.database.clone(),
+                        username: "root".to_string(),
+                        password: db_password.clone(),
+                        surrealkit_binary: config.resolved_surrealkit_binary(),
+                        internal_schema: None,
+                        remote_functions: None,
+                    };
+                    match crate::migration::create_engine(ctx).and_then(|e| e.apply()) {
+                        Ok(_) => println!("  Migrations complete."),
+                        Err(e) => println!("  Migration warning: {:?}", e),
+                    }
+                } else {
+                    println!("  No migrations directory found, skipping.");
+                }
+            } else {
+                println!("  Warning: could not resolve SurrealDB URL from deployment; skipping migrations.");
+            }
+
+            println!();
+            println!("  Restore complete.");
         }
         CloudBackupCommands::Delete { backup_id } => {
             let resp = client.delete(&format!("/v1/projects/{}/backups/{}", pid, backup_id))?;
