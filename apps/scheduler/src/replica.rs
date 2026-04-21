@@ -245,47 +245,28 @@ impl Replica {
         Ok(())
     }
 
-    /// Drop the embedded DB handle, remove the on-disk RocksDB directory, and
-    /// reopen a fresh empty DB at the same path. Resets `snapshot_seq` to 0.
-    /// The caller must hold the write lock on the replica.
+    /// Wipe the replica's logical contents in place via SurrealQL. Resets
+    /// `snapshot_seq` to 0. The caller must hold the write lock on the replica.
+    ///
+    /// We deliberately do NOT drop + reopen the RocksDB handle here: RocksDB's
+    /// `LOCK` file is released lazily after all handles drop, and the old
+    /// `Surreal<Db>` is an Arc'd handle that SurrealDB keeps alive beyond our
+    /// assignment — so reopening at the same path immediately races with the
+    /// prior lock and fails with "No locks available". REMOVE DATABASE +
+    /// DEFINE DATABASE achieves the same logical empty state without touching
+    /// the filesystem and mirrors how the main remote DB is wiped in
+    /// `restore::execute_restore_inner`.
     pub async fn reset(&mut self) -> Result<()> {
-        // Only kv-rocksdb is compiled in, so the "placeholder" also lives on
-        // disk. Use a tempdir so the old RocksDB handle drops and releases its
-        // file locks before we delete the real directory.
-        let placeholder_dir =
-            tempfile::tempdir().context("Failed to create tempdir for replica reset")?;
-        let placeholder = Surreal::new::<RocksDb>(
-            placeholder_dir.path().to_str().unwrap_or("/tmp/spky_reset"),
-        )
-        .await
-        .context("Failed to open placeholder DB during reset")?;
-        self.db = placeholder;
-
-        if self.db_path.exists() {
-            std::fs::remove_dir_all(&self.db_path)
-                .with_context(|| format!("Failed to remove replica dir {:?}", self.db_path))?;
-        }
-        if let Some(parent) = self.db_path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to recreate parent dir {:?}", parent))?;
-        }
-
-        let fresh = Surreal::new::<RocksDb>(
-            self.db_path.to_str().unwrap_or("./data/replica"),
-        )
-        .await
-        .with_context(|| format!("Failed to reopen RocksDB at {:?}", self.db_path))?;
-
-        fresh
-            .use_ns("sp00ky")
+        self.db
+            .query("REMOVE DATABASE IF EXISTS snapshot; DEFINE DATABASE snapshot;")
+            .await
+            .context("Failed to wipe replica database")?;
+        self.db
             .use_db("snapshot")
             .await
-            .context("Failed to select namespace/database on fresh replica")?;
-
-        self.db = fresh;
+            .context("Failed to re-select replica database after wipe")?;
         self.snapshot_seq = 0;
-        drop(placeholder_dir);
-        info!(path = ?self.db_path, "Replica reset (dropped + reopened empty)");
+        info!(path = ?self.db_path, "Replica reset (REMOVE DATABASE)");
         Ok(())
     }
 
@@ -396,5 +377,81 @@ impl Replica {
     /// Get number of tables
     pub fn table_count(&self) -> usize {
         4
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn insert_thread(db: &Surreal<surrealdb::engine::local::Db>, title: &str) -> Result<()> {
+        db.query(format!("CREATE thread SET title = '{}'", title))
+            .await?;
+        Ok(())
+    }
+
+    async fn count_threads(db: &Surreal<surrealdb::engine::local::Db>) -> Result<usize> {
+        let mut resp = db.query("SELECT count() FROM thread GROUP ALL").await?;
+        let rows: Vec<Value> = resp.take(0).unwrap_or_default();
+        Ok(rows
+            .first()
+            .and_then(|r| r.get("count"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as usize)
+    }
+
+    /// Reset must wipe data in place without tripping RocksDB's file lock, and
+    /// the handle must stay usable. This would have caught the original bug
+    /// (dropping + reopening at the same path failed with "No locks available").
+    #[tokio::test]
+    async fn reset_wipes_data_and_stays_usable() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut replica = Replica::new(tmp.path().join("replica")).await?;
+
+        insert_thread(&replica.db, "hello").await?;
+        assert_eq!(count_threads(&replica.db).await?, 1);
+        replica.set_snapshot_seq(42).await?;
+
+        replica.reset().await?;
+
+        assert_eq!(replica.snapshot_seq(), 0);
+        assert_eq!(replica.reload_snapshot_seq().await?, 0);
+        assert_eq!(count_threads(&replica.db).await?, 0);
+
+        insert_thread(&replica.db, "world").await?;
+        assert_eq!(count_threads(&replica.db).await?, 1);
+
+        replica.reset().await?;
+        assert_eq!(count_threads(&replica.db).await?, 0);
+
+        Ok(())
+    }
+
+    /// Full backup-restore shape: export → reset → import on a different path.
+    #[tokio::test]
+    async fn reset_then_import_round_trips_data() -> Result<()> {
+        let src_tmp = tempfile::tempdir()?;
+        let src = Replica::new(src_tmp.path().join("src")).await?;
+        insert_thread(&src.db, "hello").await?;
+
+        let dump = src_tmp.path().join("dump.surql");
+        src.export_to_file(&dump).await?;
+
+        let dst_tmp = tempfile::tempdir()?;
+        let mut dst = Replica::new(dst_tmp.path().join("dst")).await?;
+        insert_thread(&dst.db, "stale").await?;
+        assert_eq!(count_threads(&dst.db).await?, 1);
+
+        dst.reset().await?;
+        assert_eq!(count_threads(&dst.db).await?, 0);
+
+        dst.import_from_file(&dump).await?;
+
+        let mut resp = dst.db.query("SELECT title FROM thread").await?;
+        let rows: Vec<Value> = resp.take(0).unwrap_or_default();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get("title").and_then(|v| v.as_str()), Some("hello"));
+
+        Ok(())
     }
 }

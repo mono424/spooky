@@ -1,0 +1,35 @@
+services:
+  surrealdb:
+    image: surrealdb/surrealdb:v3.0.0
+    ports:
+      - '18000:8000'
+    command:
+      - start
+      - --allow-all
+      - --log
+      - info
+      - --user
+      - root
+      - --pass
+      - root
+      - memory
+    healthcheck:
+      test: ['CMD', '/surreal', 'is-ready', '--endpoint', 'http://localhost:8000']
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
+  minio:
+    image: minio/minio:latest
+    ports:
+      - '19000:9000'
+      - '19001:9001'
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ['CMD', 'curl', '-sf', 'http://localhost:9000/minio/health/live']
+      interval: 2s
+      timeout: 2s
+      retries: 20
