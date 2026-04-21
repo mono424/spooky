@@ -120,10 +120,14 @@ async fn main() -> Result<()> {
         let replica = scheduler.replica.clone();
         let ingest = scheduler.ingest_state();
         let config = Arc::clone(&backup_config);
+        let db_config = Arc::new(scheduler.config().db.clone());
         let registry = Arc::clone(&backup_registry);
         let lock = Arc::clone(&backup_restore_lock);
         tokio::spawn(async move {
-            scheduler::backup::run_backup_worker(backup_rx, replica, ingest, config, registry, lock).await;
+            scheduler::backup::run_backup_worker(
+                backup_rx, replica, ingest, config, db_config, registry, lock,
+            )
+            .await;
         });
     }
 

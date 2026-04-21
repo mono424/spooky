@@ -527,7 +527,7 @@ async fn execute_restore_inner(
 /// are only implemented for HTTP and local storage engines. Calling `.import()` on
 /// a WebSocket client returns `BackupsNotSupported` ("The protocol or storage
 /// engine does not support backups on this architecture").
-async fn connect_remote(
+pub(crate) async fn connect_remote(
     db_config: &DbConfig,
 ) -> Result<surrealdb::Surreal<surrealdb::engine::remote::http::Client>> {
     let (addr, secure) = if let Some(rest) = db_config.url.strip_prefix("wss://") {

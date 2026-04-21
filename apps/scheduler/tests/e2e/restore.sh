@@ -124,6 +124,13 @@ for _ in $(seq 1 60); do
 done
 curl -sf -o /dev/null "$SCHED_URL/backup/status" || { cat "$SCHED_LOG"; fail "Scheduler never became ready"; }
 
+log "Seeding main SurrealDB with one row"
+curl -sf -u root:root \
+  -H 'Accept: application/json' \
+  -H 'surreal-ns: sp00ky' -H 'surreal-db: sp00ky' \
+  --data 'CREATE thread SET title = "hello";' \
+  "$SURREAL_URL/sql" >/dev/null
+
 BACKUP_ID="e2e-$(date +%s)"
 PROJECT_SLUG="e2e"
 
@@ -144,16 +151,19 @@ curl -sf -X POST "$SCHED_URL/backup/restore" \
 
 poll_status "$SCHED_URL/backup/restore/status/$RESTORE_ID" restore 120 >/dev/null
 
-log "Verifying main DB is reachable and has the restored metadata table"
-INFO="$(curl -sf -u root:root \
+log "Verifying the seeded thread row round-tripped through backup+restore"
+RESP="$(curl -sf -u root:root \
   -H 'Accept: application/json' \
   -H 'surreal-ns: sp00ky' -H 'surreal-db: sp00ky' \
-  --data 'INFO FOR DB;' "$SURREAL_URL/sql")"
-printf '%s' "$INFO" | python3 -c 'import sys, json
+  --data 'SELECT count() FROM thread GROUP ALL;' \
+  "$SURREAL_URL/sql")"
+COUNT="$(printf '%s' "$RESP" | python3 -c 'import sys, json
 r = json.load(sys.stdin)
-tables = r[0]["result"]["tables"]
-assert "_00_metadata" in tables, f"expected _00_metadata after restore, got {list(tables)}"' \
-  || { printf '%s\n' "$INFO"; fail "main DB missing _00_metadata after restore"; }
+try:
+    print(r[0]["result"][0]["count"])
+except Exception:
+    print(0)')"
+[[ "$COUNT" == "1" ]] || { printf '%s\n' "$RESP"; fail "Expected 1 thread row after restore, got $COUNT"; }
 
-printf '\n\033[32mPASS: backup + restore pipeline succeeded end-to-end\033[0m\n'
-printf '\033[32m       (main DB imported via HTTP engine, replica reset via REMOVE DATABASE, WAL truncated)\033[0m\n'
+printf '\n\033[32mPASS: backup + restore round-trip succeeded (1 thread row preserved)\033[0m\n'
+printf '\033[32m       (backup exports main DB via HTTP, restore imports into main DB + replica)\033[0m\n'

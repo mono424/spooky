@@ -18,9 +18,10 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tracing::{error, info, warn};
 
+use crate::config::DbConfig;
 use crate::ingest::{pending_events_snapshot, IngestState};
 use crate::replica::Replica;
-use crate::restore::{RestoreJob, RestoreRegistry};
+use crate::restore::{connect_remote, RestoreJob, RestoreRegistry};
 
 /// Max finished (Completed/Failed) jobs to retain in the registry.
 const RECENT_JOB_LIMIT: usize = 50;
@@ -471,11 +472,13 @@ async fn ensure_bucket(config: &BackupConfig) {
 }
 
 /// Single-consumer worker: serially processes backup jobs from the queue.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_backup_worker(
     mut rx: mpsc::Receiver<BackupJob>,
     replica: Arc<RwLock<Replica>>,
     ingest: IngestState,
     config: Arc<BackupConfig>,
+    db_config: Arc<DbConfig>,
     registry: Arc<BackupRegistry>,
     lock: Arc<Mutex<()>>,
 ) {
@@ -487,7 +490,7 @@ pub async fn run_backup_worker(
         // Serialize with the restore worker — never back up mid-restore.
         let _guard = lock.lock().await;
 
-        match execute_backup(&job, &replica, &ingest, &config).await {
+        match execute_backup(&job, &replica, &ingest, &config, &db_config).await {
             Ok((size_bytes, snapshot_seq, storage_path)) => {
                 registry
                     .mark_completed(&job.backup_id, size_bytes, snapshot_seq, storage_path.clone())
@@ -515,8 +518,11 @@ async fn execute_backup(
     replica: &Arc<RwLock<Replica>>,
     ingest: &IngestState,
     config: &BackupConfig,
+    db_config: &DbConfig,
 ) -> Result<(u64, u64, String)> {
-    // 1. Drain in-memory events into the replica so the backup captures the latest state.
+    // 1. Drain in-memory events into the replica. This keeps the replica's
+    //    snapshot_seq current (useful for SSP bootstrap) even though the
+    //    backup itself exports the main DB.
     let applied = crate::drain_and_apply(&ingest.event_buffer, replica, &ingest.wal)
         .await
         .context("Failed to drain pending events into replica before backup")?;
@@ -524,15 +530,29 @@ async fn execute_backup(
         info!(backup_id = %job.backup_id, applied, "Drained pending events into replica");
     }
 
-    // 2. Native SurrealDB export to a tempfile.
+    // 2. Export the MAIN SurrealDB directly over HTTP.
+    //
+    //    Earlier we exported the embedded replica, but the replica is only
+    //    partially synced (its bootstrap + event-forwarding pipeline can miss
+    //    tables and bucket data), which produced empty ~0.2 KB dumps. Exporting
+    //    main is authoritative — whatever the user sees in SurrealDB is what
+    //    lands in the backup.
+    //
+    //    Note: SurrealDB's native export does NOT include bucket file contents;
+    //    only the `DEFINE BUCKET` statements. Backing up bucket-backed files
+    //    requires a separate copy step from the bucket's backing store.
     let tmp = tempfile::NamedTempFile::new().context("Failed to create tempfile for export")?;
     let tmp_path = tmp.path().to_path_buf();
 
-    let snapshot_seq = {
-        let rep = replica.read().await;
-        rep.export_to_file(&tmp_path).await.context("Native export failed")?;
-        rep.snapshot_seq()
-    };
+    let remote = connect_remote(db_config)
+        .await
+        .context("Failed to connect to main SurrealDB for backup export")?;
+    remote
+        .export(&tmp_path)
+        .await
+        .context("Failed to export main SurrealDB")?;
+
+    let snapshot_seq = replica.read().await.snapshot_seq();
 
     // 3. Read & gzip.
     let raw = std::fs::read(&tmp_path).context("Failed to read exported file")?;

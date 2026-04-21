@@ -180,9 +180,21 @@ enum CloudCommands {
         /// Also upgrade SSP and scheduler to latest version
         #[arg(long)]
         upgrade: bool,
+        /// Wipe the scheduler's persistent volume before redeploy. Use
+        /// after scheduler state corruption. Does NOT touch the user's
+        /// SurrealDB data.
+        #[arg(long)]
+        clean: bool,
     },
     /// Show deployment status
     Status,
+    /// Print SurrealDB root credentials for the current project
+    Credentials {
+        /// Print only the password (no URL / username label) — handy for piping
+        /// into other tools (e.g. `export SURREAL_PASS=$(spky cloud credentials --raw)`).
+        #[arg(long)]
+        raw: bool,
+    },
     /// Tail logs from cloud deployment
     Logs {
         /// Filter by service(s): surrealdb, scheduler, ssp, backend, frontend.

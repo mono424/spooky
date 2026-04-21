@@ -881,8 +881,9 @@ pub fn run(action: CloudCommands) -> Result<()> {
         CloudCommands::Logout => logout(),
         CloudCommands::Create { slug, plan } => create(slug, plan),
         CloudCommands::List => list(),
-        CloudCommands::Deploy { upgrade } => deploy(upgrade),
+        CloudCommands::Deploy { upgrade, clean } => deploy(upgrade, clean),
         CloudCommands::Status => status(),
+        CloudCommands::Credentials { raw } => credentials(raw),
         CloudCommands::Logs { filter, split, service } => logs(filter, split, service),
         CloudCommands::Scale { ssp } => scale(ssp),
         CloudCommands::Destroy => destroy(),
@@ -1184,6 +1185,111 @@ fn resolve_deploy_env_entry(
     }
 }
 
+/// Apply remote functions + internal sp00ky schema against the main SurrealDB.
+///
+/// Runs after user migrations on both deploy AND restore. Without this step,
+/// the `_00_metadata`, `_00_query`, and per-table sp00ky events are missing,
+/// and the scheduler/SSP can't bootstrap against the DB.
+///
+/// Idempotent — all DEFINE statements use OVERWRITE.
+#[allow(clippy::too_many_arguments)]
+fn apply_remote_fns_and_internal_schema(
+    db_url: &str,
+    db_password: &str,
+    deployment_status: &serde_json::Value,
+    config: &backend::Sp00kyConfig,
+    config_path: &std::path::Path,
+    client: &mut CloudClient,
+    pid: &str,
+) {
+    let resolved = config.resolved_surrealdb();
+
+    let surreal_client = if db_password.is_empty() {
+        crate::surreal_client::SurrealClient::new_unauthenticated(
+            db_url,
+            &resolved.namespace,
+            &resolved.database,
+        )
+    } else {
+        crate::surreal_client::SurrealClient::new(
+            db_url,
+            &resolved.namespace,
+            &resolved.database,
+            "root",
+            db_password,
+        )
+    };
+
+    // Prefer a running scheduler's real internal IP; fall back to the
+    // deterministic .20 suffix (Firecracker) or the Docker DNS alias.
+    let fn_endpoint = deployment_status["vms"].as_array().and_then(|vms| {
+        if let Some(sched_ip) = vms
+            .iter()
+            .find(|v| v["role"].as_str() == Some("scheduler"))
+            .and_then(|v| v["internal_ip"].as_str())
+        {
+            return Some(format!("http://{}:9667", sched_ip));
+        }
+        let surreal_ip = vms
+            .iter()
+            .find(|v| v["role"].as_str() == Some("surrealdb"))
+            .and_then(|v| v["internal_ip"].as_str())?;
+        let parts: Vec<&str> = surreal_ip.split('.').collect();
+        if parts.len() == 4 && parts[0] == "10" {
+            let subnet = format!("{}.{}.{}", parts[0], parts[1], parts[2]);
+            Some(format!("http://{}.20:9667", subnet))
+        } else {
+            Some("http://scheduler:9667".to_string())
+        }
+    });
+
+    let Some(fn_endpoint) = fn_endpoint else {
+        println!("  ▸ Warning: could not derive scheduler endpoint; skipping remote functions + internal schema.");
+        return;
+    };
+
+    let mode = config.mode.clone().unwrap_or_default();
+    let auth_secret = deployment_status["sp00ky_auth_secret"]
+        .as_str()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| {
+            let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
+            for (_name, app_config) in config.backends() {
+                let all_env = resolve_env_for_deploy(&app_config.env, config_dir, client, pid);
+                for entry in &all_env {
+                    if let Some(val) = entry.strip_prefix("SP00KY_AUTH_SECRET=") {
+                        return val.to_string();
+                    }
+                }
+            }
+            String::new()
+        });
+
+    let functions_sql =
+        crate::schema_builder::build_remote_functions_schema(&mode, &fn_endpoint, &auth_secret);
+    match surreal_client.execute(&functions_sql) {
+        Ok(_) => println!("  ▸ Remote functions applied."),
+        Err(e) => println!("  ▸ Warning: failed to apply remote functions: {:?}", e),
+    }
+
+    let int_schema = config.resolved_schema();
+    let int_config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
+    let schema_input_path = int_config_dir.join(&int_schema.schema);
+    if schema_input_path.exists() {
+        match crate::migrate::apply_internal_schema(
+            &surreal_client,
+            &schema_input_path,
+            Some(config_path),
+            &mode,
+            Some(&fn_endpoint),
+            Some(&auth_secret),
+        ) {
+            Ok(()) => {}
+            Err(e) => println!("  ▸ Warning: failed to apply internal schema: {:?}", e),
+        }
+    }
+}
+
 /// Resolve the full EnvConfig for cloud deploy, returning "KEY=VAL" strings.
 fn resolve_env_for_deploy(
     env: &Option<backend::EnvConfig>,
@@ -1306,7 +1412,7 @@ fn build_frontend_manifest(
     })
 }
 
-fn deploy(upgrade: bool) -> Result<()> {
+fn deploy(upgrade: bool, clean: bool) -> Result<()> {
     // Guided flow: ensure login → project → billing before expensive work
     let creds = ensure_login()?;
     let mut client = CloudClient::new(&creds);
@@ -1668,6 +1774,7 @@ fn deploy(upgrade: bool) -> Result<()> {
         "frontend": frontend_manifest,
         "ssp_count": ssp_count,
         "upgrade_infra": upgrade,
+        "clean": clean,
     });
 
     let resp = client.post(
@@ -1749,103 +1856,15 @@ fn deploy(upgrade: bool) -> Result<()> {
                                 println!("  ▸ No migrations directory found, skipping.");
                             }
 
-                            // Build SurrealClient for post-migration steps
-                            let surreal_client = if db_password.is_empty() {
-                                crate::surreal_client::SurrealClient::new_unauthenticated(
-                                    db_url,
-                                    &resolved.namespace,
-                                    &resolved.database,
-                                )
-                            } else {
-                                crate::surreal_client::SurrealClient::new(
-                                    db_url,
-                                    &resolved.namespace,
-                                    &resolved.database,
-                                    "root",
-                                    db_password,
-                                )
-                            };
-
-                            // Apply remote functions + internal schema BEFORE finalize so that
-                            // SSP/scheduler can bootstrap from already-migrated tables (they
-                            // require _00_query etc. to exist at startup).
-                            //
-                            // SurrealDB calls this endpoint from inside its container via
-                            // http::get(), so the scheduler container's DNS alias (`scheduler`
-                            // in Docker mode, a fixed IP in Firecracker mode) is what works.
-                            // In Firecracker mode the scheduler isn't up yet at this point
-                            // (apps phase runs after migrate), so we fall back to the
-                            // deterministic .20 suffix the orchestrator assigns.
-                            let fn_endpoint = status_data["vms"].as_array()
-                                .and_then(|vms| {
-                                    // Prefer a running scheduler's real internal IP — works for
-                                    // both modes whenever a scheduler is actually up.
-                                    if let Some(sched_ip) = vms.iter()
-                                        .find(|v| v["role"].as_str() == Some("scheduler"))
-                                        .and_then(|v| v["internal_ip"].as_str())
-                                    {
-                                        return Some(format!("http://{}:9667", sched_ip));
-                                    }
-                                    // Firecracker fallback: derive from SurrealDB IP's subnet
-                                    // (deterministic: SurrealDB=.10, scheduler=.20, SSP=.30).
-                                    let surreal_ip = vms.iter()
-                                        .find(|v| v["role"].as_str() == Some("surrealdb"))
-                                        .and_then(|v| v["internal_ip"].as_str())?;
-                                    let parts: Vec<&str> = surreal_ip.split('.').collect();
-                                    if parts.len() == 4 && parts[0] == "10" {
-                                        let subnet = format!("{}.{}.{}", parts[0], parts[1], parts[2]);
-                                        Some(format!("http://{}.20:9667", subnet))
-                                    } else {
-                                        // Docker mode without scheduler running yet: use the
-                                        // Docker DNS alias set by the runtime adapter.
-                                        Some("http://scheduler:9667".to_string())
-                                    }
-                                });
-
-                            if let Some(ref fn_endpoint) = fn_endpoint {
-                                let mode = config.mode.clone().unwrap_or_default();
-                                let auth_secret = status_data["sp00ky_auth_secret"]
-                                    .as_str()
-                                    .map(|s| s.to_string())
-                                    .unwrap_or_else(|| {
-                                        let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
-                                        for (_name, app_config) in config.backends() {
-                                            let all_env = resolve_env_for_deploy(&app_config.env, config_dir, &mut client, &pid);
-                                            for entry in &all_env {
-                                                if let Some(val) = entry.strip_prefix("SP00KY_AUTH_SECRET=") {
-                                                    return val.to_string();
-                                                }
-                                            }
-                                        }
-                                        String::new()
-                                    });
-
-                                let functions_sql = crate::schema_builder::build_remote_functions_schema(
-                                    &mode, fn_endpoint, &auth_secret,
-                                );
-                                match surreal_client.execute(&functions_sql) {
-                                    Ok(_) => println!("  ▸ Remote functions applied."),
-                                    Err(e) => println!("  ▸ Warning: failed to apply remote functions: {:?}", e),
-                                }
-
-                                let int_schema = config.resolved_schema();
-                                let int_config_dir = config_path.parent()
-                                    .unwrap_or(std::path::Path::new("."));
-                                let schema_input_path = int_config_dir.join(&int_schema.schema);
-                                if schema_input_path.exists() {
-                                    match crate::migrate::apply_internal_schema(
-                                        &surreal_client,
-                                        &schema_input_path,
-                                        Some(config_path.as_path()),
-                                        &mode,
-                                        Some(fn_endpoint),
-                                        Some(&auth_secret),
-                                    ) {
-                                        Ok(()) => {}
-                                        Err(e) => println!("  ▸ Warning: failed to apply internal schema: {:?}", e),
-                                    }
-                                }
-                            }
+                            apply_remote_fns_and_internal_schema(
+                                db_url,
+                                db_password,
+                                &status_data,
+                                &config,
+                                config_path.as_path(),
+                                &mut client,
+                                &pid,
+                            );
                         }
                     }
                 }
@@ -2309,6 +2328,37 @@ fn status() -> Result<()> {
     let data: serde_json::Value = resp.into_json().context("Failed to parse response")?;
 
     print_deployment_details(&data);
+    Ok(())
+}
+
+fn credentials(raw: bool) -> Result<()> {
+    let creds = require_credentials()?;
+    let mut client = CloudClient::new(&creds);
+    let (_, pid) = resolve_project_id(&mut client)?;
+
+    let resp = client.get(&format!("/v1/projects/{}/deployment", pid))?;
+    let data: serde_json::Value = resp.into_json().context("Failed to parse response")?;
+
+    let password = data["surrealdb_password"]
+        .as_str()
+        .or_else(|| data["db_password"].as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "No SurrealDB password available for this project. \
+                 Has the project been deployed?"
+            )
+        })?;
+
+    if raw {
+        println!("{}", password);
+        return Ok(());
+    }
+
+    let url = data["urls"]["surrealdb"].as_str().unwrap_or("(unknown)");
+    println!("  SurrealDB URL:      {}", url);
+    println!("  Username:           root");
+    println!("  Password:           {}", password);
     Ok(())
 }
 
@@ -2848,6 +2898,75 @@ fn destroy() -> Result<()> {
     Ok(())
 }
 
+/// Accept either a backup id (UUID) or a user-supplied `name`/slug and return
+/// the resolved id. UUIDs pass through untouched to avoid a round-trip on the
+/// common case. For anything else we fetch `/backups` and match on name, id
+/// prefix (first 8 chars shown by `backup list`), or exact id.
+fn resolve_backup_id(client: &mut CloudClient, pid: &str, input: &str) -> Result<String> {
+    if is_uuid(input) {
+        return Ok(input.to_string());
+    }
+
+    let resp = client.get(&format!("/v1/projects/{}/backups", pid))?;
+    let backups: Vec<serde_json::Value> = resp
+        .into_json()
+        .context("Failed to list backups while resolving backup name")?;
+
+    let mut by_name: Vec<&serde_json::Value> = backups
+        .iter()
+        .filter(|b| b["name"].as_str() == Some(input))
+        .collect();
+    if by_name.len() == 1 {
+        return Ok(by_name.remove(0)["id"].as_str().unwrap_or(input).to_string());
+    }
+    if by_name.len() > 1 {
+        bail!(
+            "Backup name '{}' is ambiguous — {} backups share this name. Pass the full backup id instead.",
+            input,
+            by_name.len()
+        );
+    }
+
+    let mut by_prefix: Vec<&serde_json::Value> = backups
+        .iter()
+        .filter(|b| b["id"].as_str().map(|id| id.starts_with(input)).unwrap_or(false))
+        .collect();
+    if by_prefix.len() == 1 {
+        return Ok(by_prefix.remove(0)["id"].as_str().unwrap_or(input).to_string());
+    }
+    if by_prefix.len() > 1 {
+        bail!(
+            "Backup id prefix '{}' is ambiguous — matches {} backups.",
+            input,
+            by_prefix.len()
+        );
+    }
+
+    bail!(
+        "No backup found matching '{}'. Run `sp00ky cloud backup list` to see available backups.",
+        input
+    )
+}
+
+fn is_uuid(s: &str) -> bool {
+    // UUIDs are 36 chars, 8-4-4-4-12 hex with dashes.
+    if s.len() != 36 {
+        return false;
+    }
+    let bytes = s.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        let expect_dash = matches!(i, 8 | 13 | 18 | 23);
+        if expect_dash {
+            if b != b'-' {
+                return false;
+            }
+        } else if !b.is_ascii_hexdigit() {
+            return false;
+        }
+    }
+    true
+}
+
 fn backup(action: CloudBackupCommands) -> Result<()> {
     let creds = require_credentials()?;
     let mut client = CloudClient::new(&creds);
@@ -2889,6 +3008,7 @@ fn backup(action: CloudBackupCommands) -> Result<()> {
             println!("  Status: {}", result["status"].as_str().unwrap_or("pending"));
         }
         CloudBackupCommands::Restore { backup_id } => {
+            let backup_id = resolve_backup_id(&mut client, &pid, &backup_id)?;
             println!("  Restoring from backup {}...", backup_id);
             let resp = client.post(
                 &format!("/v1/projects/{}/backups/{}/restore", pid, backup_id),
@@ -3010,6 +3130,20 @@ fn backup(action: CloudBackupCommands) -> Result<()> {
                 } else {
                     println!("  No migrations directory found, skipping.");
                 }
+
+                // Re-apply sp00ky-internal schema (meta tables + per-table events).
+                // The dump only contains user-table data; without this, the restored
+                // DB is missing _00_metadata / _00_query / mutation + delete events
+                // and the scheduler/SSP can't bootstrap against it.
+                apply_remote_fns_and_internal_schema(
+                    &db_url,
+                    &db_password,
+                    &deployment,
+                    &config,
+                    config_path.as_path(),
+                    &mut client,
+                    &pid,
+                );
             } else {
                 println!("  Warning: could not resolve SurrealDB URL from deployment; skipping migrations.");
             }
