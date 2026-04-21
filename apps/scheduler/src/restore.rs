@@ -521,20 +521,36 @@ async fn execute_restore_inner(
     })
 }
 
-/// Open a fresh WebSocket connection to the main SurrealDB using the same
-/// credentials the scheduler uses for the initial clone.
+/// Open a fresh HTTP connection to the main SurrealDB.
+///
+/// We use the HTTP engine (not WS) because `Surreal::import()` / `Surreal::export()`
+/// are only implemented for HTTP and local storage engines. Calling `.import()` on
+/// a WebSocket client returns `BackupsNotSupported` ("The protocol or storage
+/// engine does not support backups on this architecture").
 async fn connect_remote(
     db_config: &DbConfig,
-) -> Result<surrealdb::Surreal<surrealdb::engine::remote::ws::Client>> {
-    let ws_addr = db_config
-        .url
-        .strip_prefix("ws://")
-        .or_else(|| db_config.url.strip_prefix("wss://"))
-        .unwrap_or(&db_config.url);
+) -> Result<surrealdb::Surreal<surrealdb::engine::remote::http::Client>> {
+    let (addr, secure) = if let Some(rest) = db_config.url.strip_prefix("wss://") {
+        (rest, true)
+    } else if let Some(rest) = db_config.url.strip_prefix("ws://") {
+        (rest, false)
+    } else if let Some(rest) = db_config.url.strip_prefix("https://") {
+        (rest, true)
+    } else if let Some(rest) = db_config.url.strip_prefix("http://") {
+        (rest, false)
+    } else {
+        (db_config.url.as_str(), false)
+    };
 
-    let db = surrealdb::Surreal::new::<surrealdb::engine::remote::ws::Ws>(ws_addr)
-        .await
-        .with_context(|| format!("Failed to open WS to {}", db_config.url))?;
+    let db = if secure {
+        surrealdb::Surreal::new::<surrealdb::engine::remote::http::Https>(addr)
+            .await
+            .with_context(|| format!("Failed to open HTTPS to {}", db_config.url))?
+    } else {
+        surrealdb::Surreal::new::<surrealdb::engine::remote::http::Http>(addr)
+            .await
+            .with_context(|| format!("Failed to open HTTP to {}", db_config.url))?
+    };
 
     db.signin(surrealdb::opt::auth::Root {
         username: db_config.username.clone(),
