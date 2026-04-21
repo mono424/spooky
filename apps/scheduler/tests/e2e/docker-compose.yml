@@ -3,6 +3,8 @@ services:
     image: surrealdb/surrealdb:v3.0.0
     ports:
       - '18000:8000'
+    environment:
+      - SURREAL_CAPS_ALLOW_EXPERIMENTAL=surrealism,files
     command:
       - start
       - --allow-all

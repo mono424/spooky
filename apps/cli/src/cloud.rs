@@ -886,6 +886,7 @@ pub fn run(action: CloudCommands) -> Result<()> {
         CloudCommands::Credentials { raw } => credentials(raw),
         CloudCommands::Logs { filter, split, service } => logs(filter, split, service),
         CloudCommands::Scale { ssp } => scale(ssp),
+        CloudCommands::Restart { clean } => restart(clean),
         CloudCommands::Destroy => destroy(),
         CloudCommands::Backup { action } => backup(action),
         CloudCommands::Billing { action } => billing(action),
@@ -2845,6 +2846,27 @@ fn scale(ssp: u32) -> Result<()> {
 
     println!("Scaling to {} SSP instance(s)...", count);
     poll_scale_completion(&mut client, &pid, ssp)?;
+    Ok(())
+}
+
+fn restart(clean: bool) -> Result<()> {
+    let creds = require_credentials()?;
+    let mut client = CloudClient::new(&creds);
+    let (slug, pid) = resolve_project_id(&mut client)?;
+
+    if clean {
+        println!("Restarting scheduler + SSPs for '{}' (scheduler volume WILL be wiped)...", slug);
+    } else {
+        println!("Restarting scheduler + SSPs for '{}'...", slug);
+    }
+
+    let resp = client.post(
+        &format!("/v1/projects/{}/restart", pid),
+        &serde_json::json!({ "clean": clean }),
+    )?;
+    let result: serde_json::Value = resp.into_json().context("Failed to parse response")?;
+    let stopped = result["stopped"].as_u64().unwrap_or(0);
+    println!("  Stopped {} container(s). Worker will recreate them shortly.", stopped);
     Ok(())
 }
 

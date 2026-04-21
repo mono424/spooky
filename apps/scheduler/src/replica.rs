@@ -2,8 +2,26 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use std::path::PathBuf;
 use surrealdb::engine::local::RocksDb;
+use surrealdb::opt::capabilities::{Capabilities, ExperimentalFeature};
+use surrealdb::opt::Config;
 use surrealdb::Surreal;
 use tracing::{debug, info, warn};
+
+/// Config for the embedded replica DB: enable `Files` + `Surrealism`
+/// experimental capabilities so dumps that reference `DEFINE BUCKET ...` (a
+/// Files feature) or surrealism modules import cleanly. The main SurrealDB
+/// runs with these enabled (via `SURREAL_CAPS_ALLOW_EXPERIMENTAL=surrealism,files`),
+/// so if the replica isn't configured to match, every post-v3 restore that
+/// touches buckets dies with "expected the experimental files feature to be
+/// enabled" when the replica tries to import the dump.
+fn replica_config() -> Config {
+    Config::new().capabilities(
+        Capabilities::default().with_experimental_features_allowed(&[
+            ExperimentalFeature::Files,
+            ExperimentalFeature::Surrealism,
+        ]),
+    )
+}
 
 // Re-export RecordOp from messages to avoid duplication
 pub use crate::messages::RecordOp;
@@ -45,9 +63,12 @@ impl Replica {
                 .with_context(|| format!("Failed to create directory: {:?}", parent))?;
         }
 
-        let db = Surreal::new::<RocksDb>(db_path.to_str().unwrap_or("./data/replica"))
-            .await
-            .with_context(|| format!("Failed to open RocksDB at {:?}", db_path))?;
+        let db = Surreal::new::<RocksDb>((
+            db_path.to_str().unwrap_or("./data/replica"),
+            replica_config(),
+        ))
+        .await
+        .with_context(|| format!("Failed to open RocksDB at {:?}", db_path))?;
 
         db.use_ns("sp00ky").use_db("snapshot").await
             .context("Failed to select namespace/database on replica")?;

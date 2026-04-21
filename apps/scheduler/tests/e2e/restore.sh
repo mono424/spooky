@@ -124,11 +124,14 @@ for _ in $(seq 1 60); do
 done
 curl -sf -o /dev/null "$SCHED_URL/backup/status" || { cat "$SCHED_LOG"; fail "Scheduler never became ready"; }
 
-log "Seeding main SurrealDB with one row"
+log "Seeding main SurrealDB with a row + a bucket DEFINE"
+# The bucket DEFINE triggers the "experimental files feature" path — the
+# replica must have ExperimentalFeature::Files enabled or the dump won't
+# re-import into it.
 curl -sf -u root:root \
   -H 'Accept: application/json' \
   -H 'surreal-ns: sp00ky' -H 'surreal-db: sp00ky' \
-  --data 'CREATE thread SET title = "hello";' \
+  --data "DEFINE BUCKET OVERWRITE profile_pictures BACKEND 'memory'; CREATE thread SET title = 'hello';" \
   "$SURREAL_URL/sql" >/dev/null
 
 BACKUP_ID="e2e-$(date +%s)"

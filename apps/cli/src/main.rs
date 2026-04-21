@@ -217,6 +217,14 @@ enum CloudCommands {
         #[arg(long)]
         ssp: u32,
     },
+    /// Restart the scheduler and SSP containers for the current deployment.
+    /// Backends, frontends, and SurrealDB are left untouched.
+    Restart {
+        /// Also wipe the scheduler's persistent volume. Use after
+        /// scheduler state corruption. Does NOT touch SurrealDB data.
+        #[arg(long)]
+        clean: bool,
+    },
     /// Destroy cloud project and all VMs
     Destroy,
     /// Manage database backups
