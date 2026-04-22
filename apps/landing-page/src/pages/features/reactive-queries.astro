@@ -1,0 +1,27 @@
+---
+import FeaturePage from '../../layouts/FeaturePage.astro';
+---
+
+<FeaturePage
+  title="Reactive Queries"
+  description="Subscribe to a SurrealQL query once. sp00ky pushes fresh results the moment the underlying data changes."
+  badge="Core · Library"
+  activePath="/features"
+>
+  <p>
+    sp00ky turns any SurrealQL query into a reactive subscription. Components declare what data
+    they need — sp00ky takes care of keeping it fresh, invalidating the right rows, and pushing
+    updates to every tab, window, and device that cares.
+  </p>
+  <p>
+    No polling, no manual cache invalidation, no WebSocket boilerplate. Your view layer simply
+    reads from a query result that’s always up to date.
+  </p>
+  <h2>Highlights</h2>
+  <ul>
+    <li>Full SurrealQL — joins, graph traversals, live aggregates.</li>
+    <li>Sub-50ms reactivity over a single multiplexed WebSocket.</li>
+    <li>Automatic disposal when your component unmounts.</li>
+    <li>Cross-tab invalidation built in.</li>
+  </ul>
+</FeaturePage>

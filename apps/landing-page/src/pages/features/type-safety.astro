@@ -1,0 +1,27 @@
+---
+import FeaturePage from '../../layouts/FeaturePage.astro';
+---
+
+<FeaturePage
+  title="End-to-end Type Safety"
+  description="Schema-first codegen. Types flow from the database all the way into your UI."
+  badge="Core · Library"
+  activePath="/features"
+>
+  <p>
+    Define your schema in SurrealQL once. sp00ky generates matching types for every client
+    language, so autocomplete and compile-time checks cover the whole stack. No hand-written
+    DTOs, no stale types, no drift between server and client.
+  </p>
+  <p>
+    Rename a field, and every call site that breaks lights up in your IDE before you ship.
+    Add a column, and your clients pick it up on the next build.
+  </p>
+  <h2>How it works</h2>
+  <ul>
+    <li>Schema lives in SurrealQL files, versioned with your code.</li>
+    <li>Codegen emits types for TypeScript, Dart, Rust, and more.</li>
+    <li>Queries, mutations, and reactive subscriptions are all typed.</li>
+    <li>Migrations are schema-aware, so breaking changes surface in CI.</li>
+  </ul>
+</FeaturePage>

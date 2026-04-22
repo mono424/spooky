@@ -3,6 +3,8 @@
 import '../styles/global.css';
 import { DeployTerminal } from '../components/DeployTerminal';
 import { PricingPage } from '../components/PricingPage';
+import SiteNav from '../components/SiteNav.astro';
+import SiteFooter from '../components/SiteFooter.astro';
 import { basePath } from '../config/nav';
 ---
 
@@ -26,76 +28,7 @@ import { basePath } from '../config/nav';
   </head>
 
   <body class="min-h-screen flex flex-col">
-    <div class="sticky top-0 z-50 border-b border-white/5 px-4 py-2 md:p-4 bg-black transition-all duration-300">
-      <nav class="max-w-7xl mx-auto flex justify-between items-center gap-8">
-        <a
-          href="/"
-          class="font-bold text-xl tracking-tight transition-colors duration-200 hover:text-text-tertiary cursor-pointer"
-        >
-          <img src="/logo.svg" alt="sp00ky Logo" class="h-6" />
-        </a>
-        <div class="flex items-center gap-6">
-          <div class="hidden md:flex items-center gap-6 text-body-sm">
-            <a
-              href="/#features"
-              class="text-text-tertiary hover:text-text-primary transition-colors duration-200"
-            >
-              Features
-            </a>
-            <a
-              href="/pricing"
-              class="text-text-primary transition-colors duration-200"
-            >
-              Pricing
-            </a>
-            <a
-              href="/team"
-              class="text-text-tertiary hover:text-text-primary transition-colors duration-200"
-            >
-              Team
-            </a>
-            <a
-              href={`${basePath}/docs`}
-              class="text-text-tertiary hover:text-text-primary transition-colors duration-200"
-            >
-              Docs
-            </a>
-            <a
-              href="https://github.com/mono424/sp00ky"
-              target="_blank"
-              class="text-text-tertiary hover:text-text-primary transition-colors duration-200"
-            >
-              GitHub
-            </a>
-          </div>
-          <button
-            id="mobile-menu-btn"
-            class="md:hidden p-2 text-text-tertiary hover:text-text-primary transition-colors duration-200"
-            aria-label="Toggle menu"
-          >
-            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
-            </svg>
-          </button>
-        </div>
-      </nav>
-      <div id="mobile-menu" class="hidden md:hidden border-t border-white/5 px-4 pb-4 pt-2 flex flex-col gap-3 text-body-sm">
-        <a href="/#features" class="text-text-tertiary hover:text-text-primary transition-colors duration-200">Features</a>
-        <a href="/pricing" class="text-text-primary transition-colors duration-200">Pricing</a>
-        <a href="/team" class="text-text-tertiary hover:text-text-primary transition-colors duration-200">Team</a>
-        <a href={`${basePath}/docs`} class="text-text-tertiary hover:text-text-primary transition-colors duration-200">Docs</a>
-        <a href="https://github.com/mono424/sp00ky" target="_blank" class="text-text-tertiary hover:text-text-primary transition-colors duration-200">GitHub</a>
-      </div>
-      <script>
-        const menuBtn = document.getElementById('mobile-menu-btn');
-        const mobileMenu = document.getElementById('mobile-menu');
-        if (menuBtn && mobileMenu) {
-          menuBtn.addEventListener('click', () => {
-            mobileMenu.classList.toggle('hidden');
-          });
-        }
-      </script>
-    </div>
+    <SiteNav activePath="/pricing" />
 
     <main class="relative flex-1">
       {/* Hero Section */}
@@ -157,24 +90,6 @@ import { basePath } from '../config/nav';
       </section>
     </main>
 
-    <footer class="py-12 border-t border-white/5 relative">
-      <div class="max-w-7xl mx-auto px-4 flex flex-col md:flex-row justify-between items-center">
-        <div class="mb-4 md:mb-0 text-sm text-text-tertiary flex items-center relative">
-          <img src="/logo_small.webp" alt="sp00ky Logo" class="w-4 h-4 mr-2" />
-          © 2026
-        </div>
-        <div class="space-x-6 text-sm">
-          <a href="/pricing" class="text-text-tertiary hover:text-text-primary transition-colors duration-200">Pricing</a>
-          <a href="/team" class="text-text-tertiary hover:text-text-primary transition-colors duration-200">Team</a>
-          <a href="#" class="text-text-tertiary hover:text-text-primary transition-colors duration-200">Privacy</a>
-          <a href="#" class="text-text-tertiary hover:text-text-primary transition-colors duration-200">Terms</a>
-          <a
-            href="https://github.com/mono424/sp00ky"
-            target="_blank"
-            class="text-text-tertiary hover:text-text-primary transition-colors duration-200"
-          >GitHub</a>
-        </div>
-      </div>
-    </footer>
+    <SiteFooter />
   </body>
 </html>

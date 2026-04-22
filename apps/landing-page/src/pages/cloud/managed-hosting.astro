@@ -1,0 +1,27 @@
+---
+import FeaturePage from '../../layouts/FeaturePage.astro';
+---
+
+<FeaturePage
+  title="Managed Hosting"
+  description="Production-ready sp00ky instances, spun up with one command. Autoscaling, TLS, and observability included."
+  badge="Cloud · Managed"
+  activePath="/cloud"
+>
+  <p>
+    Skip the infra work. <code>sp00ky deploy</code> spins up a production-grade instance with
+    autoscaling, TLS, encrypted storage, logs, and metrics — preconfigured to match the local
+    dev stack so promotion to production is a formality.
+  </p>
+  <p>
+    Bring your own domain, wire up environment secrets, and let sp00ky Cloud handle the rest.
+    Scale up when traffic grows; scale back down without downtime.
+  </p>
+  <h2>In the box</h2>
+  <ul>
+    <li>Zero-config TLS on your own domains.</li>
+    <li>Autoscaling compute with per-region placement.</li>
+    <li>Streaming logs and built-in metrics dashboards.</li>
+    <li>Environment variables, preview environments, and CI/CD hooks.</li>
+  </ul>
+</FeaturePage>

@@ -1,0 +1,77 @@
+---
+import { basePath } from '../config/nav';
+import { MegaMenu } from './MegaMenu';
+
+interface Props {
+  activePath?: string;
+}
+
+const { activePath = '/' } = Astro.props;
+
+const links = [
+  { label: 'Pricing', href: '/pricing' },
+  { label: 'Docs', href: `${basePath}/docs` },
+  { label: 'About', href: '/team' },
+];
+---
+
+<header class="nav-root">
+  <div class="nav-inner">
+    <a class="nav-logo" href="/">
+      <img src="/logo.svg" alt="sp00ky" />
+    </a>
+
+    <div class="nav-links-wrap">
+      <div class="nav-links">
+        <MegaMenu client:load />
+        {
+          links.map((l) => (
+            <a
+              class={`nav-link${activePath === l.href ? ' active' : ''}`}
+              href={l.href}
+            >
+              {l.label}
+            </a>
+          ))
+        }
+      </div>
+    </div>
+
+    <div class="nav-right">
+      <a
+        class="nav-github"
+        href="https://github.com/mono424/sp00ky"
+        target="_blank"
+        rel="noopener"
+        aria-label="GitHub"
+      >
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48l-.01-1.71c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.11-1.46-1.11-1.46-.91-.62.07-.61.07-.61 1 .07 1.53 1.03 1.53 1.03.89 1.53 2.34 1.09 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.56-1.11-4.56-4.95 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.64 0 0 .84-.27 2.75 1.02a9.58 9.58 0 0 1 5 0c1.9-1.29 2.75-1.02 2.75-1.02.55 1.37.2 2.39.1 2.64.64.7 1.03 1.59 1.03 2.68 0 3.85-2.34 4.69-4.57 4.94.36.31.68.92.68 1.86l-.01 2.76c0 .27.18.58.69.48A10 10 0 0 0 12 2z" />
+        </svg>
+      </a>
+      <button
+        id="mobile-menu-btn"
+        class="nav-mobile-toggle"
+        aria-label="Toggle menu"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"></path>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <div id="mobile-menu" class="nav-mobile-menu hidden">
+    <a href="/features">Features</a>
+    {links.map((l) => <a href={l.href}>{l.label}</a>)}
+    <a href="https://github.com/mono424/sp00ky" target="_blank" rel="noopener">GitHub</a>
+  </div>
+</header>
+
+<script>
+  const btn = document.getElementById('mobile-menu-btn');
+  const menu = document.getElementById('mobile-menu');
+  if (btn && menu) {
+    btn.addEventListener('click', () => menu.classList.toggle('hidden'));
+  }
+</script>

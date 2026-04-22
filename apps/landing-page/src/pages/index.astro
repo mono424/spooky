@@ -1,15 +1,12 @@
 ---
 // src/pages/index.astro
-// deploy trigger 2026-03-28
 // oxlint-disable-next-line no-unassigned-import
 import '../styles/global.css';
-import { AsciiGhost } from '../components/AsciiGhost';
-import { HeroTerminal } from '../components/HeroTerminal';
-import { ArchitectureDiagram } from '../components/ArchitectureDiagram';
-import GitHubStars from '../components/GitHubStars';
-import { DXFeatureGrid } from '../components/DXFeatureGrid';
-import { FeatureGrid, ScalableText } from '../components/UnderTheHood';
-import SectionHeadline from '../components/SectionHeadline.astro';
+import SiteNav from '../components/SiteNav.astro';
+import SiteFooter from '../components/SiteFooter.astro';
+import { HeroStack } from '../components/HeroStack';
+import { FloatingGhosts } from '../components/FloatingGhosts';
+import { FeatureGrid } from '../components/UnderTheHood';
 import { basePath } from '../config/nav';
 ---
 
@@ -31,10 +28,7 @@ import { basePath } from '../config/nav';
 
     <meta property="twitter:card" content="summary_large_image" />
     <meta property="twitter:url" content={Astro.site} />
-    <meta
-      property="twitter:title"
-      content="sp00ky: The SurrealDB Native Real-Time Sync Engine"
-    />
+    <meta property="twitter:title" content="sp00ky: The SurrealDB Native Real-Time Sync Engine" />
     <meta
       property="twitter:description"
       content="Build local-first, offline-ready applications with sp00ky. Use the power of SurrealDB to synchronize data instantly across devices."
@@ -44,500 +38,161 @@ import { basePath } from '../config/nav';
     <title>sp00ky</title>
   </head>
   <body class="min-h-screen flex flex-col">
-    <div class="sticky top-0 z-50 border-b border-white/5 px-4 py-2 md:p-4 bg-black transition-all duration-300">
-      <nav class="max-w-7xl mx-auto flex justify-between items-center gap-8">
-        <a
-          href="#home"
-          class="font-bold text-xl tracking-tight transition-colors duration-200 hover:text-text-tertiary cursor-pointer"
-        >
-          <img src="/logo.svg" alt="sp00ky Logo" class="h-6" />
-        </a>
-        <div class="flex items-center gap-6">
-          <div class="hidden md:flex items-center gap-6 text-body-sm">
-            <a
-              href="#features"
-              class="text-text-tertiary hover:text-text-primary transition-colors duration-200"
-            >
-              Features
-            </a>
-            <a
-              href="/pricing"
-              class="text-text-tertiary hover:text-text-primary transition-colors duration-200"
-            >
-              Pricing
-            </a>
-            <a
-              href="/team"
-              class="text-text-tertiary hover:text-text-primary transition-colors duration-200"
-            >
-              Team
-            </a>
-            <a
-              href={`${basePath}/docs`}
-              class="text-text-tertiary hover:text-text-primary transition-colors duration-200"
-            >
-              Docs
-            </a>
-            <a
-              href="https://github.com/mono424/sp00ky"
-              target="_blank"
-              class="text-text-tertiary hover:text-text-primary transition-colors duration-200"
-            >
-              GitHub
-            </a>
-          </div>
-          <button
-            id="mobile-menu-btn"
-            class="md:hidden p-2 text-text-tertiary hover:text-text-primary transition-colors duration-200"
-            aria-label="Toggle menu"
-          >
-            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
-            </svg>
-          </button>
-        </div>
-      </nav>
-      <div id="mobile-menu" class="hidden md:hidden border-t border-white/5 px-4 pb-4 pt-2 flex flex-col gap-3 text-body-sm">
-        <a href="#features" class="text-text-tertiary hover:text-text-primary transition-colors duration-200">Features</a>
-        <a href="/pricing" class="text-text-tertiary hover:text-text-primary transition-colors duration-200">Pricing</a>
-        <a href="/team" class="text-text-tertiary hover:text-text-primary transition-colors duration-200">Team</a>
-        <a href={`${basePath}/docs`} class="text-text-tertiary hover:text-text-primary transition-colors duration-200">Docs</a>
-        <a href="https://github.com/mono424/sp00ky" target="_blank" class="text-text-tertiary hover:text-text-primary transition-colors duration-200">GitHub</a>
-      </div>
-      <script>
-        const menuBtn = document.getElementById('mobile-menu-btn');
-        const mobileMenu = document.getElementById('mobile-menu');
-        if (menuBtn && mobileMenu) {
-          menuBtn.addEventListener('click', () => {
-            mobileMenu.classList.toggle('hidden');
-          });
-        }
-      </script>
-    </div>
-    {/* ── MOBILE HERO ── */}
-    <section id="home" class="lg:hidden overflow-hidden">
-      {/* Zone 1: Headlines over ghost — takes ~65vh */}
-      <div class="relative min-h-[65vh] flex flex-col justify-center px-6 py-12">
-        <div
-          class="absolute inset-0 flex items-center justify-center pt-16 pointer-events-none z-0 opacity-0 animate-fade-in-subtle"
-        >
-          <div class="scale-[3]">
-            <AsciiGhost client:load />
-          </div>
-        </div>
-        <div class="relative z-10">
-          <h1
-            class="text-4xl md:text-5xl font-semibold text-text-primary opacity-0 animate-fade-in animation-delay-200 leading-tight"
-          >
-            Focus on Product.<br /><span class="text-brand-400">We Handle Sync.</span>
-          </h1>
-        </div>
-      </div>
+    <SiteNav activePath="/" />
 
-      {/* Zone 2: Actions in clean black */}
-      <div class="px-6 pb-10 pt-2 flex flex-col gap-5">
-        <div
-          class="flex items-center gap-3 px-4 py-3 rounded-md bg-surface border border-white/10 font-mono text-sm opacity-0 animate-fade-in animation-delay-500 w-full overflow-x-auto"
-        >
-          <span class="text-text-tertiary select-none">$</span>
-          <code class="text-text-primary whitespace-nowrap">npx @spooky-sync/cli@canary create</code>
-          <button
-            class="hero-copy-btn ml-auto p-1.5 rounded-md text-text-tertiary hover:text-text-primary transition-colors duration-200"
-            aria-label="Copy install command"
-          >
-            <svg
-              class="hero-copy-icon w-4 h-4"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
-              ></path>
-            </svg>
-            <svg
-              class="hero-check-icon w-4 h-4 hidden text-white/60"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M5 13l4 4L19 7"></path>
-            </svg>
-          </button>
+    <main class="flex-1">
+      <!-- HERO -->
+      <section id="home" class="hero-new">
+        <div class="hero-new-bg">
+          <FloatingGhosts client:idle count={14} />
         </div>
 
-        <div
-          class="flex flex-row items-start gap-3 opacity-0 animate-slide-up animation-delay-600"
-        >
-          <a
-            href={`${basePath}/docs`}
-            class="px-5 py-2 bg-white text-black text-sm font-medium rounded-md transition-all duration-150 hover:bg-white/85 text-center"
-          >
-            Get Started
-          </a>
-          <a
-            href="https://github.com/mono424/sp00ky"
-            target="_blank"
-            class="px-5 py-2 text-sm font-medium text-text-tertiary rounded-md transition-all duration-150 hover:text-text-primary text-center"
-          >
-            View on Github
-          </a>
-        </div>
+        <div class="hero-new-inner">
+          <div class="hero-left">
+            <div class="hero-eyebrow">
+              <span class="badge">canary</span>
+              Pre-Alpha · open source
+            </div>
 
-      </div>
-    </section>
+            <h1 class="hero-headline">
+              Focus on Product.<br /><span class="accent">We Handle Sync.</span>
+            </h1>
 
-    {/* ── DESKTOP HERO ── */}
-    <section
-      id="home"
-      class="hidden lg:flex min-h-[70vh] max-h-[800px] items-center justify-center relative py-24 overflow-hidden"
-    >
-      <div
-        class="absolute inset-0 flex items-center justify-center pointer-events-none z-0 opacity-0 animate-fade-in-subtle"
-      >
-        <div class="scale-[3]">
-          <AsciiGhost client:load />
-        </div>
-      </div>
+            <p class="hero-sub">
+              Ship your app with real-time sync, offline support, and full type safety. No extra
+              work required.
+            </p>
 
-      <div class="hero-grid max-w-7xl mx-auto px-8 relative z-10">
-        <div class="flex flex-col justify-center gap-6">
-          <h1
-            class="text-5xl lg:text-6xl font-semibold text-text-primary opacity-0 animate-fade-in animation-delay-200 leading-tight"
-          >
-            Focus on Product.<br /><span class="text-brand-400">We Handle Sync.</span>
-          </h1>
-
-          <p
-            class="text-lg text-text-muted opacity-0 animate-fade-in animation-delay-400 leading-relaxed max-w-lg"
-          >
-            Ship your app with real-time sync, offline support, and full type safety. No extra work
-            required.
-          </p>
-
-          <div
-            class="flex items-center gap-3 px-4 py-3 rounded-md bg-surface border border-white/10 font-mono text-sm opacity-0 animate-fade-in animation-delay-500 w-fit"
-          >
-            <span class="text-text-tertiary select-none">$</span>
-            <code class="text-text-primary whitespace-nowrap">npx @spooky-sync/cli@canary create</code>
-            <button
-              class="hero-copy-btn ml-auto p-1.5 rounded-md text-text-tertiary hover:text-text-primary transition-colors duration-200"
-              aria-label="Copy install command"
-            >
-              <svg
-                class="hero-copy-icon w-4 h-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
+            <div class="hero-install">
+              <span class="prompt">$</span>
+              <span class="cmd">npx @spooky-sync/cli@canary create</span>
+              <button class="copy-btn" id="hero-copy-btn" aria-label="Copy install command">
+                <svg
+                  id="hero-copy-icon"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
                   stroke-linecap="round"
                   stroke-linejoin="round"
+                >
+                  <rect x="9" y="9" width="11" height="11" rx="2"></rect>
+                  <path d="M5 15 H4 a2 2 0 0 1 -2 -2 V4 a2 2 0 0 1 2 -2 h9 a2 2 0 0 1 2 2 v1"></path>
+                </svg>
+                <svg
+                  id="hero-check-icon"
+                  class="hidden"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
                   stroke-width="2"
-                  d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
-                ></path>
-              </svg>
-              <svg
-                class="hero-check-icon w-4 h-4 hidden text-white/60"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
                   stroke-linecap="round"
                   stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M5 13l4 4L19 7"></path>
-              </svg>
-            </button>
-          </div>
-
-          <div
-            class="flex flex-row items-start gap-3 opacity-0 animate-slide-up animation-delay-600"
-          >
-            <a
-              href={`${basePath}/docs`}
-              class="px-5 py-2 bg-white text-black text-sm font-medium rounded-md transition-all duration-150 hover:bg-white/85 text-center"
-            >
-              Get Started
-            </a>
-            <a
-              href="https://github.com/mono424/sp00ky"
-              target="_blank"
-              class="px-5 py-2 text-sm font-medium text-text-tertiary rounded-md transition-all duration-150 hover:text-text-primary text-center"
-            >
-              View on Github
-            </a>
-          </div>
-
-        </div>
-
-        <div class="relative flex items-center justify-end">
-          <div
-            class="relative z-10 scale-110 translate-x-4 opacity-0 animate-flip-in animation-delay-200 overflow-hidden w-full"
-          >
-            <HeroTerminal client:load />
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <script>
-      document.querySelectorAll('.hero-copy-btn').forEach((btn) => {
-        btn.addEventListener('click', async () => {
-          const copyIcon = btn.querySelector('.hero-copy-icon');
-          const checkIcon = btn.querySelector('.hero-check-icon');
-          if (!copyIcon || !checkIcon) return;
-          try {
-            await navigator.clipboard.writeText('npx @spooky-sync/cli@canary create');
-            copyIcon.classList.add('hidden');
-            checkIcon.classList.remove('hidden');
-            setTimeout(() => {
-              copyIcon.classList.remove('hidden');
-              checkIcon.classList.add('hidden');
-            }, 2000);
-          } catch {
-            // Copy failed — silently ignore
-          }
-        });
-      });
-    </script>
-
-    {/* Mobile Terminal Preview — below hero */}
-    <div class="lg:hidden px-6 py-6 relative z-10">
-      <div class="max-w-lg mx-auto relative">
-        <div class="max-h-[220px] overflow-hidden rounded-xl">
-          <HeroTerminal client:load />
-        </div>
-        <div class="absolute inset-x-0 bottom-0 h-28 pointer-events-none z-10" style="background: linear-gradient(to top, black 10%, transparent)"></div>
-      </div>
-    </div>
-
-    <!-- Feature Grid + Local First text -->
-    <section class="pt-12 pb-16 md:pb-32 border-b border-white/10">
-      <div class="max-w-7xl mx-auto px-4">
-        <FeatureGrid client:visible />
-      </div>
-
-      <!-- Try Out Now — card style -->
-      <div class="max-w-7xl mx-auto px-4 mt-16 md:mt-24">
-        <div class="try-out-btn group relative rounded-2xl border border-white/[0.08] bg-[#111318] overflow-hidden cursor-pointer transition-all duration-300 hover:border-white/[0.14]">
-          <div class="flex flex-col md:flex-row items-stretch min-h-[200px]">
-            <!-- Left: copy + CTA -->
-            <div class="relative z-10 flex flex-col justify-between p-8 md:p-10 md:w-[45%]">
-              <div>
-                <h3 class="text-xl font-semibold text-white/90 mb-2">Experimental Demo</h3>
-                <p class="text-sm text-white/40 leading-relaxed max-w-[260px]">
-                  Explore a live app built with sp00ky. Powered by CRDTs, file buckets, and real-time sync.
-                </p>
-              </div>
-              <div class="mt-6">
-                <span class="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white/70 rounded-lg border border-white/[0.1] bg-white/[0.04] group-hover:bg-white/[0.08] group-hover:text-white group-hover:border-white/[0.18] transition-all duration-300">
-                  Try it now
-                  <svg class="w-3.5 h-3.5 -rotate-[0deg] group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform duration-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M7 17L17 7M17 7H7M17 7v10" />
-                  </svg>
-                </span>
-              </div>
-            </div>
-            <!-- Right: grid pattern + ghost -->
-            <div class="relative flex-1 min-h-[160px] md:min-h-0">
-              <!-- Grid pattern -->
-              <div class="absolute inset-0 tryout-grid opacity-[0.35]"></div>
-              <!-- Ghost icon -->
-              <div class="absolute inset-0 flex items-center justify-center">
-                <div class="flex flex-col items-center gap-5 opacity-40 group-hover:opacity-60 transition-opacity duration-500">
-                  <img src="/logo.svg" alt="sp00ky" class="w-40 md:w-48" />
-                  <span class="text-[11px] font-mono uppercase tracking-[0.25em] text-white/50">threads demo</span>
-                </div>
-              </div>
-              <!-- Vertical label -->
-              <div class="hidden md:flex absolute right-0 top-0 bottom-0 w-10 items-center justify-center">
-                <span class="text-[10px] font-mono uppercase tracking-[0.3em] text-white/15 whitespace-nowrap" style="writing-mode: vertical-rl;">Experimental Preview</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section id="features" class="py-16 md:py-32">
-      <div class="max-w-7xl mx-auto px-4">
-        <!-- Section Header -->
-        <div class="text-center mb-16">
-          <div class="mb-4">
-            <span
-              class="inline-block px-3 py-1 text-[10px] font-medium text-text-muted bg-white/5 border border-white/8 rounded-full uppercase tracking-widest"
-            >
-              How It Works
-            </span>
-          </div>
-          <h2 class="text-section font-semibold text-text-primary mb-6">It feels like magic</h2>
-          <p class="text-body text-text-tertiary max-w-2xl mx-auto">
-            Direct state synchronization powered by SurrealDB
-          </p>
-        </div>
-
-        <!-- How It Works Content -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
-          <div class="space-y-6">
-            <div class="space-y-4">
-              <h3 class="text-xl font-semibold text-text-primary">SurrealDB native sync engine</h3>
-              <p class="text-body-sm text-text-tertiary leading-relaxed">
-                sp00ky bypasses traditional REST APIs in favor of direct state synchronization on
-                top of SurrealDB. Built for modern real-time applications that need instant updates
-                across all clients.
-              </p>
+                >
+                  <path d="M20 6 L9 17 l-5 -5"></path>
+                </svg>
+              </button>
             </div>
 
-            <div class="space-y-4">
-              <h3 class="text-xl font-semibold text-text-primary">
-                Authentication-agnostic security
-              </h3>
-              <p class="text-body-sm text-text-tertiary leading-relaxed">
-                Integrate with any identity provider while maintaining fine-grained access control.
-                SurrealDB's flexible security model adapts to your authentication strategy.
-              </p>
-            </div>
-
-            <div class="mt-8">
+            <div class="hero-ctas">
+              <a href={`${basePath}/docs`} class="hero-btn hero-btn-primary">
+                Get Started
+              </a>
               <a
                 href="https://github.com/mono424/sp00ky"
                 target="_blank"
-                class="inline-block px-5 py-2 bg-white text-black font-medium text-sm rounded-md transition-colors duration-150 hover:bg-white/85"
+                rel="noopener"
+                class="hero-btn hero-btn-ghost"
               >
-                Read Full Documentation
+                View on Github
               </a>
             </div>
           </div>
 
-          <div class="flex items-center justify-center">
-            <ArchitectureDiagram client:visible />
+          <div class="hero-right">
+            <HeroStack client:load />
           </div>
         </div>
+      </section>
 
-        <ScalableText client:visible />
-      </div>
-    </section>
+      <!-- Local First copy + 4-up FeatureGrid + Try sp00ky card -->
+      <section class="pt-12 pb-16 md:pb-32 border-b border-white/10">
+        <div class="max-w-7xl mx-auto px-4">
+          <FeatureGrid client:visible />
+        </div>
 
-    <!-- Developer Experience Section with Swiper -->
-    <section class="py-16 md:py-32 border-t border-surface-border/50">
-      <div class="max-w-7xl mx-auto px-4 relative z-10">
-        <SectionHeadline
-          title="Exceptional DX"
-          badge="Developer Tools"
-          description='From <span class="text-text-primary">schema-first codegen</span> to <span class="text-text-primary">fully reactive</span> framework-native queries — sp00ky gives you type safety across your entire stack, built by <span class="text-text-primary">developers for developers</span>.'
-        />
+        <!-- Try Out Now — card style -->
+        <div class="max-w-7xl mx-auto px-4 mt-16 md:mt-24">
+          <div class="try-out-btn group relative rounded-2xl border border-white/[0.08] bg-[#111318] overflow-hidden cursor-pointer transition-all duration-300 hover:border-white/[0.14]">
+            <div class="flex flex-col md:flex-row items-stretch min-h-[200px]">
+              <div class="relative z-10 flex flex-col justify-between p-8 md:p-10 md:w-[45%]">
+                <div>
+                  <h3 class="text-xl font-semibold text-white/90 mb-2">Experimental Demo</h3>
+                  <p class="text-sm text-white/40 leading-relaxed max-w-[260px]">
+                    Explore a live app built with sp00ky. Powered by CRDTs, file buckets, and real-time sync.
+                  </p>
+                </div>
+                <div class="mt-6">
+                  <span class="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white/70 rounded-lg border border-white/[0.1] bg-white/[0.04] group-hover:bg-white/[0.08] group-hover:text-white group-hover:border-white/[0.18] transition-all duration-300">
+                    Try it now
+                    <svg
+                      class="w-3.5 h-3.5 -rotate-[0deg] group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform duration-300"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      stroke-width="2"
+                    >
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M7 17L17 7M17 7H7M17 7v10"></path>
+                    </svg>
+                  </span>
+                </div>
+              </div>
+              <div class="relative flex-1 min-h-[160px] md:min-h-0">
+                <div class="absolute inset-0 tryout-grid opacity-[0.35]"></div>
+                <div class="absolute inset-0 flex items-center justify-center">
+                  <div class="flex flex-col items-center gap-5 opacity-40 group-hover:opacity-60 transition-opacity duration-500">
+                    <img src="/logo.svg" alt="sp00ky" class="w-40 md:w-48" />
+                    <span class="text-[11px] font-mono uppercase tracking-[0.25em] text-white/50">threads demo</span>
+                  </div>
+                </div>
+                <div class="hidden md:flex absolute right-0 top-0 bottom-0 w-10 items-center justify-center">
+                  <span class="text-[10px] font-mono uppercase tracking-[0.3em] text-white/15 whitespace-nowrap" style="writing-mode: vertical-rl;">Experimental Preview</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
 
-        <DXFeatureGrid client:visible />
-
-        <!-- Chrome Web Store Banner -->
-        <div class="mt-20 flex flex-col items-center gap-5">
-          <p class="text-sm text-text-muted max-w-md text-center leading-relaxed">
-            Inspect queries, track state, and debug your app in real time, right from your browser.
+      <!-- CTA SECTION -->
+      <section class="py-16 md:py-32 border-t border-white/5 bg-black text-center relative overflow-hidden">
+        <div class="max-w-4xl mx-auto px-4 relative z-10">
+          <h2 class="text-section md:text-hero font-semibold mb-8 text-text-primary">
+            Ready to build something amazing?
+          </h2>
+          <p class="text-text-tertiary text-body-lg mb-12 max-w-2xl mx-auto leading-relaxed">
+            Start building local-first, offline-ready applications today. Dive into the documentation
+            to learn more about the architecture and implementation details.
           </p>
           <a
-            href="https://chromewebstore.google.com/detail/spooky-devtools/kiklfilnjgfjnmcfoeoaifjlmokncfef"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="group inline-flex items-center gap-4 px-6 py-4 rounded-xl bg-white/[0.03] border border-white/10 hover:border-white/20 hover:bg-white/[0.06] transition-all duration-300"
+            href={`${basePath}/docs`}
+            class="inline-flex items-center gap-3 bg-white text-black px-8 py-3 font-medium text-lg rounded-lg transition-colors duration-150 hover:bg-white/90 group"
           >
-            <div class="flex items-center justify-center w-10 h-10 rounded-lg bg-white/10 group-hover:bg-white/15 transition-colors duration-300">
-              <svg class="w-6 h-6" viewBox="0 0 24 24" fill="#4285F4" xmlns="http://www.w3.org/2000/svg">
-                <path d="M12 0C8.21 0 4.831 1.757 2.632 4.501l3.953 6.848A5.454 5.454 0 0 1 12 6.545h10.691A12 12 0 0 0 12 0zM1.931 5.47A11.943 11.943 0 0 0 0 12c0 6.012 4.42 10.991 10.189 11.864l3.953-6.847a5.45 5.45 0 0 1-6.865-2.29zm13.342 2.166a5.446 5.446 0 0 1 1.45 7.09l.002.001h-.002l-5.344 9.257c.206.01.413.016.621.016 6.627 0 12-5.373 12-12 0-1.54-.29-3.011-.818-4.364zM12 16.364a4.364 4.364 0 1 1 0-8.728 4.364 4.364 0 0 1 0 8.728Z"/>
-              </svg>
-            </div>
-            <div class="flex flex-col">
-              <span class="text-[11px] uppercase tracking-wider text-text-muted font-medium leading-none mb-1">Available on the</span>
-              <span class="text-base font-semibold text-text-primary leading-tight group-hover:text-white transition-colors duration-200">Chrome Web Store</span>
-            </div>
+            <span>Get Started</span>
             <svg
-              class="w-4 h-4 text-text-muted group-hover:text-text-primary group-hover:translate-x-0.5 transition-all duration-200 ml-2"
+              class="w-5 h-5 transition-transform duration-200 group-hover:translate-x-1"
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
             >
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
             </svg>
           </a>
         </div>
-      </div>
-    </section>
+      </section>
+    </main>
 
-    <!-- CTA SECTION -->
-    <section class="py-16 md:py-32 border-t border-white/5 bg-black text-center relative overflow-hidden">
-      <div class="max-w-4xl mx-auto px-4 relative z-10">
-        <h2 class="text-section md:text-hero font-semibold mb-8 text-text-primary">
-          Ready to build something amazing?
-        </h2>
-        <p class="text-text-tertiary text-body-lg mb-12 max-w-2xl mx-auto leading-relaxed">
-          Start building local-first, offline-ready applications today. Dive into the documentation
-          to learn more about the architecture and implementation details.
-        </p>
-        <a
-          href={`${basePath}/docs`}
-          class="inline-flex items-center gap-3 bg-white text-black px-8 py-3 font-medium text-lg rounded-lg transition-colors duration-150 hover:bg-white/90 group"
-        >
-          <span>Get Started</span>
-          <svg
-            class="w-5 h-5 transition-transform duration-200 group-hover:translate-x-1"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
-          </svg>
-        </a>
-      </div>
-    </section>
-
-    <footer class="py-12 border-t border-white/5 relative">
-      <div class="max-w-7xl mx-auto px-4 flex flex-col md:flex-row justify-between items-center">
-        <div class="mb-4 md:mb-0 text-sm text-text-tertiary flex items-center relative">
-          <img src="/logo_small.webp" alt="sp00ky Logo" class="w-4 h-4 mr-2" />
-          © 2026
-        </div>
-        <div class="space-x-6 text-sm">
-          <a
-            href="/pricing"
-            class="text-text-tertiary hover:text-text-primary transition-colors duration-200"
-            >Pricing</a
-          >
-          <a
-            href="/team"
-            class="text-text-tertiary hover:text-text-primary transition-colors duration-200"
-            >Team</a
-          >
-          <a
-            href="#"
-            class="text-text-tertiary hover:text-text-primary transition-colors duration-200"
-            >Privacy</a
-          >
-          <a
-            href="#"
-            class="text-text-tertiary hover:text-text-primary transition-colors duration-200"
-            >Terms</a
-          >
-          <a
-            href="https://github.com/mono424/sp00ky"
-            target="_blank"
-            class="text-text-tertiary hover:text-text-primary transition-colors duration-200"
-            >GitHub</a
-          >
-        </div>
-      </div>
-    </footer>
+    <SiteFooter />
 
     <!-- Try Out Now fullscreen iframe overlay -->
     <div id="tryout-overlay" class="fixed inset-0 z-[100] hidden">
@@ -565,6 +220,27 @@ import { basePath } from '../config/nav';
     </div>
 
     <script>
+      // Hero install copy button
+      const copyBtn = document.getElementById('hero-copy-btn');
+      const copyIcon = document.getElementById('hero-copy-icon');
+      const checkIcon = document.getElementById('hero-check-icon');
+      if (copyBtn && copyIcon && checkIcon) {
+        copyBtn.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText('npx @spooky-sync/cli@canary create');
+          } catch {
+            /* ignore */
+          }
+          copyIcon.classList.add('hidden');
+          checkIcon.classList.remove('hidden');
+          setTimeout(() => {
+            copyIcon.classList.remove('hidden');
+            checkIcon.classList.add('hidden');
+          }, 1600);
+        });
+      }
+
+      // Try sp00ky overlay
       const overlay = document.getElementById('tryout-overlay');
       const iframe = document.getElementById('tryout-iframe') as HTMLIFrameElement;
       const closeBtn = document.getElementById('tryout-close');
@@ -598,7 +274,7 @@ import { basePath } from '../config/nav';
   </body>
 
   <script>
-    // 1. Define the Ghost SVG (Static version, we animate the position manually)
+    // Animated favicon (floating ghost)
     const ghostSVG = `
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
       <style>
@@ -616,17 +292,14 @@ import { basePath } from '../config/nav';
       <rect class="eyes" x="18" y="8" width="4" height="4"/>
     </svg>`;
 
-    // 2. Setup the Canvas and Image
     const canvas = document.createElement('canvas');
     canvas.width = 32;
     canvas.height = 32;
     const ctx = canvas.getContext('2d');
 
     const img = new Image();
-    // Encode SVG so it can be used as an image source
     img.src = 'data:image/svg+xml;base64,' + btoa(ghostSVG);
 
-    // 3. Find (or create) the favicon link tag
     let link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
     if (!link) {
       link = document.createElement('link');
@@ -634,26 +307,14 @@ import { basePath } from '../config/nav';
       document.head.appendChild(link);
     }
 
-    // 4. The Animation Loop
     img.addEventListener('load', function () {
       const start = performance.now();
-
       function step(timestamp: number) {
-        // Calculate the "float" (Sine wave)
         const elapsed = timestamp - start;
-        // Speed: 3000ms (3s) for full loop
-        // Movement: Moves between 0px and 3px down
         const yOffset = (1 - Math.cos((elapsed / 3000) * 2 * Math.PI)) * 1.5;
-
-        // Clear and Draw
         ctx?.clearRect(0, 0, 32, 32);
-        // Draw image at the new Y position
         ctx?.drawImage(img, 0, yOffset, 32, 32);
-
-        // Update the browser favicon
         link.href = canvas.toDataURL('image/png');
-
-        // Repeat
         requestAnimationFrame(step);
       }
       requestAnimationFrame(step);
@@ -661,103 +322,6 @@ import { basePath } from '../config/nav';
   </script>
 
   <style>
-    /* Remove default details marker */
-    details > summary {
-      list-style: none;
-    }
-    details > summary::-webkit-details-marker {
-      display: none;
-    }
-
-    /* Smooth container transition */
-    .schema-details {
-      transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-    }
-
-    .schema-details[open] {
-      background-color: rgba(10, 10, 10, 0.9);
-    }
-
-    /* Enhanced preview hover */
-    .schema-details summary {
-      transition: background-color 0.3s ease;
-    }
-
-    .schema-details summary:hover {
-      background-color: rgba(255, 255, 255, 0.07);
-    }
-
-    .schema-details summary:hover .arrow-closed {
-      transform: translateX(2px);
-    }
-
-    .schema-details summary:hover .arrow-closed.rotate-90 {
-      transform: translateX(2px) rotate(90deg);
-    }
-
-    /* Arrow icon states with smooth transitions */
-    .schema-details .arrow-closed {
-      display: block;
-      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    }
-
-    .schema-details .arrow-open {
-      display: none;
-      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    }
-
-    .schema-details[open] .arrow-closed {
-      display: none;
-    }
-
-    .schema-details[open] .arrow-open {
-      display: block;
-    }
-
-    /* Chevron rotation with smooth easing */
-    .schema-details .chevron {
-      transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    }
-
-    .schema-details[open] .chevron {
-      transform: rotate(180deg);
-    }
-
-    /* Change text on expand/collapse */
-    .schema-details .expand-text::before {
-      content: 'Click to explore live schema generation';
-    }
-
-    .schema-details[open] .expand-text::before {
-      content: 'Click to collapse';
-    }
-
-    .schema-details .expand-text {
-      font-size: 0;
-    }
-
-    .schema-details .expand-text::before {
-      font-size: 1rem;
-    }
-
-    /* Professional expand animation */
-    @keyframes expand-in {
-      from {
-        opacity: 0;
-        transform: translateY(-8px);
-        max-height: 0;
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0);
-        max-height: 2000px;
-      }
-    }
-
-    .schema-details[open] .expanded-content {
-      animation: expand-in 0.5s cubic-bezier(0.4, 0, 0.2, 1);
-    }
-
     /* Try Out Now — grid pattern */
     .tryout-grid {
       background-image:

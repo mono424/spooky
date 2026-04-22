@@ -1,0 +1,27 @@
+---
+import FeaturePage from '../../layouts/FeaturePage.astro';
+---
+
+<FeaturePage
+  title="Automatic Backups"
+  description="Continuous point-in-time snapshots. Roll back to any moment with a single click."
+  badge="Cloud · Managed"
+  activePath="/cloud"
+>
+  <p>
+    sp00ky Cloud runs continuous snapshots of every workspace in the background. Snapshots are
+    incremental, encrypted, and indexed by time — so rolling back to yesterday at 14:32 is the
+    same effort as rolling back to five minutes ago.
+  </p>
+  <p>
+    No pipelines, no cron jobs, no support tickets. Open the dashboard, pick a point in time,
+    click restore. Optional scheduled exports push snapshots to your own object storage.
+  </p>
+  <h2>What’s covered</h2>
+  <ul>
+    <li>Continuous incremental snapshots — seconds-level granularity.</li>
+    <li>One-click restore to any point in time.</li>
+    <li>Encrypted at rest; opaque to the storage layer.</li>
+    <li>Optional export to S3, GCS, or R2.</li>
+  </ul>
+</FeaturePage>

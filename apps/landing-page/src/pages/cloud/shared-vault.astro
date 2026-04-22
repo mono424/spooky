@@ -1,0 +1,27 @@
+---
+import FeaturePage from '../../layouts/FeaturePage.astro';
+---
+
+<FeaturePage
+  title="Shared Vault"
+  description="End-to-end encrypted shared stores across users and devices. Collaborate without exposing plaintext to the cloud."
+  badge="Cloud · Managed"
+  activePath="/cloud"
+>
+  <p>
+    The Shared Vault lets teammates collaborate on the same sp00ky dataset with end-to-end
+    encryption. Data is encrypted on-device; the cloud sees only opaque blobs; keys are exchanged
+    over an authenticated channel.
+  </p>
+  <p>
+    Add and remove members with workspace-scoped permissions, rotate keys without re-encrypting
+    history, and audit access server-side without the server ever needing to read your data.
+  </p>
+  <h2>Security model</h2>
+  <ul>
+    <li>Per-workspace master key, rotated on membership change.</li>
+    <li>Client-side encryption before any byte leaves the device.</li>
+    <li>Zero-knowledge server: the cloud cannot decrypt content.</li>
+    <li>Optional hardware-backed key storage on supported platforms.</li>
+  </ul>
+</FeaturePage>

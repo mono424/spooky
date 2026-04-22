@@ -52,12 +52,12 @@ const features = [
 export function FeatureGrid() {
   return (
     <>
-      <div className="max-w-3xl mb-16">
+      <div className="mb-24 md:mb-32">
         <ScrollRevealText
-          className="text-2xl md:text-3xl font-semibold leading-snug"
+          className="text-4xl md:text-6xl font-semibold leading-tight tracking-tight"
           segments={[
-            { text: 'Local first. ', preRevealed: true },
-            { text: 'Your app reads and writes to a local database. Users get instant responses, even without a connection. When they\'re back online, sp00ky resolves changes and syncs state across every device — no loading spinners, no conflict modals, no extra code on your end.' },
+            { text: 'It\'s spooky. ', preRevealed: true },
+            { text: 'Data changes, every screen updates. Reactive queries keep every tab, every device, and every user in sync, instantly.' },
           ]}
         />
       </div>

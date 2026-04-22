@@ -1,0 +1,27 @@
+---
+import FeaturePage from '../../layouts/FeaturePage.astro';
+---
+
+<FeaturePage
+  title="Job Scheduler"
+  description="A durable, local-first job scheduler built into the engine. Retries, queues, and cross-session tasks — no extra infrastructure."
+  badge="Core · Library"
+  activePath="/features"
+>
+  <p>
+    Most apps need background work: retries for failed requests, deferred uploads, scheduled
+    reminders, webhooks. sp00ky ships with a built-in scheduler so you don’t have to bolt on a
+    queue service.
+  </p>
+  <p>
+    Jobs are persisted on-device, survive reloads, and replay across sessions. Define them
+    declaratively, hand them to sp00ky, and let the scheduler worry about retries and backoff.
+  </p>
+  <h2>What you get</h2>
+  <ul>
+    <li>Durable queues that survive reloads and crashes.</li>
+    <li>Exponential backoff, configurable retry policies.</li>
+    <li>Cross-tab coordination so jobs run exactly once.</li>
+    <li>First-class hooks for progress, cancellation, and completion.</li>
+  </ul>
+</FeaturePage>
