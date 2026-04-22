@@ -528,7 +528,7 @@ export function HeroStack() {
               <ellipse cx="0" cy="0" rx="95" ry="95" fill="rgba(200,120,255,0.08)" />
               <g style={{ opacity: 0.6, filter: 'saturate(0.7) brightness(1.1)' }}>
                 <image
-                  href="/surrealdb-logo.png"
+                  href={`${import.meta.env.BASE_URL}surrealdb-logo.png`}
                   x="-85"
                   y="-98"
                   width="170"
