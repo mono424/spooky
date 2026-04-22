@@ -6,6 +6,7 @@ mod cloud;
 mod codegen;
 mod dev;
 mod json_schema;
+mod logs_browser;
 mod mcp;
 mod migrate;
 mod migration;
@@ -195,7 +196,7 @@ enum CloudCommands {
         #[arg(long)]
         raw: bool,
     },
-    /// Tail logs from cloud deployment
+    /// Tail or browse logs from cloud deployment
     Logs {
         /// Filter by service(s): surrealdb, scheduler, ssp, backend, frontend.
         /// Supports blueprints: "spooky" = ssp+scheduler.
@@ -206,6 +207,35 @@ enum CloudCommands {
         /// Split view: "h" (horizontal/stacked) or "v" (vertical/side-by-side)
         #[arg(long)]
         split: Option<String>,
+
+        /// Replay history starting at this point, then keep tailing live.
+        /// Accepts a duration (e.g. `2h`, `3d`, `1h30m`) or an RFC-3339
+        /// timestamp. Matches `kubectl logs --since` — the stream stays open
+        /// unless `--until` bounds it.
+        #[arg(long)]
+        since: Option<String>,
+
+        /// End of the log window. Same format as `--since`. Setting this
+        /// turns the command into a one-shot: the stream closes when the
+        /// window is exhausted instead of continuing to tail.
+        #[arg(long)]
+        until: Option<String>,
+
+        /// Server-side regex match on the log message. Works for both
+        /// historical and live-tail modes (when the backend supports it).
+        #[arg(long)]
+        grep: Option<String>,
+
+        /// Open an interactive TUI browser instead of streaming to stdout.
+        /// Supports scroll, search, service + time filters, and follow mode.
+        #[arg(short, long)]
+        interactive: bool,
+
+        /// Start in follow mode (TUI only): auto-scroll on new entries as
+        /// they arrive. Without this the TUI opens paused at the newest
+        /// entry; toggle live with `f` inside the TUI.
+        #[arg(short = 'F', long)]
+        follow: bool,
 
         /// (Deprecated) Filter by single service
         #[arg(long, hide = true)]
@@ -224,6 +254,9 @@ enum CloudCommands {
         /// scheduler state corruption. Does NOT touch SurrealDB data.
         #[arg(long)]
         clean: bool,
+        /// Pull the latest scheduler/SSP base images before restarting.
+        #[arg(long)]
+        upgrade: bool,
     },
     /// Destroy cloud project and all VMs
     Destroy,
@@ -299,12 +332,12 @@ pub enum CloudBackupCommands {
     },
     /// Restore database from a backup
     Restore {
-        /// Backup ID to restore from
+        /// Backup ID, full name, or unique id prefix
         backup_id: String,
     },
     /// Delete a backup
     Delete {
-        /// Backup ID to delete
+        /// Backup ID, full name, or unique id prefix
         backup_id: String,
     },
     /// Configure automatic backups

@@ -884,9 +884,27 @@ pub fn run(action: CloudCommands) -> Result<()> {
         CloudCommands::Deploy { upgrade, clean } => deploy(upgrade, clean),
         CloudCommands::Status => status(),
         CloudCommands::Credentials { raw } => credentials(raw),
-        CloudCommands::Logs { filter, split, service } => logs(filter, split, service),
+        CloudCommands::Logs {
+            filter,
+            split,
+            since,
+            until,
+            grep,
+            interactive,
+            follow,
+            service,
+        } => logs(LogsArgs {
+            filter,
+            split,
+            since,
+            until,
+            grep,
+            interactive,
+            follow,
+            service,
+        }),
         CloudCommands::Scale { ssp } => scale(ssp),
-        CloudCommands::Restart { clean } => restart(clean),
+        CloudCommands::Restart { clean, upgrade } => restart(clean, upgrade),
         CloudCommands::Destroy => destroy(),
         CloudCommands::Backup { action } => backup(action),
         CloudCommands::Billing { action } => billing(action),
@@ -2368,7 +2386,7 @@ fn credentials(raw: bool) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 /// Known service names and their display colors.
-fn service_color(service: &str) -> crossterm::style::Color {
+pub fn service_color(service: &str) -> crossterm::style::Color {
     use crossterm::style::Color;
     match service {
         "surrealdb" => Color::Cyan,
@@ -2467,21 +2485,120 @@ fn strip_ansi(s: &str) -> String {
     out
 }
 
-/// Parse a SSE data line like `[role] message` into (service, message).
-fn parse_log_line(data: &str) -> Option<(String, String)> {
+/// A single log line as streamed by the backend's SSE endpoint.
+///
+/// The wire format is JSON: `{"service": "...", "timestamp": "...", "message": "..."}`.
+/// Older deployments emitted plain `[service] message` lines; `parse_log_line`
+/// keeps a fallback path so those keep working while we roll out the richer format.
+///
+/// `timestamp` uses a flexible deserializer that accepts:
+///   - RFC-3339 strings (`"2026-04-22T10:23:45.123Z"`)
+///   - Unix seconds (i64)
+///   - Unix milliseconds (i64, detected when the value exceeds 10¹⁰)
+///   - Float seconds (f64)
+/// so we don't silently drop the timestamp when a deployment uses a
+/// non-standard encoding.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct LogEntry {
+    pub service: String,
+    #[serde(default, deserialize_with = "deserialize_flexible_timestamp")]
+    pub timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    pub message: String,
+    // Captured off the wire for the upcoming TUI (colored severity column).
+    // Not yet read by the stdout printer, so silence the dead-code lint.
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub level: Option<String>,
+}
+
+impl LogEntry {
+    pub fn ts(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.timestamp
+    }
+}
+
+fn deserialize_flexible_timestamp<'de, D>(
+    d: D,
+) -> std::result::Result<Option<chrono::DateTime<chrono::Utc>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    let v = Option::<serde_json::Value>::deserialize(d)?;
+    Ok(match v {
+        Some(serde_json::Value::String(s)) => chrono::DateTime::parse_from_rfc3339(&s)
+            .ok()
+            .map(|t| t.with_timezone(&chrono::Utc)),
+        Some(serde_json::Value::Number(n)) => {
+            if let Some(i) = n.as_i64() {
+                if i.abs() > 10_000_000_000 {
+                    chrono::DateTime::from_timestamp_millis(i)
+                } else {
+                    chrono::DateTime::from_timestamp(i, 0)
+                }
+            } else if let Some(f) = n.as_f64() {
+                let secs = f.trunc() as i64;
+                let nanos = (f.fract() * 1_000_000_000.0) as u32;
+                chrono::DateTime::from_timestamp(secs, nanos)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    })
+}
+
+/// Parse a SSE `data:` payload. Prefers JSON (the current backend format);
+/// falls back to the legacy `[service] message` plain-text form.
+pub fn parse_log_line(data: &str) -> Option<LogEntry> {
     let data = data.trim();
+    if data.is_empty() {
+        return None;
+    }
+    // Drop SSE control sentinels (`done`, `[done]`, `close`, …) up front so
+    // they don't slip through as fake log entries — these are stream markers
+    // some server implementations emit and they'd otherwise render as noisy
+    // lines in the TUI / stdout.
+    if is_stream_sentinel(data) {
+        return None;
+    }
+    if data.starts_with('{') {
+        if let Ok(mut entry) = serde_json::from_str::<LogEntry>(data) {
+            entry.message = strip_ansi(&entry.message);
+            return Some(entry);
+        }
+    }
     if data.starts_with('[') {
         if let Some(end) = data.find(']') {
             let service = data[1..end].to_string();
             let message = strip_ansi(data[end + 1..].trim_start());
-            return Some((service, message));
+            return Some(LogEntry {
+                service,
+                timestamp: None,
+                message,
+                level: None,
+            });
         }
     }
-    Some(("unknown".to_string(), strip_ansi(data)))
+    Some(LogEntry {
+        service: "unknown".to_string(),
+        timestamp: None,
+        message: strip_ansi(data),
+        level: None,
+    })
+}
+
+/// SSE control words that the server sometimes emits alongside real log
+/// entries. We drop them so they don't render as fake log lines.
+fn is_stream_sentinel(s: &str) -> bool {
+    matches!(
+        s.to_ascii_lowercase().as_str(),
+        "done" | "close" | "closed" | "eof" | "end" | "[done]" | "[end]" | "--end--"
+    )
 }
 
 enum LogEvent {
-    Line { service: String, message: String },
+    Entry(LogEntry),
     Eof,
     Error(String),
 }
@@ -2507,9 +2624,9 @@ fn spawn_sse_reader(
                 for line in reader.lines() {
                     match line {
                         Ok(line) => {
-                            if let Some(data) = line.strip_prefix("data: ") {
-                                if let Some((service, message)) = parse_log_line(data) {
-                                    if tx.send(LogEvent::Line { service, message }).is_err() {
+                            if let Some(data) = line.strip_prefix("data: ").or_else(|| line.strip_prefix("data:")) {
+                                if let Some(entry) = parse_log_line(data) {
+                                    if tx.send(LogEvent::Entry(entry)).is_err() {
                                         return;
                                     }
                                 }
@@ -2538,6 +2655,7 @@ fn spawn_sse_reader(
 fn logs_stream(
     rx: std::sync::mpsc::Receiver<LogEvent>,
     filters: &Option<Vec<String>>,
+    show_timestamps: bool,
 ) -> Result<()> {
     use crossterm::style::{Color, ResetColor, SetForegroundColor};
     use std::io::Write;
@@ -2547,21 +2665,25 @@ fn logs_stream(
 
     loop {
         match rx.recv() {
-            Ok(LogEvent::Line { service, message }) => {
+            Ok(LogEvent::Entry(entry)) => {
                 if let Some(ref f) = filters {
-                    if !matches_filter(&service, f) {
+                    if !matches_filter(&entry.service, f) {
                         continue;
                     }
                 }
-                let color = service_color(&service);
-                let _ = crossterm::execute!(
-                    out,
-                    SetForegroundColor(color),
-                );
-                let _ = write!(out, "[{}]", service);
+                if show_timestamps {
+                    if let Some(ts) = entry.ts() {
+                        let _ = crossterm::execute!(out, SetForegroundColor(Color::DarkGrey));
+                        let _ = write!(out, "{} ", ts.format("%Y-%m-%dT%H:%M:%S%.3fZ"));
+                        let _ = crossterm::execute!(out, ResetColor);
+                    }
+                }
+                let color = service_color(&entry.service);
+                let _ = crossterm::execute!(out, SetForegroundColor(color));
+                let _ = write!(out, "[{}]", entry.service);
                 let _ = crossterm::execute!(out, SetForegroundColor(Color::Reset));
                 let _ = crossterm::execute!(out, ResetColor);
-                let _ = writeln!(out, " {}", message);
+                let _ = writeln!(out, " {}", entry.message);
                 let _ = out.flush();
             }
             Ok(LogEvent::Eof) => break,
@@ -2642,7 +2764,8 @@ fn logs_split(
         if !stream_ended {
             loop {
                 match rx.try_recv() {
-                    Ok(LogEvent::Line { service, message }) => {
+                    Ok(LogEvent::Entry(entry)) => {
+                        let LogEntry { service, message, .. } = entry;
                         // Dynamically add panels for new services (when no explicit filter)
                         if !panels.contains_key(&service) {
                             if explicit_filter {
@@ -2795,25 +2918,138 @@ fn logs_split(
     Ok(())
 }
 
-fn logs(filter: Option<String>, split: Option<String>, service: Option<String>) -> Result<()> {
+/// Bundle for `logs()` so adding new flags doesn't keep widening the
+/// function signature.
+pub(crate) struct LogsArgs {
+    pub filter: Option<String>,
+    pub split: Option<String>,
+    pub since: Option<String>,
+    pub until: Option<String>,
+    pub grep: Option<String>,
+    pub interactive: bool,
+    pub follow: bool,
+    pub service: Option<String>,
+}
+
+/// Parse `--since` / `--until`: either the literal `now`, a humantime
+/// duration ("2h", "1d12h") relative to now, or an RFC-3339 timestamp.
+/// Returns UTC.
+fn parse_time_anchor(input: &str) -> Result<chrono::DateTime<chrono::Utc>> {
+    let trimmed = input.trim();
+    if trimmed.eq_ignore_ascii_case("now") {
+        return Ok(chrono::Utc::now());
+    }
+    if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(trimmed) {
+        return Ok(ts.with_timezone(&chrono::Utc));
+    }
+    let dur = humantime::parse_duration(trimmed)
+        .with_context(|| format!("Invalid duration or RFC-3339 timestamp: {:?}", input))?;
+    let chrono_dur = chrono::Duration::from_std(dur)
+        .with_context(|| format!("Duration too large: {:?}", input))?;
+    Ok(chrono::Utc::now() - chrono_dur)
+}
+
+fn logs(args: LogsArgs) -> Result<()> {
+    let LogsArgs {
+        filter,
+        split,
+        since,
+        until,
+        grep,
+        interactive,
+        follow,
+        service,
+    } = args;
+
+    if interactive && split.is_some() {
+        bail!("`--interactive` and `--split` can't be combined; pick one TUI.");
+    }
+
     let creds = require_credentials()?;
     let mut client = CloudClient::new(&creds);
     let (slug, pid) = resolve_project_id(&mut client)?;
 
     let filters = resolve_filters(filter.as_deref(), service.as_deref());
 
+    // Resolve time window up-front so user sees errors before connecting.
+    let since_ts = since.as_deref().map(parse_time_anchor).transpose()?;
+    let until_ts = until.as_deref().map(parse_time_anchor).transpose()?;
+
+    let has_history_window = since_ts.is_some() || until_ts.is_some() || grep.is_some();
+
+    if interactive {
+        // Hand everything over to the TUI. It owns its own fetchers
+        // (initial window, scroll-back pagination, follow stream) so we
+        // don't build a URL here.
+        return crate::logs_browser::launch(
+            client.base_url.clone(),
+            client.auth_header(),
+            pid,
+            filters,
+            since_ts,
+            until_ts,
+            grep,
+            follow,
+        );
+    }
+
+    // Build the query string. We only ask the server to close the stream
+    // (`tail=false`) when the user has set a BOUNDED window via `--until`;
+    // everything else — including a bare `--since 1h` — replays history and
+    // then keeps tailing live (the server's default behaviour). This matches
+    // `kubectl logs --since` / `journalctl --since -f` expectations: `--since`
+    // is "also give me this much past", not "exit after this window".
+    let mut query: Vec<(String, String)> = Vec::new();
+    if let Some(ts) = since_ts {
+        query.push(("since".to_string(), ts.to_rfc3339()));
+    }
+    if let Some(ts) = until_ts {
+        query.push(("until".to_string(), ts.to_rfc3339()));
+    }
+    if let Some(ref g) = grep {
+        query.push(("q".to_string(), g.clone()));
+    }
+    let bounded = until_ts.is_some();
+    if bounded {
+        query.push(("tail".to_string(), "false".to_string()));
+    }
+
     let path = format!("/v1/projects/{}/logs", pid);
-    let url = format!("{}{}", client.base_url, path);
+    let url = if query.is_empty() {
+        format!("{}{}", client.base_url, path)
+    } else {
+        let qs: Vec<String> = query
+            .iter()
+            .map(|(k, v)| format!("{}={}", urlencode(k), urlencode(v)))
+            .collect();
+        format!("{}{}?{}", client.base_url, path, qs.join("&"))
+    };
     let auth_header = client.auth_header();
 
     let is_split = split.is_some();
 
     if !is_split {
-        println!("Streaming logs for '{}' (Ctrl+C to stop)...", slug);
+        let mode = if bounded {
+            "Fetching bounded log window"
+        } else if has_history_window {
+            "Replaying history + streaming live"
+        } else {
+            "Streaming live logs"
+        };
+        println!("{} for '{}' (Ctrl+C to stop)...", mode, slug);
         if let Some(ref f) = filters {
             let mut names: Vec<&str> = f.iter().map(|s| s.as_str()).collect();
             names.sort();
-            println!("Filtering: {}", names.join(", "));
+            println!("Filtering services: {}", names.join(", "));
+        }
+        if let Some(ts) = since_ts {
+            println!("Since: {}", ts.to_rfc3339());
+        }
+        if let Some(ts) = until_ts {
+            println!("Until: {}", ts.to_rfc3339());
+        }
+        if let Some(ref g) = grep {
+            println!("Grep: /{}/", g);
         }
         println!();
     }
@@ -2821,14 +3057,34 @@ fn logs(filter: Option<String>, split: Option<String>, service: Option<String>) 
     let (tx, rx) = std::sync::mpsc::channel();
     let _reader = spawn_sse_reader(url, auth_header, tx);
 
+    // Show timestamps whenever we're replaying history (user cares about "when");
+    // live-only tail keeps the existing compact `[service] message` format.
+    let show_timestamps = has_history_window;
+
     match split.as_deref() {
         Some("h") => logs_split(rx, &filters, ratatui::layout::Direction::Vertical)?,
         Some("v") => logs_split(rx, &filters, ratatui::layout::Direction::Horizontal)?,
         Some(other) => bail!("Invalid split mode '{}'. Use 'h' (horizontal) or 'v' (vertical).", other),
-        None => logs_stream(rx, &filters)?,
+        None => logs_stream(rx, &filters, show_timestamps)?,
     }
 
     Ok(())
+}
+
+/// Percent-encode a query-string value. We only need a minimal, dependency-free
+/// implementation — regex-y strings in `--grep` can contain `+`, `&`, spaces,
+/// etc., which would otherwise corrupt the URL.
+pub fn urlencode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.as_bytes() {
+        match *b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*b as char);
+            }
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
 }
 
 fn scale(ssp: u32) -> Result<()> {
@@ -2849,20 +3105,28 @@ fn scale(ssp: u32) -> Result<()> {
     Ok(())
 }
 
-fn restart(clean: bool) -> Result<()> {
+fn restart(clean: bool, upgrade: bool) -> Result<()> {
     let creds = require_credentials()?;
     let mut client = CloudClient::new(&creds);
     let (slug, pid) = resolve_project_id(&mut client)?;
 
+    let mut flags = Vec::new();
     if clean {
-        println!("Restarting scheduler + SSPs for '{}' (scheduler volume WILL be wiped)...", slug);
-    } else {
-        println!("Restarting scheduler + SSPs for '{}'...", slug);
+        flags.push("wipe scheduler volume");
     }
+    if upgrade {
+        flags.push("pull latest images");
+    }
+    let suffix = if flags.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", flags.join(", "))
+    };
+    println!("Restarting scheduler + SSPs for '{}'{}...", slug, suffix);
 
     let resp = client.post(
         &format!("/v1/projects/{}/restart", pid),
-        &serde_json::json!({ "clean": clean }),
+        &serde_json::json!({ "clean": clean, "upgrade": upgrade }),
     )?;
     let result: serde_json::Value = resp.into_json().context("Failed to parse response")?;
     let stopped = result["stopped"].as_u64().unwrap_or(0);
@@ -3174,6 +3438,7 @@ fn backup(action: CloudBackupCommands) -> Result<()> {
             println!("  Restore complete.");
         }
         CloudBackupCommands::Delete { backup_id } => {
+            let backup_id = resolve_backup_id(&mut client, &pid, &backup_id)?;
             let resp = client.delete(&format!("/v1/projects/{}/backups/{}", pid, backup_id))?;
             if resp.status() == 200 {
                 println!("  Backup {} deleted.", backup_id);
@@ -4814,3 +5079,121 @@ fn env_change_passphrase() -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod logs_tests {
+    use super::*;
+
+    #[test]
+    fn parse_json_log_entry() {
+        let data = r#"{"service":"ssp","timestamp":"2026-04-22T10:23:45Z","message":"hello"}"#;
+        let entry = parse_log_line(data).expect("should parse");
+        assert_eq!(entry.service, "ssp");
+        assert_eq!(entry.message, "hello");
+        assert!(entry.ts().is_some());
+    }
+
+    #[test]
+    fn parse_json_log_entry_unix_seconds() {
+        let data = r#"{"service":"ssp","timestamp":1745324625,"message":"hi"}"#;
+        let entry = parse_log_line(data).expect("should parse");
+        assert!(entry.ts().is_some(), "numeric timestamp should decode");
+    }
+
+    #[test]
+    fn parse_json_log_entry_unix_millis() {
+        let data = r#"{"service":"ssp","timestamp":1745324625000,"message":"hi"}"#;
+        let entry = parse_log_line(data).expect("should parse");
+        // Large integer → treated as milliseconds.
+        assert!(entry.ts().is_some(), "millisecond timestamp should decode");
+    }
+
+    #[test]
+    fn parse_json_log_entry_missing_timestamp_is_none() {
+        let data = r#"{"service":"ssp","message":"hi"}"#;
+        let entry = parse_log_line(data).expect("should parse");
+        assert!(entry.ts().is_none());
+    }
+
+    #[test]
+    fn parse_json_log_entry_strips_ansi_from_message() {
+        let data = r#"{"service":"ssp","timestamp":"2026-04-22T10:23:45Z","message":"\u001b[31mred\u001b[0m"}"#;
+        let entry = parse_log_line(data).expect("should parse");
+        assert_eq!(entry.message, "red");
+    }
+
+    #[test]
+    fn parse_legacy_plain_text_line() {
+        let entry = parse_log_line("[scheduler] booting").expect("should parse");
+        assert_eq!(entry.service, "scheduler");
+        assert_eq!(entry.message, "booting");
+        assert!(entry.ts().is_none());
+    }
+
+    #[test]
+    fn parse_unknown_service_falls_through() {
+        let entry = parse_log_line("raw line with no prefix").expect("should parse");
+        assert_eq!(entry.service, "unknown");
+        assert_eq!(entry.message, "raw line with no prefix");
+    }
+
+    #[test]
+    fn parse_empty_returns_none() {
+        assert!(parse_log_line("").is_none());
+        assert!(parse_log_line("   ").is_none());
+    }
+
+    #[test]
+    fn parse_drops_stream_sentinels() {
+        // These are SSE control markers some server implementations emit —
+        // they should not surface as "unknown" log entries in the UI.
+        assert!(parse_log_line("done").is_none());
+        assert!(parse_log_line("Done").is_none());
+        assert!(parse_log_line("[done]").is_none());
+        assert!(parse_log_line("close").is_none());
+        assert!(parse_log_line("eof").is_none());
+        assert!(parse_log_line("  end  ").is_none());
+    }
+
+    #[test]
+    fn parse_time_anchor_accepts_duration() {
+        let before = chrono::Utc::now();
+        let two_hours_ago = parse_time_anchor("2h").unwrap();
+        let after = chrono::Utc::now();
+        assert!(two_hours_ago <= before - chrono::Duration::hours(2) + chrono::Duration::seconds(1));
+        assert!(two_hours_ago >= after - chrono::Duration::hours(2) - chrono::Duration::seconds(1));
+    }
+
+    #[test]
+    fn parse_time_anchor_accepts_rfc3339() {
+        let ts = parse_time_anchor("2026-04-21T10:00:00Z").unwrap();
+        assert_eq!(ts.to_rfc3339(), "2026-04-21T10:00:00+00:00");
+    }
+
+    #[test]
+    fn parse_time_anchor_rejects_garbage() {
+        assert!(parse_time_anchor("not-a-date").is_err());
+    }
+
+    #[test]
+    fn parse_time_anchor_accepts_now_literal() {
+        let before = chrono::Utc::now();
+        let now = parse_time_anchor("now").unwrap();
+        let after = chrono::Utc::now();
+        assert!(now >= before && now <= after);
+        // Case-insensitive + whitespace-tolerant.
+        assert!(parse_time_anchor("NOW").is_ok());
+        assert!(parse_time_anchor("  Now ").is_ok());
+    }
+
+    #[test]
+    fn urlencode_preserves_safe_chars() {
+        assert_eq!(urlencode("abcXYZ-_.~0123"), "abcXYZ-_.~0123");
+    }
+
+    #[test]
+    fn urlencode_escapes_regex_metacharacters() {
+        assert_eq!(urlencode("a+b&c d/e"), "a%2Bb%26c%20d%2Fe");
+    }
+}
+
