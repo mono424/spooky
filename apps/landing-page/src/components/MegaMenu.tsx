@@ -1,69 +1,27 @@
 import React, { useRef, useState } from 'react';
+import {
+  Zap,
+  Activity,
+  Clock,
+  FolderSync,
+  Braces,
+  Wrench,
+  Lock,
+  DatabaseBackup,
+  Cloud,
+} from 'lucide-react';
 import { coreFeatures, cloudFeatures } from '../config/features';
 
 const ICON: Record<string, React.ReactElement> = {
-  optimistic: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M13 2 L4 14 h7 l-1 8 9-12 h-7 z" />
-    </svg>
-  ),
-  scheduler: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="9" />
-      <path d="M12 7 v5 l3 2" />
-    </svg>
-  ),
-  query: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M7 4 l-3 4 3 4" />
-      <path d="M17 4 l3 4 -3 4" />
-      <path d="M14 14 l-4 6" />
-    </svg>
-  ),
-  types: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M8 6 l-5 6 5 6" />
-      <path d="M16 6 l5 6 -5 6" />
-      <path d="M14 4 l-4 16" />
-    </svg>
-  ),
-  devtools: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="4" width="18" height="14" rx="2" />
-      <path d="M3 9 h18" />
-      <circle cx="6" cy="6.5" r="0.6" fill="currentColor" />
-      <circle cx="8.5" cy="6.5" r="0.6" fill="currentColor" />
-      <path d="M7 13 l2 2 l2 -2" />
-      <path d="M15 13 h3" />
-    </svg>
-  ),
-  files: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M14 3 H6 a2 2 0 0 0 -2 2 v14 a2 2 0 0 0 2 2 h12 a2 2 0 0 0 2 -2 V9 z" />
-      <path d="M14 3 v6 h6" />
-      <path d="M8 14 h8 M8 18 h5" />
-    </svg>
-  ),
-  vault: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="5" width="18" height="14" rx="2" />
-      <circle cx="12" cy="12" r="3" />
-      <path d="M12 9 v-1 M12 16 v-1 M15 12 h1 M8 12 h1" />
-    </svg>
-  ),
-  backup: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M21 12 a9 9 0 1 1 -3 -6.7" />
-      <path d="M21 4 v5 h-5" />
-    </svg>
-  ),
-  hosting: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4 17 a5 5 0 0 1 2 -9.7 a6 6 0 0 1 11.6 1.3 A4 4 0 0 1 18 17 z" />
-      <path d="M9 13 l3 -3 3 3" />
-      <path d="M12 10 v8" />
-    </svg>
-  ),
+  optimistic: <Zap size={18} strokeWidth={1.6} />,
+  query: <Activity size={18} strokeWidth={1.6} />,
+  scheduler: <Clock size={18} strokeWidth={1.6} />,
+  files: <FolderSync size={18} strokeWidth={1.6} />,
+  types: <Braces size={18} strokeWidth={1.6} />,
+  devtools: <Wrench size={18} strokeWidth={1.6} />,
+  vault: <Lock size={18} strokeWidth={1.6} />,
+  backup: <DatabaseBackup size={18} strokeWidth={1.6} />,
+  hosting: <Cloud size={18} strokeWidth={1.6} />,
 };
 
 const ArrowIcon = () => (

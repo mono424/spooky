@@ -1,0 +1,141 @@
+---
+// oxlint-disable-next-line no-unassigned-import
+import '../styles/global.css';
+import SiteNav from '../components/SiteNav.astro';
+import SiteFooter from '../components/SiteFooter.astro';
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Privacy policy for sp00ky." />
+    <title>Privacy — sp00ky</title>
+  </head>
+  <body class="min-h-screen flex flex-col">
+    <SiteNav activePath="/privacy" />
+
+    <main class="flex-1">
+      <section class="relative pt-24 pb-8 md:pt-32 md:pb-12 overflow-hidden">
+        <div
+          class="absolute inset-x-0 top-0 h-[420px] pointer-events-none"
+          style="background: radial-gradient(60% 50% at 50% 0%, rgba(124,106,239,0.12), transparent 70%);"
+        ></div>
+        <div class="max-w-3xl mx-auto px-4 relative z-10">
+          <div class="mb-5">
+            <span class="inline-block px-3 py-1 text-[10px] font-medium text-text-muted bg-white/5 border border-white/10 rounded-full uppercase tracking-widest">
+              Legal
+            </span>
+          </div>
+          <h1 class="text-section md:text-hero font-semibold text-text-primary mb-4 tracking-tight">
+            Privacy Policy
+          </h1>
+          <p class="text-sm text-text-muted">Last updated: April 23, 2026</p>
+        </div>
+      </section>
+
+      <section class="pb-24 md:pb-32">
+        <div class="max-w-3xl mx-auto px-4">
+          <div class="prose prose-invert max-w-none text-text-tertiary leading-relaxed">
+            <p>
+              This Privacy Policy explains what information we collect, how we use it, and the
+              choices you have. It applies to the sp00ky website, documentation, and any managed
+              cloud services offered under the sp00ky name (the "Service"). The sp00ky
+              open-source library runs on your infrastructure and does not, by itself, send any
+              data to us.
+            </p>
+
+            <h2>1. Information We Collect</h2>
+            <p>We collect a minimal amount of information, in two categories:</p>
+            <ul>
+              <li>
+                <strong>You give us:</strong> account information (such as email address) when
+                you sign up for managed services, and any content you choose to submit (for
+                example, support messages or feedback).
+              </li>
+              <li>
+                <strong>Collected automatically:</strong> basic request logs (IP address, user
+                agent, referrer, timestamp) and aggregate analytics to measure usage and
+                reliability.
+              </li>
+            </ul>
+
+            <h2>2. How We Use Information</h2>
+            <p>We use information to:</p>
+            <ul>
+              <li>Provide, maintain, and improve the Service.</li>
+              <li>Respond to support requests and communicate important updates.</li>
+              <li>Detect, prevent, and address abuse, fraud, or security issues.</li>
+              <li>Comply with legal obligations.</li>
+            </ul>
+
+            <h2>3. Sharing</h2>
+            <p>
+              We do not sell personal information. We share information only with service
+              providers that help us operate the Service (such as hosting and analytics
+              providers), under appropriate confidentiality and data-protection agreements, or
+              when required by law.
+            </p>
+
+            <h2>4. Cookies and Similar Technologies</h2>
+            <p>
+              We use a small number of cookies and similar technologies to keep the Service
+              working, remember preferences, and understand aggregate usage. You can control
+              cookies in your browser settings.
+            </p>
+
+            <h2>5. Data Retention</h2>
+            <p>
+              We keep information only as long as necessary to provide the Service and meet our
+              legal obligations. When it is no longer needed, we delete or anonymize it.
+            </p>
+
+            <h2>6. Security</h2>
+            <p>
+              We apply reasonable technical and organizational measures to protect information
+              against unauthorized access, loss, or misuse. No system is perfectly secure, and we
+              encourage you to use strong credentials and keep your account safe.
+            </p>
+
+            <h2>7. Your Rights</h2>
+            <p>
+              Depending on where you live, you may have rights to access, correct, delete, or
+              port your personal information, and to object to certain processing. Contact us
+              using the details below to exercise these rights.
+            </p>
+
+            <h2>8. Children</h2>
+            <p>
+              The Service is not directed to children under 13, and we do not knowingly collect
+              personal information from them.
+            </p>
+
+            <h2>9. International Transfers</h2>
+            <p>
+              Your information may be processed in countries other than the one you live in. When
+              we transfer data internationally, we apply appropriate safeguards.
+            </p>
+
+            <h2>10. Changes to This Policy</h2>
+            <p>
+              We may update this policy from time to time. When we do, we will update the "Last
+              updated" date above and, for material changes, provide additional notice where
+              appropriate.
+            </p>
+
+            <h2>11. Contact</h2>
+            <p>
+              Questions about this policy or our data practices? Open an issue on our
+              <a href="https://github.com/mono424/sp00ky" class="text-text-primary underline" target="_blank" rel="noopener">GitHub repository</a>
+              or reach out on
+              <a href="https://discord.com/channels/902568124350599239/1454620262526877696" class="text-text-primary underline" target="_blank" rel="noopener">Discord</a>.
+            </p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <SiteFooter />
+  </body>
+</html>
