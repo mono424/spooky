@@ -4,24 +4,97 @@ import FeaturePage from '../../layouts/FeaturePage.astro';
 
 <FeaturePage
   title="Automatic Backups"
-  description="Continuous point-in-time snapshots. Roll back to any moment with a single click."
+  description="Backups on a schedule, backups on demand, and restores that leave your database in a clean, consistent state."
   badge="Cloud · Managed"
   activePath="/cloud"
 >
   <p>
-    sp00ky Cloud runs continuous snapshots of every workspace in the background. Snapshots are
-    incremental, encrypted, and indexed by time — so rolling back to yesterday at 14:32 is the
-    same effort as rolling back to five minutes ago.
+    Backups are one of those features nobody thinks about until the one day they suddenly care
+    very, very much. sp00ky Cloud is built so that day is a quiet one.
   </p>
   <p>
-    No pipelines, no cron jobs, no support tickets. Open the dashboard, pick a point in time,
-    click restore. Optional scheduled exports push snapshots to your own object storage.
+    Set a schedule, take a manual snapshot before you do something risky, or do both. When you
+    need to go back, one command walks you there. No pager, no support ticket, no late-night
+    rummaging around in a dashboard looking for the option that admits defeat.
   </p>
-  <h2>What’s covered</h2>
+
+  <h2>The old way, and why it never feels fresh</h2>
+  <p>
+    Self-managed database backups usually mean a cron job, a shell script that was written by
+    someone who has since left the company, a bucket with access rules nobody fully understands,
+    and a quiet prayer that the thing has actually been running. The scariest part is never the
+    backup, it is the restore, because nobody has tested it since the day it was set up.
+  </p>
+
+  <h2>How sp00ky does it</h2>
+  <p>
+    Everything is a single command. You can run them locally, from a CI job, or wire them into
+    whatever deployment flow you already have.
+  </p>
+  <ol>
+    <li>Take a backup right now with <code>spky cloud backup create</code>.</li>
+    <li>Name it if you are about to do something you want to be able to undo: <code>--name before-migration</code>.</li>
+    <li>Schedule recurring backups with a cron expression, like <code>"0 2 * * *"</code> for 2am daily.</li>
+    <li>Set a retention policy so old backups clean themselves up once you have enough newer ones.</li>
+    <li>List them, delete them, or restore any of them with one more command.</li>
+  </ol>
+  <blockquote>
+    <p>
+      The best moment to take a backup is right before you do the thing you are nervous about.
+      sp00ky makes that moment cost one command.
+    </p>
+  </blockquote>
+
+  <h2>Name the scary ones</h2>
+  <p>
+    Scheduled backups are great. Named backups are better when you are about to do something
+    specific. Before a migration, before a risky data import, before you merge the pull request
+    nobody fully reviewed, run:
+  </p>
   <ul>
-    <li>Continuous incremental snapshots — seconds-level granularity.</li>
-    <li>One-click restore to any point in time.</li>
-    <li>Encrypted at rest; opaque to the storage layer.</li>
-    <li>Optional export to S3, GCS, or R2.</li>
+    <li><code>spky cloud backup create --name before-migration</code></li>
+  </ul>
+  <p>
+    The name shows up in the list next to the backup id, so when you come back looking for "the
+    one from right before we changed the schema," it is there, labeled, ready.
+  </p>
+
+  <h2>Restores you can actually trust</h2>
+  <p>
+    The part of backups that usually goes sideways is the restore. sp00ky takes this seriously, so
+    the restore path is deliberately boring:
+  </p>
+  <ul>
+    <li>New writes are paused while the restore runs. You will not race the restore and leave the database in a weird middle state.</li>
+    <li>Every layer of the database is reloaded from the same backup file, so nothing ends up out of sync.</li>
+    <li>In-flight buffers, pending writes, and live connections are cleared. When traffic resumes, it resumes against the restored state, not a half-version of it.</li>
+    <li>Your migrations run again against the restored database, so the schema ends up where your code expects it.</li>
+    <li>The CLI shows progress as the restore moves through its phases. You know what is happening, not just that something is happening.</li>
+  </ul>
+  <p>
+    If something goes wrong partway through, sp00ky refuses to serve traffic from a half-restored
+    database. That sounds scary but it is the correct answer: half-restored is how you ship wrong
+    data to production.
+  </p>
+
+  <h2>Reset, with a safety net</h2>
+  <p>
+    Sometimes you do not want a restore, you want a clean slate. The reset command wipes the
+    database and re-runs your migrations, which is great for dev environments and terrifying for
+    any database that matters. sp00ky handles both cases:
+  </p>
+  <ul>
+    <li>It warns you, in plain language, that everything is about to go away.</li>
+    <li>It offers to take a backup first, and waits for it to finish before continuing.</li>
+    <li>If this is truly a throwaway project, <code>--no-backup</code> skips the prompt.</li>
+  </ul>
+
+  <h2>What you don't have to do</h2>
+  <ul>
+    <li>Write a backup script that only one person on the team understands.</li>
+    <li>Set up a bucket, rotate credentials, and argue about retention in a spreadsheet.</li>
+    <li>Find out in production that nobody has ever tested the restore.</li>
+    <li>Remember to back up before a migration. You can, but you also have the schedule already.</li>
+    <li>File a ticket and wait. The CLI is the dashboard.</li>
   </ul>
 </FeaturePage>

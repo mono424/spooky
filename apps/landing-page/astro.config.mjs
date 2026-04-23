@@ -25,4 +25,9 @@ export default defineConfig({
     react(),
     mdx(),
   ],
+  vite: {
+    ssr: {
+      noExternal: ['holographic-sticker'],
+    },
+  },
 });

@@ -4,24 +4,151 @@ import FeaturePage from '../../layouts/FeaturePage.astro';
 
 <FeaturePage
   title="Shared Vault"
-  description="End-to-end encrypted shared stores across users and devices. Collaborate without exposing plaintext to the cloud."
+  description="A team vault for your production secrets, included with every Starter and Pro plan. Every teammate gets their own passphrase. The database only sees ciphertext."
   badge="Cloud · Managed"
   activePath="/cloud"
 >
   <p>
-    The Shared Vault lets teammates collaborate on the same sp00ky dataset with end-to-end
-    encryption. Data is encrypted on-device; the cloud sees only opaque blobs; keys are exchanged
-    over an authenticated channel.
+    Every team has that one Slack thread with the API keys in it. You know the one. The
+    Shared Vault is how you stop adding to it.
   </p>
   <p>
-    Add and remove members with workspace-scoped permissions, rotate keys without re-encrypting
-    history, and audit access server-side without the server ever needing to read your data.
+    It is a team wide encrypted store for your environment variables, built into
+    <code>spky cloud</code>. Nobody shares a master password. Nobody pastes secrets into a
+    CI log. Nobody has to guess which <code>.env</code> was the right one.
   </p>
-  <h2>Security model</h2>
-  <ul>
-    <li>Per-workspace master key, rotated on membership change.</li>
-    <li>Client-side encryption before any byte leaves the device.</li>
-    <li>Zero-knowledge server: the cloud cannot decrypt content.</li>
-    <li>Optional hardware-backed key storage on supported platforms.</li>
-  </ul>
+
+  <h2>Your passphrase stays with you</h2>
+  <p>
+    Each teammate picks their own passphrase the first time they touch the vault. It never
+    leaves your machine. The CLI runs it through Argon2id locally and only sends the
+    derived key to the server, so even we cannot recover your passphrase if you lose it.
+  </p>
+  <p>
+    Under the hood, every tenant has an RSA-4096 keypair and a shared encryption key.
+    Each member carries their own encrypted copy of that key, unlocked by their own
+    passphrase. Adding a teammate is a one command invite. Removing a teammate deletes
+    their copy instantly.
+  </p>
+
+  <h2>Secrets encrypted at rest</h2>
+  <p>
+    When you set a variable, it is encrypted with the tenant's public key using RSA-4096
+    plus AES-256-GCM, then stored in the database. If someone walks off with a Postgres
+    dump, they walk off with ciphertext.
+  </p>
+  <p>
+    One honest caveat: decryption happens on the server at request time, so this is
+    encryption at rest, not strict end to end. If you need "not even the platform can
+    read it," see the comparison below, because that is not what sp00ky's vault promises.
+  </p>
+
+  <h2>It knows your deploys</h2>
+  <p>
+    Your <code>sp00ky.yml</code> can reference vault variables directly. Run
+    <code>spky cloud deploy</code> and the right secrets land in the right service with
+    no copy paste. Rotate one value with <code>spky cloud env set</code> and the next
+    deploy picks it up.
+  </p>
+  <p>
+    Forgot your passphrase? Any admin can approve a reset from the CLI. Left the company?
+    Your copy of the key is deleted, your API keys are revoked, and the rest of the team
+    carries on without re encrypting anything.
+  </p>
+
+  <h2>How it stacks up</h2>
+  <p>
+    sp00ky's vault is scoped on purpose: secrets for your sp00ky app, managed by the CLI
+    you already use. Here is where it sits next to the dedicated tools.
+  </p>
+
+  <div class="not-prose my-8 overflow-x-auto rounded-xl border border-white/10 bg-surface-elevated">
+    <table class="w-full text-left text-sm border-collapse">
+      <thead>
+        <tr class="bg-white/[0.03]">
+          <th class="px-4 py-3 text-[11px] font-medium uppercase tracking-widest text-text-muted">What you want to do</th>
+          <th class="px-4 py-3 text-center text-[11px] font-medium uppercase tracking-widest text-brand-400">sp00ky</th>
+          <th class="px-4 py-3 text-center text-[11px] font-medium uppercase tracking-widest text-text-muted">Doppler</th>
+          <th class="px-4 py-3 text-center text-[11px] font-medium uppercase tracking-widest text-text-muted">Infisical</th>
+          <th class="px-4 py-3 text-center text-[11px] font-medium uppercase tracking-widest text-text-muted">1Password</th>
+          <th class="px-4 py-3 text-center text-[11px] font-medium uppercase tracking-widest text-text-muted">HashiCorp Vault</th>
+        </tr>
+      </thead>
+      <tbody class="text-text-tertiary">
+        <tr class="border-t border-white/5">
+          <td class="px-4 py-3 text-text-secondary">Add encrypted env vars without a separate service</td>
+          <td class="px-4 py-3 text-center"><span class="text-accent-400 text-lg">✓</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-rose-400 text-lg">✕</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-rose-400 text-lg">✕</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-rose-400 text-lg">✕</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-rose-400 text-lg">✕</span></td>
+        </tr>
+        <tr class="border-t border-white/5 bg-white/[0.015]">
+          <td class="px-4 py-3 text-text-secondary">Each teammate uses their own passphrase</td>
+          <td class="px-4 py-3 text-center"><span class="text-accent-400 text-lg">✓</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-amber-400 text-lg">~</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-amber-400 text-lg">~</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-accent-400 text-lg">✓</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-accent-400 text-lg">✓</span></td>
+        </tr>
+        <tr class="border-t border-white/5">
+          <td class="px-4 py-3 text-text-secondary">Secrets wired into your deploy pipeline out of the box</td>
+          <td class="px-4 py-3 text-center"><span class="text-accent-400 text-lg">✓</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-accent-400 text-lg">✓</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-accent-400 text-lg">✓</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-amber-400 text-lg">~</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-amber-400 text-lg">~</span></td>
+        </tr>
+        <tr class="border-t border-white/5 bg-white/[0.015]">
+          <td class="px-4 py-3 text-text-secondary">True end to end: the platform never sees plaintext</td>
+          <td class="px-4 py-3 text-center"><span class="text-rose-400 text-lg">✕</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-rose-400 text-lg">✕</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-amber-400 text-lg">~</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-accent-400 text-lg">✓</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-rose-400 text-lg">✕</span></td>
+        </tr>
+        <tr class="border-t border-white/5">
+          <td class="px-4 py-3 text-text-secondary">Central secret management across many apps and clouds</td>
+          <td class="px-4 py-3 text-center"><span class="text-rose-400 text-lg">✕</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-accent-400 text-lg">✓</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-accent-400 text-lg">✓</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-accent-400 text-lg">✓</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-accent-400 text-lg">✓</span></td>
+        </tr>
+        <tr class="border-t border-white/5 bg-white/[0.015]">
+          <td class="px-4 py-3 text-text-secondary">Hardware backed root of trust (HSM, KMS, dynamic secrets)</td>
+          <td class="px-4 py-3 text-center"><span class="text-rose-400 text-lg">✕</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-amber-400 text-lg">~</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-amber-400 text-lg">~</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-amber-400 text-lg">~</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-accent-400 text-lg">✓</span></td>
+        </tr>
+      </tbody>
+      <tfoot>
+        <tr class="border-t border-white/10 bg-white/[0.02]">
+          <td colspan="6" class="px-4 py-3 text-xs text-text-muted">
+            <span class="text-accent-400">✓</span> first class
+            &nbsp;·&nbsp;
+            <span class="text-amber-400">~</span> possible, with effort or caveats
+            &nbsp;·&nbsp;
+            <span class="text-rose-400">✕</span> not a goal
+          </td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+
+  <h2>When to pick something else</h2>
+  <p>
+    If you need secrets across half a dozen apps, clouds, and vendors, pick a real secret
+    manager. HashiCorp Vault is the serious answer for dynamic secrets and HSM backed
+    trust. Doppler and Infisical are great if you want a dedicated product that spans
+    many projects. 1Password is the move if strict end to end encryption is the point.
+  </p>
+  <p>
+    sp00ky's vault is the right call when you want your sp00ky app's production secrets
+    handled properly, per teammate, with no extra subscription and no extra dashboard to
+    remember your password for. For anything bigger, point your <code>sp00ky.yml</code>
+    at the grown up vault and we will happily fetch from it. We will not be offended.
+  </p>
 </FeaturePage>

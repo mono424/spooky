@@ -4,24 +4,151 @@ import FeaturePage from '../../layouts/FeaturePage.astro';
 
 <FeaturePage
   title="First-class Tooling"
-  description="A Chrome extension, an MCP server, and a CLI. Debug sp00ky apps in real time."
+  description="A CLI, a Chrome DevTools extension, and an MCP server. The tools you would have built anyway, already built, and working together."
   badge="Core · Library"
   activePath="/features"
 >
   <p>
-    sp00ky ships with the tooling you would build anyway, already built. Inspect every query
-    and mutation as they happen, let your AI agents drive sp00ky apps over MCP, and scaffold
-    new projects and deploys from a single CLI.
+    Most frameworks make you bring your own flashlight. You write a CLI script, wire up a
+    debug panel, paste together some cloud commands, and hope your AI agent figures out
+    the rest. sp00ky saves you the weekend.
   </p>
   <p>
-    No duct-taped logging, no homegrown admin panels, no ad-hoc scripts. Everything speaks
-    sp00ky natively.
+    Everything you reach for day to day is already in the box, speaks sp00ky natively, and
+    looks like it was made by one team, because it was.
   </p>
-  <h2>What's in the box</h2>
-  <ul>
-    <li>Chrome DevTools extension: live query inspector, state timeline, mutation log.</li>
-    <li>MCP server: let agents read, write, and reason over your app's data directly.</li>
-    <li>CLI: scaffold projects, manage migrations, deploy to sp00ky Cloud.</li>
-    <li>First-class editor support with typed completions and inline schema hints.</li>
-  </ul>
+
+  <h2>See your app while it runs</h2>
+  <p>
+    Pop open Chrome DevTools, click the <strong>Sp00ky</strong> tab, and the guesswork is
+    gone. Every store, every live query, every subscriber count, every sync status. Live.
+    No <code>console.log</code> archaeology at 2am.
+  </p>
+  <div class="not-prose mt-6 mb-8 flex flex-col items-start gap-4">
+    <a
+      href="https://chromewebstore.google.com/detail/spooky-devtools/kiklfilnjgfjnmcfoeoaifjlmokncfef"
+      target="_blank"
+      rel="noopener noreferrer"
+      class="group inline-flex items-center gap-4 px-6 py-4 rounded-xl bg-white/[0.03] border border-white/10 hover:border-white/20 hover:bg-white/[0.06] transition-all duration-300"
+    >
+      <div class="flex items-center justify-center w-10 h-10 rounded-lg bg-white/10 group-hover:bg-white/15 transition-colors duration-300">
+        <svg class="w-6 h-6" viewBox="0 0 24 24" fill="#4285F4" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 0C8.21 0 4.831 1.757 2.632 4.501l3.953 6.848A5.454 5.454 0 0 1 12 6.545h10.691A12 12 0 0 0 12 0zM1.931 5.47A11.943 11.943 0 0 0 0 12c0 6.012 4.42 10.991 10.189 11.864l3.953-6.847a5.45 5.45 0 0 1-6.865-2.29zm13.342 2.166a5.446 5.446 0 0 1 1.45 7.09l.002.001h-.002l-5.344 9.257c.206.01.413.016.621.016 6.627 0 12-5.373 12-12 0-1.54-.29-3.011-.818-4.364zM12 16.364a4.364 4.364 0 1 1 0-8.728 4.364 4.364 0 0 1 0 8.728Z"/>
+        </svg>
+      </div>
+      <div class="flex flex-col">
+        <span class="text-[11px] uppercase tracking-wider text-text-muted font-medium leading-none mb-1">Available on the</span>
+        <span class="text-base font-semibold text-text-primary leading-tight group-hover:text-white transition-colors duration-200">Chrome Web Store</span>
+      </div>
+      <svg
+        class="w-4 h-4 text-text-muted group-hover:text-text-primary group-hover:translate-x-0.5 transition-all duration-200 ml-2"
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke="currentColor"
+      >
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+      </svg>
+    </a>
+  </div>
+
+  <h2>One command from idea to deploy</h2>
+  <p>
+    The <code>spky</code> CLI is the only tool you need open in the terminal. Start a new
+    project, spin up a local stack, regenerate your types, ship to the cloud, tail your
+    logs. Same binary, same shape, no surprises.
+  </p>
+  <p>
+    When something goes sideways in production, you are one command away from live logs
+    with regex search, service filters, and a TUI browser so you can actually find the
+    thing you are looking for.
+  </p>
+
+  <h2>Your AI agents already understand it</h2>
+  <p>
+    sp00ky ships an MCP server. Point your agent at it and it can read your schema, run
+    queries, watch stores in real time, and actually know what your app looks like. You
+    stop writing context, and the agent stops hallucinating tables.
+  </p>
+
+  <h2>How it stacks up</h2>
+  <p>
+    Good tools do one thing well. Great tools work together. Here is where sp00ky sits
+    next to the usual suspects.
+  </p>
+
+  <div class="not-prose my-8 overflow-x-auto rounded-xl border border-white/10 bg-surface-elevated">
+    <table class="w-full text-left text-sm border-collapse">
+      <thead>
+        <tr class="bg-white/[0.03]">
+          <th class="px-4 py-3 text-[11px] font-medium uppercase tracking-widest text-text-muted">What you want to do</th>
+          <th class="px-4 py-3 text-center text-[11px] font-medium uppercase tracking-widest text-brand-400">sp00ky</th>
+          <th class="px-4 py-3 text-center text-[11px] font-medium uppercase tracking-widest text-text-muted">Redux DevTools</th>
+          <th class="px-4 py-3 text-center text-[11px] font-medium uppercase tracking-widest text-text-muted">Prisma Studio</th>
+          <th class="px-4 py-3 text-center text-[11px] font-medium uppercase tracking-widest text-text-muted">Supabase CLI</th>
+          <th class="px-4 py-3 text-center text-[11px] font-medium uppercase tracking-widest text-text-muted">Firebase CLI</th>
+        </tr>
+      </thead>
+      <tbody class="text-text-tertiary">
+        <tr class="border-t border-white/5">
+          <td class="px-4 py-3 text-text-secondary">Debug live app state in Chrome DevTools</td>
+          <td class="px-4 py-3 text-center"><span class="text-accent-400 text-lg">✓</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-accent-400 text-lg">✓</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-rose-400 text-lg">✕</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-rose-400 text-lg">✕</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-rose-400 text-lg">✕</span></td>
+        </tr>
+        <tr class="border-t border-white/5 bg-white/[0.015]">
+          <td class="px-4 py-3 text-text-secondary">Let AI agents drive your app natively</td>
+          <td class="px-4 py-3 text-center"><span class="text-accent-400 text-lg">✓</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-rose-400 text-lg">✕</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-rose-400 text-lg">✕</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-amber-400 text-lg">~</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-amber-400 text-lg">~</span></td>
+        </tr>
+        <tr class="border-t border-white/5">
+          <td class="px-4 py-3 text-text-secondary">Generate types from your schema</td>
+          <td class="px-4 py-3 text-center"><span class="text-accent-400 text-lg">✓</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-rose-400 text-lg">✕</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-amber-400 text-lg">~</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-accent-400 text-lg">✓</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-rose-400 text-lg">✕</span></td>
+        </tr>
+        <tr class="border-t border-white/5 bg-white/[0.015]">
+          <td class="px-4 py-3 text-text-secondary">Spin up a local dev stack in one command</td>
+          <td class="px-4 py-3 text-center"><span class="text-accent-400 text-lg">✓</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-rose-400 text-lg">✕</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-rose-400 text-lg">✕</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-accent-400 text-lg">✓</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-accent-400 text-lg">✓</span></td>
+        </tr>
+        <tr class="border-t border-white/5">
+          <td class="px-4 py-3 text-text-secondary">Deploy and tail production logs from one CLI</td>
+          <td class="px-4 py-3 text-center"><span class="text-accent-400 text-lg">✓</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-rose-400 text-lg">✕</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-rose-400 text-lg">✕</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-accent-400 text-lg">✓</span></td>
+          <td class="px-4 py-3 text-center"><span class="text-accent-400 text-lg">✓</span></td>
+        </tr>
+      </tbody>
+      <tfoot>
+        <tr class="border-t border-white/10 bg-white/[0.02]">
+          <td colspan="6" class="px-4 py-3 text-xs text-text-muted">
+            <span class="text-accent-400">✓</span> first class
+            &nbsp;·&nbsp;
+            <span class="text-amber-400">~</span> possible, with effort or caveats
+            &nbsp;·&nbsp;
+            <span class="text-rose-400">✕</span> not a goal
+          </td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+
+  <h2>When to pick something else</h2>
+  <p>
+    sp00ky's tooling is the right call when you are using sp00ky. Redux DevTools is still
+    the king of time travel debugging. Prisma Studio is a lovely spreadsheet for your
+    database. Supabase and Firebase are full platforms in their own right. Use what fits,
+    mix where it helps. We will not be offended.
+  </p>
 </FeaturePage>

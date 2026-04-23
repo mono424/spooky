@@ -4,25 +4,265 @@ import FeaturePage from '../../layouts/FeaturePage.astro';
 
 <FeaturePage
   title="Optimistic Updates"
-  description="UI updates land instantly. Sync happens in the background. No more spinners after a click."
+  description="Clicks feel instant. Syncing happens in the background. Your app is quick even when the network is not."
   badge="Core · Library"
   activePath="/features"
 >
   <p>
-    sp00ky writes hit your local store the instant you call them — a mutation returns synchronously,
-    your UI re-renders in the same frame, and the network round-trip runs in parallel. If the
-    server disagrees, sp00ky reconciles and your UI corrects itself; if the network is unreachable,
-    the write is durable on-device and replays when you reconnect.
+    Your app should feel fast. Not fast-ish. Not fast-on-a-good-connection. Fast.
   </p>
   <p>
-    The result: apps that feel instantaneous even on spotty connections, with no hand-rolled
-    optimistic state or queue logic in your components.
+    sp00ky makes every write feel immediate. You call a mutation, your data updates locally right
+    then and there, and the screen re-renders on the next frame. The trip to the server happens
+    quietly in the background. If the Wi-Fi is having a moment, your write is safe on the device
+    and will send itself later. Your users never see a spinner because they clicked a button.
   </p>
-  <h2>How it works</h2>
+
+  <h2>The old way, and why everyone dreads it</h2>
+  <p>
+    Most frameworks make you write optimism by hand, one mutation at a time. You click "post
+    comment," and somewhere in the code you have to whisper to the cache: "pretend the comment is
+    already there, in this list, and also in that counter, and also in the sidebar, and if the
+    server says no, undo all of it." That logic gets big, gets fragile, and slowly drifts away
+    from what the server actually does. Eventually a teammate changes one and not the other, and
+    you find out about it on a Friday.
+  </p>
+
+  <h2>How sp00ky does it</h2>
+  <p>
+    You just write your queries and your mutations. sp00ky handles the rest.
+  </p>
+  <ol>
+    <li>You subscribe to a query. sp00ky remembers it.</li>
+    <li>You call a mutation. sp00ky updates your local data instantly.</li>
+    <li>Every query affected by that change gets a fresh result, automatically.</li>
+    <li>Your UI re-renders right away. No extra code, no manual cache updates.</li>
+    <li>The server call goes out in the background. When it comes back, sp00ky lines everything up.</li>
+  </ol>
+  <p>
+    Behind the scenes there is a small query engine called the Streaming Processor that runs inside
+    your browser. Its job is boring and important: it watches your active queries, and when data
+    changes, it figures out which ones care and updates only those. You never have to talk to it.
+  </p>
+
+  <h2>One write, every view</h2>
+  <p>
+    This is the part that usually costs hours of component surgery in other frameworks. Add a new
+    comment, and the comments list updates, the count updates, the "last reply" timestamp on the
+    sidebar updates, the badge on the thread updates. All of it. Because sp00ky knows which queries
+    depend on which data, one write covers every view that cared. You did not wire any of that.
+  </p>
+  <blockquote>
+    <p>
+      Write the query once. Write the mutation once. Every affected view stays in sync, on its own.
+    </p>
+  </blockquote>
+
+  <h2>How this compares</h2>
+  <p>
+    Most popular clients treat optimism as an afterthought bolted onto fetching. Here is how they
+    ask you to express it, and where sp00ky takes a different approach.
+  </p>
+
+  <div class="not-prose overflow-x-auto my-8 rounded-lg border border-white/10">
+    <table class="w-full text-sm text-left">
+      <thead class="bg-white/5 text-text-primary">
+        <tr>
+          <th class="px-4 py-3 font-medium whitespace-nowrap">Framework</th>
+          <th class="px-4 py-3 font-medium whitespace-nowrap">How you express optimism</th>
+          <th class="px-4 py-3 font-medium whitespace-nowrap">Rollback on error</th>
+          <th class="px-4 py-3 font-medium whitespace-nowrap">Scope of one update</th>
+        </tr>
+      </thead>
+      <tbody class="text-text-tertiary divide-y divide-white/5">
+        <tr>
+          <td class="px-4 py-3 font-medium text-text-primary whitespace-nowrap">Apollo Client</td>
+          <td class="px-4 py-3 whitespace-nowrap">
+            <span class="inline-flex items-center gap-2">
+              <svg class="w-4 h-4 flex-shrink-0 text-red-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 5l10 10M15 5L5 15"/></svg>
+              <span><code>optimisticResponse</code> + <code>update</code> functions</span>
+            </span>
+          </td>
+          <td class="px-4 py-3 whitespace-nowrap">
+            <span class="inline-flex items-center gap-2">
+              <svg class="w-4 h-4 flex-shrink-0 text-red-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 5l10 10M15 5L5 15"/></svg>
+              <span>You write it</span>
+            </span>
+          </td>
+          <td class="px-4 py-3 whitespace-nowrap">
+            <span class="inline-flex items-center gap-2">
+              <svg class="w-4 h-4 flex-shrink-0 text-red-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 5l10 10M15 5L5 15"/></svg>
+              <span>Per cache entry you patch</span>
+            </span>
+          </td>
+        </tr>
+        <tr>
+          <td class="px-4 py-3 font-medium text-text-primary whitespace-nowrap">Relay</td>
+          <td class="px-4 py-3 whitespace-nowrap">
+            <span class="inline-flex items-center gap-2">
+              <svg class="w-4 h-4 flex-shrink-0 text-red-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 5l10 10M15 5L5 15"/></svg>
+              <span><code>optimisticUpdater</code> / <code>optimisticResponse</code></span>
+            </span>
+          </td>
+          <td class="px-4 py-3 whitespace-nowrap">
+            <span class="inline-flex items-center gap-2">
+              <svg class="w-4 h-4 flex-shrink-0 text-red-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 5l10 10M15 5L5 15"/></svg>
+              <span>You write it</span>
+            </span>
+          </td>
+          <td class="px-4 py-3 whitespace-nowrap">
+            <span class="inline-flex items-center gap-2">
+              <svg class="w-4 h-4 flex-shrink-0 text-red-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 5l10 10M15 5L5 15"/></svg>
+              <span>Per record in the store</span>
+            </span>
+          </td>
+        </tr>
+        <tr>
+          <td class="px-4 py-3 font-medium text-text-primary whitespace-nowrap">Replicache / Zero</td>
+          <td class="px-4 py-3 whitespace-nowrap">
+            <span class="inline-flex items-center gap-2">
+              <svg class="w-4 h-4 flex-shrink-0 text-amber-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 10h10"/></svg>
+              <span>Local JS mutator functions</span>
+            </span>
+          </td>
+          <td class="px-4 py-3 whitespace-nowrap">
+            <span class="inline-flex items-center gap-2">
+              <svg class="w-4 h-4 flex-shrink-0 text-emerald-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10l4 4 8-8"/></svg>
+              <span>Engine rebase</span>
+            </span>
+          </td>
+          <td class="px-4 py-3 whitespace-nowrap">
+            <span class="inline-flex items-center gap-2">
+              <svg class="w-4 h-4 flex-shrink-0 text-amber-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 10h10"/></svg>
+              <span>Whatever the mutator writes</span>
+            </span>
+          </td>
+        </tr>
+        <tr>
+          <td class="px-4 py-3 font-medium text-text-primary whitespace-nowrap">RTK Query</td>
+          <td class="px-4 py-3 whitespace-nowrap">
+            <span class="inline-flex items-center gap-2">
+              <svg class="w-4 h-4 flex-shrink-0 text-red-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 5l10 10M15 5L5 15"/></svg>
+              <span><code>onQueryStarted</code> + <code>updateQueryData</code></span>
+            </span>
+          </td>
+          <td class="px-4 py-3 whitespace-nowrap">
+            <span class="inline-flex items-center gap-2">
+              <svg class="w-4 h-4 flex-shrink-0 text-red-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 5l10 10M15 5L5 15"/></svg>
+              <span>You write it</span>
+            </span>
+          </td>
+          <td class="px-4 py-3 whitespace-nowrap">
+            <span class="inline-flex items-center gap-2">
+              <svg class="w-4 h-4 flex-shrink-0 text-red-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 5l10 10M15 5L5 15"/></svg>
+              <span>Per query you patch</span>
+            </span>
+          </td>
+        </tr>
+        <tr class="bg-white/5">
+          <td class="px-4 py-3 font-medium text-text-primary whitespace-nowrap">sp00ky</td>
+          <td class="px-4 py-3 whitespace-nowrap">
+            <span class="inline-flex items-center gap-2">
+              <svg class="w-4 h-4 flex-shrink-0 text-emerald-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10l4 4 8-8"/></svg>
+              <span>Nothing. The query engine derives it</span>
+            </span>
+          </td>
+          <td class="px-4 py-3 whitespace-nowrap">
+            <span class="inline-flex items-center gap-2">
+              <svg class="w-4 h-4 flex-shrink-0 text-emerald-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10l4 4 8-8"/></svg>
+              <span>Engine rebase</span>
+            </span>
+          </td>
+          <td class="px-4 py-3 whitespace-nowrap">
+            <span class="inline-flex items-center gap-2">
+              <svg class="w-4 h-4 flex-shrink-0 text-emerald-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10l4 4 8-8"/></svg>
+              <span>Every query that depends on the table</span>
+            </span>
+          </td>
+        </tr>
+        <tr>
+          <td class="px-4 py-3 font-medium text-text-primary whitespace-nowrap">SWR</td>
+          <td class="px-4 py-3 whitespace-nowrap">
+            <span class="inline-flex items-center gap-2">
+              <svg class="w-4 h-4 flex-shrink-0 text-red-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 5l10 10M15 5L5 15"/></svg>
+              <span><code>mutate()</code> with <code>optimisticData</code></span>
+            </span>
+          </td>
+          <td class="px-4 py-3 whitespace-nowrap">
+            <span class="inline-flex items-center gap-2">
+              <svg class="w-4 h-4 flex-shrink-0 text-red-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 5l10 10M15 5L5 15"/></svg>
+              <span>You write it</span>
+            </span>
+          </td>
+          <td class="px-4 py-3 whitespace-nowrap">
+            <span class="inline-flex items-center gap-2">
+              <svg class="w-4 h-4 flex-shrink-0 text-red-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 5l10 10M15 5L5 15"/></svg>
+              <span>One query at a time</span>
+            </span>
+          </td>
+        </tr>
+        <tr>
+          <td class="px-4 py-3 font-medium text-text-primary whitespace-nowrap">TanStack Query</td>
+          <td class="px-4 py-3 whitespace-nowrap">
+            <span class="inline-flex items-center gap-2">
+              <svg class="w-4 h-4 flex-shrink-0 text-red-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 5l10 10M15 5L5 15"/></svg>
+              <span><code>onMutate</code> + <code>setQueryData</code></span>
+            </span>
+          </td>
+          <td class="px-4 py-3 whitespace-nowrap">
+            <span class="inline-flex items-center gap-2">
+              <svg class="w-4 h-4 flex-shrink-0 text-red-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 5l10 10M15 5L5 15"/></svg>
+              <span>You write it</span>
+            </span>
+          </td>
+          <td class="px-4 py-3 whitespace-nowrap">
+            <span class="inline-flex items-center gap-2">
+              <svg class="w-4 h-4 flex-shrink-0 text-red-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 5l10 10M15 5L5 15"/></svg>
+              <span>One query at a time</span>
+            </span>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p class="text-xs text-text-muted -mt-4 mb-8">
+    Green check: the framework handles it for you. Amber bar: partial, you still write some code.
+    Red cross: it lands on your desk.
+  </p>
+
+  <p>
+    Apollo, Relay, RTK Query, SWR, and TanStack Query all expect you to write the optimism by hand,
+    once per mutation and once per query. Replicache and Zero move it into local mutator functions,
+    which is a step up but still means you maintain a second version of your server logic in
+    JavaScript. sp00ky makes it something the library does, not something you do.
+  </p>
+
+  <h2>Quick, on purpose</h2>
+  <p>
+    The Streaming Processor is written in Rust and runs in the browser as WebAssembly, which keeps
+    it light on your main thread. It only recomputes the queries that actually care about a change,
+    which keeps it light on your app. Proper benchmarks will follow in a later release, and we will
+    update this page with numbers we trust enough to put our name on.
+  </p>
+
+  <h2>When the network goes sideways</h2>
   <ul>
-    <li>Mutations write through a local SurrealDB replica before hitting the wire.</li>
-    <li>Reactive queries re-emit immediately from the replica.</li>
-    <li>A background worker reconciles with the server; conflicts use CRDT merge rules.</li>
-    <li>Failures bubble as recoverable errors — never lost writes.</li>
+    <li>
+      <strong>Offline:</strong> your write is safe on the device. When you reconnect, sp00ky sends
+      it automatically.
+    </li>
+    <li>
+      <strong>Server disagrees:</strong> the server's version wins and your UI quietly corrects
+      itself.
+    </li>
+    <li>
+      <strong>Shared counters or collaborative text:</strong> opt in to CRDT fields at the schema
+      level when you want real merge semantics. Everything else stays simple.
+    </li>
+    <li>
+      <strong>Errors:</strong> surface as recoverable errors you can show or retry. Never lost
+      writes.
+    </li>
   </ul>
 </FeaturePage>

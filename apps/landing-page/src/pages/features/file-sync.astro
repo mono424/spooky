@@ -3,24 +3,80 @@ import FeaturePage from '../../layouts/FeaturePage.astro';
 ---
 
 <FeaturePage
-  title="File Sync"
-  description="Binary assets replicated alongside your data. Chunked, resumable, and offline-first."
-  badge="Core · Library"
+  title="Built-in File Support"
+  description="Files that belong to your app, not a bolted-on service. Secure, simple, and ready on day one."
+  badge="Core · Library · Experimental"
   activePath="/features"
 >
   <p>
-    Attach files to any record and sp00ky syncs them the same way it syncs your data — chunked,
-    deduplicated, and resumable. Uploads continue in the background, resume after a disconnect,
-    and stream straight through to the cloud vault when connected.
+    Every real app ends up needing files. Avatars. Documents. Uploads of one kind or another. And
+    every stack solves it the same tired way: a second service to wire up, a third place to hold
+    permissions, and a fourth where bugs like to live.
   </p>
   <p>
-    Reads come from a local cache first, so images, audio, and docs render instantly even offline.
+    sp00ky treats files like any other part of your app. You say what kind of files you want,
+    who can touch them, and how big they can be. sp00ky takes care of the rest.
   </p>
-  <h2>Capabilities</h2>
-  <ul>
-    <li>Chunked transfers with content-addressed storage.</li>
-    <li>Resumable uploads survive network drops and reloads.</li>
-    <li>Offline-first reads with a tunable local cache.</li>
-    <li>End-to-end encryption when paired with the Shared Vault.</li>
-  </ul>
+
+  <h2>Ready the moment you need it</h2>
+  <p>
+    There is nothing to bolt on. No extra service. No sidecar. No separate dashboard to keep
+    tidy. Files live next to your data and behave the same way. If you can ship your app, you
+    can ship files.
+  </p>
+
+  <h2>Safe by default</h2>
+  <p>
+    Permissions are enforced where it counts, right inside your database. Nobody can sneak past
+    them by calling a different URL, patching the client, or guessing a path. The rules you
+    write are the rules that run.
+  </p>
+  <p>
+    Flip on private per-user folders and every user gets their own space automatically. Your
+    code writes <code>avatar.jpg</code>. The right user owns it. Nobody else can see it.
+  </p>
+
+  <h2>Instant feedback, every time</h2>
+  <p>
+    Wrong file type? Too big? Your users find out the moment they pick the file, not after an
+    awkward round-trip to the server. Less frustration, fewer support tickets, happier uploads.
+  </p>
+
+  <h2>Sensible defaults, fast starts</h2>
+  <p>
+    Most apps want the same handful of buckets: avatars, images, documents, audio, video. sp00ky
+    ships all of them as one-click presets with reasonable limits. Pick one and keep moving. Tune
+    it later when you actually need to.
+  </p>
+  <div class="not-prose overflow-x-auto my-6 rounded-lg border border-white/10">
+    <table class="w-full text-sm text-left">
+      <thead class="bg-white/5 text-text-primary">
+        <tr>
+          <th class="px-4 py-3 font-medium whitespace-nowrap">Preset</th>
+          <th class="px-4 py-3 font-medium whitespace-nowrap">Good for</th>
+          <th class="px-4 py-3 font-medium whitespace-nowrap">Max size</th>
+        </tr>
+      </thead>
+      <tbody class="text-text-tertiary divide-y divide-white/5">
+        <tr><td class="px-4 py-3 font-medium text-text-primary">Avatars</td><td class="px-4 py-3">Profile pictures and headshots</td><td class="px-4 py-3">2 MB</td></tr>
+        <tr><td class="px-4 py-3 font-medium text-text-primary">Images</td><td class="px-4 py-3">Galleries, thumbnails, hero shots</td><td class="px-4 py-3">10 MB</td></tr>
+        <tr><td class="px-4 py-3 font-medium text-text-primary">Documents</td><td class="px-4 py-3">PDFs, spreadsheets, contracts</td><td class="px-4 py-3">25 MB</td></tr>
+        <tr><td class="px-4 py-3 font-medium text-text-primary">Audio</td><td class="px-4 py-3">Voice notes, podcasts, recordings</td><td class="px-4 py-3">50 MB</td></tr>
+        <tr><td class="px-4 py-3 font-medium text-text-primary">Video</td><td class="px-4 py-3">Short clips and screen recordings</td><td class="px-4 py-3">100 MB</td></tr>
+        <tr><td class="px-4 py-3 font-medium text-text-primary">Custom</td><td class="px-4 py-3">Whatever your app actually needs</td><td class="px-4 py-3">Your call</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>Where we are today</h2>
+  <p>
+    Built-in file support is live and labelled experimental. You can build with it today. You
+    should not put it on a hot path just yet.
+  </p>
+  <p>
+    Storage currently lives in memory, so files do not survive a server restart. Real backends,
+    starting with S3 and filesystem, are next on the roadmap. Large-file niceties like chunked
+    and resumable uploads are planned. The way you use the feature is designed to stay the same,
+    so anything you write today should keep working as the rest lands.
+  </p>
 </FeaturePage>

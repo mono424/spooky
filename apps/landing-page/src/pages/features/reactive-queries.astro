@@ -4,24 +4,79 @@ import FeaturePage from '../../layouts/FeaturePage.astro';
 
 <FeaturePage
   title="Reactive Queries"
-  description="Subscribe to a SurrealQL query once. sp00ky pushes fresh results the moment the underlying data changes."
+  description="Subscribe once. Your UI stays current, automatically, everywhere."
   badge="Core · Library"
   activePath="/features"
 >
   <p>
-    sp00ky turns any SurrealQL query into a reactive subscription. Components declare what data
-    they need — sp00ky takes care of keeping it fresh, invalidating the right rows, and pushing
-    updates to every tab, window, and device that cares.
+    Your UI should always show what is actually true. Not what was true when the page loaded. Not
+    what was true before the user switched tabs and came back. Just the truth, right now.
   </p>
   <p>
-    No polling, no manual cache invalidation, no WebSocket boilerplate. Your view layer simply
-    reads from a query result that’s always up to date.
+    sp00ky turns any query into a live subscription. You write it once, your component reads the
+    result, and sp00ky quietly keeps it fresh as data changes. No refetch buttons, no focus
+    listeners, no "pull to refresh" that the user has to discover on their own.
   </p>
-  <h2>Highlights</h2>
+
+  <h2>The old way, and why it gets tiring</h2>
+  <p>
+    Keeping a UI in sync with a live database is one of those problems that always starts small
+    and ends up everywhere. First you add a <code>refetch</code>, then a polling interval, then a
+    refresh-on-focus, then a WebSocket, then a reducer that patches the cache when the socket
+    says something changed, and then a small book of rules about when each thing should fire. It
+    works until someone adds a second tab, or a second device, or a user who leaves the laptop
+    open during lunch.
+  </p>
+
+  <h2>How sp00ky does it</h2>
+  <p>
+    You just subscribe to a query. The library handles everything that keeps it live.
+  </p>
+  <ol>
+    <li>You call <code>useQuery</code> with your query. Your component gets the result.</li>
+    <li>Behind the scenes, sp00ky opens one live channel to your database.</li>
+    <li>When data changes, only the queries that care are updated.</li>
+    <li>Your component re-renders with fresh data. You did not write any of this plumbing.</li>
+    <li>When the component unmounts, the subscription cleans itself up.</li>
+  </ol>
+  <blockquote>
+    <p>
+      Subscribe once. Everything that should change, changes. Everything that should not, doesn't.
+    </p>
+  </blockquote>
+
+  <h2>Fresh everywhere, without a checklist</h2>
+  <p>
+    If your user has the app open in two tabs, a second device, or on a friend's laptop, every one
+    of those screens stays in sync. You do not opt into this. It just works, because the same
+    live channel feeds every client the same stream of changes.
+  </p>
   <ul>
-    <li>Full SurrealQL — joins, graph traversals, live aggregates.</li>
-    <li>Sub-50ms reactivity over a single multiplexed WebSocket.</li>
-    <li>Automatic disposal when your component unmounts.</li>
-    <li>Cross-tab invalidation built in.</li>
+    <li>Two tabs on the same laptop stay in sync.</li>
+    <li>Phone and desktop stay in sync.</li>
+    <li>Your teammate on the other side of the world stays in sync.</li>
+    <li>The coffee-shop tab you forgot about five hours ago catches up when you wake it.</li>
+  </ul>
+
+  <h2>Fast on purpose</h2>
+  <p>
+    The piece of sp00ky that routes changes to the right queries is written in Rust and runs in
+    your browser as WebAssembly. It is small, it stays out of your way, and it only does work for
+    queries that are actually affected by a change. Nothing else gets recomputed, nothing else
+    wakes up, nothing else renders.
+  </p>
+  <p>
+    Proper benchmarks will follow in a later release, and we will update this page with numbers we
+    trust enough to put our name on.
+  </p>
+
+  <h2>What you don't have to write anymore</h2>
+  <ul>
+    <li>Polling intervals. sp00ky is push-based, not "check every five seconds."</li>
+    <li>Manual cache invalidation after a mutation. The query that cared updates itself.</li>
+    <li>Refetch-on-focus logic. There is nothing to refetch when the data never went stale.</li>
+    <li>WebSocket boilerplate. One channel, opened for you, multiplexed across every subscription.</li>
+    <li>Cross-tab coordination. Other tabs get the same updates over the same channel.</li>
+    <li>Cleanup code. Subscriptions dispose themselves when your component goes away.</li>
   </ul>
 </FeaturePage>

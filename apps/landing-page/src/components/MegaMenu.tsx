@@ -9,6 +9,7 @@ import {
   Lock,
   DatabaseBackup,
   Cloud,
+  Terminal,
 } from 'lucide-react';
 import { coreFeatures, cloudFeatures } from '../config/features';
 
@@ -22,6 +23,7 @@ const ICON: Record<string, React.ReactElement> = {
   vault: <Lock size={18} strokeWidth={1.6} />,
   backup: <DatabaseBackup size={18} strokeWidth={1.6} />,
   hosting: <Cloud size={18} strokeWidth={1.6} />,
+  logs: <Terminal size={18} strokeWidth={1.6} />,
 };
 
 const ArrowIcon = () => (
@@ -118,9 +120,11 @@ export function MegaMenu() {
                 <span className="dot" />
                 Cloud · Managed
               </div>
-              {cloudFeatures.map((f) => (
-                <MegaItem key={f.slug} href={f.href} iconKey={f.iconKey} title={f.title} desc={f.desc} cloud />
-              ))}
+              {cloudFeatures
+                .filter((f) => !f.hideInNav)
+                .map((f) => (
+                  <MegaItem key={f.slug} href={f.href} iconKey={f.iconKey} title={f.title} desc={f.desc} cloud />
+                ))}
             </div>
           </div>
 

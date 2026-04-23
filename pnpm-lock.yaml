@@ -47,7 +47,7 @@ importers:
         version: 0.0.270
       babel-preset-solid:
         specifier: ^1.9.10
-        version: 1.9.10(@babel/core@7.29.0)(solid-js@1.9.10)
+        version: 1.9.10(@babel/core@7.28.4)(solid-js@1.9.10)
       typescript:
         specifier: ^5.3.3
         version: 5.9.3
@@ -115,6 +115,9 @@ importers:
       cmdk:
         specifier: ^1.1.1
         version: 1.1.1(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
+      holographic-sticker:
+        specifier: ^1.0.4
+        version: 1.0.4(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
       lucide-react:
         specifier: ^0.545.0
         version: 0.545.0(react@19.2.0)
@@ -4385,6 +4388,12 @@ packages:
     resolution: {integrity: sha512-F/1DnUGPopORZi0ni+CvrCgHQ5FyEAHRLSApuYWMmrbSwoN2Mn/7k+Gl38gJnR7yyDZk6WLXwiGod1JOWNDKGw==}
     hasBin: true
 
+  holographic-sticker@1.0.4:
+    resolution: {integrity: sha512-Argh6oN0Tb+7cqUDyRYYZiZxDDrya59FuHJhmJSUha7XAsANM2YXITYNkkkpnoFShe6OrTNm5XBkZ0Dm60cCvA==}
+    peerDependencies:
+      react: '>=16.8.0'
+      react-dom: '>=16.8.0'
+
   hono@4.11.7:
     resolution: {integrity: sha512-l7qMiNee7t82bH3SeyUCt9UF15EVmaBvsppY2zQtrbIhl/yzBTny+YUxsVjSjQ6gaqaeVtZmGocom8TzBlA4Yw==}
     engines: {node: '>=16.9.0'}
@@ -7715,11 +7724,6 @@ snapshots:
       '@babel/core': 7.28.4
       '@babel/helper-plugin-utils': 7.27.1
 
-  '@babel/plugin-syntax-jsx@7.27.1(@babel/core@7.29.0)':
-    dependencies:
-      '@babel/core': 7.29.0
-      '@babel/helper-plugin-utils': 7.27.1
-
   '@babel/plugin-syntax-logical-assignment-operators@7.10.4(@babel/core@7.28.4)':
     dependencies:
       '@babel/core': 7.28.4
@@ -10150,15 +10154,6 @@ snapshots:
       html-entities: 2.3.3
       parse5: 7.3.0
 
-  babel-plugin-jsx-dom-expressions@0.40.3(@babel/core@7.29.0):
-    dependencies:
-      '@babel/core': 7.29.0
-      '@babel/helper-module-imports': 7.18.6
-      '@babel/plugin-syntax-jsx': 7.27.1(@babel/core@7.29.0)
-      '@babel/types': 7.28.4
-      html-entities: 2.3.3
-      parse5: 7.3.0
-
   babel-preset-current-node-syntax@1.2.0(@babel/core@7.28.4):
     dependencies:
       '@babel/core': 7.28.4
@@ -10197,13 +10192,6 @@ snapshots:
       babel-plugin-jsx-dom-expressions: 0.40.3(@babel/core@7.28.4)
     optionalDependencies:
       solid-js: 1.9.9
-
-  babel-preset-solid@1.9.10(@babel/core@7.29.0)(solid-js@1.9.10):
-    dependencies:
-      '@babel/core': 7.29.0
-      babel-plugin-jsx-dom-expressions: 0.40.3(@babel/core@7.29.0)
-    optionalDependencies:
-      solid-js: 1.9.10
 
   bail@2.0.2: {}
 
@@ -11654,6 +11642,11 @@ snapshots:
       space-separated-tokens: 2.0.2
 
   he@1.2.0: {}
+
+  holographic-sticker@1.0.4(react-dom@19.2.0(react@19.2.0))(react@19.2.0):
+    dependencies:
+      react: 19.2.0
+      react-dom: 19.2.0(react@19.2.0)
 
   hono@4.11.7: {}
 

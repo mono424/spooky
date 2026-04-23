@@ -8,6 +8,7 @@ export interface Feature {
   longDesc: string;
   group: FeatureGroup;
   href: string;
+  hideInNav?: boolean;
 }
 
 export const coreFeatures: Feature[] = [
@@ -44,10 +45,10 @@ export const coreFeatures: Feature[] = [
   {
     slug: 'file-sync',
     iconKey: 'files',
-    title: 'File Sync',
-    desc: 'Binary assets replicated alongside your data.',
+    title: 'Built-in File Support',
+    desc: 'Typed file buckets defined in your SurrealQL schema.',
     longDesc:
-      'Attach files to your records and sp00ky replicates them alongside your data. Chunked transfers, resumable uploads, and offline-first caching come out of the box.',
+      'Define file buckets alongside your tables in SurrealQL. Permissions, size limits, and allowed extensions are enforced by the database, and type-safe hooks handle upload and download on the client.',
     group: 'core',
     href: '/features/file-sync',
   },
@@ -103,6 +104,17 @@ export const cloudFeatures: Feature[] = [
       'Production-ready sp00ky instances, spun up with a single command. Autoscaling, TLS, logs, and metrics are managed for you — focus on the app, not the infra.',
     group: 'cloud',
     href: '/cloud/managed-hosting',
+  },
+  {
+    slug: 'live-logs',
+    iconKey: 'logs',
+    title: 'Live Logs',
+    desc: 'Production logs in one command. Grep, tail, TUI, no VPN.',
+    longDesc:
+      'Stream, filter, and search production logs straight from the CLI you already use. New hires see prod on day one, no VPN ceremony, no log aggregator seat to provision.',
+    group: 'cloud',
+    href: '/cloud/live-logs',
+    hideInNav: true,
   },
 ];
 
