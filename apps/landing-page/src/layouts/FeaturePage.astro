@@ -1,0 +1,110 @@
+---
+// oxlint-disable-next-line no-unassigned-import
+import '../styles/global.css';
+import SiteNav from '../components/SiteNav.astro';
+import SiteFooter from '../components/SiteFooter.astro';
+import { basePath } from '../config/nav';
+
+interface Props {
+  title: string;
+  description: string;
+  badge: string;
+  activePath?: string;
+  docsHref?: string;
+}
+
+const {
+  title,
+  description,
+  badge,
+  activePath = '/features',
+  docsHref = `${basePath}/docs`,
+} = Astro.props;
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="generator" content={Astro.generator} />
+    <meta name="description" content={description} />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={`${title} — sp00ky`} />
+    <meta property="og:description" content={description} />
+    <meta property="og:image" content={new URL('/social-card.png', Astro.site)} />
+    <meta property="twitter:card" content="summary_large_image" />
+    <meta property="twitter:title" content={`${title} — sp00ky`} />
+    <meta property="twitter:description" content={description} />
+    <meta property="twitter:image" content={new URL('/social-card.png', Astro.site)} />
+    <title>{title} — sp00ky</title>
+  </head>
+  <body class="min-h-screen flex flex-col">
+    <SiteNav activePath={activePath} />
+
+    <main class="flex-1">
+      <section class="relative pt-24 pb-12 md:pt-32 md:pb-16 overflow-hidden">
+        <div
+          class="absolute inset-x-0 top-0 h-[420px] pointer-events-none"
+          style="background: radial-gradient(60% 50% at 50% 0%, rgba(124,106,239,0.12), transparent 70%);"
+        ></div>
+        <div class="max-w-4xl mx-auto px-4 relative z-10">
+          <div class="mb-5">
+            <span
+              class="inline-block px-3 py-1 text-[10px] font-medium text-text-muted bg-white/5 border border-white/10 rounded-full uppercase tracking-widest"
+            >
+              {badge}
+            </span>
+          </div>
+          <h1
+            class="text-section md:text-hero font-semibold text-text-primary mb-6 tracking-tight"
+          >
+            {title}
+          </h1>
+          <p class="text-body-lg text-text-tertiary max-w-2xl leading-relaxed">
+            {description}
+          </p>
+        </div>
+      </section>
+
+      <section class="pb-20 md:pb-28">
+        <div class="max-w-4xl mx-auto px-4">
+          <div class="prose prose-invert max-w-none text-text-tertiary leading-relaxed">
+            <slot />
+          </div>
+        </div>
+      </section>
+
+      <section class="py-16 md:py-24 border-t border-white/5 bg-black text-center">
+        <div class="max-w-3xl mx-auto px-4">
+          <h2 class="text-section font-semibold mb-6 text-text-primary">
+            Ready to build something amazing?
+          </h2>
+          <p class="text-text-tertiary text-body-lg mb-10 max-w-xl mx-auto leading-relaxed">
+            Full docs, install guide, and API reference — all in one place.
+          </p>
+          <a
+            href={docsHref}
+            class="inline-flex items-center gap-3 bg-white text-black px-7 py-3 font-medium text-base rounded-lg transition-colors duration-150 hover:bg-white/90 group"
+          >
+            <span>Read the docs</span>
+            <svg
+              class="w-5 h-5 transition-transform duration-200 group-hover:translate-x-1"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
+            </svg>
+          </a>
+        </div>
+      </section>
+    </main>
+
+    <SiteFooter />
+  </body>
+</html>

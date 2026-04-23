@@ -1,0 +1,28 @@
+---
+import FeaturePage from '../../layouts/FeaturePage.astro';
+---
+
+<FeaturePage
+  title="Optimistic Updates"
+  description="UI updates land instantly. Sync happens in the background. No more spinners after a click."
+  badge="Core · Library"
+  activePath="/features"
+>
+  <p>
+    sp00ky writes hit your local store the instant you call them — a mutation returns synchronously,
+    your UI re-renders in the same frame, and the network round-trip runs in parallel. If the
+    server disagrees, sp00ky reconciles and your UI corrects itself; if the network is unreachable,
+    the write is durable on-device and replays when you reconnect.
+  </p>
+  <p>
+    The result: apps that feel instantaneous even on spotty connections, with no hand-rolled
+    optimistic state or queue logic in your components.
+  </p>
+  <h2>How it works</h2>
+  <ul>
+    <li>Mutations write through a local SurrealDB replica before hitting the wire.</li>
+    <li>Reactive queries re-emit immediately from the replica.</li>
+    <li>A background worker reconciles with the server; conflicts use CRDT merge rules.</li>
+    <li>Failures bubble as recoverable errors — never lost writes.</li>
+  </ul>
+</FeaturePage>

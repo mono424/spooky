@@ -1,0 +1,26 @@
+---
+import FeaturePage from '../../layouts/FeaturePage.astro';
+---
+
+<FeaturePage
+  title="File Sync"
+  description="Binary assets replicated alongside your data. Chunked, resumable, and offline-first."
+  badge="Core · Library"
+  activePath="/features"
+>
+  <p>
+    Attach files to any record and sp00ky syncs them the same way it syncs your data — chunked,
+    deduplicated, and resumable. Uploads continue in the background, resume after a disconnect,
+    and stream straight through to the cloud vault when connected.
+  </p>
+  <p>
+    Reads come from a local cache first, so images, audio, and docs render instantly even offline.
+  </p>
+  <h2>Capabilities</h2>
+  <ul>
+    <li>Chunked transfers with content-addressed storage.</li>
+    <li>Resumable uploads survive network drops and reloads.</li>
+    <li>Offline-first reads with a tunable local cache.</li>
+    <li>End-to-end encryption when paired with the Shared Vault.</li>
+  </ul>
+</FeaturePage>

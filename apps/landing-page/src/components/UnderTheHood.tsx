@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { siRust } from 'simple-icons';
 import { ScrollRevealText } from './ScrollRevealText';
 
 const features = [
@@ -8,10 +9,8 @@ const features = [
     title: 'Rust Core',
     subtitle: 'Memory-safe. No runtime overhead. Just raw performance.',
     icon: (
-      <svg className="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="0.75" strokeLinecap="round" strokeLinejoin="round">
-        <rect x="4" y="4" width="16" height="16" rx="2" />
-        <rect x="9" y="9" width="6" height="6" />
-        <path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" />
+      <svg className="w-12 h-12" viewBox="0 0 24 24" fill="currentColor" aria-label="Rust">
+        <path d={siRust.path} />
       </svg>
     ),
   },
@@ -52,12 +51,12 @@ const features = [
 export function FeatureGrid() {
   return (
     <>
-      <div className="max-w-3xl mb-16">
+      <div className="mb-24 md:mb-32">
         <ScrollRevealText
-          className="text-2xl md:text-3xl font-semibold leading-snug"
+          className="text-4xl md:text-6xl font-semibold leading-tight tracking-tight"
           segments={[
-            { text: 'Local first. ', preRevealed: true },
-            { text: 'Your app reads and writes to a local database. Users get instant responses, even without a connection. When they\'re back online, sp00ky resolves changes and syncs state across every device — no loading spinners, no conflict modals, no extra code on your end.' },
+            { text: 'It\'s spooky. ', preRevealed: true },
+            { text: 'Data changes, every screen updates. Reactive queries keep every tab, every device, and every user in sync, instantly.' },
           ]}
         />
       </div>

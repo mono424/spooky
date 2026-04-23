@@ -1,0 +1,71 @@
+---
+// oxlint-disable-next-line no-unassigned-import
+import '../../styles/global.css';
+import SiteNav from '../../components/SiteNav.astro';
+import SiteFooter from '../../components/SiteFooter.astro';
+import { coreFeatures } from '../../config/features';
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Core sp00ky library features — the local-first sync engine." />
+    <title>Features — sp00ky</title>
+  </head>
+  <body class="min-h-screen flex flex-col">
+    <SiteNav activePath="/features" />
+
+    <main class="flex-1">
+      <section class="relative pt-24 pb-8 md:pt-32 md:pb-12 overflow-hidden">
+        <div
+          class="absolute inset-x-0 top-0 h-[420px] pointer-events-none"
+          style="background: radial-gradient(60% 50% at 50% 0%, rgba(124,106,239,0.12), transparent 70%);"
+        ></div>
+        <div class="max-w-6xl mx-auto px-4 relative z-10">
+          <div class="mb-5">
+            <span class="inline-block px-3 py-1 text-[10px] font-medium text-text-muted bg-white/5 border border-white/10 rounded-full uppercase tracking-widest">
+              Core · Library
+            </span>
+          </div>
+          <h1 class="text-section md:text-hero font-semibold text-text-primary mb-6 tracking-tight">
+            Everything the sync engine does.
+          </h1>
+          <p class="text-body-lg text-text-tertiary max-w-2xl leading-relaxed">
+            Optimistic updates, reactive queries, durable jobs, file sync, CRDT merge, and full
+            offline support — all shipped as a single Rust-core library that runs on web, native,
+            and mobile.
+          </p>
+        </div>
+      </section>
+
+      <section class="pb-24 md:pb-32">
+        <div class="max-w-6xl mx-auto px-4">
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {coreFeatures.map((f) => (
+              <a
+                href={f.href}
+                class="group relative rounded-2xl border border-white/[0.08] bg-[#111318] p-6 md:p-8 transition-all duration-300 hover:border-white/[0.18] hover:bg-[#14161c]"
+              >
+                <div class="text-[11px] font-mono uppercase tracking-[0.25em] text-white/30 mb-8">
+                  Feature
+                </div>
+                <h3 class="text-lg font-semibold text-text-primary mb-2">{f.title}</h3>
+                <p class="text-sm text-text-tertiary leading-relaxed mb-6">{f.desc}</p>
+                <span class="inline-flex items-center gap-2 text-sm text-text-tertiary group-hover:text-white transition-colors duration-200">
+                  Read more
+                  <svg class="w-3.5 h-3.5 transition-transform duration-200 group-hover:translate-x-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M5 12 h14 M13 5 l7 7 -7 7" />
+                  </svg>
+                </span>
+              </a>
+            ))}
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <SiteFooter />
+  </body>
+</html>

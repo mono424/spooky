@@ -1,0 +1,129 @@
+---
+// oxlint-disable-next-line no-unassigned-import
+import '../styles/global.css';
+import SiteNav from '../components/SiteNav.astro';
+import SiteFooter from '../components/SiteFooter.astro';
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Terms of Use for sp00ky." />
+    <title>Terms of Use — sp00ky</title>
+  </head>
+  <body class="min-h-screen flex flex-col">
+    <SiteNav activePath="/terms" />
+
+    <main class="flex-1">
+      <section class="relative pt-24 pb-8 md:pt-32 md:pb-12 overflow-hidden">
+        <div
+          class="absolute inset-x-0 top-0 h-[420px] pointer-events-none"
+          style="background: radial-gradient(60% 50% at 50% 0%, rgba(124,106,239,0.12), transparent 70%);"
+        ></div>
+        <div class="max-w-3xl mx-auto px-4 relative z-10">
+          <div class="mb-5">
+            <span class="inline-block px-3 py-1 text-[10px] font-medium text-text-muted bg-white/5 border border-white/10 rounded-full uppercase tracking-widest">
+              Legal
+            </span>
+          </div>
+          <h1 class="text-section md:text-hero font-semibold text-text-primary mb-4 tracking-tight">
+            Terms of Use
+          </h1>
+          <p class="text-sm text-text-muted">Last updated: April 23, 2026</p>
+        </div>
+      </section>
+
+      <section class="pb-24 md:pb-32">
+        <div class="max-w-3xl mx-auto px-4">
+          <div class="prose prose-invert max-w-none text-text-tertiary leading-relaxed">
+            <p>
+              These Terms of Use govern your use of the sp00ky website, documentation, open-source
+              library, and any managed cloud services offered under the sp00ky name (collectively,
+              the "Service"). By accessing or using the Service, you agree to these Terms. If you
+              do not agree, do not use the Service.
+            </p>
+
+            <h2>1. Use of the Service</h2>
+            <p>
+              You may use the Service for any lawful purpose, subject to these Terms. You are
+              responsible for your use of the Service and for any content, code, or data you
+              submit, publish, or display through it. You agree not to use the Service in a way
+              that violates any applicable law, infringes the rights of others, or interferes with
+              the Service's operation.
+            </p>
+
+            <h2>2. Accounts</h2>
+            <p>
+              Some parts of the Service require an account. You are responsible for keeping your
+              credentials secure and for any activity that occurs under your account. Notify us
+              immediately of any unauthorized use.
+            </p>
+
+            <h2>3. Open Source License</h2>
+            <p>
+              The sp00ky library is provided under its published open-source license, which
+              accompanies the source code. Nothing in these Terms modifies the rights granted
+              under that license.
+            </p>
+
+            <h2>4. Intellectual Property</h2>
+            <p>
+              The Service, including its branding, design, and documentation, is owned by sp00ky
+              and its licensors. Except for rights expressly granted to you in these Terms or in
+              the applicable open-source license, all rights are reserved.
+            </p>
+
+            <h2>5. Acceptable Use</h2>
+            <p>
+              You agree not to: (a) reverse engineer, circumvent, or disrupt the Service; (b)
+              attempt to gain unauthorized access to systems or data; (c) send malware or unlawful
+              content through the Service; or (d) use the Service to infringe the intellectual
+              property or privacy rights of others.
+            </p>
+
+            <h2>6. Disclaimer</h2>
+            <p>
+              The Service is provided "as is" and "as available" without warranties of any kind,
+              whether express or implied, including warranties of merchantability, fitness for a
+              particular purpose, and non-infringement. sp00ky does not warrant that the Service
+              will be uninterrupted, error-free, or secure.
+            </p>
+
+            <h2>7. Limitation of Liability</h2>
+            <p>
+              To the maximum extent permitted by law, sp00ky and its contributors will not be
+              liable for any indirect, incidental, special, consequential, or punitive damages, or
+              any loss of profits, revenues, data, or goodwill arising from your use of the
+              Service.
+            </p>
+
+            <h2>8. Termination</h2>
+            <p>
+              We may suspend or terminate your access to the Service at any time if we believe
+              you have violated these Terms. You may stop using the Service at any time.
+            </p>
+
+            <h2>9. Changes to These Terms</h2>
+            <p>
+              We may update these Terms from time to time. When we do, we will update the "Last
+              updated" date above. Your continued use of the Service after changes become effective
+              means you accept the updated Terms.
+            </p>
+
+            <h2>10. Contact</h2>
+            <p>
+              Questions about these Terms? Open an issue on our
+              <a href="https://github.com/mono424/sp00ky" class="text-text-primary underline" target="_blank" rel="noopener">GitHub repository</a>
+              or reach out on
+              <a href="https://discord.com/channels/902568124350599239/1454620262526877696" class="text-text-primary underline" target="_blank" rel="noopener">Discord</a>.
+            </p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <SiteFooter />
+  </body>
+</html>

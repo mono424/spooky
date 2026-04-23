@@ -1,0 +1,72 @@
+---
+// oxlint-disable-next-line no-unassigned-import
+import '../../styles/global.css';
+import SiteNav from '../../components/SiteNav.astro';
+import SiteFooter from '../../components/SiteFooter.astro';
+import { cloudFeatures } from '../../config/features';
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="sp00ky Cloud — managed vault, backups, and hosting for your sp00ky apps." />
+    <title>sp00ky Cloud — sp00ky</title>
+  </head>
+  <body class="min-h-screen flex flex-col">
+    <SiteNav activePath="/cloud" />
+
+    <main class="flex-1">
+      <section class="relative pt-24 pb-8 md:pt-32 md:pb-12 overflow-hidden">
+        <div
+          class="absolute inset-x-0 top-0 h-[420px] pointer-events-none"
+          style="background: radial-gradient(60% 50% at 50% 0%, rgba(155,138,255,0.18), transparent 70%);"
+        ></div>
+        <div class="max-w-6xl mx-auto px-4 relative z-10">
+          <div class="mb-5">
+            <span class="inline-flex items-center gap-2 px-3 py-1 text-[10px] font-medium rounded-full uppercase tracking-widest" style="background: rgba(124,106,239,0.14); color: #c4b5ff; border: 1px solid rgba(124,106,239,0.28);">
+              <span class="inline-block w-1.5 h-1.5 rounded-full" style="background: #9b8aff; box-shadow: 0 0 8px rgba(155,138,255,0.6);"></span>
+              Cloud · Managed
+            </span>
+          </div>
+          <h1 class="text-section md:text-hero font-semibold text-text-primary mb-6 tracking-tight">
+            sp00ky Cloud.
+          </h1>
+          <p class="text-body-lg text-text-tertiary max-w-2xl leading-relaxed">
+            The managed half of sp00ky — shared encrypted vaults, continuous backups, and
+            production hosting. Drop it in when you need collaboration and a backend, keep the
+            local-first experience you already built.
+          </p>
+        </div>
+      </section>
+
+      <section class="pb-24 md:pb-32">
+        <div class="max-w-5xl mx-auto px-4">
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {cloudFeatures.map((f) => (
+              <a
+                href={f.href}
+                class="group relative rounded-2xl border border-white/[0.08] bg-[#111318] p-6 md:p-8 transition-all duration-300 hover:border-brand-400/40 hover:bg-[#14161c]"
+              >
+                <div class="text-[11px] font-mono uppercase tracking-[0.25em] text-brand-400/70 mb-8">
+                  Cloud
+                </div>
+                <h3 class="text-lg font-semibold text-text-primary mb-2">{f.title}</h3>
+                <p class="text-sm text-text-tertiary leading-relaxed mb-6">{f.desc}</p>
+                <span class="inline-flex items-center gap-2 text-sm text-text-tertiary group-hover:text-brand-400 transition-colors duration-200">
+                  Read more
+                  <svg class="w-3.5 h-3.5 transition-transform duration-200 group-hover:translate-x-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M5 12 h14 M13 5 l7 7 -7 7" />
+                  </svg>
+                </span>
+              </a>
+            ))}
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <SiteFooter />
+  </body>
+</html>
