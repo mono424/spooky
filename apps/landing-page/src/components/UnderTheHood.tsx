@@ -11,7 +11,7 @@ import { ScrollRevealText } from './ScrollRevealText';
  *  the peak magnitude) so the cards still have some life but feel calmer. */
 const SCROLL_START = 0.33;
 const SCROLL_END = 0.66;
-const EDGE_STRENGTH = 0.3; // 70% less than the peak inside the active window
+const EDGE_STRENGTH = 0.36;
 
 const useScrollTilt = (wrapRef: RefObject<HTMLElement | null>) => {
   useEffect(() => {
