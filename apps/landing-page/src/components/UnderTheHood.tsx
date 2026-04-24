@@ -9,9 +9,9 @@ import { ScrollRevealText } from './ScrollRevealText';
  *  The sweep plays within SCROLL_START..SCROLL_END of the page. Before and after
  *  that window the highlight is held at a muted resting state (EDGE_STRENGTH of
  *  the peak magnitude) so the cards still have some life but feel calmer. */
-const SCROLL_START = 0.33;
-const SCROLL_END = 0.66;
-const EDGE_STRENGTH = 0.36;
+const SCROLL_START = 0.2;
+const SCROLL_END = 0.67;
+const EDGE_STRENGTH = 0.84;
 
 const useScrollTilt = (wrapRef: RefObject<HTMLElement | null>) => {
   useEffect(() => {
@@ -539,14 +539,15 @@ export function FeatureGrid() {
         }
       `}</style>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4">
+      <div className="flex overflow-x-auto snap-x snap-mandatory -mx-4 px-4 sm:mx-0 sm:px-0 sm:overflow-visible sm:grid sm:grid-cols-2 md:grid-cols-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {features.map((feature, i) => (
           <div
             key={feature.fig}
             className={[
               'px-8 py-6',
+              'flex-shrink-0 w-[85%] snap-center sm:w-auto sm:flex-shrink',
               i !== 0 ? 'sm:border-l border-white/[0.15]' : '',
-              i !== 0 ? 'border-t sm:border-t-0 border-white/[0.15]' : '',
+              i !== 0 ? 'sm:border-t-0 sm:border-white/[0.15]' : '',
               i === 2 ? 'sm:border-l-0 md:border-l' : '',
             ].join(' ')}
           >
