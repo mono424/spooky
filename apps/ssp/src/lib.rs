@@ -1183,6 +1183,12 @@ async fn info_handler(State(state): State<AppState>) -> Json<Value> {
     let ip = std::env::var("SPKY_SSP_ADVERTISE_ADDR").ok()
         .and_then(|addr| addr.split(':').next().map(|s| s.to_string()));
 
+    let circuit_tables: serde_json::Map<String, Value> = circuit
+        .table_record_counts()
+        .into_iter()
+        .map(|(t, c)| (t, Value::from(c)))
+        .collect();
+
     Json(json!([
         {
             "entity": "ssp",
@@ -1193,6 +1199,7 @@ async fn info_handler(State(state): State<AppState>) -> Json<Value> {
             "version": env!("CARGO_PKG_VERSION"),
             "uptime_seconds": state.start_time.elapsed().as_secs(),
             "last_heartbeat_seconds_ago": null,
+            "circuit_tables": circuit_tables,
             "env": env_vars,
         }
     ]))

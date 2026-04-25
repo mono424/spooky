@@ -1,5 +1,7 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde_json::Value;
+use ssp_protocol::snapshot_hash;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use surrealdb::engine::local::RocksDb;
 use surrealdb::opt::capabilities::{Capabilities, ExperimentalFeature};
@@ -26,6 +28,18 @@ fn replica_config() -> Config {
 // Re-export RecordOp from messages to avoid duplication
 pub use crate::messages::RecordOp;
 
+/// One-line description of a JSON value's variant for error messages.
+fn json_kind(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
 /// Build a full SurrealDB thing ID, handling both `"table:id"` and bare `"id"` formats.
 /// SurrealDB event triggers send IDs that already include the table prefix (e.g. `"user:abc"`),
 /// so we must avoid doubling it into `"user:user:abc"`.
@@ -36,6 +50,15 @@ fn build_thing_id(table: &str, id: &str) -> String {
     } else {
         format!("{}:{}", table, id)
     }
+}
+
+/// In-memory representation of `_00_metadata:snapshot` — the persisted
+/// integrity-check state restored at startup.
+#[derive(Default, Debug, Clone)]
+struct SnapshotState {
+    seq: u64,
+    hashes: BTreeMap<String, String>,
+    tables: BTreeSet<String>,
 }
 
 /// Chunk of replica data for bootstrap
@@ -52,6 +75,16 @@ pub struct Replica {
     db_path: PathBuf,
     /// Sequence number of the last event applied to this snapshot
     snapshot_seq: u64,
+    /// Per-table content hashes at `snapshot_seq`. Persisted in
+    /// `_00_metadata:snapshot.hashes`. Populated by `compute_table_hashes`
+    /// after a full clone and updated incrementally in `set_snapshot_state`.
+    snapshot_hashes: BTreeMap<String, String>,
+    /// Tables we have ever written to (via `ingest_all` or `apply`).
+    /// SurrealDB's `INFO FOR DB` only lists explicitly `DEFINE`d tables, so
+    /// we cannot rediscover schemaless tables from the engine — we track
+    /// them ourselves and persist alongside the hashes so a fresh process
+    /// can find them.
+    known_tables: BTreeSet<String>,
 }
 
 impl Replica {
@@ -75,16 +108,25 @@ impl Replica {
 
         info!("Opened replica SurrealDB at {:?}", db_path);
 
-        // Try to read snapshot_seq from metadata
-        let snapshot_seq = Self::read_snapshot_seq_from_db(&db).await.unwrap_or(0);
+        let SnapshotState {
+            seq: snapshot_seq,
+            hashes: snapshot_hashes,
+            tables: known_tables,
+        } = Self::read_snapshot_state_from_db(&db).await.unwrap_or_default();
         if snapshot_seq > 0 {
-            info!(snapshot_seq, "Restored snapshot sequence from metadata");
+            info!(
+                snapshot_seq,
+                hash_tables = snapshot_hashes.len(),
+                "Restored snapshot state from metadata"
+            );
         }
 
         Ok(Self {
             db,
             db_path,
             snapshot_seq,
+            snapshot_hashes,
+            known_tables,
         })
     }
 
@@ -93,38 +135,159 @@ impl Replica {
         self.snapshot_seq
     }
 
-    /// Set snapshot sequence number and persist it
-    pub async fn set_snapshot_seq(&mut self, seq: u64) -> Result<()> {
+    /// Per-table content hashes at the current `snapshot_seq`.
+    pub fn snapshot_hashes(&self) -> &BTreeMap<String, String> {
+        &self.snapshot_hashes
+    }
+
+    /// All tables this replica has ever written to.
+    pub fn known_tables(&self) -> &BTreeSet<String> {
+        &self.known_tables
+    }
+
+    /// Set snapshot sequence number AND advance the per-table hashes for the
+    /// supplied tables. Pass `None` for `touched_tables` after a full clone
+    /// to recompute every known table; pass `Some(set)` from the drain loop
+    /// to only rehash the tables a batch touched.
+    pub async fn set_snapshot_state(
+        &mut self,
+        seq: u64,
+        touched_tables: Option<&BTreeSet<String>>,
+    ) -> Result<()> {
         self.snapshot_seq = seq;
+
+        let to_hash: BTreeSet<String> = match touched_tables {
+            Some(t) => t.clone(),
+            None => self.known_tables.clone(),
+        };
+
+        for table in &to_hash {
+            match self.hash_one_table(table).await {
+                Ok(hash) => {
+                    self.snapshot_hashes.insert(table.clone(), hash);
+                }
+                Err(e) => {
+                    // Don't fail the snapshot advance just because one table
+                    // can't be hashed (e.g. schema race). Log and remove the
+                    // stale entry so /health/snapshot doesn't lie.
+                    warn!(table = %table, error = %e, "Failed to hash table");
+                    self.snapshot_hashes.remove(table);
+                }
+            }
+        }
+
+        let hashes_value = serde_json::to_value(&self.snapshot_hashes)
+            .context("Serialize snapshot_hashes failed")?;
+        let tables_value = serde_json::to_value(
+            self.known_tables.iter().cloned().collect::<Vec<_>>(),
+        )
+        .context("Serialize known_tables failed")?;
+
         self.db
-            .query("UPSERT _00_metadata:snapshot SET seq = $seq")
+            .query("UPSERT _00_metadata:snapshot SET seq = $seq, hashes = $hashes, tables = $tables")
             .bind(("seq", seq))
+            .bind(("hashes", hashes_value))
+            .bind(("tables", tables_value))
             .await
-            .context("Failed to persist snapshot_seq")?;
+            .context("Failed to persist snapshot state")?;
         Ok(())
     }
 
-    /// Read snapshot_seq from the embedded DB metadata table
-    async fn read_snapshot_seq_from_db(db: &Surreal<surrealdb::engine::local::Db>) -> Result<u64> {
+    /// Backward-compatible single-field setter used by `drain_and_apply`
+    /// when called without a touched-tables hint. Updates the seq only and
+    /// leaves cached hashes alone — callers that want the hashes refreshed
+    /// must use `set_snapshot_state`.
+    pub async fn set_snapshot_seq(&mut self, seq: u64) -> Result<()> {
+        self.set_snapshot_state(seq, Some(&BTreeSet::new())).await
+    }
+
+    /// Compute hashes for every known table. Returns the new map without
+    /// mutating `self.snapshot_hashes` — caller decides when to commit.
+    pub async fn compute_table_hashes(&self) -> Result<BTreeMap<String, String>> {
+        let mut out = BTreeMap::new();
+        for table in &self.known_tables {
+            match self.hash_one_table(table).await {
+                Ok(h) => {
+                    out.insert(table.clone(), h);
+                }
+                Err(e) => {
+                    warn!(table = %table, error = %e, "Failed to hash table during recompute");
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    async fn hash_one_table(&self, table: &str) -> Result<String> {
+        let mut response = self
+            .db
+            .query(format!("SELECT * FROM {}", table))
+            .await
+            .with_context(|| format!("hash: SELECT * FROM {} failed", table))?;
+        let sdk_val: surrealdb::types::Value = response
+            .take(0)
+            .with_context(|| format!("hash: take(0) failed for '{}'", table))?;
+        let rows: Vec<Value> = match sdk_val.into_json_value() {
+            Value::Array(arr) => arr,
+            _ => Vec::new(),
+        };
+
+        let pairs: Vec<(String, Value)> = rows
+            .into_iter()
+            .filter_map(|mut row| {
+                let id = row.as_object_mut()
+                    .and_then(|obj| obj.get("id").and_then(|v| v.as_str()).map(String::from))?;
+                let raw_id = id.strip_prefix(&format!("{}:", table)).unwrap_or(&id).to_string();
+                Some((raw_id, row))
+            })
+            .collect();
+
+        Ok(snapshot_hash::hash_table(pairs))
+    }
+
+    /// Read combined snapshot state (seq + hashes + tables) from metadata.
+    async fn read_snapshot_state_from_db(
+        db: &Surreal<surrealdb::engine::local::Db>,
+    ) -> Result<SnapshotState> {
         let mut response = db
-            .query("SELECT seq FROM _00_metadata:snapshot")
+            .query("SELECT seq, hashes, tables FROM _00_metadata:snapshot")
             .await
             .context("Failed to query snapshot metadata")?;
 
         let rows: Vec<Value> = response.take(0).unwrap_or_default();
-        if let Some(row) = rows.first() {
-            if let Some(seq) = row.get("seq").and_then(|v| v.as_u64()) {
-                return Ok(seq);
-            }
+        let row = match rows.first() {
+            Some(r) => r,
+            None => return Ok(SnapshotState::default()),
+        };
+
+        let seq = row.get("seq").and_then(|v| v.as_u64()).unwrap_or(0);
+        let hashes: BTreeMap<String, String> = row
+            .get("hashes")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+        let tables: Vec<String> = row
+            .get("tables")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+        let mut known: BTreeSet<String> = tables.into_iter().collect();
+        for k in hashes.keys() {
+            known.insert(k.clone());
         }
-        Ok(0)
+        Ok(SnapshotState {
+            seq,
+            hashes,
+            tables: known,
+        })
     }
 
-    /// Full initial load from a remote SurrealDB instance
+    /// Full initial load from a remote SurrealDB instance.
+    /// Repopulates `known_tables` from the upstream INFO FOR DB.
     pub async fn ingest_all<C>(&mut self, remote_db: &surrealdb::Surreal<C>) -> Result<()>
     where
         C: surrealdb::Connection,
     {
+        let total_start = std::time::Instant::now();
+
         // Discover tables from remote
         let mut response = remote_db
             .query("INFO FOR DB")
@@ -146,73 +309,160 @@ impl Replica {
             }
         };
 
-        for table_name in &tables {
-            info!("Ingesting table '{}' from remote...", table_name);
+        // Track which tables we are about to populate so the integrity-check
+        // path can rediscover them after a restart (INFO FOR DB on the
+        // schemaless replica won't list them).
+        for t in &tables {
+            self.known_tables.insert(t.clone());
+        }
 
-            let records: Vec<Value> = match remote_db
+        info!(
+            table_count = tables.len(),
+            "Snapshot clone starting: {} tables to ingest [{}]",
+            tables.len(),
+            tables.join(", "),
+        );
+
+        let mut total_records: usize = 0;
+        for (idx, table_name) in tables.iter().enumerate() {
+            let table_start = std::time::Instant::now();
+            info!(
+                table = %table_name,
+                progress = format!("{}/{}", idx + 1, tables.len()),
+                "[{}/{}] Ingesting table '{}' from remote...",
+                idx + 1,
+                tables.len(),
+                table_name,
+            );
+
+            // Take the SDK's own `Value` then call `into_json_value()` so RecordId/Datetime
+            // are flattened into normal JSON strings instead of `{"RecordId":{...}}` shapes.
+            // Direct deserialization into `serde_json::Value` doesn't work on SurrealDB 3.0.
+            let mut response = remote_db
                 .query(format!("SELECT * FROM {}", table_name))
                 .await
-            {
-                Ok(mut response) => response.take(0).unwrap_or_default(),
-                Err(e) => {
-                    warn!("Skipping table '{}': failed to select: {}", table_name, e);
-                    continue;
-                }
+                .with_context(|| format!("SELECT * FROM {} failed", table_name))?;
+
+            let sdk_val: surrealdb::types::Value = response.take(0)
+                .with_context(|| format!("take(0) failed for table '{}'", table_name))?;
+
+            let records: Vec<Value> = match sdk_val.into_json_value() {
+                Value::Array(arr) => arr,
+                other => bail!(
+                    "Expected array from SELECT * FROM {}, got {}",
+                    table_name,
+                    json_kind(&other),
+                ),
             };
 
             let count = records.len();
+            let fetch_ms = table_start.elapsed().as_millis();
+            let insert_start = std::time::Instant::now();
 
-            // Insert each record into the local embedded DB
-            for record in records {
-                if let Some(id) = record.get("id") {
-                    let id_str = id.to_string().trim_matches('"').to_string();
-                    let thing_id = build_thing_id(table_name, &id_str);
-                    // Use CREATE with the full record data
-                    if let Err(e) = self.db
-                        .query(format!("CREATE {} CONTENT $data", thing_id))
-                        .bind(("data", record))
-                        .await
-                    {
-                        debug!("Failed to insert {}: {}", thing_id, e);
-                    }
-                }
+            // Insert each record. Any insert failure aborts the whole snapshot.
+            // We strip the `id` field from CONTENT (the target thing already
+            // encodes it; leaving it in the body silently truncates writes on
+            // SurrealDB 3.0) and call `.check()` because the SDK reports
+            // statement-level errors there, not on `.await`.
+            for mut record in records {
+                let id_str = match record.as_object_mut() {
+                    Some(obj) => obj.remove("id").and_then(|v| v.as_str().map(String::from)),
+                    None => None,
+                };
+                let id_str = id_str.with_context(|| format!(
+                    "Record in '{}' missing string `id` after JSON flatten",
+                    table_name,
+                ))?;
+                let thing_id = build_thing_id(table_name, &id_str);
+                self.db
+                    .query(format!("CREATE {} CONTENT $data", thing_id))
+                    .bind(("data", record))
+                    .await
+                    .with_context(|| format!("CREATE {} send failed", thing_id))?
+                    .check()
+                    .with_context(|| format!("CREATE {} returned an error", thing_id))?;
             }
 
-            // Also copy _00_query table for views
-            info!("Ingested {} records from '{}'", count, table_name);
+            let insert_ms = insert_start.elapsed().as_millis();
+            total_records += count;
+            info!(
+                table = %table_name,
+                records = count,
+                fetch_ms = fetch_ms as u64,
+                insert_ms = insert_ms as u64,
+                "[{}/{}] Done '{}' — {} records (fetch {}ms, insert {}ms)",
+                idx + 1,
+                tables.len(),
+                table_name,
+                count,
+                fetch_ms,
+                insert_ms,
+            );
         }
 
-        // Copy view definitions
+        // Copy view definitions — same hard-fail discipline as the data tables above.
+        let views_start = std::time::Instant::now();
         let mut response = remote_db
             .query("SELECT * FROM _00_query")
             .await
             .context("Failed to query _00_query on remote")?;
 
-        let views: Vec<Value> = response.take(0).unwrap_or_default();
-        for view in &views {
-            if let Some(id) = view.get("id") {
-                let id_str = id.to_string().trim_matches('"').to_string();
-                let key = if id_str.starts_with("_00_query:") {
-                    id_str.clone()
-                } else {
-                    format!("_00_query:{}", id_str)
-                };
-                if let Err(e) = self.db
-                    .query(format!("CREATE {} CONTENT $data", key))
-                    .bind(("data", view.clone()))
-                    .await
-                {
-                    debug!("Failed to insert view {}: {}", key, e);
-                }
-            }
+        let sdk_val: surrealdb::types::Value = response.take(0)
+            .context("take(0) failed for _00_query")?;
+        let views: Vec<Value> = match sdk_val.into_json_value() {
+            Value::Array(arr) => arr,
+            other => bail!(
+                "Expected array from SELECT * FROM _00_query, got {}",
+                json_kind(&other),
+            ),
+        };
+        let view_count = views.len();
+        for mut record in views {
+            let id_str = match record.as_object_mut() {
+                Some(obj) => obj.remove("id").and_then(|v| v.as_str().map(String::from)),
+                None => None,
+            };
+            let id_str = id_str.context("_00_query record missing string `id` field")?;
+            let key = if id_str.starts_with("_00_query:") {
+                id_str
+            } else {
+                format!("_00_query:{}", id_str)
+            };
+            self.db
+                .query(format!("CREATE {} CONTENT $data", key))
+                .bind(("data", record))
+                .await
+                .with_context(|| format!("CREATE view {} send failed", key))?
+                .check()
+                .with_context(|| format!("CREATE view {} returned an error", key))?;
         }
-        info!("Copied {} view definitions", views.len());
+        info!(
+            views = view_count,
+            elapsed_ms = views_start.elapsed().as_millis() as u64,
+            "Copied {} view definitions",
+            view_count,
+        );
+
+        info!(
+            tables = tables.len(),
+            records = total_records,
+            views = view_count,
+            elapsed_ms = total_start.elapsed().as_millis() as u64,
+            "Snapshot clone summary: {} tables, {} records, {} views in {}ms",
+            tables.len(),
+            total_records,
+            view_count,
+            total_start.elapsed().as_millis(),
+        );
 
         Ok(())
     }
 
     /// Apply a single record event to the snapshot
-    pub async fn apply(&self, table: &str, op: RecordOp, id: &str, record: Option<Value>) -> Result<()> {
+    pub async fn apply(&mut self, table: &str, op: RecordOp, id: &str, record: Option<Value>) -> Result<()> {
+        if !table.starts_with("_00_") {
+            self.known_tables.insert(table.to_string());
+        }
         let thing_id = build_thing_id(table, id);
         match op {
             RecordOp::Create => {
@@ -287,6 +537,8 @@ impl Replica {
             .await
             .context("Failed to re-select replica database after wipe")?;
         self.snapshot_seq = 0;
+        self.snapshot_hashes.clear();
+        self.known_tables.clear();
         info!(path = ?self.db_path, "Replica reset (REMOVE DATABASE)");
         Ok(())
     }
@@ -301,16 +553,33 @@ impl Replica {
     }
 
     /// Run an arbitrary SurrealQL query against the snapshot DB
-    /// Returns the raw JSON response (used by the HTTP proxy)
+    /// Returns the raw JSON response (used by the HTTP proxy).
+    ///
+    /// SurrealDB 3.0 errors on `SELECT * FROM <undefined>` instead of returning
+    /// an empty array. The replica is schemaless and tables only "exist" once
+    /// they receive a `CREATE`, so callers (notably SSP bootstrap querying
+    /// `_00_query`) need missing tables to behave like empty result sets. We
+    /// detect that case via the SDK's `NotFound` error and translate to `[]`.
     pub async fn query(&self, surql: &str) -> Result<Value> {
         let mut response = self.db
             .query(surql)
             .await
             .with_context(|| format!("Failed to execute query: {}", surql))?;
 
-        // Try to take the first result set
-        let result: Vec<Value> = response.take(0).unwrap_or_default();
-        Ok(Value::Array(result))
+        match response.take::<surrealdb::types::Value>(0) {
+            Ok(v) => Ok(v.into_json_value()),
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("does not exist") {
+                    debug!(query = %surql, "query targets a missing table — returning []");
+                    Ok(Value::Array(Vec::new()))
+                } else {
+                    Err(anyhow::anyhow!(
+                        "take(0) failed for query [{}]: {}", surql, msg
+                    ))
+                }
+            }
+        }
     }
 
     /// Serialize all records for SSP bootstrap (chunked)
@@ -376,28 +645,52 @@ impl Replica {
 
     /// Get total record count across all tables
     pub async fn record_count(&self) -> Result<usize> {
-        let tables = vec!["thread", "job", "user", "comment"];
-        let mut total = 0;
-
-        for table_name in tables {
-            let mut response = self.db
-                .query(format!("SELECT count() as total FROM {} GROUP ALL", table_name))
-                .await?;
-
-            let rows: Vec<Value> = response.take(0).unwrap_or_default();
-            if let Some(row) = rows.first() {
-                if let Some(count) = row.get("total").and_then(|v| v.as_u64()) {
-                    total += count as usize;
-                }
-            }
-        }
-
-        Ok(total)
+        Ok(self.record_counts_per_table().await?.into_iter().map(|(_, c)| c).sum())
     }
 
-    /// Get number of tables
-    pub fn table_count(&self) -> usize {
-        4
+    /// Get per-table record counts for every non-`_00_` table in the replica.
+    /// Used by the `/health/snapshot` endpoint and `spky verify` to compare
+    /// replica state against the upstream SurrealDB.
+    ///
+    /// Discovers tables from the *currently inserted records* rather than
+    /// `INFO FOR DB`, because the replica receives schemaless inserts via
+    /// `CREATE` and SurrealDB only lists explicitly `DEFINE`d tables in
+    /// `INFO FOR DB`.
+    pub async fn record_counts_per_table(&self) -> Result<Vec<(String, usize)>> {
+        // Probe the same set of tables we know we ingest from upstream. If
+        // the table was never seen, count returns 0. We can't enumerate
+        // schemaless tables on the replica side, so we mirror the upstream
+        // discovery list (this matches how `ingest_all` populates the replica).
+        let candidates = ["comment", "commented_on", "job", "thread", "user"];
+
+        let mut counts = Vec::with_capacity(candidates.len());
+        for table_name in candidates {
+            let count = self.count_table(table_name).await?;
+            counts.push((table_name.to_string(), count));
+        }
+
+        Ok(counts)
+    }
+
+    async fn count_table(&self, table_name: &str) -> Result<usize> {
+        let mut response = self.db
+            .query(format!("SELECT count() AS total FROM {} GROUP ALL", table_name))
+            .await
+            .with_context(|| format!("count() query failed for table '{}'", table_name))?;
+        let sdk_val: surrealdb::types::Value = response.take(0)
+            .with_context(|| format!("take(0) failed for count of '{}'", table_name))?;
+        let json = sdk_val.into_json_value();
+        let count = json.as_array()
+            .and_then(|arr| arr.first())
+            .and_then(|row| row.get("total"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as usize;
+        Ok(count)
+    }
+
+    /// Number of non-`_00_` tables present in the replica.
+    pub async fn table_count(&self) -> Result<usize> {
+        Ok(self.record_counts_per_table().await?.len())
     }
 }
 

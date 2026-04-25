@@ -174,26 +174,26 @@ async fn unregister_query(
     let query_id = &request.id;
     info!("Unregistering query: {}", query_id);
 
-    // Get SSP assignment and URL
+    // Get SSP assignment and URL. Unregister is idempotent: if the query
+    // isn't tracked (e.g. fired by `_00_dbsp_cleanup` on a stale row after a
+    // scheduler restart), there's nothing to forward — return OK so the
+    // SurrealDB DELETE event doesn't surface a 404.
     let (ssp_id, ssp_url) = {
-        let ssp_id = match state.query_tracker.get_assignment(query_id).await {
-            Some(id) => id,
-            None => {
-                return Err((
-                    StatusCode::NOT_FOUND,
-                    format!("Query {} not found", query_id),
-                ));
-            }
+        let Some(ssp_id) = state.query_tracker.get_assignment(query_id).await else {
+            info!("Unregister for unknown query {} — treating as already unregistered", query_id);
+            return Ok(StatusCode::OK);
         };
 
         let pool = state.ssp_pool.read().await;
-        let ssp = pool.get(&ssp_id).ok_or_else(|| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "SSP not found in pool".to_string(),
-            )
-        })?;
-        (ssp_id.clone(), ssp.url.clone())
+        match pool.get(&ssp_id) {
+            Some(ssp) => (ssp_id.clone(), ssp.url.clone()),
+            None => {
+                drop(pool);
+                state.query_tracker.unassign(query_id).await;
+                info!("Unregister for query {} whose SSP {} is gone — cleared tracker", query_id, ssp_id);
+                return Ok(StatusCode::OK);
+            }
+        }
     };
 
     // Send unregistration to SSP via HTTP POST /view/unregister

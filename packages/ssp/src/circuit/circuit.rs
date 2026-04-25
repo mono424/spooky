@@ -705,6 +705,17 @@ impl Circuit {
         self.store.collections.keys().cloned().collect()
     }
 
+    /// Per-table row counts in the in-memory store. Used by `/info` and
+    /// `spky verify` to compare circuit state against the upstream snapshot.
+    pub fn table_record_counts(&self) -> Vec<(String, usize)> {
+        let mut out: Vec<_> = self.store.collections
+            .iter()
+            .map(|(name, coll)| (name.clone(), coll.rows.len()))
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
     /// Dependency map: table → [query_ids] for debugging.
     pub fn dependency_map_dump(&self) -> &HashMap<String, Vec<String>> {
         &self.dependency_map

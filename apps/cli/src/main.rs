@@ -18,6 +18,7 @@ mod schema_extract;
 mod create;
 mod sp00ky;
 mod surreal_client;
+mod verify;
 
 use anyhow::{Context, Result};
 use backend::{BackendProcessor, DeployMode, Sp00kyConfig, DEFAULT_CONFIG_PATH};
@@ -130,7 +131,14 @@ enum Commands {
         /// Update stored checksums for modified-but-applied migration files before applying
         #[arg(long)]
         fix_checksums: bool,
+        /// Wipe SSP and scheduler persistent state before starting so they
+        /// re-bootstrap from the upstream SurrealDB. Does NOT touch the
+        /// SurrealDB volume — user data is preserved.
+        #[arg(long)]
+        clean: bool,
     },
+    /// Verify the SSP/scheduler snapshot matches the upstream SurrealDB
+    Verify,
     /// Generate client types from sp00ky.yml
     Generate {
         /// Path to sp00ky.yml config file
@@ -1521,8 +1529,11 @@ fn main() -> Result<()> {
         }
         Some(Commands::Mcp) => return mcp::run(),
         Some(Commands::Cloud { action }) => return cloud::run(action),
-        Some(Commands::Dev { skip_migrations, apply_migrations, fix_checksums }) => {
-            return dev::run(skip_migrations, apply_migrations, fix_checksums);
+        Some(Commands::Dev { skip_migrations, apply_migrations, fix_checksums, clean }) => {
+            return dev::run(skip_migrations, apply_migrations, fix_checksums, clean);
+        }
+        Some(Commands::Verify) => {
+            return verify::run();
         }
         Some(Commands::Generate { config }) | Some(Commands::Gen { config }) => {
             let resolved_config = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));

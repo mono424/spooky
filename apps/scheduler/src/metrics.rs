@@ -9,6 +9,7 @@ use crate::backend_health::{BackendHealthCache, BackendStatus, SharedBackendConf
 use crate::ingest::{pending_events_snapshot, IngestState};
 use crate::job_scheduler::JobTracker;
 use crate::query::QueryTracker;
+use crate::replica::Replica;
 use crate::router::{SspPool, SspState};
 
 /// Get the local IP address from network interfaces (first non-loopback IPv4)
@@ -65,6 +66,7 @@ pub struct MetricsState {
     pub backend_health: BackendHealthCache,
     pub shared_backend_configs: SharedBackendConfigs,
     pub ingest: IngestState,
+    pub replica: Arc<RwLock<Replica>>,
 }
 
 /// Create metrics router
@@ -72,6 +74,8 @@ pub fn create_metrics_router(state: MetricsState) -> Router {
     Router::new()
         .route("/metrics", get(get_metrics))
         .route("/health", get(health_check))
+        .route("/health/ready", get(ready_check))
+        .route("/health/snapshot", get(snapshot_check))
         .route("/info", get(info_handler))
         .route("/info/text", get(info_text_handler))
         .route("/backends", put(update_backends_handler))
@@ -176,6 +180,63 @@ async fn health_check(
             "total": total_backends,
         }
     })))
+}
+
+/// Bootstrap-readiness probe used by `spky dev` (and friends) to wait until
+/// the scheduler has finished cloning the upstream SurrealDB into its replica.
+/// Returns 503 while in `Cloning`, 200 once `Ready` (or any post-clone state).
+async fn ready_check(
+    State(state): State<MetricsState>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let status = *state.status.read().await;
+    let status_str = match status {
+        SchedulerStatus::Cloning => "cloning",
+        SchedulerStatus::Ready => "ready",
+        SchedulerStatus::SnapshotFrozen => "frozen",
+        SchedulerStatus::SnapshotUpdating => "updating",
+        SchedulerStatus::Restoring => "restoring",
+    };
+    let code = if status == SchedulerStatus::Cloning {
+        StatusCode::SERVICE_UNAVAILABLE
+    } else {
+        StatusCode::OK
+    };
+    (code, Json(serde_json::json!({ "status": status_str })))
+}
+
+/// Per-table replica record counts. Used by `spky verify` (and curl) to
+/// confirm the snapshot is complete vs the upstream SurrealDB.
+async fn snapshot_check(
+    State(state): State<MetricsState>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let counts = {
+        let replica = state.replica.read().await;
+        replica.record_counts_per_table().await
+    };
+    let pending = pending_events_snapshot(&state.ingest).await;
+    match counts {
+        Ok(counts) => {
+            let total: usize = counts.iter().map(|(_, c)| c).sum();
+            let tables: serde_json::Map<String, serde_json::Value> = counts
+                .into_iter()
+                .map(|(t, c)| (t, serde_json::Value::from(c)))
+                .collect();
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "tables": tables,
+                    "total_records": total,
+                    "snapshot_seq": pending.snapshot_seq,
+                    "latest_seq": pending.latest_seq,
+                    "lag": pending.lag,
+                })),
+            )
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        ),
+    }
 }
 
 /// Patterns that indicate a sensitive environment variable (checked case-insensitively).

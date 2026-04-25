@@ -14,7 +14,7 @@ pub mod ssp_management;
 pub mod wal;
 pub mod proxy;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -213,6 +213,7 @@ impl Scheduler {
             backend_health,
             shared_backend_configs,
             ingest: self.ingest_state(),
+            replica: Arc::clone(&self.replica),
         }
     }
 
@@ -311,7 +312,17 @@ impl Scheduler {
 
         info!("Connected to SurrealDB");
 
-        // Step 2: Clone remote DB into local snapshot replica
+        // Step 2: Clear stale registered views from the remote DB. Views are
+        // tied to live SSPs/clients, so leftover `_00_query` rows from a prior
+        // scheduler run point at SSPs that no longer exist. Wipe them before
+        // cloning so the replica starts with a clean view registry; clients
+        // will re-register against the fresh scheduler.
+        info!("Clearing registered view data from remote SurrealDB...");
+        db.query("DELETE _00_query")
+            .await
+            .context("Failed to clear _00_query on remote")?;
+
+        // Step 3: Clone remote DB into local snapshot replica
         info!("Cloning remote database into local snapshot...");
         {
             let mut replica = self.replica.write().await;

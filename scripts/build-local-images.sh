@@ -15,23 +15,23 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 TAG="dev"
-# `spky dev` runs containers with --platform linux/amd64 (apps/cli/src/dev.rs:302,363),
-# so the local image must target that platform too — otherwise Apple Silicon hosts
-# build arm64 and Docker refuses to run with the platform constraint.
-PLATFORM="linux/amd64"
+# Build for the host platform (no `--platform`). On Apple Silicon this is
+# linux/arm64 and avoids the QEMU emulation tax that `--platform linux/amd64`
+# imposes (~5-10× slower Rust builds). `spky dev` no longer forces a platform
+# either, so docker run picks the same arch the image was built for.
 SSP_IMAGE="mono424/spooky-ssp:${TAG}"
 SCHEDULER_IMAGE="mono424/spooky-scheduler:${TAG}"
 
 target="${1:-all}"
 
 build_ssp() {
-  echo "==> Building ${SSP_IMAGE} for ${PLATFORM}"
-  docker build --platform "${PLATFORM}" -t "${SSP_IMAGE}" -f apps/ssp/Dockerfile .
+  echo "==> Building ${SSP_IMAGE} (host platform)"
+  docker build -t "${SSP_IMAGE}" -f apps/ssp/Dockerfile .
 }
 
 build_scheduler() {
-  echo "==> Building ${SCHEDULER_IMAGE} for ${PLATFORM}"
-  docker build --platform "${PLATFORM}" -t "${SCHEDULER_IMAGE}" -f apps/scheduler/Dockerfile .
+  echo "==> Building ${SCHEDULER_IMAGE} (host platform)"
+  docker build -t "${SCHEDULER_IMAGE}" -f apps/scheduler/Dockerfile .
 }
 
 case "$target" in
