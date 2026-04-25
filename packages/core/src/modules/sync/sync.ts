@@ -86,7 +86,6 @@ export class Sp00kySync<S extends SchemaStructure> {
     this.isInit = true;
     await this.scheduler.init();
     void this.scheduler.syncUp();
-    void this.scheduler.syncUp();
     void this.scheduler.syncDown();
     void this.startRefLiveQueries();
   }
