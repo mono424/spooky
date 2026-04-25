@@ -33,4 +33,5 @@ argon2 = "0.5"
 rand = "0.8"
 hex = "0.4"
 open = "5"
+ssp-protocol = { path = "../../packages/ssp-protocol" }
 

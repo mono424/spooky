@@ -25,9 +25,10 @@ fn compare_values_inner(a: &Sp00kyValue, b: &Sp00kyValue) -> Ordering {
         (Sp00kyValue::Null, Sp00kyValue::Null) => Ordering::Equal,
         (Sp00kyValue::Null, _) => Ordering::Less,
         (_, Sp00kyValue::Null) => Ordering::Greater,
-        (Sp00kyValue::Number(a), Sp00kyValue::Number(b)) => {
-            a.partial_cmp(b).unwrap_or(Ordering::Equal)
-        }
+        (Sp00kyValue::Int(a), Sp00kyValue::Int(b)) => a.cmp(b),
+        (Sp00kyValue::Float(a), Sp00kyValue::Float(b)) => a.partial_cmp(b).unwrap_or(Ordering::Equal),
+        (Sp00kyValue::Int(a), Sp00kyValue::Float(b)) => (*a as f64).partial_cmp(b).unwrap_or(Ordering::Equal),
+        (Sp00kyValue::Float(a), Sp00kyValue::Int(b)) => a.partial_cmp(&(*b as f64)).unwrap_or(Ordering::Equal),
         (Sp00kyValue::Str(a), Sp00kyValue::Str(b)) => a.cmp(b),
         (Sp00kyValue::Bool(a), Sp00kyValue::Bool(b)) => a.cmp(b),
         _ => Ordering::Equal,
@@ -41,7 +42,10 @@ pub fn hash_value(value: &Sp00kyValue) -> u64 {
     match value {
         Sp00kyValue::Null => 0u8.hash(&mut hasher),
         Sp00kyValue::Bool(b) => b.hash(&mut hasher),
-        Sp00kyValue::Number(n) => n.to_bits().hash(&mut hasher),
+        // Cast Int through f64 so Int(5) and Float(5.0) hash equally — join
+        // index lookups need to match across numeric types.
+        Sp00kyValue::Int(n) => (*n as f64).to_bits().hash(&mut hasher),
+        Sp00kyValue::Float(n) => n.to_bits().hash(&mut hasher),
         Sp00kyValue::Str(s) => s.hash(&mut hasher),
         Sp00kyValue::Array(_) => 2u8.hash(&mut hasher),
         Sp00kyValue::Object(_) => 3u8.hash(&mut hasher),

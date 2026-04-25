@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = [
+    "apps/ssp",
+    "apps/scheduler",
+    "apps/cli",
+    "packages/ssp",
+    "packages/ssp-protocol",
+    "packages/ssp-wasm",
+    "packages/job-runner",
+]

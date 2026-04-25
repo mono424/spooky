@@ -543,13 +543,17 @@ impl Replica {
         Ok(())
     }
 
-    /// Re-read `snapshot_seq` from the embedded metadata table. Useful after
+    /// Re-read snapshot state from the embedded metadata table. Useful after
     /// importing a dump — the imported `_00_metadata:snapshot` row carries the
-    /// seq from the time of backup.
+    /// seq, hashes, and table list from the time of backup.
     pub async fn reload_snapshot_seq(&mut self) -> Result<u64> {
-        let seq = Self::read_snapshot_seq_from_db(&self.db).await.unwrap_or(0);
-        self.snapshot_seq = seq;
-        Ok(seq)
+        let state = Self::read_snapshot_state_from_db(&self.db)
+            .await
+            .unwrap_or_default();
+        self.snapshot_seq = state.seq;
+        self.snapshot_hashes = state.hashes;
+        self.known_tables = state.tables;
+        Ok(self.snapshot_seq)
     }
 
     /// Run an arbitrary SurrealQL query against the snapshot DB
@@ -652,23 +656,16 @@ impl Replica {
     /// Used by the `/health/snapshot` endpoint and `spky verify` to compare
     /// replica state against the upstream SurrealDB.
     ///
-    /// Discovers tables from the *currently inserted records* rather than
-    /// `INFO FOR DB`, because the replica receives schemaless inserts via
-    /// `CREATE` and SurrealDB only lists explicitly `DEFINE`d tables in
-    /// `INFO FOR DB`.
+    /// Discovers tables from `known_tables` (populated by `ingest_all` and
+    /// `apply`, persisted in `_00_metadata:snapshot.tables`). SurrealDB
+    /// `INFO FOR DB` doesn't list schemaless tables we created via CREATE,
+    /// so we cannot rely on the engine for discovery.
     pub async fn record_counts_per_table(&self) -> Result<Vec<(String, usize)>> {
-        // Probe the same set of tables we know we ingest from upstream. If
-        // the table was never seen, count returns 0. We can't enumerate
-        // schemaless tables on the replica side, so we mirror the upstream
-        // discovery list (this matches how `ingest_all` populates the replica).
-        let candidates = ["comment", "commented_on", "job", "thread", "user"];
-
-        let mut counts = Vec::with_capacity(candidates.len());
-        for table_name in candidates {
+        let mut counts = Vec::with_capacity(self.known_tables.len());
+        for table_name in &self.known_tables {
             let count = self.count_table(table_name).await?;
-            counts.push((table_name.to_string(), count));
+            counts.push((table_name.clone(), count));
         }
-
         Ok(counts)
     }
 

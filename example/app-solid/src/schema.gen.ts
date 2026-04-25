@@ -3,29 +3,114 @@
 
 export const schema = {
   tables: [
+    /**
+     * `collaborates_on` table.
+     *
+     * @example
+     * const rows = useQuery(() => db.query('collaborates_on').orderBy('id', 'asc').limit(20).build());
+     */
+    {
+      name: 'collaborates_on' as const,
+      columns: {
+        /**
+         * `id` — string
+         *
+         * Record ID. Pass the full `'<table>:<id>'` string when reading or writing.
+         */
+        id: { type: 'string' as const, recordId: true, optional: false },
+      },
+      primaryKey: ['id'] as const
+    },
+    /**
+     * `comment` table.
+     *
+     * Relationships:
+     * - `author` → `user` (one)
+     * - `thread` → `thread` (one)
+     *
+     * @example
+     * const rows = useQuery(() => db.query('comment').orderBy('id', 'asc').limit(20).build());
+     */
     {
       name: 'comment' as const,
       columns: {
+        /**
+         * `id` — string
+         *
+         * Record ID. Pass the full `'<table>:<id>'` string when reading or writing.
+         */
         id: { type: 'string' as const, recordId: true, optional: false },
+        /**
+         * `author` — string
+         *
+         * Record ID. Pass the full `'<table>:<id>'` string when reading or writing.
+         */
         author: { type: 'string' as const, recordId: true, optional: false },
         content: { type: 'string' as const, optional: false },
+        /**
+         * `created_at?` — string
+         *
+         * ISO-8601 datetime string.
+         */
         created_at: { type: 'string' as const, dateTime: true, optional: true },
+        /**
+         * `thread` — string
+         *
+         * Record ID. Pass the full `'<table>:<id>'` string when reading or writing.
+         *
+         * `@parent` — auto-populated server-side from the auth context. Do not write from client code.
+         */
         thread: { type: 'string' as const, recordId: true, optional: false },
       },
       primaryKey: ['id'] as const
     },
+    /**
+     * `commented_on` table.
+     *
+     * @example
+     * const rows = useQuery(() => db.query('commented_on').orderBy('id', 'asc').limit(20).build());
+     */
     {
       name: 'commented_on' as const,
       columns: {
+        /**
+         * `id` — string
+         *
+         * Record ID. Pass the full `'<table>:<id>'` string when reading or writing.
+         */
         id: { type: 'string' as const, recordId: true, optional: false },
       },
       primaryKey: ['id'] as const
     },
+    /**
+     * `job` table.
+     *
+     * Relationships:
+     * - `assigned_to` → `thread` (one)
+     *
+     * @example
+     * const rows = useQuery(() => db.query('job').orderBy('id', 'asc').limit(20).build());
+     */
     {
       name: 'job' as const,
       columns: {
+        /**
+         * `id` — string
+         *
+         * Record ID. Pass the full `'<table>:<id>'` string when reading or writing.
+         */
         id: { type: 'string' as const, recordId: true, optional: false },
+        /**
+         * `assigned_to` — string
+         *
+         * Record ID. Pass the full `'<table>:<id>'` string when reading or writing.
+         */
         assigned_to: { type: 'string' as const, recordId: true, optional: false },
+        /**
+         * `created_at?` — string
+         *
+         * ISO-8601 datetime string.
+         */
         created_at: { type: 'string' as const, dateTime: true, optional: true },
         errors: { type: 'string' as const, optional: false },
         max_retries: { type: 'number' as const, optional: false },
@@ -34,34 +119,139 @@ export const schema = {
         retries: { type: 'number' as const, optional: false },
         retry_strategy: { type: 'string' as const, optional: false },
         status: { type: 'string' as const, optional: false },
+        /**
+         * `updated_at` — string
+         *
+         * ISO-8601 datetime string.
+         */
         updated_at: { type: 'string' as const, dateTime: true, optional: false },
       },
       primaryKey: ['id'] as const
     },
+    /**
+     * `thread` table.
+     *
+     * Relationships:
+     * - `author` → `user` (one)
+     * - `comments` → `comment` (many)
+     * - `jobs` → `job` (many)
+     * - `thread_invites` → `thread_invite` (many)
+     *
+     * @example
+     * const rows = useQuery(() => db.query('thread').orderBy('id', 'asc').limit(20).build());
+     */
     {
       name: 'thread' as const,
       columns: {
+        /**
+         * `id` — string
+         *
+         * Record ID. Pass the full `'<table>:<id>'` string when reading or writing.
+         */
         id: { type: 'string' as const, recordId: true, optional: false },
         active: { type: 'boolean' as const, optional: true },
+        /**
+         * `author` — string
+         *
+         * Record ID. Pass the full `'<table>:<id>'` string when reading or writing.
+         *
+         * `@parent` — auto-populated server-side from the auth context. Do not write from client code.
+         */
         author: { type: 'string' as const, recordId: true, optional: false },
-        content: { type: 'string' as const, optional: false },
+        /**
+         * `content` — string
+         *
+         * `@crdt text` — collaborative field. Read with `useCrdtField`, never `useQuery`.
+         * Writes should pass `{ debounced: true }` to `db.update` so rapid keystrokes coalesce.
+         */
+        content: { type: 'string' as const, crdt: 'text' as const, optional: false },
         content_suggestion: { type: 'string' as const, optional: true },
+        /**
+         * `created_at?` — string
+         *
+         * ISO-8601 datetime string.
+         */
         created_at: { type: 'string' as const, dateTime: true, optional: true },
-        title: { type: 'string' as const, optional: false },
+        /**
+         * `title` — string
+         *
+         * `@crdt text` — collaborative field. Read with `useCrdtField`, never `useQuery`.
+         * Writes should pass `{ debounced: true }` to `db.update` so rapid keystrokes coalesce.
+         */
+        title: { type: 'string' as const, crdt: 'text' as const, optional: false },
         title_suggestion: { type: 'string' as const, optional: true },
         comments: { type: 'string' as const, optional: true },
         jobs: { type: 'string' as const, optional: true },
+        thread_invites: { type: 'string' as const, optional: true },
       },
       primaryKey: ['id'] as const
     },
+    /**
+     * `thread_invite` table.
+     *
+     * Relationships:
+     * - `created_by` → `user` (one)
+     * - `thread` → `thread` (one)
+     *
+     * @example
+     * const rows = useQuery(() => db.query('thread_invite').orderBy('id', 'asc').limit(20).build());
+     */
+    {
+      name: 'thread_invite' as const,
+      columns: {
+        /**
+         * `id` — string
+         *
+         * Record ID. Pass the full `'<table>:<id>'` string when reading or writing.
+         */
+        id: { type: 'string' as const, recordId: true, optional: false },
+        /**
+         * `created_at?` — string
+         *
+         * ISO-8601 datetime string.
+         */
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
+        /**
+         * `created_by?` — string
+         *
+         * Record ID. Pass the full `'<table>:<id>'` string when reading or writing.
+         */
+        created_by: { type: 'string' as const, recordId: true, optional: true },
+        /**
+         * `thread` — string
+         *
+         * Record ID. Pass the full `'<table>:<id>'` string when reading or writing.
+         */
+        thread: { type: 'string' as const, recordId: true, optional: false },
+        token: { type: 'string' as const, optional: false },
+      },
+      primaryKey: ['id'] as const
+    },
+    /**
+     * `user` table.
+     *
+     * Relationships:
+     * - `comments` → `comment` (many)
+     * - `threads` → `thread` (many)
+     * - `thread_invites` → `thread_invite` (many)
+     *
+     * @example
+     * const rows = useQuery(() => db.query('user').orderBy('id', 'asc').limit(20).build());
+     */
     {
       name: 'user' as const,
       columns: {
+        /**
+         * `id` — string
+         *
+         * Record ID. Pass the full `'<table>:<id>'` string when reading or writing.
+         */
         id: { type: 'string' as const, recordId: true, optional: false },
         profile_picture: { type: 'string' as const, optional: true },
         username: { type: 'string' as const, optional: false },
         comments: { type: 'string' as const, optional: true },
         threads: { type: 'string' as const, optional: true },
+        thread_invites: { type: 'string' as const, optional: true },
       },
       primaryKey: ['id'] as const
     },
@@ -104,6 +294,24 @@ export const schema = {
       cardinality: 'many' as const
     },
     {
+      from: 'thread' as const,
+      field: 'thread_invites' as const,
+      to: 'thread_invite' as const,
+      cardinality: 'many' as const
+    },
+    {
+      from: 'thread_invite' as const,
+      field: 'created_by' as const,
+      to: 'user' as const,
+      cardinality: 'one' as const
+    },
+    {
+      from: 'thread_invite' as const,
+      field: 'thread' as const,
+      to: 'thread' as const,
+      cardinality: 'one' as const
+    },
+    {
       from: 'user' as const,
       field: 'comments' as const,
       to: 'comment' as const,
@@ -113,6 +321,12 @@ export const schema = {
       from: 'user' as const,
       field: 'threads' as const,
       to: 'thread' as const,
+      cardinality: 'many' as const
+    },
+    {
+      from: 'user' as const,
+      field: 'thread_invites' as const,
+      to: 'thread_invite' as const,
       cardinality: 'many' as const
     },
   ],
@@ -179,11 +393,16 @@ PERMISSIONS FOR select, create, update WHERE true;
 
 DEFINE TABLE thread SCHEMAFULL
 PERMISSIONS FOR select, create, update, delete WHERE true
+      AND (author.id = $auth.id
+           OR $auth.id IN (SELECT VALUE in FROM collaborates_on WHERE out = $parent.id))
+    FOR delete WHERE $access = "account" AND author.id = $auth.id
 ;
 
+-- @crdt text
 DEFINE FIELD title ON TABLE thread TYPE option<string>
     ASSERT $value != NONE AND string::len($value) > 0 AND string::len($value) <= 200;
 
+-- @crdt text
 DEFINE FIELD content ON TABLE thread TYPE option<string>
     ASSERT $value != NONE AND string::len($value) > 0;
 
@@ -228,6 +447,30 @@ DEFINE EVENT comment_created ON TABLE comment WHEN $event = "CREATE" THEN
   RELATE ($after.id)->commented_on->($after.thread)
 ;
 
+-- ##################################################################
+-- COLLABORATORS
+-- ##################################################################
+
+DEFINE TABLE thread_invite SCHEMAFULL
+PERMISSIONS FOR select, create, update, delete WHERE true;
+
+DEFINE FIELD thread     ON TABLE thread_invite TYPE option<record<thread>>;
+DEFINE FIELD token      ON TABLE thread_invite TYPE option<string>
+  ASSERT $value != NONE AND string::len($value) >= 16;
+DEFINE FIELD created_by ON TABLE thread_invite TYPE option<record<user>> VALUE $auth.id;
+DEFINE FIELD created_at ON TABLE thread_invite TYPE option<datetime> VALUE time::now();
+DEFINE INDEX unique_invite_token ON TABLE thread_invite FIELDS token UNIQUE;
+
+DEFINE TABLE collaborates_on SCHEMAFULL TYPE RELATION FROM user TO thread
+PERMISSIONS FOR select, create, update, delete WHERE true
+      AND in = $auth.id
+      AND $parent.out IN (SELECT VALUE thread FROM thread_invite)
+    FOR delete WHERE $access = "account"
+      AND (in.id = $auth.id OR out.author.id = $auth.id)
+    FOR update WHERE false;
+
+DEFINE INDEX unique_collab ON TABLE collaborates_on FIELDS in, out UNIQUE;
+
 -- Backend Schema: api
 -- ##################################################################
 -- API OUTBOX TABLE
@@ -270,13 +513,13 @@ VALUE time::now()
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- ==================================================
--- SP00KY INCANTATION
+-- SPOOKY INCANTATION
 -- The Registry of active Live Queries (Incantations).
 -- Moved to meta_tables_client.surql and meta_tables_remote.surql
 -- ==================================================
 
 -- ==================================================
--- SP00KY SCHEMA
+-- SPOOKY SCHEMA
 -- The provisioned schema state for the database. Currently only used in local cache.
 -- Used in local-migrator.ts
 -- ==================================================
@@ -288,7 +531,7 @@ DEFINE FIELD IF NOT EXISTS created_at ON _00_schema TYPE datetime VALUE time::no
 DEFINE INDEX IF NOT EXISTS unique_hash ON _00_schema FIELDS hash UNIQUE;
 
 -- ==================================================
--- SP00KY STREAM PROCESSOR STATE
+-- SPOOKY STREAM PROCESSOR STATE
 -- Stores the local state of the stream processor (DBSP)
 -- ==================================================
 
@@ -300,7 +543,7 @@ DEFINE FIELD IF NOT EXISTS state ON _00_stream_processor_state TYPE string;
 DEFINE FIELD IF NOT EXISTS updated_at ON _00_stream_processor_state TYPE datetime VALUE time::now();
 
 -- ==================================================
--- SP00KY INCANTATION
+-- SPOOKY INCANTATION
 -- The Registry of active Live Queries (Incantations).
 -- ==================================================
 
@@ -326,7 +569,7 @@ DEFINE FIELD tableName ON TABLE _00_query TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
 -- ==================================================
--- SP00KY EVENTS
+-- SPOOKY EVENTS
 -- Stores create, update, and delete events
 -- ==================================================
 
@@ -349,11 +592,15 @@ DEFINE FIELD _00_rv ON TABLE _00_pending_mutations TYPE int DEFAULT 0 PERMISSION
 DEFINE FIELD _00_rv ON TABLE _00_query TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE _00_schema TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE _00_stream_processor_state TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD _00_rv ON TABLE collaborates_on TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE comment TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE commented_on TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE job TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE thread TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD _00_rv ON TABLE thread_invite TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE user TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD _00_crdt ON TABLE comment TYPE option<object> FLEXIBLE PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD _00_crdt ON TABLE thread TYPE option<object> FLEXIBLE PERMISSIONS FOR select, create, update WHERE true;
 
 
 -- ==================================================
@@ -397,6 +644,20 @@ THEN {
 
 -- Table: thread Client Deletion
 DEFINE EVENT OVERWRITE _00_thread_client_delete ON TABLE thread
+WHEN $event = "DELETE"
+THEN {
+    -- No-op for now.
+};
+
+-- Table: thread_invite Client Mutation
+DEFINE EVENT OVERWRITE _00_thread_invite_client_mutation ON TABLE thread_invite
+WHEN $before != $after AND $event != "DELETE"
+THEN {
+    -- No-op for now. Client mutation sync logic moved to DBSP.
+};
+
+-- Table: thread_invite Client Deletion
+DEFINE EVENT OVERWRITE _00_thread_invite_client_delete ON TABLE thread_invite
 WHEN $event = "DELETE"
 THEN {
     -- No-op for now.

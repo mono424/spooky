@@ -26,12 +26,12 @@ target="${1:-all}"
 
 build_ssp() {
   echo "==> Building ${SSP_IMAGE} (host platform)"
-  docker build -t "${SSP_IMAGE}" -f apps/ssp/Dockerfile .
+  docker build -t "${SSP_IMAGE}" -f Dockerfile --target ssp .
 }
 
 build_scheduler() {
   echo "==> Building ${SCHEDULER_IMAGE} (host platform)"
-  docker build -t "${SCHEDULER_IMAGE}" -f apps/scheduler/Dockerfile .
+  docker build -t "${SCHEDULER_IMAGE}" -f Dockerfile --target scheduler .
 }
 
 case "$target" in

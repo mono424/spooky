@@ -4,7 +4,7 @@ use crate::circuit::store::{ChangeSet, Operation, Record, Store};
 use crate::circuit::view::{OutputFormat, View};
 use crate::operator::QueryPlan;
 use crate::types::{make_key, raw_id, Sp00kyValue};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// Operation type for a subquery record delta.
 #[derive(Debug, Clone, PartialEq)]
@@ -714,6 +714,25 @@ impl Circuit {
             .collect();
         out.sort_by(|a, b| a.0.cmp(&b.0));
         out
+    }
+
+    /// Per-table content hashes in the in-memory store. Bit-identical to
+    /// `Replica::compute_table_hashes` on the scheduler side when the
+    /// contents agree — used by SSP self-verify (`self_bootstrap`) and
+    /// `spky verify` to detect drift.
+    pub fn compute_table_hashes(&self) -> BTreeMap<String, String> {
+        self.store
+            .collections
+            .iter()
+            .map(|(name, coll)| {
+                let pairs: Vec<(String, serde_json::Value)> = coll
+                    .rows
+                    .iter()
+                    .map(|(id, val)| (id.clone(), serde_json::Value::from(val.clone())))
+                    .collect();
+                (name.clone(), ssp_protocol::snapshot_hash::hash_table(pairs))
+            })
+            .collect()
     }
 
     /// Dependency map: table → [query_ids] for debugging.

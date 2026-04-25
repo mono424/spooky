@@ -1,10 +1,13 @@
 mod add_api;
+mod agents;
 mod annotations;
 mod backend;
 mod bucket;
 mod cloud;
 mod codegen;
+mod create;
 mod dev;
+mod doctor;
 mod json_schema;
 mod logs_browser;
 mod mcp;
@@ -12,10 +15,10 @@ mod migrate;
 mod migration;
 mod modules;
 mod parser;
+mod scaffold;
 mod schema_builder;
 mod schema_diff;
 mod schema_extract;
-mod create;
 mod sp00ky;
 mod surreal_client;
 mod verify;
@@ -24,9 +27,9 @@ use anyhow::{Context, Result};
 use backend::{BackendProcessor, DeployMode, Sp00kyConfig, DEFAULT_CONFIG_PATH};
 use clap::{Args as ClapArgs, Parser as ClapParser, Subcommand};
 use codegen::{CodeGenerator, OutputFormat};
+use create::create_project;
 use json_schema::JsonSchemaGenerator;
 use parser::SchemaParser;
-use create::create_project;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -138,7 +141,41 @@ enum Commands {
         clean: bool,
     },
     /// Verify the SSP/scheduler snapshot matches the upstream SurrealDB
-    Verify,
+    Verify {
+        /// On mismatch, POST /admin/ssp/resync-all to force every SSP to
+        /// re-bootstrap from the scheduler's frozen snapshot.
+        #[arg(long)]
+        fix: bool,
+    },
+    /// Diagnose project health: config validity, schema/codegen freshness,
+    /// migration state. Designed as the agent feedback loop after a schema
+    /// edit. Use `--json` for an LLM-readable structured contract.
+    Doctor {
+        /// Emit results as JSON instead of human-readable text.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Render a cookbook recipe (live-list, optimistic-mutation, crdt-text-field).
+    /// Pass `list` to print the recipe index. Recipes are parameterized by your
+    /// table (and field, for CRDT recipes).
+    Scaffold {
+        /// Recipe name. Use `spky scaffold list` to see all available recipes.
+        recipe: String,
+        /// Target table name. Substituted into the template (e.g., `thread`).
+        #[arg(long)]
+        table: Option<String>,
+        /// Target field name (required by recipes that touch a single column).
+        #[arg(long)]
+        field: Option<String>,
+        /// Write the rendered snippet to this path instead of stdout.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Manage AGENTS.md — the LLM-readable project guide.
+    Agents {
+        #[command(subcommand)]
+        action: AgentsCommands,
+    },
     /// Generate client types from sp00ky.yml
     Generate {
         /// Path to sp00ky.yml config file
@@ -164,6 +201,19 @@ enum Commands {
     Cloud {
         #[command(subcommand)]
         action: CloudCommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum AgentsCommands {
+    /// Generate AGENTS.md in the project root, parameterized by the parsed schema.
+    Init {
+        /// Overwrite an existing AGENTS.md without prompting.
+        #[arg(long)]
+        force: bool,
+        /// Write to this path instead of `<project>/AGENTS.md`.
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
 }
 
@@ -793,7 +843,9 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
             empty,
         } => {
             // Load config to resolve paths
-            let config_file = config.clone().unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
+            let config_file = config
+                .clone()
+                .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
             let sp00ky_config = backend::load_config(&config_file);
             let resolved = sp00ky_config.resolved_schema();
             let resolved_surreal = sp00ky_config.resolved_surrealdb();
@@ -802,8 +854,16 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
             let resolved_migrations = migrations_dir.unwrap_or(resolved.migrations);
 
             // Use config ns/db as defaults when CLI flags are at their default "main"
-            let namespace = if namespace == "main" { resolved_surreal.namespace } else { namespace };
-            let database = if database == "main" { resolved_surreal.database } else { database };
+            let namespace = if namespace == "main" {
+                resolved_surreal.namespace
+            } else {
+                namespace
+            };
+            let database = if database == "main" {
+                resolved_surreal.database
+            } else {
+                database
+            };
 
             let deploy_mode = match mode.as_str() {
                 "cluster" => DeployMode::Cluster,
@@ -858,8 +918,16 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
             let resolved_migrations = migrations_dir.unwrap_or(resolved.migrations);
 
             let resolved_surreal = sp00ky_config.resolved_surrealdb();
-            let namespace = if conn.namespace == "main" { resolved_surreal.namespace } else { conn.namespace };
-            let database = if conn.database == "main" { resolved_surreal.database } else { conn.database };
+            let namespace = if conn.namespace == "main" {
+                resolved_surreal.namespace
+            } else {
+                conn.namespace
+            };
+            let database = if conn.database == "main" {
+                resolved_surreal.database
+            } else {
+                conn.database
+            };
 
             let deploy_mode = match mode.as_str() {
                 "cluster" => DeployMode::Cluster,
@@ -902,11 +970,20 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
             migrations_dir,
         } => {
             let sp00ky_config = backend::load_config(Path::new(DEFAULT_CONFIG_PATH));
-            let resolved_migrations = migrations_dir.unwrap_or(sp00ky_config.resolved_schema().migrations);
+            let resolved_migrations =
+                migrations_dir.unwrap_or(sp00ky_config.resolved_schema().migrations);
 
             let resolved_surreal = sp00ky_config.resolved_surrealdb();
-            let namespace = if conn.namespace == "main" { resolved_surreal.namespace } else { conn.namespace };
-            let database = if conn.database == "main" { resolved_surreal.database } else { conn.database };
+            let namespace = if conn.namespace == "main" {
+                resolved_surreal.namespace
+            } else {
+                conn.namespace
+            };
+            let database = if conn.database == "main" {
+                resolved_surreal.database
+            } else {
+                conn.database
+            };
 
             let ctx = migration::MigrationContext {
                 environment: migration::MigrationEnvironment::Production,
@@ -933,11 +1010,20 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
             fix_checksums,
         } => {
             let sp00ky_config = backend::load_config(Path::new(DEFAULT_CONFIG_PATH));
-            let resolved_migrations = migrations_dir.unwrap_or(sp00ky_config.resolved_schema().migrations);
+            let resolved_migrations =
+                migrations_dir.unwrap_or(sp00ky_config.resolved_schema().migrations);
 
             let resolved_surreal = sp00ky_config.resolved_surrealdb();
-            let namespace = if conn.namespace == "main" { resolved_surreal.namespace } else { conn.namespace };
-            let database = if conn.database == "main" { resolved_surreal.database } else { conn.database };
+            let namespace = if conn.namespace == "main" {
+                resolved_surreal.namespace
+            } else {
+                conn.namespace
+            };
+            let database = if conn.database == "main" {
+                resolved_surreal.database
+            } else {
+                conn.database
+            };
 
             let ctx = migration::MigrationContext {
                 environment: migration::MigrationEnvironment::Production,
@@ -983,10 +1069,7 @@ fn print_migration_status(statuses: &[migration::MigrationInfo]) {
                 );
             }
             migration::MigrationState::Pending => {
-                println!(
-                    "  {YELLOW}[pending]{RESET}  {}_{}",
-                    info.id, info.name
-                );
+                println!("  {YELLOW}[pending]{RESET}  {}_{}", info.id, info.name);
             }
             migration::MigrationState::Drift => {
                 let detail = info.detail.as_deref().unwrap_or("");
@@ -1014,7 +1097,16 @@ fn handle_api(action: ApiCommands) -> Result<()> {
             config,
         } => {
             let resolved_config = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
-            add_api::add_api(spec, name, base_url, auth_type, auth_token, table, schema_path, resolved_config)
+            add_api::add_api(
+                spec,
+                name,
+                base_url,
+                auth_type,
+                auth_token,
+                table,
+                schema_path,
+                resolved_config,
+            )
         }
     }
 }
@@ -1033,7 +1125,8 @@ fn handle_bucket(action: BucketCommands) -> Result<()> {
         } => {
             let resolved_config = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
             let sp00ky_config = backend::load_config(&resolved_config);
-            let resolved_buckets = buckets_dir.unwrap_or(sp00ky_config.resolved_schema().buckets_dir);
+            let resolved_buckets =
+                buckets_dir.unwrap_or(sp00ky_config.resolved_schema().buckets_dir);
 
             bucket::add(
                 name,
@@ -1145,9 +1238,12 @@ fn run_codegen(
     for table_name in parser.tables.keys() {
         let has_crdt = field_annotations.keys().any(|(t, _)| t == table_name);
         if has_crdt {
-            println!("  + Injecting _00_crdt field on table '{}' for CRDT support", table_name);
+            println!(
+                "  + Injecting _00_crdt field on table '{}' for CRDT support",
+                table_name
+            );
             filtered_schema_content.push_str(&format!(
-                "\nDEFINE FIELD _00_crdt ON TABLE {} FLEXIBLE TYPE option<object> PERMISSIONS FOR select, create, update WHERE true;",
+                "\nDEFINE FIELD _00_crdt ON TABLE {} TYPE option<object> FLEXIBLE PERMISSIONS FOR select, create, update WHERE true;",
                 table_name
             ));
         }
@@ -1189,8 +1285,8 @@ fn run_codegen(
     let generator = JsonSchemaGenerator::new();
     let json_schema = generator.generate(&parser);
 
-    let json_schema_string = serde_json::to_string_pretty(&json_schema)
-        .context("Failed to serialize JSON Schema")?;
+    let json_schema_string =
+        serde_json::to_string_pretty(&json_schema).context("Failed to serialize JSON Schema")?;
 
     fn ensure_directory_exists(path: &std::path::Path) -> Result<()> {
         if let Some(parent) = path.parent() {
@@ -1298,7 +1394,9 @@ fn run_codegen(
 
 fn handle_lint(config_path: &Path) -> Result<()> {
     use anyhow::bail;
-    use backend::{AppType, BackendDevConfig, BackendDevTypedConfig, EnvSource, EnvConfig, EnvEntry};
+    use backend::{
+        AppType, BackendDevConfig, BackendDevTypedConfig, EnvConfig, EnvEntry, EnvSource,
+    };
 
     let mut errors: Vec<String> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
@@ -1332,7 +1430,10 @@ fn handle_lint(config_path: &Path) -> Result<()> {
     // Schema paths
     let schema = config.resolved_schema();
     if !base_dir.join(&schema.schema).exists() {
-        warnings.push(format!("Schema file not found: {}", base_dir.join(&schema.schema).display()));
+        warnings.push(format!(
+            "Schema file not found: {}",
+            base_dir.join(&schema.schema).display()
+        ));
     }
 
     // Bucket files
@@ -1351,18 +1452,30 @@ fn handle_lint(config_path: &Path) -> Result<()> {
 
         // Method schema file (backends)
         if let Some(method) = &app.method {
-            check_file(&method.schema, &format!("{}.method.schema", prefix), &mut errors);
+            check_file(
+                &method.schema,
+                &format!("{}.method.schema", prefix),
+                &mut errors,
+            );
         }
 
         // Deploy dockerfile
         if let Some(deploy) = &app.deploy {
             if let Some(dockerfile) = &deploy.dockerfile {
-                check_file(dockerfile, &format!("{}.deploy.dockerfile", prefix), &mut errors);
+                check_file(
+                    dockerfile,
+                    &format!("{}.deploy.dockerfile", prefix),
+                    &mut errors,
+                );
             }
             if let Some(context) = &deploy.context {
                 let resolved = base_dir.join(context);
                 if !resolved.is_dir() {
-                    errors.push(format!("{}.deploy.context directory not found: {}", prefix, resolved.display()));
+                    errors.push(format!(
+                        "{}.deploy.context directory not found: {}",
+                        prefix,
+                        resolved.display()
+                    ));
                 }
             }
         }
@@ -1370,12 +1483,22 @@ fn handle_lint(config_path: &Path) -> Result<()> {
         // Dev workdir
         if let Some(ref dev) = app.dev {
             match dev {
-                BackendDevConfig::Typed(BackendDevTypedConfig::Npm { workdir: Some(w), .. })
-                | BackendDevConfig::Typed(BackendDevTypedConfig::Docker { workdir: Some(w), .. })
-                | BackendDevConfig::Typed(BackendDevTypedConfig::Uv { workdir: Some(w), .. }) => {
+                BackendDevConfig::Typed(BackendDevTypedConfig::Npm {
+                    workdir: Some(w), ..
+                })
+                | BackendDevConfig::Typed(BackendDevTypedConfig::Docker {
+                    workdir: Some(w), ..
+                })
+                | BackendDevConfig::Typed(BackendDevTypedConfig::Uv {
+                    workdir: Some(w), ..
+                }) => {
                     let resolved = base_dir.join(w);
                     if !resolved.is_dir() {
-                        warnings.push(format!("{}.dev.workdir directory not found: {}", prefix, resolved.display()));
+                        warnings.push(format!(
+                            "{}.dev.workdir directory not found: {}",
+                            prefix,
+                            resolved.display()
+                        ));
                     }
                 }
                 _ => {}
@@ -1383,22 +1506,38 @@ fn handle_lint(config_path: &Path) -> Result<()> {
         }
 
         // Env file references
-        fn check_env_file_sources(source: &EnvSource, base_dir: &Path, prefix: &str, warnings: &mut Vec<String>) {
+        fn check_env_file_sources(
+            source: &EnvSource,
+            base_dir: &Path,
+            prefix: &str,
+            warnings: &mut Vec<String>,
+        ) {
             match source {
                 EnvSource::Str(s) if s != "vault" => {
                     let resolved = base_dir.join(s);
                     if !resolved.exists() {
-                        warnings.push(format!("{}.env file not found: {}", prefix, resolved.display()));
+                        warnings.push(format!(
+                            "{}.env file not found: {}",
+                            prefix,
+                            resolved.display()
+                        ));
                     }
                 }
                 _ => {}
             }
         }
-        fn check_env_entry(entry: &EnvEntry, base_dir: &Path, prefix: &str, warnings: &mut Vec<String>) {
+        fn check_env_entry(
+            entry: &EnvEntry,
+            base_dir: &Path,
+            prefix: &str,
+            warnings: &mut Vec<String>,
+        ) {
             match entry {
                 EnvEntry::Source(s) => check_env_file_sources(s, base_dir, prefix, warnings),
                 EnvEntry::List(sources) => {
-                    for s in sources { check_env_file_sources(s, base_dir, prefix, warnings); }
+                    for s in sources {
+                        check_env_file_sources(s, base_dir, prefix, warnings);
+                    }
                 }
             }
         }
@@ -1406,18 +1545,27 @@ fn handle_lint(config_path: &Path) -> Result<()> {
             match env {
                 EnvConfig::Source(s) => check_env_file_sources(s, base_dir, &prefix, &mut warnings),
                 EnvConfig::List(sources) => {
-                    for s in sources { check_env_file_sources(s, base_dir, &prefix, &mut warnings); }
+                    for s in sources {
+                        check_env_file_sources(s, base_dir, &prefix, &mut warnings);
+                    }
                 }
                 EnvConfig::PerEnvironment { dev, cloud } => {
-                    if let Some(e) = dev { check_env_entry(e, base_dir, &prefix, &mut warnings); }
-                    if let Some(e) = cloud { check_env_entry(e, base_dir, &prefix, &mut warnings); }
+                    if let Some(e) = dev {
+                        check_env_entry(e, base_dir, &prefix, &mut warnings);
+                    }
+                    if let Some(e) = cloud {
+                        check_env_entry(e, base_dir, &prefix, &mut warnings);
+                    }
                 }
             }
         }
 
         // Frontend-specific: warn if no deploy config
         if app.app_type == AppType::Frontend && app.deploy.is_none() {
-            warnings.push(format!("{}: frontend app has no deploy configuration", prefix));
+            warnings.push(format!(
+                "{}: frontend app has no deploy configuration",
+                prefix
+            ));
         }
     }
 
@@ -1435,7 +1583,11 @@ fn handle_lint(config_path: &Path) -> Result<()> {
             println!("  \x1b[31merror\x1b[0m: {}", e);
         }
         println!();
-        bail!("Lint failed with {} error(s) and {} warning(s).", errors.len(), warnings.len());
+        bail!(
+            "Lint failed with {} error(s) and {} warning(s).",
+            errors.len(),
+            warnings.len()
+        );
     }
 
     if warnings.is_empty() {
@@ -1510,8 +1662,10 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     if let Some(ref project_path) = args.path {
-        std::env::set_current_dir(project_path)
-            .context(format!("Failed to set project directory: {:?}", project_path))?;
+        std::env::set_current_dir(project_path).context(format!(
+            "Failed to set project directory: {:?}",
+            project_path
+        ))?;
     }
 
     match args.command {
@@ -1529,11 +1683,36 @@ fn main() -> Result<()> {
         }
         Some(Commands::Mcp) => return mcp::run(),
         Some(Commands::Cloud { action }) => return cloud::run(action),
-        Some(Commands::Dev { skip_migrations, apply_migrations, fix_checksums, clean }) => {
+        Some(Commands::Dev {
+            skip_migrations,
+            apply_migrations,
+            fix_checksums,
+            clean,
+        }) => {
             return dev::run(skip_migrations, apply_migrations, fix_checksums, clean);
         }
-        Some(Commands::Verify) => {
-            return verify::run();
+        Some(Commands::Verify { fix }) => {
+            return verify::run(fix);
+        }
+        Some(Commands::Doctor { json }) => {
+            let project_dir = args.path.as_deref().unwrap_or_else(|| Path::new("."));
+            return doctor::run(json, project_dir);
+        }
+        Some(Commands::Scaffold {
+            recipe,
+            table,
+            field,
+            out,
+        }) => {
+            return scaffold::run(&recipe, table.as_deref(), field.as_deref(), out.as_deref());
+        }
+        Some(Commands::Agents { action }) => {
+            let project_dir = args.path.as_deref().unwrap_or_else(|| Path::new("."));
+            return match action {
+                AgentsCommands::Init { force, out } => {
+                    agents::init(force, out.as_deref(), project_dir)
+                }
+            };
         }
         Some(Commands::Generate { config }) | Some(Commands::Gen { config }) => {
             let resolved_config = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
@@ -1612,8 +1791,10 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod migration_tests {
-    use crate::migration::{self, MigrationEngine, MigrationEnvironment, MigrationInfo, MigrationState};
     use crate::migration::sp00ky_engine::Sp00kyEngine;
+    use crate::migration::{
+        self, MigrationEngine, MigrationEnvironment, MigrationInfo, MigrationState,
+    };
     use tempfile::TempDir;
 
     // ── Mock Engine ────────────────────────────────────────────────────
@@ -1623,8 +1804,12 @@ mod migration_tests {
     }
 
     impl MockEngine {
-        fn new() -> Self { Self { fail_apply: false } }
-        fn failing() -> Self { Self { fail_apply: true } }
+        fn new() -> Self {
+            Self { fail_apply: false }
+        }
+        fn failing() -> Self {
+            Self { fail_apply: true }
+        }
     }
 
     impl MigrationEngine for MockEngine {
@@ -1645,13 +1830,21 @@ mod migration_tests {
             }])
         }
 
-        fn fix(&self, _fix_checksums: bool) -> anyhow::Result<()> { Ok(()) }
+        fn fix(&self, _fix_checksums: bool) -> anyhow::Result<()> {
+            Ok(())
+        }
     }
 
     fn wrap_mock(mock: MockEngine) -> Sp00kyEngine {
         Sp00kyEngine::new(
-            Box::new(mock), "http://localhost:8000".into(), "ns".into(),
-            "db".into(), "root".into(), "root".into(), None, None,
+            Box::new(mock),
+            "http://localhost:8000".into(),
+            "ns".into(),
+            "db".into(),
+            "root".into(),
+            "root".into(),
+            None,
+            None,
         )
     }
 
@@ -1723,9 +1916,14 @@ mod migration_tests {
     #[test]
     fn test_surrealkit_fails_when_binary_not_found() {
         match crate::migration::surrealkit::SurrealKitEngine::new(
-            "nonexistent_xyz_12345".into(), MigrationEnvironment::Production,
-            std::path::PathBuf::from("."), "http://localhost:8000".into(),
-            "ns".into(), "db".into(), "root".into(), "root".into(),
+            "nonexistent_xyz_12345".into(),
+            MigrationEnvironment::Production,
+            std::path::PathBuf::from("."),
+            "http://localhost:8000".into(),
+            "ns".into(),
+            "db".into(),
+            "root".into(),
+            "root".into(),
         ) {
             Err(e) => assert!(e.to_string().contains("not found")),
             Ok(_) => panic!("should fail with missing binary"),
@@ -1735,9 +1933,14 @@ mod migration_tests {
     #[test]
     fn test_surrealkit_succeeds_with_valid_binary() {
         let result = crate::migration::surrealkit::SurrealKitEngine::new(
-            "echo".into(), MigrationEnvironment::Dev,
-            std::path::PathBuf::from("."), "http://localhost:8000".into(),
-            "ns".into(), "db".into(), "root".into(), "root".into(),
+            "echo".into(),
+            MigrationEnvironment::Dev,
+            std::path::PathBuf::from("."),
+            "http://localhost:8000".into(),
+            "ns".into(),
+            "db".into(),
+            "root".into(),
+            "root".into(),
         );
         assert!(result.is_ok());
     }
@@ -1769,13 +1972,15 @@ mod migration_tests {
 
     impl FlowMockEngine {
         fn with_pending(count: usize) -> Self {
-            let statuses = (0..count).map(|i| MigrationInfo {
-                id: format!("2024010{}120000", i + 1),
-                name: format!("migration_{}", i + 1),
-                state: MigrationState::Pending,
-                applied_at: None,
-                detail: None,
-            }).collect();
+            let statuses = (0..count)
+                .map(|i| MigrationInfo {
+                    id: format!("2024010{}120000", i + 1),
+                    name: format!("migration_{}", i + 1),
+                    state: MigrationState::Pending,
+                    applied_at: None,
+                    detail: None,
+                })
+                .collect();
             Self {
                 statuses,
                 apply_result: std::cell::RefCell::new(vec![Ok(())]),
@@ -1859,9 +2064,11 @@ mod migration_tests {
     }
 
     /// Simulates the dev.rs apply_migrations flow with a mock engine.
-    fn simulate_dev_flow(engine: &dyn MigrationEngine, auto_apply: bool, fix_checksums: bool)
-        -> anyhow::Result<String>
-    {
+    fn simulate_dev_flow(
+        engine: &dyn MigrationEngine,
+        auto_apply: bool,
+        fix_checksums: bool,
+    ) -> anyhow::Result<String> {
         let mut output = String::new();
 
         // Step 1: Fix checksums if requested (mirrors dev.rs line 692)
@@ -1882,7 +2089,8 @@ mod migration_tests {
         }
 
         // Step 4: Filter pending (mirrors dev.rs line 715)
-        let pending: Vec<_> = statuses.iter()
+        let pending: Vec<_> = statuses
+            .iter()
             .filter(|s| s.state == MigrationState::Pending)
             .collect();
 

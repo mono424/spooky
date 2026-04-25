@@ -204,14 +204,17 @@ async fn ready_check(
     (code, Json(serde_json::json!({ "status": status_str })))
 }
 
-/// Per-table replica record counts. Used by `spky verify` (and curl) to
-/// confirm the snapshot is complete vs the upstream SurrealDB.
+/// Per-table replica record counts AND content hashes. Used by `spky verify`
+/// to confirm the snapshot is complete and identical-by-content vs the
+/// upstream SurrealDB and each SSP's circuit store.
 async fn snapshot_check(
     State(state): State<MetricsState>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let counts = {
+    let (counts, hashes) = {
         let replica = state.replica.read().await;
-        replica.record_counts_per_table().await
+        let counts = replica.record_counts_per_table().await;
+        let hashes = replica.snapshot_hashes().clone();
+        (counts, hashes)
     };
     let pending = pending_events_snapshot(&state.ingest).await;
     match counts {
@@ -221,10 +224,15 @@ async fn snapshot_check(
                 .into_iter()
                 .map(|(t, c)| (t, serde_json::Value::from(c)))
                 .collect();
+            let hashes_value: serde_json::Map<String, serde_json::Value> = hashes
+                .into_iter()
+                .map(|(t, h)| (t, serde_json::Value::String(h)))
+                .collect();
             (
                 StatusCode::OK,
                 Json(serde_json::json!({
                     "tables": tables,
+                    "hashes": hashes_value,
                     "total_records": total,
                     "snapshot_seq": pending.snapshot_seq,
                     "latest_seq": pending.latest_seq,

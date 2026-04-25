@@ -18,7 +18,9 @@
   },
   "files": [
     "dist",
-    "devtools-mcp"
+    "devtools-mcp",
+    "templates/cookbook",
+    "AGENTS.md"
   ],
   "scripts": {
     "dev": "vite",
