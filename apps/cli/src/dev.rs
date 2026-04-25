@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crate::backend::{self, BackendDevConfig, BackendDevTypedConfig, DeployMode, HostingMode, ResolvedSurrealDb, ResolvedVersions, Sp00kyConfig, DEFAULT_CONFIG_PATH};
+use crate::backend::{self, BackendDevConfig, BackendDevTypedConfig, DeployEnv, DeployMode, HostingMode, ResolvedSurrealDb, ResolvedVersions, Sp00kyConfig, DEFAULT_CONFIG_PATH};
 use crate::migrate;
 use crate::schema_builder::{self, SchemaBuilderConfig};
 use crate::schema_diff;
@@ -57,7 +57,7 @@ pub fn run(skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bo
     // Read config from sp00ky.yml
     let config = backend::load_config(Path::new(DEFAULT_CONFIG_PATH));
     let mode = config.mode.clone().unwrap_or(DeployMode::Singlenode);
-    let versions = ResolvedVersions::from_config(&config);
+    let versions = ResolvedVersions::from_config(&config, DeployEnv::Dev);
     let resolved = config.resolved_schema();
     let resolved_surreal = config.resolved_surrealdb();
     let migrations_path = resolved.migrations.to_string_lossy().to_string();

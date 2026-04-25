@@ -497,11 +497,11 @@ impl Sp00kyConfig {
     }
 }
 
-/// Either a plain string (applies to both ssp & scheduler)
-/// or an object with individual fields.
+/// Inner shape: a string (applies to both ssp & scheduler) or `{ssp, scheduler}`.
+/// Used both as the flat `version` value and as the per-env entry inside `VersionConfig::PerEnvironment`.
 #[derive(Debug, Deserialize, Serialize, Clone)]
-#[serde(untagged)]
-pub enum VersionConfig {
+#[serde(untagged, deny_unknown_fields)]
+pub enum VersionSpec {
     All(String),
     Individual {
         #[serde(default)]
@@ -509,6 +509,81 @@ pub enum VersionConfig {
         #[serde(default)]
         scheduler: Option<String>,
     },
+}
+
+/// Either a single spec applied everywhere, or one spec per environment.
+/// Custom (de)serialize disambiguates `{ssp, scheduler}` from `{dev, cloud}` by key inspection,
+/// mirroring `EnvConfig`.
+#[derive(Debug, Clone)]
+pub enum VersionConfig {
+    Single(VersionSpec),
+    PerEnvironment {
+        dev: Option<VersionSpec>,
+        cloud: Option<VersionSpec>,
+    },
+}
+
+impl Serialize for VersionConfig {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        match self {
+            VersionConfig::Single(s) => s.serialize(serializer),
+            VersionConfig::PerEnvironment { dev, cloud } => {
+                use serde::ser::SerializeMap;
+                let mut map = serializer.serialize_map(None)?;
+                if let Some(d) = dev { map.serialize_entry("dev", d)?; }
+                if let Some(c) = cloud { map.serialize_entry("cloud", c)?; }
+                map.end()
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for VersionConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let value = serde_yaml::Value::deserialize(deserializer)?;
+        match &value {
+            serde_yaml::Value::String(_) => {
+                let spec: VersionSpec = serde_yaml::from_value(value)
+                    .map_err(serde::de::Error::custom)?;
+                Ok(VersionConfig::Single(spec))
+            }
+            serde_yaml::Value::Mapping(m) => {
+                // If the object has ONLY "dev" and/or "cloud" keys → PerEnvironment.
+                let keys: Vec<&str> = m.keys().filter_map(|k| k.as_str()).collect();
+                let is_per_env = !keys.is_empty()
+                    && keys.iter().all(|k| *k == "dev" || *k == "cloud");
+
+                if is_per_env {
+                    let dev_key = serde_yaml::Value::String("dev".into());
+                    let cloud_key = serde_yaml::Value::String("cloud".into());
+                    let dev = m.get(&dev_key)
+                        .map(|v| serde_yaml::from_value::<VersionSpec>(v.clone()))
+                        .transpose()
+                        .map_err(serde::de::Error::custom)?;
+                    let cloud = m.get(&cloud_key)
+                        .map(|v| serde_yaml::from_value::<VersionSpec>(v.clone()))
+                        .transpose()
+                        .map_err(serde::de::Error::custom)?;
+                    Ok(VersionConfig::PerEnvironment { dev, cloud })
+                } else {
+                    // Empty map or other keys → fall through to VersionSpec::Individual,
+                    // whose `deny_unknown_fields` will reject typos.
+                    let spec: VersionSpec = serde_yaml::from_value(value)
+                        .map_err(serde::de::Error::custom)?;
+                    Ok(VersionConfig::Single(spec))
+                }
+            }
+            _ => Err(serde::de::Error::custom("version must be a string or map")),
+        }
+    }
+}
+
+/// Which environment a `from_config` call is resolving versions for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // `Cloud` is reserved; cloud.rs does not yet read versions.
+pub enum DeployEnv {
+    Dev,
+    Cloud,
 }
 
 const DEFAULT_SURREALDB_VERSION: &str = "v3.0.0";
@@ -535,16 +610,27 @@ impl Default for ResolvedVersions {
 }
 
 impl ResolvedVersions {
-    /// Resolve versions:
+    /// Resolve versions for the given deploy environment:
     /// - `surrealdb`: from top-level `surrealdb` field, else default
-    /// - `version: "tag"` → sets both ssp & scheduler to "tag"
-    /// - `version: { ssp: "...", scheduler: "..." }` → individual control, defaults for missing
-    pub fn from_config(config: &Sp00kyConfig) -> Self {
+    /// - `version: "tag"` → sets both ssp & scheduler to "tag" for all envs
+    /// - `version: { ssp, scheduler }` → individual control, applies to all envs
+    /// - `version: { dev: ..., cloud: ... }` → per-env override; missing key for the
+    ///   requested env falls back to defaults (same as no `version` field).
+    pub fn from_config(config: &Sp00kyConfig, env: DeployEnv) -> Self {
         let surrealdb = config.resolved_surrealdb().version;
 
-        let (ssp, scheduler) = match &config.version {
-            Some(VersionConfig::All(v)) => (v.clone(), v.clone()),
-            Some(VersionConfig::Individual { ssp, scheduler }) => (
+        let spec: Option<&VersionSpec> = match &config.version {
+            None => None,
+            Some(VersionConfig::Single(s)) => Some(s),
+            Some(VersionConfig::PerEnvironment { dev, cloud }) => match env {
+                DeployEnv::Dev => dev.as_ref(),
+                DeployEnv::Cloud => cloud.as_ref(),
+            },
+        };
+
+        let (ssp, scheduler) = match spec {
+            Some(VersionSpec::All(v)) => (v.clone(), v.clone()),
+            Some(VersionSpec::Individual { ssp, scheduler }) => (
                 ssp.clone().unwrap_or_else(|| DEFAULT_SSP_VERSION.to_string()),
                 scheduler.clone().unwrap_or_else(|| DEFAULT_SCHEDULER_VERSION.to_string()),
             ),
@@ -965,5 +1051,105 @@ impl BackendProcessor {
         println!("  + Parsed OpenAPI spec from {:?}", spec_path);
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::*;
+
+    fn parse(yaml: &str) -> Sp00kyConfig {
+        serde_yaml::from_str(yaml).expect("yaml parse")
+    }
+
+    fn try_parse(yaml: &str) -> std::result::Result<Sp00kyConfig, serde_yaml::Error> {
+        serde_yaml::from_str(yaml)
+    }
+
+    fn resolve(yaml: &str, env: DeployEnv) -> (String, String) {
+        let cfg = parse(yaml);
+        let r = ResolvedVersions::from_config(&cfg, env);
+        (r.ssp, r.scheduler)
+    }
+
+    #[test]
+    fn flat_string_applies_to_both_envs() {
+        assert_eq!(resolve("version: canary\n", DeployEnv::Dev), ("canary".into(), "canary".into()));
+        assert_eq!(resolve("version: canary\n", DeployEnv::Cloud), ("canary".into(), "canary".into()));
+    }
+
+    #[test]
+    fn per_service_object_applies_to_both_envs() {
+        let yaml = "version: { ssp: a, scheduler: b }\n";
+        assert_eq!(resolve(yaml, DeployEnv::Dev), ("a".into(), "b".into()));
+        assert_eq!(resolve(yaml, DeployEnv::Cloud), ("a".into(), "b".into()));
+    }
+
+    #[test]
+    fn per_service_partial_fills_with_defaults() {
+        let yaml = "version: { ssp: a }\n";
+        assert_eq!(resolve(yaml, DeployEnv::Dev), ("a".into(), "canary".into()));
+    }
+
+    #[test]
+    fn per_env_strings() {
+        let yaml = "version:\n  dev: dev\n  cloud: canary\n";
+        assert_eq!(resolve(yaml, DeployEnv::Dev), ("dev".into(), "dev".into()));
+        assert_eq!(resolve(yaml, DeployEnv::Cloud), ("canary".into(), "canary".into()));
+    }
+
+    #[test]
+    fn per_env_with_per_service() {
+        let yaml = "version:\n  dev: { ssp: x, scheduler: y }\n  cloud: canary\n";
+        assert_eq!(resolve(yaml, DeployEnv::Dev), ("x".into(), "y".into()));
+        assert_eq!(resolve(yaml, DeployEnv::Cloud), ("canary".into(), "canary".into()));
+    }
+
+    #[test]
+    fn per_env_missing_dev_falls_back_to_defaults() {
+        let yaml = "version:\n  cloud: canary\n";
+        assert_eq!(resolve(yaml, DeployEnv::Dev), ("canary".into(), "canary".into()));
+        assert_eq!(resolve(yaml, DeployEnv::Cloud), ("canary".into(), "canary".into()));
+    }
+
+    #[test]
+    fn no_version_uses_defaults() {
+        assert_eq!(resolve("apps: {}\n", DeployEnv::Dev), ("canary".into(), "canary".into()));
+    }
+
+    #[test]
+    fn unknown_key_in_per_service_errors() {
+        // `bogus` isn't a valid VersionSpec::Individual field; deny_unknown_fields rejects it.
+        let yaml = "version: { ssp: x, bogus: y }\n";
+        assert!(try_parse(yaml).is_err());
+    }
+
+    #[test]
+    fn mixed_keys_error() {
+        // Not a subset of {dev, cloud}, falls through to VersionSpec::Individual which rejects `dev`.
+        let yaml = "version: { ssp: x, dev: y }\n";
+        assert!(try_parse(yaml).is_err());
+    }
+
+    #[test]
+    fn round_trip_serialize_flat_string() {
+        let cfg = parse("version: canary\n");
+        let out = serde_yaml::to_string(&cfg.version).unwrap();
+        assert_eq!(out.trim(), "canary");
+    }
+
+    #[test]
+    fn round_trip_serialize_per_env() {
+        let cfg = parse("version:\n  dev: dev\n  cloud: canary\n");
+        let out = serde_yaml::to_string(&cfg.version).unwrap();
+        // Round-trips back to a parseable PerEnvironment structure.
+        let reparsed: VersionConfig = serde_yaml::from_str(&out).unwrap();
+        match reparsed {
+            VersionConfig::PerEnvironment { dev, cloud } => {
+                assert!(matches!(dev, Some(VersionSpec::All(ref s)) if s == "dev"));
+                assert!(matches!(cloud, Some(VersionSpec::All(ref s)) if s == "canary"));
+            }
+            _ => panic!("expected PerEnvironment, got {:?}", reparsed),
+        }
     }
 }
