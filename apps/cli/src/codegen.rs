@@ -290,6 +290,9 @@ impl CodeGenerator {
         let schema: serde_json::Value = serde_json::from_str(json_schema_content)
             .context("Failed to parse JSON schema")?;
 
+        // Pre-compute relationships so per-table JSDoc can summarize them
+        let table_relationships = self.extract_table_relationships(&schema)?;
+
         // Build tables array - start without empty line prefix
         let mut tables_lines = vec![
             "export const schema = {".to_string(),
@@ -302,6 +305,12 @@ impl CodeGenerator {
                 for (table_name, table_def) in defs_obj {
                     if table_name == "Relationships" || table_name == "RelationTables" || table_name == "Access" || table_name == "Buckets" || table_name.starts_with("_00_") {
                         continue;
+                    }
+
+                    // Per-table JSDoc — surfaces relationships and a useQuery example so
+                    // hover-docs in IDEs and LLM reads of this file get inline context.
+                    for line in self.table_jsdoc_lines(table_name, table_relationships.get(table_name)) {
+                        tables_lines.push(line);
                     }
 
                     tables_lines.push("    {".to_string());
@@ -320,8 +329,27 @@ impl CodeGenerator {
                                 let is_datetime = col_def.get("x-is-datetime")
                                     .and_then(|v| v.as_bool())
                                     .unwrap_or(false);
+                                let crdt_variant = col_def.get("x-crdt")
+                                    .and_then(|v| v.as_str())
+                                    .filter(|s| !s.is_empty());
+                                let is_parent = col_def.get("x-parent").is_some();
 
                                 let clean_col_name = col_name.replace("`", "");
+
+                                // Per-column JSDoc — explains semantics that aren't obvious
+                                // from the runtime flags alone (CRDT requires useCrdtField,
+                                // @parent fields are auto-populated, etc.).
+                                for line in self.column_jsdoc_lines(
+                                    &clean_col_name,
+                                    col_type,
+                                    is_optional,
+                                    is_record_id,
+                                    is_datetime,
+                                    crdt_variant,
+                                    is_parent,
+                                ) {
+                                    tables_lines.push(line);
+                                }
 
                                 let mut flags = Vec::new();
                                 if is_record_id {
@@ -330,10 +358,8 @@ impl CodeGenerator {
                                 if is_datetime {
                                     flags.push("dateTime: true".to_string());
                                 }
-                                if let Some(crdt) = col_def.get("x-crdt").and_then(|v| v.as_str()) {
-                                    if !crdt.is_empty() {
-                                        flags.push(format!("crdt: '{}' as const", crdt));
-                                    }
+                                if let Some(crdt) = crdt_variant {
+                                    flags.push(format!("crdt: '{}' as const", crdt));
                                 }
 
                                 if flags.is_empty() {
@@ -360,11 +386,8 @@ impl CodeGenerator {
 
         tables_lines.push("  ],".to_string());
 
-        // Build relationships array
+        // Build relationships array (reusing the table_relationships computed above for JSDoc)
         tables_lines.push("  relationships: [".to_string());
-
-        // Extract relationship data using the existing logic
-        let table_relationships = self.extract_table_relationships(&schema)?;
 
         for (table_name, rels) in &table_relationships {
             for (field_name, related_table, cardinality) in rels {
@@ -479,6 +502,89 @@ impl CodeGenerator {
         }
     }
 
+
+    /// Build JSDoc lines for a table entry in the generated `schema.tables` array.
+    /// Indented to sit at the `    {` level (4 spaces).
+    fn table_jsdoc_lines(
+        &self,
+        table_name: &str,
+        relationships: Option<&Vec<(String, String, String)>>,
+    ) -> Vec<String> {
+        let mut lines = vec!["    /**".to_string()];
+        lines.push(format!("     * `{}` table.", table_name));
+
+        if let Some(rels) = relationships {
+            if !rels.is_empty() {
+                lines.push("     *".to_string());
+                lines.push("     * Relationships:".to_string());
+                for (field, target, cardinality) in rels {
+                    lines.push(format!(
+                        "     * - `{}` → `{}` ({})",
+                        field, target, cardinality
+                    ));
+                }
+            }
+        }
+
+        lines.push("     *".to_string());
+        lines.push("     * @example".to_string());
+        lines.push(format!(
+            "     * const rows = useQuery(() => db.query('{}').orderBy('id', 'asc').limit(20).build());",
+            table_name
+        ));
+        lines.push("     */".to_string());
+        lines
+    }
+
+    /// Build JSDoc lines for a column entry inside `columns: { ... }`.
+    /// Indented to sit at the `        ` level (8 spaces).
+    fn column_jsdoc_lines(
+        &self,
+        col_name: &str,
+        col_type: &str,
+        is_optional: bool,
+        is_record_id: bool,
+        is_datetime: bool,
+        crdt_variant: Option<&str>,
+        is_parent: bool,
+    ) -> Vec<String> {
+        // Skip JSDoc for plain columns to keep generated files compact —
+        // only emit when there's something semantically interesting to say.
+        if !is_record_id && !is_datetime && crdt_variant.is_none() && !is_parent {
+            return Vec::new();
+        }
+
+        let mut lines = vec!["        /**".to_string()];
+        let optional_marker = if is_optional { "?" } else { "" };
+        lines.push(format!(
+            "         * `{}{}` — {}",
+            col_name, optional_marker, col_type
+        ));
+
+        if is_record_id {
+            lines.push("         *".to_string());
+            lines.push("         * Record ID. Pass the full `'<table>:<id>'` string when reading or writing.".to_string());
+        }
+        if is_datetime {
+            lines.push("         *".to_string());
+            lines.push("         * ISO-8601 datetime string.".to_string());
+        }
+        if let Some(variant) = crdt_variant {
+            lines.push("         *".to_string());
+            lines.push(format!(
+                "         * `@crdt {}` — collaborative field. Read with `useCrdtField`, never `useQuery`.",
+                variant
+            ));
+            lines.push("         * Writes should pass `{ debounced: true }` to `db.update` so rapid keystrokes coalesce.".to_string());
+        }
+        if is_parent {
+            lines.push("         *".to_string());
+            lines.push("         * `@parent` — auto-populated server-side from the auth context. Do not write from client code.".to_string());
+        }
+
+        lines.push("         */".to_string());
+        lines
+    }
 
     fn map_json_schema_type_to_value_type(&self, field_def: &serde_json::Value) -> &str {
         if let Some(field_type) = field_def.get("type") {

@@ -36,9 +36,9 @@ impl SortableValue {
         let sv = match val {
             None | Some(Sp00kyValue::Null) => SortableValue::Null,
             Some(Sp00kyValue::Bool(b)) => SortableValue::Bool(*b),
-            Some(Sp00kyValue::Number(n)) => {
+            Some(v) if v.as_f64().is_some() => {
                 // Use integer representation for consistent ordering
-                SortableValue::Int((*n * 1_000_000.0) as i64)
+                SortableValue::Int((v.as_f64().unwrap() * 1_000_000.0) as i64)
             }
             Some(Sp00kyValue::Str(s)) => SortableValue::Str(s.clone()),
             _ => SortableValue::Null,

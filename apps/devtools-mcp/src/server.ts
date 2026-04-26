@@ -226,6 +226,112 @@ export function createServer(bridge: Bridge, surreal?: SurrealClient | null): Mc
     }
   );
 
+  server.tool(
+    'describe_schema',
+    'Describe all tables with columns, types, and sp00ky annotations (@crdt, @parent). Stitches INFO FOR DB with parsed schema metadata. With the browser extension this returns @crdt/@parent semantics; direct-DB mode returns raw column info only.',
+    { tabId: z.number().optional().describe('Browser tab ID') },
+    async ({ tabId }) => {
+      if (bridge.isConnected) {
+        const state = (await bridge.request(BRIDGE_METHODS.GET_STATE, {}, tabId)) as any;
+        const dbState = state?.database ?? {};
+        return json({
+          source: 'extension',
+          tables: dbState.tables ?? [],
+          relationships: dbState.relationships ?? [],
+        });
+      }
+      if (surreal) {
+        const dbInfo = (await surreal.query('INFO FOR DB;')) as any[];
+        const tablesObj =
+          dbInfo?.[0]?.result?.tables ?? dbInfo?.[0]?.tables ?? {};
+        const tableNames = Object.keys(tablesObj);
+        const tables = await Promise.all(
+          tableNames.map(async (name) => {
+            try {
+              const info = (await surreal.query(`INFO FOR TABLE \`${name}\`;`)) as any[];
+              const fieldsObj = info?.[0]?.result?.fields ?? info?.[0]?.fields ?? {};
+              const columns = Object.entries(fieldsObj).map(([fname, def]) => ({
+                name: fname,
+                definition: typeof def === 'string' ? def : JSON.stringify(def),
+              }));
+              return { name, columns };
+            } catch (e) {
+              return { name, columns: [], error: e instanceof Error ? e.message : String(e) };
+            }
+          })
+        );
+        return json({
+          source: 'direct-db',
+          note: '@crdt / @parent annotations are not visible in direct-DB mode; connect the browser extension to see them.',
+          tables,
+        });
+      }
+      throw new Error('No extension connected and no direct database configured.');
+    }
+  );
+
+  server.tool(
+    'lint_query',
+    'Validate a SurrealQL query without running it. Sends EXPLAIN <query> through the connected channel; returns parse / plan errors with location when SurrealDB provides them.',
+    {
+      query: z.string().describe('SurrealQL query to validate'),
+      target: z
+        .enum(['local', 'remote'])
+        .optional()
+        .default('remote')
+        .describe('When using the extension: lint against local (cache) or remote DB'),
+      tabId: z.number().optional().describe('Browser tab ID'),
+    },
+    async ({ query, target, tabId }) => {
+      const trimmed = query.trim().replace(/;\s*$/, '');
+      const explainQuery = /^\s*EXPLAIN\b/i.test(trimmed) ? trimmed : `EXPLAIN ${trimmed};`;
+
+      const parseError = (msg: string) => {
+        const m = msg.match(/line\s+(\d+)(?:[,\s]+col(?:umn)?\s+(\d+))?/i);
+        return {
+          ok: false,
+          errors: [
+            {
+              message: msg,
+              line: m ? Number(m[1]) : undefined,
+              column: m && m[2] ? Number(m[2]) : undefined,
+            },
+          ],
+        };
+      };
+
+      const inspectResult = (raw: unknown) => {
+        const arr = Array.isArray(raw) ? raw : [raw];
+        const errors = arr
+          .map((r: any) => (r && r.status === 'ERR' ? r.result ?? r.message : null))
+          .filter(Boolean) as string[];
+        if (errors.length > 0) {
+          return { ok: false, errors: errors.map((m) => parseError(m).errors[0]) };
+        }
+        return { ok: true, plan: arr };
+      };
+
+      try {
+        if (bridge.isConnected) {
+          const result = await bridge.request(
+            BRIDGE_METHODS.RUN_QUERY,
+            { query: explainQuery, target },
+            tabId
+          );
+          return json(inspectResult(result));
+        }
+        if (surreal) {
+          const result = await surreal.query(explainQuery);
+          return json(inspectResult(result));
+        }
+        throw new Error('No extension connected and no direct database configured.');
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return json(parseError(msg));
+      }
+    }
+  );
+
   // --- Resources ---
 
   server.resource('state', 'sp00ky://state', { description: 'Full Sp00ky DevTools state' }, async (uri) => {

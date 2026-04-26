@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crate::backend::{self, BackendDevConfig, BackendDevTypedConfig, DeployMode, HostingMode, ResolvedSurrealDb, ResolvedVersions, Sp00kyConfig, DEFAULT_CONFIG_PATH};
+use crate::backend::{self, BackendDevConfig, BackendDevTypedConfig, DeployEnv, DeployMode, HostingMode, ResolvedSurrealDb, ResolvedVersions, Sp00kyConfig, DEFAULT_CONFIG_PATH};
 use crate::migrate;
 use crate::schema_builder::{self, SchemaBuilderConfig};
 use crate::schema_diff;
@@ -21,9 +21,9 @@ const SURREAL_CONTAINER: &str = "sp00ky-dev-surrealdb";
 const SSP_CONTAINER: &str = "sp00ky-dev-ssp";
 const SCHEDULER_CONTAINER: &str = "sp00ky-dev-scheduler";
 
-const SURREAL_PORT: u16 = 8666;
-const SSP_PORT: u16 = 8667;
-const SCHEDULER_PORT: u16 = 9667;
+pub(crate) const SURREAL_PORT: u16 = 8666;
+pub(crate) const SSP_PORT: u16 = 8667;
+pub(crate) const SCHEDULER_PORT: u16 = 9667;
 const HEALTH_MAX_RETRIES: u32 = 30;
 const HEALTH_RETRY_INTERVAL: Duration = Duration::from_secs(2);
 
@@ -44,7 +44,7 @@ fn surreal_connection_url(resolved: &ResolvedSurrealDb, local_port: u16) -> Stri
 
 // ── Public entry point ──────────────────────────────────────────────────────
 
-pub fn run(skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bool) -> Result<()> {
+pub fn run(skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bool, clean: bool) -> Result<()> {
     let stop = Arc::new(AtomicBool::new(false));
     let stop_clone = stop.clone();
     ctrlc::set_handler(move || {
@@ -54,10 +54,23 @@ pub fn run(skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bo
 
     println!("{} Starting development environment...", PREFIX);
 
+    if clean {
+        let project_dir = std::env::current_dir().context("Failed to get current directory")?;
+        for sub in ["ssp_data", "scheduler_data"] {
+            let path = project_dir.join(".sp00ky").join(sub);
+            if path.exists() {
+                std::fs::remove_dir_all(&path)
+                    .with_context(|| format!("Failed to remove {}", path.display()))?;
+                println!("{} --clean: removed {}", PREFIX, path.display());
+            }
+        }
+        println!("{} --clean: SurrealDB volume preserved (use rm -rf .sp00ky/surrealdb_data for a hard reset)", PREFIX);
+    }
+
     // Read config from sp00ky.yml
     let config = backend::load_config(Path::new(DEFAULT_CONFIG_PATH));
     let mode = config.mode.clone().unwrap_or(DeployMode::Singlenode);
-    let versions = ResolvedVersions::from_config(&config);
+    let versions = ResolvedVersions::from_config(&config, DeployEnv::Dev);
     let resolved = config.resolved_schema();
     let resolved_surreal = config.resolved_surrealdb();
     let migrations_path = resolved.migrations.to_string_lossy().to_string();
@@ -296,14 +309,22 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
         let scheduler_user_env = format!("SPKY_DB_USER={}", resolved_surreal.username);
         let scheduler_pass_env = format!("SPKY_DB_PASS={}", resolved_surreal.password);
 
+        // Persist the scheduler replica + WAL to the host so `--clean` can
+        // wipe it and so it survives container restarts.
+        let scheduler_data_dir = std::env::current_dir()
+            .context("Failed to get current directory")?
+            .join(".sp00ky/scheduler_data");
+        std::fs::create_dir_all(&scheduler_data_dir).ok();
+        let scheduler_data_mount = format!("{}:/data", scheduler_data_dir.display());
+
         println!("{} Phase 5: Starting scheduler...", PREFIX);
         docker(&[
             "run", "-d",
-            "--platform", "linux/amd64",
             "--name", SCHEDULER_CONTAINER,
             "--network", NETWORK_NAME,
             "--network-alias", "scheduler",
             "-p", &scheduler_port_mapping,
+            "-v", &scheduler_data_mount,
             "-e", "RUST_LOG=info",
             "-e", &scheduler_db_url_env,
             "-e", &scheduler_db_ws_env,
@@ -315,9 +336,13 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
             &scheduler_image,
         ])?;
 
-        println!("{} Waiting for scheduler health...", PREFIX);
+        // Wait for /health/ready, which only flips to 200 after the scheduler
+        // finishes cloning the upstream SurrealDB into its replica. Without
+        // this gate, SSP boots in Phase 6 against an empty replica and
+        // computes wrong list_refs.
+        println!("{} Waiting for scheduler to clone replica from SurrealDB...", PREFIX);
         wait_for_health(
-            &format!("http://localhost:{}/metrics", SCHEDULER_PORT),
+            &format!("http://localhost:{}/health/ready", SCHEDULER_PORT),
             HEALTH_MAX_RETRIES,
             HEALTH_RETRY_INTERVAL,
             stop,
@@ -360,7 +385,6 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
 
     let mut ssp_args = vec![
         "run", "-d",
-        "--platform", "linux/amd64",
         "--name", SSP_CONTAINER,
         "--network", NETWORK_NAME,
         "--network-alias", "ssp",

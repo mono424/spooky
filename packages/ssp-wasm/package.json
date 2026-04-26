@@ -4,7 +4,8 @@
   "main": "pkg/ssp_wasm.js",
   "types": "pkg/ssp_wasm.d.ts",
   "files": [
-    "pkg"
+    "pkg",
+    "AGENTS.md"
   ],
   "repository": {
     "type": "git",

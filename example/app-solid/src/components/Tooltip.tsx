@@ -4,9 +4,22 @@ import { createSignal, Show, onCleanup } from 'solid-js';
 interface TooltipProps {
   text: string;
   kbd?: string;
-  position?: 'top' | 'bottom';
+  position?: 'top' | 'bottom' | 'left' | 'right';
   children: JSX.Element;
 }
+
+const positionClass = (pos: 'top' | 'bottom' | 'left' | 'right') => {
+  switch (pos) {
+    case 'top':
+      return 'left-1/2 -translate-x-1/2 bottom-full mb-2';
+    case 'bottom':
+      return 'left-1/2 -translate-x-1/2 top-full mt-2';
+    case 'left':
+      return 'top-1/2 -translate-y-1/2 right-full mr-2';
+    case 'right':
+      return 'top-1/2 -translate-y-1/2 left-full ml-2';
+  }
+};
 
 export function Tooltip(props: TooltipProps) {
   const [visible, setVisible] = createSignal(false);
@@ -34,9 +47,7 @@ export function Tooltip(props: TooltipProps) {
       {props.children}
       <Show when={visible()}>
         <div
-          class={`absolute left-1/2 -translate-x-1/2 z-[200] pointer-events-none ${
-            pos() === 'top' ? 'bottom-full mb-2' : 'top-full mt-2'
-          }`}
+          class={`absolute z-[200] pointer-events-none ${positionClass(pos())}`}
           style="animation: tooltip-enter 0.18s cubic-bezier(0.16, 1, 0.3, 1) forwards"
         >
           <div

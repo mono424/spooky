@@ -1,8 +1,8 @@
-import { createSignal, For, Show } from 'solid-js';
+import { createEffect, createSignal, For, Show } from 'solid-js';
 import { useNavigate, useParams } from '@solidjs/router';
 import { CommentForm } from './CommentForm';
 import type { SyncedDb } from '@spooky-sync/client-solid';
-import { useQuery, useDb, useCrdtField } from '@spooky-sync/client-solid';
+import { RecordId, useQuery, useDb, useCrdtField } from '@spooky-sync/client-solid';
 import { useAuth } from '../lib/auth';
 import { CommentBox } from './CommentBox';
 import { ThreadSidebar } from './ThreadSidebar';
@@ -12,6 +12,21 @@ import type { schema } from '../schema.gen';
 import { ProfilePicture } from './ProfilePicture';
 import { Tooltip } from './Tooltip';
 import { CollaborativeEditor } from './CollaborativeEditor';
+import { ShareDialog } from './ShareDialog';
+
+interface CollaboratorRow {
+  relationId: string;
+  user: { id: string; username?: string; profile_picture?: string | null };
+}
+
+const parseRecordId = (id: string): RecordId => {
+  const idx = id.indexOf(':');
+  if (idx <= 0) throw new Error(`Invalid record id: ${id}`);
+  return new RecordId(id.slice(0, idx), id.slice(idx + 1));
+};
+
+const stringifyId = (v: any): string =>
+  typeof v === 'string' ? v : v instanceof RecordId ? v.toString() : v ? String(v) : '';
 
 const createQuery = (
   db: SyncedDb<typeof schema>,
@@ -107,6 +122,53 @@ export function ThreadDetail() {
     return threadData.author.id === currentUser.id;
   };
 
+  const [collaborators, setCollaborators] = createSignal<CollaboratorRow[]>([]);
+  const [shareOpen, setShareOpen] = createSignal(false);
+
+  const refreshCollaborators = async (threadId: string) => {
+    try {
+      const result = await db.useRemote(async (s) =>
+        s.query<[Array<{ id: any; user: any }>]>(
+          'SELECT id, in.* AS user FROM collaborates_on WHERE out = $t',
+          { t: parseRecordId(threadId) }
+        )
+      );
+      const rows = result?.[0] ?? [];
+      setCollaborators(
+        rows
+          .filter((r) => r.user)
+          .map((r) => ({
+            relationId: stringifyId(r.id),
+            user: { ...r.user, id: stringifyId(r.user.id) },
+          }))
+      );
+    } catch (e) {
+      console.error('[ThreadDetail] failed to load collaborators', e);
+    }
+  };
+
+  createEffect(() => {
+    const t = thread()?.id;
+    if (t) refreshCollaborators(t);
+  });
+
+  const canEdit = () => {
+    if (isAuthor()) return true;
+    const me = auth.user()?.id;
+    if (!me) return false;
+    return collaborators().some((c) => c.user.id === me);
+  };
+
+  const removeCollaborator = async (relationId: string) => {
+    try {
+      await db.useRemote(async (s) => s.delete(parseRecordId(relationId)));
+      const t = thread()?.id;
+      if (t) await refreshCollaborators(t);
+    } catch (e) {
+      console.error('[ThreadDetail] failed to remove collaborator', e);
+    }
+  };
+
   // CRDT fields for collaborative editing
   const titleCrdtField = useCrdtField(
     'thread',
@@ -123,13 +185,13 @@ export function ThreadDetail() {
 
   const handleTitleChange = async (newTitle: string) => {
     const threadData = thread();
-    if (!threadData || !threadData.id || !isAuthor()) return;
+    if (!threadData || !threadData.id || !canEdit()) return;
     await db.update('thread', threadData.id, { title: newTitle }, { debounced: true });
   };
 
   const handleContentChange = async (newContent: string) => {
     const threadData = thread();
-    if (!threadData || !threadData.id || !isAuthor()) return;
+    if (!threadData || !threadData.id || !canEdit()) return;
     await db.update(
       'thread',
       threadData.id,
@@ -239,152 +301,183 @@ export function ThreadDetail() {
                           Author
                         </span>
                       </Show>
+
+                      <div
+                        class={`flex items-center gap-2 ${isAuthor() ? '' : 'ml-auto'}`}
+                      >
+                        <Show when={collaborators().length > 0}>
+                          <div class="flex -space-x-2">
+                            <For each={collaborators()}>
+                              {(c) => (
+                                <div class="relative group">
+                                  <Tooltip text={c.user.username || 'Collaborator'}>
+                                    <div class="ring-2 ring-zinc-950 rounded-full">
+                                      <ProfilePicture
+                                        src={() => c.user.profile_picture}
+                                        username={() => c.user.username}
+                                        size="sm"
+                                      />
+                                    </div>
+                                  </Tooltip>
+                                  <Show when={isAuthor()}>
+                                    <button
+                                      onMouseDown={() => removeCollaborator(c.relationId)}
+                                      class="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-zinc-900 border border-white/[0.06] text-zinc-500 hover:text-red-400 text-[10px] leading-none opacity-0 group-hover:opacity-100 transition-opacity"
+                                      title="Remove collaborator"
+                                      aria-label="Remove collaborator"
+                                    >
+                                      ×
+                                    </button>
+                                  </Show>
+                                </div>
+                              )}
+                            </For>
+                          </div>
+                        </Show>
+                        <Show when={isAuthor()}>
+                          <button
+                            onMouseDown={() => setShareOpen(true)}
+                            class="text-xs font-medium bg-surface hover:bg-surface-hover border border-white/[0.06] text-zinc-300 hover:text-white px-3 py-1 rounded-md transition-colors duration-150"
+                          >
+                            Share
+                          </button>
+                        </Show>
+                      </div>
                     </div>
 
                     {/* Title + Content card */}
                     <div class="bg-surface/40 rounded-xl border border-white/[0.06] p-6">
-                      <Show
-                        when={isAuthor()}
-                        fallback={
-                          <>
-                            <h1 class="text-2xl font-semibold mb-4 leading-tight">
-                              {threadData().title || 'Untitled'}
-                            </h1>
-                            <div class="text-[15px] text-zinc-400 whitespace-pre-wrap leading-relaxed min-h-[80px]">
-                              {threadData().content || 'No content yet...'}
+                      {/* Title Suggestion */}
+                      <Show when={isAuthor() && threadData().title_suggestion}>
+                        <div class="mb-4 bg-zinc-800/50 border border-white/[0.06] rounded-lg p-4">
+                          <div class="flex justify-between items-start mb-2">
+                            <span class="text-xs font-medium text-zinc-400 flex items-center gap-1.5">
+                              <svg
+                                class="w-3.5 h-3.5"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                              >
+                                <path
+                                  stroke-linecap="round"
+                                  stroke-linejoin="round"
+                                  stroke-width="2"
+                                  d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"
+                                />
+                              </svg>
+                              AI title suggestion
+                            </span>
+                            <div class="flex gap-2">
+                              <button
+                                // oxlint-disable-next-line no-non-null-assertion
+                                onMouseDown={() =>
+                                  handleAcceptTitle(threadData().title_suggestion!)
+                                }
+                                class="text-xs font-medium bg-surface hover:bg-surface-hover border border-white/[0.06] text-zinc-300 hover:text-white px-3 py-1 rounded-md transition-colors duration-150"
+                              >
+                                Accept
+                              </button>
+                              <button
+                                onMouseDown={() => handleDeclineTitle()}
+                                class="text-xs font-medium text-zinc-500 hover:text-white px-3 py-1 transition-colors duration-150"
+                              >
+                                Dismiss
+                              </button>
                             </div>
-                          </>
+                          </div>
+                          <div class="text-lg font-semibold text-white">
+                            {threadData().title_suggestion}
+                          </div>
+                        </div>
+                      </Show>
+
+                      {/* Title (CRDT for everyone, editable only for author) */}
+                      <Show
+                        when={titleCrdtField()}
+                        fallback={
+                          <h1 class="text-2xl font-semibold mb-4 leading-tight">
+                            {threadData().title || 'Untitled'}
+                          </h1>
                         }
                       >
-                        {/* Title Suggestion */}
-                        <Show when={threadData().title_suggestion}>
-                          <div class="mb-4 bg-zinc-800/50 border border-white/[0.06] rounded-lg p-4">
-                            <div class="flex justify-between items-start mb-2">
-                              <span class="text-xs font-medium text-zinc-400 flex items-center gap-1.5">
-                                <svg
-                                  class="w-3.5 h-3.5"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  viewBox="0 0 24 24"
-                                >
-                                  <path
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                    stroke-width="2"
-                                    d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"
-                                  />
-                                </svg>
-                                AI title suggestion
-                              </span>
-                              <div class="flex gap-2">
-                                <button
-                                  // oxlint-disable-next-line no-non-null-assertion
-                                  onMouseDown={() =>
-                                    handleAcceptTitle(threadData().title_suggestion!)
-                                  }
-                                  class="text-xs font-medium bg-surface hover:bg-surface-hover border border-white/[0.06] text-zinc-300 hover:text-white px-3 py-1 rounded-md transition-colors duration-150"
-                                >
-                                  Accept
-                                </button>
-                                <button
-                                  onMouseDown={() => handleDeclineTitle()}
-                                  class="text-xs font-medium text-zinc-500 hover:text-white px-3 py-1 transition-colors duration-150"
-                                >
-                                  Dismiss
-                                </button>
-                              </div>
-                            </div>
-                            <div class="text-lg font-semibold text-white">
-                              {threadData().title_suggestion}
-                            </div>
-                          </div>
-                        </Show>
+                        {(field) => (
+                          <CollaborativeEditor
+                            field={field()}
+                            content={threadData().title}
+                            placeholder="Untitled"
+                            class="text-2xl font-semibold mb-4 leading-tight [&_.ProseMirror]:outline-none"
+                            editable={canEdit()}
+                            singleLine
+                            username={auth.user()?.username}
+                            onUpdate={(text) => handleTitleChange(text)}
+                          />
+                        )}
+                      </Show>
 
-                        {/* Editable Title (CRDT) */}
-                        <Show
-                          when={titleCrdtField()}
-                          fallback={
-                            <div class="text-2xl font-semibold mb-4 leading-tight text-zinc-500">Loading...</div>
-                          }
-                        >
-                          {(field) => (
-                            <CollaborativeEditor
-                              field={field()}
-                              content={threadData().title}
-                              placeholder="Untitled"
-                              class="text-2xl font-semibold mb-4 leading-tight [&_.ProseMirror]:outline-none"
-                              editable={isAuthor()}
-                              singleLine
-
-                              username={auth.user()?.username}
-                              onUpdate={(text) => handleTitleChange(text)}
-                            />
-                          )}
-                        </Show>
-
-                        {/* Content Suggestion */}
-                        <Show when={threadData().content_suggestion}>
-                          <div class="mb-4 bg-zinc-800/50 border border-white/[0.06] rounded-lg p-4">
-                            <div class="flex justify-between items-start mb-2">
-                              <span class="text-xs font-medium text-zinc-400 flex items-center gap-1.5">
-                                <svg
-                                  class="w-3.5 h-3.5"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  viewBox="0 0 24 24"
-                                >
-                                  <path
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                    stroke-width="2"
-                                    d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"
-                                  />
-                                </svg>
-                                AI content suggestion
-                              </span>
-                              <div class="flex gap-2">
-                                <button
-                                  // oxlint-disable-next-line no-non-null-assertion
-                                  onMouseDown={() =>
-                                    handleAcceptContent(threadData().content_suggestion!)
-                                  }
-                                  class="text-xs font-medium bg-surface hover:bg-surface-hover border border-white/[0.06] text-zinc-300 hover:text-white px-3 py-1 rounded-md transition-colors duration-150"
-                                >
-                                  Accept
-                                </button>
-                                <button
-                                  onMouseDown={() => handleDeclineContent()}
-                                  class="text-xs font-medium text-zinc-500 hover:text-white px-3 py-1 transition-colors duration-150"
-                                >
-                                  Dismiss
-                                </button>
-                              </div>
-                            </div>
-                            <div class="text-sm text-zinc-300 whitespace-pre-wrap leading-relaxed">
-                              {threadData().content_suggestion}
+                      {/* Content Suggestion */}
+                      <Show when={isAuthor() && threadData().content_suggestion}>
+                        <div class="mb-4 bg-zinc-800/50 border border-white/[0.06] rounded-lg p-4">
+                          <div class="flex justify-between items-start mb-2">
+                            <span class="text-xs font-medium text-zinc-400 flex items-center gap-1.5">
+                              <svg
+                                class="w-3.5 h-3.5"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                              >
+                                <path
+                                  stroke-linecap="round"
+                                  stroke-linejoin="round"
+                                  stroke-width="2"
+                                  d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"
+                                />
+                              </svg>
+                              AI content suggestion
+                            </span>
+                            <div class="flex gap-2">
+                              <button
+                                // oxlint-disable-next-line no-non-null-assertion
+                                onMouseDown={() =>
+                                  handleAcceptContent(threadData().content_suggestion!)
+                                }
+                                class="text-xs font-medium bg-surface hover:bg-surface-hover border border-white/[0.06] text-zinc-300 hover:text-white px-3 py-1 rounded-md transition-colors duration-150"
+                              >
+                                Accept
+                              </button>
+                              <button
+                                onMouseDown={() => handleDeclineContent()}
+                                class="text-xs font-medium text-zinc-500 hover:text-white px-3 py-1 transition-colors duration-150"
+                              >
+                                Dismiss
+                              </button>
                             </div>
                           </div>
-                        </Show>
+                          <div class="text-sm text-zinc-300 whitespace-pre-wrap leading-relaxed">
+                            {threadData().content_suggestion}
+                          </div>
+                        </div>
+                      </Show>
 
-                        {/* Editable Content */}
-                        <Show
-                          when={contentCrdtField()}
-                          fallback={
-                            <div class="text-[15px] text-zinc-500 min-h-[120px]">Loading...</div>
-                          }
-                        >
-                          {(field) => (
-                            <CollaborativeEditor
-                              field={field()}
-                              content={threadData().content}
-                              placeholder="Write something..."
-                              class="text-[15px] text-zinc-300 focus-within:text-white leading-relaxed min-h-[120px] [&_.ProseMirror]:outline-none [&_.ProseMirror]:min-h-[120px]"
-                              editable={isAuthor()}
-                              username={auth.user()?.username}
-                              onUpdate={(text) => handleContentChange(text)}
-                            />
-                          )}
-                        </Show>
+                      {/* Content (CRDT for everyone, editable only for author) */}
+                      <Show
+                        when={contentCrdtField()}
+                        fallback={
+                          <div class="text-[15px] text-zinc-400 whitespace-pre-wrap leading-relaxed min-h-[80px]">
+                            {threadData().content || 'No content yet...'}
+                          </div>
+                        }
+                      >
+                        {(field) => (
+                          <CollaborativeEditor
+                            field={field()}
+                            content={threadData().content}
+                            placeholder="Write something..."
+                            class="text-[15px] text-zinc-300 focus-within:text-white leading-relaxed min-h-[120px] [&_.ProseMirror]:outline-none [&_.ProseMirror]:min-h-[120px]"
+                            editable={canEdit()}
+                            username={auth.user()?.username}
+                            onUpdate={(text) => handleContentChange(text)}
+                          />
+                        )}
                       </Show>
                     </div>
 
@@ -419,13 +512,19 @@ export function ThreadDetail() {
                         </Tooltip>
                       </div>
 
-                      <SpookButton
-                        loading={spookifySending() || spookifyJobLoading()}
-                        loadingLabel="Processing..."
-                        onClick={handleSpookify}
+                      <Tooltip
+                        text={isAuthor() ? 'Generate AI suggestions' : 'Only the author can Spookify this thread'}
+                        position={isAuthor() ? 'bottom' : 'left'}
                       >
-                        Spookify
-                      </SpookButton>
+                        <SpookButton
+                          loading={spookifySending() || spookifyJobLoading()}
+                          loadingLabel="Processing..."
+                          onClick={handleSpookify}
+                          disabled={!isAuthor()}
+                        >
+                          Spookify
+                        </SpookButton>
+                      </Tooltip>
                     </div>
                   </article>
 
@@ -490,6 +589,14 @@ export function ThreadDetail() {
           </div>
         </div>
       </div>
+
+      <Show when={thread()?.id}>
+        <ShareDialog
+          threadId={thread()!.id}
+          isOpen={shareOpen()}
+          onClose={() => setShareOpen(false)}
+        />
+      </Show>
     </div>
   );
 }

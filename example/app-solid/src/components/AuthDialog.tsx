@@ -16,6 +16,7 @@ export function AuthDialog(props: AuthDialogProps) {
   const [password, setPassword] = createSignal('');
   const [error, setError] = createSignal('');
   const [isLoading, setIsLoading] = createSignal(false);
+  let usernameInput: HTMLInputElement | undefined;
 
   createEffect(() => {
     if (props.isOpen) {
@@ -23,6 +24,7 @@ export function AuthDialog(props: AuthDialogProps) {
       setError('');
       setUsername('');
       setPassword('');
+      queueMicrotask(() => usernameInput?.focus());
     }
   });
 
@@ -88,6 +90,7 @@ export function AuthDialog(props: AuthDialogProps) {
                   Username
                 </label>
                 <input
+                  ref={usernameInput}
                   id="username"
                   type="text"
                   value={username()}

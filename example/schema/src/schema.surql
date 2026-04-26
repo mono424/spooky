@@ -52,7 +52,11 @@ PERMISSIONS
 DEFINE TABLE thread SCHEMAFULL
   PERMISSIONS
     FOR select WHERE true
-    FOR update, delete, create WHERE $access = "account" AND author.id = $auth.id
+    FOR create WHERE $access = "account" AND author.id = $auth.id
+    FOR update WHERE $access = "account"
+      AND (author.id = $auth.id
+           OR $auth.id IN (SELECT VALUE in FROM collaborates_on WHERE out = $parent.id))
+    FOR delete WHERE $access = "account" AND author.id = $auth.id
 ;
 
 -- @crdt text
@@ -105,3 +109,32 @@ DEFINE TABLE commented_on SCHEMAFULL TYPE RELATION
 DEFINE EVENT comment_created ON TABLE comment WHEN $event = "CREATE" THEN
   RELATE ($after.id)->commented_on->($after.thread)
 ;
+
+-- ##################################################################
+-- COLLABORATORS
+-- ##################################################################
+
+DEFINE TABLE thread_invite SCHEMAFULL
+  PERMISSIONS
+    FOR select WHERE true
+    FOR create, delete WHERE $access = "account" AND thread.author.id = $auth.id
+    FOR update WHERE false;
+
+DEFINE FIELD thread     ON TABLE thread_invite TYPE record<thread>;
+DEFINE FIELD token      ON TABLE thread_invite TYPE string
+  ASSERT $value != NONE AND string::len($value) >= 16;
+DEFINE FIELD created_by ON TABLE thread_invite TYPE record<user> VALUE $auth.id;
+DEFINE FIELD created_at ON TABLE thread_invite TYPE datetime VALUE time::now();
+DEFINE INDEX unique_invite_token ON TABLE thread_invite FIELDS token UNIQUE;
+
+DEFINE TABLE collaborates_on SCHEMAFULL TYPE RELATION FROM user TO thread
+  PERMISSIONS
+    FOR select WHERE true
+    FOR create WHERE $access = "account"
+      AND in = $auth.id
+      AND $parent.out IN (SELECT VALUE thread FROM thread_invite)
+    FOR delete WHERE $access = "account"
+      AND (in.id = $auth.id OR out.author.id = $auth.id)
+    FOR update WHERE false;
+
+DEFINE INDEX unique_collab ON TABLE collaborates_on FIELDS in, out UNIQUE;

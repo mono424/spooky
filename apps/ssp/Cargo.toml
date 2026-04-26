@@ -9,7 +9,7 @@ axum = "0.7"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 surrealdb = { version = "3.0.0", features = ["protocol-ws", "protocol-http"] }
-tokio = { version = "1.0", features = ["full"] }
+tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "sync", "time", "signal", "net", "io-util"] }
 ssp = { path = "../../packages/ssp" }
 job-runner = { path = "../../packages/job-runner" }
 ssp-protocol = { path = "../../packages/ssp-protocol" }
@@ -27,6 +27,10 @@ dotenvy = "0.15.7"
 reqwest = { version = "0.12", features = ["json"] }
 uuid = { version = "1.0", features = ["v4"] }
 hostname = "0.4"
+
+loro = "1"
+lru = "0.12"
+base64 = "0.22"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

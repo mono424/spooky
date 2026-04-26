@@ -1,9 +1,9 @@
-export function SpookButton(p: { loading: boolean; loadingLabel?: string; onClick: () => void; label?: string; children?: any }) {
+export function SpookButton(p: { loading: boolean; loadingLabel?: string; onClick: () => void; label?: string; children?: any; disabled?: boolean }) {
   return (
     <button
       onClick={p.onClick}
-      disabled={p.loading}
-      class="inline-flex items-center justify-center gap-2 h-8 px-4 bg-surface hover:bg-surface-hover border border-white/[0.06] text-zinc-300 hover:text-white text-xs font-medium rounded-lg transition-all duration-150 disabled:opacity-60 disabled:cursor-wait"
+      disabled={p.loading || p.disabled}
+      class={`inline-flex items-center justify-center gap-2 h-8 px-4 bg-surface hover:bg-surface-hover border border-white/[0.06] text-zinc-300 hover:text-white text-xs font-medium rounded-lg transition-all duration-150 disabled:opacity-60 ${p.loading ? 'disabled:cursor-wait' : 'disabled:cursor-not-allowed'}`}
     >
       {p.loading ? (
         <>

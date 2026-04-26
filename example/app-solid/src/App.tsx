@@ -13,6 +13,7 @@ import Home from './routes/index';
 import ThreadPage from './routes/thread/[id]';
 import CreateThreadPage from './routes/create-thread';
 import ProfilePage from './routes/profile';
+import InvitePage from './routes/invite/[token]';
 import { ProfilePicture } from './components/ProfilePicture';
 import { Tooltip } from './components/Tooltip';
 
@@ -197,6 +198,7 @@ export default function App() {
           <Route path="/thread/:id" component={ThreadPage} />
           <Route path="/create-thread" component={CreateThreadPage} />
           <Route path="/profile" component={ProfilePage} />
+          <Route path="/invite/:token" component={InvitePage} />
         </Router>
       </AuthProvider>
     </Sp00kyProvider>
