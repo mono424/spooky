@@ -19,6 +19,17 @@ spky cloud scale --ssp 3`;
 export const code1 = `deployment:
   sspCount: 2`;
 
+export const codeLogLevelSingle = `# Single value applies everywhere
+logLevel: info`;
+
+export const codeLogLevelPerEnv = `# Per-environment: chatty locally, quiet in production
+logLevel:
+  dev: trace
+  cloud: info`;
+
+export const codeLogLevelTargets = `# Tracing-style target=level directives also work
+logLevel: info,ssp=debug,scheduler=trace`;
+
 ## Deploy
 
 <CodeBlock
@@ -75,3 +86,23 @@ You can also set the default SSP count in your `sp00ky.yml`:
   code={code1}
   lang="yaml"
 />
+
+## Log Level
+
+`logLevel` in `sp00ky.yml` sets `RUST_LOG` on the Scheduler and SSP containers. Default is `info`.
+
+<CodeBlock code={codeLogLevelSingle} lang="yaml" />
+
+Use a `{ dev, cloud }` map to differ per environment:
+
+<CodeBlock code={codeLogLevelPerEnv} lang="yaml" />
+
+The value is forwarded to `tracing-subscriber`, so target-specific directives work:
+
+<CodeBlock code={codeLogLevelTargets} lang="yaml" />
+
+Each `spky cloud deploy` sends the resolved `cloud` value to Sp00ky Cloud, which restarts the Scheduler and SSP containers with the new `RUST_LOG`. Use `--upgrade` if you also want fresh base images at the same time.
+
+<Note>
+  At <code>trace</code>, the Scheduler logs every replica query and every record it ingests during bootstrap. Useful for diagnosing "why isn't this row showing up?" — see <a href="/docs/cloud/logs">Logs & Monitoring</a>.
+</Note>

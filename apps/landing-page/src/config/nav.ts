@@ -53,6 +53,7 @@ export const docsNav = [
     title: 'Reference',
     links: [
       { text: 'Configuration', href: `${basePath}/docs/configuration` },
+      { text: 'AI Coding Agents', href: `${basePath}/docs/ai-agents` },
       { text: 'Self-Hosted Deployment', href: `${basePath}/docs/deployment` },
       { text: 'Architecture', href: `${basePath}/docs/architecture` },
       { text: 'Scheduler API', href: `${basePath}/docs/scheduler-api` },

@@ -40,6 +40,10 @@ services:
 
 export const code1 = `docker compose up -d`;
 
+export const codeDoctor = `spky doctor`;
+
+export const codeDoctorJson = `spky doctor --json`;
+
 ## Step 1: Install the CLI
 
 The Sp00ky CLI is your primary tool for generating code and managing schemas.
@@ -70,3 +74,17 @@ Alternatively, you can set up infrastructure manually with Docker Compose:
 Run it with:
 
 <CodeBlock code={code1} lang="bash" />
+
+## Step 4: Verify Your Setup
+
+Run `spky doctor` from the project root to confirm everything is wired up:
+
+<CodeBlock code={codeDoctor} lang="bash" />
+
+It checks `sp00ky.yml` parses, the schema source exists, generated `schema.gen.ts` is up to date, and the migrations directory is in place. Each failed check comes with an actionable `fix` hint (e.g. `spky generate`).
+
+For agent-driven workflows, pass `--json` for a stable, parseable contract:
+
+<CodeBlock code={codeDoctorJson} lang="bash" />
+
+Re-run `spky doctor` after every schema edit — it's the fastest feedback loop for catching codegen drift.

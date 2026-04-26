@@ -29,6 +29,17 @@ export const code2 = `![Sp00ky Status](https://api.sp00ky.cloud/v1/badge/your-pr
 
 export const code1 = `<img src="https://api.sp00ky.cloud/v1/badge/your-project-slug" alt="Sp00ky Status" />`;
 
+export const codeLogLevel = `# Bump every container to trace level
+logLevel: trace
+
+# Or split per environment
+logLevel:
+  dev: trace
+  cloud: info`;
+
+export const codeLogLevelTargets = `# RUST_LOG directives also work
+logLevel: info,ssp=debug,scheduler=trace`;
+
 ## Viewing Logs
 
 Tail logs from your cloud deployment in real time:
@@ -37,6 +48,30 @@ Tail logs from your cloud deployment in real time:
   code={code3}
   lang="bash"
 />
+
+## Setting Log Level
+
+`logLevel` in `sp00ky.yml` sets `RUST_LOG` on the Scheduler and SSP containers in both `spky dev` and `spky cloud deploy`. Default is `info`.
+
+<CodeBlock code={codeLogLevel} lang="yaml" />
+
+The value is a `tracing-subscriber` directive, so target-specific overrides work too:
+
+<CodeBlock code={codeLogLevelTargets} lang="yaml" />
+
+### What `trace` adds
+
+At `trace`, the Scheduler emits one line per replica query (proxy passthroughs, WAL applies, ad-hoc) and one line per record during the upstream-clone bootstrap (`table=… id=… fields=N`). The Scheduler also logs the resolved namespace + database it bootstraps from at `info`, so even default-level logs make the target explicit.
+
+Use it to diagnose:
+
+- "I deployed but my data isn't showing up" — confirm the Scheduler is bootstrapping from the namespace/database you expect.
+- "This live query never updates" — every query the Scheduler runs is in the trace log, so you can see what fired and what didn't.
+- Bootstrap performance regressions — per-table `fetch_ms` / `insert_ms` are logged at `info`; per-record sequence is at `trace`.
+
+<Note>
+  Trace mode is chatty — a multi-million-row bootstrap produces a line per record. Switch back to <code>info</code> with another <code>spky cloud deploy</code> once you have what you need.
+</Note>
 
 ## Status Badge
 
