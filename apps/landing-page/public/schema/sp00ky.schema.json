@@ -29,7 +29,7 @@
       ]
     },
     "version": {
-      "description": "Sp00ky service versions. A single string sets both SSP and Scheduler. An object allows individual control.",
+      "description": "Sp00ky service versions. A string sets both SSP and Scheduler everywhere. A `{ssp, scheduler}` object splits per service. A `{dev, cloud}` object splits per environment (currently only `dev` is consumed by `spky dev`; `cloud` is reserved).",
       "oneOf": [
         {
           "type": "string",
@@ -37,7 +37,7 @@
         },
         {
           "type": "object",
-          "description": "Individual version tags for SSP and Scheduler.",
+          "description": "Individual version tags for SSP and Scheduler (applies to all envs).",
           "properties": {
             "ssp": {
               "type": "string",
@@ -51,6 +51,16 @@
             }
           },
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "description": "Per-environment versions. Currently only `dev` is consumed; `cloud` is reserved.",
+          "properties": {
+            "dev":   { "$ref": "#/$defs/versionSpec" },
+            "cloud": { "$ref": "#/$defs/versionSpec" }
+          },
+          "additionalProperties": false,
+          "minProperties": 1
         }
       ]
     },
@@ -117,6 +127,20 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "versionSpec": {
+      "description": "A version tag (string) or `{ssp, scheduler}` object. Used inside per-environment version splits.",
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "object",
+          "properties": {
+            "ssp":       { "type": "string", "default": "canary" },
+            "scheduler": { "type": "string", "default": "canary" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
     "surrealdbConfig": {
       "type": "object",
       "description": "Full SurrealDB configuration.",

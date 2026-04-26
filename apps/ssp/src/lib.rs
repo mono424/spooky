@@ -10,6 +10,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -24,6 +25,7 @@ use tracing::field::Empty;
 use tracing::{Span, debug, error, info, instrument, warn};
 
 // Expose modules for use in main.rs and tests
+pub mod crdt;
 pub mod metrics;
 pub mod open_telemetry;
 
@@ -64,6 +66,7 @@ pub struct AppState {
     pub ssp_id: String,
     pub scheduler_url: Option<String>,
     pub start_time: std::time::Instant,
+    pub crdt_cache: Arc<crdt::CrdtCache>,
 }
 
 // --- Request/Response DTOs ---
@@ -121,14 +124,15 @@ pub fn load_config() -> Config {
 // --- Scheduler Registration Helper ---
 
 /// Build the SSP registration payload and POST it to the scheduler.
-/// Returns `Ok(())` on success or an error on failure.
+/// Returns the registration response (which carries `snapshot_seq` and the
+/// per-table content hashes the SSP must match after bootstrap) or an error.
 async fn register_with_scheduler(
     client: &reqwest::Client,
     scheduler_url: &str,
     ssp_id: &str,
     listen_addr: &str,
     advertise_addr: Option<&str>,
-) -> Result<(), String> {
+) -> Result<ssp_protocol::SspRegistrationResponse, String> {
     let scheduler_base = scheduler_url.trim_end_matches('/');
     let registration_url = format!("{}/ssp/register", scheduler_base);
 
@@ -163,7 +167,10 @@ async fn register_with_scheduler(
     };
 
     match client.post(&registration_url).json(&payload).send().await {
-        Ok(resp) if resp.status().is_success() => Ok(()),
+        Ok(resp) if resp.status().is_success() => resp
+            .json::<ssp_protocol::SspRegistrationResponse>()
+            .await
+            .map_err(|e| format!("Failed to parse registration response: {}", e)),
         Ok(resp) => Err(format!("HTTP {}", resp.status())),
         Err(e) => Err(format!("{}", e)),
     }
@@ -293,6 +300,7 @@ pub fn create_app(state: AppState) -> Router {
         .route("/debug/deps", get(debug_deps_handler))
         .route("/view/register", post(register_view_handler))
         .route("/view/unregister", post(unregister_view_handler))
+        .route("/crdt/apply", post(crdt_apply_handler))
         .route("/reset", post(reset_handler))
         .layer(middleware::from_fn(auth_middleware));
 
@@ -343,6 +351,15 @@ pub async fn run_server() -> anyhow::Result<()> {
     // Clone for scheduler integration
     let processor_for_scheduler = processor_arc.clone();
 
+    let crdt_cache_capacity = std::env::var("SPKY_CRDT_CACHE_SIZE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1024);
+    let crdt_cache = Arc::new(crdt::CrdtCache::new(
+        crdt_cache_capacity,
+        crdt::CrdtAllowList::from_env(),
+    ));
+
     let state = AppState {
         db: db.clone(),
         processor: processor_arc.clone(),
@@ -353,6 +370,7 @@ pub async fn run_server() -> anyhow::Result<()> {
         ssp_id: config.ssp_id.clone(),
         scheduler_url: config.scheduler_url.clone(),
         start_time: std::time::Instant::now(),
+        crdt_cache,
     };
 
     let app = create_app(state);
@@ -376,37 +394,46 @@ pub async fn run_server() -> anyhow::Result<()> {
 
         tokio::spawn(async move {
             // Choose bootstrap source based on mode
-            let source = if let Some(ref scheduler_url) = scheduler_url {
+            let (source, expected_hashes) = if let Some(ref scheduler_url) = scheduler_url {
                 // Cluster mode: register with scheduler, then bootstrap from proxy
                 let client = reqwest::Client::new();
                 let scheduler_base = scheduler_url.trim_end_matches('/');
 
                 info!("Registering SSP {} with scheduler at {}", ssp_id, scheduler_base);
 
-                match register_with_scheduler(
+                let registration = match register_with_scheduler(
                     &client,
                     scheduler_url,
                     &ssp_id,
                     &listen_addr,
                     advertise_addr.as_deref(),
                 ).await {
-                    Ok(()) => {
-                        info!("Successfully registered with scheduler");
+                    Ok(r) => {
+                        info!(
+                            snapshot_seq = r.snapshot_seq,
+                            tables = r.table_hashes.len(),
+                            "Successfully registered with scheduler"
+                        );
+                        r
                     }
                     Err(e) => {
                         error!("Failed to register with scheduler: {}", e);
                         *status.write().await = SspStatus::Failed;
                         return;
                     }
-                }
+                };
 
                 let proxy_url = format!("{}/proxy", scheduler_base);
                 info!("Bootstrapping from scheduler proxy at {}", proxy_url);
-                BootstrapSource::Proxy { client, proxy_url }
+                (
+                    BootstrapSource::Proxy { client, proxy_url },
+                    registration.table_hashes,
+                )
             } else {
-                // Standalone mode: bootstrap directly from DB
+                // Standalone mode: bootstrap directly from DB. No expected
+                // hashes — verification only applies in cluster mode.
                 info!("Standalone mode: bootstrapping from SurrealDB");
-                BootstrapSource::Direct(db)
+                (BootstrapSource::Direct(db), BTreeMap::new())
             };
 
             // Retry bootstrap up to 10 times with backoff (tables may not exist yet
@@ -416,11 +443,60 @@ pub async fn run_server() -> anyhow::Result<()> {
                 attempt += 1;
                 match self_bootstrap(&source, &processor).await {
                     Ok(()) => {
+                        // Integrity check: only when the scheduler handed us
+                        // expected hashes (cluster mode). Mismatch ⇒ wipe
+                        // the circuit and retry once. Second failure exits
+                        // the process; supervisor restarts → fresh
+                        // registration with the current frozen snapshot.
+                        if !expected_hashes.is_empty() {
+                            let actual = {
+                                let guard = processor.read().await;
+                                guard.compute_table_hashes()
+                            };
+                            let diffs = ssp_protocol::snapshot_hash::diff_table_hashes(
+                                &expected_hashes,
+                                &actual,
+                            );
+                            if !diffs.is_empty() {
+                                for d in &diffs {
+                                    error!(
+                                        table = %d.table,
+                                        expected = %d.a,
+                                        actual = %d.b,
+                                        "Bootstrap integrity mismatch"
+                                    );
+                                }
+                                if attempt >= 2 {
+                                    error!(
+                                        attempts = attempt,
+                                        diffs = diffs.len(),
+                                        "Integrity mismatch persisted after retry — exiting for restart"
+                                    );
+                                    *status.write().await = SspStatus::Failed;
+                                    // Exit so the supervisor restarts us
+                                    // with a clean circuit and fresh
+                                    // registration handshake.
+                                    std::process::exit(2);
+                                }
+                                warn!(
+                                    attempt,
+                                    diffs = diffs.len(),
+                                    "Wiping circuit and retrying bootstrap"
+                                );
+                                {
+                                    let mut guard = processor.write().await;
+                                    *guard = Circuit::new();
+                                }
+                                continue;
+                            }
+                        }
+
                         let guard = processor.read().await;
                         metrics.view_count.add(guard.view_count() as i64, &[]);
                         info!(
                             tables = guard.table_names().len(),
                             views = guard.view_count(),
+                            verified = !expected_hashes.is_empty(),
                             "Bootstrap complete"
                         );
                         *status.write().await = SspStatus::Ready;
@@ -448,6 +524,7 @@ pub async fn run_server() -> anyhow::Result<()> {
         let processor_clone = processor_for_scheduler.clone();
         let listen_addr = config.listen_addr.clone();
         let advertise_addr = config.advertise_addr.clone();
+        let status_for_heartbeat = status.clone();
 
         tokio::spawn(async move {
             let client = reqwest::Client::new();
@@ -456,6 +533,15 @@ pub async fn run_server() -> anyhow::Result<()> {
 
             loop {
                 interval.tick().await;
+
+                // Don't heartbeat until the bootstrap task has finished
+                // registering and verifying. Otherwise the first tick can
+                // race ahead of `POST /ssp/register`, hit the scheduler as
+                // an unknown SSP, get 404, and we'd exit while our own
+                // registration is still in flight.
+                if *status_for_heartbeat.read().await != SspStatus::Ready {
+                    continue;
+                }
 
                 let views = {
                     let circuit = processor_clone.read().await;
@@ -476,24 +562,22 @@ pub async fn run_server() -> anyhow::Result<()> {
 
                 match client.post(&heartbeat_url).json(&payload).send().await {
                     Ok(resp) if resp.status() == StatusCode::NOT_FOUND => {
-                        warn!("Scheduler doesn't recognize us, attempting re-registration");
-                        match register_with_scheduler(
-                            &client,
-                            &scheduler_url_clone,
-                            &ssp_id,
-                            &listen_addr,
-                            advertise_addr.as_deref(),
-                        ).await {
-                            Ok(()) => {
-                                info!("Successfully re-registered with scheduler");
-                            }
-                            Err(e) => {
-                                error!("Re-registration failed: {}", e);
-                            }
-                        }
+                        warn!("Scheduler doesn't recognize us, exiting for clean restart");
+                        // The scheduler has dropped us. Restarting through
+                        // the supervisor re-runs the bootstrap loop above,
+                        // which re-registers and re-verifies hashes — much
+                        // safer than trying to re-register from a heartbeat
+                        // task that can't replay events into the circuit.
+                        std::process::exit(3);
                     }
                     Ok(resp) if resp.status() == StatusCode::CONFLICT => {
-                        error!("Buffer overflow detected, need to re-bootstrap");
+                        // Either buffer overflow or scheduler-driven
+                        // integrity-check resync. Either way the circuit
+                        // can't be trusted; exit so the supervisor brings
+                        // us back with a clean state.
+                        let body = resp.text().await.unwrap_or_default();
+                        error!(reason = %body, "Scheduler requested re-bootstrap, exiting");
+                        std::process::exit(4);
                     }
                     Ok(resp) if !resp.status().is_success() => {
                         warn!("Heartbeat failed: HTTP {}", resp.status());
@@ -1125,6 +1209,35 @@ async fn unregister_view_handler(
     StatusCode::OK.into_response()
 }
 
+/// CRDT apply handler — merges a Loro update into the record's `_00_crdt[<field>]`
+/// column server-side and persists the resulting snapshot. The record `UPDATE` then
+/// flows through the existing event pipeline to all subscribed clients.
+#[instrument(skip(state, payload), fields(table = %payload.table, record_id = %payload.record_id, field = %payload.field))]
+async fn crdt_apply_handler(
+    State(state): State<AppState>,
+    Json(payload): Json<crdt::ApplyRequest>,
+) -> Response {
+    let status = *state.status.read().await;
+    if status != SspStatus::Ready {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(SspError {
+                code: error_codes::NOT_READY,
+                message: format!("SSP is in {:?} state", status),
+            }),
+        )
+            .into_response();
+    }
+
+    match state.crdt_cache.apply(&state.db, &payload).await {
+        Ok(resp) => (StatusCode::OK, Json(resp)).into_response(),
+        Err(e) => {
+            error!(error = %e, "CRDT apply failed");
+            (StatusCode::BAD_REQUEST, e.to_string()).into_response()
+        }
+    }
+}
+
 /// Reset handler - clears all circuit state and edges
 async fn reset_handler(State(state): State<AppState>) -> impl IntoResponse {
     info!("Resetting circuit state");
@@ -1183,6 +1296,21 @@ async fn info_handler(State(state): State<AppState>) -> Json<Value> {
     let ip = std::env::var("SPKY_SSP_ADVERTISE_ADDR").ok()
         .and_then(|addr| addr.split(':').next().map(|s| s.to_string()));
 
+    let circuit_tables: serde_json::Map<String, Value> = circuit
+        .table_record_counts()
+        .into_iter()
+        .map(|(t, c)| (t, Value::from(c)))
+        .collect();
+
+    // Per-table content hashes — bit-identical to scheduler hashes when
+    // the circuit is in sync with the frozen snapshot. Used by `spky
+    // verify` and the scheduler's post-replay integrity check.
+    let circuit_hashes: serde_json::Map<String, Value> = circuit
+        .compute_table_hashes()
+        .into_iter()
+        .map(|(t, h)| (t, Value::String(h)))
+        .collect();
+
     Json(json!([
         {
             "entity": "ssp",
@@ -1193,6 +1321,8 @@ async fn info_handler(State(state): State<AppState>) -> Json<Value> {
             "version": env!("CARGO_PKG_VERSION"),
             "uptime_seconds": state.start_time.elapsed().as_secs(),
             "last_heartbeat_seconds_ago": null,
+            "circuit_tables": circuit_tables,
+            "circuit_hashes": circuit_hashes,
             "env": env_vars,
         }
     ]))

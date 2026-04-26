@@ -1,7 +1,7 @@
 use crate::config::LoadBalanceStrategy;
 use crate::messages::RecordUpdate;
 use crate::transport::SspInfo;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Instant;
 use tracing::warn;
 
@@ -23,6 +23,10 @@ pub struct SspPool {
     message_buffers: HashMap<String, VecDeque<RecordUpdate>>,
     /// Per-SSP snapshot_seq recorded at registration time
     ssp_snapshot_seqs: HashMap<String, u64>,
+    /// SSPs that the operator (or an integrity check) has flagged as needing
+    /// to re-bootstrap. The next heartbeat from these SSPs returns 409 so
+    /// they tear down and re-register against the current frozen snapshot.
+    forced_resync: HashSet<String>,
     strategy: LoadBalanceStrategy,
     round_robin_index: usize,
     max_buffer_size: usize,
@@ -36,10 +40,34 @@ impl SspPool {
             ssp_states: HashMap::new(),
             message_buffers: HashMap::new(),
             ssp_snapshot_seqs: HashMap::new(),
+            forced_resync: HashSet::new(),
             strategy,
             round_robin_index: 0,
             max_buffer_size,
         }
+    }
+
+    /// Flag an SSP for forced re-bootstrap on its next heartbeat. Used by
+    /// the integrity-check path when the SSP's circuit hashes disagree with
+    /// the scheduler's frozen snapshot — the SSP is told (via 409) to wipe
+    /// and re-register rather than continue serving stale state.
+    pub fn mark_for_resync(&mut self, ssp_id: &str) {
+        self.forced_resync.insert(ssp_id.to_string());
+    }
+
+    /// Flag every connected SSP for forced re-bootstrap.
+    pub fn mark_all_for_resync(&mut self) -> usize {
+        let ids: Vec<String> = self.ssps.keys().cloned().collect();
+        for id in &ids {
+            self.forced_resync.insert(id.clone());
+        }
+        ids.len()
+    }
+
+    /// Take-and-clear: returns true if this SSP was flagged for forced
+    /// resync, removing the flag in the same step.
+    pub fn take_resync_flag(&mut self, ssp_id: &str) -> bool {
+        self.forced_resync.remove(ssp_id)
     }
 
     /// Add or update an SSP
@@ -190,6 +218,7 @@ impl SspPool {
         self.ssp_states.remove(ssp_id);
         self.message_buffers.remove(ssp_id);
         self.ssp_snapshot_seqs.remove(ssp_id);
+        self.forced_resync.remove(ssp_id);
         self.ssps.remove(ssp_id)
     }
 
@@ -202,6 +231,7 @@ impl SspPool {
         self.ssp_states.clear();
         self.message_buffers.clear();
         self.ssp_snapshot_seqs.clear();
+        self.forced_resync.clear();
         self.round_robin_index = 0;
         count
     }

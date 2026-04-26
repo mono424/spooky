@@ -1,6 +1,6 @@
 [package]
 name = "sp00ky-cli"
-version = "0.0.1-canary.63"
+version = "0.0.1-canary.64"
 edition = "2021"
 
 [[bin]]
@@ -33,4 +33,5 @@ argon2 = "0.5"
 rand = "0.8"
 hex = "0.4"
 open = "5"
+ssp-protocol = { path = "../../packages/ssp-protocol" }
 

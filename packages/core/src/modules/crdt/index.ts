@@ -41,6 +41,7 @@ export class CrdtManager {
     field: string,
     fallbackText?: string,
   ): Promise<CrdtField> {
+    this.assertCrdtField(table, field);
     const key = this.makeKey(table, recordId, field);
     let crdtField = this.fields.get(key);
 
@@ -174,5 +175,31 @@ export class CrdtManager {
 
   private makeKey(table: string, recordId: string, field: string): string {
     return `${table}:${recordId}:${field}`;
+  }
+
+  /**
+   * Throws if `<table>.<field>` is not annotated `@crdt` in the schema. Catches
+   * typos, removed annotations, and stale schema codegen at the call site instead
+   * of silently producing a non-CRDT writer.
+   */
+  private assertCrdtField(table: string, field: string): void {
+    const tableSchema = this.schema.tables.find((t) => t.name === table);
+    if (!tableSchema) {
+      throw new Error(
+        `openCrdtField: unknown table '${table}'. Available: ${this.schema.tables.map((t) => t.name).join(', ')}`
+      );
+    }
+    const column = tableSchema.columns[field];
+    if (!column) {
+      throw new Error(
+        `openCrdtField: '${table}.${field}' is not in the schema. Available fields: ${Object.keys(tableSchema.columns).join(', ')}`
+      );
+    }
+    if (!column.crdt) {
+      throw new Error(
+        `openCrdtField: '${table}.${field}' is not annotated '@crdt' in the schema. ` +
+          `Add '-- @crdt text' above the field's DEFINE FIELD and regenerate the client schema.`
+      );
+    }
   }
 }

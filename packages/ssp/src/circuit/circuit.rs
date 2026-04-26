@@ -3,8 +3,8 @@ use crate::circuit::graph::Graph;
 use crate::circuit::store::{ChangeSet, Operation, Record, Store};
 use crate::circuit::view::{OutputFormat, View};
 use crate::operator::QueryPlan;
-use crate::types::{make_key, Sp00kyValue};
-use std::collections::HashMap;
+use crate::types::{make_key, raw_id, Sp00kyValue};
+use std::collections::{BTreeMap, HashMap};
 
 /// Operation type for a subquery record delta.
 #[derive(Debug, Clone, PartialEq)]
@@ -87,14 +87,40 @@ fn compute_current_subquery_set(
             None => continue,
         };
 
-        for (raw_id, row_data) in &collection.rows {
+        // Reverse one-to-one: predicate is `child.id = $parent.<fk>`, so the
+        // parent stores the child's id. Iterate parents in the view and follow
+        // the FK to the child — the forward iteration below would never match
+        // because user.id ("user:xxx") isn't a key in a parent (e.g. thread) cache.
+        if parent_key.child_field == "id" {
+            for parent_full_key in view.cache.keys() {
+                let parent_row = match store.get_row_by_key(parent_full_key) {
+                    Some(r) => r,
+                    None => continue,
+                };
+                let child_full_key = match parent_row
+                    .get(&parent_key.parent_field)
+                    .and_then(|v| v.as_str())
+                {
+                    Some(v) => v,
+                    None => continue,
+                };
+                let child_raw = raw_id(child_full_key);
+                if collection.rows.contains_key(child_raw) {
+                    let child_key = make_key(subquery_table, child_raw);
+                    result.insert(child_key, (parent_full_key.clone(), alias.clone()));
+                }
+            }
+            continue;
+        }
+
+        for (child_raw_id, row_data) in &collection.rows {
             let fk_value = match row_data.get(&parent_key.child_field).and_then(|v| v.as_str()) {
                 Some(v) => v,
                 None => continue,
             };
 
             if view.cache.contains_key(fk_value) {
-                let child_key = make_key(subquery_table, raw_id);
+                let child_key = make_key(subquery_table, child_raw_id);
                 result.insert(child_key, (fk_value.to_string(), alias.clone()));
             }
         }
@@ -136,14 +162,14 @@ fn compute_current_subquery_set(
         }
 
         // For each child row, check if child.child_field matches a parent's field value
-        for (raw_id, row_data) in &collection.rows {
+        for (child_raw_id, row_data) in &collection.rows {
             let child_value =
                 match row_data.get(&parent_key.child_field).and_then(|v| v.as_str()) {
                     Some(v) => v,
                     None => continue,
                 };
             if let Some(parent_full_key) = parent_field_index.get(child_value) {
-                let child_key = make_key(subquery_table, raw_id);
+                let child_key = make_key(subquery_table, child_raw_id);
                 result.insert(child_key, (parent_full_key.clone(), alias.clone()));
             }
         }
@@ -679,6 +705,36 @@ impl Circuit {
         self.store.collections.keys().cloned().collect()
     }
 
+    /// Per-table row counts in the in-memory store. Used by `/info` and
+    /// `spky verify` to compare circuit state against the upstream snapshot.
+    pub fn table_record_counts(&self) -> Vec<(String, usize)> {
+        let mut out: Vec<_> = self.store.collections
+            .iter()
+            .map(|(name, coll)| (name.clone(), coll.rows.len()))
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    /// Per-table content hashes in the in-memory store. Bit-identical to
+    /// `Replica::compute_table_hashes` on the scheduler side when the
+    /// contents agree — used by SSP self-verify (`self_bootstrap`) and
+    /// `spky verify` to detect drift.
+    pub fn compute_table_hashes(&self) -> BTreeMap<String, String> {
+        self.store
+            .collections
+            .iter()
+            .map(|(name, coll)| {
+                let pairs: Vec<(String, serde_json::Value)> = coll
+                    .rows
+                    .iter()
+                    .map(|(id, val)| (id.clone(), serde_json::Value::from(val.clone())))
+                    .collect();
+                (name.clone(), ssp_protocol::snapshot_hash::hash_table(pairs))
+            })
+            .collect()
+    }
+
     /// Dependency map: table → [query_ids] for debugging.
     pub fn dependency_map_dump(&self) -> &HashMap<String, Vec<String>> {
         &self.dependency_map
@@ -1026,6 +1082,124 @@ mod tests {
                 ],
             },
         }
+    }
+
+    /// Helper: build a reverse one-to-one query (parent stores the child's id).
+    /// SELECT *, (SELECT * FROM child_table WHERE id = $parent.<parent_fk> LIMIT 1)[0] AS alias FROM parent_table
+    fn reverse_one_to_one_query(
+        id: &str,
+        parent_table: &str,
+        child_table: &str,
+        alias: &str,
+        parent_fk: &str,
+    ) -> QueryPlan {
+        QueryPlan {
+            id: id.to_string(),
+            root: OperatorPlan::Project {
+                input: Box::new(OperatorPlan::Scan {
+                    table: parent_table.to_string(),
+                }),
+                projections: vec![
+                    Projection::All,
+                    Projection::Subquery {
+                        alias: alias.to_string(),
+                        plan: Box::new(OperatorPlan::Filter {
+                            input: Box::new(OperatorPlan::Scan {
+                                table: child_table.to_string(),
+                            }),
+                            predicate: Predicate::Eq {
+                                field: crate::types::Path::new("id"),
+                                value: json!({ "$param": format!("parent.{parent_fk}") }),
+                            },
+                        }),
+                        parent_key: Some(SubqueryParentKey {
+                            child_field: "id".to_string(),
+                            parent_field: parent_fk.to_string(),
+                        }),
+                    },
+                ],
+            },
+        }
+    }
+
+    #[test]
+    fn initial_snapshot_tracks_reverse_one_to_one_subquery() {
+        // Regression: top-level reverse one-to-one (e.g. thread.author -> user)
+        // wasn't being tracked because pass 1 only handled child-has-FK-to-parent.
+        let mut circuit = Circuit::new();
+
+        circuit.load(vec![
+            Record::new("user", "user:khadim", json!({"username": "khadim"})),
+            Record::new("user", "user:lisa", json!({"username": "lisa"})),
+            Record::new(
+                "thread",
+                "thread:1",
+                json!({"title": "Hello", "author": "user:khadim"}),
+            ),
+            Record::new(
+                "thread",
+                "thread:2",
+                json!({"title": "World", "author": "user:lisa"}),
+            ),
+        ]);
+
+        let delta = circuit.add_query(
+            reverse_one_to_one_query("q1", "thread", "user", "author", "author"),
+            None,
+            None,
+        );
+
+        let d = delta.expect("expected initial delta");
+        assert_eq!(d.additions.len(), 2);
+
+        let mut author_items: Vec<_> = d
+            .subquery_items
+            .iter()
+            .filter(|i| i.op == SubqueryOp::Add && i.alias == "author")
+            .collect();
+        author_items.sort_by(|a, b| a.id.cmp(&b.id));
+        assert_eq!(author_items.len(), 2);
+        assert_eq!(author_items[0].id, "user:khadim");
+        assert_eq!(author_items[0].parent_key, "thread:1");
+        assert_eq!(author_items[1].id, "user:lisa");
+        assert_eq!(author_items[1].parent_key, "thread:2");
+    }
+
+    #[test]
+    fn step_adds_reverse_one_to_one_when_parent_added() {
+        let mut circuit = Circuit::new();
+
+        circuit.load(vec![Record::new(
+            "user",
+            "user:khadim",
+            json!({"username": "khadim"}),
+        )]);
+
+        circuit.add_query(
+            reverse_one_to_one_query("q1", "thread", "user", "author", "author"),
+            None,
+            None,
+        );
+
+        // New thread referencing an existing user — author must show up as Add.
+        let deltas = circuit.step(ChangeSet {
+            changes: vec![Change::create(
+                "thread",
+                "thread:1",
+                json!({"title": "Hi", "author": "user:khadim"}),
+            )],
+        });
+
+        assert_eq!(deltas.len(), 1);
+        let adds: Vec<_> = deltas[0]
+            .subquery_items
+            .iter()
+            .filter(|i| i.op == SubqueryOp::Add)
+            .collect();
+        assert_eq!(adds.len(), 1);
+        assert_eq!(adds[0].id, "user:khadim");
+        assert_eq!(adds[0].parent_key, "thread:1");
+        assert_eq!(adds[0].alias, "author");
     }
 
     #[test]

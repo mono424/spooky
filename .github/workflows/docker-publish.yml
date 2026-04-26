@@ -33,19 +33,19 @@ jobs:
       matrix:
         include:
           - image: mono424/spooky-ssp
-            dockerfile: apps/ssp/Dockerfile
+            target: ssp
             platform: linux/amd64
             runner: ubuntu-latest
           - image: mono424/spooky-ssp
-            dockerfile: apps/ssp/Dockerfile
+            target: ssp
             platform: linux/arm64
             runner: ubuntu-24.04-arm
           - image: mono424/spooky-scheduler
-            dockerfile: apps/scheduler/Dockerfile
+            target: scheduler
             platform: linux/amd64
             runner: ubuntu-latest
           - image: mono424/spooky-scheduler
-            dockerfile: apps/scheduler/Dockerfile
+            target: scheduler
             platform: linux/arm64
             runner: ubuntu-24.04-arm
     steps:
@@ -66,11 +66,14 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ${{ matrix.dockerfile }}
+          file: Dockerfile
+          target: ${{ matrix.target }}
           platforms: ${{ matrix.platform }}
           outputs: type=image,name=${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.platform }}
-          cache-to: type=gha,scope=${{ matrix.image }}-${{ matrix.platform }},mode=max
+          cache-from: |
+            type=gha,scope=spooky-rust-${{ matrix.platform }}
+            type=gha,scope=${{ matrix.image }}-${{ matrix.platform }}
+          cache-to: type=gha,scope=spooky-rust-${{ matrix.platform }},mode=max
 
       - name: Export digest
         run: |

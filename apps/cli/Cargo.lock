@@ -3766,7 +3766,7 @@ checksum = "1b6b67fb9a61334225b5b790716f609cd58395f895b3fe8b328786812a40bc3b"
 
 [[package]]
 name = "sp00ky-cli"
-version = "0.0.1-canary.63"
+version = "0.0.1-canary.64"
 dependencies = [
  "anyhow",
  "argon2",
@@ -3788,6 +3788,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha2",
+ "ssp-protocol",
  "surrealdb-core",
  "tar",
  "tempfile",
@@ -3814,6 +3815,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
 dependencies = [
  "lock_api",
+]
+
+[[package]]
+name = "ssp-protocol"
+version = "0.0.1-canary.64"
+dependencies = [
+ "blake3",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

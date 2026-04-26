@@ -12,50 +12,76 @@ Schema schemaFromJson(String str) => Schema.fromJson(json.decode(str));
 String schemaToJson(Schema data) => json.encode(data.toJson());
 
 class Schema {
-    SpookyPendingMutations spookyPendingMutations;
-    SpookyQuery spookyQuery;
-    SpookySchema spookySchema;
-    SpookyStreamProcessorState spookyStreamProcessorState;
+    The00PendingMutations the00PendingMutations;
+    The00Query the00Query;
+    The00Schema the00Schema;
+    The00StreamProcessorState the00StreamProcessorState;
+    CollaboratesOn collaboratesOn;
     Comment comment;
     CommentedOn commentedOn;
     Job job;
     Thread thread;
+    ThreadInvite threadInvite;
     User user;
 
     Schema({
-        required this.spookyPendingMutations,
-        required this.spookyQuery,
-        required this.spookySchema,
-        required this.spookyStreamProcessorState,
+        required this.the00PendingMutations,
+        required this.the00Query,
+        required this.the00Schema,
+        required this.the00StreamProcessorState,
+        required this.collaboratesOn,
         required this.comment,
         required this.commentedOn,
         required this.job,
         required this.thread,
+        required this.threadInvite,
         required this.user,
     });
 
     factory Schema.fromJson(Map<String, dynamic> json) => Schema(
-        spookyPendingMutations: SpookyPendingMutations.fromJson(json["_00_pending_mutations"]),
-        spookyQuery: SpookyQuery.fromJson(json["_00_query"]),
-        spookySchema: SpookySchema.fromJson(json["_00_schema"]),
-        spookyStreamProcessorState: SpookyStreamProcessorState.fromJson(json["_00_stream_processor_state"]),
+        the00PendingMutations: The00PendingMutations.fromJson(json["_00_pending_mutations"]),
+        the00Query: The00Query.fromJson(json["_00_query"]),
+        the00Schema: The00Schema.fromJson(json["_00_schema"]),
+        the00StreamProcessorState: The00StreamProcessorState.fromJson(json["_00_stream_processor_state"]),
+        collaboratesOn: CollaboratesOn.fromJson(json["collaborates_on"]),
         comment: Comment.fromJson(json["comment"]),
         commentedOn: CommentedOn.fromJson(json["commented_on"]),
         job: Job.fromJson(json["job"]),
         thread: Thread.fromJson(json["thread"]),
+        threadInvite: ThreadInvite.fromJson(json["thread_invite"]),
         user: User.fromJson(json["user"]),
     );
 
     Map<String, dynamic> toJson() => {
-        "_00_pending_mutations": spookyPendingMutations.toJson(),
-        "_00_query": spookyQuery.toJson(),
-        "_00_schema": spookySchema.toJson(),
-        "_00_stream_processor_state": spookyStreamProcessorState.toJson(),
+        "_00_pending_mutations": the00PendingMutations.toJson(),
+        "_00_query": the00Query.toJson(),
+        "_00_schema": the00Schema.toJson(),
+        "_00_stream_processor_state": the00StreamProcessorState.toJson(),
+        "collaborates_on": collaboratesOn.toJson(),
         "comment": comment.toJson(),
         "commented_on": commentedOn.toJson(),
         "job": job.toJson(),
         "thread": thread.toJson(),
+        "thread_invite": threadInvite.toJson(),
         "user": user.toJson(),
+    };
+}
+
+class CollaboratesOn {
+    
+    ///Record ID
+    String id;
+
+    CollaboratesOn({
+        required this.id,
+    });
+
+    factory CollaboratesOn.fromJson(Map<String, dynamic> json) => CollaboratesOn(
+        id: json["id"],
+    );
+
+    Map<String, dynamic> toJson() => {
+        "id": id,
     };
 }
 
@@ -183,7 +209,7 @@ class Job {
     };
 }
 
-class SpookyPendingMutations {
+class The00PendingMutations {
     
     ///Any type
     String? data;
@@ -193,14 +219,14 @@ class SpookyPendingMutations {
     ///Record ID
     String? recordId;
 
-    SpookyPendingMutations({
+    The00PendingMutations({
         this.data,
         required this.id,
         required this.mutationType,
         this.recordId,
     });
 
-    factory SpookyPendingMutations.fromJson(Map<String, dynamic> json) => SpookyPendingMutations(
+    factory The00PendingMutations.fromJson(Map<String, dynamic> json) => The00PendingMutations(
         data: json["data"],
         id: json["id"],
         mutationType: json["mutationType"],
@@ -215,7 +241,7 @@ class SpookyPendingMutations {
     };
 }
 
-class SpookyQuery {
+class The00Query {
     
     ///Record ID
     String id;
@@ -230,7 +256,7 @@ class SpookyQuery {
     String tableName;
     String ttl;
 
-    SpookyQuery({
+    The00Query({
         required this.id,
         required this.lastActiveAt,
         required this.localArray,
@@ -240,7 +266,7 @@ class SpookyQuery {
         required this.ttl,
     });
 
-    factory SpookyQuery.fromJson(Map<String, dynamic> json) => SpookyQuery(
+    factory The00Query.fromJson(Map<String, dynamic> json) => The00Query(
         id: json["id"],
         lastActiveAt: DateTime.parse(json["lastActiveAt"]),
         localArray: json["localArray"],
@@ -261,18 +287,18 @@ class SpookyQuery {
     };
 }
 
-class SpookySchema {
+class The00Schema {
     DateTime? createdAt;
     String hash;
     String id;
 
-    SpookySchema({
+    The00Schema({
         this.createdAt,
         required this.hash,
         required this.id,
     });
 
-    factory SpookySchema.fromJson(Map<String, dynamic> json) => SpookySchema(
+    factory The00Schema.fromJson(Map<String, dynamic> json) => The00Schema(
         createdAt: json["created_at"] == null ? null : DateTime.parse(json["created_at"]),
         hash: json["hash"],
         id: json["id"],
@@ -285,18 +311,18 @@ class SpookySchema {
     };
 }
 
-class SpookyStreamProcessorState {
+class The00StreamProcessorState {
     String id;
     String state;
     DateTime? updatedAt;
 
-    SpookyStreamProcessorState({
+    The00StreamProcessorState({
         required this.id,
         required this.state,
         this.updatedAt,
     });
 
-    factory SpookyStreamProcessorState.fromJson(Map<String, dynamic> json) => SpookyStreamProcessorState(
+    factory The00StreamProcessorState.fromJson(Map<String, dynamic> json) => The00StreamProcessorState(
         id: json["id"],
         state: json["state"],
         updatedAt: json["updated_at"] == null ? null : DateTime.parse(json["updated_at"]),
@@ -329,6 +355,9 @@ class Thread {
     ///Reverse relationship: array of job records
     List<String>? jobs;
     
+    ///Reverse relationship: array of thread_invite records
+    List<String>? threadInvites;
+    
     ///Assert: $value != NONE AND string::len($value) > 0 AND string::len($value) <= 200
     String title;
     String? titleSuggestion;
@@ -342,6 +371,7 @@ class Thread {
         this.createdAt,
         required this.id,
         this.jobs,
+        this.threadInvites,
         required this.title,
         this.titleSuggestion,
     });
@@ -355,6 +385,7 @@ class Thread {
         createdAt: json["created_at"] == null ? null : DateTime.parse(json["created_at"]),
         id: json["id"],
         jobs: json["jobs"] == null ? [] : List<String>.from(json["jobs"]!.map((x) => x)),
+        threadInvites: json["thread_invites"] == null ? [] : List<String>.from(json["thread_invites"]!.map((x) => x)),
         title: json["title"],
         titleSuggestion: json["title_suggestion"],
     );
@@ -368,8 +399,49 @@ class Thread {
         "created_at": createdAt?.toIso8601String(),
         "id": id,
         "jobs": jobs == null ? [] : List<dynamic>.from(jobs!.map((x) => x)),
+        "thread_invites": threadInvites == null ? [] : List<dynamic>.from(threadInvites!.map((x) => x)),
         "title": title,
         "title_suggestion": titleSuggestion,
+    };
+}
+
+class ThreadInvite {
+    DateTime? createdAt;
+    
+    ///Record ID of table: user
+    String? createdBy;
+    
+    ///Record ID
+    String id;
+    
+    ///Record ID of table: thread
+    String thread;
+    
+    ///Assert: $value != NONE AND string::len($value) >= 16
+    String token;
+
+    ThreadInvite({
+        this.createdAt,
+        this.createdBy,
+        required this.id,
+        required this.thread,
+        required this.token,
+    });
+
+    factory ThreadInvite.fromJson(Map<String, dynamic> json) => ThreadInvite(
+        createdAt: json["created_at"] == null ? null : DateTime.parse(json["created_at"]),
+        createdBy: json["created_by"],
+        id: json["id"],
+        thread: json["thread"],
+        token: json["token"],
+    );
+
+    Map<String, dynamic> toJson() => {
+        "created_at": createdAt?.toIso8601String(),
+        "created_by": createdBy,
+        "id": id,
+        "thread": thread,
+        "token": token,
     };
 }
 
@@ -382,6 +454,9 @@ class User {
     String id;
     String? profilePicture;
     
+    ///Reverse relationship: array of thread_invite records
+    List<String>? threadInvites;
+    
     ///Reverse relationship: array of thread records
     List<String>? threads;
     
@@ -392,6 +467,7 @@ class User {
         this.comments,
         required this.id,
         this.profilePicture,
+        this.threadInvites,
         this.threads,
         required this.username,
     });
@@ -400,6 +476,7 @@ class User {
         comments: json["comments"] == null ? [] : List<String>.from(json["comments"]!.map((x) => x)),
         id: json["id"],
         profilePicture: json["profile_picture"],
+        threadInvites: json["thread_invites"] == null ? [] : List<String>.from(json["thread_invites"]!.map((x) => x)),
         threads: json["threads"] == null ? [] : List<String>.from(json["threads"]!.map((x) => x)),
         username: json["username"],
     );
@@ -408,6 +485,7 @@ class User {
         "comments": comments == null ? [] : List<dynamic>.from(comments!.map((x) => x)),
         "id": id,
         "profile_picture": profilePicture,
+        "thread_invites": threadInvites == null ? [] : List<dynamic>.from(threadInvites!.map((x) => x)),
         "threads": threads == null ? [] : List<dynamic>.from(threads!.map((x) => x)),
         "username": username,
     };
@@ -445,11 +523,16 @@ PERMISSIONS FOR select, create, update WHERE true;
 
 DEFINE TABLE thread SCHEMAFULL
 PERMISSIONS FOR select, create, update, delete WHERE true
+      AND (author.id = \$auth.id
+           OR \$auth.id IN (SELECT VALUE in FROM collaborates_on WHERE out = \$parent.id))
+    FOR delete WHERE \$access = \"account\" AND author.id = \$auth.id
 ;
 
+-- @crdt text
 DEFINE FIELD title ON TABLE thread TYPE option<string>
     ASSERT \$value != NONE AND string::len(\$value) > 0 AND string::len(\$value) <= 200;
 
+-- @crdt text
 DEFINE FIELD content ON TABLE thread TYPE option<string>
     ASSERT \$value != NONE AND string::len(\$value) > 0;
 
@@ -493,6 +576,30 @@ PERMISSIONS FOR select, create, update, delete WHERE true;
 DEFINE EVENT comment_created ON TABLE comment WHEN \$event = \"CREATE\" THEN
   RELATE (\$after.id)->commented_on->(\$after.thread)
 ;
+
+-- ##################################################################
+-- COLLABORATORS
+-- ##################################################################
+
+DEFINE TABLE thread_invite SCHEMAFULL
+PERMISSIONS FOR select, create, update, delete WHERE true;
+
+DEFINE FIELD thread     ON TABLE thread_invite TYPE option<record<thread>>;
+DEFINE FIELD token      ON TABLE thread_invite TYPE option<string>
+  ASSERT \$value != NONE AND string::len(\$value) >= 16;
+DEFINE FIELD created_by ON TABLE thread_invite TYPE option<record<user>> VALUE \$auth.id;
+DEFINE FIELD created_at ON TABLE thread_invite TYPE option<datetime> VALUE time::now();
+DEFINE INDEX unique_invite_token ON TABLE thread_invite FIELDS token UNIQUE;
+
+DEFINE TABLE collaborates_on SCHEMAFULL TYPE RELATION FROM user TO thread
+PERMISSIONS FOR select, create, update, delete WHERE true
+      AND in = \$auth.id
+      AND \$parent.out IN (SELECT VALUE thread FROM thread_invite)
+    FOR delete WHERE \$access = \"account\"
+      AND (in.id = \$auth.id OR out.author.id = \$auth.id)
+    FOR update WHERE false;
+
+DEFINE INDEX unique_collab ON TABLE collaborates_on FIELDS in, out UNIQUE;
 
 -- Backend Schema: api
 -- ##################################################################
@@ -615,15 +722,19 @@ DEFINE FIELD _00_rv ON TABLE _00_pending_mutations TYPE int DEFAULT 0 PERMISSION
 DEFINE FIELD _00_rv ON TABLE _00_query TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE _00_schema TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE _00_stream_processor_state TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD _00_rv ON TABLE collaborates_on TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE comment TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE commented_on TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE job TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE thread TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD _00_rv ON TABLE thread_invite TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE user TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD _00_crdt ON TABLE comment TYPE option<object> FLEXIBLE PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD _00_crdt ON TABLE thread TYPE option<object> FLEXIBLE PERMISSIONS FOR select, create, update WHERE true;
 
 
 -- ==================================================
--- AUTO-GENERATED SPOOKY EVENTS
+-- AUTO-GENERATED SP00KY EVENTS
 -- ==================================================
 
 -- Table: comment Client Mutation
@@ -663,6 +774,20 @@ THEN {
 
 -- Table: thread Client Deletion
 DEFINE EVENT OVERWRITE _00_thread_client_delete ON TABLE thread
+WHEN \$event = \"DELETE\"
+THEN {
+    -- No-op for now.
+};
+
+-- Table: thread_invite Client Mutation
+DEFINE EVENT OVERWRITE _00_thread_invite_client_mutation ON TABLE thread_invite
+WHEN \$before != \$after AND \$event != \"DELETE\"
+THEN {
+    -- No-op for now. Client mutation sync logic moved to DBSP.
+};
+
+-- Table: thread_invite Client Deletion
+DEFINE EVENT OVERWRITE _00_thread_invite_client_delete ON TABLE thread_invite
 WHEN \$event = \"DELETE\"
 THEN {
     -- No-op for now.

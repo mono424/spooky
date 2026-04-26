@@ -442,7 +442,7 @@ dependencies = [
 
 [[package]]
 name = "ssp"
-version = "0.1.0"
+version = "0.0.1-canary.64"
 dependencies = [
  "anyhow",
  "blake3",
@@ -458,9 +458,19 @@ dependencies = [
  "serde_json",
  "smallvec",
  "smol_str",
+ "ssp-protocol",
  "tracing",
  "ulid",
  "web-sys",
+]
+
+[[package]]
+name = "ssp-protocol"
+version = "0.0.1-canary.64"
+dependencies = [
+ "blake3",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

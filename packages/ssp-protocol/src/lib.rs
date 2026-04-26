@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
+
+pub mod snapshot_hash;
 
 // --- Ingest API (snake_case wire format) ---
 
@@ -50,6 +53,12 @@ pub struct SspRegistration {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SspRegistrationResponse {
     pub snapshot_seq: u64,
+    /// Per-table content hashes (blake3, hex with `b3:` prefix) at
+    /// `snapshot_seq`. The SSP must produce the same hashes after loading
+    /// its circuit store; mismatch ⇒ retry-then-fatal so the supervisor
+    /// re-registers from a fresh frozen snapshot.
+    #[serde(default)]
+    pub table_hashes: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

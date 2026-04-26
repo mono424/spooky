@@ -10,7 +10,9 @@ surrealdb:
   # hosting: cloud      # "cloud" (default) or "external"
   # endpoint: "wss://my-surreal.example.com"  # required when hosting: external
 schema: ./schema
-version: canary
+version:
+  dev: dev
+  cloud: dev
 buckets:
   - ./schema/src/buckets/profile.surql
 clientTypes:

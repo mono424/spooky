@@ -1,10 +1,11 @@
 {
   "name": "@spooky-sync/ssp-wasm",
-  "version": "0.0.1-canary.63",
+  "version": "0.0.1-canary.64",
   "main": "pkg/ssp_wasm.js",
   "types": "pkg/ssp_wasm.d.ts",
   "files": [
-    "pkg"
+    "pkg",
+    "AGENTS.md"
   ],
   "repository": {
     "type": "git",

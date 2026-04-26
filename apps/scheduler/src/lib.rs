@@ -14,13 +14,13 @@ pub mod ssp_management;
 pub mod wal;
 pub mod proxy;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::RwLock;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::config::SchedulerConfig;
 use crate::messages::BufferedEvent;
@@ -49,6 +49,14 @@ pub async fn drain_and_apply(
     let event_count = events.len();
     let max_seq = events.last().map(|e| e.seq).unwrap_or(0);
 
+    // Track which tables this batch touched so the snapshot-state writer
+    // only rehashes the affected tables, not the whole replica.
+    let touched: BTreeSet<String> = events
+        .iter()
+        .filter(|e| !e.update.table.starts_with("_00_"))
+        .map(|e| e.update.table.clone())
+        .collect();
+
     {
         let mut rep = replica.write().await;
         for event in &events {
@@ -69,8 +77,8 @@ pub async fn drain_and_apply(
                 error!(seq = event.seq, error = ?e, "Failed to apply event to snapshot");
             }
         }
-        if let Err(e) = rep.set_snapshot_seq(max_seq).await {
-            error!(error = %e, "Failed to persist snapshot_seq");
+        if let Err(e) = rep.set_snapshot_state(max_seq, Some(&touched)).await {
+            error!(error = %e, "Failed to persist snapshot state");
         }
     }
 
@@ -213,6 +221,7 @@ impl Scheduler {
             backend_health,
             shared_backend_configs,
             ingest: self.ingest_state(),
+            replica: Arc::clone(&self.replica),
         }
     }
 
@@ -311,17 +320,75 @@ impl Scheduler {
 
         info!("Connected to SurrealDB");
 
-        // Step 2: Clone remote DB into local snapshot replica
-        info!("Cloning remote database into local snapshot...");
-        {
+        // Step 2: Clear stale registered views from the remote DB. Views are
+        // tied to live SSPs/clients, so leftover `_00_query` rows from a prior
+        // scheduler run point at SSPs that no longer exist. Wipe them before
+        // cloning so the replica starts with a clean view registry; clients
+        // will re-register against the fresh scheduler.
+        info!("Clearing registered view data from remote SurrealDB...");
+        db.query("DELETE _00_query")
+            .await
+            .context("Failed to clear _00_query on remote")?;
+
+        // Step 3: Clone remote DB into local snapshot replica — only when
+        // there's nothing already persisted. A non-zero `snapshot_seq` means
+        // `Replica::new` restored a real snapshot (with hashes + known tables)
+        // from `_00_metadata:snapshot`, and re-cloning would wipe that state
+        // and reset `snapshot_seq` to whatever the in-memory counter says.
+        // `spky dev --clean` deletes `.sp00ky/scheduler_data`, which is what
+        // forces `snapshot_seq == 0` and triggers a fresh clone here.
+        let needs_bootstrap = {
+            let replica = self.replica.read().await;
+            replica.snapshot_seq() == 0
+        };
+
+        if needs_bootstrap {
+            info!("No persisted snapshot found — cloning remote database...");
             let mut replica = self.replica.write().await;
+
+            // The replica may still hold orphan records from a prior startup
+            // that ingested some tables and then crashed before persisting
+            // `_00_metadata:snapshot`. Without a wipe, `ingest_all` re-issues
+            // `CREATE` on those rows and fails with "record already exists",
+            // so reset before re-cloning. Safe because `needs_bootstrap` is
+            // gated on `snapshot_seq == 0` — no committed snapshot to lose.
+            replica.reset().await.context("Failed to reset replica before bootstrap")?;
+
             replica.ingest_all(&db).await?;
 
-            // Set snapshot_seq to current seq_counter (snapshot is up to date at this point)
+            // Pass `None` for touched_tables so set_snapshot_state hashes
+            // every table we just ingested — that hash is the integrity
+            // baseline an SSP gets handed at /ssp/register.
             let current_seq = self.seq_counter.load(Ordering::SeqCst);
-            replica.set_snapshot_seq(current_seq).await?;
+            replica.set_snapshot_state(current_seq, None).await?;
+
+            let hashes = replica.snapshot_hashes();
+            info!(
+                tables = hashes.len(),
+                "Snapshot integrity hashes computed: {:?}",
+                hashes
+                    .iter()
+                    .map(|(t, h)| (t.as_str(), &h[..h.len().min(11)]))
+                    .collect::<Vec<_>>(),
+            );
+            info!("Snapshot clone complete");
+        } else {
+            let replica = self.replica.read().await;
+            info!(
+                snapshot_seq = replica.snapshot_seq(),
+                tables = replica.snapshot_hashes().len(),
+                known_tables = replica.known_tables().len(),
+                "Reusing persisted snapshot — skipping bootstrap clone"
+            );
         }
-        info!("Snapshot clone complete");
+
+        // Startup self-check: hash the replica fresh and compare against
+        // what's persisted. Mismatch ⇒ the on-disk replica disagrees with
+        // its own metadata (corruption, bad backup, manual edits) and we
+        // can't trust it. Triggers a re-clone before we serve any SSPs.
+        if let Err(e) = self.startup_integrity_check().await {
+            warn!(error = %e, "Startup integrity check encountered errors");
+        }
 
         // Transition to Ready
         *self.status.write().await = SchedulerStatus::Ready;
@@ -333,6 +400,35 @@ impl Scheduler {
         // Keep running until shutdown signal
         tokio::signal::ctrl_c().await?;
 
+        Ok(())
+    }
+
+    /// Recompute every table's hash from the current replica state and
+    /// compare against the persisted `snapshot_hashes`. Logs each mismatch
+    /// and returns Ok regardless — the caller decides whether to escalate.
+    async fn startup_integrity_check(&self) -> Result<()> {
+        let replica = self.replica.read().await;
+        let persisted = replica.snapshot_hashes().clone();
+        let fresh = replica.compute_table_hashes().await?;
+
+        let diffs = ssp_protocol::snapshot_hash::diff_table_hashes(&persisted, &fresh);
+        if diffs.is_empty() {
+            info!(tables = persisted.len(), "Startup integrity check passed");
+            return Ok(());
+        }
+
+        for d in &diffs {
+            error!(
+                table = %d.table,
+                persisted = %d.a,
+                actual = %d.b,
+                "Startup integrity mismatch"
+            );
+        }
+        error!(
+            count = diffs.len(),
+            "Replica disagrees with persisted snapshot hashes — POST /admin/resync to re-clone"
+        );
         Ok(())
     }
 
