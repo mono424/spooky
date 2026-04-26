@@ -28,6 +28,18 @@ fn replica_config() -> Config {
 // Re-export RecordOp from messages to avoid duplication
 pub use crate::messages::RecordOp;
 
+/// True if an error from SurrealDB indicates a missing namespace, database,
+/// or table. Used to translate "upstream isn't initialized yet" into an empty
+/// result so bootstrap can run against a brand-new SurrealDB.
+pub(crate) fn is_missing_error<E: std::fmt::Display>(e: &E) -> bool {
+    let msg = e.to_string();
+    msg.contains("does not exist")
+        || msg.contains("Table not found")
+        || msg.contains("not found in this database")
+        || msg.contains("The namespace")
+        || msg.contains("The database")
+}
+
 /// One-line description of a JSON value's variant for error messages.
 fn json_kind(v: &Value) -> &'static str {
     match v {
@@ -288,26 +300,33 @@ impl Replica {
     {
         let total_start = std::time::Instant::now();
 
-        // Discover tables from remote
+        // Discover tables from remote. Tolerate "database doesn't exist yet"
+        // by treating it as an empty table list — the scheduler may legitimately
+        // be pointed at a fresh SurrealDB where neither the user schema nor
+        // Phase 4a has run.
         trace!("remote query: INFO FOR DB");
-        let mut response = remote_db
-            .query("INFO FOR DB")
-            .await
-            .context("Failed to query INFO FOR DB on remote")?;
+        let info: Value = match remote_db.query("INFO FOR DB").await {
+            Ok(mut response) => {
+                let v: Vec<Value> = response.take(0).unwrap_or_default();
+                v.into_iter().next().unwrap_or_default()
+            }
+            Err(e) if is_missing_error(&e) => {
+                debug!("INFO FOR DB on missing database — treating as empty");
+                Value::Null
+            }
+            Err(e) => return Err(anyhow::Error::from(e).context("Failed to query INFO FOR DB on remote")),
+        };
 
-        let info: Vec<Value> = response.take(0).unwrap_or_default();
-        let info = info.into_iter().next().unwrap_or_default();
-
+        // If the upstream has no `tables` block, ingest nothing. (Previously a
+        // hardcoded `[thread, job, user]` fallback lived here — actively wrong
+        // for any project not happening to use those exact names.)
         let tables: Vec<String> = match info.get("tables") {
             Some(Value::Object(tables_map)) => tables_map
                 .keys()
                 .filter(|name| !name.starts_with("_00_"))
                 .cloned()
                 .collect(),
-            _ => {
-                // Fallback to known tables
-                vec!["thread".to_string(), "job".to_string(), "user".to_string()]
-            }
+            _ => Vec::new(),
         };
 
         // Track which tables we are about to populate so the integrity-check
@@ -339,22 +358,36 @@ impl Replica {
             // Take the SDK's own `Value` then call `into_json_value()` so RecordId/Datetime
             // are flattened into normal JSON strings instead of `{"RecordId":{...}}` shapes.
             // Direct deserialization into `serde_json::Value` doesn't work on SurrealDB 3.0.
+            // Tolerate the table disappearing between INFO FOR DB and SELECT (race) or
+            // simply not existing yet — treat as zero records and move on.
             trace!(table = %table_name, "remote query: SELECT * FROM {}", table_name);
-            let mut response = remote_db
+            let records: Vec<Value> = match remote_db
                 .query(format!("SELECT * FROM {}", table_name))
                 .await
-                .with_context(|| format!("SELECT * FROM {} failed", table_name))?;
-
-            let sdk_val: surrealdb::types::Value = response.take(0)
-                .with_context(|| format!("take(0) failed for table '{}'", table_name))?;
-
-            let records: Vec<Value> = match sdk_val.into_json_value() {
-                Value::Array(arr) => arr,
-                other => bail!(
-                    "Expected array from SELECT * FROM {}, got {}",
-                    table_name,
-                    json_kind(&other),
-                ),
+            {
+                Ok(mut response) => match response.take::<surrealdb::types::Value>(0) {
+                    Ok(sdk_val) => match sdk_val.into_json_value() {
+                        Value::Array(arr) => arr,
+                        other => bail!(
+                            "Expected array from SELECT * FROM {}, got {}",
+                            table_name,
+                            json_kind(&other),
+                        ),
+                    },
+                    Err(e) if is_missing_error(&e) => {
+                        debug!(table = %table_name, "remote table missing — skipping");
+                        Vec::new()
+                    }
+                    Err(e) => return Err(anyhow::anyhow!(
+                        "take(0) failed for table '{}': {}", table_name, e
+                    )),
+                },
+                Err(e) if is_missing_error(&e) => {
+                    debug!(table = %table_name, "remote table missing — skipping");
+                    Vec::new()
+                }
+                Err(e) => return Err(anyhow::Error::from(e)
+                    .context(format!("SELECT * FROM {} failed", table_name))),
             };
 
             let count = records.len();
@@ -409,22 +442,32 @@ impl Replica {
             );
         }
 
-        // Copy view definitions — same hard-fail discipline as the data tables above.
+        // Copy view definitions. Tolerate `_00_query` not existing yet — happens
+        // when the scheduler is pointed at a fresh SurrealDB before Phase 4a
+        // has applied the internal Sp00ky schema.
         let views_start = std::time::Instant::now();
         trace!("remote query: SELECT * FROM _00_query");
-        let mut response = remote_db
-            .query("SELECT * FROM _00_query")
-            .await
-            .context("Failed to query _00_query on remote")?;
-
-        let sdk_val: surrealdb::types::Value = response.take(0)
-            .context("take(0) failed for _00_query")?;
-        let views: Vec<Value> = match sdk_val.into_json_value() {
-            Value::Array(arr) => arr,
-            other => bail!(
-                "Expected array from SELECT * FROM _00_query, got {}",
-                json_kind(&other),
-            ),
+        let views: Vec<Value> = match remote_db.query("SELECT * FROM _00_query").await {
+            Ok(mut response) => match response.take::<surrealdb::types::Value>(0) {
+                Ok(sdk_val) => match sdk_val.into_json_value() {
+                    Value::Array(arr) => arr,
+                    other => bail!(
+                        "Expected array from SELECT * FROM _00_query, got {}",
+                        json_kind(&other),
+                    ),
+                },
+                Err(e) if is_missing_error(&e) => {
+                    debug!("_00_query missing on remote — no views to copy");
+                    Vec::new()
+                }
+                Err(e) => return Err(anyhow::anyhow!("take(0) failed for _00_query: {}", e)),
+            },
+            Err(e) if is_missing_error(&e) => {
+                debug!("_00_query missing on remote — no views to copy");
+                Vec::new()
+            }
+            Err(e) => return Err(anyhow::Error::from(e)
+                .context("Failed to query _00_query on remote")),
         };
         let view_count = views.len();
         for mut record in views {
@@ -584,13 +627,12 @@ impl Replica {
         match response.take::<surrealdb::types::Value>(0) {
             Ok(v) => Ok(v.into_json_value()),
             Err(e) => {
-                let msg = e.to_string();
-                if msg.contains("does not exist") {
+                if is_missing_error(&e) {
                     debug!(query = %surql, "query targets a missing table — returning []");
                     Ok(Value::Array(Vec::new()))
                 } else {
                     Err(anyhow::anyhow!(
-                        "take(0) failed for query [{}]: {}", surql, msg
+                        "take(0) failed for query [{}]: {}", surql, e
                     ))
                 }
             }

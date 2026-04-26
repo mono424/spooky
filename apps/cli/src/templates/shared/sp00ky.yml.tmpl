@@ -1,27 +1,65 @@
 # yaml-language-server: $schema=https://sp00ky.cloud/schema/sp00ky.schema.json
-mode: singlenode
+mode: singlenode # "singlenode", "cluster", or "surrealism"
 schema: {{SCHEMA_DIR}}
 buckets: []{{CLIENT_TYPES_SECTION}}
+
+# --- Optional configuration (uncomment as needed) ---
+#
+# slug: my-project                # Sp00ky Cloud project identifier
+# cloudApi: https://api.sp00ky.cloud   # override Cloud API endpoint
+#
 # surrealdb:
 #   namespace: main
 #   database: main
-#   username: root       # SurrealDB auth username (default: root)
-#   password: root       # SurrealDB auth password (default: root)
-# cloudApi: "https://staging-api.sp00ky.cloud"  # override Sp00ky Cloud API endpoint
+#   username: root                # default: root
+#   password: root                # default: root
+#   # hosting: cloud              # "cloud" (default) or "external"
+#   # endpoint: "wss://my-surreal.example.com"  # required when hosting: external
+#
+# version:                        # service versions per environment
+#   dev: dev
+#   cloud: canary
+#
+# logLevel:                       # RUST_LOG directive per environment
+#   dev: trace
+#   cloud: info
+#
+# migrationEngine: legacy         # "legacy" (default) or "surrealkit"
+#
 # apps:
 #   web:
 #     type: frontend
 #     dev:
 #       type: npm
-#       script: "dev:app"
-#     env: ".env.local"
+#       script: dev:app
+#     deploy:
+#       dockerfile: ./apps/app/Dockerfile
+#       context: ../
+#       port: 80
+#     env:
+#       dev: '.env.local'
+#       cloud:
+#         vault:
+#           - 'VITE_DB_ENDPOINT'
 #   api:
 #     type: backend
 #     spec: ./api/openapi.yml
+#     baseUrl: http://host.docker.internal:3660
+#     dev:
+#       type: npm
+#       script: dev
+#       workdir: ./api
+#     deploy:
+#       dockerfile: ./api/Dockerfile
+#       context: ../
+#       port: 3660
+#       healthcheck: /health
 #     method:
 #       type: outbox
 #       table: job
 #       schema: ./schema/src/outbox/api.surql
 #     env:
-#       dev: ".env.local"
-#       cloud: "vault"
+#       dev: '.env.local'
+#       cloud:
+#         vault:
+#           - 'API_AUTH_TOKEN'

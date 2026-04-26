@@ -20,7 +20,7 @@ use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::RwLock;
-use tracing::{error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::config::SchedulerConfig;
 use crate::messages::BufferedEvent;
@@ -323,9 +323,28 @@ impl Scheduler {
             password: self.config.db.password.clone(),
         }).await?;
 
-        db.use_ns(&self.config.db.namespace)
-            .use_db(&self.config.db.database)
-            .await?;
+        // Self-heal NS/DB so the scheduler can bootstrap against a brand-new
+        // SurrealDB instance — Phase 4a (CLI) usually defines these, but the
+        // scheduler may be started against an upstream that hasn't run it yet.
+        // Idempotent on populated DBs. Backtick-quote identifiers since the
+        // configured names can contain hyphens.
+        let ns = &self.config.db.namespace;
+        let db_name = &self.config.db.database;
+        db.query(format!("DEFINE NAMESPACE IF NOT EXISTS `{}`", ns))
+            .await
+            .with_context(|| format!("DEFINE NAMESPACE `{}` send failed", ns))?
+            .check()
+            .with_context(|| format!("DEFINE NAMESPACE `{}` returned an error", ns))?;
+
+        db.use_ns(ns).await?;
+
+        db.query(format!("DEFINE DATABASE IF NOT EXISTS `{}`", db_name))
+            .await
+            .with_context(|| format!("DEFINE DATABASE `{}` send failed", db_name))?
+            .check()
+            .with_context(|| format!("DEFINE DATABASE `{}` returned an error", db_name))?;
+
+        db.use_db(db_name).await?;
 
         info!("Connected to SurrealDB");
 
@@ -336,9 +355,14 @@ impl Scheduler {
         // will re-register against the fresh scheduler.
         info!("Clearing registered view data from remote SurrealDB...");
         trace!(ns = %self.config.db.namespace, db = %self.config.db.database, "remote query: DELETE _00_query");
-        db.query("DELETE _00_query")
-            .await
-            .context("Failed to clear _00_query on remote")?;
+        match db.query("DELETE _00_query").await {
+            Ok(_) => {}
+            Err(e) if crate::replica::is_missing_error(&e) => {
+                debug!("_00_query missing on remote — nothing to clear");
+            }
+            Err(e) => return Err(anyhow::Error::from(e)
+                .context("Failed to clear _00_query on remote")),
+        }
 
         // Step 3: Clone remote DB into local snapshot replica — only when
         // there's nothing already persisted. A non-zero `snapshot_seq` means

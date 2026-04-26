@@ -14,6 +14,7 @@ mod mcp;
 mod migrate;
 mod migration;
 mod modules;
+mod package_manager;
 mod parser;
 mod scaffold;
 mod schema_builder;
@@ -1696,7 +1697,7 @@ fn main() -> Result<()> {
         }
         Some(Commands::Doctor { json }) => {
             let project_dir = args.path.as_deref().unwrap_or_else(|| Path::new("."));
-            return doctor::run(json, project_dir);
+            return doctor::run(json, project_dir, false);
         }
         Some(Commands::Scaffold {
             recipe,

@@ -3,21 +3,15 @@
   "private": true,
   "scripts": {
     "dev": "spky dev",
-    "dev:app": "pnpm --filter @{{PROJECT_NAME}}/app dev",
-    "build": "spky generate && pnpm --filter @{{PROJECT_NAME}}/app build",
+    "dev:app": "{{APP_DEV_CMD}}",
+    "build": "spky generate && {{APP_BUILD_CMD}}",
     "generate": "spky generate",
     "migrate:create": "spky migrate create",
     "migrate:apply": "spky migrate apply --url http://localhost:8666",
-    "migrate:status": "spky migrate status --url http://localhost:8666"
+    "migrate:status": "spky migrate status --url http://localhost:8666",
+    "doctor": "spky doctor"
   },
-  "devDependencies": {
+  "dependencies": {
     "@spooky-sync/cli": "{{VERSION}}"
-  },
-  "pnpm": {
-    "overrides": {
-      "@spooky-sync/query-builder": "{{VERSION}}",
-      "@spooky-sync/core": "{{VERSION}}",
-      "@spooky-sync/ssp-wasm": "{{VERSION}}"
-    }
-  }
+  }{{WORKSPACES_BLOCK}}{{OVERRIDES_BLOCK}}
 }

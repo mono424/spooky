@@ -14,31 +14,62 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::backend::{ClientFormat, Sp00kyConfig, DEFAULT_CONFIG_PATH};
+use crate::package_manager;
 
 const PREFIX: &str = "[sp00ky doctor]";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Severity {
+    Pass,
+    Warn,
+    Fail,
+}
+
+impl Severity {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Warn => "warn",
+            Self::Fail => "fail",
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Check {
     pub name: &'static str,
-    pub ok: bool,
+    pub severity: Severity,
     pub fix: Option<String>,
     pub detail: Option<String>,
 }
 
 impl Check {
     fn pass(name: &'static str, detail: impl Into<Option<String>>) -> Self {
-        Self { name, ok: true, fix: None, detail: detail.into() }
+        Self { name, severity: Severity::Pass, fix: None, detail: detail.into() }
     }
     fn fail(name: &'static str, fix: impl Into<String>, detail: impl Into<String>) -> Self {
         Self {
             name,
-            ok: false,
+            severity: Severity::Fail,
+            fix: Some(fix.into()),
+            detail: Some(detail.into()),
+        }
+    }
+    fn warn(name: &'static str, fix: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self {
+            name,
+            severity: Severity::Warn,
             fix: Some(fix.into()),
             detail: Some(detail.into()),
         }
     }
     fn to_json(&self) -> Value {
-        let mut obj = json!({ "name": self.name, "ok": self.ok });
+        let mut obj = json!({
+            "name": self.name,
+            "severity": self.severity.as_str(),
+            // Back-compat: callers that grepped `ok` keep working.
+            "ok": self.severity != Severity::Fail,
+        });
         if let Some(fix) = &self.fix {
             obj["fix"] = json!(fix);
         }
@@ -49,7 +80,9 @@ impl Check {
     }
 }
 
-pub fn run(emit_json: bool, project_dir: &Path) -> Result<()> {
+/// `treat_warn_as_ok`: when true, warnings do not cause exit(1). Used by
+/// `create` to surface docker-missing without aborting the scaffold.
+pub fn run(emit_json: bool, project_dir: &Path, treat_warn_as_ok: bool) -> Result<()> {
     let mut checks: Vec<Check> = Vec::new();
 
     // 1. Config existence + parse
@@ -74,19 +107,25 @@ pub fn run(emit_json: bool, project_dir: &Path) -> Result<()> {
         checks.push(check_migrations_dir(cfg, project_dir));
     }
 
-    let ok = checks.iter().all(|c| c.ok);
+    // 5. Docker availability — warn (not fail). Local-dev users only need
+    // docker for `spky migrate create`'s ephemeral DB.
+    checks.push(check_docker());
+
+    let has_fail = checks.iter().any(|c| c.severity == Severity::Fail);
+    let has_warn = checks.iter().any(|c| c.severity == Severity::Warn);
+    let overall_ok = !has_fail && !(has_warn && !treat_warn_as_ok);
 
     if emit_json {
         let payload = json!({
-            "ok": ok,
+            "ok": overall_ok,
             "checks": checks.iter().map(Check::to_json).collect::<Vec<_>>(),
         });
         println!("{}", serde_json::to_string_pretty(&payload)?);
     } else {
-        print_human(&checks, ok);
+        print_human(&checks, overall_ok);
     }
 
-    if !ok {
+    if !overall_ok {
         std::process::exit(1);
     }
     Ok(())
@@ -221,6 +260,18 @@ fn check_migrations_dir(cfg: &Sp00kyConfig, project_dir: &Path) -> Check {
     }
 }
 
+fn check_docker() -> Check {
+    if package_manager::docker_available() {
+        Check::pass("docker", Some("daemon reachable".to_string()))
+    } else {
+        Check::warn(
+            "docker",
+            "install Docker (https://docs.docker.com/get-docker/) and start the daemon",
+            "docker not available — `spky migrate create` needs it for the ephemeral SurrealDB used to diff schemas".to_string(),
+        )
+    }
+}
+
 fn newest_surql_mtime(dir: &Path) -> Option<SystemTime> {
     let mut newest: Option<SystemTime> = None;
     walk(dir, &mut |p| {
@@ -255,7 +306,11 @@ fn mtime(p: &Path) -> Option<SystemTime> {
 fn print_human(checks: &[Check], ok: bool) {
     println!();
     for c in checks {
-        let mark = if c.ok { "✓" } else { "✗" };
+        let mark = match c.severity {
+            Severity::Pass => "\x1b[32m\u{2713}\x1b[0m",
+            Severity::Warn => "\x1b[33m!\x1b[0m",
+            Severity::Fail => "\x1b[31m\u{2717}\x1b[0m",
+        };
         println!("  {} {}", mark, c.name);
         if let Some(detail) = &c.detail {
             println!("      {}", detail);
@@ -265,10 +320,14 @@ fn print_human(checks: &[Check], ok: bool) {
         }
     }
     println!();
-    if ok {
+    let fails = checks.iter().filter(|c| c.severity == Severity::Fail).count();
+    let warns = checks.iter().filter(|c| c.severity == Severity::Warn).count();
+    if ok && warns == 0 {
         println!("{} OK", PREFIX);
+    } else if fails > 0 {
+        println!("{} {} failed, {} warning(s)", PREFIX, fails, warns);
     } else {
-        println!("{} {} check(s) failed", PREFIX, checks.iter().filter(|c| !c.ok).count());
+        println!("{} {} warning(s)", PREFIX, warns);
     }
 }
 

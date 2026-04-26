@@ -1,4 +1,4 @@
-import { createEffect, createSignal, For, Show } from 'solid-js';
+import { createEffect, createSignal, For, onCleanup, Show } from 'solid-js';
 import { useNavigate, useParams } from '@solidjs/router';
 import { CommentForm } from './CommentForm';
 import type { SyncedDb } from '@spooky-sync/client-solid';
@@ -13,6 +13,7 @@ import { ProfilePicture } from './ProfilePicture';
 import { Tooltip } from './Tooltip';
 import { CollaborativeEditor } from './CollaborativeEditor';
 import { ShareDialog } from './ShareDialog';
+import { MoreHorizontal } from 'lucide-solid';
 
 interface CollaboratorRow {
   relationId: string;
@@ -124,6 +125,26 @@ export function ThreadDetail() {
 
   const [collaborators, setCollaborators] = createSignal<CollaboratorRow[]>([]);
   const [shareOpen, setShareOpen] = createSignal(false);
+  const [menuOpen, setMenuOpen] = createSignal(false);
+
+  const handleMenuClickOutside = (e: MouseEvent) => {
+    const target = e.target as HTMLElement;
+    if (!target.closest('[data-thread-menu]')) setMenuOpen(false);
+  };
+  document.addEventListener('mousedown', handleMenuClickOutside);
+  onCleanup(() => document.removeEventListener('mousedown', handleMenuClickOutside));
+
+  const handleDelete = async () => {
+    const threadData = thread();
+    if (!threadData?.id || !isAuthor()) return;
+    if (!confirm('Delete this post? This cannot be undone.')) return;
+    try {
+      await db.delete('thread', threadData.id);
+      navigate('/');
+    } catch (e) {
+      console.error('[ThreadDetail] failed to delete thread', e);
+    }
+  };
 
   const refreshCollaborators = async (threadId: string) => {
     try {
@@ -341,6 +362,30 @@ export function ThreadDetail() {
                           >
                             Share
                           </button>
+
+                          <div class="relative" data-thread-menu>
+                            <button
+                              onMouseDown={() => setMenuOpen(!menuOpen())}
+                              class="inline-flex items-center justify-center w-8 h-8 text-zinc-500 hover:text-white rounded-lg transition-colors duration-150"
+                              title="More"
+                              aria-label="More options"
+                            >
+                              <MoreHorizontal size={16} />
+                            </button>
+                            <Show when={menuOpen()}>
+                              <div class="absolute right-0 mt-1.5 w-40 bg-surface border border-white/[0.06] rounded-lg shadow-2xl z-50 py-1 animate-fade-in">
+                                <button
+                                  onMouseDown={() => {
+                                    setMenuOpen(false);
+                                    handleDelete();
+                                  }}
+                                  class="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-red-400 hover:text-red-300 hover:bg-surface-hover transition-colors duration-150"
+                                >
+                                  Delete post
+                                </button>
+                              </div>
+                            </Show>
+                          </div>
                         </Show>
                       </div>
                     </div>

@@ -14,6 +14,9 @@ use std::process::Command;
 use std::thread;
 use std::time::{Duration, SystemTime};
 
+use crate::doctor;
+use crate::package_manager::{self, PackageManager};
+
 
 
 // ---------------------------------------------------------------------------
@@ -297,6 +300,13 @@ pub fn create_project() -> Result<()> {
         "TypeScript".to_string() // full project always uses TypeScript
     };
 
+    // 5. Package manager (full projects only — schema-only has no node deps)
+    let pm = if is_schema_only {
+        PackageManager::Npm
+    } else {
+        package_manager::detect_preferred()
+    };
+
     println!(
         "\n  Creating {} project \x1b[1m{}\x1b[0m with {} schema...",
         if is_schema_only { "schema-only" } else { "full" },
@@ -358,16 +368,30 @@ pub fn create_project() -> Result<()> {
             ]),
         )?;
 
-        write_file(
-            root_path.join("pnpm-workspace.yaml"),
-            templates::PNPM_WORKSPACE,
-        )?;
+        // pnpm uses a separate workspace file; npm declares workspaces
+        // inline in package.json (handled below via WORKSPACES_BLOCK).
+        if pm == PackageManager::Pnpm {
+            write_file(
+                root_path.join("pnpm-workspace.yaml"),
+                templates::PNPM_WORKSPACE,
+            )?;
+        }
+
+        let app_pkg = format!("@{}/app", project_name);
+        let app_dev_cmd = pm.run_filter(&app_pkg, "dev");
+        let app_build_cmd = pm.run_filter(&app_pkg, "build");
+        let workspaces_block = workspaces_block(pm);
+        let overrides_block = overrides_block(pm, VERSION);
 
         write_file(
             root_path.join("package.json"),
             &render(templates::ROOT_PACKAGE_JSON, &[
                 ("PROJECT_NAME", &project_name),
                 ("VERSION", VERSION),
+                ("APP_DEV_CMD", &app_dev_cmd),
+                ("APP_BUILD_CMD", &app_build_cmd),
+                ("WORKSPACES_BLOCK", &workspaces_block),
+                ("OVERRIDES_BLOCK", &overrides_block),
             ]),
         )?;
 
@@ -423,63 +447,95 @@ pub fn create_project() -> Result<()> {
         }
     }
 
-    // --- Optional: pnpm install ---
-    let do_install = inquire::Confirm::new("Install dependencies with pnpm?")
+    // --- Optional: install dependencies ---
+    let pm_cmd = pm.cmd();
+    let do_install = inquire::Confirm::new(&format!("Install dependencies with {}?", pm_cmd))
         .with_default(true)
         .prompt()
         .unwrap_or(false);
 
+    let mut installed_ok = false;
     if do_install {
-        println!("\n  Installing dependencies...");
-        let install_result = Command::new("pnpm")
-            .args(["install"])
-            .current_dir(root_path)
-            .status();
+        if !package_manager::is_on_path(pm_cmd) {
+            println!(
+                "  \x1b[31m\u{2717}\x1b[0m {} is not on PATH. Skipping install.",
+                pm_cmd
+            );
+        } else {
+            println!("\n  Installing dependencies with {}...", pm_cmd);
+            let install_result = Command::new(pm_cmd)
+                .args(["install"])
+                .current_dir(root_path)
+                .status();
 
-        match install_result {
-            Ok(status) if status.success() => {
-                println!("  \x1b[32m\u{2713}\x1b[0m Dependencies installed");
+            match install_result {
+                Ok(status) if status.success() => {
+                    installed_ok = true;
+                    println!("  \x1b[32m\u{2713}\x1b[0m Dependencies installed");
 
-                // Run sp00ky generate and migration:create for full projects
-                // Use the current binary directly instead of the npm-installed one,
-                // so we always get the latest config-loading behavior.
-                if !is_schema_only {
-                    let current_exe = std::env::current_exe()
-                        .unwrap_or_else(|_| PathBuf::from("sp00ky"));
+                    // Run sp00ky generate and migration:create for full projects.
+                    // Use the current binary directly instead of the npm-installed one,
+                    // so we always get the latest config-loading behavior.
+                    if !is_schema_only {
+                        let current_exe = std::env::current_exe()
+                            .unwrap_or_else(|_| PathBuf::from("sp00ky"));
 
-                    println!("\n  Running sp00ky generate...");
-                    match Command::new(&current_exe)
-                        .args(["generate"])
-                        .current_dir(root_path)
-                        .status()
-                    {
-                        Ok(s) if s.success() => {
-                            println!("  \x1b[32m\u{2713}\x1b[0m Schema types generated");
+                        println!("\n  Running sp00ky generate...");
+                        match Command::new(&current_exe)
+                            .args(["generate"])
+                            .current_dir(root_path)
+                            .status()
+                        {
+                            Ok(s) if s.success() => {
+                                println!("  \x1b[32m\u{2713}\x1b[0m Schema types generated");
+                            }
+                            _ => {
+                                println!("  \x1b[33m!\x1b[0m Could not run sp00ky generate");
+                            }
                         }
-                        _ => {
-                            println!("  \x1b[33m!\x1b[0m Could not run sp00ky generate");
-                        }
-                    }
 
-                    println!("  Creating initial migration...");
-                    match Command::new(&current_exe)
-                        .args(["migrate", "create", "initial"])
-                        .current_dir(root_path)
-                        .status()
-                    {
-                        Ok(s) if s.success() => {
-                            println!("  \x1b[32m\u{2713}\x1b[0m Initial migration created");
-                        }
-                        _ => {
-                            println!("  \x1b[33m!\x1b[0m Could not create initial migration");
+                        // Docker pre-flight: skip migrate create if the daemon
+                        // isn't reachable, rather than failing inside the
+                        // ephemeral-DB startup. Print a clear next-step.
+                        if !package_manager::docker_available() {
+                            println!(
+                                "  \x1b[33m!\x1b[0m Docker not running — skipping initial migration."
+                            );
+                            println!(
+                                "      Install/start Docker, then run: \x1b[1m{} run migrate:create initial\x1b[0m",
+                                pm_cmd
+                            );
+                        } else {
+                            println!("  Creating initial migration...");
+                            match Command::new(&current_exe)
+                                .args(["migrate", "create", "initial"])
+                                .current_dir(root_path)
+                                .status()
+                            {
+                                Ok(s) if s.success() => {
+                                    println!("  \x1b[32m\u{2713}\x1b[0m Initial migration created");
+                                }
+                                _ => {
+                                    println!("  \x1b[33m!\x1b[0m Could not create initial migration");
+                                }
+                            }
                         }
                     }
                 }
-            }
-            _ => {
-                println!("  \x1b[33m!\x1b[0m Could not install dependencies (is pnpm installed?)");
+                _ => {
+                    println!(
+                        "  \x1b[33m!\x1b[0m Could not install dependencies (is {} installed?)",
+                        pm_cmd
+                    );
+                }
             }
         }
+    }
+
+    // --- Diagnostics: surface docker/config issues without aborting ---
+    if !is_schema_only && installed_ok {
+        println!("\n  Running diagnostics...");
+        let _ = doctor::run(false, root_path, /*treat_warn_as_ok=*/ true);
     }
 
     // --- Next steps ---
@@ -487,19 +543,34 @@ pub fn create_project() -> Result<()> {
 
     println!("  \x1b[1mcd {}\x1b[0m", project_name);
 
-    if !do_install {
-        println!("  \x1b[1mpnpm install\x1b[0m");
+    if !do_install || !installed_ok {
+        println!("  \x1b[1m{} install\x1b[0m", pm_cmd);
         if !is_schema_only {
-            println!("  \x1b[1mpnpm generate\x1b[0m   \x1b[2m# generate schema types\x1b[0m");
-            println!("  \x1b[1mpnpm migrate:create initial\x1b[0m   \x1b[2m# create initial migration\x1b[0m");
+            println!(
+                "  \x1b[1m{} run generate\x1b[0m   \x1b[2m# generate schema types\x1b[0m",
+                pm_cmd
+            );
+            println!(
+                "  \x1b[1m{} run migrate:create initial\x1b[0m   \x1b[2m# create initial migration (needs Docker)\x1b[0m",
+                pm_cmd
+            );
         }
     }
 
     if is_schema_only {
-        println!("  \x1b[1mpnpm dev\x1b[0m");
+        println!("  \x1b[1m{} run dev\x1b[0m", pm_cmd);
     } else {
         println!(
-            "  \x1b[1mpnpm dev\x1b[0m   \x1b[2m# start Sp00ky dev server + app\x1b[0m"
+            "  \x1b[1m{} run dev\x1b[0m   \x1b[2m# start Sp00ky dev server + app\x1b[0m",
+            pm_cmd
+        );
+    }
+
+    if !is_schema_only {
+        println!(
+            "\n  \x1b[2mAd-hoc CLI: \x1b[0m\x1b[1m{}\x1b[0m\x1b[2m  (or `{} run doctor`)\x1b[0m",
+            pm.exec("spky --help"),
+            pm_cmd
         );
     }
 
@@ -512,6 +583,41 @@ pub fn create_project() -> Result<()> {
 
     println!();
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Package-manager-aware JSON fragments for the root package.json template.
+// Each fragment is leading-comma so the template stays valid JSON.
+// ---------------------------------------------------------------------------
+
+fn workspaces_block(pm: PackageManager) -> String {
+    match pm {
+        // pnpm uses pnpm-workspace.yaml; nothing to inject here.
+        PackageManager::Pnpm => String::new(),
+        PackageManager::Npm => {
+            ",\n  \"workspaces\": [\"apps/*\", \"packages/*\"]".to_string()
+        }
+    }
+}
+
+fn overrides_block(pm: PackageManager, version: &str) -> String {
+    let entries = format!(
+        "\"@spooky-sync/query-builder\": \"{v}\",\n      \"@spooky-sync/core\": \"{v}\",\n      \"@spooky-sync/ssp-wasm\": \"{v}\"",
+        v = version
+    );
+    match pm {
+        PackageManager::Pnpm => format!(
+            ",\n  \"pnpm\": {{\n    \"overrides\": {{\n      {}\n    }}\n  }}",
+            entries
+        ),
+        // npm overrides aren't transitive the way pnpm.overrides are, but the
+        // top-level `overrides` field is the closest equivalent and pins our
+        // own packages consistently across direct deps.
+        PackageManager::Npm => format!(
+            ",\n  \"overrides\": {{\n    {}\n  }}",
+            entries.replace("\n      ", "\n    ")
+        ),
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -77,7 +77,39 @@ fn find_free_port() -> Result<u16> {
 
 const SURREALDB_IMAGE: &str = "surrealdb/surrealdb:v3.0.0";
 
+/// Ensure the SurrealDB image is locally available, pulling it (with visible
+/// progress) on first run. Without this, `docker run` would tacitly pull
+/// during startup and we'd race the 6 s health-check budget on cold installs.
+fn ensure_image_present(image: &str) -> Result<()> {
+    let already_present = Command::new("docker")
+        .args(["image", "inspect", image])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if already_present {
+        return Ok(());
+    }
+
+    println!("  Pulling {} (one-time, ~hundreds of MB)...", image);
+    let status = Command::new("docker")
+        .args(["pull", image])
+        .status()
+        .context(
+            "Failed to invoke `docker pull`. Is Docker installed and running?\n\
+             Install Docker from https://docs.docker.com/get-docker/.",
+        )?;
+    if !status.success() {
+        bail!("`docker pull {}` failed", image);
+    }
+    Ok(())
+}
+
 fn start_ephemeral_surreal_docker(port: u16) -> Result<String> {
+    ensure_image_present(SURREALDB_IMAGE)?;
+
     let container_name = format!("sp00ky-migrate-ephemeral-{}", port);
 
     Command::new("docker")
