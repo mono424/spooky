@@ -64,6 +64,25 @@
         }
       ]
     },
+    "logLevel": {
+      "description": "`RUST_LOG` directive applied to the Scheduler and SSP containers (both `spky dev` and `spky cloud deploy`). A plain string applies everywhere (e.g. `trace`, `info,ssp=debug`). A `{dev, cloud}` map sets per-environment levels. Unset → defaults to `info`.",
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "Single `RUST_LOG` directive applied in every environment. Accepts bare levels (`trace`, `debug`, `info`, `warn`, `error`, `off`) or comma-separated `target=level` pairs."
+        },
+        {
+          "type": "object",
+          "description": "Per-environment log level. `dev` is consumed by `spky dev`; `cloud` is sent to the cloud control plane on every deploy.",
+          "properties": {
+            "dev":   { "type": "string", "description": "RUST_LOG directive used for local `spky dev` containers." },
+            "cloud": { "type": "string", "description": "RUST_LOG directive applied to the remote scheduler/SSP after `spky cloud deploy`." }
+          },
+          "additionalProperties": false,
+          "minProperties": 1
+        }
+      ]
+    },
     "schema": {
       "description": "Schema directory or explicit paths. A string is treated as the base directory (convention: schema/src/schema.surql, schema/migrations/, schema/src/buckets/).",
       "oneOf": [
