@@ -8,7 +8,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, error};
+use tracing::{error, trace};
 
 use crate::replica::Replica;
 use crate::SchedulerStatus;
@@ -54,7 +54,7 @@ async fn handle_proxy_query(
 ) -> Result<Json<Value>, (StatusCode, String)> {
     reject_if_restoring(&state.status).await?;
 
-    debug!("Proxy query: {}", request.query);
+    trace!(query = %request.query, "proxy query (forwarded to local replica)");
 
     let replica = state.replica.read().await;
     match replica.query(&request.query).await {

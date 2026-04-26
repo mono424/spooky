@@ -296,6 +296,12 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
         return cleanup_direct(stop);
     }
 
+    // Resolved RUST_LOG for both scheduler and SSP. `logLevel:` in sp00ky.yml
+    // (string or `{ dev, cloud }` map) overrides; default `info` matches the
+    // pre-feature behavior so projects that don't opt in see no change.
+    let dev_log = config.resolved_log_level(DeployEnv::Dev);
+    let dev_log_env = format!("RUST_LOG={}", dev_log);
+
     // Phase 5 (cluster only): Start scheduler before SSP so SSP can register
     let scheduler_log;
     if *mode == DeployMode::Cluster {
@@ -325,7 +331,7 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
             "--network-alias", "scheduler",
             "-p", &scheduler_port_mapping,
             "-v", &scheduler_data_mount,
-            "-e", "RUST_LOG=info",
+            "-e", &dev_log_env,
             "-e", &scheduler_db_url_env,
             "-e", &scheduler_db_ws_env,
             "-e", &scheduler_ns_env,
@@ -389,7 +395,7 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
         "--network", NETWORK_NAME,
         "--network-alias", "ssp",
         "-p", &port_mapping,
-        "-e", "RUST_LOG=info,ssp=debug",
+        "-e", &dev_log_env,
         "-e", &ssp_db_url_env,
         "-e", &ssp_db_ws_env,
         "-e", &ssp_ns_env,

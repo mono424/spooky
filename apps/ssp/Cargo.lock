@@ -2191,7 +2191,7 @@ checksum = "8eaf4bc02d17cbdd7ff4c7438cafcdf7fb9a4613313ad11b4f8fefe7d3fa0130"
 
 [[package]]
 name = "job-runner"
-version = "0.0.1-canary.64"
+version = "0.0.1-canary.65"
 dependencies = [
  "anyhow",
  "reqwest 0.12.28",
@@ -4602,7 +4602,7 @@ dependencies = [
 
 [[package]]
 name = "ssp"
-version = "0.0.1-canary.64"
+version = "0.0.1-canary.65"
 dependencies = [
  "anyhow",
  "blake3",
@@ -4626,7 +4626,7 @@ dependencies = [
 
 [[package]]
 name = "ssp-protocol"
-version = "0.0.1-canary.64"
+version = "0.0.1-canary.65"
 dependencies = [
  "blake3",
  "serde",
@@ -4635,7 +4635,7 @@ dependencies = [
 
 [[package]]
 name = "ssp-server"
-version = "0.0.1-canary.64"
+version = "0.0.1-canary.65"
 dependencies = [
  "anyhow",
  "axum 0.7.9",

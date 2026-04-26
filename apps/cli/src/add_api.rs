@@ -133,6 +133,7 @@ pub fn add_api(
             cloud_api: None,
             migration_engine: None,
             surrealkit: None,
+            log_level: None,
         }
     };
 

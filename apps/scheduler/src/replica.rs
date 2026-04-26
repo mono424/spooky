@@ -7,7 +7,7 @@ use surrealdb::engine::local::RocksDb;
 use surrealdb::opt::capabilities::{Capabilities, ExperimentalFeature};
 use surrealdb::opt::Config;
 use surrealdb::Surreal;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 
 /// Config for the embedded replica DB: enable `Files` + `Surrealism`
 /// experimental capabilities so dumps that reference `DEFINE BUCKET ...` (a
@@ -289,6 +289,7 @@ impl Replica {
         let total_start = std::time::Instant::now();
 
         // Discover tables from remote
+        trace!("remote query: INFO FOR DB");
         let mut response = remote_db
             .query("INFO FOR DB")
             .await
@@ -338,6 +339,7 @@ impl Replica {
             // Take the SDK's own `Value` then call `into_json_value()` so RecordId/Datetime
             // are flattened into normal JSON strings instead of `{"RecordId":{...}}` shapes.
             // Direct deserialization into `serde_json::Value` doesn't work on SurrealDB 3.0.
+            trace!(table = %table_name, "remote query: SELECT * FROM {}", table_name);
             let mut response = remote_db
                 .query(format!("SELECT * FROM {}", table_name))
                 .await
@@ -374,6 +376,13 @@ impl Replica {
                     table_name,
                 ))?;
                 let thing_id = build_thing_id(table_name, &id_str);
+                let field_count = record.as_object().map(|o| o.len()).unwrap_or(0);
+                trace!(
+                    table = %table_name,
+                    id = %thing_id,
+                    fields = field_count,
+                    "bootstrap CREATE"
+                );
                 self.db
                     .query(format!("CREATE {} CONTENT $data", thing_id))
                     .bind(("data", record))
@@ -402,6 +411,7 @@ impl Replica {
 
         // Copy view definitions — same hard-fail discipline as the data tables above.
         let views_start = std::time::Instant::now();
+        trace!("remote query: SELECT * FROM _00_query");
         let mut response = remote_db
             .query("SELECT * FROM _00_query")
             .await
@@ -565,6 +575,7 @@ impl Replica {
     /// `_00_query`) need missing tables to behave like empty result sets. We
     /// detect that case via the SDK's `NotFound` error and translate to `[]`.
     pub async fn query(&self, surql: &str) -> Result<Value> {
+        trace!(query = %surql, "local replica query");
         let mut response = self.db
             .query(surql)
             .await

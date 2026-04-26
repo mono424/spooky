@@ -9,7 +9,7 @@ use argon2::{Argon2, Algorithm, Version, Params};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
-use crate::backend::{self, BackendDevConfig, BackendDevTypedConfig, HostingMode};
+use crate::backend::{self, BackendDevConfig, BackendDevTypedConfig, DeployEnv, HostingMode};
 use crate::surreal_client::MigrationDB;
 use crate::{CloudBackupCommands, CloudBillingCommands, CloudCommands, CloudEnvCommands, CloudKeyCommands, CloudLinkCommands, CloudTeamCommands, CloudVaultCommands};
 
@@ -1786,12 +1786,23 @@ fn deploy(upgrade: bool, clean: bool) -> Result<()> {
     let ssp_count = config.deployment.as_ref()
         .and_then(|d| d.ssp_count);
 
+    // Cloud-side `RUST_LOG` for the scheduler + SSP containers. Only sent
+    // when sp00ky.yml has `logLevel:` (or its `cloud:` sub-key) set —
+    // otherwise omit so the cloud control plane keeps the previous setting
+    // (or its `info` default). Persists across deploys via
+    // `projects.config.log_level` server-side.
+    let cloud_log_level = config
+        .log_level
+        .as_ref()
+        .and_then(|c| c.resolved(DeployEnv::Cloud));
+
     let deploy_body = serde_json::json!({
         "surrealdb": surrealdb_manifest,
         "backends": backend_manifests,
         "external_backends": external_backends,
         "frontend": frontend_manifest,
         "ssp_count": ssp_count,
+        "log_level": cloud_log_level,
         "upgrade_infra": upgrade,
         "clean": clean,
     });

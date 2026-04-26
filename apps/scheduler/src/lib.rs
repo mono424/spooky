@@ -20,7 +20,7 @@ use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::RwLock;
-use tracing::{error, info, warn};
+use tracing::{error, info, trace, warn};
 
 use crate::config::SchedulerConfig;
 use crate::messages::BufferedEvent;
@@ -299,7 +299,16 @@ impl Scheduler {
         info!("Starting Scheduler service...");
 
         // Step 1: Connect to remote SurrealDB
-        info!("Connecting to SurrealDB at {}", self.config.db.url);
+        info!(
+            url = %self.config.db.url,
+            namespace = %self.config.db.namespace,
+            database = %self.config.db.database,
+            user = %self.config.db.username,
+            "Bootstrap target: ns={} db={} url={}",
+            self.config.db.namespace,
+            self.config.db.database,
+            self.config.db.url,
+        );
         let ws_addr = self.config.db.url
             .strip_prefix("ws://")
             .or_else(|| self.config.db.url.strip_prefix("wss://"))
@@ -326,6 +335,7 @@ impl Scheduler {
         // cloning so the replica starts with a clean view registry; clients
         // will re-register against the fresh scheduler.
         info!("Clearing registered view data from remote SurrealDB...");
+        trace!(ns = %self.config.db.namespace, db = %self.config.db.database, "remote query: DELETE _00_query");
         db.query("DELETE _00_query")
             .await
             .context("Failed to clear _00_query on remote")?;
@@ -354,6 +364,11 @@ impl Scheduler {
             // gated on `snapshot_seq == 0` — no committed snapshot to lose.
             replica.reset().await.context("Failed to reset replica before bootstrap")?;
 
+            trace!(
+                ns = %self.config.db.namespace,
+                db = %self.config.db.database,
+                "starting replica.ingest_all from remote"
+            );
             replica.ingest_all(&db).await?;
 
             // Pass `None` for touched_tables so set_snapshot_state hashes

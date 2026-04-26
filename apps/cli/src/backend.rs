@@ -249,6 +249,11 @@ pub struct Sp00kyConfig {
     /// SurrealKit-specific configuration (only used when migrationEngine = "surrealkit").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub surrealkit: Option<SurrealKitConfig>,
+    /// `RUST_LOG` directive applied to the scheduler and SSP containers.
+    /// Either a plain string (`trace`, `info`, `info,ssp=debug`, …) or a
+    /// per-environment map `{ dev, cloud }`. Unset → defaults to `info`.
+    #[serde(default, rename = "logLevel", skip_serializing_if = "Option::is_none")]
+    pub log_level: Option<LogLevelConfig>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -493,7 +498,27 @@ impl Sp00kyConfig {
         for (name, app) in &self.apps {
             app.validate(name)?;
         }
+        // logLevel: walk every directive string and confirm it parses.
+        if let Some(cfg) = &self.log_level {
+            match cfg {
+                LogLevelConfig::Single(s) => validate_rust_log(s)?,
+                LogLevelConfig::PerEnvironment { dev, cloud } => {
+                    if let Some(s) = dev { validate_rust_log(s)?; }
+                    if let Some(s) = cloud { validate_rust_log(s)?; }
+                }
+            }
+        }
         Ok(())
+    }
+
+    /// Resolved `RUST_LOG` value for the given environment. Falls back to
+    /// `info` when `logLevel` is unset or has no entry for the requested env,
+    /// preserving today's behavior for projects that don't opt in.
+    pub fn resolved_log_level(&self, env: DeployEnv) -> String {
+        self.log_level
+            .as_ref()
+            .and_then(|c| c.resolved(env))
+            .unwrap_or_else(|| "info".to_string())
     }
 }
 
@@ -576,6 +601,108 @@ impl<'de> Deserialize<'de> for VersionConfig {
             _ => Err(serde::de::Error::custom("version must be a string or map")),
         }
     }
+}
+
+/// `RUST_LOG` directive shape — same dual-form idiom as `VersionConfig`.
+/// A plain string applies in every environment; a `{ dev, cloud }` map sets
+/// per-environment levels. `LogLevelConfig::resolved(env)` collapses both
+/// shapes to an `Option<String>`.
+#[derive(Debug, Clone)]
+pub enum LogLevelConfig {
+    Single(String),
+    PerEnvironment {
+        dev: Option<String>,
+        cloud: Option<String>,
+    },
+}
+
+impl LogLevelConfig {
+    /// Resolve the level for a given environment. Returns `None` when the
+    /// per-env map has no entry for `env` so the caller can apply a default.
+    pub fn resolved(&self, env: DeployEnv) -> Option<String> {
+        match self {
+            LogLevelConfig::Single(s) => Some(s.clone()),
+            LogLevelConfig::PerEnvironment { dev, cloud } => match env {
+                DeployEnv::Dev => dev.clone(),
+                DeployEnv::Cloud => cloud.clone(),
+            },
+        }
+    }
+}
+
+impl Serialize for LogLevelConfig {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        match self {
+            LogLevelConfig::Single(s) => serializer.serialize_str(s),
+            LogLevelConfig::PerEnvironment { dev, cloud } => {
+                use serde::ser::SerializeMap;
+                let mut map = serializer.serialize_map(None)?;
+                if let Some(d) = dev { map.serialize_entry("dev", d)?; }
+                if let Some(c) = cloud { map.serialize_entry("cloud", c)?; }
+                map.end()
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for LogLevelConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let value = serde_yaml::Value::deserialize(deserializer)?;
+        match &value {
+            serde_yaml::Value::String(s) => Ok(LogLevelConfig::Single(s.clone())),
+            serde_yaml::Value::Mapping(m) => {
+                let keys: Vec<&str> = m.keys().filter_map(|k| k.as_str()).collect();
+                let known = keys.iter().all(|k| *k == "dev" || *k == "cloud");
+                if !known || keys.is_empty() {
+                    return Err(serde::de::Error::custom(
+                        "logLevel map must contain only `dev` and/or `cloud` keys",
+                    ));
+                }
+                let dev = m.get(serde_yaml::Value::String("dev".into()))
+                    .map(|v| v.as_str().map(String::from)
+                        .ok_or_else(|| serde::de::Error::custom("logLevel.dev must be a string")))
+                    .transpose()?;
+                let cloud = m.get(serde_yaml::Value::String("cloud".into()))
+                    .map(|v| v.as_str().map(String::from)
+                        .ok_or_else(|| serde::de::Error::custom("logLevel.cloud must be a string")))
+                    .transpose()?;
+                Ok(LogLevelConfig::PerEnvironment { dev, cloud })
+            }
+            _ => Err(serde::de::Error::custom("logLevel must be a string or { dev, cloud } map")),
+        }
+    }
+}
+
+/// Validate a `RUST_LOG` directive string. Accepts either a bare level
+/// (`trace|debug|info|warn|error|off`) or a comma-separated list of
+/// `target=level` directives matching the `tracing-subscriber` grammar.
+fn validate_rust_log(s: &str) -> Result<()> {
+    if s.trim().is_empty() {
+        anyhow::bail!("logLevel value cannot be empty");
+    }
+    let valid_level = |lv: &str| {
+        matches!(lv, "trace" | "debug" | "info" | "warn" | "error" | "off")
+    };
+    for token in s.split(',') {
+        let token = token.trim();
+        if token.is_empty() {
+            anyhow::bail!("logLevel `{}` has empty directive", s);
+        }
+        if let Some((_target, level)) = token.split_once('=') {
+            if !valid_level(level.trim()) {
+                anyhow::bail!(
+                    "logLevel `{}` — directive `{}` has invalid level (use trace|debug|info|warn|error|off)",
+                    s, token
+                );
+            }
+        } else if !valid_level(token) {
+            anyhow::bail!(
+                "logLevel `{}` — `{}` is not a valid level (use trace|debug|info|warn|error|off, or `target=level`)",
+                s, token
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Which environment a `from_config` call is resolving versions for.
@@ -893,6 +1020,7 @@ fn default_config() -> Sp00kyConfig {
         cloud_api: None,
         migration_engine: None,
         surrealkit: None,
+        log_level: None,
     }
 }
 
