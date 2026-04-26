@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { RefObject } from 'react';
+import type { ReactNode, RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { siRust } from 'simple-icons';
 import HologramSticker from 'holographic-sticker';
@@ -293,6 +293,60 @@ const BG_MEMPHIS = `
 </g>
 `.trim();
 
+/** Defer mounting heavy children until they scroll into view (or close to it).
+ *  Reserves the same footprint via the placeholder so there's no layout shift. */
+function LazyMount({
+  children,
+  placeholder,
+  rootMargin = '300px',
+}: {
+  children: ReactNode;
+  placeholder: ReactNode;
+  rootMargin?: string;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [show, setShow] = useState(false);
+
+  useEffect(() => {
+    if (show) return;
+    const el = ref.current;
+    if (!el) return;
+    if (typeof IntersectionObserver === 'undefined') {
+      setShow(true);
+      return;
+    }
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setShow(true);
+          obs.disconnect();
+        }
+      },
+      { rootMargin }
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [show, rootMargin]);
+
+  return <div ref={ref}>{show ? children : placeholder}</div>;
+}
+
+/** Lightweight visual placeholder that matches the Sticker footprint
+ *  (200px wide, 5:7 portrait) so the grid doesn't reflow when cards mount. */
+const StickerPlaceholder = () => (
+  <div
+    aria-hidden="true"
+    style={{
+      width: 200,
+      aspectRatio: '5 / 7',
+      borderRadius: 16,
+      background:
+        'linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02))',
+      border: '1px solid rgba(255,255,255,0.06)',
+    }}
+  />
+);
+
 const Sticker = ({
   title,
   fig,
@@ -555,17 +609,19 @@ export function FeatureGrid() {
               Fig {feature.fig}
             </div>
             <div className="flex items-center justify-center mb-4">
-              <Sticker
-                title={feature.title}
-                fig={feature.fig}
-                iconInner={feature.iconInner}
-                background={feature.background}
-                iconColor={feature.iconColor}
-                iconY={feature.iconY}
-                iconScale={feature.iconScale}
-                foregroundImage={feature.foregroundImage}
-                alt={feature.alt}
-              />
+              <LazyMount placeholder={<StickerPlaceholder />}>
+                <Sticker
+                  title={feature.title}
+                  fig={feature.fig}
+                  iconInner={feature.iconInner}
+                  background={feature.background}
+                  iconColor={feature.iconColor}
+                  iconY={feature.iconY}
+                  iconScale={feature.iconScale}
+                  foregroundImage={feature.foregroundImage}
+                  alt={feature.alt}
+                />
+              </LazyMount>
             </div>
             <h3 className="text-base font-semibold text-white mb-1">{feature.title}</h3>
             <p className="text-sm text-gray-500">{feature.subtitle}</p>

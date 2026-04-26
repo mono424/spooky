@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 
 const RAW_GHOST = [
   '   ▄▄████████▄▄   ',
@@ -80,22 +80,59 @@ function buildGhosts(count: number): GhostSpec[] {
   return specs;
 }
 
-function MiniGhost({ spec, phase, blinkTick }: { spec: GhostSpec; phase: number; blinkTick: number }) {
-  const shouldBlink = ((blinkTick + spec.blinkOffset) | 0) % 23 === 0;
-  const rows = RAW_GHOST.map((row, idx) => {
-    const wave = Math.sin(idx * 0.6 + phase + spec.phaseOffset);
-    const content = shouldBlink && idx === 3 ? EYES_CLOSED : row;
-    return shiftLine(content, wave);
-  });
+const STATIC_ROWS = RAW_GHOST.join('\n');
+
+function MiniGhost({ spec, idx }: { spec: GhostSpec; idx: number }) {
+  const ref = useRef<HTMLPreElement>(null);
+
+  // Drive eye-blinks by directly mutating textContent on a slow timer.
+  // Avoids React reconciling 14 ghosts on every tick.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (typeof window === 'undefined') return;
+
+    // Only animate blinks if the user hasn't asked for reduced motion.
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    if (reduce) return;
+
+    // Stagger blinks per-ghost; ~once every ~6s, closed for ~140ms.
+    const period = 5500 + ((spec.blinkOffset * 311) % 4000);
+    const offset = (spec.blinkOffset * 173) % period;
+
+    let timer: number | null = null;
+    const closedRows = [...RAW_GHOST];
+    closedRows[3] = EYES_CLOSED;
+    const openText = RAW_GHOST.join('\n');
+    const closedText = closedRows.join('\n');
+
+    const tick = () => {
+      if (document.hidden) {
+        timer = window.setTimeout(tick, 1000);
+        return;
+      }
+      el.textContent = closedText;
+      window.setTimeout(() => {
+        if (el.isConnected) el.textContent = openText;
+      }, 140);
+      timer = window.setTimeout(tick, period);
+    };
+    timer = window.setTimeout(tick, ((offset + idx * 700) % period));
+
+    return () => {
+      if (timer != null) clearTimeout(timer);
+    };
+  }, [spec.blinkOffset, idx]);
+
   return (
     <pre
+      ref={ref}
       className="mini-ghost"
       style={{
         left: `${spec.left}%`,
         top: `${spec.top}%`,
         fontSize: `${spec.size}px`,
         opacity: spec.opacity,
-        // CSS custom properties consumed by .mini-ghost keyframes
         ['--dx' as any]: `${spec.dx}px`,
         ['--dy' as any]: `${spec.dy}px`,
         ['--rot' as any]: `${spec.rot}deg`,
@@ -103,28 +140,17 @@ function MiniGhost({ spec, phase, blinkTick }: { spec: GhostSpec; phase: number;
         animationDelay: `${spec.delay}s`,
       }}
     >
-      {rows.join('\n')}
+      {STATIC_ROWS}
     </pre>
   );
 }
 
 export function FloatingGhosts({ count = 14 }: { count?: number }) {
   const ghosts = useMemo(() => buildGhosts(count), [count]);
-  const [phase, setPhase] = useState(0);
-  const [blinkTick, setBlinkTick] = useState(0);
-
-  useEffect(() => {
-    const id = setInterval(() => {
-      setPhase((p) => p + 0.4);
-      setBlinkTick((b) => b + 1);
-    }, 140);
-    return () => clearInterval(id);
-  }, []);
-
   return (
     <div className="floating-ghosts" aria-hidden="true">
       {ghosts.map((spec, i) => (
-        <MiniGhost key={i} spec={spec} phase={phase} blinkTick={blinkTick} />
+        <MiniGhost key={i} spec={spec} idx={i} />
       ))}
     </div>
   );

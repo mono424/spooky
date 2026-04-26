@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 
 const ISO = (x: number, y: number, z = 0): [number, number] => [x - y, (x + y) / 2 - z];
 
@@ -7,7 +7,7 @@ function Sp00kyMark({
   cy = 0,
   width = 22,
   fill = 'url(#metalFill)',
-  filter = 'url(#engrave)',
+  filter = '',
 }: {
   cx?: number;
   cy?: number;
@@ -188,7 +188,7 @@ function IsoSSP({ x = 0, y = 0, label }: { x?: number; y?: number; label?: strin
   ];
   const [cxTop, cyTop] = ISO(x, y, h);
   return (
-    <g filter="url(#softshadow)">
+    <g >
       <ellipse cx={ISO(x, y, 0)[0]} cy={ISO(x, y, 0)[1] + 3} rx="36" ry="16" fill="url(#socGlow)" opacity="0.4" />
       <polygon points={frontRight.join(' ')} fill="url(#socSideR)" stroke="rgba(0,0,0,0.9)" strokeWidth="0.5" strokeLinejoin="round" />
       <polygon points={frontLeft.join(' ')} fill="url(#socSideL)" stroke="rgba(0,0,0,0.9)" strokeWidth="0.5" strokeLinejoin="round" />
@@ -199,7 +199,7 @@ function IsoSSP({ x = 0, y = 0, label }: { x?: number; y?: number; label?: strin
           y={3}
           textAnchor="middle"
           fill="url(#metalFill)"
-          filter="url(#engrave)"
+          
           fontFamily="'IBM Plex Sans', system-ui, sans-serif"
           fontSize="8.5"
           fontWeight="700"
@@ -236,7 +236,7 @@ function IsoSnapshot({ x = 0, y = 0 }: { x?: number; y?: number; label?: string 
   ];
   const [cxTop, cyTop] = ISO(x, y, h);
   return (
-    <g filter="url(#softshadow)">
+    <g >
       <ellipse cx={ISO(x, y, 0)[0]} cy={ISO(x, y, 0)[1] + 4} rx="44" ry="20" fill="url(#socGlow)" opacity="0.55" />
       <polygon points={frontRight.join(' ')} fill="url(#socSideR)" stroke="rgba(0,0,0,0.9)" strokeWidth="0.6" strokeLinejoin="round" />
       <polygon points={frontLeft.join(' ')} fill="url(#socSideL)" stroke="rgba(0,0,0,0.9)" strokeWidth="0.6" strokeLinejoin="round" />
@@ -247,7 +247,7 @@ function IsoSnapshot({ x = 0, y = 0 }: { x?: number; y?: number; label?: string 
           y={3}
           textAnchor="middle"
           fill="url(#metalFill)"
-          filter="url(#engrave)"
+          
           fontFamily="'IBM Plex Sans', system-ui, sans-serif"
           fontSize="9"
           fontWeight="700"
@@ -284,7 +284,7 @@ function IsoScheduler({ x = 0, y = 0 }: { x?: number; y?: number; label?: string
   ];
   const [cxTop, cyTop] = ISO(x, y, h);
   return (
-    <g filter="url(#softshadow)">
+    <g >
       <ellipse cx={ISO(x, y, 0)[0]} cy={ISO(x, y, 0)[1] + 6} rx="72" ry="34" fill="url(#socGlow)" />
       <ellipse
         cx={ISO(x, y, 0)[0] - 14}
@@ -322,7 +322,7 @@ function IsoScheduler({ x = 0, y = 0 }: { x?: number; y?: number; label?: string
           y={14}
           textAnchor="middle"
           fill="url(#metalFill)"
-          filter="url(#engrave)"
+          
           fontFamily="'IBM Plex Sans', system-ui, sans-serif"
           fontSize="5"
           fontWeight="700"
@@ -388,18 +388,13 @@ function SpookyEngine() {
 }
 
 export function HeroStack() {
-  const [shown, setShown] = useState<[boolean, boolean, boolean]>([false, false, false]);
-
-  useEffect(() => {
-    const timers = [
-      setTimeout(() => setShown((s) => [s[0], s[1], true]), 120),
-      setTimeout(() => setShown((s) => [s[0], true, s[2]]), 360),
-      setTimeout(() => setShown((s) => [true, s[1], s[2]]), 600),
-    ];
-    return () => timers.forEach(clearTimeout);
-  }, []);
-
-  const layerClass = (i: number) => `hero-layer${shown[i] ? ' hero-layer-in' : ''}`;
+  // Stagger is pure CSS (animation-delay) so the SVG can render server-side
+  // with no JS hydration cost. Index 0 = top layer, 2 = bottom (animates first).
+  const STAGGER_MS = [320, 200, 80] as const;
+  const layerProps = (i: number) => ({
+    className: 'hero-layer',
+    style: { animationDelay: `${STAGGER_MS[i]}ms` },
+  });
 
   return (
     <div className="hero-stack">
@@ -476,7 +471,7 @@ export function HeroStack() {
 
         {/* Bottom: sp00ky engine */}
         <g transform="translate(280 498)">
-          <g className={layerClass(2)}>
+          <g {...layerProps(2)}>
             <polygon
               points="0,-120 240,0 0,120 -240,0"
               fill="url(#platPurple)"
@@ -484,7 +479,7 @@ export function HeroStack() {
               strokeWidth="1.2"
             />
             <ellipse cx="0" cy="0" rx="110" ry="55" fill="url(#discGlow)" />
-            <g transform="translate(0 -12)" filter="url(#softshadow)">
+            <g transform="translate(0 -12)" >
               <SpookyEngine />
             </g>
             <g transform="matrix(1 0.5 -1 0.5 0 0)" style={{ opacity: 0.85 }}>
@@ -515,7 +510,7 @@ export function HeroStack() {
 
         {/* Middle: SurrealDB */}
         <g transform="translate(280 328)">
-          <g className={layerClass(1)}>
+          <g {...layerProps(1)}>
             <polygon
               points="0,-120 240,0 0,120 -240,0"
               fill="url(#platTop)"
@@ -556,17 +551,17 @@ export function HeroStack() {
 
         {/* Top: Frontend */}
         <g transform="translate(280 158)">
-          <g className={layerClass(0)}>
+          <g {...layerProps(0)}>
             <polygon
               points="0,-120 240,0 0,120 -240,0"
               fill="url(#platTop)"
               stroke="rgba(255,255,255,0.22)"
               strokeWidth="1.2"
             />
-            <g transform="translate(-14 -36)" filter="url(#softshadow)">
+            <g transform="translate(-14 -36)" >
               <IsoWindow />
             </g>
-            <g transform="translate(80 10)" filter="url(#softshadow)">
+            <g transform="translate(80 10)" >
               <IsoMobile />
             </g>
             <g transform="matrix(1 0.5 -1 0.5 0 0)" style={{ opacity: 0.8 }}>

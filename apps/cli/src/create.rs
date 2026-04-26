@@ -258,6 +258,150 @@ fn show_splash() -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// Scaffold options — non-interactive entry point for tests + create_project()
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchemaTemplate {
+    Empty,
+    Minimal,
+    Example,
+}
+
+impl SchemaTemplate {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Empty => "Empty",
+            Self::Minimal => "Minimal (User + Auth)",
+            Self::Example => "Example (User + Threads + Comments)",
+        }
+    }
+    fn has_auth(self) -> bool {
+        !matches!(self, Self::Empty)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodegenFormat {
+    TypeScript,
+    Dart,
+    Skip,
+}
+
+impl CodegenFormat {
+    fn label(self) -> &'static str {
+        match self {
+            Self::TypeScript => "TypeScript",
+            Self::Dart => "Dart",
+            Self::Skip => "Skip",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ScaffoldOptions {
+    pub project_name: String,
+    pub is_schema_only: bool,
+    pub schema_template: SchemaTemplate,
+    pub codegen_format: CodegenFormat,
+    pub pm: PackageManager,
+}
+
+/// Write the project tree to `root_path`. Pure file-writing — no prompts,
+/// no shell-out. Callable from tests.
+pub fn scaffold(root_path: &Path, opts: &ScaffoldOptions) -> Result<()> {
+    let ScaffoldOptions {
+        project_name,
+        is_schema_only,
+        schema_template,
+        codegen_format,
+        pm,
+    } = opts.clone();
+
+    fs::create_dir_all(root_path)?;
+
+    let schema_path = if is_schema_only {
+        root_path.to_path_buf()
+    } else {
+        root_path.join("packages/schema")
+    };
+
+    write_schema_package(
+        &schema_path,
+        &project_name,
+        schema_template.label(),
+        codegen_format.label(),
+        is_schema_only,
+    )?;
+
+    if is_schema_only {
+        write_file(root_path.join(".gitignore"), templates::GITIGNORE)?;
+    } else {
+        write_file(root_path.join(".gitignore"), templates::GITIGNORE)?;
+
+        let client_types_section = match codegen_format {
+            CodegenFormat::Skip => String::new(),
+            CodegenFormat::TypeScript => {
+                "\nclientTypes:\n  - format: typescript\n    output: apps/app/src/schema.gen.ts"
+                    .to_string()
+            }
+            CodegenFormat::Dart => {
+                "\nclientTypes:\n  - format: dart\n    output: apps/app/src/schema.gen.dart"
+                    .to_string()
+            }
+        };
+        write_file(
+            root_path.join("sp00ky.yml"),
+            &render(templates::SP00KY_YML, &[
+                ("SCHEMA_DIR", "packages/schema"),
+                ("CLIENT_TYPES_SECTION", &client_types_section),
+            ]),
+        )?;
+
+        if pm == PackageManager::Pnpm {
+            write_file(
+                root_path.join("pnpm-workspace.yaml"),
+                templates::PNPM_WORKSPACE,
+            )?;
+        }
+
+        let app_pkg = format!("@{}/app", project_name);
+        let app_dev_cmd = pm.run_filter(&app_pkg, "dev");
+        let app_build_cmd = pm.run_filter(&app_pkg, "build");
+        let workspaces_block = workspaces_block(pm);
+        let overrides_block = overrides_block(pm, VERSION);
+
+        write_file(
+            root_path.join("package.json"),
+            &render(templates::ROOT_PACKAGE_JSON, &[
+                ("PROJECT_NAME", &project_name),
+                ("VERSION", VERSION),
+                ("APP_DEV_CMD", &app_dev_cmd),
+                ("APP_BUILD_CMD", &app_build_cmd),
+                ("WORKSPACES_BLOCK", &workspaces_block),
+                ("OVERRIDES_BLOCK", &overrides_block),
+            ]),
+        )?;
+
+        write_app_package(root_path, &project_name, schema_template.has_auth())?;
+    }
+
+    write_file(
+        root_path.join("CLAUDE.md"),
+        &render(
+            if is_schema_only { templates::CLAUDE_MD_SCHEMA } else { templates::CLAUDE_MD_FULL },
+            &[("PROJECT_NAME", &project_name)],
+        ),
+    )?;
+    write_file(
+        root_path.join(".claude/settings.local.json"),
+        templates::CLAUDE_SETTINGS_JSON,
+    )?;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
 
@@ -286,8 +430,6 @@ pub fn create_project() -> Result<()> {
     )
     .prompt()?;
 
-    let has_auth = schema_type != "Empty";
-
     // 4. Codegen format
     let codegen_format = if is_schema_only {
         let fmt = Select::new(
@@ -295,11 +437,21 @@ pub fn create_project() -> Result<()> {
             vec!["TypeScript", "Dart", "Skip"],
         )
         .prompt()?;
-        fmt.to_string()
+        match fmt {
+            "Dart" => CodegenFormat::Dart,
+            "Skip" => CodegenFormat::Skip,
+            _ => CodegenFormat::TypeScript,
+        }
     } else {
-        "TypeScript".to_string() // full project always uses TypeScript
+        CodegenFormat::TypeScript // full project always uses TypeScript
     };
 
+    let schema_template = match schema_type {
+        "Empty" => SchemaTemplate::Empty,
+        "Minimal (User + Auth)" => SchemaTemplate::Minimal,
+        "Example (User + Threads + Comments)" => SchemaTemplate::Example,
+        _ => SchemaTemplate::Empty,
+    };
     // 5. Package manager (full projects only — schema-only has no node deps)
     let pm = if is_schema_only {
         PackageManager::Npm
@@ -326,89 +478,17 @@ pub fn create_project() -> Result<()> {
         }
         fs::remove_dir_all(root_path)?;
     }
-    fs::create_dir_all(root_path)?;
 
-    // --- Determine schema package path ---
-    let schema_path = if is_schema_only {
-        root_path.to_path_buf()
-    } else {
-        root_path.join("packages/schema")
-    };
-
-    // --- Write schema package ---
-    write_schema_package(
-        &schema_path,
-        &project_name,
-        schema_type,
-        &codegen_format,
-        is_schema_only,
-    )?;
-
-    if is_schema_only {
-        write_file(root_path.join(".gitignore"), templates::GITIGNORE)?;
-    } else {
-        write_file(root_path.join(".gitignore"), templates::GITIGNORE)?;
-
-        // Write sp00ky.yml at monorepo root with migrations pointing into schema package
-        let client_types_section = match codegen_format.as_str() {
-            "Skip" => String::new(),
-            _ => {
-                let fmt = codegen_format.to_lowercase();
-                format!(
-                    "\nclientTypes:\n  - format: {}\n    output: apps/app/src/schema.gen.ts",
-                    fmt
-                )
-            }
-        };
-        write_file(
-            root_path.join("sp00ky.yml"),
-            &render(templates::SP00KY_YML, &[
-                ("SCHEMA_DIR", "packages/schema"),
-                ("CLIENT_TYPES_SECTION", &client_types_section),
-            ]),
-        )?;
-
-        // pnpm uses a separate workspace file; npm declares workspaces
-        // inline in package.json (handled below via WORKSPACES_BLOCK).
-        if pm == PackageManager::Pnpm {
-            write_file(
-                root_path.join("pnpm-workspace.yaml"),
-                templates::PNPM_WORKSPACE,
-            )?;
-        }
-
-        let app_pkg = format!("@{}/app", project_name);
-        let app_dev_cmd = pm.run_filter(&app_pkg, "dev");
-        let app_build_cmd = pm.run_filter(&app_pkg, "build");
-        let workspaces_block = workspaces_block(pm);
-        let overrides_block = overrides_block(pm, VERSION);
-
-        write_file(
-            root_path.join("package.json"),
-            &render(templates::ROOT_PACKAGE_JSON, &[
-                ("PROJECT_NAME", &project_name),
-                ("VERSION", VERSION),
-                ("APP_DEV_CMD", &app_dev_cmd),
-                ("APP_BUILD_CMD", &app_build_cmd),
-                ("WORKSPACES_BLOCK", &workspaces_block),
-                ("OVERRIDES_BLOCK", &overrides_block),
-            ]),
-        )?;
-
-        write_app_package(root_path, &project_name, has_auth)?;
-    }
-
-    // --- Write AI setup files ---
-    write_file(
-        root_path.join("CLAUDE.md"),
-        &render(
-            if is_schema_only { templates::CLAUDE_MD_SCHEMA } else { templates::CLAUDE_MD_FULL },
-            &[("PROJECT_NAME", &project_name)],
-        ),
-    )?;
-    write_file(
-        root_path.join(".claude/settings.local.json"),
-        templates::CLAUDE_SETTINGS_JSON,
+    // --- Scaffold the project tree (non-interactive, also used by tests) ---
+    scaffold(
+        root_path,
+        &ScaffoldOptions {
+            project_name: project_name.clone(),
+            is_schema_only,
+            schema_template,
+            codegen_format,
+            pm,
+        },
     )?;
 
     println!(
@@ -772,4 +852,300 @@ fn write_file<P: AsRef<Path>>(path: P, content: &str) -> Result<()> {
     fs::write(&path, content)
         .with_context(|| format!("Failed to write file {:?}", path.as_ref()))?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Bootstrap tests
+// ---------------------------------------------------------------------------
+//
+// Two layers of coverage:
+//   1. Per-config sanity: each generated config (root package.json for npm and
+//      pnpm, app package.json, schema package.json, sp00ky.yml in both schema
+//      placement modes) renders into its expected format and parses with the
+//      canonical project parser.
+//   2. One full e2e scaffold: invoke `scaffold()` against a tempdir for a
+//      realistic option set and walk the resulting tree, asserting every
+//      produced config parses and key fields are populated.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::Sp00kyConfig;
+    use serde_json::Value as JsonValue;
+    use std::path::Path;
+    use tempfile::TempDir;
+
+    // --- Helpers ---
+
+    fn render_root_pkg(pm: PackageManager, project: &str) -> String {
+        let app_pkg = format!("@{}/app", project);
+        render(templates::ROOT_PACKAGE_JSON, &[
+            ("PROJECT_NAME", project),
+            ("VERSION", VERSION),
+            ("APP_DEV_CMD", &pm.run_filter(&app_pkg, "dev")),
+            ("APP_BUILD_CMD", &pm.run_filter(&app_pkg, "build")),
+            ("WORKSPACES_BLOCK", &workspaces_block(pm)),
+            ("OVERRIDES_BLOCK", &overrides_block(pm, VERSION)),
+        ])
+    }
+
+    fn parse_json(label: &str, raw: &str) -> JsonValue {
+        serde_json::from_str(raw)
+            .unwrap_or_else(|e| panic!("{} did not parse as JSON: {}\n---\n{}", label, e, raw))
+    }
+
+    fn parse_sp00ky_yml(raw: &str) -> Sp00kyConfig {
+        serde_yaml::from_str::<Sp00kyConfig>(raw)
+            .unwrap_or_else(|e| panic!("sp00ky.yml did not parse: {}\n---\n{}", e, raw))
+    }
+
+    fn assert_no_unrendered_placeholders(label: &str, raw: &str) {
+        assert!(
+            !raw.contains("{{"),
+            "{} still has unrendered template placeholders:\n{}",
+            label,
+            raw
+        );
+    }
+
+    fn read(root: &Path, rel: &str) -> String {
+        fs::read_to_string(root.join(rel))
+            .unwrap_or_else(|e| panic!("missing scaffolded file {}: {}", rel, e))
+    }
+
+    // --- Per-config sanity: root package.json renders for both PMs ---
+
+    #[test]
+    fn root_package_json_pnpm_is_valid_json_with_pnpm_overrides() {
+        let raw = render_root_pkg(PackageManager::Pnpm, "myproj");
+        assert_no_unrendered_placeholders("root pkg (pnpm)", &raw);
+        let v = parse_json("root pkg (pnpm)", &raw);
+
+        assert_eq!(v["name"], "myproj");
+        assert_eq!(v["private"], true);
+        assert_eq!(v["dependencies"]["@spooky-sync/cli"], VERSION);
+        // pnpm-shaped overrides
+        assert!(
+            v["pnpm"]["overrides"]["@spooky-sync/core"].is_string(),
+            "pnpm.overrides should hold sp00ky package pins"
+        );
+        // Should not emit npm-specific shapes
+        assert!(v.get("workspaces").is_none(), "pnpm variant uses pnpm-workspace.yaml");
+        assert!(
+            v.get("overrides").is_none(),
+            "pnpm variant should not have a top-level overrides field"
+        );
+        // Scripts should target pnpm
+        let dev_app = v["scripts"]["dev:app"].as_str().unwrap();
+        assert!(dev_app.starts_with("pnpm --filter"), "got {}", dev_app);
+        assert_eq!(v["scripts"]["doctor"], "spky doctor");
+    }
+
+    #[test]
+    fn root_package_json_npm_is_valid_json_with_workspaces_and_overrides() {
+        let raw = render_root_pkg(PackageManager::Npm, "myproj");
+        assert_no_unrendered_placeholders("root pkg (npm)", &raw);
+        let v = parse_json("root pkg (npm)", &raw);
+
+        assert_eq!(v["name"], "myproj");
+        // npm-shaped workspaces
+        let ws = v["workspaces"].as_array().expect("workspaces array");
+        let labels: Vec<&str> = ws.iter().map(|w| w.as_str().unwrap()).collect();
+        assert!(labels.contains(&"apps/*") && labels.contains(&"packages/*"));
+        // Top-level overrides (closest npm equivalent to pnpm.overrides)
+        assert!(v["overrides"]["@spooky-sync/core"].is_string());
+        // Should not emit pnpm-specific shapes
+        assert!(v.get("pnpm").is_none(), "npm variant should not emit a pnpm key");
+        // Scripts should target npm
+        let dev_app = v["scripts"]["dev:app"].as_str().unwrap();
+        assert!(dev_app.starts_with("npm run -w"), "got {}", dev_app);
+        // CLI is a runtime dependency so npx-scaffolded users get spky on PATH via node_modules/.bin
+        assert_eq!(v["dependencies"]["@spooky-sync/cli"], VERSION);
+        assert!(v.get("devDependencies").is_none() || v["devDependencies"].get("@spooky-sync/cli").is_none(),
+            "@spooky-sync/cli must live in dependencies, not devDependencies");
+    }
+
+    // --- Per-config sanity: sp00ky.yml renders ---
+
+    #[test]
+    fn sp00ky_yml_full_project_render_parses_with_canonical_schema() {
+        let client_types = "\nclientTypes:\n  - format: typescript\n    output: apps/app/src/schema.gen.ts";
+        let raw = render(templates::SP00KY_YML, &[
+            ("SCHEMA_DIR", "packages/schema"),
+            ("CLIENT_TYPES_SECTION", client_types),
+        ]);
+        assert_no_unrendered_placeholders("sp00ky.yml (full)", &raw);
+
+        let cfg = parse_sp00ky_yml(&raw);
+        assert_eq!(cfg.client_types.len(), 1, "clientTypes should contain one entry");
+        // Mode is optional in the parser but the template emits singlenode by default.
+        assert!(raw.contains("mode: singlenode"));
+        // Optional examples must remain commented so they don't pollute the active config.
+        assert!(raw.contains("# slug:"), "slug example should stay commented");
+        assert!(raw.contains("# surrealdb:"));
+    }
+
+    #[test]
+    fn sp00ky_yml_schema_only_render_parses_with_canonical_schema() {
+        // Schema-only writes the yml with SCHEMA_DIR="." and no clientTypes section
+        let raw = render(templates::SP00KY_YML, &[
+            ("SCHEMA_DIR", "."),
+            ("CLIENT_TYPES_SECTION", ""),
+        ]);
+        assert_no_unrendered_placeholders("sp00ky.yml (schema-only)", &raw);
+        let _ = parse_sp00ky_yml(&raw);
+    }
+
+    #[test]
+    fn sp00ky_yml_skip_codegen_render_parses() {
+        // codegen=Skip: scaffold passes empty CLIENT_TYPES_SECTION
+        let raw = render(templates::SP00KY_YML, &[
+            ("SCHEMA_DIR", "packages/schema"),
+            ("CLIENT_TYPES_SECTION", ""),
+        ]);
+        let cfg = parse_sp00ky_yml(&raw);
+        assert!(cfg.client_types.is_empty());
+    }
+
+    // --- Full e2e: scaffold a real project tree to a tempdir ---
+
+    #[test]
+    fn scaffold_full_npm_project_e2e() {
+        let tmp = TempDir::new().expect("tempdir");
+        let root = tmp.path().join("e2e-app");
+        let opts = ScaffoldOptions {
+            project_name: "e2e-app".to_string(),
+            is_schema_only: false,
+            schema_template: SchemaTemplate::Minimal,
+            codegen_format: CodegenFormat::TypeScript,
+            pm: PackageManager::Npm,
+        };
+
+        scaffold(&root, &opts).expect("scaffold succeeds");
+
+        // 1. Expected files exist
+        for rel in [
+            "sp00ky.yml",
+            "package.json",
+            ".gitignore",
+            "CLAUDE.md",
+            ".claude/settings.local.json",
+            "packages/schema/package.json",
+            "packages/schema/src/schema.surql",
+            "packages/schema/.gitignore",
+            "apps/app/package.json",
+            "apps/app/vite.config.ts",
+            "apps/app/tsconfig.json",
+            "apps/app/index.html",
+            "apps/app/src/main.tsx",
+            "apps/app/src/App.tsx",
+            "apps/app/src/auth.tsx", // Minimal template includes auth
+            "apps/app/src/db.ts",
+            "apps/app/src/schema.gen.ts",
+        ] {
+            assert!(
+                root.join(rel).exists(),
+                "expected scaffolded file missing: {}",
+                rel
+            );
+        }
+        // npm variant must NOT write pnpm-workspace.yaml
+        assert!(
+            !root.join("pnpm-workspace.yaml").exists(),
+            "npm scaffold should not emit pnpm-workspace.yaml"
+        );
+
+        // 2. sp00ky.yml parses with canonical schema and reflects scaffold opts
+        let yml = read(&root, "sp00ky.yml");
+        assert_no_unrendered_placeholders("scaffolded sp00ky.yml", &yml);
+        let cfg = parse_sp00ky_yml(&yml);
+        assert_eq!(cfg.client_types.len(), 1);
+        assert_eq!(cfg.client_types[0].output, "apps/app/src/schema.gen.ts");
+
+        // 3. Root package.json parses, has expected fields, names use scaffold project name
+        let root_pkg = read(&root, "package.json");
+        assert_no_unrendered_placeholders("scaffolded root package.json", &root_pkg);
+        let root_v = parse_json("root pkg", &root_pkg);
+        assert_eq!(root_v["name"], "e2e-app");
+        assert_eq!(root_v["dependencies"]["@spooky-sync/cli"], VERSION);
+        let dev_app = root_v["scripts"]["dev:app"].as_str().unwrap();
+        assert!(
+            dev_app.contains("@e2e-app/app"),
+            "dev:app should reference scoped app package, got {}",
+            dev_app
+        );
+        assert!(dev_app.starts_with("npm run -w"));
+
+        // 4. App package.json parses
+        let app_pkg = read(&root, "apps/app/package.json");
+        assert_no_unrendered_placeholders("app package.json", &app_pkg);
+        let app_v = parse_json("app pkg", &app_pkg);
+        assert_eq!(app_v["name"], "@e2e-app/app");
+
+        // 5. Schema package.json parses
+        let schema_pkg = read(&root, "packages/schema/package.json");
+        assert_no_unrendered_placeholders("schema package.json", &schema_pkg);
+        let schema_v = parse_json("schema pkg", &schema_pkg);
+        assert_eq!(schema_v["name"], "@e2e-app/schema");
+
+        // 6. Claude settings is valid JSON
+        let claude = read(&root, ".claude/settings.local.json");
+        let _ = parse_json("claude settings", &claude);
+
+        // 7. Schema source is non-empty (Minimal template carries auth tables)
+        let surql = read(&root, "packages/schema/src/schema.surql");
+        assert!(!surql.trim().is_empty(), "schema.surql should have content");
+    }
+
+    #[test]
+    fn scaffold_full_pnpm_project_emits_pnpm_workspace_yaml() {
+        let tmp = TempDir::new().expect("tempdir");
+        let root = tmp.path().join("pnpm-app");
+        let opts = ScaffoldOptions {
+            project_name: "pnpm-app".to_string(),
+            is_schema_only: false,
+            schema_template: SchemaTemplate::Empty,
+            codegen_format: CodegenFormat::TypeScript,
+            pm: PackageManager::Pnpm,
+        };
+        scaffold(&root, &opts).expect("scaffold succeeds");
+
+        assert!(
+            root.join("pnpm-workspace.yaml").exists(),
+            "pnpm scaffold must emit pnpm-workspace.yaml"
+        );
+        let root_v = parse_json("root pkg (pnpm e2e)", &read(&root, "package.json"));
+        // pnpm variant: no inline workspaces array; pnpm.overrides present
+        assert!(root_v.get("workspaces").is_none());
+        assert!(root_v["pnpm"]["overrides"]["@spooky-sync/core"].is_string());
+        // Empty schema template: no auth.tsx
+        assert!(!root.join("apps/app/src/auth.tsx").exists());
+    }
+
+    #[test]
+    fn scaffold_schema_only_project_writes_yml_at_root() {
+        let tmp = TempDir::new().expect("tempdir");
+        let root = tmp.path().join("schema-only");
+        let opts = ScaffoldOptions {
+            project_name: "schema-only".to_string(),
+            is_schema_only: true,
+            schema_template: SchemaTemplate::Minimal,
+            codegen_format: CodegenFormat::Dart,
+            pm: PackageManager::Npm,
+        };
+        scaffold(&root, &opts).expect("scaffold succeeds");
+
+        // Schema-only puts package.json + sp00ky.yml at the project root,
+        // not under packages/schema/, and does not scaffold an app.
+        assert!(root.join("sp00ky.yml").exists());
+        assert!(root.join("package.json").exists());
+        assert!(root.join("src/schema.surql").exists());
+        assert!(!root.join("apps/app/package.json").exists());
+
+        let cfg = parse_sp00ky_yml(&read(&root, "sp00ky.yml"));
+        assert_eq!(cfg.client_types.len(), 1);
+        assert_eq!(
+            cfg.client_types[0].output, "./schema.gen.dart",
+            "Dart codegen should write schema.gen.dart at the project root"
+        );
+    }
 }

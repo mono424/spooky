@@ -17,6 +17,22 @@ import { basePath } from '../config/nav';
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="generator" content={Astro.generator} />
     <meta name="description" content="sp00ky - A SurrealDB native Sync Engine" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- Non-render-blocking: load as `print` so the browser fetches without
+         blocking first paint, then promote to `all` once it arrives. -->
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      media="print"
+      onload="this.media='all'"
+    />
+    <noscript>
+      <link
+        rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      />
+    </noscript>
     <meta property="og:type" content="website" />
     <meta property="og:url" content={Astro.site} />
     <meta property="og:title" content="sp00ky: The SurrealDB Native Real-Time Sync Engine" />
@@ -110,7 +126,7 @@ import { basePath } from '../config/nav';
           </div>
 
           <div class="hero-right">
-            <HeroStack client:load />
+            <HeroStack />
           </div>
         </div>
       </section>
@@ -274,51 +290,61 @@ import { basePath } from '../config/nav';
   </body>
 
   <script>
-    // Animated favicon (floating ghost)
-    const ghostSVG = `
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
-      <style>
-        .bg { fill: #FFFFFF; }
-        .ghost { fill: #000000; }
-        .eyes { fill: #FFFFFF; }
-        @media (prefers-color-scheme: dark) {
-          .bg { fill: #000000; }
-          .ghost { fill: #FFFFFF; }
-          .eyes { fill: #000000; }
-        }
-      </style>
-      <path class="ghost" d="M6 10V28L10 24L14 28L18 24L22 28L26 24V10C26 4.47715 21.5228 0 16 0C10.4772 0 6 4.47715 6 10Z"/>
-      <rect class="eyes" x="10" y="8" width="4" height="4"/>
-      <rect class="eyes" x="18" y="8" width="4" height="4"/>
-    </svg>`;
+    // Animated favicon (floating ghost). Skipped on Safari — its
+    // canvas.toDataURL() takes ~100ms per call, which pegs CPU at 100%
+    // and causes multi-second main-thread freezes. The static SVG favicon
+    // in <head> remains the fallback there.
+    const ua = navigator.userAgent;
+    const isSafari =
+      /^((?!chrome|android|crios|fxios|edgios).)*safari/i.test(ua) &&
+      navigator.vendor === 'Apple Computer, Inc.';
 
-    const canvas = document.createElement('canvas');
-    canvas.width = 32;
-    canvas.height = 32;
-    const ctx = canvas.getContext('2d');
+    if (!isSafari) {
+      const ghostSVG = `
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+        <style>
+          .bg { fill: #FFFFFF; }
+          .ghost { fill: #000000; }
+          .eyes { fill: #FFFFFF; }
+          @media (prefers-color-scheme: dark) {
+            .bg { fill: #000000; }
+            .ghost { fill: #FFFFFF; }
+            .eyes { fill: #000000; }
+          }
+        </style>
+        <path class="ghost" d="M6 10V28L10 24L14 28L18 24L22 28L26 24V10C26 4.47715 21.5228 0 16 0C10.4772 0 6 4.47715 6 10Z"/>
+        <rect class="eyes" x="10" y="8" width="4" height="4"/>
+        <rect class="eyes" x="18" y="8" width="4" height="4"/>
+      </svg>`;
 
-    const img = new Image();
-    img.src = 'data:image/svg+xml;base64,' + btoa(ghostSVG);
+      const canvas = document.createElement('canvas');
+      canvas.width = 32;
+      canvas.height = 32;
+      const ctx = canvas.getContext('2d');
 
-    let link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
-    if (!link) {
-      link = document.createElement('link');
-      link.rel = 'icon';
-      document.head.appendChild(link);
-    }
+      const img = new Image();
+      img.src = 'data:image/svg+xml;base64,' + btoa(ghostSVG);
 
-    img.addEventListener('load', function () {
-      const start = performance.now();
-      function step(timestamp: number) {
-        const elapsed = timestamp - start;
-        const yOffset = (1 - Math.cos((elapsed / 3000) * 2 * Math.PI)) * 1.5;
-        ctx?.clearRect(0, 0, 32, 32);
-        ctx?.drawImage(img, 0, yOffset, 32, 32);
-        link.href = canvas.toDataURL('image/png');
-        requestAnimationFrame(step);
+      let link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
+      if (!link) {
+        link = document.createElement('link');
+        link.rel = 'icon';
+        document.head.appendChild(link);
       }
-      requestAnimationFrame(step);
-    });
+
+      img.addEventListener('load', function () {
+        const start = performance.now();
+        function step(timestamp: number) {
+          const elapsed = timestamp - start;
+          const yOffset = (1 - Math.cos((elapsed / 3000) * 2 * Math.PI)) * 1.5;
+          ctx?.clearRect(0, 0, 32, 32);
+          ctx?.drawImage(img, 0, yOffset, 32, 32);
+          link.href = canvas.toDataURL('image/png');
+          requestAnimationFrame(step);
+        }
+        requestAnimationFrame(step);
+      });
+    }
   </script>
 
   <style>

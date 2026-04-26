@@ -1,5 +1,6 @@
-/* Professional Typography - Google Fonts */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+/* Fonts: loaded via non-render-blocking <link rel="stylesheet" media="print"
+   onload="this.media='all'"> in each page's <head> (see index.astro).
+   The CSS `@import` previously here blocked first paint on every page. */
 
 @tailwind base;
 @tailwind components;
@@ -85,26 +86,23 @@
     animation: fade-in 0.8s ease-out forwards;
   }
 
-  /* Fade In to 20% Opacity with White to Gray */
+  /* Fade In to 20% Opacity. Filter brightness was animated here previously
+     but Safari's filter compositor is much slower than opacity, so it now
+     just ramps opacity. */
   @keyframes fade-in-subtle {
     0% {
       opacity: 0;
-      filter: brightness(4);
     }
     30% {
       opacity: 0.3;
-      filter: brightness(3.5);
     }
     100% {
       opacity: 0.2;
-      filter: brightness(0.8);
     }
   }
 
   .animate-fade-in-subtle {
     animation: fade-in-subtle 0.6s ease-out forwards;
-    will-change: opacity, filter;
-    backface-visibility: hidden;
   }
 
   /* Flip In Animation */
@@ -379,9 +377,11 @@ details[open] .expanded-content {
   right: 0;
   z-index: 50;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-  background: rgba(9, 9, 11, 0.72);
-  backdrop-filter: saturate(180%) blur(14px);
-  -webkit-backdrop-filter: saturate(180%) blur(14px);
+  /* Heavier opacity + smaller blur radius — Safari's backdrop-filter is one
+     of the slowest paints, especially on a fixed nav that re-rasters on scroll. */
+  background: rgba(9, 9, 11, 0.88);
+  backdrop-filter: saturate(140%) blur(8px);
+  -webkit-backdrop-filter: saturate(140%) blur(8px);
 }
 body {
   padding-top: 58px;
@@ -534,8 +534,8 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 10px;
   box-shadow: 0 20px 50px -20px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.02);
-  backdrop-filter: saturate(180%) blur(12px);
-  -webkit-backdrop-filter: saturate(180%) blur(12px);
+  backdrop-filter: saturate(140%) blur(6px);
+  -webkit-backdrop-filter: saturate(140%) blur(6px);
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -784,8 +784,7 @@ body {
   letter-spacing: 0.04em;
   color: #a1a1aa;
   width: fit-content;
-  opacity: 0;
-  animation: fade-up 600ms 150ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: fade-up 280ms ease-out both;
 }
 .hero-eyebrow .badge {
   font-size: 9px;
@@ -805,9 +804,8 @@ body {
   letter-spacing: -0.035em;
   font-weight: 600;
   color: #ffffff;
-  opacity: 0;
-  animation: fade-up 700ms 250ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
   text-wrap: balance;
+  animation: fade-up 320ms 60ms ease-out both;
 }
 .hero-headline .accent {
   color: #9b8aff;
@@ -819,8 +817,7 @@ body {
   color: #71717a;
   max-width: 520px;
   margin: 0;
-  opacity: 0;
-  animation: fade-up 700ms 400ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: fade-up 320ms 120ms ease-out both;
 }
 .hero-install {
   display: inline-flex;
@@ -834,8 +831,7 @@ body {
   font-size: 13px;
   width: fit-content;
   color: #ffffff;
-  opacity: 0;
-  animation: fade-up 700ms 550ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: fade-up 320ms 180ms ease-out both;
 }
 .hero-install .prompt {
   color: #a1a1aa;
@@ -866,8 +862,7 @@ body {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
-  opacity: 0;
-  animation: fade-up 700ms 700ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: fade-up 320ms 240ms ease-out both;
 }
 .hero-btn {
   display: inline-flex;
@@ -904,15 +899,15 @@ body {
 }
 .hero-right {
   position: relative;
-  opacity: 0;
-  animation: fade-up 900ms 350ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: fade-up 380ms 100ms ease-out both;
 }
 .hero-right::before {
   content: '';
   position: absolute;
   inset: -40px;
-  background: radial-gradient(60% 50% at 60% 50%, rgba(124, 106, 239, 0.18), transparent 65%);
-  filter: blur(20px);
+  /* The radial gradient is already soft; the extra `filter: blur(20px)` was
+     pushing the whole hero into a slow filter render layer in Safari. */
+  background: radial-gradient(60% 50% at 60% 50%, rgba(124, 106, 239, 0.22), transparent 65%);
   z-index: -1;
   pointer-events: none;
 }
@@ -926,17 +921,23 @@ body {
   display: block;
   width: 100%;
   height: auto;
-  filter: drop-shadow(0 40px 80px rgba(0, 0, 0, 0.4));
+  /* drop-shadow with an 80px blur forces the whole SVG into its own
+     filter layer, which Safari recomposites slowly. The hero already has
+     a soft purple halo behind it; the explicit shadow added little. */
+}
+@keyframes hero-layer-in {
+  from {
+    opacity: 0;
+    transform: translateY(-24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 .hero-layer {
-  opacity: 0;
-  transform: translateY(-40px);
-  transition: opacity 700ms cubic-bezier(0.2, 0.7, 0.2, 1),
-    transform 700ms cubic-bezier(0.2, 0.7, 0.2, 1);
-}
-.hero-layer.hero-layer-in {
-  opacity: 1;
-  transform: translateY(0);
+  animation: hero-layer-in 380ms ease-out both;
+  /* per-layer animation-delay set inline by HeroStack.tsx */
 }
 
 @media (max-width: 960px) {
@@ -976,7 +977,8 @@ body {
   animation-timing-function: ease-in-out;
   animation-iteration-count: infinite;
   animation-direction: alternate;
-  will-change: transform, opacity;
+  /* will-change intentionally omitted — promoting 14 layers up-front
+     hurts more than it helps in Safari (memory + composite cost). */
   user-select: none;
 }
 
