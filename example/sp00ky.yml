@@ -12,9 +12,12 @@ surrealdb:
 schema: ./schema
 version:
   dev: dev
-  cloud: dev
+  cloud: canary
 buckets:
   - ./schema/src/buckets/profile.surql
+logLevel:
+  dev: trace
+  cloud: info
 clientTypes:
   - format: typescript
     output: ./app-solid/src/schema.gen.ts
