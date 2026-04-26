@@ -193,8 +193,6 @@ jobs:
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: apps/cli
 
       - name: Install cross (Linux ARM64)
         if: matrix.cross
@@ -202,17 +200,15 @@ jobs:
 
       - name: Build binary (cross)
         if: matrix.cross
-        working-directory: apps/cli
-        run: cross build --release --target ${{ matrix.target }}
+        run: cross build --release -p sp00ky-cli --target ${{ matrix.target }}
 
       - name: Build binary (native)
         if: "!matrix.cross"
-        working-directory: apps/cli
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release -p sp00ky-cli --target ${{ matrix.target }}
 
       - name: Copy binary to package directory
         shell: bash
-        run: cp apps/cli/target/${{ matrix.target }}/release/${{ matrix.binary }} apps/cli/npm/${{ matrix.package }}/${{ matrix.binary }}
+        run: cp target/${{ matrix.target }}/release/${{ matrix.binary }} apps/cli/npm/${{ matrix.package }}/${{ matrix.binary }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
