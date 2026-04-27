@@ -5,6 +5,8 @@ export interface TextSegment {
   text: string;
   /** If true the segment starts already white (not animated). */
   preRevealed?: boolean;
+  /** Extra classes applied to every word in this segment. */
+  className?: string;
 }
 
 interface ScrollRevealTextProps {
@@ -19,11 +21,11 @@ export function ScrollRevealText({ segments, trailing, className }: ScrollReveal
 
   // Flatten all segments into an ordered word list, tagging each word with
   // whether it belongs to a pre-revealed segment.
-  const words: { word: string; preRevealed: boolean }[] = [];
+  const words: { word: string; preRevealed: boolean; className?: string }[] = [];
   for (const seg of segments) {
     const segWords = seg.text.split(/\s+/).filter(Boolean);
     for (const w of segWords) {
-      words.push({ word: w, preRevealed: !!seg.preRevealed });
+      words.push({ word: w, preRevealed: !!seg.preRevealed, className: seg.className });
     }
   }
 
@@ -37,7 +39,9 @@ export function ScrollRevealText({ segments, trailing, className }: ScrollReveal
         if (w.preRevealed) {
           return (
             <span key={i}>
-              <span className="text-white">{w.word}</span>{' '}
+              <span className={['text-white', w.className].filter(Boolean).join(' ')}>
+                {w.word}
+              </span>{' '}
             </span>
           );
         }
@@ -46,7 +50,9 @@ export function ScrollRevealText({ segments, trailing, className }: ScrollReveal
         return (
           <span key={i}>
             <span
-              className={revealed ? 'text-white' : 'text-gray-500'}
+              className={[revealed ? 'text-white' : 'text-gray-500', w.className]
+                .filter(Boolean)
+                .join(' ')}
               style={{ transition: 'color 0.15s ease' }}
             >
               {w.word}

@@ -7,6 +7,7 @@ import SiteFooter from '../components/SiteFooter.astro';
 import { HeroStack } from '../components/HeroStack';
 import { FloatingGhosts } from '../components/FloatingGhosts';
 import { FeatureGrid } from '../components/UnderTheHood';
+import NewsletterSignup from '../components/NewsletterSignup';
 import { basePath } from '../config/nav';
 ---
 
@@ -75,8 +76,8 @@ import { basePath } from '../config/nav';
             </h1>
 
             <p class="hero-sub">
-              Ship your app with real-time sync, offline support, and full type safety. No extra
-              work required.
+              Sync, offline, and type safety are already handled. You stay focused on the product
+              your users actually see.
             </p>
 
             <div class="hero-install">
@@ -181,29 +182,79 @@ import { basePath } from '../config/nav';
       </section>
 
       <!-- CTA SECTION -->
-      <section class="py-16 md:py-32 border-t border-white/5 bg-black text-center relative overflow-hidden">
-        <div class="max-w-4xl mx-auto px-4 relative z-10">
-          <h2 class="text-section md:text-hero font-semibold mb-8 text-text-primary">
-            Ready to build something amazing?
-          </h2>
-          <p class="text-text-tertiary text-body-lg mb-12 max-w-2xl mx-auto leading-relaxed">
-            Start building local-first, offline-ready applications today. Dive into the documentation
-            to learn more about the architecture and implementation details.
-          </p>
-          <a
-            href={`${basePath}/docs`}
-            class="inline-flex items-center gap-3 bg-white text-black px-8 py-3 font-medium text-lg rounded-lg transition-colors duration-150 hover:bg-white/90 group"
+      <section class="relative overflow-hidden border-t border-white/5 bg-black py-28 md:py-44">
+        <!-- Top hairline -->
+        <div
+          aria-hidden="true"
+          class="pointer-events-none absolute inset-x-0 top-0 h-px"
+          style="background: linear-gradient(90deg, transparent, rgba(255,255,255,0.18), transparent);"
+        >
+        </div>
+
+        <!-- Spotlight halo -->
+        <div
+          aria-hidden="true"
+          class="pointer-events-none absolute inset-x-0 top-0 flex justify-center"
+        >
+          <div
+            class="h-[640px] w-[1100px] max-w-[120vw] -translate-y-[35%] rounded-full"
+            style="background: radial-gradient(closest-side, rgba(255,255,255,0.10), rgba(124,106,239,0.06) 38%, transparent 72%);"
           >
-            <span>Get Started</span>
-            <svg
-              class="w-5 h-5 transition-transform duration-200 group-hover:translate-x-1"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
+          </div>
+        </div>
+
+        <div class="relative z-10 mx-auto max-w-xl px-6 text-center">
+          <!-- Mono eyebrow -->
+          <div
+            class="mb-9 inline-flex items-center gap-2.5 font-mono text-[11px] uppercase tracking-[0.22em] text-text-tertiary"
+          >
+            <span
+              class="h-1 w-1 rounded-full bg-emerald-400"
+              style="box-shadow: 0 0 8px rgba(74,222,128,0.7);"></span>
+            <span>Waitlist</span>
+            <span class="text-text-quaternary">·</span>
+            <span>v0.1 beta</span>
+          </div>
+
+          <h2
+            class="mb-6 text-balance text-5xl font-medium tracking-[-0.04em] text-text-primary md:text-7xl"
+          >
+            Almost <span class="font-serif font-normal italic tracking-tight text-text-secondary"
+              >ready.</span
             >
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
-            </svg>
-          </a>
+          </h2>
+
+          <p
+            class="mx-auto mb-12 max-w-md text-balance text-base leading-relaxed text-text-tertiary md:text-[17px]"
+          >
+            We're putting the finishing touches on sp00ky. Drop your email and you'll be first
+            through the door.
+          </p>
+
+          <NewsletterSignup client:load />
+
+          <p class="mt-4 font-mono text-[11px] tracking-wide text-text-quaternary">
+            // no spam, one note when beta opens
+          </p>
+
+          <div class="mt-16 flex items-center justify-center">
+            <a
+              href={`${basePath}/docs`}
+              class="group inline-flex items-center gap-1.5 text-xs text-text-tertiary transition-colors hover:text-text-primary"
+            >
+              <span>Or dive into the docs while we cook</span>
+              <svg
+                class="h-3 w-3 transition-transform duration-200 group-hover:translate-x-0.5"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                stroke-width="2.25"
+              >
+                <path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6"
+                ></path>
+              </svg>
+            </a>
+          </div>
         </div>
       </section>
     </main>

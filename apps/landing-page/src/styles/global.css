@@ -762,8 +762,8 @@ body {
   padding: 0 28px;
   width: 100%;
   display: grid;
-  grid-template-columns: 1.05fr 1fr;
-  gap: 56px;
+  grid-template-columns: 1.45fr 1fr;
+  gap: 48px;
   align-items: center;
 }
 .hero-left {
@@ -781,7 +781,8 @@ body {
   border-radius: 999px;
   font-family: 'JetBrains Mono', monospace;
   font-size: 11px;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
   color: #a1a1aa;
   width: fit-content;
   animation: fade-up 280ms ease-out both;
@@ -789,7 +790,7 @@ body {
 .hero-eyebrow .badge {
   font-size: 9px;
   font-weight: 600;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
   padding: 2px 7px;
   border-radius: 999px;
@@ -799,23 +800,28 @@ body {
 }
 .hero-headline {
   margin: 0;
-  font-size: clamp(2.8rem, 5.2vw, 4.2rem);
-  line-height: 1.02;
-  letter-spacing: -0.035em;
-  font-weight: 600;
+  font-size: clamp(3rem, 5.6vw, 4.75rem);
+  line-height: 1;
+  letter-spacing: -0.045em;
+  font-weight: 500;
   color: #ffffff;
   text-wrap: balance;
   animation: fade-up 320ms 60ms ease-out both;
 }
 .hero-headline .accent {
-  color: #9b8aff;
   display: inline-block;
+  font-family: ui-serif, Georgia, Cambria, 'Times New Roman', Times, serif;
+  font-weight: 400;
+  font-style: italic;
+  letter-spacing: -0.03em;
+  color: #f4f4f5;
 }
 .hero-sub {
-  font-size: 1.125rem;
-  line-height: 1.6;
-  color: #71717a;
-  max-width: 520px;
+  font-size: 1.0625rem;
+  line-height: 1.65;
+  letter-spacing: -0.005em;
+  color: #a1a1aa;
+  max-width: 480px;
   margin: 0;
   animation: fade-up 320ms 120ms ease-out both;
 }

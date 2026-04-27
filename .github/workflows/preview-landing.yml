@@ -41,6 +41,7 @@ jobs:
         working-directory: apps/landing-page
         env:
           ASTRO_BASE_PATH: /pr-preview/pr-${{ github.event.pull_request.number }}
+          PUBLIC_NEWSLETTER_ENDPOINT: ${{ secrets.PUBLIC_NEWSLETTER_ENDPOINT }}
         run: pnpm run build
 
       - name: Deploy preview

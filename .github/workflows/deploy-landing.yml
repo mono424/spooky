@@ -32,6 +32,8 @@ jobs:
 
       - name: Build with Astro
         working-directory: apps/landing-page
+        env:
+          PUBLIC_NEWSLETTER_ENDPOINT: ${{ secrets.PUBLIC_NEWSLETTER_ENDPOINT }}
         run: pnpm run build
 
       - name: Deploy to GitHub Pages

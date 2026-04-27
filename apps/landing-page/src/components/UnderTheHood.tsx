@@ -566,10 +566,17 @@ export function FeatureGrid() {
     <>
       <div className="mb-24 md:mb-32">
         <ScrollRevealText
-          className="text-4xl md:text-6xl font-semibold leading-tight tracking-tight"
+          className="text-balance text-4xl md:text-6xl font-medium leading-[1.05] tracking-[-0.045em]"
           segments={[
-            { text: 'It\'s spooky. ', preRevealed: true },
-            { text: 'Data changes, every screen updates. Reactive queries keep every tab, every device, and every user in sync, instantly.' },
+            { text: "It's", preRevealed: true },
+            {
+              text: 'sp00ky.',
+              preRevealed: true,
+              className: 'font-serif font-normal italic tracking-tight text-text-secondary',
+            },
+            {
+              text: 'Data changes, every screen updates. Reactive queries keep every tab, every device, and every user in sync, instantly.',
+            },
           ]}
         />
       </div>
