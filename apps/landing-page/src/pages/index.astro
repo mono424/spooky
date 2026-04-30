@@ -183,25 +183,29 @@ import { basePath } from '../config/nav';
 
       <!-- CTA SECTION -->
       <section class="relative overflow-hidden border-t border-white/5 bg-black py-28 md:py-44">
-        <!-- ASCII animation background (file is pre-baked ping-pong, so a plain loop suffices) -->
-        <video
-          aria-hidden="true"
-          class="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-60 mix-blend-screen"
-          autoplay
-          loop
-          muted
-          playsinline
-          preload="auto"
-        >
-          <source src="/ascii-animation.mp4" type="video/mp4" />
-        </video>
-
-        <!-- Vignette: darker at edges, slight dim in center -->
+        <!-- ASCII animation background (file is pre-baked ping-pong, so a plain loop suffices)
+             Constrained to roughly the form width + 100px and centered, with a feathered fade
+             so the edges blend into the section instead of cutting hard. -->
         <div
           aria-hidden="true"
-          class="pointer-events-none absolute inset-0"
-          style="background: radial-gradient(ellipse at center, rgba(0,0,0,0.2) 0%, rgba(0,0,0,0.6) 65%, rgba(0,0,0,0.9) 100%);"
+          class="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
+          style="
+            width: min(748px, 92vw);
+            aspect-ratio: 1 / 1;
+            -webkit-mask-image: radial-gradient(closest-side, black 55%, transparent 100%);
+            mask-image: radial-gradient(closest-side, black 55%, transparent 100%);
+          "
         >
+          <video
+            class="h-full w-full object-cover opacity-30 mix-blend-screen"
+            autoplay
+            loop
+            muted
+            playsinline
+            preload="auto"
+          >
+            <source src="/ascii-animation.mp4" type="video/mp4" />
+          </video>
         </div>
 
         <!-- Top hairline -->
@@ -220,18 +224,6 @@ import { basePath } from '../config/nav';
           <div
             class="h-[640px] w-[1100px] max-w-[120vw] -translate-y-[35%] rounded-full"
             style="background: radial-gradient(closest-side, rgba(255,255,255,0.10), rgba(124,106,239,0.06) 38%, transparent 72%);"
-          >
-          </div>
-        </div>
-
-        <!-- Reading well: soft dark backdrop centered behind the text column so it stays legible over the animation -->
-        <div
-          aria-hidden="true"
-          class="pointer-events-none absolute inset-x-0 top-1/2 z-[5] flex -translate-y-1/2 justify-center"
-        >
-          <div
-            class="h-[520px] w-[820px] max-w-[110vw] rounded-[50%]"
-            style="background: radial-gradient(closest-side, rgba(0,0,0,0.72), rgba(0,0,0,0.45) 55%, transparent 80%);"
           >
           </div>
         </div>
