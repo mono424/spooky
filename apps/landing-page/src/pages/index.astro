@@ -183,6 +183,27 @@ import { basePath } from '../config/nav';
 
       <!-- CTA SECTION -->
       <section class="relative overflow-hidden border-t border-white/5 bg-black py-28 md:py-44">
+        <!-- ASCII animation background (file is pre-baked ping-pong, so a plain loop suffices) -->
+        <video
+          aria-hidden="true"
+          class="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-60 mix-blend-screen"
+          autoplay
+          loop
+          muted
+          playsinline
+          preload="auto"
+        >
+          <source src="/ascii-animation.mp4" type="video/mp4" />
+        </video>
+
+        <!-- Vignette: darker at edges, slight dim in center -->
+        <div
+          aria-hidden="true"
+          class="pointer-events-none absolute inset-0"
+          style="background: radial-gradient(ellipse at center, rgba(0,0,0,0.2) 0%, rgba(0,0,0,0.6) 65%, rgba(0,0,0,0.9) 100%);"
+        >
+        </div>
+
         <!-- Top hairline -->
         <div
           aria-hidden="true"
@@ -203,29 +224,45 @@ import { basePath } from '../config/nav';
           </div>
         </div>
 
-        <div class="relative z-10 mx-auto max-w-xl px-6 text-center">
+        <!-- Reading well: soft dark backdrop centered behind the text column so it stays legible over the animation -->
+        <div
+          aria-hidden="true"
+          class="pointer-events-none absolute inset-x-0 top-1/2 z-[5] flex -translate-y-1/2 justify-center"
+        >
+          <div
+            class="h-[520px] w-[820px] max-w-[110vw] rounded-[50%]"
+            style="background: radial-gradient(closest-side, rgba(0,0,0,0.72), rgba(0,0,0,0.45) 55%, transparent 80%);"
+          >
+          </div>
+        </div>
+
+        <div
+          class="relative z-10 mx-auto max-w-xl px-6 text-center"
+          style="text-shadow: 0 1px 2px rgba(0,0,0,0.6), 0 0 18px rgba(0,0,0,0.45);"
+        >
           <!-- Mono eyebrow -->
           <div
-            class="mb-9 inline-flex items-center gap-2.5 font-mono text-[11px] uppercase tracking-[0.22em] text-text-tertiary"
+            class="mb-9 inline-flex items-center gap-2.5 font-mono text-[11px] uppercase tracking-[0.22em] text-text-secondary"
           >
             <span
               class="h-1 w-1 rounded-full bg-emerald-400"
               style="box-shadow: 0 0 8px rgba(74,222,128,0.7);"></span>
             <span>Waitlist</span>
-            <span class="text-text-quaternary">·</span>
+            <span class="text-text-tertiary">·</span>
             <span>v0.1 beta</span>
           </div>
 
           <h2
-            class="mb-6 text-balance text-5xl font-medium tracking-[-0.04em] text-text-primary md:text-7xl"
+            class="mb-6 text-balance text-5xl font-medium tracking-[-0.04em] text-white md:text-7xl"
+            style="text-shadow: 0 2px 4px rgba(0,0,0,0.6), 0 0 32px rgba(0,0,0,0.55);"
           >
-            Almost <span class="font-serif font-normal italic tracking-tight text-text-secondary"
+            Almost <span class="font-serif font-normal italic tracking-tight text-white/90"
               >ready.</span
             >
           </h2>
 
           <p
-            class="mx-auto mb-12 max-w-md text-balance text-base leading-relaxed text-text-tertiary md:text-[17px]"
+            class="mx-auto mb-12 max-w-md text-balance text-base leading-relaxed text-text-secondary md:text-[17px]"
           >
             We're putting the finishing touches on sp00ky. Drop your email and you'll be first
             through the door.
@@ -233,14 +270,14 @@ import { basePath } from '../config/nav';
 
           <NewsletterSignup client:load />
 
-          <p class="mt-4 font-mono text-[11px] tracking-wide text-text-quaternary">
+          <p class="mt-4 font-mono text-[11px] tracking-wide text-text-tertiary">
             // no spam, one note when beta opens
           </p>
 
           <div class="mt-16 flex items-center justify-center">
             <a
               href={`${basePath}/docs`}
-              class="group inline-flex items-center gap-1.5 text-xs text-text-tertiary transition-colors hover:text-text-primary"
+              class="group inline-flex items-center gap-1.5 text-xs text-text-secondary transition-colors hover:text-text-primary"
             >
               <span>Or dive into the docs while we cook</span>
               <svg
@@ -337,6 +374,7 @@ import { basePath } from '../config/nav';
       document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') closeTryout();
       });
+
     </script>
   </body>
 
