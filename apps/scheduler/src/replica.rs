@@ -355,74 +355,181 @@ impl Replica {
                 table_name,
             );
 
-            // Take the SDK's own `Value` then call `into_json_value()` so RecordId/Datetime
-            // are flattened into normal JSON strings instead of `{"RecordId":{...}}` shapes.
-            // Direct deserialization into `serde_json::Value` doesn't work on SurrealDB 3.0.
-            // Tolerate the table disappearing between INFO FOR DB and SELECT (race) or
+            // Page the SELECT instead of pulling the whole table in one shot.
+            // The SurrealDB Rust SDK's WebSocket engine inherits tungstenite's
+            // default `max_message_size` of 64 MiB. A SELECT response that
+            // exceeds that fails the entire query, which historically caused
+            // bootstrap to stall on tables past ~60 MiB. Paging reads the
+            // table as a sequence of bounded responses; we then concatenate
+            // the pages into the same `Vec<Value>` the rest of the loop
+            // expects.
+            //
+            // Page size is chosen adaptively: a one-row probe measures actual
+            // serialised row size, then we pick a page count that targets
+            // ~32 MiB per response (half the WS frame ceiling, comfortable
+            // headroom). `SPKY_BOOTSTRAP_PAGE_SIZE` lets the operator override
+            // the result.
+            //
+            // Take the SDK's own `Value` then call `into_json_value()` so
+            // RecordId/Datetime are flattened into normal JSON strings instead
+            // of `{"RecordId":{...}}` shapes. Direct deserialization into
+            // `serde_json::Value` doesn't work on SurrealDB 3.0. Tolerate the
+            // table disappearing between INFO FOR DB and SELECT (race) or
             // simply not existing yet — treat as zero records and move on.
-            trace!(table = %table_name, "remote query: SELECT * FROM {}", table_name);
-            let records: Vec<Value> = match remote_db
-                .query(format!("SELECT * FROM {}", table_name))
+            let target_page_bytes: usize = 32 * 1024 * 1024;
+            let probe_row_bytes: Option<usize> = match remote_db
+                .query(format!("SELECT * FROM {} LIMIT 1", table_name))
                 .await
             {
-                Ok(mut response) => match response.take::<surrealdb::types::Value>(0) {
+                Ok(mut r) => match r.take::<surrealdb::types::Value>(0) {
                     Ok(sdk_val) => match sdk_val.into_json_value() {
-                        Value::Array(arr) => arr,
-                        other => bail!(
-                            "Expected array from SELECT * FROM {}, got {}",
-                            table_name,
-                            json_kind(&other),
-                        ),
+                        Value::Array(arr) => arr
+                            .first()
+                            .map(|v| serde_json::to_vec(v).map(|b| b.len()).unwrap_or(1024)),
+                        _ => None,
+                    },
+                    Err(_) => None,
+                },
+                Err(_) => None,
+            };
+            let auto_page_size = probe_row_bytes
+                .map(|b| (target_page_bytes / b.max(1)).max(1))
+                .unwrap_or(200);
+            let page_size: usize = std::env::var("SPKY_BOOTSTRAP_PAGE_SIZE")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .filter(|n: &usize| *n > 0)
+                .unwrap_or(auto_page_size)
+                // Hard ceiling to avoid pathological large pages even if
+                // the probe misses (e.g. variable row sizes).
+                .min(2000);
+            if let Some(b) = probe_row_bytes {
+                trace!(
+                    table = %table_name,
+                    probe_bytes_per_row = b,
+                    page_size,
+                    "bootstrap page-size auto-tuned",
+                );
+            }
+            let mut records: Vec<Value> = Vec::new();
+            let mut start: usize = 0;
+            let table_missing;
+            loop {
+                trace!(
+                    table = %table_name,
+                    start,
+                    page_size,
+                    "remote query: SELECT * FROM {} LIMIT {} START {}",
+                    table_name, page_size, start,
+                );
+                let resp = remote_db
+                    .query(format!(
+                        "SELECT * FROM {} LIMIT {} START {}",
+                        table_name, page_size, start,
+                    ))
+                    .await;
+                let page: Vec<Value> = match resp {
+                    Ok(mut response) => match response.take::<surrealdb::types::Value>(0) {
+                        Ok(sdk_val) => match sdk_val.into_json_value() {
+                            Value::Array(arr) => arr,
+                            other => bail!(
+                                "Expected array from paged SELECT on {}, got {}",
+                                table_name,
+                                json_kind(&other),
+                            ),
+                        },
+                        Err(e) if is_missing_error(&e) => {
+                            debug!(table = %table_name, "remote table missing during page take — stopping");
+                            table_missing = true;
+                            break;
+                        }
+                        Err(e) => return Err(anyhow::anyhow!(
+                            "take(0) failed for table '{}' page (start={}): {}",
+                            table_name, start, e,
+                        )),
                     },
                     Err(e) if is_missing_error(&e) => {
-                        debug!(table = %table_name, "remote table missing — skipping");
-                        Vec::new()
+                        debug!(table = %table_name, "remote table missing during page query — stopping");
+                        table_missing = true;
+                        break;
                     }
-                    Err(e) => return Err(anyhow::anyhow!(
-                        "take(0) failed for table '{}': {}", table_name, e
-                    )),
-                },
-                Err(e) if is_missing_error(&e) => {
-                    debug!(table = %table_name, "remote table missing — skipping");
-                    Vec::new()
+                    Err(e) => return Err(anyhow::Error::from(e)
+                        .context(format!(
+                            "SELECT page from {} (start={}, limit={}) failed",
+                            table_name, start, page_size,
+                        ))),
+                };
+                let n = page.len();
+                records.extend(page);
+                if n < page_size {
+                    table_missing = false;
+                    break;
                 }
-                Err(e) => return Err(anyhow::Error::from(e)
-                    .context(format!("SELECT * FROM {} failed", table_name))),
-            };
+                start += page_size;
+            }
+            // `table_missing` is captured for parity with the old single-shot
+            // path. We don't use it further; the rest of the loop simply
+            // proceeds with whatever records we collected (possibly zero).
+            let _ = table_missing;
 
             let count = records.len();
             let fetch_ms = table_start.elapsed().as_millis();
             let insert_start = std::time::Instant::now();
 
-            // Insert each record. Any insert failure aborts the whole snapshot.
-            // We strip the `id` field from CONTENT (the target thing already
-            // encodes it; leaving it in the body silently truncates writes on
-            // SurrealDB 3.0) and call `.check()` because the SDK reports
-            // statement-level errors there, not on `.await`.
-            for mut record in records {
-                let id_str = match record.as_object_mut() {
-                    Some(obj) => obj.remove("id").and_then(|v| v.as_str().map(String::from)),
-                    None => None,
-                };
-                let id_str = id_str.with_context(|| format!(
-                    "Record in '{}' missing string `id` after JSON flatten",
-                    table_name,
-                ))?;
-                let thing_id = build_thing_id(table_name, &id_str);
-                let field_count = record.as_object().map(|o| o.len()).unwrap_or(0);
+            // Bulk-insert in batches. The previous per-record `CREATE … CONTENT`
+            // loop was O(N) round-trips; for tables where each record is large
+            // (e.g. tens to hundreds of KiB) the per-call cost in SurrealDB 3.0
+            // was non-linear and stalled bootstrap entirely past ~60 MiB total.
+            // `INSERT INTO <table> $records` collapses each batch to one
+            // round-trip and lets the engine handle the value tree at bulk.
+            //
+            // We still validate per-record that `id` exists; we let SurrealDB
+            // parse the string id (e.g. "comment:42") into the record-id field
+            // on insert. `.check()` once per batch is enough because a single
+            // bad record fails the whole batch (same outer semantic as the old
+            // loop: any insert failure aborts the whole snapshot clone).
+            const INSERT_BATCH_SIZE: usize = 500;
+            let chunks: Vec<Vec<Value>> = records
+                .chunks(INSERT_BATCH_SIZE)
+                .map(<[Value]>::to_vec)
+                .collect();
+            for (chunk_idx, chunk) in chunks.into_iter().enumerate() {
+                // Validate ids upfront so we can give a specific error on the
+                // offending record, matching the old loop's behaviour.
+                for (within, rec) in chunk.iter().enumerate() {
+                    let has_id = rec
+                        .as_object()
+                        .and_then(|o| o.get("id"))
+                        .and_then(|v| v.as_str())
+                        .is_some();
+                    if !has_id {
+                        anyhow::bail!(
+                            "Record {}/{} in '{}' (batch {}) missing string `id` after JSON flatten",
+                            within,
+                            chunk.len(),
+                            table_name,
+                            chunk_idx,
+                        );
+                    }
+                }
+                let chunk_len = chunk.len();
                 trace!(
                     table = %table_name,
-                    id = %thing_id,
-                    fields = field_count,
-                    "bootstrap CREATE"
+                    chunk = chunk_idx,
+                    records = chunk_len,
+                    "bootstrap INSERT batch"
                 );
                 self.db
-                    .query(format!("CREATE {} CONTENT $data", thing_id))
-                    .bind(("data", record))
+                    .query(format!("INSERT INTO {} $records RETURN NONE", table_name))
+                    .bind(("records", Value::Array(chunk)))
                     .await
-                    .with_context(|| format!("CREATE {} send failed", thing_id))?
+                    .with_context(|| format!(
+                        "INSERT into {} batch {} send failed", table_name, chunk_idx,
+                    ))?
                     .check()
-                    .with_context(|| format!("CREATE {} returned an error", thing_id))?;
+                    .with_context(|| format!(
+                        "INSERT into {} batch {} returned an error", table_name, chunk_idx,
+                    ))?;
             }
 
             let insert_ms = insert_start.elapsed().as_millis();

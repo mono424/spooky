@@ -1,0 +1,360 @@
+---
+// Minimal SVG chart component for the performance docs page.
+// Two variants:
+//   variant="bar":  categorical bar chart (one bar per row)
+//   variant="line": connected line chart (numeric x axis)
+// Up to two series. Click a legend entry to toggle that series.
+
+interface Series {
+  label: string;
+  values: number[];
+  color?: string;
+}
+
+interface Props {
+  variant: "bar" | "line";
+  /** X-axis labels (one per data point). For line charts, also used as numeric tick labels. */
+  labels: string[];
+  /** Numeric x positions for line charts. Falls back to evenly spaced if omitted. */
+  xValues?: number[];
+  /** Title shown above the chart. */
+  title: string;
+  /** Y-axis label. */
+  yLabel: string;
+  /** X-axis label. */
+  xLabel: string;
+  /** Up to two series. */
+  series: Series[];
+  /** Unit suffix on tooltips/labels (e.g. " ms"). */
+  unit?: string;
+  /** Force a specific Y max; otherwise computed from the data. */
+  yMax?: number;
+  /** Force a specific Y min; otherwise 0. Useful when all values cluster
+   * in a narrow band and you want vertical separation between curves. */
+  yMin?: number;
+}
+
+const {
+  variant,
+  labels,
+  xValues,
+  title,
+  yLabel,
+  xLabel,
+  series,
+  unit = "",
+  yMax: yMaxProp,
+  yMin: yMinProp,
+} = Astro.props as Props;
+
+const W = 720;
+const H = 320;
+const M = { top: 30, right: 24, bottom: 56, left: 64 };
+const plotW = W - M.left - M.right;
+const plotH = H - M.top - M.bottom;
+
+const allValues = series.flatMap((s) => s.values);
+const computedMax = Math.max(...allValues, 1);
+const yMin = yMinProp ?? 0;
+// Round up to a clean number.
+const niceMax = (() => {
+  if (yMaxProp !== undefined) return yMaxProp;
+  const exp = Math.pow(10, Math.floor(Math.log10(computedMax)));
+  for (const m of [1, 2, 2.5, 5, 10]) {
+    if (m * exp >= computedMax) return m * exp;
+  }
+  return 10 * exp;
+})();
+
+const yTicks = 5;
+const tickValues = Array.from(
+  { length: yTicks + 1 },
+  (_, i) => yMin + ((niceMax - yMin) * i) / yTicks,
+);
+
+const colors = ["#ffffff", "#a78bfa"]; // primary, soft purple
+
+function yToPx(v: number): number {
+  const range = niceMax - yMin;
+  if (range <= 0) return M.top + plotH / 2;
+  return M.top + plotH - ((v - yMin) / range) * plotH;
+}
+
+function xToPx(idx: number, n: number, x?: number): number {
+  if (variant === "line" && xValues && x !== undefined) {
+    const xMin = Math.min(...xValues);
+    const xMax = Math.max(...xValues);
+    if (xMax === xMin) return M.left + plotW / 2;
+    return M.left + ((x - xMin) / (xMax - xMin)) * plotW;
+  }
+  if (n === 1) return M.left + plotW / 2;
+  return M.left + (idx / (n - 1)) * plotW;
+}
+
+const barCountPerCategory = series.length;
+const groupGap = 0.2;
+const barGap = 0.05;
+function barX(catIdx: number, seriesIdx: number): { x: number; w: number } {
+  const groupW = plotW / labels.length;
+  const groupStart = M.left + catIdx * groupW + groupW * (groupGap / 2);
+  const innerW = groupW * (1 - groupGap);
+  const slot = innerW / barCountPerCategory;
+  return {
+    x: groupStart + seriesIdx * slot + slot * (barGap / 2),
+    w: slot * (1 - barGap),
+  };
+}
+---
+
+<figure class="my-6">
+  <svg
+    viewBox={`0 0 ${W} ${H}`}
+    role="img"
+    aria-label={title}
+    class="bench-chart w-full"
+    style="background: #09090b; border: 1px solid #27272a; border-radius: 0.5rem;"
+  >
+    <title>{title}</title>
+
+    {/* y-axis grid + ticks */}
+    {tickValues.map((v) => {
+      const y = yToPx(v);
+      return (
+        <>
+          <line
+            x1={M.left}
+            y1={y}
+            x2={W - M.right}
+            y2={y}
+            stroke="#27272a"
+            stroke-width="1"
+          />
+          <text
+            x={M.left - 8}
+            y={y + 4}
+            text-anchor="end"
+            fill="#a1a1aa"
+            font-size="11"
+            font-family="ui-monospace, monospace"
+          >
+            {Number.isInteger(v) ? v.toFixed(0) : v.toFixed(1)}
+          </text>
+        </>
+      );
+    })}
+
+    {/* y-axis label */}
+    <text
+      x={-(M.top + plotH / 2)}
+      y={18}
+      text-anchor="middle"
+      fill="#a1a1aa"
+      font-size="11"
+      transform="rotate(-90)"
+    >
+      {yLabel}
+    </text>
+
+    {/* axes */}
+    <line
+      x1={M.left}
+      y1={M.top}
+      x2={M.left}
+      y2={M.top + plotH}
+      stroke="#3f3f46"
+      stroke-width="1"
+    />
+    <line
+      x1={M.left}
+      y1={M.top + plotH}
+      x2={W - M.right}
+      y2={M.top + plotH}
+      stroke="#3f3f46"
+      stroke-width="1"
+    />
+
+    {variant === "bar" && (
+      <>
+        {/* Each series gets its own group so the legend can toggle it. */}
+        {series.map((s, si) => {
+          const color = s.color ?? colors[si] ?? "#fff";
+          return (
+            <g data-bench-series={si}>
+              {labels.map((_, ci) => {
+                const v = s.values[ci]!;
+                const { x, w } = barX(ci, si);
+                const y = yToPx(v);
+                const h = M.top + plotH - y;
+                return (
+                  <>
+                    <rect x={x} y={y} width={w} height={h} fill={color} />
+                    <text
+                      x={x + w / 2}
+                      y={y - 4}
+                      text-anchor="middle"
+                      fill={color}
+                      font-size="10"
+                      font-family="ui-monospace, monospace"
+                    >
+                      {v.toFixed(2)}
+                    </text>
+                  </>
+                );
+              })}
+            </g>
+          );
+        })}
+        {/* X-axis labels (shared across series). */}
+        {labels.map((lbl, ci) => (
+          <text
+            x={M.left + ci * (plotW / labels.length) + plotW / labels.length / 2}
+            y={M.top + plotH + 16}
+            text-anchor="middle"
+            fill="#e4e4e7"
+            font-size="11"
+            font-family="ui-monospace, monospace"
+          >
+            {lbl}
+          </text>
+        ))}
+      </>
+    )}
+
+    {variant === "line" && (
+      <>
+        {series.map((s, si) => {
+          const points = s.values.map((v, i) => {
+            const x = xToPx(i, s.values.length, xValues?.[i]);
+            return `${x},${yToPx(v)}`;
+          });
+          const color = s.color ?? colors[si] ?? "#fff";
+          return (
+            <g data-bench-series={si}>
+              <polyline
+                points={points.join(" ")}
+                fill="none"
+                stroke={color}
+                stroke-width="2"
+              />
+              {s.values.map((v, i) => {
+                const x = xToPx(i, s.values.length, xValues?.[i]);
+                const y = yToPx(v);
+                return (
+                  <>
+                    <circle cx={x} cy={y} r="3.5" fill={color} />
+                    <text
+                      x={x}
+                      y={y - 8}
+                      text-anchor="middle"
+                      fill={color}
+                      font-size="10"
+                      font-family="ui-monospace, monospace"
+                    >
+                      {v.toFixed(2)}
+                    </text>
+                  </>
+                );
+              })}
+            </g>
+          );
+        })}
+        {labels.map((lbl, i) => {
+          const x = xToPx(i, labels.length, xValues?.[i]);
+          return (
+            <text
+              x={x}
+              y={M.top + plotH + 16}
+              text-anchor="middle"
+              fill="#e4e4e7"
+              font-size="11"
+              font-family="ui-monospace, monospace"
+            >
+              {lbl}
+            </text>
+          );
+        })}
+      </>
+    )}
+
+    {/* x-axis label */}
+    <text
+      x={M.left + plotW / 2}
+      y={H - 12}
+      text-anchor="middle"
+      fill="#a1a1aa"
+      font-size="11"
+    >
+      {xLabel}
+    </text>
+
+    {/* legend (clickable) */}
+    {series.length > 1 && (
+      <g transform={`translate(${M.left}, ${M.top - 14})`}>
+        {series.map((s, i) => {
+          const color = s.color ?? colors[i] ?? "#fff";
+          return (
+            <g
+              transform={`translate(${i * 100}, 0)`}
+              data-bench-legend={i}
+              role="button"
+              tabindex="0"
+              aria-pressed="true"
+              style="cursor: pointer;"
+            >
+              {/* invisible larger hit area */}
+              <rect x="-2" y="-4" width="100" height="18" fill="transparent" />
+              <rect width="10" height="10" fill={color} />
+              <text
+                x={14}
+                y={9}
+                fill="#e4e4e7"
+                font-size="11"
+                font-family="ui-monospace, monospace"
+              >
+                {s.label}
+              </text>
+            </g>
+          );
+        })}
+      </g>
+    )}
+  </svg>
+  <figcaption class="mt-2 text-xs text-text-muted text-center">
+    {title}
+    {unit && ` (${unit.trim()})`}
+  </figcaption>
+</figure>
+
+<script>
+  // Click (or Enter/Space) on a legend item toggles that series' visibility.
+  // Event delegation on document so this survives Astro view transitions.
+  function toggle(legend: SVGElement) {
+    const idx = legend.getAttribute("data-bench-legend");
+    if (idx === null) return;
+    const svg = legend.closest("svg.bench-chart");
+    if (!svg) return;
+    const dataGroup = svg.querySelector(`g[data-bench-series="${idx}"]`);
+    if (!dataGroup) return;
+    const wasPressed = legend.getAttribute("aria-pressed") !== "false";
+    const nextPressed = !wasPressed;
+    legend.setAttribute("aria-pressed", nextPressed ? "true" : "false");
+    (dataGroup as SVGElement).style.display = nextPressed ? "" : "none";
+    (legend as SVGElement).style.opacity = nextPressed ? "1" : "0.4";
+  }
+
+  document.addEventListener("click", (e) => {
+    const t = e.target as Element | null;
+    const legend = t?.closest("[data-bench-legend]");
+    if (legend instanceof SVGElement) toggle(legend);
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const t = e.target as Element | null;
+    const legend = t?.closest("[data-bench-legend]");
+    if (legend instanceof SVGElement) {
+      e.preventDefault();
+      toggle(legend);
+    }
+  });
+</script>

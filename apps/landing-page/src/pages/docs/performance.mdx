@@ -1,0 +1,213 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: Performance
+---
+
+import Note from '../../components/ui/Note.astro';
+import BenchChart from '../../components/ui/BenchChart.astro';
+import CodeBlock from '../../components/ui/CodeBlock.astro';
+
+A live query in sp00ky goes from `POST /ingest` to a materialized
+view in single-digit milliseconds. Numbers below are mean of three
+runs from
+[`apps/benchmark/`](https://github.com/mono424/sp00ky/tree/main/apps/benchmark);
+raw samples are in
+[`results/`](https://github.com/mono424/sp00ky/tree/main/results).
+
+<Note>
+Single host: Apple M3 Max, 14 cores, 36 GiB RAM. SurrealDB v3 in a
+Docker container. Scheduler and SSP run as release binaries on
+loopback. Absolute numbers will shift in production; the deltas
+across rows of each chart are what reflect the engine.
+</Note>
+
+## A write reaches the view in ~3 ms
+
+End-to-end. From `POST /ingest` to the moment the SSP's materialized
+view's content hash advances. That's when a reader of the live query
+would actually see the change.
+
+<BenchChart
+  variant="bar"
+  title="End-to-end latency vs query shape (1k rows, ~1 KiB each)"
+  xLabel="query shape"
+  yLabel="latency (ms)"
+  labels={["plain", "1 subquery", "2 subqueries"]}
+  series={[
+    { label: "p50", values: [3.21, 3.91, 3.58] },
+    { label: "p95", values: [6.62, 7.56, 7.18] }
+  ]}
+  unit="ms"
+/>
+
+A flat `SELECT` propagates a write in 3.2 ms p50. Two levels of
+inlined subqueries add about 0.4 ms. p95 stays under 8 ms across all
+three shapes.
+
+## Database byte volume doesn't matter
+
+Hold the row count fixed at 1,000 and grow each row from 110 bytes to
+2 MiB. The same kind of write event always propagates in roughly the
+same time.
+
+<BenchChart
+  variant="line"
+  title="End-to-end p50 vs DB size (1,000 rows, growing per-row size)"
+  xLabel="total DB size"
+  yLabel="latency (ms)"
+  labels={["100 KiB", "3 MiB", "30 MiB", "120 MiB", "250 MiB", "500 MiB", "1 GiB"]}
+  series={[
+    { label: "depth-1", values: [3.37, 3.40, 3.85, 3.87, 2.59, 2.21, 2.54] },
+    { label: "depth-3", values: [3.91, 3.72, 4.37, 4.24, 2.87, 2.44, 2.83] }
+  ]}
+  yMin={2}
+  yMax={5}
+  unit="ms"
+/>
+
+Across **four orders of magnitude** of total DB size, end-to-end p50
+hovers between 2.2 and 4.4 ms. The engine maintains views as in-memory
+deltas; the per-event critical path doesn't read the underlying data
+volume.
+
+## The real cost driver is row count
+
+Every event triggers a fresh content hash over the canary view's
+materialized records. That's `O(rows in view)`. So when row count
+grows, latency grows with it. Realistic short rows, ~1 KiB each:
+
+<BenchChart
+  variant="line"
+  title="End-to-end p50 vs row count (~1 KiB rows)"
+  xLabel="rows in DB"
+  yLabel="latency (ms)"
+  labels={["1k", "5k", "10k", "20k", "30k"]}
+  series={[
+    { label: "depth-1", values: [3.21, 5.92, 9.43, 16.84, 27.03] },
+    { label: "depth-3", values: [3.58, 6.77, 11.04, 20.50, 33.53] }
+  ]}
+  yMin={2}
+  unit="ms"
+/>
+
+Roughly **0.8 ms per added 1,000 rows** in the view's result set. A
+1,000-row view propagates in 3 ms. A 30,000-row view propagates in
+27 ms.
+
+This is the most important lever for performance. The cost is paid
+per row currently held in a view, not per byte stored in the database.
+A 1 GiB database with small scoped views runs faster than a 30 MiB
+database with one giant view.
+
+<Note>
+**Keep queries small.** Cost is per row in the view, not per byte
+stored. A list of 20 propagates in ~3 ms; a list of 30,000 takes
+27 ms, and a UI almost never needs that.
+
+- Always include `LIMIT`.
+- Paginate on scroll. Views you stop subscribing to stay cached on
+  the SSP for a while, so re-opening them on backscroll is instant.
+- Scope by the viewer: `WHERE author = $auth.id`, `WHERE thread =
+  $current_thread_id`.
+
+One SSP comfortably holds thousands of small views. When you outgrow
+that, the answer is more SSPs, not bigger ones. The scheduler
+load-balances views across them.
+</Note>
+
+## A single SSP holds thousands of small views
+
+The other side of the same coin: many small scoped queries are cheap.
+500-row DB, view count swept from 100 to 2,000.
+
+<BenchChart
+  variant="line"
+  title="End-to-end latency vs number of registered (small) views"
+  xLabel="registered views"
+  yLabel="latency (ms)"
+  labels={["100", "500", "1k", "2k"]}
+  series={[
+    { label: "ingest p50", values: [3.75, 2.72, 3.20, 3.70] },
+    { label: "ingest p95", values: [8.49, 7.22, 6.66, 7.36] }
+  ]}
+  unit="ms"
+/>
+
+Latency is essentially flat at 2,000 active views. Memory grows
+linearly at ~16 KiB per added view: 22 MiB → 55 MiB across the sweep.
+
+If your application has 100 concurrent users each with ~20 live
+queries open (a list view, a detail panel, a few subscriptions), that
+is 2,000 views on one SSP, well inside the flat band. The
+architecture rewards "many small views" over "one big view".
+
+## 2,000 events/sec with sub-2 ms p50
+
+Worker pool of 16 concurrent in-flight `POST /ingest` calls.
+
+<BenchChart
+  variant="line"
+  title="Accept latency vs target rate"
+  xLabel="target events/sec"
+  yLabel="latency (ms)"
+  labels={["100", "200", "500", "1k", "2k"]}
+  series={[
+    { label: "p50", values: [2.15, 1.83, 0.83, 0.47, 1.36] },
+    { label: "p95", values: [4.24, 4.14, 2.58, 5.62, 13.98] }
+  ]}
+  unit="ms"
+/>
+
+p50 stays under 2.5 ms across the whole range. Latency drops in the
+mid-band as the worker pool amortises overhead. The system stays well
+under the 100 ms threshold the suite checks against, even at 2k
+events/sec.
+
+---
+
+## Verify on your own data
+
+The benchmark ships a verification probe that proves the SSP isn't
+running on a stub. On a 1 GiB DB:
+
+<CodeBlock
+  fileName="$ node apps/benchmark/dist/verify-bootstrap.js --rows 1000 --row-bytes 2000000"
+  lang="text"
+  code={`PASS seeded: 600 comments, 1144.5 MiB total
+PASS stack ready
+PASS registered canary: query="SELECT id FROM comment"
+PASS cache_size matches seed: cache_size=600
+PASS cache holds real comment IDs from seeded range
+PASS post-ingest reflects change: cache_size=601, includes new ID
+ALL CHECKS PASSED`}
+/>
+
+The probe seeds the DB, brings up the stack, registers a `SELECT id
+FROM comment` canary, then asserts the canary's cache size equals
+the seeded count, sampled cache entries are real comment IDs from
+the seeded range, and inserting a new comment grows the cache by
+exactly one with that exact ID present.
+
+## Reproduce
+
+```bash
+# Prerequisites: Docker + cargo build --release -p scheduler -p ssp-server
+pnpm -F @spooky-sync/benchmark build
+
+# Full sweep across both axes plus the secondary suites, 3 runs each.
+node apps/benchmark/dist/run-3x.js
+
+# Single point on the realistic-row axis:
+node apps/benchmark/dist/index.js subquery-depth \\
+  --rows 30000 --row-bytes 900 --ingest-events 30
+
+# Single point on the fat-row axis:
+node apps/benchmark/dist/index.js subquery-depth \\
+  --rows 1000 --row-bytes 2000000 --ingest-events 30
+
+# Verify the SSP is genuinely running on the seeded data:
+node apps/benchmark/dist/verify-bootstrap.js --rows 1000 --row-bytes 2000000
+```
+
+Each suite writes `summary.md`, `samples.json`, and `run.json` into
+`results/<suite>/`. The 3-run aggregate lives at `results/aggregated.md`.

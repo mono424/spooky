@@ -692,30 +692,60 @@ async fn self_bootstrap(
 
     info!(count = tables.len(), "Discovered tables: {:?}", tables);
 
-    // Step 2: Load all table data
+    // Step 2: Load all table data, paged. Pulling the entire table in one
+    // request blew up at multi-GB DBs because either the SurrealDB Rust SDK's
+    // Ws engine (64 MiB tungstenite frame ceiling) or the scheduler proxy
+    // had to materialise the full result set in one HTTP body. Paging keeps
+    // each round-trip bounded; the SSP still loads everything into the
+    // circuit store but does so a chunk at a time.
+    //
+    // Default page is 200 records; override via SPKY_SSP_BOOTSTRAP_PAGE_SIZE.
+    let page_size: usize = std::env::var("SPKY_SSP_BOOTSTRAP_PAGE_SIZE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|n: &usize| *n > 0)
+        .unwrap_or(200);
+
     for table in &tables {
-        let result = source.query(&format!("SELECT * FROM {}", table)).await
-            .with_context(|| format!("Failed to query table {}", table))?;
+        let mut record_count: usize = 0;
+        let mut start: usize = 0;
+        loop {
+            let result = source
+                .query(&format!(
+                    "SELECT * FROM {} LIMIT {} START {}",
+                    table, page_size, start
+                ))
+                .await
+                .with_context(|| format!("Failed to page-query table {}", table))?;
 
-        let rows: Vec<Value> = match result {
-            Value::Array(arr) => arr,
-            _ => vec![],
-        };
-        let record_count = rows.len();
+            let rows: Vec<Value> = match result {
+                Value::Array(arr) => arr,
+                _ => vec![],
+            };
+            let n = rows.len();
+            if n == 0 {
+                break;
+            }
 
-        let records: Vec<Record> = rows
-            .into_iter()
-            .filter_map(|row| {
-                let id = row.get("id")?.as_str()?.to_string();
-                Some(Record::new(table, &id, row))
-            })
-            .collect();
+            let records: Vec<Record> = rows
+                .into_iter()
+                .filter_map(|row| {
+                    let id = row.get("id")?.as_str()?.to_string();
+                    Some(Record::new(table, &id, row))
+                })
+                .collect();
 
-        {
-            let mut circuit = processor.write().await;
-            circuit.load(records);
+            {
+                let mut circuit = processor.write().await;
+                circuit.load(records);
+            }
+
+            record_count += n;
+            if n < page_size {
+                break;
+            }
+            start += page_size;
         }
-
         info!(table = %table, records = record_count, "Loaded table data");
     }
 

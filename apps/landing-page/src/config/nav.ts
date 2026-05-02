@@ -56,6 +56,7 @@ export const docsNav = [
       { text: 'AI Coding Agents', href: `${basePath}/docs/ai-agents` },
       { text: 'Self-Hosted Deployment', href: `${basePath}/docs/deployment` },
       { text: 'Architecture', href: `${basePath}/docs/architecture` },
+      { text: 'Performance', href: `${basePath}/docs/performance` },
       { text: 'Scheduler API', href: `${basePath}/docs/scheduler-api` },
       { text: 'SSP API', href: `${basePath}/docs/ssp-api` },
     ],
