@@ -23,11 +23,13 @@ DEFINE FIELD OVERWRITE ttl ON TABLE _00_query TYPE duration;
 -- ==================================================
 -- SPOOKY LIST REF
 -- The current list of results for a query/incantation.
--- Scoped per client: only the originating client sees its own list refs.
+-- Read-only to record-token callers — only the SSP (root) writes here, so
+-- clients can never forge entries into their own view. Scoped per client so
+-- a token-bearer only sees its own list refs.
 -- ==================================================
 
 DEFINE TABLE OVERWRITE _00_list_ref SCHEMALESS
-    PERMISSIONS FOR select, create, update WHERE clientId = $session.clientId;
+    PERMISSIONS FOR select WHERE clientId = $session.clientId;
 
 DEFINE FIELD OVERWRITE in ON TABLE _00_list_ref TYPE record;
 
