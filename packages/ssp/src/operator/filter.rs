@@ -86,6 +86,8 @@ fn check_predicate_recursive(
     ctx: Option<&Sp00kyValue>,
 ) -> bool {
     match pred {
+        Predicate::True => true,
+        Predicate::False => false,
         Predicate::And { predicates } => predicates
             .iter()
             .all(|p| check_predicate_recursive(p, key, store, ctx)),

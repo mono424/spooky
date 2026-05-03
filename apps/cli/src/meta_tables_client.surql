@@ -1,4 +1,15 @@
 -- ==================================================
+-- CLIENT-SIDE META TABLES
+--
+-- These tables live in the per-device local SurrealKV cache, which is
+-- single-tenant by construction (one user, one device). The codegen step in
+-- apps/cli/src/codegen.rs rewrites every PERMISSIONS clause to `WHERE true`
+-- when emitting the client schema, because there's no $session / $auth on
+-- the local DB to scope against. For multi-tenant scoping, see the
+-- corresponding rules in meta_tables_remote.surql which run on the server.
+-- ==================================================
+
+-- ==================================================
 -- SPOOKY SCHEMA
 -- The provisioned schema state for the database. Currently only used in local cache.
 -- Used in local-migrator.ts

@@ -1144,7 +1144,14 @@ impl CodeGenerator {
             }
 
             // Handle PERMISSIONS replacement
-            // Match PERMISSIONS at start of line (for TABLE/FIELD)
+            // Match PERMISSIONS at start of line (for TABLE/FIELD).
+            //
+            // Important: this rewrite runs ONLY for the client-local SurrealKV
+            // cache schema. The local DB is single-tenant (one user, one device)
+            // and has no $session / $auth context to scope against, so blanket
+            // `WHERE true` is correct here. The server schema preserves real
+            // permissions — see meta_tables_remote.surql for inheritance rules
+            // (e.g. _00_crdt / _00_version follow the linked record's perms).
             if trimmed.to_uppercase().starts_with("PERMISSIONS") {
                 let perms = if def_type == "TABLE" {
                     "PERMISSIONS FOR select, create, update, delete WHERE true"

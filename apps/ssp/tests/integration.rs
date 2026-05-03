@@ -98,8 +98,11 @@ impl TestHarness {
     /// Register a view directly on the circuit (bypasses HTTP handler & DB calls).
     async fn register_view_direct(&self, id: &str, surql: &str) {
         let payload = view_payload(id, surql);
-        let data = ssp::service::view::prepare_registration_dbsp(payload)
-            .expect("Failed to prepare view registration");
+        let data = {
+            let circuit = self.processor.read().await;
+            ssp::service::view::prepare_registration_dbsp(payload, circuit.policy())
+                .expect("Failed to prepare view registration")
+        };
         let mut circuit = self.processor.write().await;
         circuit.add_query(data.plan, data.safe_params, Some(OutputFormat::Streaming));
     }

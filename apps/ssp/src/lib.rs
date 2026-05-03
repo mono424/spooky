@@ -678,19 +678,44 @@ async fn self_bootstrap(
     let info_json = source.query("INFO FOR DB").await
         .context("Failed to query INFO FOR DB")?;
 
-    let tables: Vec<String> = match info_json.get("tables") {
+    // INFO FOR DB returns `tables: { name: "DEFINE TABLE ... PERMISSIONS ...;" }`.
+    // Keep both the table list (for data-loading) and the raw DEFINE strings
+    // (for permission extraction below).
+    let table_defs: Vec<(String, String)> = match info_json.get("tables") {
         Some(Value::Object(tables_map)) => tables_map
-            .keys()
-            .filter(|name| !name.starts_with("_00_"))
-            .cloned()
+            .iter()
+            .filter(|(name, _)| !name.starts_with("_00_"))
+            .map(|(name, def)| {
+                (name.clone(), def.as_str().unwrap_or("").to_string())
+            })
             .collect(),
         _ => {
             info!("No tables found in database");
             vec![]
         }
     };
+    let tables: Vec<String> = table_defs.iter().map(|(n, _)| n.clone()).collect();
 
     info!(count = tables.len(), "Discovered tables: {:?}", tables);
+
+    // Step 1b: Parse PERMISSIONS FOR select WHERE <expr> from each DEFINE TABLE
+    // string and load it into the circuit's permission registry. The registry
+    // is what `prepare_registration_dbsp` consults to inject implicit WHERE
+    // clauses into incoming view queries (see policy.rs).
+    {
+        let mut circuit = processor.write().await;
+        let registry = circuit.policy_mut();
+        for (name, def) in &table_defs {
+            let predicate = extract_select_permission(def);
+            info!(
+                target: "ssp::policy",
+                table = %name,
+                predicate = ?predicate,
+                "registered table permission"
+            );
+            registry.set(name, predicate);
+        }
+    }
 
     // Step 2: Load all table data, paged. Pulling the entire table in one
     // request blew up at multi-GB DBs because either the SurrealDB Rust SDK's
@@ -812,8 +837,13 @@ async fn self_bootstrap(
             "params": params,
         });
 
-        match ssp::service::view::prepare_registration_dbsp(payload) {
+        let prep = {
+            let circuit = processor.read().await;
+            ssp::service::view::prepare_registration_dbsp(payload, circuit.policy())
+        };
+        match prep {
             Ok(data) => {
+                data.rewrite_report.log(&raw_id);
                 let mut circuit = processor.write().await;
                 circuit.add_query(
                     data.plan,
@@ -829,6 +859,169 @@ async fn self_bootstrap(
     }
 
     Ok(())
+}
+
+/// Pull the `PERMISSIONS FOR select WHERE <expr>` clause out of a `DEFINE TABLE`
+/// statement and parse it into a `Predicate`.
+///
+/// Behavior:
+/// - `WHERE true` (or no PERMISSIONS clause at all → SurrealDB defaults to FULL)
+///   → `Predicate::True` so the SSP scans the whole table.
+/// - `PERMISSIONS NONE` or no `select` action  → `Predicate::False` (deny).
+/// - Parseable expression (simple comparisons against `$auth.*` etc.)
+///   → that predicate.
+/// - Unparseable expression (subqueries, IN, function calls, …)
+///   → `Predicate::False` so the SSP fails closed and never over-shares.
+fn extract_select_permission(define_table: &str) -> ssp::operator::Predicate {
+    use ssp::operator::Predicate;
+    let def = define_table.trim().trim_end_matches(';');
+    let upper = def.to_uppercase();
+
+    // No PERMISSIONS clause → SurrealDB defaults to FULL → allow.
+    let Some(perm_idx) = upper.find("PERMISSIONS") else {
+        return Predicate::True;
+    };
+    let perm_section = def[perm_idx + "PERMISSIONS".len()..].trim();
+    let perm_upper = perm_section.to_uppercase();
+
+    // Bare keywords.
+    if perm_upper.starts_with("FULL") {
+        return Predicate::True;
+    }
+    if perm_upper.starts_with("NONE") {
+        return Predicate::False;
+    }
+
+    // FOR <actions> WHERE <expr> [FOR ... WHERE ...]*
+    // We want the WHERE expression that applies to `select`.
+    let lower = perm_section.to_lowercase();
+    // Find every "for" boundary by scanning for case-insensitive "for " markers.
+    // Using lowercase indices is safe because we don't slice through multibyte chars
+    // (FOR is ASCII).
+    let mut clause_starts: Vec<usize> = Vec::new();
+    for (i, _) in lower.match_indices("for ") {
+        // Treat as a clause boundary only at start of string or after whitespace.
+        if i == 0 || lower.as_bytes()[i - 1].is_ascii_whitespace() {
+            clause_starts.push(i);
+        }
+    }
+    if clause_starts.is_empty() {
+        warn!(target: "ssp::policy", def = %def, "PERMISSIONS clause has no FOR clauses — denying");
+        return Predicate::False;
+    }
+
+    let mut select_clause: Option<&str> = None;
+    for (idx, &start) in clause_starts.iter().enumerate() {
+        let end = clause_starts.get(idx + 1).copied().unwrap_or(perm_section.len());
+        let clause = &perm_section[start..end];
+        // Header form: "FOR <actions> WHERE ..."
+        let lower_clause = clause.to_lowercase();
+        // Check the action list before the first WHERE — actions can be comma-separated.
+        let where_idx = lower_clause.find("where");
+        let header = match where_idx {
+            Some(w) => &clause[..w],
+            None => clause,
+        };
+        let header_lower = header.to_lowercase();
+        let mentions_select = header_lower.contains("select");
+        if mentions_select {
+            select_clause = where_idx.map(|w| clause[w..].trim_end_matches(',').trim());
+            break;
+        }
+    }
+
+    let Some(where_clause) = select_clause else {
+        // SurrealDB default for actions not listed is to DENY — fail closed.
+        return Predicate::False;
+    };
+
+    match ssp::converter::parse_permission_where(where_clause) {
+        Ok(p) => p,
+        Err(e) => {
+            warn!(
+                target: "ssp::policy",
+                clause = %where_clause,
+                error = %e,
+                "Unparseable select permission — denying"
+            );
+            Predicate::False
+        }
+    }
+}
+
+#[cfg(test)]
+mod permission_extract_tests {
+    use super::*;
+    use ssp::operator::Predicate;
+
+    #[test]
+    fn no_permissions_clause_is_full() {
+        let p = extract_select_permission("DEFINE TABLE foo SCHEMAFULL;");
+        assert!(matches!(p, Predicate::True));
+    }
+
+    #[test]
+    fn permissions_full_is_true() {
+        let p =
+            extract_select_permission("DEFINE TABLE foo SCHEMAFULL PERMISSIONS FULL");
+        assert!(matches!(p, Predicate::True));
+    }
+
+    #[test]
+    fn permissions_none_is_false() {
+        let p =
+            extract_select_permission("DEFINE TABLE foo SCHEMAFULL PERMISSIONS NONE");
+        assert!(matches!(p, Predicate::False));
+    }
+
+    #[test]
+    fn for_select_where_true_is_true() {
+        let p = extract_select_permission(
+            "DEFINE TABLE foo SCHEMAFULL PERMISSIONS FOR select WHERE true",
+        );
+        assert!(matches!(p, Predicate::True));
+    }
+
+    #[test]
+    fn for_select_where_false_is_false() {
+        let p = extract_select_permission(
+            "DEFINE TABLE foo SCHEMAFULL PERMISSIONS FOR select WHERE false",
+        );
+        assert!(matches!(p, Predicate::False));
+    }
+
+    #[test]
+    fn for_other_action_only_denies_select() {
+        // No FOR select clause → defaults to deny for select.
+        let p = extract_select_permission(
+            "DEFINE TABLE foo SCHEMAFULL PERMISSIONS FOR update WHERE true",
+        );
+        assert!(matches!(p, Predicate::False));
+    }
+
+    #[test]
+    fn parses_select_with_auth_eq() {
+        let p = extract_select_permission(
+            "DEFINE TABLE thread SCHEMAFULL PERMISSIONS FOR select WHERE author.id = $auth.id FOR update WHERE false",
+        );
+        assert!(matches!(p, Predicate::Eq { .. }));
+    }
+
+    #[test]
+    fn unparseable_falls_to_false() {
+        let p = extract_select_permission(
+            "DEFINE TABLE thread SCHEMAFULL PERMISSIONS FOR select WHERE $auth.id IN (SELECT id FROM x)",
+        );
+        assert!(matches!(p, Predicate::False));
+    }
+
+    #[test]
+    fn select_in_action_list() {
+        let p = extract_select_permission(
+            "DEFINE TABLE foo PERMISSIONS FOR create, select, update WHERE true",
+        );
+        assert!(matches!(p, Predicate::True));
+    }
 }
 
 // --- Middleware ---
@@ -1070,14 +1263,23 @@ async fn register_view_handler(
 
     let span = Span::current();
 
-    // Parse and validate registration data
-    let data = match ssp::service::view::prepare_registration_dbsp(payload) {
-        Ok(d) => d,
-        Err(e) => {
-            error!(error = %e, "Invalid view registration payload");
-            return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
+    // Parse and validate registration data. The permission registry is held on
+    // the Circuit and was populated during self_bootstrap. Reading it under a
+    // read lock keeps the registration path off the write lock until we
+    // actually need to mutate the circuit below.
+    let data = {
+        let circuit = state.processor.read().await;
+        match ssp::service::view::prepare_registration_dbsp(payload, circuit.policy()) {
+            Ok(d) => d,
+            Err(e) => {
+                error!(error = %e, "Invalid view registration payload");
+                return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
+            }
         }
     };
+
+    // Log the implicit-WHERE rewrite so it's transparent what was injected.
+    data.rewrite_report.log(&data.plan.id);
 
     span.record("view_id", &data.plan.id);
 

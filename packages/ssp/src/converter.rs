@@ -10,11 +10,77 @@ use nom::{
 };
 use serde_json::{json, Value};
 
+use crate::operator::predicate::Predicate;
+
 pub fn convert_surql_to_dbsp(sql: &str) -> Result<Value> {
     let clean_sql = sql.trim().trim_end_matches(';');
     match parse_full_query(clean_sql) {
         Ok((_, plan)) => Ok(plan),
         Err(e) => Err(anyhow!("SQL Parsing Error: {}", e)),
+    }
+}
+
+/// Parse a permission `WHERE` expression into a `Predicate`.
+///
+/// Accepts the body of a SurrealDB `PERMISSIONS FOR ... WHERE <expr>` clause
+/// (with or without the leading `WHERE`). Returns the predicate equivalent.
+///
+/// On unsupported syntax (subqueries, `IN`, function calls, identifier-to-identifier
+/// comparisons, etc.) returns `Err`. Callers should treat that as fail-closed and
+/// install `Predicate::False` so the SSP never over-shares relative to SurrealDB.
+pub fn parse_permission_where(input: &str) -> Result<Predicate> {
+    let mut s = input.trim();
+    // Strip optional leading WHERE (case-insensitive).
+    if s.len() >= 5 && s[..5].eq_ignore_ascii_case("WHERE") {
+        s = s[5..].trim();
+    }
+    let s = s.trim_end_matches(';').trim();
+
+    if s.is_empty() {
+        return Err(anyhow!("empty permission expression"));
+    }
+
+    // Bare boolean literals — parse_or_expression can't handle these on their own
+    // because parse_leaf_predicate requires `field op value`.
+    if s.eq_ignore_ascii_case("true") {
+        return Ok(Predicate::True);
+    }
+    if s.eq_ignore_ascii_case("false") {
+        return Ok(Predicate::False);
+    }
+
+    let (rest, value) = parse_or_expression(s)
+        .map_err(|e| anyhow!("permission parse error: {}", e))?;
+    if !rest.trim().is_empty() {
+        return Err(anyhow!(
+            "unsupported permission expression (trailing input): {:?}",
+            rest
+        ));
+    }
+
+    // Identifier-to-identifier comparisons aren't supported for permissions —
+    // the converter encodes them as `__JOIN_CANDIDATE__`.
+    if contains_join_candidate(&value) {
+        return Err(anyhow!(
+            "unsupported permission expression (identifier-vs-identifier comparison)"
+        ));
+    }
+
+    let predicate: Predicate = serde_json::from_value(value)
+        .map_err(|e| anyhow!("predicate deserialize error: {}", e))?;
+    Ok(predicate)
+}
+
+fn contains_join_candidate(v: &Value) -> bool {
+    match v {
+        Value::Object(map) => {
+            if map.get("type").and_then(|t| t.as_str()) == Some("__JOIN_CANDIDATE__") {
+                return true;
+            }
+            map.values().any(contains_join_candidate)
+        }
+        Value::Array(arr) => arr.iter().any(contains_join_candidate),
+        _ => false,
     }
 }
 
@@ -388,6 +454,68 @@ mod tests {
     use super::*;
     use crate::operator::plan::OperatorPlan as Operator;
     use crate::operator::plan::Projection;
+    use crate::operator::predicate::Predicate;
+
+    #[test]
+    fn permission_where_true_literal() {
+        let p = parse_permission_where("WHERE true").unwrap();
+        assert!(matches!(p, Predicate::True));
+    }
+
+    #[test]
+    fn permission_where_false_literal() {
+        let p = parse_permission_where("WHERE false").unwrap();
+        assert!(matches!(p, Predicate::False));
+    }
+
+    #[test]
+    fn permission_where_omitted_keyword() {
+        // Caller may strip WHERE before calling.
+        let p = parse_permission_where("true").unwrap();
+        assert!(matches!(p, Predicate::True));
+    }
+
+    #[test]
+    fn permission_simple_eq_with_auth() {
+        let p = parse_permission_where("WHERE author.id = $auth.id").unwrap();
+        match p {
+            Predicate::Eq { field, value } => {
+                assert_eq!(field.segments(), &["author".to_string(), "id".to_string()]);
+                assert_eq!(value, json!({ "$param": "auth.id" }));
+            }
+            other => panic!("expected Eq, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn permission_and_combination() {
+        let p =
+            parse_permission_where("WHERE author.id = $auth.id AND active = true").unwrap();
+        assert!(matches!(p, Predicate::And { .. }));
+    }
+
+    #[test]
+    fn permission_unsupported_subquery() {
+        // Subqueries blow past our nom parser → error.
+        let r = parse_permission_where(
+            "WHERE $auth.id IN (SELECT VALUE in FROM collaborates_on)",
+        );
+        assert!(r.is_err(), "expected unsupported error, got {:?}", r);
+    }
+
+    #[test]
+    fn permission_identifier_to_identifier_rejected() {
+        // `author = user` is parsed as a join candidate, not a comparison.
+        // Permissions don't allow join semantics — must be flagged unsupported.
+        let r = parse_permission_where("WHERE author = otherfield");
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn permission_empty_errors() {
+        assert!(parse_permission_where("").is_err());
+        assert!(parse_permission_where("WHERE").is_err());
+    }
 
     #[test]
     fn test_parse_failing_subquery() {

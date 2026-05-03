@@ -1226,7 +1226,13 @@ fn run_codegen(
     // Filter the raw schema content to remove fields with FOR select WHERE false
     let mut filtered_schema_content = filter_schema_for_client(&content, &parser)?;
 
-    // Append _00_rv field to every table for local cache setup (client-side only)
+    // Append _00_rv field to every table for local cache setup (client-side only).
+    //
+    // The `WHERE true` field-level permission is intentional: SurrealDB applies
+    // the table-level PERMISSIONS first, so a user who can't SELECT from `thread`
+    // never reaches `thread._00_rv` regardless of what's written here. The field
+    // permission only matters once the row is already accessible — and in that
+    // case the sync runtime needs to read/write the version unconditionally.
     println!("  + Injecting _00_rv field for local cache schema");
     for table_name in parser.tables.keys() {
         filtered_schema_content.push_str(&format!(
@@ -1235,7 +1241,8 @@ fn run_codegen(
         ));
     }
 
-    // Inject _00_crdt field for tables with CRDT-annotated fields (client-side only)
+    // Inject _00_crdt field for tables with CRDT-annotated fields (client-side only).
+    // Same rationale as _00_rv above: gated by table-level permissions.
     for table_name in parser.tables.keys() {
         let has_crdt = field_annotations.keys().any(|(t, _)| t == table_name);
         if has_crdt {

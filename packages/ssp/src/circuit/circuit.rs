@@ -58,6 +58,9 @@ pub struct Circuit {
     views: HashMap<String, View>,
     /// Routing: table_name → [query_id].
     dependency_map: HashMap<String, Vec<String>>,
+    /// Per-table permission predicates loaded from SurrealDB at boot.
+    /// Used by the registration pipeline to inject implicit WHERE clauses.
+    policy: crate::policy::PermissionRegistry,
 }
 
 /// Compute the full set of subquery records visible through the current view.
@@ -239,7 +242,18 @@ impl Circuit {
             graphs: HashMap::new(),
             views: HashMap::new(),
             dependency_map: HashMap::new(),
+            policy: crate::policy::PermissionRegistry::new(),
         }
+    }
+
+    /// Read-only access to the permission registry (for query rewriting).
+    pub fn policy(&self) -> &crate::policy::PermissionRegistry {
+        &self.policy
+    }
+
+    /// Mutable access to the permission registry (for boot-time loading).
+    pub fn policy_mut(&mut self) -> &mut crate::policy::PermissionRegistry {
+        &mut self.policy
     }
 
     /// Bulk-load initial data into base collections.
@@ -649,6 +663,7 @@ impl Circuit {
             graphs: HashMap::new(),
             views: HashMap::new(),
             dependency_map: HashMap::new(),
+            policy: crate::policy::PermissionRegistry::new(),
         };
 
         for qs in state.queries {
