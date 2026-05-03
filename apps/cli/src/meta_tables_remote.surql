@@ -80,10 +80,35 @@ DEFINE INDEX OVERWRITE idx_record_id ON TABLE _00_version COLUMNS record_id UNIQ
 -- SPOOKY CRDT
 -- Stores per-field CRDT state for collaborative editing.
 -- One row per record+field combination.
--- Permission inherits from the linked record (same trick as _00_version).
+--
+-- Reads inherit the parent's SELECT permission via record_id.id (record
+-- dereferencing runs under SELECT). Writes inherit the parent's UPDATE
+-- permission via fn::can_update_record below — `record_id.id != NONE`
+-- alone is wrong for write actions because it only proves the caller can
+-- read the parent, not edit it.
 -- ==================================================
+
+-- Returns true iff the caller has UPDATE permission on $r. Issues a no-op
+-- UPDATE (SET _00_rv = _00_rv) on the parent; SurrealDB enforces the
+-- parent's FOR update rule and returns [] when denied. _00_rv is injected
+-- on every user table (apps/cli/src/main.rs:1233), so the assignment is
+-- always valid.
+--
+-- Side effect: any DEFINE EVENT on the parent that fires WHEN $event = "UPDATE"
+-- will run on every CRDT push. Gate downstream events with
+-- WHEN $before._00_rv != $after._00_rv if that becomes a problem.
+DEFINE FUNCTION OVERWRITE fn::can_update_record($r: record) -> bool {
+    RETURN array::len((UPDATE $r SET _00_rv = _00_rv RETURN BEFORE)) > 0;
+};
+
 DEFINE TABLE OVERWRITE _00_crdt SCHEMALESS
-    PERMISSIONS FOR select, create, update, delete WHERE record_id.id != NONE;
+    PERMISSIONS
+        FOR select WHERE record_id.id != NONE
+        FOR create, update WHERE fn::can_update_record(record_id);
+-- No FOR delete: only the SSP cleans up CRDT rows (via the parent-record
+-- DELETE event in apps/cli/src/sp00ky.rs:175, which runs server-side).
+-- Record-token callers are denied delete by default; root bypasses.
+
 DEFINE FIELD OVERWRITE record_id ON TABLE _00_crdt TYPE record;
 DEFINE FIELD OVERWRITE field ON TABLE _00_crdt TYPE string;
 DEFINE FIELD OVERWRITE state ON TABLE _00_crdt TYPE option<string>;
