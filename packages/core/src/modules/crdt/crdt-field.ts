@@ -103,16 +103,18 @@ export class CrdtField {
     return encodeBase64(this.doc.export({ mode: 'snapshot' }));
   }
 
-  /** Push cursor ephemeral state to _00_crdt as a "_cursor_<fieldName>" entry */
+  /** Push cursor ephemeral state to the dedicated _00_cursor table.
+   *  Visibility is gated on parent UPDATE permission (see meta_tables_remote.surql),
+   *  so only collaborators see each other's cursors — read-only viewers don't. */
   async pushCursorState(encoded: Uint8Array): Promise<void> {
     if (!this.remote || !this.recordId) return;
     this.lastCursorPushTime = Date.now();
     try {
       const state = encodeBase64(encoded);
       await this.remote.query(
-        `INSERT INTO _00_crdt (record_id, field, state) VALUES ($rid, $field, $state)
+        `INSERT INTO _00_cursor (record_id, field, state) VALUES ($rid, $field, $state)
          ON DUPLICATE KEY UPDATE state = $state`,
-        { rid: parseRecordIdString(this.recordId), field: `_cursor_${this.fieldName}`, state }
+        { rid: parseRecordIdString(this.recordId), field: this.fieldName, state }
       );
     } catch (e) {
       this.logger?.warn(

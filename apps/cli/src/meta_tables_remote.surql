@@ -113,3 +113,24 @@ DEFINE FIELD OVERWRITE record_id ON TABLE _00_crdt TYPE record;
 DEFINE FIELD OVERWRITE field ON TABLE _00_crdt TYPE string;
 DEFINE FIELD OVERWRITE state ON TABLE _00_crdt TYPE option<string>;
 DEFINE INDEX OVERWRITE idx_record_field ON TABLE _00_crdt COLUMNS record_id, field UNIQUE;
+
+-- ==================================================
+-- SPOOKY CURSOR
+-- Per-field ephemeral cursor / presence state for collaborative editing.
+-- Lives in its own table so visibility can be tighter than _00_crdt:
+-- only callers who can UPDATE the parent see (and push) cursors. Read-only
+-- viewers don't get to watch other users' cursor positions.
+--
+-- Same shape as _00_crdt (record_id + field + opaque state blob). Pushed
+-- by clients via INSERT ... ON DUPLICATE KEY UPDATE — see
+-- packages/core/src/modules/crdt/crdt-field.ts::pushCursorState.
+-- ==================================================
+DEFINE TABLE OVERWRITE _00_cursor SCHEMALESS
+    PERMISSIONS FOR select, create, update WHERE fn::can_update_record(record_id);
+-- No FOR delete: cleanup is server-side via the parent-DELETE event in
+-- apps/cli/src/sp00ky.rs. Record-token callers are denied delete by default.
+
+DEFINE FIELD OVERWRITE record_id ON TABLE _00_cursor TYPE record;
+DEFINE FIELD OVERWRITE field ON TABLE _00_cursor TYPE string;
+DEFINE FIELD OVERWRITE state ON TABLE _00_cursor TYPE option<string>;
+DEFINE INDEX OVERWRITE idx_cursor_record_field ON TABLE _00_cursor COLUMNS record_id, field UNIQUE;

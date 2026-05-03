@@ -10,12 +10,16 @@ export { CrdtField, cursorColorFromName, CURSOR_COLORS } from './crdt-field';
 /**
  * CrdtManager manages active CrdtField instances and their sync channels.
  *
- * Each open record gets a LIVE SELECT on _00_crdt that delivers remote
- * changes in real time.
+ * Each open record gets two LIVE SELECTs:
+ *  - _00_crdt: persistent CRDT field snapshots (visible to anyone with parent
+ *    SELECT permission)
+ *  - _00_cursor: ephemeral cursor / presence state (only visible to callers
+ *    with parent UPDATE permission)
  */
 export class CrdtManager {
   private fields = new Map<string, CrdtField>();
-  private liveQueries = new Map<string, { uuid: Uuid; table: string }>();
+  // Per recordId: one entry per source table we're subscribed to.
+  private liveQueries = new Map<string, { uuid: Uuid; table: string }[]>();
   private logger: Logger;
 
   constructor(
@@ -115,60 +119,73 @@ export class CrdtManager {
   private async ensureLiveSelect(table: string, recordId: string): Promise<void> {
     if (this.liveQueries.has(recordId)) return;
 
+    const subscriptions: { uuid: Uuid; table: string }[] = [];
+
+    // Persistent CRDT snapshots — visible to anyone with parent SELECT.
+    const crdtUuid = await this.subscribeTo('_00_crdt', recordId, (fieldName, state) => {
+      const key = this.makeKey(table, recordId, fieldName);
+      this.fields.get(key)?.importRemote(state);
+    });
+    if (crdtUuid) subscriptions.push({ uuid: crdtUuid, table: '_00_crdt' });
+
+    // Ephemeral cursor state — table-level permission limits this to callers
+    // with parent UPDATE, so a read-only viewer never even gets the LIVE feed.
+    const cursorUuid = await this.subscribeTo('_00_cursor', recordId, (fieldName, state) => {
+      const key = this.makeKey(table, recordId, fieldName);
+      this.fields.get(key)?.importRemoteCursor(state);
+    });
+    if (cursorUuid) subscriptions.push({ uuid: cursorUuid, table: '_00_cursor' });
+
+    if (subscriptions.length > 0) {
+      this.liveQueries.set(recordId, subscriptions);
+    }
+  }
+
+  /** Start one LIVE SELECT for `recordId` on `tableName` and dispatch each
+   *  CREATE/UPDATE row to `onRow(field, state)`. Returns the live UUID, or
+   *  `undefined` if the subscription couldn't be started (e.g. permission
+   *  denied — expected for cursors when the caller is read-only). */
+  private async subscribeTo(
+    tableName: '_00_crdt' | '_00_cursor',
+    recordId: string,
+    onRow: (field: string, state: string) => void,
+  ): Promise<Uuid | undefined> {
     try {
       const [uuid] = await this.remote.query<[Uuid]>(
-        `LIVE SELECT * FROM _00_crdt WHERE record_id = $rid`,
+        `LIVE SELECT * FROM ${tableName} WHERE record_id = $rid`,
         { rid: parseRecordIdString(recordId) },
       );
-
-      this.liveQueries.set(recordId, { uuid, table });
 
       const subscription = await this.remote.getClient().liveOf(uuid);
       subscription.subscribe((message) => {
         if (message.action === 'KILLED') return;
-
-        if (message.action === 'CREATE' || message.action === 'UPDATE') {
-          const fieldName = message.value.field as string;
-          const state = message.value.state as string;
-
-          if (!fieldName || !state) return;
-
-          // Route cursor updates to the corresponding CrdtField
-          if (fieldName.startsWith('_cursor_')) {
-            const actualField = fieldName.slice('_cursor_'.length);
-            const key = this.makeKey(table, recordId, actualField);
-            const crdtField = this.fields.get(key);
-            if (crdtField) {
-              crdtField.importRemoteCursor(state);
-            }
-            return;
-          }
-
-          // Route document updates
-          const key = this.makeKey(table, recordId, fieldName);
-          const crdtField = this.fields.get(key);
-          if (crdtField) {
-            crdtField.importRemote(state);
-          }
-        }
+        if (message.action !== 'CREATE' && message.action !== 'UPDATE') return;
+        const fieldName = message.value.field as string;
+        const state = message.value.state as string;
+        if (!fieldName || !state) return;
+        onRow(fieldName, state);
       });
 
       this.logger.info(
-        { recordId, Category: 'sp00ky-client::CrdtManager::ensureLiveSelect' },
-        'LIVE SELECT on _00_crdt started'
+        { recordId, table: tableName, Category: 'sp00ky-client::CrdtManager::ensureLiveSelect' },
+        'LIVE SELECT started'
       );
+      return uuid;
     } catch (e) {
       this.logger.warn(
-        { error: e, recordId, Category: 'sp00ky-client::CrdtManager::ensureLiveSelect' },
-        'Failed to start LIVE SELECT on _00_crdt'
+        { error: e, recordId, table: tableName, Category: 'sp00ky-client::CrdtManager::ensureLiveSelect' },
+        'Failed to start LIVE SELECT'
       );
+      return undefined;
     }
   }
 
   private killLiveSelect(recordId: string): void {
-    const entry = this.liveQueries.get(recordId);
-    if (entry) {
-      this.remote.query('KILL $uuid', { uuid: entry.uuid }).catch(() => {});
+    const entries = this.liveQueries.get(recordId);
+    if (entries) {
+      for (const entry of entries) {
+        this.remote.query('KILL $uuid', { uuid: entry.uuid }).catch(() => {});
+      }
       this.liveQueries.delete(recordId);
     }
   }
