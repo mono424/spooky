@@ -124,6 +124,16 @@ export function ThreadDetail() {
   };
 
   const [collaborators, setCollaborators] = createSignal<CollaboratorRow[]>([]);
+
+  // Caller is a member when they're in the collaborates_on list for this
+  // thread but aren't the author.
+  const isMember = () => {
+    if (isAuthor()) return false;
+    const me = auth.user()?.id;
+    if (!me) return false;
+    const meStr = stringifyId(me);
+    return collaborators().some((c) => stringifyId(c.user.id) === meStr);
+  };
   const [shareOpen, setShareOpen] = createSignal(false);
   const [menuOpen, setMenuOpen] = createSignal(false);
 
@@ -143,6 +153,16 @@ export function ThreadDetail() {
       navigate('/');
     } catch (e) {
       console.error('[ThreadDetail] failed to delete thread', e);
+    }
+  };
+
+  const handleTogglePublish = async () => {
+    const threadData = thread();
+    if (!threadData?.id || !canEdit()) return;
+    try {
+      await db.update('thread', threadData.id, { published: !threadData.published });
+    } catch (e) {
+      console.error('[ThreadDetail] failed to toggle publish', e);
     }
   };
 
@@ -175,9 +195,7 @@ export function ThreadDetail() {
 
   const canEdit = () => {
     if (isAuthor()) return true;
-    const me = auth.user()?.id;
-    if (!me) return false;
-    return collaborators().some((c) => c.user.id === me);
+    return isMember();
   };
 
   const removeCollaborator = async (relationId: string) => {
@@ -223,25 +241,25 @@ export function ThreadDetail() {
 
   const handleAcceptTitle = async (suggestion: string) => {
     const threadData = thread();
-    if (!threadData || !threadData.id || !isAuthor()) return;
+    if (!threadData || !threadData.id || !canEdit()) return;
     await db.update('thread', threadData.id, { title: suggestion, title_suggestion: '' });
   };
 
   const handleDeclineTitle = async () => {
     const threadData = thread();
-    if (!threadData || !threadData.id || !isAuthor()) return;
+    if (!threadData || !threadData.id || !canEdit()) return;
     await db.update('thread', threadData.id, { title_suggestion: '' });
   };
 
   const handleAcceptContent = async (suggestion: string) => {
     const threadData = thread();
-    if (!threadData || !threadData.id || !isAuthor()) return;
+    if (!threadData || !threadData.id || !canEdit()) return;
     await db.update('thread', threadData.id, { content: suggestion, content_suggestion: '' });
   };
 
   const handleDeclineContent = async () => {
     const threadData = thread();
-    if (!threadData || !threadData.id || !isAuthor()) return;
+    if (!threadData || !threadData.id || !canEdit()) return;
     await db.update('thread', threadData.id, { content_suggestion: '' });
   };
 
@@ -317,14 +335,19 @@ export function ThreadDetail() {
                           })}
                         </div>
                       </div>
-                      <Show when={isAuthor()}>
+                      <Show when={isAuthor() || isMember()}>
                         <span class="ml-auto text-[11px] text-zinc-600 bg-surface border border-white/[0.06] rounded-full px-2.5 py-0.5">
-                          Author
+                          {isAuthor() ? 'Author' : 'Member'}
+                        </span>
+                      </Show>
+                      <Show when={canEdit() && !threadData().published}>
+                        <span class="text-[11px] text-zinc-400 bg-surface border border-white/[0.06] rounded-full px-2.5 py-0.5">
+                          Private
                         </span>
                       </Show>
 
                       <div
-                        class={`flex items-center gap-2 ${isAuthor() ? '' : 'ml-auto'}`}
+                        class={`flex items-center gap-2 ${canEdit() ? '' : 'ml-auto'}`}
                       >
                         <Show when={collaborators().length > 0}>
                           <div class="flex -space-x-2">
@@ -362,7 +385,9 @@ export function ThreadDetail() {
                           >
                             Share
                           </button>
+                        </Show>
 
+                        <Show when={canEdit()}>
                           <div class="relative" data-thread-menu>
                             <button
                               onMouseDown={() => setMenuOpen(!menuOpen())}
@@ -377,12 +402,23 @@ export function ThreadDetail() {
                                 <button
                                   onMouseDown={() => {
                                     setMenuOpen(false);
-                                    handleDelete();
+                                    handleTogglePublish();
                                   }}
-                                  class="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-red-400 hover:text-red-300 hover:bg-surface-hover transition-colors duration-150"
+                                  class="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-zinc-300 hover:text-white hover:bg-surface-hover transition-colors duration-150"
                                 >
-                                  Delete post
+                                  {threadData().published ? 'Unpublish' : 'Publish'}
                                 </button>
+                                <Show when={isAuthor()}>
+                                  <button
+                                    onMouseDown={() => {
+                                      setMenuOpen(false);
+                                      handleDelete();
+                                    }}
+                                    class="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-red-400 hover:text-red-300 hover:bg-surface-hover transition-colors duration-150"
+                                  >
+                                    Delete post
+                                  </button>
+                                </Show>
                               </div>
                             </Show>
                           </div>
@@ -393,7 +429,7 @@ export function ThreadDetail() {
                     {/* Title + Content card */}
                     <div class="bg-surface/40 rounded-xl border border-white/[0.06] p-6">
                       {/* Title Suggestion */}
-                      <Show when={isAuthor() && threadData().title_suggestion}>
+                      <Show when={canEdit() && threadData().title_suggestion}>
                         <div class="mb-4 bg-zinc-800/50 border border-white/[0.06] rounded-lg p-4">
                           <div class="flex justify-between items-start mb-2">
                             <span class="text-xs font-medium text-zinc-400 flex items-center gap-1.5">
@@ -440,9 +476,9 @@ export function ThreadDetail() {
                       <Show
                         when={titleCrdtField()}
                         fallback={
-                          <h1 class="text-2xl font-semibold mb-4 leading-tight">
-                            {threadData().title || 'Untitled'}
-                          </h1>
+                          <div class="text-2xl font-semibold mb-4 leading-tight">
+                            <p>{threadData().title || 'Untitled'}</p>
+                          </div>
                         }
                       >
                         {(field) => (
@@ -460,7 +496,7 @@ export function ThreadDetail() {
                       </Show>
 
                       {/* Content Suggestion */}
-                      <Show when={isAuthor() && threadData().content_suggestion}>
+                      <Show when={canEdit() && threadData().content_suggestion}>
                         <div class="mb-4 bg-zinc-800/50 border border-white/[0.06] rounded-lg p-4">
                           <div class="flex justify-between items-start mb-2">
                             <span class="text-xs font-medium text-zinc-400 flex items-center gap-1.5">
@@ -507,8 +543,8 @@ export function ThreadDetail() {
                       <Show
                         when={contentCrdtField()}
                         fallback={
-                          <div class="text-[15px] text-zinc-400 whitespace-pre-wrap leading-relaxed min-h-[80px]">
-                            {threadData().content || 'No content yet...'}
+                          <div class="text-[15px] text-zinc-300 leading-relaxed min-h-[120px]">
+                            <p class="whitespace-pre-wrap">{threadData().content ?? ''}</p>
                           </div>
                         }
                       >
@@ -558,14 +594,14 @@ export function ThreadDetail() {
                       </div>
 
                       <Tooltip
-                        text={isAuthor() ? 'Generate AI suggestions' : 'Only the author can Spookify this thread'}
-                        position={isAuthor() ? 'bottom' : 'left'}
+                        text={canEdit() ? 'Generate AI suggestions' : 'Only authors and members can Spookify this thread'}
+                        position={canEdit() ? 'bottom' : 'left'}
                       >
                         <SpookButton
                           loading={spookifySending() || spookifyJobLoading()}
                           loadingLabel="Processing..."
                           onClick={handleSpookify}
-                          disabled={!isAuthor()}
+                          disabled={!canEdit()}
                         >
                           Spookify
                         </SpookButton>

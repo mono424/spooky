@@ -1,5 +1,6 @@
 import type { JSX} from 'solid-js';
 import { createContext, useContext, createSignal, Show, onCleanup } from 'solid-js';
+import * as jose from 'jose';
 import type { schema } from '../schema.gen';
 import { type GetTable, type TableModel, useQuery, useDb } from '@spooky-sync/client-solid';
 
@@ -53,7 +54,14 @@ export function AuthProvider(props: { children: JSX.Element }) {
   };
 
   const signUp = async (username: string, password: string) => {
-    await db.auth.signUp('account', { username, password });
+    // Generate the user's Ed25519 share-link keypair before signup so both
+    // halves land on the user row atomically. The private key is then
+    // visible to the owner only (per-row select rule on `user.share_privkey`)
+    // and rides the normal SurrealKV sync, so JWT signing works offline.
+    const { publicKey, privateKey } = await jose.generateKeyPair('Ed25519', { extractable: true });
+    const share_pubkey  = await jose.exportSPKI(publicKey);
+    const share_privkey = await jose.exportPKCS8(privateKey);
+    await db.auth.signUp('account', { username, password, share_pubkey, share_privkey });
   };
 
   const signOut = async () => {

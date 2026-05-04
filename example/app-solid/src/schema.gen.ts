@@ -129,13 +129,61 @@ export const schema = {
       primaryKey: ['id'] as const
     },
     /**
+     * `share_link` table.
+     *
+     * Relationships:
+     * - `issuer` → `user` (one)
+     * - `thread` → `thread` (one)
+     *
+     * @example
+     * const rows = useQuery(() => db.query('share_link').orderBy('id', 'asc').limit(20).build());
+     */
+    {
+      name: 'share_link' as const,
+      columns: {
+        /**
+         * `id` — string
+         *
+         * Record ID. Pass the full `'<table>:<id>'` string when reading or writing.
+         */
+        id: { type: 'string' as const, recordId: true, optional: false },
+        /**
+         * `created_at?` — string
+         *
+         * ISO-8601 datetime string.
+         */
+        created_at: { type: 'string' as const, dateTime: true, optional: true },
+        /**
+         * `exp` — string
+         *
+         * ISO-8601 datetime string.
+         */
+        exp: { type: 'string' as const, dateTime: true, optional: false },
+        /**
+         * `issuer?` — string
+         *
+         * Record ID. Pass the full `'<table>:<id>'` string when reading or writing.
+         */
+        issuer: { type: 'string' as const, recordId: true, optional: true },
+        jti: { type: 'string' as const, optional: false },
+        jwt: { type: 'string' as const, optional: false },
+        /**
+         * `thread` — string
+         *
+         * Record ID. Pass the full `'<table>:<id>'` string when reading or writing.
+         */
+        thread: { type: 'string' as const, recordId: true, optional: false },
+      },
+      primaryKey: ['id'] as const
+    },
+    /**
      * `thread` table.
      *
      * Relationships:
      * - `author` → `user` (one)
      * - `comments` → `comment` (many)
      * - `jobs` → `job` (many)
-     * - `thread_invites` → `thread_invite` (many)
+     * - `share_links` → `share_link` (many)
      *
      * @example
      * const rows = useQuery(() => db.query('thread').orderBy('id', 'asc').limit(20).build());
@@ -172,6 +220,7 @@ export const schema = {
          * ISO-8601 datetime string.
          */
         created_at: { type: 'string' as const, dateTime: true, optional: true },
+        published: { type: 'boolean' as const, optional: true },
         /**
          * `title` — string
          *
@@ -182,48 +231,7 @@ export const schema = {
         title_suggestion: { type: 'string' as const, optional: true },
         comments: { type: 'string' as const, optional: true },
         jobs: { type: 'string' as const, optional: true },
-        thread_invites: { type: 'string' as const, optional: true },
-      },
-      primaryKey: ['id'] as const
-    },
-    /**
-     * `thread_invite` table.
-     *
-     * Relationships:
-     * - `created_by` → `user` (one)
-     * - `thread` → `thread` (one)
-     *
-     * @example
-     * const rows = useQuery(() => db.query('thread_invite').orderBy('id', 'asc').limit(20).build());
-     */
-    {
-      name: 'thread_invite' as const,
-      columns: {
-        /**
-         * `id` — string
-         *
-         * Record ID. Pass the full `'<table>:<id>'` string when reading or writing.
-         */
-        id: { type: 'string' as const, recordId: true, optional: false },
-        /**
-         * `created_at?` — string
-         *
-         * ISO-8601 datetime string.
-         */
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
-        /**
-         * `created_by?` — string
-         *
-         * Record ID. Pass the full `'<table>:<id>'` string when reading or writing.
-         */
-        created_by: { type: 'string' as const, recordId: true, optional: true },
-        /**
-         * `thread` — string
-         *
-         * Record ID. Pass the full `'<table>:<id>'` string when reading or writing.
-         */
-        thread: { type: 'string' as const, recordId: true, optional: false },
-        token: { type: 'string' as const, optional: false },
+        share_links: { type: 'string' as const, optional: true },
       },
       primaryKey: ['id'] as const
     },
@@ -232,8 +240,9 @@ export const schema = {
      *
      * Relationships:
      * - `comments` → `comment` (many)
+     * - `share_links` → `share_link` (many)
      * - `threads` → `thread` (many)
-     * - `thread_invites` → `thread_invite` (many)
+     * - `user_keypairs` → `user_keypair` (many)
      *
      * @example
      * const rows = useQuery(() => db.query('user').orderBy('id', 'asc').limit(20).build());
@@ -248,10 +257,40 @@ export const schema = {
          */
         id: { type: 'string' as const, recordId: true, optional: false },
         profile_picture: { type: 'string' as const, optional: true },
+        share_pubkey: { type: 'string' as const, optional: true },
         username: { type: 'string' as const, optional: false },
         comments: { type: 'string' as const, optional: true },
+        share_links: { type: 'string' as const, optional: true },
         threads: { type: 'string' as const, optional: true },
-        thread_invites: { type: 'string' as const, optional: true },
+        user_keypairs: { type: 'string' as const, optional: true },
+      },
+      primaryKey: ['id'] as const
+    },
+    /**
+     * `user_keypair` table.
+     *
+     * Relationships:
+     * - `owner` → `user` (one)
+     *
+     * @example
+     * const rows = useQuery(() => db.query('user_keypair').orderBy('id', 'asc').limit(20).build());
+     */
+    {
+      name: 'user_keypair' as const,
+      columns: {
+        /**
+         * `id` — string
+         *
+         * Record ID. Pass the full `'<table>:<id>'` string when reading or writing.
+         */
+        id: { type: 'string' as const, recordId: true, optional: false },
+        /**
+         * `owner` — string
+         *
+         * Record ID. Pass the full `'<table>:<id>'` string when reading or writing.
+         */
+        owner: { type: 'string' as const, recordId: true, optional: false },
+        privkey: { type: 'string' as const, optional: false },
       },
       primaryKey: ['id'] as const
     },
@@ -276,6 +315,18 @@ export const schema = {
       cardinality: 'one' as const
     },
     {
+      from: 'share_link' as const,
+      field: 'issuer' as const,
+      to: 'user' as const,
+      cardinality: 'one' as const
+    },
+    {
+      from: 'share_link' as const,
+      field: 'thread' as const,
+      to: 'thread' as const,
+      cardinality: 'one' as const
+    },
+    {
       from: 'thread' as const,
       field: 'author' as const,
       to: 'user' as const,
@@ -295,26 +346,20 @@ export const schema = {
     },
     {
       from: 'thread' as const,
-      field: 'thread_invites' as const,
-      to: 'thread_invite' as const,
+      field: 'share_links' as const,
+      to: 'share_link' as const,
       cardinality: 'many' as const
-    },
-    {
-      from: 'thread_invite' as const,
-      field: 'created_by' as const,
-      to: 'user' as const,
-      cardinality: 'one' as const
-    },
-    {
-      from: 'thread_invite' as const,
-      field: 'thread' as const,
-      to: 'thread' as const,
-      cardinality: 'one' as const
     },
     {
       from: 'user' as const,
       field: 'comments' as const,
       to: 'comment' as const,
+      cardinality: 'many' as const
+    },
+    {
+      from: 'user' as const,
+      field: 'share_links' as const,
+      to: 'share_link' as const,
       cardinality: 'many' as const
     },
     {
@@ -325,13 +370,19 @@ export const schema = {
     },
     {
       from: 'user' as const,
-      field: 'thread_invites' as const,
-      to: 'thread_invite' as const,
+      field: 'user_keypairs' as const,
+      to: 'user_keypair' as const,
       cardinality: 'many' as const
+    },
+    {
+      from: 'user_keypair' as const,
+      field: 'owner' as const,
+      to: 'user' as const,
+      cardinality: 'one' as const
     },
   ],
   access: {
-    account: {"signIn":{"params":{"password":{"type":"string","optional":false},"username":{"type":"string","optional":false}}},"signup":{"params":{"password":{"type":"string","optional":false},"username":{"type":"string","optional":false}}}},
+    account: {"signIn":{"params":{"password":{"type":"string","optional":false},"username":{"type":"string","optional":false}}},"signup":{"params":{"password":{"type":"string","optional":false},"share_privkey":{"type":"string","optional":false},"share_pubkey":{"type":"string","optional":false},"username":{"type":"string","optional":false}}}},
   },
   buckets: [
     {
@@ -387,6 +438,22 @@ DEFINE INDEX unique_username ON TABLE user FIELDS username UNIQUE;
 DEFINE FIELD profile_picture ON TABLE user TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
+-- Ed25519 public key (PEM SPKI). Read by anyone — used to verify share-link
+-- JWTs the user has signed.
+DEFINE FIELD share_pubkey ON TABLE user TYPE option<string>
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- The matching private key lives in the \`user_keypair\` table so its
+-- table-level SELECT rule scopes it to the owner. Field-level rules
+-- aren't enough: SurrealDB v3 only enforces field SELECT permissions on
+-- record-id queries, so a free-form WHERE scan would leak the key
+-- otherwise.
+DEFINE TABLE user_keypair SCHEMAFULL
+PERMISSIONS FOR select, create, update, delete WHERE true;
+DEFINE FIELD owner    ON TABLE user_keypair TYPE option<record<user>>;
+DEFINE FIELD privkey  ON TABLE user_keypair TYPE option<string>;
+DEFINE INDEX unique_keypair_owner ON TABLE user_keypair FIELDS owner UNIQUE;
+
 -- ##################################################################
 -- THREAD TABLE
 -- ##################################################################
@@ -416,6 +483,8 @@ DEFINE FIELD created_at ON TABLE thread TYPE option<datetime>
     VALUE time::now();
 
 DEFINE FIELD active ON TABLE thread TYPE option<bool> VALUE $value OR false;
+
+DEFINE FIELD published ON TABLE thread TYPE option<bool> VALUE $value OR false;
 
 -- ##################################################################
 -- COMMENT TABLE
@@ -451,21 +520,28 @@ DEFINE EVENT comment_created ON TABLE comment WHEN $event = "CREATE" THEN
 -- COLLABORATORS
 -- ##################################################################
 
-DEFINE TABLE thread_invite SCHEMAFULL
+-- Per-issuer history of share links. Append-only by design — there's no
+-- way to revoke a JWT once it's out, so the dialog only shows the issuer
+-- the links they've made and warns them. Acceptance happens server-side
+-- (example/api /share/accept), not via this table; rows here are purely
+-- informational.
+DEFINE TABLE share_link SCHEMAFULL
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
-DEFINE FIELD thread     ON TABLE thread_invite TYPE option<record<thread>>;
-DEFINE FIELD token      ON TABLE thread_invite TYPE option<string>
-  ASSERT $value != NONE AND string::len($value) >= 16;
-DEFINE FIELD created_by ON TABLE thread_invite TYPE option<record<user>> VALUE $auth.id;
-DEFINE FIELD created_at ON TABLE thread_invite TYPE option<datetime> VALUE time::now();
-DEFINE INDEX unique_invite_token ON TABLE thread_invite FIELDS token UNIQUE;
+DEFINE FIELD issuer     ON TABLE share_link TYPE option<record<user>> VALUE $auth.id;
+DEFINE FIELD thread     ON TABLE share_link TYPE option<record<thread>>;
+DEFINE FIELD jwt        ON TABLE share_link TYPE option<string>;
+DEFINE FIELD jti        ON TABLE share_link TYPE option<string>;
+DEFINE FIELD exp        ON TABLE share_link TYPE option<datetime>;
+DEFINE FIELD created_at ON TABLE share_link TYPE option<datetime> VALUE time::now();
+DEFINE INDEX unique_share_jti ON TABLE share_link FIELDS jti UNIQUE;
 
+-- Only root may CREATE a \`collaborates_on\` edge — the JWT-verifying API
+-- endpoint does it on the recipient's behalf after checking the share
+-- link's signature against the issuer's \`share_pubkey\`. Author can still
+-- kick collaborators off via FOR delete.
 DEFINE TABLE collaborates_on SCHEMAFULL TYPE RELATION FROM user TO thread
 PERMISSIONS FOR select, create, update, delete WHERE true
-      AND in = $auth.id
-      AND $parent.out IN (SELECT VALUE thread FROM thread_invite)
-    FOR delete WHERE $access = "account"
       AND (in.id = $auth.id OR out.author.id = $auth.id)
     FOR update WHERE false;
 
@@ -516,6 +592,17 @@ PERMISSIONS FOR select, create, update WHERE true;
 -- SPOOKY INCANTATION
 -- The Registry of active Live Queries (Incantations).
 -- Moved to meta_tables_client.surql and meta_tables_remote.surql
+-- ==================================================
+
+-- ==================================================
+-- CLIENT-SIDE META TABLES
+--
+-- These tables live in the per-device local SurrealKV cache, which is
+-- single-tenant by construction (one user, one device). The codegen step in
+-- apps/cli/src/codegen.rs rewrites every PERMISSIONS clause to \`WHERE true\`
+-- when emitting the client schema, because there's no $session / $auth on
+-- the local DB to scope against. For multi-tenant scoping, see the
+-- corresponding rules in meta_tables_remote.surql which run on the server.
 -- ==================================================
 
 -- ==================================================
@@ -596,11 +683,10 @@ DEFINE FIELD _00_rv ON TABLE collaborates_on TYPE int DEFAULT 0 PERMISSIONS FOR 
 DEFINE FIELD _00_rv ON TABLE comment TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE commented_on TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE job TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD _00_rv ON TABLE share_link TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE thread TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
-DEFINE FIELD _00_rv ON TABLE thread_invite TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE user TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
-DEFINE FIELD _00_crdt ON TABLE comment TYPE option<object> FLEXIBLE PERMISSIONS FOR select, create, update WHERE true;
-DEFINE FIELD _00_crdt ON TABLE thread TYPE option<object> FLEXIBLE PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD _00_rv ON TABLE user_keypair TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 
 
 -- ==================================================
@@ -635,6 +721,20 @@ THEN {
     -- No-op for now.
 };
 
+-- Table: share_link Client Mutation
+DEFINE EVENT OVERWRITE _00_share_link_client_mutation ON TABLE share_link
+WHEN $before != $after AND $event != "DELETE"
+THEN {
+    -- No-op for now. Client mutation sync logic moved to DBSP.
+};
+
+-- Table: share_link Client Deletion
+DEFINE EVENT OVERWRITE _00_share_link_client_delete ON TABLE share_link
+WHEN $event = "DELETE"
+THEN {
+    -- No-op for now.
+};
+
 -- Table: thread Client Mutation
 DEFINE EVENT OVERWRITE _00_thread_client_mutation ON TABLE thread
 WHEN $before != $after AND $event != "DELETE"
@@ -649,20 +749,6 @@ THEN {
     -- No-op for now.
 };
 
--- Table: thread_invite Client Mutation
-DEFINE EVENT OVERWRITE _00_thread_invite_client_mutation ON TABLE thread_invite
-WHEN $before != $after AND $event != "DELETE"
-THEN {
-    -- No-op for now. Client mutation sync logic moved to DBSP.
-};
-
--- Table: thread_invite Client Deletion
-DEFINE EVENT OVERWRITE _00_thread_invite_client_delete ON TABLE thread_invite
-WHEN $event = "DELETE"
-THEN {
-    -- No-op for now.
-};
-
 -- Table: user Client Mutation
 DEFINE EVENT OVERWRITE _00_user_client_mutation ON TABLE user
 WHEN $before != $after AND $event != "DELETE"
@@ -672,6 +758,20 @@ THEN {
 
 -- Table: user Client Deletion
 DEFINE EVENT OVERWRITE _00_user_client_delete ON TABLE user
+WHEN $event = "DELETE"
+THEN {
+    -- No-op for now.
+};
+
+-- Table: user_keypair Client Mutation
+DEFINE EVENT OVERWRITE _00_user_keypair_client_mutation ON TABLE user_keypair
+WHEN $before != $after AND $event != "DELETE"
+THEN {
+    -- No-op for now. Client mutation sync logic moved to DBSP.
+};
+
+-- Table: user_keypair Client Deletion
+DEFINE EVENT OVERWRITE _00_user_keypair_client_delete ON TABLE user_keypair
 WHEN $event = "DELETE"
 THEN {
     -- No-op for now.

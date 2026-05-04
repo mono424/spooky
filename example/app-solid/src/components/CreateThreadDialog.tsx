@@ -41,6 +41,7 @@ export function CreateThreadDialog(props: CreateThreadDialogProps) {
         content: content().trim(),
         author: new RecordId('user', user.id.toString().split(':')[1]),
         active: true,
+        published: false,
       });
 
       handleClose();
