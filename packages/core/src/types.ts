@@ -117,6 +117,15 @@ export interface Sp00kyConfig<S extends SchemaStructure> {
    * Defaults to 100ms.
    */
   streamDebounceTime?: number;
+  /**
+   * Debounce time in milliseconds for syncing collaborative (CRDT) field
+   * changes to the remote database. Local writes happen immediately on
+   * every keystroke (so reload/offline works), but the remote UPSERT is
+   * coalesced over this window. Lower = snappier remote propagation +
+   * more network traffic; higher = less traffic + more lag for other
+   * collaborators. Defaults to 500ms.
+   */
+  crdtDebounceMs?: number;
 }
 
 export type QueryHash = string;

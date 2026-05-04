@@ -79,3 +79,11 @@ DEFINE FIELD IF NOT EXISTS recordId ON _00_pending_mutations TYPE option<record>
 -- The data payload (for create/update)
 DEFINE FIELD IF NOT EXISTS data ON _00_pending_mutations TYPE option<object> FLEXIBLE
     PERMISSIONS FOR select, create, update WHERE true;
+
+-- CRDT and cursor state for the local cache live as `_00_crdt` and
+-- `_00_cursor` FLEXIBLE object fields on each CRDT-bearing parent table
+-- (injected by apps/cli/src/main.rs alongside the `_00_rv` version
+-- field). They're not separate tables here — the local DB is
+-- single-tenant, so we don't need the cross-table permission gate the
+-- server-side design uses. See meta_tables_remote.surql for the remote
+-- shape (separate tables with dereferenced rules).

@@ -1,5 +1,5 @@
 import type { SchemaStructure } from '@spooky-sync/query-builder';
-import type { RemoteDatabaseService } from '../../services/database/index';
+import type { LocalDatabaseService, RemoteDatabaseService } from '../../services/database/index';
 import type { Logger } from '../../services/logger/index';
 import type { Uuid } from 'surrealdb';
 import { CrdtField } from './crdt-field';
@@ -40,8 +40,10 @@ export class CrdtManager {
 
   constructor(
     private schema: SchemaStructure,
+    private local: LocalDatabaseService,
     private remote: RemoteDatabaseService,
     logger: Logger,
+    private debounceMs: number = 500,
   ) {
     this.logger = logger.child({ service: 'CrdtManager' });
   }
@@ -77,26 +79,31 @@ export class CrdtManager {
       return crdtField;
     }
 
-    // Load the existing CRDT snapshot from the `_00_crdt` table keyed by
-    // (record_id, field), if any.
+    // Load the existing CRDT snapshot from the LOCAL cache. In local the
+    // state lives as an object field on the parent row itself (injected
+    // by apps/cli/src/main.rs alongside `_00_rv`), not as a separate
+    // table — the local DB is single-tenant so we don't need the
+    // cross-table permission gate the remote design uses. This lets the
+    // editor mount offline because the snapshot rides the parent's
+    // normal local sync.
     let initialCrdtState: string | undefined;
     try {
-      const [result] = await this.remote.query<[string | null]>(
-        'SELECT VALUE state FROM ONLY _00_crdt WHERE record_id = $id AND field = $field LIMIT 1',
+      const [result] = await this.local.query<[string | null]>(
+        'SELECT VALUE _00_crdt[$field] FROM ONLY $id',
         { id: parseRecordIdString(recordId), field },
       );
       if (typeof result === 'string' && result.length > 0) {
         initialCrdtState = result;
       }
     } catch (e) {
-      this.logger.debug(
-        { error: e, Category: 'sp00ky-client::CrdtManager::open' },
-        'No existing CRDT state found'
+      this.logger.info(
+        { error: String(e), recordId, field, Category: 'sp00ky-client::CrdtManager::open' },
+        'No existing CRDT state found in local cache (continuing with empty doc)'
       );
     }
 
     crdtField = new CrdtField(field, initialCrdtState, this.logger);
-    crdtField.startSync(this.remote, recordId, this.sessionId);
+    crdtField.startSync(this.local, this.remote, recordId, this.sessionId, this.debounceMs);
     this.fields.set(key, crdtField);
 
     this.logger.info(
@@ -104,7 +111,11 @@ export class CrdtManager {
       'CrdtField opened'
     );
 
-    await this.ensureTableSubscription(table);
+    // Fire-and-forget: the LIVE subscription receives *future* updates;
+    // the initial snapshot is already in hand. Awaiting this used to add
+    // a network round-trip to every thread open. `ensureTableSubscription`
+    // coalesces concurrent calls via `pendingLive`, so this is safe.
+    void this.ensureTableSubscription(table);
 
     return crdtField;
   }

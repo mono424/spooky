@@ -589,6 +589,14 @@ DEFINE INDEX unique_keypair_owner ON TABLE user_keypair FIELDS owner UNIQUE;
 -- THREAD TABLE
 -- ##################################################################
 
+-- Permission shape constraint: the SSP's predicate parser doesn't accept
+-- subqueries (packages/ssp/src/converter.rs:498-504) and its filter
+-- vocabulary has no IN/contains operator (operator/predicate.rs). So we
+-- can't gate SELECT on `\$auth.id IN (SELECT … FROM collaborates_on)` —
+-- the SSP would fail closed and the materialized view would never reach
+-- a collaborator. Keep SELECT to author-only for now; collaborator
+-- visibility is recovered through the `collaborates_on`-driven UPDATE
+-- rule and an explicit client-side query for invited threads.
 DEFINE TABLE thread SCHEMAFULL
 PERMISSIONS FOR select, create, update, delete WHERE true
       AND (author.id = \$auth.id
@@ -806,6 +814,14 @@ PERMISSIONS FOR select, create, update WHERE true;
 -- The data payload (for create/update)
 DEFINE FIELD IF NOT EXISTS data ON _00_pending_mutations TYPE option<object> FLEXIBLE
 PERMISSIONS FOR select, create, update WHERE true;
+
+-- CRDT and cursor state for the local cache live as `_00_crdt` and
+-- `_00_cursor` FLEXIBLE object fields on each CRDT-bearing parent table
+-- (injected by apps/cli/src/main.rs alongside the `_00_rv` version
+-- field). They're not separate tables here — the local DB is
+-- single-tenant, so we don't need the cross-table permission gate the
+-- server-side design uses. See meta_tables_remote.surql for the remote
+-- shape (separate tables with dereferenced rules).
 DEFINE FIELD _00_rv ON TABLE _00_pending_mutations TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE _00_query TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE _00_schema TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
@@ -818,6 +834,8 @@ DEFINE FIELD _00_rv ON TABLE share_link TYPE int DEFAULT 0 PERMISSIONS FOR selec
 DEFINE FIELD _00_rv ON TABLE thread TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE user TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE user_keypair TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD _00_crdt ON TABLE thread TYPE option<object> FLEXIBLE PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD _00_cursor ON TABLE thread TYPE option<object> FLEXIBLE PERMISSIONS FOR select, create, update WHERE true;
 
 
 -- ==================================================

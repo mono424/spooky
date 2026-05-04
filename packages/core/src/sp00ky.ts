@@ -156,9 +156,18 @@ export class Sp00kyClient<S extends SchemaStructure> {
       logger
     );
 
-    // Initialize CRDT Manager (needs remote for parent-table LIVE SELECT
-    // and follow-up _00_crdt / _00_cursor subqueries).
-    this.crdtManager = new CrdtManager(this.config.schema, this.remote, logger);
+    // Initialize CRDT Manager. `local` is used to read the initial
+    // `_00_crdt` snapshot when a field opens AND to mirror every local
+    // edit (so reload/offline see the freshest state); `remote` is used
+    // for the debounced outgoing UPSERTs and the parent-table LIVE feed.
+    // The debounce window is configurable via `crdtDebounceMs`.
+    this.crdtManager = new CrdtManager(
+      this.config.schema,
+      this.local,
+      this.remote,
+      logger,
+      config.crdtDebounceMs ?? 500,
+    );
 
     this.dataModule = new DataModule(
       this.cache,

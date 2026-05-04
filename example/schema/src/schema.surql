@@ -7,11 +7,17 @@ DEFINE ACCESS account ON DATABASE TYPE RECORD
     -- The private key lives in `user_keypair` so its table-level SELECT
     -- rule (`owner = $auth`) gates it consistently — field-level rules in
     -- SurrealDB v3 only enforce on record-id queries, not table scans.
+    -- When the browser fails to generate a keypair (e.g. WebCrypto Ed25519
+    -- not yet available) we still let signup succeed; the user can rotate
+    -- a key in via UPDATE later, they just can't issue share links until
+    -- they do.
     LET $u = CREATE ONLY user SET
       username     = $username,
       password     = crypto::argon2::generate($password),
       share_pubkey = $share_pubkey;
-    CREATE user_keypair SET owner = $u.id, privkey = $share_privkey;
+    IF $share_privkey != NONE THEN
+      CREATE user_keypair SET owner = $u.id, privkey = $share_privkey
+    END;
     RETURN $u;
   }
   SIGNIN ( SELECT * FROM user WHERE username = $username AND crypto::argon2::compare(password, $password) )
@@ -81,9 +87,17 @@ DEFINE INDEX unique_keypair_owner ON TABLE user_keypair FIELDS owner UNIQUE;
 -- THREAD TABLE
 -- ##################################################################
 
+-- Permission shape constraint: the SSP's predicate parser doesn't accept
+-- subqueries (packages/ssp/src/converter.rs:498-504) and its filter
+-- vocabulary has no IN/contains operator (operator/predicate.rs). So we
+-- can't gate SELECT on `$auth.id IN (SELECT … FROM collaborates_on)` —
+-- the SSP would fail closed and the materialized view would never reach
+-- a collaborator. Keep SELECT to author-only for now; collaborator
+-- visibility is recovered through the `collaborates_on`-driven UPDATE
+-- rule and an explicit client-side query for invited threads.
 DEFINE TABLE thread SCHEMAFULL
   PERMISSIONS
-    FOR select WHERE published = true OR ($access = "account" AND (author.id = $auth.id OR $auth.id IN (SELECT VALUE in FROM collaborates_on WHERE out = $parent.id)))
+    FOR select WHERE published = true OR ($access = "account" AND author.id = $auth.id)
     FOR create WHERE $access = "account" AND author.id = $auth.id
     FOR update WHERE $access = "account"
       AND (author.id = $auth.id
@@ -118,7 +132,7 @@ DEFINE FIELD published ON TABLE thread TYPE bool VALUE $value OR false;
 
 DEFINE TABLE comment SCHEMAFULL
   PERMISSIONS
-    FOR select WHERE thread.published = true OR ($access = "account" AND (thread.author.id = $auth.id OR $auth.id IN (SELECT VALUE in FROM collaborates_on WHERE out = $parent.thread)))
+    FOR select WHERE thread.published = true OR ($access = "account" AND thread.author.id = $auth.id)
     FOR update, delete, create WHERE $access = "account" AND author.id = $auth.id
 ;
 
@@ -139,7 +153,7 @@ DEFINE FIELD created_at ON TABLE comment TYPE datetime
 DEFINE TABLE commented_on SCHEMAFULL TYPE RELATION
   FROM comment TO thread
   PERMISSIONS
-    FOR select WHERE out.published = true OR ($access = "account" AND (out.author.id = $auth.id OR $auth.id IN (SELECT VALUE in FROM collaborates_on WHERE out = $parent.out)));
+    FOR select WHERE out.published = true OR ($access = "account" AND out.author.id = $auth.id);
 
 DEFINE EVENT comment_created ON TABLE comment WHEN $event = "CREATE" THEN
   RELATE ($after.id)->commented_on->($after.thread)

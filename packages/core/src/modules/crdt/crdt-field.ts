@@ -1,5 +1,5 @@
 import { LoroDoc } from 'loro-crdt';
-import type { RemoteDatabaseService } from '../../services/database/index';
+import type { LocalDatabaseService, RemoteDatabaseService } from '../../services/database/index';
 import type { Logger } from '../../services/logger/index';
 import { parseRecordIdString } from '../../utils/index';
 
@@ -23,6 +23,7 @@ export function cursorColorFromName(name: string): string {
 export class CrdtField {
   private doc: LoroDoc;
   private pushTimer: ReturnType<typeof setTimeout> | null = null;
+  private local: LocalDatabaseService | null = null;
   private remote: RemoteDatabaseService | null = null;
   private recordId: string | null = null;
   private sessionId: string = '';
@@ -32,6 +33,10 @@ export class CrdtField {
   private loadedFromCrdt = false;
   private pushRetryCount = 0;
   private logger: Logger | null;
+  /** Remote-push debounce. Local writes happen immediately on every Loro
+   *  update; the remote UPSERT is coalesced over this window. Configured
+   *  via `Sp00kyConfig.crdtDebounceMs`, default 500. */
+  private remoteDebounceMs: number = 500;
 
   private _onCursorUpdate: ((data: Uint8Array) => void) | null = null;
   private pendingCursorUpdate: Uint8Array | null = null;
@@ -73,12 +78,26 @@ export class CrdtField {
     return this.loadedFromCrdt;
   }
 
-  startSync(remote: RemoteDatabaseService, recordId: string, sessionId: string): void {
+  startSync(
+    local: LocalDatabaseService,
+    remote: RemoteDatabaseService,
+    recordId: string,
+    sessionId: string,
+    debounceMs: number,
+  ): void {
+    this.local = local;
     this.remote = remote;
     this.recordId = recordId;
     this.sessionId = sessionId;
+    this.remoteDebounceMs = debounceMs;
+    // Every local Loro update writes the snapshot to the local cache
+    // *immediately* (so reload/offline see the latest text), then
+    // schedules a debounced push to remote. The local UPSERT is cheap —
+    // it's an in-memory SurrealKV write — but errors are swallowed so a
+    // bad write never blocks user input.
     this.unsubscribe = this.doc.subscribeLocalUpdates(() => {
-      this.schedulePush();
+      void this.persistLocal();
+      this.scheduleRemotePush();
     });
   }
 
@@ -89,10 +108,17 @@ export class CrdtField {
   }
 
   importRemote(base64State: string): void {
-    // Suppress echo: skip imports within 500ms of our own push
-    if (Date.now() - this.lastPushTime < 500) return;
+    // Echo suppression: skip imports within `remoteDebounceMs + 200` of
+    // our own push. The +200 guards against round-trip jitter where our
+    // own write echoes back from the LIVE feed before the debounce
+    // window closes.
+    if (Date.now() - this.lastPushTime < this.remoteDebounceMs + 200) return;
     try {
       this.doc.import(decodeBase64(base64State));
+      // Persist the merged snapshot locally so the next reload/offline
+      // open sees the freshest converged state without waiting for the
+      // LIVE feed.
+      void this.persistLocal();
     } catch (e) {
       this.logger?.warn(
         { error: e, Category: 'sp00ky-client::CrdtField::importRemote' },
@@ -157,20 +183,42 @@ export class CrdtField {
     }
   }
 
-  private schedulePush(): void {
+  private scheduleRemotePush(): void {
     if (this.pushTimer) clearTimeout(this.pushTimer);
-    this.pushTimer = setTimeout(() => void this.pushToRemote(), 300);
+    this.pushTimer = setTimeout(() => void this.pushToRemote(), this.remoteDebounceMs);
+  }
+
+  /** Mirror the LoroDoc snapshot into the parent row's local `_00_crdt`
+   *  object field. Runs synchronously on every local update and on every
+   *  remote import, so a reload (online or offline) sees the freshest
+   *  content immediately. The field is injected on every CRDT-bearing
+   *  parent by `apps/cli/src/main.rs` for client output only — server
+   *  uses a separate `_00_crdt` table. Failures are logged and swallowed:
+   *  a stale local write must never block user input. */
+  private async persistLocal(): Promise<void> {
+    if (!this.local || !this.recordId) return;
+    try {
+      await this.local.query(
+        `UPDATE $id SET _00_crdt[$field] = $state RETURN NONE;`,
+        { id: parseRecordIdString(this.recordId), field: this.fieldName, state: this.exportSnapshot() }
+      );
+    } catch (e) {
+      this.logger?.debug(
+        { error: e, Category: 'sp00ky-client::CrdtField::persistLocal' },
+        'Local CRDT persist failed (best-effort)'
+      );
+    }
   }
 
   private async pushToRemote(): Promise<void> {
     if (!this.remote || !this.recordId) return;
     this.lastPushTime = Date.now();
     try {
-      // Write the CRDT snapshot into the `_00_crdt` table keyed by the
-      // array record id `[record_id, field]`, then bump the parent's
+      // Write the CRDT snapshot into the remote `_00_crdt` table keyed
+      // by the composite `[record_id, field]` id, then bump the parent's
       // `_00_rv` so its LIVE feed fires for every viewer that can SELECT
-      // it. The bump is what triggers cross-browser delivery now that the
-      // snapshot is no longer embedded on the parent row.
+      // it. The bump is what triggers cross-browser delivery — the
+      // editor itself is local-only.
       await this.remote.query(
         `UPSERT type::record("_00_crdt", [$id, $field]) SET record_id = $id, field = $field, state = $state;
          UPDATE $id SET _00_rv = _00_rv RETURN NONE;`,
@@ -182,9 +230,12 @@ export class CrdtField {
         { error: e, Category: 'sp00ky-client::CrdtField::pushToRemote' },
         'Failed to push CRDT state to remote'
       );
+      // Bounded retry. Offline first-loads will exhaust this and stop
+      // hammering; the next user keystroke (or the next time a remote
+      // event lands once we're back online) will kick off another push.
       if (this.pushRetryCount < 2) {
         this.pushRetryCount++;
-        this.schedulePush();
+        this.scheduleRemotePush();
       }
     }
   }

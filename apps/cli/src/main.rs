@@ -1253,14 +1253,45 @@ fn run_codegen(
         ));
     }
 
-    // CRDT and cursor state lives in the dedicated `_00_crdt` and
-    // `_00_cursor` tables (defined in meta_tables_remote.surql). Splitting
-    // them off the parent row is what makes offline edits mergeable: each
-    // (record, field) gets its own row, so concurrent offline writes don't
-    // collide on the parent row's last-write-wins semantics. The parent's
-    // LIVE feed is still used to fan changes out across browsers — the
-    // client bumps the parent's `_00_rv` whenever it UPSERTs into a meta
-    // table, see crdt-field.ts.
+    // Inject `_00_crdt` and `_00_cursor` as FLEXIBLE object fields on every
+    // CRDT-bearing parent — CLIENT (local cache) ONLY. The local DB is
+    // single-tenant by construction and stripped of permissions, so we
+    // sidestep the cross-table dereference rules that the remote design
+    // needs. The parent row owns its CRDT state directly:
+    //
+    //   record._00_crdt   = { <field_name>: <base64 LoroDoc snapshot>, ... }
+    //   record._00_cursor = { <session_id>: { <field_name>: <base64 cursor blob>, ... } }
+    //
+    // This rides the parent record's normal local sync (one row per thread,
+    // not one row per field), keeps reads on the same query the editor
+    // already issues for the parent, and lets the user reload offline
+    // because the snapshot lives on the row that's already in cache.
+    //
+    // Server side keeps the separate `_00_crdt` / `_00_cursor` tables (see
+    // meta_tables_remote.surql) — they need their own row identity to enforce
+    // dereferenced UPDATE permissions per parent.
+    {
+        let mut crdt_tables = std::collections::BTreeSet::new();
+        for ((table_name, _field_name), anns) in &field_annotations {
+            if anns.iter().any(|a| a.name == "crdt") {
+                crdt_tables.insert(table_name.clone());
+            }
+        }
+        for table_name in &crdt_tables {
+            println!(
+                "  + Injecting _00_crdt + _00_cursor object fields on '{}' for local cache",
+                table_name
+            );
+            filtered_schema_content.push_str(&format!(
+                "\nDEFINE FIELD _00_crdt ON TABLE {} TYPE option<object> FLEXIBLE PERMISSIONS FOR select, create, update WHERE true;",
+                table_name
+            ));
+            filtered_schema_content.push_str(&format!(
+                "\nDEFINE FIELD _00_cursor ON TABLE {} TYPE option<object> FLEXIBLE PERMISSIONS FOR select, create, update WHERE true;",
+                table_name
+            ));
+        }
+    }
 
     // Choose which content to use based on format
     let raw_schema_content = if matches!(output_format, OutputFormat::Surql) {

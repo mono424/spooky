@@ -55,13 +55,23 @@ export function AuthProvider(props: { children: JSX.Element }) {
 
   const signUp = async (username: string, password: string) => {
     // Generate the user's Ed25519 share-link keypair before signup so both
-    // halves land on the user row atomically. The private key is then
-    // visible to the owner only (per-row select rule on `user.share_privkey`)
-    // and rides the normal SurrealKV sync, so JWT signing works offline.
-    const { publicKey, privateKey } = await jose.generateKeyPair('Ed25519', { extractable: true });
-    const share_pubkey  = await jose.exportSPKI(publicKey);
-    const share_privkey = await jose.exportPKCS8(privateKey);
-    await db.auth.signUp('account', { username, password, share_pubkey, share_privkey });
+    // halves land on the user row atomically. WebCrypto Ed25519 isn't
+    // universally supported yet; if generation fails we still want signup
+    // to succeed (the SIGNUP query treats the keypair fields as optional)
+    // and let the user backfill a key later.
+    let share_pubkey: string | null = null;
+    let share_privkey: string | null = null;
+    try {
+      const { publicKey, privateKey } = await jose.generateKeyPair('Ed25519', { extractable: true });
+      share_pubkey  = await jose.exportSPKI(publicKey);
+      share_privkey = await jose.exportPKCS8(privateKey);
+    } catch (e) {
+      console.warn('[auth] Ed25519 keypair generation failed; signing up without one.', e);
+    }
+    // The codegen types the keypair fields as required strings; null is
+    // accepted by the SIGNUP block at runtime (it skips the `user_keypair`
+    // create when privkey is NONE), but TypeScript doesn't know that.
+    await db.auth.signUp('account', { username, password, share_pubkey, share_privkey } as any);
   };
 
   const signOut = async () => {

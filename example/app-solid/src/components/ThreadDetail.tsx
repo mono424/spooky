@@ -1,4 +1,4 @@
-import { createEffect, createSignal, For, onCleanup, Show } from 'solid-js';
+import { createEffect, createMemo, createSignal, For, onCleanup, Show } from 'solid-js';
 import { useNavigate, useParams } from '@solidjs/router';
 import { CommentForm } from './CommentForm';
 import type { SyncedDb } from '@spooky-sync/client-solid';
@@ -13,7 +13,7 @@ import { ProfilePicture } from './ProfilePicture';
 import { Tooltip } from './Tooltip';
 import { CollaborativeEditor } from './CollaborativeEditor';
 import { ShareDialog } from './ShareDialog';
-import { MoreHorizontal } from 'lucide-solid';
+import { Lock, MoreVertical } from 'lucide-solid';
 
 interface CollaboratorRow {
   relationId: string;
@@ -76,7 +76,16 @@ export function ThreadDetail() {
       userId: auth.user()?.id ?? '',
     })
   );
-  const thread = () => threadResult.data() || null;
+  // Guard against stale data on j/k navigation: useQuery keeps the
+  // previous thread's data() until the new query resolves, which causes
+  // the old title/content to flash in the new route. Treat the data as
+  // null whenever its id doesn't match the current route param.
+  const thread = createMemo(() => {
+    const data = threadResult.data();
+    if (!data) return null;
+    const dataId = String((data as any).id ?? '').split(':')[1] ?? '';
+    return dataId === params.id ? data : null;
+  });
 
   // Query all threads for j/k navigation between threads
   const allThreadsResult = useQuery(() => {
@@ -88,15 +97,40 @@ export function ThreadDetail() {
     navigate('/');
   };
 
+  // Pending selection for j/k nav: the sidebar lights up the row
+  // immediately while the route change is debounced. Lets the user blast
+  // through several rows without each one mounting/unmounting the editor.
+  const [pendingThreadId, setPendingThreadId] = createSignal<string | null>(null);
+  let navTimer: ReturnType<typeof setTimeout> | null = null;
+
   const navigateToAdjacentThread = (direction: 1 | -1) => {
     const list = allThreads();
     if (list.length === 0) return;
-    const currentIdx = list.findIndex((t) => t.id.split(':')[1] === params.id);
+    const cursorId = pendingThreadId() ?? params.id;
+    const currentIdx = list.findIndex((t) => t.id.split(':')[1] === cursorId);
     if (currentIdx === -1) return;
     const nextIdx = currentIdx + direction;
     if (nextIdx < 0 || nextIdx >= list.length) return;
-    navigate(`/thread/${list[nextIdx].id.split(':')[1]}`);
+
+    const targetSuffix = list[nextIdx].id.split(':')[1];
+    setPendingThreadId(targetSuffix);
+    if (navTimer) clearTimeout(navTimer);
+    navTimer = setTimeout(() => {
+      navTimer = null;
+      navigate(`/thread/${targetSuffix}`);
+    }, 200);
   };
+
+  // Clear pending highlight once the route catches up.
+  createEffect(() => {
+    if (pendingThreadId() && pendingThreadId() === params.id) {
+      setPendingThreadId(null);
+    }
+  });
+
+  onCleanup(() => {
+    if (navTimer) clearTimeout(navTimer);
+  });
 
   createHotkey('J', () => navigateToAdjacentThread(1));
   createHotkey('K', () => navigateToAdjacentThread(-1));
@@ -282,7 +316,7 @@ export function ThreadDetail() {
     <div class="fixed inset-0 top-14 z-40 bg-zinc-950">
       <div class="max-w-5xl mx-auto h-full flex">
         <ThreadSidebar
-          activeThreadId={params.id}
+          activeThreadId={pendingThreadId() ?? params.id}
           onNavigate={navigateToAdjacentThread}
           threads={allThreads()}
           isLoading={allThreadsResult.isLoading()}
@@ -335,56 +369,48 @@ export function ThreadDetail() {
                           })}
                         </div>
                       </div>
-                      <Show when={isAuthor() || isMember()}>
-                        <span class="ml-auto text-[11px] text-zinc-600 bg-surface border border-white/[0.06] rounded-full px-2.5 py-0.5">
-                          {isAuthor() ? 'Author' : 'Member'}
-                        </span>
-                      </Show>
-                      <Show when={canEdit() && !threadData().published}>
-                        <span class="text-[11px] text-zinc-400 bg-surface border border-white/[0.06] rounded-full px-2.5 py-0.5">
-                          Private
-                        </span>
-                      </Show>
+                      {/* Pushes everything below to the right edge. */}
+                      <div class="flex-1" />
 
-                      <div
-                        class={`flex items-center gap-2 ${canEdit() ? '' : 'ml-auto'}`}
-                      >
-                        <Show when={collaborators().length > 0}>
-                          <div class="flex -space-x-2">
-                            <For each={collaborators()}>
-                              {(c) => (
-                                <div class="relative group">
-                                  <Tooltip text={c.user.username || 'Collaborator'}>
-                                    <div class="ring-2 ring-zinc-950 rounded-full">
-                                      <ProfilePicture
-                                        src={() => c.user.profile_picture}
-                                        username={() => c.user.username}
-                                        size="sm"
-                                      />
-                                    </div>
-                                  </Tooltip>
-                                  <Show when={isAuthor()}>
-                                    <button
-                                      onMouseDown={() => removeCollaborator(c.relationId)}
-                                      class="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-zinc-900 border border-white/[0.06] text-zinc-500 hover:text-red-400 text-[10px] leading-none opacity-0 group-hover:opacity-100 transition-opacity"
-                                      title="Remove collaborator"
-                                      aria-label="Remove collaborator"
-                                    >
-                                      ×
-                                    </button>
-                                  </Show>
-                                </div>
-                              )}
-                            </For>
-                          </div>
-                        </Show>
-                        <Show when={isAuthor()}>
-                          <button
-                            onMouseDown={() => setShareOpen(true)}
-                            class="text-xs font-medium bg-surface hover:bg-surface-hover border border-white/[0.06] text-zinc-300 hover:text-white px-3 py-1 rounded-md transition-colors duration-150"
-                          >
-                            Share
-                          </button>
+                      <Show when={collaborators().length > 0}>
+                        <div class="flex -space-x-1.5">
+                          <For each={collaborators()}>
+                            {(c) => (
+                              <div class="relative group">
+                                <Tooltip text={c.user.username || 'Collaborator'}>
+                                  <div class="ring-2 ring-zinc-950 rounded-full">
+                                    <ProfilePicture
+                                      src={() => c.user.profile_picture}
+                                      username={() => c.user.username}
+                                      size="xs"
+                                    />
+                                  </div>
+                                </Tooltip>
+                                <Show when={isAuthor()}>
+                                  <button
+                                    onMouseDown={() => removeCollaborator(c.relationId)}
+                                    class="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-zinc-900 border border-white/[0.06] text-zinc-500 hover:text-red-400 text-[10px] leading-none opacity-0 group-hover:opacity-100 transition-opacity"
+                                    title="Remove collaborator"
+                                    aria-label="Remove collaborator"
+                                  >
+                                    ×
+                                  </button>
+                                </Show>
+                              </div>
+                            )}
+                          </For>
+                        </div>
+                      </Show>
+                      <div class="flex items-center gap-2">
+                        <Show when={canEdit() && !threadData().published}>
+                          <Tooltip text="Private — only members can view">
+                            <span
+                              class="inline-flex items-center justify-center w-6 h-6 text-zinc-500 bg-surface border border-white/[0.06] rounded-full"
+                              aria-label="Private"
+                            >
+                              <Lock size={12} />
+                            </span>
+                          </Tooltip>
                         </Show>
 
                         <Show when={canEdit()}>
@@ -395,10 +421,21 @@ export function ThreadDetail() {
                               title="More"
                               aria-label="More options"
                             >
-                              <MoreHorizontal size={16} />
+                              <MoreVertical size={16} />
                             </button>
                             <Show when={menuOpen()}>
                               <div class="absolute right-0 mt-1.5 w-40 bg-surface border border-white/[0.06] rounded-lg shadow-2xl z-50 py-1 animate-fade-in">
+                                <Show when={isAuthor()}>
+                                  <button
+                                    onMouseDown={() => {
+                                      setMenuOpen(false);
+                                      setShareOpen(true);
+                                    }}
+                                    class="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-zinc-300 hover:text-white hover:bg-surface-hover transition-colors duration-150"
+                                  >
+                                    Share
+                                  </button>
+                                </Show>
                                 <button
                                   onMouseDown={() => {
                                     setMenuOpen(false);

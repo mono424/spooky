@@ -7,10 +7,18 @@ DEFINE FUNCTION OVERWRITE fn::query::register($config: object) {
     -- caller passed in $config.clientId is ignored. This is what the
     -- _00_query / _00_list_ref permission rules match against at read
     -- time, so the value must be derived inside the user's session.
+    --
+    -- $auth.id is injected server-side into params under `auth.id` so the
+    -- SSP's permission rewrite (packages/ssp/src/policy.rs) can resolve
+    -- `$auth.id` references in the registered table's SELECT predicate
+    -- per-user. Without this, predicates that reference $auth fail closed
+    -- (Predicate::False) at packages/ssp/src/policy.rs:184-194.
+    LET $params_in = $config.params OR {};
+    LET $params_with_auth = object::extend($params_in, { auth: { id: <string>($auth.id OR '') } });
     LET $module_config = {
         id: <string>$config.id,
         surql: <string>$config.surql,
-        params: <string>($config.params OR {}),
+        params: <string>$params_with_auth,
         clientId: <string>session::id(),
         ttl: <string>($config.ttl OR '1h'),
         lastActiveAt: <string>time::now(),
