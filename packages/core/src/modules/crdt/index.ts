@@ -10,24 +10,48 @@ export { CrdtField, cursorColorFromName, CURSOR_COLORS } from './crdt-field';
 /**
  * CrdtManager manages active CrdtField instances and their sync channels.
  *
- * Each open record gets two LIVE SELECTs:
- *  - _00_crdt: persistent CRDT field snapshots (visible to anyone with parent
- *    SELECT permission)
- *  - _00_cursor: ephemeral cursor / presence state (only visible to callers
- *    with parent UPDATE permission)
+ * Collaborative state lives in two dedicated tables (defined in
+ * `apps/cli/src/meta_tables_remote.surql`):
+ *   - `_00_crdt`   { record_id, field, state } — one row per (record, field)
+ *   - `_00_cursor` { record_id, session_id, field, state } — one row per
+ *                    (record, session, field)
+ *
+ * Splitting them off the parent row is what makes offline edits mergeable:
+ * each (record, field) gets its own row, so concurrent offline writes don't
+ * collide on the parent's last-write-wins semantics.
+ *
+ * Cross-browser delivery still rides the parent table's existing LIVE feed
+ * to avoid SurrealDB v3 LIVE bugs around dereference-based permission rules
+ * (issues 3602, 4026). On every meta UPSERT the writer also bumps the
+ * parent's `_00_rv` (a no-op assignment); that fires the parent's LIVE
+ * feed, and the receiver pulls the matching `_00_crdt` / `_00_cursor` rows
+ * via subquery. Permission inheritance happens server-side via
+ * `record_id.id != NONE` (SELECT) and `fn::can_update_record` (UPDATE).
  */
 export class CrdtManager {
   private fields = new Map<string, CrdtField>();
-  // Per recordId: one entry per source table we're subscribed to.
-  private liveQueries = new Map<string, { uuid: Uuid; table: string }[]>();
+  // One LIVE subscription per parent table (e.g. "thread" → uuid).
+  private liveByTable = new Map<string, Uuid>();
+  // Coalesces concurrent first-time subscribes for the same table.
+  private pendingLive = new Map<string, Promise<void>>();
   private logger: Logger;
+  // SurrealDB session id, used as the per-session key inside `_00_cursor`.
+  private sessionId: string = '';
 
   constructor(
     private schema: SchemaStructure,
     private remote: RemoteDatabaseService,
-    logger: Logger
+    logger: Logger,
   ) {
     this.logger = logger.child({ service: 'CrdtManager' });
+  }
+
+  /** Set the session id that scopes this client's cursor entries. Must be
+   *  called before `open()` for cursors to be pushed under a stable key.
+   *  Passed in from `sp00ky.ts` at boot (it already fetches `session::id()`
+   *  for the data-module salt). */
+  setSessionId(sessionId: string): void {
+    this.sessionId = sessionId;
   }
 
   /**
@@ -53,15 +77,16 @@ export class CrdtManager {
       return crdtField;
     }
 
-    // Load saved CRDT state from remote _00_crdt table
+    // Load the existing CRDT snapshot from the `_00_crdt` table keyed by
+    // (record_id, field), if any.
     let initialCrdtState: string | undefined;
     try {
-      const [result] = await this.remote.query<[string[]]>(
-        'SELECT VALUE state FROM _00_crdt WHERE record_id = $rid AND field = $field LIMIT 1',
-        { rid: parseRecordIdString(recordId), field }
+      const [result] = await this.remote.query<[string | null]>(
+        'SELECT VALUE state FROM ONLY _00_crdt WHERE record_id = $id AND field = $field LIMIT 1',
+        { id: parseRecordIdString(recordId), field },
       );
-      if (result && result.length > 0 && result[0]) {
-        initialCrdtState = result[0];
+      if (typeof result === 'string' && result.length > 0) {
+        initialCrdtState = result;
       }
     } catch (e) {
       this.logger.debug(
@@ -71,7 +96,7 @@ export class CrdtManager {
     }
 
     crdtField = new CrdtField(field, initialCrdtState, this.logger);
-    crdtField.startSync(this.remote, recordId);
+    crdtField.startSync(this.remote, recordId, this.sessionId);
     this.fields.set(key, crdtField);
 
     this.logger.info(
@@ -79,7 +104,7 @@ export class CrdtManager {
       'CrdtField opened'
     );
 
-    await this.ensureLiveSelect(table, recordId);
+    await this.ensureTableSubscription(table);
 
     return crdtField;
   }
@@ -92,12 +117,11 @@ export class CrdtManager {
       this.fields.delete(key);
     }
 
-    const prefix = `${table}:${recordId}:`;
-    const hasOtherFields = Array.from(this.fields.keys()).some(
-      (k) => k !== key && k.startsWith(prefix)
-    );
-    if (!hasOtherFields) {
-      this.killLiveSelect(recordId);
+    // If no fields on this table remain open, tear down the table-wide LIVE.
+    const tablePrefix = `${table}:`;
+    const stillOpen = Array.from(this.fields.keys()).some((k) => k.startsWith(tablePrefix));
+    if (!stillOpen) {
+      this.killTableSubscription(table);
     }
 
     this.logger.debug(
@@ -111,82 +135,113 @@ export class CrdtManager {
       field.stopSync();
     }
     this.fields.clear();
-    for (const recordId of this.liveQueries.keys()) {
-      this.killLiveSelect(recordId);
+    for (const table of Array.from(this.liveByTable.keys())) {
+      this.killTableSubscription(table);
     }
   }
 
-  private async ensureLiveSelect(table: string, recordId: string): Promise<void> {
-    if (this.liveQueries.has(recordId)) return;
+  /** Ensure a single `LIVE SELECT * FROM <table>` is running, shared across
+   *  every open CrdtField on `table`. */
+  private async ensureTableSubscription(table: string): Promise<void> {
+    if (this.liveByTable.has(table)) return;
 
-    const subscriptions: { uuid: Uuid; table: string }[] = [];
+    const pending = this.pendingLive.get(table);
+    if (pending) return pending;
 
-    // Persistent CRDT snapshots — visible to anyone with parent SELECT.
-    const crdtUuid = await this.subscribeTo('_00_crdt', recordId, (fieldName, state) => {
-      const key = this.makeKey(table, recordId, fieldName);
-      this.fields.get(key)?.importRemote(state);
-    });
-    if (crdtUuid) subscriptions.push({ uuid: crdtUuid, table: '_00_crdt' });
+    const start = (async () => {
+      try {
+        const [uuid] = await this.remote.query<[Uuid]>(
+          `LIVE SELECT * FROM ${table}`,
+        );
 
-    // Ephemeral cursor state — table-level permission limits this to callers
-    // with parent UPDATE, so a read-only viewer never even gets the LIVE feed.
-    const cursorUuid = await this.subscribeTo('_00_cursor', recordId, (fieldName, state) => {
-      const key = this.makeKey(table, recordId, fieldName);
-      this.fields.get(key)?.importRemoteCursor(state);
-    });
-    if (cursorUuid) subscriptions.push({ uuid: cursorUuid, table: '_00_cursor' });
+        const subscription = await this.remote.getClient().liveOf(uuid);
+        subscription.subscribe((message) => {
+          if (message.action === 'KILLED') return;
+          if (message.action !== 'CREATE' && message.action !== 'UPDATE') return;
+          this.dispatchRow(table, message.value as Record<string, unknown>);
+        });
 
-    if (subscriptions.length > 0) {
-      this.liveQueries.set(recordId, subscriptions);
-    }
-  }
+        this.liveByTable.set(table, uuid);
+        this.logger.info(
+          { table, Category: 'sp00ky-client::CrdtManager::ensureTableSubscription' },
+          'LIVE SELECT started'
+        );
+      } catch (e) {
+        this.logger.warn(
+          { error: e, table, Category: 'sp00ky-client::CrdtManager::ensureTableSubscription' },
+          'Failed to start LIVE SELECT'
+        );
+      }
+    })();
 
-  /** Start one LIVE SELECT for `recordId` on `tableName` and dispatch each
-   *  CREATE/UPDATE row to `onRow(field, state)`. Returns the live UUID, or
-   *  `undefined` if the subscription couldn't be started (e.g. permission
-   *  denied — expected for cursors when the caller is read-only). */
-  private async subscribeTo(
-    tableName: '_00_crdt' | '_00_cursor',
-    recordId: string,
-    onRow: (field: string, state: string) => void,
-  ): Promise<Uuid | undefined> {
+    this.pendingLive.set(table, start);
     try {
-      const [uuid] = await this.remote.query<[Uuid]>(
-        `LIVE SELECT * FROM ${tableName} WHERE record_id = $rid`,
-        { rid: parseRecordIdString(recordId) },
+      await start;
+    } finally {
+      this.pendingLive.delete(table);
+    }
+  }
+
+  /** Route a freshly-arrived row to the currently-open CrdtFields. The
+   *  parent LIVE feed only carries the parent row itself (the meta tables
+   *  are separate), so we follow up with a single round-trip subquery to
+   *  pull the matching `_00_crdt` and `_00_cursor` rows and dispatch each
+   *  one. */
+  private dispatchRow(table: string, row: Record<string, unknown>): void {
+    const id = row.id != null ? String(row.id) : '';
+    if (!id) return;
+
+    // Skip the round-trip when we have no open editors for this row — there
+    // is nothing to deliver to anyway. Keys are `${table}:${recordId}:${field}`,
+    // and `id` already includes the table prefix (e.g. "thread:abc").
+    const rowKeyPrefix = `${table}:${id}:`;
+    const anyOpen = Array.from(this.fields.keys()).some((k) => k.startsWith(rowKeyPrefix));
+    if (!anyOpen) return;
+
+    void this.fetchAndDispatchMeta(table, id);
+  }
+
+  private async fetchAndDispatchMeta(table: string, id: string): Promise<void> {
+    try {
+      const recordId = parseRecordIdString(id);
+      const [crdtRows, cursorRows] = await this.remote.query<[
+        Array<{ field: string; state: string | null }>,
+        Array<{ session_id: string; field: string; state: string | null }>,
+      ]>(
+        `SELECT field, state FROM _00_crdt WHERE record_id = $id;
+         SELECT session_id, field, state FROM _00_cursor WHERE record_id = $id;`,
+        { id: recordId },
       );
 
-      const subscription = await this.remote.getClient().liveOf(uuid);
-      subscription.subscribe((message) => {
-        if (message.action === 'KILLED') return;
-        if (message.action !== 'CREATE' && message.action !== 'UPDATE') return;
-        const fieldName = message.value.field as string;
-        const state = message.value.state as string;
-        if (!fieldName || !state) return;
-        onRow(fieldName, state);
-      });
+      if (Array.isArray(crdtRows)) {
+        for (const r of crdtRows) {
+          if (!r || typeof r.state !== 'string' || r.state.length === 0) continue;
+          const key = this.makeKey(table, id, r.field);
+          this.fields.get(key)?.importRemote(r.state);
+        }
+      }
 
-      this.logger.info(
-        { recordId, table: tableName, Category: 'sp00ky-client::CrdtManager::ensureLiveSelect' },
-        'LIVE SELECT started'
-      );
-      return uuid;
+      if (Array.isArray(cursorRows)) {
+        for (const r of cursorRows) {
+          if (!r || typeof r.state !== 'string' || r.state.length === 0) continue;
+          if (r.session_id === this.sessionId) continue;
+          const key = this.makeKey(table, id, r.field);
+          this.fields.get(key)?.importRemoteCursor(r.state);
+        }
+      }
     } catch (e) {
       this.logger.warn(
-        { error: e, recordId, table: tableName, Category: 'sp00ky-client::CrdtManager::ensureLiveSelect' },
-        'Failed to start LIVE SELECT'
+        { error: e, table, id, Category: 'sp00ky-client::CrdtManager::fetchAndDispatchMeta' },
+        'Failed to fetch CRDT/cursor meta rows after parent LIVE event'
       );
-      return undefined;
     }
   }
 
-  private killLiveSelect(recordId: string): void {
-    const entries = this.liveQueries.get(recordId);
-    if (entries) {
-      for (const entry of entries) {
-        this.remote.query('KILL $uuid', { uuid: entry.uuid }).catch(() => {});
-      }
-      this.liveQueries.delete(recordId);
+  private killTableSubscription(table: string): void {
+    const uuid = this.liveByTable.get(table);
+    if (uuid) {
+      this.remote.query('KILL $uuid', { uuid }).catch(() => {});
+      this.liveByTable.delete(table);
     }
   }
 

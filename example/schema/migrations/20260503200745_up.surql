@@ -1,0 +1,15 @@
+-- Migration: up
+-- Created: 2026-05-03T20:07:47.254058+00:00
+
+-- Removed
+REMOVE FUNCTION IF EXISTS fn::can_update_record;
+REMOVE TABLE IF EXISTS _00_crdt;
+REMOVE TABLE IF EXISTS _00_cursor;
+REMOVE FIELD IF EXISTS field ON TABLE _00_crdt;
+REMOVE FIELD IF EXISTS record_id ON TABLE _00_crdt;
+REMOVE FIELD IF EXISTS state ON TABLE _00_crdt;
+REMOVE FIELD IF EXISTS field ON TABLE _00_cursor;
+REMOVE FIELD IF EXISTS record_id ON TABLE _00_cursor;
+REMOVE FIELD IF EXISTS state ON TABLE _00_cursor;
+REMOVE INDEX IF EXISTS idx_record_field ON TABLE _00_crdt;
+REMOVE INDEX IF EXISTS idx_cursor_record_field ON TABLE _00_cursor;

@@ -3,20 +3,17 @@
 -- ==================================================
 
 DEFINE FUNCTION OVERWRITE fn::query::register($config: object) {
-    IF $config.clientId == NONE THEN {
-        THROW 'Missing client id';
-    } END;
-
-    -- Prepare config for DBSP module
+    -- clientId comes from session::id() (server-trusted); whatever the
+    -- caller passed in $config.clientId is ignored.
     LET $module_config = {
         id: <string>$config.id,
         surql: <string>$config.surql,
         params: <string>($config.params OR {}),
-        clientId: <string>$config.clientId,
+        clientId: <string>session::id(),
         ttl: <string>($config.ttl OR '1h'),
         lastActiveAt: <string>time::now()
     };
-    
+
     -- Call DBSP module directly
     mod::dbsp::register_view($module_config);
 };

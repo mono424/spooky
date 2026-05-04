@@ -25,6 +25,7 @@ export class CrdtField {
   private pushTimer: ReturnType<typeof setTimeout> | null = null;
   private remote: RemoteDatabaseService | null = null;
   private recordId: string | null = null;
+  private sessionId: string = '';
   private unsubscribe: (() => void) | null = null;
   private lastPushTime = 0;
   private lastCursorPushTime = 0;
@@ -72,9 +73,10 @@ export class CrdtField {
     return this.loadedFromCrdt;
   }
 
-  startSync(remote: RemoteDatabaseService, recordId: string): void {
+  startSync(remote: RemoteDatabaseService, recordId: string, sessionId: string): void {
     this.remote = remote;
     this.recordId = recordId;
+    this.sessionId = sessionId;
     this.unsubscribe = this.doc.subscribeLocalUpdates(() => {
       this.schedulePush();
     });
@@ -103,18 +105,30 @@ export class CrdtField {
     return encodeBase64(this.doc.export({ mode: 'snapshot' }));
   }
 
-  /** Push cursor ephemeral state to the dedicated _00_cursor table.
-   *  Visibility is gated on parent UPDATE permission (see meta_tables_remote.surql),
-   *  so only collaborators see each other's cursors — read-only viewers don't. */
+  /** Push cursor presence into the `_00_cursor` table, keyed by the array
+   *  record id `[record_id, session_id, field]`. The composite id is the
+   *  primary key, so UPSERT can target it directly and create-or-update
+   *  without a WHERE clause (UPSERT … WHERE silently fails to create rows
+   *  when no match exists). All three axes are required: a single browser
+   *  session has its own cursor for every open CrdtField, and the blob
+   *  itself is bound to one specific LoroDoc, so the receiver needs the
+   *  field axis to dispatch each blob to the matching editor. The trailing
+   *  `UPDATE $id SET _00_rv = _00_rv` bumps the parent so its LIVE feed
+   *  fans the change to other browsers — see CrdtManager.dispatchRow. */
   async pushCursorState(encoded: Uint8Array): Promise<void> {
     if (!this.remote || !this.recordId) return;
     this.lastCursorPushTime = Date.now();
     try {
       const state = encodeBase64(encoded);
       await this.remote.query(
-        `INSERT INTO _00_cursor (record_id, field, state) VALUES ($rid, $field, $state)
-         ON DUPLICATE KEY UPDATE state = $state`,
-        { rid: parseRecordIdString(this.recordId), field: this.fieldName, state }
+        `UPSERT type::record("_00_cursor", [$id, $sid, $field]) SET record_id = $id, session_id = $sid, field = $field, state = $state;
+         UPDATE $id SET _00_rv = _00_rv RETURN NONE;`,
+        {
+          id: parseRecordIdString(this.recordId),
+          sid: this.sessionId,
+          field: this.fieldName,
+          state,
+        }
       );
     } catch (e) {
       this.logger?.warn(
@@ -152,10 +166,15 @@ export class CrdtField {
     if (!this.remote || !this.recordId) return;
     this.lastPushTime = Date.now();
     try {
+      // Write the CRDT snapshot into the `_00_crdt` table keyed by the
+      // array record id `[record_id, field]`, then bump the parent's
+      // `_00_rv` so its LIVE feed fires for every viewer that can SELECT
+      // it. The bump is what triggers cross-browser delivery now that the
+      // snapshot is no longer embedded on the parent row.
       await this.remote.query(
-        `INSERT INTO _00_crdt (record_id, field, state) VALUES ($rid, $field, $state)
-         ON DUPLICATE KEY UPDATE state = $state`,
-        { rid: parseRecordIdString(this.recordId), field: this.fieldName, state: this.exportSnapshot() }
+        `UPSERT type::record("_00_crdt", [$id, $field]) SET record_id = $id, field = $field, state = $state;
+         UPDATE $id SET _00_rv = _00_rv RETURN NONE;`,
+        { id: parseRecordIdString(this.recordId), field: this.fieldName, state: this.exportSnapshot() }
       );
       this.pushRetryCount = 0;
     } catch (e) {

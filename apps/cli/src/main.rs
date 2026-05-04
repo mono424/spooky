@@ -1169,7 +1169,7 @@ fn run_codegen(
 
     // Append embedded meta tables
     let meta_tables = include_str!("meta_tables.surql");
-    let meta_tables_remote = include_str!("meta_tables_remote.surql");
+    let meta_tables_remote_raw = include_str!("meta_tables_remote.surql");
     let meta_tables_client = include_str!("meta_tables_client.surql");
 
     content.push('\n');
@@ -1177,8 +1177,20 @@ fn run_codegen(
     println!("  + Appended base meta_tables.surql");
 
     if matches!(output_format, OutputFormat::Surql) {
+        // Pre-parse the user schema (without meta tables yet) so we can
+        // derive the per-parent CRDT permission rule and substitute the
+        // {{CRDT_UPDATE_RULE}} placeholder before appending.
+        let mut pre_parser = SchemaParser::new();
+        pre_parser
+            .parse_file(&content)
+            .context("Failed to pre-parse user schema for CRDT permission derivation")?;
+        let meta_tables_remote = schema_builder::substitute_crdt_update_rule(
+            meta_tables_remote_raw,
+            &content,
+            &pre_parser,
+        );
         content.push('\n');
-        content.push_str(meta_tables_remote);
+        content.push_str(&meta_tables_remote);
         println!("  + Appended meta_tables_remote.surql");
     } else {
         content.push('\n');
@@ -1241,21 +1253,14 @@ fn run_codegen(
         ));
     }
 
-    // Inject _00_crdt field for tables with CRDT-annotated fields (client-side only).
-    // Same rationale as _00_rv above: gated by table-level permissions.
-    for table_name in parser.tables.keys() {
-        let has_crdt = field_annotations.keys().any(|(t, _)| t == table_name);
-        if has_crdt {
-            println!(
-                "  + Injecting _00_crdt field on table '{}' for CRDT support",
-                table_name
-            );
-            filtered_schema_content.push_str(&format!(
-                "\nDEFINE FIELD _00_crdt ON TABLE {} TYPE option<object> FLEXIBLE PERMISSIONS FOR select, create, update WHERE true;",
-                table_name
-            ));
-        }
-    }
+    // CRDT and cursor state lives in the dedicated `_00_crdt` and
+    // `_00_cursor` tables (defined in meta_tables_remote.surql). Splitting
+    // them off the parent row is what makes offline edits mergeable: each
+    // (record, field) gets its own row, so concurrent offline writes don't
+    // collide on the parent row's last-write-wins semantics. The parent's
+    // LIVE feed is still used to fan changes out across browsers — the
+    // client bumps the parent's `_00_rv` whenever it UPSERTs into a meta
+    // table, see crdt-field.ts.
 
     // Choose which content to use based on format
     let raw_schema_content = if matches!(output_format, OutputFormat::Surql) {

@@ -1,6 +1,6 @@
 import { platform, arch } from 'os';
 import { resolve, dirname } from 'path';
-import { existsSync } from 'fs';
+import { existsSync, statSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 
@@ -40,15 +40,24 @@ export function findBinary(): string {
     return platformBinary;
   }
 
-  // 2. Local dev build (from dist/ -> ../target/release/ or ../target/debug/)
-  const releasePath = resolve(__dirname, '../target/release', binaryName);
-  if (existsSync(releasePath)) {
-    return releasePath;
-  }
+  // 2. Local dev build. Cargo workspace builds (`cargo build -p sp00ky-cli`
+  //    from anywhere in the monorepo) write to <workspace>/target/, while
+  //    standalone `cargo build` from apps/cli writes to apps/cli/target/.
+  //    Check both, preferring the freshest binary so a workspace dev:build
+  //    doesn't get masked by a stale per-package target dir.
+  const candidatePaths = [
+    resolve(__dirname, '../../../target/release', binaryName), // workspace release
+    resolve(__dirname, '../target/release', binaryName),       // per-package release
+    resolve(__dirname, '../../../target/debug', binaryName),   // workspace debug
+    resolve(__dirname, '../target/debug', binaryName),         // per-package debug
+  ];
 
-  const debugPath = resolve(__dirname, '../target/debug', binaryName);
-  if (existsSync(debugPath)) {
-    return debugPath;
+  const existing = candidatePaths.filter((p) => existsSync(p));
+  if (existing.length > 0) {
+    // Prefer the most recently modified — handles "stale per-package target
+    // shadows fresh workspace build" without forcing the user to clean.
+    existing.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
+    return existing[0];
   }
 
   // 3. Legacy fallback (binary next to dist/)
@@ -72,8 +81,7 @@ export function findBinary(): string {
   throw new Error(
     `Could not find spky binary. Checked paths:\n` +
       `  - Platform package (${pkg ?? 'none'})\n` +
-      `  - ${releasePath}\n` +
-      `  - ${debugPath}\n` +
+      candidatePaths.map((p) => `  - ${p}\n`).join('') +
       `  - ${legacyPath}\n` +
       `  - ${cwdPath}\n` +
       hint

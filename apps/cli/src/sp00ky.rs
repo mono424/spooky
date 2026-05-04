@@ -172,7 +172,10 @@ pub fn generate_sp00ky_events(
 
         // --- Versioning Logic ---
         events.push_str("    DELETE _00_version WHERE record_id = $before.id;\n");
-        events.push_str("    DELETE _00_crdt WHERE record_id = $before.id;\n");
+        // CRDT and cursor rows are scoped to the parent by `record_id`. The
+        // server cleans them up here because the meta tables have no FOR
+        // delete rule (record-token callers can't address them directly).
+        events.push_str("    DELETE _00_crdt   WHERE record_id = $before.id;\n");
         events.push_str("    DELETE _00_cursor WHERE record_id = $before.id;\n\n");
 
         // --- Ingestion Logic ---

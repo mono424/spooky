@@ -575,6 +575,15 @@ pub fn apply_internal_schema(
     println!("  + Applying meta tables (remote)...");
     let mut meta_tables_remote = include_str!("meta_tables_remote.surql").to_string();
 
+    // Substitute the {{CRDT_UPDATE_RULE}} placeholder. Same code path used
+    // by schema_builder.rs and main.rs codegen so the rule renders
+    // consistently.
+    meta_tables_remote = crate::schema_builder::substitute_crdt_update_rule(
+        &meta_tables_remote,
+        &content,
+        &parser,
+    );
+
     // Replace unregister_view for singlenode/cluster mode — uses $sp00ky_endpoint param
     if *mode == DeployMode::Singlenode || *mode == DeployMode::Cluster {
         let unregister_call = "let $result = mod::dbsp::unregister_view(<string>$before.id);";

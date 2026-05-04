@@ -24,6 +24,7 @@
   ],
   "scripts": {
     "dev": "vite",
+    "dev:build": "cargo build -p sp00ky-cli",
     "build:rust": "cargo build --release",
     "build:vite": "vite build",
     "build:types": "tsc --emitDeclarationOnly --declaration --declarationDir dist",

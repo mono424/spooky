@@ -99,8 +99,6 @@ export interface Sp00kyConfig<S extends SchemaStructure> {
     /** Authentication token. */
     token?: string;
   };
-  /** Unique client identifier. If not provided, one will be generated. */
-  clientId?: string;
   /** The schema definition. */
   schema: S;
   /** The compiled SURQL schema string. */

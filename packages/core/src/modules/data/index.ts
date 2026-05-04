@@ -48,6 +48,11 @@ export class DataModule<S extends SchemaStructure> {
   private mutationCallbacks: Set<MutationCallback> = new Set();
   private debounceTimers: Map<QueryHash, NodeJS.Timeout> = new Map();
   private logger: Logger;
+  // Salt for query-id hashing. Set from SurrealDB's session::id() so two
+  // browser sessions registering the same logical query (same surql + params)
+  // don't collide on the same `_00_query` row — each session gets its own.
+  // Empty string until init(sessionId) is called.
+  private sessionId: string = '';
 
   constructor(
     private cache: CacheModule,
@@ -59,8 +64,21 @@ export class DataModule<S extends SchemaStructure> {
     this.logger = logger.child({ service: 'DataModule' });
   }
 
-  async init(): Promise<void> {
-    this.logger.info({ Category: 'sp00ky-client::DataModule::init' }, 'DataModule initialized');
+  async init(sessionId: string): Promise<void> {
+    this.sessionId = sessionId;
+    this.logger.info(
+      { sessionId, Category: 'sp00ky-client::DataModule::init' },
+      'DataModule initialized'
+    );
+  }
+
+  /**
+   * Update the session salt used in query-id hashing. Call this when the
+   * SurrealDB session changes (sign-in, sign-out, reconnect). Subsequently
+   * registered queries will get fresh, session-scoped IDs.
+   */
+  setSessionId(sessionId: string): void {
+    this.sessionId = sessionId;
   }
 
   // ==================== QUERY MANAGEMENT ====================
@@ -808,7 +826,10 @@ export class DataModule<S extends SchemaStructure> {
   }
 
   private async calculateHash(data: any): Promise<string> {
-    const content = JSON.stringify(data);
+    // sessionId is part of the hash so the same logical query from two
+    // sessions (e.g. two browser tabs of the same user) lands on different
+    // `_00_query` rows and doesn't fight over a shared one.
+    const content = JSON.stringify({ ...data, sessionId: this.sessionId });
     const msgBuffer = new TextEncoder().encode(content);
     const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
     const hashArray = Array.from(new Uint8Array(hashBuffer));

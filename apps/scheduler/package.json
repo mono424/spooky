@@ -1,0 +1,8 @@
+{
+  "name": "scheduler",
+  "version": "0.0.1-canary.66",
+  "private": true,
+  "scripts": {
+    "dev:build": "cargo build -p scheduler"
+  }
+}

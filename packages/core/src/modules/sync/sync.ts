@@ -20,7 +20,6 @@ import { encodeRecordId, extractTablePart, surql } from '../../utils/index';
  * @template S The schema structure type.
  */
 export class Sp00kySync<S extends SchemaStructure> {
-  private clientId: string = '';
   private upQueue: UpQueue;
   private downQueue: DownQueue;
   private isInit: boolean = false;
@@ -77,12 +76,10 @@ export class Sp00kySync<S extends SchemaStructure> {
   /**
    * Initializes the synchronization system.
    * Starts the scheduler and initiates the initial sync cycles.
-   * @param clientId The unique identifier for this client instance.
    * @throws Error if already initialized.
    */
-  public async init(clientId: string) {
+  public async init() {
     if (this.isInit) throw new Error('Sp00kySync is already initialized');
-    this.clientId = clientId;
     this.isInit = true;
     await this.scheduler.init();
     void this.scheduler.syncUp();
@@ -92,7 +89,7 @@ export class Sp00kySync<S extends SchemaStructure> {
 
   private async startRefLiveQueries() {
     this.logger.debug(
-      { clientId: this.clientId, Category: 'sp00ky-client::Sp00kySync::startRefLiveQueries' },
+      { Category: 'sp00ky-client::Sp00kySync::startRefLiveQueries' },
       'Starting ref live queries'
     );
 
@@ -348,10 +345,10 @@ export class Sp00kySync<S extends SchemaStructure> {
       );
       throw new Error('Query to register not found');
     }
-    // Delegate to remote function which handles DBSP registration & persistence
+    // Delegate to remote function which handles DBSP registration & persistence.
+    // clientId is set server-side from session::id() — see fn::query::register.
     await this.remote.query('fn::query::register($config)', {
       config: {
-        clientId: this.clientId,
         id: queryState.config.id,
         surql: queryState.config.surql,
         params: queryState.config.params,

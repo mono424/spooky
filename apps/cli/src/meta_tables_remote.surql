@@ -1,12 +1,14 @@
 -- ==================================================
 -- SPOOKY INCANTATION
 -- The Registry of active Live Queries (Incantations).
--- Scoped per client: a record-token caller only sees their own incantations.
--- The SSP itself runs as root and is unaffected by these table-level rules.
+-- Scoped per session: `clientId` is set from `session::id()` server-side
+-- in `fn::query::register`, so a record-token caller only sees the
+-- incantations that originated from their current session. The SSP runs
+-- as root and bypasses these table-level rules.
 -- ==================================================
 
 DEFINE TABLE OVERWRITE _00_query SCHEMALESS
-    PERMISSIONS FOR select, create, update WHERE clientId = $session.clientId;
+    PERMISSIONS FOR select, create, update WHERE clientId = <string>session::id();
 
 -- The raw query string (for re-hydration/debugging)
 DEFINE FIELD OVERWRITE surql ON TABLE _00_query TYPE option<string>;
@@ -24,12 +26,14 @@ DEFINE FIELD OVERWRITE ttl ON TABLE _00_query TYPE duration;
 -- SPOOKY LIST REF
 -- The current list of results for a query/incantation.
 -- Read-only to record-token callers — only the SSP (root) writes here, so
--- clients can never forge entries into their own view. Scoped per client so
--- a token-bearer only sees its own list refs.
+-- clients can never forge entries into their own view. Scoped by
+-- `session::id()`: the SSP propagates the originating session's id from
+-- _00_query.clientId onto each list-ref row, so a token-bearer only sees
+-- its own list refs.
 -- ==================================================
 
 DEFINE TABLE OVERWRITE _00_list_ref SCHEMALESS
-    PERMISSIONS FOR select WHERE clientId = $session.clientId;
+    PERMISSIONS FOR select WHERE clientId = <string>session::id();
 
 DEFINE FIELD OVERWRITE in ON TABLE _00_list_ref TYPE record;
 
@@ -77,60 +81,44 @@ DEFINE FIELD OVERWRITE version ON TABLE _00_version TYPE int;
 DEFINE INDEX OVERWRITE idx_record_id ON TABLE _00_version COLUMNS record_id UNIQUE;
 
 -- ==================================================
--- SPOOKY CRDT
--- Stores per-field CRDT state for collaborative editing.
--- One row per record+field combination.
+-- SPOOKY CRDT + CURSOR
+-- Per-field collaborative state (one row per record+field for CRDT,
+-- one row per record+session+field for cursor). Records are array-keyed
+-- (e.g. `_00_crdt:[thread:abc, "title"]`) so the client can UPSERT by
+-- composite id without race-prone WHERE-based UPSERTs.
 --
--- Reads inherit the parent's SELECT permission via record_id.id (record
--- dereferencing runs under SELECT). Writes inherit the parent's UPDATE
--- permission via fn::can_update_record below — `record_id.id != NONE`
--- alone is wrong for write actions because it only proves the caller can
--- read the parent, not edit it.
+-- Reads inherit the parent's SELECT permission via `record_id.id != NONE`:
+-- dereferencing a record runs under SELECT, so when the caller can't read
+-- the parent row the dereference yields NONE and the meta row becomes
+-- invisible too.
+--
+-- Writes inherit the parent's UPDATE permission via the {{CRDT_UPDATE_RULE}}
+-- token below. The token is substituted at codegen time (schema_builder.rs)
+-- with each CRDT-bearing parent's UPDATE expression — field references
+-- rewritten to dereference through `record_id.<field>`. Permission rule
+-- evaluation runs in elevated context, so an inline UPDATE check on the
+-- parent doesn't actually enforce the parent's rule; only the dereference
+-- pattern does.
+--
+-- No FOR delete: cleanup is server-side via the parent's DELETE event
+-- (apps/cli/src/sp00ky.rs).
 -- ==================================================
 
--- Returns true iff the caller has UPDATE permission on $r. Issues a no-op
--- UPDATE (SET _00_rv = _00_rv) on the parent; SurrealDB enforces the
--- parent's FOR update rule and returns [] when denied. _00_rv is injected
--- on every user table (apps/cli/src/main.rs:1233), so the assignment is
--- always valid.
---
--- Side effect: any DEFINE EVENT on the parent that fires WHEN $event = "UPDATE"
--- will run on every CRDT push. Gate downstream events with
--- WHEN $before._00_rv != $after._00_rv if that becomes a problem.
-DEFINE FUNCTION OVERWRITE fn::can_update_record($r: record) -> bool {
-    RETURN array::len((UPDATE $r SET _00_rv = _00_rv RETURN BEFORE)) > 0;
-};
-
-DEFINE TABLE OVERWRITE _00_crdt SCHEMALESS
+DEFINE TABLE OVERWRITE _00_crdt SCHEMAFULL
     PERMISSIONS
         FOR select WHERE record_id.id != NONE
-        FOR create, update WHERE fn::can_update_record(record_id);
--- No FOR delete: only the SSP cleans up CRDT rows (via the parent-record
--- DELETE event in apps/cli/src/sp00ky.rs:175, which runs server-side).
--- Record-token callers are denied delete by default; root bypasses.
-
+        FOR create, update WHERE {{CRDT_UPDATE_RULE}};
 DEFINE FIELD OVERWRITE record_id ON TABLE _00_crdt TYPE record;
 DEFINE FIELD OVERWRITE field ON TABLE _00_crdt TYPE string;
 DEFINE FIELD OVERWRITE state ON TABLE _00_crdt TYPE option<string>;
-DEFINE INDEX OVERWRITE idx_record_field ON TABLE _00_crdt COLUMNS record_id, field UNIQUE;
+DEFINE INDEX OVERWRITE idx_crdt_record_field ON TABLE _00_crdt COLUMNS record_id, field UNIQUE;
 
--- ==================================================
--- SPOOKY CURSOR
--- Per-field ephemeral cursor / presence state for collaborative editing.
--- Lives in its own table so visibility can be tighter than _00_crdt:
--- only callers who can UPDATE the parent see (and push) cursors. Read-only
--- viewers don't get to watch other users' cursor positions.
---
--- Same shape as _00_crdt (record_id + field + opaque state blob). Pushed
--- by clients via INSERT ... ON DUPLICATE KEY UPDATE — see
--- packages/core/src/modules/crdt/crdt-field.ts::pushCursorState.
--- ==================================================
-DEFINE TABLE OVERWRITE _00_cursor SCHEMALESS
-    PERMISSIONS FOR select, create, update WHERE fn::can_update_record(record_id);
--- No FOR delete: cleanup is server-side via the parent-DELETE event in
--- apps/cli/src/sp00ky.rs. Record-token callers are denied delete by default.
-
+DEFINE TABLE OVERWRITE _00_cursor SCHEMAFULL
+    PERMISSIONS
+        FOR select WHERE record_id.id != NONE
+        FOR create, update WHERE {{CRDT_UPDATE_RULE}};
 DEFINE FIELD OVERWRITE record_id ON TABLE _00_cursor TYPE record;
+DEFINE FIELD OVERWRITE session_id ON TABLE _00_cursor TYPE string;
 DEFINE FIELD OVERWRITE field ON TABLE _00_cursor TYPE string;
 DEFINE FIELD OVERWRITE state ON TABLE _00_cursor TYPE option<string>;
-DEFINE INDEX OVERWRITE idx_cursor_record_field ON TABLE _00_cursor COLUMNS record_id, field UNIQUE;
+DEFINE INDEX OVERWRITE idx_cursor_record_session_field ON TABLE _00_cursor COLUMNS record_id, session_id, field UNIQUE;

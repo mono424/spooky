@@ -1,6 +1,6 @@
 const SURREAL_SQL_URL = 'http://localhost:8666/sql';
 const SURREAL_NS = 'main';
-const SURREAL_DB = 'main';
+const SURREAL_DB = 'example';
 const SURREAL_USER = 'root';
 const SURREAL_PASS = 'root';
 

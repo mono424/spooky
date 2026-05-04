@@ -36,7 +36,7 @@ import { EventSystem } from './events/index';
 import { CacheModule } from './modules/cache/index';
 import { CrdtManager, CrdtField } from './modules/crdt/index';
 import { LocalStoragePersistenceClient } from './services/persistence/localstorage';
-import { generateId, parseParams } from './utils/index';
+import { parseParams } from './utils/index';
 import { SurrealDBPersistenceClient } from './services/persistence/surrealdb';
 import { ResilientPersistenceClient } from './services/persistence/resilient';
 
@@ -156,7 +156,8 @@ export class Sp00kyClient<S extends SchemaStructure> {
       logger
     );
 
-    // Initialize CRDT Manager (needs remote for _00_crdt LIVE SELECT)
+    // Initialize CRDT Manager (needs remote for parent-table LIVE SELECT
+    // and follow-up _00_crdt / _00_cursor subqueries).
     this.crdtManager = new CrdtManager(this.config.schema, this.remote, logger);
 
     this.dataModule = new DataModule(
@@ -226,13 +227,6 @@ export class Sp00kyClient<S extends SchemaStructure> {
       'Sp00kyClient initialization started'
     );
     try {
-      const clientId = this.config.clientId ?? (await this.loadOrGenerateClientId());
-      this.persistClientId(clientId);
-      this.logger.debug(
-        { clientId, Category: 'sp00ky-client::Sp00kyClient::init' },
-        'Client ID loaded'
-      );
-
       await this.local.connect();
       this.logger.debug(
         { Category: 'sp00ky-client::Sp00kyClient::init' },
@@ -257,13 +251,28 @@ export class Sp00kyClient<S extends SchemaStructure> {
       await this.auth.init();
       this.logger.debug({ Category: 'sp00ky-client::Sp00kyClient::init' }, 'Auth initialized');
 
-      await this.dataModule.init();
+      // Salt query-id hashing with the SurrealDB session id so two browsers
+      // for the same user don't collide on shared `_00_query` rows. The same
+      // session id is the `session_id` key in `_00_cursor` rows, so the
+      // CrdtManager needs it too.
+      const sessionId = await this.fetchSessionId();
+      await this.dataModule.init(sessionId);
+      this.crdtManager.setSessionId(sessionId);
       this.logger.debug(
-        { Category: 'sp00ky-client::Sp00kyClient::init' },
+        { sessionId, Category: 'sp00ky-client::Sp00kyClient::init' },
         'DataModule initialized'
       );
 
-      await this.sync.init(clientId);
+      // Refresh the salt whenever auth state flips (sign-in, sign-out).
+      // session::id() changes per WebSocket session, and a sign-in spawns
+      // a new authenticated session, so the salt must follow.
+      this.auth.subscribe(async () => {
+        const next = await this.fetchSessionId();
+        this.dataModule.setSessionId(next);
+        this.crdtManager.setSessionId(next);
+      });
+
+      await this.sync.init();
       this.logger.debug({ Category: 'sp00ky-client::Sp00kyClient::init' }, 'Sync initialized');
 
       this.logger.info(
@@ -292,7 +301,8 @@ export class Sp00kyClient<S extends SchemaStructure> {
   /**
    * Open a CRDT field for collaborative editing.
    * Returns a CrdtField with a LoroDoc that can be bound to any editor.
-   * Also starts a LIVE SELECT on _00_crdt for real-time sync.
+   * Also starts a LIVE SELECT on the parent table for real-time sync;
+   * incoming events trigger a subquery fetch of `_00_crdt` / `_00_cursor`.
    */
   async openCrdtField(
     table: string,
@@ -396,26 +406,22 @@ export class Sp00kyClient<S extends SchemaStructure> {
     return fn(this.remote.getClient());
   }
 
-  private persistClientId(id: string) {
+  /**
+   * Fetch SurrealDB's `session::id()` as a string. Used as a salt for
+   * query-id hashing so two sessions for the same user get distinct
+   * `_00_query` rows. Returns empty string if the query fails (we still
+   * boot, just without session scoping for IDs).
+   */
+  private async fetchSessionId(): Promise<string> {
     try {
-      this.persistenceClient.set('sp00ky_client_id', id);
+      const [sid] = await this.remote.query<[string]>('RETURN <string>session::id()');
+      return typeof sid === 'string' ? sid : '';
     } catch (e) {
       this.logger.warn(
-        { error: e, Category: 'sp00ky-client::Sp00kyClient::persistClientId' },
-        'Failed to persist client ID'
+        { error: e, Category: 'sp00ky-client::Sp00kyClient::fetchSessionId' },
+        'Failed to fetch session::id() — proceeding with empty salt'
       );
+      return '';
     }
-  }
-
-  private async loadOrGenerateClientId(): Promise<string> {
-    const clientId = await this.persistenceClient.get<string>('sp00ky_client_id');
-
-    if (clientId) {
-      return clientId;
-    }
-
-    const newId = generateId();
-    await this.persistClientId(newId);
-    return newId;
   }
 }
