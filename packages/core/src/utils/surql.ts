@@ -34,6 +34,7 @@ export interface SurqlHelper {
     keyDataVars: ({ key: string; variable: string } | { statement: string } | string)[]
   ): string;
   upsert(idVar: string, dataVar: string): string;
+  upsertMerge(idVar: string, dataVar: string): string;
   updateMerge(idVar: string, dataVar: string): string;
   updateSet(
     idVar: string,
@@ -125,6 +126,14 @@ export const surql: SurqlHelper = {
 
   upsert(idVar: string, dataVar: string) {
     return `UPSERT ONLY $${idVar} REPLACE $${dataVar}`;
+  },
+
+  // Use this for sync-down ingestion: the remote payload omits local-only
+  // fields injected by the CLI's local-schema setup (`_00_crdt`,
+  // `_00_cursor`), and REPLACE would wipe them on every round-trip and
+  // break offline reload of CRDT state.
+  upsertMerge(idVar: string, dataVar: string) {
+    return `UPSERT ONLY $${idVar} MERGE $${dataVar}`;
   },
 
   updateMerge(idVar: string, dataVar: string) {

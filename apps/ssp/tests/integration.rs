@@ -10,6 +10,7 @@ use tower::ServiceExt;
 
 use ssp::circuit::view::OutputFormat;
 use ssp::circuit::{Circuit, Record};
+use ssp_server::crdt::{CrdtAllowList, CrdtCache};
 use ssp_server::metrics::Metrics;
 use ssp_server::{create_app, AppState, SharedDb, SspStatus};
 
@@ -34,6 +35,8 @@ struct TestHarness {
     job_queue_tx: mpsc::Sender<JobEntry>,
     job_queue_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<JobEntry>>>,
     db: SharedDb,
+    crdt_cache: Arc<CrdtCache>,
+    start_time: std::time::Instant,
 }
 
 impl TestHarness {
@@ -48,7 +51,7 @@ impl TestHarness {
     fn with_options(status: SspStatus, job_config: JobConfig) -> Self {
         // Set auth secret for the middleware
         unsafe {
-            std::env::set_var("SP00KY_AUTH_SECRET", AUTH_SECRET);
+            std::env::set_var("SPKY_AUTH_SECRET", AUTH_SECRET);
         }
 
         let (tx, rx) = mpsc::channel::<JobEntry>(100);
@@ -62,14 +65,30 @@ impl TestHarness {
         let db: surrealdb::Surreal<surrealdb::engine::remote::ws::Client> =
             surrealdb::Surreal::init();
 
+        // Permission injection now default-denies any table without a
+        // registered permission. The integration suite was written before
+        // permissions existed, so seed every table it touches with a
+        // permissive `"true"` rule. Tests that exercise permission failure
+        // paths can still register custom permissions per-test via
+        // `Circuit::set_permission`.
+        let circuit = {
+            let mut c = Circuit::new();
+            for table in PERMISSIVE_TABLES {
+                c.set_permission(*table, "true");
+            }
+            c
+        };
+
         Self {
-            processor: Arc::new(RwLock::new(Circuit::new())),
+            processor: Arc::new(RwLock::new(circuit)),
             status: Arc::new(RwLock::new(status)),
             metrics,
             job_config: Arc::new(job_config),
             job_queue_tx: tx,
             job_queue_rx: Arc::new(tokio::sync::Mutex::new(rx)),
             db: Arc::new(db),
+            crdt_cache: Arc::new(CrdtCache::new(64, CrdtAllowList::default())),
+            start_time: std::time::Instant::now(),
         }
     }
 
@@ -81,6 +100,10 @@ impl TestHarness {
             metrics: Arc::clone(&self.metrics),
             job_config: Arc::clone(&self.job_config),
             job_queue_tx: self.job_queue_tx.clone(),
+            ssp_id: "test-ssp".to_string(),
+            scheduler_url: None,
+            start_time: self.start_time,
+            crdt_cache: Arc::clone(&self.crdt_cache),
         };
         create_app(state)
     }
@@ -95,18 +118,36 @@ impl TestHarness {
         circuit.load(records);
     }
 
+    /// Add or override a permission rule for a table on this harness.
+    async fn set_permission(&self, table: &str, where_text: &str) {
+        let mut circuit = self.processor.write().await;
+        circuit.set_permission(table, where_text);
+    }
+
     /// Register a view directly on the circuit (bypasses HTTP handler & DB calls).
     async fn register_view_direct(&self, id: &str, surql: &str) {
         let payload = view_payload(id, surql);
         let data = {
             let circuit = self.processor.read().await;
-            ssp::service::view::prepare_registration_dbsp(payload, circuit.policy())
+            ssp::service::view::prepare_registration_dbsp(payload, circuit.permissions())
                 .expect("Failed to prepare view registration")
         };
         let mut circuit = self.processor.write().await;
         circuit.add_query(data.plan, data.safe_params, Some(OutputFormat::Streaming));
     }
 }
+
+/// Tables seeded with permissive `"true"` permissions in `TestHarness::new()`.
+/// The pre-permission integration suite assumes free read access on every
+/// table it queries; permission-aware tests use `set_permission` to override.
+const PERMISSIVE_TABLES: &[&str] = &[
+    "user",
+    "post",
+    "thread",
+    "comment",
+    "users",
+    "posts",
+];
 
 // ---------------------------------------------------------------------------
 // Request Helpers
@@ -141,6 +182,22 @@ async fn post_authed(app: Router, path: &str, body: &Value) -> (StatusCode, Valu
     let body_bytes = response.into_body().collect().await.unwrap().to_bytes();
     let body_value = serde_json::from_slice(&body_bytes).unwrap_or(Value::Null);
     (status, body_value)
+}
+
+async fn post_authed_text(app: Router, path: &str, body: &Value) -> (StatusCode, String) {
+    let request = Request::builder()
+        .method("POST")
+        .uri(path)
+        .header("content-type", "application/json")
+        .header("Authorization", format!("Bearer {}", AUTH_SECRET))
+        .body(axum::body::Body::from(serde_json::to_vec(body).unwrap()))
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    let status = response.status();
+    let body_bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body_text = String::from_utf8_lossy(&body_bytes).into_owned();
+    (status, body_text)
 }
 
 async fn post_authed_raw(app: Router, path: &str, body: &[u8]) -> (StatusCode, Value) {
@@ -222,6 +279,17 @@ fn view_payload(id: &str, surql: &str) -> Value {
     })
 }
 
+fn view_payload_with_params(id: &str, surql: &str, params: Value) -> Value {
+    json!({
+        "id": id,
+        "surql": surql,
+        "clientId": "test-client",
+        "ttl": "30m",
+        "lastActiveAt": "2024-01-01T00:00:00Z",
+        "params": params,
+    })
+}
+
 // ===========================================================================
 // Test Modules
 // ===========================================================================
@@ -229,10 +297,15 @@ fn view_payload(id: &str, surql: &str) -> Value {
 mod auth_tests {
     use super::*;
 
+    // /health is a public route; auth-gated routes are /ingest, /view/*, /reset, etc.
+    // We hit /debug/deps because it's the cheapest authenticated route that has
+    // no DB dependency in this harness.
+    const AUTHED_PATH: &str = "/debug/deps";
+
     #[tokio::test]
     async fn unauthenticated_request_returns_401() {
         let h = TestHarness::new();
-        let (status, _) = get_json(h.app(), "/health").await;
+        let (status, _) = get_json(h.app(), AUTHED_PATH).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 
@@ -241,7 +314,7 @@ mod auth_tests {
         let h = TestHarness::new();
         let request = Request::builder()
             .method("GET")
-            .uri("/health")
+            .uri(AUTHED_PATH)
             .header("Authorization", "Bearer wrong-token")
             .body(axum::body::Body::empty())
             .unwrap();
@@ -253,7 +326,7 @@ mod auth_tests {
     #[tokio::test]
     async fn valid_token_passes_through() {
         let h = TestHarness::new();
-        let (status, _) = get_authed(h.app(), "/health").await;
+        let (status, _) = get_authed(h.app(), AUTHED_PATH).await;
         assert_eq!(status, StatusCode::OK);
     }
 
@@ -262,7 +335,7 @@ mod auth_tests {
         let h = TestHarness::new();
         let request = Request::builder()
             .method("GET")
-            .uri("/health")
+            .uri(AUTHED_PATH)
             .header("Authorization", AUTH_SECRET)
             .body(axum::body::Body::empty())
             .unwrap();
@@ -275,20 +348,22 @@ mod auth_tests {
 mod health_tests {
     use super::*;
 
+    // /health is public and the response is `{ "status": <state> }`. View and
+    // table counts moved to /info long ago. Tests here pin only the surface
+    // contract: status code maps to SspStatus and body has a `status` field.
+
     #[tokio::test]
     async fn health_ready_returns_200() {
         let h = TestHarness::new();
-        let (status, body) = get_authed(h.app(), "/health").await;
+        let (status, body) = get_json(h.app(), "/health").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["status"], "ready");
-        assert_eq!(body["views"], 0);
-        assert_eq!(body["tables"], 0);
     }
 
     #[tokio::test]
     async fn health_bootstrapping_returns_503() {
         let h = TestHarness::with_status(SspStatus::Bootstrapping);
-        let (status, body) = get_authed(h.app(), "/health").await;
+        let (status, body) = get_json(h.app(), "/health").await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(body["status"], "bootstrapping");
     }
@@ -296,38 +371,16 @@ mod health_tests {
     #[tokio::test]
     async fn health_failed_returns_503() {
         let h = TestHarness::with_status(SspStatus::Failed);
-        let (status, body) = get_authed(h.app(), "/health").await;
+        let (status, body) = get_json(h.app(), "/health").await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(body["status"], "failed");
     }
 
     #[tokio::test]
-    async fn health_reports_view_and_table_count() {
+    async fn health_response_has_status_field() {
         let h = TestHarness::new();
-
-        // Load data into two tables
-        h.load_records(vec![
-            Record::new("user", "user:1", json!({"name": "Alice", "id": "user:1"})),
-            Record::new("post", "post:1", json!({"title": "Hello", "id": "post:1"})),
-        ])
-        .await;
-
-        // Register a view
-        h.register_view_direct("view1", "SELECT * FROM user").await;
-
-        let (status, body) = get_authed(h.app(), "/health").await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["views"], 1);
-        assert_eq!(body["tables"], 2);
-    }
-
-    #[tokio::test]
-    async fn health_response_has_all_fields() {
-        let h = TestHarness::new();
-        let (_, body) = get_authed(h.app(), "/health").await;
+        let (_, body) = get_json(h.app(), "/health").await;
         assert!(body.get("status").is_some());
-        assert!(body.get("views").is_some());
-        assert!(body.get("tables").is_some());
     }
 }
 
@@ -769,6 +822,238 @@ mod status_gating_tests {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Permission injection tests (HTTP register path)
+// ---------------------------------------------------------------------------
+//
+// These exercise `register_view_handler`'s contract that
+// `permission_inject::inject_permissions` errors come back as 400 with the
+// offending table named, and that successful registration injects the
+// permission filter into the operator plan visible via `/debug/view/<id>`.
+
+mod permission_register_tests {
+    use super::*;
+    use ssp::algebra::ZSetOps;
+
+    /// A view payload referencing a table with no registered permission must
+    /// be rejected at registration time, not silently denied at runtime.
+    /// `Circuit::new()` plus a fresh harness without seeding the table gives
+    /// us a default-deny case directly.
+    #[tokio::test]
+    async fn unknown_table_returns_400_with_table_name() {
+        let h = TestHarness::new();
+        let payload = view_payload("perms-unknown", "SELECT * FROM secret_table");
+
+        let (status, msg) = post_authed_text(h.app(), "/view/register", &payload).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            msg.contains("secret_table"),
+            "error must name the table: got {msg}"
+        );
+        assert!(
+            msg.to_lowercase().contains("default-deny"),
+            "error must mention default-deny: got {msg}"
+        );
+
+        let circuit = h.processor.read().await;
+        assert!(
+            circuit.get_view("perms-unknown").is_none(),
+            "view must not register on permission failure"
+        );
+    }
+
+    /// A table whose permission is `false` (e.g. SurrealDB `PERMISSIONS NONE`
+    /// or a `FOR select WHERE false` clause) must produce a 400 with `FALSE`
+    /// in the message.
+    #[tokio::test]
+    async fn false_permission_returns_400() {
+        let h = TestHarness::new();
+        h.set_permission("locked", "false").await;
+
+        let (status, msg) = post_authed_text(
+            h.app(),
+            "/view/register",
+            &view_payload("v-locked", "SELECT * FROM locked"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(msg.contains("locked"), "got {msg}");
+        assert!(msg.contains("FALSE"), "got {msg}");
+    }
+
+    /// A permission referencing `$auth` without auth params in the
+    /// registration payload must fail at registration time with a clear
+    /// error pointing at the missing param.
+    #[tokio::test]
+    async fn auth_required_no_params_returns_400() {
+        let h = TestHarness::new();
+        h.set_permission("thread", "author.id = $auth.id").await;
+
+        let payload = view_payload("v-no-auth", "SELECT * FROM thread");
+        let (status, msg) = post_authed_text(h.app(), "/view/register", &payload).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(msg.contains("$auth"), "got {msg}");
+        assert!(msg.contains("thread"), "got {msg}");
+    }
+
+    /// A permission expression using a SurrealDB construct the SSP cannot
+    /// represent (`IN (SELECT ...)`) must fail at registration with the
+    /// unsupported snippet named, instead of silently fail-closing at
+    /// runtime as the previous policy.rs implementation did.
+    #[tokio::test]
+    async fn subquery_permission_returns_400() {
+        let h = TestHarness::new();
+        h.set_permission(
+            "thread",
+            "$auth.id IN (SELECT VALUE in FROM collaborates_on)",
+        )
+        .await;
+
+        let payload = view_payload_with_params(
+            "v-subq",
+            "SELECT * FROM thread",
+            json!({ "auth": { "id": "user:a" } }),
+        );
+        let (status, msg) = post_authed_text(h.app(), "/view/register", &payload).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(msg.contains("unsupported construct"), "got {msg}");
+    }
+
+    /// Successful registration with a `field = $auth.id` permission and a
+    /// matching `auth` param: view registers, and only matching rows reach
+    /// the cache after data flows through.
+    #[tokio::test]
+    async fn auth_eq_filters_by_user_via_direct_register() {
+        // We use register_view_direct because the HTTP register handler
+        // hits the (unconnected) DB to upsert _00_query metadata, which
+        // would 500 in this harness. The point of the test is the
+        // permission filter, not the metadata persistence path.
+        let h = TestHarness::new();
+        h.set_permission("thread", "author.id = $auth.id").await;
+
+        h.load_records(vec![
+            Record::new(
+                "thread",
+                "thread:a",
+                json!({"id": "thread:a", "author": {"id": "user:alice"}}),
+            ),
+            Record::new(
+                "thread",
+                "thread:b",
+                json!({"id": "thread:b", "author": {"id": "user:bob"}}),
+            ),
+        ])
+        .await;
+
+        let payload = view_payload_with_params(
+            "v-mine",
+            "SELECT * FROM thread",
+            json!({ "auth": { "id": "user:alice" } }),
+        );
+        let data = {
+            let circuit = h.processor.read().await;
+            ssp::service::view::prepare_registration_dbsp(payload, circuit.permissions())
+                .expect("registration with valid permission must succeed")
+        };
+        {
+            let mut circuit = h.processor.write().await;
+            circuit.add_query(data.plan, data.safe_params, Some(OutputFormat::Streaming));
+        }
+
+        let circuit = h.processor.read().await;
+        let view = circuit.get_view("v-mine").expect("view registered");
+        // Permission allows only Alice's threads.
+        assert!(view.cache.is_present("thread:a"), "alice's thread must be present");
+        assert!(!view.cache.is_present("thread:b"), "bob's thread must NOT leak through");
+    }
+
+    /// `true` permission (the SurrealDB FULL default) is a no-op: the
+    /// registered plan is unchanged from a vanilla scan and all rows pass
+    /// through.
+    #[tokio::test]
+    async fn true_permission_is_noop() {
+        let h = TestHarness::new();
+        // `user` is already permissive in the harness, but be explicit.
+        h.set_permission("user", "true").await;
+
+        h.load_records(vec![
+            Record::new("user", "user:1", json!({"id": "user:1"})),
+            Record::new("user", "user:2", json!({"id": "user:2"})),
+        ])
+        .await;
+
+        h.register_view_direct("v-all", "SELECT * FROM user").await;
+
+        let circuit = h.processor.read().await;
+        let view = circuit.get_view("v-all").unwrap();
+        assert!(view.cache.is_present("user:1"));
+        assert!(view.cache.is_present("user:2"));
+    }
+
+    /// A query referencing two tables in a subquery: each scan must get its
+    /// own permission predicate. Default-deny on the inner table aborts the
+    /// whole registration even though the outer scan would have succeeded.
+    /// We exercise this through `prepare_registration_dbsp` directly because
+    /// the HTTP `/view/register` path tries to upsert metadata into an
+    /// unconnected DB after the perm check, which would 500 in this harness.
+    #[tokio::test]
+    async fn subquery_inner_scan_is_validated() {
+        let h = TestHarness::new();
+        // The harness seeds `comment` permissive; remove it so the inner
+        // scan is genuinely default-deny.
+        {
+            let mut circuit = h.processor.write().await;
+            // Replace permissions with only thread set permissive.
+            *circuit = {
+                let mut c = Circuit::new();
+                c.set_permission("thread", "true");
+                c
+            };
+        }
+
+        let payload = view_payload(
+            "v-subq",
+            "SELECT *, (SELECT * FROM comment WHERE thread=$parent.id) AS comments FROM thread",
+        );
+        let circuit = h.processor.read().await;
+        let result =
+            ssp::service::view::prepare_registration_dbsp(payload, circuit.permissions());
+        let err = match result {
+            Ok(_) => panic!("expected Err, got Ok"),
+            Err(e) => e,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("comment"), "must name the inner table; got {msg}");
+        assert!(
+            msg.to_lowercase().contains("default-deny"),
+            "must explain default-deny; got {msg}"
+        );
+    }
+
+    /// Failed registration must not pollute the circuit even partially: no
+    /// view should appear in `view_count()` after the rejection.
+    #[tokio::test]
+    async fn failed_registration_leaves_no_orphan_state() {
+        let h = TestHarness::new();
+        let before = h.processor.read().await.view_count();
+
+        let payload = view_payload("v-orphan", "SELECT * FROM ghost");
+        let (status, _) = post_authed_text(h.app(), "/view/register", &payload).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let after = h.processor.read().await.view_count();
+        assert_eq!(before, after, "rejection must not register the view");
+        assert!(
+            h.processor
+                .read()
+                .await
+                .get_view("v-orphan")
+                .is_none(),
+            "no orphan view"
+        );
+    }
+}
+
 // ===========================================================================
 // DB Integration Tests (require running SurrealDB)
 // ===========================================================================
@@ -785,7 +1070,7 @@ mod db_integration_tests {
             .unwrap_or_else(|_| "127.0.0.1:8000".to_string());
 
         unsafe {
-            std::env::set_var("SP00KY_AUTH_SECRET", AUTH_SECRET);
+            std::env::set_var("SPKY_AUTH_SECRET", AUTH_SECRET);
         }
 
         let db = Surreal::new::<Ws>(&addr)
@@ -815,14 +1100,24 @@ mod db_integration_tests {
         let (tx, rx) = mpsc::channel::<JobEntry>(100);
         let provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder().build();
 
+        let circuit = {
+            let mut c = Circuit::new();
+            for table in PERMISSIVE_TABLES {
+                c.set_permission(*table, "true");
+            }
+            c
+        };
+
         TestHarness {
-            processor: Arc::new(RwLock::new(Circuit::new())),
+            processor: Arc::new(RwLock::new(circuit)),
             status: Arc::new(RwLock::new(SspStatus::Ready)),
             metrics: Arc::new(Metrics::new(&provider)),
             job_config: Arc::new(JobConfig::default()),
             job_queue_tx: tx,
             job_queue_rx: Arc::new(tokio::sync::Mutex::new(rx)),
             db: Arc::new(db),
+            crdt_cache: Arc::new(CrdtCache::new(64, CrdtAllowList::default())),
+            start_time: std::time::Instant::now(),
         }
     }
 

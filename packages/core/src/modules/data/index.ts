@@ -291,6 +291,10 @@ export class DataModule<S extends SchemaStructure> {
     return Array.from(this.activeQueries.values());
   }
 
+  getActiveQueryHashes(): QueryHash[] {
+    return Array.from(this.activeQueries.keys());
+  }
+
   async updateQueryLocalArray(id: string, localArray: RecordVersionArray): Promise<void> {
     const queryState = this.activeQueries.get(id);
     if (!queryState) {

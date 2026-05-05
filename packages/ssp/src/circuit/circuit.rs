@@ -58,9 +58,11 @@ pub struct Circuit {
     views: HashMap<String, View>,
     /// Routing: table_name → [query_id].
     dependency_map: HashMap<String, Vec<String>>,
-    /// Per-table permission predicates loaded from SurrealDB at boot.
-    /// Used by the registration pipeline to inject implicit WHERE clauses.
-    policy: crate::policy::PermissionRegistry,
+    /// Per-table raw `PERMISSIONS FOR select WHERE <expr>` text, loaded from
+    /// SurrealDB at boot. The registration pipeline routes each scan's
+    /// permission through the same converter that handles user queries and
+    /// AND-folds the result into the scan's filter.
+    permissions: HashMap<String, String>,
 }
 
 /// Compute the full set of subquery records visible through the current view.
@@ -242,18 +244,19 @@ impl Circuit {
             graphs: HashMap::new(),
             views: HashMap::new(),
             dependency_map: HashMap::new(),
-            policy: crate::policy::PermissionRegistry::new(),
+            permissions: HashMap::new(),
         }
     }
 
-    /// Read-only access to the permission registry (for query rewriting).
-    pub fn policy(&self) -> &crate::policy::PermissionRegistry {
-        &self.policy
+    /// Read-only access to the per-table permission text (for query rewriting).
+    pub fn permissions(&self) -> &HashMap<String, String> {
+        &self.permissions
     }
 
-    /// Mutable access to the permission registry (for boot-time loading).
-    pub fn policy_mut(&mut self) -> &mut crate::policy::PermissionRegistry {
-        &mut self.policy
+    /// Register a table's raw `PERMISSIONS FOR select WHERE <expr>` text.
+    /// Called once per table at boot time after `INFO FOR DB` is parsed.
+    pub fn set_permission(&mut self, table: impl Into<String>, where_text: impl Into<String>) {
+        self.permissions.insert(table.into(), where_text.into());
     }
 
     /// Bulk-load initial data into base collections.
@@ -663,7 +666,7 @@ impl Circuit {
             graphs: HashMap::new(),
             views: HashMap::new(),
             dependency_map: HashMap::new(),
-            policy: crate::policy::PermissionRegistry::new(),
+            permissions: HashMap::new(),
         };
 
         for qs in state.queries {

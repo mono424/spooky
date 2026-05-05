@@ -117,6 +117,15 @@ export class CrdtManager {
     // coalesces concurrent calls via `pendingLive`, so this is safe.
     void this.ensureTableSubscription(table);
 
+    // No local snapshot — could be a first-ever open on this device, a
+    // memory-backed local DB after reload, or a record that hasn't been
+    // touched since `_00_crdt` started being persisted. Pull the remote
+    // snapshot now; otherwise the editor sits empty until the parent's
+    // LIVE feed happens to fire on a future edit.
+    if (!initialCrdtState) {
+      void this.fetchAndDispatchMeta(table, recordId);
+    }
+
     return crdtField;
   }
 

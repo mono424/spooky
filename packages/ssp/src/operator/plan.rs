@@ -35,6 +35,35 @@ pub enum OperatorPlan {
         right: Box<OperatorPlan>,
         on: JoinCondition,
     },
+    /// Semi-join: emit left keys with at least one right witness. Output
+    /// weights are 0/1. Used by permission lowering for `IN (subquery)` and
+    /// `EXISTS (subquery)` predicates.
+    SemiJoin {
+        left: Box<OperatorPlan>,
+        right: Box<OperatorPlan>,
+        on: JoinCondition,
+    },
+    /// Anti-join: emit left keys with no right witness. Output weights are
+    /// 0/1. Used by permission lowering for `NOT IN (subquery)` and
+    /// `NOT EXISTS (subquery)` predicates, and as the lowering of `Not(b)`.
+    AntiJoin {
+        left: Box<OperatorPlan>,
+        right: Box<OperatorPlan>,
+        on: JoinCondition,
+    },
+    /// Z-set additive merge. Used by permission lowering for `OR` of branches
+    /// over the same outer scan, with a downstream `Distinct` collapsing
+    /// duplicate keys to weight 1.
+    Union {
+        left: Box<OperatorPlan>,
+        right: Box<OperatorPlan>,
+    },
+    /// Threshold to {0, 1} weights. Used to dedupe a `Union` of permission
+    /// branches; reusable elsewhere too. The runtime operator already exists
+    /// (`distinct.rs`); this variant just makes it reachable from a plan.
+    Distinct {
+        input: Box<OperatorPlan>,
+    },
     Project {
         input: Box<OperatorPlan>,
         projections: Vec<Projection>,
@@ -103,7 +132,9 @@ impl OperatorPlan {
     fn collect_tables(&self, tables: &mut Vec<String>) {
         match self {
             OperatorPlan::Scan { table } => tables.push(table.clone()),
-            OperatorPlan::Filter { input, .. } | OperatorPlan::Limit { input, .. } => {
+            OperatorPlan::Filter { input, .. }
+            | OperatorPlan::Limit { input, .. }
+            | OperatorPlan::Distinct { input } => {
                 input.collect_tables(tables);
             }
             OperatorPlan::Project { input, projections } => {
@@ -115,7 +146,10 @@ impl OperatorPlan {
                     }
                 }
             }
-            OperatorPlan::Join { left, right, .. } => {
+            OperatorPlan::Join { left, right, .. }
+            | OperatorPlan::SemiJoin { left, right, .. }
+            | OperatorPlan::AntiJoin { left, right, .. }
+            | OperatorPlan::Union { left, right } => {
                 left.collect_tables(tables);
                 right.collect_tables(tables);
             }
@@ -148,7 +182,9 @@ impl OperatorPlan {
     ) {
         match self {
             OperatorPlan::Scan { .. } => {}
-            OperatorPlan::Filter { input, .. } | OperatorPlan::Limit { input, .. } => {
+            OperatorPlan::Filter { input, .. }
+            | OperatorPlan::Limit { input, .. }
+            | OperatorPlan::Distinct { input } => {
                 input.collect_subquery_projection_info(result, parent_table);
             }
             OperatorPlan::Project { input, projections } => {
@@ -174,7 +210,10 @@ impl OperatorPlan {
                     }
                 }
             }
-            OperatorPlan::Join { left, right, .. } => {
+            OperatorPlan::Join { left, right, .. }
+            | OperatorPlan::SemiJoin { left, right, .. }
+            | OperatorPlan::AntiJoin { left, right, .. }
+            | OperatorPlan::Union { left, right } => {
                 left.collect_subquery_projection_info(result, parent_table.clone());
                 right.collect_subquery_projection_info(result, parent_table);
             }
@@ -184,7 +223,9 @@ impl OperatorPlan {
     fn collect_subquery_tables(&self, tables: &mut Vec<String>) {
         match self {
             OperatorPlan::Scan { .. } => {}
-            OperatorPlan::Filter { input, .. } | OperatorPlan::Limit { input, .. } => {
+            OperatorPlan::Filter { input, .. }
+            | OperatorPlan::Limit { input, .. }
+            | OperatorPlan::Distinct { input } => {
                 input.collect_subquery_tables(tables);
             }
             OperatorPlan::Project { input, projections } => {
@@ -196,7 +237,10 @@ impl OperatorPlan {
                     }
                 }
             }
-            OperatorPlan::Join { left, right, .. } => {
+            OperatorPlan::Join { left, right, .. }
+            | OperatorPlan::SemiJoin { left, right, .. }
+            | OperatorPlan::AntiJoin { left, right, .. }
+            | OperatorPlan::Union { left, right } => {
                 left.collect_subquery_tables(tables);
                 right.collect_subquery_tables(tables);
             }

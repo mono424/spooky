@@ -186,10 +186,9 @@ impl Sp00kyProcessor {
 
         let data = ssp::service::view::prepare_registration_dbsp(
             config_val,
-            self.circuit.policy(),
+            self.circuit.permissions(),
         )
         .map_err(|e| JsValue::from_str(&format!("Registration failed: {}", e)))?;
-        data.rewrite_report.log(&data.plan.id);
 
         let plan_id = data.plan.id.clone();
         let initial_delta = self

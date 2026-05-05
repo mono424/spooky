@@ -26,6 +26,7 @@ export class Sp00kySync<S extends SchemaStructure> {
   private logger: Logger;
   private syncEngine: SyncEngine;
   private scheduler: SyncScheduler;
+  private wasDisconnected: boolean = false;
   public events = createSyncEventSystem();
 
   get isSyncing() {
@@ -82,9 +83,35 @@ export class Sp00kySync<S extends SchemaStructure> {
     if (this.isInit) throw new Error('Sp00kySync is already initialized');
     this.isInit = true;
     await this.scheduler.init();
+    this.subscribeToReconnect();
     void this.scheduler.syncUp();
     void this.scheduler.syncDown();
     void this.startRefLiveQueries();
+  }
+
+  // Only the connect that follows a prior disconnect counts as a
+  // reconnect; the initial connect after init() must not trigger a
+  // refetch storm.
+  private subscribeToReconnect() {
+    const client = this.remote.getClient();
+    client.subscribe('disconnected', () => {
+      this.wasDisconnected = true;
+      this.logger.info(
+        { Category: 'sp00ky-client::Sp00kySync::onDisconnect' },
+        'Remote disconnected'
+      );
+    });
+    client.subscribe('connected', () => {
+      if (!this.wasDisconnected) return;
+      this.wasDisconnected = false;
+      this.logger.info(
+        { Category: 'sp00ky-client::Sp00kySync::onReconnect' },
+        'Remote reconnected, refetching active queries'
+      );
+      for (const hash of this.dataModule.getActiveQueryHashes()) {
+        this.scheduler.enqueueDownEvent({ type: 'register', payload: { hash } });
+      }
+    });
   }
 
   private async startRefLiveQueries() {

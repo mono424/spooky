@@ -1,7 +1,7 @@
-use crate::policy::{PermissionRegistry, RewriteReport};
-use crate::{converter, sanitizer};
+use crate::{converter, permission_inject, sanitizer};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 
 pub mod view {
     use super::*;
@@ -12,19 +12,17 @@ pub mod view {
         pub safe_params: Option<Value>,
         pub metadata: Value,
         pub format: Option<crate::circuit::view::OutputFormat>,
-        /// Report describing the implicit permission filters injected into
-        /// the plan during preparation. Empty when the registry is empty.
-        pub rewrite_report: RewriteReport,
     }
 
     /// Prepares a view registration request using DBSP types.
     ///
-    /// Runs the converter, then injects implicit `WHERE` clauses from the
-    /// permission registry via `policy::rewrite_plan`. The returned
-    /// `rewrite_report` records what was injected so the caller can log it.
+    /// Runs the converter on the user's surql, then injects each table's
+    /// permission predicate per scan via `permission_inject::inject_permissions`.
+    /// Errors abort registration so callers can surface them (typically as
+    /// HTTP 400) with the offending table named.
     pub fn prepare_registration_dbsp(
         config: Value,
-        registry: &PermissionRegistry,
+        permissions: &HashMap<String, String>,
     ) -> Result<DbspRegistrationData> {
         use crate::circuit::view::OutputFormat;
         use crate::operator::plan::{OperatorPlan, QueryPlan};
@@ -87,10 +85,7 @@ pub mod view {
         let safe_params = sanitizer::parse_params(params.clone());
         let safe_params_val = safe_params.clone().unwrap_or(json!({}));
 
-        // Implicit WHERE injection: walk the plan and wrap every Scan with the
-        // permission predicate registered for that table. See policy.rs.
-        let rewrite_report =
-            crate::policy::rewrite_plan(&mut root_op, registry, safe_params.as_ref());
+        permission_inject::inject_permissions(&mut root_op, permissions, safe_params.as_ref())?;
 
         let plan = QueryPlan {
             id: id.clone(),
@@ -112,7 +107,6 @@ pub mod view {
             safe_params,
             metadata,
             format,
-            rewrite_report,
         })
     }
 }
